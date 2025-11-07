@@ -1,0 +1,616 @@
+"""Sepsis-3 and suspected infection detection.
+
+This module implements the Sepsis-3 criteria from Singer et al. (2016)
+and suspected infection (SI) detection, following R ricu's implementation.
+
+References:
+    Singer M, Deutschman CS, Seymour CW, et al. The Third International
+    Consensus Definitions for Sepsis and Septic Shock (Sepsis-3). JAMA.
+    2016;315(8):801–810. doi:10.1001/jama.2016.0287
+"""
+
+from typing import Optional, Callable, Literal, List
+import pandas as pd
+import numpy as np
+
+
+def delta_cummin(x: pd.Series) -> pd.Series:
+    """Calculate delta from cumulative minimum (R ricu delta_cummin).
+    
+    For Sepsis-3, this represents the increase in SOFA score from the
+    minimum value seen up to the current time point.
+    
+    This is the recommended default for Sepsis-3 detection as it captures
+    the maximum increase from any prior low point.
+    
+    Args:
+        x: SOFA score series
+        
+    Returns:
+        Delta from cumulative minimum
+        
+    Examples:
+        >>> sofa = pd.Series([2, 1, 4, 3, 5])
+        >>> delta_cummin(sofa)
+        # Returns: [0, 0, 3, 2, 4]  # Increase from cumulative minimum
+    """
+    # 🔧 FIX: Use integer.max instead of inf to match R ricu
+    # R ricu uses .Machine$integer.max (2^31-1 = 2147483647)
+    # This ensures exact compatibility with R ricu's behavior
+    integer_max = 2147483647  # .Machine$integer.max in R
+    x_filled = x.fillna(integer_max)
+    cummin = x_filled.cummin()
+    
+    # Calculate delta
+    result = x - cummin
+    
+    # Handle cases where x was NaN
+    result[x.isna()] = np.nan
+    
+    return result
+
+
+def delta_start(x: pd.Series) -> pd.Series:
+    """Calculate delta from start value (R ricu delta_start).
+    
+    Represents SOFA score increase from the first non-NA measurement.
+    
+    Args:
+        x: SOFA score series
+        
+    Returns:
+        Delta from first value
+        
+    Examples:
+        >>> sofa = pd.Series([2, 1, 4, 3, 5])
+        >>> delta_start(sofa)
+        # Returns: [0, -1, 2, 1, 3]  # Increase from first value (2)
+    """
+    # 🔧 FIX: Match R ricu behavior - return NaN if all values are NA
+    non_na = x.dropna()
+    if len(non_na) == 0:
+        return pd.Series([np.nan] * len(x), index=x.index)
+    first_val = non_na.iloc[0]
+    return x - first_val
+
+
+def delta_min(x: pd.Series, shifts: Optional[List[int]] = None) -> pd.Series:
+    """Calculate delta from minimum over shifted windows (R ricu delta_min).
+    
+    Represents SOFA score increase from the minimum value in a
+    sliding window. Default window is previous 24 hours (shifts 0-23).
+    
+    Args:
+        x: SOFA score series (hourly resolution expected)
+        shifts: List of shift amounts in hours (default: 0-23 for 24-hour window)
+        
+    Returns:
+        Delta from windowed minimum
+        
+    Examples:
+        >>> # Hourly SOFA scores
+        >>> sofa = pd.Series([2, 3, 1, 4, 2, 5])
+        >>> delta_min(sofa, shifts=[0, 1, 2])  # 3-hour window
+        # Returns minimum over current + 2 prior hours for each time point
+    """
+    if shifts is None:
+        shifts = list(range(24))  # Default: 24-hour window
+    
+    if len(x) == 0:
+        return x
+    
+    # Calculate minimum across all shifts
+    shifted_vals = [x.shift(s) for s in shifts]
+    
+    if not shifted_vals:
+        return x - x
+    
+    # Stack and find minimum
+    stacked = pd.concat(shifted_vals, axis=1)
+    windowed_min = stacked.min(axis=1, skipna=True)
+    
+    return x - windowed_min
+
+
+def susp_inf(
+    abx: pd.DataFrame,
+    samp: pd.DataFrame,
+    id_cols: list,
+    index_col: str,
+    abx_count_win: pd.Timedelta = pd.Timedelta(hours=24),
+    abx_min_count: int = 1,
+    positive_cultures: bool = False,
+    si_mode: Literal["and", "or", "abx", "samp"] = "and",
+    abx_win: pd.Timedelta = pd.Timedelta(hours=24),
+    samp_win: pd.Timedelta = pd.Timedelta(hours=72),
+    keep_components: bool = False,
+) -> pd.DataFrame:
+    """Detect suspected infection (R ricu susp_inf).
+    
+    Suspected infection is defined as co-occurrence of antibiotic treatment
+    and body-fluid sampling within specified time windows.
+    
+    Implementation follows R ricu's susp_inf function:
+    1. Process antibiotics with si_abx():
+       - Count antibiotics in rolling window (abx_count_win)
+       - Filter by minimum count (abx_min_count)
+    2. Process samples with si_samp():
+       - Aggregate sampling events
+       - Optionally filter for positive cultures
+    3. Combine using si_mode:
+       - "and": Both ABX and sampling required (si_and)
+       - "or": Either ABX or sampling (si_or)
+       - "abx": Only ABX required
+       - "samp": Only sampling required
+    
+    Time window logic (si_mode="and"):
+    - ABX followed by sampling: sampling within [abx_time, abx_time + abx_win)
+    - Sampling followed by ABX: ABX within [samp_time, samp_time + samp_win)
+    
+    Args:
+        abx: Antibiotic data (must have id_cols, index_col, 'abx' column)
+        samp: Sampling data (must have id_cols, index_col, 'samp' column)
+        id_cols: ID columns for merging
+        index_col: Time index column
+        abx_count_win: Window for counting antibiotic administrations
+        abx_min_count: Minimum antibiotic administrations required
+        positive_cultures: Whether to require positive cultures
+        si_mode: Detection mode ('and', 'or', 'abx', 'samp')
+        abx_win: Time window after ABX for sampling (default 24h)
+        samp_win: Time window after sampling for ABX (default 72h)
+        keep_components: Whether to keep individual component times
+        
+    Returns:
+        DataFrame with suspected infection events
+    """
+    # Process antibiotic data (si_abx in R ricu)
+    abx_processed = _process_abx(abx, id_cols, index_col, abx_count_win, abx_min_count)
+    
+    # Process sampling data (si_samp in R ricu)
+    samp_processed = _process_samp(samp, positive_cultures)
+    
+    # Combine based on mode
+    if si_mode == "and":
+        result = _si_and(abx_processed, samp_processed, id_cols, index_col,
+                        abx_win, samp_win, keep_components)
+    elif si_mode == "or":
+        result = _si_or(abx_processed, samp_processed, id_cols, index_col,
+                       keep_components)
+    elif si_mode == "abx":
+        result = abx_processed.copy()
+        result['susp_inf'] = True
+    elif si_mode == "samp":
+        result = samp_processed.copy()
+        result['susp_inf'] = True
+    else:
+        raise ValueError(f"Unknown si_mode: {si_mode}")
+    
+    return result
+
+
+def _process_abx(
+    abx: pd.DataFrame,
+    id_cols: list,
+    index_col: str,
+    count_win: pd.Timedelta,
+    min_count: int,
+) -> pd.DataFrame:
+    """Process antibiotic data for SI detection."""
+    if abx.empty:
+        return pd.DataFrame(columns=id_cols + [index_col, 'abx'])
+    
+    # 确保abx列存在
+    if 'abx' not in abx.columns:
+        # 如果abx列不存在，创建它（假设所有行都是abx事件）
+        abx = abx.copy()
+        abx['abx'] = True
+    
+    if min_count > 1:
+        # Count antibiotics in rolling window
+        from .ts_utils import slide
+        abx = slide(
+            abx, id_cols, index_col,
+            before=pd.Timedelta(0),
+            after=count_win,
+            agg_func={'abx': 'sum'}
+        )
+    
+    # Filter by minimum count
+    abx = abx[abx['abx'] >= min_count].copy()
+    return abx
+
+
+def _process_samp(samp: pd.DataFrame, positive_only: bool) -> pd.DataFrame:
+    """Process sampling data for SI detection."""
+    if samp.empty:
+        return pd.DataFrame()
+    
+    # 确保samp列存在
+    if 'samp' not in samp.columns:
+        # 如果samp列不存在，创建它（假设所有行都是采样事件）
+        samp = samp.copy()
+        samp['samp'] = True
+    
+    if positive_only:
+        # Require positive cultures (samp > 0)
+        samp = samp[samp['samp'] > 0].copy()
+    else:
+        # Just require any sampling (non-NA)
+        samp = samp[samp['samp'].notna()].copy()
+    
+    return samp
+
+
+def _si_and(
+    abx: pd.DataFrame,
+    samp: pd.DataFrame,
+    id_cols: list,
+    index_col: str,
+    abx_win: pd.Timedelta,
+    samp_win: pd.Timedelta,
+    keep_components: bool,
+) -> pd.DataFrame:
+    """Detect SI when both antibiotic AND sampling occur.
+    
+    Following R ricu's si_and logic with rolling joins:
+    
+    Method 1 (do_roll): ABX followed by sampling
+    - Find sampling events within [abx_time, abx_time + abx_win)
+    - R: do_roll(abx, samp, abx_win) with roll = -win
+    - Takes ABX time as SI time
+    
+    Method 2 (do_roll): Sampling followed by ABX
+    - Find ABX events within [samp_time, samp_time + samp_win)
+    - R: do_roll(samp, abx, samp_win) with roll = -win
+    - Takes sampling time as SI time
+    
+    Note: R's roll = -win means "roll forward" to find next event
+    within window, creating half-open intervals [t, t+win)
+    
+    Args:
+        abx: Processed antibiotic data
+        samp: Processed sampling data
+        id_cols: ID columns
+        index_col: Time index column
+        abx_win: Time window after ABX for sampling
+        samp_win: Time window after sampling for ABX
+        keep_components: Whether to keep component times
+        
+    Returns:
+        DataFrame with suspected infection events
+    """
+    if abx.empty or samp.empty:
+        return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
+    
+    # Determine if time is numeric (hours) or datetime
+    time_is_numeric = pd.api.types.is_numeric_dtype(abx[index_col]) if index_col in abx.columns else False
+    
+    if not time_is_numeric:
+        # Ensure datetime for datetime operations
+        if index_col in abx.columns:
+            abx = abx.copy()
+            abx[index_col] = pd.to_datetime(abx[index_col], errors='coerce')
+        if index_col in samp.columns:
+            samp = samp.copy()
+            samp[index_col] = pd.to_datetime(samp[index_col], errors='coerce')
+    
+    results = []
+    
+    # Method 1: ABX followed by sampling (within abx_win)
+    # R: do_roll(abx, samp, abx_win) with roll = -win
+    # Searches forward: [abx_time, abx_time + abx_win)
+    for _, abx_row in abx.iterrows():
+        id_mask = pd.Series(True, index=samp.index)
+        for col in id_cols:
+            if col in samp.columns:
+                id_mask = id_mask & (samp[col] == abx_row[col])
+        
+        abx_time = abx_row[index_col]
+        
+        if pd.notna(abx_time):
+            # Half-open interval: [abx_time, abx_time + abx_win)
+            if time_is_numeric:
+                abx_win_val = abx_win.total_seconds() / 3600.0
+                time_mask = (samp[index_col] >= abx_time) & (samp[index_col] < abx_time + abx_win_val)
+            else:
+                time_mask = (samp[index_col] >= abx_time) & (samp[index_col] < abx_time + abx_win)
+            
+            matching_samps = samp[id_mask & time_mask]
+            
+            for _, samp_row in matching_samps.iterrows():
+                # Take the earlier time (ABX) as SI time
+                result_row = {index_col: abx_time}
+                for col in id_cols:
+                    result_row[col] = abx_row[col]
+                
+                if keep_components:
+                    result_row['abx_time'] = abx_time
+                    result_row['samp_time'] = samp_row[index_col]
+                
+                results.append(result_row)
+    
+    # Method 2: Sampling followed by ABX (within samp_win)
+    # R: do_roll(samp, abx, samp_win) with roll = -win
+    # Searches forward: [samp_time, samp_time + samp_win)
+    for _, samp_row in samp.iterrows():
+        id_mask = pd.Series(True, index=abx.index)
+        for col in id_cols:
+            if col in abx.columns:
+                id_mask = id_mask & (abx[col] == samp_row[col])
+        
+        samp_time = samp_row[index_col]
+        
+        if pd.notna(samp_time):
+            # Half-open interval: [samp_time, samp_time + samp_win)
+            if time_is_numeric:
+                samp_win_val = samp_win.total_seconds() / 3600.0
+                time_mask = (abx[index_col] >= samp_time) & (abx[index_col] < samp_time + samp_win_val)
+            else:
+                time_mask = (abx[index_col] >= samp_time) & (abx[index_col] < samp_time + samp_win)
+            
+            matching_abx = abx[id_mask & time_mask]
+            
+            for _, abx_row in matching_abx.iterrows():
+                # Take the earlier time (sampling) as SI time
+                result_row = {index_col: samp_time}
+                for col in id_cols:
+                    result_row[col] = samp_row[col]
+                
+                if keep_components:
+                    result_row['abx_time'] = abx_row[index_col]
+                    result_row['samp_time'] = samp_time
+                
+                results.append(result_row)
+    
+    if not results:
+        return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
+    
+    result_df = pd.DataFrame(results)
+    
+    # Remove duplicates (same patient, same SI time)
+    dedup_cols = id_cols + [index_col]
+    result_df = result_df.drop_duplicates(subset=dedup_cols)
+    
+    result_df['susp_inf'] = True
+    return result_df
+
+
+def _si_or(
+    abx: pd.DataFrame,
+    samp: pd.DataFrame,
+    id_cols: list,
+    index_col: str,
+    keep_components: bool,
+) -> pd.DataFrame:
+    """Detect SI when either antibiotic OR sampling occurs.
+    
+    Following R ricu's si_or logic:
+    - Merge abx and samp with outer join
+    - Keep rows where abx OR samp is TRUE
+    """
+    # 🔧 FIX: Always use merge to match R ricu behavior
+    merge_cols = id_cols + [index_col]
+    
+    # Prepare data with flags
+    abx_prep = abx[merge_cols].copy()
+    abx_prep['_abx_flag'] = True
+    
+    samp_prep = samp[merge_cols].copy()
+    samp_prep['_samp_flag'] = True
+    
+    # Outer merge (like R's merge(..., all = TRUE))
+    result = pd.merge(abx_prep, samp_prep, on=merge_cols, how='outer')
+    
+    # Keep rows where abx OR samp occurred
+    result['_abx_flag'] = result['_abx_flag'].fillna(False)
+    result['_samp_flag'] = result['_samp_flag'].fillna(False)
+    result = result[result['_abx_flag'] | result['_samp_flag']].copy()
+    
+    # Add component times if requested
+    if keep_components:
+        result['abx_time'] = result[index_col].where(result['_abx_flag'])
+        result['samp_time'] = result[index_col].where(result['_samp_flag'])
+    
+    # Clean up flags
+    result = result.drop(columns=['_abx_flag', '_samp_flag'])
+    result['susp_inf'] = True
+    
+    return result
+
+
+def sep3(
+    sofa: pd.DataFrame,
+    susp_inf: pd.DataFrame,
+    id_cols: list,
+    index_col: str,
+    si_window: Literal["first", "last", "any"] = "first",
+    delta_fun: Callable = delta_cummin,
+    sofa_thresh: int = 2,
+    si_lwr: pd.Timedelta = pd.Timedelta(hours=48),
+    si_upr: pd.Timedelta = pd.Timedelta(hours=24),
+    keep_components: bool = False,
+) -> pd.DataFrame:
+    """Detect Sepsis-3 (R ricu sep3).
+    
+    Sepsis-3 is defined as a ≥2 point increase in SOFA score within
+    the suspected infection window.
+    
+    Implementation follows R ricu's sep3 function:
+    1. Filter SI events where susp_inf == TRUE
+    2. Apply si_window filter ("first", "last", or "any")
+    3. Create time windows: [si_time - si_lwr, si_time + si_upr]
+    4. Join with SOFA scores using the window
+    5. Calculate delta_sofa using delta_fun within each window
+    6. Keep events where delta_sofa >= sofa_thresh
+    7. Take first occurrence per patient
+    
+    Args:
+        sofa: SOFA score data (must have 'sofa' column)
+        susp_inf: Suspected infection data
+        id_cols: ID columns
+        index_col: Time index column
+        si_window: Which SI window to use ('first', 'last', 'any')
+        delta_fun: Function to calculate SOFA delta
+        sofa_thresh: Required SOFA increase (default 2)
+        si_lwr: Time before SI (default 48h)
+        si_upr: Time after SI (default 24h)
+        keep_components: Whether to keep delta_sofa, samp_time, abx_time
+        
+    Returns:
+        DataFrame with Sepsis-3 events
+    """
+    # Filter SI events where susp_inf == TRUE
+    if 'susp_inf' in susp_inf.columns:
+        si_events = susp_inf[susp_inf['susp_inf'] == True].copy()
+    else:
+        # If no susp_inf column, assume all rows are SI events
+        si_events = susp_inf.copy()
+    
+    if si_events.empty:
+        return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])
+    
+    # Determine if time is numeric (hours) or datetime
+    si_time_is_numeric = pd.api.types.is_numeric_dtype(si_events[index_col])
+    sofa_time_is_numeric = pd.api.types.is_numeric_dtype(sofa[index_col]) if index_col in sofa.columns else False
+    
+    # Convert Timedelta to hours if time is numeric
+    if si_time_is_numeric:
+        si_lwr_hours = si_lwr.total_seconds() / 3600.0
+        si_upr_hours = si_upr.total_seconds() / 3600.0
+    else:
+        # Ensure time columns are datetime
+        if index_col in si_events.columns:
+            si_events[index_col] = pd.to_datetime(si_events[index_col], errors='coerce')
+        if index_col in sofa.columns:
+            sofa = sofa.copy()
+            sofa[index_col] = pd.to_datetime(sofa[index_col], errors='coerce')
+    
+    # Apply si_window filter: "first", "last", or "any"
+    if si_window in ["first", "last"]:
+        if si_window == "first":
+            si_events = si_events.sort_values(index_col).groupby(id_cols, as_index=False).first()
+        else:  # last
+            si_events = si_events.sort_values(index_col).groupby(id_cols, as_index=False).last()
+    # If "any", keep all SI events
+    
+    # Define SI windows - matches R ricu logic
+    # R ricu: [si_time - si_lwr, si_time + si_upr]
+    if si_time_is_numeric:
+        si_events['si_lwr'] = si_events[index_col] - si_lwr_hours
+        si_events['si_upr'] = si_events[index_col] + si_upr_hours
+    else:
+        si_events['si_lwr'] = si_events[index_col] - si_lwr
+        si_events['si_upr'] = si_events[index_col] + si_upr
+    
+    # Prepare SOFA data with join columns
+    # R ricu uses: sofa[, c("join_time1", "join_time2") := list(time, time)]
+    sofa_prep = sofa.copy()
+    sofa_prep['join_time1'] = sofa_prep[index_col]
+    sofa_prep['join_time2'] = sofa_prep[index_col]
+    
+    results = []
+    
+    # For each SI event, find SOFA scores in window and calculate delta
+    # R ricu: sofa[susp, list(delta_sofa = delta_fun(sofa), ...), 
+    #              on = .(id, join_time1 >= si_lwr, join_time2 <= si_upr), 
+    #              by = .EACHI, nomatch = NULL]
+    for _, si_row in si_events.iterrows():
+        # Match by patient ID
+        id_match = pd.Series(True, index=sofa_prep.index)
+        for col in id_cols:
+            if col in sofa_prep.columns:
+                id_match = id_match & (sofa_prep[col] == si_row[col])
+        
+        # Match by time window: join_time1 >= si_lwr AND join_time2 <= si_upr
+        # This is equivalent to: si_lwr <= time <= si_upr
+        time_match = (sofa_prep['join_time1'] >= si_row['si_lwr']) & \
+                     (sofa_prep['join_time2'] <= si_row['si_upr'])
+        
+        window_sofa = sofa_prep[id_match & time_match].copy()
+        
+        if len(window_sofa) == 0:
+            continue
+        
+        # Sort by time and calculate SOFA delta using delta_fun
+        # R ricu: delta_sofa = delta_fun(sofa)
+        window_sofa = window_sofa.sort_values(index_col)
+        window_sofa['delta_sofa'] = delta_fun(window_sofa['sofa'])
+        
+        # Filter by threshold: delta_sofa >= sofa_thresh
+        # R ricu: res[delta_sofa >= sofa_thresh]
+        sep3_rows = window_sofa[window_sofa['delta_sofa'] >= sofa_thresh]
+        
+        if len(sep3_rows) == 0:
+            continue
+        
+        # Take first occurrence (earliest time meeting threshold)
+        # R ricu: res[, head(.SD, n = 1L), by = id_vars(res)]
+        first_sep3 = sep3_rows.iloc[0]
+        
+        result_row = {index_col: first_sep3[index_col]}
+        for col in id_cols:
+            result_row[col] = si_row[col]
+        
+        result_row['sep3'] = True
+        
+        if keep_components:
+            result_row['delta_sofa'] = first_sep3['delta_sofa']
+            if 'samp_time' in si_row:
+                result_row['samp_time'] = si_row['samp_time']
+            if 'abx_time' in si_row:
+                result_row['abx_time'] = si_row['abx_time']
+        
+        results.append(result_row)
+    
+    if not results:
+        return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])
+    
+    result_df = pd.DataFrame(results)
+    
+    # Keep only first Sepsis-3 event per patient
+    # R ricu: res[, head(.SD, n = 1L), by = id_vars(res)]
+    result_df = result_df.sort_values(index_col).groupby(id_cols, as_index=False).first()
+    
+    return result_df
+
+
+# 别名函数 - 为了兼容性
+def label_sep3(
+    sofa_data: pd.DataFrame,
+    susp_inf_data: pd.DataFrame,
+    delta_sofa: int = 2,
+    si_mode: str = "abx_ind",
+    keep_components: bool = False,
+    **kwargs
+) -> pd.DataFrame:
+    """
+    Sepsis-3 标注 - 别名函数，调用 sep3()
+    
+    这是 R ricu label_sep3 的 Python 实现。
+    
+    Args:
+        sofa_data: SOFA 评分数据
+        susp_inf_data: 疑似感染数据
+        delta_sofa: SOFA 评分增量阈值（默认 2）
+        si_mode: 疑似感染模式
+        keep_components: 是否保留组件
+        **kwargs: 其他参数
+        
+    Returns:
+        Sepsis-3 标注结果
+        
+    Examples:
+        >>> # 使用 SOFA 和疑似感染数据
+        >>> sep3_labels = label_sep3(sofa_df, si_df)
+        >>> 
+        >>> # 自定义阈值
+        >>> sep3_labels = label_sep3(sofa_df, si_df, delta_sofa=3)
+    """
+    return sep3(
+        sofa_data=sofa_data,
+        susp_inf_data=susp_inf_data,
+        delta_sofa=delta_sofa,
+        si_mode=si_mode,
+        keep_components=keep_components,
+        **kwargs
+    )

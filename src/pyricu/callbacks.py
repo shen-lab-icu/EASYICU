@@ -1,0 +1,1412 @@
+"""Callback functions for clinical scores (SOFA, SIRS, qSOFA, etc.).
+
+This module provides implementations of clinical scoring systems commonly
+used in intensive care settings, replicating the functionality of R ricu's
+callback functions.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, Optional, Union
+
+import numpy as np
+import pandas as pd
+
+from .table import ICUTable
+
+
+def _is_true_safe(series: pd.Series) -> pd.Series:
+    """Safely convert series to boolean, handling different dtypes.
+    
+    Replicates R's is_true: non-NA and True.
+    Handles Float64 dtype which can't use fillna(False).
+    """
+    if pd.api.types.is_float_dtype(series):
+        # For float dtypes, check if not NaN and convert to bool
+        return series.notna() & (series != 0)
+    else:
+        # For other types, use standard fillna
+        return series.fillna(False).astype(bool)
+
+
+def sofa_score(
+    data_dict: Dict[str, pd.DataFrame],
+    *,
+    keep_components: bool = False,
+    win_length: pd.Timedelta = None,
+    worst_val_fun: str = 'max',
+) -> pd.DataFrame:
+    """Calculate SOFA (Sequential Organ Failure Assessment) score.
+
+    Replicates R ricu's sofa_score logic:
+    1. Merge all components
+    2. fill_gaps() - Fill time gaps to create continuous time series
+    3. slide() - Apply sliding window to get worst value over win_length
+    4. Sum components to get total SOFA score
+
+    The SOFA score aggregates 6 organ system scores:
+    - Respiratory (PaO2/FiO2 ratio)
+    - Coagulation (platelets)
+    - Liver (bilirubin)
+    - Cardiovascular (MAP and vasopressors)
+    - CNS (Glasgow Coma Score)
+    - Renal (creatinine and urine output)
+
+    Args:
+        data_dict: Dictionary containing required concept DataFrames:
+            - sofa_resp: Respiratory component
+            - sofa_coag: Coagulation component
+            - sofa_liver: Liver component
+            - sofa_cardio: Cardiovascular component
+            - sofa_cns: CNS component
+            - sofa_renal: Renal component
+        keep_components: If True, keep individual components in output
+        win_length: Time window for worst value calculation (default 24 hours)
+        worst_val_fun: Function to apply over window ('max' or 'min')
+
+    Returns:
+        DataFrame with SOFA score and optionally components
+    """
+    from .ts_utils import fill_gaps, slide
+    
+    required = ['sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal']
+    
+    # Set default window length
+    if win_length is None:
+        win_length = pd.Timedelta(hours=24)
+    
+    # Step 1: Merge all component dataframes using outer joins.
+    result = None
+    for comp in required:
+        if comp in data_dict and not data_dict[comp].empty:
+            df = data_dict[comp]
+            if result is None:
+                result = df
+            else:
+                result = pd.merge(result, df, on=['stay_id', 'time'], how='outer')
+
+    if result is None or result.empty:
+        return pd.DataFrame(columns=['stay_id', 'time', 'sofa'])
+
+    # Step 2: Use fill_gaps to create continuous time series
+    # CRITICAL: fill_gaps should only fill within the range where we have data,
+    # matching R ricu's behavior where time points are determined by component data.
+    # We DON'T create arbitrary time grids beyond data boundaries.
+    from .ts_utils import fill_gaps as ricu_fill_gaps
+    
+    # Apply fill_gaps which will create hourly grid within data range for each patient
+    aligned_result = ricu_fill_gaps(result, limits=None)
+
+    # Step 3: Apply sliding window to get the "worst" value (max).
+    # CRITICAL: Slide on the gapped data, BEFORE forward-filling.
+    # This matches R ricu's logic where `slide` operates on the output of `fill_gaps`.
+    id_cols = ['stay_id']
+    sofa_components = [comp for comp in required if comp in aligned_result.columns]
+    
+    if win_length.total_seconds() > 0:
+        agg_dict = {comp: worst_val_fun for comp in sofa_components}
+        
+        slid_result = slide(
+            data=aligned_result,
+            id_cols=id_cols,
+            index_col='time',
+            before=win_length,
+            after=pd.Timedelta(0),
+            agg_func=agg_dict,
+            full_window=False
+        )
+    else:
+        slid_result = aligned_result.copy()
+
+    # Step 5: Forward-fill the results AFTER sliding.
+    # This fills in the hours where the entire 24h window had no data.
+    slid_components = [c for c in sofa_components if c in slid_result.columns]
+    if slid_components:
+        slid_result[slid_components] = slid_result.groupby(id_cols)[slid_components].ffill()
+
+    # CRITICAL: Filter out rows where ALL components are NaN
+    # This replicates ricu's behavior where time points only exist if at least one component has data
+    # Without this, fill_gaps creates rows beyond component data boundaries
+    if slid_components:
+        # Keep rows where at least one component is non-NaN
+        has_data_mask = slid_result[slid_components].notna().any(axis=1)
+        slid_result = slid_result[has_data_mask].copy()
+
+    # Step 6: Calculate the total SOFA score.
+    slid_result['sofa'] = slid_result[slid_components].fillna(0).sum(axis=1).astype(int)
+    
+    # Final column selection.
+    final_cols = ['stay_id', 'time', 'sofa']
+    if keep_components:
+        final_cols.extend(sofa_components)
+    
+    # Ensure all required columns exist before returning, adding NaN if they were dropped.
+    for col in final_cols:
+        if col not in slid_result.columns:
+            slid_result[col] = np.nan
+            
+    return slid_result[final_cols]
+
+
+def sofa_resp(pafi: pd.Series, vent_ind: Optional[pd.Series] = None) -> pd.Series:
+    """Calculate respiratory SOFA component.
+    
+    Replicates R ricu's sofa_resp logic:
+    - Merge pafi with expanded vent_ind (aggregate="any")
+    - If pafi < 200 and NOT on ventilation, set pafi = 200
+    - Then calculate score based on pafi thresholds
+
+    Score based on PaO2/FiO2 ratio (after adjustment):
+    - 0: >= 400
+    - 1: < 400
+    - 2: < 300
+    - 3: < 200
+    - 4: < 100
+
+    Args:
+        pafi: PaO2/FiO2 ratio values (should already be adjusted if vent_ind provided)
+        vent_ind: Ventilation indicator (optional, should be expanded from win_tbl)
+
+    Returns:
+        Series with respiratory SOFA scores
+    """
+    def is_true(series):
+        """Replicate R's is_true: non-NA and True"""
+        return series.fillna(False).astype(bool)
+    
+    # Replicate R logic: if pafi < 200 and NOT on ventilation, set pafi = 200
+    pafi_adjusted = pafi.copy()
+    if vent_ind is not None:
+        mask = is_true(pafi < 200) & (~is_true(vent_ind))
+        pafi_adjusted[mask] = 200
+    
+    # Calculate score using fifelse chain (R ricu logic)
+    # R: fifelse(is_true(x < 100), 4L, fifelse(is_true(x < 200), 3L, ...))
+    # This is a nested if-else: check from highest to lowest threshold
+    score = pd.Series(0, index=pafi.index, dtype=int)
+    
+    # Apply in priority order (highest to lowest threshold)
+    # Note: fifelse is a nested if-else, so we check conditions sequentially
+    pafi_num = pd.to_numeric(pafi_adjusted, errors='coerce')
+    # Use vectorized if-else logic: each condition is checked in order
+    # For each row, find the FIRST matching condition (highest priority)
+    score = pd.Series(0, index=pafi.index, dtype=int)
+    mask_100 = is_true(pafi_num < 100)
+    mask_200 = is_true(pafi_num < 200) & ~mask_100
+    mask_300 = is_true(pafi_num < 300) & ~mask_200 & ~mask_100
+    mask_400 = is_true(pafi_num < 400) & ~mask_300 & ~mask_200 & ~mask_100
+    
+    score[mask_100] = 4
+    score[mask_200] = 3
+    score[mask_300] = 2
+    score[mask_400] = 1
+    
+    return score
+
+
+def sofa_coag(plt: pd.Series) -> pd.Series:
+    """Calculate coagulation SOFA component.
+    
+    Replicates R ricu's sofa_coag logic:
+    sofa_coag <- sofa_single("plt", "sofa_coag", function(x) 4L - findInterval(x, c(20, 50, 100, 150)))
+
+    Score based on platelet count (×10³/mm³):
+    - 4: < 20
+    - 3: 20-49
+    - 2: 50-99
+    - 1: 100-149
+    - 0: >= 150
+
+    Args:
+        plt: Platelet count values
+
+    Returns:
+        Series with coagulation SOFA scores
+    """
+    # Replicate R's findInterval logic: findInterval(x, c(20, 50, 100, 150))
+    # Returns: 0 if x < 20, 1 if 20 <= x < 50, 2 if 50 <= x < 100, 3 if 100 <= x < 150, 4 if x >= 150
+    # Then: score = 4 - findInterval
+    # Replicate R's findInterval logic: findInterval(x, c(20, 50, 100, 150))
+    # Returns: 0 if x < 20, 1 if 20 <= x < 50, 2 if 50 <= x < 100, 3 if 100 <= x < 150, 4 if x >= 150
+    # Then: score = 4 - findInterval
+    score = pd.Series(0, index=plt.index, dtype=int)
+    
+    # Handle NaN values (keep as 0)
+    valid_mask = plt.notna()
+    
+    # Apply findInterval logic
+    # x < 20: findInterval = 0, score = 4 - 0 = 4
+    score[valid_mask & (plt < 20)] = 4
+    
+    # 20 <= x < 50: findInterval = 1, score = 4 - 1 = 3
+    score[valid_mask & (plt >= 20) & (plt < 50)] = 3
+    
+    # 50 <= x < 100: findInterval = 2, score = 4 - 2 = 2
+    score[valid_mask & (plt >= 50) & (plt < 100)] = 2
+    
+    # 100 <= x < 150: findInterval = 3, score = 4 - 3 = 1
+    score[valid_mask & (plt >= 100) & (plt < 150)] = 1
+    
+    # x >= 150: findInterval = 4, score = 4 - 4 = 0 (already set)
+    
+    return score
+
+
+def sofa_liver(bili: pd.Series) -> pd.Series:
+    """Calculate liver SOFA component.
+    
+    Replicates R ricu's sofa_liver logic:
+    sofa_liver <- sofa_single("bili", "sofa_liver", function(x) findInterval(x, c(1.2, 2, 6, 12)))
+
+    Score based on bilirubin (mg/dL):
+    - 0: < 1.2
+    - 1: 1.2-1.9
+    - 2: 2.0-5.9
+    - 3: 6.0-11.9
+    - 4: >= 12.0
+
+    Args:
+        bili: Bilirubin values
+
+    Returns:
+        Series with liver SOFA scores
+    """
+    # Replicate R's findInterval logic: findInterval(x, c(1.2, 2, 6, 12))
+    # Returns: 0 if x < 1.2, 1 if 1.2 <= x < 2, 2 if 2 <= x < 6, 3 if 6 <= x < 12, 4 if x >= 12
+    score = pd.Series(0, index=bili.index, dtype=int)
+    
+    # Handle NaN values (keep as 0)
+    valid_mask = bili.notna()
+    
+    # Apply findInterval logic directly
+    # x < 1.2: findInterval = 0, score = 0 (already set)
+    
+    # 1.2 <= x < 2: findInterval = 1, score = 1
+    score[valid_mask & (bili >= 1.2) & (bili < 2.0)] = 1
+    
+    # 2 <= x < 6: findInterval = 2, score = 2
+    score[valid_mask & (bili >= 2.0) & (bili < 6.0)] = 2
+    
+    # 6 <= x < 12: findInterval = 3, score = 3
+    score[valid_mask & (bili >= 6.0) & (bili < 12.0)] = 3
+    
+    # x >= 12: findInterval = 4, score = 4
+    score[valid_mask & (bili >= 12.0)] = 4
+    
+    return score
+
+
+def sofa_cardio(
+    map: pd.Series,
+    dopa60: Optional[pd.Series] = None,
+    norepi60: Optional[pd.Series] = None,
+    dobu60: Optional[pd.Series] = None,
+    epi60: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Calculate cardiovascular SOFA component.
+    
+    Replicates R ricu's fifelse chain logic with proper priority:
+    - 4: dopa > 15 | epi > 0.1 | norepi > 0.1
+    - 3: dopa > 5 | (epi > 0 & epi <= 0.1) | (norepi > 0 & norepi <= 0.1)
+    - 2: (dopa > 0 & dopa <= 5) | dobu > 0
+    - 1: map < 70
+    - 0: otherwise
+
+    IMPORTANT: Vasopressor rates MUST be in μg/kg/min
+    
+    Unit conversion requirements:
+    - If your data is in μg/min (not weight-adjusted), divide by patient weight (kg)
+    - If your data is in mg/h, convert: (mg/h * 1000 μg/mg) / (60 min/h * weight_kg)
+    - Common MIMIC-IV sources (inputevents) may store rates in various units
+    
+    The thresholds (e.g., dopa > 15, norepi > 0.1) assume μg/kg/min.
+    Incorrect units will cause severe scoring errors.
+
+    Args:
+        map: Mean arterial pressure values (mmHg)
+        dopa60: Dopamine rate (μg/kg/min) - REQUIRED UNIT
+        norepi60: Norepinephrine rate (μg/kg/min) - REQUIRED UNIT
+        dobu60: Dobutamine rate (μg/kg/min) - REQUIRED UNIT
+        epi60: Epinephrine rate (μg/kg/min) - REQUIRED UNIT
+
+    Returns:
+        Series with cardiovascular SOFA scores
+        
+    Warnings:
+        This function does NOT perform unit conversion. Ensure vasopressor
+        rates are standardized to μg/kg/min before calling this function.
+        Use pyricu.unit_conversion or concept-level callbacks for standardization.
+    """
+    # Default zero for missing vasopressor data
+    dopa = dopa60.fillna(0) if dopa60 is not None else pd.Series(0, index=map.index)
+    norepi = norepi60.fillna(0) if norepi60 is not None else pd.Series(0, index=map.index)
+    dobu = dobu60.fillna(0) if dobu60 is not None else pd.Series(0, index=map.index)
+    epi = epi60.fillna(0) if epi60 is not None else pd.Series(0, index=map.index)
+    
+    # Convert to boolean masks for proper handling of NaN
+    def is_true(series):
+        """Replicate R's is_true: non-NA and True"""
+        return series.fillna(False).astype(bool)
+    
+    # Chain of fifelse (if-else) with priority from highest to lowest
+    # Score 4: highest priority
+    score = pd.Series(0, index=map.index, dtype=int)
+    score[is_true((dopa > 15) | (epi > 0.1) | (norepi > 0.1))] = 4
+    
+    # Score 3: second priority (only if not already 4)
+    mask3 = is_true((dopa > 5) | ((epi > 0) & (epi <= 0.1)) | ((norepi > 0) & (norepi <= 0.1)))
+    score[mask3 & (score != 4)] = 3
+    
+    # Score 2: third priority (only if not already 3 or 4)
+    mask2 = is_true(((dopa > 0) & (dopa <= 5)) | (dobu > 0))
+    score[mask2 & (score < 3)] = 2
+    
+    # Score 1: lowest priority (only if not already 2, 3, or 4)
+    mask1 = is_true(map < 70)
+    score[mask1 & (score < 2)] = 1
+    
+    return score
+
+
+def sofa_cns(gcs: pd.Series) -> pd.Series:
+    """Calculate CNS SOFA component.
+
+    Score based on Glasgow Coma Score:
+    - 0: 15
+    - 1: 13-14
+    - 2: 10-12
+    - 3: 6-9
+    - 4: < 6
+
+    Args:
+        gcs: Glasgow Coma Score values
+
+    Returns:
+        Series with CNS SOFA scores
+    """
+    # Convert to numeric, preserving NaN
+    g = pd.to_numeric(gcs, errors="coerce")
+    score = pd.Series(0, index=g.index, dtype=int)
+    
+    # Only apply thresholds where gcs is not NaN
+    # Score 4: < 6
+    mask = g < 6
+    score[mask] = 4
+    
+    # Score 3: 6-9
+    mask = (g >= 6) & (g < 10)
+    score[mask] = 3
+    
+    # Score 2: 10-12
+    mask = (g >= 10) & (g < 13)
+    score[mask] = 2
+    
+    # Score 1: 13-14
+    mask = (g >= 13) & (g < 15)
+    score[mask] = 1
+    
+    # Score 0: 15 (default, already set)
+    # NaN values remain 0 (which is correct for missing data)
+    
+    return score
+
+
+def sofa_renal(
+    crea: pd.Series,
+    urine24: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Calculate renal SOFA component.
+    
+    Replicates R ricu's sofa_renal fifelse chain logic:
+    - 4: cre >= 5 | uri < 200
+    - 3: (cre >= 3.5 & cre < 5) | uri < 500
+    - 2: cre >= 2 & cre < 3.5
+    - 1: cre >= 1.2 & cre < 2
+    - 0: otherwise (when at least one input is non-NA)
+    
+    CRITICAL: In ricu, sofa_renal is calculated using collect_dots with merge_dat=TRUE,
+    which means it only produces output at time points where at least one of the input
+    concepts (crea or urine24) has data. The score itself follows fifelse logic that
+    returns 0L as the final else, but this is only executed when there IS data.
+
+    Args:
+        crea: Creatinine values (mg/dL)
+        urine24: 24-hour urine output values (mL/day, optional)
+
+    Returns:
+        Series with renal SOFA scores (0-4, with 0 as baseline when data exists)
+    """
+    def is_true(series):
+        """Replicate R's is_true: non-NA and True"""
+        return series.fillna(False).astype(bool)
+    
+    # Convert to numeric, preserving NaN
+    crea_num = pd.to_numeric(crea, errors="coerce")
+    
+    # Handle urine24: only use if provided
+    if urine24 is not None:
+        uri_num = pd.to_numeric(urine24, errors="coerce")
+    else:
+        # If not provided, create Series of NaN (won't match any threshold)
+        uri_num = pd.Series(np.nan, index=crea.index)
+    
+    # Start with 0 as baseline score (matching R's final else in nested fifelse)
+    score = pd.Series(0, index=crea.index, dtype=int)
+    
+    # Start with 0 as baseline score (matching R's final else in nested fifelse)
+    score = pd.Series(0, index=crea.index, dtype=int)
+    
+    # Score 1: crea >= 1.2 & crea < 2 (only based on crea)
+    mask1 = is_true((crea_num >= 1.2) & (crea_num < 2))
+    score[mask1] = 1
+    
+    # Score 2: crea >= 2 & crea < 3.5 (only based on crea)
+    mask2 = is_true((crea_num >= 2) & (crea_num < 3.5))
+    score[mask2] = 2
+    
+    # Score 3: (crea >= 3.5 & crea < 5) OR urine24 < 500
+    mask_crea_3 = is_true((crea_num >= 3.5) & (crea_num < 5))
+    mask_uri_3 = is_true(uri_num < 500)
+    score[mask_crea_3 | mask_uri_3] = 3
+    
+    # Score 4: crea >= 5 OR urine24 < 200
+    mask_crea_4 = is_true(crea_num >= 5)
+    mask_uri_4 = is_true(uri_num < 200)
+    score[mask_crea_4 | mask_uri_4] = 4
+    
+    return score
+
+
+def sofa2_renal(
+    crea: pd.Series,
+    rrt: Optional[pd.Series] = None,
+    rrt_criteria: Optional[pd.Series] = None,
+    urine_mlkgph: Optional[pd.Series] = None,
+    potassium: Optional[pd.Series] = None,
+    ph: Optional[pd.Series] = None,
+    bicarb: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Calculate SOFA-2 renal component.
+    
+    SOFA-2 renal scoring (2025 version):
+    - Score 4: Receiving RRT OR meets RRT criteria OR crea > 3.5 mg/dL OR anuria (0 mL ≥12h) OR urine <0.3 mL/kg/h ≥24h
+    - Score 3: crea > 2.0-3.5 mg/dL OR urine <0.5 mL/kg/h ≥12h
+    - Score 2: crea > 1.2-2.0 mg/dL OR urine <0.5 mL/kg/h for 6-12h  
+    - Score 1: crea ≤ 3.0 mg/dL (threshold relaxed from SOFA-1's 1.9)
+    - Score 0: crea ≤ 1.2 mg/dL
+    
+    RRT criteria (SOFA-2 footnote p):
+    - Creatinine > 1.2 mg/dL OR oliguria (<0.3 mL/kg/h) for >6 hours
+    - PLUS at least one of:
+      * Serum potassium ≥ 6.0 mmol/L
+      * Metabolic acidosis: pH ≤ 7.20 AND HCO3 ≤ 12 mmol/L
+    
+    Args:
+        crea: Serum creatinine (mg/dL)
+        rrt: Boolean - currently receiving RRT
+        rrt_criteria: Boolean - meets RRT criteria but not receiving it
+        urine_mlkgph: Urine output rate (mL/kg/h)
+        potassium: Serum potassium (mmol/L) - for RRT criteria
+        ph: Arterial pH - for RRT criteria
+        bicarb: Serum bicarbonate (mmol/L) - for RRT criteria
+        
+    Returns:
+        Series with SOFA-2 renal scores (0-4)
+    """
+    crea_num = pd.to_numeric(crea, errors="coerce")
+    score = pd.Series(0, index=crea.index, dtype=int)
+    
+    # Handle urine output (now in mL/kg/h, not mL/day)
+    if urine_mlkgph is not None:
+        urine_num = pd.to_numeric(urine_mlkgph, errors="coerce")
+    else:
+        urine_num = pd.Series(np.nan, index=crea.index)
+    
+    # Score 1: crea ≤ 3.0 mg/dL (note: this is just for completeness, default is 0)
+    # (No need to explicitly score this as it's covered by score 2 threshold)
+    
+    # Score 2: crea > 1.2-2.0 mg/dL OR urine <0.5 mL/kg/h for 6-12h
+    mask2_crea = _is_true_safe((crea_num > 1.2) & (crea_num <= 2.0))
+    mask2_urine = _is_true_safe(urine_num < 0.5)  # Simplified: can't track duration here
+    score[mask2_crea | mask2_urine] = 2
+    
+    # Score 3: crea > 2.0-3.5 mg/dL OR urine <0.5 mL/kg/h ≥12h
+    mask3_crea = _is_true_safe((crea_num > 2.0) & (crea_num <= 3.5))
+    # For urine duration, we'd need temporal logic - simplified here
+    score[mask3_crea] = 3
+    
+    # Score 4: Multiple conditions
+    # - RRT in use
+    mask4_rrt = _is_true_safe(rrt) if rrt is not None else pd.Series(False, index=crea.index)
+    
+    # - Meets RRT criteria but not receiving it
+    mask4_rrt_crit = _is_true_safe(rrt_criteria) if rrt_criteria is not None else pd.Series(False, index=crea.index)
+    
+    # - Creatinine criteria
+    mask4_crea = _is_true_safe(crea_num > 3.5)
+    
+    # - Urine criteria: <0.3 mL/kg/h for ≥24h or anuria ≥12h
+    mask4_urine = _is_true_safe(urine_num < 0.3)  # Simplified
+    
+    # If we have potassium and pH/bicarb data, check RRT criteria
+    # RRT criteria: (crea > 1.2 OR oliguria) AND (K+ ≥ 6.0 OR acidosis)
+    if not mask4_rrt_crit.any() and potassium is not None and ph is not None and bicarb is not None:
+        k_num = pd.to_numeric(potassium, errors="coerce")
+        ph_num = pd.to_numeric(ph, errors="coerce")
+        hco3_num = pd.to_numeric(bicarb, errors="coerce")
+        
+        # Base kidney injury: crea > 1.2 OR oliguria (<0.3 mL/kg/h for >6h)
+        base_injury = _is_true_safe(crea_num > 1.2) | _is_true_safe(urine_num < 0.3)
+        
+        # Electrolyte/acid-base crisis
+        hyperkalemia = _is_true_safe(k_num >= 6.0)
+        acidosis = _is_true_safe((ph_num <= 7.20) & (hco3_num <= 12))
+        
+        # Meets RRT criteria
+        mask4_rrt_crit = base_injury & (hyperkalemia | acidosis)
+    
+    # Apply score 4
+    score[mask4_rrt | mask4_rrt_crit | mask4_crea | mask4_urine] = 4
+    
+    return score
+
+
+def sofa2_resp(
+    pafi: pd.Series,
+    spo2: Optional[pd.Series] = None,
+    fio2: Optional[pd.Series] = None,
+    adv_resp: Optional[pd.Series] = None,
+    ecmo: Optional[pd.Series] = None,
+    ecmo_indication: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Calculate SOFA-2 respiratory component.
+    
+    SOFA-2 respiratory scoring (2025 version):
+    - Score 4: P/F ≤75 with advanced support OR ECMO (respiratory indication)
+    - Score 3: P/F ≤150 with advanced support
+    - Score 2: P/F ≤225
+    - Score 1: P/F ≤300
+    - Score 0: P/F >300
+    
+    Advanced support required for scores 3-4 (unless unavailable/ceiling of treatment).
+    If PaO2/FiO2 unavailable, use SpO2/FiO2 with adjusted cutoffs.
+    
+    Args:
+        pafi: PaO2/FiO2 ratio
+        spo2: SpO2 (oxygen saturation) for SaFi calculation
+        fio2: FiO2 (fraction of inspired oxygen) for SaFi calculation
+        adv_resp: Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP)
+        ecmo: ECMO in use
+        ecmo_indication: ECMO indication ('respiratory' or 'cardiovascular')
+    
+    Returns:
+        Series with SOFA-2 respiratory scores (0-4)
+    """
+    pf = pd.to_numeric(pafi, errors="coerce")
+    idx = pf.index
+    score = pd.Series(0, index=idx, dtype=int)
+    
+    # Calculate SaFi if PaFi unavailable
+    safi = None
+    if spo2 is not None and fio2 is not None:
+        s = pd.to_numeric(spo2, errors="coerce")
+        f = pd.to_numeric(fio2, errors="coerce")
+        # Only use SaFi when SpO2 < 98% (per SOFA-2 footnote f)
+        safi = s / f
+        safi[s >= 98] = np.nan
+    
+    # Use SaFi if PaFi unavailable (with adjusted cutoffs per footnote f)
+    # SaFi cutoffs: >300 / ≤300 / ≤250 / ≤200 with vent / ≤120 with vent or ECMO
+    ratio = pf.copy()
+    use_safi = pf.isna() & (safi is not None and safi.notna())
+    if use_safi.any() and safi is not None:
+        ratio[use_safi] = safi[use_safi]
+    
+    # Check for advanced respiratory support
+    on_adv_resp = _is_true_safe(adv_resp) if adv_resp is not None else pd.Series(False, index=idx)
+    
+    # Check for ECMO (respiratory indication auto-scores 4)
+    on_ecmo_resp = pd.Series(False, index=idx)
+    if ecmo is not None and ecmo_indication is not None:
+        on_ecmo = _is_true_safe(ecmo)
+        is_resp_indication = (ecmo_indication == 'respiratory')
+        on_ecmo_resp = on_ecmo & is_resp_indication
+    elif ecmo is not None:
+        # Default ECMO to respiratory if indication unknown
+        on_ecmo_resp = _is_true_safe(ecmo)
+    
+    # Score 1: P/F ≤300 (or SaFi ≤300)
+    score[ratio <= 300] = 1
+    
+    # Score 2: P/F ≤225 (or SaFi ≤250)
+    mask2 = (ratio <= 225) if safi is None else ((ratio <= 225) | ((use_safi) & (ratio <= 250)))
+    score[mask2] = 2
+    
+    # Score 3: P/F ≤150 (or SaFi ≤200) WITH advanced support
+    mask3_ratio = (ratio <= 150) if safi is None else ((ratio <= 150) | ((use_safi) & (ratio <= 200)))
+    mask3 = mask3_ratio & on_adv_resp
+    score[mask3] = 3
+    
+    # Score 4: P/F ≤75 (or SaFi ≤120) WITH advanced support OR ECMO (respiratory)
+    mask4_ratio = (ratio <= 75) if safi is None else ((ratio <= 75) | ((use_safi) & (ratio <= 120)))
+    mask4 = (mask4_ratio & on_adv_resp) | on_ecmo_resp
+    score[mask4] = 4
+    
+    return score
+
+
+def sofa2_coag(plt: pd.Series) -> pd.Series:
+    """Calculate SOFA-2 coagulation component.
+    
+    SOFA-2 hemostasis scoring (updated thresholds from SOFA-1):
+    - Score 4: platelets ≤50
+    - Score 3: platelets ≤80  (was ≤50 in SOFA-1)
+    - Score 2: platelets ≤100 (was ≤100 in SOFA-1)
+    - Score 1: platelets ≤150 (was ≤150 in SOFA-1)
+    - Score 0: platelets >150
+    
+    Args:
+        plt: Platelet count (×10³/μL)
+        
+    Returns:
+        Series with SOFA-2 coagulation scores (0-4)
+    """
+    p = pd.to_numeric(plt, errors="coerce")
+    score = pd.Series(0, index=p.index, dtype=int)
+    
+    valid = p.notna()
+    score[valid & (p <= 150)] = 1
+    score[valid & (p <= 100)] = 2
+    score[valid & (p <= 80)] = 3
+    score[valid & (p <= 50)] = 4
+    
+    return score
+
+
+def sofa2_liver(bili: pd.Series) -> pd.Series:
+    """Calculate SOFA-2 liver component.
+    
+    SOFA-2 liver scoring (relaxed 1-point threshold):
+    - Score 4: bilirubin >12 mg/dL (>205 μmol/L)
+    - Score 3: bilirubin ≤12, >6.0 mg/dL (≤205, >102.6 μmol/L)
+    - Score 2: bilirubin ≤6.0, >3.0 mg/dL (≤102.6, >51.3 μmol/L)
+    - Score 1: bilirubin ≤3.0, >1.2 mg/dL (≤51.3, >20.6 μmol/L) - RELAXED from ≤1.9 in SOFA-1
+    - Score 0: bilirubin ≤1.2 mg/dL (≤20.6 μmol/L)
+    
+    Args:
+        bili: Total bilirubin (mg/dL)
+        
+    Returns:
+        Series with SOFA-2 liver scores (0-4)
+    """
+    b = pd.to_numeric(bili, errors="coerce")
+    score = pd.Series(0, index=b.index, dtype=int)
+    
+    valid = b.notna()
+    # Use findInterval-like logic: check thresholds in order
+    score[valid & (b > 1.2)] = 1  # Relaxed threshold (was 1.9 in SOFA-1)
+    score[valid & (b > 3.0)] = 2  # SOFA-2 new intermediate threshold
+    score[valid & (b >= 6.0)] = 3
+    score[valid & (b > 12.0)] = 4
+    
+    return score
+
+
+def sofa2_cardio(
+    map: pd.Series,
+    norepi60: Optional[pd.Series] = None,
+    epi60: Optional[pd.Series] = None,
+    dopa60: Optional[pd.Series] = None,
+    dobu60: Optional[pd.Series] = None,
+    other_vaso: Optional[pd.Series] = None,
+    mech_circ_support: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Calculate SOFA-2 cardiovascular component.
+    
+    SOFA-2 cardiovascular scoring (combined catecholamine dosing):
+    - Score 4: High-dose vasopressor (NE+Epi >0.4 μg/kg/min) 
+               OR medium-dose + other vaso/inotrope
+               OR mechanical circulatory support
+    - Score 3: Medium-dose (NE+Epi 0.2-0.4) OR low-dose + other vaso/inotrope
+    - Score 2: Low-dose (NE+Epi ≤0.2) OR any other vaso/inotrope
+    - Score 1: MAP <70 mmHg, no vasopressors
+    - Score 0: MAP ≥70 mmHg
+    
+    Dopamine used only if NE/Epi unavailable (equipotency: >40 = high, >20 = medium, ≤20 = low).
+    
+    Args:
+        map: Mean arterial pressure (mmHg)
+        norepi60: Norepinephrine dose (μg/kg/min)
+        epi60: Epinephrine dose (μg/kg/min)
+        dopa60: Dopamine dose (μg/kg/min, backup)
+        dobu60: Dobutamine dose (μg/kg/min)
+        other_vaso: Other vasopressors/inotropes (vasopressin/phenylephrine/milrinone)
+        mech_circ_support: Mechanical circulatory support (IABP/LVAD/Impella/VA-ECMO)
+        
+    Returns:
+        Series with SOFA-2 cardiovascular scores (0-4)
+    """
+    map_num = pd.to_numeric(map, errors="coerce")
+    idx = map_num.index
+    score = pd.Series(0, index=idx, dtype=int)
+    
+    # Convert vasopressor doses to numeric
+    ne = pd.to_numeric(norepi60, errors="coerce").fillna(0) if norepi60 is not None else pd.Series(0, index=idx)
+    epi = pd.to_numeric(epi60, errors="coerce").fillna(0) if epi60 is not None else pd.Series(0, index=idx)
+    dopa = pd.to_numeric(dopa60, errors="coerce").fillna(0) if dopa60 is not None else pd.Series(0, index=idx)
+    dobu = pd.to_numeric(dobu60, errors="coerce").fillna(0) if dobu60 is not None else pd.Series(0, index=idx)
+    
+    # SOFA-2: Combined norepinephrine + epinephrine dose
+    combined_cate = ne + epi
+    
+    # Check for other vasopressors/inotropes
+    has_other_vaso = _is_true_safe(other_vaso) | (dobu > 0) if other_vaso is not None else (dobu > 0)
+    
+    # Check for mechanical support
+    has_mech_support = _is_true_safe(mech_circ_support) if mech_circ_support is not None else pd.Series(False, index=idx)
+    
+    # Score 1: MAP <70, no vasopressors
+    score[map_num < 70] = 1
+    
+    # Use dopamine only if NE/Epi not available
+    use_dopamine = (combined_cate == 0) & (dopa > 0)
+    
+    # Score 2: Low-dose vasopressor OR any other vaso/inotrope
+    low_dose_cate = (combined_cate > 0) & (combined_cate <= 0.2)
+    low_dose_dopa = use_dopamine & (dopa <= 20)
+    score[low_dose_cate | low_dose_dopa | has_other_vaso] = 2
+    
+    # Score 3: Medium-dose OR low-dose + other vaso
+    medium_dose_cate = (combined_cate > 0.2) & (combined_cate <= 0.4)
+    medium_dose_dopa = use_dopamine & (dopa > 20) & (dopa <= 40)
+    score[medium_dose_cate | medium_dose_dopa | (low_dose_cate & has_other_vaso)] = 3
+    
+    # Score 4: High-dose OR medium-dose + other vaso OR mechanical support
+    high_dose_cate = combined_cate > 0.4
+    high_dose_dopa = use_dopamine & (dopa > 40)
+    score[high_dose_cate | high_dose_dopa | (medium_dose_cate & has_other_vaso) | has_mech_support] = 4
+    
+    return score
+
+
+def sofa2_cns(
+    gcs: pd.Series,
+    delirium_tx: Optional[pd.Series] = None,
+    sedated_gcs: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Calculate SOFA-2 CNS (brain) component.
+    
+    SOFA-2 brain scoring:
+    - Score 4: GCS 3-5 (or extension/no response to pain, myoclonus)
+    - Score 3: GCS 6-8 (or flexion to pain)
+    - Score 2: GCS 9-12 (or withdrawal to pain)
+    - Score 1: GCS 13-14 (or localizing to pain) OR delirium treatment
+    - Score 0: GCS 15 (unless on delirium treatment)
+    
+    Special rules:
+    - Use sedated_gcs (GCS before sedation) if available
+    - If receiving delirium treatment and GCS=15, score 1 point
+    - Motor scale can substitute full GCS if unavailable
+    
+    Args:
+        gcs: Glasgow Coma Scale (3-15)
+        delirium_tx: Receiving delirium treatment (haloperidol, etc.)
+        sedated_gcs: GCS before sedation (for sedated patients)
+        
+    Returns:
+        Series with SOFA-2 CNS scores (0-4)
+    """
+    # Use sedated_gcs if available, otherwise use regular gcs
+    g = pd.to_numeric(sedated_gcs, errors="coerce") if sedated_gcs is not None else pd.Series(np.nan, index=gcs.index)
+    g = g.fillna(pd.to_numeric(gcs, errors="coerce"))
+    
+    idx = g.index
+    score = pd.Series(0, index=idx, dtype=int)
+    
+    valid = g.notna()
+    score[valid & (g >= 13) & (g <= 14)] = 1
+    score[valid & (g >= 9) & (g <= 12)] = 2
+    score[valid & (g >= 6) & (g <= 8)] = 3
+    score[valid & (g >= 3) & (g <= 5)] = 4
+    
+    # SOFA-2 NEW: Delirium treatment rule
+    # If receiving delirium treatment and GCS==15, upgrade to 1pt
+    if delirium_tx is not None:
+        dtx = _is_true_safe(delirium_tx)
+        mask = (g == 15) & dtx
+        score[mask] = np.maximum(score[mask], 1)
+    
+    return score
+
+
+def sirs_score(
+    temp: pd.Series,
+    hr: pd.Series,
+    resp: pd.Series,
+    pco2: Optional[pd.Series] = None,
+    wbc: Optional[pd.Series] = None,
+    bnd: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Calculate SIRS (Systemic Inflammatory Response Syndrome) score.
+
+    SIRS criteria (score 1 for each):
+    - Temperature < 36°C or > 38°C
+    - Heart rate > 90 bpm
+    - Respiratory rate > 20/min or PaCO2 < 32 mmHg
+    - WBC < 4000 or > 12000 or >10% bands
+
+    Args:
+        temp: Temperature values (°C)
+        hr: Heart rate values
+        resp: Respiratory rate values
+        pco2: PaCO2 values (optional)
+        wbc: White blood cell count (optional)
+        bnd: Band forms percentage (optional)
+
+    Returns:
+        Series with SIRS scores (0-4)
+    """
+    score = pd.Series(0, index=temp.index, dtype=int)
+    
+    # Temperature criterion
+    score[(temp < 36) | (temp > 38)] += 1
+    
+    # Heart rate criterion
+    score[hr > 90] += 1
+    
+    # Respiratory criterion
+    score[resp > 20] += 1
+    if pco2 is not None:
+        score[pco2 < 32] += 1
+    
+    # WBC criterion
+    if wbc is not None:
+        score[(wbc < 4) | (wbc > 12)] += 1
+    if bnd is not None:
+        score[bnd > 10] += 1
+    
+    return score
+
+
+def qsofa_score(
+    sbp: pd.Series,
+    resp: pd.Series,
+    gcs: pd.Series,
+) -> pd.Series:
+    """Calculate qSOFA (quick SOFA) score.
+
+    qSOFA criteria (score 1 for each):
+    - SBP ≤ 100 mmHg
+    - Respiratory rate ≥ 22/min
+    - Altered mentation (GCS < 15)
+
+    Args:
+        sbp: Systolic blood pressure values
+        resp: Respiratory rate values
+        gcs: Glasgow Coma Score values
+
+    Returns:
+        Series with qSOFA scores (0-3)
+    """
+    score = pd.Series(0, index=sbp.index, dtype=int)
+    
+    score[sbp <= 100] += 1
+    score[resp >= 22] += 1
+    score[gcs < 15] += 1
+    
+    return score
+
+
+def apache_ii_score(
+    age: pd.Series,
+    temp: pd.Series,
+    map_val: pd.Series,
+    hr: pd.Series,
+    resp: pd.Series,
+    pao2: Optional[pd.Series] = None,
+    ph: Optional[pd.Series] = None,
+    na: Optional[pd.Series] = None,
+    k: Optional[pd.Series] = None,
+    crea: Optional[pd.Series] = None,
+    hct: Optional[pd.Series] = None,
+    wbc: Optional[pd.Series] = None,
+    gcs: Optional[pd.Series] = None,
+) -> pd.Series:
+    """Calculate APACHE II score (simplified version).
+
+    Note: This is a simplified implementation. Full APACHE II requires
+    additional chronic health and admission diagnosis information.
+
+    Args:
+        age: Age in years
+        temp: Temperature (°C)
+        map_val: Mean arterial pressure
+        hr: Heart rate
+        resp: Respiratory rate
+        pao2: PaO2 (optional)
+        ph: Arterial pH (optional)
+        na: Sodium (optional)
+        k: Potassium (optional)
+        crea: Creatinine (optional)
+        hct: Hematocrit (optional)
+        wbc: White blood cell count (optional)
+        gcs: Glasgow Coma Score (optional)
+
+    Returns:
+        Series with APACHE II scores
+    """
+    score = pd.Series(0, index=age.index, dtype=float)
+    
+    # Age points
+    score[age >= 45] += 2
+    score[age >= 55] += 3
+    score[age >= 65] += 5
+    score[age >= 75] += 6
+    
+    # Temperature
+    score[temp >= 41] += 4
+    score[(temp >= 39) & (temp < 41)] += 3
+    score[(temp >= 38.5) & (temp < 39)] += 1
+    score[(temp >= 36) & (temp < 38.5)] += 0
+    score[(temp >= 34) & (temp < 36)] += 1
+    score[(temp >= 32) & (temp < 34)] += 2
+    score[(temp >= 30) & (temp < 32)] += 3
+    score[temp < 30] += 4
+    
+    # Additional components would be added here...
+    # This is a placeholder for demonstration
+    
+    return score.astype(int)
+
+
+def news_score(
+    resp: pd.Series,
+    temp: pd.Series,
+    sbp: pd.Series,
+    hr: pd.Series,
+    o2sat: pd.Series = None,
+    spo2: pd.Series = None,
+    supp_o2: pd.Series = None,
+    avpu: pd.Series = None,
+    gcs: pd.Series = None,
+    keep_components: bool = False
+) -> Union[pd.Series, pd.DataFrame]:
+    """
+    Calculate NEWS (National Early Warning Score).
+    
+    NEWS is an early warning score system for detecting acute illness deterioration.
+    
+    Components:
+    - Respiratory rate: 8-24 breaths/min
+    - Oxygen saturation: 91-100%
+    - Temperature: 35-39°C
+    - Systolic BP: 90-219 mmHg
+    - Heart rate: 40-130 bpm
+    - Supplemental O2: Yes/No
+    - Consciousness level: A=Alert, V=Voice, P=Pain, U=Unresponsive
+    
+    Args:
+        resp: Respiratory rate
+        temp: Temperature (°C)
+        sbp: Systolic blood pressure
+        hr: Heart rate
+        o2sat: Oxygen saturation (%) - alias: spo2
+        spo2: Oxygen saturation (%) - alias for o2sat
+        supp_o2: Supplemental oxygen (boolean), optional
+        avpu: AVPU score (A/V/P/U), optional
+        gcs: Glasgow Coma Scale (alternative to AVPU), optional
+        keep_components: Return individual component scores
+        
+    Returns:
+        NEWS total score or DataFrame with components
+    """
+    # Handle parameter aliases
+    if o2sat is None and spo2 is not None:
+        o2sat = spo2
+    
+    # Create default values if not provided
+    if o2sat is None:
+        o2sat = pd.Series(100, index=resp.index)
+    if supp_o2 is None:
+        supp_o2 = pd.Series(False, index=resp.index)
+    if avpu is None and gcs is None:
+        avpu = pd.Series("A", index=resp.index)
+    elif avpu is None and gcs is not None:
+        # Convert GCS to AVPU (rough approximation)
+        avpu = pd.Series("A", index=gcs.index)
+        avpu[gcs < 15] = "V"
+        avpu[gcs < 13] = "P"
+        avpu[gcs < 9] = "U"
+    # Initialize component scores
+    resp_score = pd.Series(0, index=resp.index, dtype=int)
+    resp_score[resp <= 8] = 3
+    resp_score[(resp > 8) & (resp <= 11)] = 1
+    resp_score[(resp > 11) & (resp <= 20)] = 0
+    resp_score[(resp > 20) & (resp <= 24)] = 2
+    resp_score[resp > 24] = 3
+    
+    o2sat_score = pd.Series(0, index=o2sat.index, dtype=int)
+    o2sat_score[o2sat <= 91] = 3
+    o2sat_score[(o2sat > 91) & (o2sat <= 93)] = 2
+    o2sat_score[(o2sat > 93) & (o2sat <= 95)] = 1
+    o2sat_score[o2sat > 95] = 0
+    
+    temp_score = pd.Series(0, index=temp.index, dtype=int)
+    temp_score[temp <= 35] = 3
+    temp_score[(temp > 35) & (temp <= 36)] = 1
+    temp_score[(temp > 36) & (temp <= 38.4)] = 0
+    temp_score[(temp > 38.4) & (temp <= 39)] = 1
+    temp_score[temp > 39] = 2
+    
+    sbp_score = pd.Series(0, index=sbp.index, dtype=int)
+    sbp_score[sbp <= 90] = 3
+    sbp_score[(sbp > 90) & (sbp <= 100)] = 2
+    sbp_score[(sbp > 100) & (sbp <= 110)] = 1
+    sbp_score[(sbp > 110) & (sbp <= 219)] = 0
+    sbp_score[sbp > 219] = 3
+    
+    hr_score = pd.Series(0, index=hr.index, dtype=int)
+    hr_score[hr <= 40] = 3
+    hr_score[(hr > 40) & (hr <= 50)] = 1
+    hr_score[(hr > 50) & (hr <= 90)] = 0
+    hr_score[(hr > 90) & (hr <= 110)] = 1
+    hr_score[(hr > 110) & (hr <= 130)] = 2
+    hr_score[hr > 130] = 3
+    
+    supp_o2_score = supp_o2.apply(lambda x: 2 if x else 0).astype(int)
+    
+    avpu_score = avpu.apply(lambda x: 0 if x == "A" else 3).astype(int)
+    
+    # Calculate total
+    news_total = (
+        resp_score + o2sat_score + temp_score + sbp_score +
+        hr_score + supp_o2_score + avpu_score
+    )
+    
+    if keep_components:
+        return pd.DataFrame({
+            "news": news_total,
+            "resp_comp": resp_score,
+            "o2sat_comp": o2sat_score,
+            "temp_comp": temp_score,
+            "sbp_comp": sbp_score,
+            "hr_comp": hr_score,
+            "supp_o2_comp": supp_o2_score,
+            "avpu_comp": avpu_score
+        })
+    
+    return news_total
+
+
+def mews_score(
+    sbp: pd.Series,
+    hr: pd.Series,
+    resp: pd.Series,
+    temp: pd.Series,
+    avpu: pd.Series = None,
+    gcs: pd.Series = None,
+    keep_components: bool = False
+) -> Union[pd.Series, pd.DataFrame]:
+    """
+    Calculate MEWS (Modified Early Warning Score).
+    
+    MEWS is a simplified early warning score system.
+    
+    Components:
+    - Systolic BP: 70-199 mmHg
+    - Heart rate: 40-129 bpm
+    - Respiratory rate: 9-29 breaths/min
+    - Temperature: 35-38.4°C
+    - Consciousness level: A=0, V=1, P=2, U=3
+    
+    Args:
+        sbp: Systolic blood pressure
+        hr: Heart rate
+        resp: Respiratory rate
+        temp: Temperature (°C)
+        avpu: AVPU score (A/V/P/U), optional
+        gcs: Glasgow Coma Scale (alternative to AVPU), optional
+        keep_components: Return individual component scores
+        
+    Returns:
+        MEWS total score or DataFrame with components
+    """
+    # Handle missing consciousness assessment
+    if avpu is None and gcs is None:
+        avpu = pd.Series("A", index=sbp.index)
+    elif avpu is None and gcs is not None:
+        # Convert GCS to AVPU
+        avpu = pd.Series("A", index=gcs.index)
+        avpu[gcs < 15] = "V"
+        avpu[gcs < 13] = "P"
+        avpu[gcs < 9] = "U"
+    # Systolic BP score
+    sbp_score = pd.Series(0, index=sbp.index, dtype=int)
+    sbp_score[sbp <= 70] = 3
+    sbp_score[(sbp > 70) & (sbp <= 80)] = 2
+    sbp_score[(sbp > 80) & (sbp <= 100)] = 1
+    sbp_score[(sbp > 100) & (sbp <= 199)] = 0
+    sbp_score[sbp > 199] = 2
+    
+    # Heart rate score
+    hr_score = pd.Series(0, index=hr.index, dtype=int)
+    hr_score[hr <= 40] = 2
+    hr_score[(hr > 40) & (hr <= 50)] = 1
+    hr_score[(hr > 50) & (hr <= 100)] = 0
+    hr_score[(hr > 100) & (hr <= 110)] = 1
+    hr_score[(hr > 110) & (hr <= 129)] = 2
+    hr_score[hr > 129] = 3
+    
+    # Respiratory rate score
+    resp_score = pd.Series(0, index=resp.index, dtype=int)
+    resp_score[resp <= 9] = 2
+    resp_score[(resp > 9) & (resp <= 14)] = 0
+    resp_score[(resp > 14) & (resp <= 20)] = 1
+    resp_score[(resp > 20) & (resp <= 29)] = 2
+    resp_score[resp > 29] = 3
+    
+    # Temperature score
+    temp_score = pd.Series(0, index=temp.index, dtype=int)
+    temp_score[temp <= 35] = 2
+    temp_score[(temp > 35) & (temp <= 38.4)] = 0
+    temp_score[temp > 38.4] = 2
+    
+    # AVPU score
+    avpu_map = {"A": 0, "V": 1, "P": 2, "U": 3}
+    avpu_score = avpu.map(avpu_map).fillna(0).astype(int)
+    
+    # Calculate total
+    mews_total = sbp_score + hr_score + resp_score + temp_score + avpu_score
+    
+    if keep_components:
+        return pd.DataFrame({
+            "mews": mews_total,
+            "sbp_comp": sbp_score,
+            "hr_comp": hr_score,
+            "resp_comp": resp_score,
+            "temp_comp": temp_score,
+            "avpu_comp": avpu_score
+        })
+    
+    return mews_total
+
+
+def ts_to_win_tbl(win_dur):
+    """
+    Convert time series table to window table by adding duration variable.
+    
+    This is a higher-order function that returns a callback function.
+    The returned function adds a duration column and marks the table as window-based.
+    
+    Args:
+        win_dur: Window duration (e.g., from mins(1))
+        
+    Returns:
+        Callback function that transforms the data
+    """
+    def callback(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        """Add duration column to data."""
+        # Add duration column
+        result = data.copy()
+        result['dur_var'] = win_dur
+        return result
+    
+    return callback
+
+
+def pafi(
+    po2: pd.DataFrame,
+    fio2: pd.DataFrame,
+    match_win: pd.Timedelta = pd.Timedelta(hours=2),
+    mode: str = "match_vals",
+    fix_na_fio2: bool = True,
+) -> pd.DataFrame:
+    """Calculate PaO2/FiO2 ratio (P/F ratio) from oxygen partial pressure and FiO2.
+    
+    The P/F ratio is a key indicator of respiratory function used in SOFA scoring.
+    This function matches PaO2 and FiO2 measurements within a time window and
+    calculates the ratio.
+    
+    Args:
+        po2: DataFrame with PaO2 (partial pressure of oxygen) measurements
+        fio2: DataFrame with FiO2 (fraction of inspired oxygen) measurements
+        match_win: Time window for matching PaO2 and FiO2 (default: 2 hours)
+        mode: Matching mode ('match_vals', 'extreme_vals', or 'fill_gaps')
+        fix_na_fio2: If True, assume FiO2=21% (room air) when missing
+        
+    Returns:
+        DataFrame with pafi column (PaO2/FiO2 * 100)
+        
+    Examples:
+        >>> # Load PaO2 and FiO2 data
+        >>> po2_data = load_concept('po2', 'mimic_demo')
+        >>> fio2_data = load_concept('fio2', 'mimic_demo')
+        >>> pf_ratio = pafi(po2_data, fio2_data)
+    """
+    # Identify ID and time columns
+    id_cols = [col for col in po2.columns if 'id' in col.lower() and col in fio2.columns]
+    time_cols = [col for col in po2.columns if 'time' in col.lower() and col in fio2.columns]
+    
+    if not time_cols:
+        raise ValueError("No time column found in input DataFrames")
+    
+    time_col = time_cols[0]
+    
+    # Identify value columns (non-ID, non-time)
+    po2_val_col = [col for col in po2.columns if col not in id_cols + time_cols][0]
+    fio2_val_col = [col for col in fio2.columns if col not in id_cols + time_cols][0]
+    
+    # Prepare data
+    po2_df = po2[id_cols + [time_col, po2_val_col]].copy()
+    fio2_df = fio2[id_cols + [time_col, fio2_val_col]].copy()
+    
+    po2_df = po2_df.rename(columns={po2_val_col: 'po2'})
+    fio2_df = fio2_df.rename(columns={fio2_val_col: 'fio2'})
+    
+    # Merge based on mode
+    if mode == "match_vals":
+        # 🔧 FIX: 使用 left join 而不是 inner join，保留所有 po2 数据
+        # 这样即使 fio2 缺失，也能在后面填充为 21（室内空气）
+        result = pd.merge(po2_df, fio2_df, on=id_cols + [time_col], how='left')
+    
+    elif mode == "extreme_vals":
+        # Match within window, take extreme values
+        result = pd.merge_asof(
+            po2_df.sort_values(id_cols + [time_col]),
+            fio2_df.sort_values(id_cols + [time_col]),
+            on=time_col,
+            by=id_cols,
+            tolerance=match_win,
+            direction='nearest'
+        )
+    
+    elif mode == "fill_gaps":
+        # Forward fill FiO2 values
+        result = pd.merge_asof(
+            po2_df.sort_values(id_cols + [time_col]),
+            fio2_df.sort_values(id_cols + [time_col]),
+            on=time_col,
+            by=id_cols,
+            direction='backward'
+        )
+    
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+    
+    # Fix missing FiO2 (assume room air = 21%)
+    if fix_na_fio2:
+        result.loc[result['fio2'].isna(), 'fio2'] = 21.0
+    
+    # Remove rows with missing or invalid data
+    result = result[
+        result['po2'].notna() & 
+        result['fio2'].notna() & 
+        (result['fio2'] != 0)
+    ]
+    
+    # Calculate P/F ratio
+    result['pafi'] = 100 * result['po2'] / result['fio2']
+    
+    # Remove intermediate columns
+    result = result.drop(columns=['po2', 'fio2'])
+    
+    return result
+
+
+def safi(
+    o2sat: pd.DataFrame,
+    fio2: pd.DataFrame,
+    match_win: pd.Timedelta = pd.Timedelta(hours=2),
+    mode: str = "match_vals",
+    fix_na_fio2: bool = True,
+) -> pd.DataFrame:
+    """Calculate SaO2/FiO2 ratio (S/F ratio) from oxygen saturation and FiO2.
+    
+    The S/F ratio is an alternative to P/F ratio when arterial blood gas is not
+    available. It uses pulse oximetry (SpO2) instead of PaO2.
+    
+    Args:
+        o2sat: DataFrame with O2 saturation (SpO2) measurements
+        fio2: DataFrame with FiO2 (fraction of inspired oxygen) measurements
+        match_win: Time window for matching O2sat and FiO2 (default: 2 hours)
+        mode: Matching mode ('match_vals', 'extreme_vals', or 'fill_gaps')
+        fix_na_fio2: If True, assume FiO2=21% (room air) when missing
+        
+    Returns:
+        DataFrame with safi column (SaO2/FiO2 * 100)
+        
+    Examples:
+        >>> # Load SpO2 and FiO2 data
+        >>> spo2_data = load_concept('o2sat', 'mimic_demo')
+        >>> fio2_data = load_concept('fio2', 'mimic_demo')
+        >>> sf_ratio = safi(spo2_data, fio2_data)
+    """
+    # Identify ID and time columns
+    id_cols = [col for col in o2sat.columns if 'id' in col.lower() and col in fio2.columns]
+    time_cols = [col for col in o2sat.columns if 'time' in col.lower() and col in fio2.columns]
+    
+    if not time_cols:
+        raise ValueError("No time column found in input DataFrames")
+    
+    time_col = time_cols[0]
+    
+    # Identify value columns (non-ID, non-time)
+    o2sat_val_col = [col for col in o2sat.columns if col not in id_cols + time_cols][0]
+    fio2_val_col = [col for col in fio2.columns if col not in id_cols + time_cols][0]
+    
+    # Prepare data
+    o2sat_df = o2sat[id_cols + [time_col, o2sat_val_col]].copy()
+    fio2_df = fio2[id_cols + [time_col, fio2_val_col]].copy()
+    
+    o2sat_df = o2sat_df.rename(columns={o2sat_val_col: 'o2sat'})
+    fio2_df = fio2_df.rename(columns={fio2_val_col: 'fio2'})
+    
+    # Merge based on mode
+    if mode == "match_vals":
+        # 🔧 FIX: 使用 left join 而不是 inner join，保留所有 o2sat 数据
+        # 这样即使 fio2 缺失，也能在后面填充为 21（室内空气）
+        result = pd.merge(o2sat_df, fio2_df, on=id_cols + [time_col], how='left')
+    
+    elif mode == "extreme_vals":
+        # Match within window, take extreme values
+        result = pd.merge_asof(
+            o2sat_df.sort_values(id_cols + [time_col]),
+            fio2_df.sort_values(id_cols + [time_col]),
+            on=time_col,
+            by=id_cols,
+            tolerance=match_win,
+            direction='nearest'
+        )
+    
+    elif mode == "fill_gaps":
+        # Forward fill FiO2 values
+        result = pd.merge_asof(
+            o2sat_df.sort_values(id_cols + [time_col]),
+            fio2_df.sort_values(id_cols + [time_col]),
+            on=time_col,
+            by=id_cols,
+            direction='backward'
+        )
+    
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+    
+    # Fix missing FiO2 (assume room air = 21%)
+    if fix_na_fio2:
+        result.loc[result['fio2'].isna(), 'fio2'] = 21.0
+    
+    # Remove rows with missing or invalid data
+    result = result[
+        result['o2sat'].notna() & 
+        result['fio2'].notna() & 
+        (result['fio2'] != 0)
+    ]
+    
+    # Calculate S/F ratio
+    result['safi'] = 100 * result['o2sat'] / result['fio2']
+    
+    # Remove intermediate columns
+    result = result.drop(columns=['o2sat', 'fio2'])
+    
+    return result
+
