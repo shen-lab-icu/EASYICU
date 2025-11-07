@@ -1,15 +1,18 @@
-"""Sepsis detection based on SOFA-2.
+"""Sepsis detection based on SOFA-2 (2025 consensus).
 
-This module mirrors sepsis.py but expects a 'sofa2' column and provides a
-sep2() function. The suspected infection (SI) detection is reused from
-pyricu.sepsis.susp_inf.
+This module mirrors sepsis.py but uses SOFA-2 scores instead of SOFA-1.
+It provides a sep3_sofa2() function for Sepsis-3 detection using SOFA-2 scoring.
 
-Sepsis-2 is defined as a ≥2 point increase in SOFA-2 score within the
-suspected infection window, following the same logic as Sepsis-3 but using
-the updated SOFA-2 scoring system.
+The suspected infection (SI) detection logic is reused from pyricu.sepsis.susp_inf.
+
+Sepsis-3 (using SOFA-2) is defined as a ≥2 point increase in SOFA-2 score
+within the suspected infection window.
 
 References:
     Moreno et al. (2025). SOFA-2 Consensus Statement. JAMA Network Open.
+    Singer M, Deutschman CS, Seymour CW, et al. The Third International
+    Consensus Definitions for Sepsis and Septic Shock (Sepsis-3). JAMA.
+    2016;315(8):801–810.
 """
 
 from __future__ import annotations
@@ -19,10 +22,20 @@ from typing import Callable, List, Literal, Optional
 import numpy as np
 import pandas as pd
 
-from .sepsis import delta_cummin, delta_min, delta_start, susp_inf  # re-export use
+# 重用 sepsis.py 中的工具函数
+from .sepsis import (
+    delta_cummin,
+    delta_min,
+    delta_start,
+    susp_inf,
+    _process_abx,
+    _process_samp,
+    _si_and,
+    _si_or
+)
 
 
-def sep2(
+def sep3_sofa2(
     sofa2: pd.DataFrame,
     susp_inf_df: pd.DataFrame,
     id_cols: list,
@@ -34,10 +47,11 @@ def sep2(
     si_upr: pd.Timedelta = pd.Timedelta(hours=24),
     keep_components: bool = False,
 ) -> pd.DataFrame:
-    """Detect Sepsis using SOFA-2 (ΔSOFA-2 ≥ threshold within SI window).
+    """Detect Sepsis-3 using SOFA-2 scores (ΔSOFA-2 ≥ threshold within SI window).
 
-    Sepsis-2 follows the same detection logic as Sepsis-3 (sep3 function),
-    but uses SOFA-2 scores instead of SOFA-1 scores.
+    This function mirrors sep3() from sepsis.py but uses SOFA-2 scores instead of SOFA-1.
+    The detection criteria remain the same: ≥2 point increase in score within the
+    suspected infection window.
     
     Implementation mirrors R ricu's sep3 function:
     1. Filter SI events where susp_inf == TRUE
@@ -61,23 +75,16 @@ def sep2(
         keep_components: Whether to keep delta_sofa2, samp_time, abx_time
         
     Returns:
-        DataFrame with Sepsis-2 events (sep2 column = True)
+        DataFrame with Sepsis-3 events using SOFA-2 (sep3_sofa2 column = True)
         
     Examples:
-        >>> # Basic Sepsis-2 detection
-        >>> sep2_events = sep2(sofa2_df, si_df, ['patient_id'], 'time')
+        >>> # Basic Sepsis-3 detection with SOFA-2
+        >>> sep3_sofa2_events = sep3_sofa2(sofa2_df, si_df, ['stay_id'], 'charttime')
         >>> 
         >>> # Custom threshold and keep components
-        >>> sep2_events = sep2(
-        ...     sofa2_df, si_df, ['patient_id'], 'time',
+        >>> sep3_sofa2_events = sep3_sofa2(
+        ...     sofa2_df, si_df, ['stay_id'], 'charttime',
         ...     sofa_thresh=3, keep_components=True
-        ... )
-        >>> 
-        >>> # Use different delta function
-        >>> from pyricu.sepsis import delta_start
-        >>> sep2_events = sep2(
-        ...     sofa2_df, si_df, ['patient_id'], 'time',
-        ...     delta_fun=delta_start
         ... )
     """
     # Filter SI events
@@ -88,7 +95,7 @@ def sep2(
         si_events = susp_inf_df.copy()
     
     if si_events.empty:
-        return pd.DataFrame(columns=id_cols + [index_col, "sep2"])
+        return pd.DataFrame(columns=id_cols + [index_col, "sep3_sofa2"])
 
     # Determine if time is numeric (hours) or datetime
     si_time_is_numeric = pd.api.types.is_numeric_dtype(si_events[index_col])
@@ -176,7 +183,7 @@ def sep2(
         for col in id_cols:
             row[col] = si_row[col]
         
-        row["sep2"] = True
+        row["sep3_sofa2"] = True
         
         if keep_components:
             row["delta_sofa2"] = first_hit["delta_sofa2"]
@@ -188,9 +195,9 @@ def sep2(
         results.append(row)
 
     if not results:
-        return pd.DataFrame(columns=id_cols + [index_col, "sep2"])
+        return pd.DataFrame(columns=id_cols + [index_col, "sep3_sofa2"])
 
-    # Keep only first Sepsis-2 event per patient
+    # Keep only first Sepsis-3 event per patient
     # R ricu: res[, head(.SD, n = 1L), by = id_vars(res)]
     out = pd.DataFrame(results)
     out = out.sort_values(index_col).groupby(id_cols, as_index=False).first()
@@ -198,7 +205,7 @@ def sep2(
     return out
 
 
-def label_sep2(
+def label_sep3_sofa2(
     sofa2_data: pd.DataFrame,
     susp_inf_data: pd.DataFrame,
     id_cols: list,
@@ -208,10 +215,10 @@ def label_sep2(
     keep_components: bool = False,
     **kwargs
 ) -> pd.DataFrame:
-    """Sepsis-2 labeling - wrapper function calling sep2().
+    """Sepsis-3 labeling using SOFA-2 - wrapper function calling sep3_sofa2().
     
-    This is the Python implementation of R ricu label_sep2, providing
-    a user-friendly interface for Sepsis-2 detection.
+    This is the Python implementation of R ricu label_sep3, providing
+    a user-friendly interface for Sepsis-3 detection using SOFA-2 scores.
     
     Args:
         sofa2_data: SOFA-2 score data
@@ -221,28 +228,22 @@ def label_sep2(
         delta_sofa2: SOFA-2 score increase threshold (default 2)
         si_mode: Suspected infection mode (passed to susp_inf if needed)
         keep_components: Whether to keep component columns
-        **kwargs: Additional arguments passed to sep2()
+        **kwargs: Additional arguments passed to sep3_sofa2()
         
     Returns:
-        Sepsis-2 labeling results
+        Sepsis-3 labeling results using SOFA-2
         
     Examples:
         >>> # Basic usage
-        >>> sep2_labels = label_sep2(sofa2_df, si_df, ['patient_id'], 'time')
+        >>> sep3_sofa2_labels = label_sep3_sofa2(sofa2_df, si_df, ['stay_id'], 'charttime')
         >>> 
         >>> # Custom threshold
-        >>> sep2_labels = label_sep2(
-        ...     sofa2_df, si_df, ['patient_id'], 'time',
+        >>> sep3_sofa2_labels = label_sep3_sofa2(
+        ...     sofa2_df, si_df, ['stay_id'], 'charttime',
         ...     delta_sofa2=3
         ... )
-        >>> 
-        >>> # Keep diagnostic components
-        >>> sep2_labels = label_sep2(
-        ...     sofa2_df, si_df, ['patient_id'], 'time',
-        ...     keep_components=True
-        ... )
     """
-    return sep2(
+    return sep3_sofa2(
         sofa2=sofa2_data,
         susp_inf_df=susp_inf_data,
         id_cols=id_cols,

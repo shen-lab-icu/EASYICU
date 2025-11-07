@@ -366,11 +366,36 @@ def load_sepsis3(
                     # result 是数值型（相对时间），需要转换 df_to_merge
                     if pd.api.types.is_datetime64_any_dtype(df_time_dtype):
                         # df_to_merge 是 datetime，需要转换为相对时间
-                        # 但这需要知道入院时间，这里暂时跳过时间列合并
-                        if verbose:
-                            print(f"   ⚠️  {concept}: charttime 类型不匹配（{result_time_dtype} vs {df_time_dtype}），仅按 ID 合并")
-                        # 不使用 charttime 作为合并键
-                        df_to_merge = df_to_merge.drop(columns=['charttime'])
+                        # 尝试通过 icustays 表获取入院时间进行转换
+                        try:
+                            from .fst_reader import read_fst
+                            icustays_file = Path(data_path) / 'icustays.fst'
+                            if icustays_file.exists():
+                                icustays = read_fst(icustays_file)
+                                if primary_id_col in icustays.columns and 'intime' in icustays.columns:
+                                    # 合并入院时间
+                                    df_with_intime = df_to_merge.merge(
+                                        icustays[[primary_id_col, 'intime']].drop_duplicates(),
+                                        on=primary_id_col,
+                                        how='left'
+                                    )
+                                    # 转换为相对小时数（处理时区问题）
+                                    df_with_intime['intime'] = pd.to_datetime(df_with_intime['intime'], errors='coerce', utc=True).dt.tz_localize(None)
+                                    df_with_intime['charttime'] = pd.to_datetime(df_with_intime['charttime'], errors='coerce', utc=True).dt.tz_localize(None)
+                                    time_diff = (df_with_intime['charttime'] - df_with_intime['intime']).dt.total_seconds() / 3600.0
+                                    df_to_merge['charttime'] = time_diff
+                                    if verbose:
+                                        print(f"   ✅ {concept}: charttime 已转换为相对时间（小时）")
+                                else:
+                                    raise ValueError("icustays 缺少必要的列")
+                            else:
+                                raise FileNotFoundError("找不到 icustays.fst")
+                        except Exception as e:
+                            # 转换失败，跳过时间列合并
+                            if verbose:
+                                print(f"   ⚠️  {concept}: 无法转换 charttime 为相对时间（{e}），仅按 ID 合并")
+                            # 不使用 charttime 作为合并键，但保留原始 charttime
+                            df_to_merge = df_to_merge.drop(columns=['charttime'])
                     else:
                         # 尝试转换为数值型
                         try:
