@@ -33,7 +33,9 @@ from .callbacks import (
     sofa_resp,
     sofa_score,
 )
+from .sofa2 import sofa2_score as sofa2_score_fn
 from .sepsis import sep3 as sep3_detector, susp_inf as susp_inf_detector
+from .sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector
 from .table import ICUTable, WinTbl
 from .utils import coalesce
 from .unit_conversion import convert_vaso_rate
@@ -1312,6 +1314,144 @@ def _callback_sofa_score(
     frame = data[cols]
     
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="sofa")
+
+
+def _callback_sofa2_score(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Calculate SOFA-2 score with sliding window support.
+    
+    Similar to SOFA-1 but outputs 'sofa2' column and uses sofa2_* components.
+    
+    Args:
+        tables: Dictionary of input tables (SOFA-2 components)
+        ctx: Callback context with optional parameters:
+            - win_length: Sliding window duration (default: 24 hours)
+            - worst_val_fun: Aggregation function ('max', 'min', or callable, default: 'max')
+            - keep_components: Whether to keep individual components (default: False)
+            - full_window: Whether to require full window (default: False)
+    
+    Returns:
+        ICUTable with SOFA-2 scores
+    """
+    from .ts_utils import slide, fill_gaps, hours
+    from .utils import max_or_na
+    
+    data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
+    if data.empty:
+        print(f"   ⚠️  SOFA-2回调: _merge_tables 返回空数据")
+        cols = id_columns + ([index_column] if index_column else []) + ["sofa2"]
+        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="sofa2")
+
+    # Get parameters from context
+    win_length = ctx.kwargs.get('win_length', hours(24))
+    worst_val_fun = ctx.kwargs.get('worst_val_fun', 'max')
+    keep_components = ctx.kwargs.get('keep_components', False)
+    full_window = ctx.kwargs.get('full_window', False)
+    
+    # Convert string function names to callable functions
+    if worst_val_fun == 'max':
+        worst_val_fun = max_or_na
+    elif worst_val_fun == 'min':
+        from .utils import min_or_na
+        worst_val_fun = min_or_na
+    
+    # Convert timedelta to pd.Timedelta if needed
+    if hasattr(win_length, 'total_seconds'):  # datetime.timedelta
+        win_length = pd.Timedelta(win_length)
+    
+    # SOFA-2 components (note the sofa2_ prefix)
+    required = ["sofa2_resp", "sofa2_coag", "sofa2_liver", "sofa2_cardio", "sofa2_cns", "sofa2_renal"]
+    
+    # Ensure all components exist
+    for name in required:
+        if name not in data:
+            data[name] = 0
+    
+    # Fill gaps and apply sliding window (same logic as SOFA-1)
+    if index_column and index_column in data.columns:
+        interval = ctx.interval or pd.Timedelta(hours=1)
+        id_cols_to_group = list(id_columns) if id_columns else []
+        
+        if id_cols_to_group:
+            filled_groups = []
+            for patient_id, group in data.groupby(id_cols_to_group):
+                time_col = index_column
+                is_numeric_time = pd.api.types.is_numeric_dtype(group[time_col])
+                
+                if is_numeric_time:
+                    interval_hours = interval.total_seconds() / 3600.0
+                    start_time = group[time_col].min()
+                    end_time = group[time_col].max()
+                    time_range = np.arange(start_time, end_time + interval_hours, interval_hours)
+                    filled_df = pd.DataFrame({time_col: time_range})
+                else:
+                    start_time = pd.to_datetime(group[time_col]).min()
+                    end_time = pd.to_datetime(group[time_col]).max()
+                    time_range = pd.date_range(start=start_time, end=end_time, freq=interval)
+                    filled_df = pd.DataFrame({time_col: time_range})
+                
+                # Add ID columns
+                if isinstance(patient_id, tuple):
+                    for i, col in enumerate(id_cols_to_group):
+                        filled_df[col] = patient_id[i]
+                else:
+                    filled_df[id_cols_to_group[0]] = patient_id
+                
+                # Merge with original data
+                filled_df = filled_df.merge(
+                    group,
+                    on=[time_col] + id_cols_to_group,
+                    how='left'
+                )
+                
+                filled_groups.append(filled_df)
+            
+            if filled_groups:
+                data = pd.concat(filled_groups, ignore_index=True)
+        
+        # Sort data by time
+        data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
+        
+        # Apply sliding window to each component
+        agg_dict = {}
+        for comp in required:
+            if comp in data.columns:
+                agg_dict[comp] = worst_val_fun
+        
+        if agg_dict:
+            data = slide(
+                data,
+                list(id_columns),
+                index_column,
+                before=win_length,
+                after=pd.Timedelta(0),
+                agg_func=agg_dict,
+                full_window=full_window,
+            )
+    
+    # Calculate total SOFA-2 score (note: output column is 'sofa2')
+    data["sofa2"] = (
+        data[required]
+        .fillna(0)
+        .astype(float)
+        .sum(axis=1)
+        .round()
+        .astype(int)
+    )
+    
+    # Select output columns
+    if keep_components:
+        cols = id_columns + ([index_column] if index_column else []) + required + ["sofa2"]
+    else:
+        cols = id_columns + ([index_column] if index_column else []) + ["sofa2"]
+    
+    # Filter to existing columns
+    cols = [c for c in cols if c in data.columns]
+    frame = data[cols]
+    
+    return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="sofa2")
 
 
 def _callback_mews(
@@ -3118,7 +3258,7 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "sofa2_cardio": _callback_sofa_component(sofa2_cardio),
     "sofa2_cns": _callback_sofa_component(sofa2_cns),
     "sofa2_renal": _callback_sofa_component(sofa2_renal),  # SOFA-2 version with RRT criteria
-    "sofa2_score": _callback_sofa_score,  # 暂时复用SOFA1的总分计算
+    "sofa2_score": _callback_sofa2_score,  # SOFA-2 总分计算（使用 sofa2_* 组件）
 }
 
 
