@@ -1,0 +1,26 @@
+# Include documentation
+include README.md
+include LICENSE
+include CHANGELOG.md
+
+# Include configuration files
+include pyproject.toml
+include setup.py
+
+# Include data files
+recursive-include src/pyricu/data *.json
+recursive-include src/pyricu/extdata *.json *.yaml *.yml
+
+# Exclude unwanted files
+global-exclude __pycache__
+global-exclude *.py[co]
+global-exclude .DS_Store
+global-exclude *.so
+global-exclude *.dylib
+
+# Exclude test data (too large for package)
+prune test_data_50patients
+prune test_data_minimal
+prune tests
+prune .pytest_cache
+prune .git

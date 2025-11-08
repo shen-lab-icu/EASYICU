@@ -66,7 +66,15 @@ class ConceptLoader:
         
         if isinstance(concepts, list) and all(isinstance(c, str) for c in concepts):
             # 从字典加载概念
-            concept_dict = load_dictionary(self.src.name)
+            # 如果请求的概念中包含 SOFA-2 相关概念，自动加载 sofa2-dict
+            sofa2_concepts = {'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 
+                              'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
+                              'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria',
+                              'adv_resp', 'ecmo', 'ecmo_indication', 'sedated_gcs',
+                              'mech_circ_support', 'other_vaso', 'delirium_tx'}
+            include_sofa2 = any(c in sofa2_concepts for c in concepts)
+            
+            concept_dict = load_dictionary(self.src.name, include_sofa2=include_sofa2)
             concept_objs = [concept_dict[name] for name in concepts]
         elif isinstance(concepts, Concept):
             concept_objs = [concepts]

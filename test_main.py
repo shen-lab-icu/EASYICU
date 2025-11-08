@@ -9,6 +9,11 @@ pyricu 统一测试脚本
 4. 性能基准测试
 
 使用统一配置，避免代码重复。
+支持多数据库：MIMIC-IV, eICU, HiRID, AUMC
+
+注意：本脚本已更新为使用新的简化API
+- 推荐: load_sofa(), load_concepts() 等函数（支持智能默认值）
+- 弃用: ICUQuickLoader 类（保留向后兼容）
 """
 
 import pandas as pd
@@ -20,6 +25,21 @@ import time
 # 确保使用 src/ 下的代码
 sys.path.insert(0, 'src')
 
+# ============================================================================
+# 全局配置：选择要测试的数据库
+# ============================================================================
+
+# 数据库选择：'miiv', 'eicu', 'hirid', 'aumc'
+TEST_DATABASE = 'eicu'  # 修改这里来切换数据库
+
+# 数据源选择：'test' (测试数据) 或 'production' (完整数据)
+TEST_DATA_SOURCE = 'test'
+
+# 患者集选择：'debug' (1个), 'default' (3个), '50patients' (50个)
+TEST_PATIENT_SET = 'default'
+
+# ============================================================================
+
 # 可选的可视化库
 try:
     import matplotlib.pyplot as plt
@@ -27,13 +47,26 @@ try:
 except ImportError:
     HAS_MATPLOTLIB = False
 
-# 导入核心功能
-from pyricu.quickstart import (
+# 导入核心功能（使用新API）
+from pyricu import (
     load_sofa,
+    load_sofa2,
     load_sepsis3,
-    get_patient_ids as load_patient_ids,
-    ICUQuickLoader
+    load_concepts,
 )
+
+# 保留向后兼容
+try:
+    from pyricu.quickstart import get_patient_ids as load_patient_ids
+except ImportError:
+    # 如果quickstart被移除，使用替代方法
+    def load_patient_ids(data_path, database='miiv', max_patients=None):
+        from pyricu.fst_reader import read_fst
+        icustays = read_fst(Path(data_path) / 'icustays.fst')
+        ids = icustays['stay_id'].tolist()
+        if max_patients:
+            ids = ids[:max_patients]
+        return ids
 from pyricu.datasource import FilterOp, FilterSpec
 from pyricu.easy import load_vitals, load_labs, load_sofa_score, load_sepsis
 from pyricu.project_config import (
@@ -51,36 +84,49 @@ from pyricu.project_config import (
 # 测试 1: SOFA 评分加载和验证
 # ============================================================================
 
-def test_sofa_basic(data_path: str, patient_ids: list, verbose: bool = True):
+def test_sofa_basic(data_path: str, patient_ids: list, database: str = 'miiv', verbose: bool = True):
     """测试基本 SOFA 评分加载"""
     if verbose:
         print("\n" + "=" * 80)
-        print("🧪 测试 1: SOFA 评分加载")
+        print(f"🧪 测试 1: SOFA 评分加载 [{database.upper()}]")
         print("=" * 80)
     
-    sofa_df = load_sofa(data_path, patient_ids=patient_ids, database='miiv', verbose=False)
+    sofa_df = load_sofa(
+        database=database,
+        data_path=data_path,
+        patient_ids=patient_ids,
+        verbose=False
+    )
+    
+    # 根据数据库类型确定 ID 列名
+    id_col = 'patientunitstayid' if database in ['eicu', 'eicu_demo'] else 'stay_id'
     
     if verbose:
-        print(f"✅ SOFA 数据: {len(sofa_df)} 行, 患者数={sofa_df['stay_id'].nunique()}, "
+        print(f"✅ SOFA 数据: {len(sofa_df)} 行, 患者数={sofa_df[id_col].nunique()}, "
               f"平均分={sofa_df['sofa'].mean():.1f}")
     
     # 验证
     assert len(sofa_df) > 0, "❌ SOFA 数据为空"
     assert 'sofa' in sofa_df.columns, "❌ 缺少 sofa 列"
-    assert 'stay_id' in sofa_df.columns, "❌ 缺少 stay_id 列"
+    assert id_col in sofa_df.columns, f"❌ 缺少 {id_col} 列"
     
     return sofa_df
 
 
-def test_sofa_components(data_path: str, patient_ids: list, verbose: bool = True):
+def test_sofa_components(data_path: str, patient_ids: list, database: str = 'miiv', verbose: bool = True):
     """测试 SOFA 组件加载"""
     if verbose:
         print("\n" + "=" * 80)
-        print("🧪 测试 2: SOFA 组件")
+        print(f"🧪 测试 2: SOFA 组件 [{database.upper()}]")
         print("=" * 80)
     
-    sofa_df = load_sofa(data_path, patient_ids=patient_ids, database='miiv', 
-                        keep_components=True, verbose=False)
+    sofa_df = load_sofa(
+        database=database,
+        data_path=data_path,
+        patient_ids=patient_ids,
+        keep_components=True,
+        verbose=False
+    )
     
     # 检查组件列
     expected_components = ['sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal']
@@ -108,32 +154,44 @@ def test_sofa_components(data_path: str, patient_ids: list, verbose: bool = True
 # 测试 2b: SOFA-2 评分对比
 # ============================================================================
 
-def test_sofa2_comparison(data_path: str, patient_ids: list, verbose: bool = True):
+def test_sofa2_comparison(data_path: str, patient_ids: list, database: str = 'miiv', verbose: bool = True):
     """测试 SOFA-2 评分并与 SOFA 对比"""
     if verbose:
         print("\n" + "=" * 80)
-        print("🧪 测试 3: SOFA-2 评分对比")
+        print(f"🧪 测试 3: SOFA-2 评分对比 [{database.upper()}]")
         print("=" * 80)
     
     try:
-        loader = ICUQuickLoader(data_path, database='miiv', use_sofa2=True)
-        
-        sofa2_df = loader.load_concepts('sofa2', patient_ids=patient_ids,
-                                       interval=pd.Timedelta(hours=1),
-                                       win_length=pd.Timedelta(hours=24),
-                                       keep_components=True, verbose=False)
+        # 使用新API加载SOFA-2
+        sofa2_df = load_sofa2(
+            database=database,
+            data_path=data_path,
+            patient_ids=patient_ids,
+            interval='1h',
+            win_length='24h',
+            keep_components=True,
+            verbose=False
+        )
         
         if verbose and 'sofa2' in sofa2_df.columns and len(sofa2_df) > 0:
             print(f"✅ SOFA-2 数据: {len(sofa2_df)} 行, 平均分={sofa2_df['sofa2'].mean():.1f}")
         
         # 对比 SOFA 和 SOFA2
-        sofa1_df = load_sofa(data_path, patient_ids=patient_ids, database='miiv', 
-                            keep_components=False, verbose=False)
+        sofa1_df = load_sofa(
+            database=database,
+            data_path=data_path,
+            patient_ids=patient_ids,
+            keep_components=False,
+            verbose=False
+        )
+        
+        # 根据数据库类型确定 ID 列名
+        id_col = 'patientunitstayid' if database in ['eicu', 'eicu_demo'] else 'stay_id'
         
         if len(sofa1_df) > 0 and len(sofa2_df) > 0:
-            merged = sofa1_df[['stay_id', 'charttime', 'sofa']].merge(
-                sofa2_df[['stay_id', 'charttime', 'sofa2']],
-                on=['stay_id', 'charttime'], how='inner'
+            merged = sofa1_df[[id_col, 'charttime', 'sofa']].merge(
+                sofa2_df[[id_col, 'charttime', 'sofa2']],
+                on=[id_col, 'charttime'], how='inner'
             )
             
             if len(merged) > 0 and verbose:
@@ -152,14 +210,19 @@ def test_sofa2_comparison(data_path: str, patient_ids: list, verbose: bool = Tru
 # 测试 3: Sepsis-3 诊断
 # ============================================================================
 
-def test_sepsis3(data_path: str, patient_ids: list, verbose: bool = True):
+def test_sepsis3(data_path: str, patient_ids: list, database: str = 'miiv', verbose: bool = True):
     """测试 Sepsis-3 诊断"""
     if verbose:
         print("\n" + "=" * 80)
-        print("🧪 测试 4: Sepsis-3 诊断")
+        print(f"🧪 测试 4: Sepsis-3 诊断 [{database.upper()}]")
         print("=" * 80)
     
-    sepsis_df = load_sepsis3(data_path, patient_ids=patient_ids, database='miiv', verbose=False)
+    sepsis_df = load_sepsis3(
+        database=database,
+        data_path=data_path,
+        patient_ids=patient_ids,
+        verbose=False
+    )
     
     # 统计
     if len(sepsis_df) > 0 and verbose:
@@ -174,18 +237,18 @@ def test_sepsis3(data_path: str, patient_ids: list, verbose: bool = True):
 # 测试 4: 极简 API
 # ============================================================================
 
-def test_easy_api(data_path: str, patient_ids: list, verbose: bool = True):
+def test_easy_api(data_path: str, patient_ids: list, database: str = 'miiv', verbose: bool = True):
     """测试极简 API"""
     if verbose:
         print("\n" + "=" * 80)
-        print("🧪 测试 5: 极简 API")
+        print(f"🧪 测试 5: 极简 API [{database.upper()}]")
         print("=" * 80)
     
     tests = [
-        ('生命体征', lambda: load_vitals(data_path, patient_ids=patient_ids)),
-        ('实验室', lambda: load_labs(data_path, patient_ids=patient_ids)),
-        ('SOFA评分', lambda: load_sofa_score(data_path, patient_ids=patient_ids)),
-        ('Sepsis诊断', lambda: load_sepsis(data_path, patient_ids=patient_ids))
+        ('生命体征', lambda: load_vitals(database=database, data_path=data_path, patient_ids=patient_ids)),
+        ('实验室', lambda: load_labs(database=database, data_path=data_path, patient_ids=patient_ids)),
+        ('SOFA评分', lambda: load_sofa_score(data_path, patient_ids=patient_ids, database=database)),
+        ('Sepsis诊断', lambda: load_sepsis(data_path, patient_ids=patient_ids, database=database))
     ]
     
     for name, func in tests:
@@ -205,33 +268,39 @@ def test_easy_api(data_path: str, patient_ids: list, verbose: bool = True):
 # 测试 5: 批量加载性能
 # ============================================================================
 
-def test_batch_performance(data_path: str, patient_ids: list, verbose: bool = True):
+def test_batch_performance(data_path: str, patient_ids: list, database: str = 'miiv', verbose: bool = True):
     """测试批量加载性能（缓存优化）"""
     if verbose:
         print("\n" + "=" * 80)
-        print("🧪 测试 6: 批量加载性能")
+        print(f"🧪 测试 6: 批量加载性能 [{database.upper()}]")
         print("=" * 80)
     
-    loader = ICUQuickLoader(data_path, database='miiv')
     concepts = get_concepts('vitals')
     
     start = time.time()
-    result = loader.load_concepts(concepts, patient_ids=patient_ids)
+    # 使用新API批量加载
+    result = load_concepts(
+        concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path
+    )
     elapsed = time.time() - start
     
     if verbose:
-        print(f"✅ 批量加载 {len(concepts)} 个概念: {elapsed:.2f}秒, {len(result)} 行")
+        result_len = len(result.data) if hasattr(result, 'data') else len(result)
+        print(f"✅ 批量加载 {len(concepts)} 个概念: {elapsed:.2f}秒, {result_len} 行")
 
 
-def test_data_integrity(data_path: str, patient_ids: list, verbose: bool = True):
+def test_data_integrity(data_path: str, patient_ids: list, database: str = 'miiv', verbose: bool = True):
     """测试数据完整性"""
     if verbose:
         print("\n" + "=" * 80)
-        print("🧪 测试 7: 数据完整性")
+        print(f"🧪 测试 7: 数据完整性 [{database.upper()}]")
         print("=" * 80)
     
     try:
-        vitals = load_vitals(data_path, patient_ids=patient_ids[:1])
+        vitals = load_vitals(database=database, data_path=data_path, patient_ids=patient_ids[:1])
         if verbose:
             status = "正常" if len(vitals) > 0 else "空数据"
             print(f"✅ 数据加载{status} ({len(vitals)} 条记录)")
@@ -245,11 +314,11 @@ def test_data_integrity(data_path: str, patient_ids: list, verbose: bool = True)
 # 测试 7: SOFA vs SOFA2 和 Sepsis 对比可视化
 # ============================================================================
 
-def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, verbose: bool = True):
+def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, database: str = 'miiv', verbose: bool = True):
     """可视化对比 SOFA vs SOFA2 及 Sepsis 诊断 - 多患者版本"""
     if verbose:
         print("\n" + "=" * 80)
-        print("🧪 测试 8: Sepsis 可视化对比（多患者）")
+        print(f"🧪 测试 8: Sepsis 可视化对比（多患者） [{database.upper()}]")
         print("=" * 80)
     
     if not HAS_MATPLOTLIB:
@@ -263,9 +332,6 @@ def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, verbose: b
     try:
         from pyricu.sepsis_sofa2 import sep3_sofa2
         
-        loader = ICUQuickLoader(data_path, database='miiv', use_sofa2=False)
-        loader_sofa2 = ICUQuickLoader(data_path, database='miiv', use_sofa2=True)
-        
         # 查找有 Sepsis 事件的患者（最多3个）
         if verbose:
             print(f"🔍 搜索 Sepsis 病例...")
@@ -274,7 +340,12 @@ def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, verbose: b
         
         for pid in patient_ids[:min(20, len(patient_ids))]:  # 搜索前20个患者
             try:
-                sepsis3_df = load_sepsis3(data_path, patient_ids=[pid], database='miiv', verbose=False)
+                sepsis3_df = load_sepsis3(
+                    database=database,
+                    data_path=data_path,
+                    patient_ids=[pid],
+                    verbose=False
+                )
                 has_sep3 = sepsis3_df['sep3'].sum() > 0 if 'sep3' in sepsis3_df.columns else False
                 
                 if has_sep3:
@@ -298,19 +369,32 @@ def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, verbose: b
         for patient_id in sepsis_patients:
             try:
                 # 加载该患者的数据
-                sofa_df = loader.load_concepts(
-                    'sofa', patient_ids={'stay_id': [patient_id]},
-                    interval=pd.Timedelta(hours=1), win_length=pd.Timedelta(hours=24),
-                    keep_components=False, verbose=False
+                sofa_df = load_sofa(
+                    database=database,
+                    data_path=data_path,
+                    patient_ids=[patient_id],
+                    interval='1h',
+                    win_length='24h',
+                    keep_components=False,
+                    verbose=False
                 )
                 
-                sofa2_df = loader_sofa2.load_concepts(
-                    'sofa2', patient_ids={'stay_id': [patient_id]},
-                    interval=pd.Timedelta(hours=1), win_length=pd.Timedelta(hours=24),
-                    keep_components=False, verbose=False
+                sofa2_df = load_sofa2(
+                    database=database,
+                    data_path=data_path,
+                    patient_ids=[patient_id],
+                    interval='1h',
+                    win_length='24h',
+                    keep_components=False,
+                    verbose=False
                 )
                 
-                sepsis3_df = load_sepsis3(data_path, patient_ids=[patient_id], database='miiv', verbose=False)
+                sepsis3_df = load_sepsis3(
+                    database=database,
+                    data_path=data_path,
+                    patient_ids=[patient_id],
+                    verbose=False
+                )
                 
                 if sofa_df.empty or sepsis3_df.empty:
                     continue
@@ -433,44 +517,55 @@ def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, verbose: b
 # ============================================================================
 
 def run_all_tests(
-    data_source: str = 'test',
-    patient_set: str = 'default',
+    data_source: str = None,
+    patient_set: str = None,
+    database: str = None,
     verbose: bool = True
 ):
     """运行所有测试
     
     Args:
-        data_source: 数据源 ('test', 'production')
-        patient_set: 患者集 ('default', '50patients', 'debug')
+        data_source: 数据源 ('test', 'production')，默认使用全局 TEST_DATA_SOURCE
+        patient_set: 患者集 ('default', '50patients', 'debug')，默认使用全局 TEST_PATIENT_SET
+        database: 数据库 ('miiv', 'eicu', 'hirid', 'aumc')，默认使用全局 TEST_DATABASE
         verbose: 是否显示详细输出
     """
+    # 使用全局变量作为默认值
+    if data_source is None:
+        data_source = TEST_DATA_SOURCE
+    if patient_set is None:
+        patient_set = TEST_PATIENT_SET
+    if database is None:
+        database = TEST_DATABASE
+    
     # 获取配置
-    data_path = str(get_data_path(data_source))
-    patient_ids = get_patient_ids(patient_set)
+    data_path = str(get_data_path(data_source, database))
+    patient_ids = get_patient_ids(patient_set, database, Path(data_path))
     
     print("=" * 80)
     print("🏥 pyricu 统一测试")
     print("=" * 80)
     
     print(f"\n📋 测试配置:")
+    print(f"   数据库: {database.upper()}")
     print(f"   数据源: {data_source} ({data_path})")
     print(f"   患者集: {patient_set} ({len(patient_ids)} 个患者)")
     print(f"   患者ID: {patient_ids}")
     
     # 运行所有测试
     try:
-        test_sofa_basic(data_path, patient_ids, verbose)
-        test_sofa_components(data_path, patient_ids, verbose)
-        test_sofa2_comparison(data_path, patient_ids, verbose)
-        test_sepsis3(data_path, patient_ids, verbose)
-        test_easy_api(data_path, patient_ids, verbose)
-        test_batch_performance(data_path, patient_ids, verbose)
-        test_data_integrity(data_path, patient_ids, verbose)
-        test_sofa_sepsis_visualization(data_path, patient_ids, verbose)
+        test_sofa_basic(data_path, patient_ids, database, verbose)
+        test_sofa_components(data_path, patient_ids, database, verbose)
+        test_sofa2_comparison(data_path, patient_ids, database, verbose)
+        test_sepsis3(data_path, patient_ids, database, verbose)
+        test_easy_api(data_path, patient_ids, database, verbose)
+        test_batch_performance(data_path, patient_ids, database, verbose)
+        test_data_integrity(data_path, patient_ids, database, verbose)
+        test_sofa_sepsis_visualization(data_path, patient_ids, database, verbose)
         
         # 总结
         print("\n" + "=" * 80)
-        print("✅ 所有测试通过！pyricu 核心功能验证完成")
+        print(f"✅ 所有测试通过！pyricu 核心功能验证完成 [{database.upper()}]")
         print("=" * 80)
         
     except Exception as e:
@@ -487,10 +582,15 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='pyricu 统一测试')
-    parser.add_argument('--data', choices=['test', 'production'], default='test',
-                        help='数据源 (default: test)')
-    parser.add_argument('--patients', choices=['debug', 'default', '50patients'], default='default',
-                        help='患者集 (default: default)')
+    parser.add_argument('--database', choices=['miiv', 'eicu', 'hirid', 'aumc'], 
+                        default=TEST_DATABASE,
+                        help=f'数据库 (default: {TEST_DATABASE})')
+    parser.add_argument('--data', choices=['test', 'production'], 
+                        default=TEST_DATA_SOURCE,
+                        help=f'数据源 (default: {TEST_DATA_SOURCE})')
+    parser.add_argument('--patients', choices=['debug', 'default', '50patients'], 
+                        default=TEST_PATIENT_SET,
+                        help=f'患者集 (default: {TEST_PATIENT_SET})')
     parser.add_argument('--verbose', action='store_true', default=True,
                         help='显示详细输出')
     parser.add_argument('--quiet', action='store_true',
@@ -505,6 +605,7 @@ def main():
     success = run_all_tests(
         data_source=args.data,
         patient_set=args.patients,
+        database=args.database,
         verbose=verbose
     )
     

@@ -637,6 +637,7 @@ def vent_flag(
 
 def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
     """Create callback equivalent to R's eicu_duration(gap_length)."""
+    from .ts_utils import group_measurements
 
     if not isinstance(gap_length, pd.Timedelta):
         gap_length = pd.to_timedelta(gap_length)
@@ -658,14 +659,27 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
             id_cols = [col for col in frame.columns if "id" in col.lower()]
 
         if index_var is None or index_var not in frame.columns:
-            time_cols = [col for col in frame.columns if "time" in col.lower()]
+            # eICU uses 'offset' columns, other databases use 'time' columns
+            time_cols = [col for col in frame.columns if "time" in col.lower() or "offset" in col.lower()]
             if not time_cols:
                 raise ValueError("Cannot determine time column for eICU duration callback")
             index_var = time_cols[0]
 
-        frame[index_var] = pd.to_datetime(frame[index_var], errors="coerce")
+        # eICU offset is numeric (minutes), datetime conversion will be handled later if needed
+        # Just ensure it's numeric and not null
+        if 'offset' in index_var.lower():
+            # offset is already numeric (minutes from ICU admission)
+            frame[index_var] = pd.to_numeric(frame[index_var], errors="coerce")
+        else:
+            # Other databases use datetime
+            frame[index_var] = pd.to_datetime(frame[index_var], errors="coerce")
+        
         frame = frame.dropna(subset=[index_var])
+        
+        if frame.empty:
+            return frame
 
+        # Add group column using group_measurements
         grouped = group_measurements(
             frame,
             id_cols=id_cols,
@@ -674,14 +688,32 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
             group_col=group_col,
         )
 
-        return calc_dur(
-            grouped,
-            val_col=val_col,
-            min_var=index_var,
-            max_var=index_var,
-            grp_var=group_col,
-            id_cols=id_cols,
-        )
+        # Calculate duration per group (R calc_dur logic)
+        # For each id_cols + group_col group, calculate max(time) - min(time)
+        groupby_cols = id_cols + [group_col]
+        
+        result = grouped.groupby(groupby_cols).agg({
+            index_var: ['min', 'max']
+        }).reset_index()
+        
+        # Flatten column names
+        result.columns = groupby_cols + ['min_time', 'max_time']
+        
+        # Calculate duration
+        if 'offset' in index_var.lower():
+            # For offset (numeric minutes), duration is direct subtraction
+            result[val_col] = result['max_time'] - result['min_time']
+            # Use min_time as the time point for this duration measurement
+            result[index_var] = result['min_time']
+        else:
+            # For datetime, duration is timedelta converted to minutes
+            result[val_col] = (result['max_time'] - result['min_time']).dt.total_seconds() / 60
+            result[index_var] = result['min_time']
+        
+        # Keep id_cols + index_var + val_col (drop group_col, min_time, max_time)
+        result = result[id_cols + [index_var, val_col]]
+        
+        return result
 
     return _callback
 
@@ -2180,3 +2212,135 @@ def units_to_unit(x: pd.Timedelta) -> str:
     }
     
     return unit_map.get(resolution, 'hour')
+
+
+def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
+    """eICU dose rate conversion with weight normalization (R ricu eicu_rate_kg).
+    
+    Converts various dose rate units to mcg/kg/min, handling:
+    - /hr -> /min (divide by 60)
+    - mg/ -> mcg/ (multiply by 1000)
+    - units/kg/min -> NA (not convertible)
+    - ml/ -> mcg/ (multiply by ml_to_mcg)
+    - nanograms/ -> mcg/ (divide by 1000)
+    - Unknown/ml units -> NA
+    - Add /kg/ for non-kg-normalized rates using patient weight
+    
+    Args:
+        ml_to_mcg: Conversion factor from ml to mcg (drug concentration)
+        
+    Returns:
+        Callback function
+        
+    Examples:
+        >>> # Norepinephrine: 1 ml = 1600 mcg
+        >>> norepi_callback = eicu_rate_kg_callback(ml_to_mcg=1600)
+    """
+    def callback(
+        frame: pd.DataFrame,
+        val_var: str,
+        sub_var: str,
+        weight_var: str,
+        concept_name: str,
+    ) -> pd.DataFrame:
+        """Apply eICU rate/kg conversion.
+        
+        Args:
+            frame: Input dataframe
+            val_var: Value column name
+            sub_var: Sub-variable column (contains unit info)
+            weight_var: Weight column name (from patient table)
+            concept_name: Output concept name
+            
+        Returns:
+            Converted dataframe
+        """
+        frame = frame.copy()
+        
+        # Convert values to numeric
+        if val_var in frame.columns:
+            frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
+        
+        # Extract unit from sub_var (e.g., "drugname (mcg/kg/min)")
+        if sub_var in frame.columns:
+            # eICU format: "drugname (unit)" or just "unit"
+            def extract_unit(s):
+                if pd.isna(s):
+                    return None
+                s = str(s)
+                # Match pattern like "(unit)" or just return as-is
+                match = re.search(r'\(([^)]+)\)$', s)
+                if match:
+                    return match.group(1)
+                # Check if it's already a unit-like string
+                if '/' in s or s.lower() in ['mg', 'mcg', 'ml', 'units']:
+                    return s
+                return None
+            
+            frame['unit_var'] = frame[sub_var].apply(extract_unit)
+        else:
+            # No sub_var, assume all are same unit or unknown
+            frame['unit_var'] = 'Unknown'
+        
+        # Load weight if needed (merge from patient table)
+        # For now, we'll use a placeholder - in practice, this should join with patient table
+        if weight_var not in frame.columns:
+            # Try to get weight from patient table via patientunitstayid
+            # This is a simplified version - full implementation would join tables
+            frame[weight_var] = 70.0  # Default weight kg as fallback
+        
+        # Normalize to /kg/ if not already
+        frame['is_per_kg'] = frame['unit_var'].str.contains('/kg/', case=False, na=False)
+        
+        # For non-kg rates, divide by weight and update unit
+        mask_non_kg = ~frame['is_per_kg'] & frame[val_var].notna() & frame[weight_var].notna()
+        if mask_non_kg.any():
+            frame.loc[mask_non_kg, val_var] = frame.loc[mask_non_kg, val_var] / frame.loc[mask_non_kg, weight_var]
+            frame.loc[mask_non_kg, 'unit_var'] = frame.loc[mask_non_kg, 'unit_var'].apply(
+                lambda u: u.replace('/', '/kg/') if u and '/' in u else f'{u}/kg' if u else 'Unknown/kg'
+            )
+        
+        # Now apply unit conversions to standardize to mcg/kg/min
+        def convert_to_mcg_kg_min(row):
+            val = row[val_var]
+            unit = row.get('unit_var', '')
+            
+            if pd.isna(val) or not unit:
+                return val
+            
+            unit = str(unit).strip()
+            
+            # /hr -> /min
+            if '/hr' in unit or '/hour' in unit:
+                val = val / 60
+                unit = re.sub(r'/h(ou)?r', '/min', unit, flags=re.IGNORECASE)
+            
+            # mg -> mcg
+            if unit.startswith('mg/') or 'mg/kg' in unit:
+                val = val * 1000
+                unit = unit.replace('mg/', 'mcg/').replace('mg/kg', 'mcg/kg')
+            
+            # ml -> mcg
+            if unit.startswith('ml/') or 'ml/kg' in unit:
+                val = val * ml_to_mcg
+                unit = unit.replace('ml/', 'mcg/').replace('ml/kg', 'mcg/kg')
+            
+            # nanograms -> mcg
+            if unit.startswith('nanograms/') or 'nanograms/kg' in unit:
+                val = val / 1000
+                unit = unit.replace('nanograms/', 'mcg/').replace('nanograms/kg', 'mcg/kg')
+            
+            # Set to NA for incompatible units
+            if 'units/' in unit.lower() or unit.lower() in ['unknown', 'ml', 'unknown/kg', 'ml/kg']:
+                return np.nan
+            
+            return val
+        
+        frame[concept_name] = frame.apply(convert_to_mcg_kg_min, axis=1)
+        
+        # Clean up temporary columns
+        frame = frame.drop(columns=['unit_var', 'is_per_kg'], errors='ignore')
+        
+        return frame
+    
+    return callback

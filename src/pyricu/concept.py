@@ -285,8 +285,20 @@ class ConceptResolver:
         
         # 转换为字典格式
         if not isinstance(patient_ids, dict):
-            # 如果是列表，假设是 stay_id（最常用）
-            patient_ids = {'stay_id': list(patient_ids)}
+            # 如果是列表，根据数据库类型选择合适的ID列名
+            db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+            
+            print(f'  patient_ids类型: {type(patient_ids)}')
+            print(f'  db_name: {db_name}')
+            
+            if db_name in ['eicu', 'eicu_demo']:
+                # eICU使用patientunitstayid
+                patient_ids = {'patientunitstayid': list(patient_ids)}
+                print(f'  转换为: {patient_ids}')
+            else:
+                # MIMIC-IV等使用stay_id
+                patient_ids = {'stay_id': list(patient_ids)}
+                print(f'  转换为: {patient_ids}')
         else:
             patient_ids = dict(patient_ids)  # 复制，避免修改原始数据
         
@@ -314,6 +326,12 @@ class ConceptResolver:
         # 加载或使用缓存的 ID 映射表
         if self._id_mapping_cache is None:
             try:
+                # 🔧 FIX: eICU doesn't use icustays table
+                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                if db_name in ['eicu', 'eicu_demo']:
+                    # eICU uses patientunitstayid as the primary ID, no mapping needed
+                    return patient_ids
+                
                 from .datasource import FilterSpec, FilterOp
                 # 加载 icustays 表（只需要 stay_id 和 subject_id）
                 filters = [
@@ -464,6 +482,26 @@ class ConceptResolver:
         config = data_source.config
         sources = definition.for_data_source(config)
         if not sources:
+            # For optional sub-concepts (e.g., mech_vent in eICU), return empty table
+            # instead of raising error - let callback handle missing concepts
+            if kwargs.get('_allow_missing_concept', False):
+                # Return empty ICUTable with database-appropriate default ID columns
+                db_name = config.name if hasattr(config, 'name') else 'unknown'
+                if db_name == 'eicu' or db_name == 'eicu_demo':
+                    default_id_cols = ['patientunitstayid']
+                elif db_name.startswith('mimic') or db_name == 'miiv':
+                    default_id_cols = ['stay_id']
+                else:
+                    default_id_cols = ['stay_id']  # fallback
+                
+                empty_df = pd.DataFrame(columns=default_id_cols)
+                return ICUTable(
+                    data=empty_df,
+                    id_columns=default_id_cols,
+                    index_column=None,
+                    value_column=None,
+                )
+            
             raise KeyError(
                 f"No source configuration for concept '{concept_name}' "
                 f"in data source '{config.name}'"
@@ -474,6 +512,9 @@ class ConceptResolver:
         index_column: Optional[str] = None
         unit_column: Optional[str] = None
         time_columns: List[str] = []
+        
+        # DEBUG: 临时启用调试模式
+        DEBUG_MODE = False
 
         for source in sources:
             if source.class_name == "fun_itm":
@@ -510,16 +551,22 @@ class ConceptResolver:
             # 🔧 修复：添加患者过滤器
             # 即使 defaults.id_var 为 None，仍尝试添加患者过滤器
             # 对于 MIMIC-IV hosp 表（如 microbiologyevents），使用 subject_id
+            # 对于 eICU 表，使用 patientunitstayid
             effective_id_var = defaults.id_var
             if patient_ids:
                 if not effective_id_var:
                     # 如果没有配置 id_var，尝试检测常见的ID列
-                    # 先检查表是否有 subject_id（MIMIC-IV hosp 表）
-                    # 注意：这里我们还不知道表的列，所以先假设是 subject_id
-                    # 实际过滤会在 load_table 中根据实际列名进行
-                    if source.table in ['microbiologyevents', 'labevents', 'd_labitems', 'prescriptions']:
+                    # 先检查数据库类型
+                    db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                    
+                    if db_name in ['eicu', 'eicu_demo']:
+                        # eICU使用patientunitstayid
+                        effective_id_var = 'patientunitstayid'
+                    elif source.table in ['microbiologyevents', 'labevents', 'd_labitems', 'prescriptions']:
+                        # MIMIC-IV hosp表使用subject_id
                         effective_id_var = 'subject_id'
                     elif source.table in ['inputevents', 'chartevents', 'outputevents', 'procedureevents']:
+                        # MIMIC-IV icu表使用stay_id
                         effective_id_var = 'stay_id'
                 
                 if effective_id_var:
@@ -532,10 +579,13 @@ class ConceptResolver:
                         verbose=verbose
                     )
                     
+                    # DEBUG
                     # patient_ids可能是dict(包含stay_id和subject_id)或列表
                     if isinstance(expanded_patient_ids, dict):
                         # 使用对应列的ID
                         id_values = expanded_patient_ids.get(effective_id_var)
+                        
+                        # DEBUG
                         if id_values:
                             filters.append(
                                 FilterSpec(
@@ -606,6 +656,7 @@ class ConceptResolver:
             else:
                 # 从数据源加载
                 try:
+                    # DEBUG: 打印过滤器信息
                     table = data_source.load_table(source.table, filters=filters, verbose=verbose)
                     frame = table.data.copy()
                     # 仅当有患者过滤器时才缓存
@@ -698,18 +749,22 @@ class ConceptResolver:
                         mask_out = tmp['outtime'].isna() | (tmp[time_col] <= tmp['outtime'])
                         tmp = tmp[mask_out].copy()
                         after_filter = len(tmp)
-                        if DEBUG_MODE and verbose and before_filter > after_filter:
-                            print(f"      ⏱️  时间窗口过滤（仅过滤outtime后）: {source.table} 从 {before_filter} 行过滤到 {after_filter} 行")
+                        # 只在调试模式下打印时间过滤信息
+                        if DEBUG_MODE and before_filter > after_filter:
+                            print(f"      ⏱️  [{concept_name}] 时间窗口过滤: {source.table} 从 {before_filter} 行 → {after_filter} 行")
                         
                         # CRITICAL FIX: 无论tmp是否为空，都要更新frame
-                        # 如果tmp为空（没有匹配的数据），frame也应该为空
+                        # 如果tmp为空（没有匹配的数据或被时间过滤），frame也应该为空
                         if not tmp.empty:
                             # 将过滤后的数据作为新frame，仅保留必要列
                             frame = tmp.drop(columns=['intime', 'outtime'])
-                            if DEBUG_MODE: print(f"   ✅ MIMIC-IV: {source.table} 合并后非空，行数={len(frame)}, 列={list(frame.columns)[:10]}")
+                            if DEBUG_MODE: print(f"   ✅ [{concept_name}] MIMIC-IV {source.table}: 合并+过滤后 {len(frame)} 行")
                         else:
-                            # tmp为空，说明没有匹配的住院数据，frame也应该为空
-                            print(f"   ⚠️  MIMIC-IV: {source.table} 合并后为空！原始列={list(frame.columns)[:10]}")
+                            # tmp为空的原因可能是：1) 没有匹配的住院数据，2) 时间过滤后为空
+                            # 这是正常的数据过滤行为（例如实验室结果在ICU出院后采集）
+                            if DEBUG_MODE:
+                                reason = "时间窗口过滤" if before_filter > 0 else "ICU住院匹配"
+                                print(f"   ⚠️  [{concept_name}] MIMIC-IV {source.table}: {reason}后为空 (原始{len(frame)}行 → 匹配{before_filter}行 → 过滤后0行)")
                             frame = pd.DataFrame(columns=frame.columns)
                             
                         # 🔗 关键修复：如果用户提供了特定的 stay_id，在映射后再次过滤
@@ -751,14 +806,23 @@ class ConceptResolver:
             else:
                 id_columns = id_columns or list(table.id_columns)
             
-            index_column = index_column or source.index_var or table.index_column
-            unit_column = unit_column or source.unit_var or table.unit_column
+            # 🔧 CRITICAL FIX: 每个源使用自己的 index_column 和 unit_column
+            # 不要复用循环外的变量，避免多源概念时第一个源的配置覆盖后续源
+            source_index_column = source.index_var or table.index_column
+            source_unit_column = source.unit_var or table.unit_column
+            
+            # 更新全局 index_column 和 unit_column（用于后续的时间对齐等操作）
+            # 但确保每个源处理时使用自己的配置
+            if not index_column:
+                index_column = source_index_column
+            if not unit_column:
+                unit_column = source_unit_column
 
             time_columns = list(
                 {
                     *time_columns,
                     *(table.time_columns or []),
-                    *( [index_column] if index_column else []),
+                    *( [source_index_column] if source_index_column else []),
                 }
             )
 
@@ -844,13 +908,13 @@ class ConceptResolver:
                 frame,
                 source,
                 concept_name,
-                unit_column,
+                source_unit_column,
             )
             
             # 单位过滤（在回调之后）
-            if definition.units and unit_column and unit_column in frame.columns:
+            if definition.units and source_unit_column and source_unit_column in frame.columns:
                 allowed_units = {unit.lower() for unit in definition.units}
-                series = frame[unit_column].astype(str).str.lower()
+                series = frame[source_unit_column].astype(str).str.lower()
                 frame = frame[series.isin(allowed_units)]
             
             # 🔧 FIX: 只有在concept_name列存在时才dropna
@@ -865,8 +929,14 @@ class ConceptResolver:
             # 🔧 FIX: 值范围过滤（在回调之后）
             # 现在值已经经过转换（如华氏度→摄氏度），可以安全过滤
             if definition.minimum is not None:
+                # 确保列是数值类型，避免字符串比较错误
+                if concept_name in frame.columns:
+                    frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
                 frame = frame[frame[concept_name] >= definition.minimum]
             if definition.maximum is not None:
+                # 确保列是数值类型
+                if concept_name in frame.columns:
+                    frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
                 frame = frame[frame[concept_name] <= definition.maximum]
             
             # 在值范围过滤后，删除无效的NaN（但保留有效范围内的NaN用于后续处理）
@@ -886,9 +956,10 @@ class ConceptResolver:
                 # 将映射后的类别值复制到 concept_name
                 frame[concept_name] = frame[source.sub_var]
 
+            # DEBUG: 在keep_cols过滤前打印
             keep_cols = {
                 *(id_columns or []),
-                *( [index_column] if index_column else []),
+                *( [source_index_column] if source_index_column else []),
                 concept_name,
             }
             # 添加实际存在的time_columns（不强制要求所有time_columns都存在）
@@ -896,8 +967,8 @@ class ConceptResolver:
                 if tc in frame.columns:
                     keep_cols.add(tc)
             
-            if unit_column and unit_column in frame.columns:
-                keep_cols.add(unit_column)
+            if source_unit_column and source_unit_column in frame.columns:
+                keep_cols.add(source_unit_column)
             
             # 保留 _duration_val 列（如果存在），用于后续持续时间计算
             if '_duration_val' in frame.columns:
@@ -913,11 +984,11 @@ class ConceptResolver:
             missing = required_cols - set(frame.columns)
             
             # 对于索引列，检查是否在数据中有任何时间列
-            if index_column:
-                # 检查是否有index_column，或者有类似的时间列
+            if source_index_column:
+                # 检查是否有source_index_column，或者有类似的时间列
                 time_cols = [col for col in frame.columns if 'time' in col.lower() or col in ['starttime', 'endtime', 'charttime', 'storetime']]
-                if index_column not in frame.columns and not time_cols:
-                    missing.add(index_column)
+                if source_index_column not in frame.columns and not time_cols:
+                    missing.add(source_index_column)
             
             if missing:
                 # 对于labevents等表，如果缺少stay_id但映射过程已处理，应该已经有stay_id了
@@ -926,8 +997,8 @@ class ConceptResolver:
                     frame = pd.DataFrame()
                     continue
                 # 对于多源概念，如果某个源缺少index_column但其他源有，这是可以接受的
-                if index_column in missing and len(sources) > 1:
-                    missing.discard(index_column)
+                if source_index_column in missing and len(sources) > 1:
+                    missing.discard(source_index_column)
                 
                 if missing:
                     raise KeyError(
@@ -942,19 +1013,70 @@ class ConceptResolver:
             ordered_cols: List[str] = []
             # 保留所有可用的ID列（不只是第一个）
             ordered_cols.extend(available_id_cols)
-            if index_column and index_column not in ordered_cols:
-                ordered_cols.append(index_column)
+            if source_index_column and source_index_column not in ordered_cols:
+                ordered_cols.append(source_index_column)
             extra_time = [
                 col for col in time_columns if col and col not in ordered_cols
             ]
             ordered_cols.extend(extra_time)
             ordered_cols.append(concept_name)
-            if unit_column and unit_column not in ordered_cols:
-                ordered_cols.append(unit_column)
+            if source_unit_column and source_unit_column not in ordered_cols:
+                ordered_cols.append(source_unit_column)
+            
             ordered_cols = [col for col in ordered_cols if col in frame.columns]
+            
+            # DEBUG: 在keep_cols过滤后打印
             frames.append(frame.loc[:, ordered_cols])
 
-        combined = pd.concat(frames, ignore_index=True)
+        if not frames:
+            # 返回空 DataFrame 而不是报错（某些概念可能在测试数据中没有数据）
+            print(f"   ⚠️  警告: 概念 '{concept_name}' 的所有 {len(sources)} 个数据源都返回空数据")
+            # 创建一个空的 DataFrame，包含必要的列
+            # 确保有 ID 列：使用配置的 id_columns，如果没有则使用数据库的默认ID列
+            if not id_columns:
+                # 从数据源名称推断默认ID列
+                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else 'unknown'
+                if db_name == 'eicu' or db_name == 'eicu_demo':
+                    id_columns = ['patientunitstayid']
+                elif db_name.startswith('mimic'):
+                    id_columns = ['stay_id']
+                else:
+                    id_columns = ['stay_id']  # 通用默认值
+            empty_cols = list(id_columns) + ([index_column] if index_column else []) + [concept_name]
+            combined = pd.DataFrame(columns=empty_cols)
+        else:
+            combined = pd.concat(frames, ignore_index=True)
+            
+        # DEBUG
+        # 🔧 CRITICAL FIX: Standardize time column name for eICU BEFORE any processing
+        # eICU uses different time column names (labresultoffset, observationoffset, etc.)
+        # For multi-source concepts (like abx), different sources may use different offset columns
+        # Rename all offset columns to 'charttime' to enable unified processing
+        db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+        if db_name in ['eicu', 'eicu_demo'] and index_column:
+            # All possible eICU time offset columns
+            eicu_time_cols = [
+                'labresultoffset', 'observationoffset', 'nursecharting_offset', 
+                'respiratorycharting_offset', 'intakeoutput_offset', 'respchartoffset',
+                'infusionoffset', 'drugstartoffset', 'drugstopoffset', 'drugorderoffset',
+                'culturetakenoffset', 'cultureoffset'
+            ]
+            
+            offset_cols_in_data = [col for col in combined.columns if col in eicu_time_cols]
+            
+            if offset_cols_in_data:
+                # 重命名第一个offset列为charttime
+                first_offset = offset_cols_in_data[0]
+                combined = combined.rename(columns={first_offset: 'charttime'})
+                
+                # 合并其他offset列到charttime（使用第一个非NaN值）
+                for offset_col in offset_cols_in_data[1:]:
+                    if offset_col in combined.columns:
+                        combined['charttime'] = combined['charttime'].fillna(combined[offset_col])
+                        combined = combined.drop(columns=[offset_col])
+                
+                index_column = 'charttime'  # Update index_column for subsequent processing
+        
         sort_keys = [col for col in id_columns if col]
         if index_column:
             sort_keys.append(index_column)
@@ -968,22 +1090,36 @@ class ConceptResolver:
         # Do NOT use _apply_aggregation before time alignment
         should_aggregate_in_change_interval = agg_value is not False
         
+        # 如果数据为空，返回空 ICUTable
+        if combined.empty:
+            return ICUTable(
+                data=combined,
+                id_columns=id_columns,
+                index_column=index_column,
+                value_column=concept_name,
+                unit_column=None,
+                time_columns=[col for col in time_columns if col],
+            )
+        
         # Only set unit_column if it actually exists in the combined data
         final_unit_column = unit_column if unit_column and unit_column in combined.columns else None
         
         # Apply interval alignment and aggregation if interval is specified
         if interval is not None and index_column and index_column in combined.columns:
+            # DEBUG
             from .ts_utils import change_interval
             
             # Align time to ICU admission if requested (BEFORE any aggregation)
             if align_to_admission:
+                # DEBUG
                 combined = self._align_time_to_admission(
                     combined,
                     data_source,
                     id_columns,
                     index_column
                 )
-            
+                
+                # DEBUG
             # Determine aggregation method for change_interval
             # This is the ONLY aggregation we should do (on relative time)
             agg_method = aggregator if aggregator not in (None, False, "auto") else None
@@ -1036,7 +1172,7 @@ class ConceptResolver:
         return ICUTable(
             data=combined,
             id_columns=id_columns,
-            index_column=index_column,
+            index_column=index_column,  # Already updated for eICU if needed
             value_column=concept_name,
             unit_column=final_unit_column,
             time_columns=[col for col in time_columns if col],
@@ -1063,6 +1199,18 @@ class ConceptResolver:
         Returns:
             DataFrame with time converted to hours since ICU admission
         """
+        # 🔧 CRITICAL FIX: eICU时间列已经是相对时间(offset),不需要对齐
+        # eICU uses offset columns (labresultoffset, observationoffset, etc.) which are
+        # already in MINUTES from ICU admission. Convert to HOURS for consistency.
+        db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+        if db_name in ['eicu', 'eicu_demo']:
+            # eICU时间列是相对于入院时间的offset,单位是分钟
+            # 转换为小时以与其他数据库保持一致
+            if index_column in data.columns and pd.api.types.is_numeric_dtype(data[index_column]):
+                # 将分钟转换为小时
+                data[index_column] = data[index_column] / 60.0
+            return data
+        
         # Early return checks (no verbose output for performance)
         if data.empty or not index_column or index_column not in data.columns:
             return data
@@ -1275,6 +1423,9 @@ class ConceptResolver:
 
         aggregate_mapping = self._build_sub_aggregate(definition.aggregate, sub_names)
 
+        # Prepare kwargs for sub-concepts, allowing them to be optional
+        sub_kwargs = {**kwargs, '_allow_missing_concept': True}
+        
         sub_tables = self.load_concepts(
             sub_names,
             data_source,
@@ -1284,11 +1435,44 @@ class ConceptResolver:
             verbose=True,  # 临时开启verbose查看子概念加载
             interval=interval,  # Pass interval to recursive calls
             align_to_admission=align_to_admission,  # Pass align flag
-            **kwargs,  # Pass kwargs to sub concepts
+            **sub_kwargs,  # Pass kwargs with allow_missing flag
         )
 
         if isinstance(sub_tables, ICUTable):
             sub_tables = {sub_names[0]: sub_tables}
+
+        # 🔧 CRITICAL FIX: Standardize time column names for eICU BEFORE passing to callbacks
+        # eICU uses different time column names (labresultoffset, observationoffset, etc.)
+        # Rename them to a standard name 'charttime' to enable merging across concepts
+        db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+        if db_name in ['eicu', 'eicu_demo']:
+            # All possible eICU time offset columns
+            eicu_time_cols = [
+                'labresultoffset', 'observationoffset', 'nursecharting_offset', 
+                'respiratorycharting_offset', 'intakeoutput_offset', 'respchartoffset',
+                'infusionoffset', 'drugstartoffset', 'drugstopoffset', 'drugorderoffset',
+                'culturetakenoffset', 'cultureoffset'  # 添加微生物培养时间列
+            ]
+            
+            standardized_sub_tables = {}
+            for name, table in sub_tables.items():
+                if isinstance(table, ICUTable) and table.index_column:
+                    # Check if this table uses an eICU-specific time column
+                    if table.index_column in eicu_time_cols and table.index_column != 'charttime':
+                        # Rename the column in the DataFrame
+                        if table.index_column in table.data.columns:
+                            renamed_data = table.data.rename(columns={table.index_column: 'charttime'})
+                            # Create new ICUTable with updated index_column
+                            table = ICUTable(
+                                data=renamed_data,
+                                id_columns=table.id_columns,
+                                index_column='charttime',  # Update metadata
+                                value_column=table.value_column,
+                                unit_column=table.unit_column,
+                                time_columns=table.time_columns,
+                            )
+                standardized_sub_tables[name] = table
+            sub_tables = standardized_sub_tables
 
         # 🔧 CRITICAL FIX: Align WinTbl time columns BEFORE passing to callbacks
         # This ensures _merge_tables can properly merge WinTbl concepts with numeric time columns
@@ -1628,6 +1812,11 @@ class ConceptResolver:
 
         agg_value = self._coerce_final_aggregator(agg_value)
 
+        # WinTbl 不需要聚合，直接返回
+        from .table import WinTbl
+        if isinstance(raw, WinTbl):
+            return raw
+
         if agg_value is not False:
             frame = self._apply_aggregation(
                 raw.data,
@@ -1730,12 +1919,46 @@ class ConceptResolver:
         data = data[mask].copy()
 
         if "ts_to_win_tbl" in callback:
-            if base_table.index_column is None:
-                raise ValueError("ts_to_win_tbl requires a time indexed table.")
+            # 如果 base_table 为空或没有 index_column，返回空的 WinTbl
+            if base_table.index_column is None or base_table.data.empty:
+                # 使用 base_table 的 ID 列（优先），否则使用数据库特定的默认值
+                # WinTbl 已在模块顶部导入，不需要重复导入
+                
+                # 确定数据库特定的默认 ID 列
+                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else 'unknown'
+                default_id_cols = ['stay_id']  # 默认
+                if db_name == 'eicu' or db_name == 'eicu_demo':
+                    default_id_cols = ['patientunitstayid']
+                elif db_name.startswith('mimic'):
+                    default_id_cols = ['stay_id']
+                
+                if isinstance(base_table, WinTbl):
+                    id_cols = list(base_table.id_vars) if base_table.id_vars else default_id_cols
+                else:
+                    id_cols = list(base_table.id_columns) if base_table.id_columns else default_id_cols
+                idx_col = base_table.index_column if base_table.index_column else 'charttime'  # 默认时间列
+                # 创建空 DataFrame 并设置正确的 dtype
+                empty_win_df = pd.DataFrame(columns=id_cols + [idx_col, concept_name + "_dur", concept_name])
+                # 设置 index 列为 datetime 类型（即使为空）
+                empty_win_df[idx_col] = pd.to_datetime(empty_win_df[idx_col])
+                # dur_var 应该是 float（小时），而不是 timedelta
+                empty_win_df[concept_name + "_dur"] = empty_win_df[concept_name + "_dur"].astype(float)
+                empty_win_df[concept_name] = empty_win_df[concept_name].astype(bool)
+                return WinTbl(
+                    data=empty_win_df,
+                    id_vars=id_cols,
+                    index_var=idx_col,
+                    dur_var=concept_name + "_dur",
+                )
             dur_match = re.search(r"ts_to_win_tbl\((.+)\)", callback, flags=re.DOTALL)
             duration = self._parse_interval_expression(dur_match.group(1) if dur_match else "mins(60)")
+            # 将 timedelta 转换为小时（float）
+            if isinstance(duration, pd.Timedelta):
+                duration_hours = duration.total_seconds() / 3600.0
+            else:
+                duration_hours = float(duration)
             win_df = data[list(base_table.id_columns) + [base_table.index_column]].copy()
-            win_df["duration"] = duration
+            win_df["duration"] = duration_hours
             win_df[concept_name] = True
             return WinTbl(
                 data=win_df.rename(columns={"duration": concept_name + "_dur"}),
@@ -1768,6 +1991,20 @@ class ConceptResolver:
         value = _parse_literal(match.group(2))
         if isinstance(value, pd.Timedelta):
             return value
+        # 如果value是字符串（如"60m"），需要先检查是否是有效的时间字符串
+        if isinstance(value, str):
+            # 移除可能的尾随字符（如括号）
+            value = value.strip().rstrip(')')
+            try:
+                # 使用 'ms' 替代已弃用的 'L'
+                return pd.to_timedelta(value.replace('L', 'ms'))
+            except Exception:
+                # 如果不是有效的时间字符串，尝试解析为数值
+                try:
+                    value = float(value)
+                except ValueError:
+                    raise ValueError(f"Cannot parse interval value '{value}' in expression '{expression}'")
+        # value是数值，需要加上unit
         if unit in {"min", "mins", "minute", "minutes"}:
             return pd.to_timedelta(value, unit="m")
         if unit in {"hour", "hours"}:
@@ -1843,11 +2080,20 @@ class ConceptResolver:
                     common_keys = [col for col in merged.index.names if col in frame.index.names]
                     merged = merged.reset_index()
                     frame = frame.reset_index()
-                    merged = merged.merge(frame, on=common_keys, how='outer')
+                    # 检测列重叠，使用suffixes避免冲突
+                    overlapping_cols = set(merged.columns) & set(frame.columns) - set(common_keys)
+                    if overlapping_cols:
+                        merged = merged.merge(frame, on=common_keys, how='outer', suffixes=('', '_dup'))
+                        # 删除重复列
+                        merged = merged[[c for c in merged.columns if not c.endswith('_dup')]]
+                    else:
+                        merged = merged.merge(frame, on=common_keys, how='outer')
                     merged = merged.sort_values(common_keys)
                     merged = merged.set_index(common_keys)
                 else:
-                    merged = merged.join(frame, how="outer")
+                    merged = merged.join(frame, how="outer", rsuffix='_dup')
+                    # 删除join产生的重复列
+                    merged = merged[[c for c in merged.columns if not c.endswith('_dup')]]
 
         if merged is None:
             return pd.DataFrame()
@@ -1960,6 +2206,28 @@ def _apply_callback(
         print(f"   🔧 应用回调: {expr} (输入行数={len(frame)})")
 
     if expr == "identity_callback":
+        return frame
+
+    # Handle percent_as_numeric - remove '%' and convert to numeric
+    if re.fullmatch(r"transform_fun\(percent_as_numeric\)", expr):
+        series = frame[concept_name]
+        # Remove '%' symbol and convert to numeric
+        # Handle both string '50%' and numeric 50
+        def parse_percent(val):
+            if pd.isna(val):
+                return np.nan
+            if isinstance(val, str):
+                # Remove '%' symbol if present
+                val_clean = val.strip().rstrip('%')
+                try:
+                    return float(val_clean)
+                except (ValueError, AttributeError):
+                    return np.nan
+            else:
+                # Already numeric
+                return float(val)
+        
+        frame.loc[:, concept_name] = series.apply(parse_percent)
         return frame
 
     match = re.fullmatch(r"transform_fun\(set_val\((.+)\)\)", expr, flags=re.DOTALL)
@@ -2160,7 +2428,8 @@ def _apply_callback(
 
         numeric = pd.to_numeric(frame.loc[mask, concept_name], errors="coerce")
         transformed = _apply_binary_op(symbol, numeric, value)
-        frame.loc[mask, concept_name] = transformed
+        # 明确转换类型以避免 dtype 不兼容警告
+        frame.loc[mask, concept_name] = transformed.astype('float64')
         
         if DEBUG_MODE:
             print(f"       转换后非NaN行数: {transformed.notna().sum()}/{len(transformed)}")
@@ -2301,7 +2570,25 @@ def _apply_callback(
         from .callback_utils import eicu_duration_callback
 
         gap_arg = match.group(1)
-        gap = _parse_interval_expression(gap_arg)
+        # Parse interval expression directly
+        gap_expr = gap_arg.strip()
+        interval_match = re.fullmatch(r"([a-zA-Z]+)\((.+)\)", gap_expr)
+        if interval_match:
+            unit = interval_match.group(1).lower()
+            value = _parse_literal(interval_match.group(2))
+            if unit in {"min", "mins", "minute", "minutes"}:
+                gap = pd.to_timedelta(value, unit="m")
+            elif unit in {"hour", "hours"}:
+                gap = pd.to_timedelta(value, unit="h")
+            elif unit in {"sec", "secs", "second", "seconds"}:
+                gap = pd.to_timedelta(value, unit="s")
+            elif unit in {"day", "days"}:
+                gap = pd.to_timedelta(value, unit="d")
+            else:
+                raise ValueError(f"Unsupported interval unit '{unit}' in expression '{gap_expr}'")
+        else:
+            raise ValueError(f"Unsupported interval expression '{gap_arg}'")
+        
         callback_fn = eicu_duration_callback(gap)
         id_cols = [col for col in frame.columns if 'id' in col.lower()]
         index_var = source.index_var
@@ -2310,6 +2597,27 @@ def _apply_callback(
             val_col=concept_name,
             index_var=index_var,
             id_cols=id_cols,
+        )
+
+    # Handle eicu_rate_kg(ml_to_mcg = VALUE) - eICU dose rate conversion with weight
+    match = re.fullmatch(r"eicu_rate_kg\(\s*ml_to_mcg\s*=\s*(.+)\)", expr, flags=re.DOTALL)
+    if match:
+        from .callback_utils import eicu_rate_kg_callback
+        
+        ml_to_mcg = float(match.group(1))
+        callback_fn = eicu_rate_kg_callback(ml_to_mcg)
+        
+        # Get necessary variables
+        val_var = source.value_var or concept_name
+        sub_var = source.sub_var
+        weight_var = source.params.get('weight_var', 'admissionweight') if source.params else 'admissionweight'
+        
+        return callback_fn(
+            frame,
+            val_var=val_var,
+            sub_var=sub_var,
+            weight_var=weight_var,
+            concept_name=concept_name,
         )
 
     raise NotImplementedError(
@@ -2322,6 +2630,10 @@ def _apply_binary_op(symbol: str, series: pd.Series, value: object) -> pd.Series
     # Import conversion functions
     from .callback_utils import fahr_to_cels
     from .unit_conversion import celsius_to_fahrenheit, fahrenheit_to_celsius
+    
+    # Special case: set_val_na - set all values to NA
+    if symbol == "set_val_na":
+        return pd.Series([np.nan] * len(series), index=series.index)
     
     # Function map for unit conversions
     func_map = {
@@ -2352,10 +2664,15 @@ def _apply_binary_op(symbol: str, series: pd.Series, value: object) -> pd.Series
 def _parse_binary_op(expr: str) -> tuple[str, object]:
     """Parse binary_op expression.
     
-    Handles both:
+    Handles:
     - binary_op(`+`, 10)
     - fahr_to_cels (function name only)
+    - set_val(NA) (special: set all values to NA)
     """
+    # Check for set_val(NA) - special case for convert_unit
+    if re.fullmatch(r'set_val\(NA\)', expr.strip(), re.IGNORECASE):
+        return 'set_val_na', None
+    
     # Check if it's just a function name (like fahr_to_cels)
     if re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', expr.strip()):
         # It's a function name - return it as a special operator
@@ -2494,12 +2811,13 @@ def _parse_literal(token: str):
 Concept = ConceptDefinition  # Concept 类别名，指向 ConceptDefinition
 
 
-def load_dictionary(src_name: Optional[str] = None) -> ConceptDictionary:
+def load_dictionary(src_name: Optional[str] = None, include_sofa2: bool = False) -> ConceptDictionary:
     """
     加载概念字典 - 兼容函数
     
     Args:
         src_name: 数据源名称（可选）
+        include_sofa2: 是否包含 SOFA-2 概念字典
         
     Returns:
         ConceptDictionary 实例
@@ -2507,4 +2825,4 @@ def load_dictionary(src_name: Optional[str] = None) -> ConceptDictionary:
     from .resources import load_dictionary as _load_dictionary
 
     # 当前实现不根据数据源过滤概念，但保留参数以兼容既有调用
-    return _load_dictionary()
+    return _load_dictionary(include_sofa2=include_sofa2)

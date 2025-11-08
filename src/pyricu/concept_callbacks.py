@@ -41,6 +41,17 @@ from .utils import coalesce
 from .unit_conversion import convert_vaso_rate
 
 
+# Helper functions to unify WinTbl and ICUTable attribute access
+def _get_id_columns(table):
+    """Get ID columns from either WinTbl (id_vars) or ICUTable (id_columns)."""
+    return list(table.id_vars if isinstance(table, WinTbl) else table.id_columns)
+
+
+def _get_index_column(table):
+    """Get index column from either WinTbl (index_var) or ICUTable (index_column)."""
+    return table.index_var if isinstance(table, WinTbl) else table.index_column
+
+
 CallbackFn = Callable[[Dict[str, ICUTable], "ConceptCallbackContext"], ICUTable]
 
 
@@ -99,6 +110,12 @@ def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: s
         DataFrame with columns [from_col, to_col] and optionally 'subject_id'
     """
     try:
+        # 🔧 FIX: eICU doesn't use icustays table, skip for eICU databases
+        db_name = ctx.data_source.config.name if hasattr(ctx.data_source, 'config') and hasattr(ctx.data_source.config, 'name') else ''
+        if db_name in ['eicu', 'eicu_demo']:
+            # eICU uses patientunitstayid as the primary ID, no mapping needed
+            return None
+        
         # Load icustays table which contains the mapping for MIMIC datasets
         # This works for MIMIC-III/IV, other databases may use different mapping tables
         # Build list of columns, avoiding duplicates
@@ -190,8 +207,9 @@ def _assert_shared_schema(
     # Collect all unique ID column sets
     id_column_sets = {}
     for name, table in tables.items():
-        ids = list(table.id_columns)
-        idx = table.index_column
+        # Use helper function to support both WinTbl and ICUTable
+        ids = _get_id_columns(table)
+        idx = _get_index_column(table)
         id_column_sets[name] = ids
         
         if id_columns is None:
@@ -274,7 +292,8 @@ def _assert_shared_schema(
     
     # Final validation - all tables should now have matching IDs
     for name, table in converted_tables.items():
-        ids = list(table.id_columns)
+        # Use helper function to support both WinTbl and ICUTable
+        ids = _get_id_columns(table)
         if ids != id_columns:
             raise ValueError(
                 f"Concept component '{name}' has identifier columns {ids}, "
@@ -322,7 +341,8 @@ def _merge_tables(
                     new_cols.append(str(col))
             frame.columns = new_cols
         
-        table_idx = table.index_column
+        # Use helper function to support both WinTbl and ICUTable
+        table_idx = _get_index_column(table)
         
         # Rename index column to the canonical name if it differs
         if table_idx and index_column and table_idx != index_column:
@@ -353,7 +373,13 @@ def _merge_tables(
         if frame.empty:
             continue
         
-        value_col = table.value_column or name
+        # 🔧 处理 WinTbl (没有 value_column，使用 name 本身)
+        from pyricu.table import WinTbl
+        if isinstance(table, WinTbl):
+            value_col = name  # WinTbl 的值列就是概念名本身
+        else:
+            value_col = table.value_column or name
+            
         if value_col != name:
             frame = frame.rename(columns={value_col: name})
         
@@ -686,7 +712,7 @@ def _callback_sofa_component(
                 elif ctx.concept_name == 'sofa_renal' and name == 'urine24':
                     # Optional urine24 parameter - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_renal' and name in ['urine_mlkgph', 'rrt', 'rrt_criteria', 'potassium', 'ph', 'bicarb']:
+                elif ctx.concept_name == 'sofa2_renal' and name in ['uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'potassium', 'ph', 'bicarb']:
                     # SOFA-2 renal optional parameters - pass None
                     kwargs[name] = None
                 elif ctx.concept_name == 'sofa2_resp' and name in ['spo2', 'fio2', 'adv_resp', 'ecmo', 'ecmo_indication']:
@@ -935,7 +961,7 @@ def _callback_sofa_resp(
             # Aggregate overlapping intervals with boolean OR ("any")
             key_cols = vent_id_cols + [target_time_col]
             if value_col in vent_expanded_df.columns and not vent_expanded_df.empty:
-                vent_expanded_df[value_col] = vent_expanded_df[value_col].fillna(False).astype(bool)
+                vent_expanded_df[value_col] = vent_expanded_df[value_col].where(vent_expanded_df[value_col].notna(), False).astype(bool)
                 vent_expanded_df = vent_expanded_df.groupby(key_cols, as_index=False)[value_col].any()
             elif vent_expanded_df.empty:
                 vent_expanded_df = pd.DataFrame(columns=key_cols + [value_col])
@@ -1137,7 +1163,8 @@ def _callback_sofa_resp(
     
     # Adjust pafi: if pafi < 200 and NOT on ventilation, set pafi = 200
     # Replicates: dat[is_true(get(pafi_var) < 200) & !is_true(get(vent_var)), c(pafi_var) := 200]
-    vent_mask = merged[vent_col].fillna(False).astype(bool)
+    # 使用 where() 替代 fillna() 以避免 downcasting 警告
+    vent_mask = merged[vent_col].where(merged[vent_col].notna(), False).astype(bool)
     pafi_vals = pd.to_numeric(merged[pafi_col], errors="coerce")
     adjust_mask = (pafi_vals < 200) & (~vent_mask)
     merged.loc[adjust_mask, pafi_col] = 200
@@ -1490,7 +1517,7 @@ def _callback_news(
         temp=pd.to_numeric(data.get("temp")),
         sbp=pd.to_numeric(data.get("sbp")),
         hr=pd.to_numeric(data.get("hr")),
-        supp_o2=data.get("supp_o2").fillna(False).astype(bool),
+        supp_o2=data.get("supp_o2").where(data.get("supp_o2").notna(), False).astype(bool),
         avpu=data.get("avpu").astype(str),
         keep_components=False,
     )
@@ -2037,7 +2064,7 @@ def _callback_supp_o2(
         on=key_cols,
         how="outer",
     )
-    merged[vent_col] = merged[vent_col].fillna(False).astype(bool)
+    merged[vent_col] = merged[vent_col].where(merged[vent_col].notna(), False).astype(bool)
     merged[fio2_col] = merged[fio2_col].fillna(21)
     merged["supp_o2"] = merged[vent_col] | (merged[fio2_col] > 21)
 
@@ -2233,9 +2260,20 @@ def _callback_vent_ind(
         merged = merged.dropna(subset=[f"{time_col}_start"])
         merged = merged.sort_values(id_columns + [f"{time_col}_start"])
 
+        # 计算持续时间 - 需要根据时间列类型决定如何计算
         end_times = merged[f"{time_col}_end"].fillna(merged[f"{time_col}_start"])
-        durations = (end_times - merged[f"{time_col}_start"]).fillna(pd.Timedelta(0))
-        merged["vent_dur"] = durations.clip(lower=pd.Timedelta(minutes=30))
+        
+        if pd.api.types.is_numeric_dtype(merged[f"{time_col}_start"]):
+            # 时间是数值类型(小时) - 直接相减得到小时数
+            durations = (end_times - merged[f"{time_col}_start"]).fillna(0.0)
+            # clip 最小值为 0.5 小时 (30 minutes)
+            merged["vent_dur"] = durations.clip(lower=0.5)
+        else:
+            # 时间是 datetime 类型 - 相减得到 Timedelta，然后转换为小时
+            durations = (end_times - merged[f"{time_col}_start"]).fillna(pd.Timedelta(0))
+            merged["vent_dur"] = durations.clip(lower=pd.Timedelta(minutes=30))
+            # 转换为数值小时
+            merged["vent_dur"] = merged["vent_dur"].dt.total_seconds() / 3600.0
 
         win_df = merged[id_columns + [f"{time_col}_start", "vent_dur"]].rename(
             columns={f"{time_col}_start": time_col}
@@ -2248,10 +2286,10 @@ def _callback_vent_ind(
         )
         return result
 
-    # Only start events available – create fixed window of 30 minutes
-    default_duration = pd.Timedelta(minutes=30)
+    # Only start events available – create fixed window of 30 minutes (0.5 hours)
     win_df = start_df[id_columns + [time_col]].copy()
-    win_df["vent_dur"] = default_duration
+    # Use numeric duration (hours) instead of Timedelta
+    win_df["vent_dur"] = 0.5  # 30 minutes = 0.5 hours
     win_df["vent_ind"] = True
     return WinTbl(
         data=win_df,
@@ -3005,8 +3043,8 @@ def _callback_gcs(
     # CRITICAL FIX: Replicate R ricu's sed_impute logic
     # If sed_impute="max" (default) and patient is intubated (ett_gcs=True), set tgcs=15
     if sed_impute == "max" and ett_gcs is not None:
-        # Convert ett_gcs to boolean
-        is_intubated = ett_gcs.fillna(False).astype(bool)
+        # Convert ett_gcs to boolean - 使用 where() 替代 fillna() 以避免警告
+        is_intubated = ett_gcs.where(ett_gcs.notna(), False).astype(bool)
         # For intubated patients, set tgcs=15
         if tgcs is None:
             tgcs = pd.Series(np.nan, index=data.index, dtype=float)
@@ -3054,10 +3092,10 @@ def _callback_rrt_criteria(
       * Metabolic acidosis: pH ≤ 7.20 AND HCO3 ≤ 12 mmol/L
     - AND NOT currently receiving RRT
     
-    This is a computed concept that requires crea, urine_mlkgph, potassium, ph, bicarb, and rrt.
+    This is a computed concept that requires crea, uo_6h, uo_12h, uo_24h, potassium, ph, bicarb, and rrt.
     """
     # Load required concepts if not already provided
-    required_concepts = ["crea", "urine_mlkgph", "potassium", "ph", "bicarb", "rrt"]
+    required_concepts = ["crea", "uo_6h", "uo_12h", "uo_24h", "potassium", "ph", "bicarb", "rrt"]
     missing_concepts = [c for c in required_concepts if c not in tables]
     
     if missing_concepts:
@@ -3078,7 +3116,9 @@ def _callback_rrt_criteria(
     
     # Extract tables
     crea_tbl = tables.get("crea")
-    urine_tbl = tables.get("urine_mlkgph")
+    uo_6h_tbl = tables.get("uo_6h")
+    uo_12h_tbl = tables.get("uo_12h")
+    uo_24h_tbl = tables.get("uo_24h")
     k_tbl = tables.get("potassium")
     ph_tbl = tables.get("ph")
     hco3_tbl = tables.get("bicarb")
@@ -3091,19 +3131,21 @@ def _callback_rrt_criteria(
         cols = id_columns + ([index_column] if index_column else []) + ["rrt_criteria"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="rrt_criteria")
     
-    # Extract columns
+    # Extract columns - use uo_6h for oliguria check (proxy for >6h duration)
     crea = pd.to_numeric(data.get("crea", pd.Series(np.nan, index=data.index)), errors="coerce")
-    urine = pd.to_numeric(data.get("urine_mlkgph", pd.Series(np.nan, index=data.index)), errors="coerce")
+    uo_6h = pd.to_numeric(data.get("uo_6h", pd.Series(np.nan, index=data.index)), errors="coerce")
     potassium = pd.to_numeric(data.get("potassium", pd.Series(np.nan, index=data.index)), errors="coerce")
     ph = pd.to_numeric(data.get("ph", pd.Series(np.nan, index=data.index)), errors="coerce")
     hco3 = pd.to_numeric(data.get("bicarb", pd.Series(np.nan, index=data.index)), errors="coerce")
     
     # Check if receiving RRT
-    rrt_active = data.get("rrt", pd.Series(False, index=data.index)).fillna(False).astype(bool)
+    rrt_active = data.get("rrt", pd.Series(False, index=data.index)).where(
+        data.get("rrt", pd.Series(False, index=data.index)).notna(), False
+    ).astype(bool)
     
-    # Base kidney injury criteria
+    # Base kidney injury criteria (use uo_6h as proxy for oliguria >6h)
     aki_crea = (crea > 1.2).fillna(False)
-    aki_oligo = (urine < 0.3).fillna(False)
+    aki_oligo = (uo_6h < 0.3).fillna(False)
     base_injury = aki_crea | aki_oligo
     
     # Electrolyte/acid-base crisis
@@ -3125,6 +3167,9 @@ def _callback_urine_mlkgph(
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
     """Convert urine output from mL to mL/kg/h.
+    
+    DEPRECATED: This callback is replaced by uo_6h, uo_12h, uo_24h for SOFA-2.
+    Kept for backward compatibility with old code.
     
     This callback computes urine output rate by:
     1. Loading urine (mL) data
@@ -3179,6 +3224,97 @@ def _callback_urine_mlkgph(
     )
 
 
+def _callback_uo_window(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+    window_hours: int,
+    output_col: str,
+) -> ICUTable:
+    """Generic callback for windowed urine output (uo_6h, uo_12h, uo_24h).
+    
+    Computes rolling average urine output over specified window in mL/kg/h.
+    Uses the uo_6h, uo_12h, uo_24h functions from callbacks.py.
+    """
+    from .callbacks import _urine_window_avg
+    
+    # Load required concepts
+    required = ["urine", "weight"]
+    missing = [c for c in required if c not in tables]
+    
+    if missing:
+        loaded = ctx.resolver.load_concepts(
+            missing,
+            ctx.data_source,
+            merge=False,
+            aggregate=None,
+            patient_ids=ctx.patient_ids,
+            interval=ctx.interval,
+        )
+        if isinstance(loaded, ICUTable):
+            tables[missing[0]] = loaded
+        else:
+            tables.update(loaded)
+    
+    urine_tbl = tables.get("urine")
+    weight_tbl = tables.get("weight")
+    
+    if urine_tbl is None or urine_tbl.data.empty:
+        # Return empty table - get ID columns from data_source
+        try:
+            id_cols = [ctx.data_source.id_cfg.id]  # Get from data_source config
+        except:
+            id_cols = ["stay_id"]  # Fallback
+        
+        index_col = "charttime"
+        cols = id_cols + [index_col] + [output_col]
+        return _as_icutbl(
+            pd.DataFrame(columns=cols),
+            id_columns=id_cols,
+            index_column=index_col,
+            value_column=output_col
+        )
+    
+    # Call the actual callback function from callbacks.py
+    min_hours = max(1, window_hours // 2)
+    result_df = _urine_window_avg(
+        urine=urine_tbl.data,
+        weight=weight_tbl.data if weight_tbl else pd.DataFrame(),
+        window_hours=window_hours,
+        min_hours=min_hours,
+        interval=ctx.interval or pd.Timedelta(hours=1)
+    )
+    
+    if result_df.empty:
+        return _as_icutbl(
+            result_df,
+            id_columns=list(urine_tbl.id_columns),
+            index_column=urine_tbl.index_column,
+            value_column=output_col
+        )
+    
+    return _as_icutbl(
+        result_df.reset_index(drop=True),
+        id_columns=list(urine_tbl.id_columns),
+        index_column=urine_tbl.index_column,
+        value_column=output_col
+    )
+
+
+def _callback_uo_6h(tables: Dict[str, ICUTable], ctx: ConceptCallbackContext) -> ICUTable:
+    """6-hour rolling average urine output (mL/kg/h)."""
+    return _callback_uo_window(tables, ctx, window_hours=6, output_col="uo_6h")
+
+
+def _callback_uo_12h(tables: Dict[str, ICUTable], ctx: ConceptCallbackContext) -> ICUTable:
+    """12-hour rolling average urine output (mL/kg/h)."""
+    return _callback_uo_window(tables, ctx, window_hours=12, output_col="uo_12h")
+
+
+def _callback_uo_24h(tables: Dict[str, ICUTable], ctx: ConceptCallbackContext) -> ICUTable:
+    """24-hour rolling average urine output (mL/kg/h)."""
+    return _callback_uo_window(tables, ctx, window_hours=24, output_col="uo_24h")
+
+
 def _callback_sum_components(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -3228,6 +3364,9 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "gcs": _callback_gcs,
     "rrt_criteria": _callback_rrt_criteria,
     "urine_mlkgph": _callback_urine_mlkgph,
+    "uo_6h": _callback_uo_6h,
+    "uo_12h": _callback_uo_12h,
+    "uo_24h": _callback_uo_24h,
     "sum_components": _callback_sum_components,
     "sofa_resp": _callback_sofa_resp,
     "sofa_coag": _callback_sofa_component(sofa_coag),

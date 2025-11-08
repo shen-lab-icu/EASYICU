@@ -37,29 +37,34 @@ from .table import (
     rm_cols,
 )
 
-# 高层便捷API - 像 R ricu 一样简单
+# 高层便捷API - 推荐使用的主API
 try:
     from .api import (
-        load_concept,
-        load_sofa_components,
+        # 主API - 智能默认值
+        load_concepts as _load_concepts_api,  # 先导入为内部名称
+        load_concept,  # 别名
+        # Easy API - 便捷函数
+        load_sofa,
+        load_sofa2,
+        load_sepsis3,
         load_vitals,
         load_labs,
+        # 工具函数
         list_available_concepts,
         list_available_sources,
         get_concept_info,
     )
+    # 将新API作为主要的load_concepts
+    load_concepts = _load_concepts_api
     _HAS_API = True
-except ImportError:
+except ImportError as e:
+    print(f"Warning: Failed to import api module: {e}")
     _HAS_API = False
 
-# 快速启动 API - 一行代码完成常见任务
+# 快速启动 API - DEPRECATED（保留向后兼容）
 try:
     from .quickstart import (
         ICUQuickLoader,
-        load_sofa,
-        load_sepsis3,
-        load_vitals,
-        load_labs,
         get_patient_ids,
         # 向后兼容的别名
         MIMICQuickLoader,
@@ -72,12 +77,19 @@ try:
 except ImportError:
     _HAS_QUICKSTART = False
 
-# 从 load_concepts 模块导入 load_concepts 函数
+# 从 load_concepts 模块导入（保留向后兼容）
+# 注意：这会覆盖上面的load_concepts，所以我们在最后重新设置
 try:
-    from .load_concepts import load_concepts, ConceptLoader
+    from .load_concepts import ConceptLoader
+    from .load_concepts import load_concepts as _load_concepts_old
     _HAS_LOAD_CONCEPTS = True
 except ImportError:
     _HAS_LOAD_CONCEPTS = False
+
+# 确保新API优先
+if _HAS_API:
+    load_concepts = _load_concepts_api  # 使用新API
+    # load_concept已经从api.py导入，是load_concepts的别名
 
 # 增强API - 支持缓存和时间对齐
 try:
@@ -556,15 +568,22 @@ except ImportError:
     _HAS_CONCEPT_BUILDER = False
 
 __all__ = [
-    # 高层API - 最常用的函数
-    "load_concept",
-    "load_sofa_components", 
+    # === 推荐使用的API ===
+    # 主API（智能默认值，完全灵活）
+    "load_concepts",
+    "load_concept",  # 别名
+    # Easy API（预定义便捷函数）
+    "load_sofa",
+    "load_sofa2",
+    "load_sepsis3",
     "load_vitals",
     "load_labs",
+    # 工具函数
     "list_available_concepts",
     "list_available_sources",
     "get_concept_info",
-    # 核心类
+    
+    # === 核心类 ===
     "ConceptDictionary",
     "ConceptResolver",
     "DataSourceConfig",
@@ -577,6 +596,8 @@ __all__ = [
     "TsTbl",
     "WinTbl",
     "PvalTbl",
+    
+    # === 表操作 ===
     "rbind_tbl",
     "cbind_tbl",
     "merge_lst",
@@ -597,6 +618,8 @@ __all__ = [
     "rbind_lst",
     "rename_cols",
     "rm_cols",
+    
+    # === 资源加载 ===
     "load_table",
     "load_data_sources",
     "load_dictionary",
@@ -605,20 +628,12 @@ __all__ = [
 
 # Add optional exports
 if _HAS_API:
-    __all__.extend([
-        "load_concept",
-        "load_sofa_components", 
-        "load_vitals",
-        "load_labs",
-        "list_available_concepts",
-        "list_available_sources",
-        "get_concept_info",
-    ])
+    # API已在上面添加到__all__中
+    pass
 
 if _HAS_LOAD_CONCEPTS:
     __all__.extend([
-        "load_concepts",
-        "ConceptLoader",
+        "ConceptLoader",  # 只导出类，不导出load_concepts函数
     ])
 
 if _HAS_ENHANCED_API:
@@ -629,20 +644,16 @@ if _HAS_ENHANCED_API:
     ])
 
 if _HAS_QUICKSTART:
+    # Deprecated - 保留向后兼容
     __all__.extend([
-        # 主要API（新名称）
-        "ICUQuickLoader",
-        "load_sofa",
-        "load_sepsis3",
-        "load_vitals",
-        "load_labs",
+        "ICUQuickLoader",  # DEPRECATED
         "get_patient_ids",
         # 向后兼容的别名
-        "MIMICQuickLoader",
-        "load_mimic_sofa",
-        "load_mimic_sepsis3",
-        "load_mimic_vitals",
-        "load_mimic_labs",
+        "MIMICQuickLoader",  # DEPRECATED
+        "load_mimic_sofa",  # DEPRECATED
+        "load_mimic_sepsis3",  # DEPRECATED
+        "load_mimic_vitals",  # DEPRECATED
+        "load_mimic_labs",  # DEPRECATED
     ])
 
 if _HAS_ASSERTIONS:

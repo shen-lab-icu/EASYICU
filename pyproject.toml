@@ -34,8 +34,10 @@ dev = [
 pyricu = "pyricu.scripts.extract_features:main"
 
 [project.urls]
-Homepage = "https://example.com/pyricu"
-Repository = "https://example.com/pyricu.git"
+Homepage = "https://github.com/shen-lab-icu/pyricu"
+Repository = "https://github.com/shen-lab-icu/pyricu.git"
+Issues = "https://github.com/shen-lab-icu/pyricu/issues"
+Documentation = "https://github.com/shen-lab-icu/pyricu/blob/main/README.md"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

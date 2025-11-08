@@ -11,10 +11,9 @@ pyricu 是一个专为重症监护室 (ICU) 数据分析设计的 Python 工具�
 - **概念化抽象**：用统一的"概念"名称访问不同数据库中的相同临床指标
 - **自动数据对齐**：自动处理时间序列对齐、单位转换、缺失值
 
-### 🚀 三层 API 设计
-1. **极简 API** (`pyricu.easy`) - 一行代码搞定常用任务
-2. **快速启动 API** (`pyricu.quickstart`) - 更多控制选项
-3. **完整 API** (`pyricu.concept`) - 完全的灵活性和可定制性
+### 🚀 两层 API 设计
+1. **Easy API** - 预定义的便捷函数（`load_sofa`, `load_vitals`等）
+2. **Concept API** - 灵活的主API（`load_concepts`）支持智能默认值和完全自定义
 
 ### 📊 丰富的临床评分系统
 - **SOFA** (Sequential Organ Failure Assessment) - 器官衰竭评分
@@ -70,130 +69,126 @@ pip install -e .
 
 ### 5 分钟上手示例
 
-#### 1. 极简 API - 加载生命体征
+#### 1. Easy API - 便捷函数
 
 ```python
-from pyricu.easy import load_vitals, load_labs, load_sofa_score
+from pyricu import load_sofa, load_vitals, load_labs
 
-# 一行代码加载生命体征（心率、血压、体温等）
+# 加载 SOFA 评分
+sofa = load_sofa(
+    database='miiv',
+    data_path='/path/to/mimic-iv/data',
+    patient_ids=[30000123, 30000456]
+)
+
+# 加载生命体征
 vitals = load_vitals(
-    data_path="/path/to/mimic-iv/data",
-    patient_ids=[30000123, 30000456]  # 可选：指定患者
+    database='miiv',
+    data_path='/path/to/data',
+    patient_ids=[30000123]
 )
 
-print(vitals.head())
-#    stay_id            charttime   hr   sbp   dbp  temp  resp  spo2
-# 0  30000123 2180-07-23 16:00:00  82.0  120    75  36.8    16    98
-# 1  30000123 2180-07-23 17:00:00  85.0  118    73  36.9    18    97
-```
-
-#### 2. 加载实验室检查
-
-```python
-# 加载实验室指标
+# 加载实验室检查
 labs = load_labs(
-    data_path="/path/to/mimic-iv/data",
+    database='miiv',
+    data_path='/path/to/data',
     patient_ids=[30000123]
 )
 
-print(labs.columns)
-# ['stay_id', 'charttime', 'crea', 'bili', 'plt', 'wbc', 'lactate', ...]
+print(sofa.head())
+#    stay_id  charttime  sofa  sofa_resp  sofa_cardio  sofa_liver  sofa_coag  sofa_cns  sofa_renal
+# 0  30000123       1.0   3.0        1.0          0.0         0.0        1.0       0.0         1.0
+# 1  30000123       2.0   3.0        1.0          0.0         0.0        1.0       0.0         1.0
+# 2  30000123       3.0   4.0        2.0          0.0         0.0        1.0       0.0         1.0
+# (注: charttime 表示入 ICU 后的小时数)
 ```
 
-#### 3. 计算 SOFA 评分
+#### 2. Concept API - 完全自定义
 
 ```python
-# 自动计算 SOFA 评分（包括所有 6 个子组件）
-sofa = load_sofa_score(
-    data_path="/path/to/mimic-iv/data",
-    patient_ids=[30000123]
+from pyricu import load_concepts
+
+# 批量加载多个概念
+vitals = load_concepts(
+    concepts=['hr', 'sbp', 'dbp', 'temp'],
+    database='miiv',
+    data_path='/path/to/mimic-iv/data',
+    patient_ids=[30000123],
+    interval='1h',  # 1小时对齐
+    verbose=True
 )
 
-print(sofa[['stay_id', 'charttime', 'sofa', 'sofa_resp', 'sofa_cardio']].head())
-#    stay_id            charttime  sofa  sofa_resp  sofa_cardio
-# 0  30000123 2180-07-23 16:00:00    5          2            1
-# 1  30000123 2180-07-23 17:00:00    6          2            2
-```
-
-#### 4. Sepsis-3 诊断
-
-```python
-from pyricu.easy import load_sepsis
-
-# 一键诊断脓毒症（SOFA ≥2 + 疑似感染）
-sepsis = load_sepsis(
-    data_path="/path/to/mimic-iv/data",
-    patient_ids=[30000123]
+# 加载 SOFA-2 评分（2025新标准）
+sofa2 = load_concepts(
+    'sofa2',
+    database='miiv',
+    data_path='/path/to/data',
+    patient_ids=[30000123, 30000456],
+    interval='6h',           # 6小时间隔
+    win_length='24h',        # 24小时窗口
+    keep_components=True,    # 保留所有组件
+    aggregate='max',         # 最大值聚合
+    verbose=True
 )
 
-print(f"脓毒症患者数: {sepsis['sep3'].sum()}")
-```
-
-#### 5. 自定义概念加载
-
-```python
-from pyricu.easy import load_custom
-
-# 加载任意临床概念
-data = load_custom(
-    data_path="/path/to/mimic-iv/data",
-    concepts=['gcs', 'lactate', 'crp', 'pct'],  # 格拉斯哥、乳酸、CRP、降钙素原
-    patient_ids=[30000123]
-)
+print(sofa2.columns)
+# ['stay_id', 'charttime', 'sofa2', 'sofa2_resp', 'sofa2_coag', 
+#  'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal']
 ```
 
 ## 📚 高级用法
 
-### 使用 QuickStart API 进行更精细的控制
+### 批量加载多个概念
 
 ```python
-from pyricu.quickstart import ICUQuickLoader
-import pandas as pd
+from pyricu import load_concepts
 
-# 创建加载器
-loader = ICUQuickLoader(
-    data_path="/path/to/mimic-iv/data",
-    database='miiv'  # 支持: miiv, mimic, eicu, aumc, hirid
-)
-
-# 加载单个概念
-hr_data = loader.load_concepts(
-    'hr',  # 心率
-    patient_ids=[30000123, 30000456],
-    interval=pd.Timedelta(hours=1),  # 1小时采样间隔
-    win_length=pd.Timedelta(hours=24)  # 24小时滑动窗口
-)
-
-# 批量加载多个概念（共享缓存，性能更好）
+# 一次加载多个概念（共享数据，性能更好）
 concepts = ['hr', 'sbp', 'dbp', 'temp', 'resp', 'spo2']
-vitals = loader.load_concepts(
-    concepts,
+vitals = load_concepts(
+    concepts=concepts,
+    database='miiv',
+    data_path='/path/to/data',
     patient_ids=[30000123],
-    interval=pd.Timedelta(minutes=30),  # 30分钟间隔
-    merge=True  # 自动合并为一个 DataFrame
+    interval='1h',
+    aggregate={'hr': 'mean', 'sbp': 'max'}  # 每个概念不同聚合
+)
+```
+
+### 字符串格式的时间参数
+
+```python
+from pyricu import load_concepts
+
+# 支持便捷的字符串时间格式
+data = load_concepts(
+    concepts=['hr', 'map', 'spo2'],
+    database='miiv',
+    data_path='/path/to/data',
+    patient_ids=[123, 456],
+    interval='30min',      # 30分钟间隔
+    win_length='6h'        # 6小时窗口
 )
 ```
 
 ### SOFA-2 (2025) 新版本评分
 
 ```python
-# 使用最新的 SOFA-2 评分系统（2025版）
-loader = ICUQuickLoader(
-    data_path="/path/to/mimic-iv/data",
-    database='miiv',
-    use_sofa2=True  # 启用 SOFA-2 字典
-)
+from pyricu import load_sofa2
 
-sofa2 = loader.load_concepts(
-    'sofa2',
+# 使用最新的 SOFA-2 评分系统
+sofa2 = load_sofa2(
+    database='miiv',
+    data_path='/path/to/data',
     patient_ids=[30000123],
-    interval=pd.Timedelta(hours=1),
+    interval='1h',
+    win_length='24h',
     keep_components=True  # 保留所有子组件
 )
 
 print(sofa2.columns)
-# ['stay_id', 'charttime', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 
-#  'sofa2_cardio', 'sofa2_cns', 'sofa2_renal', 'sofa2']
+# ['stay_id', 'charttime', 'sofa2', 'sofa2_resp', 'sofa2_coag', 
+#  'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal']
 ```
 
 **SOFA-2 相比 SOFA-1 的改进：**
@@ -416,12 +411,12 @@ data = loader.load_concepts(
     merge=True
 )
 
-# 可视化
+# 可视化（charttime 表示入 ICU 后的小时数）
 fig, axes = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
-data.plot(x='charttime', y='hr', ax=axes[0], title='心率')
-data.plot(x='charttime', y='sbp', ax=axes[1], title='收缩压')
-data.plot(x='charttime', y='lactate', ax=axes[2], title='乳酸')
-data.plot(x='charttime', y='sofa', ax=axes[3], title='SOFA评分')
+data.plot(x='charttime', y='hr', ax=axes[0], title='心率', xlabel='ICU 住院时间 (小时)')
+data.plot(x='charttime', y='sbp', ax=axes[1], title='收缩压', xlabel='ICU 住院时间 (小时)')
+data.plot(x='charttime', y='lactate', ax=axes[2], title='乳酸', xlabel='ICU 住院时间 (小时)')
+data.plot(x='charttime', y='sofa', ax=axes[3], title='SOFA评分', xlabel='ICU 住院时间 (小时)')
 plt.tight_layout()
 plt.show()
 ```
