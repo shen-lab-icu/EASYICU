@@ -363,6 +363,9 @@ class TsTbl(IdTbl):
     
     def _detect_interval(self) -> pd.Timedelta:
         """Auto-detect time interval from data."""
+        # Check if index is numeric (eICU-style) or temporal
+        is_numeric = pd.api.types.is_numeric_dtype(self.data[self.index_var])
+        
         # Get unique time differences
         diffs = []
         for _, group in self.data.groupby(self.id_vars):
@@ -376,8 +379,14 @@ class TsTbl(IdTbl):
             return pd.Timedelta(hours=1)
         
         # Return minimum non-zero difference
-        min_diff = min(d for d in diffs if d > pd.Timedelta(0))
-        return min_diff
+        if is_numeric:
+            # For numeric times (hours), convert to Timedelta
+            min_diff = min(d for d in diffs if d > 0)
+            return pd.Timedelta(hours=min_diff)
+        else:
+            # For temporal types, already Timedelta
+            min_diff = min(d for d in diffs if d > pd.Timedelta(0))
+            return min_diff
     
     def _validate(self):
         """Validate time series table structure."""
@@ -392,9 +401,16 @@ class TsTbl(IdTbl):
             raise ValueError(f"Index column '{self.index_var}' cannot be an ID column")
         
         # Check index column type
-        if not (pd.api.types.is_timedelta64_dtype(self.data[self.index_var]) or
-                pd.api.types.is_datetime64_any_dtype(self.data[self.index_var])):
-            raise ValueError(f"Index column '{self.index_var}' must be datetime or timedelta")
+        # Allow: datetime, timedelta, or numeric (for eICU-style offset in hours)
+        is_temporal = (pd.api.types.is_timedelta64_dtype(self.data[self.index_var]) or
+                      pd.api.types.is_datetime64_any_dtype(self.data[self.index_var]))
+        is_numeric = pd.api.types.is_numeric_dtype(self.data[self.index_var])
+        
+        if not (is_temporal or is_numeric):
+            raise ValueError(
+                f"Index column '{self.index_var}' must be datetime, timedelta, or numeric. "
+                f"Got: {self.data[self.index_var].dtype}"
+            )
     
     def _reorder_columns(self):
         """Move ID and index columns to front."""
@@ -558,8 +574,15 @@ class WinTbl(TsTbl):
             raise ValueError(f"Duration column '{self.dur_var}' cannot be an ID or index column")
         
         # Check duration column type
-        if not pd.api.types.is_timedelta64_dtype(self.data[self.dur_var]):
-            raise ValueError(f"Duration column '{self.dur_var}' must be timedelta")
+        # Allow: timedelta or numeric (for eICU-style duration in hours)
+        is_timedelta = pd.api.types.is_timedelta64_dtype(self.data[self.dur_var])
+        is_numeric = pd.api.types.is_numeric_dtype(self.data[self.dur_var])
+        
+        if not (is_timedelta or is_numeric):
+            raise ValueError(
+                f"Duration column '{self.dur_var}' must be timedelta or numeric. "
+                f"Got: {self.data[self.dur_var].dtype}"
+            )
     
     def _reorder_columns(self):
         """Move ID, index, and duration columns to front."""

@@ -39,12 +39,15 @@ else:
     TEST_DATA_PATH = PROJECT_ROOT / "test_data_50patients"
 
 TEST_DATA_MINIMAL = PROJECT_ROOT / "test_data_minimal"
+TEST_DATA_EICU = PROJECT_ROOT / "test_data_eicu"
 
 # Production data path
 if ENV_PROD_DATA:
     PRODUCTION_DATA_PATH = Path(ENV_PROD_DATA)
 else:
     PRODUCTION_DATA_PATH = Path("/home/1_publicData/icu_databases/mimiciv/3.1")
+
+PRODUCTION_DATA_EICU = Path("/home/1_publicData/icu_databases/eicu/2.0.1")
 
 # Output directories
 OUTPUT_DIR = PROJECT_ROOT / "output"
@@ -60,15 +63,23 @@ for directory in [OUTPUT_DIR, CACHE_DIR, LOGS_DIR]:
 # ============================================================================
 
 # Standard 3-patient test set (used in most tests)
-# Note: These are stay_ids from test_data_50patients
-DEFAULT_TEST_PATIENTS = [34807493, 33987268, 35044219]
+# MIMIC-IV: stay_ids from test_data_50patients
+DEFAULT_TEST_PATIENTS_MIIV = [34807493, 33987268, 35044219]
+
+# eICU: patientunitstayid from test_data_eicu
+DEFAULT_TEST_PATIENTS_EICU = [2572404, 2573741, 2576788]
+
+# Default (MIMIC-IV)
+DEFAULT_TEST_PATIENTS = DEFAULT_TEST_PATIENTS_MIIV
 
 # Extended 50-patient test set (for comprehensive validation)
 # Note: Automatically loaded from test data - use get_patient_ids('50patients')
 DEFAULT_50_PATIENTS = None  # Will be loaded dynamically
 
 # Single patient for quick debugging
-DEBUG_PATIENT = [34807493]
+DEBUG_PATIENT_MIIV = [34807493]
+DEBUG_PATIENT_EICU = [2572404]
+DEBUG_PATIENT = DEBUG_PATIENT_MIIV
 
 # ============================================================================
 # Data Source Configuration
@@ -149,60 +160,92 @@ CHUNK_SIZE = int(os.getenv('PYRICU_CHUNK_SIZE', '10000'))
 # Helper Functions
 # ============================================================================
 
-def get_data_path(source: str = "test") -> Path:
-    """Get data path for specified source.
+def get_data_path(source: str = "test", database: str = "miiv") -> Path:
+    """Get data path for specified source and database.
     
     Args:
         source: Data source type ('test', 'test_minimal', 'production')
+        database: Database name ('miiv', 'eicu', 'hirid', 'aumc')
         
     Returns:
         Path to data directory
         
     Examples:
-        >>> get_data_path('test')
+        >>> get_data_path('test', 'miiv')
         PosixPath('/home/zhuhb/project/ricu_to_python/pyricu/test_data_50patients')
-        >>> get_data_path('production')
+        >>> get_data_path('test', 'eicu')
+        PosixPath('/home/zhuhb/project/ricu_to_python/pyricu/test_data_eicu')
+        >>> get_data_path('production', 'miiv')
         PosixPath('/home/1_publicData/icu_databases/mimiciv/3.1')
     """
     if source == "test":
-        return TEST_DATA_PATH
+        if database == "miiv":
+            return TEST_DATA_PATH
+        elif database == "eicu":
+            return TEST_DATA_EICU
+        else:
+            raise ValueError(f"Test data for database '{database}' not configured")
     elif source == "test_minimal":
         return TEST_DATA_MINIMAL
     elif source == "production":
-        return PRODUCTION_DATA_PATH
+        if database == "miiv":
+            return PRODUCTION_DATA_PATH
+        elif database == "eicu":
+            return PRODUCTION_DATA_EICU
+        else:
+            raise ValueError(f"Production data for database '{database}' not configured")
     else:
         raise ValueError(f"Unknown data source: {source}")
 
 
-def get_patient_ids(patient_set: str = "default") -> List[int]:
-    """Get patient IDs for specified test set.
+def get_patient_ids(patient_set: str = "default", database: str = "miiv", data_path: Path = None) -> List[int]:
+    """Get patient IDs for specified test set and database.
     
     Args:
         patient_set: Patient set name ('default', '50patients', 'debug')
+        database: Database name ('miiv', 'eicu', 'hirid', 'aumc')
+        data_path: Optional data path (will use get_data_path if not provided)
         
     Returns:
         List of patient subject_ids or stay_ids
         
     Examples:
-        >>> get_patient_ids('default')
+        >>> get_patient_ids('default', 'miiv')
         [34807493, 33987268, 35044219]
-        >>> get_patient_ids('debug')
-        [34807493]
+        >>> get_patient_ids('debug', 'eicu')
+        [2572404]
     """
     if patient_set == "default":
-        return DEFAULT_TEST_PATIENTS
+        if database == "miiv":
+            return DEFAULT_TEST_PATIENTS_MIIV
+        elif database == "eicu":
+            return DEFAULT_TEST_PATIENTS_EICU
+        else:
+            return DEFAULT_TEST_PATIENTS
     elif patient_set == "50patients":
         # Dynamically load from test data
         if DEFAULT_50_PATIENTS is None:
             try:
                 from pyricu.quickstart import get_patient_ids as load_patient_ids
-                return load_patient_ids(TEST_DATA_PATH, max_patients=50, database='miiv')
+                if data_path is None:
+                    data_path = get_data_path('test', database)
+                return load_patient_ids(data_path, max_patients=50, database=database)
             except:
                 # Fallback to default
-                return DEFAULT_TEST_PATIENTS
+                if database == "miiv":
+                    return DEFAULT_TEST_PATIENTS_MIIV
+                elif database == "eicu":
+                    return DEFAULT_TEST_PATIENTS_EICU
+                else:
+                    return DEFAULT_TEST_PATIENTS
         return DEFAULT_50_PATIENTS
     elif patient_set == "debug":
-        return DEBUG_PATIENT
+        if database == "miiv":
+            return DEBUG_PATIENT_MIIV
+        elif database == "eicu":
+            return DEBUG_PATIENT_EICU
+        else:
+            return DEBUG_PATIENT
     else:
         raise ValueError(f"Unknown patient set: {patient_set}")
 

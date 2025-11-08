@@ -1,30 +1,44 @@
 """
-pyricu 快速启动 API - 一行代码完成常见任务
+pyricu 快速启动 API - DEPRECATED
 
-这个模块提供了简洁的高级 API，用于快速加载和分析 ICU 数据。
-所有复杂的逻辑都封装在内部，测试代码只需要简单的函数调用。
+⚠️  此模块已被弃用，将在未来版本中移除。
 
-支持多个ICU数据库：MIMIC-IV, MIMIC-III, eICU, HiRID, AUC 等。
+请使用新的简化API:
+    from pyricu import load_concepts, load_sofa, load_vitals
+    
+    # 旧代码:
+    loader = ICUQuickLoader('miiv', '/data')
+    sofa = loader.load_sofa(patient_ids=[123])
+    
+    # 新代码（更简单）:
+    sofa = load_sofa(patient_ids=[123], database='miiv', data_path='/data')
+    
+    # 或者更简单（自动检测）:
+    sofa = load_sofa(patient_ids=[123])
+
+新API的优势:
+- 无需创建loader对象
+- 支持智能默认值（自动检测数据库和路径）
+- 更少的代码，更清晰的语义
+- 保留所有高级功能（完全向后兼容）
 
 Examples:
-    >>> from pyricu.quickstart import load_sofa, load_sepsis3
+    >>> from pyricu import load_sofa, load_concepts
     >>> 
-    >>> # 一行代码加载 SOFA 及其组件（适用于所有数据库）
-    >>> sofa_df = load_sofa(
-    ...     data_path='/path/to/icu_data',
-    ...     patient_ids=[10001, 10002, 10003],
-    ...     database='miiv'  # 或 'eicu', 'hirid' 等
-    ... )
+    >>> # 简单用法
+    >>> sofa = load_sofa(patient_ids=[10001, 10002])
     >>> 
-    >>> # 一行代码加载 Sepsis-3 相关特征
-    >>> sepsis_df = load_sepsis3(
-    ...     data_path='/path/to/icu_data',
-    ...     patient_ids=[10001, 10002, 10003],
-    ...     database='miiv'
-    ... )
+    >>> # 完全自定义
+    >>> data = load_concepts('sofa2',
+    ...                      patient_ids=[10001, 10002],
+    ...                      database='miiv',
+    ...                      interval='6h',
+    ...                      win_length='24h')
 """
 
 from __future__ import annotations
+
+import warnings
 from pathlib import Path
 from typing import List, Optional, Union, Dict
 import pandas as pd
@@ -32,6 +46,16 @@ import pandas as pd
 from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary
 from .resources import load_data_sources
+
+
+# 显示弃用警告
+warnings.warn(
+    "pyricu.quickstart模块已被弃用，将在未来版本中移除。"
+    "请使用 pyricu.api 模块（from pyricu import load_concepts, load_sofa等）。"
+    "详见文档: https://github.com/shen-lab-icu/pyricu",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 class ICUQuickLoader:
@@ -113,9 +137,14 @@ class ICUQuickLoader:
         if isinstance(concept_names, str):
             concept_names = [concept_names]
         
-        # 规范化患者ID
+        # 规范化患者ID - 根据数据库类型选择正确的ID列名
         if patient_ids is not None and not isinstance(patient_ids, dict):
-            patient_ids = {'stay_id': patient_ids}
+            # 根据数据库类型选择合适的ID列名
+            if self.database in ['eicu', 'eicu_demo']:
+                patient_ids = {'patientunitstayid': patient_ids}
+            else:
+                # MIMIC-IV等使用stay_id
+                patient_ids = {'stay_id': patient_ids}
         
         # 加载概念
         kwargs = {
@@ -261,8 +290,9 @@ def load_sepsis3(
     result = all_data['sofa'].copy()
     
     # 确定主ID列（来自sofa）
+    # 支持多种数据库的ID列名
     primary_id_col = None
-    for col in ['stay_id', 'hadm_id', 'subject_id', 'icustay_id']:
+    for col in ['stay_id', 'patientunitstayid', 'hadm_id', 'subject_id', 'icustay_id']:
         if col in result.columns:
             primary_id_col = col
             break
@@ -299,9 +329,9 @@ def load_sepsis3(
         df_to_merge = df.copy()
         
         # 步骤 1: ID 列转换
-        # 检测 df 的 ID 列
+        # 检测 df 的 ID 列，支持多种数据库
         df_id_col = None
-        for col in ['stay_id', 'hadm_id', 'subject_id', 'icustay_id']:
+        for col in ['stay_id', 'patientunitstayid', 'hadm_id', 'subject_id', 'icustay_id']:
             if col in df_to_merge.columns:
                 df_id_col = col
                 break

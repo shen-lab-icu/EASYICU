@@ -348,7 +348,7 @@ def load_src_cfg(src_name: str) -> DataSourceConfig:
     加载数据源配置 - 对应 R ricu load_src_cfg
     
     Args:
-        src_name: 数据源名称 (如 'mimic_demo', 'eicu_demo')
+        src_name: 数据源名称 (如 'mimic_demo', 'eicu_demo', 'eicu', 'miiv')
         
     Returns:
         DataSourceConfig 对象
@@ -357,13 +357,18 @@ def load_src_cfg(src_name: str) -> DataSourceConfig:
         >>> cfg = load_src_cfg('mimic_demo')
         >>> print(cfg.name)
         'mimic_demo'
+        >>> cfg = load_src_cfg('eicu')
+        >>> 'vitalperiodic' in cfg.tables
+        True
     """
-    # 尝试加载配置文件
+    # 使用 load_data_sources 加载数据源注册表
+    from .resources import load_data_sources
+    registry = load_data_sources()
+    
     try:
-        from .resources import get_data_source_config
-        return get_data_source_config(src_name)
-    except Exception:
-        # 如果都失败，创建一个基本配置
+        return registry.get(src_name)
+    except KeyError:
+        # 如果数据源不存在，创建一个基本配置
         # 注意: id_cfg 和 tables 必须是字典
         return DataSourceConfig(
             name=src_name,

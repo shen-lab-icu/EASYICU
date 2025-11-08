@@ -83,23 +83,48 @@
       "crea",
       "rrt",
       "rrt_criteria",
-      "urine_mlkgph",
+      "uo_6h",
+      "uo_12h",
+      "uo_24h",
       "potassium",
       "ph",
       "bicarb"
     ],
-    "description": "SOFA-2 renal component (RRT→4pt; meets RRT criteria→4pt; urine <0.5/<0.3 mL/kg/h; crea >1.2/2.0/3.5 mg/dL)",
+    "description": "SOFA-2 renal component with duration-based UO (6h/12h/24h windows for accurate temporal scoring)",
     "category": "outcome",
     "aggregate": [
       "max",
       null,
       null,
-      null,
+      "min",
+      "min",
+      "min",
       "max",
       "min",
       "min"
     ],
     "callback": "sofa2_renal",
+    "class": "rec_cncpt"
+  },
+  "uo_6h": {
+    "concepts": ["urine", "weight"],
+    "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h → Score 1)",
+    "category": "output",
+    "callback": "uo_6h",
+    "class": "rec_cncpt"
+  },
+  "uo_12h": {
+    "concepts": ["urine", "weight"],
+    "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for ≥12h → Score 2; anuria ≥12h → Score 3)",
+    "category": "output",
+    "callback": "uo_12h",
+    "class": "rec_cncpt"
+  },
+  "uo_24h": {
+    "concepts": ["urine", "weight"],
+    "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for ≥24h → Score 3)",
+    "category": "output",
+    "callback": "uo_24h",
     "class": "rec_cncpt"
   },
   "adv_resp": {
@@ -293,14 +318,6 @@
         }
       ]
     }
-  },
-  "urine_mlkgph": {
-    "concepts": "urine",
-    "class": "rec_cncpt",
-    "description": "Urine output rate (mL/kg/h)",
-    "category": "renal",
-    "unit": "mL/kg/h",
-    "callback": "urine_mlkgph"
   },
   "mech_circ_support": {
     "class": "lgl_cncpt",

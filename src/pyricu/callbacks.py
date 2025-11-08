@@ -481,19 +481,21 @@ def sofa2_renal(
     crea: pd.Series,
     rrt: Optional[pd.Series] = None,
     rrt_criteria: Optional[pd.Series] = None,
-    urine_mlkgph: Optional[pd.Series] = None,
+    uo_6h: Optional[pd.Series] = None,
+    uo_12h: Optional[pd.Series] = None,
+    uo_24h: Optional[pd.Series] = None,
     potassium: Optional[pd.Series] = None,
     ph: Optional[pd.Series] = None,
     bicarb: Optional[pd.Series] = None,
 ) -> pd.Series:
-    """Calculate SOFA-2 renal component.
+    """Calculate SOFA-2 renal component with accurate duration-based urine output scoring.
     
     SOFA-2 renal scoring (2025 version):
-    - Score 4: Receiving RRT OR meets RRT criteria OR crea > 3.5 mg/dL OR anuria (0 mL ≥12h) OR urine <0.3 mL/kg/h ≥24h
-    - Score 3: crea > 2.0-3.5 mg/dL OR urine <0.5 mL/kg/h ≥12h
-    - Score 2: crea > 1.2-2.0 mg/dL OR urine <0.5 mL/kg/h for 6-12h  
-    - Score 1: crea ≤ 3.0 mg/dL (threshold relaxed from SOFA-1's 1.9)
-    - Score 0: crea ≤ 1.2 mg/dL
+    - Score 0: Creatinine ≤1.20 mg/dL
+    - Score 1: Creatinine >1.20, ≤2.0 mg/dL OR UO <0.5 mL/kg/h for 6-12h
+    - Score 2: Creatinine >2.0, ≤3.5 mg/dL OR UO <0.5 mL/kg/h for ≥12h
+    - Score 3: Creatinine >3.5 mg/dL OR UO <0.3 mL/kg/h for ≥24h OR anuria (0 mL) for ≥12h
+    - Score 4: Receiving RRT OR meets RRT criteria
     
     RRT criteria (SOFA-2 footnote p):
     - Creatinine > 1.2 mg/dL OR oliguria (<0.3 mL/kg/h) for >6 hours
@@ -505,7 +507,9 @@ def sofa2_renal(
         crea: Serum creatinine (mg/dL)
         rrt: Boolean - currently receiving RRT
         rrt_criteria: Boolean - meets RRT criteria but not receiving it
-        urine_mlkgph: Urine output rate (mL/kg/h)
+        uo_6h: 6-hour average urine output (mL/kg/h)
+        uo_12h: 12-hour average urine output (mL/kg/h)
+        uo_24h: 24-hour average urine output (mL/kg/h)
         potassium: Serum potassium (mmol/L) - for RRT criteria
         ph: Arterial pH - for RRT criteria
         bicarb: Serum bicarbonate (mmol/L) - for RRT criteria
@@ -516,47 +520,42 @@ def sofa2_renal(
     crea_num = pd.to_numeric(crea, errors="coerce")
     score = pd.Series(0, index=crea.index, dtype=int)
     
-    # Handle urine output (now in mL/kg/h, not mL/day)
-    if urine_mlkgph is not None:
-        urine_num = pd.to_numeric(urine_mlkgph, errors="coerce")
-    else:
-        urine_num = pd.Series(np.nan, index=crea.index)
+    # Convert urine output parameters
+    uo_6h_num = pd.to_numeric(uo_6h, errors="coerce") if uo_6h is not None else pd.Series(np.nan, index=crea.index)
+    uo_12h_num = pd.to_numeric(uo_12h, errors="coerce") if uo_12h is not None else pd.Series(np.nan, index=crea.index)
+    uo_24h_num = pd.to_numeric(uo_24h, errors="coerce") if uo_24h is not None else pd.Series(np.nan, index=crea.index)
     
-    # Score 1: crea ≤ 3.0 mg/dL (note: this is just for completeness, default is 0)
-    # (No need to explicitly score this as it's covered by score 2 threshold)
+    # Score 1: Creatinine >1.2, ≤2.0 OR UO <0.5 mL/kg/h for 6-12h
+    # UO for 6-12h means: 6h average <0.5 BUT 12h average ≥0.5 (or missing)
+    mask1_crea = _is_true_safe((crea_num > 1.2) & (crea_num <= 2.0))
+    mask1_uo = _is_true_safe(uo_6h_num < 0.5) & ~_is_true_safe(uo_12h_num < 0.5)
+    score[mask1_crea | mask1_uo] = 1
     
-    # Score 2: crea > 1.2-2.0 mg/dL OR urine <0.5 mL/kg/h for 6-12h
-    mask2_crea = _is_true_safe((crea_num > 1.2) & (crea_num <= 2.0))
-    mask2_urine = _is_true_safe(urine_num < 0.5)  # Simplified: can't track duration here
-    score[mask2_crea | mask2_urine] = 2
+    # Score 2: Creatinine >2.0, ≤3.5 OR UO <0.5 mL/kg/h for ≥12h
+    # UO for ≥12h means: 12h average <0.5
+    mask2_crea = _is_true_safe((crea_num > 2.0) & (crea_num <= 3.5))
+    mask2_uo = _is_true_safe(uo_12h_num < 0.5)
+    score[mask2_crea | mask2_uo] = 2
     
-    # Score 3: crea > 2.0-3.5 mg/dL OR urine <0.5 mL/kg/h ≥12h
-    mask3_crea = _is_true_safe((crea_num > 2.0) & (crea_num <= 3.5))
-    # For urine duration, we'd need temporal logic - simplified here
-    score[mask3_crea] = 3
+    # Score 3: Creatinine >3.5 OR UO <0.3 mL/kg/h for ≥24h OR anuria for ≥12h
+    mask3_crea = _is_true_safe(crea_num > 3.5)
+    mask3_uo_24h = _is_true_safe(uo_24h_num < 0.3)  # UO <0.3 for ≥24h
+    mask3_anuria_12h = _is_true_safe(uo_12h_num == 0)  # Anuria for ≥12h
+    score[mask3_crea | mask3_uo_24h | mask3_anuria_12h] = 3
     
-    # Score 4: Multiple conditions
-    # - RRT in use
+    # Score 4: RRT or meets RRT criteria
     mask4_rrt = _is_true_safe(rrt) if rrt is not None else pd.Series(False, index=crea.index)
-    
-    # - Meets RRT criteria but not receiving it
     mask4_rrt_crit = _is_true_safe(rrt_criteria) if rrt_criteria is not None else pd.Series(False, index=crea.index)
     
-    # - Creatinine criteria
-    mask4_crea = _is_true_safe(crea_num > 3.5)
-    
-    # - Urine criteria: <0.3 mL/kg/h for ≥24h or anuria ≥12h
-    mask4_urine = _is_true_safe(urine_num < 0.3)  # Simplified
-    
     # If we have potassium and pH/bicarb data, check RRT criteria
-    # RRT criteria: (crea > 1.2 OR oliguria) AND (K+ ≥ 6.0 OR acidosis)
     if not mask4_rrt_crit.any() and potassium is not None and ph is not None and bicarb is not None:
         k_num = pd.to_numeric(potassium, errors="coerce")
         ph_num = pd.to_numeric(ph, errors="coerce")
         hco3_num = pd.to_numeric(bicarb, errors="coerce")
         
         # Base kidney injury: crea > 1.2 OR oliguria (<0.3 mL/kg/h for >6h)
-        base_injury = _is_true_safe(crea_num > 1.2) | _is_true_safe(urine_num < 0.3)
+        # Use 6h average as proxy for "oliguria for >6h"
+        base_injury = _is_true_safe(crea_num > 1.2) | _is_true_safe(uo_6h_num < 0.3)
         
         # Electrolyte/acid-base crisis
         hyperkalemia = _is_true_safe(k_num >= 6.0)
@@ -566,7 +565,7 @@ def sofa2_renal(
         mask4_rrt_crit = base_injury & (hyperkalemia | acidosis)
     
     # Apply score 4
-    score[mask4_rrt | mask4_rrt_crit | mask4_crea | mask4_urine] = 4
+    score[mask4_rrt | mask4_rrt_crit] = 4
     
     return score
 
@@ -706,7 +705,7 @@ def sofa2_liver(bili: pd.Series) -> pd.Series:
     # Use findInterval-like logic: check thresholds in order
     score[valid & (b > 1.2)] = 1  # Relaxed threshold (was 1.9 in SOFA-1)
     score[valid & (b > 3.0)] = 2  # SOFA-2 new intermediate threshold
-    score[valid & (b >= 6.0)] = 3
+    score[valid & (b > 6.0)] = 3  # Fixed: should be > 6.0, not >= 6.0
     score[valid & (b > 12.0)] = 4
     
     return score
@@ -1409,4 +1408,167 @@ def safi(
     result = result.drop(columns=['o2sat', 'fio2'])
     
     return result
+
+
+def uo_6h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = None) -> pd.DataFrame:
+    """Calculate 6-hour average urine output in mL/kg/h.
+    
+    This function computes a rolling 6-hour average of urine output, normalized
+    by patient weight, for SOFA-2 renal scoring.
+    
+    SOFA-2 criterion: UO <0.5 mL/kg/h for 6-12 hours → Score 1
+    
+    Args:
+        urine: DataFrame with urine output (mL)
+        weight: DataFrame with patient weight (kg)
+        interval: Time interval for data (if None, inferred from data)
+        
+    Returns:
+        DataFrame with 'uo_6h' column (mL/kg/h)
+    """
+    return _urine_window_avg(urine, weight, window_hours=6, min_hours=3, interval=interval)
+
+
+def uo_12h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = None) -> pd.DataFrame:
+    """Calculate 12-hour average urine output in mL/kg/h.
+    
+    This function computes a rolling 12-hour average of urine output, normalized
+    by patient weight, for SOFA-2 renal scoring.
+    
+    SOFA-2 criteria:
+    - UO <0.5 mL/kg/h for ≥12 hours → Score 2
+    - Anuria (0 mL) for ≥12 hours → Score 4
+    
+    Args:
+        urine: DataFrame with urine output (mL)
+        weight: DataFrame with patient weight (kg)
+        interval: Time interval for data (if None, inferred from data)
+        
+    Returns:
+        DataFrame with 'uo_12h' column (mL/kg/h)
+    """
+    return _urine_window_avg(urine, weight, window_hours=12, min_hours=6, interval=interval)
+
+
+def uo_24h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = None) -> pd.DataFrame:
+    """Calculate 24-hour average urine output in mL/kg/h.
+    
+    This function computes a rolling 24-hour average of urine output, normalized
+    by patient weight, for SOFA-2 renal scoring.
+    
+    SOFA-2 criterion: UO <0.3 mL/kg/h for ≥24 hours → Score 3
+    
+    Args:
+        urine: DataFrame with urine output (mL)
+        weight: DataFrame with patient weight (kg)
+        interval: Time interval for data (if None, inferred from data)
+        
+    Returns:
+        DataFrame with 'uo_24h' column (mL/kg/h)
+    """
+    return _urine_window_avg(urine, weight, window_hours=24, min_hours=12, interval=interval)
+
+
+def _urine_window_avg(
+    urine: pd.DataFrame,
+    weight: pd.DataFrame,
+    window_hours: int,
+    min_hours: int,
+    interval: pd.Timedelta = None
+) -> pd.DataFrame:
+    """Internal function to calculate windowed average urine output.
+    
+    Args:
+        urine: DataFrame with urine output (mL)
+        weight: DataFrame with patient weight (kg)
+        window_hours: Window size in hours
+        min_hours: Minimum hours of data required in window
+        interval: Time interval for data
+        
+    Returns:
+        DataFrame with averaged urine output (mL/kg/h)
+    """
+    # Determine ID and time columns
+    id_cols = [col for col in urine.columns if col.endswith('_id') or col == 'stay_id' or col == 'icustay_id' or col == 'patientunitstayid']
+    time_col = 'charttime'
+    val_col = 'urine'
+    result_col = f'uo_{window_hours}h'
+    
+    # Merge urine and weight data
+    merged = pd.merge(urine, weight, on=id_cols, how='left', suffixes=('', '_weight'))
+    
+    # Handle weight time column
+    if 'charttime_weight' in merged.columns:
+        # Use forward fill to propagate weight values
+        merged = merged.sort_values(id_cols + [time_col])
+        for id_col in id_cols:
+            merged['weight'] = merged.groupby(id_col)['weight'].ffill()
+    
+    # Remove rows without weight
+    merged = merged[merged['weight'].notna() & (merged['weight'] > 0)]
+    
+    if len(merged) == 0:
+        # Return empty DataFrame with correct structure
+        result = urine[id_cols + [time_col]].copy()
+        result[result_col] = np.nan
+        return result
+    
+    # Sort by ID and time
+    merged = merged.sort_values(id_cols + [time_col])
+    
+    # Infer interval if not provided
+    if interval is None:
+        # Try to infer from data
+        if len(merged) > 1:
+            time_diffs = merged.groupby(id_cols)[time_col].diff()
+            valid_diffs = time_diffs[time_diffs.notna() & (time_diffs > pd.Timedelta(0))]
+            if len(valid_diffs) > 0:
+                interval = valid_diffs.median()
+            else:
+                interval = pd.Timedelta(hours=1)
+        else:
+            interval = pd.Timedelta(hours=1)
+    
+    # Calculate window parameters (use lowercase 'h' to avoid deprecation warning)
+    window_str = f'{window_hours}h'  # Pandas rolling window format
+    min_periods = max(1, int(min_hours / (interval.total_seconds() / 3600)))
+    
+    # PERFORMANCE FIX: Use simple mean instead of complex rolling window
+    # For SOFA scoring, we just need to know if average UO over the period meets threshold
+    # This is much faster than time-based rolling windows
+    
+    # Simple approach: Calculate average UO per patient over recent window
+    # This is an approximation but much faster for large datasets
+    def calc_uo_rate_fast(group):
+        # Sort by time
+        group = group.sort_values(time_col)
+        
+        # Use backward-looking average over last N measurements
+        # Approximate window_hours by number of measurements
+        n_measurements = max(1, int(window_hours / (interval.total_seconds() / 3600)))
+        
+        # Rolling sum of urine (count-based, much faster than time-based)
+        urine_sum = group[val_col].rolling(
+            window=n_measurements,
+            min_periods=max(1, min_periods),
+            closed='right'
+        ).sum()
+        
+        # Use most recent weight (forward fill already done)
+        weight_val = group['weight']
+        
+        # Calculate rate: total_mL / (kg * hours) = mL/kg/h
+        rate = urine_sum / (weight_val * window_hours)
+        
+        group[result_col] = rate
+        return group
+    
+    result = merged.groupby(id_cols, group_keys=False).apply(calc_uo_rate_fast)
+    
+    # Keep only relevant columns
+    keep_cols = id_cols + [time_col, result_col]
+    result = result[[col for col in keep_cols if col in result.columns]]
+    
+    return result
+
 
