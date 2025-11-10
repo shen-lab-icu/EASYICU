@@ -142,18 +142,29 @@
             225411
           ],
           "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "value",
+          "ids": [
+            "High Flow Nasal Cannula",
+            "HFNC",
+            "Optiflow"
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ],
       "eicu": [
         {
           "table": "respiratorycare",
           "sub_var": "ventstartoffset",
+          "val_var": "ventstartoffset",
           "callback": "transform_fun(set_val(TRUE))"
         },
         {
           "table": "respiratorycharting",
           "sub_var": "respchartvaluelabel",
-          "regex": "CPAP|BiPAP|NIV|PEEP/CPAP|Bipap",
+          "regex": "CPAP|BiPAP|NIV|PEEP/CPAP|Bipap|HFNC|High Flow",
           "class": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -162,7 +173,7 @@
         {
           "table": "listitems",
           "sub_var": "item",
-          "regex": "(CPAP|Bipap|NIV|IPPV|SIMV|ASB|MMV|BIPAP)",
+          "regex": "(CPAP|Bipap|NIV|IPPV|SIMV|ASB|MMV|BIPAP|HFNC|High Flow)",
           "class": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         },
@@ -410,7 +421,7 @@
         {
           "table": "drugitems",
           "sub_var": "item",
-          "regex": "(Noradrenaline|Adrenaline|Fenylefrine|vasopressin|Milrinone)",
+          "regex": "(Fenylefrine|vasopressin)",
           "class": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -421,10 +432,7 @@
           "sub_var": "pharmacode",
           "ids": [
             112,
-            113,
-            115,
-            116,
-            426
+            113
           ],
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -465,9 +473,12 @@
       "aumc": [
         {
           "table": "drugitems",
-          "sub_var": "item",
-          "regex": "(haloperidol|quetiapine|olanzapine|risperidone)",
-          "class": "rgx_itm",
+          "sub_var": "itemid",
+          "ids": [
+            7097,
+            13012,
+            16360
+          ],
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
@@ -475,8 +486,9 @@
         {
           "table": "pharma",
           "sub_var": "pharmaid",
-          "regex": "(haloperidol|quetiapine|olanzapine|risperidone)",
-          "class": "rgx_itm",
+          "ids": [
+            239
+          ],
           "callback": "transform_fun(set_val(TRUE))"
         }
       ]
@@ -585,7 +597,10 @@
           "table": "observations",
           "sub_var": "variableid",
           "ids": [
-            24000524
+            20000500,
+            24000520,
+            24000833,
+            24000867
           ]
         }
       ]
