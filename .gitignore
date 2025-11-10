@@ -58,8 +58,8 @@ demo_easy_output.txt
 # Demo、示例和工具 - 不上传示例代码
 demo.py
 examples/
-tools/
-
+tools/archived
+output
 # 测试文件 - 不上传测试代码
 # test_main.py
 test_sepsis_validation.py

@@ -9,7 +9,7 @@ well enough for the packaged concept dictionary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, Mapping, MutableMapping, Optional
+from typing import Callable, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -394,6 +394,11 @@ def _merge_tables(
                     col_to_rename = matching_cols[0]
                 frame = frame.rename(columns={col_to_rename: name})
         
+        # 🔧 FIX: 先处理frame中的重复列（例如合并多个item时可能产生重复的measuredat列）
+        if frame.columns.duplicated().any():
+            # 对于重复列，只保留第一个
+            frame = frame.loc[:, ~frame.columns.duplicated()]
+        
         # 只保留键列和值列,避免合并时的列冲突
         cols_to_keep = key_cols + [name]
         # 确保所有列都存在
@@ -402,7 +407,13 @@ def _merge_tables(
         
         # 统一时间列类型到目标类型
         if index_column and index_column in frame.columns and target_time_type:
-            current_dtype = frame[index_column].dtype
+            # 🔧 FIX: 处理重复列名情况 - frame[col]可能返回DataFrame
+            index_col_data = frame[index_column]
+            if isinstance(index_col_data, pd.DataFrame):
+                # 取第一列
+                current_dtype = index_col_data.iloc[:, 0].dtype
+            else:
+                current_dtype = index_col_data.dtype
             is_numeric = pd.api.types.is_numeric_dtype(current_dtype)
             
             if target_time_type == 'numeric' and not is_numeric:
@@ -422,6 +433,12 @@ def _merge_tables(
         else:
             # 时间类型已经在前面统一，直接merge
             try:
+                # 🔧 FIX: 如果frame有与merged重复的列（除了key_cols），先删除frame中的重复列
+                # 这通常发生在时间列（如measuredat, registeredat）在多个源表中都存在的情况
+                duplicate_cols = [c for c in frame.columns if c in merged.columns and c not in key_cols]
+                if duplicate_cols:
+                    frame = frame.drop(columns=duplicate_cols)
+                
                 merged = merged.merge(frame, on=key_cols, how=how)
             except ValueError as e:
                 # Merge失败，跳过这个表
@@ -1048,8 +1065,8 @@ def _callback_sofa_resp(
     
     # Ensure we have at least one key column
     if not key_cols:
-        # Try to infer from column names
-        for col in ['stay_id', 'icustay_id', 'subject_id']:
+        # Try to infer from column names - 扩展支持更多数据库的ID列
+        for col in ['stay_id', 'icustay_id', 'admissionid', 'patientunitstayid', 'subject_id']:
             if col in pafi_df.columns and col in vent_df.columns:
                 key_cols = [col]
                 break
@@ -1065,6 +1082,36 @@ def _callback_sofa_resp(
                 f"共同列: {list(common_cols)}\n"
                 f"id_columns: {id_columns}, index_column: {index_column}"
             )
+    
+    # 🔧 FIX: 统一ID列名 - 不同概念可能使用不同的ID列名（stay_id vs admissionid等）
+    # 如果vent_df和pafi_df的ID列名不一致，重命名为统一的列名
+    id_col_map = {
+        'stay_id': ['stay_id', 'icustay_id', 'admissionid', 'patientunitstayid'],
+        'icustay_id': ['stay_id', 'icustay_id', 'admissionid', 'patientunitstayid'],
+        'admissionid': ['stay_id', 'icustay_id', 'admissionid', 'patientunitstayid'],
+        'patientunitstayid': ['stay_id', 'icustay_id', 'admissionid', 'patientunitstayid']
+    }
+    
+    # 找到pafi_df和vent_df各自的ID列
+    pafi_id_col = None
+    vent_id_col = None
+    
+    for col in ['admissionid', 'stay_id', 'icustay_id', 'patientunitstayid']:
+        if col in pafi_df.columns:
+            pafi_id_col = col
+            break
+    
+    for col in ['admissionid', 'stay_id', 'icustay_id', 'patientunitstayid']:
+        if col in vent_df.columns:
+            vent_id_col = col
+            break
+    
+    # 如果ID列名不一致，统一重命名为pafi的ID列名
+    if pafi_id_col and vent_id_col and pafi_id_col != vent_id_col:
+        vent_df = vent_df.rename(columns={vent_id_col: pafi_id_col})
+        # 更新key_cols
+        if vent_id_col in key_cols:
+            key_cols = [pafi_id_col if c == vent_id_col else c for c in key_cols]
     
     # Ensure all key columns exist in both dataframes
     missing_in_pafi = [col for col in key_cols if col not in pafi_df.columns]
@@ -1216,13 +1263,6 @@ def _callback_sofa_score(
     
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     if data.empty:
-        print(f"   ⚠️  SOFA回调: _merge_tables 返回空数据")
-        print(f"       输入tables数量: {len(tables)}")
-        for name, table in tables.items():
-            if hasattr(table, 'data'):
-                print(f"       - {name}: {len(table.data)} 行")
-            else:
-                print(f"       - {name}: {len(table)} 行")
         cols = id_columns + ([index_column] if index_column else []) + ["sofa"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="sofa")
 
@@ -1653,13 +1693,19 @@ def _match_fio2(
             # 然后在merge后转换回numeric类型
             o2_time_backup = None
             fio2_time_backup = None
+            numeric_unit = 'h'
+            if ctx is not None:
+                ds_cfg = getattr(getattr(ctx, "data_source", None), "config", None)
+                ds_name = getattr(ds_cfg, "name", "") if ds_cfg is not None else ""
+                if isinstance(ds_name, str) and ds_name.lower() == "aumc":
+                    numeric_unit = 'ms'
             if o2_time_is_numeric:
                 o2_time_backup = o2_df[index_column].copy()
-                # 对于numeric类型（小时数），需要转换为datetime进行merge_asof
-                o2_df[index_column] = base_time + pd.to_timedelta(o2_df[index_column], unit='h')
+                # 对于numeric类型，需要转换为datetime进行merge_asof
+                o2_df[index_column] = base_time + pd.to_timedelta(o2_df[index_column], unit=numeric_unit)
             if fio2_time_is_numeric:
                 fio2_time_backup = fio2_df[index_column].copy()
-                fio2_df[index_column] = base_time + pd.to_timedelta(fio2_df[index_column], unit='h')
+                fio2_df[index_column] = base_time + pd.to_timedelta(fio2_df[index_column], unit=numeric_unit)
             
             # 确保数据在每个by分组内都是排序的（merge_asof的严格要求）
             # 先选择需要的列，然后排序
@@ -2190,6 +2236,16 @@ def _callback_vent_ind(
     end_tbl = tables.get("vent_end")
     if start_tbl is None:
         raise ValueError("vent_ind requires vent_start concept data")
+    
+    # 🔧 FIX: Handle empty input data
+    if start_tbl.data.empty:
+        # Return empty result with proper schema
+        return _as_icutbl(
+            pd.DataFrame(columns=list(start_tbl.id_columns) + [start_tbl.index_column or 'time', 'vent_ind']),
+            id_columns=start_tbl.id_columns,
+            index_column=start_tbl.index_column or 'time',
+            value_column='vent_ind',
+        )
 
     id_columns, index_column, _ = _assert_shared_schema(
         {k: v for k, v in tables.items() if k in {"vent_start", "vent_end"} and v is not None}
@@ -2338,9 +2394,25 @@ def _callback_urine24(
         df[urine_col] = 0.0
     df[urine_col] = pd.to_numeric(df[urine_col], errors="coerce").fillna(0.0)
     
-    # Check if time column is numeric (hours since admission) or datetime
+    # 🔧 性能优化：对于AUMC和HiRID等高频数据，先按interval聚合再处理
+    # 这些数据库的采样频率很高（每分钟甚至更频繁），需要先降采样
+    # ⚠️  暂时禁用这个优化，因为可能导致性能问题
     time_col = urine_tbl.index_column
     is_numeric_time = pd.api.types.is_numeric_dtype(df[time_col])
+    
+    # 检测是否需要降采样（如果同一患者在1小时内有超过10个数据点）
+    id_cols_to_group = list(urine_tbl.id_columns) if urine_tbl.id_columns else []
+    need_resampling = False
+    
+    # DISABLED降采样检测逻辑 - 会导致性能问题
+    # if id_cols_to_group and len(df) > 100:  # 只对较大的数据集检测
+    #     ...
+    
+    # 跳过降采样步骤
+    # if need_resampling:
+    #     ...
+    
+    # Check if time column is numeric (hours since admission) or datetime
     
     # Calculate min_steps and step_factor (replicates R ricu logic)
     if is_numeric_time:
@@ -2648,6 +2720,18 @@ def _callback_vaso60(
 
     rate_tbl = tables[rate_name]
     dur_tbl = tables[dur_name]
+    
+    # 🔧 FIX: Handle empty input data
+    if rate_tbl.data.empty or dur_tbl.data.empty:
+        # Return empty result with proper schema
+        id_cols = rate_tbl.id_columns or dur_tbl.id_columns or ['stay_id']
+        idx_col = rate_tbl.index_column or dur_tbl.index_column or 'charttime'
+        return _as_icutbl(
+            pd.DataFrame(columns=list(id_cols) + [idx_col, ctx.concept_name]),
+            id_columns=id_cols,
+            index_column=idx_col,
+            value_column=ctx.concept_name,
+        )
 
     id_columns, index_column, _ = _assert_shared_schema({rate_name: rate_tbl, dur_name: dur_tbl})
     if index_column is None:
@@ -2666,6 +2750,21 @@ def _callback_vaso60(
     dur_df = dur_tbl.data.copy()
     rate_col = rate_tbl.value_column or rate_name
     dur_col = dur_tbl.value_column or dur_name
+    
+    #  🔧 修复：确保index_column在两个DataFrame中都存在
+    # change_interval可能将列名改为'start',需要使用实际的列名
+    rate_index_col = index_column if index_column in rate_df.columns else (rate_tbl.index_column if rate_tbl.index_column and rate_tbl.index_column in rate_df.columns else None)
+    dur_index_col = index_column if index_column in dur_df.columns else (dur_tbl.index_column if dur_tbl.index_column and dur_tbl.index_column in dur_df.columns else None)
+    
+    if rate_index_col is None or dur_index_col is None:
+        # 尝试查找时间列
+        rate_time_cols = [c for c in rate_df.columns if c in ['start', 'measuredat', 'charttime', index_column]]
+        dur_time_cols = [c for c in dur_df.columns if c in ['start', 'measuredat', 'charttime', index_column]]
+        if rate_time_cols and dur_time_cols:
+            rate_index_col = rate_time_cols[0]
+            dur_index_col = dur_time_cols[0]
+        else:
+            raise ValueError(f"vaso60: time column not found. Expected '{index_column}' but rate has {list(rate_df.columns[:5])}, dur has {list(dur_df.columns[:5])}")
 
     # Identify unit column heuristically if metadata is missing
     rate_unit_col = rate_tbl.unit_column
@@ -2717,21 +2816,29 @@ def _callback_vaso60(
 
     # 统一时间列：若任一为数值型（相对小时），将双方都转换为基于同一锚点的datetime
     base_time = pd.Timestamp('2000-01-01')
-    rate_time_is_numeric = pd.api.types.is_numeric_dtype(rate_df[index_column])
-    dur_time_is_numeric = pd.api.types.is_numeric_dtype(dur_df[index_column])
+    ds_name = ''
+    if ctx is not None:
+        ds_cfg = getattr(getattr(ctx, 'data_source', None), 'config', None)
+        ds_name = getattr(ds_cfg, 'name', '') if ds_cfg is not None else ''
+    numeric_unit = 'h'
+    if isinstance(ds_name, str) and ds_name.lower() == 'aumc':
+        numeric_unit = 'ms'
+
+    rate_time_is_numeric = pd.api.types.is_numeric_dtype(rate_df[rate_index_col])
+    dur_time_is_numeric = pd.api.types.is_numeric_dtype(dur_df[dur_index_col])
     if rate_time_is_numeric or dur_time_is_numeric:
         if rate_time_is_numeric:
-            rate_df[index_column] = base_time + pd.to_timedelta(pd.to_numeric(rate_df[index_column], errors='coerce'), unit='h')
+            rate_df[rate_index_col] = base_time + pd.to_timedelta(pd.to_numeric(rate_df[rate_index_col], errors='coerce'), unit=numeric_unit)
         else:
-            rate_df[index_column] = pd.to_datetime(rate_df[index_column], errors='coerce')
+            rate_df[rate_index_col] = pd.to_datetime(rate_df[rate_index_col], errors='coerce')
         if dur_time_is_numeric:
-            dur_df[index_column] = base_time + pd.to_timedelta(pd.to_numeric(dur_df[index_column], errors='coerce'), unit='h')
+            dur_df[dur_index_col] = base_time + pd.to_timedelta(pd.to_numeric(dur_df[dur_index_col], errors='coerce'), unit=numeric_unit)
         else:
-            dur_df[index_column] = pd.to_datetime(dur_df[index_column], errors='coerce')
+            dur_df[dur_index_col] = pd.to_datetime(dur_df[dur_index_col], errors='coerce')
     else:
         # 双方原本均为datetime，标准化为tz-naive
-        rate_df[index_column] = pd.to_datetime(rate_df[index_column], errors='coerce')
-        dur_df[index_column] = pd.to_datetime(dur_df[index_column], errors='coerce')
+        rate_df[rate_index_col] = pd.to_datetime(rate_df[rate_index_col], errors='coerce')
+        dur_df[dur_index_col] = pd.to_datetime(dur_df[dur_index_col], errors='coerce')
 
     durations = dur_df[dur_col]
     if pd.api.types.is_timedelta64_dtype(durations):
@@ -2757,19 +2864,21 @@ def _callback_vaso60(
                 durations = seconds_based
 
     dur_df["__duration"] = durations
-    dur_df = dur_df.dropna(subset=["__duration", index_column])
+    dur_df = dur_df.dropna(subset=["__duration", dur_index_col])
     dur_df = dur_df[dur_df["__duration"] > pd.Timedelta(0)]
 
     if dur_df.empty or rate_df.empty:
-        cols = id_columns + [index_column, ctx.concept_name]
+        # 使用rate_index_col作为最终输出的时间列（因为它更可能是标准列名）
+        output_index_col = rate_index_col if rate_index_col in ['start', 'measuredat', 'charttime'] else dur_index_col
+        cols = id_columns + [output_index_col, ctx.concept_name]
         return _as_icutbl(
             pd.DataFrame(columns=cols),
             id_columns=id_columns,
-            index_column=index_column,
+            index_column=output_index_col,
             value_column=ctx.concept_name,
         )
 
-    dur_df["__start"] = dur_df[index_column]
+    dur_df["__start"] = dur_df[dur_index_col]
     dur_df["__end"] = dur_df["__start"] + dur_df["__duration"]
 
     max_gap = pd.Timedelta(minutes=5)
@@ -2782,11 +2891,12 @@ def _callback_vaso60(
     )
 
     if intervals.empty:
-        cols = id_columns + [index_column, ctx.concept_name]
+        output_index_col = rate_index_col if rate_index_col in ['start', 'measuredat', 'charttime'] else dur_index_col
+        cols = id_columns + [output_index_col, ctx.concept_name]
         return _as_icutbl(
             pd.DataFrame(columns=cols),
             id_columns=id_columns,
-            index_column=index_column,
+            index_column=output_index_col,
             value_column=ctx.concept_name,
         )
 
@@ -2794,15 +2904,16 @@ def _callback_vaso60(
     intervals = intervals[intervals["__length"] >= pd.Timedelta(hours=1)].copy()
 
     if intervals.empty:
-        cols = id_columns + [index_column, ctx.concept_name]
+        output_index_col = rate_index_col if rate_index_col in ['start', 'measuredat', 'charttime'] else dur_index_col
+        cols = id_columns + [output_index_col, ctx.concept_name]
         return _as_icutbl(
             pd.DataFrame(columns=cols),
             id_columns=id_columns,
-            index_column=index_column,
+            index_column=output_index_col,
             value_column=ctx.concept_name,
         )
 
-    rate_df = rate_df.dropna(subset=[index_column])
+    rate_df = rate_df.dropna(subset=[rate_index_col])
     rate_df[rate_col] = pd.to_numeric(rate_df[rate_col], errors="coerce")
 
     if rate_unit_col and "__unit_token" in rate_df.columns and not rate_df.empty:
@@ -2912,30 +3023,32 @@ def _callback_vaso60(
     rate_df = rate_df.dropna(subset=[rate_col])
 
     if rate_df.empty:
-        cols = id_columns + [index_column, ctx.concept_name]
+        output_index_col = rate_index_col if rate_index_col in ['start', 'measuredat', 'charttime'] else dur_index_col
+        cols = id_columns + [output_index_col, ctx.concept_name]
         return _as_icutbl(
             pd.DataFrame(columns=cols),
             id_columns=id_columns,
-            index_column=index_column,
+            index_column=output_index_col,
             value_column=ctx.concept_name,
         )
 
     merged = rate_df.merge(intervals.drop(columns=["__length"]), on=id_columns, how="inner")
-    mask = (merged[index_column] >= merged["__start"]) & (merged[index_column] <= merged["__end"])
+    mask = (merged[rate_index_col] >= merged["__start"]) & (merged[rate_index_col] <= merged["__end"])
     filtered = merged[mask]
 
     if filtered.empty:
-        cols = id_columns + [index_column, ctx.concept_name]
+        output_index_col = rate_index_col if rate_index_col in ['start', 'measuredat', 'charttime'] else dur_index_col
+        cols = id_columns + [output_index_col, ctx.concept_name]
         return _as_icutbl(
             pd.DataFrame(columns=cols),
             id_columns=id_columns,
-            index_column=index_column,
+            index_column=output_index_col,
             value_column=ctx.concept_name,
         )
 
     filtered = filtered.drop(columns=["__start", "__end"])
     grouped = (
-        filtered.groupby(id_columns + [index_column], dropna=False)[rate_col]
+        filtered.groupby(id_columns + [rate_index_col], dropna=False)[rate_col]
         .max()
         .reset_index()
     )
@@ -2943,25 +3056,26 @@ def _callback_vaso60(
     grouped = grouped.drop(columns=[rate_col])
 
     if final_interval is not None and not grouped.empty:
-        grouped[index_column] = grouped[index_column].dt.floor(final_interval)
+        grouped[rate_index_col] = grouped[rate_index_col].dt.floor(final_interval)
         grouped = (
-            grouped.groupby(id_columns + [index_column], dropna=False)[ctx.concept_name]
+            grouped.groupby(id_columns + [rate_index_col], dropna=False)[ctx.concept_name]
             .max()
             .reset_index()
         )
 
-    cols = id_columns + [index_column, ctx.concept_name]
+    output_index_col = rate_index_col if rate_index_col in ['start', 'measuredat', 'charttime'] else dur_index_col
+    cols = id_columns + [output_index_col, ctx.concept_name]
     result = grouped[cols].reset_index(drop=True)
     # 若上面为了计算将时间转换为datetime（源头为相对小时），在返回前还原为相对小时
     if rate_time_is_numeric or dur_time_is_numeric:
         try:
-            result[index_column] = (pd.to_datetime(result[index_column], errors='coerce') - base_time) / pd.Timedelta(hours=1)
+            result[output_index_col] = (pd.to_datetime(result[output_index_col], errors='coerce') - base_time) / pd.Timedelta(hours=1)
         except Exception:
             pass
     return _as_icutbl(
         result,
         id_columns=id_columns,
-        index_column=index_column,
+        index_column=output_index_col,
         value_column=ctx.concept_name,
     )
 
@@ -3138,10 +3252,17 @@ def _callback_rrt_criteria(
     ph = pd.to_numeric(data.get("ph", pd.Series(np.nan, index=data.index)), errors="coerce")
     hco3 = pd.to_numeric(data.get("bicarb", pd.Series(np.nan, index=data.index)), errors="coerce")
     
-    # Check if receiving RRT
-    rrt_active = data.get("rrt", pd.Series(False, index=data.index)).where(
-        data.get("rrt", pd.Series(False, index=data.index)).notna(), False
-    ).astype(bool)
+    # Check if receiving RRT - handle both boolean and numeric types
+    rrt_series = data.get("rrt")
+    if rrt_series is not None and len(rrt_series) > 0:
+        # Convert to boolean, treating NaN/NA/0 as False
+        # First convert to numeric if needed, then to bool
+        if pd.api.types.is_numeric_dtype(rrt_series):
+            rrt_active = (rrt_series.fillna(0) > 0).astype(bool)
+        else:
+            rrt_active = rrt_series.fillna(False).astype(bool)
+    else:
+        rrt_active = pd.Series(False, index=data.index, dtype=bool)
     
     # Base kidney injury criteria (use uo_6h as proxy for oliguria >6h)
     aki_crea = (crea > 1.2).fillna(False)
@@ -3260,15 +3381,27 @@ def _callback_uo_window(
     
     if urine_tbl is None or urine_tbl.data.empty:
         # Return empty table - get ID columns from data_source
-        try:
-            id_cols = [ctx.data_source.id_cfg.id]  # Get from data_source config
-        except:
-            id_cols = ["stay_id"]  # Fallback
-        
-        index_col = "charttime"
+        id_cols = []
+        # Prefer patientunitstayid when available (eICU)
+        if weight_tbl is not None and 'patientunitstayid' in weight_tbl.data.columns:
+            id_cols = ['patientunitstayid']
+        elif urine_tbl is not None and 'patientunitstayid' in urine_tbl.data.columns:
+            id_cols = ['patientunitstayid']
+        else:
+            try:
+                id_candidate = getattr(ctx.data_source, 'id_cfg', None)
+                if hasattr(id_candidate, 'id'):
+                    id_cols = [id_candidate.id]
+            except Exception:
+                id_cols = []
+        if not id_cols:
+            id_cols = ["stay_id"]
+
+        index_col = urine_tbl.index_column if urine_tbl and urine_tbl.index_column else "charttime"
         cols = id_cols + [index_col] + [output_col]
+        frame = pd.DataFrame(columns=cols)
         return _as_icutbl(
-            pd.DataFrame(columns=cols),
+            frame,
             id_columns=id_cols,
             index_column=index_col,
             value_column=output_col
