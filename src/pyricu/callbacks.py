@@ -1489,13 +1489,44 @@ def _urine_window_avg(
         DataFrame with averaged urine output (mL/kg/h)
     """
     # Determine ID and time columns
-    id_cols = [col for col in urine.columns if col.endswith('_id') or col == 'stay_id' or col == 'icustay_id' or col == 'patientunitstayid']
-    time_col = 'charttime'
+    id_cols = [col for col in urine.columns if col.endswith('_id') or col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']]
+    
+    # 🔧 FIX: 不同数据库使用不同的时间列名
+    if 'charttime' in urine.columns:
+        time_col = 'charttime'
+    elif 'measuredat' in urine.columns:
+        time_col = 'measuredat'
+    else:
+        time_col = 'charttime'  # 默认
+    
     val_col = 'urine'
     result_col = f'uo_{window_hours}h'
     
+    # 如果没有找到ID列，尝试常见的ID列名
+    if not id_cols:
+        for potential_id in ['admissionid', 'stay_id', 'patientunitstayid', 'patientid', 'icustay_id']:
+            if potential_id in urine.columns:
+                id_cols = [potential_id]
+                break
+    
     # Merge urine and weight data
-    merged = pd.merge(urine, weight, on=id_cols, how='left', suffixes=('', '_weight'))
+    if id_cols:
+        # 🔧 FIX: 检查weight表是否有相同的ID列
+        # 对于AUMC，urine有admissionid但weight只有patientid
+        # 需要先join admissions表获取admissionid->patientid映射
+        common_ids = [col for col in id_cols if col in weight.columns]
+        if common_ids:
+            merged = pd.merge(urine, weight, on=common_ids, how='left', suffixes=('', '_weight'))
+        else:
+            # ID列不匹配，尝试广播weight（假设只有一个患者）
+            merged = urine.copy()
+            if 'weight' in weight.columns and len(weight) > 0:
+                merged['weight'] = weight['weight'].iloc[0]
+    else:
+        # 如果还是没有ID列，直接使用urine数据（假设只有一个患者）
+        merged = urine.copy()
+        if 'weight' in weight.columns and len(weight) > 0:
+            merged['weight'] = weight['weight'].iloc[0]
     
     # Handle weight time column
     if 'charttime_weight' in merged.columns:

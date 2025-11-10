@@ -160,7 +160,12 @@ class ICUDataSource:
         patient_ids_filter = None
         if filters:
             for spec in filters:
-                if spec.op == FilterOp.IN and spec.column in ['subject_id', 'icustay_id', 'hadm_id', 'stay_id']:
+                # 支持各数据库的ID列名
+                id_columns = ['subject_id', 'icustay_id', 'hadm_id', 'stay_id',  # MIMIC
+                             'admissionid', 'patientid',  # AUMC
+                             'patientunitstayid',  # eICU
+                             'patientid']  # HiRID
+                if spec.op == FilterOp.IN and spec.column in id_columns:
                     patient_ids_filter = spec
                     # 只在verbose模式下输出，且只输出一次
                     if verbose:
@@ -194,6 +199,16 @@ class ICUDataSource:
         time_like_cols = set(time_columns)
         if index_column:
             time_like_cols.add(index_column)
+        
+        # 🔧 AUMC特殊处理：时间列是毫秒,需要转换为分钟 (参考R ricu的ms_as_mins)
+        # R ricu: ms_as_mins <- function(x) min_as_mins(as.integer(x / 6e4))
+        # 这样处理后,AUMC的时间单位与其他数据库一致(都是分钟)
+        if self.config.name == 'aumc':
+            for column in time_like_cols:
+                if column in frame.columns and pd.api.types.is_numeric_dtype(frame[column]):
+                    # 将毫秒转换为分钟: ms / 60000
+                    frame[column] = (frame[column] / 60000.0).astype('float64')
+        
         for column in time_like_cols:
             # 只有当列存在且不是numeric类型时才转换
             # 如果已经是numeric，可能是已经对齐过的小时数
@@ -378,10 +393,32 @@ class ICUDataSource:
             # Try to read as compressed CSV
             return pd.read_csv(path, compression='gzip', usecols=list(columns) if columns else None)
         if suffix in {".parquet", ".pq"}:
-            df = pd.read_parquet(path, columns=list(columns) if columns else None)
+            # 🚀 使用PyArrow过滤器优化大文件读取
+            if patient_ids_filter:
+                try:
+                    import pyarrow.parquet as pq
+                    # 构建PyArrow过滤表达式
+                    import pyarrow.compute as pc
+                    target_ids = patient_ids_filter.value if isinstance(patient_ids_filter.value, list) else [patient_ids_filter.value]
+                    filter_expr = pc.field(patient_ids_filter.column).isin(target_ids)
+                    
+                    # 使用PyArrow读取并过滤
+                    df = pq.read_table(
+                        path,
+                        columns=list(columns) if columns else None,
+                        filters=filter_expr
+                    ).to_pandas()
+                except ImportError:
+                    # 如果没有PyArrow，回退到pandas
+                    df = pd.read_parquet(path, columns=list(columns) if columns else None)
+                    if patient_ids_filter.column in df.columns:
+                        target_ids = set(patient_ids_filter.value) if isinstance(patient_ids_filter.value, list) else {patient_ids_filter.value}
+                        df = df[df[patient_ids_filter.column].isin(target_ids)]
+            else:
+                df = pd.read_parquet(path, columns=list(columns) if columns else None)
+            
             # 处理重复列名（如果存在）
             if df.columns.duplicated().any():
-                # 使用pandas的dedup_names方法处理重复列名
                 import pandas.io.common
                 df.columns = pandas.io.common.dedup_names(df.columns, is_potential_multiindex=False)
             return df
@@ -414,9 +451,9 @@ class ICUDataSource:
             # 找到文件，根据格式读取
             num_files = len(files)
             
-            # 准备患者ID过滤器
+            # 准备患者ID过滤器 (支持多种数据库的ID列)
             filter_tuple = None
-            if patient_ids_filter and patient_ids_filter.column in ['subject_id', 'hadm_id', 'icustay_id', 'stay_id']:
+            if patient_ids_filter and patient_ids_filter.column in ['subject_id', 'hadm_id', 'icustay_id', 'stay_id', 'admissionid', 'patientid']:
                 target_ids = set(patient_ids_filter.value) if not isinstance(patient_ids_filter.value, str) else {patient_ids_filter.value}
                 filter_tuple = (patient_ids_filter.column, target_ids)
                 if DEBUG_MODE: print(f"   📁 加载 {directory.name} ({num_files} 个 {fmt} 分区) - 过滤 {len(target_ids)} 个患者...")

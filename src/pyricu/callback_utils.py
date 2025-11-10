@@ -4,7 +4,7 @@ Provides function factories and utilities for creating item callback functions
 that handle data transformations during concept loading.
 """
 
-from typing import Callable, Union, Optional, Dict, Any
+from typing import Callable, Union, Optional, Dict, Any, List
 import re
 import pandas as pd
 import numpy as np
@@ -2289,12 +2289,19 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
             # This is a simplified version - full implementation would join tables
             frame[weight_var] = 70.0  # Default weight kg as fallback
         
+        # 🔧 FIX: Convert weight to numeric (handle empty strings in infusiondrug.patientweight)
+        if weight_var in frame.columns:
+            frame[weight_var] = pd.to_numeric(frame[weight_var], errors='coerce')
+        
         # Normalize to /kg/ if not already
         frame['is_per_kg'] = frame['unit_var'].str.contains('/kg/', case=False, na=False)
         
         # For non-kg rates, divide by weight and update unit
+        # 🔧 FIX: Also check weight is not NaN after numeric conversion
         mask_non_kg = ~frame['is_per_kg'] & frame[val_var].notna() & frame[weight_var].notna()
         if mask_non_kg.any():
+            # 🔧 FIX: Convert val_var to float before division to avoid dtype mismatch warning
+            frame[val_var] = frame[val_var].astype(float)
             frame.loc[mask_non_kg, val_var] = frame.loc[mask_non_kg, val_var] / frame.loc[mask_non_kg, weight_var]
             frame.loc[mask_non_kg, 'unit_var'] = frame.loc[mask_non_kg, 'unit_var'].apply(
                 lambda u: u.replace('/', '/kg/') if u and '/' in u else f'{u}/kg' if u else 'Unknown/kg'
@@ -2344,3 +2351,272 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         return frame
     
     return callback
+
+
+def _aumc_get_id_columns(df: pd.DataFrame) -> List[str]:
+    return [col for col in df.columns if isinstance(col, str) and col.lower().endswith('id')]
+
+
+def _aumc_normalize_mass_units(df: pd.DataFrame, unit_col: Optional[str], val_col: str) -> None:
+    if not unit_col:
+        return
+    if unit_col not in df.columns:
+        df[unit_col] = 'mcg'
+        return
+
+    df[unit_col] = df[unit_col].astype(str).str.strip()
+    units_lower = df[unit_col].str.lower()
+
+    mask_mg = units_lower.isin({'mg', 'milligram', 'milligrams'})
+    if mask_mg.any():
+        df.loc[mask_mg, val_col] = df.loc[mask_mg, val_col] * 1_000.0
+        df.loc[mask_mg, unit_col] = 'mcg'
+
+    mask_g = units_lower.isin({'g', 'gram', 'grams'})
+    if mask_g.any():
+        df.loc[mask_g, val_col] = df.loc[mask_g, val_col] * 1_000_000.0
+        df.loc[mask_g, unit_col] = 'mcg'
+
+    mask_micro = units_lower.isin({'µg', 'μg', 'ug', 'microgram', 'micrograms'})
+    if mask_micro.any():
+        df.loc[mask_micro, unit_col] = 'mcg'
+
+    mask_mcg = units_lower.isin({'mcg', 'mcgs'})
+    if mask_mcg.any():
+        df.loc[mask_mcg, unit_col] = 'mcg'
+
+
+def _aumc_normalize_rate_units(df: pd.DataFrame, rate_uom_col: Optional[str], val_col: str, default: str = 'min') -> Optional[str]:
+    if not rate_uom_col:
+        return None
+    if rate_uom_col not in df.columns:
+        df[rate_uom_col] = default
+        return rate_uom_col
+
+    df[rate_uom_col] = df[rate_uom_col].astype(str).str.strip()
+    rate_lower = df[rate_uom_col].str.lower()
+
+    mask_hour = rate_lower.isin({'uur', 'u', 'hour', 'hours', 'h'})
+    if mask_hour.any():
+        df.loc[mask_hour, val_col] = df.loc[mask_hour, val_col] / 60.0
+        df.loc[mask_hour, rate_uom_col] = 'min'
+
+    mask_day = rate_lower.isin({'dag', 'dagen', 'day', 'days', 'd'})
+    if mask_day.any():
+        df.loc[mask_day, val_col] = df.loc[mask_day, val_col] / (24.0 * 60.0)
+        df.loc[mask_day, rate_uom_col] = 'min'
+
+    mask_sec = rate_lower.isin({'sec', 'seconde', 'second', 'seconds', 's'})
+    if mask_sec.any():
+        df.loc[mask_sec, val_col] = df.loc[mask_sec, val_col] * 60.0
+        df.loc[mask_sec, rate_uom_col] = 'min'
+
+    df[rate_uom_col] = df[rate_uom_col].replace({'nan': 'min', 'none': 'min'}).fillna('min')
+    return rate_uom_col
+
+
+def aumc_rate_kg(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    val_col: str,
+    unit_col: Optional[str],
+    rel_weight_col: Optional[str],
+    rate_unit_col: Optional[str],
+    index_col: Optional[str],
+    stop_col: Optional[str],
+    default_weight: float = 70.0,
+) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+
+    df = frame.copy()
+
+    if val_col not in df.columns:
+        return pd.DataFrame(columns=list(df.columns) + [concept_name])
+
+    df[val_col] = pd.to_numeric(df[val_col], errors='coerce')
+    df = df.dropna(subset=[val_col])
+    if df.empty:
+        return df
+
+    _aumc_normalize_mass_units(df, unit_col, val_col)
+    rate_unit_col = _aumc_normalize_rate_units(df, rate_unit_col, val_col) or rate_unit_col
+
+    if 'weight' not in df.columns:
+        df['weight'] = default_weight
+    df['weight'] = pd.to_numeric(df['weight'], errors='coerce').fillna(default_weight)
+
+    if rel_weight_col and rel_weight_col in df.columns:
+        rel_mask = df[rel_weight_col].fillna(False).astype(bool)
+    else:
+        rel_mask = pd.Series(False, index=df.index)
+
+    mask_non_perkg = (~rel_mask) & (df['weight'] > 0)
+    if mask_non_perkg.any():
+        df.loc[mask_non_perkg, val_col] = df.loc[mask_non_perkg, val_col] / df.loc[mask_non_perkg, 'weight']
+
+    if unit_col and unit_col in df.columns:
+        df[unit_col] = df[unit_col].astype(str).replace({'µg': 'mcg', 'μg': 'mcg', 'ug': 'mcg'})
+    else:
+        unit_col = None
+
+    if rate_unit_col and rate_unit_col in df.columns:
+        df[rate_unit_col] = df[rate_unit_col].astype(str)
+        if unit_col and unit_col in df.columns:
+            df[unit_col] = df[unit_col] + '/kg/' + df[rate_unit_col]
+    elif unit_col and unit_col in df.columns:
+        df[unit_col] = df[unit_col] + '/kg/min'
+
+    base_time = pd.Timestamp('2000-01-01')
+    if index_col and index_col in df.columns and pd.api.types.is_numeric_dtype(df[index_col]):
+        df[index_col] = base_time + pd.to_timedelta(pd.to_numeric(df[index_col], errors='coerce'), unit='ms')
+
+    df[concept_name] = df[val_col]
+
+    id_cols = _aumc_get_id_columns(df)
+    result_cols = list(dict.fromkeys(id_cols))
+    
+    # 🔧 CRITICAL FIX: 确保时间列总是包含在返回中(即使为空或不存在)
+    # aumc_rate_kg回调在R中调用expand(),保留index_var(时间列)
+    # Python中必须显式保留,否则vaso60回调会失败(rate_df没有时间列,dur_df有)
+    if index_col:
+        # 即使index_col不在df.columns中,也需要确保它存在
+        # 如果不存在,创建一个空的时间列(NaT)
+        if index_col not in df.columns:
+            df[index_col] = pd.NaT
+        result_cols.append(index_col)
+    
+    result_cols.append(concept_name)
+    if unit_col and unit_col in df.columns:
+        result_cols.append(unit_col)
+    if rate_unit_col and rate_unit_col in df.columns:
+        result_cols.append(rate_unit_col)
+
+    return df[result_cols].dropna(subset=[concept_name])
+
+
+def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
+    def callback(
+        frame: pd.DataFrame,
+        val_col: str,
+        unit_col: Optional[str],
+        rate_unit_col: Optional[str],
+        stop_col: Optional[str],
+        concept_name: str,
+    ) -> pd.DataFrame:
+        if frame.empty:
+            return frame
+
+        df = frame.copy()
+
+        if val_col not in df.columns:
+            return pd.DataFrame(columns=list(df.columns) + [concept_name])
+
+        df[val_col] = pd.to_numeric(df[val_col], errors='coerce')
+        df = df.dropna(subset=[val_col])
+        if df.empty:
+            return df
+
+        if unit_col and unit_col in df.columns:
+            df[unit_col] = df[unit_col].astype(str).str.strip()
+            lower = df[unit_col].str.lower()
+
+            mask_micro = lower.isin({'µg', 'μg', 'ug', 'microgram', 'micrograms'})
+            if mask_micro.any():
+                df.loc[mask_micro, unit_col] = 'mcg'
+
+            mask_mg = lower.isin({'mg', 'milligram', 'milligrams'})
+            if mask_mg.any():
+                df.loc[mask_mg, val_col] = df.loc[mask_mg, val_col] * 1000.0
+                df.loc[mask_mg, unit_col] = 'mcg'
+
+            lower = df[unit_col].str.lower()
+            mask_mcg = lower.isin({'mcg', 'microgram', 'micrograms'})
+            if mask_mcg.any():
+                df.loc[mask_mcg, val_col] = df.loc[mask_mcg, val_col] * mcg_to_units
+                df.loc[mask_mcg, unit_col] = 'units'
+        else:
+            unit_col = None
+
+        rate_unit_col = _aumc_normalize_rate_units(df, rate_unit_col, val_col) or rate_unit_col
+        if rate_unit_col and rate_unit_col in df.columns:
+            df[rate_unit_col] = df[rate_unit_col].astype(str)
+
+        if unit_col and unit_col in df.columns:
+            if rate_unit_col and rate_unit_col in df.columns:
+                df[unit_col] = df[unit_col] + '/' + df[rate_unit_col]
+            else:
+                df[unit_col] = df[unit_col] + '/min'
+
+        base_time = pd.Timestamp('2000-01-01')
+        index_col = next((col for col in ['start', 'charttime', 'time'] if col in df.columns), None)
+        if index_col and pd.api.types.is_numeric_dtype(df[index_col]):
+            df[index_col] = base_time + pd.to_timedelta(pd.to_numeric(df[index_col], errors='coerce'), unit='ms')
+
+        df[concept_name] = df[val_col]
+
+        id_cols = _aumc_get_id_columns(df)
+        result_cols = list(dict.fromkeys(id_cols))
+        if index_col and index_col in df.columns:
+            result_cols.append(index_col)
+        result_cols.append(concept_name)
+        if unit_col and unit_col in df.columns:
+            result_cols.append(unit_col)
+        if rate_unit_col and rate_unit_col in df.columns:
+            result_cols.append(rate_unit_col)
+
+        return df[result_cols].dropna(subset=[concept_name])
+
+    return callback
+
+
+def aumc_dur(
+    frame: pd.DataFrame,
+    *,
+    val_col: str,
+    stop_var: Optional[str],
+    grp_var: Optional[str],
+    index_var: Optional[str],
+    concept_name: str,
+) -> pd.DataFrame:
+    if frame.empty or not stop_var or stop_var not in frame.columns:
+        return frame
+
+    df = frame.copy()
+
+    start_col = index_var if index_var and index_var in df.columns else None
+    if not start_col:
+        start_col = next((col for col in ['start', 'charttime', 'time'] if col in df.columns), None)
+    if not start_col:
+        return df
+
+    base_time = pd.Timestamp('2000-01-01')
+    start_numeric = pd.to_numeric(df[start_col], errors='coerce')
+    stop_numeric = pd.to_numeric(df[stop_var], errors='coerce')
+    df['__start_dt'] = base_time + pd.to_timedelta(start_numeric, unit='ms')
+    df['__stop_dt'] = base_time + pd.to_timedelta(stop_numeric, unit='ms')
+
+    id_cols = _aumc_get_id_columns(df)
+    group_var = grp_var if grp_var and grp_var in df.columns else None
+
+    result = calc_dur(
+        df,
+        val_col=val_col,
+        min_var='__start_dt',
+        max_var='__stop_dt',
+        grp_var=group_var,
+        id_cols=id_cols,
+    )
+
+    if val_col in result.columns and pd.api.types.is_timedelta64_dtype(result[val_col]):
+        result[val_col] = result[val_col].dt.total_seconds() / 3600.0
+
+    if '__start_dt' in result.columns:
+        result = result.rename(columns={'__start_dt': start_col})
+    if '__stop_dt' in result.columns:
+        result = result.drop(columns=['__stop_dt'])
+
+    result[concept_name] = result[val_col]
+
+    return result

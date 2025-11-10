@@ -410,6 +410,15 @@ try:
 except ImportError:
     _HAS_DATA_QUALITY = False
 
+try:
+    from .visualization import (
+        plot_sepsis_timeline,
+        plot_sepsis_batch,
+    )
+    _HAS_VISUALIZATION = True
+except ImportError:
+    _HAS_VISUALIZATION = False
+
 # 数据源工具
 try:
     from .src_utils import (
@@ -906,6 +915,12 @@ if _HAS_DATA_QUALITY:
         "DataQualityValidator",
         "validate_data_quality",
         "print_quality_summary",
+    ])
+
+if _HAS_VISUALIZATION:
+    __all__.extend([
+        "plot_sepsis_timeline",
+        "plot_sepsis_batch",
     ])
 
 if _HAS_SRC_UTILS:

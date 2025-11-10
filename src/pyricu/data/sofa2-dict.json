@@ -22,14 +22,14 @@
       "ecmo",
       "ecmo_indication"
     ],
-    "description": "SOFA-2 respiratory component (P/F≤300/225/150/75 with advanced support; ECMO auto-4 if respiratory indication)",
+    "description": "SOFA-2 respiratory component (P/F\u2264300/225/150/75 with advanced support; ECMO auto-4 if respiratory indication)",
     "category": "outcome",
     "callback": "sofa2_resp",
     "class": "rec_cncpt"
   },
   "sofa2_coag": {
     "concepts": "plt",
-    "description": "SOFA-2 hemostasis component (updated thresholds: ≤150/100/80/50)",
+    "description": "SOFA-2 hemostasis component (updated thresholds: \u2264150/100/80/50)",
     "category": "outcome",
     "callback": "sofa2_coag",
     "class": "rec_cncpt",
@@ -37,7 +37,7 @@
   },
   "sofa2_liver": {
     "concepts": "bili",
-    "description": "SOFA-2 liver component (relaxed 1pt threshold: ≤3.0 mg/dL vs ≤1.9 in SOFA-1)",
+    "description": "SOFA-2 liver component (relaxed 1pt threshold: \u22643.0 mg/dL vs \u22641.9 in SOFA-1)",
     "category": "outcome",
     "aggregate": "max",
     "callback": "sofa2_liver",
@@ -53,7 +53,7 @@
       "other_vaso",
       "mech_circ_support"
     ],
-    "description": "SOFA-2 cardiovascular component (combined norepi+epi: ≤0.2/0.2-0.4/>0.4 μg/kg/min; dopamine backup only; mechanical support)",
+    "description": "SOFA-2 cardiovascular component (combined norepi+epi: \u22640.2/0.2-0.4/>0.4 \u03bcg/kg/min; dopamine backup only; mechanical support)",
     "category": "outcome",
     "aggregate": [
       "min",
@@ -73,7 +73,7 @@
       "delirium_tx",
       "sedated_gcs"
     ],
-    "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; delirium treatment → 1pt even if GCS=15)",
+    "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; delirium treatment \u2192 1pt even if GCS=15)",
     "category": "outcome",
     "callback": "sofa2_cns",
     "class": "rec_cncpt"
@@ -107,22 +107,31 @@
     "class": "rec_cncpt"
   },
   "uo_6h": {
-    "concepts": ["urine", "weight"],
-    "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h → Score 1)",
+    "concepts": [
+      "urine",
+      "weight"
+    ],
+    "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h \u2192 Score 1)",
     "category": "output",
     "callback": "uo_6h",
     "class": "rec_cncpt"
   },
   "uo_12h": {
-    "concepts": ["urine", "weight"],
-    "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for ≥12h → Score 2; anuria ≥12h → Score 3)",
+    "concepts": [
+      "urine",
+      "weight"
+    ],
+    "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for \u226512h \u2192 Score 2; anuria \u226512h \u2192 Score 3)",
     "category": "output",
     "callback": "uo_12h",
     "class": "rec_cncpt"
   },
   "uo_24h": {
-    "concepts": ["urine", "weight"],
-    "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for ≥24h → Score 3)",
+    "concepts": [
+      "urine",
+      "weight"
+    ],
+    "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for \u226524h \u2192 Score 3)",
     "category": "output",
     "callback": "uo_24h",
     "class": "rec_cncpt"
@@ -227,6 +236,14 @@
       ],
       "aumc": [
         {
+          "table": "listitems",
+          "sub_var": "itemid",
+          "ids": [
+            20662
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
           "table": "procedureorderitems",
           "sub_var": "item",
           "regex": "ECMO",
@@ -271,18 +288,12 @@
       ],
       "aumc": [
         {
-          "table": "procedureorderitems",
-          "sub_var": "item",
-          "regex": "VV.*ECMO",
-          "class": "rgx_itm",
-          "callback": "transform_fun(set_val('respiratory'))"
-        },
-        {
-          "table": "procedureorderitems",
-          "sub_var": "item",
-          "regex": "VA.*ECMO",
-          "class": "rgx_itm",
-          "callback": "transform_fun(set_val('cardiovascular'))"
+          "table": "listitems",
+          "sub_var": "itemid",
+          "ids": [
+            20662
+          ],
+          "callback": "apply_map(c(`VA ECMO` = 'cardiovascular', `VV ECMO` = 'respiratory'), var = 'value')"
         }
       ],
       "hirid": []
@@ -503,7 +514,13 @@
         {
           "table": "procedureevents",
           "sub_var": "itemid",
-          "ids": [225441, 225802, 225803, 225809, 225955],
+          "ids": [
+            225441,
+            225802,
+            225803,
+            225809,
+            225955
+          ],
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
@@ -545,7 +562,7 @@
   },
   "rrt_criteria": {
     "class": "lgl_cncpt",
-    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+≥6.0 OR acidosis pH≤7.20+HCO3≤12)",
+    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+\u22656.0 OR acidosis pH\u22647.20+HCO3\u226412)",
     "category": "renal",
     "sources": {
       "miiv": [],

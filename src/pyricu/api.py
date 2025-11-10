@@ -217,7 +217,12 @@ def load_concepts(
         # 根据数据库类型选择正确的ID列
         if database in ['eicu', 'eicu_demo']:
             patient_ids = {'patientunitstayid': patient_ids}
+        elif database in ['aumc']:
+            patient_ids = {'admissionid': patient_ids}
+        elif database in ['hirid']:
+            patient_ids = {'patientid': patient_ids}
         else:
+            # MIMIC-IV 等使用 stay_id
             patient_ids = {'stay_id': patient_ids}
     
     # 9. 处理时间参数

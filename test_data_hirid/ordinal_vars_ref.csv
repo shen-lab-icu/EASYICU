@@ -1,0 +1,73 @@
+variableid,code,stringvalue
+3845,1,Stand By
+3845,2,DGV
+3845,3,CMV
+3845,4,Druckreg. Vol.Kontr.
+3845,5,Volumenunterstützung
+3845,6,SIMV(CMV)+DU
+3845,7,SIMV(DGV.)+DU
+3845,8,DU/ST
+3845,9,Optional
+3845,10,SIMV-PregVctrl+Psupp
+3845,11,Bi-Vent
+3845,12,NIV DGV
+3845,13,NIV DU
+3845,14,Nasal CPAP
+3845,15,NAVA
+3845,17,NIV neur adj
+10000100,1,1 keine
+10000100,2,2 unverständl. Laute
+10000100,3,3 unzu.häng. Worte
+10000100,4,4 Desorientiert
+10000100,5,5 Orientiert
+10000200,1,1 kein(auf Weckreiz)
+10000200,2,2 abnorme Extension
+10000200,3,3 abnorme Flexion
+10000200,4,4 ungezielte Abwehr
+10000200,5,5 gezielte Abwehr
+10000200,6,6 auf Aufforderung
+10000300,1,1 kein(auf Weckreiz)
+10000300,2,2 auf Weckreiz
+10000300,3,3 auf Aufforderung
+10000300,4,4 Spontan
+10002508,0,Nein
+10002508,1,Ja
+10002508,2,-
+15001166,1,SR
+15001166,2,Sinusbradykardie
+15001166,3,Sinustachykardie
+15001166,4,Atrial fibrillation
+15001166,5,AV-Rhythmus
+15001166,6,PM
+15001166,7,AV Block Grad 1
+15001166,8,AV Block Grad 2
+15001166,9,AV Block Grad 3
+15001166,10,Vhfli
+15001166,11,Vhfla
+15001166,12,Kammerrhythmus
+15001166,13,Kammerflimmern
+15001166,14,Asystolie
+15001166,15,Sinusarrhythmie
+15001166,16,siehe PD Spez.Rhyth
+15001525,1,1
+15001525,2,2
+15001525,3,3
+15001525,4,4
+15001525,5,5
+15001525,6,6
+15001525,7,7
+15001525,8,2 x 2
+15001525,9,2 x 4
+15001525,10,2 x 6
+15001525,11,8
+15001525,14,2 x 3
+15001525,15,2 x 5
+15001525,16,0
+15001525,17,1.5
+15001525,18,9
+15001552,1,intubiert
+15001552,2,tracheotomiert
+15001552,3,Maske
+15001552,4,Helm
+15001552,5,Mundstück(Stellar)
+15001552,6,-

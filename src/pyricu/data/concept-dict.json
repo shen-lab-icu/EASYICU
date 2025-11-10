@@ -3285,7 +3285,7 @@
           "table": "listitems",
           "sub_var": "itemid",
           "target": "ts_tbl",
-          "callback": "combine_callbacks(\n               transform_fun(comp_na(`==`, 'Geïntubeerd')),\n               ts_to_win_tbl(mins(1L))\n             )"
+          "callback": "combine_callbacks(\n               transform_fun(comp_na(`==`, 'Ge\u00efntubeerd')),\n               ts_to_win_tbl(mins(1L))\n             )"
         }
       ],
       "eicu": [
@@ -7178,7 +7178,7 @@
   "temp": {
     "unit": [
       "C",
-      "°C"
+      "\u00b0C"
     ],
     "min": 32,
     "max": 42,
@@ -8040,7 +8040,7 @@
           "ids": 13066,
           "table": "listitems",
           "sub_var": "itemid",
-          "callback": "apply_map( c(`Geen geluid` = 1, `Onverstaanbare woorden` = 2, `Onjuiste woorden` = 3, `Verwarde taal` = 4, `Georiënteerd` = 5) )"
+          "callback": "apply_map( c(`Geen geluid` = 1, `Onverstaanbare woorden` = 2, `Onjuiste woorden` = 3, `Verwarde taal` = 4, `Geori\u00ebnteerd` = 5) )"
         }
       ],
       "eicu": [
@@ -8240,6 +8240,260 @@
           "val_var": "WeightOnAdmission",
           "class": "col_itm",
           "callback": "transform_fun(binary_op(`/`, 1000))"
+        }
+      ]
+    }
+  },
+  "ecmo": {
+    "class": "lgl_cncpt",
+    "description": "Extracorporeal membrane oxygenation in use",
+    "category": "respiratory",
+    "sources": {
+      "miiv": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            224660,
+            228193
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "ECMO",
+          "class": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "listitems",
+          "sub_var": "itemid",
+          "ids": [
+            20662
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "procedureorderitems",
+          "sub_var": "item",
+          "regex": "ECMO",
+          "class": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "hirid": []
+    }
+  },
+  "ecmo_indication": {
+    "class": "chr_cncpt",
+    "description": "ECMO indication (respiratory/cardiovascular)",
+    "category": "respiratory",
+    "sources": {
+      "miiv": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            224660,
+            228193
+          ],
+          "callback": "transform_fun(set_val('respiratory'))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "VV.*ECMO|ECMO.*respiratory",
+          "class": "rgx_itm",
+          "callback": "transform_fun(set_val('respiratory'))"
+        },
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "VA.*ECMO|ECMO.*cardio",
+          "class": "rgx_itm",
+          "callback": "transform_fun(set_val('cardiovascular'))"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "listitems",
+          "sub_var": "itemid",
+          "ids": [
+            20662
+          ],
+          "callback": "apply_map(c(`VA ECMO` = 'cardiovascular', `VV ECMO` = 'respiratory'), var = 'value')"
+        }
+      ],
+      "hirid": []
+    }
+  },
+  "rrt": {
+    "class": "lgl_cncpt",
+    "description": "Renal replacement therapy in use",
+    "category": "renal",
+    "sources": {
+      "miiv": [
+        {
+          "table": "procedureevents",
+          "sub_var": "itemid",
+          "ids": [
+            225441,
+            225802,
+            225803,
+            225809,
+            225955
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "(CRRT|hemodialysis|dialysis)",
+          "class": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "procedureorderitems",
+          "sub_var": "item",
+          "regex": "(CRRT|Hemodialysis|Dialysis|CVVH)",
+          "class": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "ids": [
+            6684
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "rrt_criteria": {
+    "class": "lgl_cncpt",
+    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+\u22656.0 OR acidosis pH\u22647.20+HCO3\u226412)",
+    "category": "renal",
+    "sources": {
+      "miiv": [],
+      "eicu": [],
+      "aumc": [],
+      "hirid": []
+    },
+    "target": "id_tbl",
+    "callback": "rrt_criteria"
+  },
+  "mech_circ_support": {
+    "class": "lgl_cncpt",
+    "description": "Mechanical circulatory support (IABP/LVAD/Impella)",
+    "category": "cardiovascular",
+    "sources": {
+      "miiv": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            224272,
+            224322,
+            225979,
+            220128
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "IABP|balloon pump|LVAD|Impella",
+          "class": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "procedureorderitems",
+          "sub_var": "item",
+          "regex": "(IABP|balloon|Impella|LVAD)",
+          "class": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "listitems",
+          "sub_var": "itemid",
+          "ids": [
+            6658
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "sedated_gcs": {
+    "class": "num_cncpt",
+    "description": "GCS before sedation (for sedated patients)",
+    "category": "neurology",
+    "unit": "score",
+    "min": 3,
+    "max": 15,
+    "sources": {
+      "miiv": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            220739
+          ]
+        }
+      ],
+      "eicu": [
+        {
+          "table": "nursecharting",
+          "sub_var": "nursingchartcelltypevallabel",
+          "regex": "GCS.*prior.*sedation",
+          "class": "rgx_itm"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "numericitems",
+          "sub_var": "item",
+          "regex": "GCS.*pre.*sedat",
+          "class": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": []
         }
       ]
     }
