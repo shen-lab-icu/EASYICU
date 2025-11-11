@@ -464,31 +464,32 @@ def test_data_integrity(data_path: str, patient_ids: list, database: str = 'miiv
 # 测试 7: SOFA vs SOFA2 和 Sepsis 对比可视化
 # ============================================================================
 
+# ============================================================================
 def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, database: str = 'miiv', verbose: bool = True):
-    """可视化对比 SOFA vs SOFA2 及 Sepsis 诊断 - 多患者版本"""
+    """Visualization: Compare SOFA vs SOFA2 and Sepsis diagnosis (multi-patient version)"""
     if verbose:
         print("\n" + "=" * 80)
-        print(f"🧪 测试 8: Sepsis 可视化对比（多患者） [{database.upper()}]")
+        print(f"🧪 Test 8: Sepsis Visualization Comparison (Multi-patient) [{database.upper()}]")
         print("=" * 80)
-    
+
     if not HAS_MATPLOTLIB:
-        print("⚠️  matplotlib 未安装，跳过可视化测试")
+        print("⚠️  matplotlib not installed, skipping visualization test")
         return
-    
+
     if len(patient_ids) == 0:
-        print("⚠️  没有患者数据，跳过可视化")
+        print("⚠️  No patient data available, skipping visualization")
         return
-    
+
     try:
         from pyricu.sepsis_sofa2 import sep3_sofa2
-        
-        # 查找有 Sepsis 事件的患者（最多3个）
+
+        # Find patients with Sepsis events (up to 3)
         if verbose:
-            print(f"🔍 搜索 Sepsis 病例...")
-        
+            print(f"🔍 Searching for Sepsis cases...")
+
         sepsis_patients = []
-        
-        for pid in patient_ids[:min(20, len(patient_ids))]:  # 搜索前20个患者
+
+        for pid in patient_ids[:min(20, len(patient_ids))]:
             try:
                 sepsis3_df = load_sepsis3(
                     database=database,
@@ -497,28 +498,28 @@ def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, database: 
                     verbose=False
                 )
                 has_sep3 = sepsis3_df['sep3'].sum() > 0 if 'sep3' in sepsis3_df.columns else False
-                
+
                 if has_sep3:
                     sepsis_patients.append(pid)
-                    if len(sepsis_patients) >= 3:  # 找到3个就够了
+                    if len(sepsis_patients) >= 3:
                         break
             except:
                 pass
-        
+
         if len(sepsis_patients) == 0:
             sepsis_patients = patient_ids[:min(3, len(patient_ids))]
-        
+
         if verbose:
-            print(f"   找到 {len(sepsis_patients)} 个患者，开始绘图...")
-        
-        # 为每个患者创建图表
+            print(f"   Found {len(sepsis_patients)} patients, generating plots...")
+
+        # Create plots
         output_dir = Path('output')
         output_dir.mkdir(exist_ok=True)
         chart_count = 0
-        
+
         for patient_id in sepsis_patients:
             try:
-                # 加载该患者的数据
+                # Load data
                 sofa_df = load_sofa(
                     database=database,
                     data_path=data_path,
@@ -528,7 +529,7 @@ def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, database: 
                     keep_components=False,
                     verbose=False
                 )
-                
+
                 sofa2_df = load_sofa2(
                     database=database,
                     data_path=data_path,
@@ -538,50 +539,50 @@ def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, database: 
                     keep_components=False,
                     verbose=False
                 )
-                
+
                 sepsis3_df = load_sepsis3(
                     database=database,
                     data_path=data_path,
                     patient_ids=[patient_id],
                     verbose=False
                 )
-                
-                # 🔧 单独加载抗生素、血培养、疑似感染数据
+
+                # Antibiotics, blood culture, suspected infection
                 try:
-                    abx_df = load_concepts('abx', database=database, data_path=data_path, 
-                                          patient_ids=[patient_id], verbose=False)
-                except:
-                    abx_df = pd.DataFrame()
-                
-                try:
-                    samp_df = load_concepts('samp', database=database, data_path=data_path, 
+                    abx_df = load_concepts('abx', database=database, data_path=data_path,
                                            patient_ids=[patient_id], verbose=False)
                 except:
-                    samp_df = pd.DataFrame()
-                
+                    abx_df = pd.DataFrame()
+
                 try:
-                    susp_inf_df = load_concepts('susp_inf', database=database, data_path=data_path, 
-                                               patient_ids=[patient_id], verbose=False)
+                    samp_df = load_concepts('samp', database=database, data_path=data_path,
+                                            patient_ids=[patient_id], verbose=False)
+                except:
+                    samp_df = pd.DataFrame()
+
+                try:
+                    susp_inf_df = load_concepts('susp_inf', database=database, data_path=data_path,
+                                                patient_ids=[patient_id], verbose=False)
                 except:
                     susp_inf_df = pd.DataFrame()
-                
+
                 if sofa_df.empty:
                     continue
-                
-                # 提取各类事件
-                # 抗生素：有starttime列的使用starttime，否则用charttime
+
+                # Extract events
                 if not abx_df.empty:
                     time_col = 'starttime' if 'starttime' in abx_df.columns else 'charttime'
                     if 'abx' in abx_df.columns:
-                        abx_data = abx_df[abx_df['abx'].notna() & (abx_df['abx'] > 0)][[time_col]].rename(columns={time_col: 'time'})
+                        abx_data = abx_df[abx_df['abx'].notna() & (abx_df['abx'] > 0)][[time_col]].rename(
+                            columns={time_col: 'time'})
                     else:
                         abx_data = abx_df[[time_col]].rename(columns={time_col: 'time'})
                 else:
                     abx_data = pd.DataFrame()
-                
-                # 血培养
+
                 if not samp_df.empty:
-                    time_col = 'charttime' if 'charttime' in samp_df.columns else ('starttime' if 'starttime' in samp_df.columns else None)
+                    time_col = 'charttime' if 'charttime' in samp_df.columns else (
+                        'starttime' if 'starttime' in samp_df.columns else None)
                     if time_col and 'samp' in samp_df.columns:
                         samp_data = samp_df[[time_col, 'samp']].rename(columns={time_col: 'time'})
                     elif time_col:
@@ -590,41 +591,40 @@ def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, database: 
                         samp_data = pd.DataFrame()
                 else:
                     samp_data = pd.DataFrame()
-                
-                # 疑似感染
+
                 if not susp_inf_df.empty:
                     time_col = 'starttime' if 'starttime' in susp_inf_df.columns else 'charttime'
                     if 'susp_inf' in susp_inf_df.columns:
-                        si_data = susp_inf_df[susp_inf_df['susp_inf'] == True][[time_col]].rename(columns={time_col: 'time'})
+                        si_data = susp_inf_df[susp_inf_df['susp_inf'] == True][[time_col]].rename(
+                            columns={time_col: 'time'})
                     else:
                         si_data = susp_inf_df[[time_col]].rename(columns={time_col: 'time'})
                 else:
                     si_data = pd.DataFrame()
-                
-                # Sepsis-3诊断
+
                 if not sepsis3_df.empty:
                     time_col = 'charttime' if 'charttime' in sepsis3_df.columns else 'starttime'
                     if 'sep3' in sepsis3_df.columns:
-                        sep3_data = sepsis3_df[sepsis3_df['sep3'] == True][[time_col]].rename(columns={time_col: 'time'})
+                        sep3_data = sepsis3_df[sepsis3_df['sep3'] == True][[time_col]].rename(
+                            columns={time_col: 'time'})
                     else:
                         sep3_data = sepsis3_df[[time_col]].rename(columns={time_col: 'time'})
                 else:
                     sep3_data = pd.DataFrame()
-                
-                # 计算 Sepsis-3 (SOFA2)
+
+                # Sepsis-3 (SOFA2)
                 sep3_sofa2_data = pd.DataFrame()
                 if not si_data.empty and not sofa2_df.empty:
                     try:
-                        # 需要将si_data转换回原格式（带susp_inf列）
                         si_for_sep3 = si_data.copy()
                         si_for_sep3['susp_inf'] = True
-                        # 确定ID列
-                        id_col = 'stay_id' if 'stay_id' in sofa2_df.columns else ('patientunitstayid' if 'patientunitstayid' in sofa2_df.columns else 'admissionid')
+                        id_col = 'stay_id' if 'stay_id' in sofa2_df.columns else (
+                            'patientunitstayid' if 'patientunitstayid' in sofa2_df.columns else 'admissionid')
                         time_col = 'charttime' if 'charttime' in sofa2_df.columns else 'starttime'
                         if id_col in susp_inf_df.columns:
                             si_for_sep3[id_col] = patient_id
                         si_for_sep3 = si_for_sep3.rename(columns={'time': time_col})
-                        
+
                         sep3_sofa2_result = sep3_sofa2(
                             sofa2=sofa2_df,
                             susp_inf_df=si_for_sep3,
@@ -632,103 +632,95 @@ def test_sofa_sepsis_visualization(data_path: str, patient_ids: list, database: 
                             index_col=time_col
                         )
                         if 'sep3_sofa2' in sep3_sofa2_result.columns:
-                            sep3_sofa2_data = sep3_sofa2_result[sep3_sofa2_result['sep3_sofa2'] == True][[time_col]].rename(columns={time_col: 'time'})
+                            sep3_sofa2_data = sep3_sofa2_result[sep3_sofa2_result['sep3_sofa2'] == True][
+                                [time_col]].rename(columns={time_col: 'time'})
                     except Exception as e:
                         if verbose:
-                            print(f"   ⚠️  SOFA2 Sepsis-3计算失败: {str(e)[:50]}...")
-                
-                # 创建图表
+                            print(f"   ⚠️  SOFA2 Sepsis-3 calculation failed: {str(e)[:50]}...")
+
+                # Create figure
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
-                
-                # 确定时间列
+
                 time_col_sofa = 'charttime' if 'charttime' in sofa_df.columns else 'starttime'
-                
-                # 图1: SOFA vs SOFA2 评分
-                ax1.plot(sofa_df[time_col_sofa], sofa_df['sofa'], 
-                        marker='o', linewidth=2, markersize=6, label='SOFA', color='#1f77b4')
-                
+
+                # Plot 1: SOFA vs SOFA2
+                ax1.plot(sofa_df[time_col_sofa], sofa_df['sofa'],
+                         marker='o', linewidth=2, markersize=6, label='SOFA', color='#1f77b4')
+
                 if not sofa2_df.empty:
                     time_col_sofa2 = 'charttime' if 'charttime' in sofa2_df.columns else 'starttime'
-                    ax1.plot(sofa2_df[time_col_sofa2], sofa2_df['sofa2'], 
-                            marker='s', linewidth=2, markersize=6, label='SOFA2', color='#ff7f0e')
-                
-                # 添加 SOFA=2 参考线
-                ax1.axhline(y=2, color='orange', linestyle='--', alpha=0.5, linewidth=1.5, label='SOFA=2 (基线)')
-                
-                # 标记 Sepsis-3 时间和窗口
+                    ax1.plot(sofa2_df[time_col_sofa2], sofa2_df['sofa2'],
+                             marker='s', linewidth=2, markersize=6, label='SOFA2', color='#ff7f0e')
+
+                ax1.axhline(y=2, color='orange', linestyle='--', alpha=0.5, linewidth=1.5, label='SOFA=2 (baseline)')
+
                 if not sep3_data.empty:
                     sep3_time = sep3_data.iloc[0]['time']
-                    ax1.axvline(x=sep3_time, color='red', linestyle='--', linewidth=2, 
-                               label=f'Sepsis-3 时间 ({sep3_time:.1f}h)')
-                    
-                    # SI 窗口 (-48h 到 +24h)
+                    ax1.axvline(x=sep3_time, color='red', linestyle='--', linewidth=2,
+                                label=f'Sepsis-3 time ({sep3_time:.1f}h)')
+
                     si_window_start = sep3_time - 48
                     si_window_end = sep3_time + 24
-                    ax1.axvspan(si_window_start, si_window_end, alpha=0.15, color='yellow', 
-                               label='疑似感染窗口 (-48/+24h)')
-                
-                ax1.set_ylabel('SOFA 评分', fontsize=12, fontweight='bold')
-                ax1.set_title(f'患者 {patient_id} - SOFA vs SOFA2 对比', fontsize=14, fontweight='bold')
+                    ax1.axvspan(si_window_start, si_window_end, alpha=0.15, color='yellow',
+                                label='Suspected infection window (-48/+24h)')
+
+                ax1.set_ylabel('SOFA Score', fontsize=12, fontweight='bold')
+                ax1.set_title(f'Patient {patient_id} - SOFA vs SOFA2 Comparison', fontsize=14, fontweight='bold')
                 ax1.legend(loc='upper left', fontsize=10)
                 ax1.grid(True, alpha=0.3)
                 ax1.set_ylim(bottom=0)
-                
-                # 图2: 事件时间线
+
+                # Plot 2: Event timeline
                 y_positions = {'abx': 1, 'samp': 2, 'si': 3, 'sep3_sofa': 4, 'sep3_sofa2': 5}
-                
-                # 抗生素
+
                 if not abx_data.empty:
-                    ax2.scatter(abx_data['time'], [y_positions['abx']]*len(abx_data), 
-                               s=150, marker='s', color='blue', label='抗生素', zorder=5, alpha=0.8)
-                
-                # 血培养
+                    ax2.scatter(abx_data['time'], [y_positions['abx']] * len(abx_data),
+                                s=150, marker='s', color='blue', label='Antibiotics', zorder=5, alpha=0.8)
+
                 if not samp_data.empty:
-                    ax2.scatter(samp_data['time'], [y_positions['samp']]*len(samp_data), 
-                               s=150, marker='^', color='green', label='血培养', zorder=5, alpha=0.8)
-                
-                # 疑似感染
+                    ax2.scatter(samp_data['time'], [y_positions['samp']] * len(samp_data),
+                                s=150, marker='^', color='green', label='Blood Culture', zorder=5, alpha=0.8)
+
                 if not si_data.empty:
-                    ax2.scatter(si_data['time'], [y_positions['si']]*len(si_data), 
-                               s=180, marker='D', color='orange', label='疑似感染', zorder=5, alpha=0.9)
-                
-                # Sepsis-3 (SOFA)
+                    ax2.scatter(si_data['time'], [y_positions['si']] * len(si_data),
+                                s=180, marker='D', color='orange', label='Suspected Infection', zorder=5, alpha=0.9)
+
                 if not sep3_data.empty:
-                    ax2.scatter(sep3_data['time'], [y_positions['sep3_sofa']]*len(sep3_data), 
-                               s=250, marker='*', color='red', label='Sepsis-3 (SOFA)', zorder=6, 
-                               edgecolors='darkred', linewidths=1.5)
-                
-                # Sepsis-3 (SOFA2)
+                    ax2.scatter(sep3_data['time'], [y_positions['sep3_sofa']] * len(sep3_data),
+                                s=250, marker='*', color='red', label='Sepsis-3 (SOFA)', zorder=6,
+                                edgecolors='darkred', linewidths=1.5)
+
                 if not sep3_sofa2_data.empty:
-                    ax2.scatter(sep3_sofa2_data['time'], [y_positions['sep3_sofa2']]*len(sep3_sofa2_data), 
-                               s=250, marker='*', color='darkgreen', label='Sepsis-3 (SOFA2)', zorder=6,
-                               edgecolors='green', linewidths=1.5)
-                
+                    ax2.scatter(sep3_sofa2_data['time'], [y_positions['sep3_sofa2']] * len(sep3_sofa2_data),
+                                s=250, marker='*', color='darkgreen', label='Sepsis-3 (SOFA2)', zorder=6,
+                                edgecolors='green', linewidths=1.5)
+
                 ax2.set_yticks(list(y_positions.values()))
-                ax2.set_yticklabels(['抗生素', '采样', '疑似感染', 'Sepsis-3\n(SOFA)', 'Sepsis-3\n(SOFA2)'])
-                ax2.set_xlabel('ICU 入院后时间（小时）', fontsize=12, fontweight='bold')
-                ax2.set_ylabel('事件类型', fontsize=12, fontweight='bold')
+                ax2.set_yticklabels(
+                    ['Antibiotics', 'Blood Sample', 'Suspected Infection', 'Sepsis-3\n(SOFA)', 'Sepsis-3\n(SOFA2)'])
+                ax2.set_xlabel('Hours since ICU admission', fontsize=12, fontweight='bold')
+                ax2.set_ylabel('Event Type', fontsize=12, fontweight='bold')
                 ax2.legend(loc='upper left', fontsize=10)
                 ax2.grid(True, alpha=0.3, axis='x')
                 ax2.set_ylim(0.5, 5.5)
-                
+
                 plt.tight_layout()
-                
-                # 保存图表
+
                 output_file = output_dir / f'sepsis_comparison_patient_{patient_id}.png'
                 plt.savefig(output_file, dpi=150, bbox_inches='tight')
                 plt.close()
                 chart_count += 1
-                
+
             except Exception as e:
                 if verbose:
-                    print(f"   ⚠️  患者 {patient_id}: {str(e)[:60]}...")
-        
+                    print(f"   ⚠️  Patient {patient_id}: {str(e)[:60]}...")
+
         if verbose:
-            print(f"✅ 成功生成 {chart_count} 个可视化图表")
-        
+            print(f"✅ Successfully generated {chart_count} visualization charts")
+
     except Exception as e:
         if verbose:
-            print(f"⚠️  可视化失败: {e}")
+            print(f"⚠️  Visualization failed: {e}")
 
 
 # ============================================================================
