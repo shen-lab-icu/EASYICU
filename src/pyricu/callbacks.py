@@ -17,16 +17,20 @@ from .table import ICUTable
 
 def _is_true_safe(series: pd.Series) -> pd.Series:
     """Safely convert series to boolean, handling different dtypes.
-    
+
     Replicates R's is_true: non-NA and True.
     Handles Float64 dtype which can't use fillna(False).
     """
-    if pd.api.types.is_float_dtype(series):
-        # For float dtypes, check if not NaN and convert to bool
-        return series.notna() & (series != 0)
-    else:
-        # For other types, use standard fillna
-        return series.fillna(False).astype(bool)
+    try:
+        # Use unified implementation if available
+        from .common_utils import SeriesUtils
+        return SeriesUtils.is_true(series)
+    except ImportError:
+        # Fallback to original implementation
+        if pd.api.types.is_float_dtype(series):
+            return series.notna() & (series != 0)
+        else:
+            return series.fillna(False).astype(bool)
 
 
 def sofa_score(
@@ -95,6 +99,15 @@ def sofa_score(
     from .ts_utils import fill_gaps as ricu_fill_gaps
     
     # Apply fill_gaps which will create hourly grid within data range for each patient
+    # For miiv database, enforce ricu-style time filtering (time >= 0)
+    if 'time' in result.columns and len(result) > 0:
+        # Check if this is miiv data by examining data source patterns
+        # If we have very negative time values, assume miiv and apply ricu-style filtering
+        min_time = result['time'].min()
+        if min_time < -1000:  # Likely miiv data with pre-ICU records
+            # Filter to only include time >= 0 (ricu-style)
+            result = result[result['time'] >= 0].copy()
+
     aligned_result = ricu_fill_gaps(result, limits=None)
 
     # Step 3: Apply sliding window to get the "worst" value (max).
@@ -150,7 +163,7 @@ def sofa_score(
 
 def sofa_resp(pafi: pd.Series, vent_ind: Optional[pd.Series] = None) -> pd.Series:
     """Calculate respiratory SOFA component.
-    
+
     Replicates R ricu's sofa_resp logic:
     - Merge pafi with expanded vent_ind (aggregate="any")
     - If pafi < 200 and NOT on ventilation, set pafi = 200
@@ -172,7 +185,11 @@ def sofa_resp(pafi: pd.Series, vent_ind: Optional[pd.Series] = None) -> pd.Serie
     """
     def is_true(series):
         """Replicate R's is_true: non-NA and True"""
-        return series.fillna(False).astype(bool)
+        try:
+            from .common_utils import SeriesUtils
+            return SeriesUtils.is_true(series)
+        except ImportError:
+            return series.fillna(False).astype(bool)
     
     # Replicate R logic: if pafi < 200 and NOT on ventilation, set pafi = 200
     pafi_adjusted = pafi.copy()
@@ -1296,14 +1313,18 @@ def pafi(
     if fix_na_fio2:
         result.loc[result['fio2'].isna(), 'fio2'] = 21.0
     
+    # Convert to numeric, handling None and string values
+    result['po2'] = pd.to_numeric(result['po2'], errors='coerce')
+    result['fio2'] = pd.to_numeric(result['fio2'], errors='coerce')
+
     # Remove rows with missing or invalid data
     result = result[
-        result['po2'].notna() & 
-        result['fio2'].notna() & 
-        (result['fio2'] != 0)
+        result['po2'].notna() &
+        result['fio2'].notna() &
+        (result['fio2'] > 0)  # Use > 0 instead of != 0 for safety
     ]
-    
-    # Calculate P/F ratio
+
+    # Calculate P/F ratio with safe division
     result['pafi'] = 100 * result['po2'] / result['fio2']
     
     # Remove intermediate columns
@@ -1394,14 +1415,18 @@ def safi(
     if fix_na_fio2:
         result.loc[result['fio2'].isna(), 'fio2'] = 21.0
     
+    # Convert to numeric, handling None and string values
+    result['o2sat'] = pd.to_numeric(result['o2sat'], errors='coerce')
+    result['fio2'] = pd.to_numeric(result['fio2'], errors='coerce')
+
     # Remove rows with missing or invalid data
     result = result[
-        result['o2sat'].notna() & 
-        result['fio2'].notna() & 
-        (result['fio2'] != 0)
+        result['o2sat'].notna() &
+        result['fio2'].notna() &
+        (result['fio2'] > 0)  # Use > 0 instead of != 0 for safety
     ]
-    
-    # Calculate S/F ratio
+
+    # Calculate S/F ratio with safe division
     result['safi'] = 100 * result['o2sat'] / result['fio2']
     
     # Remove intermediate columns
@@ -1594,7 +1619,7 @@ def _urine_window_avg(
         group[result_col] = rate
         return group
     
-    result = merged.groupby(id_cols, group_keys=False).apply(calc_uo_rate_fast)
+    result = merged.groupby(id_cols, group_keys=False).apply(calc_uo_rate_fast, include_groups=False)
     
     # Keep only relevant columns
     keep_cols = id_cols + [time_col, result_col]

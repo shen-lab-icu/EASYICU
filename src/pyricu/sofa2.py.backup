@@ -84,17 +84,16 @@ def sofa2_resp(
 
     Priority of oxygenation metric: use PaO2/FiO2 if available; otherwise
     derive SpO2/FiO2 when both are present (only when SpO2 < 98%).
-    
-    SOFA-2 thresholds for P/F (mmHg) vs SOFA-1:
+
+    SOFA-2 thresholds for P/F (mmHg):
     ┌────────┬─────────────┬───────────────┬─────────────────────┐
-    │ Score  │ SOFA-1 P/F  │ SOFA-2 P/F    │ SOFA-2 Requirements │
+    │ Score  │ SOFA-2 P/F  │ Requirements   │ Notes               │
     ├────────┼─────────────┼───────────────┼─────────────────────┤
-    │   0    │ >400        │ >300          │ None                │
-    │   1    │ 300-400     │ ≤300          │ None                │
-    │   2    │ 200-299     │ ≤225          │ None                │
-    │   3    │ 100-199+MV  │ ≤150          │ Advanced support^   │
-    │   4    │ <100+MV     │ ≤75           │ Advanced support^   │
-    │        │             │ OR ECMO (respiratory indication)        │
+    │   0    │ >300        │ None           │                     │
+    │   1    │ ≤300        │ None           │                     │
+    │   2    │ ≤225        │ None           │                     │
+    │   3    │ ≤150        │ Advanced support^                   │
+    │   4    │ ≤75         │ Advanced support^ OR ECMO (resp)     │
     └────────┴─────────────┴───────────────┴─────────────────────┘
 
     ^ Advanced support: HFNC, CPAP, BiPAP, NIV, IMV, long-term home ventilation
@@ -340,10 +339,8 @@ def sofa2_cardio(
     score[ne_ep_mask & (total > 0.2) & (total <= 0.4)] = 3  # Medium dose
     score[ne_ep_mask & (total > 0.4)] = 4  # High dose
 
-    # Escalate if medium + other vasoactive drugs → 4pt
+    # Escalate if medium + other vasoactive drugs
     score[(total > 0.2) & (total <= 0.4) & others] = 4
-    # Escalate if low dose + other vasoactive drugs → 3pt
-    score[(total > 0) & (total <= 0.2) & others] = 3
 
     # Any other vasopressor/inotrope (when no norepi+epi)
     no_ne_ep = (total == 0) & (da.fillna(0) == 0)

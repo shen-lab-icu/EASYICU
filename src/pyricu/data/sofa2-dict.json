@@ -418,14 +418,16 @@
           "sub_var": "drugname",
           "regex": "vasopressin|phenylephrine|milrinone",
           "class": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "val_var": "drugname"
         },
         {
           "table": "infusiondrug",
           "sub_var": "drugname",
           "regex": "vasopressin|phenylephrine|milrinone",
           "class": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "val_var": "drugname"
         }
       ],
       "aumc": [
@@ -476,6 +478,7 @@
         {
           "table": "medication",
           "sub_var": "drugname",
+          "val_var": "drugname",
           "regex": "haloperidol|quetiapine|olanzapine|risperidone",
           "class": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"

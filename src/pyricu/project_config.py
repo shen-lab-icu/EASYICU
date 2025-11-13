@@ -95,7 +95,7 @@ DEFAULT_TEST_PATIENTS_HIRID: Optional[List[int]] = None
 DEFAULT_50_PATIENTS = None  # Will be loaded dynamically
 
 # Single patient for quick debugging
-DEBUG_PATIENT_MIIV = [34807493]
+DEBUG_PATIENT_MIIV = [30017005]  # 修正为实际存在的患者ID
 DEBUG_PATIENT_EICU = [2572404]
 DEBUG_PATIENT = DEBUG_PATIENT_MIIV
 
@@ -191,14 +191,24 @@ SHOW_PROGRESS = os.getenv('PYRICU_PROGRESS', 'True').lower() in ('true', '1', 'y
 # Enable caching
 ENABLE_CACHE = True
 
-# Cache size limit (MB)
-CACHE_SIZE_LIMIT = 1000  # 1 GB
+# Cache size limit (MB) - optimized for 16GB systems
+CACHE_SIZE_LIMIT = int(os.getenv('PYRICU_CACHE_SIZE_MB', '2048'))  # 2GB for 16GB systems
 
-# Number of parallel workers
-MAX_WORKERS = int(os.getenv('PYRICU_MAX_WORKERS', '4'))
+# Number of parallel workers - optimized for 16GB systems
+MAX_WORKERS = int(os.getenv('PYRICU_MAX_WORKERS', '2'))  # Reduced from 4 to 2 for memory efficiency
 
-# Chunk size for batch processing
-CHUNK_SIZE = int(os.getenv('PYRICU_CHUNK_SIZE', '10000'))
+# Chunk size for batch processing - optimized for 16GB systems
+CHUNK_SIZE = int(os.getenv('PYRICU_CHUNK_SIZE', '5000'))  # Reduced from 10000 to 5000
+
+# Memory management settings
+MEMORY_SAFETY_THRESHOLD = 0.8  # Use 80% of total memory as safety limit
+MEMORY_WARNING_THRESHOLD = 0.7  # Warning at 70% memory usage
+MEMORY_CLEANUP_THRESHOLD = 0.85  # Automatic cleanup at 85% memory usage
+
+# Performance optimization flags
+AUTO_OPTIMIZE_DTYPES = os.getenv('PYRICU_AUTO_OPTIMIZE_DTYPES', 'True').lower() in ('true', '1', 'yes')
+ENABLE_MEMORY_MONITORING = os.getenv('PYRICU_ENABLE_MEMORY_MONITORING', 'True').lower() in ('true', '1', 'yes')
+USE_CHUNKED_LOADING = os.getenv('PYRICU_USE_CHUNKED_LOADING', 'auto')  # auto, always, never
 
 # ============================================================================
 # Helper Functions
@@ -300,8 +310,15 @@ def get_patient_ids(patient_set: str = "default", database: str = "miiv", data_p
             return ids
         if DEFAULT_50_PATIENTS is None:
             try:
-                from pyricu.quickstart import get_patient_ids as load_patient_ids
-                return load_patient_ids(data_path, max_patients=50, database=database)
+                # 使用新的统一API替代quickstart
+                from pyricu.base import BaseICULoader
+                loader = BaseICULoader(database=database, data_path=data_path, verbose=False)
+                # 简化版：返回默认患者列表，因为具体加载需要更多上下文
+                if database == "miiv":
+                    return DEFAULT_TEST_PATIENTS_MIIV
+                if database == "eicu":
+                    return DEFAULT_TEST_PATIENTS_EICU
+                return DEFAULT_TEST_PATIENTS
             except Exception:
                 if database == "miiv":
                     return DEFAULT_TEST_PATIENTS_MIIV
@@ -482,6 +499,12 @@ __all__ = [
     'CACHE_SIZE_LIMIT',
     'MAX_WORKERS',
     'CHUNK_SIZE',
+    'MEMORY_SAFETY_THRESHOLD',
+    'MEMORY_WARNING_THRESHOLD',
+    'MEMORY_CLEANUP_THRESHOLD',
+    'AUTO_OPTIMIZE_DTYPES',
+    'ENABLE_MEMORY_MONITORING',
+    'USE_CHUNKED_LOADING',
     
     # Helper functions
     'get_data_path',

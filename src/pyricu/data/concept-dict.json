@@ -87,6 +87,7 @@
           "regex": "bactrim|cipro|flagyl|metronidazole|zithromax|zosyn|(((amika|cleo|ofloxa)|(azithro|clinda|tobra|vanco)my)c|(ampi|oxa|peni|pipera)cill|cefazol|levaqu|rifamp)in",
           "table": "infusiondrug",
           "sub_var": "drugname",
+          "val_var": "drugname",
           "callback": "transform_fun(set_val(TRUE))",
           "class": "rgx_itm"
         },
@@ -94,6 +95,7 @@
           "regex": "cipro|flagyl|maxipime|metronidazole|tazobactam|zosyn|cef(azolin|epime)|(((azithro|clinda|vanco)my|ofloxa|vanco)c|levaqu|piperacill|roceph)in",
           "table": "medication",
           "sub_var": "drugname",
+          "val_var": "drugname",
           "callback": "transform_fun(set_val(TRUE))",
           "class": "rgx_itm"
         }
@@ -103,6 +105,7 @@
           "regex": "bactrim|cipro|flagyl|metronidazole|zithromax|zosyn|(((amika|cleo|ofloxa)|(azithro|clinda|tobra|vanco)my)c|(ampi|oxa|peni|pipera)cill|cefazol|levaqu|rifamp)in",
           "table": "infusiondrug",
           "sub_var": "drugname",
+          "val_var": "drugname",
           "callback": "transform_fun(set_val(TRUE))",
           "class": "rgx_itm"
         },
@@ -110,6 +113,7 @@
           "regex": "cipro|flagyl|maxipime|metronidazole|tazobactam|zosyn|cef(azolin|epime)|(((azithro|clinda|vanco)my|ofloxa|vanco)c|levaqu|piperacill|roceph)in",
           "table": "medication",
           "sub_var": "drugname",
+          "val_var": "drugname",
           "callback": "transform_fun(set_val(TRUE))",
           "class": "rgx_itm"
         }
@@ -209,6 +213,7 @@
           "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn",
           "table": "prescriptions",
           "sub_var": "drug",
+          "val_var": "drugname",
           "callback": "transform_fun(set_val(TRUE))",
           "class": "rgx_itm"
         },
@@ -6955,7 +6960,8 @@
       "max"
     ],
     "callback": "sofa_cardio",
-    "class": "rec_cncpt"
+    "class": "rec_cncpt",
+    "compute_from_callback": true
   },
   "sofa_cns": {
     "concepts": "gcs",
@@ -6963,7 +6969,8 @@
     "omopid": 1616439,
     "category": "outcome",
     "callback": "sofa_cns",
-    "class": "rec_cncpt"
+    "class": "rec_cncpt",
+    "compute_from_callback": true
   },
   "sofa_coag": {
     "concepts": "plt",
@@ -6972,7 +6979,8 @@
     "category": "outcome",
     "aggregate": "min",
     "callback": "sofa_coag",
-    "class": "rec_cncpt"
+    "class": "rec_cncpt",
+    "compute_from_callback": true
   },
   "sofa_liver": {
     "concepts": "bili",
@@ -6981,7 +6989,8 @@
     "category": "outcome",
     "aggregate": "max",
     "callback": "sofa_liver",
-    "class": "rec_cncpt"
+    "class": "rec_cncpt",
+    "compute_from_callback": true
   },
   "sofa_renal": {
     "concepts": [
@@ -6996,7 +7005,8 @@
       null
     ],
     "callback": "sofa_renal",
-    "class": "rec_cncpt"
+    "class": "rec_cncpt",
+    "compute_from_callback": true
   },
   "sofa_resp": {
     "concepts": [
@@ -7007,7 +7017,8 @@
     "omopid": 1616907,
     "category": "outcome",
     "callback": "sofa_resp",
-    "class": "rec_cncpt"
+    "class": "rec_cncpt",
+    "compute_from_callback": true
   },
   "spo2": {
     "unit": [

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 import pandas as pd
 
-from .quickstart import ICUQuickLoader
+from .api import load_concepts
 
 
 def load_vitals(
@@ -71,16 +71,16 @@ def load_vitals(
     # 默认生命体征概念
     if concepts is None:
         concepts = ['hr', 'sbp', 'dbp', 'resp', 'temp', 'spo2']
-    
-    loader = ICUQuickLoader(data_path, database=database)
-    
-    df = loader.load_concepts(
+
+    df = load_concepts(
         concepts,
         patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
         interval=pd.Timedelta(hours=interval_hours),
         verbose=False
     )
-    
+
     return df
 
 
@@ -118,16 +118,16 @@ def load_labs(
             'bili',     # 胆红素
             'lact',     # 乳酸
         ]
-    
-    loader = ICUQuickLoader(data_path, database=database)
-    
-    df = loader.load_concepts(
+
+    df = load_concepts(
         concepts,
         patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
         interval=pd.Timedelta(hours=interval_hours),
         verbose=False
     )
-    
+
     return df
 
 
@@ -155,16 +155,16 @@ def load_sofa_score(
         >>> print(sofa.columns)
         >>> # ['stay_id', 'charttime', 'sofa', 'sofa_resp', 'sofa_coag', ...]
     """
-    loader = ICUQuickLoader(data_path, database=database)
-    
-    df = loader.load_concepts(
+    df = load_concepts(
         'sofa',
         patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
         interval=pd.Timedelta(hours=interval_hours),
         keep_components=keep_components,
         verbose=False
     )
-    
+
     return df
 
 
@@ -195,22 +195,22 @@ def load_sepsis(
         >>> # 查看 Sepsis-3 阳性患者
         >>> positive = sepsis[sepsis['sep3'] == True]
     """
-    loader = ICUQuickLoader(data_path, database=database)
-    
     if definition == 'sepsis3':
         concept = 'sep3'
     elif definition == 'sepsis2':
         concept = 'sep2'  # 如果已定义
     else:
         raise ValueError(f"Unknown sepsis definition: {definition}")
-    
-    df = loader.load_concepts(
+
+    df = load_concepts(
         concept,
         patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
         interval=pd.Timedelta(hours=interval_hours),
         verbose=False
     )
-    
+
     return df
 
 
@@ -244,15 +244,15 @@ def load_custom(
         ...                        ['hr', 'sbp', 'temp', 'sofa'],
         ...                        patient_ids=[10001, 10002])
     """
-    loader = ICUQuickLoader(data_path, database=database)
-    
-    df = loader.load_concepts(
+    df = load_concepts(
         concepts,
         patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
         interval=pd.Timedelta(hours=interval_hours),
         verbose=False
     )
-    
+
     return df
 
 
@@ -287,19 +287,19 @@ def quick_summary(
         vitals_count = len(vitals)
     except Exception:
         vitals_count = 0
-    
+
     try:
         labs = load_labs(data_path, patient_ids, database, concepts=['wbc'])
         labs_count = len(labs)
     except Exception:
         labs_count = 0
-    
+
     try:
         sofa = load_sofa_score(data_path, patient_ids, database)
         sofa_mean = sofa['sofa'].mean() if 'sofa' in sofa.columns else None
     except Exception:
         sofa_mean = None
-    
+
     try:
         sepsis = load_sepsis(data_path, patient_ids, database)
         sepsis_positive = sepsis['sep3'].sum() if 'sep3' in sepsis.columns else 0
