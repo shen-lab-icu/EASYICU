@@ -96,9 +96,9 @@ def sofa2_resp(
     │   4    │ <100+MV     │ ≤75           │ Advanced support^   │
     │        │             │ OR ECMO (respiratory indication)        │
     └────────┴─────────────┴───────────────┴─────────────────────┘
-    
-    ^ Advanced support: IMV, NIV, HFNC, CPAP, BiPAP, home ventilation
-    
+
+    ^ Advanced support: HFNC, CPAP, BiPAP, NIV, IMV, long-term home ventilation
+
     SpO2/FiO2 alternative thresholds (when SpO2 < 98%):
     - 0: >300  │ 1: ≤300  │ 2: ≤250  │ 3: ≤200+support  │ 4: ≤120+support or ECMO
     
@@ -212,7 +212,7 @@ def sofa2_coag(plt: pd.Series) -> pd.Series:
 def sofa2_liver(bili: pd.Series) -> pd.Series:
     """SOFA-2 liver component (bilirubin mg/dL).
 
-    SOFA-2 relaxed 1pt threshold vs SOFA-1:
+    SOFA-2 thresholds based on consensus table:
     ┌────────┬──────────────┬──────────────┐
     │ Score  │ SOFA-1       │ SOFA-2       │
     ├────────┼──────────────┼──────────────┤
@@ -222,7 +222,7 @@ def sofa2_liver(bili: pd.Series) -> pd.Series:
     │   3    │ 6.0-11.9     │ ≤12.0        │
     │   4    │ >12.0        │ >12.0        │
     └────────┴──────────────┴──────────────┘
-    
+
     Key change:
     - 1pt threshold relaxed from ≤1.9 to ≤3.0 mg/dL
     - Reduces false positives for mild liver dysfunction
@@ -242,8 +242,9 @@ def sofa2_liver(bili: pd.Series) -> pd.Series:
     """
     b = pd.to_numeric(bili, errors="coerce")
     score = pd.Series(0, index=bili.index, dtype=int)
-    # Apply thresholds according to SOFA-2 table
-    # Score increases at boundaries: >1.20, >3.0, >6.0, >12.0
+
+    # Apply thresholds according to SOFA-2 table (using upper bounds)
+    # 0pt: ≤1.20, 1pt: >1.20-3.0, 2pt: >3.0-6.0, 3pt: >6.0-12.0, 4pt: >12.0
     score[b > 1.20] = 1
     score[b > 3.0] = 2
     score[b > 6.0] = 3
@@ -260,53 +261,38 @@ def sofa2_cardio(
     dobutamine60: Optional[pd.Series] = None,
     other_vaso: Optional[pd.Series] = None,
     mech_circ_support: Optional[pd.Series] = None,
+    vasopressors_unavailable: Optional[pd.Series] = None,
 ) -> pd.Series:
     """SOFA-2 cardiovascular component.
 
-    MAJOR CHANGE: Dopamine downgraded; norepinephrine+epinephrine combined.
-    
-    PRIMARY scoring (norepinephrine + epinephrine μg/kg/min, combined):
+    Scoring based on the SOFA-2 consensus table:
     ┌────────┬────────────────────────────────────────────────────────┐
     │ Score  │ SOFA-2 Criteria                                        │
     ├────────┼────────────────────────────────────────────────────────┤
     │   0    │ MAP ≥70 mmHg, no vasopressor/inotrope                 │
     │   1    │ MAP <70 mmHg, no vasopressor/inotrope                 │
-    │   2    │ Norepi+epi ≤0.2 (low dose)                           │
+    │   2    │ Low-dose vasopressor (norepi+epi ≤0.2)               │
     │        │ OR any other vasopressor/inotrope                     │
-    │   3    │ Norepi+epi >0.2-0.4 (medium dose)                    │
-    │        │ OR low dose + other vasopressor/inotrope              │
-    │   4    │ Norepi+epi >0.4 (high dose)                          │
-    │        │ OR medium dose + other vasopressor/inotrope           │
+    │   3    │ Medium-dose vasopressor (norepi+epi >0.2-0.4)        │
+    │        │ OR low-dose + other vasopressor/inotrope              │
+    │   4    │ High-dose vasopressor (norepi+epi >0.4)              │
+    │        │ OR medium-dose + other vasopressor/inotrope           │
     │        │ OR mechanical circulatory support*                    │
     └────────┴────────────────────────────────────────────────────────┘
-    
+
     *Mechanical support: VA-ECMO, IABP, LVAD, Impella, microaxial flow pump
-    
+
     ALTERNATE scoring (dopamine only, when norepi+epi == 0):
-    ┌────────┬──────────────────────────┬──────────────────┐
-    │ Score  │ Dopamine (μg/kg/min)     │ Equivalence      │
-    ├────────┼──────────────────────────┼──────────────────┤
-    │   2    │ ≤20                      │ Low dose         │
-    │   3    │ >20-40                   │ Medium dose      │
-    │   4    │ >40                      │ High dose        │
-    └────────┴──────────────────────────┴──────────────────┘
-    
-    Based on norepinephrine equipotency studies (De Backer et al. 2010).
-    
-    Comparison with SOFA-1:
-    - SOFA-1: Dopamine was primary vasopressor (>5/>15 μg/kg/min thresholds)
-    - SOFA-2: Norepinephrine is primary (reflects current practice)
-    - SOFA-2: Norepi+epi doses are ADDED (not evaluated separately)
-    - SOFA-2: Dopamine only used as backup when norepi/epi unavailable
-    
+    - 2pt: ≤20 μg/kg/min  │ 3pt: >20-40 μg/kg/min  │ 4pt: >40 μg/kg/min
+
     MAP-only fallback (when vasopressors unavailable/ceiling of care):
-    - 0: ≥70 mmHg  │ 1: 60-69  │ 2: 50-59  │ 3: 40-49  │ 4: <40 mmHg
-    
+    - 0pt: ≥70 mmHg  │ 1pt: 60-69  │ 2pt: 50-59  │ 3pt: 40-49  │ 4pt: <40 mmHg
+
     Important notes:
     - Vasopressors must be continuous IV infusion ≥1 hour to count
     - Norepinephrine base equivalents (salt conversion):
       * 1 mg base = 2 mg bitartrate monohydrate
-      * 1 mg base = 1.89 mg anhydrous bitartrate  
+      * 1 mg base = 1.89 mg anhydrous bitartrate
       * 1 mg base = 1.22 mg hydrochloride
     - "other_vaso" includes: vasopressin, phenylephrine, dopamine (adjunct), dobutamine
     
@@ -318,7 +304,8 @@ def sofa2_cardio(
         dobutamine60: Dobutamine dose (μg/kg/min)
         other_vaso: Boolean - other vasoactive drugs present
         mech_circ_support: Boolean - mechanical circulatory support active
-        
+        vasopressors_unavailable: Boolean - vasopressors unavailable/precluded
+
     Returns:
         Series of cardiovascular SOFA-2 scores (0-4)
     """
@@ -329,35 +316,52 @@ def sofa2_cardio(
     db = pd.to_numeric(dobutamine60, errors="coerce") if dobutamine60 is not None else pd.Series(0.0, index=idx)
     others = _is_true(other_vaso) if other_vaso is not None else pd.Series(False, index=idx)
     mech = _is_true(mech_circ_support) if mech_circ_support is not None else pd.Series(False, index=idx)
+    vaso_unavail = _is_true(vasopressors_unavailable) if vasopressors_unavailable is not None else pd.Series(False, index=idx)
 
     # KEY SOFA-2 CHANGE: Combined norepinephrine + epinephrine
     total = ne.fillna(0) + ep.fillna(0)
+    map_val = pd.to_numeric(map, errors="coerce")
 
     score = pd.Series(0, index=idx, dtype=int)
 
     # Mechanical support overrides → auto 4pt
     score[mech] = 4
 
+    # Check if any vasopressors/inotropes are being used
+    any_vaso = (total > 0) | (da > 0) | (db > 0) | others
+
+    # Primary scoring: MAP when no vasopressors/inotropes
+    no_vaso_mask = ~any_vaso
+    score[no_vaso_mask & (map_val < 70)] = 1
+
     # Primary norepi+epi rule (SOFA-2 combined dosing)
-    mask_any = total > 0
-    score[(total > 0.4)] = 4  # High dose
-    score[(total > 0.2) & (total <= 0.4)] = 3  # Medium dose
-    score[(total > 0) & (total <= 0.2)] = 2  # Low dose
+    ne_ep_mask = total > 0
+    score[ne_ep_mask & (total <= 0.2)] = 2  # Low dose
+    score[ne_ep_mask & (total > 0.2) & (total <= 0.4)] = 3  # Medium dose
+    score[ne_ep_mask & (total > 0.4)] = 4  # High dose
 
-    # Escalate to 4 if medium dose plus other vasoactive present
+    # Escalate if medium + other vasoactive drugs → 4pt
     score[(total > 0.2) & (total <= 0.4) & others] = 4
+    # Escalate if low dose + other vasoactive drugs → 3pt
+    score[(total > 0) & (total <= 0.2) & others] = 3
 
-    # Dobutamine as additional criterion for 2 (any dose of inotrope)
-    score[(db > 0) & (score < 2)] = 2
-
-    # MAP-only backup (if score still < 2)
-    score[(pd.to_numeric(map, errors="coerce") < 70) & (score < 2)] = 1
+    # Any other vasopressor/inotrope (when no norepi+epi)
+    no_ne_ep = (total == 0) & (da.fillna(0) == 0)
+    score[no_ne_ep & ((db > 0) | others)] = 2
 
     # ALTERNATE: Dopamine-only scoring when norepi+epi == 0 (SOFA-2 backup rule)
-    no_ne_ep = ~mask_any
-    score[(da > 40) & no_ne_ep] = np.maximum(score[(da > 40) & no_ne_ep], 4)
-    score[(da > 20) & (da <= 40) & no_ne_ep & (score < 4)] = 3
-    score[(da > 0) & (da <= 20) & no_ne_ep & (score < 3)] = 2
+    dopamine_only = (total == 0) & (da > 0)
+    score[dopamine_only & (da <= 20)] = 2
+    score[dopamine_only & (da > 20) & (da <= 40)] = 3
+    score[dopamine_only & (da > 40)] = 4
+
+    # MAP-only fallback when vasopressors unavailable (ceiling of care)
+    if vaso_unavail.any():
+        score[vaso_unavail & (map_val >= 70)] = 0
+        score[vaso_unavail & (map_val >= 60) & (map_val < 70)] = 1
+        score[vaso_unavail & (map_val >= 50) & (map_val < 60)] = 2
+        score[vaso_unavail & (map_val >= 40) & (map_val < 50)] = 3
+        score[vaso_unavail & (map_val < 40)] = 4
 
     return score
 
@@ -367,6 +371,7 @@ def sofa2_cns(
     *,
     delirium_tx: Optional[pd.Series] = None,
     sedated_gcs: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
 ) -> pd.Series:
     """SOFA-2 brain/CNS component.
 
@@ -407,14 +412,17 @@ def sofa2_cns(
         gcs: Glasgow Coma Scale (3-15)
         delirium_tx: Boolean - receiving delirium treatment
         sedated_gcs: GCS before sedation (for currently sedated patients)
-        
+        motor_response: Motor response score when GCS cannot be fully assessed
+                       (6=localizing, 5=withdrawal, 4=flexion, 3=extension, 2=no response)
+
     Returns:
         Series of brain/CNS SOFA-2 scores (0-4)
-        
+
     Notes:
     - For sedated patients without sedated_gcs: use last known GCS or 0
     - Delirium treatment overrides GCS=15 to minimum 1pt
     - Motor alternatives allow scoring in intubated/non-verbal patients
+    - When GCS 3 domains cannot be assessed, use best motor scale domain score
     """
     # Use pre-sedation GCS if available, otherwise use current GCS
     if sedated_gcs is not None:
@@ -423,9 +431,25 @@ def sofa2_cns(
         g = g.combine_first(pd.to_numeric(gcs, errors="coerce"))
     else:
         g = pd.to_numeric(gcs, errors="coerce")
-    
+
     score = pd.Series(0, index=g.index, dtype=int)
-    
+
+    # Use motor response if GCS cannot be fully assessed
+    if motor_response is not None:
+        m = pd.to_numeric(motor_response, errors="coerce")
+        # Map motor response to equivalent GCS scores
+        # 6=localizing (~GCS 13-14), 5=withdrawal (~GCS 9-12), 4=flexion (~GCS 6-8),
+        # 3=extension (~GCS 3-5), 2=no response (~GCS 3-5)
+        motor_score = pd.Series(0, index=m.index, dtype=int)
+        motor_score[m == 6] = 1  # Localizing to pain
+        motor_score[m == 5] = 2  # Withdrawal to pain
+        motor_score[m == 4] = 3  # Flexion to pain
+        motor_score[m <= 3] = 4  # Extension/no response/myoclonus
+
+        # Use motor response when GCS is missing or cannot be assessed
+        gcs_available = ~g.isna()
+        score[~gcs_available] = motor_score[~gcs_available]
+
     # GCS thresholds (same as SOFA-1)
     score[g < 15] = 1
     score[g < 13] = 2
@@ -448,11 +472,14 @@ def sofa2_renal(
     rrt: Optional[pd.Series] = None,
     urine_mlkgph: Optional[pd.Series] = None,
     urine_duration_h: Optional[pd.Series] = None,
+    potassium: Optional[pd.Series] = None,
+    ph: Optional[pd.Series] = None,
+    bicarbonate: Optional[pd.Series] = None,
 ) -> pd.Series:
     """SOFA-2 renal component.
 
     MAJOR CHANGE: RRT auto-scores 4pt; urine standardized to mL/kg/h
-    
+
     Scoring criteria (from SOFA-2 table):
     ┌────────┬────────────────────┬─────────────────────────────────┬─────┐
     │ Score  │ Creatinine         │ Urine output                    │ RRT │
@@ -467,11 +494,12 @@ def sofa2_renal(
     │        │ (>300 μmol/L)      │ OR anuria ≥12h                  │     │
     │   4    │ Any                │ Any                             │ Yes │
     └────────┴────────────────────┴─────────────────────────────────┴─────┘
-    
+
     RRT criteria (score 4pt - receiving or fulfils criteria for RRT):
     - Includes chronic RRT use
     - Excludes patients receiving RRT ONLY for non-renal causes
-    
+    - Meets criteria if: creatinine >1.2 AND oliguria + (K≥6.0 OR pH≤7.20 + HCO3≤12)
+
     Intermittent RRT:
     - Score 4pt on BOTH treatment AND non-treatment days
     - Continue until RRT permanently discontinued
@@ -489,18 +517,22 @@ def sofa2_renal(
     
     Args:
         crea: Serum creatinine (mg/dL)
-        rrt: Boolean - receiving or meets criteria for RRT
+        rrt: Boolean - receiving RRT
         urine_mlkgph: Urine output rate (mL/kg/h)
         urine_duration_h: Duration of urine measurement period (hours)
-        
+        potassium: Serum potassium (mmol/L) - for RRT criteria
+        ph: Arterial pH - for RRT criteria
+        bicarbonate: Serum bicarbonate (mmol/L) - for RRT criteria
+
     Returns:
         Series of renal SOFA-2 scores (0-4)
-        
+
     Notes:
     - If urine_mlkgph not available, use creatinine-only scoring
     - RRT overrides all other criteria → auto 4pt
     - For intermittent RRT: keep scoring 4pt until permanently stopped
     - Anuria defined as 0 mL for ≥12h
+    - RRT criteria check: creatinine >1.2 + oliguria + (K≥6.0 OR pH≤7.20 + HCO3≤12)
     - Unit conversion: mg/dL × 88.4 = μmol/L
     """
     c = pd.to_numeric(crea, errors="coerce")
@@ -510,6 +542,21 @@ def sofa2_renal(
     # RRT = auto 4pt (SOFA-2 major addition)
     if rrt is not None:
         score[_is_true(rrt)] = 4
+
+    # Check if patient meets RRT criteria but not receiving RRT (e.g., ceiling of care)
+    if (potassium is not None) and (ph is not None) and (bicarbonate is not None) and (urine_mlkgph is not None):
+        k = pd.to_numeric(potassium, errors="coerce")
+        ph_val = pd.to_numeric(ph, errors="coerce")
+        hco3 = pd.to_numeric(bicarbonate, errors="coerce")
+        u = pd.to_numeric(urine_mlkgph, errors="coerce")
+
+        # RRT criteria: creatinine >1.2 AND oliguria + (K≥6.0 OR pH≤7.20 + HCO3≤12)
+        oliguria = u < 0.3  # <0.3 mL/kg/h
+        metabolic_crisis = (k >= 6.0) | ((ph_val <= 7.20) & (hco3 <= 12))
+        rrt_criteria = (c > 1.2) & oliguria & metabolic_crisis
+
+        # Score 4pt if meets RRT criteria but not receiving RRT
+        score[rrt_criteria & (score < 4)] = 4
 
     # Urine output criteria (body weight standardized)
     if urine_mlkgph is not None:

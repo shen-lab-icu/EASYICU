@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any, Optional, Union, List
+import logging
 
 import pandas as pd
 import numpy as np
@@ -98,13 +99,20 @@ def change_interval(
         # Time is already in hours (since admission), use floor to round down
         # R ricu uses floor() not round(): round_to(x, to=1) = floor(x)
         # e.g., if interval is 1 hour, floor 11.7 -> 11.0, floor 11.3 -> 11.0
-        hours_per_interval = target_interval.total_seconds() / 3600.0
+        # 🔧 FIX: Handle None values to prevent division errors
+        total_seconds = target_interval.total_seconds()
+        if total_seconds is None:
+            raise ValueError(f"Invalid target_interval: {target_interval}")
+        hours_per_interval = total_seconds / 3600.0
         if hours_per_interval == 1.0:
             # Special case: if interval is 1 hour, use floor directly
-            df[table.index_column] = np.floor(df[table.index_column])
+            # 🔧 FIX: Handle None/NaN values to prevent division errors
+            df[table.index_column] = np.floor(pd.to_numeric(df[table.index_column], errors='coerce'))
         else:
             # General case: floor(x / to) * to (matches R ricu round_to)
-            df[table.index_column] = np.floor(df[table.index_column] / hours_per_interval) * hours_per_interval
+            # 🔧 FIX: Handle None/NaN values to prevent division errors
+            numeric_time = pd.to_numeric(df[table.index_column], errors='coerce')
+            df[table.index_column] = np.floor(numeric_time / hours_per_interval) * hours_per_interval
     else:
         # Time is datetime
         # 注意：如果时间应该是相对于入院时间的小时数，这里不应该出现datetime
@@ -115,6 +123,23 @@ def change_interval(
 
     # Group by ID columns and rounded time, and aggregate
     group_cols = list(table.id_columns) + [table.index_column]
+
+    # Filter group_cols to only include columns that actually exist in the dataframe
+    # This handles cases where ID columns were filtered out during processing (e.g., eICU infusiondrug)
+    existing_group_cols = [col for col in group_cols if col in df.columns]
+    if len(existing_group_cols) != len(group_cols):
+        missing_cols = set(group_cols) - set(existing_group_cols)
+        import logging
+        logging.debug(f"change_interval: Missing columns {missing_cols} in dataframe. Using available columns: {existing_group_cols}")
+    group_cols = existing_group_cols
+
+    # Ensure we have at least one grouping column
+    if not group_cols:
+        # If no valid grouping columns, create a dummy group column
+        df['__dummy_group'] = 1
+        group_cols = ['__dummy_group']
+        import logging
+        logging.debug("change_interval: No valid grouping columns found. Using dummy group column.")
 
     if aggregation:
         # Apply aggregation - only aggregate numeric columns
@@ -144,7 +169,11 @@ def change_interval(
     # CRITICAL: Fill gaps in time series (replicates R ricu fill_gaps)
     # This ensures all time points are present, even if no measurements exist
     if fill_gaps and table.id_columns:
-        hours_per_interval = target_interval.total_seconds() / 3600.0
+        # 🔧 FIX: Handle None values to prevent division errors
+        total_seconds = target_interval.total_seconds()
+        if total_seconds is None:
+            raise ValueError(f"Invalid target_interval: {target_interval}")
+        hours_per_interval = total_seconds / 3600.0
         filled_groups = []
         
         for patient_id, group in df.groupby(list(table.id_columns)):
@@ -604,7 +633,7 @@ def replace_na(
                 group, columns, method, value, limit, max_gap, index_col
             )
         
-        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group)
+        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=False)
         return data.reset_index(drop=True)
     else:
         return _fill_na_single(data, columns, method, value, limit, max_gap, index_col)
@@ -746,13 +775,22 @@ def slide(
             data[index_col] = pd.to_datetime(data[index_col])
     
     # Convert before/after to compatible units
-    if is_numeric_time:
+    if before is None:
+        before_val = 24.0  # Default to 24 hours
+    elif is_numeric_time:
         # Time is in hours, convert Timedelta to hours
         before_val = before.total_seconds() / 3600.0
-        after_val = after.total_seconds() / 3600.0
     else:
         # Time is datetime, use Timedelta directly
         before_val = before
+
+    if after is None:
+        after_val = 0.0  # Default to 0 hours
+    elif is_numeric_time:
+        # Time is in hours, convert Timedelta to hours
+        after_val = after.total_seconds() / 3600.0
+    else:
+        # Time is datetime, use Timedelta directly
         after_val = after
     
     results = []
@@ -1236,7 +1274,7 @@ def locf(
             
             return group
         
-        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group)
+        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=False)
     else:
         # No grouping
         if max_gap is not None and index_col is not None:
@@ -1307,7 +1345,7 @@ def locb(
             
             return group
         
-        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group)
+        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=False)
     else:
         # No grouping
         if max_gap is not None and index_col is not None:
@@ -1584,7 +1622,7 @@ def group_measurements(
         
         return group
     
-    data = data.groupby(id_cols, group_keys=False).apply(calc_groups)
+    data = data.groupby(id_cols, group_keys=False).apply(calc_groups, include_groups=False)
     
     return data.reset_index(drop=True)
 
@@ -1646,7 +1684,7 @@ def create_intervals(
         
         return group
     
-    data = data.groupby(id_cols, group_keys=False).apply(calc_endtimes)
+    data = data.groupby(id_cols, group_keys=False).apply(calc_endtimes, include_groups=False)
     
     return data.reset_index(drop=True)
 

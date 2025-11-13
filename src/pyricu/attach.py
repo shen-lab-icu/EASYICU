@@ -190,11 +190,12 @@ def src_data_avail(source_name: Optional[str] = None) -> Dict[str, bool]:
 
         # Check if data files exist
         all_available = True
-        for table_name in config.tables.keys():
-            table_file = source.base_path / f"{table_name}.parquet"
-            if not table_file.exists():
-                all_available = False
-                break
+        if source.base_path is not None:
+            for table_name in config.tables.keys():
+                table_file = source.base_path / f"{table_name}.parquet"
+                if not table_file.exists():
+                    all_available = False
+                    break
 
         availability[name] = all_available
 

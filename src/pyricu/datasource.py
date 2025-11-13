@@ -335,6 +335,29 @@ class ICUDataSource:
         else:
             # 获取实际要查找的文件名
             file_base_name = config_to_file_mappings.get(table_name, table_name)
+
+            # 从表配置中获取实际的文件名（如果存在）
+            if table_name in self.config.tables:
+                table_config = self.config.tables[table_name]
+                if hasattr(table_config, 'files') and table_config.files:
+                    # 获取第一个文件的路径，去掉扩展名
+                    file_info = table_config.files[0]
+                    if isinstance(file_info, dict) and 'path' in file_info:
+                        file_path = file_info['path']
+                    elif hasattr(file_info, 'path'):
+                        file_path = file_info.path
+                    else:
+                        file_path = str(file_info)
+                    # 去掉扩展名，获取基础文件名（处理复合扩展名如.csv.gz）
+                    parts = file_path.split('.')
+                    if len(parts) >= 2:
+                        # 处理复合扩展名如 .csv.gz
+                        if parts[-1] == 'gz' and len(parts) >= 3 and parts[-2] == 'csv':
+                            file_base_name = '.'.join(parts[:-2])
+                        else:
+                            file_base_name = '.'.join(parts[:-1])
+                    else:
+                        file_base_name = file_path
         
         # Try different formats in order of preference
         # 1. FST (R ricu format) - highest priority for existing ricu data
@@ -345,24 +368,26 @@ class ICUDataSource:
                 return fst_candidate
         
         # 2. Parquet (Python default)
-        for name in [table_name, table_name.lower()]:
+        for name in [file_base_name, file_base_name.lower(), table_name, table_name.lower()]:
             candidate = self.base_path / f"{name}.{self.default_format}"
             if candidate.exists():
                 return candidate
         
         # 3. CSV (fallback)
-        for name in [table_name, table_name.lower()]:
-            csv_candidate = self.base_path / f"{name}.csv"
-            if csv_candidate.exists():
-                return csv_candidate
-            # Also try .csv.gz
-            csv_gz_candidate = self.base_path / f"{name}.csv.gz"
-            if csv_gz_candidate.exists():
-                return csv_gz_candidate
+        if self.base_path is not None:
+            for name in [table_name, table_name.lower()]:
+                csv_candidate = self.base_path / f"{name}.csv"
+                if csv_candidate.exists():
+                    return csv_candidate
+                # Also try .csv.gz
+                csv_gz_candidate = self.base_path / f"{name}.csv.gz"
+                if csv_gz_candidate.exists():
+                    return csv_gz_candidate
         
         # 4. Check subdirectory for partitioned data (common in hirid observations)
-        for name in [table_name, table_name.lower()]:
-            subdir = self.base_path / name
+        if self.base_path is not None:
+            for name in [table_name, table_name.lower()]:
+                subdir = self.base_path / name
             if subdir.is_dir():
                 # Look for FST files first
                 fst_files = list(subdir.glob("*.fst"))
@@ -397,19 +422,18 @@ class ICUDataSource:
             if patient_ids_filter:
                 try:
                     import pyarrow.parquet as pq
-                    # 构建PyArrow过滤表达式
-                    import pyarrow.compute as pc
+                    import pyarrow as pa
+                    # 使用 DNF (Disjunctive Normal Form) 格式，兼容性更好
                     target_ids = patient_ids_filter.value if isinstance(patient_ids_filter.value, list) else [patient_ids_filter.value]
-                    filter_expr = pc.field(patient_ids_filter.column).isin(target_ids)
                     
-                    # 使用PyArrow读取并过滤
+                    # 使用PyArrow读取并过滤 - 使用 DNF 格式
                     df = pq.read_table(
                         path,
                         columns=list(columns) if columns else None,
-                        filters=filter_expr
+                        filters=[[( patient_ids_filter.column, 'in', target_ids)]]
                     ).to_pandas()
-                except ImportError:
-                    # 如果没有PyArrow，回退到pandas
+                except (ImportError, Exception) as e:
+                    # 如果PyArrow过滤失败，回退到pandas后过滤
                     df = pd.read_parquet(path, columns=list(columns) if columns else None)
                     if patient_ids_filter.column in df.columns:
                         target_ids = set(patient_ids_filter.value) if isinstance(patient_ids_filter.value, list) else {patient_ids_filter.value}

@@ -61,21 +61,9 @@ except ImportError as e:
     print(f"Warning: Failed to import api module: {e}")
     _HAS_API = False
 
-# 快速启动 API - DEPRECATED（保留向后兼容）
-try:
-    from .quickstart import (
-        ICUQuickLoader,
-        get_patient_ids,
-        # 向后兼容的别名
-        MIMICQuickLoader,
-        load_mimic_sofa,
-        load_mimic_sepsis3,
-        load_mimic_vitals,
-        load_mimic_labs,
-    )
-    _HAS_QUICKSTART = True
-except ImportError:
-    _HAS_QUICKSTART = False
+# 快速启动 API - 已移除 (现在使用统一API)
+# ICUQuickLoader等已被重构为BaseICULoader和统一的api.load_concepts
+_HAS_QUICKSTART = False
 
 # 从 load_concepts 模块导入（保留向后兼容）
 # 注意：这会覆盖上面的load_concepts，所以我们在最后重新设置
@@ -576,6 +564,76 @@ try:
 except ImportError:
     _HAS_CONCEPT_BUILDER = False
 
+# 内存优化功能
+try:
+    from .memory_optimizer import (
+        MemoryMonitor,
+        MemoryConfig,
+        MemoryEfficientTable,
+        get_memory_monitor,
+        optimize_for_16gb,
+    )
+    _HAS_MEMORY_OPTIMIZER = True
+except ImportError:
+    _HAS_MEMORY_OPTIMIZER = False
+
+# 优化的回调函数
+try:
+    from .callbacks_optimized import (
+        OptimizedCallbacks,
+        get_optimized_callbacks,
+        sofa_score as sofa_score_optimized,
+        sofa_resp as sofa_resp_optimized,
+        pafi as pafi_optimized,
+    )
+    _HAS_OPTIMIZED_CALLBACKS = True
+except ImportError:
+    _HAS_OPTIMIZED_CALLBACKS = False
+
+# 优化的数据源
+try:
+    from .datasource_optimized import (
+        OptimizedDataSource,
+        create_optimized_datasource,
+    )
+    _HAS_OPTIMIZED_DATASOURCE = True
+except ImportError:
+    _HAS_OPTIMIZED_DATASOURCE = False
+
+# 统一工具函数库
+try:
+    from .common_utils import (
+        SeriesUtils,
+        DataFrameUtils,
+        TimeSeriesUtils,
+        ValidationUtils,
+        is_true,
+        safe_copy,
+        optimize_dtypes,
+        locf,
+    )
+    _HAS_COMMON_UTILS = True
+except ImportError:
+    _HAS_COMMON_UTILS = False
+
+# 统一API
+try:
+    from .api_unified import (
+        UnifiedConceptLoader,
+        get_loader,
+        load_concepts as load_concepts_unified,
+        load_concept as load_concept_unified,
+        list_available_concepts as list_available_concepts_unified,
+        get_concept_info as get_concept_info_unified,
+        load_sofa as load_sofa_unified,
+        load_sofa2 as load_sofa2_unified,
+        load_vitals as load_vitals_unified,
+        load_labs as load_labs_unified,
+    )
+    _HAS_UNIFIED_API = True
+except ImportError:
+    _HAS_UNIFIED_API = False
+
 __all__ = [
     # === 推荐使用的API ===
     # 主API（智能默认值，完全灵活）
@@ -1038,4 +1096,54 @@ if _HAS_CONCEPT_BUILDER:
         "is_item",
         "is_itm",
         "new_src_tbl",
+    ])
+
+if _HAS_MEMORY_OPTIMIZER:
+    __all__.extend([
+        "MemoryMonitor",
+        "MemoryConfig",
+        "MemoryEfficientTable",
+        "get_memory_monitor",
+        "optimize_for_16gb",
+    ])
+
+if _HAS_OPTIMIZED_CALLBACKS:
+    __all__.extend([
+        "OptimizedCallbacks",
+        "get_optimized_callbacks",
+        "sofa_score_optimized",
+        "sofa_resp_optimized",
+        "pafi_optimized",
+    ])
+
+if _HAS_OPTIMIZED_DATASOURCE:
+    __all__.extend([
+        "OptimizedDataSource",
+        "create_optimized_datasource",
+    ])
+
+if _HAS_COMMON_UTILS:
+    __all__.extend([
+        "SeriesUtils",
+        "DataFrameUtils",
+        "TimeSeriesUtils",
+        "ValidationUtils",
+        "is_true",
+        "safe_copy",
+        "optimize_dtypes",
+        "locf",
+    ])
+
+if _HAS_UNIFIED_API:
+    __all__.extend([
+        "UnifiedConceptLoader",
+        "get_loader",
+        "load_concepts_unified",
+        "load_concept_unified",
+        "list_available_concepts_unified",
+        "get_concept_info_unified",
+        "load_sofa_unified",
+        "load_sofa2_unified",
+        "load_vitals_unified",
+        "load_labs_unified",
     ])
