@@ -42,15 +42,31 @@ _global_loader = None
 _loader_config = None
 
 
-def _get_global_loader(database: Optional[str] = None, data_path: Optional[Path] = None,
-                      **kwargs) -> BaseICULoader:
+def _get_global_loader(
+    database: Optional[str] = None,
+    data_path: Optional[Path] = None,
+    dict_path: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
+    **kwargs,
+) -> BaseICULoader:
     """获取或创建全局加载器实例（减少重复初始化）"""
     global _global_loader, _loader_config
 
-    current_config = (database, data_path, frozenset(kwargs.items()))
+    if dict_path is None:
+        dict_key = None
+    elif isinstance(dict_path, (list, tuple)):
+        dict_key = tuple(map(str, dict_path))
+    else:
+        dict_key = str(dict_path)
+
+    current_config = (database, data_path, dict_key, frozenset(kwargs.items()))
 
     if _global_loader is None or _loader_config != current_config:
-        _global_loader = BaseICULoader(database=database, data_path=data_path, **kwargs)
+        _global_loader = BaseICULoader(
+            database=database,
+            data_path=data_path,
+            dict_path=dict_path,
+            **kwargs,
+        )
         _loader_config = current_config
 
     return _global_loader
@@ -74,6 +90,10 @@ def load_concepts(
     use_sofa2: bool = False,  # 新增：是否使用SOFA2字典
     merge: bool = True,       # 新增：是否合并结果
     ricu_compatible: bool = False,  # 新增：返回ricu.R兼容格式
+    dict_path: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
+    chunk_size: Optional[int] = None,
+    progress: bool = False,
+    parallel_workers: int = 1,
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
@@ -182,6 +202,7 @@ def load_concepts(
     loader = _get_global_loader(
         database=database,
         data_path=data_path,
+        dict_path=dict_path,
         use_sofa2=use_sofa2,
         verbose=verbose
     )
@@ -208,6 +229,9 @@ def load_concepts(
         keep_components=keep_components,
         merge=merge,
         ricu_compatible=ricu_compatible,
+        chunk_size=chunk_size,
+        progress=progress,
+        parallel_workers=parallel_workers,
         **kwargs
     )
 

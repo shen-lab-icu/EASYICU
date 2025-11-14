@@ -614,3 +614,141 @@ def label_sep3(
         keep_components=keep_components,
         **kwargs
     )
+
+
+def _prepare_series(df: pd.DataFrame, required_cols: List[str], label: str) -> pd.DataFrame:
+    """Ensure required columns exist and return a copy containing them."""
+    missing = [col for col in required_cols if col not in df.columns]
+    if missing:
+        raise ValueError(f"{label} 缺少必要列: {missing}")
+    return df[required_cols].copy()
+
+
+def compute_sepsis3_onset(
+    sofa_df: pd.DataFrame,
+    susp_inf_df: pd.DataFrame,
+    *,
+    id_col: str,
+    sofa_time_col: str,
+    si_time_col: str,
+    sofa_score_col: str = 'sofa',
+    sofa_system: str = 'SOFA-1',
+    delta_fun: Callable = delta_cummin,
+    sofa_thresh: int = 2,
+    si_window: Literal['first', 'last', 'any'] = 'first',
+    si_lwr: pd.Timedelta = pd.Timedelta(hours=48),
+    si_upr: pd.Timedelta = pd.Timedelta(hours=24),
+) -> pd.DataFrame:
+    """Compute Sepsis-3 onset time for a specific SOFA system."""
+
+    if sofa_df.empty or susp_inf_df.empty:
+        return pd.DataFrame(columns=[id_col, 'onset_time', 'delta_sofa', 'sofa_system'])
+
+    sofa_required = [id_col, sofa_time_col, sofa_score_col]
+    si_required = [id_col, si_time_col]
+    sofa_ready = _prepare_series(sofa_df, sofa_required, f"SOFA数据[{sofa_system}]")
+    susp_ready = _prepare_series(susp_inf_df, si_required, "疑似感染数据")
+
+    # 确保susp_inf列存在
+    if 'susp_inf' in susp_inf_df.columns:
+        susp_ready['susp_inf'] = susp_inf_df['susp_inf'].values
+        susp_ready['susp_inf'] = susp_ready['susp_inf'].fillna(True)
+    else:
+        susp_ready['susp_inf'] = True
+
+    sofa_norm = sofa_ready.rename(columns={
+        id_col: '_id',
+        sofa_time_col: '_time',
+        sofa_score_col: 'sofa'
+    })
+    susp_norm = susp_ready.rename(columns={
+        id_col: '_id',
+        si_time_col: '_time'
+    })
+
+    result = sep3(
+        sofa=sofa_norm,
+        susp_inf=susp_norm,
+        id_cols=['_id'],
+        index_col='_time',
+        si_window=si_window,
+        delta_fun=delta_fun,
+        sofa_thresh=sofa_thresh,
+        si_lwr=si_lwr,
+        si_upr=si_upr,
+        keep_components=True
+    )
+
+    if result.empty:
+        return pd.DataFrame(columns=[id_col, 'onset_time', 'delta_sofa', 'sofa_system'])
+
+    renamed = result.rename(columns={'_id': id_col, '_time': 'onset_time'})
+    if 'delta_sofa' not in renamed.columns:
+        renamed['delta_sofa'] = sofa_thresh
+    renamed['sofa_system'] = sofa_system
+    columns = [id_col, 'onset_time', 'delta_sofa', 'sofa_system']
+    if 'sep3' in renamed.columns:
+        columns.append('sep3')
+    else:
+        renamed['sep3'] = True
+        columns.append('sep3')
+
+    return renamed[columns]
+
+
+def compare_sepsis_onsets(
+    sofa1_onset: pd.DataFrame,
+    sofa2_onset: pd.DataFrame,
+    id_col: str,
+    tolerance_hours: float = 1.0,
+) -> pd.DataFrame:
+    """Compare Sepsis-3 onset times between SOFA-1 and SOFA-2."""
+
+    if sofa1_onset.empty and sofa2_onset.empty:
+        return pd.DataFrame(columns=[id_col, 'onset_time_sofa1', 'onset_time_sofa2', 'time_diff_hours', 'agreement'])
+
+    def _prepare(df: pd.DataFrame, suffix: str) -> pd.DataFrame:
+        if df.empty:
+            return pd.DataFrame(columns=[id_col, f'onset_time_{suffix}'])
+        return df[[id_col, 'onset_time']].drop_duplicates().rename(columns={'onset_time': f'onset_time_{suffix}'})
+
+    s1 = _prepare(sofa1_onset, 'sofa1')
+    s2 = _prepare(sofa2_onset, 'sofa2')
+
+    merged = pd.merge(s1, s2, on=id_col, how='outer')
+
+    def _calc_diff(row):
+        t1 = row.get('onset_time_sofa1')
+        t2 = row.get('onset_time_sofa2')
+        if pd.isna(t1) or pd.isna(t2):
+            return np.nan
+        if isinstance(t1, pd.Timestamp) and isinstance(t2, pd.Timestamp):
+            delta = (t2 - t1) / pd.Timedelta(hours=1)
+            return float(delta)
+        try:
+            return float(t2) - float(t1)
+        except Exception:
+            return np.nan
+
+    merged['time_diff_hours'] = merged.apply(_calc_diff, axis=1)
+    merged['agreement'] = merged['time_diff_hours'].abs() <= tolerance_hours
+
+    def _earlier(row):
+        if pd.isna(row.get('onset_time_sofa1')) and pd.isna(row.get('onset_time_sofa2')):
+            return 'unknown'
+        if pd.isna(row.get('onset_time_sofa1')):
+            return 'SOFA-2'
+        if pd.isna(row.get('onset_time_sofa2')):
+            return 'SOFA-1'
+        diff = row.get('time_diff_hours')
+        if pd.isna(diff):
+            return 'unknown'
+        if diff < 0:
+            return 'SOFA-2 earlier'
+        elif diff > 0:
+            return 'SOFA-1 earlier'
+        return 'same'
+
+    merged['earlier_onset'] = merged.apply(_earlier, axis=1)
+
+    return merged

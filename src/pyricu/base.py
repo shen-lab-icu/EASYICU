@@ -10,7 +10,9 @@ from __future__ import annotations
 import os
 import logging
 from pathlib import Path
-from typing import List, Optional, Union, Dict, Any
+from typing import List, Optional, Union, Dict, Any, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import defaultdict
 import pandas as pd
 
 from .datasource import ICUDataSource
@@ -51,6 +53,8 @@ class BaseICULoader:
         self.verbose = verbose
         self.database = self._detect_database(database)
         self.data_path = self._setup_data_path(data_path, self.database)
+        self._dict_path = dict_path
+        self._use_sofa2 = use_sofa2
 
         # Initialize data source
         self._init_datasource()
@@ -127,16 +131,21 @@ class BaseICULoader:
     def _init_concept_system(self, dict_path: Optional[Union[str, Path, List[Union[str, Path]]]], use_sofa2: bool):
         """Initialize the concept system"""
         try:
-            # Load concept dictionaries
             if dict_path is None:
-                # Use built-in dictionaries
-                dicts = [load_dictionary(include_sofa2=use_sofa2)]
+                env_override = os.getenv("PYRICU_DICT_PATH") or os.getenv("PYRICU_DICT_DIR")
+                if env_override:
+                    dict_path = env_override
 
-                
-            elif isinstance(dict_path, (list, tuple)):
-                dicts = [load_dictionary(p) for p in dict_path]
-            else:
-                dicts = [load_dictionary(dict_path)]
+            dicts: List[ConceptDictionary] = [load_dictionary(include_sofa2=use_sofa2)]
+
+            if dict_path is not None:
+                if isinstance(dict_path, (list, tuple)):
+                    sources = list(dict_path)
+                else:
+                    sources = [dict_path]
+
+                for source in sources:
+                    dicts.append(self._load_dict_source(source))
 
             # Create merged dictionary
             if len(dicts) == 1:
@@ -160,6 +169,22 @@ class BaseICULoader:
         except Exception as e:
             raise RuntimeError(f"Failed to initialize concept system: {e}")
 
+    def _load_dict_source(self, source: Union[str, Path, ConceptDictionary]) -> ConceptDictionary:
+        """Load a dictionary from a custom source."""
+        if isinstance(source, ConceptDictionary):
+            return source
+
+        if isinstance(source, (str, Path)):
+            path = Path(str(source))
+            if path.exists():
+                if path.is_dir():
+                    return load_dictionary(directories=[path])
+                if path.is_file():
+                    return ConceptDictionary.from_json(path)
+
+        # Fallback to treating the string as a packaged resource name
+        return load_dictionary(str(source))
+
     def load_concepts(
         self,
         concepts: Union[str, List[str]],
@@ -170,6 +195,9 @@ class BaseICULoader:
         keep_components: bool = False,
         merge: bool = True,
         ricu_compatible: bool = False,  # 新增：ricu.R兼容模式
+        chunk_size: Optional[int] = None,
+        progress: bool = False,
+        parallel_workers: int = 1,
         **kwargs
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
@@ -178,49 +206,50 @@ class BaseICULoader:
         This method consolidates the loading logic from multiple API implementations.
         """
         try:
-            # Convert concepts to list
             if isinstance(concepts, str):
                 concepts = [concepts]
 
-            # Convert time parameters
             if isinstance(interval, str):
                 interval = pd.Timedelta(interval)
             if isinstance(win_length, str):
                 win_length = pd.Timedelta(win_length)
 
-            # Load concepts efficiently - load all concepts at once
             if self.verbose:
                 logger.info(f"Loading {len(concepts)} concepts: {', '.join(concepts)}")
 
-            # Load all concepts in one call
-            all_results = self.concept_resolver.load_concepts(
-                concepts,
-                self.datasource,
-                patient_ids=patient_ids,
-                interval=interval,
-                win_length=win_length,
-                aggregate=aggregate,
-                keep_components=keep_components,  # 🔧 FIX: 传递 keep_components 参数
-                ricu_compatible=ricu_compatible,  # 🔧 FIX: 传递 ricu_compatible 参数
-                **kwargs
-            )
+            batches = self._build_patient_batches(patient_ids, chunk_size)
+            if batches:
+                return self._load_concepts_chunked(
+                    concepts,
+                    batches,
+                    interval,
+                    win_length,
+                    aggregate,
+                    keep_components,
+                    merge,
+                    ricu_compatible,
+                    progress,
+                    parallel_workers,
+                    kwargs,
+                )
 
-            # Handle different return formats
-            if isinstance(all_results, dict):
-                # Multiple concepts returned separately
-                results = all_results
-                if not merge:
-                    return results
-                else:
-                    if self.verbose:
-                        logger.info("Merging concept results")
-                    return self._merge_concepts(results, keep_components)
-            else:
-                # Already merged result
-                return all_results
+            return self._load_concepts_once(
+                concepts,
+                patient_ids,
+                interval,
+                win_length,
+                aggregate,
+                keep_components,
+                merge,
+                ricu_compatible,
+                kwargs,
+            )
 
         except Exception as e:
             raise RuntimeError(f"Failed to load concepts {concepts}: {e}")
+        finally:
+            if hasattr(self, "concept_resolver"):
+                self.concept_resolver.clear_table_cache()
 
     def _merge_concepts(self, results: Dict[str, pd.DataFrame], keep_components: bool) -> pd.DataFrame:
         """Merge multiple concept DataFrames"""
@@ -260,6 +289,209 @@ class BaseICULoader:
                 )
 
         return merged_df if merged_df is not None else pd.DataFrame()
+
+    def _load_concepts_once(
+        self,
+        concepts: List[str],
+        patient_ids: Optional[Union[List, Dict]],
+        interval: Optional[pd.Timedelta],
+        win_length: Optional[pd.Timedelta],
+        aggregate: Optional[Union[str, Dict]],
+        keep_components: bool,
+        merge: bool,
+        ricu_compatible: bool,
+        extra_kwargs: Dict[str, Any],
+    ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+        try:
+            result = self.concept_resolver.load_concepts(
+                concepts,
+                self.datasource,
+                patient_ids=patient_ids,
+                interval=interval,
+                win_length=win_length,
+                aggregate=aggregate,
+                keep_components=keep_components,
+                ricu_compatible=ricu_compatible,
+                **extra_kwargs,
+            )
+        finally:
+            self.concept_resolver.clear_table_cache()
+
+        if isinstance(result, dict):
+            if not merge:
+                return result
+            if self.verbose:
+                logger.info("Merging concept results")
+            return self._merge_concepts(result, keep_components)
+        return result
+
+    def _load_concepts_once_worker(
+        self,
+        patient_ids: Optional[Union[List, Dict]],
+        concepts: List[str],
+        interval: Optional[pd.Timedelta],
+        win_length: Optional[pd.Timedelta],
+        aggregate: Optional[Union[str, Dict]],
+        keep_components: bool,
+        merge: bool,
+        ricu_compatible: bool,
+        extra_kwargs: Dict[str, Any],
+    ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+        worker = BaseICULoader(
+            data_path=self.data_path,
+            database=self.database,
+            dict_path=self._dict_path,
+            use_sofa2=self._use_sofa2,
+            verbose=False,
+        )
+        return worker._load_concepts_once(
+            concepts,
+            patient_ids,
+            interval,
+            win_length,
+            aggregate,
+            keep_components,
+            merge,
+            ricu_compatible,
+            extra_kwargs,
+        )
+
+    def _load_concepts_chunked(
+        self,
+        concepts: List[str],
+        batches: List[Union[List, Dict]],
+        interval: Optional[pd.Timedelta],
+        win_length: Optional[pd.Timedelta],
+        aggregate: Optional[Union[str, Dict]],
+        keep_components: bool,
+        merge: bool,
+        ricu_compatible: bool,
+        progress: bool,
+        parallel_workers: int,
+        extra_kwargs: Dict[str, Any],
+    ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+        aggregated_frames: List[pd.DataFrame] = []
+        aggregated_dict: Dict[str, List[pd.DataFrame]] = defaultdict(list)
+        total_batches = len(batches)
+
+        def _accumulate(chunk_result):
+            if isinstance(chunk_result, dict):
+                for name, frame in chunk_result.items():
+                    if frame is not None and not frame.empty:
+                        aggregated_dict[name].append(frame)
+            else:
+                if chunk_result is not None and not getattr(chunk_result, "empty", False):
+                    aggregated_frames.append(chunk_result)
+
+        if parallel_workers and parallel_workers > 1:
+            with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+                future_map = {
+                    executor.submit(
+                        self._load_concepts_once_worker,
+                        batch_ids,
+                        concepts,
+                        interval,
+                        win_length,
+                        aggregate,
+                        keep_components,
+                        merge,
+                        ricu_compatible,
+                        extra_kwargs,
+                    ): idx
+                    for idx, batch_ids in enumerate(batches, start=1)
+                }
+                for future in as_completed(future_map):
+                    idx = future_map[future]
+                    chunk_result = future.result()
+                    _accumulate(chunk_result)
+                    if progress:
+                        pct = (idx / total_batches) * 100.0
+                        logger.info(
+                            "Chunked load %s: %d/%d (%.1f%%)",
+                            ", ".join(concepts),
+                            idx,
+                            total_batches,
+                            pct,
+                        )
+        else:
+            for idx, batch_ids in enumerate(batches, start=1):
+                chunk_result = self._load_concepts_once(
+                    concepts,
+                    batch_ids,
+                    interval,
+                    win_length,
+                    aggregate,
+                    keep_components,
+                    merge,
+                    ricu_compatible,
+                    extra_kwargs,
+                )
+                _accumulate(chunk_result)
+                if progress:
+                    pct = (idx / total_batches) * 100.0
+                    logger.info(
+                        "Chunked load %s: %d/%d (%.1f%%)",
+                        ", ".join(concepts),
+                        idx,
+                        total_batches,
+                        pct,
+                    )
+
+        if aggregated_dict:
+            combined = {
+                name: pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+                for name, frames in aggregated_dict.items()
+            }
+            if merge:
+                return self._merge_concepts(combined, keep_components)
+            return combined
+
+        if aggregated_frames:
+            return (
+                pd.concat(aggregated_frames, ignore_index=True)
+                if len(aggregated_frames) > 1
+                else aggregated_frames[0]
+            )
+
+        return pd.DataFrame()
+
+    def _build_patient_batches(
+        self,
+        patient_ids: Optional[Union[List, Dict]],
+        chunk_size: Optional[int],
+    ) -> Optional[List[Union[List, Dict]]]:
+        if not chunk_size or chunk_size <= 0 or patient_ids is None:
+            return None
+
+        if isinstance(patient_ids, dict):
+            if len(patient_ids) != 1:
+                return None
+            key, values = next(iter(patient_ids.items()))
+            seq = self._normalize_patient_ids(values)
+            if seq is None or len(seq) <= chunk_size:
+                return None
+            return [
+                {key: seq[i : i + chunk_size]}
+                for i in range(0, len(seq), chunk_size)
+            ]
+
+        if isinstance(patient_ids, Sequence) and not isinstance(patient_ids, (str, bytes)):
+            seq = self._normalize_patient_ids(patient_ids)
+            if seq is None or len(seq) <= chunk_size:
+                return None
+            return [seq[i : i + chunk_size] for i in range(0, len(seq), chunk_size)]
+
+        return None
+
+    @staticmethod
+    def _normalize_patient_ids(values: Union[Sequence, pd.Series]) -> Optional[List]:
+        if values is None:
+            return None
+        try:
+            seq = list(dict.fromkeys(values))
+        except TypeError:
+            seq = list(values)
+        return seq
 
 
 def get_default_data_path(database: str) -> Optional[Path]:
