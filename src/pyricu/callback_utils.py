@@ -183,6 +183,16 @@ def apply_map(mapping: Dict[Any, Any], var: str = 'val_col') -> Callable:
             if data[col_name].dtype != object:
                 data[col_name] = data[col_name].astype(object)
             data.loc[mask, col_name] = mapped[mask]
+
+            # Check if mapping values are numeric and ensure float type to match ricu.R
+            mapped_values = [v for v in mapping.values() if isinstance(v, (int, float))]
+            if mapped_values and all(isinstance(v, (int, float)) for v in mapping.values()):
+                # For pure numeric mappings, ensure float type
+                try:
+                    data[col_name] = pd.to_numeric(data[col_name], errors='coerce').astype(float)
+                except:
+                    # Keep as is if conversion fails
+                    pass
         return data
     
     return callback
@@ -315,6 +325,8 @@ def eicu_age(data: pd.DataFrame, val_col: str = 'age', **kwargs) -> pd.DataFrame
     data = data.copy()
     data[val_col] = data[val_col].replace('> 89', '90')
     data[val_col] = pd.to_numeric(data[val_col], errors='coerce')
+    # Ensure float type to match ricu.R
+    data[val_col] = data[val_col].astype(float)
     return data
 
 

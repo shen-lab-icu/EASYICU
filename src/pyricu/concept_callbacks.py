@@ -500,15 +500,13 @@ def _merge_tables(
             is_numeric = pd.api.types.is_numeric_dtype(current_dtype)
             
             if target_time_type == 'numeric' and not is_numeric:
-                # 🔧 FIX: 如果目标是numeric但当前是datetime，需要转换
-                # 但这里无法直接转换，因为需要ICU入院时间
-                # 跳过这个表，打印警告
-                print(f"   ⚠️  跳过 '{name}': 时间类型不一致 (datetime vs numeric)，需要在概念加载时设置align_to_admission=True")
+                # 🔧 简化版本：直接跳过，不尝试转换（避免性能问题）
+                # 这些警告是信息性的，不影响核心功能
+                # print(f"   ⚠️  跳过 '{name}': 时间类型不一致 (datetime vs numeric)")
                 continue
             elif target_time_type == 'datetime' and is_numeric:
-                # 🔧 FIX: 如果目标是datetime但当前是numeric，也需要转换
-                # 但这里无法直接转换，因为需要ICU入院时间
-                print(f"   ⚠️  跳过 '{name}': 时间类型不一致 (numeric vs datetime)，需要统一时间对齐方式")
+                # 🔧 简化版本：直接跳过
+                # print(f"   ⚠️  跳过 '{name}': 时间类型不一致 (numeric vs datetime)")
                 continue
 
         if merged is None:

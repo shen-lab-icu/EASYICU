@@ -7189,7 +7189,7 @@
   "temp": {
     "unit": [
       "C",
-      "\u00b0C"
+      "°C"
     ],
     "min": 32,
     "max": 42,
@@ -8051,7 +8051,7 @@
           "ids": 13066,
           "table": "listitems",
           "sub_var": "itemid",
-          "callback": "apply_map( c(`Geen geluid` = 1, `Onverstaanbare woorden` = 2, `Onjuiste woorden` = 3, `Verwarde taal` = 4, `Geori\u00ebnteerd` = 5) )"
+          "callback": "apply_map( c(`Geen geluid` = 1, `Onverstaanbare woorden` = 2, `Onjuiste woorden` = 3, `Verwarde taal` = 4, `Georiënteerd` = 5) )"
         }
       ],
       "eicu": [
@@ -8190,7 +8190,7 @@
         {
           "val_var": "weightgroup",
           "table": "admissions",
-          "callback": "apply_map(c(`59-` = 50, `60-69` = 65, `70-79` = 75, `80-89` = 85, `90-99` = 95, `100-109` = 105, `110+` = 120))",
+          "callback": "apply_map(c(`59-` = 50.0, `60-69` = 65.0, `70-79` = 75.0, `80-89` = 85.0, `90-99` = 95.0, `100-109` = 105.0, `110+` = 120.0))",
           "class": "col_itm"
         }
       ],
@@ -8402,7 +8402,7 @@
   },
   "rrt_criteria": {
     "class": "lgl_cncpt",
-    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+\u22656.0 OR acidosis pH\u22647.20+HCO3\u226412)",
+    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+≥6.0 OR acidosis pH≤7.20+HCO3≤12)",
     "category": "renal",
     "sources": {
       "miiv": [],

@@ -88,6 +88,7 @@ class UnifiedConceptLoader:
                      time_window: Optional[int] = None,
                      use_chunking: bool = None,
                      max_memory_mb: Optional[int] = None,
+                     ricu_compatible: bool = False,
                      **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
         Unified concept loading method.
@@ -208,6 +209,7 @@ class UnifiedConceptLoader:
                     self.data_source,
                     patient_ids=patient_ids,
                     time_window=time_window,
+                    ricu_compatible=ricu_compatible,
                     **kwargs
                 )
 
@@ -254,7 +256,7 @@ class UnifiedConceptLoader:
 
         if not patient_ids:
             # If no patient filter, load concept data first to get patient IDs
-            sample_data = self.resolver.load_concepts([concept_list[0]], self.data_source, **kwargs)
+            sample_data = self.resolver.load_concepts([concept_list[0]], self.data_source, ricu_compatible=ricu_compatible, **kwargs)
             if sample_data.empty:
                 return pd.DataFrame() if merge else {}
             patient_ids = sample_data.iloc[:, 0].unique().tolist()
