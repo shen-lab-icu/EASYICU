@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional
 
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, root_validator, validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 
 class IdentifierConfig(BaseModel):
@@ -41,7 +41,7 @@ class TableDefaults(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    @validator("time_vars", pre=True, always=True)
+    @field_validator("time_vars", mode="before")
     def _ensure_list(cls, value: object) -> List[str]:
         if value is None:
             return []
@@ -64,7 +64,7 @@ class TableConfig(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
     def _extract_known_fields(cls, values: Mapping[str, object]) -> Mapping[str, object]:
         values = dict(values)
         known = {"defaults", "files", "num_rows", "cols"}
@@ -115,7 +115,7 @@ class DataSourceConfig(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
     def _normalise_payload(cls, values: Mapping[str, object]) -> Mapping[str, object]:
         # Convert id_cfg and tables dictionaries into strongly typed objects.
         id_cfg_raw = values.get("id_cfg", {})

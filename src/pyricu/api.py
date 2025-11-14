@@ -73,6 +73,7 @@ def load_concepts(
     verbose: bool = False,
     use_sofa2: bool = False,  # 新增：是否使用SOFA2字典
     merge: bool = True,       # 新增：是否合并结果
+    ricu_compatible: bool = False,  # 新增：返回ricu.R兼容格式
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
@@ -206,6 +207,7 @@ def load_concepts(
         aggregate=aggregate,
         keep_components=keep_components,
         merge=merge,
+        ricu_compatible=ricu_compatible,
         **kwargs
     )
 
@@ -224,6 +226,7 @@ def load_sofa(
     win_length: Union[str, pd.Timedelta] = '24h',
     keep_components: bool = True,
     verbose: bool = False,
+    **kwargs  # 允许传递额外参数如align_to_admission
 ) -> pd.DataFrame:
     """
     加载SOFA评分（便捷函数）- 重构版本
@@ -236,6 +239,7 @@ def load_sofa(
         win_length: 窗口长度（默认24小时）
         keep_components: 是否保留组件（默认True）
         verbose: 是否显示详细信息
+        **kwargs: 额外参数传递给load_concepts（如align_to_admission）
 
     Returns:
         SOFA评分DataFrame
@@ -248,6 +252,10 @@ def load_sofa(
         >>> sofa = load_sofa(patient_ids=[123, 456],
         ...                  database='miiv', data_path='/data/miiv',
         ...                  win_length='12h', interval='6h')
+        >>>
+        >>> # 使用时间对齐
+        >>> sofa = load_sofa(patient_ids=[123, 456],
+        ...                  align_to_admission=True)
     """
     if verbose:
         print("🏥 加载SOFA评分...")
@@ -260,7 +268,8 @@ def load_sofa(
         interval=interval,
         win_length=win_length,
         keep_components=keep_components,
-        verbose=verbose
+        verbose=verbose,
+        **kwargs  # 传递额外参数
     )
 
 
@@ -272,6 +281,7 @@ def load_sofa2(
     win_length: Union[str, pd.Timedelta] = '24h',
     keep_components: bool = True,
     verbose: bool = False,
+    **kwargs  # 允许传递额外参数如align_to_admission
 ) -> pd.DataFrame:
     """
     加载SOFA-2评分（2025年新标准）- 重构版本
@@ -284,6 +294,7 @@ def load_sofa2(
         win_length: 窗口长度（默认24小时）
         keep_components: 是否保留组件（默认True）
         verbose: 是否显示详细信息
+        **kwargs: 额外参数传递给load_concepts（如align_to_admission）
 
     Returns:
         SOFA-2评分DataFrame
@@ -308,7 +319,8 @@ def load_sofa2(
         win_length=win_length,
         keep_components=keep_components,
         verbose=verbose,
-        use_sofa2=True  # 强制使用SOFA2字典
+        use_sofa2=True,  # 强制使用SOFA2字典
+        **kwargs  # 传递额外参数
     )
 
 
@@ -530,19 +542,625 @@ def get_concept_info(concept_name: str) -> Dict:
     return info
 
 
+# === 新增模块函数（参考ricu.R） ===
+
+def _validate_concepts(concepts: List[str], verbose: bool = False) -> List[str]:
+    """
+    验证概念是否存在于字典中，返回可用的概念列表
+
+    Args:
+        concepts: 要验证的概念列表
+        verbose: 是否显示详细信息
+
+    Returns:
+        可用的概念列表
+    """
+    try:
+        dict_obj = load_dictionary()
+        available_concepts = [c for c in concepts if c in dict_obj.concepts]
+        missing_concepts = [c for c in concepts if c not in dict_obj.concepts]
+
+        if verbose and missing_concepts:
+            print(f"  ⚠️  以下概念在字典中不存在，将被跳过: {missing_concepts}")
+
+        return available_concepts
+    except Exception:
+        return concepts  # 如果验证失败，返回原列表
+
+
+def load_demographics(
+    patient_ids: Optional[Union[List, Dict]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Union[str, pd.Timedelta] = '1h',
+    win_length: Union[str, pd.Timedelta] = '24h',
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    加载基础人口统计学数据（参考ricu.R的data_demo）
+
+    包含: age, bmi, height, sex, weight
+
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型 (None=自动检测)
+        data_path: 数据路径 (None=自动检测)
+        interval: 时间间隔（默认1小时）
+        win_length: 窗口长度（默认24小时）
+        verbose: 是否显示详细信息
+
+    Returns:
+        人口统计学DataFrame
+
+    Examples:
+        >>> demo = load_demographics(patient_ids=[123, 456])
+    """
+    if verbose:
+        print("👥 加载基础人口统计学数据...")
+
+    # 🔧 修复：分别加载概念以避免ID列冲突
+    try:
+        all_data = []
+
+        # 加载age和sex（来自patients表，使用subject_id）
+        try:
+            age_sex_data = load_concepts(
+                concepts=['age', 'sex'],
+                patient_ids=patient_ids,
+                database=database,
+                data_path=data_path,
+                merge=True,
+                verbose=False
+            )
+            if age_sex_data is not None and not age_sex_data.empty:
+                all_data.append(age_sex_data)
+                if verbose:
+                    print(f"  ✅ age/sex: {len(age_sex_data)}行")
+        except Exception as e:
+            if verbose:
+                print(f"  ⚠️  age/sex加载失败: {str(e)[:50]}")
+
+        # 加载height和weight（来自chartevents表，使用stay_id）
+        try:
+            height_weight_data = load_concepts(
+                concepts=['height', 'weight'],
+                patient_ids=patient_ids,
+                database=database,
+                data_path=data_path,
+                merge=True,
+                verbose=False
+            )
+            if height_weight_data is not None and not height_weight_data.empty:
+                all_data.append(height_weight_data)
+                if verbose:
+                    print(f"  ✅ height/weight: {len(height_weight_data)}行")
+        except Exception as e:
+            if verbose:
+                print(f"  ⚠️  height/weight加载失败: {str(e)[:50]}")
+
+        # 如果没有数据，返回空DataFrame
+        if not all_data:
+            if verbose:
+                print("  ❌ 没有可用的人口统计学数据")
+            return pd.DataFrame()
+
+        # 🔧 手动合并数据，处理ID列差异
+        merged_data = all_data[0]
+        for i, df in enumerate(all_data[1:], 1):
+            if df.empty:
+                continue
+
+            # 确定共同的ID列
+            common_cols = set(merged_data.columns) & set(df.columns)
+            id_cols = [col for col in common_cols if 'id' in col.lower() or col in ['stay_id', 'subject_id', 'patientunitstayid']]
+
+            if id_cols:
+                id_col = id_cols[0]
+                try:
+                    merged_data = pd.merge(merged_data, df, on=id_col, how='outer', suffixes=('', f'_{i}'))
+                except Exception as e:
+                    if verbose:
+                        print(f"  ⚠️  合并失败: {str(e)[:50]}")
+                    # 如果合并失败，使用concat
+                    merged_data = pd.concat([merged_data, df], ignore_index=True)
+            else:
+                # 如果没有共同ID列，使用concat
+                merged_data = pd.concat([merged_data, df], ignore_index=True)
+
+        if verbose:
+            print(f"  ✅ 最终合并结果: {len(merged_data)}行, {len(merged_data.columns)}列")
+
+        return merged_data
+
+    except Exception as e:
+        if verbose:
+            print(f"  ❌ 人口统计学数据加载失败: {e}")
+        return pd.DataFrame()
+
+
+def load_outcomes(
+    patient_ids: Optional[Union[List, Dict]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Union[str, pd.Timedelta] = '1h',
+    win_length: Union[str, pd.Timedelta] = '24h',
+    keep_components: bool = True,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    加载结局指标数据（参考ricu.R的data_outcome）
+
+    包含: death, los_icu, qsofa, sirs
+
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型 (None=自动检测)
+        data_path: 数据路径 (None=自动检测)
+        interval: 时间间隔（默认1小时）
+        win_length: 窗口长度（默认24小时）
+        keep_components: 是否保留组件（默认True）
+        verbose: 是否显示详细信息
+
+    Returns:
+        结局指标DataFrame
+
+    Examples:
+        >>> outcomes = load_outcomes(patient_ids=[123, 456])
+    """
+    if verbose:
+        print("📊 加载结局指标数据...")
+
+    concepts = ['death', 'los_icu', 'qsofa', 'sirs']
+    available_concepts = _validate_concepts(concepts, verbose)
+
+    if not available_concepts:
+        if verbose:
+            print("  ❌ 没有可用的概念")
+        return pd.DataFrame()
+
+    return load_concepts(
+        concepts=available_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        keep_components=keep_components,
+        merge=True,
+        verbose=verbose
+    )
+
+
+def load_vitals_detailed(
+    patient_ids: Optional[Union[List, Dict]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Union[str, pd.Timedelta] = '1h',
+    win_length: Union[str, pd.Timedelta] = '24h',
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    加载详细生命体征数据（参考ricu.R的data_vital）
+
+    包含: dbp, etco2, hr, map, sbp, temp
+
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型 (None=自动检测)
+        data_path: 数据路径 (None=自动检测)
+        interval: 时间间隔（默认1小时）
+        win_length: 窗口长度（默认24小时）
+        verbose: 是否显示详细信息
+
+    Returns:
+        详细生命体征DataFrame
+
+    Examples:
+        >>> vitals = load_vitals_detailed(patient_ids=[123, 456])
+    """
+    if verbose:
+        print("❤️ 加载详细生命体征数据...")
+
+    concepts = ['dbp', 'etco2', 'hr', 'map', 'sbp', 'temp']
+    available_concepts = _validate_concepts(concepts, verbose)
+
+    if not available_concepts:
+        if verbose:
+            print("  ❌ 没有可用的概念")
+        return pd.DataFrame()
+
+    return load_concepts(
+        concepts=available_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        merge=True,
+        verbose=verbose
+    )
+
+
+def load_neurological(
+    patient_ids: Optional[Union[List, Dict]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Union[str, pd.Timedelta] = '1h',
+    win_length: Union[str, pd.Timedelta] = '24h',
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    加载神经系统评估数据（参考ricu.R的data_neu）
+
+    包含: avpu, egcs, gcs, mgcs, rass, vgcs
+
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型 (None=自动检测)
+        data_path: 数据路径 (None=自动检测)
+        interval: 时间间隔（默认1小时）
+        win_length: 窗口长度（默认24小时）
+        verbose: 是否显示详细信息
+
+    Returns:
+        神经系统评估DataFrame
+
+    Examples:
+        >>> neuro = load_neurological(patient_ids=[123, 456])
+    """
+    if verbose:
+        print("🧠 加载神经系统评估数据...")
+
+    concepts = ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'vgcs']
+    available_concepts = _validate_concepts(concepts, verbose)
+
+    if not available_concepts:
+        if verbose:
+            print("  ❌ 没有可用的概念")
+        return pd.DataFrame()
+
+    return load_concepts(
+        concepts=available_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        merge=True,
+        verbose=verbose
+    )
+
+
+def load_output(
+    patient_ids: Optional[Union[List, Dict]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Union[str, pd.Timedelta] = '1h',
+    win_length: Union[str, pd.Timedelta] = '24h',
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    加载输出量数据（参考ricu.R的data_output）
+
+    包含: urine, urine24
+
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型 (None=自动检测)
+        data_path: 数据路径 (None=自动检测)
+        interval: 时间间隔（默认1小时）
+        win_length: 窗口长度（默认24小时）
+        verbose: 是否显示详细信息
+
+    Returns:
+        输出量DataFrame
+
+    Examples:
+        >>> output = load_output(patient_ids=[123, 456])
+    """
+    if verbose:
+        print("💧 加载输出量数据...")
+
+    concepts = ['urine', 'urine24']
+    available_concepts = _validate_concepts(concepts, verbose)
+
+    if not available_concepts:
+        if verbose:
+            print("  ❌ 没有可用的概念")
+        return pd.DataFrame()
+
+    return load_concepts(
+        concepts=available_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        merge=True,
+        verbose=verbose
+    )
+
+
+def load_respiratory(
+    patient_ids: Optional[Union[List, Dict]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Union[str, pd.Timedelta] = '1h',
+    win_length: Union[str, pd.Timedelta] = '24h',
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    加载呼吸系统数据（参考ricu.R的data_resp）
+
+    包含: ett_gcs, mech_vent, o2sat, sao2, pafi, resp, safi, supp_o2, vent_ind
+
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型 (None=自动检测)
+        data_path: 数据路径 (None=自动检测)
+        interval: 时间间隔（默认1小时）
+        win_length: 窗口长度（默认24小时）
+        verbose: 是否显示详细信息
+
+    Returns:
+        呼吸系统DataFrame
+
+    Examples:
+        >>> resp = load_respiratory(patient_ids=[123, 456])
+    """
+    if verbose:
+        print("🫁 加载呼吸系统数据...")
+
+    concepts = ['ett_gcs', 'mech_vent', 'o2sat', 'sao2', 'pafi', 'resp', 'safi', 'supp_o2', 'vent_ind']
+    available_concepts = _validate_concepts(concepts, verbose)
+
+    if not available_concepts:
+        if verbose:
+            print("  ❌ 没有可用的概念")
+        return pd.DataFrame()
+
+    return load_concepts(
+        concepts=available_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        merge=True,
+        verbose=verbose
+    )
+
+
+def load_lab_comprehensive(
+    patient_ids: Optional[Union[List, Dict]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Union[str, pd.Timedelta] = '1h',
+    win_length: Union[str, pd.Timedelta] = '24h',
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    加载全面的实验室检查数据（参考ricu.R的data_lab）
+
+    包含: alb, alp, alt, ast, bicar, bili, bili_dir, bun, ca, ck, ckmb,
+          cl, crea, crp, glu, k, mg, na, phos, tnt
+
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型 (None=自动检测)
+        data_path: 数据路径 (None=自动检测)
+        interval: 时间间隔（默认1小时）
+        win_length: 窗口长度（默认24小时）
+        verbose: 是否显示详细信息
+
+    Returns:
+        实验室检查DataFrame
+
+    Examples:
+        >>> labs = load_lab_comprehensive(patient_ids=[123, 456])
+    """
+    if verbose:
+        print("🧪 加载全面的实验室检查数据...")
+
+    concepts = ['alb', 'alp', 'alt', 'ast', 'bicar', 'bili', 'bili_dir', 'bun',
+               'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt']
+    available_concepts = _validate_concepts(concepts, verbose)
+
+    if not available_concepts:
+        if verbose:
+            print("  ❌ 没有可用的概念")
+        return pd.DataFrame()
+
+    return load_concepts(
+        concepts=available_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        merge=True,
+        verbose=verbose
+    )
+
+
+def load_blood_gas(
+    patient_ids: Optional[Union[List, Dict]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Union[str, pd.Timedelta] = '1h',
+    win_length: Union[str, pd.Timedelta] = '24h',
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    加载血气分析数据（参考ricu.R的data_blood）
+
+    包含: be, cai, fio2, hbco, lact, methb, pco2, ph, po2, tco2
+
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型 (None=自动检测)
+        data_path: 数据路径 (None=自动检测)
+        interval: 时间间隔（默认1小时）
+        win_length: 窗口长度（默认24小时）
+        verbose: 是否显示详细信息
+
+    Returns:
+        血气分析DataFrame
+
+    Examples:
+        >>> blood_gas = load_blood_gas(patient_ids=[123, 456])
+    """
+    if verbose:
+        print("🩸 加载血气分析数据...")
+
+    concepts = ['be', 'cai', 'fio2', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2']
+    available_concepts = _validate_concepts(concepts, verbose)
+
+    if not available_concepts:
+        if verbose:
+            print("  ❌ 没有可用的概念")
+        return pd.DataFrame()
+
+    return load_concepts(
+        concepts=available_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        merge=True,
+        verbose=verbose
+    )
+
+
+def load_hematology(
+    patient_ids: Optional[Union[List, Dict]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Union[str, pd.Timedelta] = '1h',
+    win_length: Union[str, pd.Timedelta] = '24h',
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    加载血液学检查数据（参考ricu.R的data_hematology）
+
+    包含: bnd, esr, fgn, hgb, inr_pt, lymph, mch, mchc, mcv, neut, plt, ptt, wbc
+
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型 (None=自动检测)
+        data_path: 数据路径 (None=自动检测)
+        interval: 时间间隔（默认1小时）
+        win_length: 窗口长度（默认24小时）
+        verbose: 是否显示详细信息
+
+    Returns:
+        血液学DataFrame
+
+    Examples:
+        >>> hematology = load_hematology(patient_ids=[123, 456])
+    """
+    if verbose:
+        print("🩸 加载血液学检查数据...")
+
+    concepts = ['bnd', 'esr', 'fgn', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc',
+               'mcv', 'neut', 'plt', 'ptt', 'wbc']
+    available_concepts = _validate_concepts(concepts, verbose)
+
+    if not available_concepts:
+        if verbose:
+            print("  ❌ 没有可用的概念")
+        return pd.DataFrame()
+
+    return load_concepts(
+        concepts=available_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        merge=True,
+        verbose=verbose
+    )
+
+
+def load_medications(
+    patient_ids: Optional[Union[List, Dict]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Union[str, pd.Timedelta] = '1h',
+    win_length: Union[str, pd.Timedelta] = '24h',
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    加载药物治疗数据（参考ricu.R的data_med）
+
+    包含: abx, adh_rate, cort, dex, dobu_dur, dobu_rate, dobu60,
+          epi_dur, epi_rate, ins, norepi_dur, norepi_equiv, norepi_rate, vaso_ind
+
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型 (None=自动检测)
+        data_path: 数据路径 (None=自动检测)
+        interval: 时间间隔（默认1小时）
+        win_length: 窗口长度（默认24小时）
+        verbose: 是否显示详细信息
+
+    Returns:
+        药物治疗DataFrame
+
+    Examples:
+        >>> meds = load_medications(patient_ids=[123, 456])
+    """
+    if verbose:
+        print("💊 加载药物治疗数据...")
+
+    concepts = ['abx', 'adh_rate', 'cort', 'dex', 'dobu_dur', 'dobu_rate', 'dobu60',
+               'epi_dur', 'epi_rate', 'ins', 'norepi_dur', 'norepi_equiv', 'norepi_rate', 'vaso_ind']
+    available_concepts = _validate_concepts(concepts, verbose)
+
+    if not available_concepts:
+        if verbose:
+            print("  ❌ 没有可用的概念")
+        return pd.DataFrame()
+
+    return load_concepts(
+        concepts=available_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        merge=True,
+        verbose=verbose
+    )
+
+
 # 为了兼容性，也导出原始的类和函数
 __all__ = [
     # 主要API
     'load_concepts',      # 主API（智能默认值）
     'load_concept',       # 别名（向后兼容）
-    
+
     # Easy API（便捷函数）
     'load_sofa',
     'load_sofa2',
     'load_sepsis3',
     'load_vitals',
     'load_labs',
-    
+
+    # 新增模块函数（参考ricu.R）
+    'load_demographics',     # 基础人口统计学
+    'load_outcomes',         # 结局指标
+    'load_vitals_detailed',   # 详细生命体征
+    'load_neurological',     # 神经系统评估
+    'load_output',           # 输出量
+    'load_respiratory',      # 呼吸系统
+    'load_lab_comprehensive', # 全面实验室检查
+    'load_blood_gas',        # 血气分析
+    'load_hematology',       # 血液学检查
+    'load_medications',      # 药物治疗
+
     # 工具函数
     'list_available_concepts',
     'list_available_sources',

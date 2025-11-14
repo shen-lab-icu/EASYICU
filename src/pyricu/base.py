@@ -169,6 +169,7 @@ class BaseICULoader:
         aggregate: Optional[Union[str, Dict]] = None,
         keep_components: bool = False,
         merge: bool = True,
+        ricu_compatible: bool = False,  # 新增：ricu.R兼容模式
         **kwargs
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
@@ -200,6 +201,7 @@ class BaseICULoader:
                 win_length=win_length,
                 aggregate=aggregate,
                 keep_components=keep_components,  # 🔧 FIX: 传递 keep_components 参数
+                ricu_compatible=ricu_compatible,  # 🔧 FIX: 传递 ricu_compatible 参数
                 **kwargs
             )
 

@@ -7309,7 +7309,7 @@
     },
     "tables": {
       "admissions": {
-        "files": "admissions.fst",
+        "files": "admissions.parquet",
         "defaults": {
           "val_var": "admission_type",
           "time_vars": [
@@ -7394,7 +7394,7 @@
         }
       },
       "patients": {
-        "files": "patients.fst",
+        "files": "patients.parquet",
         "defaults": {
           "time_vars": "dod"
         },
@@ -7877,7 +7877,7 @@
         }
       },
       "labevents": {
-        "files": "labevents.fst",
+        "files": "labevents.parquet",
         "defaults": {
           "id_var": "subject_id",
           "index_var": "charttime",
@@ -8483,7 +8483,7 @@
         }
       },
       "chartevents": {
-        "files": "chartevents",
+        "files": "chartevents.parquet",
         "defaults": {
           "id_var": "stay_id",
           "index_var": "charttime",
@@ -8579,7 +8579,7 @@
         }
       },
       "datetimeevents": {
-        "files": "datetimeevents.fst",
+        "files": "datetimeevents.parquet",
         "defaults": {
           "index_var": "charttime",
           "val_var": "itemid",
@@ -8683,7 +8683,7 @@
         }
       },
       "icustays": {
-        "files": "icustays.fst",
+        "files": "icustays.parquet",
         "defaults": {
           "index_var": "intime",
           "val_var": "last_careunit",
@@ -8731,7 +8731,7 @@
         }
       },
       "inputevents": {
-        "files": "inputevents.fst",
+        "files": "inputevents.parquet",
         "defaults": {
           "id_var": "stay_id",
           "index_var": "starttime",
@@ -8859,7 +8859,7 @@
         }
       },
       "outputevents": {
-        "files": "outputevents.fst",
+        "files": "outputevents.parquet",
         "defaults": {
           "index_var": "charttime",
           "id_var": "stay_id",
@@ -9179,6 +9179,40 @@
           },
           "originalrate": {
             "name": "originalrate",
+            "spec": "col_double"
+          }
+        }
+      },
+      "demo": {
+        "files": "miiv_demo.csv",
+        "defaults": {
+          "val_var": "age",
+          "time_vars": []
+        },
+        "num_rows": 94458,
+        "cols": {
+          "stay_id": {
+            "name": "stay_id",
+            "spec": "col_integer"
+          },
+          "age": {
+            "name": "age",
+            "spec": "col_integer"
+          },
+          "bmi": {
+            "name": "bmi",
+            "spec": "col_double"
+          },
+          "height": {
+            "name": "height",
+            "spec": "col_double"
+          },
+          "sex": {
+            "name": "sex",
+            "spec": "col_character"
+          },
+          "weight": {
+            "name": "weight",
             "spec": "col_double"
           }
         }
@@ -9961,84 +9995,40 @@
     ],
     "tables": {
       "admissions": {
-        "files": "admissions.csv",
+        "files": "aumc_demo.csv",
         "defaults": {
-          "index_var": "admittedat",
-          "time_vars": [
-            "admittedat",
-            "dischargedat",
-            "dateofdeath"
-          ]
+          "val_var": "age",
+          "time_vars": []
         },
         "num_rows": 23106,
         "cols": {
-          "patientid": {
-            "name": "patientid",
-            "spec": "col_integer"
-          },
           "admissionid": {
             "name": "admissionid",
             "spec": "col_integer"
           },
-          "admissioncount": {
-            "name": "admissioncount",
+          "adm": {
+            "name": "adm",
+            "spec": "col_character"
+          },
+          "age": {
+            "name": "age",
             "spec": "col_integer"
           },
-          "location": {
-            "name": "location",
-            "spec": "col_character"
-          },
-          "urgency": {
-            "name": "urgency",
-            "spec": "col_logical"
-          },
-          "origin": {
-            "name": "origin",
-            "spec": "col_character"
-          },
-          "admittedat": {
-            "name": "admittedat",
+          "bmi": {
+            "name": "bmi",
             "spec": "col_double"
           },
-          "admissionyeargroup": {
-            "name": "admissionyeargroup",
-            "spec": "col_character"
-          },
-          "dischargedat": {
-            "name": "dischargedat",
+          "height": {
+            "name": "height",
             "spec": "col_double"
           },
-          "lengthofstay": {
-            "name": "lengthofstay",
-            "spec": "col_integer"
-          },
-          "destination": {
-            "name": "destination",
+          "sex": {
+            "name": "sex",
             "spec": "col_character"
           },
-          "gender": {
-            "name": "gender",
-            "spec": "col_character"
-          },
-          "agegroup": {
-            "name": "agegroup",
-            "spec": "col_character"
-          },
-          "dateofdeath": {
-            "name": "dateofdeath",
+          "weight": {
+            "name": "weight",
             "spec": "col_double"
-          },
-          "weightgroup": {
-            "name": "weightgroup",
-            "spec": "col_character"
-          },
-          "weightsource": {
-            "name": "weightsource",
-            "spec": "col_character"
-          },
-          "specialty": {
-            "name": "specialty",
-            "spec": "col_character"
           }
         }
       },
@@ -10485,6 +10475,50 @@
           "duration": {
             "name": "duration",
             "spec": "col_integer"
+          }
+        }
+      },
+      "vital": {
+        "files": "aumc_vital.csv",
+        "defaults": {
+          "index_var": "measuredat",
+          "time_vars": [
+            "measuredat"
+          ]
+        },
+        "num_rows": 2492453,
+        "cols": {
+          "admissionid": {
+            "name": "admissionid",
+            "spec": "col_integer"
+          },
+          "measuredat": {
+            "name": "measuredat",
+            "spec": "col_integer"
+          },
+          "dbp": {
+            "name": "dbp",
+            "spec": "col_double"
+          },
+          "etco2": {
+            "name": "etco2",
+            "spec": "col_double"
+          },
+          "hr": {
+            "name": "hr",
+            "spec": "col_double"
+          },
+          "map": {
+            "name": "map",
+            "spec": "col_double"
+          },
+          "sbp": {
+            "name": "sbp",
+            "spec": "col_double"
+          },
+          "temp": {
+            "name": "temp",
+            "spec": "col_double"
           }
         }
       }

@@ -49,6 +49,17 @@ try:
         load_sepsis3,
         load_vitals,
         load_labs,
+        # 新增模块函数（参考ricu.R）
+        load_demographics,     # 基础人口统计学
+        load_outcomes,         # 结局指标
+        load_vitals_detailed,   # 详细生命体征
+        load_neurological,     # 神经系统评估
+        load_output,           # 输出量
+        load_respiratory,      # 呼吸系统
+        load_lab_comprehensive, # 全面实验室检查
+        load_blood_gas,        # 血气分析
+        load_hematology,       # 血液学检查
+        load_medications,      # 药物治疗
         # 工具函数
         list_available_concepts,
         list_available_sources,
@@ -645,11 +656,22 @@ __all__ = [
     "load_sepsis3",
     "load_vitals",
     "load_labs",
+    # 新增模块函数（参考ricu.R）
+    "load_demographics",     # 基础人口统计学
+    "load_outcomes",         # 结局指标
+    "load_vitals_detailed",   # 详细生命体征
+    "load_neurological",     # 神经系统评估
+    "load_output",           # 输出量
+    "load_respiratory",      # 呼吸系统
+    "load_lab_comprehensive", # 全面实验室检查
+    "load_blood_gas",        # 血气分析
+    "load_hematology",       # 血液学检查
+    "load_medications",      # 药物治疗
     # 工具函数
     "list_available_concepts",
     "list_available_sources",
     "get_concept_info",
-    
+
     # === 核心类 ===
     "ConceptDictionary",
     "ConceptResolver",
@@ -663,7 +685,7 @@ __all__ = [
     "TsTbl",
     "WinTbl",
     "PvalTbl",
-    
+
     # === 表操作 ===
     "rbind_tbl",
     "cbind_tbl",
@@ -685,7 +707,7 @@ __all__ = [
     "rbind_lst",
     "rename_cols",
     "rm_cols",
-    
+
     # === 资源加载 ===
     "load_table",
     "load_data_sources",
