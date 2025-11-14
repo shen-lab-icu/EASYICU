@@ -9,7 +9,7 @@ well enough for the packaged concept dictionary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 import logging
 import os
 
@@ -54,6 +54,162 @@ def _get_id_columns(table):
 def _get_index_column(table):
     """Get index column from either WinTbl (index_var) or ICUTable (index_column)."""
     return table.index_var if isinstance(table, WinTbl) else table.index_column
+
+
+def _coerce_hour_scalar(value) -> float:
+    """Convert timestamps/timedeltas/numeric offsets to floating hour units."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return np.nan
+    if isinstance(value, pd.Timestamp):
+        ts = value.tz_localize(None) if getattr(value, "tzinfo", None) else value
+        return ts.value / 3_600_000_000_000
+    if isinstance(value, (np.datetime64,)):
+        ts = pd.Timestamp(value)
+        ts = ts.tz_localize(None) if getattr(ts, "tzinfo", None) else ts
+        return ts.value / 3_600_000_000_000
+    if isinstance(value, pd.Timedelta):
+        return value.total_seconds() / 3600.0
+    if isinstance(value, np.timedelta64):
+        return pd.to_timedelta(value).total_seconds() / 3600.0
+    if isinstance(value, str):
+        ts = pd.to_datetime(value, errors="coerce")
+        if pd.notna(ts):
+            ts = ts.tz_localize(None) if getattr(ts, "tzinfo", None) else ts
+            return ts.value / 3_600_000_000_000
+        td = pd.to_timedelta(value, errors="coerce")
+        if pd.notna(td):
+            return td.total_seconds() / 3600.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def _coerce_duration_hours(value) -> float:
+    """Convert duration column to floating hour units."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return np.nan
+    if isinstance(value, pd.Timedelta):
+        return value.total_seconds() / 3600.0
+    if isinstance(value, np.timedelta64):
+        return pd.to_timedelta(value).total_seconds() / 3600.0
+    if isinstance(value, str):
+        td = pd.to_timedelta(value, errors="coerce")
+        if pd.notna(td):
+            return td.total_seconds() / 3600.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def _expand_win_table_to_interval(
+    win_tbl: WinTbl,
+    *,
+    interval: Optional[pd.Timedelta],
+    value_column: str,
+    target_index: Optional[str] = None,
+    fill_value: Optional[object] = True,
+) -> ICUTable:
+    """
+    Expand a WinTbl into an hourly ICUTable to simplify downstream merges.
+
+    Args:
+        win_tbl: Source window table to expand.
+        interval: Desired sampling interval (defaults to 1 hour).
+        value_column: Column to use as indicator/value in the expanded rows.
+        target_index: Optional output index column name (defaults to win_tbl.index_var).
+        fill_value: Value to emit when the window table does not store explicit values.
+    """
+    if not isinstance(win_tbl, WinTbl):
+        return win_tbl
+
+    interval = interval or pd.Timedelta(hours=1)
+    interval_hours = max(interval.total_seconds() / 3600.0, 1e-6)
+
+    idx_col = win_tbl.index_var or target_index or "time"
+    dur_col = win_tbl.dur_var
+    id_columns = list(win_tbl.id_vars)
+    out_index = target_index or idx_col
+
+    if dur_col is None or dur_col not in win_tbl.data.columns:
+        raise ValueError("Cannot expand WinTbl without a duration column")
+
+    records: List[Dict[str, object]] = []
+    data = win_tbl.data.copy()
+
+    for _, row in data.iterrows():
+        start_val = row[idx_col] if idx_col in row.index else np.nan
+        duration_val = row[dur_col] if dur_col in row.index else np.nan
+        start_hours = _coerce_hour_scalar(start_val)
+        duration_hours = _coerce_duration_hours(duration_val)
+
+        if np.isnan(start_hours) or np.isnan(duration_hours) or duration_hours <= 0:
+            continue
+
+        end_hours = start_hours + duration_hours
+        current = np.floor(start_hours / interval_hours) * interval_hours
+
+        while current < end_hours:
+            rec = {col: row[col] for col in id_columns if col in row.index}
+            rec[out_index] = current
+            if value_column in row.index:
+                rec[value_column] = row[value_column]
+            else:
+                rec[value_column] = fill_value
+            records.append(rec)
+            current += interval_hours
+
+    cols = id_columns + [out_index, value_column]
+    if not records:
+        return _as_icutbl(
+            pd.DataFrame(columns=cols),
+            id_columns=id_columns,
+            index_column=out_index,
+            value_column=value_column,
+        )
+
+    expanded = pd.DataFrame.from_records(records)
+    expanded = expanded[cols].drop_duplicates()
+    expanded = expanded.sort_values(id_columns + [out_index])
+    return _as_icutbl(
+        expanded.reset_index(drop=True),
+        id_columns=id_columns,
+        index_column=out_index,
+        value_column=value_column,
+    )
+
+
+def _get_numeric_series(
+    data: pd.DataFrame,
+    column: str,
+    *,
+    index: Optional[pd.Index] = None,
+    default: Optional[float] = np.nan,
+) -> pd.Series:
+    """
+    Fetch a column from ``data`` as a numeric Series, tolerating scalars or missing values.
+
+    R ricu callbacks frequently expect Series inputs even when some components are
+    absent.  When a column is missing (or when pandas returns a scalar because the
+    merge dropped to a Series), we create a new Series filled with ``default`` so
+    downstream score functions can safely operate on aligned indices.
+    """
+    if column in data.columns:
+        raw = data[column]
+    else:
+        raw = default
+
+    if isinstance(raw, pd.DataFrame):
+        raw = raw.iloc[:, 0]
+
+    if isinstance(raw, pd.Series):
+        series = raw
+    else:
+        fill_index = index if index is not None else data.index
+        series = pd.Series(default, index=fill_index, dtype=float)
+
+    return pd.to_numeric(series, errors="coerce")
 
 
 CallbackFn = Callable[[Dict[str, ICUTable], "ConceptCallbackContext"], ICUTable]
@@ -669,7 +825,36 @@ def _callback_avpu(
     gcs_tbl = _ensure_time_index(tables["gcs"])
     df = gcs_tbl.data.copy()
     idx_cols = gcs_tbl.id_columns + ([gcs_tbl.index_column] if gcs_tbl.index_column else [])
-    scores = df[gcs_tbl.value_column or "gcs"]
+    preferred_order = [
+        gcs_tbl.value_column,
+        "gcs",
+        "gcs_min",
+        "gcs_total",
+        "gcs_sum",
+    ]
+    score_col = next(
+        (
+            col
+            for col in preferred_order
+            if isinstance(col, str) and col in df.columns
+        ),
+        None,
+    )
+    if score_col is None:
+        candidates = [col for col in df.columns if col.startswith("gcs")]
+        score_col = candidates[0] if candidates else None
+    if score_col is None:
+        frame = pd.DataFrame(columns=idx_cols + ["avpu"])
+        return _as_icutbl(
+            frame,
+            id_columns=gcs_tbl.id_columns,
+            index_column=gcs_tbl.index_column,
+            value_column="avpu",
+        )
+    column_data = df[score_col]
+    if isinstance(column_data, pd.DataFrame):
+        column_data = column_data.iloc[:, 0]
+    scores = pd.to_numeric(column_data, errors="coerce")
 
     def score_to_avpu(value: float) -> str | None:
         if pd.isna(value):
@@ -683,11 +868,21 @@ def _callback_avpu(
         return "A"
 
     avpu = scores.map(score_to_avpu)
-    result = df[idx_cols].copy()
+    result = pd.DataFrame(index=df.index)
+    for col in gcs_tbl.id_columns:
+        if col in df.columns:
+            result[col] = df[col]
+    if gcs_tbl.index_column and gcs_tbl.index_column in df.columns:
+        result[gcs_tbl.index_column] = df[gcs_tbl.index_column]
     result["avpu"] = avpu
     result = result.dropna(subset=["avpu"])
 
-    return _as_icutbl(result.reset_index(drop=True), id_columns=gcs_tbl.id_columns, index_column=gcs_tbl.index_column, value_column="avpu")
+    return _as_icutbl(
+        result.reset_index(drop=True),
+        id_columns=gcs_tbl.id_columns,
+        index_column=gcs_tbl.index_column,
+        value_column="avpu",
+    )
 
 
 def _callback_norepi_equiv(
@@ -1774,13 +1969,14 @@ def _callback_sirs(
         cols = id_columns + ([index_column] if index_column else []) + ["sirs"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="sirs")
 
+    index = data.index
     data["sirs"] = sirs_score(
-        temp=pd.to_numeric(data.get("temp")),
-        hr=pd.to_numeric(data.get("hr")),
-        resp=pd.to_numeric(data.get("resp")),
-        pco2=pd.to_numeric(data.get("pco2", np.nan)),
-        wbc=pd.to_numeric(data.get("wbc", np.nan)),
-        bnd=pd.to_numeric(data.get("bnd", np.nan)),
+        temp=_get_numeric_series(data, "temp", index=index),
+        hr=_get_numeric_series(data, "hr", index=index),
+        resp=_get_numeric_series(data, "resp", index=index),
+        pco2=_get_numeric_series(data, "pco2", index=index),
+        wbc=_get_numeric_series(data, "wbc", index=index),
+        bnd=_get_numeric_series(data, "bnd", index=index),
     )
     cols = id_columns + ([index_column] if index_column else []) + ["sirs"]
     return _as_icutbl(data[cols].reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="sirs")
@@ -2272,19 +2468,70 @@ def _callback_supp_o2(
     vent_tbl = tables["vent_ind"]
     fio2_tbl = tables["fio2"]
 
-    id_columns, index_column, _ = _assert_shared_schema({"vent_ind": vent_tbl, "fio2": fio2_tbl})
-    if index_column is None:
-        raise ValueError("supp_o2 requires time-indexed input tables")
+    # When vent_ind arrives as a WinTbl we need a dense hourly indicator to align with FiO2.
+    if isinstance(vent_tbl, WinTbl):
+        desired_index = fio2_tbl.index_column or vent_tbl.index_column or "charttime"
+        vent_col = vent_tbl.value_column or "vent_ind"
+        vent_tbl = _expand_win_table_to_interval(
+            vent_tbl,
+            interval=ctx.interval,
+            value_column=vent_col,
+            target_index=desired_index,
+            fill_value=True,
+        )
 
+    id_columns, index_column, _ = _assert_shared_schema({"vent_ind": vent_tbl, "fio2": fio2_tbl})
     vent_df = vent_tbl.data.copy()
     fio2_df = fio2_tbl.data.copy()
+
+    # 🔧 FIX: vent_ind is often a WinTbl indexed by starttime while fio2 uses charttime.
+    # Align the index column names so we can merge on a common timeline.
+    vent_index = vent_tbl.index_column
+    fio2_index = fio2_tbl.index_column
+
+    # Prefer the fio2 index (charttime) for the merged timeline. If missing, fall back to vent index.
+    if fio2_index is None and "charttime" in fio2_df.columns:
+        fio2_index = "charttime"
+    if vent_index is None and "charttime" in vent_df.columns:
+        vent_index = "charttime"
+    if vent_index is None and "starttime" in vent_df.columns:
+        vent_index = "starttime"
+
+    # If we still don't have an index from either table, fail fast.
+    merged_index = fio2_index or vent_index
+    if merged_index is None:
+        raise ValueError("supp_o2 requires at least one time column")
+
+    # Ensure both tables expose the merged index column so downstream merge succeeds.
+    if merged_index not in vent_df.columns and vent_index in vent_df.columns:
+        vent_df = vent_df.rename(columns={vent_index: merged_index})
+    if merged_index not in fio2_df.columns and fio2_index in fio2_df.columns:
+        fio2_df = fio2_df.rename(columns={fio2_index: merged_index})
+
+    index_column = merged_index
+    key_cols = (id_columns or []) + [index_column]
+
+    if index_column not in vent_df.columns:
+        # When vent_ind comes as WinTbl without explicit timestamp, approximate using starttime column
+        possible_cols = ["starttime", "charttime", "time"]
+        for candidate in possible_cols:
+            if candidate in vent_df.columns:
+                vent_df = vent_df.rename(columns={candidate: index_column})
+                break
+    if index_column not in fio2_df.columns:
+        possible_cols = ["charttime", "starttime", "time"]
+        for candidate in possible_cols:
+            if candidate in fio2_df.columns:
+                fio2_df = fio2_df.rename(columns={candidate: index_column})
+                break
+
+    if index_column not in vent_df.columns or index_column not in fio2_df.columns:
+        raise ValueError("supp_o2 requires vent_ind and fio2 tables to provide a shared time column")
 
     vent_col = vent_tbl.value_column or "vent_ind"
     fio2_col = fio2_tbl.value_column or "fio2"
 
     fio2_df[fio2_col] = pd.to_numeric(fio2_df[fio2_col], errors="coerce")
-
-    key_cols = id_columns + [index_column]
 
     merged = fio2_df.merge(
         vent_df[key_cols + [vent_col]],

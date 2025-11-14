@@ -240,23 +240,35 @@ def convert_unit(
         unit_col: str = 'unit',
         **kwargs
     ) -> pd.DataFrame:
-        if val_col not in data.columns or unit_col not in data.columns:
-            return data
+        if val_col not in data.columns:
+            if 'valuenum' in data.columns:
+                val_col = 'valuenum'
+            else:
+                return data
+        if unit_col not in data.columns:
+            if 'valueuom' in data.columns:
+                unit_col = 'valueuom'
+            else:
+                unit_col = None
         
         data = data.copy()
         
-        for i, (f, new_u, rgx) in enumerate(zip(func, new_unit, regex)):
+        for f, new_u, rgx in zip(func, new_unit, regex):
             if rgx is None:
                 # Apply to all rows
                 data[val_col] = f(data[val_col])
-                data[unit_col] = new_u
+                if unit_col:
+                    data[unit_col] = new_u
             else:
                 # Apply to matching rows
+                if unit_col is None:
+                    break
                 mask = data[unit_col].str.contains(
                     rgx, case=not ignore_case, na=False, regex=True
                 )
                 data.loc[mask, val_col] = f(data.loc[mask, val_col])
-                data.loc[mask, unit_col] = new_u
+                if unit_col:
+                    data.loc[mask, unit_col] = new_u
         
         return data
     

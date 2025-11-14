@@ -1878,6 +1878,16 @@
           "sub_var": "pharmaid",
           "callback": "transform_fun(set_val(TRUE))"
         }
+      ],
+      "miiv": [
+        {
+          "table": "prescriptions",
+          "sub_var": "drug",
+          "regex": "(hydrocortisone|methylpred|prednisone|dexameth)",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class": "rgx_itm",
+          "target": "id_tbl"
+        }
       ]
     }
   },
@@ -3713,6 +3723,15 @@
           "sub_var": "variableid",
           "class": "hrd_itm"
         }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            50805
+          ],
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
       ]
     }
   },
@@ -3827,6 +3846,7 @@
           "ids": 226707,
           "table": "chartevents",
           "sub_var": "itemid",
+          "val_var": "valuenum",
           "callback": "convert_unit(binary_op(`*`, 2.54), 'cm', '^in')"
         }
       ],

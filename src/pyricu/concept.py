@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
@@ -196,6 +197,58 @@ class ConceptDictionary:
     def values(self):
         return self._concepts.values()
 
+    def copy(self) -> "ConceptDictionary":
+        """Create a shallow copy of this dictionary."""
+        return ConceptDictionary(self._concepts.copy())
+
+    def update(self, other: "ConceptDictionary") -> None:
+        """Merge another dictionary into this one with per-concept granularity."""
+        if not isinstance(other, ConceptDictionary):
+            raise TypeError("Can only update from another ConceptDictionary")
+
+        for name, incoming in other._concepts.items():
+            if name not in self._concepts:
+                self._concepts[name] = incoming
+                continue
+
+            current = self._concepts[name]
+
+            merged_sources: Dict[str, List[ConceptSource]] = copy.deepcopy(current.sources)
+            for source_name, entries in incoming.sources.items():
+                merged_sources[source_name] = copy.deepcopy(entries)
+
+            def _pick(new_value, old_value, *, allow_empty: bool = False):
+                if allow_empty:
+                    return copy.deepcopy(new_value) if new_value is not None else copy.deepcopy(old_value)
+                if isinstance(new_value, list):
+                    return copy.deepcopy(new_value) if new_value else copy.deepcopy(old_value)
+                return new_value if new_value not in (None,) else old_value
+
+            merged_definition = ConceptDefinition(
+                name=name,
+                sources=merged_sources,
+                units=_pick(incoming.units, current.units, allow_empty=True),
+                minimum=incoming.minimum if incoming.minimum is not None else current.minimum,
+                maximum=incoming.maximum if incoming.maximum is not None else current.maximum,
+                description=incoming.description if incoming.description is not None else current.description,
+                category=incoming.category if incoming.category is not None else current.category,
+                target=incoming.target if incoming.target is not None else current.target,
+                interval=incoming.interval if incoming.interval is not None else current.interval,
+                aggregate=incoming.aggregate if incoming.aggregate is not None else current.aggregate,
+                class_name=incoming.class_name if incoming.class_name is not None else current.class_name,
+                callback=incoming.callback if incoming.callback is not None else current.callback,
+                sub_concepts=_pick(incoming.sub_concepts, current.sub_concepts),
+                levels=_pick(incoming.levels, current.levels),
+                keep_components=(
+                    incoming.keep_components
+                    if incoming.keep_components is not None
+                    else current.keep_components
+                ),
+                omop_id=incoming.omop_id if incoming.omop_id is not None else current.omop_id,
+            )
+
+            self._concepts[name] = merged_definition
+
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> "ConceptDictionary":
         concepts = {
@@ -252,6 +305,17 @@ class ConceptResolver:
 
     def available_concepts(self) -> List[str]:
         return sorted(self.dictionary.keys())
+
+    def clear_table_cache(self) -> None:
+        """Clear cached source tables."""
+        self._table_cache.clear()
+
+    def _should_fill_gaps(self, concept_name: str, definition: ConceptDefinition) -> bool:
+        category = (definition.category or "").lower() if definition.category else ""
+        concept = concept_name.lower()
+        # Only a handful of concepts in ricu explicitly require dense hourly grids.
+        fill_concepts = {"vent_ind", "urine", "urine24"}
+        return concept in fill_concepts
     
     def _expand_patient_ids(
         self, 
@@ -1012,9 +1076,6 @@ class ConceptResolver:
                                 if DEBUG_MODE:
                                     print(f"      ⚠️  [住院数据] 加载失败: {str(e)[:50]}")
 
-                        # Calculate relative hours from ICU admission
-                        tmp['hours_from_intime'] = (tmp[time_col] - tmp['intime']).dt.total_seconds() / 3600
-
                         # CRITICAL FIX: Use hospital discharge time as upper bound (ricu.R behavior)
                         # ricu.R includes data up to hospital discharge, not ICU discharge
                         if hospital_disch_times:
@@ -1073,12 +1134,6 @@ class ConceptResolver:
                                 mask_time = tmp['outtime'].isna() | (tmp[time_col] <= tmp['outtime'])
                                 tmp = tmp[mask_time].copy()
                                 filter_type = "ICU出院窗口(最后备用)"
-
-                        # Convert absolute time to relative time (ricu.R style)
-                        tmp[time_col] = tmp['hours_from_intime']
-
-                        # Drop the temporary column
-                        tmp = tmp.drop(columns=['hours_from_intime'])
 
                         after_filter = len(tmp)
                         # 只在调试模式下打印时间过滤信息
@@ -1590,13 +1645,15 @@ class ConceptResolver:
                 unit_column=final_unit_column,
                 time_columns=[col for col in time_columns if col],
             )
+
+            fill_missing = self._should_fill_gaps(concept_name, definition)
             
             # Apply interval change with aggregation (SINGLE aggregation on relative time)
             combined_result = change_interval(
                 temp_table,
                 interval=interval,
                 aggregation=agg_method,
-                fill_gaps=False  # 不填充gaps，因为数据应该已经对齐
+                fill_gaps=fill_missing
             )
             
             # Extract data if ICUTable is returned
@@ -2187,12 +2244,15 @@ class ConceptResolver:
             # For sofa_single type, the time points should already be correct,
             # but we still apply change_interval to match ricu_code's behavior
             # Skip if result is still WinTbl (not expanded)
-            if agg_method and not result.data.empty and not isinstance(result, WinTbl):
+            has_time_column = getattr(result, 'index_column', None)
+            if agg_method and has_time_column and has_time_column in result.data.columns and not result.data.empty and not isinstance(result, WinTbl):
                 try:
+                    fill_missing = self._should_fill_gaps(concept_name, definition)
                     combined_result = change_interval(
                         result,
                         interval=interval,
-                        aggregation=agg_method
+                        aggregation=agg_method,
+                        fill_gaps=fill_missing
                     )
                     
                     # Extract data if ICUTable is returned
@@ -2313,23 +2373,87 @@ class ConceptResolver:
         if id_cfg is None or not id_cfg.table or not id_cfg.start or not id_cfg.end:
             raise ValueError(f"Identifier configuration for '{win_type}' is incomplete.")
 
-        table = data_source.load_table(id_cfg.table)
-        frame = table.data[[id_cfg.id, id_cfg.start, id_cfg.end]].copy()
+        required_cols = [id_cfg.id, id_cfg.start, id_cfg.end]
+        table = data_source.load_table(id_cfg.table, columns=required_cols)
+        frame = table.data[required_cols].copy()
         frame = frame.dropna(subset=[id_cfg.start, id_cfg.end])
 
-        frame[concept_name] = (
-            pd.to_datetime(frame[id_cfg.end]) - pd.to_datetime(frame[id_cfg.start])
-        ).dt.total_seconds() / 86400.0
+        start_time = pd.to_datetime(frame[id_cfg.start], errors="coerce")
+        end_time = pd.to_datetime(frame[id_cfg.end], errors="coerce")
+        valid_mask = start_time.notna() & end_time.notna() & (end_time >= start_time)
+        frame = frame.loc[valid_mask].copy()
+        if frame.empty:
+            return ICUTable(
+                data=pd.DataFrame(columns=[id_cfg.id, concept_name]),
+                id_columns=[id_cfg.id],
+                index_column=None,
+                value_column=concept_name,
+            )
 
+        frame[concept_name] = (end_time.loc[valid_mask] - start_time.loc[valid_mask]).dt.total_seconds() / 86400.0
         frame = frame[frame[concept_name] >= 0]
-        if patient_ids is not None:
-            frame = frame[frame[id_cfg.id].isin(set(patient_ids))]
+        if frame.empty:
+            return ICUTable(
+                data=pd.DataFrame(columns=[id_cfg.id, concept_name]),
+                id_columns=[id_cfg.id],
+                index_column=None,
+                value_column=concept_name,
+            )
 
-        frame = frame[[id_cfg.id, concept_name]].reset_index(drop=True)
+        if patient_ids is not None:
+            if isinstance(patient_ids, dict):
+                candidates = patient_ids.get(id_cfg.id) or patient_ids.get(str(id_cfg.id)) or []
+            else:
+                candidates = patient_ids
+            if candidates:
+                frame = frame[frame[id_cfg.id].isin(set(candidates))]
+
+        idx_col = f"{concept_name}_starttime"
+        dur_col = f"{concept_name}_duration"
+        frame[idx_col] = pd.to_datetime(start_time.loc[frame.index].values)
+        frame[dur_col] = pd.to_timedelta(end_time.loc[frame.index].values - frame[idx_col].values)
+        frame = frame.dropna(subset=[idx_col, dur_col])
+
+        if frame.empty:
+            return ICUTable(
+                data=pd.DataFrame(columns=[id_cfg.id, concept_name]),
+                id_columns=[id_cfg.id],
+                index_column=None,
+                value_column=concept_name,
+            )
+
+        rows: List[dict] = []
+        for _, row in frame.iterrows():
+            stay_id = row[id_cfg.id]
+            start_dt = pd.to_datetime(row[idx_col])
+            duration = row[dur_col]
+            if pd.isna(start_dt) or pd.isna(duration):
+                continue
+            end_dt = start_dt + duration
+            current_time = start_dt - pd.Timedelta(hours=1)
+            while current_time < end_dt:
+                rows.append(
+                    {
+                        id_cfg.id: stay_id,
+                        "index_var": current_time,
+                        concept_name: row[concept_name],
+                    }
+                )
+                current_time += pd.Timedelta(hours=1)
+
+        if not rows:
+            return ICUTable(
+                data=pd.DataFrame(columns=[id_cfg.id, concept_name]),
+                id_columns=[id_cfg.id],
+                index_column=None,
+                value_column=concept_name,
+            )
+
+        ts_df = pd.DataFrame(rows)
         return ICUTable(
-            data=frame,
+            data=ts_df,
             id_columns=[id_cfg.id],
-            index_column=None,
+            index_column="index_var",
             value_column=concept_name,
         )
 
@@ -3042,21 +3166,15 @@ def _apply_callback(
             actual_unit_var = 'unit'
         
         if actual_unit_var and actual_unit_var in frame.columns:
-            # 🔧 FIX: 处理valueuom为None的情况
-            # 将None值转换为空字符串，避免单位匹配失败
             unit_series = frame[actual_unit_var].fillna('').astype(str)
             if old_unit:
-                # 🔧 FIX: 更宽松的单位匹配
-                # - 'f' 应该匹配 '°F', 'deg F', 'F', 'f', '°f', 'degF' 等
-                # - 'c' 应该匹配 '°C', 'deg C', 'C', 'c', '°c', 'degC' 等
-                # - 空字符串或None应该匹配任何单位（用于FiO2等数据）
-                # 方法：移除度数符号和空格，然后比较
-                old_unit_clean = old_unit.replace('°', '').replace('deg', '').replace(' ', '').lower()
-                unit_series_clean = unit_series.str.replace('°', '', regex=False).str.replace('deg', '', regex=False).str.replace(' ', '', regex=False).str.lower()
-
-                # 🔧 CRITICAL FIX: 空字符串或'none'应该匹配任何单位
-                # 这解决了FiO2数据valueuom=None导致的过滤问题
-                mask = (unit_series_clean == old_unit_clean) | (unit_series_clean == '') | (unit_series_clean == 'none')
+                case_flag = False
+                try:
+                    regex_mask = unit_series.str.contains(old_unit, case=case_flag, na=False, regex=True)
+                except re.error:
+                    regex_mask = unit_series.str.contains(re.escape(old_unit), case=case_flag, na=False, regex=True)
+                empty_mask = unit_series.str.strip().eq('').fillna(False) | unit_series.str.lower().eq('none')
+                mask = regex_mask | empty_mask
             else:
                 mask = pd.Series(True, index=frame.index)
             
@@ -3336,6 +3454,109 @@ def _apply_callback(
         from .callback_utils import eicu_age
         return eicu_age(frame, val_col=concept_name)
 
+    if expr.strip() == "distribute_amount":
+        from .callback_utils import distribute_amount
+        end_col = source.params.get("end_var") if source.params else None
+        if not end_col:
+            end_col = source.params.get("dur_var") if source.params else None
+        if not end_col and "endtime" in frame.columns:
+            end_col = "endtime"
+        index_col = source.index_var
+        if not index_col and "charttime" in frame.columns:
+            index_col = "charttime"
+        unit_col = unit_column or source.unit_var
+        if not unit_col:
+            if "rateuom" in frame.columns:
+                unit_col = "rateuom"
+            elif "valueuom" in frame.columns:
+                unit_col = "valueuom"
+        if not end_col or end_col not in frame.columns:
+            return frame
+        if not index_col or index_col not in frame.columns:
+            return frame
+        return distribute_amount(
+            frame,
+            val_col=concept_name,
+            unit_col=unit_col,
+            end_col=end_col,
+            index_col=index_col,
+        )
+
+    if expr.strip() == "mimv_rate":
+        from .callback_utils import mimv_rate
+        duration_col = None
+        start_col = source.index_var
+        if not start_col:
+            if "starttime" in frame.columns:
+                start_col = "starttime"
+        end_col = None
+        if source.params:
+            end_col = source.params.get("dur_var") or source.params.get("end_var")
+        if not end_col and "endtime" in frame.columns:
+            end_col = "endtime"
+        if end_col and end_col in frame.columns and start_col and start_col in frame.columns:
+            start = pd.to_datetime(frame[start_col], errors="coerce")
+            stop = pd.to_datetime(frame[end_col], errors="coerce")
+            frame = frame.copy()
+            frame["__duration__"] = stop - start
+            duration_col = "__duration__"
+        elif end_col and end_col in frame.columns:
+            duration_col = end_col
+        elif "duration" in frame.columns:
+            duration_col = "duration"
+        if not duration_col or duration_col not in frame.columns:
+            return frame
+        amount_col = concept_name
+        if source.params:
+            alt_amount = source.params.get("amount_var")
+            if alt_amount and alt_amount in frame.columns:
+                amount_col = alt_amount
+        unit_col = unit_column or source.unit_var
+        if not unit_col:
+            if "rateuom" in frame.columns:
+                unit_col = "rateuom"
+            elif "valueuom" in frame.columns:
+                unit_col = "valueuom"
+        auom_col = None
+        if source.params:
+            auom_col = source.params.get("auom_var")
+        if not auom_col or auom_col not in frame.columns:
+            if "amountuom" in frame.columns:
+                auom_col = "amountuom"
+            else:
+                auom_col = unit_col
+        return mimv_rate(
+            frame,
+            val_col=concept_name,
+            unit_col=unit_col,
+            dur_var=duration_col,
+            amount_var=amount_col,
+            auom_var=auom_col,
+        )
+
+    match = re.fullmatch(r"dex_to_10\((.+)\)", expr, flags=re.DOTALL)
+    if match:
+        from .callback_utils import dex_to_10
+
+        args = _split_arguments(match.group(1))
+        if len(args) < 2:
+            return frame
+        ids = _parse_r_value(args[0])
+        factors = _parse_r_value(args[1])
+        if not isinstance(ids, list):
+            ids = [ids]
+        if not isinstance(factors, list):
+            factors = [factors]
+        callback_fn = dex_to_10(ids, factors)
+        sub_var = source.sub_var
+        if not sub_var or sub_var not in frame.columns:
+            return frame
+        return callback_fn(
+            frame,
+            sub_var=sub_var,
+            val_col=concept_name,
+        )
+
     raise NotImplementedError(
         f"Callback '{callback}' is not yet supported."
     )
@@ -3423,6 +3644,21 @@ def _parse_mapping(body: str) -> Dict[object, object]:
         value = _parse_literal(value_text.strip())
         mapping[key] = value
     return mapping
+
+
+def _parse_r_arguments(expr: str) -> list:
+    return [_parse_r_value(arg) for arg in _split_arguments(expr)]
+
+
+def _parse_r_value(token: str):
+    text = token.strip()
+    if text.startswith("list(") and text.endswith(")"):
+        inner = text[5:-1]
+        return [_parse_r_value(arg) for arg in _split_arguments(inner)]
+    if text.startswith("c(") and text.endswith(")"):
+        inner = text[2:-1]
+        return [_parse_r_value(arg) for arg in _split_arguments(inner)]
+    return _parse_literal(text)
 
 
 def _split_arguments(argument_str: str) -> List[str]:

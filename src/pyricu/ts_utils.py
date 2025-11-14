@@ -23,7 +23,7 @@ def change_interval(
     new_interval: pd.Timedelta | timedelta = None,
     time_col: str = None,
     aggregation: Optional[str] = None,
-    fill_gaps: bool = False,  # Whether to fill gaps in time series (default False to match basic R ricu behavior)
+    fill_gaps: bool = False,
 ) -> ICUTable | pd.DataFrame:
     """Change the time resolution of a time series table.
     
@@ -52,6 +52,71 @@ def change_interval(
     if isinstance(target_interval, timedelta):
         target_interval = pd.Timedelta(target_interval)
     
+    def _fill_time_gaps(
+        df: pd.DataFrame,
+        id_cols: List[str],
+        time_column: str,
+        target_interval: pd.Timedelta,
+        numeric_time: bool,
+    ) -> pd.DataFrame:
+        if df.empty:
+            return df
+
+        if id_cols:
+            groups = df.groupby(id_cols, dropna=False, sort=False)
+        else:
+            groups = [(None, df)]
+
+        freq_hours = max(target_interval.total_seconds() / 3600.0, 1e-9)
+        filled_parts = []
+
+        for key, group in groups:
+            group = group.sort_values(time_column)
+            valid_times = group[time_column].dropna()
+            if valid_times.empty:
+                filled_parts.append(group)
+                continue
+
+            start = valid_times.iloc[0]
+            end = valid_times.iloc[-1]
+
+            if numeric_time:
+                grid = np.arange(start, end + freq_hours, freq_hours)
+            else:
+                start_dt = pd.to_datetime(start)
+                end_dt = pd.to_datetime(end)
+                if pd.isna(start_dt) or pd.isna(end_dt):
+                    filled_parts.append(group)
+                    continue
+                grid = pd.date_range(start=start_dt, end=end_dt, freq=target_interval)
+
+            if len(grid) == 0:
+                filled_parts.append(group)
+                continue
+
+            reindexed = (
+                group.set_index(time_column)
+                .reindex(grid)
+                .reset_index()
+                .rename(columns={"index": time_column})
+            )
+
+            if id_cols:
+                if not isinstance(key, tuple):
+                    key_tuple = (key,)
+                else:
+                    key_tuple = key
+                for col, val in zip(id_cols, key_tuple):
+                    reindexed[col] = val
+
+            filled_parts.append(reindexed)
+
+        combined = pd.concat(filled_parts, ignore_index=True, sort=False)
+        for col in df.columns:
+            if col not in combined.columns:
+                combined[col] = np.nan
+        return combined[df.columns]
+
     # Handle DataFrame input
     if isinstance(table, pd.DataFrame):
         if time_col is None:
@@ -94,8 +159,10 @@ def change_interval(
 
     df = table.data.copy()
 
+    numeric_time = pd.api.types.is_numeric_dtype(df[table.index_column])
+
     # Handle numeric time (hours since admission) differently from datetime
-    if pd.api.types.is_numeric_dtype(df[table.index_column]):
+    if numeric_time:
         # Time is already in hours (since admission), use floor to round down
         # R ricu uses floor() not round(): round_to(x, to=1) = floor(x)
         # e.g., if interval is 1 hour, floor 11.7 -> 11.0, floor 11.3 -> 11.0
@@ -168,52 +235,14 @@ def change_interval(
     
     # CRITICAL: Fill gaps in time series (replicates R ricu fill_gaps)
     # This ensures all time points are present, even if no measurements exist
-    if fill_gaps and table.id_columns:
-        # 🔧 FIX: Handle None values to prevent division errors
-        total_seconds = target_interval.total_seconds()
-        if total_seconds is None:
-            raise ValueError(f"Invalid target_interval: {target_interval}")
-        hours_per_interval = total_seconds / 3600.0
-        filled_groups = []
-        
-        for patient_id, group in df.groupby(list(table.id_columns)):
-            if group.empty:
-                continue
-            
-            # Get time range for this patient
-            min_time = group[table.index_column].min()
-            max_time = group[table.index_column].max()
-            
-            # Generate complete time series
-            if pd.api.types.is_numeric_dtype(group[table.index_column]):
-                # Numeric time (hours)
-                time_range = np.arange(min_time, max_time + hours_per_interval, hours_per_interval)
-            else:
-                # Datetime
-                time_range = pd.date_range(start=min_time, end=max_time, freq=target_interval)
-            
-            # Create DataFrame with all time points
-            time_df = pd.DataFrame({table.index_column: time_range})
-            
-            # Add ID columns
-            if isinstance(patient_id, tuple):
-                for i, col in enumerate(table.id_columns):
-                    time_df[col] = patient_id[i]
-            else:
-                time_df[table.id_columns[0]] = patient_id
-            
-            # Left join to preserve all time points (matching R ricu's x[unique(join), on=...])
-            # This keeps all rows from time_df, filling with NA where no data exists
-            filled = time_df.merge(
-                group,
-                on=[table.index_column] + list(table.id_columns),
-                how='left'
-            )
-            
-            filled_groups.append(filled)
-        
-        if filled_groups:
-            df = pd.concat(filled_groups, ignore_index=True)
+    if fill_gaps:
+        df = _fill_time_gaps(
+            df,
+            list(table.id_columns),
+            table.index_column,
+            target_interval,
+            numeric_time,
+        )
 
     return ICUTable(
         data=df,
