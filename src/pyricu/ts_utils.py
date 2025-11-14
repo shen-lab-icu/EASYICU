@@ -7,7 +7,7 @@ interval alignment, windowing, and time-based transformations.
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any, Optional, Union, List
+from typing import Any, Optional, Union, List, Iterable
 import logging
 
 import pandas as pd
@@ -59,63 +59,51 @@ def change_interval(
         target_interval: pd.Timedelta,
         numeric_time: bool,
     ) -> pd.DataFrame:
+        """Vectorized gap filler that relies on pandas reindexing."""
         if df.empty:
             return df
 
-        if id_cols:
-            groups = df.groupby(id_cols, dropna=False, sort=False)
-        else:
-            groups = [(None, df)]
-
-        freq_hours = max(target_interval.total_seconds() / 3600.0, 1e-9)
-        filled_parts = []
-
-        for key, group in groups:
-            group = group.sort_values(time_column)
-            valid_times = group[time_column].dropna()
-            if valid_times.empty:
-                filled_parts.append(group)
-                continue
-
-            start = valid_times.iloc[0]
-            end = valid_times.iloc[-1]
-
+        def _build_grid(start_value, end_value):
             if numeric_time:
-                grid = np.arange(start, end + freq_hours, freq_hours)
-            else:
-                start_dt = pd.to_datetime(start)
-                end_dt = pd.to_datetime(end)
-                if pd.isna(start_dt) or pd.isna(end_dt):
-                    filled_parts.append(group)
-                    continue
-                grid = pd.date_range(start=start_dt, end=end_dt, freq=target_interval)
+                step = target_interval.total_seconds() / 3600.0
+                return np.arange(start_value, end_value + step, step)
+            start_dt = pd.to_datetime(start_value)
+            end_dt = pd.to_datetime(end_value)
+            if pd.isna(start_dt) or pd.isna(end_dt):
+                return None
+            return pd.date_range(start=start_dt, end=end_dt, freq=target_interval)
 
-            if len(grid) == 0:
-                filled_parts.append(group)
-                continue
-
-            reindexed = (
+        def _expand_group(group: pd.DataFrame) -> pd.DataFrame:
+            usable = group[time_column].dropna()
+            if usable.empty:
+                return group
+            grid = _build_grid(usable.iloc[0], usable.iloc[-1])
+            if grid is None or len(grid) == 0:
+                return group
+            expanded = (
                 group.set_index(time_column)
                 .reindex(grid)
                 .reset_index()
                 .rename(columns={"index": time_column})
             )
+            for col in id_cols:
+                if col in group.columns:
+                    expanded[col] = group[col].iloc[0]
+            return expanded
 
-            if id_cols:
-                if not isinstance(key, tuple):
-                    key_tuple = (key,)
-                else:
-                    key_tuple = key
-                for col, val in zip(id_cols, key_tuple):
-                    reindexed[col] = val
+        if id_cols:
+            filled = (
+                df.groupby(id_cols, dropna=False, sort=False, group_keys=False)
+                .apply(_expand_group)
+                .reset_index(drop=True)
+            )
+        else:
+            filled = _expand_group(df)
 
-            filled_parts.append(reindexed)
-
-        combined = pd.concat(filled_parts, ignore_index=True, sort=False)
         for col in df.columns:
-            if col not in combined.columns:
-                combined[col] = np.nan
-        return combined[df.columns]
+            if col not in filled.columns:
+                filled[col] = np.nan
+        return filled[df.columns]
 
     # Handle DataFrame input
     if isinstance(table, pd.DataFrame):

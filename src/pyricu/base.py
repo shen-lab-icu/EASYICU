@@ -39,7 +39,7 @@ class BaseICULoader:
         database: Optional[str] = None,
         dict_path: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
         use_sofa2: bool = False,
-        verbose: bool = False
+        verbose: bool = False,
     ):
         """Initialize the unified loader
 
@@ -198,6 +198,7 @@ class BaseICULoader:
         chunk_size: Optional[int] = None,
         progress: bool = False,
         parallel_workers: int = 1,
+        concept_workers: int = 1,
         **kwargs
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
@@ -206,6 +207,7 @@ class BaseICULoader:
         This method consolidates the loading logic from multiple API implementations.
         """
         try:
+            kwargs = dict(kwargs)
             if isinstance(concepts, str):
                 concepts = [concepts]
 
@@ -230,6 +232,7 @@ class BaseICULoader:
                     ricu_compatible,
                     progress,
                     parallel_workers,
+                    concept_workers,
                     kwargs,
                 )
 
@@ -242,7 +245,9 @@ class BaseICULoader:
                 keep_components,
                 merge,
                 ricu_compatible,
+                concept_workers,
                 kwargs,
+                preserve_cache=False,
             )
 
         except Exception as e:
@@ -300,8 +305,12 @@ class BaseICULoader:
         keep_components: bool,
         merge: bool,
         ricu_compatible: bool,
+        concept_workers: int,
         extra_kwargs: Dict[str, Any],
+        preserve_cache: bool = False,
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+        params = dict(extra_kwargs)
+        verbose_flag = params.pop("verbose", self.verbose)
         try:
             result = self.concept_resolver.load_concepts(
                 concepts,
@@ -312,10 +321,13 @@ class BaseICULoader:
                 aggregate=aggregate,
                 keep_components=keep_components,
                 ricu_compatible=ricu_compatible,
-                **extra_kwargs,
+                concept_workers=concept_workers,
+                verbose=verbose_flag,
+                **params,
             )
         finally:
-            self.concept_resolver.clear_table_cache()
+            if not preserve_cache:
+                self.concept_resolver.clear_table_cache()
 
         if isinstance(result, dict):
             if not merge:
@@ -335,6 +347,7 @@ class BaseICULoader:
         keep_components: bool,
         merge: bool,
         ricu_compatible: bool,
+        concept_workers: int,
         extra_kwargs: Dict[str, Any],
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         worker = BaseICULoader(
@@ -353,7 +366,9 @@ class BaseICULoader:
             keep_components,
             merge,
             ricu_compatible,
+            concept_workers,
             extra_kwargs,
+            preserve_cache=False,
         )
 
     def _load_concepts_chunked(
@@ -368,6 +383,7 @@ class BaseICULoader:
         ricu_compatible: bool,
         progress: bool,
         parallel_workers: int,
+        concept_workers: int,
         extra_kwargs: Dict[str, Any],
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         aggregated_frames: List[pd.DataFrame] = []
@@ -396,6 +412,7 @@ class BaseICULoader:
                         keep_components,
                         merge,
                         ricu_compatible,
+                        concept_workers,
                         extra_kwargs,
                     ): idx
                     for idx, batch_ids in enumerate(batches, start=1)
@@ -424,7 +441,9 @@ class BaseICULoader:
                     keep_components,
                     merge,
                     ricu_compatible,
+                    concept_workers,
                     extra_kwargs,
+                    preserve_cache=True,
                 )
                 _accumulate(chunk_result)
                 if progress:
@@ -436,6 +455,8 @@ class BaseICULoader:
                         total_batches,
                         pct,
                     )
+
+        self.concept_resolver.clear_table_cache()
 
         if aggregated_dict:
             combined = {

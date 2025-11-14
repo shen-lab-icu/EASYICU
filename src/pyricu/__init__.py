@@ -9,6 +9,7 @@ from .config import DataSourceConfig, DataSourceRegistry
 from .concept import ConceptDictionary, ConceptResolver
 from .datasource import FilterOp, FilterSpec, ICUDataSource, load_table
 from .resources import load_data_sources, load_dictionary, package_path
+from .logging_utils import configure_logging
 from .table import (
     ICUTable, 
     IdTbl, 
@@ -671,6 +672,7 @@ __all__ = [
     "list_available_concepts",
     "list_available_sources",
     "get_concept_info",
+    "configure_logging",
 
     # === 核心类 ===
     "ConceptDictionary",
