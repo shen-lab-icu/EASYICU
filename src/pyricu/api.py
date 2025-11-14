@@ -94,6 +94,7 @@ def load_concepts(
     chunk_size: Optional[int] = None,
     progress: bool = False,
     parallel_workers: int = 1,
+    concept_workers: int = 1,
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
@@ -232,6 +233,7 @@ def load_concepts(
         chunk_size=chunk_size,
         progress=progress,
         parallel_workers=parallel_workers,
+        concept_workers=concept_workers,
         **kwargs
     )
 

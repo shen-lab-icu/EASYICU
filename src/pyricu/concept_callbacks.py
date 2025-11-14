@@ -2533,17 +2533,36 @@ def _callback_supp_o2(
 
     fio2_df[fio2_col] = pd.to_numeric(fio2_df[fio2_col], errors="coerce")
 
-    merged = fio2_df.merge(
-        vent_df[key_cols + [vent_col]],
-        on=key_cols,
-        how="outer",
-    )
-    merged[vent_col] = merged[vent_col].where(merged[vent_col].notna(), False).astype(bool)
-    merged[fio2_col] = merged[fio2_col].fillna(21)
-    merged["supp_o2"] = merged[vent_col] | (merged[fio2_col] > 21)
+    # Align both tables on a shared MultiIndex and compute boolean result via numpy.
+    id_components = key_cols.copy()
+    if not id_components:
+        id_components = [index_column]
 
-    cols = key_cols + ["supp_o2"]
-    return _as_icutbl(merged[cols].reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="supp_o2")
+    vent_series = (
+        vent_df.set_index(id_components)[vent_col]
+        if key_cols
+        else vent_df.set_index(index_column)[vent_col]
+    )
+    fio2_series = (
+        fio2_df.set_index(id_components)[fio2_col]
+        if key_cols
+        else fio2_df.set_index(index_column)[fio2_col]
+    )
+
+    shared_index = vent_series.index.union(fio2_series.index)
+    vent_aligned = vent_series.reindex(shared_index, fill_value=False).astype(bool, copy=False)
+    fio2_aligned = pd.to_numeric(fio2_series.reindex(shared_index, fill_value=21.0), errors="coerce").fillna(21.0)
+
+    supp_mask = np.logical_or(vent_aligned.to_numpy(), fio2_aligned.to_numpy() > 21.0)
+    result = shared_index.to_frame(index=False)
+    result["supp_o2"] = supp_mask
+
+    if key_cols:
+        cols = key_cols + ["supp_o2"]
+        return _as_icutbl(result[cols], id_columns=id_columns, index_column=index_column, value_column="supp_o2")
+
+    cols = [index_column, "supp_o2"]
+    return _as_icutbl(result[cols], id_columns=id_columns, index_column=index_column, value_column="supp_o2")
 
 
 def _callback_vent_ind(
@@ -2975,81 +2994,24 @@ def _callback_urine24(
         cols = key_cols + ["urine24"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="urine24")
     
-    # Sort by ID and time
     df = df.sort_values(key_cols)
-    
-    # Define urine_sum function (replicates R ricu logic exactly)
-    def urine_sum_func(values):
-        """
-        Replicate R ricu urine_sum: if length < min_steps return NA, else sum * step_factor / length
-        
-        CRITICAL: R ricu checks if length(x) < min_steps, where x is the data BEFORE fill_gaps.
-        But after fill_gaps with 0, all windows will have full length (24 points for 1h interval).
-        The issue is that fill_gaps shouldn't extend beyond the actual data range.
-        
-        For now, we check the number of values (length), not non-zero count.
-        The real fix should be in limiting fill_gaps to actual data boundaries.
-        """
-        if len(values) < min_steps:
-            return np.nan
-        else:
-            # sum(x, na.rm = TRUE) * step_factor / length(x)
-            return np.sum(values) * step_factor / len(values)
-    
-    # Apply sliding window (24 hours) - replicates R ricu slide(res, !!expr, hours(24L))
-    result_frames = []
-    
-    if not id_cols_to_group:
-        # No patient grouping
-        group = df.set_index(time_col)
-        if is_numeric_time:
-            window_size = int(24.0 / interval_hours)
-            # Use min_periods=1 because we check min_steps in urine_sum_func
-            rolling = group[urine_col].rolling(window=window_size, min_periods=1)
-            urine24_values = rolling.apply(lambda x: urine_sum_func(x.values))
-            tmp = urine24_values.reset_index()
-            tmp = tmp.rename(columns={urine_col: "urine24"})
-        else:
-            window_size = pd.Timedelta(hours=24) // interval
-            # Use min_periods=1 because we check min_steps in urine_sum_func
-            rolling = group[urine_col].rolling(window=window_size, min_periods=1)
-            urine24_values = rolling.apply(lambda x: urine_sum_func(x.values))
-            tmp = urine24_values.reset_index()
-            tmp = tmp.rename(columns={urine_col: "urine24"})
-        result_frames.append(tmp)
-    else:
-        # Group by patient IDs
-        for patient_id, group in df.groupby(id_cols_to_group):
-            group = group.set_index(time_col)
-            if is_numeric_time:
-                window_size = int(24.0 / interval_hours)
-                # Use min_periods=1 because we check min_steps in urine_sum_func
-                rolling = group[urine_col].rolling(window=window_size, min_periods=1)
-                urine24_values = rolling.apply(lambda x: urine_sum_func(x.values))
-                tmp = urine24_values.reset_index()
-                tmp = tmp.rename(columns={urine_col: "urine24"})
-            else:
-                window_size = pd.Timedelta(hours=24) // interval
-                # Use min_periods=1 because we check min_steps in urine_sum_func
-                rolling = group[urine_col].rolling(window=window_size, min_periods=1)
-                urine24_values = rolling.apply(lambda x: urine_sum_func(x.values))
-                tmp = urine24_values.reset_index()
-                tmp = tmp.rename(columns={urine_col: "urine24"})
-            
-            # Add ID columns
-            if isinstance(patient_id, tuple):
-                for i, col in enumerate(id_cols_to_group):
-                    tmp[col] = patient_id[i]
-            else:
-                tmp[id_cols_to_group[0]] = patient_id
-            
-            result_frames.append(tmp)
+    samples_per_day = max(int(np.ceil(pd.Timedelta(hours=24).total_seconds() / interval.total_seconds())), 1)
+    scale_factor = step_factor / samples_per_day
 
-    if not result_frames:
-        cols = key_cols + ["urine24"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="urine24")
-    
-    result = pd.concat(result_frames, ignore_index=True)
+    def _assign_rolling(block: pd.DataFrame) -> pd.DataFrame:
+        block_sorted = block.sort_values(time_col)
+        rolling = block_sorted[urine_col].rolling(window=samples_per_day, min_periods=min_steps).sum()
+        block_sorted["urine24"] = rolling.to_numpy() * scale_factor
+        return block_sorted
+
+    if id_cols_to_group:
+        result = (
+            df.groupby(id_cols_to_group, dropna=False, sort=False, group_keys=False)
+            .apply(_assign_rolling)
+            .reset_index(drop=True)
+        )
+    else:
+        result = _assign_rolling(df)
     
     # 🔧 DEBUG: Print urine24 range for patient 30000646
     if 'stay_id' in result.columns:

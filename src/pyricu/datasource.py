@@ -5,15 +5,17 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, List, Mapping, MutableMapping, Optional
+import logging
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 import pandas as pd
 
-from .config import DataSourceConfig, DataSourceRegistry
+from .config import DataSourceConfig, DataSourceRegistry, DatasetOptions, TableConfig
 from .table import ICUTable
 
 # 全局调试开关 - 设置为 False 可以减少输出
 DEBUG_MODE = False
+logger = logging.getLogger(__name__)
 
 
 class FilterOp(str, enum.Enum):
@@ -124,6 +126,11 @@ class ICUDataSource:
         self._table_sources: MutableMapping[str, Any] = dict(table_sources or {})
         self.default_format = default_format
         self.registry = registry
+        self._dataset_sources: Dict[str, DatasetOptions] = {
+            name: table.dataset
+            for name, table in self.config.tables.items()
+            if table.dataset is not None
+        }
         self.enable_cache = enable_cache
         self._table_cache: dict = {}  # 缓存已加载的原始表数据
         self.format_priority = format_priority or self.get_format_priority()
@@ -215,6 +222,21 @@ class ICUDataSource:
             if column in frame.columns:
                 frame[column] = _coerce_datetime(frame[column])
 
+        if verbose and logger.isEnabledFor(logging.INFO):
+            id_label = id_columns[0] if id_columns else defaults.id_var or "N/A"
+            unique_count = (
+                frame[id_label].nunique()
+                if id_label in frame.columns
+                else "N/A"
+            )
+            logger.info(
+                "🔍 表 %s 加载后: %d 行, 唯一%s: %s",
+                table_name,
+                len(frame),
+                id_label,
+                unique_count,
+            )
+
         return ICUTable(
             data=frame,
             id_columns=id_columns,
@@ -244,35 +266,38 @@ class ICUDataSource:
             return self._table_cache[cache_key].copy()
         
         loader = self._table_sources.get(table_name)
-        if loader is None:
+        dataset_cfg = self._dataset_sources.get(table_name)
+        if loader is None and dataset_cfg is not None:
+            frame = self._read_dataset(table_name, dataset_cfg, columns, patient_ids_filter)
+        elif loader is None:
             loader = self._resolve_loader_from_disk(table_name)
-        if loader is None:
-            # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
-            # 这允许在demo数据中缺少某些表时继续运行
-            if self.config.name == 'miiv' and table_name in self.config.tables:
-                # 返回空DataFrame，保持与配置中表结构一致的列
-                table_cfg = self.config.get_table(table_name)
-                defaults = table_cfg.defaults
-                # 尝试从配置中获取预期的列
-                expected_cols = []
-                if defaults.id_var:
-                    expected_cols.append(defaults.id_var)
-                if defaults.index_var:
-                    expected_cols.append(defaults.index_var)
-                if defaults.val_var:
-                    expected_cols.append(defaults.val_var)
-                if defaults.unit_var:
-                    expected_cols.append(defaults.unit_var)
-                if defaults.time_vars:
-                    expected_cols.extend(defaults.time_vars)
+            if loader is None:
+                # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
+                # 这允许在demo数据中缺少某些表时继续运行
+                if self.config.name == 'miiv' and table_name in self.config.tables:
+                    # 返回空DataFrame，保持与配置中表结构一致的列
+                    table_cfg = self.config.get_table(table_name)
+                    defaults = table_cfg.defaults
+                    # 尝试从配置中获取预期的列
+                    expected_cols = []
+                    if defaults.id_var:
+                        expected_cols.append(defaults.id_var)
+                    if defaults.index_var:
+                        expected_cols.append(defaults.index_var)
+                    if defaults.val_var:
+                        expected_cols.append(defaults.val_var)
+                    if defaults.unit_var:
+                        expected_cols.append(defaults.unit_var)
+                    if defaults.time_vars:
+                        expected_cols.extend(defaults.time_vars)
+                    
+                    # 返回空DataFrame，避免抛出错误
+                    return pd.DataFrame(columns=expected_cols if expected_cols else ['index'])
                 
-                # 返回空DataFrame，避免抛出错误
-                return pd.DataFrame(columns=expected_cols if expected_cols else ['index'])
-            
-            raise KeyError(
-                f"No table source registered for '{table_name}' "
-                f"in data source '{self.config.name}'"
-            )
+                raise KeyError(
+                    f"No table source registered for '{table_name}' "
+                    f"in data source '{self.config.name}'"
+                )
         if callable(loader):
             frame = loader()
         else:
@@ -501,11 +526,35 @@ class ICUDataSource:
                 dfs = [self._read_fst_file(f, columns) for f in files]
                 
             elif fmt == 'parquet':
-                # Parquet 读取（支持列选择）
+                dataset_df = self._read_parquet_dataset(
+                    directory,
+                    columns=list(columns) if columns else None,
+                    filter_spec=patient_ids_filter,
+                )
+                if dataset_df is not None:
+                    return dataset_df
+                # Fallback: iterate individual parquet files
                 dfs = []
+                arrow_filters = None
+                if patient_ids_filter:
+                    arrow_filters = self._build_dataset_filter(patient_ids_filter)
                 for f in files:
+                    if arrow_filters is not None or columns is not None:
+                        try:
+                            import pyarrow.parquet as pq  # type: ignore
+                            table = pq.read_table(
+                                f,
+                                columns=list(columns) if columns else None,
+                            )
+                            if arrow_filters is not None:
+                                import pyarrow.compute as pc  # type: ignore
+                                table = table.filter(arrow_filters)
+                            df = table.to_pandas()
+                            dfs.append(df)
+                            continue
+                        except Exception:
+                            pass  # Fallback to pandas.read_parquet below
                     df = pd.read_parquet(f, columns=list(columns) if columns else None)
-                    # 如果有患者过滤器，应用过滤
                     if filter_tuple:
                         col_name, target_ids = filter_tuple
                         if col_name in df.columns:
@@ -532,6 +581,100 @@ class ICUDataSource:
         # 没有找到任何支持的文件
         tried_formats = ', '.join(self.format_priority)
         raise ValueError(f"No supported data files found in directory: {directory} (tried: {tried_formats})")
+
+    def _read_parquet_dataset(
+        self,
+        directory: Path,
+        columns: Optional[Sequence[str]],
+        filter_spec: Optional[FilterSpec],
+    ) -> Optional[pd.DataFrame]:
+        """Attempt to read a parquet directory via PyArrow Dataset for fast filtering."""
+        try:
+            import pyarrow.dataset as ds  # type: ignore
+        except ImportError:
+            return None
+
+        filter_expr = None
+        if filter_spec is not None:
+            filter_expr = self._build_dataset_filter(filter_spec)
+        try:
+            try:
+                dataset = ds.dataset(directory, format="parquet", partitioning="hive")
+            except (ValueError, TypeError):
+                dataset = ds.dataset(directory, format="parquet")
+
+            table = dataset.to_table(columns=columns, filter=filter_expr)
+            return table.to_pandas()
+        except (OSError, ValueError, TypeError) as exc:
+            if DEBUG_MODE:
+                logger.debug("PyArrow dataset read failed for %s: %s", directory, exc)
+            return None
+
+    @staticmethod
+    def _build_dataset_filter(filter_spec: FilterSpec):
+        """Convert FilterSpec to a PyArrow Dataset expression."""
+        try:
+            import pyarrow.dataset as ds  # type: ignore
+        except ImportError:
+            return None
+
+        field = ds.field(filter_spec.column)
+        if filter_spec.op == FilterOp.EQ:
+            return field == filter_spec.value
+        if filter_spec.op == FilterOp.IN:
+            values = _ensure_sequence(filter_spec.value)
+            return field.isin(values)
+        if filter_spec.op == FilterOp.BETWEEN:
+            lower, upper = filter_spec.value
+            return (field >= lower) & (field <= upper)
+        return None
+
+    def _read_dataset(
+        self,
+        table_name: str,
+        dataset_cfg: DatasetOptions,
+        columns: Optional[Iterable[str]],
+        patient_ids_filter: Optional[FilterSpec],
+    ) -> pd.DataFrame:
+        """Read a table via explicit PyArrow Dataset configuration."""
+        try:
+            import pyarrow.dataset as ds  # type: ignore
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "PyArrow is required for dataset-backed tables. "
+                "Install pyarrow or remove the dataset configuration."
+            ) from exc
+
+        root = dataset_cfg.path or table_name
+        root_path = Path(root)
+        if not root_path.is_absolute():
+            if self.base_path is None:
+                raise ValueError(
+                    f"Dataset path '{root}' for table '{table_name}' is relative, "
+                    "but data source has no base_path."
+                )
+            root_path = self.base_path / root_path
+
+        partitioning = dataset_cfg.partitioning or "hive"
+        format_name = dataset_cfg.format or "parquet"
+        options = dataset_cfg.options or {}
+
+        try:
+            dataset = ds.dataset(
+                root_path,
+                format=format_name,
+                partitioning=partitioning,
+                **options,
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            raise RuntimeError(
+                f"Failed to initialise dataset for table '{table_name}' at {root_path}: {exc}"
+            ) from exc
+
+        filter_expr = self._build_dataset_filter(patient_ids_filter) if patient_ids_filter else None
+        logger.info("📁 Using PyArrow dataset for %s (%s)", table_name, root_path)
+        table = dataset.to_table(columns=columns, filter=filter_expr)
+        return table.to_pandas()
     
     def _read_fst_file(self, path: Path, columns: Optional[Iterable[str]]) -> pd.DataFrame:
         """Read an FST file using the fst_reader module."""
@@ -570,6 +713,18 @@ def load_table(
     """Functional façade delegating to :meth:`ICUDataSource.load_table`."""
 
     return data_source.load_table(table_name, columns=columns, filters=filters)
+
+
+def _ensure_sequence(value: Any) -> List[Any]:
+    """Normalise scalars/iterables for filter construction."""
+    if value is None:
+        return []
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return list(value)
+    try:
+        return list(value)
+    except TypeError:
+        return [value]
 
 
 def _coerce_datetime(series: pd.Series) -> pd.Series:
