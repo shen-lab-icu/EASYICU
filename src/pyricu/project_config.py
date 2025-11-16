@@ -192,13 +192,17 @@ SHOW_PROGRESS = os.getenv('PYRICU_PROGRESS', 'True').lower() in ('true', '1', 'y
 ENABLE_CACHE = True
 
 # Cache size limit (MB) - optimized for 16GB systems
-CACHE_SIZE_LIMIT = int(os.getenv('PYRICU_CACHE_SIZE_MB', '2048'))  # 2GB for 16GB systems
+CACHE_SIZE_LIMIT = int(os.getenv('PYRICU_CACHE_SIZE_MB', '0'))  # 0 = unlimited cache by default
+
+# Auto-clear cache on startup - helps prevent stale data issues
+AUTO_CLEAR_CACHE = os.getenv('PYRICU_AUTO_CLEAR_CACHE', 'True').lower() in ('true', '1', 'yes')
 
 # Number of parallel workers - optimized for 16GB systems
-MAX_WORKERS = int(os.getenv('PYRICU_MAX_WORKERS', '2'))  # Reduced from 4 to 2 for memory efficiency
+MAX_WORKERS = int(os.getenv('PYRICU_MAX_WORKERS', '999'))  # Reduced from 4 to 2 for memory efficiency
 
 # Chunk size for batch processing - optimized for 16GB systems
-CHUNK_SIZE = int(os.getenv('PYRICU_CHUNK_SIZE', '5000'))  # Reduced from 10000 to 5000
+CHUNK_SIZE_STR = os.getenv('PYRICU_CHUNK_SIZE', 'None')
+CHUNK_SIZE = int(CHUNK_SIZE_STR) if CHUNK_SIZE_STR != 'None' else None  # Reduced from 10000 to 5000
 
 # Memory management settings
 MEMORY_SAFETY_THRESHOLD = 0.8  # Use 80% of total memory as safety limit

@@ -18,6 +18,7 @@ import pandas as pd
 from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary
 from .resources import load_data_sources, load_dictionary
+from .cache_manager import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,9 @@ class BaseICULoader:
 
         # Initialize concept system
         self._init_concept_system(dict_path, use_sofa2)
+
+        # Register caches with global cache manager
+        self._register_caches()
 
     def _detect_database(self, database: Optional[str]) -> str:
         """Detect database type from environment or use default"""
@@ -168,6 +172,27 @@ class BaseICULoader:
 
         except Exception as e:
             raise RuntimeError(f"Failed to initialize concept system: {e}")
+
+    def _register_caches(self):
+        """Register caches with global cache manager"""
+        try:
+            cache_manager = get_cache_manager()
+
+            # Register data source cache
+            if hasattr(self, 'datasource') and self.datasource:
+                cache_manager.register_memory_cache(self.datasource)
+
+            # Register concept resolver cache
+            if hasattr(self, 'concept_resolver') and self.concept_resolver:
+                cache_manager.register_memory_cache(self.concept_resolver)
+
+            if self.verbose:
+                logger.info("✅ 已注册缓存到全局缓存管理器")
+
+        except Exception as e:
+            if self.verbose:
+                logger.warning(f"⚠️  缓存注册失败: {e}")
+            # 不影响主要功能，继续运行
 
     def _load_dict_source(self, source: Union[str, Path, ConceptDictionary]) -> ConceptDictionary:
         """Load a dictionary from a custom source."""
@@ -311,6 +336,10 @@ class BaseICULoader:
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         params = dict(extra_kwargs)
         verbose_flag = params.pop("verbose", self.verbose)
+        
+        # 🚀 优化：当加载多个相关概念时保留缓存（如SOFA的多个子概念）
+        should_preserve_cache = preserve_cache or len(concepts) > 1
+        
         try:
             result = self.concept_resolver.load_concepts(
                 concepts,
@@ -326,7 +355,8 @@ class BaseICULoader:
                 **params,
             )
         finally:
-            if not preserve_cache:
+            # 只有在不需要保留缓存时才清除
+            if not should_preserve_cache:
                 self.concept_resolver.clear_table_cache()
 
         if isinstance(result, dict):

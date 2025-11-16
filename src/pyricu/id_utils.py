@@ -36,6 +36,7 @@ class IDMapper:
     
     # ID 层级定义 (从最细粒度到最粗粒度)
     ID_HIERARCHY = {
+        'miiv': ['stay_id', 'hadm_id', 'subject_id'],  # MIMIC-IV
         'mimic_demo': ['stay_id', 'hadm_id', 'subject_id'],
         'mimic': ['stay_id', 'hadm_id', 'subject_id'],
         'eicu_demo': ['patientunitstayid', 'patienthealthsystemstayid', 'uniquepid'],
@@ -47,6 +48,11 @@ class IDMapper:
     
     # ID 映射表配置
     MAPPING_TABLES = {
+        'miiv': {
+            ('hadm_id', 'subject_id'): ('admissions', ['hadm_id', 'subject_id']),
+            ('stay_id', 'hadm_id'): ('icustays', ['stay_id', 'hadm_id', 'subject_id']),
+            ('stay_id', 'subject_id'): ('icustays', ['stay_id', 'subject_id']),
+        },
         'mimic_demo': {
             ('hadm_id', 'subject_id'): ('admissions', ['hadm_id', 'subject_id']),
             ('stay_id', 'hadm_id'): ('icustays', ['stay_id', 'hadm_id', 'subject_id']),

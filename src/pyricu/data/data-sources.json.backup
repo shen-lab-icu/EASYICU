@@ -7877,9 +7877,9 @@
         }
       },
       "labevents": {
-        "files": "labevents.parquet",
+        "files": "labevents/",
         "defaults": {
-          "id_var": "subject_id",
+          "id_var": "stay_id",
           "index_var": "charttime",
           "val_var": "valuenum",
           "unit_var": "valueuom",
@@ -7888,10 +7888,13 @@
             "storetime"
           ]
         },
-        "num_rows": 118171367,
         "cols": {
           "labevent_id": {
             "name": "labevent_id",
+            "spec": "col_integer"
+          },
+          "stay_id": {
+            "name": "stay_id",
             "spec": "col_integer"
           },
           "subject_id": {
@@ -7902,27 +7905,17 @@
             "name": "hadm_id",
             "spec": "col_integer"
           },
-          "specimen_id": {
-            "name": "specimen_id",
-            "spec": "col_integer"
+          "charttime": {
+            "name": "charttime",
+            "spec": "col_datetime"
+          },
+          "storetime": {
+            "name": "storetime",
+            "spec": "col_datetime"
           },
           "itemid": {
             "name": "itemid",
             "spec": "col_integer"
-          },
-          "charttime": {
-            "name": "charttime",
-            "spec": "col_datetime",
-            "format": "%Y-%m-%d %H:%M:%S"
-          },
-          "storetime": {
-            "name": "storetime",
-            "spec": "col_datetime",
-            "format": "%Y-%m-%d %H:%M:%S"
-          },
-          "value": {
-            "name": "value",
-            "spec": "col_character"
           },
           "valuenum": {
             "name": "valuenum",
@@ -7931,45 +7924,7 @@
           "valueuom": {
             "name": "valueuom",
             "spec": "col_character"
-          },
-          "ref_range_lower": {
-            "name": "ref_range_lower",
-            "spec": "col_double"
-          },
-          "ref_range_upper": {
-            "name": "ref_range_upper",
-            "spec": "col_double"
-          },
-          "flag": {
-            "name": "flag",
-            "spec": "col_character"
-          },
-          "priority": {
-            "name": "priority",
-            "spec": "col_character"
-          },
-          "comments": {
-            "name": "comments",
-            "spec": "col_character"
-          },
-          "order_provider_id": {
-            "name": "order_provider_id",
-            "spec": "col_character"
           }
-        },
-        "partitioning": {
-          "col": "itemid",
-          "breaks": [
-            50868,
-            50902,
-            50943,
-            50983,
-            51146,
-            51248,
-            51256,
-            51279,
-            51491
-          ]
         }
       },
       "microbiologyevents": {

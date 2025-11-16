@@ -397,8 +397,10 @@ def optimize_for_16gb():
 
     return config
 
-# Auto-configure on import
-try:
-    _config = optimize_for_16gb()
-except Exception as e:
-    print(f"⚠️  Auto-optimization failed: {e}")
+# Auto-configure on import only if explicitly requested
+_config = None
+if os.getenv('PYRICU_AUTO_OPTIMIZE_16GB', 'false').lower() in ('true', '1', 'yes'):
+    try:
+        _config = optimize_for_16gb()
+    except Exception as e:
+        print(f"⚠️  Auto-optimization failed: {e}")

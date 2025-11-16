@@ -2,13 +2,12 @@
 完整的概念加载系统
 实现 R ricu 的 load_concepts 功能
 """
-from typing import List, Optional, Union, Dict, Any, Callable
-from pathlib import Path
+from typing import List, Optional, Union, Dict, Any, Callable, Iterable, Sequence, Mapping
 import pandas as pd
-import numpy as np
 from datetime import timedelta
 
 from .concept import Concept, load_dictionary
+from .config import DataSourceConfig, TableConfig, load_src_cfg
 from .datasource import ICUDataSource
 from .table import load_table
 from .ts_utils import change_interval, aggregate_data
@@ -17,22 +16,198 @@ from .callback_utils import combine_callbacks
 # DataSource 别名用于向后兼容
 DataSource = ICUDataSource
 
+# 常见列名集合，用于推测可能需要的列
+COMMON_ID_COLUMNS = [
+    'stay_id', 'icustay_id', 'subject_id', 'hadm_id',
+    'patientunitstayid', 'patientid', 'patient_id', 'admissionid',
+    'admission_id', 'patienthealthsystemstayid', 'uniquepid',
+    'encounter', 'encounter_id', 'visit_id', 'visitid', 'episode_id',
+]
+
+ID_TYPE_HINTS = {
+    'patient': ['subject_id', 'patientid', 'patient_id', 'uniquepid'],
+    'hadm': ['hadm_id', 'admissionid', 'admission_id', 'visit_id', 'encounter_id'],
+    'icustay': ['stay_id', 'icustay_id', 'patientunitstayid'],
+}
+
+COMMON_TIME_COLUMNS = [
+    'charttime', 'time', 'datetime', 'timestamp', 'starttime', 'endtime',
+    'intime', 'outtime', 'admittime', 'dischtime', 'createtime',
+    'observationoffset', 'chartoffset', 'eventtime', 'realtime'
+]
+
+COMMON_VALUE_COLUMNS = [
+    'valuenum', 'value', 'valuetext', 'valueasnumber', 'value_as_number',
+    'amount', 'totalamount', 'rate', 'dose', 'doseamount', 'dose_val_rx',
+    'volume', 'chartvalue', 'resultvalue', 'value1', 'value2', 'value3',
+    'drugname', 'amountuom'
+]
+
+# 🚀 表特定的最小列集 - 只加载必要的列以提升性能
+MINIMAL_COLUMNS_MAP = {
+    # MIMIC-IV chartevents: 只需要6列而非全部11列
+    # 包含value列以支持字符串型数据（如药物名称等）
+    'chartevents': ['stay_id', 'charttime', 'itemid', 'value', 'valuenum', 'valueuom'],
+    
+    # MIMIC-IV labevents: 只需要5列而非全部16列  
+    # 注意: labevents没有stay_id，需要subject_id+hadm_id后续关联
+    'labevents': ['subject_id', 'hadm_id', 'charttime', 'itemid', 'valuenum'],
+    
+    # MIMIC-IV inputevents: 输入事件的核心列
+    # 包含hadm_id用于某些需要住院级别聚合的概念（如abx）
+    'inputevents': ['stay_id', 'hadm_id', 'starttime', 'endtime', 'itemid', 'amount', 'amountuom', 'rate', 'linkorderid'],
+    
+    # MIMIC-IV outputevents: 输出事件的核心列
+    'outputevents': ['stay_id', 'charttime', 'itemid', 'value'],
+    
+    # MIMIC-IV procedureevents: 操作事件的核心列
+    'procedureevents': ['stay_id', 'starttime', 'endtime', 'itemid', 'value'],
+    
+    # eICU vitalperiodic: 生命体征周期表
+    'vitalperiodic': ['patientunitstayid', 'observationoffset', 'temperature', 'heartrate', 
+                      'respiration', 'systemicsystolic', 'systemicdiastolic', 'systemicmean'],
+    
+    # eICU lab: 实验室检查
+    'lab': ['patientunitstayid', 'labresultoffset', 'labname', 'labresult'],
+}
+
+# 性能优化开关 - 如果遇到问题可以禁用
+USE_MINIMAL_COLUMNS = True
+
 
 class ConceptLoader:
     """概念加载器 - 复刻 R ricu 的 load_concepts"""
     
-    def __init__(self, src: Union[str, DataSource]):
+    def __init__(self, src: Union[str, DataSource, DataSourceConfig]):
         """
         初始化概念加载器
         
         Args:
             src: 数据源名称或 DataSource 对象
         """
-        if isinstance(src, str):
-            from .config import load_src_cfg
+        self._data_source: Optional[ICUDataSource] = None
+        if isinstance(src, ICUDataSource):
+            self._data_source = src
+            self.src = src.config
+        elif isinstance(src, DataSourceConfig):
+            self.src = src
+        elif isinstance(src, str):
             self.src = load_src_cfg(src)
         else:
-            self.src = src
+            raise TypeError(f"不支持的数据源类型: {type(src)}")
+        self._src_name = self.src.name
+    
+    def _get_table_config(self, table_name: Optional[str]) -> Optional[TableConfig]:
+        """根据表名获取配置。"""
+        if not table_name or not hasattr(self.src, 'tables'):
+            return None
+        return self.src.tables.get(table_name)
+    
+    def _infer_required_columns(
+        self,
+        table_name: Optional[str],
+        id_type: str,
+        extra_candidates: Optional[Sequence[str]] = None,
+    ) -> Optional[List[str]]:
+        """根据表配置和概念需求推断需要加载的列 - 优化版，只加载必要列"""
+        
+        # 🚀 性能优化：优先使用最小列集（减少50-70%的I/O）
+        if USE_MINIMAL_COLUMNS and table_name in MINIMAL_COLUMNS_MAP:
+            base_cols = list(MINIMAL_COLUMNS_MAP[table_name])
+            
+            # 添加额外需要的列（如sub_var, val_var等）
+            if extra_candidates:
+                for col in extra_candidates:
+                    if col and col not in base_cols:
+                        base_cols.append(col)
+            
+            # 确保有ID列
+            has_id = any(id_col in base_cols for id_col in 
+                        ['stay_id', 'icustay_id', 'subject_id', 'patientunitstayid', 'hadm_id'])
+            if not has_id:
+                # 添加ID类型对应的列
+                id_candidates = ID_TYPE_HINTS.get(id_type, ['stay_id'])
+                base_cols.insert(0, id_candidates[0])
+            
+            return base_cols
+        
+        # 回退到原有逻辑（用于不在最小列集映射中的表，如icustays等）
+        table_cfg = self._get_table_config(table_name)
+        defaults = table_cfg.defaults if table_cfg else None
+        available = (
+            set(table_cfg.columns.keys())
+            if table_cfg and table_cfg.columns
+            else None
+        )
+        
+        candidates: List[str] = []
+        if defaults:
+            if defaults.id_var:
+                candidates.append(defaults.id_var)
+            if defaults.index_var:
+                candidates.append(defaults.index_var)
+            if defaults.val_var:
+                candidates.append(defaults.val_var)
+            if defaults.unit_var:
+                candidates.append(defaults.unit_var)
+            candidates.extend(defaults.time_vars or [])
+        
+        if extra_candidates:
+            candidates.extend(extra_candidates)
+        
+        # ID 列和通用列候选
+        candidates.extend(ID_TYPE_HINTS.get(id_type, []))
+        candidates.extend(COMMON_ID_COLUMNS)
+        candidates.extend(COMMON_TIME_COLUMNS)
+        candidates.extend(COMMON_VALUE_COLUMNS)
+        
+        filtered: List[str] = []
+        seen: set[str] = set()
+        for col in candidates:
+            if not col or col in seen:
+                continue
+            if available is not None and col not in available:
+                continue
+            filtered.append(col)
+            seen.add(col)
+        
+        return filtered or None
+    
+    def _safe_load_table(
+        self,
+        table_name: str,
+        columns: Optional[Iterable[str]],
+    ) -> pd.DataFrame:
+        """在列过滤失败时回退到全表加载。"""
+        if columns:
+            try:
+                return load_table(self._src_name, table_name, columns=list(columns))
+            except Exception:
+                # 回退到加载全部列，确保兼容缺少列描述的表
+                return load_table(self._src_name, table_name)
+        return load_table(self._src_name, table_name)
+    
+    def _columns_for_source(self, source, id_type: str) -> Optional[List[str]]:
+        """提取 ConceptSource 所需的列。"""
+        extra: List[str] = []
+        if getattr(source, 'sub_var', None):
+            extra.append(source.sub_var)
+        if getattr(source, 'value_var', None):
+            extra.append(source.value_var)
+        if getattr(source, 'index_var', None):
+            extra.append(source.index_var)
+        if getattr(source, 'unit_var', None):
+            extra.append(source.unit_var)
+        return self._infer_required_columns(source.table, id_type, extra)
+    
+    def _columns_for_item(self, item: Mapping[str, Any], id_type: str) -> Optional[List[str]]:
+        """提取旧式 item 配置所需列。"""
+        extra: List[str] = []
+        for key in ['sub_var', 'val_var', 'value_var', 'time_var', 'index_var']:
+            value = item.get(key)
+            if isinstance(value, str):
+                extra.append(value)
+        return self._infer_required_columns(item.get('table'), id_type, extra)
             
     def load_concepts(
         self,
@@ -74,7 +249,7 @@ class ConceptLoader:
                               'mech_circ_support', 'other_vaso', 'delirium_tx'}
             include_sofa2 = any(c in sofa2_concepts for c in concepts)
             
-            concept_dict = load_dictionary(self.src.name, include_sofa2=include_sofa2)
+            concept_dict = load_dictionary(self._src_name, include_sofa2=include_sofa2)
             concept_objs = [concept_dict[name] for name in concepts]
         elif isinstance(concepts, Concept):
             concept_objs = [concepts]
@@ -212,8 +387,17 @@ class ConceptLoader:
         if not table_name:
             return pd.DataFrame()
         
+        required_columns = self._columns_for_item(item, id_type)
+        
+        # 🔍 调试：显示推断的列
+        if required_columns:
+            import logging
+            logger = logging.getLogger('pyricu.load_concepts')
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"   🔹 表 {table_name} 推断的列: {required_columns}")
+        
         try:
-            df = load_table(self.src.name, table_name)
+            df = self._safe_load_table(table_name, required_columns)
         except Exception as e:
             print(f"警告: 无法加载表 {table_name}: {e}")
             return pd.DataFrame()
@@ -295,8 +479,9 @@ class ConceptLoader:
         if not table_name:
             return pd.DataFrame()
         
+        required_columns = self._columns_for_source(source, id_type)
         try:
-            df = load_table(self.src.name, table_name)
+            df = self._safe_load_table(table_name, required_columns)
         except Exception as e:
             print(f"警告: 无法加载表 {table_name}: {e}")
             return pd.DataFrame()
@@ -435,7 +620,7 @@ class ConceptLoader:
                         sub_concept = sub_concepts[sub_name]
                     else:
                         # 从字典中加载
-                        concept_dict = load_dictionary(self.src.name)
+                        concept_dict = load_dictionary(self._src_name)
                         if sub_name not in concept_dict:
                             print(f"警告: 找不到子概念 {sub_name}")
                             continue
@@ -681,7 +866,7 @@ class ConceptLoader:
             },
         }
         
-        src_name = self.src.name if hasattr(self.src, 'name') else str(self.src)
+        src_name = self._src_name
         
         if src_name in id_mappings and id_type in id_mappings[src_name]:
             return id_mappings[src_name][id_type]

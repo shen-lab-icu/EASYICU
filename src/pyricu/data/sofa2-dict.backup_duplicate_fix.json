@@ -1,0 +1,724 @@
+{
+  "sofa2": {
+    "concepts": [
+      "sofa2_resp",
+      "sofa2_coag",
+      "sofa2_liver",
+      "sofa2_cardio",
+      "sofa2_cns",
+      "sofa2_renal"
+    ],
+    "description": "SOFA-2 (2025) aggregate score",
+    "category": "outcome",
+    "callback": "sofa2_score",
+    "class_name": "rec_cncpt"
+  },
+  "sofa2_resp": {
+    "concepts": [
+      "pafi",
+      "spo2",
+      "fio2",
+      "adv_resp",
+      "ecmo",
+      "ecmo_indication"
+    ],
+    "description": "SOFA-2 respiratory component (P/F\u2264300/225/150/75 with advanced support; ECMO auto-4 if respiratory indication)",
+    "category": "outcome",
+    "callback": "sofa2_resp",
+    "class_name": "rec_cncpt"
+  },
+  "sofa2_coag": {
+    "concepts": "plt",
+    "description": "SOFA-2 hemostasis component (updated thresholds: \u2264150/100/80/50)",
+    "category": "outcome",
+    "callback": "sofa2_coag",
+    "class_name": "rec_cncpt",
+    "aggregate": "min"
+  },
+  "sofa2_liver": {
+    "concepts": "bili",
+    "description": "SOFA-2 liver component (relaxed 1pt threshold: \u22643.0 mg/dL vs \u22641.9 in SOFA-1)",
+    "category": "outcome",
+    "aggregate": "max",
+    "callback": "sofa2_liver",
+    "class_name": "rec_cncpt"
+  },
+  "sofa2_cardio": {
+    "concepts": [
+      "map",
+      "norepi60",
+      "epi60",
+      "dopa60",
+      "dobu60",
+      "other_vaso",
+      "mech_circ_support"
+    ],
+    "description": "SOFA-2 cardiovascular component (combined norepi+epi: \u22640.2/0.2-0.4/>0.4 \u03bcg/kg/min; dopamine backup only; mechanical support)",
+    "category": "outcome",
+    "aggregate": [
+      "min",
+      "max",
+      "max",
+      "max",
+      "max",
+      null,
+      null
+    ],
+    "callback": "sofa2_cardio",
+    "class_name": "rec_cncpt"
+  },
+  "sofa2_cns": {
+    "concepts": [
+      "gcs",
+      "delirium_tx",
+      "sedated_gcs"
+    ],
+    "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; delirium treatment \u2192 1pt even if GCS=15)",
+    "category": "outcome",
+    "callback": "sofa2_cns",
+    "class_name": "rec_cncpt"
+  },
+  "sofa2_renal": {
+    "concepts": [
+      "crea",
+      "rrt",
+      "rrt_criteria",
+      "uo_6h",
+      "uo_12h",
+      "uo_24h",
+      "potassium",
+      "ph",
+      "bicarb"
+    ],
+    "description": "SOFA-2 renal component with duration-based UO (6h/12h/24h windows for accurate temporal scoring)",
+    "category": "outcome",
+    "aggregate": [
+      "max",
+      null,
+      null,
+      "min",
+      "min",
+      "min",
+      "max",
+      "min",
+      "min"
+    ],
+    "callback": "sofa2_renal",
+    "class_name": "rec_cncpt"
+  },
+  "uo_6h": {
+    "concepts": [
+      "urine",
+      "weight"
+    ],
+    "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h \u2192 Score 1)",
+    "category": "output",
+    "callback": "uo_6h",
+    "class_name": "rec_cncpt"
+  },
+  "uo_12h": {
+    "concepts": [
+      "urine",
+      "weight"
+    ],
+    "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for \u226512h \u2192 Score 2; anuria \u226512h \u2192 Score 3)",
+    "category": "output",
+    "callback": "uo_12h",
+    "class_name": "rec_cncpt"
+  },
+  "uo_24h": {
+    "concepts": [
+      "urine",
+      "weight"
+    ],
+    "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for \u226524h \u2192 Score 3)",
+    "category": "output",
+    "callback": "uo_24h",
+    "class_name": "rec_cncpt"
+  },
+  "adv_resp": {
+    "class_name": "lgl_cncpt",
+    "description": "Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP)",
+    "category": "respiratory",
+    "sources": {
+      "miiv": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            223848,
+            223849,
+            225411
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "value",
+          "ids": [
+            "High Flow Nasal Cannula",
+            "HFNC",
+            "Optiflow"
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycare",
+          "sub_var": "ventstartoffset",
+          "val_var": "ventstartoffset",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "regex": "CPAP|BiPAP|NIV|PEEP/CPAP|Bipap|HFNC|High Flow",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "listitems",
+          "sub_var": "item",
+          "regex": "(CPAP|Bipap|NIV|IPPV|SIMV|ASB|MMV|BIPAP|HFNC|High Flow)",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "listitems",
+          "sub_var": "itemid",
+          "ids": [
+            6685,
+            6694
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [
+            3845,
+            15001552
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "ecmo": {
+    "class_name": "lgl_cncpt",
+    "description": "Extracorporeal membrane oxygenation in use",
+    "category": "respiratory",
+    "sources": {
+      "miiv": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            224660,
+            228193
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "ECMO",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "listitems",
+          "sub_var": "itemid",
+          "ids": [
+            20662
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "procedureorderitems",
+          "sub_var": "item",
+          "regex": "ECMO",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "hirid": []
+    }
+  },
+  "ecmo_indication": {
+    "class_name": "chr_cncpt",
+    "description": "ECMO indication (respiratory/cardiovascular)",
+    "category": "respiratory",
+    "sources": {
+      "miiv": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            224660,
+            228193
+          ],
+          "callback": "transform_fun(set_val('respiratory'))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "VV.*ECMO|ECMO.*respiratory",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val('respiratory'))"
+        },
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "VA.*ECMO|ECMO.*cardio",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val('cardiovascular'))"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "listitems",
+          "sub_var": "itemid",
+          "ids": [
+            20662
+          ],
+          "callback": "apply_map(c(`VA ECMO` = 'cardiovascular', `VV ECMO` = 'respiratory'), var = 'value')"
+        }
+      ],
+      "hirid": []
+    }
+  },
+  "sedated_gcs": {
+    "class_name": "num_cncpt",
+    "description": "GCS before sedation (for sedated patients)",
+    "category": "neurology",
+    "unit": "score",
+    "min": 3,
+    "max": 15,
+    "sources": {
+      "miiv": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            220739
+          ]
+        }
+      ],
+      "eicu": [
+        {
+          "table": "nursecharting",
+          "sub_var": "nursingchartcelltypevallabel",
+          "regex": "GCS.*prior.*sedation",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "numericitems",
+          "sub_var": "item",
+          "regex": "GCS.*pre.*sedat",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": []
+        }
+      ]
+    }
+  },
+  "mech_circ_support": {
+    "class_name": "lgl_cncpt",
+    "description": "Mechanical circulatory support (IABP/LVAD/Impella)",
+    "category": "cardiovascular",
+    "sources": {
+      "miiv": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            224272,
+            224322,
+            225979,
+            220128
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "IABP|balloon pump|LVAD|Impella",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "procedureorderitems",
+          "sub_var": "item",
+          "regex": "(IABP|balloon|Impella|LVAD)",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "listitems",
+          "sub_var": "itemid",
+          "ids": [
+            6658
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "other_vaso": {
+    "class_name": "lgl_cncpt",
+    "description": "Other vasoactive medication present (vasopressin/phenylephrine/milrinone)",
+    "category": "cardiovascular",
+    "sources": {
+      "miiv": [
+        {
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "ids": [
+            222315,
+            221749,
+            221986
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "medication",
+          "sub_var": "drugname",
+          "regex": "vasopressin|phenylephrine|milrinone",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "val_var": "drugname"
+        },
+        {
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "regex": "vasopressin|phenylephrine|milrinone",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "val_var": "drugname"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "drugitems",
+          "sub_var": "item",
+          "regex": "(Fenylefrine|vasopressin)",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "hirid": [
+        {
+          "table": "pharma",
+          "sub_var": "pharmacode",
+          "ids": [
+            112,
+            113
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "delirium_tx": {
+    "class_name": "lgl_cncpt",
+    "description": "Delirium treatment administered (e.g., haloperidol, quetiapine)",
+    "category": "neurology",
+    "sources": {
+      "miiv": [
+        {
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "ids": [
+            221824
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "prescriptions",
+          "sub_var": "drug",
+          "regex": "haloperidol|quetiapine|olanzapine|risperidone",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "regex": "haloperidol|quetiapine|olanzapine|risperidone",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "ids": [
+            7097,
+            13012,
+            16360
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "hirid": [
+        {
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "ids": [
+            239
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "rrt": {
+    "class_name": "lgl_cncpt",
+    "description": "Renal replacement therapy in use",
+    "category": "renal",
+    "sources": {
+      "miiv": [
+        {
+          "table": "procedureevents",
+          "sub_var": "itemid",
+          "ids": [
+            225441,
+            225802,
+            225803,
+            225809,
+            225955
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "(CRRT|hemodialysis|dialysis)",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "procedureorderitems",
+          "sub_var": "item",
+          "regex": "(CRRT|Hemodialysis|Dialysis|CVVH)",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "ids": [
+            6684
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [],
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "rrt_criteria": {
+    "class_name": "lgl_cncpt",
+    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+\u22656.0 OR acidosis pH\u22647.20+HCO3\u226412)",
+    "category": "renal",
+    "sources": {
+      "miiv": [],
+      "eicu": [],
+      "aumc": [],
+      "hirid": []
+    },
+    "target": "id_tbl",
+    "callback": "rrt_criteria"
+  },
+  "potassium": {
+    "class_name": "num_cncpt",
+    "description": "Serum potassium",
+    "category": "chemistry",
+    "unit": "mmol/L",
+    "min": 2.0,
+    "max": 10.0,
+    "sources": {
+      "miiv": [
+        {
+          "table": "labevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "ids": [
+            50822,
+            50971
+          ]
+        }
+      ],
+      "eicu": [
+        {
+          "table": "lab",
+          "sub_var": "labname",
+          "regex": "potassium",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "ids": [
+            6835,
+            9555
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [
+            20000500,
+            24000520,
+            24000833,
+            24000867
+          ]
+        }
+      ]
+    }
+  },
+  "ph": {
+    "class_name": "num_cncpt",
+    "description": "Arterial pH",
+    "category": "blood_gas",
+    "unit": "pH",
+    "min": 6.5,
+    "max": 8.0,
+    "sources": {
+      "miiv": [
+        {
+          "table": "labevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "ids": [
+            50820
+          ]
+        }
+      ],
+      "eicu": [
+        {
+          "table": "lab",
+          "sub_var": "labname",
+          "regex": "pH",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "ids": [
+            6848,
+            12310
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [
+            20000200
+          ]
+        }
+      ]
+    }
+  },
+  "bicarb": {
+    "class_name": "num_cncpt",
+    "description": "Serum bicarbonate (HCO3)",
+    "category": "chemistry",
+    "unit": "mmol/L",
+    "min": 5.0,
+    "max": 50.0,
+    "sources": {
+      "miiv": [
+        {
+          "table": "labevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "ids": [
+            50882
+          ]
+        }
+      ],
+      "eicu": [
+        {
+          "table": "lab",
+          "sub_var": "labname",
+          "regex": "bicarbonate|HCO3",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "ids": [
+            6850,
+            9990
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [
+            24000500
+          ]
+        }
+      ]
+    }
+  }
+}
