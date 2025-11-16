@@ -343,6 +343,9 @@ class ConceptResolver:
         self._table_cache: Dict[tuple, pd.DataFrame] = {}
         self._cache_lock = RLock()
         self._concept_cache: Dict[str, ICUTable] = {}
+        # 🚀 新增：概念数据缓存（避免重复加载相同概念，如urine）
+        # Key: (concept_name, patient_ids_hash, interval, aggregate)
+        self._concept_data_cache: Dict[tuple, pd.DataFrame] = {}
         self._inflight: set[str] = set()
         self.cache_dir = cache_dir if cache_dir else None
         self.cache_schema_version = "1"
@@ -371,6 +374,7 @@ class ConceptResolver:
         with self._cache_lock:
             self._table_cache.clear()
             self._concept_cache.clear()
+            self._concept_data_cache.clear()  # 🚀 清除概念数据缓存
             self._inflight.clear()
 
     def _should_fill_gaps(self, concept_name: str, definition: ConceptDefinition) -> bool:
@@ -762,8 +766,8 @@ class ConceptResolver:
                     elif db_name in ['hirid']:
                         # HiRID使用patientid
                         effective_id_var = 'patientid'
-                    elif source.table in ['microbiologyevents', 'labevents', 'd_labitems', 'prescriptions']:
-                        # MIMIC-IV hosp表使用subject_id
+                    elif source.table in ['microbiologyevents', 'd_labitems', 'prescriptions']:
+                        # MIMIC-IV hosp表使用subject_id（labevents除外，它同时支持stay_id和subject_id）
                         effective_id_var = 'subject_id'
                     elif source.table in ['inputevents', 'chartevents', 'outputevents', 'procedureevents']:
                         # MIMIC-IV icu表使用stay_id
@@ -838,10 +842,6 @@ class ConceptResolver:
             # 尝试从缓存获取
             with self._cache_lock:
                 cached_table = self._table_cache.get(cache_key)
-            
-            # 确保frame变量始终被初始化
-            frame = pd.DataFrame()
-            
             if cached_table is not None:
                 if verbose or DEBUG_MODE:
                     if DEBUG_MODE: print(f"   ♻️  使用缓存的表: {source.table} (跳过 {len(patient_filter_in_filters.value) if patient_filter_in_filters else 0} 个患者的加载)")
@@ -868,236 +868,201 @@ class ConceptResolver:
                 )
             else:
                 # 从数据源加载
-                # 确保frame变量始终被初始化
-                frame = pd.DataFrame()
-                
                 try:
-                    # 尝试使用列过滤加载
-                    requested_columns = self._determine_required_columns(defaults, source)
-                    essential_columns = self._essential_columns(defaults, source)
+                    # DEBUG: 打印过滤器信息
+                    table = data_source.load_table(source.table, filters=filters, verbose=verbose)
                     
-                    table = data_source.load_table(
-                        source.table,
-                        columns=requested_columns,
-                        filters=filters,
-                        verbose=verbose,
-                    )
-                    
-                    frame = table.data
-                    
-                    # 检查是否缺少关键列，如果是则回退到加载全部列
-                    missing_essential = [col for col in essential_columns if col and col not in frame.columns]
-                    if missing_essential:
-                        if DEBUG_MODE:
-                            print(f"       缺少关键列 {missing_essential}，回退到加载全表")
-                        table = data_source.load_table(
-                            source.table,
-                            columns=None,
-                            filters=filters,
-                            verbose=verbose,
-                        )
-                        frame = table.data
-                except Exception as e:
+                    # 🔍 DEBUG: 检查table.data
                     if DEBUG_MODE:
-                        print(f"       加载带列过滤的表失败: {e}, 回退到全表加载")
-                    # 发生任何异常都回退到全表加载
-                    table = data_source.load_table(
-                        source.table,
-                        columns=None,
-                        filters=filters,
-                        verbose=verbose,
-                    )
-                    frame = table.data
-
-                # 🔧 调试：检查过滤是否成功
-                if verbose and patient_ids and table.id_columns:
-                    id_col = table.id_columns[0] if table.id_columns else None
-                    if id_col and id_col in frame.columns:
-                        unique_ids = frame[id_col].unique()
-                        print(f"   🔍 表 {source.table} 加载后: {len(frame)} 行, 唯一{id_col}: {len(unique_ids)}个")
-                        if len(unique_ids) <= 10:
-                            print(f"       ID列表: {sorted(unique_ids)}")
-                
-                # 🔧 性能优化：对于AUMC/HiRID等高频数据，在表加载后立即降采样
-                # 检测数据库类型和数据频率
-                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                is_high_freq_db = db_name in ['aumc', 'hirid']
-                
-                if is_high_freq_db and table.index_column and len(frame) > 1000:
-                    time_col = table.index_column
-                    is_numeric_time = pd.api.types.is_numeric_dtype(frame[time_col])
+                        print(f"   🔎 table.data类型: {type(table.data)}, 长度: {len(table.data) if hasattr(table.data, '__len__') else 'N/A'}")
+                        if hasattr(table.data, 'columns'):
+                            print(f"       列: {list(table.data.columns)}")
+                        if hasattr(table.data, 'head'):
+                            print(f"       前3行:\\n{table.data.head(3)}")
                     
-                    # 使用interval参数（如果提供）
-                    target_interval = kwargs.get('interval', pd.Timedelta(hours=1))
-                    if isinstance(target_interval, str):
-                        target_interval = pd.Timedelta(target_interval)
+                    frame = table.data.copy()
                     
-                    # 检测当前数据频率
-                    need_resample = False
-                    if len(frame) > 100:
-                        frame_sorted = frame.sort_values(time_col)
-                        time_diffs = frame_sorted[time_col].diff().dropna()
-                        if len(time_diffs) > 10:
-                            median_diff = time_diffs.median()
-                            if is_numeric_time:
-                                # 数值时间（小时）
-                                target_hours = target_interval.total_seconds() / 3600.0
-                                # AUMC数据频率很高，中位差通常<0.1小时
-                                if median_diff < target_hours * 0.5:  # 如果中位间隔小于目标间隔的一半
-                                    need_resample = True
-                            else:
-                                # datetime时间
-                                if median_diff < target_interval * 0.5:
-                                    need_resample = True
+                    # 🔧 调试：检查过滤是否成功
+                    if verbose and patient_ids and table.id_columns:
+                        id_col = table.id_columns[0] if table.id_columns else None
+                        if id_col and id_col in frame.columns:
+                            unique_ids = frame[id_col].unique()
+                            print(f"   🔍 表 {source.table} 加载后: {len(frame)} 行, 唯一{id_col}: {len(unique_ids)}个")
+                            if len(unique_ids) <= 10:
+                                print(f"       ID列表: {sorted(unique_ids)}")
                     
-                    # 执行降采样
-                    if need_resample:
-                        if verbose:
-                            print(f"   ⚡ 检测到高频数据（{source.table}），降采样到 {target_interval}")
+                    # 🔧 性能优化：对于AUMC/HiRID等高频数据，在表加载后立即降采样
+                    # 检测数据库类型和数据频率
+                    db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                    is_high_freq_db = db_name in ['aumc', 'hirid']
+                    
+                    if is_high_freq_db and table.index_column and len(frame) > 1000:
+                        time_col = table.index_column
+                        is_numeric_time = pd.api.types.is_numeric_dtype(frame[time_col])
                         
-                        id_cols = table.id_columns if table.id_columns else []
-                        value_col = table.value_column
+                        # 使用interval参数（如果提供）
+                        target_interval = kwargs.get('interval', pd.Timedelta(hours=1))
+                        if isinstance(target_interval, str):
+                            target_interval = pd.Timedelta(target_interval)
                         
-                        # 🔧 如果id_cols为空但frame中有明显的ID列，尝试推断
-                        if not id_cols:
-                            potential_id_cols = ['admissionid', 'patientunitstayid', 'stay_id', 'patientid']
-                            for col in potential_id_cols:
-                                if col in frame.columns:
-                                    id_cols = [col]
-                                    if verbose:
-                                        print(f"   ℹ️  推断ID列: {col}")
-                                    break
+                        # 检测当前数据频率
+                        need_resample = False
+                        if len(frame) > 100:
+                            frame_sorted = frame.sort_values(time_col)
+                            time_diffs = frame_sorted[time_col].diff().dropna()
+                            if len(time_diffs) > 10:
+                                median_diff = time_diffs.median()
+                                if is_numeric_time:
+                                    # 数值时间（小时）
+                                    target_hours = target_interval.total_seconds() / 3600.0
+                                    # AUMC数据频率很高，中位差通常<0.1小时
+                                    if median_diff < target_hours * 0.5:  # 如果中位间隔小于目标间隔的一半
+                                        need_resample = True
+                                else:
+                                    # datetime时间
+                                    if median_diff < target_interval * 0.5:
+                                        need_resample = True
                         
-                        if value_col and value_col in frame.columns:
-                            if is_numeric_time:
-                                # 数值时间：四舍五入到interval
-                                interval_hours = target_interval.total_seconds() / 3600.0
-                                frame[time_col + '_rounded'] = (frame[time_col] / interval_hours).round() * interval_hours
-                                
-                                # 聚合：根据数据类型选择聚合函数
-                                # 对于输出类数据（尿量等）使用sum，其他使用mean
-                                agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'mean'
-                                group_cols = id_cols + [time_col + '_rounded']
-                                
-                                # 🔧 保留所有列，不只是value_col
-                                # 对于数值列使用agg_func，其他列使用first
-                                agg_dict = {}
-                                for col in frame.columns:
-                                    # 跳过分组列（ID列和时间列已经在group_cols中）
-                                    if col in group_cols or col == time_col + '_rounded':
-                                        continue
-                                    # value列：先检查类型，只有数值型才能聚合
-                                    elif col == value_col:
-                                        if pd.api.types.is_numeric_dtype(frame[col]) and not pd.api.types.is_bool_dtype(frame[col]):
-                                            agg_dict[col] = agg_func
-                                        else:
-                                            agg_dict[col] = 'first'  # object类型用first
-                                    # 其他数值列使用聚合函数（排除布尔类型）
-                                    elif pd.api.types.is_numeric_dtype(frame[col]) and not pd.api.types.is_bool_dtype(frame[col]):
-                                        agg_dict[col] = agg_func
-                                    # 其他列（包括object、string等）使用first
-                                    else:
-                                        agg_dict[col] = 'first'
-                                
-                                if agg_dict:  # 只有当有列需要聚合时才执行
-                                    try:
-                                        frame = frame.groupby(group_cols, as_index=False).agg(agg_dict)
-                                        frame = frame.rename(columns={time_col + '_rounded': time_col})
-                                    except Exception as e:
+                        # 执行降采样
+                        if need_resample:
+                            if verbose:
+                                print(f"   ⚡ 检测到高频数据（{source.table}），降采样到 {target_interval}")
+                            
+                            id_cols = table.id_columns if table.id_columns else []
+                            value_col = table.value_column
+                            
+                            # 🔧 如果id_cols为空但frame中有明显的ID列，尝试推断
+                            if not id_cols:
+                                potential_id_cols = ['admissionid', 'patientunitstayid', 'stay_id', 'patientid']
+                                for col in potential_id_cols:
+                                    if col in frame.columns:
+                                        id_cols = [col]
                                         if verbose:
-                                            print(f"   ⚠️  聚合失败: {e}")
-                                            print(f"       group_cols={group_cols}")
-                                            print(f"       agg_dict={agg_dict}")
-                                            print(f"       frame列类型:")
-                                            for col, dtype in frame.dtypes.items():
-                                                print(f"         {col}: {dtype}")
-                                        raise
-                                else:
-                                    # 没有需要聚合的列，只保留唯一的时间点
-                                    frame = frame.drop_duplicates(subset=group_cols)
-                                    frame = frame.rename(columns={time_col + '_rounded': time_col})
-                            else:
-                                # datetime时间：使用resample
-                                if id_cols:
-                                    resampled_groups = []
-                                    agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'mean'
+                                            print(f"   ℹ️  推断ID列: {col}")
+                                        break
+                            
+                            if value_col and value_col in frame.columns:
+                                if is_numeric_time:
+                                    # 数值时间：四舍五入到interval
+                                    interval_hours = target_interval.total_seconds() / 3600.0
+                                    frame[time_col + '_rounded'] = (frame[time_col] / interval_hours).round() * interval_hours
                                     
-                                    for group_id, group_df in frame.groupby(id_cols):
-                                        group_df = group_df.set_index(time_col)
-                                        
-                                        # 聚合所有数值列
-                                        numeric_cols = group_df.select_dtypes(include=[np.number]).columns.tolist()
-                                        if value_col in numeric_cols:
-                                            # value_col使用特定的聚合函数
-                                            agg_dict = {value_col: agg_func}
-                                            # 其他数值列使用mean
-                                            for col in numeric_cols:
-                                                if col != value_col:
-                                                    agg_dict[col] = 'mean'
-                                        else:
-                                            agg_dict = {col: 'mean' for col in numeric_cols}
-                                        
-                                        resampled = group_df[numeric_cols].resample(target_interval).agg(agg_dict)
-                                        resampled = resampled.reset_index()
-                                        
-                                        # 添加ID列
-                                        if isinstance(group_id, tuple):
-                                            for i, col in enumerate(id_cols):
-                                                resampled[col] = group_id[i]
-                                        else:
-                                            resampled[id_cols[0]] = group_id
-                                        
-                                        resampled_groups.append(resampled)
-                                    
-                                    if resampled_groups:
-                                        frame = pd.concat(resampled_groups, ignore_index=True)
-                                else:
-                                    frame = frame.set_index(time_col)
+                                    # 聚合：根据数据类型选择聚合函数
+                                    # 对于输出类数据（尿量等）使用sum，其他使用mean
                                     agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'mean'
-                                    numeric_cols = frame.select_dtypes(include=[np.number]).columns.tolist()
-                                    agg_dict = {col: agg_func if col == value_col else 'mean' for col in numeric_cols}
-                                    frame = frame[numeric_cols].resample(target_interval).agg(agg_dict).reset_index()
-                        
-                        if verbose:
-                            print(f"   ✓ 降采样完成：{len(table.data)} 行 → {len(frame)} 行")
-                        
-                        # 🔧 更新table对象以反映降采样后的数据
-                        table = ICUTable(
-                            data=frame,
-                            id_columns=table.id_columns,
-                            index_column=table.index_column,
-                            value_column=table.value_column,
-                            unit_column=table.unit_column,
+                                    group_cols = id_cols + [time_col + '_rounded']
+                                    
+                                    # 🔧 保留所有列，不只是value_col
+                                    # 对于数值列使用agg_func，其他列使用first
+                                    agg_dict = {}
+                                    for col in frame.columns:
+                                        # 跳过分组列（ID列和时间列已经在group_cols中）
+                                        if col in group_cols or col == time_col + '_rounded':
+                                            continue
+                                        # value列：先检查类型，只有数值型才能聚合
+                                        elif col == value_col:
+                                            if pd.api.types.is_numeric_dtype(frame[col]) and not pd.api.types.is_bool_dtype(frame[col]):
+                                                agg_dict[col] = agg_func
+                                            else:
+                                                agg_dict[col] = 'first'  # object类型用first
+                                        # 其他数值列使用聚合函数（排除布尔类型）
+                                        elif pd.api.types.is_numeric_dtype(frame[col]) and not pd.api.types.is_bool_dtype(frame[col]):
+                                            agg_dict[col] = agg_func
+                                        # 其他列（包括object、string等）使用first
+                                        else:
+                                            agg_dict[col] = 'first'
+                                    
+                                    if agg_dict:  # 只有当有列需要聚合时才执行
+                                        try:
+                                            frame = frame.groupby(group_cols, as_index=False).agg(agg_dict)
+                                            frame = frame.rename(columns={time_col + '_rounded': time_col})
+                                        except Exception as e:
+                                            if verbose:
+                                                print(f"   ⚠️  聚合失败: {e}")
+                                                print(f"       group_cols={group_cols}")
+                                                print(f"       agg_dict={agg_dict}")
+                                                print(f"       frame列类型:")
+                                                for col, dtype in frame.dtypes.items():
+                                                    print(f"         {col}: {dtype}")
+                                            raise
+                                    else:
+                                        # 没有需要聚合的列，只保留唯一的时间点
+                                        frame = frame.drop_duplicates(subset=group_cols)
+                                        frame = frame.rename(columns={time_col + '_rounded': time_col})
+                                else:
+                                    # datetime时间：使用resample
+                                    if id_cols:
+                                        resampled_groups = []
+                                        agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'mean'
+                                        
+                                        for group_id, group_df in frame.groupby(id_cols):
+                                            group_df = group_df.set_index(time_col)
+                                            
+                                            # 聚合所有数值列
+                                            numeric_cols = group_df.select_dtypes(include=[np.number]).columns.tolist()
+                                            if value_col in numeric_cols:
+                                                # value_col使用特定的聚合函数
+                                                agg_dict = {value_col: agg_func}
+                                                # 其他数值列使用mean
+                                                for col in numeric_cols:
+                                                    if col != value_col:
+                                                        agg_dict[col] = 'mean'
+                                            else:
+                                                agg_dict = {col: 'mean' for col in numeric_cols}
+                                            
+                                            resampled = group_df[numeric_cols].resample(target_interval).agg(agg_dict)
+                                            resampled = resampled.reset_index()
+                                            
+                                            # 添加ID列
+                                            if isinstance(group_id, tuple):
+                                                for i, col in enumerate(id_cols):
+                                                    resampled[col] = group_id[i]
+                                            else:
+                                                resampled[id_cols[0]] = group_id
+                                            
+                                            resampled_groups.append(resampled)
+                                        
+                                        if resampled_groups:
+                                            frame = pd.concat(resampled_groups, ignore_index=True)
+                                    else:
+                                        frame = frame.set_index(time_col)
+                                        agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'mean'
+                                        numeric_cols = frame.select_dtypes(include=[np.number]).columns.tolist()
+                                        agg_dict = {col: agg_func if col == value_col else 'mean' for col in numeric_cols}
+                                        frame = frame[numeric_cols].resample(target_interval).agg(agg_dict).reset_index()
+                                
+                                if verbose:
+                                    print(f"   ✓ 降采样完成：{len(table.data)} 行 → {len(frame)} 行")
+                                
+                                # 🔧 更新table对象以反映降采样后的数据
+                                table = ICUTable(
+                                    data=frame,
+                                    id_columns=table.id_columns,
+                                    index_column=table.index_column,
+                                    value_column=table.value_column,
+                                    unit_column=table.unit_column,
+                                )
+                    
+                    
+                    # 仅当有患者过滤器时才缓存
+                    if patient_filter_in_filters:
+                        # 缓存只应用了患者过滤器的表
+                        patient_only_table = data_source.load_table(
+                            source.table,
+                            filters=[patient_filter_in_filters],
+                            verbose=False
                         )
+                        with self._cache_lock:
+                            self._table_cache[cache_key] = patient_only_table
+                        if verbose:
+                            if DEBUG_MODE: print(f"   💾 缓存表 {source.table}: {len(patient_filter_in_filters.value)} 个患者")
+                except (KeyError, FileNotFoundError, ValueError) as e:
+                    # 如果表不存在，跳过这个源
+                    if DEBUG_MODE:
+                        print(f"   ⚠️  表 '{source.table}' 不存在或无法加载，跳过此源: {e}")
+                    continue
             
-            
-            # 仅当有患者过滤器时才缓存
-            if patient_filter_in_filters:
-                # 缓存只应用了患者过滤器的表
-                patient_only_table = data_source.load_table(
-                    source.table,
-                    columns=None, # 统一使用全表加载避免二次检查
-                    filters=[patient_filter_in_filters],
-                    verbose=False
-                )
-                with self._cache_lock:
-                    self._table_cache[cache_key] = patient_only_table
-                if verbose:
-                    if DEBUG_MODE: print(f"   💾 缓存表 {source.table}: {len(patient_filter_in_filters.value)} 个患者")
-            
-            # 确保frame变量已定义
-            if 'frame' not in locals() or frame is None:
-                if DEBUG_MODE:
-                    print(f"   ⚠️  frame变量未定义或为None，创建空DataFrame")
-                frame = pd.DataFrame()
-                
             # MIMIC-IV特殊处理：若表为labevents/microbiologyevents/inputevents，仅有subject_id，按时间窗口映射到对应ICU stay
-            # 确保frame变量已定义
-            if 'frame' not in locals():
-                if DEBUG_MODE:
-                    print(f"   ⚠️  frame变量未定义，跳过 {source.table} 的处理")
-                continue
-                
             if DEBUG_MODE:
                 print(f"   📊 加载后数据: {source.table}, 行数={len(frame)}, itemid过滤={source.ids}")
                 if source.ids and source.sub_var and source.sub_var in frame.columns:
@@ -2865,6 +2830,99 @@ class ConceptResolver:
         merged = merged.reset_index()
         return merged
 
+    def _build_cache_key(
+        self,
+        concept_name: str,
+        data_source: ICUDataSource,
+        patient_ids: Optional[Iterable[object]],
+        interval: Optional[pd.Timedelta],
+        align_to_admission: bool,
+        aggregator: object,
+        kwargs: Dict[str, object],
+    ) -> str:
+        """Build a cache key for a concept based on all relevant parameters."""
+        import hashlib
+        import json
+        
+        # Create a dictionary of all parameters that affect the result
+        cache_params = {
+            "concept_name": concept_name,
+            "database": data_source.config.name if hasattr(data_source.config, 'name') else str(data_source.config),
+            "patient_ids": sorted(list(patient_ids)) if patient_ids else None,
+            "interval": str(interval) if interval else None,
+            "align_to_admission": align_to_admission,
+            "aggregator": str(aggregator),
+            "kwargs": {k: str(v) for k, v in kwargs.items()},
+            "dictionary_signature": self.dictionary_signature,
+            "schema_version": self.cache_schema_version,
+        }
+        
+        # Serialize and hash the parameters
+        serialized = json.dumps(cache_params, sort_keys=True, default=str)
+        return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+
+    def _load_from_disk_cache(
+        self,
+        concept_name: str,
+        data_source: ICUDataSource,
+        cache_key: str,
+    ) -> Optional[ICUTable]:
+        """Load a concept from disk cache if available."""
+        if self.cache_dir is None:
+            return None
+            
+        try:
+            import pickle
+            from pathlib import Path
+            
+            # Create cache file path
+            cache_file = Path(self.cache_dir) / f"{cache_key}.pkl"
+            if not cache_file.exists():
+                return None
+                
+            # Load from cache
+            with open(cache_file, "rb") as f:
+                cached_data = pickle.load(f)
+                
+            # Verify the cached data is an ICUTable
+            if isinstance(cached_data, ICUTable):
+                return cached_data
+                
+        except Exception:
+            # If anything goes wrong, silently return None to force recomputation
+            pass
+            
+        return None
+
+    def _store_in_disk_cache(
+        self,
+        concept_name: str,
+        data_source: ICUDataSource,
+        cache_key: str,
+        result: ICUTable,
+    ) -> None:
+        """Store a concept result in disk cache."""
+        if self.cache_dir is None:
+            return
+            
+        try:
+            import pickle
+            from pathlib import Path
+            
+            # Ensure cache directory exists
+            Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
+            
+            # Create cache file path
+            cache_file = Path(self.cache_dir) / f"{cache_key}.pkl"
+            
+            # Store in cache
+            with open(cache_file, "wb") as f:
+                pickle.dump(result, f)
+                
+        except Exception:
+            # If anything goes wrong, silently continue without caching
+            pass
+
     def _expand_dependencies(self, requested: List[str]) -> List[str]:
         """Return dependency-closed list of concept names."""
         ordered: List[str] = []
@@ -2885,74 +2943,6 @@ class ConceptResolver:
             visit(concept)
         return ordered
 
-    def _build_cache_key(
-        self,
-        concept_name: str,
-        data_source: ICUDataSource,
-        patient_ids: Optional[Iterable[object]],
-        interval: Optional[pd.Timedelta],
-        align_to_admission: bool,
-        aggregator: object,
-        kwargs: Dict[str, object],
-    ) -> str:
-        """Build a cache key for concept loading."""
-        # Create a hashable representation of all parameters
-        key_data = {
-            "concept_name": concept_name,
-            "data_source": data_source.config.name if hasattr(data_source, 'config') else str(data_source),
-            "patient_ids": tuple(sorted(patient_ids)) if patient_ids else None,
-            "interval": str(interval) if interval else None,
-            "align_to_admission": align_to_admission,
-            "aggregator": str(aggregator),
-            "kwargs": tuple(sorted(kwargs.items())) if kwargs else None,
-            "dict_signature": self.dictionary_signature,
-        }
-        
-        # Create a hash of the key data
-        key_str = str(sorted(key_data.items()))
-        return hashlib.md5(key_str.encode()).hexdigest()
-
-    def _load_from_disk_cache(
-        self,
-        concept_name: str,
-        data_source: ICUDataSource,
-        cache_key: str,
-    ) -> Optional[ICUTable]:
-        """Load concept data from disk cache if available."""
-        if self.cache_dir is None:
-            return None
-            
-        try:
-            cache_file = self.cache_dir / f"{cache_key}.pkl"
-            if cache_file.exists():
-                with open(cache_file, 'rb') as f:
-                    return pickle.load(f)
-        except Exception:
-            # If cache loading fails, continue without cache
-            pass
-            
-        return None
-
-    def _store_in_disk_cache(
-        self,
-        concept_name: str,
-        data_source: ICUDataSource,
-        cache_key: str,
-        result: ICUTable,
-    ) -> None:
-        """Store concept data in disk cache."""
-        if self.cache_dir is None:
-            return
-            
-        try:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_file = self.cache_dir / f"{cache_key}.pkl"
-            with open(cache_file, 'wb') as f:
-                pickle.dump(result, f)
-        except Exception:
-            # If cache storing fails, continue without cache
-            pass
-
     def _ensure_concept_loaded(
         self,
         concept_name: str,
@@ -2964,9 +2954,28 @@ class ConceptResolver:
         align_to_admission: bool,
         kwargs: Dict[str, object],
     ) -> ICUTable:
+        # 🚀 优化：首先检查概念数据缓存（避免重复加载相同概念，如urine）
+        patient_ids_hash = hash(frozenset(patient_ids)) if patient_ids else None
+        agg_value = aggregators.get(concept_name, "auto")
+        if agg_value in (None, "auto"):
+            definition = self.dictionary.get(concept_name)
+            if definition and definition.aggregate is not None:
+                agg_value = definition.aggregate
+        
+        concept_cache_key = (concept_name, patient_ids_hash, str(interval), str(agg_value))
+        
         with self._cache_lock:
+            # 检查概念数据缓存
+            if concept_cache_key in self._concept_data_cache:
+                if verbose and logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("✨ 从内存缓存加载概念 '%s'", concept_name)
+                return self._concept_data_cache[concept_cache_key]
+            
+            # 检查旧的概念缓存
             cached = self._concept_cache.get(concept_name)
             if cached is not None:
+                # 同时更新到新缓存
+                self._concept_data_cache[concept_cache_key] = cached
                 return cached
             if concept_name in self._inflight:
                 raise RuntimeError(f"Circular dependency detected for concept '{concept_name}'")
@@ -2985,10 +2994,6 @@ class ConceptResolver:
                 kwargs,
             )
 
-        agg_value = aggregators.get(concept_name, "auto")
-        if agg_value in (None, "auto") and definition.aggregate is not None:
-            agg_value = definition.aggregate
-
         cache_key = self._build_cache_key(
             concept_name,
             data_source,
@@ -3003,6 +3008,7 @@ class ConceptResolver:
         if disk_hit is not None:
             with self._cache_lock:
                 self._concept_cache[concept_name] = disk_hit
+                self._concept_data_cache[concept_cache_key] = disk_hit  # 🚀 也存入新缓存
                 self._inflight.discard(concept_name)
             return disk_hit
 
@@ -3026,6 +3032,7 @@ class ConceptResolver:
 
         with self._cache_lock:
             self._concept_cache[concept_name] = result
+            self._concept_data_cache[concept_cache_key] = result  # 🚀 存入新缓存
             self._inflight.discard(concept_name)
         return result
 

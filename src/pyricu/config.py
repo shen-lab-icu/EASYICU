@@ -685,6 +685,26 @@ def migrate_config(old_version: str = '0.1',
 # Auto-load configuration on import
 # ============================================================================
 
+def load_data_sources() -> DataSourceRegistry:
+    """Load data sources configuration.
+
+    Returns:
+        DataSourceRegistry: Registry of available data sources
+
+    Examples:
+        >>> registry = load_data_sources()
+        >>> for source in registry:
+        ...     print(source.name)
+    """
+    config_file = get_config_file('data-sources')
+
+    if config_file.exists():
+        return DataSourceRegistry.from_json(config_file)
+    else:
+        # Return empty registry if no config file found
+        return DataSourceRegistry()
+
+
 def _auto_load_config():
     """Automatically load saved configuration when module is imported."""
     try:

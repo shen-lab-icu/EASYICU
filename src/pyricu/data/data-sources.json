@@ -7428,7 +7428,7 @@
         }
       },
       "transfers": {
-        "files": "transfers.fst",
+        "files": "transfers.parquet",
         "defaults": {
           "time_vars": [
             "intime",
@@ -7470,7 +7470,7 @@
         }
       },
       "d_hcpcs": {
-        "files": "d_hcpcs.fst",
+        "files": "d_hcpcs.parquet",
         "defaults": {
           "id_var": "code",
           "val_var": "short_description"
@@ -7496,7 +7496,7 @@
         }
       },
       "diagnoses_icd": {
-        "files": "diagnoses_icd.fst",
+        "files": "diagnoses_icd.parquet",
         "defaults": {
           "val_var": "icd_code"
         },
@@ -7525,7 +7525,7 @@
         }
       },
       "d_icd_diagnoses": {
-        "files": "d_icd_diagnoses.fst",
+        "files": "d_icd_diagnoses.parquet",
         "defaults": {
           "id_var": "icd_code",
           "val_var": "long_title"
@@ -7547,7 +7547,7 @@
         }
       },
       "d_icd_procedures": {
-        "files": "d_icd_procedures.fst",
+        "files": "d_icd_procedures.parquet",
         "defaults": {
           "id_var": "icd_code",
           "val_var": "long_title"
@@ -7569,7 +7569,7 @@
         }
       },
       "d_labitems": {
-        "files": "d_labitems.fst",
+        "files": "d_labitems.parquet",
         "defaults": {
           "id_var": "itemid",
           "val_var": "label"
@@ -7599,7 +7599,7 @@
         }
       },
       "drgcodes": {
-        "files": "drgcodes.fst",
+        "files": "drgcodes.parquet",
         "defaults": {
           "val_var": "drg_code"
         },
@@ -7636,7 +7636,7 @@
         }
       },
       "emar_detail": {
-        "files": "emar_detail.fst",
+        "files": "emar_detail.parquet",
         "defaults": {
           "id_var": "emar_id"
         },
@@ -7777,7 +7777,7 @@
         }
       },
       "emar": {
-        "files": "emar.fst",
+        "files": "emar.parquet",
         "defaults": {
           "index_var": "charttime",
           "time_vars": [
@@ -7842,7 +7842,7 @@
         }
       },
       "hcpcsevents": {
-        "files": "hcpcsevents.fst",
+        "files": "hcpcsevents.parquet",
         "defaults": {
           "index_var": "chartdate",
           "time_vars": "chartdate"
@@ -7877,7 +7877,19 @@
         }
       },
       "labevents": {
-        "files": "labevents.parquet",
+        "files": [
+          "labevents/1.parquet",
+          "labevents/2.parquet",
+          "labevents/3.parquet",
+          "labevents/4.parquet",
+          "labevents/5.parquet",
+          "labevents/6.parquet",
+          "labevents/7.parquet",
+          "labevents/8.parquet",
+          "labevents/9.parquet",
+          "labevents/10.parquet"
+        ],
+        "num_rows": 118171367,
         "defaults": {
           "id_var": "subject_id",
           "index_var": "charttime",
@@ -7888,7 +7900,6 @@
             "storetime"
           ]
         },
-        "num_rows": 118171367,
         "cols": {
           "labevent_id": {
             "name": "labevent_id",
@@ -7973,7 +7984,7 @@
         }
       },
       "microbiologyevents": {
-        "files": "microbiologyevents.fst",
+        "files": "microbiologyevents.parquet",
         "defaults": {
           "index_var": "chartdate",
           "val_var": "isolate_num",
@@ -8093,7 +8104,7 @@
         }
       },
       "pharmacy": {
-        "files": "pharmacy.fst",
+        "files": "pharmacy.parquet",
         "defaults": {
           "id_var": "pharmacy_id",
           "index_var": "starttime",
@@ -8225,7 +8236,7 @@
         }
       },
       "poe_detail": {
-        "files": "poe_detail.fst",
+        "files": "poe_detail.parquet",
         "defaults": {
           "id_var": "poe_id"
         },
@@ -8254,7 +8265,7 @@
         }
       },
       "poe": {
-        "files": "poe.fst",
+        "files": "poe.parquet",
         "defaults": {
           "index_var": "ordertime",
           "time_vars": "ordertime"
@@ -8322,7 +8333,7 @@
         }
       },
       "prescriptions": {
-        "files": "prescriptions.fst",
+        "files": "prescriptions.parquet",
         "defaults": {
           "index_var": "starttime",
           "val_var": "dose_val_rx",
@@ -8415,7 +8426,7 @@
         }
       },
       "procedures_icd": {
-        "files": "procedures_icd.fst",
+        "files": "procedures_icd.parquet",
         "defaults": {
           "index_var": "chartdate",
           "val_var": "icd_code",
@@ -8451,7 +8462,7 @@
         }
       },
       "services": {
-        "files": "services.fst",
+        "files": "services.parquet",
         "defaults": {
           "index_var": "transfertime",
           "val_var": "curr_service",
@@ -8483,7 +8494,39 @@
         }
       },
       "chartevents": {
-        "files": "chartevents.parquet",
+        "files": [
+          "chartevents/1.parquet",
+          "chartevents/2.parquet",
+          "chartevents/3.parquet",
+          "chartevents/4.parquet",
+          "chartevents/5.parquet",
+          "chartevents/6.parquet",
+          "chartevents/7.parquet",
+          "chartevents/8.parquet",
+          "chartevents/9.parquet",
+          "chartevents/10.parquet",
+          "chartevents/11.parquet",
+          "chartevents/12.parquet",
+          "chartevents/13.parquet",
+          "chartevents/14.parquet",
+          "chartevents/15.parquet",
+          "chartevents/16.parquet",
+          "chartevents/17.parquet",
+          "chartevents/18.parquet",
+          "chartevents/19.parquet",
+          "chartevents/20.parquet",
+          "chartevents/21.parquet",
+          "chartevents/22.parquet",
+          "chartevents/23.parquet",
+          "chartevents/24.parquet",
+          "chartevents/25.parquet",
+          "chartevents/26.parquet",
+          "chartevents/27.parquet",
+          "chartevents/28.parquet",
+          "chartevents/29.parquet",
+          "chartevents/30.parquet"
+        ],
+        "num_rows": 313645063,
         "defaults": {
           "id_var": "stay_id",
           "index_var": "charttime",
@@ -8494,7 +8537,6 @@
             "storetime"
           ]
         },
-        "num_rows": 313645063,
         "cols": {
           "subject_id": {
             "name": "subject_id",
@@ -8515,8 +8557,7 @@
           },
           "storetime": {
             "name": "storetime",
-            "spec": "col_datetime",
-            "format": "%Y-%m-%d %H:%M:%S"
+            "spec": "col_datetime"
           },
           "itemid": {
             "name": "itemid",
@@ -8637,7 +8678,7 @@
         }
       },
       "d_items": {
-        "files": "d_items.fst",
+        "files": "d_items.parquet",
         "defaults": {
           "id_var": "itemid",
           "val_var": "label"
@@ -8685,6 +8726,7 @@
       "icustays": {
         "files": "icustays.parquet",
         "defaults": {
+          "id_var": "stay_id",
           "index_var": "intime",
           "val_var": "last_careunit",
           "time_vars": [
@@ -8913,7 +8955,7 @@
         }
       },
       "procedureevents": {
-        "files": "procedureevents.fst",
+        "files": "procedureevents.parquet",
         "defaults": {
           "index_var": "starttime",
           "id_var": "stay_id",
@@ -9043,7 +9085,7 @@
         }
       },
       "omr": {
-        "files": "omr.fst",
+        "files": "omr.parquet",
         "defaults": {
           "index_var": "chartdate",
           "val_var": "result_value",
@@ -9075,7 +9117,7 @@
         }
       },
       "caregiver": {
-        "files": "caregiver.fst",
+        "files": "caregiver.parquet",
         "defaults": [],
         "num_rows": 15468,
         "cols": {
@@ -9086,7 +9128,7 @@
         }
       },
       "provider": {
-        "files": "provider.fst",
+        "files": "provider.parquet",
         "defaults": [],
         "num_rows": 40508,
         "cols": {
@@ -9097,7 +9139,7 @@
         }
       },
       "ingredientevents": {
-        "files": "ingredientevents.fst",
+        "files": "ingredientevents.parquet",
         "defaults": {
           "index_var": "starttime",
           "val_var": "rate",
@@ -10539,7 +10581,7 @@
         "id": "CaseID",
         "position": 2,
         "start": "ICUOffset",
-        "end": "TimeOfStay",
+        "end": "TimeOparquetay",
         "table": "cases"
       }
     },
@@ -10570,8 +10612,8 @@
             "name": "AdmissionYear",
             "spec": "col_integer"
           },
-          "timeofstay": {
-            "name": "TimeOfStay",
+          "timeoparquetay": {
+            "name": "TimeOparquetay",
             "spec": "col_integer"
           },
           "icuoffset": {

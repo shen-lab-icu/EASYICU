@@ -17,6 +17,18 @@ from .table import ICUTable
 DEBUG_MODE = False
 logger = logging.getLogger(__name__)
 
+# 🚀 性能优化：最小必要列集（自动应用）
+MINIMAL_COLUMNS = {
+    'chartevents': ['stay_id', 'charttime', 'itemid', 'valuenum', 'valueuom', 'value'],
+    'labevents': ['subject_id', 'hadm_id', 'charttime', 'itemid', 'valuenum', 'valueuom'],
+    'outputevents': ['stay_id', 'charttime', 'itemid', 'value'],
+    'procedureevents': ['stay_id', 'starttime', 'itemid', 'value'],
+    'datetimeevents': ['stay_id', 'charttime', 'itemid', 'value'],
+    'inputevents': ['stay_id', 'starttime', 'endtime', 'itemid', 'amount', 'amountuom'],
+    'icustays': ['stay_id', 'subject_id', 'hadm_id', 'intime', 'outtime', 'los'],
+    'd_items': ['itemid', 'label', 'category'],
+}
+
 
 class FilterOp(str, enum.Enum):
     """Supported filter operations for table loading."""
@@ -161,6 +173,14 @@ class ICUDataSource:
     ) -> ICUTable:
         """Load and wrap a table according to the stored configuration."""
         
+        # 🚀 性能优化：如果没有指定columns，使用最小列集
+        if columns is None:
+            from .load_concepts import MINIMAL_COLUMNS_MAP, USE_MINIMAL_COLUMNS
+            if USE_MINIMAL_COLUMNS and table_name in MINIMAL_COLUMNS_MAP:
+                columns = MINIMAL_COLUMNS_MAP[table_name]
+                if DEBUG_MODE:
+                    print(f"   ⚡ 应用最小列集优化: {table_name} -> {len(columns)}列")
+        
         table_cfg = self.config.get_table(table_name)
         
         # 提取 patient_ids 过滤器用于分区预过滤
@@ -252,6 +272,10 @@ class ICUDataSource:
         columns: Optional[Iterable[str]],
         patient_ids_filter: Optional[FilterSpec] = None,
     ) -> pd.DataFrame:
+        # 🔍 调试日志：显示请求的列
+        if DEBUG_MODE and columns:
+            print(f"   📋 加载表 {table_name} 时请求的列: {list(columns)}")
+        
         # 缓存键：表名 + 列集合 + 患者过滤器
         # 对于有患者过滤器的情况,也使用缓存(因为同一批患者会被多个概念使用)
         if patient_ids_filter:
@@ -270,7 +294,25 @@ class ICUDataSource:
         if loader is None and dataset_cfg is not None:
             frame = self._read_dataset(table_name, dataset_cfg, columns, patient_ids_filter)
         elif loader is None:
-            loader = self._resolve_loader_from_disk(table_name)
+            # 🔧 修复：检查是否为多文件配置，如果是，使用目录路径
+            table_cfg = self.config.get_table(table_name)
+            if len(table_cfg.files) > 1:
+                # 多文件配置：使用目录路径以启用多文件读取
+                base_path = self.base_path or Path.cwd()
+                if table_cfg.files and table_cfg.files[0].get('path'):
+                    # 获取目录路径
+                    first_path = Path(table_cfg.files[0]['path'])
+                    multi_file_dir = base_path / first_path.parent
+                    if multi_file_dir.is_dir():
+                        loader = multi_file_dir
+                    else:
+                        # 回退到单个文件解析
+                        loader = self._resolve_loader_from_disk(table_name)
+                else:
+                    # 回退到单个文件解析
+                    loader = self._resolve_loader_from_disk(table_name)
+            else:
+                loader = self._resolve_loader_from_disk(table_name)
             if loader is None:
                 # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
                 # 这允许在demo数据中缺少某些表时继续运行
@@ -425,10 +467,17 @@ class ICUDataSource:
         
         return None
 
+    def _get_minimal_columns(self, table_name: str) -> Optional[List[str]]:
+        """获取表的最小必要列集（性能优化）"""
+        return MINIMAL_COLUMNS.get(table_name)
+    
     def _read_file(self, path: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
         # Handle directory (partitioned data)
         if path.is_dir():
-            return self._read_partitioned_data(path, columns, patient_ids_filter=patient_ids_filter)
+            if DEBUG_MODE:
+                print(f"   📂 读取分区目录: {path.name}, 请求列: {list(columns) if columns else '全部列'}")
+            # 🚀 使用优化版本（自动忽略.fst文件）
+            return self._read_partitioned_data_optimized(path, columns, patient_ids_filter)
         
         suffix = path.suffix.lower()
         
@@ -478,8 +527,94 @@ class ICUDataSource:
         
         raise ValueError(f"Unsupported file format for table loading: {path.suffix}")
     
-    def _read_partitioned_data(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
+    def _read_partitioned_data_optimized(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
+        """读取分区数据（优化版本：自动忽略.fst文件，只读取.parquet）"""
+        try:
+            import pyarrow.dataset as ds
+            import pyarrow.parquet as pq
+            
+            # 🚀 策略1：尝试使用PyArrow Dataset（最快，但需要所有文件格式一致）
+            try:
+                dataset = ds.dataset(
+                    directory,
+                    format='parquet',
+                    partitioning=None,
+                    exclude_invalid_files=True  # 忽略.fst等非parquet文件
+                )
+                
+                # 应用列过滤
+                if columns:
+                    df = dataset.to_table(columns=list(columns)).to_pandas()
+                else:
+                    df = dataset.to_table().to_pandas()
+                
+                # 应用患者ID过滤（在pandas层面，因为PyArrow不支持isin）
+                if patient_ids_filter:
+                    df = patient_ids_filter.apply(df)
+                
+                return df
+            
+            except Exception as e:
+                # Dataset读取失败，回退到逐文件读取
+                if DEBUG_MODE:
+                    logger.debug(f"PyArrow dataset读取失败: {e}，使用逐文件策略")
+            
+            # 🚀 策略2：逐文件读取并立即过滤（内存友好，适合大数据集）
+            parquet_files = sorted(directory.glob("*.parquet"))
+            if not parquet_files:
+                parquet_files = sorted(directory.glob("*.pq"))
+            
+            if not parquet_files:
+                raise FileNotFoundError(f"No parquet files found in {directory}")
+            
+            # 准备过滤条件
+            filter_ids = None
+            id_column = None
+            if patient_ids_filter:
+                id_column = patient_ids_filter.column
+                if isinstance(patient_ids_filter.value, (list, tuple, set)):
+                    filter_ids = set(patient_ids_filter.value)
+                else:
+                    filter_ids = {patient_ids_filter.value}
+            
+            # 逐文件读取+立即过滤
+            chunks = []
+            for file_path in parquet_files:
+                # 读取单个文件（只读取需要的列）
+                if columns:
+                    df_chunk = pd.read_parquet(file_path, columns=list(columns))
+                else:
+                    df_chunk = pd.read_parquet(file_path)
+                
+                # 立即应用过滤（减少内存占用）
+                if filter_ids and id_column and id_column in df_chunk.columns:
+                    df_chunk = df_chunk[df_chunk[id_column].isin(filter_ids)]
+                
+                # 只保留有数据的chunk
+                if len(df_chunk) > 0:
+                    chunks.append(df_chunk)
+            
+            # 合并所有chunks
+            if chunks:
+                return pd.concat(chunks, ignore_index=True)
+            else:
+                # 返回空DataFrame，保持列结构
+                if columns:
+                    return pd.DataFrame(columns=list(columns))
+                else:
+                    return pd.DataFrame()
+            
+        except Exception as e:
+            # 最终回退到原始实现
+            logger.warning(f"优化读取失败: {e}，回退到fallback方法")
+            return self._read_partitioned_data_fallback(directory, columns, patient_ids_filter)
+    
+    def _read_partitioned_data_fallback(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
         """Read partitioned data from a directory, respecting format priority."""
+        
+        # 🔍 调试日志：显示分区加载请求的列
+        if DEBUG_MODE and columns:
+            print(f"   🔹 分区表 {directory.name} 请求的列: {list(columns)}")
         
         # 按优先级顺序查找文件
         format_map = {
@@ -526,8 +661,10 @@ class ICUDataSource:
                 dfs = [self._read_fst_file(f, columns) for f in files]
                 
             elif fmt == 'parquet':
+                # 🔧 修复：传递具体的parquet文件列表，而不是目录，避免混合格式问题
                 dataset_df = self._read_parquet_dataset(
                     directory,
+                    files,  # 传递具体的parquet文件列表
                     columns=list(columns) if columns else None,
                     filter_spec=patient_ids_filter,
                 )
@@ -585,8 +722,9 @@ class ICUDataSource:
     def _read_parquet_dataset(
         self,
         directory: Path,
-        columns: Optional[Sequence[str]],
-        filter_spec: Optional[FilterSpec],
+        files: Optional[List[Path]] = None,
+        columns: Optional[Sequence[str]] = None,
+        filter_spec: Optional[FilterSpec] = None,
     ) -> Optional[pd.DataFrame]:
         """Attempt to read a parquet directory via PyArrow Dataset for fast filtering."""
         try:
@@ -598,10 +736,16 @@ class ICUDataSource:
         if filter_spec is not None:
             filter_expr = self._build_dataset_filter(filter_spec)
         try:
-            try:
-                dataset = ds.dataset(directory, format="parquet", partitioning="hive")
-            except (ValueError, TypeError):
-                dataset = ds.dataset(directory, format="parquet")
+            # 🔧 修复：使用传入的文件列表创建dataset，避免混合格式问题
+            if files is not None:
+                # 使用具体的parquet文件列表
+                dataset = ds.dataset(files, format="parquet")
+            else:
+                # 回退到原始逻辑（仅包含parquet文件的目录）
+                try:
+                    dataset = ds.dataset(directory, format="parquet", partitioning="hive")
+                except (ValueError, TypeError):
+                    dataset = ds.dataset(directory, format="parquet")
 
             table = dataset.to_table(columns=columns, filter=filter_expr)
             return table.to_pandas()

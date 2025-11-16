@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 import logging
 import os
+import sys
 
 import numpy as np
 import pandas as pd
@@ -300,18 +301,15 @@ def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: s
             if from_col in needed_cols and to_col in needed_cols:
                 mapping = icustays_tbl.data[needed_cols].drop_duplicates()
                 # Debug print
-                import os
                 if os.environ.get('DEBUG'):
                     print(f"   ✅ ID映射加载成功: {from_col} → {to_col}, {len(mapping)} 行")
                 return mapping
         else:
-            import os
             if os.environ.get('DEBUG'):
                 print(f"   ⚠️  icustays 表为空或未加载")
     except Exception as e:
         # Mapping table not available - this is OK, not all concepts need it
         # Only print error in debug mode to avoid spam
-        import os
         if os.environ.get('DEBUG'):
             import traceback
             print(f"   ⚠️  无法加载 icustays 进行 ID 转换 ({from_col} → {to_col}): {e}")
@@ -425,7 +423,6 @@ def _assert_shared_schema(
             mapping = _load_id_mapping_table(ctx, 'hadm_id', 'stay_id')
             
             if mapping is not None:
-                import os
                 if os.environ.get('DEBUG'):
                     print(f"   ✅ ID映射表加载成功: hadm_id → stay_id, {len(mapping)} 行")
                 
@@ -446,7 +443,6 @@ def _assert_shared_schema(
                         
                         # 如果转换后数据为空，标记要移除这个表（而不是报错）
                         if converted_data.empty:
-                            import os
                             if os.environ.get('DEBUG'):
                                 print(f"      ⚠️  跳过空表 '{name}'（ID 转换后无匹配数据）")
                             # 标记要从原始tables中移除
@@ -471,7 +467,6 @@ def _assert_shared_schema(
                 # Update id_columns to reflect conversion
                 id_columns = ['stay_id']
             else:
-                import os
                 if os.environ.get('DEBUG'):
                     print(f"   ⚠️  ID映射表加载失败: hadm_id → stay_id")
         
@@ -499,7 +494,6 @@ def _assert_shared_schema(
                         
                         # 如果转换后数据为空，标记要移除这个表（而不是报错）
                         if converted_data.empty:
-                            import os
                             if os.environ.get('DEBUG'):
                                 print(f"      ⚠️  跳过空表 '{name}'（ID 转换后无匹配数据）")
                             # 标记要从原始tables中移除
@@ -531,7 +525,6 @@ def _assert_shared_schema(
         ids = _get_id_columns(table)
         if ids != id_columns:
             # 如果还有 ID 不匹配的表，说明转换失败
-            import os
             if os.environ.get('DEBUG'):
                 print(f"   ⚠️  表 '{name}' ID 不匹配: {ids} vs {id_columns}")
             raise ValueError(
@@ -1026,9 +1019,27 @@ def _callback_sofa_component(
                     # Required parameters - create Series with NaN to preserve time points
                     kwargs[name] = pd.Series(np.nan, index=data.index, dtype=float)
         
-        # Call function with kwargs - add try/catch for missing data handling
+        # Call function with kwargs - add special handling for functions that require positional args
         try:
-            result = func(**kwargs)
+            # Special handling for sofa_renal and sofa2_renal which require 'crea' as positional arg
+            if ctx.concept_name in ['sofa_renal', 'sofa2_renal']:
+                if 'crea' in kwargs:
+                    func_kwargs = kwargs.copy()
+                    crea_arg = func_kwargs.pop('crea')
+                    result = func(crea_arg, **func_kwargs)
+                else:
+                    # For sofa_renal/sofa2_renal, if crea is missing, create an empty NaN series
+                    # This can happen when patients have no creatinine measurements
+                    logger.warning(
+                        f"SOFA component '{ctx.concept_name}' has no creatinine data. "
+                        f"Returning empty result."
+                    )
+                    if data is not None and not data.empty and index_column:
+                        result = pd.Series([], dtype=float, name=ctx.concept_name)
+                    else:
+                        result = pd.Series([], name=ctx.concept_name, dtype=float)
+            else:
+                result = func(**kwargs)
         except TypeError as e:
             if "unsupported operand type" in str(e) and "NoneType" in str(e):
                 # Handle the case where callback functions receive None values due to missing data sources
@@ -1061,19 +1072,7 @@ def _callback_sofa_component(
             crea_vals = kwargs.get('crea')
             urine24_vals = kwargs.get('urine24')
             
-            # DEBUG for patient 30000646
-            if 'stay_id' in data.columns and (data['stay_id'] == 30000646).any():
-                import sys
-                patient_mask = data['stay_id'] == 30000646
-                print(f"\n🔍 DEBUG sofa_renal boundary filter for patient 30000646:", file=sys.stderr)
-                print(f"   Total rows before filter: {patient_mask.sum()}", file=sys.stderr)
-                if crea_vals is not None and isinstance(crea_vals, pd.Series):
-                    crea_max = data.loc[patient_mask & crea_vals.notna(), index_column].max() if (patient_mask & crea_vals.notna()).any() else None
-                    print(f"   crea max valid time: {crea_max}", file=sys.stderr)
-                if urine24_vals is not None and isinstance(urine24_vals, pd.Series):
-                    urine_max = data.loc[patient_mask & urine24_vals.notna(), index_column].max() if (patient_mask & urine24_vals.notna()).any() else None
-                    print(f"   urine24 max valid time: {urine_max}", file=sys.stderr)
-            
+                    
             # Find the maximum charttime where either crea or urine24 has actual data (not NaN)
             max_valid_time = None
             if crea_vals is not None and isinstance(crea_vals, pd.Series) and crea_vals.notna().any():
@@ -1083,22 +1082,14 @@ def _callback_sofa_component(
                 urine_max = data.loc[urine24_vals.notna(), index_column].max()
                 max_valid_time = urine_max if max_valid_time is None else max(max_valid_time, urine_max)
             
-            # DEBUG
-            if 'stay_id' in data.columns and (data['stay_id'] == 30000646).any():
-                print(f"   Computed max_valid_time: {max_valid_time}", file=sys.stderr)
-            
+              
             # Filter: only keep rows where charttime <= max_valid_time
             if max_valid_time is not None:
                 valid_mask = data[index_column] <= max_valid_time
                 data = data[valid_mask].copy()
                 result = result[valid_mask]
                 
-                # DEBUG
-                if 'stay_id' in data.columns and (data['stay_id'] == 30000646).any():
-                    patient_mask_after = data['stay_id'] == 30000646
-                    print(f"   Rows after filter: {patient_mask_after.sum()}", file=sys.stderr)
-                    print(f"   Charttime range after filter: {data.loc[patient_mask_after, index_column].min()}-{data.loc[patient_mask_after, index_column].max()}", file=sys.stderr)
-        
+                
         # For optional parameters (like urine24 in sofa_renal), ensure they are None if all NaN
         # This replicates R ricu's behavior where missing optional params are treated as NULL
         # 🔧 FIX: Handle optional parameters correctly - convert all-NaN Series to None
@@ -2900,11 +2891,7 @@ def _callback_urine24(
                 else:
                     pid = patient_id
                 
-                if pid == 30000646:
-                    end_time = 107.0  # ricu's urine24 stops here
-                elif pid == 30000153:
-                    end_time = 38.0  # ricu's urine24 stops here
-                
+                                
                 # Create limits entry
                 if isinstance(patient_id, tuple):
                     limits_entry = {col: patient_id[i] for i, col in enumerate(id_cols_to_group)}
@@ -3013,18 +3000,7 @@ def _callback_urine24(
     else:
         result = _assign_rolling(df)
     
-    # 🔧 DEBUG: Print urine24 range for patient 30000646
-    if 'stay_id' in result.columns:
-        patient_30000646 = result[result['stay_id'] == 30000646]
-        if len(patient_30000646) > 0:
-            urine24_valid = patient_30000646[patient_30000646['urine24'].notna()]
-            if len(urine24_valid) > 0:
-                print(f"🔧 DEBUG urine24 for patient 30000646:")
-                print(f"   Total rows: {len(patient_30000646)}")
-                print(f"   Non-NA rows: {len(urine24_valid)}")
-                print(f"   Range: {urine24_valid[urine_tbl.index_column].min():.0f} to {urine24_valid[urine_tbl.index_column].max():.0f}")
-                print(f"   min_steps={min_steps}, step_factor={step_factor:.2f}")
-    
+        
     cols = list(urine_tbl.id_columns) + [urine_tbl.index_column, "urine24"]
     return _as_icutbl(result[cols], id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="urine24")
 
@@ -3674,12 +3650,10 @@ def _callback_rrt_criteria(
                     successful_loads.append(concept_name)
                 else:
                     # Concept not found in dictionary, skip it
-                    import os
                     if os.environ.get('DEBUG'):
                         print(f"   ⚠️  概念 '{concept_name}' 不在当前字典中，跳过加载")
             except (KeyError, ValueError) as e:
                 # Concept not available in current dictionary
-                import os
                 if os.environ.get('DEBUG'):
                     print(f"   ⚠️  无法加载概念 '{concept_name}': {e}，跳过")
     

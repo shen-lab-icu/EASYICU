@@ -22,14 +22,14 @@
       "ecmo",
       "ecmo_indication"
     ],
-    "description": "SOFA-2 respiratory component (P/F≤300/225/150/75 with advanced support; ECMO auto-4 if respiratory indication)",
+    "description": "SOFA-2 respiratory component (P/F\u2264300/225/150/75 with advanced support; ECMO auto-4 if respiratory indication)",
     "category": "outcome",
     "callback": "sofa2_resp",
     "class_name": "rec_cncpt"
   },
   "sofa2_coag": {
     "concepts": "plt",
-    "description": "SOFA-2 hemostasis component (updated thresholds: ≤150/100/80/50)",
+    "description": "SOFA-2 hemostasis component (updated thresholds: \u2264150/100/80/50)",
     "category": "outcome",
     "callback": "sofa2_coag",
     "class_name": "rec_cncpt",
@@ -37,7 +37,7 @@
   },
   "sofa2_liver": {
     "concepts": "bili",
-    "description": "SOFA-2 liver component (relaxed 1pt threshold: ≤3.0 mg/dL vs ≤1.9 in SOFA-1)",
+    "description": "SOFA-2 liver component (relaxed 1pt threshold: \u22643.0 mg/dL vs \u22641.9 in SOFA-1)",
     "category": "outcome",
     "aggregate": "max",
     "callback": "sofa2_liver",
@@ -53,7 +53,7 @@
       "other_vaso",
       "mech_circ_support"
     ],
-    "description": "SOFA-2 cardiovascular component (combined norepi+epi: ≤0.2/0.2-0.4/>0.4 μg/kg/min; dopamine backup only; mechanical support)",
+    "description": "SOFA-2 cardiovascular component (combined norepi+epi: \u22640.2/0.2-0.4/>0.4 \u03bcg/kg/min; dopamine backup only; mechanical support)",
     "category": "outcome",
     "aggregate": [
       "min",
@@ -73,7 +73,7 @@
       "delirium_tx",
       "sedated_gcs"
     ],
-    "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; delirium treatment → 1pt even if GCS=15)",
+    "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; delirium treatment \u2192 1pt even if GCS=15)",
     "category": "outcome",
     "callback": "sofa2_cns",
     "class_name": "rec_cncpt"
@@ -111,7 +111,7 @@
       "urine",
       "weight"
     ],
-    "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h → Score 1)",
+    "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h \u2192 Score 1)",
     "category": "output",
     "callback": "uo_6h",
     "class_name": "rec_cncpt"
@@ -121,7 +121,7 @@
       "urine",
       "weight"
     ],
-    "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for ≥12h → Score 2; anuria ≥12h → Score 3)",
+    "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for \u226512h \u2192 Score 2; anuria \u226512h \u2192 Score 3)",
     "category": "output",
     "callback": "uo_12h",
     "class_name": "rec_cncpt"
@@ -131,7 +131,7 @@
       "urine",
       "weight"
     ],
-    "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for ≥24h → Score 3)",
+    "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for \u226524h \u2192 Score 3)",
     "category": "output",
     "callback": "uo_24h",
     "class_name": "rec_cncpt"
@@ -565,7 +565,7 @@
   },
   "rrt_criteria": {
     "class_name": "lgl_cncpt",
-    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+≥6.0 OR acidosis pH≤7.20+HCO3≤12)",
+    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+\u22656.0 OR acidosis pH\u22647.20+HCO3\u226412)",
     "category": "renal",
     "sources": {
       "miiv": [],
@@ -575,5 +575,150 @@
     },
     "target": "id_tbl",
     "callback": "rrt_criteria"
+  },
+  "potassium": {
+    "class_name": "num_cncpt",
+    "description": "Serum potassium",
+    "category": "chemistry",
+    "unit": "mmol/L",
+    "min": 2.0,
+    "max": 10.0,
+    "sources": {
+      "miiv": [
+        {
+          "table": "labevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "ids": [
+            50822,
+            50971
+          ]
+        }
+      ],
+      "eicu": [
+        {
+          "table": "lab",
+          "sub_var": "labname",
+          "regex": "potassium",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "ids": [
+            6835,
+            9555
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [
+            20000500,
+            24000520,
+            24000833,
+            24000867
+          ]
+        }
+      ]
+    }
+  },
+  "ph": {
+    "class_name": "num_cncpt",
+    "description": "Arterial pH",
+    "category": "blood_gas",
+    "unit": "pH",
+    "min": 6.5,
+    "max": 8.0,
+    "sources": {
+      "miiv": [
+        {
+          "table": "labevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "ids": [
+            50820
+          ]
+        }
+      ],
+      "eicu": [
+        {
+          "table": "lab",
+          "sub_var": "labname",
+          "regex": "pH",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "ids": [
+            6848,
+            12310
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [
+            20000200
+          ]
+        }
+      ]
+    }
+  },
+  "bicarb": {
+    "class_name": "num_cncpt",
+    "description": "Serum bicarbonate (HCO3)",
+    "category": "chemistry",
+    "unit": "mmol/L",
+    "min": 5.0,
+    "max": 50.0,
+    "sources": {
+      "miiv": [
+        {
+          "table": "labevents",
+          "sub_var": "itemid",
+          "index_var": "charttime",
+          "ids": [
+            50882
+          ]
+        }
+      ],
+      "eicu": [
+        {
+          "table": "lab",
+          "sub_var": "labname",
+          "regex": "bicarbonate|HCO3",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "aumc": [
+        {
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "ids": [
+            6850,
+            9990
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "table": "observations",
+          "sub_var": "variableid",
+          "ids": [
+            24000500
+          ]
+        }
+      ]
+    }
   }
 }

@@ -34,6 +34,7 @@ import logging
 
 from .base import BaseICULoader, get_default_data_path, detect_database_type
 from .resources import load_dictionary
+from .config import load_data_sources
 
 logger = logging.getLogger(__name__)
 

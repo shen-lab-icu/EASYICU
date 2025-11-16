@@ -10,6 +10,7 @@ from .concept import ConceptDictionary, ConceptResolver
 from .datasource import FilterOp, FilterSpec, ICUDataSource, load_table
 from .resources import load_data_sources, load_dictionary, package_path
 from .logging_utils import configure_logging
+from .cache_manager import get_cache_manager, auto_clear_cache_if_enabled, clear_pyricu_cache, get_cache_status
 from .table import (
     ICUTable, 
     IdTbl, 
@@ -1171,3 +1172,22 @@ if _HAS_UNIFIED_API:
         "load_vitals_unified",
         "load_labs_unified",
     ])
+
+# 添加缓存管理功能到__all__
+__all__.extend([
+    "get_cache_manager",
+    "clear_pyricu_cache",
+    "get_cache_status",
+])
+
+# 模块初始化时自动执行缓存清理（如果启用）
+try:
+    from .cache_manager import _initialize_cache_manager
+    _initialize_cache_manager()
+except ImportError:
+    # 如果缓存管理器不可用，继续正常运行
+    pass
+except Exception as e:
+    # 缓存初始化失败不应阻止模块加载
+    import logging
+    logging.getLogger(__name__).warning(f"缓存管理器初始化失败: {e}")

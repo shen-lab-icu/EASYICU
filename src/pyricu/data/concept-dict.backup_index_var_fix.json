@@ -1,6 +1,6 @@
 {
   "abx": {
-    "class_name": "lgl_cncpt",
+    "class": "lgl_cncpt",
     "description": "antibiotics",
     "omopid": 4085730,
     "category": "medications",
@@ -89,7 +89,7 @@
           "sub_var": "drugname",
           "val_var": "drugname",
           "callback": "transform_fun(set_val(TRUE))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         },
         {
           "regex": "cipro|flagyl|maxipime|metronidazole|tazobactam|zosyn|cef(azolin|epime)|(((azithro|clinda|vanco)my|ofloxa|vanco)c|levaqu|piperacill|roceph)in",
@@ -97,7 +97,7 @@
           "sub_var": "drugname",
           "val_var": "drugname",
           "callback": "transform_fun(set_val(TRUE))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -107,7 +107,7 @@
           "sub_var": "drugname",
           "val_var": "drugname",
           "callback": "transform_fun(set_val(TRUE))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         },
         {
           "regex": "cipro|flagyl|maxipime|metronidazole|tazobactam|zosyn|cef(azolin|epime)|(((azithro|clinda|vanco)my|ofloxa|vanco)c|levaqu|piperacill|roceph)in",
@@ -115,7 +115,7 @@
           "sub_var": "drugname",
           "val_var": "drugname",
           "callback": "transform_fun(set_val(TRUE))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -215,7 +215,7 @@
           "sub_var": "drug",
           "val_var": "drugname",
           "callback": "transform_fun(set_val(TRUE))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         },
         {
           "ids": [
@@ -283,7 +283,7 @@
           "sub_var": "drug",
           "interval": "00:01:00",
           "callback": "mimic_abx_presc",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         },
         {
           "ids": [
@@ -351,7 +351,7 @@
           "sub_var": "drug",
           "interval": "00:01:00",
           "callback": "mimic_abx_presc",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         },
         {
           "ids": [
@@ -470,7 +470,7 @@
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_rate_units(2.65, 0.53)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -479,7 +479,7 @@
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_rate_units(2.65, 0.53)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -544,7 +544,7 @@
       "surg",
       "other"
     ],
-    "class_name": "fct_cncpt",
+    "class": "fct_cncpt",
     "description": "patient admission type",
     "category": "demographics",
     "sources": {
@@ -553,7 +553,7 @@
           "val_var": "specialty",
           "table": "admissions",
           "callback": "apply_map( c(Cardiochirurgie = 'surg', Cardiologie = 'med', ders = 'other', Gynaecologie = 'other', `Heelkunde Gastro-enterologie` = 'surg', `Heelkunde Longen/Oncologie` = 'surg', `Heelkunde Oncologie` = 'surg', Hematologie = 'med', `Intensive Care Volwassenen` = 'other', Inwendig = 'med', `Keel, Neus & Oorarts` = 'surg', Longziekte = 'med', `Maag-,Darm-,Leverziekten` = 'med', Mondheelkunde = 'surg', Nefrologie = 'med', Neurochirurgie = 'surg', Neurologie = 'med', Obstetrie = 'other', `Oncologie Inwendig` = 'med', Oogheelkunde = 'surg', Orthopedie = 'surg', `Plastische chirurgie` = 'surg', Reumatologie = 'med', Traumatologie = 'surg', Urologie = 'surg', Vaatchirurgie = 'surg', Verloskunde = 'other'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu": [
@@ -561,7 +561,7 @@
           "table": "admissiondx",
           "val_var": "admitdxpath",
           "callback": "eicu_adx",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
@@ -569,7 +569,7 @@
           "table": "admissiondx",
           "val_var": "admitdxpath",
           "callback": "eicu_adx",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "miiv": [
@@ -577,7 +577,7 @@
           "table": "services",
           "val_var": "curr_service",
           "callback": "apply_map(\n            c(MED   = 'med',   SURG  = 'surg', CMED = 'med',  CSURG  = 'surg',\n              VSURG = 'surg',  NSURG = 'surg', NB   = 'other', NMED  = 'med',\n              ORTHO = 'surg',  TRAUM = 'surg', OMED = 'med',   GU    = 'other',\n              NBB   = 'other', TSURG = 'surg', GYN  = 'other', PSURG = 'surg',\n              OBS   = 'other', ENT   = 'surg', DENT = 'surg',  PSYCH = 'other')\n          )",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "mimic": [
@@ -585,7 +585,7 @@
           "table": "services",
           "val_var": "curr_service",
           "callback": "apply_map(\n            c(MED   = 'med',   SURG  = 'surg', CMED = 'med',  CSURG  = 'surg',\n              VSURG = 'surg',  NSURG = 'surg', NB   = 'other', NMED  = 'med',\n              ORTHO = 'surg',  TRAUM = 'surg', OMED = 'med',   GU    = 'other',\n              NBB   = 'other', TSURG = 'surg', GYN  = 'other', PSURG = 'surg',\n              OBS   = 'other', ENT   = 'surg', DENT = 'surg',  PSYCH = 'other')\n          )",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "mimic_demo": [
@@ -593,7 +593,7 @@
           "table": "services",
           "val_var": "curr_service",
           "callback": "apply_map(\n            c(MED   = 'med',   SURG  = 'surg', CMED = 'med',  CSURG  = 'surg',\n              VSURG = 'surg',  NSURG = 'surg', NB   = 'other', NMED  = 'med',\n              ORTHO = 'surg',  TRAUM = 'surg', OMED = 'med',   GU    = 'other',\n              NBB   = 'other', TSURG = 'surg', GYN  = 'other', PSURG = 'surg',\n              OBS   = 'other', ENT   = 'surg', DENT = 'surg',  PSYCH = 'other')\n          )",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ]
     }
@@ -612,7 +612,7 @@
           "val_var": "agegroup",
           "table": "admissions",
           "callback": "apply_map(c(`18-39` = 30, `40-49` = 45, `50-59` = 55, `60-69` = 65, `70-79` = 75, `80+` = 90))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu": [
@@ -620,7 +620,7 @@
           "table": "patient",
           "val_var": "age",
           "callback": "transform_fun(eicu_age)",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
@@ -628,21 +628,21 @@
           "table": "patient",
           "val_var": "age",
           "callback": "transform_fun(eicu_age)",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
         {
           "table": "general",
           "val_var": "age",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "miiv": [
         {
           "table": "patients",
           "val_var": "anchor_age",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "mimic": [
@@ -650,7 +650,7 @@
           "table": "patients",
           "val_var": "dob",
           "callback": "transform_fun(mimic_age)",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "mimic_demo": [
@@ -658,14 +658,14 @@
           "table": "patients",
           "val_var": "dob",
           "callback": "transform_fun(mimic_age)",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "sic": [
         {
           "table": "cases",
           "val_var": "AgeOnAdmission",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ]
     }
@@ -709,7 +709,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -781,7 +781,7 @@
           "ids": 20002700,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -853,7 +853,7 @@
           "ids": 20002600,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -925,7 +925,7 @@
           "ids": 24000330,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -964,7 +964,7 @@
     "omopid": 40493498,
     "category": "neurological",
     "callback": "avpu",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "basos": {
     "unit": "%",
@@ -1073,7 +1073,7 @@
           "ids": 20001300,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -1146,15 +1146,14 @@
           "ids": 20004200,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
         {
           "ids": 50882,
           "table": "labevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -1224,15 +1223,14 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
         {
           "ids": 50885,
           "table": "labevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -1294,7 +1292,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -1337,7 +1335,7 @@
     "category": "demographics",
     "callback": "bmi",
     "target": "id_tbl",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "bnd": {
     "unit": "%",
@@ -1374,7 +1372,7 @@
           "ids": 24000557,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -1439,7 +1437,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 2.8), 'mg/dL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -1514,7 +1512,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 4.008), 'mg/dL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -1588,7 +1586,7 @@
           "ids": 24000522,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -1660,7 +1658,7 @@
           "ids": 24000210,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -1726,7 +1724,7 @@
           "ids": 24000220,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -1799,7 +1797,7 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -1836,7 +1834,7 @@
     }
   },
   "cort": {
-    "class_name": "lgl_cncpt",
+    "class": "lgl_cncpt",
     "description": "corticosteroids",
     "omopid": 304275008,
     "category": "medications",
@@ -1887,7 +1885,7 @@
           "sub_var": "drug",
           "regex": "(hydrocortisone|methylpred|prednisone|dexameth)",
           "callback": "transform_fun(set_val(TRUE))",
-          "class_name": "rgx_itm",
+          "class": "rgx_itm",
           "target": "id_tbl"
         }
       ]
@@ -1933,16 +1931,14 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 0.011312), 'mg/dL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
         {
           "ids": 50912,
           "table": "labevents",
-          "sub_var": "itemid",
-          "index_var": "charttime",
-          "value_var": "valuenum"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -2006,7 +2002,7 @@
           "ids": 20002200,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -2057,14 +2053,14 @@
         {
           "table": "vitalperiodic",
           "val_var": "systemicdiastolic",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
         {
           "table": "vitalperiodic",
           "val_var": "systemicdiastolic",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -2072,7 +2068,7 @@
           "ids": 120,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -2082,8 +2078,7 @@
             220180
           ],
           "table": "chartevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -2125,7 +2120,7 @@
     }
   },
   "death": {
-    "class_name": "lgl_cncpt",
+    "class": "lgl_cncpt",
     "description": "in hospital mortality",
     "omopid": 4306655,
     "category": "outcome",
@@ -2136,7 +2131,7 @@
           "index_var": "dateofdeath",
           "val_var": "dischargedat",
           "callback": "aumc_death",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu": [
@@ -2145,7 +2140,7 @@
           "index_var": "unitdischargeoffset",
           "val_var": "hospitaldischargestatus",
           "callback": "transform_fun(comp_na(`==`, 'Expired'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
@@ -2154,7 +2149,7 @@
           "index_var": "unitdischargeoffset",
           "val_var": "hospitaldischargestatus",
           "callback": "transform_fun(comp_na(`==`, 'Expired'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -2166,7 +2161,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "hirid_death",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -2175,7 +2170,7 @@
           "index_var": "deathtime",
           "val_var": "hospital_expire_flag",
           "callback": "transform_fun(comp_na(`==`, 1L))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "mimic": [
@@ -2184,7 +2179,7 @@
           "index_var": "deathtime",
           "val_var": "hospital_expire_flag",
           "callback": "transform_fun(comp_na(`==`, 1L))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "mimic_demo": [
@@ -2193,7 +2188,7 @@
           "index_var": "deathtime",
           "val_var": "hospital_expire_flag",
           "callback": "transform_fun(comp_na(`==`, 1L))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ]
     }
@@ -2229,7 +2224,7 @@
           "sub_var": "drugname",
           "dur_var": "drugstopoffset",
           "callback": "eicu_dex_med",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         },
         {
           "regex": "(d10|dextrose.+10 ?%).+ml/hr",
@@ -2237,7 +2232,7 @@
           "sub_var": "drugname",
           "callback": "eicu_dex_inf",
           "target": "ts_tbl",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -2247,7 +2242,7 @@
           "sub_var": "drugname",
           "dur_var": "drugstopoffset",
           "callback": "eicu_dex_med",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         },
         {
           "regex": "(d10|dextrose.+10 ?%).+ml/hr",
@@ -2255,7 +2250,7 @@
           "sub_var": "drugname",
           "callback": "eicu_dex_inf",
           "target": "ts_tbl",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -2353,7 +2348,7 @@
         }
       ]
     },
-    "class_name": [
+    "class": [
       "unt_cncpt",
       "num_cncpt"
     ]
@@ -2379,7 +2374,7 @@
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_duration(gap_length = hours(5L))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -2388,7 +2383,7 @@
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_duration(gap_length = hours(5L))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -2492,7 +2487,7 @@
           "sub_var": "drugname",
           "weight_var": "patientweight",
           "callback": "eicu_rate_kg(ml_to_mcg = 2000)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -2502,7 +2497,7 @@
           "sub_var": "drugname",
           "weight_var": "patientweight",
           "callback": "eicu_rate_kg(ml_to_mcg = 2000)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -2582,7 +2577,7 @@
     "category": "medications",
     "interval": "00:01:00",
     "callback": "vaso60",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "dopa_dur": {
     "description": "dopamine duration",
@@ -2605,7 +2600,7 @@
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_duration(gap_length = hours(5L))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -2614,7 +2609,7 @@
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_duration(gap_length = hours(5L))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "miiv": [
@@ -2709,7 +2704,7 @@
           "sub_var": "drugname",
           "weight_var": "patientweight",
           "callback": "eicu_rate_kg(ml_to_mcg = 1600)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -2719,7 +2714,7 @@
           "sub_var": "drugname",
           "weight_var": "patientweight",
           "callback": "eicu_rate_kg(ml_to_mcg = 1600)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "miiv": [
@@ -2792,7 +2787,7 @@
     "category": "outcome",
     "interval": "00:01:00",
     "callback": "vaso60",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "egcs": {
     "min": 1,
@@ -2834,7 +2829,7 @@
           "ids": 10000300,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -2952,7 +2947,7 @@
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_duration(gap_length = hours(5L))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -2961,7 +2956,7 @@
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_duration(gap_length = hours(5L))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -3073,7 +3068,7 @@
           "sub_var": "drugname",
           "weight_var": "patientweight",
           "callback": "eicu_rate_kg(ml_to_mcg = 40)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -3083,7 +3078,7 @@
           "sub_var": "drugname",
           "weight_var": "patientweight",
           "callback": "eicu_rate_kg(ml_to_mcg = 40)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -3171,7 +3166,7 @@
     "category": "outcome",
     "interval": "00:01:00",
     "callback": "vaso60",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "esr": {
     "unit": [
@@ -3199,7 +3194,7 @@
           "ids": 24000668,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -3260,7 +3255,7 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -3293,7 +3288,7 @@
     }
   },
   "ett_gcs": {
-    "class_name": "lgl_cncpt",
+    "class": "lgl_cncpt",
     "description": "tracheostomy",
     "omopid": 4097216,
     "category": "respiratory",
@@ -3310,19 +3305,19 @@
       ],
       "eicu": [
         {
-          "class_name": "fun_itm",
+          "class": "fun_itm",
           "callback": "combine_callbacks(\n               fwd_concept('rass'),\n               transform_fun(comp_na(`<=`, -3)),\n               ts_to_win_tbl(mins(360L))\n             )"
         }
       ],
       "eicu_demo": [
         {
-          "class_name": "fun_itm",
+          "class": "fun_itm",
           "callback": "combine_callbacks(\n               fwd_concept('rass'),\n               transform_fun(comp_na(`<=`, -3)),\n               ts_to_win_tbl(mins(360L))\n             )"
         }
       ],
       "hirid": [
         {
-          "class_name": "fun_itm",
+          "class": "fun_itm",
           "callback": "combine_callbacks(\n               fwd_concept('mech_vent'),\n               transform_fun(comp_na(`==`, 'invasive'))\n             )"
         }
       ],
@@ -3401,7 +3396,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 100), 'mg/dL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -3482,21 +3477,19 @@
           "ids": 2010,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
         {
           "ids": 223835,
           "table": "chartevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         },
         {
           "ids": 50816,
           "table": "labevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -3557,7 +3550,7 @@
       "any"
     ],
     "callback": "gcs",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "glu": {
     "unit": "mg/dL",
@@ -3613,7 +3606,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 18.016), 'mg/dL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -3728,7 +3721,7 @@
           "ids": 24000526,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -3823,21 +3816,21 @@
           "val_var": "heightgroup",
           "table": "admissions",
           "callback": "apply_map(c(`159-` = 150, `160-169` = 165, `170-179` = 175, `180-189` = 185, `190+` = 200))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu": [
         {
           "table": "patient",
           "val_var": "admissionheight",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
         {
           "table": "patient",
           "val_var": "admissionheight",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -3845,7 +3838,7 @@
           "ids": 10000450,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -3893,7 +3886,7 @@
         {
           "table": "cases",
           "val_var": "HeightOnAdmission",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ]
     }
@@ -3944,7 +3937,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL', 'g/l')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -4002,14 +3995,14 @@
         {
           "table": "vitalperiodic",
           "val_var": "heartrate",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
         {
           "table": "vitalperiodic",
           "val_var": "heartrate",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -4017,15 +4010,14 @@
           "ids": 200,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
         {
           "ids": 220045,
           "table": "chartevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -4088,7 +4080,7 @@
           "ids": 24000567,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -4137,7 +4129,7 @@
           "regex": "^insulin (250.+)?\\(((ml|units)/hr)?\\)$",
           "table": "infusiondrug",
           "sub_var": "drugname",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -4145,7 +4137,7 @@
           "regex": "^insulin (250.+)?\\(((ml|units)/hr)?\\)$",
           "table": "infusiondrug",
           "sub_var": "drugname",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -4263,15 +4255,14 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
         {
           "ids": 50971,
           "table": "labevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -4338,7 +4329,7 @@
           "ids": 24000524,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -4386,35 +4377,35 @@
         {
           "callback": "los_callback",
           "win_type": "hadm",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ],
       "eicu_demo": [
         {
           "callback": "los_callback",
           "win_type": "hadm",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ],
       "miiv": [
         {
           "callback": "los_callback",
           "win_type": "hadm",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ],
       "mimic": [
         {
           "callback": "los_callback",
           "win_type": "hadm",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ],
       "mimic_demo": [
         {
           "callback": "los_callback",
           "win_type": "hadm",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ]
     }
@@ -4430,49 +4421,49 @@
         {
           "callback": "los_callback",
           "win_type": "icustay",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ],
       "eicu": [
         {
           "callback": "los_callback",
           "win_type": "icustay",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ],
       "eicu_demo": [
         {
           "callback": "los_callback",
           "win_type": "icustay",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ],
       "hirid": [
         {
           "callback": "los_callback",
           "win_type": "icustay",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ],
       "miiv": [
         {
           "callback": "los_callback",
           "win_type": "icustay",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ],
       "mimic": [
         {
           "callback": "los_callback",
           "win_type": "icustay",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ],
       "mimic_demo": [
         {
           "callback": "los_callback",
           "win_type": "icustay",
-          "class_name": "fun_itm"
+          "class": "fun_itm"
         }
       ]
     }
@@ -4518,7 +4509,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "blood_cell_ratio",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -4573,24 +4564,24 @@
         {
           "table": "vitalperiodic",
           "val_var": "systemicmean",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "table": "vitalaperiodic",
           "val_var": "noninvasivemean",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
         {
           "table": "vitalperiodic",
           "val_var": "systemicmean",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "table": "vitalaperiodic",
           "val_var": "noninvasivemean",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -4601,7 +4592,7 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -4691,7 +4682,7 @@
           "ids": 24000160,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -4760,7 +4751,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 0.16114), '%')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -4827,7 +4818,7 @@
           "ids": 24000150,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -4861,7 +4852,7 @@
     }
   },
   "mech_vent": {
-    "class_name": "fct_cncpt",
+    "class": "fct_cncpt",
     "target": "win_tbl",
     "levels": [
       "invasive",
@@ -4891,7 +4882,7 @@
           "sub_var": "variableid",
           "target": "ts_tbl",
           "interval": "00:01:00",
-          "class_name": "hrd_itm",
+          "class": "hrd_itm",
           "callback": "combine_callbacks(hirid_vent,\n                                           apply_map(c(`1` = 'invasive',\n                                                       `2` = 'invasive',\n                                                       `3` = 'noninvasive',\n                                                       `4` = 'noninvasive',\n                                                       `5` = 'noninvasive',\n                                                       `6` = 'noninvasive')))"
         }
       ],
@@ -4943,7 +4934,7 @@
           "ids": 24000549,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -4981,7 +4972,7 @@
     "omopid": 40484211,
     "category": "outcome",
     "callback": "mews_score",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "mg": {
     "unit": "mg/dL",
@@ -5024,7 +5015,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 2.431), 'mg/dL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -5098,7 +5089,7 @@
           "ids": 10000200,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -5178,7 +5169,7 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -5257,7 +5248,7 @@
           "ids": 24000550,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -5304,7 +5295,7 @@
     "omopid": 44808550,
     "category": "outcome",
     "callback": "news_score",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "norepi_dur": {
     "description": "norepinephrine duration",
@@ -5327,7 +5318,7 @@
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_duration(gap_length = hours(5L))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -5336,7 +5327,7 @@
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_duration(gap_length = hours(5L))",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -5427,7 +5418,7 @@
       "phn_rate"
     ],
     "callback": "norepi_equiv",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "norepi_rate": {
     "unit": [
@@ -5458,7 +5449,7 @@
           "sub_var": "drugname",
           "weight_var": "patientweight",
           "callback": "eicu_rate_kg(ml_to_mcg = 32)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -5468,7 +5459,7 @@
           "sub_var": "drugname",
           "weight_var": "patientweight",
           "callback": "eicu_rate_kg(ml_to_mcg = 32)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -5553,7 +5544,7 @@
     "category": "outcome",
     "interval": "00:01:00",
     "callback": "vaso60",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "o2sat": {
     "unit": [
@@ -5587,7 +5578,7 @@
           "table": "vitalperiodic",
           "val_var": "sao2",
           "unit_val": "%",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "ids": "O2 Sat (%)",
@@ -5600,7 +5591,7 @@
           "table": "vitalperiodic",
           "val_var": "sao2",
           "unit_val": "%",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "ids": "O2 Sat (%)",
@@ -5617,7 +5608,7 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -5703,7 +5694,7 @@
       "max"
     ],
     "callback": "pafi",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "pco2": {
     "unit": [
@@ -5746,7 +5737,7 @@
           "ids": 20001200,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -5815,15 +5806,14 @@
           "ids": 20000300,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
         {
           "ids": 50820,
           "table": "labevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -5862,7 +5852,7 @@
           "sub_var": "drugname",
           "weight_var": "patientweight",
           "callback": "eicu_rate_kg(ml_to_mcg = 200)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -5872,7 +5862,7 @@
           "sub_var": "drugname",
           "weight_var": "patientweight",
           "callback": "eicu_rate_kg(ml_to_mcg = 200)",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "miiv": [
@@ -5971,7 +5961,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`*`, 3.097521), 'mg/dL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -6047,15 +6037,14 @@
           "ids": 20000110,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
         {
           "ids": 51265,
           "table": "labevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -6122,15 +6111,14 @@
           "ids": 20000200,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
         {
           "ids": 50821,
           "table": "labevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -6250,7 +6238,7 @@
           "ids": 20004410,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -6293,7 +6281,7 @@
     "omopid": 1616732,
     "category": "outcome",
     "callback": "qsofa_score",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "rass": {
     "min": -5,
@@ -6330,7 +6318,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "transform_fun(floor)",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -6502,14 +6490,14 @@
         {
           "table": "vitalperiodic",
           "val_var": "respiration",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
         {
           "table": "vitalperiodic",
           "val_var": "respiration",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -6520,7 +6508,7 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -6532,8 +6520,7 @@
             224690
           ],
           "table": "chartevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -6585,10 +6572,10 @@
       "max"
     ],
     "callback": "safi",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "samp": {
-    "class_name": "lgl_cncpt",
+    "class": "lgl_cncpt",
     "category": "microbiology",
     "description": "body fluid sampling",
     "omopid": 4133843,
@@ -6627,7 +6614,7 @@
           "table": "microlab",
           "val_var": "organism",
           "callback": "transform_fun(comp_na(`!=`, 'no growth'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
@@ -6635,7 +6622,7 @@
           "table": "microlab",
           "val_var": "organism",
           "callback": "transform_fun(comp_na(`!=`, 'no growth'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "miiv": [
@@ -6645,7 +6632,7 @@
           "val_var": "org_itemid",
           "callback": "transform_fun(comp_na())",
           "aux_time": "charttime",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "mimic": [
@@ -6655,7 +6642,7 @@
           "val_var": "org_itemid",
           "callback": "transform_fun(comp_na())",
           "aux_time": "charttime",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "mimic_demo": [
@@ -6665,7 +6652,7 @@
           "val_var": "org_itemid",
           "callback": "transform_fun(comp_na())",
           "aux_time": "charttime",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ]
     }
@@ -6708,7 +6695,7 @@
           "ids": 20000800,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -6788,14 +6775,14 @@
         {
           "table": "vitalperiodic",
           "val_var": "systemicsystolic",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
         {
           "table": "vitalperiodic",
           "val_var": "systemicsystolic",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -6803,7 +6790,7 @@
           "ids": 100,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -6813,8 +6800,7 @@
             220179
           ],
           "table": "chartevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -6868,7 +6854,7 @@
       false,
       true
     ],
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "sex": {
     "target": "id_tbl",
@@ -6876,7 +6862,7 @@
       "Female",
       "Male"
     ],
-    "class_name": "fct_cncpt",
+    "class": "fct_cncpt",
     "description": "patient sex",
     "omopid": 37116947,
     "category": "demographics",
@@ -6886,21 +6872,21 @@
           "val_var": "gender",
           "table": "admissions",
           "callback": "apply_map(c(Vrouw = 'Female', Man = 'Male'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu": [
         {
           "table": "patient",
           "val_var": "gender",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
         {
           "table": "patient",
           "val_var": "gender",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -6908,7 +6894,7 @@
           "table": "general",
           "val_var": "sex",
           "callback": "apply_map(c(M = 'Male', F = 'Female'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "miiv": [
@@ -6916,7 +6902,7 @@
           "table": "patients",
           "val_var": "gender",
           "callback": "apply_map(c(M = 'Male', F = 'Female'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "mimic": [
@@ -6924,7 +6910,7 @@
           "table": "patients",
           "val_var": "gender",
           "callback": "apply_map(c(M = 'Male', F = 'Female'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "mimic_demo": [
@@ -6932,7 +6918,7 @@
           "table": "patients",
           "val_var": "gender",
           "callback": "apply_map(c(M = 'Male', F = 'Female'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "sic": [
@@ -6940,7 +6926,7 @@
           "table": "cases",
           "val_var": "Sex",
           "callback": "apply_map(c(`735` = 'Male', `736` = 'Female'))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ]
     }
@@ -6958,7 +6944,7 @@
     "omopid": 4140444,
     "category": "outcome",
     "callback": "sirs_score",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "sofa": {
     "concepts": [
@@ -6982,7 +6968,7 @@
     "omopid": 1616852,
     "category": "outcome",
     "callback": "sofa_score",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "sofa_cardio": {
     "concepts": [
@@ -7012,7 +6998,7 @@
       "max"
     ],
     "callback": "sofa_cardio",
-    "class_name": "rec_cncpt",
+    "class": "rec_cncpt",
     "compute_from_callback": true
   },
   "sofa_cns": {
@@ -7021,7 +7007,7 @@
     "omopid": 1616439,
     "category": "outcome",
     "callback": "sofa_cns",
-    "class_name": "rec_cncpt",
+    "class": "rec_cncpt",
     "compute_from_callback": true
   },
   "sofa_coag": {
@@ -7031,7 +7017,7 @@
     "category": "outcome",
     "aggregate": "min",
     "callback": "sofa_coag",
-    "class_name": "rec_cncpt",
+    "class": "rec_cncpt",
     "compute_from_callback": true
   },
   "sofa_liver": {
@@ -7041,7 +7027,7 @@
     "category": "outcome",
     "aggregate": "max",
     "callback": "sofa_liver",
-    "class_name": "rec_cncpt",
+    "class": "rec_cncpt",
     "compute_from_callback": true
   },
   "sofa_renal": {
@@ -7062,7 +7048,7 @@
       null
     ],
     "callback": "sofa_renal",
-    "class_name": "rec_cncpt",
+    "class": "rec_cncpt",
     "compute_from_callback": true
   },
   "sofa_resp": {
@@ -7080,7 +7066,7 @@
     "omopid": 1616907,
     "category": "outcome",
     "callback": "sofa_resp",
-    "class_name": "rec_cncpt",
+    "class": "rec_cncpt",
     "compute_from_callback": true
   },
   "spo2": {
@@ -7109,7 +7095,7 @@
           "table": "vitalperiodic",
           "val_var": "sao2",
           "unit_val": "%",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
@@ -7117,7 +7103,7 @@
           "table": "vitalperiodic",
           "val_var": "sao2",
           "unit_val": "%",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -7128,7 +7114,7 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -7138,8 +7124,7 @@
             226253
           ],
           "table": "chartevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         }
       ],
       "mimic": [
@@ -7186,7 +7171,7 @@
     "omopid": 36304401,
     "category": "respiratory",
     "callback": "supp_o2",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "susp_inf": {
     "concepts": [
@@ -7205,7 +7190,7 @@
       ]
     ],
     "callback": "susp_inf",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "tco2": {
     "unit": "mEq/L",
@@ -7257,7 +7242,7 @@
   "temp": {
     "unit": [
       "C",
-      "\u00b0C"
+      "°C"
     ],
     "min": 32,
     "max": 42,
@@ -7280,14 +7265,14 @@
         {
           "table": "vitalperiodic",
           "val_var": "temperature",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
         {
           "table": "vitalperiodic",
           "val_var": "temperature",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -7299,15 +7284,14 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
         {
           "ids": 223762,
           "table": "chartevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
+          "sub_var": "itemid"
         },
         {
           "ids": [
@@ -7316,8 +7300,7 @@
           ],
           "table": "chartevents",
           "sub_var": "itemid",
-          "callback": "convert_unit(fahr_to_cels, 'C', 'f')",
-          "index_var": "charttime"
+          "callback": "convert_unit(fahr_to_cels, 'C', 'f')"
         }
       ],
       "mimic": [
@@ -7385,7 +7368,7 @@
     "min": 3,
     "max": 15,
     "callback": "sum_components",
-    "class_name": "rec_cncpt",
+    "class": "rec_cncpt",
     "sources": {
       "eicu": [
         {
@@ -7423,7 +7406,7 @@
             "vgcs"
           ],
           "callback": "sum_components",
-          "class_name": "rec_cncpt"
+          "class": "rec_cncpt"
         }
       ]
     }
@@ -7462,7 +7445,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "convert_unit(binary_op(`/`, 1000), 'ng/mL')",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -7576,7 +7559,7 @@
           "regex": "catheter.+output|output.+catheter",
           "table": "intakeoutput",
           "sub_var": "celllabel",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "eicu_demo": [
@@ -7592,7 +7575,7 @@
           "regex": "catheter.+output|output.+catheter",
           "table": "intakeoutput",
           "sub_var": "celllabel",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -7601,7 +7584,7 @@
           "table": "observations",
           "sub_var": "variableid",
           "callback": "hirid_urine",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -7710,7 +7693,7 @@
     "omopid": 4191836,
     "category": "output",
     "callback": "urine24",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "vaso_ind": {
     "concepts": [
@@ -7723,10 +7706,10 @@
     "omopid": 3655896,
     "category": "medications",
     "callback": "vaso_ind",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "vent_end": {
-    "class_name": "lgl_cncpt",
+    "class": "lgl_cncpt",
     "description": "ventilation end",
     "category": "respiratory",
     "sources": {
@@ -7735,13 +7718,13 @@
           "table": "respiratorycare",
           "val_var": "ventendoffset",
           "callback": "vent_flag",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "table": "respiratorycare",
           "val_var": "priorventendoffset",
           "callback": "vent_flag",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "ids": [
@@ -7760,13 +7743,13 @@
           "table": "respiratorycare",
           "val_var": "ventendoffset",
           "callback": "vent_flag",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "table": "respiratorycare",
           "val_var": "priorventendoffset",
           "callback": "vent_flag",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "ids": [
@@ -7860,10 +7843,10 @@
     "interval": "00:01:00",
     "callback": "vent_ind",
     "target": "win_tbl",
-    "class_name": "rec_cncpt"
+    "class": "rec_cncpt"
   },
   "vent_start": {
-    "class_name": "lgl_cncpt",
+    "class": "lgl_cncpt",
     "description": "ventilation start",
     "category": "respiratory",
     "sources": {
@@ -7872,13 +7855,13 @@
           "table": "respiratorycare",
           "val_var": "ventstartoffset",
           "callback": "vent_flag",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "table": "respiratorycare",
           "val_var": "priorventstartoffset",
           "callback": "vent_flag",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "ids": [
@@ -7896,13 +7879,13 @@
           "table": "respiratorycare",
           "val_var": "ventstartoffset",
           "callback": "vent_flag",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "table": "respiratorycare",
           "val_var": "priorventstartoffset",
           "callback": "vent_flag",
-          "class_name": "col_itm"
+          "class": "col_itm"
         },
         {
           "ids": [
@@ -8124,7 +8107,7 @@
           "ids": 13066,
           "table": "listitems",
           "sub_var": "itemid",
-          "callback": "apply_map( c(`Geen geluid` = 1, `Onverstaanbare woorden` = 2, `Onjuiste woorden` = 3, `Verwarde taal` = 4, `Geori\u00ebnteerd` = 5) )"
+          "callback": "apply_map( c(`Geen geluid` = 1, `Onverstaanbare woorden` = 2, `Onjuiste woorden` = 3, `Verwarde taal` = 4, `Georiënteerd` = 5) )"
         }
       ],
       "eicu": [
@@ -8146,7 +8129,7 @@
           "ids": 10000100,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -8217,7 +8200,7 @@
           "ids": 20000700,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -8264,21 +8247,21 @@
           "val_var": "weightgroup",
           "table": "admissions",
           "callback": "apply_map(c(`59-` = 50.0, `60-69` = 65.0, `70-79` = 75.0, `80-89` = 85.0, `90-99` = 95.0, `100-109` = 105.0, `110+` = 120.0))",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu": [
         {
           "table": "patient",
           "val_var": "admissionweight",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "eicu_demo": [
         {
           "table": "patient",
           "val_var": "admissionweight",
-          "class_name": "col_itm"
+          "class": "col_itm"
         }
       ],
       "hirid": [
@@ -8286,7 +8269,7 @@
           "ids": 10000400,
           "table": "observations",
           "sub_var": "variableid",
-          "class_name": "hrd_itm"
+          "class": "hrd_itm"
         }
       ],
       "miiv": [
@@ -8322,14 +8305,14 @@
         {
           "table": "cases",
           "val_var": "WeightOnAdmission",
-          "class_name": "col_itm",
+          "class": "col_itm",
           "callback": "transform_fun(binary_op(`/`, 1000))"
         }
       ]
     }
   },
   "ecmo": {
-    "class_name": "lgl_cncpt",
+    "class": "lgl_cncpt",
     "description": "Extracorporeal membrane oxygenation in use",
     "category": "respiratory",
     "sources": {
@@ -8349,7 +8332,7 @@
           "table": "treatment",
           "sub_var": "treatmentstring",
           "regex": "ECMO",
-          "class_name": "rgx_itm",
+          "class": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
@@ -8366,7 +8349,7 @@
           "table": "procedureorderitems",
           "sub_var": "item",
           "regex": "ECMO",
-          "class_name": "rgx_itm",
+          "class": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
@@ -8374,7 +8357,7 @@
     }
   },
   "ecmo_indication": {
-    "class_name": "chr_cncpt",
+    "class": "chr_cncpt",
     "description": "ECMO indication (respiratory/cardiovascular)",
     "category": "respiratory",
     "sources": {
@@ -8394,14 +8377,14 @@
           "table": "treatment",
           "sub_var": "treatmentstring",
           "regex": "VV.*ECMO|ECMO.*respiratory",
-          "class_name": "rgx_itm",
+          "class": "rgx_itm",
           "callback": "transform_fun(set_val('respiratory'))"
         },
         {
           "table": "treatment",
           "sub_var": "treatmentstring",
           "regex": "VA.*ECMO|ECMO.*cardio",
-          "class_name": "rgx_itm",
+          "class": "rgx_itm",
           "callback": "transform_fun(set_val('cardiovascular'))"
         }
       ],
@@ -8419,7 +8402,7 @@
     }
   },
   "rrt": {
-    "class_name": "lgl_cncpt",
+    "class": "lgl_cncpt",
     "description": "Renal replacement therapy in use",
     "category": "renal",
     "sources": {
@@ -8442,7 +8425,7 @@
           "table": "treatment",
           "sub_var": "treatmentstring",
           "regex": "(CRRT|hemodialysis|dialysis)",
-          "class_name": "rgx_itm",
+          "class": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
@@ -8451,7 +8434,7 @@
           "table": "procedureorderitems",
           "sub_var": "item",
           "regex": "(CRRT|Hemodialysis|Dialysis|CVVH)",
-          "class_name": "rgx_itm",
+          "class": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         },
         {
@@ -8474,8 +8457,8 @@
     }
   },
   "rrt_criteria": {
-    "class_name": "lgl_cncpt",
-    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+\u22656.0 OR acidosis pH\u22647.20+HCO3\u226412)",
+    "class": "lgl_cncpt",
+    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+≥6.0 OR acidosis pH≤7.20+HCO3≤12)",
     "category": "renal",
     "sources": {
       "miiv": [],
@@ -8487,7 +8470,7 @@
     "callback": "rrt_criteria"
   },
   "mech_circ_support": {
-    "class_name": "lgl_cncpt",
+    "class": "lgl_cncpt",
     "description": "Mechanical circulatory support (IABP/LVAD/Impella)",
     "category": "cardiovascular",
     "sources": {
@@ -8509,7 +8492,7 @@
           "table": "treatment",
           "sub_var": "treatmentstring",
           "regex": "IABP|balloon pump|LVAD|Impella",
-          "class_name": "rgx_itm",
+          "class": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
@@ -8518,7 +8501,7 @@
           "table": "procedureorderitems",
           "sub_var": "item",
           "regex": "(IABP|balloon|Impella|LVAD)",
-          "class_name": "rgx_itm",
+          "class": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         },
         {
@@ -8541,7 +8524,7 @@
     }
   },
   "sedated_gcs": {
-    "class_name": "num_cncpt",
+    "class": "num_cncpt",
     "description": "GCS before sedation (for sedated patients)",
     "category": "neurology",
     "unit": "score",
@@ -8562,7 +8545,7 @@
           "table": "nursecharting",
           "sub_var": "nursingchartcelltypevallabel",
           "regex": "GCS.*prior.*sedation",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "aumc": [
@@ -8570,7 +8553,7 @@
           "table": "numericitems",
           "sub_var": "item",
           "regex": "GCS.*pre.*sedat",
-          "class_name": "rgx_itm"
+          "class": "rgx_itm"
         }
       ],
       "hirid": [
@@ -8578,40 +8561,6 @@
           "table": "observations",
           "sub_var": "variableid",
           "ids": []
-        }
-      ]
-    }
-  },
-  "potassium": {
-    "description": "Alias for k (potassium) - SOFA-2 compatibility",
-    "category": "chemistry",
-    "unit": ["mEq/L", "mmol/l"],
-    "min": 0,
-    "max": 10,
-    "sources": {
-      "miiv": [
-        {
-          "ids": [50822, 50971],
-          "table": "labevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
-        }
-      ]
-    }
-  },
-  "bicarb": {
-    "description": "Alias for bicar (bicarbonate) - SOFA-2 compatibility",
-    "category": "chemistry",
-    "unit": ["mEq/L", "mmol/l"],
-    "min": 5,
-    "max": 50,
-    "sources": {
-      "miiv": [
-        {
-          "ids": [50882],
-          "table": "labevents",
-          "sub_var": "itemid",
-          "index_var": "charttime"
         }
       ]
     }

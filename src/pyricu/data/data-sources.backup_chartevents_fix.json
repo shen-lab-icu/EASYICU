@@ -7877,7 +7877,19 @@
         }
       },
       "labevents": {
-        "files": "labevents/",
+        "files": [
+          "labevents/1.parquet",
+          "labevents/2.parquet",
+          "labevents/3.parquet",
+          "labevents/4.parquet",
+          "labevents/5.parquet",
+          "labevents/6.parquet",
+          "labevents/7.parquet",
+          "labevents/8.parquet",
+          "labevents/9.parquet",
+          "labevents/10.parquet"
+        ],
+        "num_rows": 118171367,
         "defaults": {
           "id_var": "stay_id",
           "index_var": "charttime",
@@ -7893,10 +7905,6 @@
             "name": "labevent_id",
             "spec": "col_integer"
           },
-          "stay_id": {
-            "name": "stay_id",
-            "spec": "col_integer"
-          },
           "subject_id": {
             "name": "subject_id",
             "spec": "col_integer"
@@ -7904,6 +7912,18 @@
           "hadm_id": {
             "name": "hadm_id",
             "spec": "col_integer"
+          },
+          "specimen_id": {
+            "name": "specimen_id",
+            "spec": "col_integer"
+          },
+          "itemid": {
+            "name": "itemid",
+            "spec": "col_integer"
+          },
+          "order_provider_id": {
+            "name": "order_provider_id",
+            "spec": "col_character"
           },
           "charttime": {
             "name": "charttime",
@@ -7913,9 +7933,9 @@
             "name": "storetime",
             "spec": "col_datetime"
           },
-          "itemid": {
-            "name": "itemid",
-            "spec": "col_integer"
+          "value": {
+            "name": "value",
+            "spec": "col_character"
           },
           "valuenum": {
             "name": "valuenum",
@@ -7924,7 +7944,41 @@
           "valueuom": {
             "name": "valueuom",
             "spec": "col_character"
+          },
+          "ref_range_lower": {
+            "name": "ref_range_lower",
+            "spec": "col_double"
+          },
+          "ref_range_upper": {
+            "name": "ref_range_upper",
+            "spec": "col_double"
+          },
+          "flag": {
+            "name": "flag",
+            "spec": "col_character"
+          },
+          "priority": {
+            "name": "priority",
+            "spec": "col_character"
+          },
+          "comments": {
+            "name": "comments",
+            "spec": "col_character"
           }
+        },
+        "partitioning": {
+          "col": "itemid",
+          "breaks": [
+            50868,
+            50902,
+            50943,
+            50983,
+            51146,
+            51248,
+            51256,
+            51279,
+            51491
+          ]
         }
       },
       "microbiologyevents": {
@@ -8438,7 +8492,38 @@
         }
       },
       "chartevents": {
-        "files": "chartevents.parquet",
+        "files": [
+          "1.parquet",
+          "2.parquet",
+          "3.parquet",
+          "4.parquet",
+          "5.parquet",
+          "6.parquet",
+          "7.parquet",
+          "8.parquet",
+          "9.parquet",
+          "10.parquet",
+          "11.parquet",
+          "12.parquet",
+          "13.parquet",
+          "14.parquet",
+          "15.parquet",
+          "16.parquet",
+          "17.parquet",
+          "18.parquet",
+          "19.parquet",
+          "20.parquet",
+          "21.parquet",
+          "22.parquet",
+          "23.parquet",
+          "24.parquet",
+          "25.parquet",
+          "26.parquet",
+          "27.parquet",
+          "28.parquet",
+          "29.parquet",
+          "30.parquet"
+        ],
         "defaults": {
           "id_var": "stay_id",
           "index_var": "charttime",
@@ -8449,8 +8534,15 @@
             "storetime"
           ]
         },
-        "num_rows": 313645063,
         "cols": {
+          "chartevent_id": {
+            "name": "chartevent_id",
+            "spec": "col_integer"
+          },
+          "stay_id": {
+            "name": "stay_id",
+            "spec": "col_integer"
+          },
           "subject_id": {
             "name": "subject_id",
             "spec": "col_integer"
@@ -8459,27 +8551,17 @@
             "name": "hadm_id",
             "spec": "col_integer"
           },
-          "stay_id": {
-            "name": "stay_id",
-            "spec": "col_integer"
-          },
           "charttime": {
             "name": "charttime",
-            "spec": "col_datetime",
-            "format": "%Y-%m-%d %H:%M:%S"
+            "spec": "col_datetime"
           },
           "storetime": {
             "name": "storetime",
-            "spec": "col_datetime",
-            "format": "%Y-%m-%d %H:%M:%S"
+            "spec": "col_datetime"
           },
           "itemid": {
             "name": "itemid",
             "spec": "col_integer"
-          },
-          "value": {
-            "name": "value",
-            "spec": "col_character"
           },
           "valuenum": {
             "name": "valuenum",
@@ -8488,49 +8570,7 @@
           "valueuom": {
             "name": "valueuom",
             "spec": "col_character"
-          },
-          "warning": {
-            "name": "warning",
-            "spec": "col_integer"
-          },
-          "caregiver_id": {
-            "name": "caregiver_id",
-            "spec": "col_integer"
           }
-        },
-        "partitioning": {
-          "col": "itemid",
-          "breaks": [
-            220048,
-            220059,
-            220181,
-            220228,
-            220615,
-            223782,
-            223835,
-            223905,
-            223962,
-            223990,
-            224015,
-            224055,
-            224082,
-            224093,
-            224328,
-            224650,
-            224701,
-            224850,
-            225072,
-            226104,
-            227240,
-            227467,
-            227950,
-            227960,
-            228004,
-            228397,
-            228594,
-            228924,
-            229124
-          ]
         }
       },
       "datetimeevents": {
