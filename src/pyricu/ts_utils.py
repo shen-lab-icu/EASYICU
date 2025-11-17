@@ -7,13 +7,35 @@ interval alignment, windowing, and time-based transformations.
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any, Optional, Union, List, Iterable
+from typing import Any, Optional, Union, List, Iterable, Dict, Sequence
 import logging
 
 import pandas as pd
 import numpy as np
 
+# 🚀 Try to import numba for JIT compilation
+try:
+    from numba import jit
+    HAS_NUMBA = True
+except ImportError:
+    HAS_NUMBA = False
+    # No-op decorator when numba not available
+    def jit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
 from .table import ICUTable
+
+
+def _safe_group_apply(grouped, func):
+    """Call groupby.apply explicitly keeping group columns in the result."""
+    try:
+        # include_groups=True preserves ID columns for pandas ≥2.1 while
+        # maintaining backwards compatibility with earlier versions.
+        return grouped.apply(func, include_groups=True)
+    except TypeError:  # pandas < 2.1
+        return grouped.apply(func)
 
 
 def change_interval(
@@ -45,99 +67,55 @@ def change_interval(
     # Handle parameter aliases
     if interval is None and new_interval is None:
         raise ValueError("Either 'interval' or 'new_interval' must be specified")
-    
-    target_interval = interval if interval is not None else new_interval
-    
-    # Convert timedelta to pd.Timedelta if needed
-    if isinstance(target_interval, timedelta):
-        target_interval = pd.Timedelta(target_interval)
-    
-    def _fill_time_gaps(
-        df: pd.DataFrame,
-        id_cols: List[str],
-        time_column: str,
-        target_interval: pd.Timedelta,
-        numeric_time: bool,
-    ) -> pd.DataFrame:
-        """Vectorized gap filler that relies on pandas reindexing."""
-        if df.empty:
-            return df
 
-        def _build_grid(start_value, end_value):
-            if numeric_time:
-                step = target_interval.total_seconds() / 3600.0
-                return np.arange(start_value, end_value + step, step)
-            start_dt = pd.to_datetime(start_value)
-            end_dt = pd.to_datetime(end_value)
-            if pd.isna(start_dt) or pd.isna(end_dt):
-                return None
-            return pd.date_range(start=start_dt, end=end_dt, freq=target_interval)
+    target_interval = pd.to_timedelta(interval if interval is not None else new_interval)
 
-        def _expand_group(group: pd.DataFrame) -> pd.DataFrame:
-            usable = group[time_column].dropna()
-            if usable.empty:
-                return group
-            grid = _build_grid(usable.iloc[0], usable.iloc[-1])
-            if grid is None or len(grid) == 0:
-                return group
-            expanded = (
-                group.set_index(time_column)
-                .reindex(grid)
-                .reset_index()
-                .rename(columns={"index": time_column})
-            )
-            for col in id_cols:
-                if col in group.columns:
-                    expanded[col] = group[col].iloc[0]
-            return expanded
+    def _detect_time_columns(df: pd.DataFrame) -> List[str]:
+        return [
+            col
+            for col in df.columns
+            if pd.api.types.is_datetime64_any_dtype(df[col])
+            or pd.api.types.is_timedelta64_dtype(df[col])
+        ]
 
-        if id_cols:
-            filled = (
-                df.groupby(id_cols, dropna=False, sort=False, group_keys=False)
-                .apply(_expand_group)
-                .reset_index(drop=True)
-            )
-        else:
-            filled = _expand_group(df)
-
-        for col in df.columns:
-            if col not in filled.columns:
-                filled[col] = np.nan
-        return filled[df.columns]
+    def _round_time_columns(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+        for col in cols:
+            if col in df.columns:
+                df[col] = round_to_interval(df[col], target_interval)
+        return df
 
     # Handle DataFrame input
     if isinstance(table, pd.DataFrame):
-        if time_col is None:
-            # Try to guess time column
-            for col in ['datetime', 'time', 'charttime', 'index_time']:
-                if col in table.columns:
-                    time_col = col
-                    break
-        
-        if time_col is None:
-            raise ValueError("time_col must be specified for DataFrame input")
-        
         df = table.copy()
-        
-        # Round times to the specified interval
-        df[time_col] = pd.to_datetime(df[time_col]).dt.floor(target_interval)
+
+        detected_time_cols = _detect_time_columns(df)
+        primary_time_col = time_col or (detected_time_cols[0] if detected_time_cols else None)
+
+        if primary_time_col is None:
+            raise ValueError("time_col must be specified or inferable from DataFrame")
+
+        time_cols = [primary_time_col] + [
+            col for col in detected_time_cols if col != primary_time_col
+        ]
+
+        df = _round_time_columns(df, time_cols)
         
         if aggregation:
             # Group by time and aggregate
             numeric_cols = df.select_dtypes(include=['number']).columns
-            agg_dict = {col: aggregation for col in numeric_cols if col != time_col}
+            agg_dict = {col: aggregation for col in numeric_cols if col != primary_time_col}
             if agg_dict:
                 try:
-                    df = df.groupby(time_col, as_index=False).agg(agg_dict)
+                    df = df.groupby(primary_time_col, as_index=False).agg(agg_dict)
                 except Exception:
                     # 聚合失败时退化为去重，避免抛错
-                    df = df.drop_duplicates(subset=[time_col], keep="first")
+                    df = df.drop_duplicates(subset=[primary_time_col], keep="first")
             else:
                 # 无可聚合的数值列，退化为去重
-                df = df.drop_duplicates(subset=[time_col], keep="first")
+                df = df.drop_duplicates(subset=[primary_time_col], keep="first")
         else:
             # Just drop duplicates
-            df = df.drop_duplicates(subset=[time_col], keep="first")
+            df = df.drop_duplicates(subset=[primary_time_col], keep="first")
         
         return df
     
@@ -146,35 +124,17 @@ def change_interval(
         return table
 
     df = table.data.copy()
+    time_cols: List[str] = []
+    if table.index_column:
+        time_cols.append(table.index_column)
+    time_cols.extend(table.time_columns or [])
 
-    numeric_time = pd.api.types.is_numeric_dtype(df[table.index_column])
+    detected = _detect_time_columns(df)
+    for col in detected:
+        if col not in time_cols:
+            time_cols.append(col)
 
-    # Handle numeric time (hours since admission) differently from datetime
-    if numeric_time:
-        # Time is already in hours (since admission), use floor to round down
-        # R ricu uses floor() not round(): round_to(x, to=1) = floor(x)
-        # e.g., if interval is 1 hour, floor 11.7 -> 11.0, floor 11.3 -> 11.0
-        # 🔧 FIX: Handle None values to prevent division errors
-        total_seconds = target_interval.total_seconds()
-        if total_seconds is None:
-            raise ValueError(f"Invalid target_interval: {target_interval}")
-        hours_per_interval = total_seconds / 3600.0
-        if hours_per_interval == 1.0:
-            # Special case: if interval is 1 hour, use floor directly
-            # 🔧 FIX: Handle None/NaN values to prevent division errors
-            df[table.index_column] = np.floor(pd.to_numeric(df[table.index_column], errors='coerce'))
-        else:
-            # General case: floor(x / to) * to (matches R ricu round_to)
-            # 🔧 FIX: Handle None/NaN values to prevent division errors
-            numeric_time = pd.to_numeric(df[table.index_column], errors='coerce')
-            df[table.index_column] = np.floor(numeric_time / hours_per_interval) * hours_per_interval
-    else:
-        # Time is datetime
-        # 注意：如果时间应该是相对于入院时间的小时数，这里不应该出现datetime
-        # 但为了安全，我们将datetime舍入到指定的interval，然后保持为datetime
-        # （理想情况下，_align_time_to_admission应该已经将时间转换为小时数）
-        df[table.index_column] = pd.to_datetime(df[table.index_column], errors='coerce')
-        df[table.index_column] = df[table.index_column].dt.floor(target_interval)
+    df = _round_time_columns(df, time_cols)
 
     # Group by ID columns and rounded time, and aggregate
     group_cols = list(table.id_columns) + [table.index_column]
@@ -221,15 +181,16 @@ def change_interval(
         # Just drop duplicates, keeping first occurrence
         df = df.drop_duplicates(subset=group_cols, keep="first")
     
-    # CRITICAL: Fill gaps in time series (replicates R ricu fill_gaps)
-    # This ensures all time points are present, even if no measurements exist
     if fill_gaps:
-        df = _fill_time_gaps(
+        fill_fn = globals().get("fill_gaps")
+        if not callable(fill_fn):
+            raise RuntimeError("fill_gaps helper is not available")
+        df = fill_fn(
             df,
             list(table.id_columns),
             table.index_column,
             target_interval,
-            numeric_time,
+            method="none",
         )
 
     return ICUTable(
@@ -483,7 +444,7 @@ def fill_gaps(
     id_cols: list,
     index_col: str,
     interval: pd.Timedelta,
-    limits: Optional[pd.DataFrame] = None,
+    limits: Optional[Any] = None,
     method: str = "none",
 ) -> pd.DataFrame:
     """Fill time gaps in a time series (R ricu fill_gaps).
@@ -493,7 +454,9 @@ def fill_gaps(
         id_cols: ID columns to group by
         index_col: Time index column
         interval: Expected time interval between observations
-        limits: DataFrame with start/end times per ID (optional)
+        limits: Either a DataFrame with per-ID start/end bounds, an
+            `ICUTable`, or any length-2 sequence specifying global
+            lower/upper bounds (matching ricu's difftime vector support)
         method: Fill method ('ffill', 'bfill', 'interpolate', or 'none')
 
     Returns:
@@ -510,53 +473,155 @@ def fill_gaps(
         >>> fill_gaps(df, ['id'], 'time', pd.Timedelta(hours=1))
     """
     data = data.copy()
-    
-    # Ensure time column is datetime
-    if not pd.api.types.is_datetime64_any_dtype(data[index_col]):
-        data[index_col] = pd.to_datetime(data[index_col])
-    
-    filled_groups = []
-    
-    for id_vals, group in data.groupby(id_cols):
-        if len(group) == 0:
-            continue
-        
-        # Determine time range
-        if limits is not None:
-            # Use limits DataFrame
-            if isinstance(id_vals, tuple):
-                mask = True
-                for i, col in enumerate(id_cols):
-                    mask = mask & (limits[col] == id_vals[i])
-            else:
-                mask = (limits[id_cols[0]] == id_vals)
-            
-            limit_row = limits[mask]
-            if len(limit_row) > 0:
-                min_time = pd.to_datetime(limit_row.iloc[0]['start'])
-                max_time = pd.to_datetime(limit_row.iloc[0]['end'])
-            else:
-                min_time = group[index_col].min()
-                max_time = group[index_col].max()
+    if index_col not in data.columns:
+        return data
+
+    interval = pd.to_timedelta(interval)
+    if interval <= pd.Timedelta(0):
+        raise ValueError("interval must be a positive timedelta")
+
+    id_cols = [col for col in (id_cols or []) if col in data.columns]
+
+    def _normalize_time(series: pd.Series) -> tuple[pd.Series, str]:
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return pd.to_datetime(series, errors="coerce"), "datetime"
+        if pd.api.types.is_timedelta64_dtype(series):
+            return pd.to_timedelta(series, errors="coerce"), "timedelta"
+        if pd.api.types.is_numeric_dtype(series):
+            return pd.to_numeric(series, errors="coerce"), "numeric"
+        as_dt = pd.to_datetime(series, errors="coerce")
+        if as_dt.notna().any():
+            return as_dt, "datetime"
+        as_td = pd.to_timedelta(series, errors="coerce")
+        if as_td.notna().any():
+            return as_td, "timedelta"
+        return pd.to_numeric(series, errors="coerce"), "numeric"
+
+    def _coerce_limits(values: pd.Series, kind: str) -> pd.Series:
+        if kind == "datetime":
+            return pd.to_datetime(values, errors="coerce")
+        if kind == "timedelta":
+            return pd.to_timedelta(values, errors="coerce")
+        return pd.to_numeric(values, errors="coerce")
+
+    def _select_limits(id_vals: Any) -> tuple[Any, Any]:
+        if limits_df is None:
+            return None, None
+        if not id_cols:
+            row = limits_df.iloc[:1]
         else:
-            min_time = group[index_col].min()
-            max_time = group[index_col].max()
-        
-        # Create complete time index
-        complete_index = pd.date_range(start=min_time, end=max_time, freq=interval)
-        
-        # Reindex
-        group = group.set_index(index_col)
-        group = group.reindex(complete_index)
-        
-        # Fill ID columns
-        for i, id_col in enumerate(id_cols):
             if isinstance(id_vals, tuple):
-                group[id_col] = id_vals[i]
+                mask = pd.Series(True, index=limits_df.index)
+                for idx, col in enumerate(id_cols):
+                    mask &= limits_df[col] == id_vals[idx]
             else:
-                group[id_col] = id_vals
-        
-        # Apply fill method
+                mask = limits_df[id_cols[0]] == id_vals
+            row = limits_df[mask]
+        if row.empty:
+            return None, None
+        first = row.iloc[0]
+        return first["start"], first["end"]
+
+    time_series, time_kind = _normalize_time(data[index_col])
+    data[index_col] = time_series
+
+    def _is_sequence_like(obj: Any) -> bool:
+        if isinstance(obj, (pd.Series, pd.Index, np.ndarray)):
+            return True
+        if isinstance(obj, Sequence) and not isinstance(obj, (str, bytes)):
+            return True
+        return False
+
+    def _prepare_limits(limits_obj: Any) -> Optional[pd.DataFrame]:
+        if limits_obj is None:
+            return None
+        if isinstance(limits_obj, pd.DataFrame):
+            return limits_obj.copy()
+        if hasattr(limits_obj, "data") and isinstance(getattr(limits_obj, "data"), pd.DataFrame):
+            return getattr(limits_obj, "data").copy()
+        if _is_sequence_like(limits_obj):
+            seq = list(limits_obj)
+            if len(seq) != 2:
+                raise ValueError("limits sequences must contain exactly two entries (start, end)")
+            if id_cols:
+                base = data[id_cols].drop_duplicates().reset_index(drop=True)
+            else:
+                base = pd.DataFrame(index=[0])
+            base = base.copy()
+            base["start"] = seq[0]
+            base["end"] = seq[1]
+            if not id_cols:
+                base = base[["start", "end"]]
+            return base
+        raise TypeError("limits must be a DataFrame, ICUTable, or length-2 sequence")
+
+    limits_df = _prepare_limits(limits)
+    if limits_df is not None:
+        for required_col in ("start", "end"):
+            if required_col not in limits_df.columns:
+                raise ValueError("limits must contain 'start' and 'end' columns")
+        limits_df["start"] = _coerce_limits(limits_df["start"], time_kind)
+        limits_df["end"] = _coerce_limits(limits_df["end"], time_kind)
+
+    step_hours = interval / pd.Timedelta(hours=1)
+
+    def _build_range(start, end):
+        if pd.isna(start) or pd.isna(end) or start > end:
+            return None
+        if time_kind == "datetime":
+            return pd.date_range(start=start, end=end, freq=interval)
+        if time_kind == "timedelta":
+            return pd.timedelta_range(start=start, end=end, freq=interval)
+        if step_hours <= 0:
+            raise ValueError("interval must not be zero")
+        return np.arange(start, end + step_hours, step_hours)
+
+    def _assign_ids(frame: pd.DataFrame, id_vals: Any) -> pd.DataFrame:
+        if not id_cols:
+            return frame
+        if isinstance(id_vals, tuple):
+            for idx, col in enumerate(id_cols):
+                frame[col] = id_vals[idx]
+        else:
+            frame[id_cols[0]] = id_vals
+            for extra in id_cols[1:]:
+                if extra not in frame.columns:
+                    frame[extra] = np.nan
+        return frame
+
+    if id_cols:
+        grouped = data.groupby(id_cols, dropna=False, sort=False)
+    else:
+        grouped = [(None, data)]
+
+    filled_groups: List[pd.DataFrame] = []
+
+    for id_vals, group in grouped:
+        if group.empty:
+            continue
+        group = group.sort_values(index_col)
+        observed = group[index_col].dropna()
+        if observed.empty:
+            continue
+
+        min_time = observed.iloc[0]
+        max_time = observed.iloc[-1]
+        limit_min, limit_max = _select_limits(id_vals)
+        if limit_min is not None and limit_max is not None:
+            min_time, max_time = limit_min, limit_max
+
+        full_range = _build_range(min_time, max_time)
+        if full_range is None or len(full_range) == 0:
+            continue
+
+        if isinstance(full_range, np.ndarray):
+            reindex_target = pd.Index(full_range, name=index_col)
+        else:
+            reindex_target = full_range
+
+        group = group.set_index(index_col).reindex(reindex_target)
+        group = _assign_ids(group, id_vals)
+
         if method == "ffill":
             group = group.fillna(method="ffill")
         elif method == "bfill":
@@ -564,14 +629,14 @@ def fill_gaps(
         elif method == "interpolate":
             numeric_cols = group.select_dtypes(include="number").columns
             group[numeric_cols] = group[numeric_cols].interpolate()
-        
+
         group = group.reset_index()
         group.rename(columns={"index": index_col}, inplace=True)
         filled_groups.append(group)
-    
+
     if not filled_groups:
-        return pd.DataFrame()
-    
+        return pd.DataFrame(columns=data.columns)
+
     result = pd.concat(filled_groups, ignore_index=True)
     return result
 
@@ -650,7 +715,7 @@ def replace_na(
                 group, columns, method, value, limit, max_gap, index_col
             )
         
-        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=False)
+        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=True)
         return data.reset_index(drop=True)
     else:
         return _fill_na_single(data, columns, method, value, limit, max_gap, index_col)
@@ -740,6 +805,46 @@ def _fill_na_single(
     return data
 
 
+# 🚀 Numba-accelerated window computation core
+@jit(nopython=True, cache=True)
+def _compute_window_bounds(times: np.ndarray, before_val: float, after_val: float):
+    """Compute window start/end indices for each time point.
+    
+    Returns:
+        window_starts, window_ends: arrays of indices marking window boundaries
+    """
+    n = len(times)
+    window_starts = np.empty(n, dtype=np.int64)
+    window_ends = np.empty(n, dtype=np.int64)
+    
+    for i in range(n):
+        center_time = times[i]
+        start_time = center_time - before_val
+        end_time = center_time + after_val
+        
+        # Binary search for window start
+        left, right = 0, n
+        while left < right:
+            mid = (left + right) // 2
+            if times[mid] < start_time:
+                left = mid + 1
+            else:
+                right = mid
+        window_starts[i] = left
+        
+        # Binary search for window end
+        left, right = 0, n
+        while left < right:
+            mid = (left + right) // 2
+            if times[mid] <= end_time:
+                left = mid + 1
+            else:
+                right = mid
+        window_ends[i] = left
+    
+    return window_starts, window_ends
+
+
 def slide(
     data: pd.DataFrame,
     id_cols: list,
@@ -749,7 +854,10 @@ def slide(
     agg_func: Optional[dict] = None,
     full_window: bool = False,
 ) -> pd.DataFrame:
-    """Apply sliding window aggregation (R ricu slide).
+    """Apply sliding window aggregation (R ricu slide) - OPTIMIZED WITH NUMBA.
+    
+    🚀 Performance: Numba-accelerated binary search for window bounds.
+    Expected 3-10x faster than original loop-based version.
     
     For each time point, creates a window spanning [time - before, time + after]
     and aggregates values within that window.
@@ -781,6 +889,9 @@ def slide(
     if agg_func is None:
         agg_func = {}
     
+    if len(data) == 0:
+        return pd.DataFrame()
+    
     data = data.copy()
     
     # Handle both datetime and numeric (hours) time columns
@@ -793,100 +904,124 @@ def slide(
     
     # Convert before/after to compatible units
     if before is None:
-        before_val = 24.0  # Default to 24 hours
+        before_val = 24.0 if is_numeric_time else pd.Timedelta(hours=24)
     elif is_numeric_time:
-        # Time is in hours, convert Timedelta to hours
         before_val = before.total_seconds() / 3600.0
     else:
-        # Time is datetime, use Timedelta directly
         before_val = before
 
     if after is None:
-        after_val = 0.0  # Default to 0 hours
+        after_val = 0.0 if is_numeric_time else pd.Timedelta(0)
     elif is_numeric_time:
-        # Time is in hours, convert Timedelta to hours
         after_val = after.total_seconds() / 3600.0
     else:
-        # Time is datetime, use Timedelta directly
         after_val = after
     
+    # 🚀 优化：使用Numba加速窗口边界计算
     results = []
     
-    for id_vals, group in data.groupby(id_cols):
-        group = group.sort_values(index_col)
+    for id_vals, group in data.groupby(id_cols, sort=False):
+        if len(group) == 0:
+            continue
+            
+        group = group.sort_values(index_col).reset_index(drop=True)
         
-        # For full_window check, we need group time range
-        if full_window and len(group) > 0:
-            group_start = group[index_col].min()
-            group_end = group[index_col].max()
+        # Convert time column to numeric for numba
+        if is_numeric_time:
+            times_numeric = group[index_col].values.astype(np.float64)
+            before_numeric = float(before_val)
+            after_numeric = float(after_val)
+        else:
+            # Convert datetime to Unix timestamp (float64)
+            times_numeric = group[index_col].values.astype('datetime64[ns]').astype(np.float64) / 1e9
+            before_numeric = before_val.total_seconds()
+            after_numeric = after_val.total_seconds()
         
-        for idx, row in group.iterrows():
-            center_time = row[index_col]
-            window_start = center_time - before_val
-            window_end = center_time + after_val
+        n = len(times_numeric)
+        
+        # For full_window check
+        if full_window:
+            group_start = times_numeric[0]
+            group_end = times_numeric[-1]
+        
+        # 🚀 Numba加速：批量计算所有窗口边界
+        window_starts, window_ends = _compute_window_bounds(
+            times_numeric, before_numeric, after_numeric
+        )
+        
+        # 遍历每个时间点进行聚合
+        for i in range(n):
+            window_start_idx = window_starts[i]
+            window_end_idx = window_ends[i]
             
             # Check if full window is available
             if full_window:
-                if window_start < group_start or window_end > group_end:
+                window_start_time = times_numeric[i] - before_numeric
+                window_end_time = times_numeric[i] + after_numeric
+                if window_start_time < group_start or window_end_time > group_end:
                     continue
             
-            # Select data in window
-            window_data = group[
-                (group[index_col] >= window_start) &
-                (group[index_col] <= window_end)
-            ]
-            
-            if len(window_data) == 0:
+            if window_start_idx >= window_end_idx:
                 continue
             
             # Build result row
-            result_row = {index_col: center_time}
+            result_row = {index_col: group.iloc[i][index_col]}
             
             # Add ID columns
-            for i, col in enumerate(id_cols):
+            for j, col in enumerate(id_cols):
                 if isinstance(id_vals, tuple):
-                    result_row[col] = id_vals[i]
+                    result_row[col] = id_vals[j]
                 else:
                     result_row[col] = id_vals
             
+            # 🚀 优化：直接使用iloc批量索引，避免重复过滤
+            window_data = group.iloc[window_start_idx:window_end_idx]
+            
             # Apply aggregations
             for col, func in agg_func.items():
-                if col in window_data.columns:
-                    # Handle string function names
-                    if isinstance(func, str):
-                        if func == 'mean':
-                            result_row[col] = window_data[col].mean()
-                        elif func == 'sum':
-                            result_row[col] = window_data[col].sum()
-                        elif func == 'min':
-                            result_row[col] = window_data[col].min()
-                        elif func == 'max':
-                            result_row[col] = window_data[col].max()
-                        elif func == 'count':
-                            result_row[col] = window_data[col].count()
-                        elif func == 'std':
-                            result_row[col] = window_data[col].std()
-                        elif func == 'first':
-                            result_row[col] = window_data[col].iloc[0] if len(window_data) > 0 else None
-                        elif func == 'last':
-                            result_row[col] = window_data[col].iloc[-1] if len(window_data) > 0 else None
-                        elif func == 'max_or_na':
-                            # Special handling for max_or_na
-                            vals = window_data[col].dropna()
-                            result_row[col] = vals.max() if len(vals) > 0 else None
-                        elif func == 'min_or_na':
-                            # Special handling for min_or_na
-                            vals = window_data[col].dropna()
-                            result_row[col] = vals.min() if len(vals) > 0 else None
-                        else:
-                            raise ValueError(f"Unknown aggregation function: {func}")
-                    elif callable(func):
-                        # Handle callable functions
-                        result_row[col] = func(window_data[col])
+                if col not in group.columns:
+                    continue
+                    
+                col_data = window_data[col]
+                
+                # Handle string function names
+                if isinstance(func, str):
+                    if func == 'mean':
+                        result_row[col] = col_data.mean()
+                    elif func == 'sum':
+                        result_row[col] = col_data.sum()
+                    elif func == 'min':
+                        result_row[col] = col_data.min()
+                    elif func == 'max':
+                        result_row[col] = col_data.max()
+                    elif func == 'count':
+                        result_row[col] = col_data.count()
+                    elif func == 'std':
+                        result_row[col] = col_data.std()
+                    elif func == 'first':
+                        result_row[col] = col_data.iloc[0] if len(col_data) > 0 else None
+                    elif func == 'last':
+                        result_row[col] = col_data.iloc[-1] if len(col_data) > 0 else None
+                    elif func == 'max_or_na':
+                        vals = col_data.dropna()
+                        result_row[col] = vals.max() if len(vals) > 0 else None
+                    elif func == 'min_or_na':
+                        vals = col_data.dropna()
+                        result_row[col] = vals.min() if len(vals) > 0 else None
                     else:
-                        raise ValueError(f"agg_func values must be string or callable, got {type(func)}")
+                        raise ValueError(f"Unknown aggregation function: {func}")
+                elif callable(func):
+                    result_row[col] = func(col_data)
+                else:
+                    raise ValueError(f"agg_func values must be string or callable, got {type(func)}")
+
             
             results.append(result_row)
+    
+    if not results:
+        return pd.DataFrame()
+    
+    return pd.DataFrame(results)
     
     if not results:
         return pd.DataFrame()
@@ -1291,7 +1426,7 @@ def locf(
             
             return group
         
-        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=False)
+        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=True)
     else:
         # No grouping
         if max_gap is not None and index_col is not None:
@@ -1362,7 +1497,7 @@ def locb(
             
             return group
         
-        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=False)
+        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=True)
     else:
         # No grouping
         if max_gap is not None and index_col is not None:
@@ -1618,30 +1753,31 @@ def group_measurements(
         >>> group_measurements(df, ['id'], 'time', max_gap=pd.Timedelta(hours=6))
         # Returns groups: [1, 1, 2, 2, 2]
     """
+    if not id_cols:
+        raise ValueError("group_measurements requires at least one id column")
+
+    max_gap = pd.to_timedelta(max_gap)
+
     data = data.copy()
-    
-    # Ensure sorted
+
+    # Ensure sorted for predictable diff behaviour
     data = data.sort_values(id_cols + [index_col])
-    
-    # Ensure datetime
+
+    # Ensure datetime comparisons
     if not pd.api.types.is_datetime64_any_dtype(data[index_col]):
         data[index_col] = pd.to_datetime(data[index_col])
-    
-    def calc_groups(group):
-        # Calculate time differences
-        time_diffs = group[index_col].diff()
-        
-        # Mark where gaps exceed max_gap
-        large_gaps = time_diffs > max_gap
-        
-        # Cumulative sum creates group IDs
-        group[group_col] = large_gaps.cumsum()
-        
-        return group
-    
-    data = data.groupby(id_cols, group_keys=False).apply(calc_groups, include_groups=False)
-    
-    return data.reset_index(drop=True)
+
+    indexed = data.set_index(id_cols)
+    level_order = list(range(len(id_cols)))
+
+    time_diffs = indexed.groupby(level=level_order, sort=False)[index_col].diff()
+    gap_flags = (time_diffs > max_gap).fillna(False).astype(int)
+    group_ids = gap_flags.groupby(level=level_order, sort=False).cumsum()
+
+    indexed[group_col] = group_ids
+
+    result = indexed.reset_index()
+    return result.reset_index(drop=True)
 
 
 def create_intervals(
@@ -1676,34 +1812,37 @@ def create_intervals(
         ... })
         >>> create_intervals(df, ['id'], 'time')
     """
+    if not id_cols:
+        raise ValueError("create_intervals requires at least one id column")
+
+    overhang = pd.to_timedelta(overhang)
+    max_len = pd.to_timedelta(max_len)
+
     data = data.copy()
-    
-    # Ensure sorted
+
+    # Ensure sorted for predictable shift semantics
     data = data.sort_values(id_cols + [index_col])
-    
+
     # Ensure datetime
     if not pd.api.types.is_datetime64_any_dtype(data[index_col]):
         data[index_col] = pd.to_datetime(data[index_col])
-    
-    def calc_endtimes(group):
-        # Calculate time to next observation
-        next_times = group[index_col].shift(-1)
-        durations = next_times - group[index_col]
-        
-        # For last observation, use overhang
-        durations = durations.fillna(overhang)
-        
-        # Cap at max_len
-        durations = durations.clip(upper=max_len)
-        
-        # Calculate end times
-        group[end_col] = group[index_col] + durations
-        
-        return group
-    
-    data = data.groupby(id_cols, group_keys=False).apply(calc_endtimes, include_groups=False)
-    
-    return data.reset_index(drop=True)
+
+    indexed = data.set_index(id_cols)
+    level_order = list(range(len(id_cols)))
+
+    next_times = indexed.groupby(level=level_order, sort=False)[index_col].shift(-1)
+    durations = next_times - indexed[index_col]
+
+    # For last observation, use overhang
+    durations = durations.fillna(overhang)
+
+    # Cap at max_len
+    durations = durations.clip(upper=max_len)
+
+    indexed[end_col] = indexed[index_col] + durations
+
+    result = indexed.reset_index()
+    return result.reset_index(drop=True)
 
 
 # Re-export for compatibility with ICUTable interface
@@ -1750,22 +1889,88 @@ def fill_gaps_table(
 
 
 def round_to_interval(
-    times: Union[pd.Series, timedelta],
-    interval: timedelta
-):
-    """将时间舍入到最近的间隔 (R ricu re_time)"""
-    if isinstance(times, (timedelta, pd.Timedelta)):
-        interval_ns = pd.Timedelta(interval).value
-        times_ns = pd.Timedelta(times).value
-        rounded_ns = np.round(times_ns / interval_ns) * interval_ns
-        return pd.Timedelta(rounded_ns, unit='ns')
-    
-    elif isinstance(times, pd.Series):
-        interval_ns = pd.Timedelta(interval).value
-        times_ns = times.dt.total_seconds() * 1e9
-        rounded_ns = np.round(times_ns / interval_ns) * interval_ns
-        return pd.to_timedelta(rounded_ns, unit='ns')
-    
+    times: Union[pd.Series, pd.Index, pd.Timestamp, pd.Timedelta, timedelta, float, int],
+    interval: timedelta,
+) -> Union[pd.Series, pd.Index, pd.Timestamp, pd.Timedelta, float, int]:
+    """Floor timestamps/durations/numerics to the nearest interval (ricu ``re_time``)."""
+
+    if interval is None:
+        return times
+
+    interval_td = pd.to_timedelta(interval)
+    if interval_td <= pd.Timedelta(0):
+        raise ValueError("interval must be a positive timedelta")
+
+    step_ns = interval_td.value
+    step_hours = interval_td / pd.Timedelta(hours=1)
+
+    def _floor_ns(int_values: np.ndarray) -> np.ndarray:
+        return (int_values // step_ns) * step_ns
+
+    def _floor_numeric(values: pd.Series) -> pd.Series:
+        numeric = pd.to_numeric(values, errors="coerce")
+        if step_hours == 0:
+            raise ValueError("interval must not be zero")
+        floored = np.floor(numeric / step_hours) * step_hours
+        res = pd.Series(floored, index=values.index, name=values.name)
+        res[numeric.isna()] = np.nan
+        return res
+
+    def _series_from(values: np.ndarray, template: pd.Series, converter) -> pd.Series:
+        series = converter(values)
+        return pd.Series(series, index=template.index, name=template.name)
+
+    if isinstance(times, pd.Series):
+        if times.empty:
+            return times
+
+        if pd.api.types.is_datetime64_any_dtype(times):
+            return _series_from(_floor_ns(times.astype("int64", copy=False)), times, pd.to_datetime)
+
+        if pd.api.types.is_timedelta64_dtype(times):
+            return _series_from(_floor_ns(times.astype("int64", copy=False)), times,
+                                lambda arr: pd.to_timedelta(arr, unit="ns"))
+
+        if pd.api.types.is_numeric_dtype(times):
+            return _floor_numeric(times)
+
+        as_dt = pd.to_datetime(times, errors="coerce")
+        if as_dt.notna().any():
+            floored = _floor_ns(as_dt.astype("int64", copy=False))
+            result = _series_from(floored, times, pd.to_datetime)
+            result[as_dt.isna()] = pd.NaT
+            return result
+
+        as_td = pd.to_timedelta(times, errors="coerce")
+        if as_td.notna().any():
+            floored = _floor_ns(as_td.astype("int64", copy=False))
+            result = _series_from(floored, times,
+                                  lambda arr: pd.to_timedelta(arr, unit="ns"))
+            result[as_td.isna()] = pd.NaT
+            return result
+
+        return times
+
+    if isinstance(times, pd.DatetimeIndex):
+        floored = _floor_ns(times.astype("int64", copy=False))
+        return pd.to_datetime(floored)
+
+    if isinstance(times, pd.TimedeltaIndex):
+        floored = _floor_ns(times.astype("int64", copy=False))
+        return pd.to_timedelta(floored, unit="ns")
+
+    if isinstance(times, pd.Timestamp):
+        return pd.Timestamp(_floor_ns(np.array([times.value]))[0])
+
+    if isinstance(times, (pd.Timedelta, timedelta)):
+        td = pd.to_timedelta(times)
+        return pd.to_timedelta(_floor_ns(np.array([td.value]))[0], unit="ns")
+
+    if isinstance(times, (float, int)):
+        if step_hours == 0:
+            raise ValueError("interval must not be zero")
+        return float(np.floor(times / step_hours) * step_hours)
+
     return times
 
 

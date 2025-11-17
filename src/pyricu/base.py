@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import os
 import logging
+import threading
 from pathlib import Path
 from typing import List, Optional, Union, Dict, Any, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import pandas as pd
 
@@ -19,6 +20,7 @@ from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary
 from .resources import load_data_sources, load_dictionary
 from .cache_manager import get_cache_manager
+from .table import ICUTable
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,9 @@ class BaseICULoader:
 
         # Register caches with global cache manager
         self._register_caches()
+
+        # Thread-local storage for per-worker concept resolvers
+        self._thread_local_resolver = threading.local()
 
     def _detect_database(self, database: Optional[str]) -> str:
         """Detect database type from environment or use default"""
@@ -194,6 +199,83 @@ class BaseICULoader:
                 logger.warning(f"⚠️  缓存注册失败: {e}")
             # 不影响主要功能，继续运行
 
+    def _create_resolver_clone(self) -> ConceptResolver:
+        """Create a fresh ConceptResolver sharing the same dictionary."""
+        return ConceptResolver(dictionary=self.concept_dict)
+
+    def _get_thread_resolver(self) -> ConceptResolver:
+        """Lazily create per-thread concept resolvers for parallel batches."""
+        if not hasattr(self, '_thread_local_resolver'):
+            self._thread_local_resolver = threading.local()
+        resolver = getattr(self._thread_local_resolver, 'resolver', None)
+        if resolver is None:
+            resolver = self._create_resolver_clone()
+            self._thread_local_resolver.resolver = resolver
+        return resolver
+
+    def _limit_blas_threads(self) -> Dict[str, Optional[str]]:
+        """Force single-threaded BLAS during Python-level threading."""
+        env_vars = [
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+            "BLIS_NUM_THREADS",
+        ]
+        original: Dict[str, Optional[str]] = {}
+        for var in env_vars:
+            original[var] = os.environ.get(var)
+            os.environ[var] = "1"
+        return original
+
+    def _restore_blas_threads(self, state: Dict[str, Optional[str]]) -> None:
+        for var, value in state.items():
+            if value is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = value
+
+    def _resolve_parallel_workers(self, requested: Optional[int]) -> int:
+        """Determine how many patient-chunk workers to spawn by default."""
+        if isinstance(requested, int) and requested > 0:
+            return requested
+
+        env_value = os.getenv("PYRICU_PARALLEL_WORKERS")
+        if env_value:
+            try:
+                env_workers = int(env_value)
+                if env_workers > 0:
+                    return env_workers
+            except ValueError:
+                logger.warning("Invalid PYRICU_PARALLEL_WORKERS=%s, ignoring", env_value)
+
+        default_workers = 32
+        cpu_count = os.cpu_count()
+        if cpu_count:
+            default_workers = max(1, min(default_workers, cpu_count))
+
+        return default_workers
+
+    def _resolve_parallel_backend(self, backend: Optional[str]) -> str:
+        """Select execution backend for patient chunk parallelism."""
+        if backend:
+            normalized = backend.strip().lower()
+            if normalized in {"thread", "process"}:
+                return normalized
+            if normalized != "auto":
+                logger.warning("Unknown parallel_backend '%s', falling back to auto", backend)
+
+        env_backend = os.getenv("PYRICU_PARALLEL_BACKEND")
+        if env_backend:
+            normalized = env_backend.strip().lower()
+            if normalized in {"thread", "process"}:
+                return normalized
+
+        if os.name == "nt":
+            return "thread"
+        return "process"
+
     def _load_dict_source(self, source: Union[str, Path, ConceptDictionary]) -> ConceptDictionary:
         """Load a dictionary from a custom source."""
         if isinstance(source, ConceptDictionary):
@@ -222,8 +304,9 @@ class BaseICULoader:
         ricu_compatible: bool = False,  # 新增：ricu.R兼容模式
         chunk_size: Optional[int] = None,
         progress: bool = False,
-        parallel_workers: int = 1,
+        parallel_workers: Optional[int] = None,
         concept_workers: int = 1,
+        parallel_backend: str = "auto",
         **kwargs
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
@@ -246,6 +329,7 @@ class BaseICULoader:
 
             batches = self._build_patient_batches(patient_ids, chunk_size)
             if batches:
+                worker_count = self._resolve_parallel_workers(parallel_workers)
                 return self._load_concepts_chunked(
                     concepts,
                     batches,
@@ -256,8 +340,9 @@ class BaseICULoader:
                     merge,
                     ricu_compatible,
                     progress,
-                    parallel_workers,
+                    worker_count,
                     concept_workers,
+                    parallel_backend,
                     kwargs,
                 )
 
@@ -333,6 +418,8 @@ class BaseICULoader:
         concept_workers: int,
         extra_kwargs: Dict[str, Any],
         preserve_cache: bool = False,
+        resolver: Optional[ConceptResolver] = None,
+        use_thread_resolver: bool = False,
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         params = dict(extra_kwargs)
         verbose_flag = params.pop("verbose", self.verbose)
@@ -340,10 +427,19 @@ class BaseICULoader:
         # 🚀 优化：当加载多个相关概念时保留缓存（如SOFA的多个子概念）
         should_preserve_cache = preserve_cache or len(concepts) > 1
         
+        resolver_obj: ConceptResolver
+        if resolver is not None:
+            resolver_obj = resolver
+        elif use_thread_resolver:
+            resolver_obj = self._get_thread_resolver()
+        else:
+            resolver_obj = self.concept_resolver
+
         try:
-            result = self.concept_resolver.load_concepts(
+            result = resolver_obj.load_concepts(
                 concepts,
                 self.datasource,
+                merge=merge,
                 patient_ids=patient_ids,
                 interval=interval,
                 win_length=win_length,
@@ -357,7 +453,7 @@ class BaseICULoader:
         finally:
             # 只有在不需要保留缓存时才清除
             if not should_preserve_cache:
-                self.concept_resolver.clear_table_cache()
+                resolver_obj.clear_table_cache()
 
         if isinstance(result, dict):
             if not merge:
@@ -366,40 +462,6 @@ class BaseICULoader:
                 logger.info("Merging concept results")
             return self._merge_concepts(result, keep_components)
         return result
-
-    def _load_concepts_once_worker(
-        self,
-        patient_ids: Optional[Union[List, Dict]],
-        concepts: List[str],
-        interval: Optional[pd.Timedelta],
-        win_length: Optional[pd.Timedelta],
-        aggregate: Optional[Union[str, Dict]],
-        keep_components: bool,
-        merge: bool,
-        ricu_compatible: bool,
-        concept_workers: int,
-        extra_kwargs: Dict[str, Any],
-    ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
-        worker = BaseICULoader(
-            data_path=self.data_path,
-            database=self.database,
-            dict_path=self._dict_path,
-            use_sofa2=self._use_sofa2,
-            verbose=False,
-        )
-        return worker._load_concepts_once(
-            concepts,
-            patient_ids,
-            interval,
-            win_length,
-            aggregate,
-            keep_components,
-            merge,
-            ricu_compatible,
-            concept_workers,
-            extra_kwargs,
-            preserve_cache=False,
-        )
 
     def _load_concepts_chunked(
         self,
@@ -414,52 +476,158 @@ class BaseICULoader:
         progress: bool,
         parallel_workers: int,
         concept_workers: int,
+        parallel_backend: str,
         extra_kwargs: Dict[str, Any],
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         aggregated_frames: List[pd.DataFrame] = []
         aggregated_dict: Dict[str, List[pd.DataFrame]] = defaultdict(list)
+        aggregated_meta: Dict[str, Dict[str, Any]] = {}
         total_batches = len(batches)
+        if parallel_workers is None or parallel_workers <= 0:
+            parallel_workers = 1
+        if total_batches:
+            parallel_workers = max(1, min(parallel_workers, total_batches))
+        backend = self._resolve_parallel_backend(parallel_backend)
+        
+        # 🚀 优化：在处理前预加载大表（避免重复I/O）
+        if backend == "thread" and parallel_workers > 1 and total_batches > 1:
+            logger.info(
+                f"🚀 启用多线程优化({backend}): {parallel_workers}线程处理{total_batches}批次"
+            )
+            
+            # 预加载关键大表
+            all_patient_ids = []
+            for batch in batches:
+                if isinstance(batch, dict):
+                    all_patient_ids.extend(batch.get('stay_id', []))
+                else:
+                    all_patient_ids.extend(batch)
+            
+            preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
+            logger.info(f"📦 预加载大表: {', '.join(preload_tables)}")
+            self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)
+        elif backend == "process" and parallel_workers > 1 and total_batches > 1:
+            logger.info(
+                f"🚀 启用多进程优化: {parallel_workers}进程处理{total_batches}批次"
+            )
+
+        def _capture_meta(table: ICUTable) -> Dict[str, Any]:
+            return {
+                "id_columns": list(table.id_columns),
+                "index_column": table.index_column,
+                "value_column": table.value_column,
+                "unit_column": table.unit_column,
+                "time_columns": list(table.time_columns),
+            }
 
         def _accumulate(chunk_result):
             if isinstance(chunk_result, dict):
                 for name, frame in chunk_result.items():
-                    if frame is not None and not frame.empty:
-                        aggregated_dict[name].append(frame)
+                    if frame is None:
+                        continue
+                    meta = None
+                    if isinstance(frame, ICUTable):
+                        meta = _capture_meta(frame)
+                        frame_data = frame.data
+                    else:
+                        frame_data = frame
+                    if frame_data is not None and not getattr(frame_data, "empty", False):
+                        aggregated_dict[name].append(frame_data)
+                        if meta and name not in aggregated_meta:
+                            aggregated_meta[name] = meta
             else:
                 if chunk_result is not None and not getattr(chunk_result, "empty", False):
                     aggregated_frames.append(chunk_result)
 
         if parallel_workers and parallel_workers > 1:
-            with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
-                future_map = {
-                    executor.submit(
-                        self._load_concepts_once_worker,
-                        batch_ids,
-                        concepts,
-                        interval,
-                        win_length,
-                        aggregate,
-                        keep_components,
-                        merge,
-                        ricu_compatible,
-                        concept_workers,
-                        extra_kwargs,
-                    ): idx
-                    for idx, batch_ids in enumerate(batches, start=1)
-                }
-                for future in as_completed(future_map):
-                    idx = future_map[future]
-                    chunk_result = future.result()
-                    _accumulate(chunk_result)
-                    if progress:
-                        pct = (idx / total_batches) * 100.0
-                        logger.info(
-                            "Chunked load %s: %d/%d (%.1f%%)",
-                            ", ".join(concepts),
-                            idx,
-                            total_batches,
-                            pct,
-                        )
+            blas_state: Optional[Dict[str, Optional[str]]] = None
+            if backend == "thread":
+                blas_state = self._limit_blas_threads()
+            try:
+                if backend == "process":
+                    worker_payload = {
+                        "database": self.database,
+                        "data_path": str(self.data_path) if self.data_path is not None else None,
+                        "dict_path": self._dict_path,
+                        "use_sofa2": getattr(self, "_use_sofa2", False),
+                        "datasource_config": self.datasource.config,
+                        "concept_dict": self.concept_dict,
+                        "verbose": self.verbose,
+                    }
+                    with ProcessPoolExecutor(
+                        max_workers=parallel_workers,
+                        initializer=_init_parallel_chunk_worker,
+                        initargs=(worker_payload,)
+                    ) as executor:
+                        future_map = {
+                            executor.submit(
+                                _process_chunk_task,
+                                (
+                                    concepts,
+                                    batch_ids,
+                                    interval,
+                                    win_length,
+                                    aggregate,
+                                    keep_components,
+                                    merge,
+                                    ricu_compatible,
+                                    concept_workers,
+                                    extra_kwargs,
+                                ),
+                            ): idx
+                            for idx, batch_ids in enumerate(batches, start=1)
+                        }
+                        for future in as_completed(future_map):
+                            idx = future_map[future]
+                            chunk_result = future.result()
+                            _accumulate(chunk_result)
+                            if progress:
+                                pct = (idx / total_batches) * 100.0
+                                logger.info(
+                                    "Chunked load %s: %d/%d (%.1f%%)",
+                                    ", ".join(concepts),
+                                    idx,
+                                    total_batches,
+                                    pct,
+                                )
+                else:
+                    executor_params = dict(max_workers=parallel_workers)
+                    with ThreadPoolExecutor(**executor_params) as executor:
+                        future_map = {
+                            executor.submit(
+                                self._load_concepts_once,
+                                concepts,
+                                batch_ids,
+                                interval,
+                                win_length,
+                                aggregate,
+                                keep_components,
+                                merge,
+                                ricu_compatible,
+                                concept_workers,
+                                extra_kwargs,
+                                True,
+                                None,
+                                True,
+                            ): idx
+                            for idx, batch_ids in enumerate(batches, start=1)
+                        }
+                        for future in as_completed(future_map):
+                            idx = future_map[future]
+                            chunk_result = future.result()
+                            _accumulate(chunk_result)
+                            if progress:
+                                pct = (idx / total_batches) * 100.0
+                                logger.info(
+                                    "Chunked load %s: %d/%d (%.1f%%)",
+                                    ", ".join(concepts),
+                                    idx,
+                                    total_batches,
+                                    pct,
+                                )
+            finally:
+                if blas_state is not None:
+                    self._restore_blas_threads(blas_state)
         else:
             for idx, batch_ids in enumerate(batches, start=1):
                 chunk_result = self._load_concepts_once(
@@ -474,6 +642,7 @@ class BaseICULoader:
                     concept_workers,
                     extra_kwargs,
                     preserve_cache=True,
+                    resolver=self.concept_resolver,
                 )
                 _accumulate(chunk_result)
                 if progress:
@@ -489,10 +658,25 @@ class BaseICULoader:
         self.concept_resolver.clear_table_cache()
 
         if aggregated_dict:
-            combined = {
-                name: pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
-                for name, frames in aggregated_dict.items()
-            }
+            combined: Dict[str, Any] = {}
+            for name, frames in aggregated_dict.items():
+                combined_frame = (
+                    pd.concat(frames, ignore_index=True)
+                    if len(frames) > 1
+                    else frames[0]
+                )
+                if not merge and name in aggregated_meta:
+                    meta = aggregated_meta[name]
+                    combined[name] = ICUTable(
+                        data=combined_frame,
+                        id_columns=meta.get("id_columns") or [],
+                        index_column=meta.get("index_column"),
+                        value_column=meta.get("value_column"),
+                        unit_column=meta.get("unit_column"),
+                        time_columns=meta.get("time_columns") or [],
+                    )
+                else:
+                    combined[name] = combined_frame
             if merge:
                 return self._merge_concepts(combined, keep_components)
             return combined
@@ -555,3 +739,59 @@ def detect_database_type() -> str:
     """Auto-detect database type from environment (convenience function)"""
     loader = BaseICULoader(verbose=False)
     return loader.database
+
+
+_PROCESS_WORKER_LOADER: Optional[BaseICULoader] = None
+
+
+def _init_parallel_chunk_worker(payload: Dict[str, Any]) -> None:
+    """Initializer for process-based chunk workers."""
+    global _PROCESS_WORKER_LOADER
+    loader = BaseICULoader.__new__(BaseICULoader)
+    loader.verbose = payload.get("verbose", False)
+    loader.database = payload.get("database")
+    data_path = payload.get("data_path")
+    loader.data_path = Path(data_path) if data_path else None
+    loader._dict_path = payload.get("dict_path")
+    loader._use_sofa2 = payload.get("use_sofa2", False)
+    loader.datasource = ICUDataSource(
+        config=payload["datasource_config"],
+        base_path=loader.data_path,
+    )
+    loader.concept_dict = payload["concept_dict"]
+    loader.concept_resolver = ConceptResolver(dictionary=loader.concept_dict)
+    loader._thread_local_resolver = threading.local()
+    _PROCESS_WORKER_LOADER = loader
+
+
+def _process_chunk_task(args: tuple) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+    """Execute a patient chunk inside a worker process."""
+    if _PROCESS_WORKER_LOADER is None:
+        raise RuntimeError("Chunk worker not initialized")
+
+    (
+        concepts,
+        batch_ids,
+        interval,
+        win_length,
+        aggregate,
+        keep_components,
+        merge,
+        ricu_compatible,
+        concept_workers,
+        extra_kwargs,
+    ) = args
+
+    return _PROCESS_WORKER_LOADER._load_concepts_once(
+        concepts,
+        batch_ids,
+        interval,
+        win_length,
+        aggregate,
+        keep_components,
+        merge,
+        ricu_compatible,
+        concept_workers,
+        extra_kwargs,
+        preserve_cache=True,
+    )

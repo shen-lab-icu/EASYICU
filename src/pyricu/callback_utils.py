@@ -586,7 +586,7 @@ def locf(max_gap: Optional[pd.Timedelta] = None) -> Callable:
                 
                 return group
             
-            data = data.groupby(id_cols).apply(fill_group, include_groups=False).reset_index(drop=True)
+            data = data.groupby(id_cols).apply(fill_group, include_groups=True).reset_index(drop=True)
         else:
             # Simple forward fill
             data[val_col] = data[val_col].fillna(method='ffill')
@@ -649,7 +649,7 @@ def locb(max_gap: Optional[pd.Timedelta] = None) -> Callable:
                 
                 return group
             
-            data = data.groupby(id_cols).apply(fill_group, include_groups=False).reset_index(drop=True)
+            data = data.groupby(id_cols).apply(fill_group, include_groups=True).reset_index(drop=True)
         else:
             # Simple backward fill
             data[val_col] = data[val_col].fillna(method='bfill')
@@ -883,6 +883,8 @@ def mimic_rate_mv(
     keep_vars = list(id_cols) + [val_col]
     if unit_col and unit_col in data.columns:
         keep_vars.append(unit_col)
+    if stop_var and stop_var in data.columns:
+        keep_vars.append(stop_var)
     
     # 确保 index_var (starttime) 被保留在 keep_vars 中，因为它是时间索引
     if index_var not in keep_vars:
@@ -1297,7 +1299,7 @@ def create_intervals(
             group.loc[too_long, end_var] = group.loc[too_long, index_var] + max_len
             return group
         
-        data = data.groupby(by_cols, group_keys=False).apply(calc_end, include_groups=False)
+        data = data.groupby(by_cols, group_keys=False).apply(calc_end, include_groups=True)
     else:
         # No grouping
         data[end_var] = data[index_var].shift(-1)
@@ -1362,7 +1364,9 @@ def expand_intervals(
         keep_vars = [keep_vars]
     
     keep_vars = list(id_cols) + list(keep_vars)
-    keep_vars = [v for v in keep_vars if v in data.columns and v not in [index_var, 'endtime']]
+    keep_vars = [v for v in keep_vars if v in data.columns and v != index_var]
+    if 'endtime' not in keep_vars and 'endtime' in data.columns:
+        keep_vars.append('endtime')
     
     # Expand
     expanded = expand(
@@ -1457,7 +1461,7 @@ def hirid_vent(
         group['dur_var'] = durations
         return group
     
-    data = data.groupby(id_cols, group_keys=False).apply(calc_duration, include_groups=False)
+    data = data.groupby(id_cols, group_keys=False).apply(calc_duration, include_groups=True)
     
     return data
 
@@ -1531,7 +1535,7 @@ def grp_amount_to_rate(
         else:
             group_cols = id_cols
         
-        data = data.groupby(group_cols, group_keys=False).apply(calc_rate, include_groups=False)
+        data = data.groupby(group_cols, group_keys=False).apply(calc_rate, include_groups=True)
         
         # Set units
         if isinstance(unit_val, dict):
@@ -2462,6 +2466,212 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         return frame
     
     return callback
+
+
+def eicu_rate_units_callback(ml_to_mcg: float, mcg_to_units: float) -> Callable:
+    """Convert eICU medication rates to units/min (R ricu eicu_rate_units).
+
+    Args:
+        ml_to_mcg: Conversion factor from millilitres to micrograms.
+        mcg_to_units: Conversion factor from micrograms to drug-specific units.
+
+    Returns:
+        Callback that normalises rate units and expands durations to hourly intervals.
+    """
+
+    if ml_to_mcg <= 0 or mcg_to_units <= 0:
+        raise ValueError("Conversion factors must be positive numbers")
+
+    def _normalize_units(frame: pd.DataFrame, val_var: str, unit_col: str) -> pd.DataFrame:
+        work = frame.copy()
+        work[unit_col] = work[unit_col].fillna("")
+
+        # 1) '/hr' -> '/min'
+        mask = work[unit_col].str.contains(r"/hr$", case=False, na=False)
+        if mask.any():
+            work.loc[mask, val_var] = work.loc[mask, val_var] / 60.0
+            work.loc[mask, unit_col] = work.loc[mask, unit_col].str.replace(
+                r"/hr$", "/min", regex=True, flags=re.IGNORECASE
+            )
+
+        # 2) 'mg/' -> 'mcg/'
+        mask = work[unit_col].str.contains(r"^mg/", case=False, na=False)
+        if mask.any():
+            work.loc[mask, val_var] = work.loc[mask, val_var] * 1000.0
+            work.loc[mask, unit_col] = work.loc[mask, unit_col].str.replace(
+                r"^mg/", "mcg/", regex=True, flags=re.IGNORECASE
+            )
+
+        # 3) Entries with '/kg/' are not convertible → mark as missing units/min
+        mask = work[unit_col].str.contains(r"/kg/", case=False, na=False)
+        if mask.any():
+            work.loc[mask, val_var] = np.nan
+            work.loc[mask, unit_col] = "units/min"
+
+        # 4) 'ml/' -> 'mcg/' using concentration factor
+        mask = work[unit_col].str.contains(r"^ml/", case=False, na=False)
+        if mask.any():
+            work.loc[mask, val_var] = work.loc[mask, val_var] * ml_to_mcg
+            work.loc[mask, unit_col] = work.loc[mask, unit_col].str.replace(
+                r"^ml/", "mcg/", regex=True, flags=re.IGNORECASE
+            )
+
+        # 5) 'mcg/' -> 'units/' using microgram-to-unit factor
+        mask = work[unit_col].str.contains(r"^mcg/", case=False, na=False)
+        if mask.any():
+            work.loc[mask, val_var] = work.loc[mask, val_var] * mcg_to_units
+            work.loc[mask, unit_col] = work.loc[mask, unit_col].str.replace(
+                r"^mcg/", "units/", regex=True, flags=re.IGNORECASE
+            )
+
+        return work
+
+    def callback(
+        frame: pd.DataFrame,
+        val_var: str,
+        sub_var: Optional[str],
+        concept_name: str,
+    ) -> pd.DataFrame:
+        if frame.empty:
+            return frame
+
+        work = frame.copy()
+        if val_var not in work.columns:
+            work[val_var] = pd.to_numeric(work.iloc[:, 0], errors="coerce")
+        else:
+            work[val_var] = pd.to_numeric(work[val_var], errors="coerce")
+
+        if sub_var and sub_var in work.columns:
+            work["unit_var"] = eicu_extract_unit(work[sub_var])
+        else:
+            work["unit_var"] = np.nan
+
+        work = _normalize_units(work, val_var, "unit_var")
+
+        # Expand into hourly windows so that pyricu matches ricu's exposure logic.
+        expanded = expand_intervals(work, keep_vars=[val_var, "unit_var"])
+        return expanded
+
+    return callback
+
+
+def _infer_interval_from_series(series: pd.Series) -> pd.Timedelta:
+    """Best-effort detection of interval spacing for offset/time columns."""
+
+    values = series.dropna()
+    if values.empty:
+        return pd.Timedelta(hours=1)
+
+    if pd.api.types.is_datetime64_any_dtype(values):
+        ordered = values.sort_values()
+        diffs = ordered.diff()
+        diffs = diffs[diffs > pd.Timedelta(0)]
+        if not diffs.empty:
+            return diffs.min()
+
+    if pd.api.types.is_timedelta64_dtype(values):
+        ordered = values.sort_values()
+        diffs = ordered.diff()
+        diffs = diffs[diffs > pd.Timedelta(0)]
+        if not diffs.empty:
+            return diffs.min()
+
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if not numeric.empty:
+        ordered = numeric.sort_values()
+        diffs = ordered.diff()
+        diffs = diffs[diffs > 0]
+        if not diffs.empty and diffs.min() > 0:
+            minutes = diffs.min()
+            return pd.to_timedelta(minutes, unit="m")
+
+    return pd.Timedelta(hours=1)
+
+
+def eicu_dex_med(
+    frame: pd.DataFrame,
+    val_var: str,
+    dur_var: str,
+    concept_name: str,
+) -> pd.DataFrame:
+    """Dexmedetomidine eICU infusion normalisation (R ricu eicu_dex_med)."""
+
+    if val_var not in frame.columns or dur_var not in frame.columns:
+        return frame
+
+    work = frame.copy()
+
+    # Split textual dose "<value> <unit>" into numeric value + unit column
+    tokens = (
+        work[val_var]
+        .astype(str)
+        .str.strip()
+        .str.replace(r"\s+", " ", regex=True)
+        .str.split(" ", n=1, expand=True)
+    )
+    work[val_var] = tokens[0]
+    work["unit_var"] = tokens[1] if tokens.shape[1] > 1 else np.nan
+
+    work[val_var] = pd.to_numeric(
+        work[val_var].str.replace(r"^(.+-|Manual)", "", regex=True), errors="coerce"
+    )
+
+    mg_mask = work["unit_var"].str.contains(r"^m?g.*m?", case=False, na=False)
+    if mg_mask.any():
+        work.loc[mg_mask, val_var] = work.loc[mg_mask, val_var] * 2.0
+
+    duration = pd.to_timedelta(work[dur_var], errors="coerce")
+    if duration.isna().all():
+        fallback = pd.to_numeric(work[dur_var], errors="coerce")
+        duration = pd.to_timedelta(fallback, unit="m")
+
+    duration = duration.fillna(pd.Timedelta(minutes=1))
+    duration = duration.mask(duration <= pd.Timedelta(0), pd.Timedelta(minutes=1))
+
+    mask = duration <= pd.Timedelta(hours=12)
+    work = work.loc[mask].copy()
+    duration = duration.loc[mask]
+
+    minutes = duration.dt.total_seconds() / 60.0
+    minutes = minutes.where(minutes > 0, 1.0)
+
+    work[val_var] = work[val_var] / minutes * 5.0
+    work["unit_var"] = "ml/min"
+    work[dur_var] = duration
+
+    return work
+
+
+def eicu_dex_inf(
+    frame: pd.DataFrame,
+    val_var: str,
+    index_var: Optional[str],
+) -> pd.DataFrame:
+    """Normalize eICU dex infusion TS rows to win-table compatible rows."""
+
+    if frame.empty or val_var not in frame.columns:
+        return frame
+
+    work = frame.copy()
+    work[val_var] = pd.to_numeric(work[val_var], errors="coerce")
+
+    idx_col = index_var
+    if not idx_col or idx_col not in work.columns:
+        candidates = [
+            col
+            for col in work.columns
+            if col.lower().endswith("offset") or col.lower().endswith("time")
+        ]
+        idx_col = candidates[0] if candidates else None
+
+    interval = pd.Timedelta(hours=1)
+    if idx_col and idx_col in work.columns:
+        interval = _infer_interval_from_series(work[idx_col])
+
+    work["dur_var"] = interval
+    work["unit_var"] = "ml/hr"
+
+    return work
 
 
 def _aumc_get_id_columns(df: pd.DataFrame) -> List[str]:

@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 from dataclasses import dataclass, field, replace, asdict
 from pathlib import Path
-from threading import RLock
+from threading import RLock, local as thread_local
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional, Union
 
 import numpy as np
@@ -46,6 +46,25 @@ def _safe_serialize(value):
         except Exception:
             return str(value)
     return str(value)
+
+
+def _default_id_columns_for_db(db_name: Optional[str]) -> List[str]:
+    """Return canonical identifier columns for a given database."""
+
+    db = (db_name or "").lower()
+    mapping = {
+        "eicu": ["patientunitstayid"],
+        "eicu_demo": ["patientunitstayid"],
+        "aumc": ["admissionid"],
+        "hirid": ["patientid"],
+        "sic": ["caseid"],
+        "miiv": ["stay_id"],
+        "mimic_demo": ["stay_id"],
+    }
+
+    if db.startswith("mimic"):
+        return ["stay_id"]
+    return mapping.get(db, ["stay_id"])
 
 
 @dataclass
@@ -346,7 +365,8 @@ class ConceptResolver:
         # 🚀 新增：概念数据缓存（避免重复加载相同概念，如urine）
         # Key: (concept_name, patient_ids_hash, interval, aggregate)
         self._concept_data_cache: Dict[tuple, pd.DataFrame] = {}
-        self._inflight: set[str] = set()
+        # 🔧 多线程支持：使用线程局部存储避免循环依赖误报
+        self._thread_local = thread_local()
         self.cache_dir = cache_dir if cache_dir else None
         self.cache_schema_version = "1"
         self.dictionary_signature = self._compute_dictionary_signature()
@@ -375,7 +395,15 @@ class ConceptResolver:
             self._table_cache.clear()
             self._concept_cache.clear()
             self._concept_data_cache.clear()  # 🚀 清除概念数据缓存
-            self._inflight.clear()
+            # 清除当前线程的inflight集合
+            if hasattr(self._thread_local, 'inflight'):
+                self._thread_local.inflight.clear()
+
+    def _get_inflight(self) -> set:
+        """获取当前线程的inflight集合（线程安全）"""
+        if not hasattr(self._thread_local, 'inflight'):
+            self._thread_local.inflight = set()
+        return self._thread_local.inflight
 
     def _should_fill_gaps(self, concept_name: str, definition: ConceptDefinition) -> bool:
         category = (definition.category or "").lower() if definition.category else ""
@@ -532,11 +560,12 @@ class ConceptResolver:
         **kwargs,  # Additional parameters for callbacks (e.g., win_length, worst_val_fun)
     ):
         names = [name for name in concept_names]
-        required_names = self._expand_dependencies(names)
+        required_names = self._expand_dependencies(names)  # Ensure dependencies are expanded
         tables: Dict[str, ICUTable] = {}
         aggregators = self._normalise_aggregators(aggregate, required_names)
         self._concept_cache = {}
-        self._inflight = set()
+        # 初始化当前线程的inflight集合
+        self._get_inflight().clear()
 
         # 存储患者ID用于ricu格式转换
         self._last_patient_ids = list(patient_ids) if patient_ids else None
@@ -621,7 +650,8 @@ class ConceptResolver:
         finally:
             with self._cache_lock:
                 self._concept_cache.clear()
-                self._inflight.clear()
+                # 清除当前线程的inflight集合
+                self._get_inflight().clear()
 
     def _load_single_concept(
         self,
@@ -636,7 +666,7 @@ class ConceptResolver:
         **kwargs,  # Additional parameters for callbacks
     ) -> ICUTable:
         definition = self.dictionary[concept_name]
-        if definition.sub_concepts:
+        if definition.sub_concepts:  # Check for sub-concepts
             return self._load_recursive_concept(
                 concept_name,
                 definition,
@@ -685,12 +715,7 @@ class ConceptResolver:
             if kwargs.get('_allow_missing_concept', False):
                 # Return empty ICUTable with database-appropriate default ID columns
                 db_name = config.name if hasattr(config, 'name') else 'unknown'
-                if db_name == 'eicu' or db_name == 'eicu_demo':
-                    default_id_cols = ['patientunitstayid']
-                elif db_name.startswith('mimic') or db_name == 'miiv':
-                    default_id_cols = ['stay_id']
-                else:
-                    default_id_cols = ['stay_id']  # fallback
+                default_id_cols = _default_id_columns_for_db(db_name)
                 
                 empty_df = pd.DataFrame(columns=default_id_cols)
                 return ICUTable(
@@ -1501,7 +1526,14 @@ class ConceptResolver:
             # 对于索引列，检查是否在数据中有任何时间列
             if source_index_column:
                 # 检查是否有source_index_column，或者有类似的时间列
-                time_cols = [col for col in frame.columns if 'time' in col.lower() or col in ['starttime', 'endtime', 'charttime', 'storetime']]
+                time_aliases = {"starttime", "endtime", "charttime", "storetime"}
+                time_cols = []
+                for col in frame.columns:
+                    if not isinstance(col, str):
+                        continue
+                    lowered = col.lower()
+                    if "time" in lowered or lowered in time_aliases:
+                        time_cols.append(col)
                 if source_index_column not in frame.columns and not time_cols:
                     missing.add(source_index_column)
             
@@ -1591,12 +1623,7 @@ class ConceptResolver:
             if not id_columns:
                 # 从数据源名称推断默认ID列
                 db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else 'unknown'
-                if db_name == 'eicu' or db_name == 'eicu_demo':
-                    id_columns = ['patientunitstayid']
-                elif db_name.startswith('mimic'):
-                    id_columns = ['stay_id']
-                else:
-                    id_columns = ['stay_id']  # 通用默认值
+                id_columns = _default_id_columns_for_db(db_name)
             empty_cols = list(id_columns) + ([index_column] if index_column else []) + [concept_name]
             combined = pd.DataFrame(columns=empty_cols)
         else:
@@ -2493,7 +2520,19 @@ class ConceptResolver:
 
         required_cols = [id_cfg.id, id_cfg.start, id_cfg.end]
         table = data_source.load_table(id_cfg.table, columns=required_cols)
-        frame = table.data[required_cols].copy()
+
+        base_frame = table.data.copy()
+        missing_required = [col for col in required_cols if col not in base_frame.columns]
+        if missing_required:
+            for column in missing_required:
+                fallback = self._synthesise_los_column(column, data_source, base_frame)
+                if fallback is None:
+                    raise KeyError(
+                        f"Required column '{column}' missing for LOS calculation in table '{id_cfg.table}'"
+                    )
+                base_frame[column] = fallback
+
+        frame = base_frame[required_cols].copy()
         frame = frame.dropna(subset=[id_cfg.start, id_cfg.end])
 
         start_time = pd.to_datetime(frame[id_cfg.start], errors="coerce")
@@ -2575,6 +2614,22 @@ class ConceptResolver:
             value_column=concept_name,
         )
 
+    def _synthesise_los_column(
+        self,
+        column_name: str,
+        data_source: ICUDataSource,
+        frame: pd.DataFrame,
+    ) -> Optional[pd.Series]:
+        ds_name = (data_source.config.name or "").lower()
+        if column_name == "unitadmitoffset" and ds_name.startswith("eicu"):
+            logger.warning(
+                "Column '%s' missing for %s; assuming zero-minute ICU admission offsets.",
+                column_name,
+                data_source.config.name,
+            )
+            return pd.Series(0, index=frame.index, dtype="float64")
+        return None
+
     def _load_fun_item_forward(
         self,
         concept_name: str,
@@ -2629,11 +2684,7 @@ class ConceptResolver:
                 
                 # 确定数据库特定的默认 ID 列
                 db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else 'unknown'
-                default_id_cols = ['stay_id']  # 默认
-                if db_name == 'eicu' or db_name == 'eicu_demo':
-                    default_id_cols = ['patientunitstayid']
-                elif db_name.startswith('mimic'):
-                    default_id_cols = ['stay_id']
+                default_id_cols = _default_id_columns_for_db(db_name)
                 
                 if isinstance(base_table, WinTbl):
                     id_cols = list(base_table.id_vars) if base_table.id_vars else default_id_cols
@@ -2977,9 +3028,11 @@ class ConceptResolver:
                 # 同时更新到新缓存
                 self._concept_data_cache[concept_cache_key] = cached
                 return cached
-            if concept_name in self._inflight:
+            # 线程安全的循环依赖检测
+            inflight = self._get_inflight()
+            if concept_name in inflight:
                 raise RuntimeError(f"Circular dependency detected for concept '{concept_name}'")
-            self._inflight.add(concept_name)
+            inflight.add(concept_name)
 
         definition = self.dictionary[concept_name]
         for dependency in definition.depends_on:
@@ -3009,7 +3062,7 @@ class ConceptResolver:
             with self._cache_lock:
                 self._concept_cache[concept_name] = disk_hit
                 self._concept_data_cache[concept_cache_key] = disk_hit  # 🚀 也存入新缓存
-                self._inflight.discard(concept_name)
+                self._get_inflight().discard(concept_name)
             return disk_hit
 
         try:
@@ -3025,7 +3078,7 @@ class ConceptResolver:
             )
         except Exception:
             with self._cache_lock:
-                self._inflight.discard(concept_name)
+                self._get_inflight().discard(concept_name)
             raise
 
         self._store_in_disk_cache(concept_name, data_source, cache_key, result)
@@ -3033,7 +3086,7 @@ class ConceptResolver:
         with self._cache_lock:
             self._concept_cache[concept_name] = result
             self._concept_data_cache[concept_cache_key] = result  # 🚀 存入新缓存
-            self._inflight.discard(concept_name)
+            self._get_inflight().discard(concept_name)
         return result
 
     def _apply_aggregation(
@@ -3288,6 +3341,31 @@ def _apply_callback(
     if expr == "identity_callback":
         return frame
 
+    if expr == "aumc_death":
+        # R ricu logic: is_true(index_var - val_var < hours(72L))
+        def _pick(col: Optional[str], fallbacks: List[str]) -> Optional[str]:
+            ordered = [col] if col else []
+            ordered.extend(fallbacks)
+            for candidate in ordered:
+                if candidate and candidate in frame.columns:
+                    return candidate
+            return None
+
+        index_col = _pick(source.index_var, ["dateofdeath", "deathdate", "dod", "death_time"])
+        value_col = _pick(source.value_var, [concept_name, "dischargedat", "dischargetime", "dischargeat"])
+
+        if index_col is None or value_col is None:
+            return frame
+
+        df = frame.copy()
+        death_ts = pd.to_datetime(df[index_col], errors="coerce")
+        discharge_ts = pd.to_datetime(df[value_col], errors="coerce")
+        delta = death_ts - discharge_ts
+        within_window = delta < pd.Timedelta(hours=72)
+        within_window = within_window & death_ts.notna() & discharge_ts.notna()
+        df[value_col] = within_window.astype(int)
+        return df
+
     # Handle eicu_age - process eICU age data (convert '> 89' to 90)
     if re.fullmatch(r"transform_fun\(eicu_age\)", expr):
         from .callback_utils import eicu_age
@@ -3353,9 +3431,12 @@ def _apply_callback(
         if isinstance(value, (int, float)) and not pd.api.types.is_numeric_dtype(series):
             series = pd.to_numeric(series, errors="coerce")
         comparator = op_map[op_token]
-        frame.loc[:, concept_name] = series.apply(
+        comparison = series.apply(
             lambda item: False if pd.isna(item) else comparator(item, value)
-        )
+        ).astype("boolean")
+        frame = frame.copy()
+        frame.drop(columns=[concept_name], inplace=True)
+        frame[concept_name] = comparison
         return frame
 
     match = re.fullmatch(r"transform_fun\(binary_op\(`(.+?)`,\s*(.+)\)\)", expr, flags=re.DOTALL)
@@ -3704,6 +3785,32 @@ def _apply_callback(
             weight_var=weight_var,
             concept_name=concept_name,
         )
+        
+    match = re.fullmatch(r"eicu_rate_units\((.+)\)", expr, flags=re.DOTALL)
+    if match:
+        from .callback_utils import eicu_rate_units_callback
+
+        args = _split_arguments(match.group(1))
+        if len(args) < 2:
+            raise ValueError(f"eicu_rate_units requires two arguments, got '{expr}'")
+
+        def _arg_to_float(text: str) -> float:
+            part = text.split("=", 1)[1] if "=" in text else text
+            return float(_parse_literal(part.strip()))
+
+        ml_to_mcg = _arg_to_float(args[0])
+        mcg_to_units = _arg_to_float(args[1])
+        callback_fn = eicu_rate_units_callback(ml_to_mcg, mcg_to_units)
+
+        val_var = source.value_var or concept_name
+        sub_var = source.sub_var
+
+        return callback_fn(
+            frame,
+            val_var=val_var,
+            sub_var=sub_var,
+            concept_name=concept_name,
+        )
 
     if expr == "aumc_rate_kg":
         from .callback_utils import aumc_rate_kg
@@ -3865,12 +3972,14 @@ def _apply_callback(
         args = _split_arguments(match.group(1))
         if len(args) < 2:
             return frame
+
         ids = _parse_r_value(args[0])
         factors = _parse_r_value(args[1])
         if not isinstance(ids, list):
             ids = [ids]
         if not isinstance(factors, list):
             factors = [factors]
+
         callback_fn = dex_to_10(ids, factors)
         sub_var = source.sub_var
         if not sub_var or sub_var not in frame.columns:
@@ -3879,6 +3988,40 @@ def _apply_callback(
             frame,
             sub_var=sub_var,
             val_col=concept_name,
+        )
+
+    if expr.strip() == "eicu_dex_med":
+        from .callback_utils import eicu_dex_med as eicu_dex_med_cb
+
+        val_var = source.value_var or concept_name
+        dur_var = None
+        if source.params:
+            dur_var = source.params.get("dur_var") or source.params.get("stop_var")
+        if not dur_var or dur_var not in frame.columns:
+            if "duration" in frame.columns:
+                dur_var = "duration"
+            elif "drugstopoffset" in frame.columns:
+                dur_var = "drugstopoffset"
+        if not dur_var or dur_var not in frame.columns:
+            return frame
+
+        return eicu_dex_med_cb(
+            frame,
+            val_var=val_var,
+            dur_var=dur_var,
+            concept_name=concept_name,
+        )
+
+    if expr.strip() == "eicu_dex_inf":
+        from .callback_utils import eicu_dex_inf as eicu_dex_inf_cb
+
+        val_var = source.value_var or concept_name
+        index_var = source.index_var
+
+        return eicu_dex_inf_cb(
+            frame,
+            val_var=val_var,
+            index_var=index_var,
         )
 
     raise NotImplementedError(

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import logging
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
+from threading import RLock
 
 import pandas as pd
 
@@ -75,17 +76,11 @@ class ICUDataSource:
         """设置全局文件格式优先级
         
         Args:
-            priority: 格式列表，按优先级排序，例如 ['parquet', 'fst', 'csv']
+            priority: 格式列表（当前只支持 ['parquet']）
         
         Examples:
-            >>> # 优先使用 Parquet（纯 Python，无需 R）
-            >>> ICUDataSource.set_format_priority(['parquet', 'fst', 'csv'])
-            >>> 
-            >>> # 只使用 Parquet（跳过 FST）
-            >>> ICUDataSource.set_format_priority(['parquet', 'csv'])
-            >>> 
-            >>> # 优先 FST（旧行为，需要 R 环境）
-            >>> ICUDataSource.set_format_priority(['fst', 'parquet', 'csv'])
+            >>> # 只使用 Parquet 格式（纯 Python，无需 R）
+            >>> ICUDataSource.set_format_priority(['parquet'])
         """
         cls._global_format_priority = priority
 
@@ -106,9 +101,8 @@ class ICUDataSource:
         if env_priority:
             return [fmt.strip() for fmt in env_priority.split(',')]
         
-        # 3. 默认优先级：Parquet > FST > CSV
-        # Parquet 优先因为：纯 Python，无需 R，列式存储，压缩好
-        return ['parquet', 'fst', 'csv']
+        # 只支持 Parquet 格式
+        return ['parquet']
 
     def __init__(
         self,
@@ -145,7 +139,9 @@ class ICUDataSource:
         }
         self.enable_cache = enable_cache
         self._table_cache: dict = {}  # 缓存已加载的原始表数据
+        self._preloaded_tables: dict = {}  # 🚀 预加载的完整表（用于多患者批处理）
         self.format_priority = format_priority or self.get_format_priority()
+        self._lock = RLock()
 
     def register_table_source(self, table: str, source: Any) -> None:
         """Register a callable/file path used to load ``table``."""
@@ -153,13 +149,66 @@ class ICUDataSource:
     
     def clear_cache(self) -> None:
         """清除表缓存,释放内存。"""
-        self._table_cache.clear()
+        with self._lock:
+            self._table_cache.clear()
+            self._preloaded_tables.clear()
+    
+    def preload_tables(self, table_names: List[str], patient_ids: Optional[List[int]] = None) -> None:
+        """
+        🚀 预加载大表到内存，避免重复I/O
+        
+        Args:
+            table_names: 要预加载的表名列表
+            patient_ids: 可选的患者ID列表，用于预过滤
+        """
+        base_patient_ids = list(patient_ids) if patient_ids is not None else None
+        for table_name in table_names:
+            with self._lock:
+                if table_name in self._preloaded_tables:
+                    continue
+                
+            # 加载完整表（使用最小列集）
+            columns = MINIMAL_COLUMNS.get(table_name)
+            
+            # 不使用filters，直接加载完整表
+            table = self.load_table(table_name, columns=columns, verbose=False)
+            df = table.dataframe()  # 修正：这是个方法
+            
+            # 如果提供了patient_ids，预过滤
+            if base_patient_ids is not None:
+                id_col = None
+                filter_ids = base_patient_ids
+                if 'stay_id' in df.columns:
+                    id_col = 'stay_id'
+                elif 'subject_id' in df.columns:
+                    # 需要从icustays获取subject_id映射
+                    if table_name != 'icustays':
+                        icustays = self.load_table('icustays', columns=['stay_id', 'subject_id'], verbose=False)
+                        icustays_df = icustays.dataframe()
+                        subject_ids = icustays_df[icustays_df['stay_id'].isin(base_patient_ids)]['subject_id'].dropna().astype(int).unique()
+                        id_col = 'subject_id'
+                        filter_ids = subject_ids.tolist()
+                
+                if id_col and filter_ids is not None:
+                    df = df[df[id_col].isin(filter_ids)]
+            
+            with self._lock:
+                self._preloaded_tables[table_name] = df
+            logger.info(f"📦 预加载表 {table_name}: {len(df):,}行")
+    
+    def get_preloaded_table(self, table_name: str) -> Optional[pd.DataFrame]:
+        """获取预加载的表"""
+        with self._lock:
+            table = self._preloaded_tables.get(table_name)
+        return table
     
     def get_cache_info(self) -> dict:
         """获取缓存信息。"""
-        total_size = sum(df.memory_usage(deep=True).sum() for df in self._table_cache.values())
+        with self._lock:
+            total_size = sum(df.memory_usage(deep=True).sum() for df in self._table_cache.values())
+            cached_tables = len(self._table_cache)
         return {
-            'cached_tables': len(self._table_cache),
+            'cached_tables': cached_tables,
             'memory_mb': total_size / (1024 * 1024)
         }
 
@@ -173,42 +222,67 @@ class ICUDataSource:
     ) -> ICUTable:
         """Load and wrap a table according to the stored configuration."""
         
-        # 🚀 性能优化：如果没有指定columns，使用最小列集
-        if columns is None:
-            from .load_concepts import MINIMAL_COLUMNS_MAP, USE_MINIMAL_COLUMNS
-            if USE_MINIMAL_COLUMNS and table_name in MINIMAL_COLUMNS_MAP:
-                columns = MINIMAL_COLUMNS_MAP[table_name]
-                if DEBUG_MODE:
-                    print(f"   ⚡ 应用最小列集优化: {table_name} -> {len(columns)}列")
-        
         table_cfg = self.config.get_table(table_name)
-        
-        # 提取 patient_ids 过滤器用于分区预过滤
-        patient_ids_filter = None
-        if filters:
-            for spec in filters:
-                # 支持各数据库的ID列名
-                id_columns = ['subject_id', 'icustay_id', 'hadm_id', 'stay_id',  # MIMIC
-                             'admissionid', 'patientid',  # AUMC
-                             'patientunitstayid',  # eICU
-                             'patientid']  # HiRID
-                if spec.op == FilterOp.IN and spec.column in id_columns:
-                    patient_ids_filter = spec
-                    # 只在verbose模式下输出，且只输出一次
-                    if verbose:
-                        cache_key = f"_filter_logged_{table_name}"
-                        if not hasattr(self, cache_key) or not getattr(self, cache_key, False):
-                            if DEBUG_MODE: print(f"   🎯 检测到患者ID过滤器: {len(spec.value)} 个患者, 列={spec.column}")
-                            setattr(self, cache_key, True)
-                    break
-        
-        frame = self._load_raw_frame(table_name, columns, patient_ids_filter=patient_ids_filter)
-        
-        if filters:
-            for spec in filters:
-                frame = spec.apply(frame)
+
+        # 🚀 优化1：优先使用预加载的表
+        preloaded_frame = None
+        with self._lock:
+            if table_name in self._preloaded_tables:
+                preloaded_frame = self._preloaded_tables[table_name]
+
+        if preloaded_frame is not None:
+            frame_view = preloaded_frame
+
+            # 应用列过滤（避免提前复制整张表）
+            if columns is not None:
+                available_cols = [c for c in columns if c in frame_view.columns]
+                frame_view = frame_view.loc[:, available_cols]
+
+            # 应用行过滤
+            if filters:
+                frame_filtered = frame_view
+                for spec in filters:
+                    frame_filtered = spec.apply(frame_filtered)
+            else:
+                frame_filtered = frame_view
+
+            frame = frame_filtered.copy()
         else:
-            frame = frame.copy()
+            # 🚀 优化2：如果没有指定columns，使用最小列集
+            if columns is None:
+                from .load_concepts import MINIMAL_COLUMNS_MAP, USE_MINIMAL_COLUMNS
+                if USE_MINIMAL_COLUMNS and table_name in MINIMAL_COLUMNS_MAP:
+                    columns = MINIMAL_COLUMNS_MAP[table_name]
+                    if DEBUG_MODE:
+                        print(f"   ⚡ 应用最小列集优化: {table_name} -> {len(columns)}列")
+
+            # 提取 patient_ids 过滤器用于分区预过滤
+            patient_ids_filter = None
+            if filters:
+                for spec in filters:
+                    # 支持各数据库的ID列名
+                    id_columns = ['subject_id', 'icustay_id', 'hadm_id', 'stay_id',  # MIMIC
+                                 'admissionid', 'patientid',  # AUMC
+                                 'patientunitstayid',  # eICU
+                                 'patientid']  # HiRID
+                    if spec.op == FilterOp.IN and spec.column in id_columns:
+                        patient_ids_filter = spec
+                        # 只在verbose模式下输出，且只输出一次
+                        if verbose:
+                            cache_key = f"_filter_logged_{table_name}"
+                            if not hasattr(self, cache_key) or not getattr(self, cache_key, False):
+                                if DEBUG_MODE:
+                                    print(f"   🎯 检测到患者ID过滤器: {len(spec.value)} 个患者, 列={spec.column}")
+                                setattr(self, cache_key, True)
+                        break
+
+            frame = self._load_raw_frame(table_name, columns, patient_ids_filter=patient_ids_filter)
+
+            if filters:
+                for spec in filters:
+                    frame = spec.apply(frame)
+            else:
+                frame = frame.copy()
 
         defaults = table_cfg.defaults
         id_columns = (
@@ -286,8 +360,11 @@ class ICUDataSource:
             cache_key = (table_name, tuple(sorted(columns)) if columns else None, None, None)
         
         # 检查缓存
-        if self.enable_cache and cache_key in self._table_cache:
-            return self._table_cache[cache_key].copy()
+        if self.enable_cache:
+            with self._lock:
+                cached_frame = self._table_cache.get(cache_key)
+            if cached_frame is not None:
+                return cached_frame.copy()
         
         loader = self._table_sources.get(table_name)
         dataset_cfg = self._dataset_sources.get(table_name)
@@ -355,7 +432,8 @@ class ICUDataSource:
         
         # 缓存加载的数据（使用之前构建的cache_key）
         if self.enable_cache:
-            self._table_cache[cache_key] = frame.copy()
+            with self._lock:
+                self._table_cache[cache_key] = frame.copy()
         
         return frame
 
@@ -367,9 +445,13 @@ class ICUDataSource:
         explicit = table_cfg.first_file()
         if explicit:
             explicit_path = self.base_path / explicit
-            # Only use explicit path if it actually exists
             if explicit_path.exists():
-                return explicit_path
+                # Accept directories (partitioned datasets) and Parquet files immediately
+                if explicit_path.is_dir():
+                    return explicit_path
+                if explicit_path.suffix.lower() in {".parquet", ".pq"}:
+                    return explicit_path
+                # Otherwise continue searching for a Parquet counterpart below
         
         # MIMIC-IV 文件名映射: 配置中的表名 -> 文件系统中的实际文件名
         # 因为 MIMIC-IV 改了表名,但配置文件还是用的旧名
@@ -426,45 +508,33 @@ class ICUDataSource:
                     else:
                         file_base_name = file_path
         
-        # Try different formats in order of preference
-        # 1. FST (R ricu format) - highest priority for existing ricu data
-        # Try both original case and lowercase
-        for name in [file_base_name, file_base_name.lower()]:
-            fst_candidate = self.base_path / f"{name}.fst"
-            if fst_candidate.exists():
-                return fst_candidate
-        
-        # 2. Parquet (Python default)
+        # Only support Parquet format - try different name variations
         for name in [file_base_name, file_base_name.lower(), table_name, table_name.lower()]:
-            candidate = self.base_path / f"{name}.{self.default_format}"
-            if candidate.exists():
-                return candidate
+            # Try .parquet extension
+            parquet_candidate = self.base_path / f"{name}.parquet"
+            if parquet_candidate.exists():
+                return parquet_candidate
+            # Try .pq extension (short form)
+            pq_candidate = self.base_path / f"{name}.pq"
+            if pq_candidate.exists():
+                return pq_candidate
         
-        # 3. CSV (fallback)
-        if self.base_path is not None:
-            for name in [table_name, table_name.lower()]:
-                csv_candidate = self.base_path / f"{name}.csv"
-                if csv_candidate.exists():
-                    return csv_candidate
-                # Also try .csv.gz
-                csv_gz_candidate = self.base_path / f"{name}.csv.gz"
-                if csv_gz_candidate.exists():
-                    return csv_gz_candidate
-        
-        # 4. Check subdirectory for partitioned data (common in hirid observations)
+        # Check subdirectory for partitioned parquet data (common in hirid observations)
         if self.base_path is not None:
             for name in [table_name, table_name.lower()]:
                 subdir = self.base_path / name
-            if subdir.is_dir():
-                # Look for FST files first
-                fst_files = list(subdir.glob("*.fst"))
-                if fst_files:
-                    return subdir  # Return directory, will handle in _read_file
-                # Then Parquet
-                parquet_files = list(subdir.glob("*.parquet")) + list(subdir.glob("*.pq"))
-                if parquet_files:
-                    return subdir
+                if subdir.is_dir():
+                    # Look for Parquet files
+                    parquet_files = list(subdir.glob("*.parquet")) + list(subdir.glob("*.pq"))
+                    if parquet_files:
+                        return subdir
         
+        # Fall back to explicit file if it exists (e.g., CSV) so that callers can handle it
+        if explicit:
+            explicit_path = self.base_path / explicit
+            if explicit_path.exists():
+                return explicit_path
+
         return None
 
     def _get_minimal_columns(self, table_name: str) -> Optional[List[str]]:
@@ -480,17 +550,9 @@ class ICUDataSource:
             return self._read_partitioned_data_optimized(path, columns, patient_ids_filter)
         
         suffix = path.suffix.lower()
+        suffixes = [s.lower() for s in path.suffixes]
         
-        # Handle .csv.gz files (compressed CSV)
-        if str(path).endswith('.csv.gz') or str(path).endswith('.CSV.GZ'):
-            return pd.read_csv(path, compression='gzip', usecols=list(columns) if columns else None)
-        
-        # Handle regular formats
-        if suffix == ".csv":
-            return pd.read_csv(path, usecols=list(columns) if columns else None)
-        if suffix == ".gz":
-            # Try to read as compressed CSV
-            return pd.read_csv(path, compression='gzip', usecols=list(columns) if columns else None)
+        # Preferred: Parquet format
         if suffix in {".parquet", ".pq"}:
             # 🚀 使用PyArrow过滤器优化大文件读取
             if patient_ids_filter:
@@ -520,18 +582,44 @@ class ICUDataSource:
                 import pandas.io.common
                 df.columns = pandas.io.common.dedup_names(df.columns, is_potential_multiindex=False)
             return df
-        if suffix == ".feather":
-            return pd.read_feather(path, columns=list(columns) if columns else None)
-        if suffix == ".fst":
-            return self._read_fst_file(path, columns)
         
-        raise ValueError(f"Unsupported file format for table loading: {path.suffix}")
+        # Fallback: CSV (optionally compressed)
+        is_csv_gz = suffix == ".gz" and len(suffixes) >= 2 and suffixes[-2] == ".csv"
+        if suffix == ".csv" or is_csv_gz:
+            compression = "gzip" if is_csv_gz else None
+            return self._read_csv_file(path, columns, patient_ids_filter, compression=compression)
+
+        raise ValueError(
+            f"Unsupported file format '{path.suffix}' for {path.name}. Provide Parquet or CSV inputs."
+        )
+
+    def _read_csv_file(
+        self,
+        path: Path,
+        columns: Optional[Iterable[str]],
+        patient_ids_filter: Optional[FilterSpec],
+        *,
+        compression: Optional[str] = None,
+    ) -> pd.DataFrame:
+        logger.warning(
+            "⚠️  Falling back to CSV read for %s. Consider generating Parquet files for better performance.",
+            path.name,
+        )
+        usecols = list(columns) if columns else None
+        df = pd.read_csv(path, usecols=usecols, compression=compression, low_memory=False)
+        if patient_ids_filter and patient_ids_filter.column in df.columns:
+            values = patient_ids_filter.value
+            if not isinstance(values, (list, tuple, set, pd.Series)):
+                values = [values]
+            df = df[df[patient_ids_filter.column].isin(values)]
+        return df
     
     def _read_partitioned_data_optimized(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
         """读取分区数据（优化版本：自动忽略.fst文件，只读取.parquet）"""
         try:
             import pyarrow.dataset as ds
             import pyarrow.parquet as pq
+            import pyarrow.compute as pc
             
             # 🚀 策略1：尝试使用PyArrow Dataset（最快，但需要所有文件格式一致）
             try:
@@ -542,17 +630,35 @@ class ICUDataSource:
                     exclude_invalid_files=True  # 忽略.fst等非parquet文件
                 )
                 
-                # 应用列过滤
-                if columns:
-                    df = dataset.to_table(columns=list(columns)).to_pandas()
-                else:
-                    df = dataset.to_table().to_pandas()
-                
-                # 应用患者ID过滤（在pandas层面，因为PyArrow不支持isin）
+                filter_expr = None
                 if patient_ids_filter:
-                    df = patient_ids_filter.apply(df)
-                
-                return df
+                    id_col = patient_ids_filter.column
+                    values = patient_ids_filter.value
+                    if isinstance(values, (list, tuple, set)):
+                        value_list = list(values)
+                    elif isinstance(values, pd.Series):
+                        value_list = values.tolist()
+                    else:
+                        try:
+                            value_list = list(values)
+                        except TypeError:
+                            value_list = [values]
+
+                    if not value_list:
+                        wanted_cols = list(columns) if columns else dataset.schema.names
+                        return pd.DataFrame(columns=wanted_cols)
+
+                    try:
+                        filter_expr = ds.field(id_col).isin(value_list)
+                    except Exception:
+                        filter_expr = None
+
+                if columns:
+                    table = dataset.to_table(columns=list(columns), filter=filter_expr)
+                else:
+                    table = dataset.to_table(filter=filter_expr)
+
+                return table.to_pandas()
             
             except Exception as e:
                 # Dataset读取失败，回退到逐文件读取
@@ -616,108 +722,66 @@ class ICUDataSource:
         if DEBUG_MODE and columns:
             print(f"   🔹 分区表 {directory.name} 请求的列: {list(columns)}")
         
-        # 按优先级顺序查找文件
-        format_map = {
-            'parquet': lambda: sorted(directory.glob("*.parquet")) + sorted(directory.glob("*.pq")),
-            'fst': lambda: sorted(directory.glob("*.fst")),
-            'csv': lambda: sorted(directory.glob("*.csv")) + sorted(directory.glob("*.csv.gz")),
-        }
+        # 只支持 Parquet 格式
+        files = sorted(directory.glob("*.parquet")) + sorted(directory.glob("*.pq"))
+        if not files:
+            # 没有找到 parquet 文件
+            return pd.DataFrame()
         
-        # 尝试按优先级读取
-        for fmt in self.format_priority:
-            if fmt not in format_map:
-                continue
-                
-            files = format_map[fmt]()
-            if not files:
-                continue
-            
-            # 找到文件，根据格式读取
-            num_files = len(files)
-            
-            # 准备患者ID过滤器 (支持多种数据库的ID列)
-            filter_tuple = None
-            if patient_ids_filter and patient_ids_filter.column in ['subject_id', 'hadm_id', 'icustay_id', 'stay_id', 'admissionid', 'patientid']:
-                target_ids = set(patient_ids_filter.value) if not isinstance(patient_ids_filter.value, str) else {patient_ids_filter.value}
-                filter_tuple = (patient_ids_filter.column, target_ids)
-                if DEBUG_MODE: print(f"   📁 加载 {directory.name} ({num_files} 个 {fmt} 分区) - 过滤 {len(target_ids)} 个患者...")
-            else:
-                if DEBUG_MODE: print(f"   📁 加载 {directory.name} ({num_files} 个 {fmt} 分区)...")
-            
-            if fmt == 'fst':
-                # FST 特殊处理：支持并行读取
-                if num_files > 3:
-                    try:
-                        from .fst_reader_fast import read_fst_parallel
-                        return read_fst_parallel(
-                            files, 
-                            columns=list(columns) if columns else None, 
-                            verbose=True,
-                            patient_ids_filter=filter_tuple
-                        )
-                    except Exception:
-                        pass  # Fallback to sequential
-                # Sequential FST reading
-                dfs = [self._read_fst_file(f, columns) for f in files]
-                
-            elif fmt == 'parquet':
-                # 🔧 修复：传递具体的parquet文件列表，而不是目录，避免混合格式问题
-                dataset_df = self._read_parquet_dataset(
-                    directory,
-                    files,  # 传递具体的parquet文件列表
-                    columns=list(columns) if columns else None,
-                    filter_spec=patient_ids_filter,
-                )
-                if dataset_df is not None:
-                    return dataset_df
-                # Fallback: iterate individual parquet files
-                dfs = []
-                arrow_filters = None
-                if patient_ids_filter:
-                    arrow_filters = self._build_dataset_filter(patient_ids_filter)
-                for f in files:
-                    if arrow_filters is not None or columns is not None:
-                        try:
-                            import pyarrow.parquet as pq  # type: ignore
-                            table = pq.read_table(
-                                f,
-                                columns=list(columns) if columns else None,
-                            )
-                            if arrow_filters is not None:
-                                import pyarrow.compute as pc  # type: ignore
-                                table = table.filter(arrow_filters)
-                            df = table.to_pandas()
-                            dfs.append(df)
-                            continue
-                        except Exception:
-                            pass  # Fallback to pandas.read_parquet below
-                    df = pd.read_parquet(f, columns=list(columns) if columns else None)
-                    if filter_tuple:
-                        col_name, target_ids = filter_tuple
-                        if col_name in df.columns:
-                            df = df[df[col_name].isin(target_ids)]
-                    dfs.append(df)
-                    
-            elif fmt == 'csv':
-                # CSV 读取
-                dfs = []
-                for f in files:
-                    compression = 'gzip' if str(f).endswith('.gz') else None
-                    df = pd.read_csv(f, usecols=list(columns) if columns else None, compression=compression)
-                    # 如果有患者过滤器，应用过滤
-                    if filter_tuple:
-                        col_name, target_ids = filter_tuple
-                        if col_name in df.columns:
-                            df = df[df[col_name].isin(target_ids)]
-                    dfs.append(df)
-            
-            # 合并所有分区
-            if dfs:
-                return pd.concat(dfs, ignore_index=True)
+        num_files = len(files)
         
-        # 没有找到任何支持的文件
-        tried_formats = ', '.join(self.format_priority)
-        raise ValueError(f"No supported data files found in directory: {directory} (tried: {tried_formats})")
+        # 准备患者ID过滤器 (支持多种数据库的ID列)
+        filter_tuple = None
+        if patient_ids_filter and patient_ids_filter.column in ['subject_id', 'hadm_id', 'icustay_id', 'stay_id', 'admissionid', 'patientid']:
+            target_ids = set(patient_ids_filter.value) if not isinstance(patient_ids_filter.value, str) else {patient_ids_filter.value}
+            filter_tuple = (patient_ids_filter.column, target_ids)
+            if DEBUG_MODE: print(f"   📁 加载 {directory.name} ({num_files} 个 parquet 分区) - 过滤 {len(target_ids)} 个患者...")
+        else:
+            if DEBUG_MODE: print(f"   📁 加载 {directory.name} ({num_files} 个 parquet 分区)...")
+        
+        # 🔧 修复：传递具体的parquet文件列表，而不是目录，避免混合格式问题
+        dataset_df = self._read_parquet_dataset(
+            directory,
+            files,  # 传递具体的parquet文件列表
+            columns=list(columns) if columns else None,
+            filter_spec=patient_ids_filter,
+        )
+        if dataset_df is not None:
+            return dataset_df
+        # Fallback: iterate individual parquet files
+        dfs = []
+        arrow_filters = None
+        if patient_ids_filter:
+            arrow_filters = self._build_dataset_filter(patient_ids_filter)
+        for f in files:
+            if arrow_filters is not None or columns is not None:
+                try:
+                    import pyarrow.parquet as pq  # type: ignore
+                    table = pq.read_table(
+                        f,
+                        columns=list(columns) if columns else None,
+                    )
+                    if arrow_filters is not None:
+                        import pyarrow.compute as pc  # type: ignore
+                        table = table.filter(arrow_filters)
+                    df = table.to_pandas()
+                    dfs.append(df)
+                    continue
+                except Exception:
+                    pass  # Fallback to pandas.read_parquet below
+            df = pd.read_parquet(f, columns=list(columns) if columns else None)
+            if filter_tuple:
+                col_name, target_ids = filter_tuple
+                if col_name in df.columns:
+                    df = df[df[col_name].isin(target_ids)]
+            dfs.append(df)
+        
+        # 合并所有分区
+        if dfs:
+            return pd.concat(dfs, ignore_index=True)
+        
+        # 没有找到任何parquet文件
+        return pd.DataFrame()
 
     def _read_parquet_dataset(
         self,
@@ -817,34 +881,28 @@ class ICUDataSource:
 
         filter_expr = self._build_dataset_filter(patient_ids_filter) if patient_ids_filter else None
         logger.info("📁 Using PyArrow dataset for %s (%s)", table_name, root_path)
-        table = dataset.to_table(columns=columns, filter=filter_expr)
-        return table.to_pandas()
-    
-    def _read_fst_file(self, path: Path, columns: Optional[Iterable[str]]) -> pd.DataFrame:
-        """Read an FST file using the fst_reader module."""
-        try:
-            # First try the fast reader (uses R fst package directly)
-            try:
-                from .fst_reader_fast import read_fst_fast
-                df = read_fst_fast(path, columns=list(columns) if columns else None)
-                return df
-            except Exception as e:
-                # Fallback to regular fst_reader if fast reader fails
-                from .fst_reader import read_fst
-                df = read_fst(path)
-                if columns is not None:
-                    missing = set(columns) - set(df.columns)
-                    if missing:
-                        raise KeyError(f"Columns {sorted(missing)} not found in FST file '{path}'")
-                    df = df[list(columns)]
-                return df
-        except ImportError:
-            raise ImportError(
-                "FST file support requires either:\n"
-                "  1. Python fst package: pip install fst\n"
-                "  2. R with fst package installed (recommended for fst_reader_fast)\n"
-                f"Cannot read: {path}"
+
+        requested_columns = list(columns) if columns is not None else None
+        effective_columns: Optional[List[str]] = None
+        missing_columns: List[str] = []
+        if requested_columns:
+            available = set(dataset.schema.names)
+            missing_columns = [col for col in requested_columns if col not in available]
+            effective_columns = [col for col in requested_columns if col in available]
+            if not effective_columns:
+                effective_columns = None
+
+        table = dataset.to_table(columns=effective_columns, filter=filter_expr)
+        frame = table.to_pandas()
+
+        if requested_columns:
+            frame = frame.reindex(columns=requested_columns)
+        if missing_columns:
+            logger.warning(
+                "Dataset %s missing columns %s; filled with NA values", table_name, ", ".join(missing_columns)
             )
+        return frame
+    
 
 
 def load_table(

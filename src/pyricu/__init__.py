@@ -11,6 +11,7 @@ from .datasource import FilterOp, FilterSpec, ICUDataSource, load_table
 from .resources import load_data_sources, load_dictionary, package_path
 from .logging_utils import configure_logging
 from .cache_manager import get_cache_manager, auto_clear_cache_if_enabled, clear_pyricu_cache, get_cache_status
+from .runtime_defaults import LoaderDefaults, resolve_loader_defaults
 from .table import (
     ICUTable, 
     IdTbl, 

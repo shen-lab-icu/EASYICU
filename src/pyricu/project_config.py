@@ -77,7 +77,9 @@ DEFAULT_TEST_PATIENTS_MIIV = [30005000, 30009597, 30017005]
 # eICU: patientunitstayid from test_data_eicu
 # 选择有RRT和血管加压药数据的患者以便测试SOFA-2特征
 # 患者245906数据最丰富(RRT 13条, 血管加压药 17条)
-DEFAULT_TEST_PATIENTS_EICU = [243334, 245906, 249329, 251510, 257542]
+# The bundled eICU sample contains five anonymized stays (see test_data_eicu/test_patient_ids.py)
+# so we align the defaults here to ensure validation scripts pick up real rows.
+DEFAULT_TEST_PATIENTS_EICU = [1589473, 2506331, 2683425, 2785291, 3146941]
 
 # AUMC: admissionid from test_data_aumc
 # 选择有RRT、ECMO和血管加压药数据的患者以便测试SOFA-2特征

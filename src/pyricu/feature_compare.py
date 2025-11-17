@@ -10,6 +10,8 @@ parses arguments and delegates to :func:`main`.
 from __future__ import annotations
 
 import argparse
+import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
@@ -197,6 +199,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RICU_ROOT = REPO_ROOT / "ricu_data"
 SUPPORTED_DATABASES = ("miiv", "eicu", "aumc", "hirid")
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_DATA_PATHS: Dict[str, Path] = {
     "miiv": TEST_DATA_MIIV,
     "eicu": TEST_DATA_EICU,
@@ -275,7 +279,7 @@ class FeatureComparison:
                 entry["status"] = "missing:pyricu"
             elif py_stats.rows > 0 and ricu_stats.rows == 0:
                 entry["status"] = "missing:ricu"
-            elif ricu_stats.rows > 0 and py_stats.non_null == 0:
+            elif ricu_stats.non_null > 0 and py_stats.non_null == 0:
                 entry["status"] = "missing:pyricu"
             else:
                 entry["status"] = "ok"
@@ -337,6 +341,8 @@ class RicuPyricuComparator:
         if dict_path.exists():
             self._loader_kwargs["dict_path"] = str(dict_path)
 
+        self._interval_cap_hours = 24 * 365  # prevent runaway window expansion
+
     def run(self) -> Dict[str, FeatureComparison]:
         self._ensure_fio2_patch()
         results: Dict[str, FeatureComparison] = {}
@@ -380,22 +386,17 @@ class RicuPyricuComparator:
         frames: Dict[str, pd.DataFrame] = {}
         for name in module.concepts:
             try:
-                frame = load_concepts(
-                    name,
-                    patient_ids=self.test_patients or None,
-                    database=self.database,
-                    data_path=str(self.data_path),
-                    interval="1h" if module.time_column else None,
-                    merge=True,
-                    verbose=False,
-                    **self._loader_kwargs,
-                )
+                frame = self._load_concept_frame(name, self.test_patients or None, module)
             except Exception as exc:
                 print(f"   ⚠️  concept {name} failed in module {module.name}: {exc}")
                 continue
             if name == "fio2" and self._fio2_override is not None:
                 frame = self._fio2_override.copy()
             series = self._normalize_concept_frame(frame, module, name)
+            if self._should_retry_per_patient(series, frame):
+                retry = self._reload_concept_per_patient(name, module)
+                if retry is not None:
+                    series = retry
             if series is not None:
                 frames[name] = series
 
@@ -482,7 +483,14 @@ class RicuPyricuComparator:
             result[column] = series.reset_index(drop=True)
         return result
 
-    def _normalize_concept_frame(self, frame: pd.DataFrame, module: FeatureModule, concept: str) -> Optional[pd.DataFrame]:
+    def _normalize_concept_frame(
+        self,
+        frame: pd.DataFrame,
+        module: FeatureModule,
+        concept: str,
+        *,
+        force_id: Optional[int] = None,
+    ) -> Optional[pd.DataFrame]:
         if frame is None or (hasattr(frame, "empty") and frame.empty):
             return None
         if isinstance(frame, pd.Series):
@@ -507,14 +515,186 @@ class RicuPyricuComparator:
             return None
         rename_map[value_col] = "value"
         cols.append(value_col)
+
+        # keep auxiliary columns so we can expand windows or repair ids later
+        end_col = self._detect_column(df, "endtime", ["endtime", "end_time", "stop", f"{concept}_end", f"{concept}_endtime"])
+        duration_col = self._detect_column(df, f"{concept}_dur", [f"{concept}_dur", f"{concept}_duration", "duration", "dur", "hours", "length"])
+        backup_ids = [candidate for candidate in ("subject_id", "hadm_id", "patientunitstayid") if candidate in df.columns]
+        for extra in filter(None, [end_col, duration_col]):
+            if extra not in cols and extra in df.columns:
+                cols.append(extra)
+        for backup in backup_ids:
+            if backup not in cols:
+                cols.append(backup)
+                rename_map.setdefault(backup, backup)
+        if end_col:
+            rename_map[end_col] = "endtime"
+        if duration_col:
+            rename_map[duration_col] = "duration"
         df = df[cols].rename(columns=rename_map)
+        if "value" in df.columns and pd.api.types.is_timedelta64_dtype(df["value"]):
+            df["value"] = df["value"].dt.total_seconds() / 3600.0
+        # Drop duplicate columns (e.g., repeated component outputs) while keeping first values
+        if df.columns.duplicated().any():
+            df = df.loc[:, ~df.columns.duplicated()]
         if "time" in df.columns and not pd.api.types.is_numeric_dtype(df["time"]):
             id_ref = df["id"] if "id" in df.columns else None
             df["time"] = self._time_to_hours(df["time"], id_ref)
         if "time" in df.columns:
             df = df.dropna(subset=["time"])
+        df = self._fill_missing_ids(df)
+        if force_id is not None and "id" in df.columns:
+            df["id"] = df["id"].fillna(force_id)
         df = df.dropna(subset=["id"]).reset_index(drop=True)
+        df = self._expand_interval_rows(df, module, concept)
         return df
+
+    def _load_concept_frame(
+        self,
+        concept: str,
+        patient_ids: Optional[Sequence[int]],
+        module: FeatureModule,
+    ) -> pd.DataFrame:
+        return load_concepts(
+            concept,
+            patient_ids=patient_ids,
+            database=self.database,
+            data_path=str(self.data_path),
+            interval="1h" if module.time_column else None,
+            merge=True,
+            verbose=False,
+            **self._loader_kwargs,
+        )
+
+    def _should_retry_per_patient(
+        self,
+        series: Optional[pd.DataFrame],
+        raw_frame: Optional[pd.DataFrame],
+    ) -> bool:
+        if not self.test_patients:
+            return False
+        if raw_frame is None or not isinstance(raw_frame, pd.DataFrame) or raw_frame.empty:
+            return False
+        if series is None or series.empty:
+            return True
+        if "id" not in series.columns:
+            return True
+        return not series["id"].notna().any()
+
+    def _reload_concept_per_patient(self, concept: str, module: FeatureModule) -> Optional[pd.DataFrame]:
+        if not self.test_patients:
+            return None
+        per_patient: List[pd.DataFrame] = []
+        for stay_id in self.test_patients:
+            try:
+                frame = self._load_concept_frame(concept, [stay_id], module)
+            except Exception as exc:
+                logger.warning("Failed reloading %s for stay %s: %s", concept, stay_id, exc)
+                continue
+            normalized = self._normalize_concept_frame(frame, module, concept, force_id=stay_id)
+            if normalized is not None and not normalized.empty:
+                per_patient.append(normalized)
+        if not per_patient:
+            return None
+        combined = pd.concat(per_patient, ignore_index=True)
+        sort_cols = ["id"] + (["time"] if "time" in combined.columns else [])
+        combined = combined.sort_values(sort_cols).reset_index(drop=True)
+        return combined
+
+    def _fill_missing_ids(self, df: pd.DataFrame) -> pd.DataFrame:
+        if "id" not in df.columns or df["id"].notna().any():
+            return df
+        lookup = self._load_icustay_times()
+        if lookup.empty:
+            return df
+
+        merged = df.copy()
+        for column in ("hadm_id", "subject_id"):
+            if column not in merged.columns or column not in lookup.columns:
+                continue
+            bridge = lookup[["stay_id", column]].dropna().drop_duplicates()
+            if bridge.empty:
+                continue
+            merged = merged.merge(bridge, on=column, how="left", suffixes=("", "_mapped"))
+            mapped_col = "stay_id"
+            if mapped_col in merged.columns:
+                merged["id"] = merged["id"].fillna(merged[mapped_col])
+                merged = merged.drop(columns=[mapped_col])
+        for cleanup in ("subject_id", "hadm_id", "patientunitstayid"):
+            if cleanup in merged.columns:
+                merged = merged.drop(columns=[cleanup])
+        return merged
+
+    def _expand_interval_rows(self, df: pd.DataFrame, module: FeatureModule, concept: str) -> pd.DataFrame:
+        if module.name != "med" or "time" not in df.columns:
+            return df.drop(columns=["endtime", "duration"], errors="ignore")
+
+        has_end = "endtime" in df.columns and df["endtime"].notna().any()
+        has_duration = "duration" in df.columns and df["duration"].notna().any()
+
+        # Duration-style concepts (e.g., *_dur) already encode exposure length and
+        # should not be expanded into per-hour series.
+        concept_lower = concept.lower()
+        if concept_lower.endswith("_dur"):
+            return df.drop(columns=["endtime", "duration"], errors="ignore")
+
+        # Do not fabricate synthetic durations when the upstream concept already
+        # provides discrete time points (ricu treats those as point events).  The
+        # previous heuristic expanded every measurement until the next one,
+        # drastically overestimating vasopressor exposure compared to ricu.
+        if not has_end and not has_duration:
+            return df.drop(columns=["endtime", "duration"], errors="ignore")
+
+        working = df.copy()
+
+        if has_end and not pd.api.types.is_numeric_dtype(working["endtime"]):
+            icu = self._load_icustay_times()
+            if not icu.empty and "intime" in icu.columns:
+                icu_map = icu[["stay_id", "intime"]].dropna().drop_duplicates().rename(columns={"stay_id": "id"})
+                icu_map["intime"] = pd.to_datetime(icu_map["intime"], errors="coerce").dt.tz_localize(None)
+                working = working.merge(icu_map, on="id", how="left")
+                end_dt = pd.to_datetime(working["endtime"], errors="coerce").dt.tz_localize(None)
+                working["endtime"] = (
+                    (end_dt - working["intime"]).dt.total_seconds() / 3600.0
+                )
+                working = working.drop(columns=["intime"], errors="ignore")
+            else:
+                working["endtime"] = self._time_to_hours(working["endtime"], working.get("id"))
+        if has_duration:
+            if pd.api.types.is_timedelta64_dtype(working["duration"]):
+                working["duration"] = working["duration"].dt.total_seconds() / 3600.0
+            working["duration"] = pd.to_numeric(working["duration"], errors="coerce")
+
+        starts = pd.to_numeric(working["time"], errors="coerce")
+        if has_end:
+            ends = pd.to_numeric(working["endtime"], errors="coerce")
+        elif has_duration:
+            ends = starts + working["duration"].fillna(0)
+        else:
+            ends = starts
+
+        records: List[dict] = []
+        skipped = 0
+        for idx, (start, end, value, stay_id) in enumerate(zip(starts, ends, working.get("value"), working.get("id"))):
+            if pd.isna(start) or pd.isna(end) or pd.isna(stay_id) or pd.isna(value):
+                continue
+            if end < start:
+                end = start
+            span = min(end - start, self._interval_cap_hours)
+            if span <= 0:
+                records.append({"id": stay_id, "time": float(start), "value": value})
+                continue
+            if span >= self._interval_cap_hours:
+                skipped += 1
+            start_hour = int(math.floor(start))
+            end_hour = int(math.ceil(min(end, start + self._interval_cap_hours)))
+            for hour in range(start_hour, end_hour + 1):
+                records.append({"id": stay_id, "time": float(hour), "value": value})
+        if not records:
+            return df.drop(columns=["endtime", "duration"], errors="ignore")
+        expanded = pd.DataFrame.from_records(records)
+        expanded = expanded.drop_duplicates(subset=["id", "time", "value"]).reset_index(drop=True)
+        return expanded
 
     def _detect_column(self, df: pd.DataFrame, preferred: Optional[str], fallbacks: Iterable[str]) -> Optional[str]:
         if preferred and preferred in df.columns:
@@ -565,13 +745,21 @@ class RicuPyricuComparator:
         return grid if not grid.empty else None
 
     def _ensure_fio2_patch(self) -> None:
+        """Apply fio2 patch only for MIMIC-IV database."""
         if self._fio2_override is not None:
+            return
+        # Only apply this patch for miiv database (chartevents.parquet is miiv-specific)
+        if self.database not in ("miiv", "mimiciv"):
             return
         base = self._load_pyricu_fio2()
         raw = self._load_raw_fio2()
-        if base.empty and raw.empty:
+        frames = [df for df in (base, raw) if not df.empty]
+        if not frames:
             return
-        merged = pd.concat([base, raw], ignore_index=True)
+        merged = pd.concat(frames, ignore_index=True)
+        # Check if stay_id column exists before using it
+        if "stay_id" not in merged.columns:
+            return
         merged = merged.dropna(subset=["stay_id"])
         if "charttime" not in merged.columns:
             return
@@ -622,10 +810,18 @@ class RicuPyricuComparator:
             return self._icustay_times
         icu_path = Path(self.data_path) / "icustays.parquet"
         if icu_path.exists():
-            df = pd.read_parquet(icu_path, columns=["stay_id", "intime"])
-            df["intime"] = pd.to_datetime(df["intime"])
+            desired = ["stay_id", "subject_id", "hadm_id", "intime", "outtime"]
+            try:
+                df = pd.read_parquet(icu_path, columns=desired)
+            except Exception:
+                df = pd.read_parquet(icu_path)
+                keep = [col for col in desired if col in df.columns]
+                df = df[keep] if keep else df
+            for time_col in ("intime", "outtime"):
+                if time_col in df.columns:
+                    df[time_col] = pd.to_datetime(df[time_col])
         else:
-            df = pd.DataFrame(columns=["stay_id", "intime"])
+            df = pd.DataFrame(columns=["stay_id", "subject_id", "hadm_id", "intime", "outtime"])
         self._icustay_times = df
         return df
 
