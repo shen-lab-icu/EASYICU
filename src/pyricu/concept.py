@@ -117,7 +117,7 @@ class ConceptSource:
             index_var = None
 
         regex = payload.pop("regex", None)
-        class_name = payload.pop("class", None)
+        class_name = payload.pop("class", payload.pop("class_name", None))
         callback = payload.pop("callback", None)
         interval = payload.pop("interval", None)
         target = payload.pop("target", None)
@@ -209,7 +209,7 @@ class ConceptDefinition:
             target=payload.get("target"),
             interval=_maybe_timedelta(payload.get("interval")),
             aggregate=payload.get("aggregate"),
-            class_name=payload.get("class"),
+            class_name=payload.get("class") or payload.get("class_name"),
             callback=payload.get("callback"),
             sub_concepts=sub_concepts,
             levels=payload.get("levels"),
@@ -1599,7 +1599,6 @@ class ConceptResolver:
 
             for source in sources:
                 if hasattr(source, 'table'):
-                    # 检查表文件是否存在
                     import os
                     if hasattr(data_source, 'base_path') and data_source.base_path is not None:
                         table_file = data_source.base_path / f"{source.table}.parquet"
@@ -2614,6 +2613,17 @@ class ConceptResolver:
             )
 
         ts_df = pd.DataFrame(rows)
+        try:
+            ts_df = self._align_time_to_admission(
+                ts_df,
+                data_source,
+                [id_cfg.id],
+                "index_var",
+            )
+        except Exception:
+            pass
+        ts_df["index_var"] = pd.to_numeric(ts_df["index_var"], errors="coerce")
+        ts_df = ts_df.dropna(subset=["index_var"]).reset_index(drop=True)
         return ICUTable(
             data=ts_df,
             id_columns=[id_cfg.id],

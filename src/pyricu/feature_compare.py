@@ -365,16 +365,29 @@ class RicuPyricuComparator:
         if not file_path.exists():
             print(f"⚠️  Missing ricu file: {file_path}")
             return {}
-        df = pd.read_csv(file_path, low_memory=False)
-        id_column = module.id_column if module.id_column in df.columns else self._detect_column(df, module.id_column, ID_CANDIDATES)
+        
+        # 🚀 OPTIMIZATION: Load only header first to detect columns, then filter during read
+        sample_df = pd.read_csv(file_path, nrows=0, low_memory=False)
+        id_column = module.id_column if module.id_column in sample_df.columns else self._detect_column(sample_df, module.id_column, ID_CANDIDATES)
         time_column = None
         if module.time_column:
-            if module.time_column in df.columns:
+            if module.time_column in sample_df.columns:
                 time_column = module.time_column
             else:
-                time_column = self._detect_column(df, module.time_column, TIME_CANDIDATES)
+                time_column = self._detect_column(sample_df, module.time_column, TIME_CANDIDATES)
+        
+        # 🚀 OPTIMIZATION: Filter patients during CSV parsing using chunked reader
         if id_column and self.test_patients:
-            df = df[df[id_column].isin(self.test_patients)]
+            chunks = []
+            chunksize = 50000  # Read in chunks to save memory
+            for chunk in pd.read_csv(file_path, low_memory=False, chunksize=chunksize):
+                filtered = chunk[chunk[id_column].isin(self.test_patients)]
+                if not filtered.empty:
+                    chunks.append(filtered)
+            df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame(columns=sample_df.columns)
+        else:
+            df = pd.read_csv(file_path, low_memory=False)
+        
         return self._split_wide_table(df, module, detected_id_column=id_column, detected_time_column=time_column)
 
     def _load_pyricu_series(

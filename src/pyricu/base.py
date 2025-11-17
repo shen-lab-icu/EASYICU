@@ -237,7 +237,11 @@ class BaseICULoader:
                 os.environ[var] = value
 
     def _resolve_parallel_workers(self, requested: Optional[int]) -> int:
-        """Determine how many patient-chunk workers to spawn by default."""
+        """Determine how many patient-chunk workers to spawn by default.
+        
+        ⚡ 性能优化: 由于Python GIL和锁竞争，多线程反而会降低性能
+        默认使用单线程，除非明确指定
+        """
         if isinstance(requested, int) and requested > 0:
             return requested
 
@@ -250,11 +254,10 @@ class BaseICULoader:
             except ValueError:
                 logger.warning("Invalid PYRICU_PARALLEL_WORKERS=%s, ignoring", env_value)
 
-        default_workers = 32
-        cpu_count = os.cpu_count()
-        if cpu_count:
-            default_workers = max(1, min(default_workers, cpu_count))
-
+        # ⚡ 默认单线程以避免GIL竞争和锁开销
+        # 用户可通过环境变量PYRICU_PARALLEL_WORKERS或参数显式启用并行
+        default_workers = 1
+        
         return default_workers
 
     def _resolve_parallel_backend(self, backend: Optional[str]) -> str:
@@ -495,21 +498,37 @@ class BaseICULoader:
                 f"🚀 启用多线程优化({backend}): {parallel_workers}线程处理{total_batches}批次"
             )
             
-            # 预加载关键大表
+            # 智能预加载：只在患者数量足够时才预加载
             all_patient_ids = []
             for batch in batches:
                 if isinstance(batch, dict):
                     all_patient_ids.extend(batch.get('stay_id', []))
                 else:
                     all_patient_ids.extend(batch)
-            
-            preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
-            logger.info(f"📦 预加载大表: {', '.join(preload_tables)}")
-            self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)
+
+            # 只有患者数量足够多时才预加载，避免小数据集的性能开销
+            if len(all_patient_ids) >= 1000:  # 提高阈值，减少不必要的预加载
+                preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
+                logger.info(f"📦 大规模数据({len(all_patient_ids)}患者)，预加载大表: {', '.join(preload_tables)}")
+                self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)
+            else:
+                logger.info(f"⚡ 小规模数据({len(all_patient_ids)}患者)，跳过预加载以提升性能")
         elif backend == "process" and parallel_workers > 1 and total_batches > 1:
             logger.info(
                 f"🚀 启用多进程优化: {parallel_workers}进程处理{total_batches}批次"
             )
+
+            # 为多进程模式也预加载大表，避免重复I/O
+            all_patient_ids = []
+            for batch in batches:
+                if isinstance(batch, dict):
+                    all_patient_ids.extend(batch.get('stay_id', []))
+                else:
+                    all_patient_ids.extend(batch)
+
+            preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
+            logger.info(f"📦 多进程模式预加载大表: {', '.join(preload_tables)}")
+            self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)
 
         def _capture_meta(table: ICUTable) -> Dict[str, Any]:
             return {

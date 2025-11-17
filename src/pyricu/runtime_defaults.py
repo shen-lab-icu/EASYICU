@@ -48,10 +48,13 @@ _DEFAULT_ENV_KEYS: Dict[str, Sequence[str]] = {
 }
 
 _DEFAULT_TIERS = (
-    {"max_patients": 100, "profile": "tiny", "chunk": 10, "workers": 8, "backend": "thread"},
-    {"max_patients": 500, "profile": "small", "chunk": 25, "workers": 16, "backend": "process"},
-    {"max_patients": 2000, "profile": "medium", "chunk": 100, "workers": 24, "backend": "process"},
-    {"max_patients": math.inf, "profile": "large", "chunk": 250, "workers": 40, "backend": "process"},
+    # ⚡ 性能优化: 减少workers避免Python GIL和锁竞争导致的性能下降
+    # 实测显示: 多线程在数据加载场景下反而会因为锁竞争变慢
+    {"max_patients": 100, "profile": "tiny", "chunk": 100, "workers": 1, "concept_workers": 1, "backend": "thread"},
+    {"max_patients": 500, "profile": "small", "chunk": 125, "workers": 1, "concept_workers": 1, "backend": "thread"},
+    {"max_patients": 2000, "profile": "medium", "chunk": 200, "workers": 1, "concept_workers": 1, "backend": "thread"},
+    {"max_patients": 8000, "profile": "large", "chunk": 400, "workers": 2, "concept_workers": 1, "backend": "thread"},
+    {"max_patients": math.inf, "profile": "xlarge", "chunk": 800, "workers": 4, "concept_workers": 1, "backend": "thread"},
 )
 
 
@@ -91,8 +94,10 @@ def resolve_loader_defaults(
 
     concept_value, concept_source = _read_int(merged_keys["concept"], env, minimum=1)
     if concept_value is None:
-        concept_value = max(1, default_concept_workers)
-        concept_source = "default"
+        # Use profile-specific concept_workers if available, otherwise fallback to default
+        profile_concept_workers = profile.get("concept_workers", default_concept_workers)
+        concept_value = max(1, profile_concept_workers)
+        concept_source = f"auto({profile['profile']})"
 
     backend_value, backend_source = _read_choice(
         merged_keys["backend"],

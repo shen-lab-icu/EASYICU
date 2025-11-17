@@ -114,6 +114,170 @@ def _coerce_duration_hours(value) -> float:
         return np.nan
 
 
+_STAY_LIMIT_CACHE: Dict[int, pd.DataFrame] = {}
+
+
+def _normalize_patient_ids(patient_ids, column: str) -> Optional[List[object]]:
+    """Resolve the list of patient ids matching the requested id column."""
+    if patient_ids is None:
+        return None
+    if isinstance(patient_ids, dict):
+        for key in (column, f"{column}_id", column.replace("_id", "")):
+            if key in patient_ids and patient_ids[key] is not None:
+                values = patient_ids[key]
+                break
+        else:
+            return None
+    else:
+        values = patient_ids
+    if values is None:
+        return None
+    if isinstance(values, (pd.Series, np.ndarray)):
+        values = values.tolist()
+    normalized = []
+    for value in values:
+        try:
+            normalized.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return normalized or None
+
+
+def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[str]) -> Optional[pd.DataFrame]:
+    """Compute per-stay start/end offsets (hours) using admission windows."""
+    if not id_columns:
+        return None
+    primary_id = id_columns[0]
+    if primary_id != "stay_id":
+        return None
+    data_source = getattr(ctx, "data_source", None)
+    if data_source is None:
+        return None
+    cache_key = id(data_source)
+    cached = _STAY_LIMIT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        icu_tbl = data_source.load_table(
+            "icustays",
+            columns=["stay_id", "hadm_id", "subject_id", "intime", "outtime"],
+            verbose=False,
+        )
+    except Exception:
+        return None
+    icu_df = getattr(icu_tbl, "data", icu_tbl)
+    if icu_df is None or icu_df.empty or "hadm_id" not in icu_df.columns:
+        return None
+    try:
+        adm_tbl = data_source.load_table(
+            "admissions",
+            columns=["hadm_id", "admittime", "dischtime", "deathtime"],
+            verbose=False,
+        )
+    except Exception:
+        return None
+    adm_df = getattr(adm_tbl, "data", adm_tbl)
+    if adm_df is None or adm_df.empty:
+        return None
+    try:
+        pat_tbl = data_source.load_table(
+            "patients", columns=["subject_id", "dod", "anchor_age", "anchor_year"], verbose=False
+        )
+    except Exception:
+        pat_tbl = None
+    pat_df = getattr(pat_tbl, "data", pat_tbl) if pat_tbl is not None else None
+    icu = icu_df.copy()
+    patient_filter = _normalize_patient_ids(ctx.patient_ids, primary_id)
+    if patient_filter:
+        icu = icu[icu["stay_id"].isin(patient_filter)]
+    adm = adm_df.copy()
+    icu["intime"] = pd.to_datetime(icu["intime"], errors="coerce").dt.tz_localize(None)
+    icu["outtime"] = pd.to_datetime(icu.get("outtime"), errors="coerce").dt.tz_localize(None)
+    adm["admittime"] = pd.to_datetime(adm["admittime"], errors="coerce").dt.tz_localize(None)
+    adm["dischtime"] = pd.to_datetime(adm["dischtime"], errors="coerce").dt.tz_localize(None)
+    for extra_col in ("deathtime",):
+        if extra_col in adm.columns:
+            adm[extra_col] = pd.to_datetime(adm[extra_col], errors="coerce").dt.tz_localize(None)
+    if pat_df is not None and not pat_df.empty and "subject_id" in icu.columns:
+        pat = pat_df.copy()
+        for col in ("dod",):
+            if col in pat.columns:
+                pat[col] = pd.to_datetime(pat[col], errors="coerce").dt.tz_localize(None)
+        merged = icu.merge(adm, on="hadm_id", how="left", suffixes=("", "_adm"))
+        merged = merged.merge(pat, on="subject_id", how="left", suffixes=("", "_pat"))
+    else:
+        merged = icu.merge(adm, on="hadm_id", how="left", suffixes=("", "_adm"))
+    merged = merged.dropna(subset=["stay_id", "intime"])
+    if merged.empty:
+        return None
+    merged["admittime"] = merged["admittime"].fillna(merged["intime"])
+    if "outtime" in merged.columns:
+        merged["dischtime"] = merged["dischtime"].fillna(merged["outtime"])
+    else:
+        merged["dischtime"] = merged["dischtime"].fillna(merged["admittime"])
+    # Incorporate additional clinical timestamps to better match ricu stay windows.
+    start_candidates = [
+        merged.get(col)
+        for col in ("admittime", "intime")
+        if col in merged.columns
+    ]
+    end_candidates = [
+        merged.get(col)
+        for col in ("dischtime", "deathtime", "outtime", "dod")
+        if col in merged.columns
+    ]
+    if start_candidates:
+        start_time = pd.concat(start_candidates, axis=1).min(axis=1)
+    else:
+        start_time = merged["intime"]
+    if end_candidates:
+        end_time = pd.concat(end_candidates, axis=1).max(axis=1)
+    else:
+        end_time = merged.get("outtime", merged["intime"])
+
+    invalid_mask = start_time.notna() & end_time.notna() & (end_time < start_time)
+    if invalid_mask.any():
+        end_time = end_time.where(~invalid_mask, start_time)
+
+    start_hours = (start_time - merged["intime"]).dt.total_seconds() / 3600.0
+    end_hours = (end_time - merged["intime"]).dt.total_seconds() / 3600.0
+    limits = merged[["stay_id"]].copy()
+    limits["start"] = start_hours
+    limits["end"] = end_hours
+    limits = limits.replace([np.inf, -np.inf], np.nan).dropna(subset=["start", "end"])
+    _STAY_LIMIT_CACHE[cache_key] = limits
+    return limits
+
+
+def _compose_fill_limits(
+    data: pd.DataFrame,
+    id_columns: List[str],
+    index_column: str,
+    ctx: "ConceptCallbackContext",
+) -> Optional[pd.DataFrame]:
+    """Build fill_gaps limits matching ricu's collapse(x) behavior.
+    
+    By default (matching ricu), uses observed data range (min/max per ID).
+    This ensures SOFA and other aggregates cover the full patient timeline
+    as captured in the merged component data, not just ICU stay windows.
+    """
+    if not id_columns or index_column not in data.columns:
+        return None
+    observed = (
+        data.dropna(subset=[index_column])
+        .groupby(id_columns, dropna=False)[index_column]
+        .agg(["min", "max"])
+        .reset_index()
+        .rename(columns={"min": "start", "max": "end"})
+    )
+    if observed.empty:
+        return None
+    # 🔧 CRITICAL FIX: Match ricu's fill_gaps(dat, limits = collapse(x))
+    # Use observed data range directly (not constrained by ICU stay windows)
+    # to replicate ricu's behavior of filling gaps across entire patient timeline
+    return observed[id_columns + ["start", "end"]]
+
+
 def _expand_win_table_to_interval(
     win_tbl: WinTbl,
     *,
@@ -614,6 +778,16 @@ def _merge_tables(
         # 🔧 跳过空表 - 它们对合并没有贡献，且可能有不正确的列类型
         if frame.empty:
             continue
+
+        # 确保时间列类型与目标一致，避免后续被强制跳过
+        frame = _ensure_time_column_type(
+            frame,
+            index_column=index_column,
+            target_time_type=target_time_type,
+            id_columns=id_columns,
+            ctx=ctx,
+            table_name=name,
+        )
         
         # 🔧 处理 WinTbl (没有 value_column，使用 name 本身)
         from pyricu.table import WinTbl
@@ -647,27 +821,6 @@ def _merge_tables(
         cols_to_keep = [c for c in cols_to_keep if c in frame.columns]
         frame = frame[cols_to_keep]
         
-        # 统一时间列类型到目标类型
-        if index_column and index_column in frame.columns and target_time_type:
-            # 🔧 FIX: 处理重复列名情况 - frame[col]可能返回DataFrame
-            index_col_data = frame[index_column]
-            if isinstance(index_col_data, pd.DataFrame):
-                # 取第一列
-                current_dtype = index_col_data.iloc[:, 0].dtype
-            else:
-                current_dtype = index_col_data.dtype
-            is_numeric = pd.api.types.is_numeric_dtype(current_dtype)
-            
-            if target_time_type == 'numeric' and not is_numeric:
-                # 🔧 简化版本：直接跳过，不尝试转换（避免性能问题）
-                # 这些警告是信息性的，不影响核心功能
-                # print(f"   ⚠️  跳过 '{name}': 时间类型不一致 (datetime vs numeric)")
-                continue
-            elif target_time_type == 'datetime' and is_numeric:
-                # 🔧 简化版本：直接跳过
-                # print(f"   ⚠️  跳过 '{name}': 时间类型不一致 (numeric vs datetime)")
-                continue
-
         if merged is None:
             merged = frame
         else:
@@ -696,7 +849,112 @@ def _merge_tables(
     if merged is None:
         merged = pd.DataFrame(columns=key_cols)
 
+    # Ensure each concept contributes a column even if its source table was empty
+    expected_value_columns = list(standardized_tables.keys())
+    for value_col in expected_value_columns:
+        if value_col not in merged.columns:
+            merged[value_col] = pd.Series(dtype="float64")
+
     return merged, id_columns, index_column
+
+
+def _ensure_time_column_type(
+    frame: pd.DataFrame,
+    *,
+    index_column: Optional[str],
+    target_time_type: Optional[str],
+    id_columns: Iterable[str] | None,
+    ctx: Optional[ConceptCallbackContext],
+    table_name: str,
+) -> pd.DataFrame:
+    """Coerce the time column to the desired type (hours or datetime).
+
+    R ricu keeps component timelines aligned by ensuring every table uses
+    the same relative hour axis. When some sub-concepts still expose
+    datetime or timedelta columns, the previous implementation silently
+    skipped them, causing downstream aggregates (like SOFA) to lose their
+    component inputs. This helper mirrors ricu's behaviour by converting
+    those columns to numeric hours whenever possible, leveraging the
+    resolver's ``_align_time_to_admission`` fallback when context exists.
+    """
+
+    if not index_column or index_column not in frame.columns or not target_time_type:
+        return frame
+
+    series = frame[index_column]
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
+
+    if target_time_type == "numeric":
+        if pd.api.types.is_numeric_dtype(series):
+            return frame
+
+        def _ensure_copy(data: pd.DataFrame) -> pd.DataFrame:
+            return data if data is not frame else data.copy()
+
+        working = frame
+
+        if pd.api.types.is_timedelta64_dtype(series):
+            working = _ensure_copy(working)
+            working[index_column] = pd.to_timedelta(series, errors="coerce").dt.total_seconds() / 3600.0
+            return working
+
+        resolver = getattr(ctx, "resolver", None) if ctx else None
+        data_source = getattr(ctx, "data_source", None) if ctx else None
+        if resolver is not None and data_source is not None and hasattr(resolver, "_align_time_to_admission"):
+            try:
+                aligned = resolver._align_time_to_admission(  # type: ignore[attr-defined]
+                    working.copy(),
+                    data_source,
+                    list(id_columns or []),
+                    index_column,
+                )
+            except Exception:
+                aligned = None
+            if isinstance(aligned, pd.DataFrame) and index_column in aligned.columns:
+                aligned_series = aligned[index_column]
+                if pd.api.types.is_numeric_dtype(aligned_series):
+                    return aligned
+                if pd.api.types.is_timedelta64_dtype(aligned_series):
+                    aligned[index_column] = (
+                        pd.to_timedelta(aligned_series, errors="coerce").dt.total_seconds() / 3600.0
+                    )
+                    return aligned
+                working = aligned
+
+        working = _ensure_copy(working)
+        aligned_series = working[index_column]
+        if pd.api.types.is_datetime64_any_dtype(aligned_series):
+            if list(id_columns or []):
+                def _relative_hours(group: pd.Series) -> pd.Series:
+                    valid = group.dropna()
+                    if valid.empty:
+                        return pd.Series(np.nan, index=group.index)
+                    base = valid.iloc[0]
+                    delta = group - base
+                    return delta.dt.total_seconds() / 3600.0
+
+                working[index_column] = working.groupby(list(id_columns or []))[index_column].transform(
+                    _relative_hours
+                )
+            else:
+                valid = aligned_series.dropna()
+                base = valid.iloc[0] if not valid.empty else pd.NaT
+                working[index_column] = ((aligned_series - base).dt.total_seconds() / 3600.0)
+            return working
+
+        working[index_column] = pd.to_numeric(working[index_column], errors="coerce")
+        return working
+
+    if target_time_type == "datetime":
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return frame
+        working = frame if frame is not None else pd.DataFrame()
+        working = working.copy()
+        working[index_column] = pd.to_datetime(working[index_column], errors="coerce").dt.tz_localize(None)
+        return working
+
+    return frame
 
 
 def _as_icutbl(
@@ -1868,15 +2126,12 @@ def _callback_sofa_score(
     keep_components = ctx.kwargs.get('keep_components', False)
     full_window = ctx.kwargs.get('full_window', False)
     
-    # 🔧 FIX: Convert string function names to callable functions
+    # 🚀 优化：使用字符串而非函数对象，配合 slide 内的直接 max/min 调用
     # R ricu uses max_or_na by default, which returns NA if all values are NA
-    # For string 'max' or 'min', we should use max_or_na or min_or_na
     if worst_val_fun == 'max':
-        worst_val_fun = max_or_na
+        worst_val_fun = 'max_or_na'  # ✅ 使用字符串
     elif worst_val_fun == 'min':
-        from .utils import min_or_na
-        worst_val_fun = min_or_na
-    # If worst_val_fun is already a callable (like max_or_na), use it directly
+        worst_val_fun = 'min_or_na'  # ✅ 使用字符串
     
     # Convert timedelta to pd.Timedelta if needed
     if win_length is None:
@@ -1889,13 +2144,7 @@ def _callback_sofa_score(
 
     # 🔧 CRITICAL FIX: Ensure all components exist with proper missing data handling
     for name in required:
-        if name not in data:
-            data[name] = 0
-        else:
-            # 🔧 Handle missing values in SOFA components for early time points
-            # For time=0 when 24h window may not have sufficient data, treat NaN as 0
-            # This matches clinical practice where missing data is assumed normal
-            data[name] = data[name].fillna(0)
+        data[name] = data.get(name)
     
     # CRITICAL: Fill gaps in time series (replicates R ricu fill_gaps(dat))
     # This ensures all time points are present before sliding window calculation
@@ -1905,61 +2154,15 @@ def _callback_sofa_score(
         id_cols_to_group = list(id_columns) if id_columns else []
 
         if id_cols_to_group:
-            filled_groups = []
-            for patient_id, group in data.groupby(id_cols_to_group):
-                # Get time range for this patient
-                time_col = index_column
-                is_numeric_time = pd.api.types.is_numeric_dtype(group[time_col])
-
-                if is_numeric_time:
-                    interval_hours = interval.total_seconds() / 3600.0
-                    # 🔧 CRITICAL FIX: 扩展时间范围以匹配R ricu的行为
-                    # R ricu includes pre-ICU data (negative time) and post-ICU data
-                    start_time = group[time_col].min()
-
-                    # 🔧 关键修复：扩展结束时间以包含ICU出院后的合理时间窗口
-                    # R ricu通常会包含出院后的一些时间点，这是临床评估的标准做法
-                    actual_end_time = group[time_col].max()
-
-                    # 🔧 关键修复：扩展时间范围以匹配R ricu的完整临床时间窗口
-                    # R ricu通常会包含很长的随访期，特别是对于有长期治疗的患者
-                    # 对于MIMIC-IV，R ricu可能扩展到包含入院前和出院后的完整时间范围
-                    if actual_end_time >= 1500 and actual_end_time <= 1550:
-                        # 这是ICU出院时间，扩展到与R ricu一致的时间范围
-                        # R ricu示例：3721小时 = 1512(ICU住院) + 2209(随访期)
-                        # 对于有机械通气的患者，R ricu通常扩展更长时间
-                        end_time = 3721  # 匹配R ricu的时间范围
-                    else:
-                        end_time = actual_end_time
-
-                    time_range = np.arange(start_time, end_time + interval_hours, interval_hours)
-                    filled_df = pd.DataFrame({time_col: time_range})
-                else:
-                    # For datetime time columns, still use the actual min time
-                    # (This is less common for SOFA calculations)
-                    start_time = pd.to_datetime(group[time_col]).min()
-                    end_time = pd.to_datetime(group[time_col]).max()
-                    time_range = pd.date_range(start=start_time, end=end_time, freq=interval)
-                    filled_df = pd.DataFrame({time_col: time_range})
-                
-                # Add ID columns
-                if isinstance(patient_id, tuple):
-                    for i, col in enumerate(id_cols_to_group):
-                        filled_df[col] = patient_id[i]
-                else:
-                    filled_df[id_cols_to_group[0]] = patient_id
-                
-                # Merge with original data (left join to keep all time points)
-                filled_df = filled_df.merge(
-                    group,
-                    on=[time_col] + id_cols_to_group,
-                    how='left'
-                )
-                
-                filled_groups.append(filled_df)
-            
-            if filled_groups:
-                data = pd.concat(filled_groups, ignore_index=True)
+            limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
+            data = fill_gaps(
+                data,
+                id_cols=id_cols_to_group,
+                index_col=index_column,
+                interval=interval,
+                limits=limits_df,
+                method="none",
+            )
         
         # Sort data by time
         data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
@@ -1984,40 +2187,8 @@ def _callback_sofa_score(
     
     # Calculate total SOFA score (replicates R ricu rowSums(.SD, na.rm = TRUE))
     # 🔧 FINAL FIX: Smart interpolation for time=0 to match R ricu behavior
-    def calculate_sofa_final(row):
-        """Smart SOFA calculation that matches R ricu behavior exactly"""
-        # Count available component scores
-        available_vals = []
-        for comp in required:
-            val = row[comp]
-            if pd.notna(val):
-                available_vals.append(val)
-
-        if not available_vals:
-            return 0
-
-        # Standard calculation for most time points
-        if index_column and index_column in row and row[index_column] > 0:
-            return int(round(sum(available_vals)))
-        else:
-            # For time <= 0 (入院前和入院时刻):
-            # R ricu shows SOFA=3.0 at time=0, likely from clinical baseline assessment
-            # Since we don't have full component data at this point, use the available data
-            # but also consider the clinical context (critical care admission)
-            component_sum = sum(available_vals)
-
-            # If no components available but this is ICU admission time (0),
-            # use a reasonable baseline based on clinical practice
-            if component_sum == 0 and row[index_column] == 0:
-                # Moderate baseline for ICU admission without clear organ failure signs
-                # This matches the pattern seen in R ricu (sofa=3.0 with mostly NaN components)
-                return 3
-            else:
-                # Use available data, don't penalize for missing early measurements
-                return int(round(component_sum))
-
-    # Apply final calculation
-    data["sofa"] = data.apply(calculate_sofa_final, axis=1)
+    # Apply final calculation (sum components; NA treated as 0 via row sum)
+    data["sofa"] = data[required].fillna(0).sum(axis=1)
     
     # Select output columns
     if keep_components:
@@ -2066,12 +2237,11 @@ def _callback_sofa2_score(
     keep_components = ctx.kwargs.get('keep_components', False)
     full_window = ctx.kwargs.get('full_window', False)
     
-    # Convert string function names to callable functions
+    # 🚀 优化：使用字符串而非函数对象
     if worst_val_fun == 'max':
-        worst_val_fun = max_or_na
+        worst_val_fun = 'max_or_na'  # ✅ 使用字符串
     elif worst_val_fun == 'min':
-        from .utils import min_or_na
-        worst_val_fun = min_or_na
+        worst_val_fun = 'min_or_na'  # ✅ 使用字符串
     
     # Convert timedelta to pd.Timedelta if needed
     if win_length is None:
@@ -2093,45 +2263,15 @@ def _callback_sofa2_score(
         id_cols_to_group = list(id_columns) if id_columns else []
         
         if id_cols_to_group:
-            filled_groups = []
-            for patient_id, group in data.groupby(id_cols_to_group):
-                time_col = index_column
-                is_numeric_time = pd.api.types.is_numeric_dtype(group[time_col])
-
-                if is_numeric_time:
-                    interval_hours = interval.total_seconds() / 3600.0
-                    # 🔧 CRITICAL FIX: Start from actual minimum time to preserve negative time data
-                    # R ricu includes pre-ICU data (negative time) which is clinically important
-                    start_time = group[time_col].min()
-                    end_time = group[time_col].max()
-                    time_range = np.arange(start_time, end_time + interval_hours, interval_hours)
-                    filled_df = pd.DataFrame({time_col: time_range})
-                else:
-                    # For datetime time columns, still use the actual min time
-                    # (This is less common for SOFA calculations)
-                    start_time = pd.to_datetime(group[time_col]).min()
-                    end_time = pd.to_datetime(group[time_col]).max()
-                    time_range = pd.date_range(start=start_time, end=end_time, freq=interval)
-                    filled_df = pd.DataFrame({time_col: time_range})
-                
-                # Add ID columns
-                if isinstance(patient_id, tuple):
-                    for i, col in enumerate(id_cols_to_group):
-                        filled_df[col] = patient_id[i]
-                else:
-                    filled_df[id_cols_to_group[0]] = patient_id
-                
-                # Merge with original data
-                filled_df = filled_df.merge(
-                    group,
-                    on=[time_col] + id_cols_to_group,
-                    how='left'
-                )
-                
-                filled_groups.append(filled_df)
-            
-            if filled_groups:
-                data = pd.concat(filled_groups, ignore_index=True)
+            limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
+            data = fill_gaps(
+                data,
+                id_cols=id_cols_to_group,
+                index_col=index_column,
+                interval=interval,
+                limits=limits_df,
+                method="none",
+            )
         
         # Sort data by time
         data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
@@ -2474,7 +2614,7 @@ def _match_fio2(
                             fio2_group[[index_column, fio2_col]].copy(),
                             on=index_column,
                             tolerance=match_win,
-                            direction='nearest'
+                            direction='backward'
                         )
                         # 添加ID列
                         for col in id_columns:
@@ -2491,7 +2631,7 @@ def _match_fio2(
                             o2_group[[index_column, o2_col]],
                             on=index_column,
                             tolerance=match_win,
-                            direction='nearest'
+                            direction='backward'
                         )
                         # 添加ID列
                         for col in id_columns:
@@ -2518,15 +2658,15 @@ def _match_fio2(
                     fio2_subset,
                     on=index_column,
                     tolerance=match_win,
-                    direction='nearest'
+                    direction='backward'
                 )
-                
+
                 merged_bwd = pd.merge_asof(
                     fio2_subset,
                     o2_subset,
                     on=index_column,
                     tolerance=match_win,
-                    direction='nearest'
+                    direction='backward'
                 )
             
             # Combine both directions and remove duplicates (like R's rbind + unique)
@@ -4163,39 +4303,33 @@ def _callback_rrt_criteria(
     - AND NOT currently receiving RRT
     
     This is a computed concept that requires crea, uo_6h, uo_12h, uo_24h, potassium, ph, bicarb, and rrt.
+    
+    ⚡ 性能优化: 依赖概念应该在调用前就已加载好,避免在callback中递归加载
     """
-    # Load required concepts if not already provided
+    # ⚡ 优化: 检查是否所有依赖都已提供,如果缺失则一次性批量加载
     required_concepts = ["crea", "uo_6h", "uo_12h", "uo_24h", "potassium", "ph", "bicarb", "rrt"]
     missing_concepts = [c for c in required_concepts if c not in tables]
     
     if missing_concepts:
-        # Load missing concepts - handle concepts that might not be in current dictionary
-        successful_loads = []
-        for concept_name in missing_concepts:
-            try:
-                loaded = ctx.resolver.load_concepts(
-                    [concept_name],
-                    ctx.data_source,
-                    merge=False,
-                    aggregate=None,
-                    patient_ids=ctx.patient_ids,
-                    interval=ctx.interval,
-                )
-                # Add loaded concept to tables
-                if isinstance(loaded, ICUTable):
-                    tables[concept_name] = loaded
-                    successful_loads.append(concept_name)
-                elif isinstance(loaded, dict) and concept_name in loaded:
-                    tables[concept_name] = loaded[concept_name]
-                    successful_loads.append(concept_name)
-                else:
-                    # Concept not found in dictionary, skip it
-                    if os.environ.get('DEBUG'):
-                        print(f"   ⚠️  概念 '{concept_name}' 不在当前字典中，跳过加载")
-            except (KeyError, ValueError) as e:
-                # Concept not available in current dictionary
-                if os.environ.get('DEBUG'):
-                    print(f"   ⚠️  无法加载概念 '{concept_name}': {e}，跳过")
+        # ⚡ 批量加载所有缺失的概念(而非逐个加载)
+        try:
+            loaded = ctx.resolver.load_concepts(
+                missing_concepts,  # 一次性加载所有缺失概念
+                ctx.data_source,
+                merge=False,
+                aggregate=None,
+                patient_ids=ctx.patient_ids,
+                interval=ctx.interval,
+            )
+            # 将加载的概念添加到tables
+            if isinstance(loaded, dict):
+                tables.update(loaded)
+            elif isinstance(loaded, ICUTable) and len(missing_concepts) == 1:
+                tables[missing_concepts[0]] = loaded
+        except (KeyError, ValueError) as e:
+            # 如果批量加载失败,静默处理(某些概念可能在字典中不存在)
+            if os.environ.get('DEBUG'):
+                print(f"   ⚠️  无法加载部分RRT依赖概念: {e}")
     
     # Extract tables
     crea_tbl = tables.get("crea")

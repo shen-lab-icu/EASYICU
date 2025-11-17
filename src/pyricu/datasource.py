@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import logging
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
@@ -46,22 +46,31 @@ class FilterSpec:
     column: str
     op: FilterOp
     value: Any
+    _value_set: Optional[set] = field(default=None, init=False, repr=False)  # ⚡ 缓存set版本的value
 
-    def apply(self, frame: pd.DataFrame) -> pd.DataFrame:
-        if self.op == FilterOp.EQ:
-            mask = frame[self.column] == self.value
-            return frame.loc[mask].copy()
+    def __post_init__(self):
+        """⚡ 性能优化: 预计算value的set形式用于isin操作"""
         if self.op == FilterOp.IN:
             if isinstance(self.value, str):
-                candidate = [self.value]
+                self._value_set = {self.value}
+            elif hasattr(self.value, '__iter__'):
+                self._value_set = set(self.value)
             else:
-                candidate = list(self.value)
-            mask = frame[self.column].isin(candidate)
-            return frame.loc[mask].copy()
+                self._value_set = {self.value}
+
+    def apply(self, frame: pd.DataFrame) -> pd.DataFrame:
+        # ⚡ 性能优化: 返回视图而非副本，由调用者决定是否需要copy
+        if self.op == FilterOp.EQ:
+            mask = frame[self.column] == self.value
+            return frame.loc[mask]
+        if self.op == FilterOp.IN:
+            # ⚡ 使用预计算的set，避免每次都list转换
+            mask = frame[self.column].isin(self._value_set)
+            return frame.loc[mask]
         if self.op == FilterOp.BETWEEN:
             lower, upper = self.value
             mask = frame[self.column].between(lower, upper)
-            return frame.loc[mask].copy()
+            return frame.loc[mask]
         raise ValueError(f"Unsupported filter operation: {self.op}")
 
 
@@ -347,24 +356,30 @@ class ICUDataSource:
         patient_ids_filter: Optional[FilterSpec] = None,
     ) -> pd.DataFrame:
         # 🔍 调试日志：显示请求的列
-        if DEBUG_MODE and columns:
-            print(f"   📋 加载表 {table_name} 时请求的列: {list(columns)}")
+        if columns:
+            print(f"   📋 _load_raw_frame: table={table_name}, columns={list(columns)}")
         
-        # 缓存键：表名 + 列集合 + 患者过滤器
-        # 对于有患者过滤器的情况,也使用缓存(因为同一批患者会被多个概念使用)
-        if patient_ids_filter:
-            # 使用frozenset来确保患者ID列表的哈希一致性
-            patient_ids_set = frozenset(patient_ids_filter.value) if not isinstance(patient_ids_filter.value, str) else frozenset([patient_ids_filter.value])
-            cache_key = (table_name, tuple(sorted(columns)) if columns else None, patient_ids_filter.column, patient_ids_set)
-        else:
-            cache_key = (table_name, tuple(sorted(columns)) if columns else None, None, None)
+        # 🚀 OPTIMIZATION: 缓存键不包含patient_ids_filter以实现跨概念共享
+        # 对于同一批患者的多个概念加载,只在第一次读取表,后续从缓存中过滤
+        # 这将chartevents等大表的加载从N次(每概念一次)减少到1次
+        cache_key = (table_name, tuple(sorted(columns)) if columns else None)
         
         # 检查缓存
+        cached_frame = None
         if self.enable_cache:
             with self._lock:
                 cached_frame = self._table_cache.get(cache_key)
-            if cached_frame is not None:
-                return cached_frame.copy()
+        
+        if cached_frame is not None:
+            # 🚀 OPTIMIZATION: 从缓存中取数据后再应用patient过滤
+            # 这样多个概念可以共享同一个缓存的表副本
+            # ⚡ 性能优化: 避免copy(),直接返回过滤后的视图
+            print(f"   ✅ 从缓存加载: table={table_name}, cached_columns={list(cached_frame.columns)}")
+            if patient_ids_filter:
+                # 返回过滤后的视图，避免拷贝整个缓存表
+                return patient_ids_filter.apply(cached_frame)
+            # 如果不需要过滤，返回切片视图而非副本
+            return cached_frame[:]
         
         loader = self._table_sources.get(table_name)
         dataset_cfg = self._dataset_sources.get(table_name)
@@ -394,6 +409,8 @@ class ICUDataSource:
                 # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
                 # 这允许在demo数据中缺少某些表时继续运行
                 if self.config.name == 'miiv' and table_name in self.config.tables:
+                    # ❌ DEBUG: 这个路径导致返回空DataFrame!
+                    print(f"   ❌ loader is None for {table_name}, returning empty DataFrame")
                     # 返回空DataFrame，保持与配置中表结构一致的列
                     table_cfg = self.config.get_table(table_name)
                     defaults = table_cfg.defaults
@@ -430,12 +447,20 @@ class ICUDataSource:
                 )
             frame = frame[list(columns)]
         
-        # 缓存加载的数据（使用之前构建的cache_key）
+        # 🚀 OPTIMIZATION: 缓存完整表(未经patient过滤)以实现跨概念共享
+        # patient过滤在从缓存读取时应用(见上面cached_frame分支)
+        # ⚡ 性能优化: 缓存原始frame，返回过滤后的结果
         if self.enable_cache:
             with self._lock:
-                self._table_cache[cache_key] = frame.copy()
+                # 缓存原始未过滤的表
+                self._table_cache[cache_key] = frame
         
-        return frame
+        # 应用patient过滤(如果有)
+        if patient_ids_filter:
+            return patient_ids_filter.apply(frame)
+        
+        # 未过滤且未缓存时返回切片
+        return frame[:] if self.enable_cache else frame
 
     def _resolve_loader_from_disk(self, table_name: str) -> Optional[Callable[[], pd.DataFrame] | Path]:
         if not self.base_path:
@@ -555,27 +580,26 @@ class ICUDataSource:
         # Preferred: Parquet format
         if suffix in {".parquet", ".pq"}:
             # 🚀 使用PyArrow过滤器优化大文件读取
-            if patient_ids_filter:
+            if patient_ids_filter and patient_ids_filter.op == FilterOp.IN:
                 try:
                     import pyarrow.parquet as pq
                     import pyarrow as pa
-                    # 使用 DNF (Disjunctive Normal Form) 格式，兼容性更好
-                    target_ids = patient_ids_filter.value if isinstance(patient_ids_filter.value, list) else [patient_ids_filter.value]
+                    # ⚡ 使用预计算的set
+                    target_ids = list(patient_ids_filter._value_set)
                     
                     # 使用PyArrow读取并过滤 - 使用 DNF 格式
                     df = pq.read_table(
                         path,
                         columns=list(columns) if columns else None,
-                        filters=[[( patient_ids_filter.column, 'in', target_ids)]]
+                        filters=[[(patient_ids_filter.column, 'in', target_ids)]]
                     ).to_pandas()
                 except (ImportError, Exception) as e:
                     # 如果PyArrow过滤失败，回退到pandas后过滤
-                    df = pd.read_parquet(path, columns=list(columns) if columns else None)
+                    df = pd.read_parquet(path, columns=list(columns) if columns else None, engine='pyarrow')
                     if patient_ids_filter.column in df.columns:
-                        target_ids = set(patient_ids_filter.value) if isinstance(patient_ids_filter.value, list) else {patient_ids_filter.value}
-                        df = df[df[patient_ids_filter.column].isin(target_ids)]
+                        df = patient_ids_filter.apply(df)
             else:
-                df = pd.read_parquet(path, columns=list(columns) if columns else None)
+                df = pd.read_parquet(path, columns=list(columns) if columns else None, engine='pyarrow')
             
             # 处理重复列名（如果存在）
             if df.columns.duplicated().any():
@@ -930,32 +954,32 @@ def _ensure_sequence(value: Any) -> List[Any]:
 
 
 def _coerce_datetime(series: pd.Series) -> pd.Series:
-    """Coerce a Series to datetime type, handling various edge cases."""
+    """Coerce a Series to datetime type, handling various edge cases.
+    
+    ⚡ 性能优化: 减少重复的类型检查和转换
+    """
+    # ⚡ 快速路径1: 已经是datetime且无时区
     if pd.api.types.is_datetime64_any_dtype(series):
-        # 如果已经是datetime，移除时区信息以避免后续时区不一致错误
         if hasattr(series.dt, 'tz') and series.dt.tz is not None:
             return series.dt.tz_localize(None)
         return series
     
-    # 如果已经是numeric类型，不要转换！
-    # 这可能是已经对齐到入院时间的小时数
+    # ⚡ 快速路径2: 数值型不转换
     if pd.api.types.is_numeric_dtype(series):
         return series
     
-    # Reset index if it has duplicates (which can cause "cannot assemble with duplicate keys")
-    if series.index.duplicated().any():
+    # ⚡ 优化: 一次性检查和reset index
+    has_dup_idx = series.index.duplicated().any()
+    if has_dup_idx:
         series = series.reset_index(drop=True)
     
+    # ⚡ 优化: 统一使用coerce模式，避免try-except开销
     try:
-        # Try direct conversion first, with UTC then remove timezone
-        converted = pd.to_datetime(series, errors="raise", utc=True).dt.tz_localize(None)
-        return converted
-    except (TypeError, ValueError) as e:
-        # If raise fails, try with coerce
-        try:
-            converted = pd.to_datetime(series, errors="coerce", utc=True).dt.tz_localize(None)
-            return converted
-        except (TypeError, ValueError):
-            # If all else fails, return original series
-            # This handles cases where conversion is not possible
-            return series
+        converted = pd.to_datetime(series, errors="coerce", utc=True)
+        # 只在转换成功时移除时区
+        if converted is not None and hasattr(converted, 'dt'):
+            return converted.dt.tz_localize(None)
+        return series
+    except Exception:
+        # 极端情况：返回原值
+        return series
