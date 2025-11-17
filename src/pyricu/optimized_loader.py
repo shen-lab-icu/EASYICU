@@ -258,7 +258,7 @@ class OptimizedICUDataSource(ICUDataSource):
     ) -> pd.DataFrame:
         """使用pandas加载（回退方案）"""
         # 读取数据
-        df = pd.read_parquet(file_path, columns=columns)
+        df = pd.read_parquet(file_path, columns=columns, engine='pyarrow')
 
         # 应用过滤器
         if patient_ids_filter and patient_ids_filter.op == FilterOp.IN:

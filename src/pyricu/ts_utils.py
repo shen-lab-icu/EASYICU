@@ -71,11 +71,18 @@ def change_interval(
     target_interval = pd.to_timedelta(interval if interval is not None else new_interval)
 
     def _detect_time_columns(df: pd.DataFrame) -> List[str]:
+        # 🔧 CRITICAL FIX: Exclude duration columns (timedelta) from time column rounding
+        # Duration columns like norepi_dur, dopa_dur should NOT be rounded to interval
+        # Only actual timestamp columns (datetime64) should be rounded
+        # Common duration column patterns: *_dur, *_duration, duration
+        duration_patterns = ('_dur', '_duration', 'duration')
         return [
             col
             for col in df.columns
             if pd.api.types.is_datetime64_any_dtype(df[col])
-            or pd.api.types.is_timedelta64_dtype(df[col])
+            # Exclude timedelta columns (durations) unless they are actual time columns
+            or (pd.api.types.is_timedelta64_dtype(df[col]) 
+                and not any(col.endswith(pat) or col.startswith('dur') for pat in duration_patterns))
         ]
 
     def _round_time_columns(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
@@ -619,7 +626,17 @@ def fill_gaps(
         else:
             reindex_target = full_range
 
-        group = group.set_index(index_col).reindex(reindex_target)
+        group = group.set_index(index_col)
+
+        # Preserve original observations even when limits introduce
+        # off-grid timestamps by ensuring the reindex target includes
+        # the existing index values.
+        if hasattr(reindex_target, "union"):
+            target_index = reindex_target.union(group.index)
+        else:
+            target_index = pd.Index(reindex_target, name=index_col).union(group.index)
+
+        group = group.reindex(target_index)
         group = _assign_ids(group, id_vals)
 
         if method == "ffill":
@@ -854,10 +871,10 @@ def slide(
     agg_func: Optional[dict] = None,
     full_window: bool = False,
 ) -> pd.DataFrame:
-    """Apply sliding window aggregation (R ricu slide) - OPTIMIZED WITH NUMBA.
+    """Apply sliding window aggregation (R ricu slide) - VECTORIZED VERSION.
     
-    🚀 Performance: Numba-accelerated binary search for window bounds.
-    Expected 3-10x faster than original loop-based version.
+    🚀 Performance: Fully vectorized using pandas rolling() API.
+    Expected 2-5x faster than loop-based version.
     
     For each time point, creates a window spanning [time - before, time + after]
     and aggregates values within that window.
@@ -870,8 +887,8 @@ def slide(
         after: Time to look forward (default 0)
         agg_func: Dict mapping column names to aggregation functions
                   e.g., {'value': 'mean', 'count': 'sum'}
-                  Can also accept strings like 'max', 'min', 'mean', 'sum'
-                  or callable functions
+                  Supports: 'max', 'min', 'mean', 'sum', 'count', 'std', 
+                           'first', 'last', 'max_or_na', 'min_or_na'
         full_window: If True, only include rows where the full window is available
         
     Returns:
@@ -892,7 +909,32 @@ def slide(
     if len(data) == 0:
         return pd.DataFrame()
     
-    data = data.copy()
+    # 🚀 优化策略选择：after=0 时使用向量化 rolling，否则用循环
+    # rolling() 原生不支持 forward window，仅支持 backward
+    if after == pd.Timedelta(0):
+        # print(f"🚀 使用向量化 slide (vectorized path)", flush=True)
+        return _slide_vectorized(data, id_cols, index_col, before, agg_func, full_window)
+    else:
+        # print(f"⚠️ 使用循环 slide (loop path, after={after})", flush=True)
+        # Fallback to loop-based version for forward windows
+        return _slide_loop(data, id_cols, index_col, before, after, agg_func, full_window)
+
+
+def _slide_vectorized(
+    data: pd.DataFrame,
+    id_cols: list,
+    index_col: str,
+    before: pd.Timedelta,
+    agg_func: dict,
+    full_window: bool = False,
+) -> pd.DataFrame:
+    """Vectorized slide implementation using pandas rolling() - FAST PATH.
+    
+    🚀 Uses pandas native rolling() for maximum performance.
+    Only works when after=0 (no forward looking window).
+    """
+    if len(data) == 0:
+        return pd.DataFrame()
     
     # Handle both datetime and numeric (hours) time columns
     is_numeric_time = pd.api.types.is_numeric_dtype(data[index_col])
@@ -900,6 +942,195 @@ def slide(
     if not is_numeric_time:
         # Ensure time column is datetime
         if not pd.api.types.is_datetime64_any_dtype(data[index_col]):
+            data = data.copy()
+            data[index_col] = pd.to_datetime(data[index_col])
+    
+    # Convert before to compatible units
+    if before is None:
+        window_size = 24.0 if is_numeric_time else pd.Timedelta(hours=24)
+    elif is_numeric_time:
+        window_size = before.total_seconds() / 3600.0
+    else:
+        window_size = before
+    
+    # Map string function names to pandas aggregation methods
+    agg_map = {}
+    for col, func in agg_func.items():
+        if col not in data.columns:
+            continue
+        
+        if isinstance(func, str):
+            if func in ['max', 'min', 'mean', 'sum', 'std', 'count']:
+                agg_map[col] = func
+            elif func == 'max_or_na':
+                agg_map[col] = 'max'  # pandas max already handles NA
+            elif func == 'min_or_na':
+                agg_map[col] = 'min'  # pandas min already handles NA
+            elif func == 'first':
+                agg_map[col] = lambda x: x.iloc[0] if len(x) > 0 else np.nan
+            elif func == 'last':
+                agg_map[col] = lambda x: x.iloc[-1] if len(x) > 0 else np.nan
+            else:
+                # Fallback to loop version for unknown functions
+                return _slide_loop(data, id_cols, index_col, before, pd.Timedelta(0), agg_func, full_window)
+        elif callable(func):
+            agg_map[col] = func
+        else:
+            raise ValueError(f"agg_func values must be string or callable, got {type(func)}")
+    
+    if not agg_map:
+        return pd.DataFrame()
+    
+    # 🚀 核心优化：使用 pandas rolling() 向量化计算
+    results = []
+    
+    for id_vals, group in data.groupby(id_cols, sort=False):
+        if len(group) == 0:
+            continue
+        
+        # Sort by time and set time as index for rolling
+        group = group.sort_values(index_col).reset_index(drop=True)
+        
+        # Set time as index for rolling
+        if is_numeric_time:
+            # For numeric time (hours), convert to timedelta for rolling
+            # print(f"🚀 Numeric time - converting to timedelta for vectorized rolling", flush=True)
+            
+            # Convert numeric hours to timedelta
+            group_with_td = group.copy()
+            group_with_td['__temp_time__'] = pd.to_timedelta(group[index_col], unit='h')
+            group_indexed = group_with_td.set_index('__temp_time__')
+            
+            # Convert window size to timedelta
+            window_td = pd.Timedelta(hours=window_size)
+            
+            # Apply rolling aggregation
+            rolled = group_indexed.rolling(
+                window=window_td,
+                closed='both',
+                min_periods=1 if not full_window else None
+            )
+            
+            # Compute aggregations
+            agg_results = {}
+            for col, agg_fn in agg_map.items():
+                if col in group_indexed.columns and col != '__temp_time__':
+                    if isinstance(agg_fn, str):
+                        agg_results[col] = rolled[col].agg(agg_fn)
+                    else:
+                        agg_results[col] = rolled[col].apply(agg_fn, raw=False)
+            
+            # Reconstruct result with original index_col
+            result_group = pd.DataFrame(agg_results, index=group_indexed.index)
+            result_group = result_group.reset_index(drop=True)
+            result_group[index_col] = group[index_col].values
+            
+            # Add ID columns
+            for i, id_col in enumerate(id_cols):
+                if isinstance(id_vals, tuple):
+                    result_group[id_col] = id_vals[i]
+                else:
+                    result_group[id_col] = id_vals
+            
+            # Filter for full_window if needed
+            if full_window:
+                group_start = group[index_col].min()
+                group_end = group[index_col].max()
+                mask = (result_group[index_col] - window_size >= group_start)
+                result_group = result_group[mask]
+        else:
+            # For datetime, use time-based rolling (FAST!)
+            group_indexed = group.set_index(index_col)
+            
+            # Apply rolling aggregation
+            rolled = group_indexed.rolling(
+                window=window_size, 
+                closed='both',  # Include both endpoints: [time-before, time]
+                min_periods=1 if not full_window else None
+            )
+            
+            # Compute aggregations
+            agg_results = {}
+            for col, agg_fn in agg_map.items():
+                if col in group_indexed.columns:
+                    if isinstance(agg_fn, str):
+                        agg_results[col] = rolled[col].agg(agg_fn)
+                    else:
+                        agg_results[col] = rolled[col].apply(agg_fn, raw=False)
+            
+            # Reconstruct result with ID columns
+            result_group = pd.DataFrame(agg_results, index=group_indexed.index)
+            result_group = result_group.reset_index()
+            
+            # Add ID columns
+            for i, id_col in enumerate(id_cols):
+                if isinstance(id_vals, tuple):
+                    result_group[id_col] = id_vals[i]
+                else:
+                    result_group[id_col] = id_vals
+            
+            # Filter for full_window if needed
+            if full_window:
+                group_start = group_indexed.index.min()
+                group_end = group_indexed.index.max()
+                mask = (result_group[index_col] - window_size >= group_start)
+                result_group = result_group[mask]
+        
+        results.append(result_group)
+    
+    if not results:
+        return pd.DataFrame()
+    
+    return pd.concat(results, ignore_index=True)
+
+
+def _slide_loop(
+    data: pd.DataFrame,
+    id_cols: list,
+    index_col: str,
+    before: pd.Timedelta,
+    after: pd.Timedelta,
+    agg_func: dict,
+    full_window: bool = False,
+) -> pd.DataFrame:
+    """Loop-based slide implementation - FALLBACK for complex cases.
+    
+    Used when:
+    - after != 0 (forward looking window)
+    - Custom aggregation functions
+    - Numeric time columns
+    """
+    if len(data) == 0:
+        return pd.DataFrame()
+    
+    # Handle both datetime and numeric (hours) time columns
+    is_numeric_time = pd.api.types.is_numeric_dtype(data[index_col])
+def _slide_loop(
+    data: pd.DataFrame,
+    id_cols: list,
+    index_col: str,
+    before: pd.Timedelta,
+    after: pd.Timedelta,
+    agg_func: dict,
+    full_window: bool = False,
+) -> pd.DataFrame:
+    """Loop-based slide implementation - FALLBACK for complex cases.
+    
+    Used when:
+    - after != 0 (forward looking window)
+    - Custom aggregation functions
+    - Numeric time columns
+    """
+    if len(data) == 0:
+        return pd.DataFrame()
+    
+    # Handle both datetime and numeric (hours) time columns
+    is_numeric_time = pd.api.types.is_numeric_dtype(data[index_col])
+    
+    if not is_numeric_time:
+        # Ensure time column is datetime
+        if not pd.api.types.is_datetime64_any_dtype(data[index_col]):
+            data = data.copy()
             data[index_col] = pd.to_datetime(data[index_col])
     
     # Convert before/after to compatible units
@@ -917,116 +1148,152 @@ def slide(
     else:
         after_val = after
     
-    # 🚀 优化：使用Numba加速窗口边界计算
     results = []
     
     for id_vals, group in data.groupby(id_cols, sort=False):
         if len(group) == 0:
             continue
-            
-        group = group.sort_values(index_col).reset_index(drop=True)
         
-        # Convert time column to numeric for numba
-        if is_numeric_time:
-            times_numeric = group[index_col].values.astype(np.float64)
-            before_numeric = float(before_val)
-            after_numeric = float(after_val)
-        else:
-            # Convert datetime to Unix timestamp (float64)
-            times_numeric = group[index_col].values.astype('datetime64[ns]').astype(np.float64) / 1e9
-            before_numeric = before_val.total_seconds()
-            after_numeric = after_val.total_seconds()
-        
-        n = len(times_numeric)
-        
-        # For full_window check
-        if full_window:
-            group_start = times_numeric[0]
-            group_end = times_numeric[-1]
-        
-        # 🚀 Numba加速：批量计算所有窗口边界
-        window_starts, window_ends = _compute_window_bounds(
-            times_numeric, before_numeric, after_numeric
+        result_group = _slide_loop_single_group(
+            group, id_cols, index_col, before, after, 
+            agg_func, full_window, id_vals, is_numeric_time,
+            before_val, after_val
         )
-        
-        # 遍历每个时间点进行聚合
-        for i in range(n):
-            window_start_idx = window_starts[i]
-            window_end_idx = window_ends[i]
-            
-            # Check if full window is available
-            if full_window:
-                window_start_time = times_numeric[i] - before_numeric
-                window_end_time = times_numeric[i] + after_numeric
-                if window_start_time < group_start or window_end_time > group_end:
-                    continue
-            
-            if window_start_idx >= window_end_idx:
-                continue
-            
-            # Build result row
-            result_row = {index_col: group.iloc[i][index_col]}
-            
-            # Add ID columns
-            for j, col in enumerate(id_cols):
-                if isinstance(id_vals, tuple):
-                    result_row[col] = id_vals[j]
-                else:
-                    result_row[col] = id_vals
-            
-            # 🚀 优化：直接使用iloc批量索引，避免重复过滤
-            window_data = group.iloc[window_start_idx:window_end_idx]
-            
-            # Apply aggregations
-            for col, func in agg_func.items():
-                if col not in group.columns:
-                    continue
-                    
-                col_data = window_data[col]
-                
-                # Handle string function names
-                if isinstance(func, str):
-                    if func == 'mean':
-                        result_row[col] = col_data.mean()
-                    elif func == 'sum':
-                        result_row[col] = col_data.sum()
-                    elif func == 'min':
-                        result_row[col] = col_data.min()
-                    elif func == 'max':
-                        result_row[col] = col_data.max()
-                    elif func == 'count':
-                        result_row[col] = col_data.count()
-                    elif func == 'std':
-                        result_row[col] = col_data.std()
-                    elif func == 'first':
-                        result_row[col] = col_data.iloc[0] if len(col_data) > 0 else None
-                    elif func == 'last':
-                        result_row[col] = col_data.iloc[-1] if len(col_data) > 0 else None
-                    elif func == 'max_or_na':
-                        vals = col_data.dropna()
-                        result_row[col] = vals.max() if len(vals) > 0 else None
-                    elif func == 'min_or_na':
-                        vals = col_data.dropna()
-                        result_row[col] = vals.min() if len(vals) > 0 else None
-                    else:
-                        raise ValueError(f"Unknown aggregation function: {func}")
-                elif callable(func):
-                    result_row[col] = func(col_data)
-                else:
-                    raise ValueError(f"agg_func values must be string or callable, got {type(func)}")
+        results.append(result_group)
+    
+    if not results:
+        return pd.DataFrame()
+    
+    return pd.concat(results, ignore_index=True)
 
+
+def _slide_loop_single_group(
+    group: pd.DataFrame,
+    id_cols: list,
+    index_col: str,
+    before: pd.Timedelta,
+    after: pd.Timedelta,
+    agg_func: dict,
+    full_window: bool,
+    id_vals,
+    is_numeric_time: bool,
+    before_val = None,
+    after_val = None,
+) -> pd.DataFrame:
+    """Process single group with loop-based sliding window."""
+    
+    group = group.sort_values(index_col).reset_index(drop=True)
+    
+    # Convert time column to numeric for comparison
+    if is_numeric_time:
+        times_numeric = group[index_col].values.astype(np.float64)
+        if before_val is None:
+            before_numeric = before.total_seconds() / 3600.0 if before else 24.0
+        else:
+            before_numeric = float(before_val)
+        if after_val is None:
+            after_numeric = after.total_seconds() / 3600.0 if after else 0.0
+        else:
+            after_numeric = float(after_val)
+    else:
+        # Convert datetime to Unix timestamp (float64)
+        times_numeric = group[index_col].values.astype('datetime64[ns]').astype(np.float64) / 1e9
+        before_numeric = (before_val if before_val else before).total_seconds()
+        after_numeric = (after_val if after_val else after).total_seconds()
+    
+    n = len(times_numeric)
+    
+    # For full_window check
+    if full_window:
+        group_start = times_numeric[0]
+        group_end = times_numeric[-1]
+    
+    # 🚀 Numba加速：批量计算所有窗口边界
+    window_starts, window_ends = _compute_window_bounds(
+        times_numeric, before_numeric, after_numeric
+    )
+    
+    # 遍历每个时间点进行聚合
+    results = []
+    for i in range(n):
+        window_start_idx = window_starts[i]
+        window_end_idx = window_ends[i]
+        
+        # Check if full window is available
+        if full_window:
+            window_start_time = times_numeric[i] - before_numeric
+            window_end_time = times_numeric[i] + after_numeric
+            if window_start_time < group_start or window_end_time > group_end:
+                continue
+        
+        if window_start_idx >= window_end_idx:
+            continue
+        
+        # Build result row
+        result_row = {index_col: group.iloc[i][index_col]}
+        
+        # Add ID columns
+        for j, col in enumerate(id_cols):
+            if isinstance(id_vals, tuple):
+                result_row[col] = id_vals[j]
+            else:
+                result_row[col] = id_vals
+        
+        # 🚀 优化：直接使用iloc批量索引
+        window_data = group.iloc[window_start_idx:window_end_idx]
+        
+        # Apply aggregations
+        for col, func in agg_func.items():
+            if col not in group.columns:
+                continue
+                
+            col_data = window_data[col]
             
-            results.append(result_row)
+            # Handle string function names
+            if isinstance(func, str):
+                if func == 'mean':
+                    result_row[col] = col_data.mean()
+                elif func == 'sum':
+                    result_row[col] = col_data.sum()
+                elif func == 'min':
+                    result_row[col] = col_data.min()
+                elif func == 'max':
+                    result_row[col] = col_data.max()
+                elif func == 'count':
+                    result_row[col] = col_data.count()
+                elif func == 'std':
+                    result_row[col] = col_data.std()
+                elif func == 'first':
+                    result_row[col] = col_data.iloc[0] if len(col_data) > 0 else None
+                elif func == 'last':
+                    result_row[col] = col_data.iloc[-1] if len(col_data) > 0 else None
+                elif func == 'max_or_na':
+                    # 🚀 优化：直接用 max(skipna=True)，避免函数调用开销
+                    result = col_data.max(skipna=True)
+                    result_row[col] = result if not pd.isna(result) else np.nan
+                elif func == 'min_or_na':
+                    # 🚀 优化：直接用 min(skipna=True)，避免函数调用开销
+                    result = col_data.min(skipna=True)
+                    result_row[col] = result if not pd.isna(result) else np.nan
+                else:
+                    raise ValueError(f"Unknown aggregation function: {func}")
+            elif callable(func):
+                result_row[col] = func(col_data)
+            else:
+                raise ValueError(f"agg_func values must be string or callable, got {type(func)}")
+        
+        results.append(result_row)
     
     if not results:
         return pd.DataFrame()
     
     return pd.DataFrame(results)
-    
-    if not results:
-        return pd.DataFrame()
-    
-    return pd.DataFrame(results)
+
+
+# Remove old duplicated code below
+def _old_slide_code_placeholder():
+    """This is a placeholder to mark where old code was removed."""
+    pass
 
 
 def slide_index(

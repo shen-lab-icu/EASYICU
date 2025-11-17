@@ -3,8 +3,10 @@
 实现 R ricu 的 load_concepts 功能
 """
 from typing import List, Optional, Union, Dict, Any, Callable, Iterable, Sequence, Mapping
-import pandas as pd
+import logging
 from datetime import timedelta
+
+import pandas as pd
 
 from .concept import Concept, load_dictionary
 from .config import DataSourceConfig, TableConfig, load_src_cfg
@@ -75,6 +77,9 @@ MINIMAL_COLUMNS_MAP = {
 USE_MINIMAL_COLUMNS = True
 
 
+logger = logging.getLogger(__name__)
+
+
 class ConceptLoader:
     """概念加载器 - 复刻 R ricu 的 load_concepts"""
     
@@ -96,6 +101,7 @@ class ConceptLoader:
         else:
             raise TypeError(f"不支持的数据源类型: {type(src)}")
         self._src_name = self.src.name
+        self._id_lookup_cache: Optional[pd.DataFrame] = None
     
     def _get_table_config(self, table_name: Optional[str]) -> Optional[TableConfig]:
         """根据表名获取配置。"""
@@ -198,7 +204,11 @@ class ConceptLoader:
             extra.append(source.index_var)
         if getattr(source, 'unit_var', None):
             extra.append(source.unit_var)
-        return self._infer_required_columns(source.table, id_type, extra)
+        
+        # 🔍 DEBUG: 输出提取的列信息
+        result = self._infer_required_columns(source.table, id_type, extra)
+        print(f"🔍 _columns_for_source: table={source.table}, sub_var={getattr(source, 'sub_var', None)}, extra={extra}, result={result}")
+        return result
     
     def _columns_for_item(self, item: Mapping[str, Any], id_type: str) -> Optional[List[str]]:
         """提取旧式 item 配置所需列。"""
@@ -208,6 +218,93 @@ class ConceptLoader:
             if isinstance(value, str):
                 extra.append(value)
         return self._infer_required_columns(item.get('table'), id_type, extra)
+
+    def _canonical_id_column(self, id_type: str) -> str:
+        """根据数据源配置返回指定ID类型的标准列名。"""
+        cfg = self.src.id_configs.get(id_type) if hasattr(self.src, 'id_configs') else None
+        if cfg and getattr(cfg, 'id', None):
+            return cfg.id
+        fallback = {
+            'icustay': 'stay_id',
+            'hadm': 'hadm_id',
+            'patient': 'subject_id',
+        }
+        return fallback.get(id_type, id_type)
+
+    def _coerce_patient_list(self, patient_ids: Union[List, Sequence, set, pd.Series, pd.DataFrame, None]) -> List[Any]:
+        """将 patient_ids 归一化为简单列表。"""
+        if patient_ids is None:
+            return []
+        values: List[Any] = []
+        if isinstance(patient_ids, pd.DataFrame):
+            for column in patient_ids.columns:
+                col_vals = patient_ids[column].tolist()
+                for value in col_vals:
+                    if pd.isna(value):
+                        continue
+                    values.append(value)
+            return values
+        if isinstance(patient_ids, pd.Series):
+            return [value for value in patient_ids.tolist() if not pd.isna(value)]
+        if isinstance(patient_ids, (list, tuple, set)):
+            return [value for value in patient_ids if not pd.isna(value)]
+        return [patient_ids] if not pd.isna(patient_ids) else []
+
+    def _load_id_lookup(self) -> pd.DataFrame:
+        """加载包含 stay/hadm/subject 映射的参考表，用于ID转换。"""
+        if self._id_lookup_cache is not None:
+            return self._id_lookup_cache
+
+        cfg = getattr(self.src, 'id_configs', {}).get('icustay') if hasattr(self.src, 'id_configs') else None
+        table_name = cfg.table if cfg and getattr(cfg, 'table', None) else None
+        if not table_name:
+            self._id_lookup_cache = pd.DataFrame()
+            return self._id_lookup_cache
+
+        desired_cols = {
+            'stay_id', 'icustay_id', 'patientunitstayid', 'hadm_id', 'subject_id',
+            'admissionid', 'patientid', 'patient_id', 'admission_id'
+        }
+        for id_cfg in getattr(self.src, 'id_configs', {}).values():
+            if getattr(id_cfg, 'id', None):
+                desired_cols.add(id_cfg.id)
+
+        table_cfg = self._get_table_config(table_name)
+        available = set(table_cfg.columns.keys()) if table_cfg and table_cfg.columns else None
+        columns = [col for col in desired_cols if (available is None or col in available)]
+        columns = columns or None
+
+        try:
+            lookup = self._safe_load_table(table_name, columns)
+        except Exception as exc:
+            logger.warning("无法加载ID映射表 %s: %s", table_name, exc)
+            lookup = pd.DataFrame()
+
+        self._id_lookup_cache = lookup
+        return lookup
+
+    def _map_patient_ids_to_column(
+        self,
+        patient_ids: List[Any],
+        id_type: str,
+        target_column: Optional[str],
+    ) -> Optional[List[Any]]:
+        """将基于 id_type 的 patient_ids 映射到目标列的取值集合。"""
+        if target_column is None:
+            return patient_ids
+        canonical_col = self._canonical_id_column(id_type)
+        if canonical_col.lower() == target_column.lower():
+            return patient_ids
+        lookup = self._load_id_lookup()
+        if lookup.empty or canonical_col not in lookup.columns or target_column not in lookup.columns:
+            return None
+        if not patient_ids:
+            return []
+        subset = lookup[lookup[canonical_col].isin(patient_ids)]
+        if subset.empty:
+            return []
+        mapped = subset[target_column].dropna().unique().tolist()
+        return mapped
             
     def load_concepts(
         self,
@@ -406,10 +503,23 @@ class ConceptLoader:
         if patient_ids is not None:
             id_col = self._get_id_column(df, id_type)
             if id_col:
+                filter_values: Optional[List[Any]] = None
                 if isinstance(patient_ids, pd.DataFrame):
-                    df = df.merge(patient_ids, on=id_col, how='inner')
+                    if id_col in patient_ids.columns:
+                        filter_values = [val for val in patient_ids[id_col].tolist() if not pd.isna(val)]
+                    else:
+                        canonical_col = self._canonical_id_column(id_type)
+                        if canonical_col in patient_ids.columns:
+                            base_values = [val for val in patient_ids[canonical_col].tolist() if not pd.isna(val)]
+                            filter_values = self._map_patient_ids_to_column(base_values, id_type, id_col)
                 else:
-                    df = df[df[id_col].isin(patient_ids)]
+                    base_values = self._coerce_patient_list(patient_ids)
+                    filter_values = self._map_patient_ids_to_column(base_values, id_type, id_col)
+
+                if filter_values is not None:
+                    if not filter_values:
+                        return pd.DataFrame()
+                    df = df[df[id_col].isin(filter_values)]
         
         # 3. 过滤item值
         val_col = item.get('val_var', 'value')
@@ -500,10 +610,23 @@ class ConceptLoader:
         if patient_ids is not None:
             id_col = self._get_id_column(df, id_type)
             if id_col:
+                filter_values: Optional[List[Any]] = None
                 if isinstance(patient_ids, pd.DataFrame):
-                    df = df.merge(patient_ids, on=id_col, how='inner')
+                    if id_col in patient_ids.columns:
+                        filter_values = [val for val in patient_ids[id_col].tolist() if not pd.isna(val)]
+                    else:
+                        canonical_col = self._canonical_id_column(id_type)
+                        if canonical_col in patient_ids.columns:
+                            base_values = [val for val in patient_ids[canonical_col].tolist() if not pd.isna(val)]
+                            filter_values = self._map_patient_ids_to_column(base_values, id_type, id_col)
                 else:
-                    df = df[df[id_col].isin(patient_ids)]
+                    base_values = self._coerce_patient_list(patient_ids)
+                    filter_values = self._map_patient_ids_to_column(base_values, id_type, id_col)
+
+                if filter_values is not None:
+                    if not filter_values:
+                        return pd.DataFrame()
+                    df = df[df[id_col].isin(filter_values)]
         
         # 4. 确定值列
         val_col = source.value_var or 'valuenum'  # 默认使用 valuenum
