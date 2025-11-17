@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional
 
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, root_validator, validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 
 class IdentifierConfig(BaseModel):
@@ -41,7 +41,7 @@ class TableDefaults(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    @validator("time_vars", pre=True, always=True)
+    @field_validator("time_vars", mode="before")
     def _ensure_list(cls, value: object) -> List[str]:
         if value is None:
             return []
@@ -50,6 +50,17 @@ class TableDefaults(BaseModel):
         if isinstance(value, Iterable):
             return [str(item) for item in value]
         raise TypeError("time_vars must be a string or an iterable of strings")
+
+
+class DatasetOptions(BaseModel):
+    """Optional declaration describing a PyArrow Dataset layout for a table."""
+
+    path: Optional[str] = None
+    format: str = "parquet"
+    partitioning: Optional[str] = None
+    options: Dict[str, object] = Field(default_factory=dict)
+
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
 
 class TableConfig(BaseModel):
@@ -61,19 +72,28 @@ class TableConfig(BaseModel):
     num_rows: Optional[int] = Field(default=None, alias="num_rows")
     columns: Optional[Mapping[str, object]] = Field(default=None, alias="cols")
     extra: Dict[str, object] = Field(default_factory=dict)
+    dataset: Optional[DatasetOptions] = None
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
     def _extract_known_fields(cls, values: Mapping[str, object]) -> Mapping[str, object]:
         values = dict(values)
-        known = {"defaults", "files", "num_rows", "cols"}
+        known = {"defaults", "files", "num_rows", "cols", "dataset"}
         extra = {k: v for k, v in values.items() if k not in known and k != "name"}
         values["extra"] = extra
         defaults = values.get("defaults")
         if defaults in (None, [], ()):
             values["defaults"] = {}
         values["files"] = cls._coerce_files(values.get("files"))
+        dataset_payload = values.get("dataset")
+        if dataset_payload:
+            if isinstance(dataset_payload, DatasetOptions):
+                values["dataset"] = dataset_payload
+            elif isinstance(dataset_payload, Mapping):
+                values["dataset"] = DatasetOptions(**dataset_payload)
+            else:
+                raise TypeError("dataset must be a mapping describing dataset options")
         return values
 
     @staticmethod
@@ -115,7 +135,7 @@ class DataSourceConfig(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    @root_validator(pre=True)
+    @model_validator(mode="before")
     def _normalise_payload(cls, values: Mapping[str, object]) -> Mapping[str, object]:
         # Convert id_cfg and tables dictionaries into strongly typed objects.
         id_cfg_raw = values.get("id_cfg", {})
@@ -665,6 +685,26 @@ def migrate_config(old_version: str = '0.1',
 # Auto-load configuration on import
 # ============================================================================
 
+def load_data_sources() -> DataSourceRegistry:
+    """Load data sources configuration.
+
+    Returns:
+        DataSourceRegistry: Registry of available data sources
+
+    Examples:
+        >>> registry = load_data_sources()
+        >>> for source in registry:
+        ...     print(source.name)
+    """
+    config_file = get_config_file('data-sources')
+
+    if config_file.exists():
+        return DataSourceRegistry.from_json(config_file)
+    else:
+        # Return empty registry if no config file found
+        return DataSourceRegistry()
+
+
 def _auto_load_config():
     """Automatically load saved configuration when module is imported."""
     try:
@@ -677,4 +717,3 @@ def _auto_load_config():
 
 # Auto-load on import
 _auto_load_config()
-

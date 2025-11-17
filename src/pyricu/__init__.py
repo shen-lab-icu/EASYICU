@@ -9,6 +9,9 @@ from .config import DataSourceConfig, DataSourceRegistry
 from .concept import ConceptDictionary, ConceptResolver
 from .datasource import FilterOp, FilterSpec, ICUDataSource, load_table
 from .resources import load_data_sources, load_dictionary, package_path
+from .logging_utils import configure_logging
+from .cache_manager import get_cache_manager, auto_clear_cache_if_enabled, clear_pyricu_cache, get_cache_status
+from .runtime_defaults import LoaderDefaults, resolve_loader_defaults
 from .table import (
     ICUTable, 
     IdTbl, 
@@ -49,6 +52,17 @@ try:
         load_sepsis3,
         load_vitals,
         load_labs,
+        # 新增模块函数（参考ricu.R）
+        load_demographics,     # 基础人口统计学
+        load_outcomes,         # 结局指标
+        load_vitals_detailed,   # 详细生命体征
+        load_neurological,     # 神经系统评估
+        load_output,           # 输出量
+        load_respiratory,      # 呼吸系统
+        load_lab_comprehensive, # 全面实验室检查
+        load_blood_gas,        # 血气分析
+        load_hematology,       # 血液学检查
+        load_medications,      # 药物治疗
         # 工具函数
         list_available_concepts,
         list_available_sources,
@@ -61,21 +75,9 @@ except ImportError as e:
     print(f"Warning: Failed to import api module: {e}")
     _HAS_API = False
 
-# 快速启动 API - DEPRECATED（保留向后兼容）
-try:
-    from .quickstart import (
-        ICUQuickLoader,
-        get_patient_ids,
-        # 向后兼容的别名
-        MIMICQuickLoader,
-        load_mimic_sofa,
-        load_mimic_sepsis3,
-        load_mimic_vitals,
-        load_mimic_labs,
-    )
-    _HAS_QUICKSTART = True
-except ImportError:
-    _HAS_QUICKSTART = False
+# 快速启动 API - 已移除 (现在使用统一API)
+# ICUQuickLoader等已被重构为BaseICULoader和统一的api.load_concepts
+_HAS_QUICKSTART = False
 
 # 从 load_concepts 模块导入（保留向后兼容）
 # 注意：这会覆盖上面的load_concepts，所以我们在最后重新设置
@@ -576,6 +578,76 @@ try:
 except ImportError:
     _HAS_CONCEPT_BUILDER = False
 
+# 内存优化功能
+try:
+    from .memory_optimizer import (
+        MemoryMonitor,
+        MemoryConfig,
+        MemoryEfficientTable,
+        get_memory_monitor,
+        optimize_for_16gb,
+    )
+    _HAS_MEMORY_OPTIMIZER = True
+except ImportError:
+    _HAS_MEMORY_OPTIMIZER = False
+
+# 优化的回调函数
+try:
+    from .callbacks_optimized import (
+        OptimizedCallbacks,
+        get_optimized_callbacks,
+        sofa_score as sofa_score_optimized,
+        sofa_resp as sofa_resp_optimized,
+        pafi as pafi_optimized,
+    )
+    _HAS_OPTIMIZED_CALLBACKS = True
+except ImportError:
+    _HAS_OPTIMIZED_CALLBACKS = False
+
+# 优化的数据源
+try:
+    from .datasource_optimized import (
+        OptimizedDataSource,
+        create_optimized_datasource,
+    )
+    _HAS_OPTIMIZED_DATASOURCE = True
+except ImportError:
+    _HAS_OPTIMIZED_DATASOURCE = False
+
+# 统一工具函数库
+try:
+    from .common_utils import (
+        SeriesUtils,
+        DataFrameUtils,
+        TimeSeriesUtils,
+        ValidationUtils,
+        is_true,
+        safe_copy,
+        optimize_dtypes,
+        locf,
+    )
+    _HAS_COMMON_UTILS = True
+except ImportError:
+    _HAS_COMMON_UTILS = False
+
+# 统一API
+try:
+    from .api_unified import (
+        UnifiedConceptLoader,
+        get_loader,
+        load_concepts as load_concepts_unified,
+        load_concept as load_concept_unified,
+        list_available_concepts as list_available_concepts_unified,
+        get_concept_info as get_concept_info_unified,
+        load_sofa as load_sofa_unified,
+        load_sofa2 as load_sofa2_unified,
+        load_vitals as load_vitals_unified,
+        load_labs as load_labs_unified,
+    )
+    _HAS_UNIFIED_API = True
+except ImportError:
+    _HAS_UNIFIED_API = False
+
 __all__ = [
     # === 推荐使用的API ===
     # 主API（智能默认值，完全灵活）
@@ -587,11 +659,23 @@ __all__ = [
     "load_sepsis3",
     "load_vitals",
     "load_labs",
+    # 新增模块函数（参考ricu.R）
+    "load_demographics",     # 基础人口统计学
+    "load_outcomes",         # 结局指标
+    "load_vitals_detailed",   # 详细生命体征
+    "load_neurological",     # 神经系统评估
+    "load_output",           # 输出量
+    "load_respiratory",      # 呼吸系统
+    "load_lab_comprehensive", # 全面实验室检查
+    "load_blood_gas",        # 血气分析
+    "load_hematology",       # 血液学检查
+    "load_medications",      # 药物治疗
     # 工具函数
     "list_available_concepts",
     "list_available_sources",
     "get_concept_info",
-    
+    "configure_logging",
+
     # === 核心类 ===
     "ConceptDictionary",
     "ConceptResolver",
@@ -605,7 +689,7 @@ __all__ = [
     "TsTbl",
     "WinTbl",
     "PvalTbl",
-    
+
     # === 表操作 ===
     "rbind_tbl",
     "cbind_tbl",
@@ -627,7 +711,7 @@ __all__ = [
     "rbind_lst",
     "rename_cols",
     "rm_cols",
-    
+
     # === 资源加载 ===
     "load_table",
     "load_data_sources",
@@ -1039,3 +1123,72 @@ if _HAS_CONCEPT_BUILDER:
         "is_itm",
         "new_src_tbl",
     ])
+
+if _HAS_MEMORY_OPTIMIZER:
+    __all__.extend([
+        "MemoryMonitor",
+        "MemoryConfig",
+        "MemoryEfficientTable",
+        "get_memory_monitor",
+        "optimize_for_16gb",
+    ])
+
+if _HAS_OPTIMIZED_CALLBACKS:
+    __all__.extend([
+        "OptimizedCallbacks",
+        "get_optimized_callbacks",
+        "sofa_score_optimized",
+        "sofa_resp_optimized",
+        "pafi_optimized",
+    ])
+
+if _HAS_OPTIMIZED_DATASOURCE:
+    __all__.extend([
+        "OptimizedDataSource",
+        "create_optimized_datasource",
+    ])
+
+if _HAS_COMMON_UTILS:
+    __all__.extend([
+        "SeriesUtils",
+        "DataFrameUtils",
+        "TimeSeriesUtils",
+        "ValidationUtils",
+        "is_true",
+        "safe_copy",
+        "optimize_dtypes",
+        "locf",
+    ])
+
+if _HAS_UNIFIED_API:
+    __all__.extend([
+        "UnifiedConceptLoader",
+        "get_loader",
+        "load_concepts_unified",
+        "load_concept_unified",
+        "list_available_concepts_unified",
+        "get_concept_info_unified",
+        "load_sofa_unified",
+        "load_sofa2_unified",
+        "load_vitals_unified",
+        "load_labs_unified",
+    ])
+
+# 添加缓存管理功能到__all__
+__all__.extend([
+    "get_cache_manager",
+    "clear_pyricu_cache",
+    "get_cache_status",
+])
+
+# 模块初始化时自动执行缓存清理（如果启用）
+try:
+    from .cache_manager import _initialize_cache_manager
+    _initialize_cache_manager()
+except ImportError:
+    # 如果缓存管理器不可用，继续正常运行
+    pass
+except Exception as e:
+    # 缓存初始化失败不应阻止模块加载
+    import logging
+    logging.getLogger(__name__).warning(f"缓存管理器初始化失败: {e}")

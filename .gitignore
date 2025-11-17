@@ -51,7 +51,10 @@ logs/
 
 # Data files - 不上传测试数据
 # test_data_50patients/
-test_data_minimal/
+test_data_miiv/
+test_data_eicu/
+test_data_aumc/
+test_data_hirid/
 # output/
 demo_easy_output.txt
 
