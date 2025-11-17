@@ -46,6 +46,16 @@ from .utils import coalesce
 from .unit_conversion import convert_vaso_rate
 
 
+def _safe_group_apply(grouped, func):
+    """Compatibility helper for pandas include_groups default change."""
+    try:
+        # include_groups=True preserves the group keys as columns so downstream
+        # callbacks relying on ID columns (e.g., urine/urine24) keep them.
+        return grouped.apply(func, include_groups=True)
+    except TypeError:  # pandas < 2.1
+        return grouped.apply(func)
+
+
 # Helper functions to unify WinTbl and ICUTable attribute access
 def _get_id_columns(table):
     """Get ID columns from either WinTbl (id_vars) or ICUTable (id_columns)."""
@@ -791,6 +801,177 @@ def _merge_intervals(
     return pd.DataFrame.from_records(records, columns=columns)
 
 
+# ============================================================================
+# AUMC-specific callbacks
+# ============================================================================
+
+def _callback_aumc_death(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """AUMC death callback: marks death if it occurred within 72 hours of ICU discharge.
+    
+    Similar to ricu's: x[, val_var := is_true(index_var - val_var < hours(72L))]
+    """
+    if not tables or len(tables) == 0:
+        return _empty_icutbl(ctx)
+    
+    # Get the single input table
+    input_table = list(tables.values())[0]
+    data = input_table.df.copy()
+    
+    if data.empty:
+        return _empty_icutbl(ctx)
+    
+    id_columns = input_table.id_columns
+    index_column = input_table.index_column or ctx.index_column
+    value_column = input_table.value_column or list(tables.keys())[0]
+    
+    # Check if death occurred within 72 hours
+    # index_column is typically the time of observation (e.g., charttime in hours)
+    # value_column contains the time of death
+    if index_column in data.columns and value_column in data.columns:
+        # Convert to numeric to handle time differences
+        index_vals = pd.to_numeric(data[index_column], errors='coerce')
+        value_vals = pd.to_numeric(data[value_column], errors='coerce')
+        
+        # Death within 72 hours: (time_of_observation - time_of_death) < 72
+        data['death'] = (index_vals - value_vals < 72).astype(int)
+    else:
+        # If columns are missing, mark all as death=1 (conservative)
+        data['death'] = 1
+    
+    output_cols = list(id_columns) + ([index_column] if index_column else []) + ['death']
+    result = data[output_cols].copy()
+    
+    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column='death')
+
+
+def _callback_aumc_bxs(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """AUMC blood gas callback: negates values where direction is '-'.
+    
+    Similar to ricu's: x[get(dir_var) == "-", val_var := -1L * get(val_var)]
+    """
+    if not tables or len(tables) == 0:
+        return _empty_icutbl(ctx)
+    
+    # Typically receives two tables: value and direction
+    # Find the value table and direction table
+    value_table = None
+    dir_table = None
+    
+    for name, tbl in tables.items():
+        if 'dir' in name.lower() or 'direction' in name.lower():
+            dir_table = tbl
+        else:
+            value_table = tbl
+    
+    if value_table is None:
+        # If no direction table, just return the first table
+        return list(tables.values())[0]
+    
+    data = value_table.df.copy()
+    if data.empty:
+        return value_table
+    
+    id_columns = value_table.id_columns
+    index_column = value_table.index_column or ctx.index_column
+    value_column = value_table.value_column or ctx.concept_name
+    
+    # If we have direction information, merge it
+    if dir_table is not None:
+        dir_data = dir_table.df
+        merge_cols = list(id_columns)
+        if index_column and index_column in data.columns and index_column in dir_data.columns:
+            merge_cols.append(index_column)
+        
+        if merge_cols:
+            data = data.merge(dir_data, on=merge_cols, how='left', suffixes=('', '_dir'))
+            dir_column = dir_table.value_column or 'direction'
+            
+            # Negate values where direction is '-'
+            if dir_column in data.columns:
+                mask = data[dir_column] == '-'
+                if value_column in data.columns:
+                    data.loc[mask, value_column] = -1 * data.loc[mask, value_column]
+    
+    output_cols = list(id_columns) + ([index_column] if index_column else []) + [value_column]
+    output_cols = [c for c in output_cols if c in data.columns]
+    result = data[output_cols].copy()
+    
+    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
+
+
+def _callback_aumc_rass(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """AUMC RASS callback: extracts first 2 characters as integer.
+    
+    Similar to ricu's: as.integer(substr(x, 1L, 2L))
+    """
+    if not tables or len(tables) == 0:
+        return _empty_icutbl(ctx)
+    
+    input_table = list(tables.values())[0]
+    data = input_table.df.copy()
+    
+    if data.empty:
+        return input_table
+    
+    id_columns = input_table.id_columns
+    index_column = input_table.index_column or ctx.index_column
+    value_column = input_table.value_column or ctx.concept_name
+    
+    if value_column in data.columns:
+        # Extract first 2 characters and convert to integer
+        data[value_column] = data[value_column].astype(str).str[:2]
+        data[value_column] = pd.to_numeric(data[value_column], errors='coerce')
+    
+    output_cols = list(id_columns) + ([index_column] if index_column else []) + [value_column]
+    output_cols = [c for c in output_cols if c in data.columns]
+    result = data[output_cols].dropna(subset=[value_column]).copy()
+    
+    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
+
+
+def _callback_blood_cell_ratio(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Calculate blood cell ratios (e.g., lymphocytes, neutrophils as percentage).
+    
+    This callback handles cell count ratios, typically percentage calculations.
+    """
+    if not tables or len(tables) == 0:
+        return _empty_icutbl(ctx)
+    
+    # This is typically a simple passthrough that may involve unit conversion
+    input_table = list(tables.values())[0]
+    data = input_table.df.copy()
+    
+    if data.empty:
+        return input_table
+    
+    id_columns = input_table.id_columns
+    index_column = input_table.index_column or ctx.index_column
+    value_column = input_table.value_column or ctx.concept_name
+    
+    # The data is usually already in the correct format
+    # Just ensure it's numeric
+    if value_column in data.columns:
+        data[value_column] = pd.to_numeric(data[value_column], errors='coerce')
+    
+    output_cols = list(id_columns) + ([index_column] if index_column else []) + [value_column]
+    output_cols = [c for c in output_cols if c in data.columns]
+    result = data[output_cols].dropna(subset=[value_column]).copy()
+    
+    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
+
+
 def _callback_bmi(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -890,29 +1071,110 @@ def _callback_norepi_equiv(
         "phn_rate": 1 / 10.0,
     }
 
-    tables = {name: tbl for name, tbl in tables.items() if name in factors}
-    merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
-    if merged.empty:
-        frame = pd.DataFrame(columns=id_columns + ([index_column] if index_column else []) + ["norepi_equiv"])
-        return _as_icutbl(frame, id_columns=id_columns, index_column=index_column, value_column="norepi_equiv")
+    relevant_tables = {name: tbl for name, tbl in tables.items() if name in factors}
+    schema_tables = relevant_tables if relevant_tables else tables
 
-    total = pd.Series(0.0, index=merged.index, dtype=float)
+    id_columns, index_column, converted = _assert_shared_schema(
+        schema_tables,
+        ctx=ctx,
+        convert_ids=True,
+    )
+
+    if converted:
+        schema_tables = converted
+
+    tables_to_use = {name: schema_tables[name] for name in factors if name in schema_tables}
+
+    key_cols = id_columns + ([index_column] if index_column else [])
+    scaled_frames: List[pd.DataFrame] = []
+
     for name, factor in factors.items():
-        if name not in merged:
+        table = tables_to_use.get(name)
+        if table is None or table.data.empty:
             continue
-        total = total + pd.to_numeric(merged[name], errors="coerce").fillna(0.0) * factor
 
-    merged["norepi_equiv"] = total
-    cols = id_columns + ([index_column] if index_column else []) + ["norepi_equiv"]
-    merged = merged[cols]
+        frame = table.data.copy()
+        value_col = table.value_column or name
+        if value_col not in frame.columns and name in frame.columns:
+            value_col = name
+        elif value_col not in frame.columns:
+            key_set = set(key_cols)
+            fallback_cols = [col for col in frame.columns if col not in key_set]
+            value_col = fallback_cols[0] if fallback_cols else None
 
-    return _as_icutbl(merged.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="norepi_equiv")
+        if value_col is None or value_col not in frame.columns:
+            continue
+
+        numeric = pd.to_numeric(frame[value_col], errors="coerce") * factor
+        if key_cols:
+            missing_keys = [col for col in key_cols if col not in frame.columns]
+            for col in missing_keys:
+                frame[col] = np.nan
+            out = frame[key_cols].copy()
+        else:
+            out = pd.DataFrame(index=frame.index)
+
+        out["norepi_equiv"] = numeric
+        out = out.dropna(subset=["norepi_equiv"])
+        if not out.empty:
+            scaled_frames.append(out)
+
+    if not scaled_frames:
+        empty_cols = key_cols + ["norepi_equiv"]
+        empty = pd.DataFrame(columns=empty_cols)
+        return _as_icutbl(empty, id_columns=id_columns, index_column=index_column, value_column="norepi_equiv")
+
+    combined = pd.concat(scaled_frames, ignore_index=True)
+
+    if key_cols:
+        aggregated = (
+            combined.groupby(key_cols)["norepi_equiv"].sum(min_count=1).reset_index()
+        )
+        aggregated = aggregated.sort_values(key_cols).reset_index(drop=True)
+    else:
+        aggregated = pd.DataFrame({"norepi_equiv": [combined["norepi_equiv"].sum(min_count=1)]})
+
+    return _as_icutbl(
+        aggregated,
+        id_columns=id_columns,
+        index_column=index_column,
+        value_column="norepi_equiv",
+    )
 
 
 def _callback_sofa_component(
     func: Callable[..., pd.Series],
 ) -> CallbackFn:
     def wrapper(tables: Dict[str, ICUTable], ctx: ConceptCallbackContext) -> ICUTable:
+        # Some SOFA components (cardio variants) rely on auxiliary concepts such as
+        # ``vaso_ind`` to determine when vasopressor rates should be zeroed out.
+        # The recursive dictionary only lists the direct rate concepts as
+        # ``sub_concepts``, so the callback would never receive the indicator and
+        # our forward-fill logic would keep vasopressors active forever.  Fetch the
+        # optional dependency lazily via the resolver so we can preserve the
+        # original merge behavior when the indicator is available.
+        tables = dict(tables)
+        if ctx.concept_name in {"sofa_cardio", "sofa2_cardio"} and "vaso_ind" not in tables:
+            try:
+                loaded = ctx.resolver.load_concepts(
+                    ["vaso_ind"],
+                    ctx.data_source,
+                    merge=False,
+                    aggregate={"vaso_ind": "max"},
+                    patient_ids=ctx.patient_ids,
+                    interval=ctx.interval,
+                    align_to_admission=True,
+                )
+                if isinstance(loaded, dict):
+                    vaso_tbl = loaded.get("vaso_ind")
+                else:
+                    vaso_tbl = loaded
+                if isinstance(vaso_tbl, ICUTable) and not vaso_tbl.data.empty:
+                    tables["vaso_ind"] = vaso_tbl
+            except Exception:
+                # Missing indicator should not break SOFA computation; simply skip
+                # zeroing when it is unavailable.
+                pass
         # CRITICAL: For single concept (sofa_single type), ricu_code's collect_dots returns the data directly
         # For multiple concepts, use outer join (replicates R ricu merge_dat = TRUE)
         # In ricu_code: sofa_single("plt", "sofa_coag", fun) -> collect_dots("plt", ...) returns plt data
@@ -948,12 +1210,37 @@ def _callback_sofa_component(
 
         # CRITICAL: Ensure time points are sorted after merge
         if index_column:
-            data = data.sort_values(id_columns + [index_column] if id_columns else [index_column])
+            sort_cols = id_columns + [index_column] if id_columns else [index_column]
+            data = data.sort_values(sort_cols)
+
+        # ricu keeps vasopressor rates active until the infusion ends. Our raw
+        # vaso rate/equivalent rows only appear when the rate table logs a change,
+        # so after the outer merge with MAP we must forward-fill those values and
+        # zero them once the patient is off vasopressors.
+        if ctx.concept_name == "sofa_cardio":
+            vaso_tokens = ("norepi", "dobu", "dopa", "epi", "adh")
+            vaso_cols: list[str] = [
+                col
+                for col in data.columns
+                if col != "vaso_ind" and any(token in col for token in vaso_tokens)
+            ]
+            if vaso_cols:
+                if id_columns:
+                    data[vaso_cols] = data.groupby(id_columns, dropna=False)[vaso_cols].ffill()
+                else:
+                    data[vaso_cols] = data[vaso_cols].ffill()
+
+                if "vaso_ind" in data.columns:
+                    vaso_mask = pd.to_numeric(data["vaso_ind"], errors="coerce").fillna(0.0) != 0
+                    for col in vaso_cols:
+                        data.loc[~vaso_mask, col] = 0.0
 
         # Extract data from merged DataFrame
         # The data DataFrame already has columns from all tables merged by key columns
         kwargs = {}
         for name, table in tables.items():
+            if name == "vaso_ind":
+                continue  # indicator is only used to zero rates, not passed to score function
             # Try to find the column in merged data
             # First try the concept name (after _merge_tables renaming)
             col_name = name
@@ -1526,9 +1813,10 @@ def _callback_sofa_resp(
     
     # Calculate score using sofa_resp function
     # Pass None for vent_ind since we're not doing PaFi adjustment anymore
+    vent_series = merged[vent_col] if vent_col in merged.columns else None
     score = sofa_resp(
         pd.to_numeric(merged[pafi_col], errors="coerce"),
-        None  # No PaFi adjustment based on ventilation status
+        vent_series
     )
 
     merged[ctx.concept_name] = score
@@ -2560,236 +2848,308 @@ def _callback_vent_ind(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    if "mech_vent" in tables and not tables["mech_vent"].data.empty:
-        mech = tables["mech_vent"]
-        df = mech.data.copy()
-        
-        # 🔧 FIX: mech_vent is a window table (WinTbl) with starttime and duration
-        # We need to return it as a window table, not convert to time series here
-        # The conversion to time series will be handled by the concept resolution
-        if isinstance(mech, WinTbl) or (hasattr(mech, 'dur_var') and mech.dur_var):
-            # mech_vent is already a window table, just rename value column to vent_ind
-            val_col = mech.value_column or "mech_vent"
-            result_df = df.copy()
-            if val_col != "vent_ind":
-                result_df["vent_ind"] = result_df[val_col].astype(bool)
-                if val_col in result_df.columns and val_col != "vent_ind":
-                    result_df = result_df.drop(columns=[val_col])
-            else:
-                result_df["vent_ind"] = result_df["vent_ind"].astype(bool)
-            
-            # Return as WinTbl to preserve window information
-            return WinTbl(
-                data=result_df,
-                id_vars=mech.id_columns,
-                index_var=mech.index_column,
-                dur_var=getattr(mech, 'dur_var', None) or (val_col if val_col in result_df.columns else None),
-            )
-        else:
-            # mech_vent arrived as a regular table (e.g., from procedureevents.duration minutes).
-            # Derive window durations from the numeric value column and emit a WinTbl.
-            val_col = mech.value_column or "mech_vent"
-            idx_col = mech.index_column
-            id_cols = list(mech.id_columns) if mech.id_columns else []
+    from .ts_utils import expand
 
-            if idx_col is None:
-                for candidate in ["starttime", "charttime", "time"]:
-                    if candidate in df.columns:
-                        idx_col = candidate
-                        break
-            if not id_cols:
-                id_cols = [c for c in ["stay_id", "icustay_id", "subject_id"] if c in df.columns][:1]
+    interval = ctx.interval or pd.Timedelta(hours=1)
+    if not isinstance(interval, pd.Timedelta):
+        interval = pd.to_timedelta(interval)
 
-            duration_raw = pd.to_numeric(df[val_col], errors="coerce")
-            unit_series = df["valueuom"].astype(str).str.lower() if "valueuom" in df.columns else None
+    match_win = ctx.kwargs.get("match_win", pd.Timedelta(hours=6))
+    if not isinstance(match_win, pd.Timedelta):
+        match_win = pd.to_timedelta(match_win)
 
-            duration_hours = pd.Series(np.nan, index=df.index, dtype=float)
-            if unit_series is not None:
-                minutes_mask = unit_series.str.contains("min")
-                hours_mask = unit_series.str.contains("hour")
-                duration_hours[minutes_mask] = duration_raw[minutes_mask] / 60.0
-                duration_hours[hours_mask] = duration_raw[hours_mask]
-                other_mask = ~(minutes_mask | hours_mask)
-                duration_hours[other_mask] = duration_raw[other_mask] / 60.0
-            else:
-                duration_hours = duration_raw / 60.0
+    min_length = ctx.kwargs.get("min_length", pd.Timedelta(minutes=30))
+    if not isinstance(min_length, pd.Timedelta):
+        min_length = pd.to_timedelta(min_length)
 
-            duration_hours = duration_hours.fillna(0).clip(lower=0)
+    relevant_tables = {
+        name: tbl
+        for name, tbl in tables.items()
+        if name in {"vent_start", "vent_end", "mech_vent"} and tbl is not None
+    }
 
-            # If we still cannot identify index columns, fall back to boolean ICUTable
-            if idx_col is None or idx_col not in df.columns or not id_cols:
-                df["vent_ind"] = duration_hours > 0
-                cols = (id_cols if id_cols else []) + ([idx_col] if idx_col and idx_col in df.columns else []) + ["vent_ind"]
-                frame = df[cols]
-                return _as_icutbl(
-                    frame.reset_index(drop=True),
-                    id_columns=id_cols,
-                    index_column=idx_col,
-                    value_column="vent_ind",
-                )
+    if not relevant_tables:
+        raise ValueError("vent_ind requires vent_start or mech_vent concept data")
 
-            # Expand windowed durations into hourly indicators directly to avoid downstream WinTbl alignment issues.
-            if pd.api.types.is_datetime64_any_dtype(df[idx_col]):
-                start_numeric = pd.to_datetime(df[idx_col], errors="coerce").astype("int64") / 3_600_000_000_000
-            else:
-                start_numeric = pd.to_numeric(df[idx_col], errors="coerce")
+    id_columns, _, converted = _assert_shared_schema(relevant_tables, ctx=ctx, convert_ids=True)
+    if converted:
+        for name in list(relevant_tables.keys()):
+            if name in converted:
+                relevant_tables[name] = converted[name]
 
-            interval = ctx.interval or pd.Timedelta(hours=1)
-            interval_hours = interval.total_seconds() / 3600.0
-            records = []
+    id_columns = id_columns or []
 
-            for start_val, dur_val, (_, row) in zip(start_numeric, duration_hours, df.iterrows()):
-                if pd.isna(start_val) or pd.isna(dur_val) or dur_val <= 0 or interval_hours <= 0:
-                    continue
-                end_time = start_val + dur_val
-                current_time = np.floor(start_val / interval_hours) * interval_hours
-                while current_time < end_time:
-                    rec = {idx_col: current_time, "vent_ind": True}
-                    for col in id_cols:
-                        rec[col] = row[col]
-                    records.append(rec)
-                    current_time += interval_hours
+    start_tbl = relevant_tables.get("vent_start")
+    end_tbl = relevant_tables.get("vent_end")
+    mech_tbl = relevant_tables.get("mech_vent")
 
-            if records:
-                expanded = pd.DataFrame(records)
-                return _as_icutbl(
-                    expanded.reset_index(drop=True),
-                    id_columns=id_cols,
-                    index_column=idx_col,
-                    value_column="vent_ind",
-                )
-
-            # Fallback: no positive duration windows, emit boolean indicator at start times only.
-            df["vent_ind"] = duration_hours > 0
-            cols = id_cols + [idx_col, "vent_ind"]
-            frame = df[cols]
-            return _as_icutbl(
-                frame.reset_index(drop=True),
-                id_columns=id_cols,
-                index_column=idx_col,
-                value_column="vent_ind",
-            )
-
-    start_tbl = tables.get("vent_start")
-    end_tbl = tables.get("vent_end")
-    if start_tbl is None:
-        raise ValueError("vent_ind requires vent_start concept data")
-    
-    # 🔧 FIX: Handle empty input data
-    if start_tbl.data.empty:
-        # Return empty result with proper schema
-        return _as_icutbl(
-            pd.DataFrame(columns=list(start_tbl.id_columns) + [start_tbl.index_column or 'time', 'vent_ind']),
-            id_columns=start_tbl.id_columns,
-            index_column=start_tbl.index_column or 'time',
-            value_column='vent_ind',
-        )
-
-    id_columns, index_column, _ = _assert_shared_schema(
-        {k: v for k, v in tables.items() if k in {"vent_start", "vent_end"} and v is not None}
+    time_column = (
+        (start_tbl.index_column if start_tbl and start_tbl.index_column else None)
+        or (mech_tbl.index_column if mech_tbl and mech_tbl.index_column else None)
+        or "time"
     )
-    if index_column is None:
-        raise ValueError("vent_ind requires time-indexed start/end tables")
 
-    start_df = start_tbl.data.copy()
-    start_df = start_df[start_df[start_tbl.value_column or "vent_start"].astype(bool)]
-    
-    # 标准化时间列名：统一使用index_column作为时间列名
-    time_col = index_column
-    start_time_col = start_tbl.index_column or time_col
-    if start_time_col != time_col and start_time_col in start_df.columns:
-        start_df = start_df.rename(columns={start_time_col: time_col})
-    
-    # 确保时间列是datetime类型，并移除时区（但不转换numeric类型）
-    if time_col in start_df.columns:
-        if not pd.api.types.is_numeric_dtype(start_df[time_col]):
-            start_df[time_col] = pd.to_datetime(start_df[time_col], errors='coerce')
-            if pd.api.types.is_datetime64_any_dtype(start_df[time_col]):
-                if hasattr(start_df[time_col].dtype, 'tz') and start_df[time_col].dtype.tz is not None:
-                    start_df[time_col] = start_df[time_col].dt.tz_localize(None)
+    def _empty_result() -> ICUTable:
+        cols = list(id_columns)
+        if time_column:
+            cols.append(time_column)
+        cols.append("vent_ind")
+        frame = pd.DataFrame(columns=cols)
+        return _as_icutbl(frame, id_columns=id_columns, index_column=time_column, value_column="vent_ind")
 
-    if end_tbl is not None:
-        end_df = end_tbl.data.copy()
-        end_df = end_df[end_df[end_tbl.value_column or "vent_end"].astype(bool)]
-        
-        # 标准化end_df的时间列名
-        end_time_col = end_tbl.index_column or time_col
-        if end_time_col != time_col and end_time_col in end_df.columns:
-            end_df = end_df.rename(columns={end_time_col: time_col})
-        
-        # 确保时间列是datetime类型，并移除时区（但不转换numeric类型）
-        if time_col in end_df.columns:
-            if not pd.api.types.is_numeric_dtype(end_df[time_col]):
-                end_df[time_col] = pd.to_datetime(end_df[time_col], errors='coerce')
-                if pd.api.types.is_datetime64_any_dtype(end_df[time_col]):
-                    if hasattr(end_df[time_col].dtype, 'tz') and end_df[time_col].dtype.tz is not None:
-                        end_df[time_col] = end_df[time_col].dt.tz_localize(None)
-        
-        # 合并时，如果两个表都有相同的时间列名，需要使用suffixes
-        # 但我们已经重命名为统一名称，所以需要手动处理
-        # 先重命名时间列，添加suffix后再合并
-        start_df_renamed = start_df.rename(columns={time_col: f"{time_col}_start"})
-        end_df_renamed = end_df.rename(columns={time_col: f"{time_col}_end"})
-        
-        merged = start_df_renamed.merge(end_df_renamed, on=id_columns, how="outer")
-        
-        # 确保至少有一个时间列存在
-        if f"{time_col}_start" not in merged.columns:
-            # 如果start列不存在，尝试从end列创建
-            if f"{time_col}_end" in merged.columns:
-                merged[f"{time_col}_start"] = merged[f"{time_col}_end"]
-        if f"{time_col}_end" not in merged.columns:
-            # 如果end列不存在，使用start列
-            merged[f"{time_col}_end"] = merged[f"{time_col}_start"]
-        
-        # 确保两个时间列都是datetime类型且无时区（但不转换numeric类型）
-        for col in [f"{time_col}_start", f"{time_col}_end"]:
-            if col in merged.columns:
-                if not pd.api.types.is_numeric_dtype(merged[col]):
-                    merged[col] = pd.to_datetime(merged[col], errors='coerce')
-                    if pd.api.types.is_datetime64_any_dtype(merged[col]):
-                        if hasattr(merged[col].dtype, 'tz') and merged[col].dtype.tz is not None:
-                            merged[col] = merged[col].dt.tz_localize(None)
-        
-        merged = merged.dropna(subset=[f"{time_col}_start"])
-        merged = merged.sort_values(id_columns + [f"{time_col}_start"])
+    def _relative_hours(frame: pd.DataFrame, column: str) -> pd.Series:
+        """Convert heterogeneous time columns to hours since ICU admission."""
+        series = frame[column]
+        if pd.api.types.is_numeric_dtype(series):
+            return pd.to_numeric(series, errors="coerce")
+        if not hasattr(ctx, "resolver") or not hasattr(ctx.resolver, "_align_time_to_admission"):
+            return pd.Series(np.nan, index=series.index)
+        if not id_columns:
+            return pd.Series(np.nan, index=series.index)
+        helper = frame[list(id_columns) + [column]].copy()
+        helper = helper.rename(columns={column: "__time"})
+        aligned = ctx.resolver._align_time_to_admission(  # type: ignore[attr-defined]
+            helper,
+            ctx.data_source,
+            list(id_columns),
+            "__time",
+        )
+        return aligned["__time"]
 
-        # 计算持续时间 - 需要根据时间列类型决定如何计算
-        end_times = merged[f"{time_col}_end"].fillna(merged[f"{time_col}_start"])
-        
-        if pd.api.types.is_numeric_dtype(merged[f"{time_col}_start"]):
-            # 时间是数值类型(小时) - 直接相减得到小时数
-            durations = (end_times - merged[f"{time_col}_start"]).fillna(0.0)
-            # clip 最小值为 0.5 小时 (30 minutes)
-            merged["vent_dur"] = durations.clip(lower=0.5)
+    def _coerce_time(series: pd.Series):
+        if pd.api.types.is_datetime64_any_dtype(series):
+            clean = pd.to_datetime(series, errors="coerce").dt.tz_localize(None)
+            return clean, lambda values: values
+        if pd.api.types.is_timedelta64_dtype(series):
+            base = pd.Timestamp("1970-01-01")
+            clean = base + series
+            return clean, lambda values: (values - base)
+        base = pd.Timestamp("1970-01-01")
+        numeric = pd.to_numeric(series, errors="coerce")
+        clean = base + pd.to_timedelta(numeric, unit="h")
+        return clean, lambda values: (values - base).dt.total_seconds() / 3600.0
+
+    def _coerce_duration(series: pd.Series) -> pd.Series:
+        if pd.api.types.is_timedelta64_dtype(series):
+            return series
+        try:
+            td_series = pd.to_timedelta(series, errors="coerce")
+            if td_series.notna().any():
+                return td_series
+        except Exception:  # fallback to numeric parsing
+            pass
+        numeric = pd.to_numeric(series, errors="coerce")
+        return pd.to_timedelta(numeric, unit="h")
+
+    def _expand_windows(window_df: pd.DataFrame, revert_fn) -> ICUTable:
+        if window_df.empty:
+            return _empty_result()
+
+        work = window_df.copy()
+        work["vent_dur_td"] = _coerce_duration(work["vent_dur_td"]).fillna(match_win)
+        work = work.dropna(subset=["_start_dt", "vent_dur_td"])
+        if work.empty:
+            return _empty_result()
+
+        work["_end_dt"] = work["_start_dt"] + work["vent_dur_td"]
+        expanded = expand(
+            work,
+            start_var="_start_dt",
+            end_var="_end_dt",
+            step_size=interval,
+            id_cols=id_columns,
+            keep_vars=None,
+        )
+        if expanded.empty:
+            return _empty_result()
+
+        expanded = expanded.rename(columns={"_start_dt": time_column})
+        if revert_fn is not None:
+            expanded[time_column] = revert_fn(expanded[time_column])
+        expanded["vent_ind"] = True
+
+        group_cols = list(id_columns) + [time_column]
+        expanded = expanded.groupby(group_cols, as_index=False)["vent_ind"].any()
+        expanded = expanded.reset_index(drop=True)
+        return _as_icutbl(expanded, id_columns=id_columns, index_column=time_column, value_column="vent_ind")
+
+    def _windows_from_mech(mech: ICUTable | WinTbl) -> Optional[ICUTable]:
+        df = mech.data.copy()
+        if df.empty:
+            return None
+
+        value_col = mech.value_column or "mech_vent"
+        if value_col in df.columns:
+            df["vent_flag"] = pd.Series(df[value_col]).fillna(False)
+            if df["vent_flag"].dtype == bool:
+                vent_mask = df["vent_flag"]
+            else:
+                vent_mask = ~df["vent_flag"].isin([False, 0, "0", "false", "False", "none", None])
         else:
-            # 时间是 datetime 类型 - 相减得到 Timedelta，然后转换为小时
-            durations = (end_times - merged[f"{time_col}_start"]).fillna(pd.Timedelta(0))
-            merged["vent_dur"] = durations.clip(lower=pd.Timedelta(minutes=30))
-            # 转换为数值小时
-            merged["vent_dur"] = merged["vent_dur"].dt.total_seconds() / 3600.0
+            vent_mask = pd.Series(True, index=df.index)
 
-        win_df = merged[id_columns + [f"{time_col}_start", "vent_dur"]].rename(
-            columns={f"{time_col}_start": time_col}
-        )
-        result = WinTbl(
-            data=win_df.assign(vent_ind=True),
-            id_vars=id_columns,
-            index_var=time_col,
-            dur_var="vent_dur",
-        )
+        df = df[vent_mask]
+        if df.empty:
+            return None
+
+        idx_col = mech.index_column or mech.index_var or time_column
+        if idx_col not in df.columns:
+            for candidate in ["charttime", "starttime", "time"]:
+                if candidate in df.columns:
+                    idx_col = candidate
+                    break
+        if idx_col not in df.columns:
+            return None
+
+        start_times, revert_fn = _coerce_time(df[idx_col])
+        start_hours = _relative_hours(df, idx_col)
+        df = df.assign(_start_dt=start_times, _start_hours=start_hours).dropna(subset=["_start_dt", "_start_hours"])
+        if df.empty:
+            return None
+        start_hours = df["_start_hours"]
+
+        dur_series: Optional[pd.Series] = None
+        if isinstance(mech, WinTbl) and mech.dur_var and mech.dur_var in df.columns:
+            dur_series = df[mech.dur_var]
+        else:
+            end_col = next(
+                (col for col in ("endtime", "end_time", "stop", "end") if col in df.columns),
+                None,
+            )
+            if end_col is not None:
+                end_hours = _relative_hours(df, end_col)
+                dur_hours = end_hours - start_hours
+                dur_series = pd.to_timedelta(dur_hours, unit="h")
+            elif "duration" in df.columns:
+                dur_series = pd.to_timedelta(df["duration"], errors="coerce")
+
+        if dur_series is None:
+            dur_series = pd.Series(match_win, index=df.index)
+
+        dur_series = _coerce_duration(dur_series).fillna(match_win)
+
+        window_df = df[id_columns + ["_start_dt"]].copy()
+        window_df["vent_dur_td"] = dur_series.values
+        return _expand_windows(window_df, revert_fn)
+
+    def _windows_from_events(start: ICUTable, end: Optional[ICUTable]) -> ICUTable:
+        start_df = start.data.copy()
+        val_col = start.value_column or "vent_start"
+        if val_col in start_df.columns:
+            start_df = start_df[pd.to_numeric(start_df[val_col], errors="coerce").fillna(0).astype(bool)]
+        if start_df.empty:
+            return _empty_result()
+
+        idx_col = start.index_column or time_column
+        if idx_col not in start_df.columns:
+            for candidate in ["charttime", "starttime", "time"]:
+                if candidate in start_df.columns:
+                    idx_col = candidate
+                    break
+        if idx_col not in start_df.columns:
+            return _empty_result()
+
+        start_times, revert_fn = _coerce_time(start_df[idx_col])
+        start_df = start_df.assign(_start_dt=start_times).dropna(subset=["_start_dt"])
+        if start_df.empty:
+            return _empty_result()
+
+        if end is not None and not end.data.empty:
+            end_df = end.data.copy()
+            end_col = end.value_column or "vent_end"
+            if end_col in end_df.columns:
+                end_df = end_df[pd.to_numeric(end_df[end_col], errors="coerce").fillna(0).astype(bool)]
+            if not end_df.empty:
+                end_idx = end.index_column or idx_col
+                if end_idx not in end_df.columns:
+                    for candidate in ["endtime", "charttime", "time"]:
+                        if candidate in end_df.columns:
+                            end_idx = candidate
+                            break
+                end_times, _ = _coerce_time(end_df[end_idx])
+                end_df = end_df.assign(_end_dt=end_times).dropna(subset=["_end_dt"])
+            else:
+                end_df = None
+        else:
+            end_df = None
+
+        sort_cols = ["_start_dt"]
+        if id_columns:
+            sort_cols += list(id_columns)
+        start_sorted = start_df.sort_values(sort_cols).reset_index(drop=True)
+
+        if end_df is not None and not end_df.empty:
+            end_sort_cols = ["_end_dt"]
+            if id_columns:
+                end_sort_cols += list(id_columns)
+            end_sorted = end_df.sort_values(end_sort_cols).reset_index(drop=True)
+            merge_kwargs = {
+                "left_on": "_start_dt",
+                "right_on": "_end_dt",
+                "direction": "forward",
+                "tolerance": match_win,
+            }
+            if id_columns:
+                merge_kwargs["by"] = id_columns
+            merged = pd.merge_asof(start_sorted, end_sorted[id_columns + ["_end_dt"]], **merge_kwargs)
+            merged["_matched_end"] = merged["_end_dt"].where(merged["_end_dt"].notna(), merged["_start_dt"] + match_win)
+        else:
+            merged = start_sorted.copy()
+            merged["_matched_end"] = merged["_start_dt"] + match_win
+
+        merged["vent_dur_td"] = (merged["_matched_end"] - merged["_start_dt"]).clip(lower=min_length)
+        merged = merged[merged["vent_dur_td"] >= min_length]
+        if merged.empty:
+            return _empty_result()
+
+        window_df = merged[id_columns + ["_start_dt", "vent_dur_td"]].copy()
+        return _expand_windows(window_df, revert_fn)
+
+    def _normalize_result(result: Optional[ICUTable]) -> Optional[ICUTable]:
+        if result is None:
+            return None
+        if getattr(result, "data", pd.DataFrame()).empty:
+            return None
         return result
 
-    # Only start events available – create fixed window of 30 minutes (0.5 hours)
-    win_df = start_df[id_columns + [time_col]].copy()
-    # Use numeric duration (hours) instead of Timedelta
-    win_df["vent_dur"] = 0.5  # 30 minutes = 0.5 hours
-    win_df["vent_ind"] = True
-    return WinTbl(
-        data=win_df,
-        id_vars=id_columns,
-        index_var=time_col,
-        dur_var="vent_dur",
+    mech_result = None
+    if mech_tbl is not None and not mech_tbl.data.empty:
+        mech_result = _normalize_result(_windows_from_mech(mech_tbl))
+
+    event_result = None
+    if start_tbl is not None and not start_tbl.data.empty:
+        event_result = _normalize_result(_windows_from_events(start_tbl, end_tbl))
+
+    if mech_result is None and event_result is None:
+        return _empty_result()
+
+    if mech_result is None:
+        return event_result  # type: ignore[return-value]
+
+    if event_result is None:
+        return mech_result
+
+    # Combine both sources instead of picking the longest. ricu unions any
+    # evidence of ventilation, so we take the OR across timelines.
+    combined = pd.concat(
+        [event_result.data, mech_result.data], ignore_index=True, copy=False
+    )
+
+    # Ensure duplicate timestamps collapse to a single True indicator.
+    group_cols = list(id_columns)
+    if time_column:
+        group_cols += [time_column]
+
+    if group_cols:
+        combined = (
+            combined.groupby(group_cols, as_index=False)["vent_ind"].any()
+        )
+
+    return _as_icutbl(
+        combined,
+        id_columns=id_columns,
+        index_column=time_column,
+        value_column="vent_ind",
     )
 
 
@@ -2985,20 +3345,16 @@ def _callback_urine24(
     samples_per_day = max(int(np.ceil(pd.Timedelta(hours=24).total_seconds() / interval.total_seconds())), 1)
     scale_factor = step_factor / samples_per_day
 
-    def _assign_rolling(block: pd.DataFrame) -> pd.DataFrame:
-        block_sorted = block.sort_values(time_col)
-        rolling = block_sorted[urine_col].rolling(window=samples_per_day, min_periods=min_steps).sum()
-        block_sorted["urine24"] = rolling.to_numpy() * scale_factor
-        return block_sorted
-
     if id_cols_to_group:
-        result = (
-            df.groupby(id_cols_to_group, dropna=False, sort=False, group_keys=False)
-            .apply(_assign_rolling)
-            .reset_index(drop=True)
-        )
+        grouped = df.groupby(id_cols_to_group, dropna=False, sort=False)[urine_col]
+        rolling = grouped.rolling(window=samples_per_day, min_periods=min_steps).sum()
+        rolling = rolling.reset_index(level=id_cols_to_group, drop=True)
+        df["urine24"] = rolling * scale_factor
     else:
-        result = _assign_rolling(df)
+        rolling = df[urine_col].rolling(window=samples_per_day, min_periods=min_steps).sum()
+        df["urine24"] = rolling * scale_factor
+
+    result = df
     
         
     cols = list(urine_tbl.id_columns) + [urine_tbl.index_column, "urine24"]
@@ -3010,30 +3366,136 @@ def _callback_vaso_ind(
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
     merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
-    if merged.empty:
-        cols = id_columns + ([index_column] if index_column else []) + ["vaso_ind"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="vaso_ind")
+    time_col = index_column or "starttime"
+    cols = list(id_columns) + ([time_col] if time_col else [])
+    empty_cols = cols + ["vaso_ind"]
+    if merged.empty or time_col not in merged.columns:
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=id_columns,
+            index_column=time_col,
+            value_column="vaso_ind",
+        )
 
-    indicators = []
-    for name in tables:
-        series = merged.get(name)
-        if series is None:
-            continue
-        if pd.api.types.is_timedelta64_dtype(series):
-            flags = series.fillna(pd.Timedelta(0)) > pd.Timedelta(0)
-        else:
-            numeric = pd.to_numeric(series, errors="coerce").fillna(0)
-            flags = numeric > 0
-        indicators.append(flags.values)
+    vaso_cols = [col for col in merged.columns if col not in cols]
+    if not vaso_cols:
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=id_columns,
+            index_column=time_col,
+            value_column="vaso_ind",
+        )
 
-    if indicators:
-        merged["vaso_ind"] = np.any(np.stack(indicators, axis=1), axis=1)
+    base_time = pd.Timestamp("2000-01-01")
+    time_series = merged[time_col]
+    time_is_numeric = pd.api.types.is_numeric_dtype(time_series)
+    if time_is_numeric:
+        numeric_time = pd.to_numeric(time_series, errors="coerce")
+        merged["__start_dt"] = base_time + pd.to_timedelta(numeric_time, unit="h")
     else:
-        merged["vaso_ind"] = False
+        merged["__start_dt"] = pd.to_datetime(time_series, errors="coerce")
 
-    cols = id_columns + ([index_column] if index_column else []) + ["vaso_ind"]
-    frame = merged[cols]
-    return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="vaso_ind")
+    def _coerce_duration(series: pd.Series) -> pd.Series:
+        if pd.api.types.is_timedelta64_dtype(series):
+            return series
+        converted = pd.to_timedelta(series, errors="coerce")
+        if converted.notna().any():
+            return converted
+        numeric = pd.to_numeric(series, errors="coerce")
+        return pd.to_timedelta(numeric, unit="h", errors="coerce")
+
+    for col in vaso_cols:
+        merged[col] = _coerce_duration(merged[col])
+
+    window_records: list[tuple] = []
+    for _, row in merged.iterrows():
+        start_dt = row["__start_dt"]
+        if pd.isna(start_dt):
+            continue
+        id_values = tuple(row[col] for col in id_columns) if id_columns else tuple()
+        for col in vaso_cols:
+            duration = row[col]
+            if pd.isna(duration) or duration <= pd.Timedelta(0):
+                continue
+            end_dt = start_dt + duration
+            window_records.append((*id_values, start_dt, end_dt))
+
+    if not window_records:
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=id_columns,
+            index_column=time_col,
+            value_column="vaso_ind",
+        )
+
+    window_cols = list(id_columns) + ["__start", "__end"]
+    window_df = pd.DataFrame(window_records, columns=window_cols)
+
+    existing_id_cols = list(id_columns)
+    if not existing_id_cols:
+        window_df["__dummy_id"] = 1
+        existing_id_cols = ["__dummy_id"]
+
+    intervals = _merge_intervals(
+        window_df[existing_id_cols + ["__start", "__end"]],
+        id_columns=existing_id_cols,
+        start_col="__start",
+        end_col="__end",
+        max_gap=pd.Timedelta(0),
+    )
+
+    if intervals.empty:
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=id_columns,
+            index_column=time_col,
+            value_column="vaso_ind",
+        )
+
+    final_interval = ctx.interval
+    if isinstance(final_interval, str):
+        try:
+            final_interval = pd.to_timedelta(final_interval)
+        except Exception:
+            final_interval = None
+    if final_interval is None or final_interval <= pd.Timedelta(0):
+        final_interval = pd.Timedelta(hours=1)
+
+    expanded_frames: list[pd.DataFrame] = []
+    for _, row in intervals.iterrows():
+        start = row["__start"]
+        end = row["__end"]
+        if pd.isna(start) or pd.isna(end) or start > end:
+            continue
+        grid = pd.date_range(start=start, end=end, freq=final_interval)
+        if grid.empty:
+            grid = pd.DatetimeIndex([start])
+        frame = pd.DataFrame({time_col: grid, "vaso_ind": True})
+        for col in existing_id_cols:
+            frame[col] = row[col]
+        expanded_frames.append(frame)
+
+    if not expanded_frames:
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=id_columns,
+            index_column=time_col,
+            value_column="vaso_ind",
+        )
+
+    expanded = pd.concat(expanded_frames, ignore_index=True)
+    if "__dummy_id" in expanded.columns:
+        expanded = expanded.drop(columns=["__dummy_id"])
+    expanded = expanded.drop_duplicates(subset=list(id_columns) + [time_col] if id_columns else [time_col])
+
+    if time_is_numeric:
+        expanded[time_col] = (
+            pd.to_datetime(expanded[time_col], errors="coerce") - base_time
+        ) / pd.Timedelta(hours=1)
+
+    result_cols = list(id_columns) + [time_col, "vaso_ind"] if id_columns else [time_col, "vaso_ind"]
+    expanded = expanded[result_cols].reset_index(drop=True)
+    return _as_icutbl(expanded, id_columns=id_columns, index_column=time_col, value_column="vaso_ind")
 
 
 def _callback_sep3(
@@ -3458,6 +3920,84 @@ def _callback_vaso60(
     )
     grouped[ctx.concept_name] = grouped[rate_col]
     grouped = grouped.drop(columns=[rate_col])
+
+    # Expand vasopressor rates across their active windows so that every hour
+    # within an infusion inherits the most recent setting, matching ricu's
+    # vaso60 (change_interval + aggregate).
+    if final_interval is not None and not grouped.empty and not intervals.empty:
+        interval_id_cols = [col for col in id_columns if col in intervals.columns]
+
+        def _normalize_key(values: Sequence[object]) -> tuple:
+            normalized = []
+            for val in values:
+                if pd.isna(val):
+                    normalized.append("__nan__")
+                else:
+                    normalized.append(val)
+            return tuple(normalized) if normalized else ("__all__",)
+
+        interval_map: Dict[tuple, List[tuple[pd.Timestamp, pd.Timestamp]]] = {}
+        for _, row in intervals.iterrows():
+            key = _normalize_key([row[col] for col in interval_id_cols])
+            interval_map.setdefault(key, []).append((row["__start"], row["__end"]))
+
+        expanded_frames: List[pd.DataFrame] = []
+        group_key_cols = [col for col in id_columns if col in grouped.columns]
+
+        if group_key_cols:
+            grouped_iter = grouped.sort_values(group_key_cols + [rate_index_col]).groupby(group_key_cols, dropna=False)
+        else:
+            grouped_iter = [(None, grouped.sort_values([rate_index_col]))]
+
+        for _, grp in grouped_iter:
+            if grp.empty:
+                continue
+            first = grp.iloc[0]
+            key = _normalize_key([first[col] for col in interval_id_cols])
+            windows = interval_map.get(key)
+            if not windows:
+                continue
+
+            times = pd.to_datetime(grp[rate_index_col], errors="coerce")
+            values = pd.to_numeric(grp[ctx.concept_name], errors="coerce")
+            valid_mask = times.notna() & values.notna()
+            if not valid_mask.any():
+                continue
+            times = times[valid_mask]
+            values = values[valid_mask]
+            times_ns = times.to_numpy(dtype="datetime64[ns]")
+            value_arr = values.to_numpy()
+
+            for start, end in windows:
+                if pd.isna(start) or pd.isna(end) or start > end:
+                    continue
+                grid = pd.date_range(start=start, end=end, freq=final_interval)
+                if grid.empty:
+                    continue
+                grid_ns = grid.to_numpy(dtype="datetime64[ns]")
+                idx = np.searchsorted(times_ns, grid_ns, side="right") - 1
+                valid_idx = idx >= 0
+                if not valid_idx.any():
+                    continue
+                idx_safe = idx.copy()
+                idx_safe[idx_safe < 0] = 0
+                sampled = value_arr[idx_safe].astype(float, copy=False)
+                sampled[~valid_idx] = np.nan
+                frame = pd.DataFrame({rate_index_col: grid, ctx.concept_name: sampled})
+                for col in group_key_cols:
+                    frame[col] = first[col]
+                frame = frame.dropna(subset=[ctx.concept_name])
+                if not frame.empty:
+                    expanded_frames.append(frame)
+
+        if expanded_frames:
+            expanded = pd.concat(expanded_frames, ignore_index=True)
+            agg_cols = [col for col in group_key_cols] + [rate_index_col]
+            grouped = (
+                expanded.groupby(agg_cols, dropna=False)[ctx.concept_name]
+                .max()
+                .reset_index()
+            )
 
     if final_interval is not None and not grouped.empty:
         grouped[rate_index_col] = grouped[rate_index_col].dt.floor(final_interval)
@@ -3960,6 +4500,12 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "sofa2_cns": _callback_sofa_component(sofa2_cns),
     "sofa2_renal": _callback_sofa_component(sofa2_renal),  # SOFA-2 version with RRT criteria
     "sofa2_score": _callback_sofa2_score,  # SOFA-2 总分计算（使用 sofa2_* 组件）
+    # AUMC-specific callbacks
+    "aumc_death": _callback_aumc_death,
+    "aumc_bxs": _callback_aumc_bxs,
+    "aumc_rass": _callback_aumc_rass,
+    "blood_cell_ratio": _callback_blood_cell_ratio,
+    "transform_fun(aumc_rass)": _callback_aumc_rass,  # Handle transform_fun wrapper
 }
 
 

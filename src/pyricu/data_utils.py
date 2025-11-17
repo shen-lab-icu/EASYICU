@@ -829,30 +829,12 @@ def re_time(
     times: pd.Series,
     interval: pd.Timedelta,
 ) -> pd.Series:
-    """Discretize times to interval (R ricu re_time).
-    
-    Rounds times to nearest interval boundary.
-    
-    Args:
-        times: Time series to discretize
-        interval: Time interval
-        
-    Returns:
-        Discretized times
-        
-    Examples:
-        >>> times = pd.Series([pd.Timedelta(hours=1.3), pd.Timedelta(hours=2.7)])
-        >>> re_time(times, pd.Timedelta(hours=1))
-        0   0 days 01:00:00
-        1   0 days 03:00:00
-        dtype: timedelta64[ns]
-    """
-    # Convert to nanoseconds for precise arithmetic
-    interval_ns = interval.value
-    times_ns = times.dt.total_seconds() * 1e9
-    
-    # Round to nearest interval
-    rounded_ns = (times_ns / interval_ns).round() * interval_ns
-    
-    return pd.to_timedelta(rounded_ns, unit='ns')
+    """Discretize times by flooring to the requested interval (ricu ``re_time``)."""
+
+    if times is None or interval is None:
+        return times
+
+    from .ts_utils import round_to_interval
+
+    return round_to_interval(times, interval)
 

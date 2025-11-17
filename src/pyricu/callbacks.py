@@ -1628,14 +1628,18 @@ def _urine_window_avg(
         group[result_col] = rate
         return group
     
-    result = merged.groupby(id_cols, group_keys=False).apply(calc_uo_rate_fast, include_groups=False)
+    result = merged.groupby(id_cols, group_keys=False).apply(
+        calc_uo_rate_fast,
+        include_groups=True,
+    )
 
-    # 将分组ID列重新附加回来（include_groups=False会将其排除）
+    # 如果未来的 pandas 默认移除了 ID 列，这里仍兜底补齐
     if id_cols:
-        ids_df = merged[id_cols].reset_index(drop=True)
-        result = result.reset_index(drop=True)
-        for col in id_cols:
-            if col not in result.columns:
+        missing_cols = [col for col in id_cols if col not in result.columns]
+        if missing_cols:
+            ids_df = merged[id_cols].reset_index(drop=True)
+            result = result.reset_index(drop=True)
+            for col in missing_cols:
                 result[col] = ids_df[col]
     
     # Keep only relevant columns

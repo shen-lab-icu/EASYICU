@@ -94,8 +94,9 @@ def load_concepts(
     dict_path: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
     chunk_size: Optional[int] = None,
     progress: bool = False,
-    parallel_workers: int = 1,
+    parallel_workers: Optional[int] = None,
     concept_workers: int = 1,
+    parallel_backend: str = 'auto',
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
@@ -235,6 +236,7 @@ def load_concepts(
         progress=progress,
         parallel_workers=parallel_workers,
         concept_workers=concept_workers,
+        parallel_backend=parallel_backend,
         **kwargs
     )
 

@@ -10,6 +10,7 @@ import numpy as np
 from functools import reduce as functools_reduce
 import hashlib
 import pickle
+import warnings
 
 T = TypeVar('T')
 
@@ -451,6 +452,8 @@ def min_or_na(x: Union[pd.Series, np.ndarray, List]) -> Any:
 def max_or_na(x: Union[pd.Series, np.ndarray, List]) -> Any:
     """Return maximum or NA if all values are NA (R ricu max_or_na).
     
+    🚀 Optimized: Single-pass computation without isna().all() check.
+    
     Unlike base max() which returns -Inf for all-NA input with na.rm=TRUE,
     this returns NA.
     
@@ -467,14 +470,15 @@ def max_or_na(x: Union[pd.Series, np.ndarray, List]) -> Any:
         nan
     """
     if isinstance(x, pd.Series):
-        if x.isna().all():
-            return np.nan
-        return x.max(skipna=True)
+        # 🚀 优化：直接用max(skipna=True)，空序列返回nan
+        result = x.max(skipna=True)
+        return result if not pd.isna(result) else np.nan
     elif isinstance(x, np.ndarray):
-        x_clean = x[~pd.isna(x)]
-        if len(x_clean) == 0:
-            return np.nan
-        return np.max(x_clean)
+        # 🚀 优化：使用np.nanmax，更快且单次遍历
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            result = np.nanmax(x)
+        return result if not (np.isnan(result) if isinstance(result, (int, float)) else False) else np.nan
     else:
         x_clean = [v for v in x if not pd.isna(v)]
         if len(x_clean) == 0:
