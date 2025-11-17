@@ -1717,6 +1717,10 @@ class ConceptResolver:
                         raise
         combined = combined.reset_index(drop=True)
         agg_value = self._coerce_final_aggregator(aggregator)
+        if agg_value in (None, "auto"):
+            fallback_agg = definition.aggregate
+            if fallback_agg is not None:
+                agg_value = self._coerce_final_aggregator(fallback_agg)
 
         # CRITICAL FIX: Avoid double aggregation issue
         # Strategy: Only use change_interval's aggregation (on relative time after floor)
@@ -1755,12 +1759,9 @@ class ConceptResolver:
                 # DEBUG
             # Determine aggregation method for change_interval
             # This is the ONLY aggregation we should do (on relative time)
-            agg_method = aggregator if aggregator not in (None, False, "auto") else None
-            if agg_method is None:
-                # Check if definition has aggregate
-                definition = self.dictionary[concept_name]
-                if definition.aggregate is not None:
-                    agg_method = definition.aggregate
+            agg_method = agg_value if agg_value not in (None, False, "auto") else None
+            if agg_method in (None, "auto"):
+                agg_method = None
             # Default to 'median' for numeric values if no aggregate specified (matches R ricu)
             if agg_method is None:
                 # Check if value column is numeric
@@ -2073,6 +2074,12 @@ class ConceptResolver:
                 f"Recursive concept '{concept_name}' specifies no sub concepts."
             )
 
+        agg_value = self._coerce_final_aggregator(aggregator)
+        if agg_value in (None, "auto"):
+            fallback_agg = definition.aggregate
+            if fallback_agg is not None:
+                agg_value = self._coerce_final_aggregator(fallback_agg)
+
         aggregate_mapping = self._build_sub_aggregate(definition.aggregate, sub_names)
 
         # Prepare kwargs for sub-concepts, allowing them to be optional
@@ -2360,9 +2367,9 @@ class ConceptResolver:
             # But we should NOT re-aggregate if the result already has the correct interval.
             
             # 确定聚合方法：使用传入的aggregator或definition.aggregate
-            agg_method = aggregator if aggregator not in (None, False, "auto") else None
-            if agg_method is None and definition.aggregate is not None:
-                agg_method = definition.aggregate
+            agg_method = agg_value if agg_value not in (None, False, "auto") else None
+            if agg_method in (None, "auto"):
+                agg_method = None
             # 🔧 FIX: GCS total score should use 'min' aggregation (for recursive concepts)
             # But GCS sub-components should use default aggregation (median)
             if concept_name == 'gcs':
