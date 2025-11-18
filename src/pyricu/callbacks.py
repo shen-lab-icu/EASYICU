@@ -785,7 +785,7 @@ def sofa2_cardio(
     score[map_num < 70] = 1
     
     # Use dopamine only if NE/Epi not available
-    use_dopamine = (combined_cate == 0) & (dopa > 0)
+    use_dopamine = (combined_cate == 0) & (dopa > 0) & (not has_other_vaso)
     
     # Score 2: Low-dose vasopressor OR any other vaso/inotrope
     low_dose_cate = (combined_cate > 0) & (combined_cate <= 0.2)
@@ -795,15 +795,14 @@ def sofa2_cardio(
     # Score 3: Medium-dose OR low-dose + other vaso
     medium_dose_cate = (combined_cate > 0.2) & (combined_cate <= 0.4)
     medium_dose_dopa = use_dopamine & (dopa > 20) & (dopa <= 40)
-    score[medium_dose_cate | medium_dose_dopa | (low_dose_cate & has_other_vaso)] = 3
+    score[medium_dose_cate | medium_dose_dopa | (low_dose_cate & (has_other_vaso or dopa > 0))] = 3
     
     # Score 4: High-dose OR medium-dose + other vaso OR mechanical support
     high_dose_cate = combined_cate > 0.4
     high_dose_dopa = use_dopamine & (dopa > 40)
-    score[high_dose_cate | high_dose_dopa | (medium_dose_cate & has_other_vaso) | has_mech_support] = 4
+    score[high_dose_cate | high_dose_dopa | (medium_dose_cate & (has_other_vaso or dopa > 0)) | has_mech_support] = 4
     
     return score
-
 
 def sofa2_cns(
     gcs: pd.Series,
