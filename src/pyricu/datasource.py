@@ -37,6 +37,7 @@ class FilterOp(str, enum.Enum):
     EQ = "=="
     IN = "in"
     BETWEEN = "between"
+    REGEX = "regex"
 
 
 @dataclass
@@ -70,6 +71,10 @@ class FilterSpec:
         if self.op == FilterOp.BETWEEN:
             lower, upper = self.value
             mask = frame[self.column].between(lower, upper)
+            return frame.loc[mask]
+        if self.op == FilterOp.REGEX:
+            # Regex filtering for rgx_itm concepts (e.g., drug names)
+            mask = frame[self.column].str.contains(self.value, case=False, na=False, regex=True)
             return frame.loc[mask]
         raise ValueError(f"Unsupported filter operation: {self.op}")
 

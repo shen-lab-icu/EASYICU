@@ -1,7 +1,7 @@
-"""Project-level configuration for pyricu testing and demos.
+"""Project-level configuration for pyricu.
 
 This module provides centralized configuration for:
-- Data paths (test data, production data)
+- Data paths (production data)
 - Default patient lists
 - Common constants
 
@@ -19,7 +19,6 @@ import pandas as pd
 # ============================================================================
 
 # Allow override via environment variables
-ENV_TEST_DATA = os.getenv('PYRICU_TEST_DATA')
 ENV_PROD_DATA = os.getenv('PYRICU_PROD_DATA')
 ENV_PROJECT_ROOT = os.getenv('PYRICU_PROJECT_ROOT')
 
@@ -34,19 +33,7 @@ else:
     # Default: parent directory of pyricu/src/pyricu
     PROJECT_ROOT = Path(__file__).parent.parent.parent
 
-# Test data directories
-if ENV_TEST_DATA:
-    TEST_DATA_PATH = Path(ENV_TEST_DATA)
-else:
-    TEST_DATA_PATH = PROJECT_ROOT / "test_data_miiv"
-
-TEST_DATA_MINIMAL = PROJECT_ROOT / "test_data_minimal"
-TEST_DATA_MIIV = PROJECT_ROOT / "test_data_miiv"
-TEST_DATA_EICU = PROJECT_ROOT / "test_data_eicu"
-TEST_DATA_AUMC = PROJECT_ROOT / "test_data_aumc"
-TEST_DATA_HIRID = PROJECT_ROOT / "test_data_hirid"
-
-# Production data path
+# Production data paths - use original raw data only
 if ENV_PROD_DATA:
     PRODUCTION_DATA_PATH = Path(ENV_PROD_DATA)
 else:
@@ -66,38 +53,27 @@ for directory in [OUTPUT_DIR, CACHE_DIR, LOGS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# Default Patient IDs
+# Default Patient IDs  
 # ============================================================================
 
-# Standard 3-patient test set (used in most tests)
-# MIMIC-IV: stay_ids from test_data_miiv
-# 选择有RRT+血管加压药+谵妄评估的患者以便测试SOFA-2特征
-DEFAULT_TEST_PATIENTS_MIIV = [30005000, 30009597, 30017005]
+# Default patient IDs extracted from production data
+# MIMIC-IV: stay_ids with rich SOFA-2 features
+DEFAULT_PATIENTS_MIIV = [30005000, 30009597, 30017005]
 
-# eICU: patientunitstayid from test_data_eicu
-# 选择有RRT和血管加压药数据的患者以便测试SOFA-2特征
-# 患者245906数据最丰富(RRT 13条, 血管加压药 17条)
-# The bundled eICU sample contains five anonymized stays (see test_data_eicu/test_patient_ids.py)
-# so we align the defaults here to ensure validation scripts pick up real rows.
-DEFAULT_TEST_PATIENTS_EICU = [1589473, 2506331, 2683425, 2785291, 3146941]
+# eICU: patientunitstayid with RRT and vasopressor data
+DEFAULT_PATIENTS_EICU = [1589473, 2506331, 2683425, 2785291, 3146941]
 
-# AUMC: admissionid from test_data_aumc
-# 选择有RRT、ECMO和血管加压药数据的患者以便测试SOFA-2特征
-# 患者11: RRT数据（CVVH）
-# 患者3441: ECMO数据（VA ECMO，296条记录）
-# 患者53: RRT数据（CVVH）
-DEFAULT_TEST_PATIENTS_AUMC = [11, 3441, 53]
+# AUMC: admissionid with RRT, ECMO and vasopressor data
+DEFAULT_PATIENTS_AUMC = [11, 3441, 53]
+
+# HiRID: patientid (to be extracted from production data)
+DEFAULT_PATIENTS_HIRID: Optional[List[int]] = None
 
 # Default (MIMIC-IV)
-DEFAULT_TEST_PATIENTS = DEFAULT_TEST_PATIENTS_MIIV
-DEFAULT_TEST_PATIENTS_HIRID: Optional[List[int]] = None
-
-# Extended 50-patient test set (for comprehensive validation)
-# Note: Automatically loaded from test data - use get_patient_ids('50patients')
-DEFAULT_50_PATIENTS = None  # Will be loaded dynamically
+DEFAULT_PATIENTS = DEFAULT_PATIENTS_MIIV
 
 # Single patient for quick debugging
-DEBUG_PATIENT_MIIV = [30017005]  # 修正为实际存在的患者ID
+DEBUG_PATIENT_MIIV = [30017005]
 DEBUG_PATIENT_EICU = [2572404]
 DEBUG_PATIENT = DEBUG_PATIENT_MIIV
 
@@ -220,57 +196,42 @@ USE_CHUNKED_LOADING = os.getenv('PYRICU_USE_CHUNKED_LOADING', 'auto')  # auto, a
 # Helper Functions
 # ============================================================================
 
-def get_data_path(source: str = "test", database: str = "miiv") -> Path:
-    """Get data path for specified source and database.
+def get_data_path(source: str = "production", database: str = "miiv") -> Path:
+    """Get data path for specified database.
     
     Args:
-        source: Data source type ('test', 'test_minimal', 'production')
+        source: Data source type (only 'production' is supported)
         database: Database name ('miiv', 'eicu', 'hirid', 'aumc')
         
     Returns:
         Path to data directory
         
     Examples:
-        >>> get_data_path('test', 'miiv')
-        PosixPath('/home/zhuhb/project/ricu_to_python/pyricu/test_data_50patients')
-        >>> get_data_path('test', 'eicu')
-        PosixPath('/home/zhuhb/project/ricu_to_python/pyricu/test_data_eicu')
         >>> get_data_path('production', 'miiv')
         PosixPath('/home/1_publicData/icu_databases/mimiciv/3.1')
+        >>> get_data_path('production', 'eicu')
+        PosixPath('/home/1_publicData/icu_databases/eicu/2.0.1')
     """
-    if source == "test":
-        if database == "miiv":
-            return TEST_DATA_PATH
-        elif database == "eicu":
-            return TEST_DATA_EICU
-        elif database == "aumc":
-            return TEST_DATA_AUMC
-        elif database == "hirid":
-            return TEST_DATA_HIRID
-        else:
-            raise ValueError(f"Test data for database '{database}' not configured")
-    elif source == "test_minimal":
-        return TEST_DATA_MINIMAL
-    elif source == "production":
-        if database == "miiv":
-            return PRODUCTION_DATA_PATH
-        elif database == "eicu":
-            return PRODUCTION_DATA_EICU
-        elif database == "aumc":
-            return PRODUCTION_DATA_AUMC
-        elif database == "hirid":
-            return PRODUCTION_DATA_HIRID
-        else:
-            raise ValueError(f"Production data for database '{database}' not configured")
+    if source != "production":
+        raise ValueError(f"Only 'production' data source is supported, got: {source}")
+        
+    if database == "miiv":
+        return PRODUCTION_DATA_PATH
+    elif database == "eicu":
+        return PRODUCTION_DATA_EICU
+    elif database == "aumc":
+        return PRODUCTION_DATA_AUMC
+    elif database == "hirid":
+        return PRODUCTION_DATA_HIRID
     else:
-        raise ValueError(f"Unknown data source: {source}")
+        raise ValueError(f"Unknown database: {database}")
 
 
 def get_patient_ids(patient_set: str = "default", database: str = "miiv", data_path: Path = None) -> List[int]:
-    """Get patient IDs for specified test set and database.
+    """Get patient IDs for specified patient set and database.
     
     Args:
-        patient_set: Patient set name ('default', '50patients', 'debug')
+        patient_set: Patient set name ('default', 'debug', or number like '50')
         database: Database name ('miiv', 'eicu', 'hirid', 'aumc')
         data_path: Optional data path (will use get_data_path if not provided)
         
@@ -279,70 +240,55 @@ def get_patient_ids(patient_set: str = "default", database: str = "miiv", data_p
         
     Examples:
         >>> get_patient_ids('default', 'miiv')
-        [34807493, 33987268, 35044219]
+        [30005000, 30009597, 30017005]
         >>> get_patient_ids('debug', 'eicu')
         [2572404]
     """
     if data_path is None:
-        data_path = get_data_path('test', database)
+        data_path = get_data_path('production', database)
     else:
         data_path = Path(data_path)
 
     if patient_set == "default":
         if database == "miiv":
-            return DEFAULT_TEST_PATIENTS_MIIV
-        if database == "eicu":
-            return DEFAULT_TEST_PATIENTS_EICU
-        if database == "aumc":
-            global DEFAULT_TEST_PATIENTS_AUMC
-            if DEFAULT_TEST_PATIENTS_AUMC is None:
-                DEFAULT_TEST_PATIENTS_AUMC = _load_ids_for_database(database, data_path, 3)
-            if not DEFAULT_TEST_PATIENTS_AUMC:
+            return DEFAULT_PATIENTS_MIIV
+        elif database == "eicu":
+            return DEFAULT_PATIENTS_EICU
+        elif database == "aumc":
+            global DEFAULT_PATIENTS_AUMC
+            if DEFAULT_PATIENTS_AUMC is None:
+                DEFAULT_PATIENTS_AUMC = _load_ids_for_database(database, data_path, 3)
+            if not DEFAULT_PATIENTS_AUMC:
                 raise ValueError("Unable to load default AUMC admission IDs")
-            return DEFAULT_TEST_PATIENTS_AUMC
-        if database == "hirid":
-            global DEFAULT_TEST_PATIENTS_HIRID
-            if DEFAULT_TEST_PATIENTS_HIRID is None:
-                DEFAULT_TEST_PATIENTS_HIRID = _load_ids_for_database(database, data_path, 3)
-            if not DEFAULT_TEST_PATIENTS_HIRID:
+            return DEFAULT_PATIENTS_AUMC
+        elif database == "hirid":
+            global DEFAULT_PATIENTS_HIRID
+            if DEFAULT_PATIENTS_HIRID is None:
+                DEFAULT_PATIENTS_HIRID = _load_ids_for_database(database, data_path, 3)
+            if not DEFAULT_PATIENTS_HIRID:
                 raise ValueError("Unable to load default HiRID patient IDs")
-            return DEFAULT_TEST_PATIENTS_HIRID
-        return DEFAULT_TEST_PATIENTS
-    elif patient_set == "50patients":
-        if database in {"aumc", "hirid"}:
-            ids = _load_ids_for_database(database, data_path, 50)
-            if not ids:
-                raise ValueError(f"Unable to load 50 patients for database '{database}'")
-            return ids
-        if DEFAULT_50_PATIENTS is None:
-            try:
-                # 使用新的统一API替代quickstart
-                from pyricu.base import BaseICULoader
-                loader = BaseICULoader(database=database, data_path=data_path, verbose=False)
-                # 简化版：返回默认患者列表，因为具体加载需要更多上下文
-                if database == "miiv":
-                    return DEFAULT_TEST_PATIENTS_MIIV
-                if database == "eicu":
-                    return DEFAULT_TEST_PATIENTS_EICU
-                return DEFAULT_TEST_PATIENTS
-            except Exception:
-                if database == "miiv":
-                    return DEFAULT_TEST_PATIENTS_MIIV
-                if database == "eicu":
-                    return DEFAULT_TEST_PATIENTS_EICU
-                return DEFAULT_TEST_PATIENTS
-        return DEFAULT_50_PATIENTS
+            return DEFAULT_PATIENTS_HIRID
+        else:
+            return DEFAULT_PATIENTS
     elif patient_set == "debug":
         if database == "miiv":
             return DEBUG_PATIENT_MIIV
-        if database == "eicu":
+        elif database == "eicu":
             return DEBUG_PATIENT_EICU
-        if database in {"aumc", "hirid"}:
+        elif database in {"aumc", "hirid"}:
             ids = _load_ids_for_database(database, data_path, 1)
             if not ids:
                 raise ValueError(f"Unable to load debug IDs for '{database}'")
             return ids
-        return DEBUG_PATIENT
+        else:
+            return DEBUG_PATIENT
+    elif patient_set.isdigit():
+        # Load N patients from production data
+        limit = int(patient_set)
+        ids = _load_ids_for_database(database, data_path, limit)
+        if not ids:
+            raise ValueError(f"Unable to load {limit} patients for database '{database}'")
+        return ids
     else:
         raise ValueError(f"Unknown patient set: {patient_set}")
 
@@ -385,24 +331,22 @@ def print_config() -> None:
         📋 Pyricu Project Configuration
         ================================
         Project Root: /home/zhuhb/project/ricu_to_python/pyricu
-        Test Data: /home/zhuhb/project/ricu_to_python/pyricu/test_data_50patients
-        Production Data: /home/1_publicData/icu_databases/mimiciv/3.1
+        Production Data (MIMIC-IV): /home/1_publicData/icu_databases/mimiciv/3.1
         ...
     """
     print("📋 Pyricu Project Configuration")
     print("=" * 50)
     print(f"Project Root: {PROJECT_ROOT}")
-    print(f"Test Data: {TEST_DATA_PATH}")
-    print(f"Production Data: {PRODUCTION_DATA_PATH}")
+    print(f"Production Data (MIMIC-IV): {PRODUCTION_DATA_PATH}")
+    print(f"Production Data (eICU): {PRODUCTION_DATA_EICU}")
+    print(f"Production Data (AUMC): {PRODUCTION_DATA_AUMC}")
+    print(f"Production Data (HiRID): {PRODUCTION_DATA_HIRID}")
     print(f"Output Dir: {OUTPUT_DIR}")
     print(f"Cache Dir: {CACHE_DIR}")
     print(f"Logs Dir: {LOGS_DIR}")
     print()
-    print(f"Default Patients: {len(DEFAULT_TEST_PATIENTS)} patients")
-    if DEFAULT_50_PATIENTS is not None:
-        print(f"50-Patient Set: {len(DEFAULT_50_PATIENTS)} patients")
-    else:
-        print(f"50-Patient Set: Dynamic (loaded on demand)")
+    print(f"Default Patients (MIMIC-IV): {len(DEFAULT_PATIENTS_MIIV)} patients")
+    print(f"Default Patients (eICU): {len(DEFAULT_PATIENTS_EICU)} patients")
     print(f"Default Source: {DEFAULT_SOURCE}")
     print()
     print(f"Cache Enabled: {ENABLE_CACHE}")
@@ -417,26 +361,28 @@ def print_config() -> None:
 # ============================================================================
 
 def validate_paths() -> bool:
-    """Validate that critical paths exist.
+    """Validate that production data paths exist.
     
     Returns:
-        True if all paths exist, False otherwise
+        True if at least one production path exists, False otherwise
         
     Examples:
         >>> if validate_paths():
-        ...     print("All paths valid")
+        ...     print("Production paths available")
     """
-    valid = True
+    valid = False
     
-    # Check test data path
-    if not TEST_DATA_PATH.exists():
-        print(f"⚠️  Warning: Test data path not found: {TEST_DATA_PATH}")
-        valid = False
-    
-    # Check production data path (optional)
-    if not PRODUCTION_DATA_PATH.exists():
-        print(f"ℹ️  Info: Production data path not found: {PRODUCTION_DATA_PATH}")
-        # Don't mark as invalid since production data is optional
+    # Check production data paths
+    for db_name, db_path in [
+        ("MIMIC-IV", PRODUCTION_DATA_PATH),
+        ("eICU", PRODUCTION_DATA_EICU),
+        ("AUMC", PRODUCTION_DATA_AUMC),
+        ("HiRID", PRODUCTION_DATA_HIRID),
+    ]:
+        if db_path.exists():
+            valid = True
+        elif VERBOSE:
+            print(f"ℹ️  Info: {db_name} production data path not found: {db_path}")
     
     return valid
 
@@ -453,11 +399,6 @@ if VERBOSE:
 __all__ = [
     # Paths
     'PROJECT_ROOT',
-    'TEST_DATA_PATH',
-    'TEST_DATA_MINIMAL',
-    'TEST_DATA_EICU',
-    'TEST_DATA_AUMC',
-    'TEST_DATA_HIRID',
     'PRODUCTION_DATA_PATH',
     'PRODUCTION_DATA_EICU',
     'PRODUCTION_DATA_AUMC',
@@ -467,12 +408,11 @@ __all__ = [
     'LOGS_DIR',
     
     # Patient IDs
-    'DEFAULT_TEST_PATIENTS',
-    'DEFAULT_TEST_PATIENTS_MIIV',
-    'DEFAULT_TEST_PATIENTS_EICU',
-    'DEFAULT_TEST_PATIENTS_AUMC',
-    'DEFAULT_TEST_PATIENTS_HIRID',
-    'DEFAULT_50_PATIENTS',
+    'DEFAULT_PATIENTS',
+    'DEFAULT_PATIENTS_MIIV',
+    'DEFAULT_PATIENTS_EICU',
+    'DEFAULT_PATIENTS_AUMC',
+    'DEFAULT_PATIENTS_HIRID',
     'DEBUG_PATIENT',
     'DEBUG_PATIENT_MIIV',
     'DEBUG_PATIENT_EICU',

@@ -733,96 +733,85 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
                 raise ValueError("Cannot determine time column for eICU duration callback")
             index_var = time_cols[0]
 
-        # eICU offset is numeric (minutes), datetime conversion will be handled later if needed
-        # Just ensure it's numeric and not null
-        if 'offset' in index_var.lower():
-            # offset is already numeric (minutes from ICU admission)
+        # 🔧 FIX: Handle numeric offset vs datetime properly
+        is_offset = 'offset' in index_var.lower()
+        if is_offset:
+            # eICU offset is numeric (minutes from ICU admission)
             frame[index_var] = pd.to_numeric(frame[index_var], errors="coerce")
+            frame = frame.dropna(subset=[index_var])
+            
+            if frame.empty:
+                return frame
+            
+            # For numeric offsets, convert to datetime temporarily for group_measurements
+            # which expects datetime. We'll convert back later.
+            base_time = pd.Timestamp('2000-01-01')
+            frame['__temp_time'] = base_time + pd.to_timedelta(frame[index_var], unit='min')
+            temp_index_var = '__temp_time'
         else:
             # Other databases use datetime
             frame[index_var] = pd.to_datetime(frame[index_var], errors="coerce")
-        
-        frame = frame.dropna(subset=[index_var])
-        
-        if frame.empty:
-            return frame
+            frame = frame.dropna(subset=[index_var])
+            
+            if frame.empty:
+                return frame
+            
+            temp_index_var = index_var
 
         # Add group column using group_measurements
         grouped = group_measurements(
             frame,
             id_cols=id_cols,
-            index_col=index_var,
+            index_col=temp_index_var,
             max_gap=gap_length,
             group_col=group_col,
         )
+        
+        # If we used temporary time column, drop it now but keep original index_var
+        if is_offset:
+            grouped = grouped.drop(columns=['__temp_time'], errors='ignore')
 
         # Calculate duration per group (R calc_dur logic)
-        # For each id_cols + group_col group, calculate max(time) - min(time)
-        # Make sure all ID columns actually exist in the frame
-        valid_id_cols = []
-        for col in id_cols:
-            if col in frame.columns:
-                valid_id_cols.append(col)
-            else:
-                # If an expected ID column is missing, log it and continue
-                # This can happen in eICU where some ID columns are filtered out during processing
-                import logging
-                logging.warning(f"Expected ID column '{col}' not found in data frame. Available columns: {list(frame.columns)}")
-
+        # Following R ricu's calc_dur implementation
+        # 🔧 FIX: Simplify to match R ricu exactly
+        
+        # Make sure all ID columns actually exist in grouped dataframe
+        valid_id_cols = [col for col in id_cols if col in grouped.columns]
+        
         if not valid_id_cols:
-            raise ValueError("No valid ID columns found in data frame")
+            import logging
+            logging.warning(f"No valid ID columns found in grouped data. Available columns: {list(grouped.columns)}")
+            # Return empty with correct structure
+            return pd.DataFrame(columns=list(id_cols) + [index_var, val_col])
 
         groupby_cols = valid_id_cols + [group_col]
-
-        # Ensure all groupby columns exist in the grouped dataframe
-        existing_groupby_cols = []
-        for col in groupby_cols:
-            if col in grouped.columns:
-                existing_groupby_cols.append(col)
-            else:
-                import logging
-                logging.debug(f"GroupBy column '{col}' not found in grouped data. Available columns: {list(grouped.columns)}")
-
-        if not existing_groupby_cols:
-            raise ValueError("No valid GroupBy columns found in grouped data frame")
-
-        result = grouped.groupby(existing_groupby_cols).agg({
+        
+        # R ricu: res <- x[, list(min(min_var), max(max_var)), by = c(id_vars, grp_var)]
+        result = grouped.groupby(groupby_cols, dropna=False).agg({
             index_var: ['min', 'max']
         }).reset_index()
         
         # Flatten column names
-        result.columns = existing_groupby_cols + ['min_time', 'max_time']
+        result.columns = groupby_cols + ['min_time', 'max_time']
         
-        # Calculate duration
-        if 'offset' in index_var.lower():
-            # For offset (numeric minutes), duration is direct subtraction
-            result[val_col] = result['max_time'] - result['min_time']
-            # Use min_time as the time point for this duration measurement
-            result[index_var] = result['min_time']
+        # R ricu: res <- res[, c(val_var) := get(val_var) - get(index_var)]
+        # Calculate duration: max - min
+        # For numeric offset (minutes), convert to hours; for datetime, result is already timedelta
+        if is_offset:
+            # eICU: offset in minutes, duration should be in hours
+            result[val_col] = (result['max_time'] - result['min_time']) / 60.0
         else:
-            # For datetime, duration is timedelta converted to minutes
-            # 🔧 FIX: Handle None values to prevent division errors
-            time_diff = pd.to_datetime(result['max_time'], errors='coerce') - pd.to_datetime(result['min_time'], errors='coerce')
-            result[val_col] = time_diff.dt.total_seconds() / 60
-            result[index_var] = result['min_time']
+            # Other databases: datetime difference gives timedelta, convert to hours
+            result[val_col] = (result['max_time'] - result['min_time']).dt.total_seconds() / 3600.0
         
-        # Keep existing_groupby_cols + index_var + val_col (drop group_col, min_time, max_time)
-        # But only keep columns that actually exist
-        final_cols = []
-        for col in existing_groupby_cols:
-            if col in result.columns:
-                final_cols.append(col)
-
-        # Add index_var and val_col if they exist and are not the same as existing columns
-        for col in [index_var, val_col]:
-            if col in result.columns and col not in final_cols:
-                final_cols.append(col)
-
-        if final_cols:
-            result = result[final_cols]
-        else:
-            # If no valid columns, return empty dataframe with correct structure
-            result = pd.DataFrame(columns=[index_var, val_col])
+        # Use min_time as the index_var value for this duration
+        result[index_var] = result['min_time']
+        
+        # Return columns: id_vars + index_var + val_var (drop group_col)
+        # R ricu returns: id_vars, grp_var, index_var, val_var
+        # But for duration concepts, we typically don't need grp_var in final output
+        final_cols = valid_id_cols + [index_var, val_col]
+        result = result[final_cols]
         
         return result
 

@@ -256,12 +256,18 @@ def _compose_fill_limits(
     id_columns: List[str],
     index_column: str,
     ctx: "ConceptCallbackContext",
+    expand_forward: bool = True,
 ) -> Optional[pd.DataFrame]:
     """Build fill_gaps limits matching ricu's collapse(x) behavior.
     
     By default (matching ricu), uses observed data range (min/max per ID).
     This ensures SOFA and other aggregates cover the full patient timeline
     as captured in the merged component data, not just ICU stay windows.
+    
+    Args:
+        expand_forward: If True, expand end time to create symmetric timeline
+                       around time 0 (ICU admission), matching ricu's behavior.
+                       This replicates ricu's outcome module time grid expansion.
     """
     if not id_columns or index_column not in data.columns:
         return None
@@ -274,9 +280,16 @@ def _compose_fill_limits(
     )
     if observed.empty:
         return None
-    # 🔧 CRITICAL FIX: Match ricu's fill_gaps(dat, limits = collapse(x))
-    # Use observed data range directly (not constrained by ICU stay windows)
-    # to replicate ricu's behavior of filling gaps across entire patient timeline
+    
+    # 🔧 CRITICAL FIX: Match ricu's symmetric timeline expansion
+    # Ricu extends the end time to create a symmetric window around time 0.
+    # Formula: new_end = original_end + abs(start)
+    # Example: [-663, 512] becomes [-663, 512 + 663] = [-663, 1175]
+    # This matches ricu's observed behavior in outcome.csv
+    if expand_forward:
+        # Extend forward by the same distance as backward from time 0
+        observed['end'] = observed['end'] + abs(observed['start'])
+    
     return observed[id_columns + ["start", "end"]]
 
 
@@ -2156,7 +2169,8 @@ def _callback_sofa_score(
         id_cols_to_group = list(id_columns) if id_columns else []
 
         if id_cols_to_group:
-            limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
+            # Enable forward expansion for SOFA to match ricu's extended timelines
+            limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx, expand_forward=True)
             data = fill_gaps(
                 data,
                 id_cols=id_cols_to_group,

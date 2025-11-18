@@ -14,22 +14,23 @@ import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
 from . import load_concepts
 from .project_config import (
-    DEFAULT_TEST_PATIENTS_AUMC,
-    DEFAULT_TEST_PATIENTS_EICU,
-    DEFAULT_TEST_PATIENTS_HIRID,
-    DEFAULT_TEST_PATIENTS_MIIV,
-    TEST_DATA_AUMC,
-    TEST_DATA_EICU,
-    TEST_DATA_HIRID,
-    TEST_DATA_MIIV,
+    DEFAULT_PATIENTS_AUMC,
+    DEFAULT_PATIENTS_EICU,
+    DEFAULT_PATIENTS_HIRID,
+    DEFAULT_PATIENTS_MIIV,
+    PRODUCTION_DATA_AUMC,
+    PRODUCTION_DATA_EICU,
+    PRODUCTION_DATA_HIRID,
+    PRODUCTION_DATA_PATH,
 )
+from .runtime_defaults import resolve_loader_defaults
 
 
 @dataclass
@@ -199,20 +200,27 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RICU_ROOT = REPO_ROOT / "ricu_data"
 SUPPORTED_DATABASES = ("miiv", "eicu", "aumc", "hirid")
 
+ALIGNMENT_ENV_KEYS = {
+    "chunk": ("RICU_ALIGN_CHUNK", "PYRICU_CHUNK_SIZE"),
+    "parallel": ("RICU_ALIGN_PARALLEL", "PYRICU_PARALLEL_WORKERS"),
+    "concept": ("RICU_ALIGN_CONCEPT", "PYRICU_CONCEPT_WORKERS"),
+    "backend": ("RICU_ALIGN_BACKEND", "PYRICU_PARALLEL_BACKEND"),
+}
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DATA_PATHS: Dict[str, Path] = {
-    "miiv": TEST_DATA_MIIV,
-    "eicu": TEST_DATA_EICU,
-    "aumc": TEST_DATA_AUMC,
-    "hirid": TEST_DATA_HIRID,
+    "miiv": PRODUCTION_DATA_PATH,
+    "eicu": PRODUCTION_DATA_EICU,
+    "aumc": PRODUCTION_DATA_AUMC,
+    "hirid": PRODUCTION_DATA_HIRID,
 }
 
 DEFAULT_PATIENTS: Dict[str, List[int]] = {
-    "miiv": [30017005, 30045407, 30009597, 30041848, 30005000],
-    "eicu": DEFAULT_TEST_PATIENTS_EICU,
-    "aumc": DEFAULT_TEST_PATIENTS_AUMC,
-    "hirid": DEFAULT_TEST_PATIENTS_HIRID or [],
+    "miiv": DEFAULT_PATIENTS_MIIV,
+    "eicu": DEFAULT_PATIENTS_EICU,
+    "aumc": DEFAULT_PATIENTS_AUMC,
+    "hirid": DEFAULT_PATIENTS_HIRID or [],
 }
 
 PATIENT_ID_SOURCES: Dict[str, tuple[str, str]] = {
@@ -342,10 +350,29 @@ class RicuPyricuComparator:
             self._loader_kwargs["dict_path"] = str(dict_path)
 
         self._interval_cap_hours = 24 * 365  # prevent runaway window expansion
+        patient_goal = (
+            len(self.test_patients)
+            if isinstance(self.test_patients, list)
+            else (max_patients if max_patients and max_patients > 0 else None)
+        )
+        self._loader_defaults = resolve_loader_defaults(
+            patient_goal,
+            env_keys=ALIGNMENT_ENV_KEYS,
+        )
+        loader_kwargs = self._loader_defaults.as_loader_kwargs(progress=False)
+        for key, value in loader_kwargs.items():
+            if value is None:
+                continue
+            self._loader_kwargs[key] = value
+
+        self._concept_cache: Dict[Tuple[str, bool], pd.DataFrame] = {}
 
     def run(self) -> Dict[str, FeatureComparison]:
         self._ensure_fio2_patch()
         results: Dict[str, FeatureComparison] = {}
+        print(
+            f"⚙️  Loader profile [{self.database}]: {self._loader_defaults.summary()}"
+        )
         for module in MODULES:
             comparison = self._compare_module(module)
             results[module.name] = comparison
@@ -568,7 +595,12 @@ class RicuPyricuComparator:
         patient_ids: Optional[Sequence[int]],
         module: FeatureModule,
     ) -> pd.DataFrame:
-        return load_concepts(
+        cache_key = (concept, bool(module.time_column))
+        cached = self._concept_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        frame = load_concepts(
             concept,
             patient_ids=patient_ids,
             database=self.database,
@@ -576,8 +608,11 @@ class RicuPyricuComparator:
             interval="1h" if module.time_column else None,
             merge=True,
             verbose=False,
+            _allow_missing_concept=True,
             **self._loader_kwargs,
         )
+        self._concept_cache[cache_key] = frame
+        return frame
 
     def _should_retry_per_patient(
         self,
@@ -639,7 +674,8 @@ class RicuPyricuComparator:
         return merged
 
     def _expand_interval_rows(self, df: pd.DataFrame, module: FeatureModule, concept: str) -> pd.DataFrame:
-        if module.name != "med" or "time" not in df.columns:
+        # Check if we have time column (required for expansion)
+        if "time" not in df.columns:
             return df.drop(columns=["endtime", "duration"], errors="ignore")
 
         has_end = "endtime" in df.columns and df["endtime"].notna().any()
@@ -650,6 +686,14 @@ class RicuPyricuComparator:
         concept_lower = concept.lower()
         if concept_lower.endswith("_dur"):
             return df.drop(columns=["endtime", "duration"], errors="ignore")
+        
+        # Logical/boolean concepts (abx, samp, etc.) are event indicators and
+        # should NOT be expanded into continuous time series. They represent
+        # discrete events (e.g., antibiotic administration started at time X),
+        # not continuous states. Expanding them would incorrectly fill gaps.
+        logical_concepts = {"abx", "samp", "cort"}  # Add other event-based concepts as needed
+        if concept_lower in logical_concepts:
+            return df.drop(columns=["endtime", "duration"], errors="ignore")
 
         # Do not fabricate synthetic durations when the upstream concept already
         # provides discrete time points (ricu treats those as point events).  The
@@ -657,8 +701,20 @@ class RicuPyricuComparator:
         # drastically overestimating vasopressor exposure compared to ricu.
         if not has_end and not has_duration:
             return df.drop(columns=["endtime", "duration"], errors="ignore")
+        
+        # Expand window-based concepts (mech_vent, etc.) from all modules, not just med
+        # This includes respiratory concepts like mech_vent that have start/end times
 
         working = df.copy()
+        
+        # Debug
+        if has_end:
+            import sys
+            print(f"DEBUG _expand_interval_rows: concept={concept}, has_end={has_end}", file=sys.stderr)
+            print(f"DEBUG endtime dtype: {working['endtime'].dtype}", file=sys.stderr)
+            print(f"DEBUG endtime is_numeric: {pd.api.types.is_numeric_dtype(working['endtime'])}", file=sys.stderr)
+            if len(working) > 0:
+                print(f"DEBUG endtime first value: {working['endtime'].iloc[0]}", file=sys.stderr)
 
         if has_end and not pd.api.types.is_numeric_dtype(working["endtime"]):
             icu = self._load_icustay_times()
@@ -765,8 +821,17 @@ class RicuPyricuComparator:
         if self.database not in ("miiv", "mimiciv"):
             return
         base = self._load_pyricu_fio2()
+        base_has_values = (
+            isinstance(base, pd.DataFrame)
+            and not base.empty
+            and "fio2" in base.columns
+            and base["fio2"].notna().any()
+        )
+        if base_has_values:
+            # 现在pyricu的fio2加载已经可以解析百分号字符串，直接使用标准结果即可
+            return
         raw = self._load_raw_fio2()
-        frames = [df for df in (base, raw) if not df.empty]
+        frames = [df for df in (base, raw) if isinstance(df, pd.DataFrame) and not df.empty]
         if not frames:
             return
         merged = pd.concat(frames, ignore_index=True)
@@ -776,8 +841,10 @@ class RicuPyricuComparator:
         merged = merged.dropna(subset=["stay_id"])
         if "charttime" not in merged.columns:
             return
+        merged["charttime"] = pd.to_numeric(merged["charttime"], errors="coerce")
+        merged["charttime"] = np.floor(merged["charttime"].astype(float))
         merged = merged.sort_values(["stay_id", "charttime"])
-        merged = merged.drop_duplicates(subset=["stay_id", "charttime"], keep="last")
+        merged = merged.drop_duplicates(subset=["stay_id", "charttime"], keep="first")
         self._fio2_override = merged.reset_index(drop=True)
 
     def _load_pyricu_fio2(self) -> pd.DataFrame:

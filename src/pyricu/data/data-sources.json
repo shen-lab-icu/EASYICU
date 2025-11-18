@@ -3954,6 +3954,7 @@
       "admissions": {
         "files": "ADMISSIONS.parquet",
         "defaults": {
+          "id_var": "subject_id",
           "val_var": "admission_type",
           "time_vars": [
             "admittime",
@@ -7311,6 +7312,7 @@
       "admissions": {
         "files": "admissions.parquet",
         "defaults": {
+          "id_var": "subject_id",
           "val_var": "admission_type",
           "time_vars": [
             "admittime",
