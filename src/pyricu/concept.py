@@ -408,6 +408,21 @@ class ConceptResolver:
     def _should_fill_gaps(self, concept_name: str, definition: ConceptDefinition) -> bool:
         category = (definition.category or "").lower() if definition.category else ""
         concept = concept_name.lower()
+
+        raw_class = getattr(definition, "class_name", None)
+        class_names: List[str] = []
+        if isinstance(raw_class, str):
+            class_names = [raw_class.lower()]
+        elif isinstance(raw_class, Iterable):
+            class_names = [str(item).lower() for item in raw_class if item]
+        else:
+            class_names = []
+
+        # Never fill gaps for logical/boolean concepts (abx, samp, etc.)
+        # These are event indicators that should remain sparse
+        if "lgl_cncpt" in class_names:
+            return False
+        
         # Only a handful of concepts in ricu explicitly require dense hourly grids.
         fill_concepts = {"vent_ind", "urine", "urine24"}
         return concept in fill_concepts
@@ -577,9 +592,9 @@ class ConceptResolver:
                 "Aggregation must be enabled for all concepts when merge=True."
             )
 
-        # Set default interval to 1 hour if not specified
-        if interval is None:
-            interval = pd.Timedelta(hours=1)
+        # Note: interval can be None, which means return raw time points without alignment
+        # Only force default interval if the user explicitly wants time series but didn't specify interval
+        # For now, respect None as "no interval"
         
         total = len(names)
 
@@ -761,15 +776,24 @@ class ConceptResolver:
                 raise ValueError(
                     f"Concept '{concept_name}' requires 'sub_var' when specifying ids."
                 )
+            
+            if hasattr(source, 'regex') and source.regex and not source.sub_var:
+                raise ValueError(
+                    f"Concept '{concept_name}' requires 'sub_var' when specifying regex."
+                )
+            
             table_cfg = data_source.config.get_table(source.table)
             defaults = table_cfg.defaults
-            filters = [
-                FilterSpec(
+            
+            # Build filters for sub_var (only for ids, NOT regex)
+            # Regex filtering is handled later after table loading (see line ~1428)
+            filters = []
+            if source.ids is not None:
+                filters.append(FilterSpec(
                     column=source.sub_var,
                     op=FilterOp.IN,
                     value=source.ids,
-                )
-            ] if source.ids is not None else []
+                ))
             
             # 🔧 修复：添加患者过滤器
             # 即使 defaults.id_var 为 None，仍尝试添加患者过滤器
@@ -894,7 +918,7 @@ class ConceptResolver:
             else:
                 # 从数据源加载
                 try:
-                    # DEBUG: 打印过滤器信息
+                    # Load table with filters
                     table = data_source.load_table(source.table, filters=filters, verbose=verbose)
                     
                     # 🔍 DEBUG: 检查table.data
@@ -1083,8 +1107,8 @@ class ConceptResolver:
                             if DEBUG_MODE: print(f"   💾 缓存表 {source.table}: {len(patient_filter_in_filters.value)} 个患者")
                 except (KeyError, FileNotFoundError, ValueError) as e:
                     # 如果表不存在，跳过这个源
-                    if DEBUG_MODE:
-                        print(f"   ⚠️  表 '{source.table}' 不存在或无法加载，跳过此源: {e}")
+                    if DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"Table '{source.table}' not available: {type(e).__name__}: {str(e)[:100]}")
                     continue
             
             # MIMIC-IV特殊处理：若表为labevents/microbiologyevents/inputevents，仅有subject_id，按时间窗口映射到对应ICU stay
@@ -1816,6 +1840,51 @@ class ConceptResolver:
             else:
                 # 没有有效的时间列，设为None
                 index_column = None
+        
+        # 🔧 CRITICAL: Check if target is 'win_tbl', and convert to WinTbl if needed
+        # For concepts like mech_vent that have target='win_tbl' but no concept-level callback
+        # DISABLED for now - WinTbl conversion has issues with endtime handling
+        # Return raw ICUTable and let expansion happen in _ensure_concept_loaded
+        if False and definition.target == 'win_tbl' and interval is not None:
+            from .table import WinTbl
+            # WinTbl needs: index_var (time), dur_var (duration), id_vars (IDs)
+            # Check if we have endtime or duration columns
+            has_endtime = any(col in combined.columns for col in ['endtime', 'end_time', 'stop'])
+            has_duration = any(col in combined.columns for col in ['duration', 'dur', concept_name + '_dur'])
+            
+            if has_endtime or has_duration:
+                # Find the appropriate columns
+                endtime_col = next((col for col in ['endtime', 'end_time', 'stop'] if col in combined.columns), None)
+                duration_col = next((col for col in ['duration', 'dur', concept_name + '_dur'] if col in combined.columns), None)
+                
+                # If we have endtime, calculate duration
+                if endtime_col and index_column:
+                    # Ensure both are numeric (hours)
+                    # endtime might still be datetime if it wasn't properly aligned
+                    if pd.api.types.is_datetime64_any_dtype(combined[endtime_col]):
+                        # Skip endtime conversion for now - has issues
+                        # TODO: Fix endtime handling for procedureevents
+                        pass
+                    
+                    # Now both should be numeric
+                    if pd.api.types.is_numeric_dtype(combined[endtime_col]) and pd.api.types.is_numeric_dtype(combined[index_column]):
+                        # Calculate duration as endtime - starttime
+                        combined[concept_name + '_dur'] = combined[endtime_col] - combined[index_column]
+                        duration_col = concept_name + '_dur'
+                        # Remove endtime column (WinTbl uses duration, not endtime)
+                        combined = combined.drop(columns=[endtime_col], errors='ignore')
+                    else:
+                        # Can't calculate duration, skip WinTbl conversion
+                        duration_col = None
+                
+                if duration_col and index_column:
+                    # Create WinTbl
+                    return WinTbl(
+                        data=combined,
+                        id_vars=id_columns,
+                        index_var=index_column,
+                        dur_var=duration_col,
+                    )
         
         return ICUTable(
             data=combined,
@@ -2787,6 +2856,7 @@ class ConceptResolver:
         raise ValueError(f"Unsupported interval unit '{unit}' in expression '{expression}'")
 
     def _merge_tables(self, tables: Mapping[str, ICUTable]) -> pd.DataFrame:
+        from .table import WinTbl
         merged: Optional[pd.DataFrame] = None
         index_column: Optional[str] = None
         id_columns: Optional[List[str]] = None
@@ -2794,18 +2864,31 @@ class ConceptResolver:
         for name, table in tables.items():
             frame = table.data.copy()
 
-            id_columns = id_columns or list(table.id_columns)
-            index_column = index_column or table.index_column
-
-            expected_id = id_columns or []
-            if list(table.id_columns) != expected_id:
-                raise ValueError(
-                    "All concepts must share identical identifier columns to merge"
-                )
-            if table.index_column != index_column:
-                raise ValueError(
-                    "All concepts must share identical index column to merge"
-                )
+            # Handle both ICUTable and WinTbl
+            if isinstance(table, WinTbl):
+                id_columns = id_columns or list(table.id_vars)
+                index_column = index_column or table.index_var
+                expected_id = id_columns or []
+                if list(table.id_vars) != expected_id:
+                    raise ValueError(
+                        "All concepts must share identical identifier columns to merge"
+                    )
+                if table.index_var != index_column:
+                    raise ValueError(
+                        "All concepts must share identical index column to merge"
+                    )
+            else:
+                id_columns = id_columns or list(table.id_columns)
+                index_column = index_column or table.index_column
+                expected_id = id_columns or []
+                if list(table.id_columns) != expected_id:
+                    raise ValueError(
+                        "All concepts must share identical identifier columns to merge"
+                    )
+                if table.index_column != index_column:
+                    raise ValueError(
+                        "All concepts must share identical index column to merge"
+                    )
 
             key_cols = expected_id + ([index_column] if index_column else [])
             
@@ -3093,6 +3176,64 @@ class ConceptResolver:
                 align_to_admission=align_to_admission,
                 **kwargs,
             )
+            
+            # 🔧 CRITICAL: Expand WinTbl to time series if interval is specified
+            # This must happen after loading but before caching, so all concepts
+            # (including those without sub_concepts) get expanded
+            from .table import WinTbl
+            if isinstance(result, WinTbl) and interval is not None and not result.data.empty:
+                idx_col = result.index_var
+                dur_col = result.dur_var
+                id_cols = result.id_vars
+                
+                if idx_col and dur_col and idx_col in result.data.columns and dur_col in result.data.columns:
+                    if verbose:
+                        logger.info("   🔧 扩展 WinTbl '%s' 到时间序列 (interval=%s)", concept_name, interval)
+                    
+                    # 扩展窗口到时间序列
+                    expanded_rows = []
+                    for _, row in result.data.iterrows():
+                        start_time = row[idx_col]
+                        duration = row[dur_col]
+                        
+                        # 计算结束时间（小时）
+                        end_time = start_time + duration
+                        
+                        # 生成时间序列（每个 interval）
+                        interval_hours = interval.total_seconds() / 3600.0
+                        current_time = np.floor(start_time / interval_hours) * interval_hours
+                        
+                        while current_time < end_time:
+                            new_row = {idx_col: current_time}
+                            # 复制 ID 列
+                            for col in id_cols:
+                                if col in row.index:
+                                    new_row[col] = row[col]
+                            # 复制值列（除了 dur_col）
+                            for col in result.data.columns:
+                                if col not in [idx_col, dur_col] and col not in id_cols:
+                                    new_row[col] = row[col]
+                            expanded_rows.append(new_row)
+                            current_time += interval_hours
+                    
+                    # 转换为 DataFrame
+                    if expanded_rows:
+                        expanded_df = pd.DataFrame(expanded_rows)
+                        # 转换为 ICUTable
+                        value_col = [c for c in expanded_df.columns if c not in id_cols and c != idx_col]
+                        value_col = value_col[0] if value_col else None
+                        from .table import ICUTable
+                        result = ICUTable(
+                            data=expanded_df,
+                            id_columns=id_cols,
+                            index_column=idx_col,
+                            value_column=value_col,
+                            unit_column=None,
+                            time_columns=[],
+                        )
+                        if verbose:
+                            logger.info("   ✅ 扩展完成: %d 行", len(expanded_df))
+                        
         except Exception:
             with self._cache_lock:
                 self._get_inflight().discard(concept_name)
@@ -3390,23 +3531,35 @@ def _apply_callback(
 
     # Handle percent_as_numeric - remove '%' and convert to numeric
     if re.fullmatch(r"transform_fun\(percent_as_numeric\)", expr):
-        series = frame[concept_name]
-        # Remove '%' symbol and convert to numeric
-        # Handle both string '50%' and numeric 50
+        series = frame[concept_name].copy()
+
         def parse_percent(val):
             if pd.isna(val):
                 return np.nan
             if isinstance(val, str):
-                # Remove '%' symbol if present
                 val_clean = val.strip().rstrip('%')
                 try:
                     return float(val_clean)
                 except (ValueError, AttributeError):
                     return np.nan
-            else:
-                # Already numeric
+            try:
                 return float(val)
-        
+            except (TypeError, ValueError):
+                return np.nan
+
+        def missing_mask(values: pd.Series) -> pd.Series:
+            mask = values.isna()
+            as_str = values.astype(str).str.strip().str.lower()
+            mask |= as_str.eq("") | as_str.eq("nan") | as_str.eq("none")
+            return mask
+
+        mask = missing_mask(series)
+        for fallback_col in ("value", "valuetext"):
+            if fallback_col in frame.columns and fallback_col != concept_name:
+                fallback_series = frame[fallback_col]
+                series = series.where(~mask, fallback_series)
+                mask = missing_mask(series)
+
         frame.loc[:, concept_name] = series.apply(parse_percent)
         return frame
 

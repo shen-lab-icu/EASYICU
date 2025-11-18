@@ -102,6 +102,18 @@ class BaseICULoader:
                 logger.info(f"Using path from {env_var}: {path}")
             return Path(path)
 
+        # Check production data paths from project_config
+        try:
+            from .project_config import get_data_path
+            prod_path = get_data_path(source='production', database=database)
+            if prod_path and prod_path.exists():
+                if self.verbose:
+                    logger.info(f"Using production data path: {prod_path}")
+                return prod_path
+        except Exception as e:
+            if self.verbose:
+                logger.debug(f"Could not get production path from project_config: {e}")
+
         # Check common paths
         common_paths = [
             Path.home() / 'data' / database,

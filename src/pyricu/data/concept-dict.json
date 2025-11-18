@@ -3490,13 +3490,15 @@
           "ids": 223835,
           "table": "chartevents",
           "sub_var": "itemid",
-          "index_var": "charttime"
+          "index_var": "charttime",
+          "callback": "transform_fun(percent_as_numeric)"
         },
         {
           "ids": 50816,
           "table": "labevents",
           "sub_var": "itemid",
-          "index_var": "charttime"
+          "index_var": "charttime",
+          "callback": "transform_fun(percent_as_numeric)"
         }
       ],
       "mimic": [
