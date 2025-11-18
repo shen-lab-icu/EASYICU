@@ -205,9 +205,9 @@ class ConceptLoader:
         if getattr(source, 'unit_var', None):
             extra.append(source.unit_var)
         
-        # 🔍 DEBUG: 输出提取的列信息
+        # DEBUG: 输出提取的列信息
         result = self._infer_required_columns(source.table, id_type, extra)
-        print(f"🔍 _columns_for_source: table={source.table}, sub_var={getattr(source, 'sub_var', None)}, extra={extra}, result={result}")
+        logger.debug(f"_columns_for_source: table={source.table}, sub_var={getattr(source, 'sub_var', None)}, extra={extra}, result={result}")
         return result
     
     def _columns_for_item(self, item: Mapping[str, Any], id_type: str) -> Optional[List[str]]:

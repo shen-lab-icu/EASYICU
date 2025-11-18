@@ -506,13 +506,15 @@ class BaseICULoader:
                 else:
                     all_patient_ids.extend(batch)
 
-            # 只有患者数量足够多时才预加载，避免小数据集的性能开销
-            if len(all_patient_ids) >= 1000:  # 提高阈值，减少不必要的预加载
-                preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
-                logger.info(f"📦 大规模数据({len(all_patient_ids)}患者)，预加载大表: {', '.join(preload_tables)}")
-                self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)
-            else:
-                logger.info(f"⚡ 小规模数据({len(all_patient_ids)}患者)，跳过预加载以提升性能")
+            # ❌ 临时禁用预加载：预加载逻辑有bug，会在load_table时无限递归
+            # TODO: 修复预加载逻辑后重新启用
+            logger.info(f"⚡ 数据规模({len(all_patient_ids)}患者)，预加载功能暂时禁用")
+            # if len(all_patient_ids) >= 1000:
+            #     preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
+            #     logger.info(f"📦 大规模数据({len(all_patient_ids)}患者)，预加载大表: {', '.join(preload_tables)}")
+            #     self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)
+            # else:
+            #     logger.info(f"⚡ 小规模数据({len(all_patient_ids)}患者)，跳过预加载以提升性能")
         elif backend == "process" and parallel_workers > 1 and total_batches > 1:
             logger.info(
                 f"🚀 启用多进程优化: {parallel_workers}进程处理{total_batches}批次"
@@ -526,9 +528,11 @@ class BaseICULoader:
                 else:
                     all_patient_ids.extend(batch)
 
-            preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
-            logger.info(f"📦 多进程模式预加载大表: {', '.join(preload_tables)}")
-            self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)
+            # ❌ 临时禁用预加载
+            logger.info(f"⚡ 多进程模式，预加载功能暂时禁用")
+            # preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
+            # logger.info(f"📦 多进程模式预加载大表: {', '.join(preload_tables)}")
+            # self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)
 
         def _capture_meta(table: ICUTable) -> Dict[str, Any]:
             return {
