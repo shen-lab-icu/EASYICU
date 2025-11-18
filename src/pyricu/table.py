@@ -24,9 +24,12 @@ class ICUTable:
     value_column: Optional[str] = None
     unit_column: Optional[str] = None
     time_columns: List[str] = field(default_factory=list)
+    _owns_data: bool = field(default=False, repr=False)  # 🚀 标记是否拥有数据
 
     def __post_init__(self) -> None:
-        self.data = self.data.copy()
+        # 🚀 优化：避免不必要的copy，大部分情况下数据是只读的
+        # 如果需要修改，调用者应该传入_owns_data=True或显式调用.copy()
+        pass  # 移除强制copy
         self._validate_columns(self.id_columns, required=False)
         self._validate_columns(self.time_columns, required=False)
         if self.index_column:

@@ -1,13 +1,16 @@
 """
-高性能 Parquet 读取器 - 纯 Python，无需 R
-比 fst 更快，支持更多优化功能
+高性能 Parquet 读取器 - 纯 Python,无需 R
+比 fst 更快,支持更多优化功能
 """
 from pathlib import Path
 from typing import Optional, List, Union, Tuple, Any
+import logging
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger(__name__)
 
 
 def read_parquet(
@@ -89,9 +92,9 @@ def read_parquet_parallel(
             return None
     
     if verbose:
-        print(f"   📚 并行读取 {len(file_paths)} 个 Parquet 分区...")
+        logger.debug(f"并行读取 {len(file_paths)} 个 Parquet 分区...")
         if filters:
-            print(f"   🔍 应用过滤器: {filters}")
+            logger.debug(f"应用过滤器: {filters}")
     
     dfs = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -111,7 +114,7 @@ def read_parquet_parallel(
     result = pd.concat(dfs, ignore_index=True)
     
     if verbose:
-        print(f"   ✅ 读取完成: {len(result):,} 行")
+        logger.debug(f"读取完成: {len(result):,} 行")
     
     return result
 

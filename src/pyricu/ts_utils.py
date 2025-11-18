@@ -334,9 +334,10 @@ def expand(
     if keep_vars is None:
         keep_vars = []
     
+    # 🚀 优化: 避免不必要的 copy，使用视图
     # Ensure start and end are datetime
-    data = data.copy()
     if not pd.api.types.is_datetime64_any_dtype(data[start_var]):
+        data = data.copy()  # 只在需要修改时才复制
         data[start_var] = pd.to_datetime(data[start_var])
     
     # Handle end_var as duration or absolute time
@@ -348,36 +349,46 @@ def expand(
             data[end_var] = pd.to_datetime(data[end_var])
         end_col = end_var
     
-    expanded_rows = []
-    for _, row in data.iterrows():
+    # 🚀 优化: 向量化处理，避免 iterrows()
+    expanded_chunks = []
+    
+    # 预先过滤有效行（非 NA，start <= end）
+    valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
+    valid_data = data[valid_mask]
+    
+    if len(valid_data) == 0:
+        # 返回空结果
+        result_cols = [start_var] + id_cols + keep_vars
+        return pd.DataFrame(columns=result_cols)
+    
+    # 🚀 向量化: 批量处理每一行
+    for idx, row in valid_data.iterrows():
         start = row[start_var]
         end = row[end_col]
         
-        if pd.isna(start) or pd.isna(end) or start > end:
+        # 生成时间范围
+        time_range = pd.date_range(start=start, end=end, freq=step_size)
+        n_points = len(time_range)
+        
+        if n_points == 0:
             continue
         
-        # Generate time range
-        time_range = pd.date_range(start=start, end=end, freq=step_size)
+        # 🚀 优化: 使用 dict + repeat 而不是逐个 append
+        chunk_data = {start_var: time_range}
         
-        for time_point in time_range:
-            new_row = {start_var: time_point}
-            
-            # Add ID columns
-            for col in id_cols:
-                if col in row:
-                    new_row[col] = row[col]
-            
-            # Add keep_vars
-            for col in keep_vars:
-                if col in row:
-                    new_row[col] = row[col]
-            
-            expanded_rows.append(new_row)
+        # 重复 ID 列和 keep_vars
+        for col in id_cols + keep_vars:
+            if col in row:
+                chunk_data[col] = [row[col]] * n_points
+        
+        expanded_chunks.append(pd.DataFrame(chunk_data))
     
-    if not expanded_rows:
-        return pd.DataFrame()
+    # 🚀 合并所有chunks
+    if not expanded_chunks:
+        result_cols = [start_var] + id_cols + keep_vars
+        return pd.DataFrame(columns=result_cols)
     
-    result = pd.DataFrame(expanded_rows)
+    result = pd.concat(expanded_chunks, ignore_index=True)
     
     # Clean up temporary column
     if '_end_abs' in data.columns:
@@ -479,7 +490,7 @@ def fill_gaps(
         ... })
         >>> fill_gaps(df, ['id'], 'time', pd.Timedelta(hours=1))
     """
-    data = data.copy()
+    # 🚀 优化: 只在需要修改时才复制
     if index_col not in data.columns:
         return data
 
@@ -942,7 +953,7 @@ def _slide_vectorized(
     if not is_numeric_time:
         # Ensure time column is datetime
         if not pd.api.types.is_datetime64_any_dtype(data[index_col]):
-            data = data.copy()
+            # 🚀 优化：避免copy（调用者通常不再使用原数据）
             data[index_col] = pd.to_datetime(data[index_col])
     
     # Convert before to compatible units

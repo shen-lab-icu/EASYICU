@@ -252,125 +252,105 @@ def _si_and(
 ) -> pd.DataFrame:
     """Detect SI when both antibiotic AND sampling occur.
     
-    Following R ricu's si_and logic with rolling joins:
-    
-    Method 1 (do_roll): ABX followed by sampling
-    - Find sampling events within [abx_time, abx_time + abx_win)
-    - R: do_roll(abx, samp, abx_win) with roll = -win
-    - Takes ABX time as SI time
-    
-    Method 2 (do_roll): Sampling followed by ABX
-    - Find ABX events within [samp_time, samp_time + samp_win)
-    - R: do_roll(samp, abx, samp_win) with roll = -win
-    - Takes sampling time as SI time
-    
-    Note: R's roll = -win means "roll forward" to find next event
-    within window, creating half-open intervals [t, t+win)
-    
-    Args:
-        abx: Processed antibiotic data
-        samp: Processed sampling data
-        id_cols: ID columns
-        index_col: Time index column
-        abx_win: Time window after ABX for sampling
-        samp_win: Time window after sampling for ABX
-        keep_components: Whether to keep component times
-        
-    Returns:
-        DataFrame with suspected infection events
+    Simple iterrows implementation (correctness-focused)
     """
     if abx.empty or samp.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
     
-    # Determine if time is numeric (hours) or datetime
-    time_is_numeric = pd.api.types.is_numeric_dtype(abx[index_col]) if index_col in abx.columns else False
+    # Determine time type
+    time_is_numeric = pd.api.types.is_numeric_dtype(abx[index_col])
     
     if not time_is_numeric:
-        # Ensure datetime for datetime operations
-        if index_col in abx.columns:
+        # 🚀 优化：仅在需要时copy（datetime转换可能已在上游完成）
+        if not pd.api.types.is_datetime64_any_dtype(abx[index_col]):
             abx = abx.copy()
             abx[index_col] = pd.to_datetime(abx[index_col], errors='coerce')
-        if index_col in samp.columns:
+        if not pd.api.types.is_datetime64_any_dtype(samp[index_col]):
             samp = samp.copy()
             samp[index_col] = pd.to_datetime(samp[index_col], errors='coerce')
+        abx_win_val = abx_win
+        samp_win_val = samp_win
+    else:
+        abx_win_val = abx_win.total_seconds() / 3600.0
+        samp_win_val = samp_win.total_seconds() / 3600.0
     
     results = []
     
-    # Method 1: ABX followed by sampling (within abx_win)
-    # R: do_roll(abx, samp, abx_win) with roll = -win
-    # Searches forward: [abx_time, abx_time + abx_win)
+    # Method 1: ABX → sampling
     for _, abx_row in abx.iterrows():
-        id_mask = pd.Series(True, index=samp.index)
-        for col in id_cols:
-            if col in samp.columns:
-                id_mask = id_mask & (samp[col] == abx_row[col])
-        
         abx_time = abx_row[index_col]
+        if pd.isna(abx_time):
+            continue
         
-        if pd.notna(abx_time):
-            # Half-open interval: [abx_time, abx_time + abx_win)
-            if time_is_numeric:
-                abx_win_val = abx_win.total_seconds() / 3600.0
-                time_mask = (samp[index_col] >= abx_time) & (samp[index_col] < abx_time + abx_win_val)
-            else:
-                time_mask = (samp[index_col] >= abx_time) & (samp[index_col] < abx_time + abx_win)
-            
-            matching_samps = samp[id_mask & time_mask]
-            
-            for _, samp_row in matching_samps.iterrows():
-                # Take the earlier time (ABX) as SI time
-                result_row = {index_col: abx_time}
-                for col in id_cols:
-                    result_row[col] = abx_row[col]
-                
-                if keep_components:
-                    result_row['abx_time'] = abx_time
-                    result_row['samp_time'] = samp_row[index_col]
-                
-                results.append(result_row)
-    
-    # Method 2: Sampling followed by ABX (within samp_win)
-    # R: do_roll(samp, abx, samp_win) with roll = -win
-    # Searches forward: [samp_time, samp_time + samp_win)
-    for _, samp_row in samp.iterrows():
-        id_mask = pd.Series(True, index=abx.index)
+        samp_mask = pd.Series(True, index=samp.index)
         for col in id_cols:
-            if col in abx.columns:
-                id_mask = id_mask & (abx[col] == samp_row[col])
+            samp_mask &= (samp[col] == abx_row[col])
         
+        samp_subset = samp[samp_mask]
+        if samp_subset.empty:
+            continue
+        
+        if time_is_numeric:
+            samp_in_win = samp_subset[
+                (samp_subset[index_col] >= abx_time) &
+                (samp_subset[index_col] < abx_time + abx_win_val)
+            ]
+        else:
+            samp_in_win = samp_subset[
+                (samp_subset[index_col] >= abx_time) &
+                (samp_subset[index_col] < abx_time + abx_win_val)
+            ]
+        
+        if not samp_in_win.empty:
+            result_row = {col: abx_row[col] for col in id_cols}
+            result_row[index_col] = abx_time
+            
+            if keep_components:
+                result_row['abx_time'] = abx_time
+                result_row['samp_time'] = samp_in_win.iloc[0][index_col]
+            
+            results.append(result_row)
+    
+    # Method 2: Sampling → ABX
+    for _, samp_row in samp.iterrows():
         samp_time = samp_row[index_col]
+        if pd.isna(samp_time):
+            continue
         
-        if pd.notna(samp_time):
-            # Half-open interval: [samp_time, samp_time + samp_win)
-            if time_is_numeric:
-                samp_win_val = samp_win.total_seconds() / 3600.0
-                time_mask = (abx[index_col] >= samp_time) & (abx[index_col] < samp_time + samp_win_val)
-            else:
-                time_mask = (abx[index_col] >= samp_time) & (abx[index_col] < samp_time + samp_win)
+        abx_mask = pd.Series(True, index=abx.index)
+        for col in id_cols:
+            abx_mask &= (abx[col] == samp_row[col])
+        
+        abx_subset = abx[abx_mask]
+        if abx_subset.empty:
+            continue
+        
+        if time_is_numeric:
+            abx_in_win = abx_subset[
+                (abx_subset[index_col] >= samp_time) &
+                (abx_subset[index_col] < samp_time + samp_win_val)
+            ]
+        else:
+            abx_in_win = abx_subset[
+                (abx_subset[index_col] >= samp_time) &
+                (abx_subset[index_col] < samp_time + samp_win_val)
+            ]
+        
+        if not abx_in_win.empty:
+            result_row = {col: samp_row[col] for col in id_cols}
+            result_row[index_col] = samp_time
             
-            matching_abx = abx[id_mask & time_mask]
+            if keep_components:
+                result_row['abx_time'] = abx_in_win.iloc[0][index_col]
+                result_row['samp_time'] = samp_time
             
-            for _, abx_row in matching_abx.iterrows():
-                # Take the earlier time (sampling) as SI time
-                result_row = {index_col: samp_time}
-                for col in id_cols:
-                    result_row[col] = samp_row[col]
-                
-                if keep_components:
-                    result_row['abx_time'] = abx_row[index_col]
-                    result_row['samp_time'] = samp_time
-                
-                results.append(result_row)
+            results.append(result_row)
     
     if not results:
         return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
     
     result_df = pd.DataFrame(results)
-    
-    # Remove duplicates (same patient, same SI time)
-    dedup_cols = id_cols + [index_col]
-    result_df = result_df.drop_duplicates(subset=dedup_cols)
-    
+    result_df = result_df.drop_duplicates(subset=id_cols + [index_col])
     result_df['susp_inf'] = True
     return result_df
 

@@ -186,11 +186,11 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
     except Exception:
         pat_tbl = None
     pat_df = getattr(pat_tbl, "data", pat_tbl) if pat_tbl is not None else None
-    icu = icu_df.copy()
+    icu = icu_df
     patient_filter = _normalize_patient_ids(ctx.patient_ids, primary_id)
     if patient_filter:
-        icu = icu[icu["stay_id"].isin(patient_filter)]
-    adm = adm_df.copy()
+        icu = icu[icu["stay_id"].isin(patient_filter)].copy()
+    adm = adm_df
     icu["intime"] = pd.to_datetime(icu["intime"], errors="coerce").dt.tz_localize(None)
     icu["outtime"] = pd.to_datetime(icu.get("outtime"), errors="coerce").dt.tz_localize(None)
     adm["admittime"] = pd.to_datetime(adm["admittime"], errors="coerce").dt.tz_localize(None)
@@ -199,10 +199,12 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
         if extra_col in adm.columns:
             adm[extra_col] = pd.to_datetime(adm[extra_col], errors="coerce").dt.tz_localize(None)
     if pat_df is not None and not pat_df.empty and "subject_id" in icu.columns:
-        pat = pat_df.copy()
+        pat = pat_df
         for col in ("dod",):
             if col in pat.columns:
+                pat = pat.copy()  # Only copy when modifying
                 pat[col] = pd.to_datetime(pat[col], errors="coerce").dt.tz_localize(None)
+                break  # Only need to copy once
         merged = icu.merge(adm, on="hadm_id", how="left", suffixes=("", "_adm"))
         merged = merged.merge(pat, on="subject_id", how="left", suffixes=("", "_pat"))
     else:
@@ -241,7 +243,7 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
 
     start_hours = (start_time - merged["intime"]).dt.total_seconds() / 3600.0
     end_hours = (end_time - merged["intime"]).dt.total_seconds() / 3600.0
-    limits = merged[["stay_id"]].copy()
+    limits = merged.loc[:, ["stay_id"]].copy()
     limits["start"] = start_hours
     limits["end"] = end_hours
     limits = limits.replace([np.inf, -np.inf], np.nan).dropna(subset=["start", "end"])
@@ -474,9 +476,9 @@ def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: s
             needed_cols = [col for col in cols_to_load if col in icustays_tbl.data.columns]
             if from_col in needed_cols and to_col in needed_cols:
                 mapping = icustays_tbl.data[needed_cols].drop_duplicates()
-                # Debug print
+                # Debug logging
                 if os.environ.get('DEBUG'):
-                    print(f"   ✅ ID映射加载成功: {from_col} → {to_col}, {len(mapping)} 行")
+                    logger.debug(f"ID映射加载成功: {from_col} → {to_col}, {len(mapping)} 行")
                 return mapping
         else:
             if os.environ.get('DEBUG'):
@@ -598,14 +600,14 @@ def _assert_shared_schema(
             
             if mapping is not None:
                 if os.environ.get('DEBUG'):
-                    print(f"   ✅ ID映射表加载成功: hadm_id → stay_id, {len(mapping)} 行")
+                    logger.debug(f"ID映射表加载成功: hadm_id → stay_id, {len(mapping)} 行")
                 
                 # Convert tables with hadm_id to stay_id
                 tables_to_remove = []  # Track empty tables to remove
                 for name, table in list(tables.items()):
                     if 'hadm_id' in table.id_columns and 'stay_id' not in table.id_columns:
                         if os.environ.get('DEBUG'):
-                            print(f"   🔄 转换表 '{name}': hadm_id → stay_id")
+                            logger.debug(f"转换表 '{name}': hadm_id → stay_id")
                         converted_data = _convert_id_column(
                             table.data.copy(),
                             'hadm_id',
@@ -656,7 +658,7 @@ def _assert_shared_schema(
                 for name, table in list(tables.items()):
                     if 'subject_id' in table.id_columns and 'stay_id' not in table.id_columns:
                         if os.environ.get('DEBUG'):
-                            print(f"   🔄 转换表 '{name}': subject_id → stay_id")
+                            logger.debug(f"转换表 '{name}': subject_id → stay_id")
                         converted_data = _convert_id_column(
                             table.data.copy(),
                             'subject_id',
@@ -2458,8 +2460,8 @@ def _match_fio2(
     if mode == "match_vals":
         # Rolling join: merge o2 and fio2 within time window
         # This matches R's rolling join behavior
-        o2_df = o2_tbl.data.copy()
-        fio2_df = fio2_tbl.data.copy()
+        o2_df = o2_tbl.data
+        fio2_df = fio2_tbl.data
         
         # Rename value columns
         o2_val_col = o2_tbl.value_column or o2_col
@@ -2496,17 +2498,19 @@ def _match_fio2(
                 if isinstance(ds_name, str) and ds_name.lower() == "aumc":
                     numeric_unit = 'ms'
             if o2_time_is_numeric:
-                o2_time_backup = o2_df[index_column].copy()
+                o2_time_backup = o2_df[index_column]
                 # 对于numeric类型，需要转换为datetime进行merge_asof
+                o2_df = o2_df.copy()  # Only copy when we need to modify
                 o2_df[index_column] = base_time + pd.to_timedelta(o2_df[index_column], unit=numeric_unit)
             if fio2_time_is_numeric:
-                fio2_time_backup = fio2_df[index_column].copy()
+                fio2_time_backup = fio2_df[index_column]
+                fio2_df = fio2_df.copy()  # Only copy when we need to modify
                 fio2_df[index_column] = base_time + pd.to_timedelta(fio2_df[index_column], unit=numeric_unit)
             
             # 确保数据在每个by分组内都是排序的（merge_asof的严格要求）
             # 先选择需要的列，然后排序
-            o2_subset = o2_df[id_columns + [index_column, o2_col]].copy()
-            fio2_subset = fio2_df[id_columns + [index_column, fio2_col]].copy()
+            o2_subset = o2_df[id_columns + [index_column, o2_col]]
+            fio2_subset = fio2_df[id_columns + [index_column, fio2_col]]
             
             # 移除NaN时间值（NaN会导致排序问题）
             o2_subset = o2_subset.dropna(subset=[index_column])
@@ -2519,8 +2523,8 @@ def _match_fio2(
                 # 这样可以避免pandas sort_values在某些边界情况下的问题
                 o2_groups = []
                 for id_val in o2_subset[id_columns[0]].unique():
-                    group = o2_subset[o2_subset[id_columns[0]] == id_val].copy()
-                    # 确保每个分组内时间列严格排序
+                    group = o2_subset[o2_subset[id_columns[0]] == id_val]
+                    # 确保每个分组内时间列严格排序 - sort_values creates a copy
                     group = group.sort_values(by=index_column, kind='mergesort')
                     o2_groups.append(group)
                 if o2_groups:
@@ -2530,8 +2534,8 @@ def _match_fio2(
                 
                 fio2_groups = []
                 for id_val in fio2_subset[id_columns[0]].unique():
-                    group = fio2_subset[fio2_subset[id_columns[0]] == id_val].copy()
-                    # 确保每个分组内时间列严格排序
+                    group = fio2_subset[fio2_subset[id_columns[0]] == id_val]
+                    # 确保每个分组内时间列严格排序 - sort_values creates a copy
                     group = group.sort_values(by=index_column, kind='mergesort')
                     fio2_groups.append(group)
                 if fio2_groups:
@@ -2548,8 +2552,8 @@ def _match_fio2(
                 # 如果fio2为空，创建与o2_subset时间点对齐的DataFrame
                 # 所有fio2值都是NaN，后续会被fix_na_fio2填充为21%
                 if fio2_subset.empty:
-                    merged = o2_subset.copy()
-                    merged[fio2_col] = float('nan')
+                    merged = o2_subset
+                    merged = merged.assign(**{fio2_col: float('nan')})
                     # 转换回原始时间类型
                     if o2_time_is_numeric:
                         merged[index_column] = o2_time_backup
@@ -2579,8 +2583,8 @@ def _match_fio2(
                     o2_mask = o2_subset[id_columns[0]] == id_val
                     fio2_mask = fio2_subset[id_columns[0]] == id_val
                     
-                    o2_group = o2_subset[o2_mask].copy()
-                    fio2_group = fio2_subset[fio2_mask].copy()
+                    o2_group = o2_subset[o2_mask]
+                    fio2_group = fio2_subset[fio2_mask]
                     
                     # 🔧 CRITICAL FIX: 如果 o2_group 为空，跳过
                     # 但如果 fio2_group 为空，不跳过！应该填充 fio2=21%
@@ -2589,8 +2593,7 @@ def _match_fio2(
                     
                     # 如果 fio2_group 为空，为当前患者创建 fio2=NaN 的数据，后续会被填充为 21%
                     if len(fio2_group) == 0:
-                        merged_fwd_group = o2_group[[index_column, o2_col]].copy()
-                        merged_fwd_group[fio2_col] = float('nan')
+                        merged_fwd_group = o2_group[[index_column, o2_col]].assign(**{fio2_col: float('nan')})
                         # 添加ID列
                         for col in id_columns:
                             merged_fwd_group[col] = id_val
@@ -2610,8 +2613,8 @@ def _match_fio2(
                     # Forward join: 不使用by参数，因为已经按ID分组了
                     try:
                         merged_fwd_group = pd.merge_asof(
-                            o2_group[[index_column, o2_col]].copy(),
-                            fio2_group[[index_column, fio2_col]].copy(),
+                            o2_group[[index_column, o2_col]],
+                            fio2_group[[index_column, fio2_col]],
                             on=index_column,
                             tolerance=match_win,
                             direction='backward'

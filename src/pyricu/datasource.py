@@ -257,13 +257,13 @@ class ICUDataSource:
 
             frame = frame_filtered.copy()
         else:
-            # 🚀 优化2：如果没有指定columns，使用最小列集
+            # 🚀 优吖2：如果没有指定columns，使用最小列集
             if columns is None:
                 from .load_concepts import MINIMAL_COLUMNS_MAP, USE_MINIMAL_COLUMNS
                 if USE_MINIMAL_COLUMNS and table_name in MINIMAL_COLUMNS_MAP:
                     columns = MINIMAL_COLUMNS_MAP[table_name]
                     if DEBUG_MODE:
-                        print(f"   ⚡ 应用最小列集优化: {table_name} -> {len(columns)}列")
+                        logger.debug(f"应用最小列集优化: {table_name} -> {len(columns)}列")
 
             # 提取 patient_ids 过滤器用于分区预过滤
             patient_ids_filter = None
@@ -281,7 +281,7 @@ class ICUDataSource:
                             cache_key = f"_filter_logged_{table_name}"
                             if not hasattr(self, cache_key) or not getattr(self, cache_key, False):
                                 if DEBUG_MODE:
-                                    print(f"   🎯 检测到患者ID过滤器: {len(spec.value)} 个患者, 列={spec.column}")
+                                    logger.debug(f"检测到患者ID过滤器: {len(spec.value)} 个患者, 列={spec.column}")
                                 setattr(self, cache_key, True)
                         break
 
@@ -355,9 +355,9 @@ class ICUDataSource:
         columns: Optional[Iterable[str]],
         patient_ids_filter: Optional[FilterSpec] = None,
     ) -> pd.DataFrame:
-        # 🔍 调试日志：显示请求的列
+        # 🔍 调试日志：显示请求的列（仅在DEBUG级别显示）
         if columns:
-            print(f"   📋 _load_raw_frame: table={table_name}, columns={list(columns)}")
+            logger.debug(f"_load_raw_frame: table={table_name}, columns={list(columns)}")
         
         # 🚀 OPTIMIZATION: 缓存键不包含patient_ids_filter以实现跨概念共享
         # 对于同一批患者的多个概念加载,只在第一次读取表,后续从缓存中过滤
@@ -374,7 +374,7 @@ class ICUDataSource:
             # 🚀 OPTIMIZATION: 从缓存中取数据后再应用patient过滤
             # 这样多个概念可以共享同一个缓存的表副本
             # ⚡ 性能优化: 避免copy(),直接返回过滤后的视图
-            print(f"   ✅ 从缓存加载: table={table_name}, cached_columns={list(cached_frame.columns)}")
+            logger.debug(f"从缓存加载: table={table_name}, cached_columns={list(cached_frame.columns)}")
             if patient_ids_filter:
                 # 返回过滤后的视图，避免拷贝整个缓存表
                 return patient_ids_filter.apply(cached_frame)
@@ -409,8 +409,8 @@ class ICUDataSource:
                 # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
                 # 这允许在demo数据中缺少某些表时继续运行
                 if self.config.name == 'miiv' and table_name in self.config.tables:
-                    # ❌ DEBUG: 这个路径导致返回空DataFrame!
-                    print(f"   ❌ loader is None for {table_name}, returning empty DataFrame")
+                    # DEBUG: 这个路径导致返回空DataFrame!
+                    logger.debug(f"loader is None for {table_name}, returning empty DataFrame")
                     # 返回空DataFrame，保持与配置中表结构一致的列
                     table_cfg = self.config.get_table(table_name)
                     defaults = table_cfg.defaults
@@ -570,7 +570,7 @@ class ICUDataSource:
         # Handle directory (partitioned data)
         if path.is_dir():
             if DEBUG_MODE:
-                print(f"   📂 读取分区目录: {path.name}, 请求列: {list(columns) if columns else '全部列'}")
+                logger.debug(f"读取分区目录: {path.name}, 请求列: {list(columns) if columns else '全部列'}")
             # 🚀 使用优化版本（自动忽略.fst文件）
             return self._read_partitioned_data_optimized(path, columns, patient_ids_filter)
         
@@ -744,7 +744,7 @@ class ICUDataSource:
         
         # 🔍 调试日志：显示分区加载请求的列
         if DEBUG_MODE and columns:
-            print(f"   🔹 分区表 {directory.name} 请求的列: {list(columns)}")
+            logger.debug(f"分区表 {directory.name} 请求的列: {list(columns)}")
         
         # 只支持 Parquet 格式
         files = sorted(directory.glob("*.parquet")) + sorted(directory.glob("*.pq"))
