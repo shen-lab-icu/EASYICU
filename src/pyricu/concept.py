@@ -25,12 +25,17 @@ from .concept_callbacks import ConceptCallbackContext, execute_concept_callback
 logger = logging.getLogger(__name__)
 
 # 全局调试开关 - 设置为 False 可以减少输出
+DEBUG_MODE = False
 
 # Concepts that require hourly maxima (vasoactive infusion rates)
 VASO_RATE_CONCEPTS = {"dopa_rate", "dobu_rate", "epi_rate", "norepi_rate", "adh_rate"}
 
 
 def _debug(msg: str) -> None:
+    if DEBUG_MODE:
+        logger.debug(msg)
+
+
 def _safe_serialize(value):
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
@@ -539,6 +544,7 @@ class ConceptResolver:
                     self._id_mapping_cache = icustays_table[['stay_id', 'subject_id']].drop_duplicates()
                     
                 if verbose:
+                    if DEBUG_MODE: print(f"   🔗 加载 ID 映射表: {len(self._id_mapping_cache)} 条记录")
             except Exception as e:
                 if verbose:
                     print(f"   ⚠️  无法加载 icustays 进行 ID 转换: {e}")
@@ -552,6 +558,8 @@ class ConceptResolver:
         if target_values:
             patient_ids[target_id_var] = target_values
             if verbose:
+                if DEBUG_MODE: print(f"   🔗 ID 转换: {source_var}={len(source_values)}个 → {target_id_var}={len(target_values)}个")
+        
         return patient_ids
 
     def load_concepts(
@@ -573,10 +581,7 @@ class ConceptResolver:
         required_names = self._expand_dependencies(names)  # Ensure dependencies are expanded
         tables: Dict[str, ICUTable] = {}
         aggregators = self._normalise_aggregators(aggregate, required_names)
-        # 🚀 性能优化: 不要清空 _concept_cache，保留用于递归调用的缓存
-        # 只在顶层调用时初始化（检查是否已存在）
-        if not hasattr(self, '_concept_cache') or self._concept_cache is None:
-            self._concept_cache = {}
+        self._concept_cache = {}
         # 初始化当前线程的inflight集合
         self._get_inflight().clear()
 
@@ -649,6 +654,7 @@ class ConceptResolver:
                 # 如果是ricu_compatible模式且只有一个概念，返回ricu.R格式的DataFrame
                 if ricu_compatible and len(tables) == 1:
                     concept_name = list(tables.keys())[0]
+                    logger.debug("调试：调用_to_ricu_format处理概念 %s", concept_name)
                     return self._to_ricu_format(tables[concept_name], concept_name)
                 return tables
 
@@ -748,6 +754,7 @@ class ConceptResolver:
         unit_column: Optional[str] = None
         time_columns: List[str] = []
         
+        # DEBUG: 临时启用调试模式
         DEBUG_MODE = False
 
         for source in sources:
@@ -889,13 +896,20 @@ class ConceptResolver:
                 cached_table = self._table_cache.get(cache_key)
             if cached_table is not None:
                 if verbose or DEBUG_MODE:
+                    if DEBUG_MODE: print(f"   ♻️  使用缓存的表: {source.table} (跳过 {len(patient_filter_in_filters.value) if patient_filter_in_filters else 0} 个患者的加载)")
                 # 从缓存获取ICUTable对象
                 frame = cached_table.data.copy()
+                
+                if DEBUG_MODE:
+                    print(f"   🔍 缓存数据: {len(frame)} 行, 列={list(frame.columns)[:5]}")
                 
                 # 应用其他过滤器（如 sub_var/ids）
                 for f in other_filters_list:
                     before_count = len(frame)
                     frame = f.apply(frame)
+                    if DEBUG_MODE:
+                        print(f"   🔧 缓存分支过滤 {f.column}: {before_count:,} → {len(frame):,} 行")
+                
                 # 重新构建 table 对象（使用过滤后的 frame）
                 table = ICUTable(
                     data=frame,
@@ -911,6 +925,13 @@ class ConceptResolver:
                     table = data_source.load_table(source.table, filters=filters, verbose=verbose)
                     
                     # 🔍 DEBUG: 检查table.data
+                    if DEBUG_MODE:
+                        print(f"   🔎 table.data类型: {type(table.data)}, 长度: {len(table.data) if hasattr(table.data, '__len__') else 'N/A'}")
+                        if hasattr(table.data, 'columns'):
+                            print(f"       列: {list(table.data.columns)}")
+                        if hasattr(table.data, 'head'):
+                            print(f"       前3行:\\n{table.data.head(3)}")
+                    
                     frame = table.data.copy()
                     
                     # 🔧 调试：检查过滤是否成功
@@ -1086,13 +1107,24 @@ class ConceptResolver:
                         with self._cache_lock:
                             self._table_cache[cache_key] = patient_only_table
                         if verbose:
+                            if DEBUG_MODE: print(f"   💾 缓存表 {source.table}: {len(patient_filter_in_filters.value)} 个患者")
                 except (KeyError, FileNotFoundError, ValueError) as e:
                     # 如果表不存在，跳过这个源
                     if DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"Table '{source.table}' not available: {type(e).__name__}: {str(e)[:100]}")
                     continue
             
             # MIMIC-IV特殊处理：若表为labevents/microbiologyevents/inputevents，仅有subject_id，按时间窗口映射到对应ICU stay
+            if DEBUG_MODE:
+                print(f"   📊 加载后数据: {source.table}, 行数={len(frame)}, itemid过滤={source.ids}")
+                if source.ids and source.sub_var and source.sub_var in frame.columns:
+                    print(f"       - {source.sub_var} 唯一值: {sorted(frame[source.sub_var].unique())[:10]}")
+                print(f"       - frame列: {list(frame.columns)}")
+                print(f"       - frame前3行:\\n{frame.head(3)}")
+            if DEBUG_MODE:
+                if DEBUG_MODE: print(f"   🔍 调试 {source.table}: 'subject_id' in frame={('subject_id' in frame.columns)}, 'stay_id' in frame={('stay_id' in frame.columns)}, defaults.id_var={defaults.id_var}")
             if source.table in ['labevents', 'microbiologyevents', 'inputevents'] and 'subject_id' in frame.columns and 'stay_id' not in frame.columns:
+                if DEBUG_MODE: print(f"   ➡️  进入 MIMIC-IV 特殊处理: {source.table}")
                 try:
                     # 仅加载相关subject的icustays，并携带intime/outtime用于窗口过滤
                     icustay_filters = []
@@ -1150,7 +1182,17 @@ class ConceptResolver:
                         before_filter = len(tmp)
 
                         # Debug output for hospital window fix
+                        if DEBUG_MODE:
+                            print(f"      🏥 [住院窗口] 开始处理: 表={source.table}, 行数={len(tmp)}")
+                            if 'hadm_id' in tmp.columns:
+                                print(f"      🏥 [住院窗口] tmp包含hadm_id: {tmp['hadm_id'].notna().sum()}个有效值")
+                            else:
+                                print(f"      🏥 [住院窗口] ❌ tmp不包含hadm_id列!")
+
                         # Load admissions table for hospital discharge times
+                        if DEBUG_MODE:
+                            print(f"      🏥 [住院窗口] 开始加载admissions表...")
+
                         # Try to load admissions table for hospital discharge times
                         hospital_disch_times = {}
                         if 'hadm_id' in tmp.columns:
@@ -1190,6 +1232,9 @@ class ConceptResolver:
                                         if DEBUG_MODE and hospital_disch_times:
                                             print(f"      🏥 [住院窗口] 加载住院出院时间: {len(hospital_disch_times)}个记录")
                             except Exception as e:
+                                if DEBUG_MODE:
+                                    print(f"      ⚠️  [住院数据] 加载失败: {str(e)[:50]}")
+
                         # CRITICAL FIX: Use hospital discharge time as upper bound (ricu.R behavior)
                         # ricu.R includes data up to hospital discharge, not ICU discharge
                         if hospital_disch_times:
@@ -1230,6 +1275,9 @@ class ConceptResolver:
                                         if DEBUG_MODE and hospital_disch_times:
                                             print(f"      📋 [强制住院窗口重试] {len(hospital_disch_times)}个住院记录")
                             except Exception as e:
+                                if DEBUG_MODE:
+                                    print(f"      ⚠️  [强制住院窗口] 重试失败: {str(e)[:50]}")
+
                             # Apply hospital discharge if available, else ICU fallback
                             if hospital_disch_times:
                                 tmp['hospital_dischtime'] = tmp['hadm_id'].map(hospital_disch_times)
@@ -1256,9 +1304,13 @@ class ConceptResolver:
                         if not tmp.empty:
                             # 将过滤后的数据作为新frame，仅保留必要列
                             frame = tmp.drop(columns=['intime', 'outtime'])
+                            if DEBUG_MODE: print(f"   ✅ [{concept_name}] MIMIC-IV {source.table}: 合并+过滤后 {len(frame)} 行")
                         else:
                             # tmp为空的原因可能是：1) 没有匹配的住院数据，2) 时间过滤后为空
                             # 这是正常的数据过滤行为（例如实验室结果在ICU出院后采集，或在miiv中是ICU入院前的数据）
+                            if DEBUG_MODE:
+                                reason = "ricu.R-style时间过滤" if before_filter > 0 else "ICU住院匹配"
+                                print(f"   ⚠️  [{concept_name}] MIMIC-IV {source.table}: {reason}后为空 (原始{len(frame)}行 → 匹配{before_filter}行 → 过滤后0行)")
                             frame = pd.DataFrame(columns=frame.columns)
                             
                         # 🔗 关键修复：如果用户提供了特定的 stay_id，在映射后再次过滤
@@ -1272,11 +1324,13 @@ class ConceptResolver:
                         
                         if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
                                 id_columns = ['stay_id']
+                                if DEBUG_MODE: print(f"   🔄 MIMIC-IV特殊处理: {source.table} ID列从 subject_id → stay_id (行数: {len(frame)})")
                     else:
                         # 没有明确时间列，退化为subject级合并（可能产生冗余），但仍补充stay_id
                         frame = frame.merge(icu_df[['subject_id', 'stay_id']], on='subject_id', how='inner')
                         if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
                             id_columns = ['stay_id']
+                            if DEBUG_MODE: print(f"   🔄 MIMIC-IV特殊处理(无时间列): {source.table} ID列从 subject_id → stay_id (行数: {len(frame)})")
                 except Exception as ex:
                     print(f"⚠️  Warning: Failed to time-map labevents to icu stays: {ex}")
                     if verbose:
@@ -1294,6 +1348,7 @@ class ConceptResolver:
                     # 优先使用stay_id（MIMIC-IV）或第一个找到的ID列
                     preferred_id = 'stay_id' if 'stay_id' in found_id_cols else found_id_cols[0]
                     id_columns = [preferred_id]
+                    if DEBUG_MODE: print(f"   🔍 自动检测到ID列: {preferred_id}")
             else:
                 id_columns = id_columns or list(table.id_columns)
             
@@ -1335,6 +1390,9 @@ class ConceptResolver:
 
             # 如果value_column不在frame中，可能需要先创建（例如从callback创建）
             # 先检查value_column是否存在，如果不存在，可能需要通过callback创建
+            if DEBUG_MODE:
+                print(f"   🔎 重命名前: value_column={value_column}, 在frame中={value_column in frame.columns}, frame行数={len(frame)}")
+            
             if value_column not in frame.columns:
                 # 对于某些概念（如lgl_cncpt），value_column可能通过callback创建
                 # 先尝试应用callback，然后再检查
@@ -1349,12 +1407,17 @@ class ConceptResolver:
                     value_column = concept_name
                 elif value_column not in frame.columns:
                     # 如果仍然不存在，跳过这个源
+                    if DEBUG_MODE:
+                        print(f"   ⚠️  value_column '{value_column}' 不存在，跳过此源")
                     frame = pd.DataFrame()
                     continue
 
             rename_map = {value_column: concept_name}
             frame = frame.rename(columns=rename_map)
             
+            if DEBUG_MODE:
+                print(f"   🔄 重命名后: concept_name={concept_name}, 在frame中={concept_name in frame.columns}, frame行数={len(frame)}")
+
             # If unit_column is specified but not in frame, set to None
             # This can happen if callbacks don't preserve unit columns
             if unit_column and unit_column not in frame.columns:
@@ -1460,6 +1523,7 @@ class ConceptResolver:
                 # 将映射后的类别值复制到 concept_name
                 frame[concept_name] = frame[source.sub_var]
 
+            # DEBUG: 在keep_cols过滤前打印
             keep_cols = {
                 *(id_columns or []),
                 *( [source_index_column] if source_index_column else []),
@@ -1513,6 +1577,7 @@ class ConceptResolver:
                     data_source.config.name in ['eicu', 'eicu_demo'] and
                     source.table == 'infusiondrug' and
                     missing.issubset({'patientunitstayid', 'infusiondrugid', 'volumeoffluid'})):
+                    logging.debug(f"eICU infusiondrug missing ID columns {missing}, but continuing with available data")
                     missing.discard('patientunitstayid')
                     missing.discard('infusiondrugid')
                     missing.discard('volumeoffluid')
@@ -1529,6 +1594,7 @@ class ConceptResolver:
             # 确保ID列在数据中
             available_id_cols = [col for col in id_columns if col in frame.columns]
             if not available_id_cols and id_columns:
+                logging.debug(f"配置的ID列 {id_columns} 不在数据中，可用列: {list(frame.columns)[:10]}")
             
             ordered_cols: List[str] = []
             # 保留所有可用的ID列（不只是第一个）
@@ -1570,12 +1636,14 @@ class ConceptResolver:
                             missing_tables.append(source.table)
 
             if missing_tables and db_name in ['eicu', 'eicu_demo']:
+                logging.debug(f"eICU测试数据缺少表 {missing_tables}，概念 '{concept_name}' 暂时不可用")
             else:
                 # 只对某些高级治疗概念显示INFO级别信息
                 advanced_concepts = ['ecmo', 'ecmo_indication', 'mech_circ_support', 'rrt']
                 if concept_name in advanced_concepts:
                     logging.info(f"概念 '{concept_name}' 在测试数据中不可用（高级治疗）")
                 else:
+                    logging.debug(f"概念 '{concept_name}' 的所有 {len(sources)} 个数据源都返回空数据")
             # 创建一个空的 DataFrame，包含必要的列
             # 确保有 ID 列：使用配置的 id_columns，如果没有则使用数据库的默认ID列
             if not id_columns:
@@ -1645,6 +1713,9 @@ class ConceptResolver:
                 except TypeError as e:
                     if 'ordered' in str(e) or 'not supported between instances' in str(e):
                         # 处理混合类型排序问题
+                        if DEBUG_MODE:
+                            print(f"      🔧 [排序修复] 检测到混合类型排序问题: {e}")
+
                         # 尝试逐个检查和修复排序键的类型
                         cleaned_combined = combined.copy()
                         for key in sort_keys:
@@ -1661,6 +1732,8 @@ class ConceptResolver:
                                         # 尝试排序以检测问题
                                         cleaned_combined.sort_values(by=[key])
                                     except TypeError:
+                                        if DEBUG_MODE:
+                                            print(f"      🔧 [排序修复] 列{key}存在混合类型，转换为字符串")
                                         cleaned_combined[key] = cleaned_combined[key].astype(str)
 
                         # 重新排序
@@ -1816,31 +1889,14 @@ class ConceptResolver:
                         dur_var=duration_col,
                     )
         
-        if concept_name == "infusionoffset" and index_column and index_column in combined.columns:
-            combined[concept_name] = combined[index_column]
-            combined = combined.drop(columns=["drugrate"], errors="ignore")
-        try:
-            return ICUTable(
-                data=combined,
-                id_columns=id_columns,
-                index_column=index_column,  # Already updated for eICU if needed
-                value_column=concept_name,
-                unit_column=final_unit_column,
-                time_columns=[col for col in time_columns if col],
-            )
-        except KeyError as exc:
-            if concept_name == "infusionoffset" and index_column and index_column in combined.columns:
-                combined[concept_name] = combined[index_column]
-                combined = combined.drop(columns=["drugrate"], errors="ignore")
-                return ICUTable(
-                    data=combined,
-                    id_columns=id_columns,
-                    index_column=index_column,
-                    value_column=concept_name,
-                    unit_column=final_unit_column,
-                    time_columns=[col for col in time_columns if col],
-                )
-            raise exc
+        return ICUTable(
+            data=combined,
+            id_columns=id_columns,
+            index_column=index_column,  # Already updated for eICU if needed
+            value_column=concept_name,
+            unit_column=final_unit_column,
+            time_columns=[col for col in time_columns if col],
+        )
     
     def _align_time_to_admission(
         self,
@@ -2087,8 +2143,14 @@ class ConceptResolver:
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
         sub_names = list(definition.sub_concepts)
 
+        # DEBUG: Print database detection info
         if verbose and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"🔍 Database-specific config check for concept '{concept_name}':")
+            logger.debug(f"   db_name: '{db_name}'")
+            logger.debug(f"   original sub_concepts: {sub_names}")
+            logger.debug(f"   definition has sources: {hasattr(definition, 'sources')}")
             if hasattr(definition, 'sources'):
+                logger.debug(f"   definition.sources: {definition.sources}")
 
         # Check if there's a database-specific configuration that overrides sub_concepts
         if db_name and hasattr(definition, 'sources') and db_name in definition.sources:
@@ -2107,17 +2169,20 @@ class ConceptResolver:
                         # Use database-specific sub_concepts
                         sub_names = list(db_source_dict['concepts'])
                         if verbose and logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"🔄 Using {db_name}-specific sub_concepts for '{concept_name}': {sub_names}")
                         break
                     elif 'params' in db_source_dict and isinstance(db_source_dict['params'], dict) and 'concepts' in db_source_dict['params']:
                         # Use database-specific sub_concepts from params
                         sub_names = list(db_source_dict['params']['concepts'])
                         if verbose and logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"🔄 Using {db_name}-specific sub_concepts from params for '{concept_name}': {sub_names}")
                         break
             else:
                 # db_sources is a dict (loaded from JSON)
                 if 'concepts' in db_sources:
                     sub_names = list(db_sources['concepts'])
                     if verbose and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"🔄 Using {db_name}-specific sub_concepts for '{concept_name}': {sub_names}")
 
         if not sub_names:
             raise ValueError(
@@ -2196,12 +2261,16 @@ class ConceptResolver:
                     id_cols = table.id_vars
                     
                     if verbose and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug("   🔧 对齐 WinTbl '%s': index_var=%s, dur_var=%s", name, idx_col, dur_col)
                         if idx_col in table.data.columns:
+                            logger.debug("      index_var 类型: %s", table.data[idx_col].dtype)
                         if dur_col and dur_col in table.data.columns:
+                            logger.debug("      dur_var 类型: %s", table.data[dur_col].dtype)
                     
                     # Align index_var (start time) if it's datetime
                     if idx_col and idx_col in table.data.columns and pd.api.types.is_datetime64_any_dtype(table.data[idx_col]):
                         if verbose and logger.isEnabledFor(logging.DEBUG):
+                            logger.debug("      ✅ 转换 index_var 从 datetime 到小时")
                         table.data = self._align_time_to_admission(
                             table.data,
                             data_source,
@@ -2213,6 +2282,7 @@ class ConceptResolver:
                     if dur_col and dur_col in table.data.columns:
                         if pd.api.types.is_timedelta64_dtype(table.data[dur_col]):
                             if verbose and logger.isEnabledFor(logging.DEBUG):
+                                logger.debug("      ✅ 转换 dur_var 从 timedelta 到小时")
                             table.data[dur_col] = table.data[dur_col].dt.total_seconds() / 3600.0
                         elif pd.api.types.is_datetime64_any_dtype(table.data[dur_col]):
                             # If dur_var is datetime (shouldn't happen), warn
@@ -2234,7 +2304,12 @@ class ConceptResolver:
         # 🔧 IMPORTANT FIX: Check for database-specific callback override
         callback_name = definition.callback
 
+        # DEBUG: Print callback detection info
         if verbose and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"🔍 Callback detection for concept '{concept_name}':")
+            logger.debug(f"   original callback: '{callback_name}'")
+            logger.debug(f"   db_name: '{db_name}'")
+            logger.debug(f"   has sources: {hasattr(definition, 'sources')}")
 
         if db_name and hasattr(definition, 'sources') and db_name in definition.sources:
             db_sources = definition.sources[db_name]
@@ -2252,18 +2327,21 @@ class ConceptResolver:
                         # Use database-specific callback only if explicitly specified
                         callback_name = db_source_dict['callback']
                         if verbose and logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"🔄 Using {db_name}-specific callback '{callback_name}' for '{concept_name}'")
                         break
             else:
                 # db_sources is a dict (loaded from JSON)
                 if 'callback' in db_sources and db_sources['callback'] is not None:
                     callback_name = db_sources['callback']
                     if verbose and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"🔄 Using {db_name}-specific callback '{callback_name}' for '{concept_name}'")
 
         # 🔧 CRITICAL FIX: Validate callback_name before execution
         if callback_name is None:
             raise ValueError(f"Concept '{concept_name}' has no callback specified. Both original and database-specific callbacks are None.")
 
         if verbose and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"🎯 Executing callback '{callback_name}' for concept '{concept_name}' with {len(sub_tables)} sub-tables")
 
         result = execute_concept_callback(callback_name, sub_tables, ctx)
 
@@ -2279,6 +2357,11 @@ class ConceptResolver:
             # Align index_var if it's still datetime
             if idx_col and idx_col in result.data.columns and pd.api.types.is_datetime64_any_dtype(result.data[idx_col]):
                 if verbose and logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "   🔧 对齐 WinTbl 结果 '%s': index_var=%s (datetime → 小时)",
+                        concept_name,
+                        idx_col,
+                    )
                 result.data = self._align_time_to_admission(
                     result.data,
                     data_source,
@@ -2289,6 +2372,11 @@ class ConceptResolver:
             # Convert dur_var from timedelta to hours
             if dur_col and dur_col in result.data.columns and pd.api.types.is_timedelta64_dtype(result.data[dur_col]):
                 if verbose and logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "   🔧 转换 WinTbl 结果 '%s': dur_var=%s (timedelta → 小时)",
+                        concept_name,
+                        dur_col,
+                    )
                 result.data[dur_col] = result.data[dur_col].dt.total_seconds() / 3600.0
 
         # R代码中，递归概念的回调返回结果就是最终结果，不需要再次聚合
@@ -2371,6 +2459,7 @@ class ConceptResolver:
                 if idx_col and dur_col and idx_col in result.data.columns and dur_col in result.data.columns:
                     if verbose:
                         if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug("   🔧 扩展 WinTbl '%s' 到时间序列 (interval=%s)", concept_name, interval)
                     
                     # 扩展窗口到时间序列
                     expanded_rows = []
@@ -2413,6 +2502,7 @@ class ConceptResolver:
                             time_columns=[],
                         )
                         if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug("   ✅ 扩展完成: %d 行", len(expanded_df))
                         elif verbose:
                             print(f"   ✅ 扩展完成: {len(expanded_df)} 行")
                     else:
@@ -3113,7 +3203,7 @@ class ConceptResolver:
         align_to_admission: bool,
         kwargs: Dict[str, object],
     ) -> ICUTable:
-        # 🚀 优化：增强概念数据缓存（避免重复加载相同概念，如urine、vaso_ind、pafi）
+        # 🚀 优化：首先检查概念数据缓存（避免重复加载相同概念，如urine）
         patient_ids_hash = hash(frozenset(patient_ids)) if patient_ids else None
         agg_value = aggregators.get(concept_name, "auto")
         if agg_value in (None, "auto"):
@@ -3121,50 +3211,20 @@ class ConceptResolver:
             if definition and definition.aggregate is not None:
                 agg_value = definition.aggregate
         
-        # 🔥 关键优化: 对于基础概念（无callback或无sub_concepts），忽略kwargs
-        # 这样urine/weight等基础概念可以被多个父概念共享缓存
-        definition = self.dictionary.get(concept_name)
-        is_base_concept = (
-            definition and 
-            (not definition.callback or not definition.sub_concepts)
-        )
-        
-        if is_base_concept:
-            # 基础概念不使用kwargs_hash，允许跨父概念共享缓存
-            concept_cache_key = (concept_name, patient_ids_hash, str(interval), str(agg_value))
-        else:
-            # 复杂概念使用kwargs_hash以区分不同配置
-            # 处理不可hash的值（如dict）
-            try:
-                hashable_items = []
-                for k, v in sorted(kwargs.items()):
-                    if isinstance(v, dict):
-                        # 字典转为排序的元组
-                        hashable_items.append((k, tuple(sorted(v.items()))))
-                    elif isinstance(v, (list, set)):
-                        # 列表/集合转为元组
-                        hashable_items.append((k, tuple(v)))
-                    else:
-                        hashable_items.append((k, v))
-                kwargs_hash = hash(frozenset(hashable_items)) if hashable_items else 0
-            except TypeError:
-                # 如果仍然无法hash，使用字符串表示
-                kwargs_hash = hash(str(sorted(kwargs.items())))
-            concept_cache_key = (concept_name, patient_ids_hash, str(interval), str(agg_value), kwargs_hash)
+        concept_cache_key = (concept_name, patient_ids_hash, str(interval), str(agg_value))
         
         with self._cache_lock:
             # 检查概念数据缓存
             if concept_cache_key in self._concept_data_cache:
-                if verbose and logger.isEnabledFor(logging.INFO):
-                    logger.info("   ✨ 从缓存加载概念 '%s'", concept_name)
+                if verbose and logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("✨ 从内存缓存加载概念 '%s'", concept_name)
                 return self._concept_data_cache[concept_cache_key]
             
-            # 检查旧的概念缓存（向后兼容）
+            # 检查旧的概念缓存
             cached = self._concept_cache.get(concept_name)
             if cached is not None:
+                # 同时更新到新缓存
                 self._concept_data_cache[concept_cache_key] = cached
-                if verbose and logger.isEnabledFor(logging.INFO):
-                    logger.info("   ✨ 从旧缓存加载概念 '%s'", concept_name)
                 return cached
             # 线程安全的循环依赖检测
             inflight = self._get_inflight()
@@ -3531,6 +3591,9 @@ def _apply_callback(
 
     expr = callback.strip()
     
+    if DEBUG_MODE:
+        print(f"   🔧 应用回调: {expr} (输入行数={len(frame)})")
+
     if expr == "identity_callback":
         return frame
 
@@ -3761,6 +3824,9 @@ def _apply_callback(
         new_unit = _strip_quotes(arguments[1]) if len(arguments) > 1 else None
         old_unit = _strip_quotes(arguments[2]) if len(arguments) > 2 else None
         
+        if DEBUG_MODE:
+            print(f"       convert_unit: symbol={symbol}, value={value}, new_unit={new_unit}, old_unit={old_unit}")
+
         frame = frame.copy()
         
         # 🔧 FIX: 如果 source.unit_var 未指定，尝试自动检测单位列
@@ -3785,13 +3851,23 @@ def _apply_callback(
             else:
                 mask = pd.Series(True, index=frame.index)
             
+            if DEBUG_MODE:
+                print(f"       unit_var={actual_unit_var}, 匹配行数={mask.sum()}/{len(frame)}")
+                if mask.sum() > 0:
+                    print(f"       匹配的单位: {unit_series[mask].unique()[:5]}")
         else:
             mask = pd.Series(True, index=frame.index)
+            if DEBUG_MODE:
+                print(f"       无unit_var，处理所有行")
+
         numeric = pd.to_numeric(frame.loc[mask, concept_name], errors="coerce")
         transformed = _apply_binary_op(symbol, numeric, value)
         # 明确转换类型以避免 dtype 不兼容警告
         frame.loc[mask, concept_name] = transformed.astype('float64')
         
+        if DEBUG_MODE:
+            print(f"       转换后非NaN行数: {transformed.notna().sum()}/{len(transformed)}")
+
         # 更新单位列
         if new_unit and actual_unit_var and actual_unit_var in frame.columns:
             frame.loc[mask, actual_unit_var] = new_unit

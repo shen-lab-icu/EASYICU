@@ -644,6 +644,7 @@ def load_demographics(
             if age_sex_data is not None and not age_sex_data.empty:
                 all_data.append(age_sex_data)
                 if verbose:
+                    logger.debug(f"age/sex: {len(age_sex_data)}行")
         except Exception as e:
             if verbose:
                 print(f"  ⚠️  age/sex加载失败: {str(e)[:50]}")
@@ -661,6 +662,7 @@ def load_demographics(
             if height_weight_data is not None and not height_weight_data.empty:
                 all_data.append(height_weight_data)
                 if verbose:
+                    logger.debug(f"height/weight: {len(height_weight_data)}行")
         except Exception as e:
             if verbose:
                 print(f"  ⚠️  height/weight加载失败: {str(e)[:50]}")
@@ -695,6 +697,7 @@ def load_demographics(
                 merged_data = pd.concat([merged_data, df], ignore_index=True)
 
         if verbose:
+            logger.debug(f"最终合并结果: {len(merged_data)}行, {len(merged_data.columns)}列")
 
         return merged_data
 

@@ -112,6 +112,7 @@ class BaseICULoader:
                 return prod_path
         except Exception as e:
             if self.verbose:
+                logger.debug(f"Could not get production path from project_config: {e}")
 
         # Check common paths
         common_paths = [

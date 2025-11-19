@@ -92,7 +92,9 @@ def read_parquet_parallel(
             return None
     
     if verbose:
+        logger.debug(f"并行读取 {len(file_paths)} 个 Parquet 分区...")
         if filters:
+            logger.debug(f"应用过滤器: {filters}")
     
     dfs = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -112,6 +114,7 @@ def read_parquet_parallel(
     result = pd.concat(dfs, ignore_index=True)
     
     if verbose:
+        logger.debug(f"读取完成: {len(result):,} 行")
     
     return result
 
