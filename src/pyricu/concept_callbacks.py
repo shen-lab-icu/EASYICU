@@ -1874,6 +1874,13 @@ def _callback_sofa_component(
         
         cols = id_columns + ([index_column] if index_column else []) + [ctx.concept_name]
         frame = data[cols]
+        
+        # 🔧 FIX: Remove duplicate timestamps (can occur when merging tables with outer join
+        # or when raw data has multiple records at same timestamp)
+        # Keep first occurrence for each (admissionid, measuredat) pair
+        dedup_cols = list(id_columns) + ([index_column] if index_column else [])
+        frame = frame.drop_duplicates(subset=dedup_cols, keep='first')
+        
         return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=ctx.concept_name)
 
     return wrapper
@@ -4791,6 +4798,12 @@ def _callback_gcs(
     data["gcs"] = combined
     cols = id_columns + ([index_column] if index_column else []) + ["gcs"]
     frame = data[cols].dropna(subset=["gcs"])
+    
+    # 🔧 FIX: Remove duplicate timestamps (outer merge may create duplicates)
+    # Keep first occurrence for each (admissionid, measuredat) pair
+    dedup_cols = list(id_columns) + ([index_column] if index_column else [])
+    frame = frame.drop_duplicates(subset=dedup_cols, keep='first')
+    
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="gcs")
 
 
