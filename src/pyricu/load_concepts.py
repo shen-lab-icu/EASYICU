@@ -205,9 +205,7 @@ class ConceptLoader:
         if getattr(source, 'unit_var', None):
             extra.append(source.unit_var)
         
-        # DEBUG: 输出提取的列信息
         result = self._infer_required_columns(source.table, id_type, extra)
-        logger.debug(f"_columns_for_source: table={source.table}, sub_var={getattr(source, 'sub_var', None)}, extra={extra}, result={result}")
         return result
     
     def _columns_for_item(self, item: Mapping[str, Any], id_type: str) -> Optional[List[str]]:
@@ -491,7 +489,6 @@ class ConceptLoader:
             import logging
             logger = logging.getLogger('pyricu.load_concepts')
             if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"   🔹 表 {table_name} 推断的列: {required_columns}")
         
         try:
             df = self._safe_load_table(table_name, required_columns)

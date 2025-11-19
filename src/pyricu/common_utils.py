@@ -145,7 +145,6 @@ class DataFrameUtils:
         optimized_memory = optimized_df.memory_usage(deep=True).sum()
         savings = original_memory - optimized_memory
         if savings > 0:
-            logger.debug(f"DataFrame optimization saved {savings / 1024:.1f}KB")
 
         return optimized_df
 
@@ -370,8 +369,6 @@ class ValidationUtils:
             'cols': len(df.columns)
         }
 
-        logger.debug(f"Memory usage for {operation}: {memory_info['total_mb']:.1f}MB "
-                    f"({memory_info['rows']:,} rows x {memory_info['cols']} cols)")
 
         return memory_info
 

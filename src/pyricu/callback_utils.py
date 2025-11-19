@@ -721,7 +721,6 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
         # This allows the callback to work even when ID columns were filtered out
         if not any(col in frame.columns for col in id_cols) and not frame.empty:
             import logging
-            logging.debug(f"No ID columns found in eICU duration callback. Available columns: {list(frame.columns)}. Creating dummy grouping for duration calculation.")
             # Use a constant group ID for all rows (treat as single patient/time series)
             frame["__dummy_patient_id"] = 1
             id_cols = ["__dummy_patient_id"]

@@ -15,7 +15,6 @@ from .config import DataSourceConfig, DataSourceRegistry, DatasetOptions, TableC
 from .table import ICUTable
 
 # 全局调试开关 - 设置为 False 可以减少输出
-DEBUG_MODE = False
 logger = logging.getLogger(__name__)
 
 # 🚀 性能优化：最小必要列集（自动应用）
@@ -262,13 +261,11 @@ class ICUDataSource:
 
             frame = frame_filtered.copy()
         else:
-            # 🚀 优吖2：如果没有指定columns，使用最小列集
+            # 如果没有指定columns，使用最小列集
             if columns is None:
                 from .load_concepts import MINIMAL_COLUMNS_MAP, USE_MINIMAL_COLUMNS
                 if USE_MINIMAL_COLUMNS and table_name in MINIMAL_COLUMNS_MAP:
                     columns = MINIMAL_COLUMNS_MAP[table_name]
-                    if DEBUG_MODE:
-                        logger.debug(f"应用最小列集优化: {table_name} -> {len(columns)}列")
 
             # 提取 patient_ids 过滤器用于分区预过滤
             patient_ids_filter = None
@@ -281,13 +278,6 @@ class ICUDataSource:
                                  'patientid']  # HiRID
                     if spec.op == FilterOp.IN and spec.column in id_columns:
                         patient_ids_filter = spec
-                        # 只在verbose模式下输出，且只输出一次
-                        if verbose:
-                            cache_key = f"_filter_logged_{table_name}"
-                            if not hasattr(self, cache_key) or not getattr(self, cache_key, False):
-                                if DEBUG_MODE:
-                                    logger.debug(f"检测到患者ID过滤器: {len(spec.value)} 个患者, 列={spec.column}")
-                                setattr(self, cache_key, True)
                         break
 
             frame = self._load_raw_frame(table_name, columns, patient_ids_filter=patient_ids_filter)
@@ -360,26 +350,34 @@ class ICUDataSource:
         columns: Optional[Iterable[str]],
         patient_ids_filter: Optional[FilterSpec] = None,
     ) -> pd.DataFrame:
-        # 🔍 调试日志：显示请求的列（仅在DEBUG级别显示）
-        if columns:
-            logger.debug(f"_load_raw_frame: table={table_name}, columns={list(columns)}")
+        # 超集缓存策略：检查是否有包含所需列的缓存
+        if self.enable_cache and columns:
+            requested_cols = set(columns)
+            with self._lock:
+                # 查找包含所有请求列的缓存
+                for cache_key, cached_frame in self._table_cache.items():
+                    if cache_key[0] == table_name:  # 表名匹配
+                        cached_cols = set(cached_frame.columns)
+                        if requested_cols.issubset(cached_cols):
+                            # 找到包含所需列的缓存，返回子集
+                            result_frame = cached_frame[list(columns)]
+                            if patient_ids_filter:
+                                return patient_ids_filter.apply(result_frame)
+                            return result_frame
         
         # 🚀 OPTIMIZATION: 缓存键不包含patient_ids_filter以实现跨概念共享
         # 对于同一批患者的多个概念加载,只在第一次读取表,后续从缓存中过滤
         # 这将chartevents等大表的加载从N次(每概念一次)减少到1次
         cache_key = (table_name, tuple(sorted(columns)) if columns else None)
         
-        # 检查缓存
+        # 检查精确匹配的缓存
         cached_frame = None
         if self.enable_cache:
             with self._lock:
                 cached_frame = self._table_cache.get(cache_key)
         
         if cached_frame is not None:
-            # 🚀 OPTIMIZATION: 从缓存中取数据后再应用patient过滤
-            # 这样多个概念可以共享同一个缓存的表副本
-            # ⚡ 性能优化: 避免copy(),直接返回过滤后的视图
-            logger.debug(f"从缓存加载: table={table_name}, cached_columns={list(cached_frame.columns)}")
+            # 从缓存中取数据后再应用patient过滤
             if patient_ids_filter:
                 # 返回过滤后的视图，避免拷贝整个缓存表
                 return patient_ids_filter.apply(cached_frame)
@@ -414,8 +412,6 @@ class ICUDataSource:
                 # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
                 # 这允许在demo数据中缺少某些表时继续运行
                 if self.config.name == 'miiv' and table_name in self.config.tables:
-                    # DEBUG: 这个路径导致返回空DataFrame!
-                    logger.debug(f"loader is None for {table_name}, returning empty DataFrame")
                     # 返回空DataFrame，保持与配置中表结构一致的列
                     table_cfg = self.config.get_table(table_name)
                     defaults = table_cfg.defaults
@@ -574,9 +570,6 @@ class ICUDataSource:
     def _read_file(self, path: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
         # Handle directory (partitioned data)
         if path.is_dir():
-            if DEBUG_MODE:
-                logger.debug(f"读取分区目录: {path.name}, 请求列: {list(columns) if columns else '全部列'}")
-            # 🚀 使用优化版本（自动忽略.fst文件）
             return self._read_partitioned_data_optimized(path, columns, patient_ids_filter)
         
         suffix = path.suffix.lower()
@@ -691,9 +684,6 @@ class ICUDataSource:
             
             except Exception as e:
                 # Dataset读取失败，回退到逐文件读取
-                if DEBUG_MODE:
-                    logger.debug(f"PyArrow dataset读取失败: {e}，使用逐文件策略")
-            
             # 🚀 策略2：逐文件读取并立即过滤（内存友好，适合大数据集）
             parquet_files = sorted(directory.glob("*.parquet"))
             if not parquet_files:
@@ -749,7 +739,6 @@ class ICUDataSource:
         
         # 🔍 调试日志：显示分区加载请求的列
         if DEBUG_MODE and columns:
-            logger.debug(f"分区表 {directory.name} 请求的列: {list(columns)}")
         
         # 只支持 Parquet 格式
         files = sorted(directory.glob("*.parquet")) + sorted(directory.glob("*.pq"))
@@ -764,10 +753,7 @@ class ICUDataSource:
         if patient_ids_filter and patient_ids_filter.column in ['subject_id', 'hadm_id', 'icustay_id', 'stay_id', 'admissionid', 'patientid']:
             target_ids = set(patient_ids_filter.value) if not isinstance(patient_ids_filter.value, str) else {patient_ids_filter.value}
             filter_tuple = (patient_ids_filter.column, target_ids)
-            if DEBUG_MODE: print(f"   📁 加载 {directory.name} ({num_files} 个 parquet 分区) - 过滤 {len(target_ids)} 个患者...")
         else:
-            if DEBUG_MODE: print(f"   📁 加载 {directory.name} ({num_files} 个 parquet 分区)...")
-        
         # 🔧 修复：传递具体的parquet文件列表，而不是目录，避免混合格式问题
         dataset_df = self._read_parquet_dataset(
             directory,
@@ -843,8 +829,6 @@ class ICUDataSource:
             table = dataset.to_table(columns=columns, filter=filter_expr)
             return table.to_pandas()
         except (OSError, ValueError, TypeError) as exc:
-            if DEBUG_MODE:
-                logger.debug("PyArrow dataset read failed for %s: %s", directory, exc)
             return None
 
     @staticmethod
