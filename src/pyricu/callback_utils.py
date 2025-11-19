@@ -2777,12 +2777,12 @@ def aumc_rate_kg(
             df[unit_col] = df[unit_col] + '/kg/' + df[rate_unit_col]
     elif unit_col and unit_col in df.columns:
         df[unit_col] = df[unit_col] + '/kg/min'
-
-    base_time = pd.Timestamp('2000-01-01')
+    # 🔧 FIX: AUMC时间单位处理
+    # datasource.py已经把AUMC时间从毫秒转换为分钟(numeric)
+    # 这里应该转换为小时(numeric),而不是datetime,以保持与其他数据库的一致性
     if index_col and index_col in df.columns and pd.api.types.is_numeric_dtype(df[index_col]):
-        # 🔧 FIX: AUMC times are already converted to MINUTES in datasource.py
-        # So we should use 'min' unit, not 'ms'
-        df[index_col] = base_time + pd.to_timedelta(pd.to_numeric(df[index_col], errors='coerce'), unit='min')
+        # 将分钟转换为小时(保持数值型)
+        df[index_col] = pd.to_numeric(df[index_col], errors='coerce') / 60.0
 
     df[concept_name] = df[val_col]
 
