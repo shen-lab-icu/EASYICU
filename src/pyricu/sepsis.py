@@ -354,7 +354,6 @@ def _si_and(
     result_df['susp_inf'] = True
     return result_df
 
-
 def _si_or(
     abx: pd.DataFrame,
     samp: pd.DataFrame,

@@ -1481,6 +1481,7 @@
     "description": "calcium",
     "omopid": 4216722,
     "category": "chemistry",
+    "callback": "ca",
     "sources": {
       "aumc": [
         {
@@ -4569,12 +4570,32 @@
           "table": "labevents",
           "sub_var": "itemid"
         }
+  ],
+  "sic": [
+    {
+      "ids": 223,
+      "table": "laboratory",
+      "sub_var": "LaboratoryID"
+    }
+  ]
+}
+},
+  "infusionoffset": {
+    "description": "hourly infusion offsets",
+    "category": "medications",
+    "sources": {
+      "eicu": [
+          {
+            "table": "infusiondrug",
+            "index_var": "infusionoffset",
+            "value_var": "drugrate"
+          }
       ],
-      "sic": [
+      "eicu_demo": [
         {
-          "ids": 223,
-          "table": "laboratory",
-          "sub_var": "LaboratoryID"
+          "table": "infusiondrug",
+          "index_var": "infusionoffset",
+          "value_var": "drugrate"
         }
       ]
     }
@@ -7248,7 +7269,11 @@
     "class_name": "rec_cncpt"
   },
   "tco2": {
-    "unit": "mEq/L",
+    "unit": [
+      "mEq/L",
+      "mmol/L"
+    ],
+    "callback": "tco2",
     "min": 5,
     "max": 60,
     "description": "totcal CO2",
@@ -7260,7 +7285,7 @@
           "ids": "Total CO2",
           "table": "lab",
           "sub_var": "labname",
-          "callback": "convert_unit(set_val(NA), 'mEq/L', 'lpm')"
+          "callback": "combine_callbacks(\n               convert_unit(set_val(NA), 'mEq/L', 'lpm'),\n               convert_unit(binary_op(`*`, 1), 'mEq/L', '(?i)mmol')\n             )"
         }
       ],
       "eicu_demo": [
@@ -7268,7 +7293,7 @@
           "ids": "Total CO2",
           "table": "lab",
           "sub_var": "labname",
-          "callback": "convert_unit(set_val(NA), 'mEq/L', 'lpm')"
+          "callback": "combine_callbacks(\n               convert_unit(set_val(NA), 'mEq/L', 'lpm'),\n               convert_unit(binary_op(`*`, 1), 'mEq/L', '(?i)mmol')\n             )"
         }
       ],
       "miiv": [
