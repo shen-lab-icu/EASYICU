@@ -4,6 +4,7 @@
     "description": "antibiotics",
     "omopid": 4085730,
     "category": "medications",
+    "aggregate": "max",
     "sources": {
       "aumc": [
         {
@@ -3066,6 +3067,19 @@
           "callback": "aumc_rate_kg"
         }
       ],
+      "miiv": [
+        {
+          "ids": [
+            221289,
+            229617
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "stop_var": "endtime",
+          "rate_uom": "rateuom",
+          "callback": "mimic_rate_mv"
+        }
+      ],
       "eicu": [
         {
           "regex": "^epi( |n).*\\(.+\\)$",
@@ -3099,15 +3113,6 @@
           "sub_var": "pharmaid",
           "grp_var": "infusionid",
           "callback": "hirid_rate_kg"
-        }
-      ],
-      "miiv": [
-        {
-          "ids": 221289,
-          "table": "inputevents",
-          "sub_var": "itemid",
-          "stop_var": "endtime",
-          "callback": "mimic_rate_mv"
         }
       ],
       "mimic": [
@@ -3446,15 +3451,35 @@
         {
           "ids": 12279,
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "value_var": "value"
+        },
+        {
+          "ids": [
+            13076
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "value_var": "value",
+          "callback": "transform_fun(percent_as_numeric)"
+        },
+        {
+          "ids": [
+            20656
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid",
+          "value_var": "value",
+          "callback": "transform_fun(percent_as_numeric)"
         }
       ],
       "eicu": [
         {
-          "ids": "FiO2",
+          "regex": "FIO2.*%.*",
           "table": "respiratorycharting",
           "sub_var": "respchartvaluelabel",
-          "callback": "transform_fun(percent_as_numeric)"
+          "callback": "transform_fun(percent_as_numeric)",
+          "class_name": "rgx_itm"
         },
         {
           "ids": "FiO2",
@@ -3465,10 +3490,11 @@
       ],
       "eicu_demo": [
         {
-          "ids": "FiO2",
+          "regex": "FIO2.*%.*",
           "table": "respiratorycharting",
           "sub_var": "respchartvaluelabel",
-          "callback": "transform_fun(percent_as_numeric)"
+          "callback": "transform_fun(percent_as_numeric)",
+          "class_name": "rgx_itm"
         },
         {
           "ids": "FiO2",
@@ -4458,9 +4484,9 @@
       ],
       "miiv": [
         {
-          "callback": "los_callback",
-          "win_type": "icustay",
-          "class_name": "fun_itm"
+          "table": "icustays",
+          "val_var": "los",
+          "class_name": "col_itm"
         }
       ],
       "mimic": [
@@ -5441,6 +5467,7 @@
     "description": "norepinephrine rate",
     "omopid": 1321341,
     "category": "medications",
+    "aggregate": "max",
     "sources": {
       "aumc": [
         {
@@ -5451,6 +5478,16 @@
           "rate_uom": "doserateunit",
           "stop_var": "stop",
           "callback": "aumc_rate_kg"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": 221906,
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "stop_var": "endtime",
+          "rate_uom": "rateuom",
+          "callback": "mimic_rate_mv"
         }
       ],
       "eicu": [
@@ -5485,15 +5522,6 @@
           "sub_var": "pharmaid",
           "grp_var": "infusionid",
           "callback": "hirid_rate_kg"
-        }
-      ],
-      "miiv": [
-        {
-          "ids": 221906,
-          "table": "inputevents",
-          "sub_var": "itemid",
-          "stop_var": "endtime",
-          "callback": "mimic_rate_mv"
         }
       ],
       "mimic": [
@@ -6917,7 +6945,6 @@
         {
           "table": "patients",
           "val_var": "gender",
-          "callback": "apply_map(c(M = 'Male', F = 'Female'))",
           "class_name": "col_itm"
         }
       ],
@@ -7188,7 +7215,18 @@
     "omopid": 36304401,
     "category": "respiratory",
     "callback": "supp_o2",
-    "class_name": "rec_cncpt"
+    "class_name": "rec_cncpt",
+    "sources": {
+      "aumc": [
+        {
+          "concepts": [
+            "vent_ind"
+          ],
+          "callback": "supp_o2_aumc",
+          "class_name": "rec_cncpt"
+        }
+      ]
+    }
   },
   "susp_inf": {
     "concepts": [
@@ -7725,7 +7763,32 @@
     "omopid": 3655896,
     "category": "medications",
     "callback": "vaso_ind",
-    "class_name": "rec_cncpt"
+    "class_name": "rec_cncpt",
+    "sources": {
+      "eicu": [
+        {
+          "concepts": [
+            "norepi_rate",
+            "dobu_rate",
+            "epi_rate"
+          ],
+          "callback": "vaso_ind_rate",
+          "class_name": "rec_cncpt"
+        }
+      ],
+      "aumc": [
+        {
+          "concepts": [
+            "norepi_rate",
+            "dobu_rate",
+            "dopa_rate",
+            "epi_rate"
+          ],
+          "callback": "vaso_ind_rate",
+          "class_name": "rec_cncpt"
+        }
+      ]
+    }
   },
   "vent_end": {
     "class_name": "lgl_cncpt",
@@ -8587,13 +8650,19 @@
   "potassium": {
     "description": "Alias for k (potassium) - SOFA-2 compatibility",
     "category": "chemistry",
-    "unit": ["mEq/L", "mmol/l"],
+    "unit": [
+      "mEq/L",
+      "mmol/l"
+    ],
     "min": 0,
     "max": 10,
     "sources": {
       "miiv": [
         {
-          "ids": [50822, 50971],
+          "ids": [
+            50822,
+            50971
+          ],
           "table": "labevents",
           "sub_var": "itemid",
           "index_var": "charttime"
@@ -8604,13 +8673,18 @@
   "bicarb": {
     "description": "Alias for bicar (bicarbonate) - SOFA-2 compatibility",
     "category": "chemistry",
-    "unit": ["mEq/L", "mmol/l"],
+    "unit": [
+      "mEq/L",
+      "mmol/l"
+    ],
     "min": 5,
     "max": 50,
     "sources": {
       "miiv": [
         {
-          "ids": [50882],
+          "ids": [
+            50882
+          ],
           "table": "labevents",
           "sub_var": "itemid",
           "index_var": "charttime"

@@ -15,6 +15,49 @@ import pandas as pd
 from .table import ICUTable
 
 
+def _standardize_fio2_units(fio2_df: pd.DataFrame, database: str) -> pd.DataFrame:
+    """将FiO2标准化为百分比形式（0-100）以实现跨数据库兼容性
+
+    Args:
+        fio2_df: FiO2数据DataFrame，包含fio2列
+        database: 数据库名称（'miiv', 'eicu', 'aumc'等）
+
+    Returns:
+        标准化后的DataFrame
+    """
+    if 'fio2' not in fio2_df.columns or fio2_df.empty:
+        return fio2_df
+
+    # 获取非空值进行分析
+    values = fio2_df['fio2'].dropna()
+    if len(values) == 0:
+        return fio2_df
+
+    # 🔧 基于分析结果的数据库特定转换
+    if database == 'miiv':
+        # MIMIC-IV分析显示pafi计算准确，推断不需要转换
+        # 但为了安全起见，添加自动检测
+        max_val = values.max()
+        if max_val <= 1.0:  # 分数形式
+            fio2_df['fio2'] = fio2_df['fio2'] * 100
+
+    elif database == 'eicu':
+        # eICU已确认为百分比形式（21-100），不需要转换
+        # 但保持一致性检查
+        max_val = values.max()
+        if max_val <= 1.0:  # 如果意外发现是分数形式
+            fio2_df['fio2'] = fio2_df['fio2'] * 100
+
+    elif database == 'aumc':
+        # AUMC有percent_as_numeric转换机制，基本确认为百分比形式
+        # 但同样添加安全检查
+        max_val = values.max()
+        if max_val <= 1.0:  # 如果意外发现是分数形式
+            fio2_df['fio2'] = fio2_df['fio2'] * 100
+
+    return fio2_df
+
+
 def _is_true_safe(series: pd.Series) -> pd.Series:
     """Safely convert series to boolean, handling different dtypes.
 
@@ -190,34 +233,33 @@ def sofa_resp(pafi: pd.Series, vent_ind: Optional[pd.Series] = None) -> pd.Serie
             return SeriesUtils.is_true(series)
         except ImportError:
             return series.fillna(False).astype(bool)
-    
-    # Replicate R logic: if pafi < 200 and NOT on ventilation, set pafi = 200
-    pafi_adjusted = pafi.copy()
+
+    pafi_num = pd.to_numeric(pafi, errors="coerce")
+    idx = pafi_num.index
     if vent_ind is not None:
-        mask = is_true(pafi < 200) & (~is_true(vent_ind))
-        pafi_adjusted[mask] = 200
-    
-    # Calculate score using fifelse chain (R ricu logic)
-    # R: fifelse(is_true(x < 100), 4L, fifelse(is_true(x < 200), 3L, ...))
-    # This is a nested if-else: check from highest to lowest threshold
-    score = pd.Series(0, index=pafi.index, dtype=int)
-    
-    # Apply in priority order (highest to lowest threshold)
-    # Note: fifelse is a nested if-else, so we check conditions sequentially
-    pafi_num = pd.to_numeric(pafi_adjusted, errors='coerce')
-    # Use vectorized if-else logic: each condition is checked in order
-    # For each row, find the FIRST matching condition (highest priority)
-    score = pd.Series(0, index=pafi.index, dtype=int)
-    mask_100 = is_true(pafi_num < 100)
-    mask_200 = is_true(pafi_num < 200) & ~mask_100
-    mask_300 = is_true(pafi_num < 300) & ~mask_200 & ~mask_100
-    mask_400 = is_true(pafi_num < 400) & ~mask_300 & ~mask_200 & ~mask_100
-    
+        vent_mask = is_true(vent_ind.reindex(idx, copy=False))
+    else:
+        vent_mask = pd.Series(False, index=idx)
+
+    adj = pafi_num.copy()
+    mask = is_true(adj < 200) & (~vent_mask)
+    adj[mask] = 200
+
+    score = pd.Series(0, index=idx, dtype=float)
+    mask_100 = is_true(adj < 100)
+    mask_200 = is_true(adj < 200) & ~mask_100
+    mask_300 = is_true(adj < 300) & ~mask_200 & ~mask_100
+    mask_400 = is_true(adj < 400) & ~mask_300 & ~mask_200 & ~mask_100
+
     score[mask_100] = 4
     score[mask_200] = 3
     score[mask_300] = 2
     score[mask_400] = 1
-    
+
+    # If no PaFi measurement and no ventilation status, drop the row (ricu wouldn't emit it)
+    missing_mask = pafi_num.isna() & ~vent_mask
+    score[missing_mask] = np.nan
+
     return score
 
 
@@ -401,15 +443,15 @@ def sofa_cns(gcs: pd.Series) -> pd.Series:
     Returns:
         Series with CNS SOFA scores
     """
-    # Convert to numeric, preserving NaN
     g = pd.to_numeric(gcs, errors="coerce")
-    score = pd.Series(0, index=g.index, dtype=int)
-    
+    score = pd.Series(np.nan, index=g.index, dtype=float)
+    valid = g.notna()
+    score.loc[valid] = 0
+
     # Only apply thresholds where gcs is not NaN
-    # Score 4: < 6
     mask = g < 6
     score[mask] = 4
-    
+
     # Score 3: 6-9
     mask = (g >= 6) & (g < 10)
     score[mask] = 3
@@ -421,9 +463,6 @@ def sofa_cns(gcs: pd.Series) -> pd.Series:
     # Score 1: 13-14
     mask = (g >= 13) & (g < 15)
     score[mask] = 1
-    
-    # Score 0: 15 (default, already set)
-    # NaN values remain 0 (which is correct for missing data)
     
     return score
 
@@ -467,12 +506,8 @@ def sofa_renal(
         # If not provided, create Series of NaN (won't match any threshold)
         uri_num = pd.Series(np.nan, index=crea.index)
     
-    # Start with 0 as baseline score (matching R's final else in nested fifelse)
     score = pd.Series(0, index=crea.index, dtype=int)
-    
-    # Start with 0 as baseline score (matching R's final else in nested fifelse)
-    score = pd.Series(0, index=crea.index, dtype=int)
-    
+
     # Score 1: crea >= 1.2 & crea < 2 (only based on crea)
     mask1 = is_true((crea_num >= 1.2) & (crea_num < 2))
     score[mask1] = 1
@@ -1236,6 +1271,7 @@ def pafi(
     match_win: pd.Timedelta = pd.Timedelta(hours=2),
     mode: str = "match_vals",
     fix_na_fio2: bool = True,
+    database: str = None,
 ) -> pd.DataFrame:
     """Calculate PaO2/FiO2 ratio (P/F ratio) from oxygen partial pressure and FiO2.
     
@@ -1278,7 +1314,11 @@ def pafi(
     
     po2_df = po2_df.rename(columns={po2_val_col: 'po2'})
     fio2_df = fio2_df.rename(columns={fio2_val_col: 'fio2'})
-    
+
+    # 🔧 新增：数据库自适应的FiO2单位标准化
+    if database is not None:
+        fio2_df = _standardize_fio2_units(fio2_df, database)
+
     # Merge based on mode
     if mode == "match_vals":
         # 🔧 FIX: 使用 left join 而不是 inner join，保留所有 po2 数据
@@ -1339,6 +1379,7 @@ def safi(
     match_win: pd.Timedelta = pd.Timedelta(hours=2),
     mode: str = "match_vals",
     fix_na_fio2: bool = True,
+    database: str = None,
 ) -> pd.DataFrame:
     """Calculate SaO2/FiO2 ratio (S/F ratio) from oxygen saturation and FiO2.
     
@@ -1380,7 +1421,11 @@ def safi(
     
     o2sat_df = o2sat_df.rename(columns={o2sat_val_col: 'o2sat'})
     fio2_df = fio2_df.rename(columns={fio2_val_col: 'fio2'})
-    
+
+    # 🔧 新增：数据库自适应的FiO2单位标准化
+    if database is not None:
+        fio2_df = _standardize_fio2_units(fio2_df, database)
+
     # Merge based on mode
     if mode == "match_vals":
         # 🔧 FIX: 使用 left join 而不是 inner join，保留所有 o2sat 数据
@@ -1645,7 +1690,73 @@ def _urine_window_avg(
     # Keep only relevant columns
     keep_cols = id_cols + [time_col, result_col]
     result = result[[col for col in keep_cols if col in result.columns]]
-    
+
     return result
 
 
+def miiv_icu_patients_filter(data: Union[IdTbl, pd.DataFrame], **kwargs) -> Union[IdTbl, pd.DataFrame]:
+    """Filter MIMIC-IV patients data to only include ICU patients.
+
+    This callback connects patients table with icustays table to ensure
+    that demographic data (age, sex) only includes ICU patients,
+    matching the ID system used by other concepts (stay_id).
+
+    Args:
+        data: DataFrame from patients table with subject_id and demographic data
+        **kwargs: Additional keyword arguments (database name, etc.)
+
+    Returns:
+        DataFrame filtered to ICU patients with stay_id as primary ID
+    """
+    from .datasource import ICUDataSource
+
+    # Get database name from kwargs or default to miiv
+    database = kwargs.get('database', 'miiv')
+
+    if database != 'miiv':
+        # For non-MIMIC-IV databases, return data unchanged
+        return data
+
+    try:
+        # Get ICUDataSource instance
+        ds = ICUDataSource.get_instance(database)
+
+        # Load icustays table to get mapping between subject_id and stay_id
+        icustays = ds.load_table('icustays', columns=['stay_id', 'subject_id'])
+
+        if icustays.empty:
+            # If no icustays data, return empty DataFrame with expected structure
+            return pd.DataFrame(columns=['stay_id'] + [col for col in data.columns if col != 'subject_id'])
+
+        # Merge patients data with icustays to filter only ICU patients
+        # Convert subject_id to same type for proper merging
+        if 'subject_id' in data.columns and 'subject_id' in icustays.columns:
+            data_copy = data.copy()
+            icustays_copy = icustays.copy()
+
+            # Ensure both subject_id columns are the same type
+            data_copy['subject_id'] = data_copy['subject_id'].astype(icustays_copy['subject_id'].dtype)
+
+            # Merge to keep only ICU patients
+            merged = pd.merge(
+                icustays_copy[['stay_id', 'subject_id']],
+                data_copy,
+                on='subject_id',
+                how='inner'
+            )
+
+            # Set stay_id as the primary ID column
+            merged = merged.set_index('stay_id')
+
+            # Remove subject_id column as stay_id is now primary
+            merged = merged.drop(columns=['subject_id'], errors='ignore')
+
+            return merged
+        else:
+            # If expected columns not found, return original data
+            return data
+
+    except Exception:
+        # If any error occurs during filtering, return original data
+        # This ensures the system doesn't break if icustays table is unavailable
+        return data
