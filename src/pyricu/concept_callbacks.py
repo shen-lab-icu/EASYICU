@@ -17,6 +17,9 @@ import sys
 import numpy as np
 import pandas as pd
 
+# Debug mode flag - can be set to True for verbose debugging output
+DEBUG_MODE = False
+
 from .callbacks import (
     mews_score,
     news_score,
@@ -1304,13 +1307,11 @@ def _callback_aumc_dur(
     
     Replicates ricu's aumc_dur which calls calc_dur(x, val_var, index_var(x), stop_var, grp_var).
     
-    This callback:
-    1. Groups data by ID + optional grp_var (e.g., orderid)
-    2. Finds min(start_time) and max(stop_time) per group
-    3. Returns duration = stop - start
+    IMPORTANT: AUMC times are in milliseconds. We need to:
+    1. Keep times as numeric (milliseconds)
+    2. Calculate duration = stop - start (in ms)
+    3. Convert to hours: duration_hours = duration_ms / (1000 * 60 * 60)
     """
-    from ..callback_utils import calc_dur
-    
     if not tables or len(tables) == 0:
         return _empty_icutbl(ctx)
     
@@ -1349,20 +1350,59 @@ def _callback_aumc_dur(
         logger.warning(f"aumc_dur: index_column '{index_column}' not found, columns: {data.columns.tolist()}")
         return input_table
     
-    # Call calc_dur from callback_utils
-    try:
-        result = calc_dur(
-            data,
-            val_var=value_column,
-            min_var=index_column,
-            max_var=stop_var,
-            grp_var=grp_var,
-            id_vars=id_columns
-        )
+    # 🔧 FIX: AUMC times are in milliseconds (numeric), not datetime
+    # We need to calculate duration differently than calc_dur which assumes datetime
+    
+    # Build grouping columns
+    group_cols = list(id_columns)
+    if grp_var and grp_var in data.columns:
+        group_cols.append(grp_var)
+    
+    # Group and aggregate: min(start), max(stop)
+    if group_cols:
+        # Ensure numeric types for time columns
+        data[index_column] = pd.to_numeric(data[index_column], errors='coerce')
+        data[stop_var] = pd.to_numeric(data[stop_var], errors='coerce')
+        
+        # Drop rows with NaN times
+        data = data.dropna(subset=[index_column, stop_var])
+        
+        if data.empty:
+            result = pd.DataFrame(columns=group_cols + [index_column, value_column])
+            return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
+        
+        # Aggregate
+        agg_dict = {
+            index_column: 'min',  # min start time
+            stop_var: 'max'  # max stop time
+        }
+        
+        grouped = data.groupby(group_cols, dropna=False).agg(agg_dict).reset_index()
+        
+        # Calculate duration in milliseconds
+        duration_ms = grouped[stop_var] - grouped[index_column]
+        
+        # Convert to hours: ms / (1000 * 60 * 60)
+        grouped[value_column] = duration_ms / (1000.0 * 60.0 * 60.0)
+        
+        # Keep group cols, index_column, and value column
+        keep_cols = group_cols + [index_column, value_column]
+        result = grouped[[col for col in keep_cols if col in grouped.columns]].copy()
+        
         return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
-    except Exception as e:
-        logger.error(f"aumc_dur failed for {ctx.concept_name}: {e}")
-        return input_table
+    else:
+        # No grouping, simple duration calculation
+        data[index_column] = pd.to_numeric(data[index_column], errors='coerce')
+        data[stop_var] = pd.to_numeric(data[stop_var], errors='coerce')
+        data = data.dropna(subset=[index_column, stop_var])
+        
+        duration_ms = data[stop_var] - data[index_column]
+        data[value_column] = duration_ms / (1000.0 * 60.0 * 60.0)
+        
+        keep_cols = list(id_columns) + [index_column, value_column]
+        result = data[[col for col in keep_cols if col in data.columns]].copy()
+        
+        return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
 
 
 def _callback_blood_cell_ratio(
@@ -4233,12 +4273,14 @@ def _callback_vaso60(
     if ctx is not None:
         ds_cfg = getattr(getattr(ctx, 'data_source', None), 'config', None)
         ds_name = getattr(ds_cfg, 'name', '') if ds_cfg is not None else ''
-    numeric_unit = 'h'
-    if isinstance(ds_name, str) and ds_name.lower() == 'aumc':
-        numeric_unit = 'ms'
+    
+    # 🔧 FIX: AUMC times are already converted to MINUTES in datasource.py
+    # So we should use 'min' unit, not 'ms'
+    numeric_unit = 'min' if isinstance(ds_name, str) and ds_name.lower() == 'aumc' else 'h'
 
     rate_time_is_numeric = pd.api.types.is_numeric_dtype(rate_df[rate_index_col])
     dur_time_is_numeric = pd.api.types.is_numeric_dtype(dur_df[dur_index_col])
+    
     if rate_time_is_numeric or dur_time_is_numeric:
         if rate_time_is_numeric:
             rate_df[rate_index_col] = base_time + pd.to_timedelta(pd.to_numeric(rate_df[rate_index_col], errors='coerce'), unit=numeric_unit)
@@ -4264,17 +4306,32 @@ def _callback_vaso60(
         # Just set durations to NaN to avoid crash
         durations = pd.Series([pd.NaT] * len(durations), index=durations.index, dtype='timedelta64[ns]')
     else:
-        converted = pd.to_timedelta(durations, errors="coerce")
-        if converted.notna().any():
-            durations = converted
-        else:
-            numeric_durations = pd.to_numeric(durations, errors="coerce")
-            minutes_based = pd.to_timedelta(numeric_durations, unit="m", errors="coerce")
-            if minutes_based.notna().any():
-                durations = minutes_based
+        # 🔧 FIX: For AUMC, skip pd.to_timedelta() without unit because it treats
+        # numbers as DAYS, not hours. We know AUMC durations are in hours.
+        is_aumc = isinstance(ds_name, str) and ds_name.lower() == 'aumc'
+        
+        if not is_aumc:
+            converted = pd.to_timedelta(durations, errors="coerce")
+            if converted.notna().any():
+                durations = converted
             else:
-                seconds_based = pd.to_timedelta(numeric_durations, unit="s", errors="coerce")
-                durations = seconds_based
+                # Fall through to numeric conversion
+                is_aumc = True  # Treat as numeric
+        
+        if is_aumc:
+            numeric_durations = pd.to_numeric(durations, errors="coerce")
+            if isinstance(ds_name, str) and ds_name.lower() == 'aumc':
+                # AUMC: duration is in hours
+                hours_based = pd.to_timedelta(numeric_durations, unit="h", errors="coerce")
+                durations = hours_based
+            else:
+                # Other databases: try minutes first, then seconds
+                minutes_based = pd.to_timedelta(numeric_durations, unit="m", errors="coerce")
+                if minutes_based.notna().any():
+                    durations = minutes_based
+                else:
+                    seconds_based = pd.to_timedelta(numeric_durations, unit="s", errors="coerce")
+                    durations = seconds_based
 
     dur_df["__duration"] = durations
     dur_df = dur_df.dropna(subset=["__duration", dur_index_col])
