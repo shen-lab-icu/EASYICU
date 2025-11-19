@@ -2780,7 +2780,9 @@ def aumc_rate_kg(
 
     base_time = pd.Timestamp('2000-01-01')
     if index_col and index_col in df.columns and pd.api.types.is_numeric_dtype(df[index_col]):
-        df[index_col] = base_time + pd.to_timedelta(pd.to_numeric(df[index_col], errors='coerce'), unit='ms')
+        # 🔧 FIX: AUMC times are already converted to MINUTES in datasource.py
+        # So we should use 'min' unit, not 'ms'
+        df[index_col] = base_time + pd.to_timedelta(pd.to_numeric(df[index_col], errors='coerce'), unit='min')
 
     df[concept_name] = df[val_col]
 
@@ -2890,43 +2892,72 @@ def aumc_dur(
     index_var: Optional[str],
     concept_name: str,
 ) -> pd.DataFrame:
+    """
+    Calculate duration for AUMC database items.
+    
+    NOTE: AUMC times are preprocessed in datasource.py and converted from 
+    milliseconds to MINUTES (ms / 60000). So when we receive the data here,
+    start/stop are already in MINUTES, not milliseconds!
+    
+    This function groups items by patient and order, then calculates the duration
+    in hours from start to stop timestamps (which are in minutes).
+    
+    Args:
+        frame: Input dataframe with AUMC data (times already in MINUTES)
+        val_col: Name of the value column (will be replaced with duration)
+        stop_var: Column name containing stop timestamps in MINUTES
+        grp_var: Column name for grouping (e.g., 'orderid')
+        index_var: Column name containing start timestamps in MINUTES
+        concept_name: Name of the concept being calculated
+        
+    Returns:
+        DataFrame with duration column in hours
+    """
     if frame.empty or not stop_var or stop_var not in frame.columns:
         return frame
 
     df = frame.copy()
 
+    # Find start column
     start_col = index_var if index_var and index_var in df.columns else None
     if not start_col:
         start_col = next((col for col in ['start', 'charttime', 'time'] if col in df.columns), None)
     if not start_col:
         return df
 
-    base_time = pd.Timestamp('2000-01-01')
-    start_numeric = pd.to_numeric(df[start_col], errors='coerce')
-    stop_numeric = pd.to_numeric(df[stop_var], errors='coerce')
-    df['__start_dt'] = base_time + pd.to_timedelta(start_numeric, unit='ms')
-    df['__stop_dt'] = base_time + pd.to_timedelta(stop_numeric, unit='ms')
-
+    # Get patient ID columns
     id_cols = _aumc_get_id_columns(df)
-    group_var = grp_var if grp_var and grp_var in df.columns else None
-
-    result = calc_dur(
-        df,
-        val_col=val_col,
-        min_var='__start_dt',
-        max_var='__stop_dt',
-        grp_var=group_var,
-        id_cols=id_cols,
-    )
-
-    if val_col in result.columns and pd.api.types.is_timedelta64_dtype(result[val_col]):
-        result[val_col] = result[val_col].dt.total_seconds() / 3600.0
-
-    if '__start_dt' in result.columns:
-        result = result.rename(columns={'__start_dt': start_col})
-    if '__stop_dt' in result.columns:
-        result = result.drop(columns=['__stop_dt'])
-
-    result[concept_name] = result[val_col]
-
+    
+    # Prepare grouping columns
+    group_cols = list(id_cols)
+    if grp_var and grp_var in df.columns:
+        if grp_var not in group_cols:
+            group_cols.append(grp_var)
+    
+    # Times are already in MINUTES (converted in datasource.py)
+    # Just ensure they're numeric
+    df[start_col] = pd.to_numeric(df[start_col], errors='coerce')
+    df[stop_var] = pd.to_numeric(df[stop_var], errors='coerce')
+    
+    # Group by patient (and orderid if available) and aggregate start/stop
+    grouped = df.groupby(group_cols, as_index=False).agg({
+        start_col: 'min',  # earliest start time
+        stop_var: 'max',   # latest stop time
+    })
+    
+    # Calculate duration: times are in MINUTES, convert to HOURS
+    duration_minutes = grouped[stop_var] - grouped[start_col]
+    duration_hours = duration_minutes / 60.0  # minutes -> hours
+    
+    # Create a clean result with the duration
+    grouped[concept_name] = duration_hours
+    
+    # Keep only necessary columns for the result
+    result_cols = group_cols + [concept_name]
+    # Also keep start_col if it's the index column (e.g., 'start')
+    if start_col not in result_cols:
+        result_cols.append(start_col)
+    
+    result = grouped[result_cols]
+    
     return result
