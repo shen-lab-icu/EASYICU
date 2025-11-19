@@ -139,7 +139,6 @@ MODULES: List[FeatureModule] = [
             "norepi_equiv",
             "norepi_rate",
             "vaso_ind",
-            "infusionoffset",
         ],
         time_column="starttime",
         description="Vasopressors / medications",
@@ -582,7 +581,6 @@ class RicuPyricuComparator:
             id_ref = df["id"] if "id" in df.columns else None
             df["time"] = self._time_to_hours(df["time"], id_ref)
         if "time" in df.columns:
-            df["time"] = np.floor(pd.to_numeric(df["time"], errors="coerce"))
             df = df.dropna(subset=["time"])
         df = self._fill_missing_ids(df)
         if force_id is not None and "id" in df.columns:
@@ -602,44 +600,19 @@ class RicuPyricuComparator:
         if cached is not None:
             return cached
 
-        try:
-            frame = load_concepts(
-                concept,
-                patient_ids=patient_ids,
-                database=self.database,
-                data_path=str(self.data_path),
-                interval="1h" if module.time_column else None,
-                merge=True,
-                verbose=False,
-                _allow_missing_concept=True,
-                **self._loader_kwargs,
-            )
-        except Exception as exc:
-            if concept == "infusionoffset":
-                frame = self._load_infusionoffset_fallback(patient_ids)
-            else:
-                raise
+        frame = load_concepts(
+            concept,
+            patient_ids=patient_ids,
+            database=self.database,
+            data_path=str(self.data_path),
+            interval="1h" if module.time_column else None,
+            merge=True,
+            verbose=False,
+            _allow_missing_concept=True,
+            **self._loader_kwargs,
+        )
         self._concept_cache[cache_key] = frame
         return frame
-
-    def _load_infusionoffset_fallback(
-        self,
-        patient_ids: Optional[Sequence[int]],
-    ) -> pd.DataFrame:
-        try:
-            fallback = load_concepts(
-                "infusionoffset",
-                patient_ids=patient_ids,
-                database=self.database,
-                data_path=str(self.data_path),
-                merge=True,
-                verbose=False,
-            )
-        except Exception as exc:
-            return pd.DataFrame()
-        if isinstance(fallback, dict):
-            return fallback.get("infusionoffset", pd.DataFrame())
-        return fallback
 
     def _should_retry_per_patient(
         self,

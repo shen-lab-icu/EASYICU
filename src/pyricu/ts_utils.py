@@ -152,6 +152,7 @@ def change_interval(
     if len(existing_group_cols) != len(group_cols):
         missing_cols = set(group_cols) - set(existing_group_cols)
         import logging
+        logging.debug(f"change_interval: Missing columns {missing_cols} in dataframe. Using available columns: {existing_group_cols}")
     group_cols = existing_group_cols
 
     # Ensure we have at least one grouping column
@@ -160,6 +161,7 @@ def change_interval(
         df['__dummy_group'] = 1
         group_cols = ['__dummy_group']
         import logging
+        logging.debug("change_interval: No valid grouping columns found. Using dummy group column.")
 
     if aggregation:
         # Apply aggregation - only aggregate numeric columns
@@ -359,52 +361,27 @@ def expand(
         result_cols = [start_var] + id_cols + keep_vars
         return pd.DataFrame(columns=result_cols)
     
-    # 🚀 超级优化: 批量生成时间范围，避免逐行循环
-    # 计算每行需要的点数
-    time_diffs = (valid_data[end_col] - valid_data[start_var]) / step_size
-    n_points_per_row = (time_diffs.apply(lambda x: int(x) + 1)).values
-    
-    # 使用numpy向量化操作生成所有时间点
-    total_points = n_points_per_row.sum()
-    if total_points == 0:
-        result_cols = [start_var] + id_cols + keep_vars
-        return pd.DataFrame(columns=result_cols)
-    
-    # 预分配结果数组
-    all_times = np.empty(total_points, dtype='datetime64[ns]')
-    
-    # 为每个ID和keep_var列预分配
-    result_data = {start_var: all_times}
-    for col in id_cols + keep_vars:
-        result_data[col] = np.empty(total_points, dtype=object)
-    
-    # 批量填充
-    pos = 0
-    for idx, (_, row) in enumerate(valid_data.iterrows()):
-        n = n_points_per_row[idx]
-        if n == 0:
+    # 🚀 向量化: 批量处理每一行
+    for idx, row in valid_data.iterrows():
+        start = row[start_var]
+        end = row[end_col]
+        
+        # 生成时间范围
+        time_range = pd.date_range(start=start, end=end, freq=step_size)
+        n_points = len(time_range)
+        
+        if n_points == 0:
             continue
         
-        # 生成时间范围（只为这一行）
-        time_range = pd.date_range(start=row[start_var], end=row[end_col], freq=step_size)
-        n_actual = len(time_range)
+        # 🚀 优化: 使用 dict + repeat 而不是逐个 append
+        chunk_data = {start_var: time_range}
         
-        # 填充到预分配的数组中
-        all_times[pos:pos+n_actual] = time_range.values
+        # 重复 ID 列和 keep_vars
         for col in id_cols + keep_vars:
             if col in row:
-                result_data[col][pos:pos+n_actual] = row[col]
+                chunk_data[col] = [row[col]] * n_points
         
-        pos += n_actual
-    
-    # 创建最终DataFrame（只创建一次）
-    result = pd.DataFrame({k: v[:pos] for k, v in result_data.items()})
-    
-    # Clean up temporary column
-    if '_end_abs' in data.columns:
-        data.drop('_end_abs', axis=1, inplace=True)
-    
-    return result
+        expanded_chunks.append(pd.DataFrame(chunk_data))
     
     # 🚀 合并所有chunks
     if not expanded_chunks:
@@ -513,8 +490,8 @@ def fill_gaps(
         ... })
         >>> fill_gaps(df, ['id'], 'time', pd.Timedelta(hours=1))
     """
-    # 🚀 优化: 早期退出检查
-    if data.empty or index_col not in data.columns:
+    # 🚀 优化: 只在需要修改时才复制
+    if index_col not in data.columns:
         return data
 
     interval = pd.to_timedelta(interval)
@@ -577,10 +554,9 @@ def fill_gaps(
         if limits_obj is None:
             return None
         if isinstance(limits_obj, pd.DataFrame):
-            # 🚀 优化: 返回视图而非复制
-            return limits_obj
+            return limits_obj.copy()
         if hasattr(limits_obj, "data") and isinstance(getattr(limits_obj, "data"), pd.DataFrame):
-            return getattr(limits_obj, "data")
+            return getattr(limits_obj, "data").copy()
         if _is_sequence_like(limits_obj):
             seq = list(limits_obj)
             if len(seq) != 2:
@@ -631,10 +607,6 @@ def fill_gaps(
                     frame[extra] = np.nan
         return frame
 
-    # 🚀 优化: 预先排序和过滤，减少后续操作
-    data = data.sort_values(id_cols + [index_col] if id_cols else [index_col])
-    data = data.dropna(subset=[index_col])  # 提前过滤NaN时间
-    
     if id_cols:
         grouped = data.groupby(id_cols, dropna=False, sort=False)
     else:
@@ -645,8 +617,8 @@ def fill_gaps(
     for id_vals, group in grouped:
         if group.empty:
             continue
-        # 已经排序过了，无需再次排序
-        observed = group[index_col]  # 已经dropna过了
+        group = group.sort_values(index_col)
+        observed = group[index_col].dropna()
         if observed.empty:
             continue
 

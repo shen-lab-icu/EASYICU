@@ -17,6 +17,8 @@ import sys
 import numpy as np
 import pandas as pd
 
+# Debug mode flag - can be set to True for verbose debugging output
+DEBUG_MODE = False
 
 from .callbacks import (
     mews_score,
@@ -42,7 +44,6 @@ from .sofa2 import sofa2_score as sofa2_score_fn
 from .sepsis import sep3 as sep3_detector, susp_inf as susp_inf_detector
 from .sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector
 from .table import ICUTable, WinTbl
-from .datasource import FilterSpec, FilterOp
 
 logger = logging.getLogger(__name__)
 from .utils import coalesce
@@ -80,14 +81,17 @@ def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str)
         # MIMIC-IV: 如果最大值<=1.0且中位数>0.1，认为是分数形式，需要转换为百分比
         if max_val <= 1.0 and min_val >= 0.0 and fio2_values.median() > 0.1:
             result_df[fio2_col] = result_df[fio2_col] * 100
+            logger.debug(f"MIMIC-IV FiO2从分数形式转换为百分比形式 (max_val: {max_val}, median: {fio2_values.median()})")
         # 如果值在0-1之间但有些异常值，检查大部分数据
         elif max_val <= 1.5 and (fio2_values.quantile(0.95) <= 1.0) and fio2_values.median() > 0.1:
             result_df[fio2_col] = result_df[fio2_col] * 100
+            logger.debug(f"MIMIC-IV FiO2从分数形式转换为百分比形式 (95%分位数: {fio2_values.quantile(0.95)}, median: {fio2_values.median()})")
 
     elif database.lower() == 'eicu':
         # eICU: 通常已经是百分比形式，但进行验证
         if max_val <= 1.0 and min_val >= 0.0 and fio2_values.median() > 0.1:
             result_df[fio2_col] = result_df[fio2_col] * 100
+            logger.debug(f"eICU FiO2从分数形式转换为百分比形式 (max_val: {max_val}, median: {fio2_values.median()})")
 
     elif database.lower() == 'aumc':
         # AUMC: 特殊处理 - 已知大部分是百分比形式，只有少数itemid可能是分数
@@ -99,16 +103,19 @@ def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str)
             fraction_ratio = len(fraction_like_values) / len(fio2_values)
             if fraction_ratio > 0.2:
                 result_df[fio2_col] = result_df[fio2_col] * 100
+                logger.debug(f"AUMC FiO2从分数形式转换为百分比形式 (fraction_ratio: {fraction_ratio:.2f})")
             else:
                 # 否则只转换明显是分数的值，保留已经是百分比的值
                 mask = (result_df[fio2_col] > 0.1) & (result_df[fio2_col] < 1.0)
                 result_df.loc[mask, fio2_col] = result_df.loc[mask, fio2_col] * 100
+                logger.debug(f"AUMC FiO2选择性转换：{mask.sum()}个值从分数转为百分比")
 
         # 特殊处理：将可疑的0值和异常值设为NaN，让后续逻辑处理
         # AUMC中0.0通常表示缺失值而不是真实的FiO2值
         zero_mask = result_df[fio2_col] == 0.0
         if zero_mask.sum() > 0:
             result_df.loc[zero_mask, fio2_col] = float('nan')
+            logger.debug(f"AUMC FiO2: 将{zero_mask.sum()}个0值设为NaN")
 
     # 验证转换后的值在合理范围内（0-100）
     converted_values = result_df[fio2_col].dropna()
@@ -196,7 +203,6 @@ def _coerce_duration_hours(value) -> float:
 
 
 _STAY_LIMIT_CACHE: Dict[int, pd.DataFrame] = {}
-_EICU_UNIT_LIMIT_CACHE: Dict[int, pd.DataFrame] = {}
 
 
 def _normalize_patient_ids(patient_ids, column: str) -> Optional[List[object]]:
@@ -330,73 +336,6 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
     limits["end"] = end_hours
     limits = limits.replace([np.inf, -np.inf], np.nan).dropna(subset=["start", "end"])
     _STAY_LIMIT_CACHE[cache_key] = limits
-    return limits
-
-
-def _build_eicu_unit_limits(ctx: "ConceptCallbackContext", id_columns: List[str]) -> Optional[pd.DataFrame]:
-    """Compute hospital-level start/end offsets for eICU patientunitstay IDs."""
-
-    if not id_columns:
-        return None
-    primary_id = id_columns[0]
-    if primary_id != "patientunitstayid":
-        return None
-    data_source = getattr(ctx, "data_source", None)
-    if data_source is None:
-        return None
-
-    cache_key = id(data_source)
-    cached = _EICU_UNIT_LIMIT_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        patient_tbl = data_source.load_table(
-            "patient",
-            columns=[
-                "patientunitstayid",
-                "hospitaladmitoffset",
-                "hospitaldischargeoffset",
-                "unitdischargeoffset",
-            ],
-            verbose=False,
-        )
-    except Exception:
-        return None
-
-    patient_df = getattr(patient_tbl, "data", patient_tbl)
-    if patient_df is None or patient_df.empty or primary_id not in patient_df.columns:
-        return None
-
-    patient_filter = _normalize_patient_ids(ctx.patient_ids, primary_id)
-    df = patient_df
-    if patient_filter:
-        df = df[df[primary_id].isin(patient_filter)].copy()
-    if df.empty:
-        return None
-
-    def _offset_to_hours(series: pd.Series) -> pd.Series:
-        numeric = pd.to_numeric(series, errors="coerce")
-        return numeric / 60.0
-
-    start_hours = _offset_to_hours(df.get("hospitaladmitoffset"))
-    end_hours = _offset_to_hours(df.get("hospitaldischargeoffset"))
-
-    # Fallback to unit discharge offsets when hospital discharge is missing
-    if end_hours.isna().all() and "unitdischargeoffset" in df.columns:
-        end_hours = _offset_to_hours(df["unitdischargeoffset"])
-
-    limits = df[[primary_id]].copy()
-    limits["start"] = start_hours
-    limits["end"] = end_hours
-    limits = limits.dropna(subset=["start", "end"])
-    if limits.empty:
-        return None
-
-    # Match ricu's symmetric expansion so forward horizon mirrors backward span
-    limits["end"] = limits["end"] + limits["start"].abs()
-
-    _EICU_UNIT_LIMIT_CACHE[cache_key] = limits
     return limits
 
 
@@ -639,11 +578,19 @@ def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: s
             if from_col in needed_cols and to_col in needed_cols:
                 mapping = icustays_tbl.data[needed_cols].drop_duplicates()
                 # Debug logging
+                if os.environ.get('DEBUG'):
+                    logger.debug(f"ID映射加载成功: {from_col} → {to_col}, {len(mapping)} 行")
                 return mapping
         else:
+            if os.environ.get('DEBUG'):
+                print(f"   ⚠️  icustays 表为空或未加载")
     except Exception as e:
         # Mapping table not available - this is OK, not all concepts need it
         # Only print error in debug mode to avoid spam
+        if os.environ.get('DEBUG'):
+            import traceback
+            print(f"   ⚠️  无法加载 icustays 进行 ID 转换 ({from_col} → {to_col}): {e}")
+            traceback.print_exc()
     return None
 
 
@@ -753,16 +700,29 @@ def _assert_shared_schema(
             mapping = _load_id_mapping_table(ctx, 'hadm_id', 'stay_id')
             
             if mapping is not None:
+                if os.environ.get('DEBUG'):
+                    logger.debug(f"ID映射表加载成功: hadm_id → stay_id, {len(mapping)} 行")
+                
+                # Convert tables with hadm_id to stay_id
                 tables_to_remove = []  # Track empty tables to remove
                 for name, table in list(tables.items()):
                     if 'hadm_id' in table.id_columns and 'stay_id' not in table.id_columns:
+                        if os.environ.get('DEBUG'):
+                            logger.debug(f"转换表 '{name}': hadm_id → stay_id")
                         converted_data = _convert_id_column(
                             table.data.copy(),
                             'hadm_id',
                             'stay_id',
                             mapping
                         )
+                        if os.environ.get('DEBUG'):
+                            print(f"      转换后: {len(converted_data)} 行")
+                        
+                        # 如果转换后数据为空，标记要移除这个表（而不是报错）
                         if converted_data.empty:
+                            if os.environ.get('DEBUG'):
+                                print(f"      ⚠️  跳过空表 '{name}'（ID 转换后无匹配数据）")
+                            # 标记要从原始tables中移除
                             tables_to_remove.append(name)
                             continue
                         
@@ -784,6 +744,10 @@ def _assert_shared_schema(
                 # Update id_columns to reflect conversion
                 id_columns = ['stay_id']
             else:
+                if os.environ.get('DEBUG'):
+                    print(f"   ⚠️  ID映射表加载失败: hadm_id → stay_id")
+        
+        # Handle subject_id ↔ stay_id conversion
         if 'subject_id' in all_id_types and 'stay_id' in all_id_types:
             # Prefer stay_id as target (ICU-level granularity, more specific)
             target_id_col = 'stay_id'
@@ -794,13 +758,22 @@ def _assert_shared_schema(
                 tables_to_remove = []  # Track empty tables to remove
                 for name, table in list(tables.items()):
                     if 'subject_id' in table.id_columns and 'stay_id' not in table.id_columns:
+                        if os.environ.get('DEBUG'):
+                            logger.debug(f"转换表 '{name}': subject_id → stay_id")
                         converted_data = _convert_id_column(
                             table.data.copy(),
                             'subject_id',
                             'stay_id',
                             mapping
                         )
+                        if os.environ.get('DEBUG'):
+                            print(f"      转换后: {len(converted_data)} 行")
+                        
+                        # 如果转换后数据为空，标记要移除这个表（而不是报错）
                         if converted_data.empty:
+                            if os.environ.get('DEBUG'):
+                                print(f"      ⚠️  跳过空表 '{name}'（ID 转换后无匹配数据）")
+                            # 标记要从原始tables中移除
                             tables_to_remove.append(name)
                             continue
                         
@@ -829,6 +802,8 @@ def _assert_shared_schema(
         ids = _get_id_columns(table)
         if ids != id_columns:
             # 如果还有 ID 不匹配的表，说明转换失败
+            if os.environ.get('DEBUG'):
+                print(f"   ⚠️  表 '{name}' ID 不匹配: {ids} vs {id_columns}")
             raise ValueError(
                 f"Concept component '{name}' has identifier columns {ids}, "
                 f"expected {id_columns}. Automatic ID conversion failed."
@@ -1648,8 +1623,6 @@ def _callback_sofa_component(
         tables = dict(tables)
         if ctx.concept_name in {"sofa_cardio", "sofa2_cardio"} and "vaso_ind" not in tables:
             try:
-                # 🚀 性能优化: vaso_ind会被多次加载(sofa_cardio和sofa2_cardio各一次)
-                # resolver内部的缓存机制会避免重复计算，直接从_concept_data_cache读取
                 loaded = ctx.resolver.load_concepts(
                     ["vaso_ind"],
                     ctx.data_source,
@@ -1658,7 +1631,6 @@ def _callback_sofa_component(
                     patient_ids=ctx.patient_ids,
                     interval=None,
                     align_to_admission=True,
-                    verbose=False,  # 🔇 避免重复的日志输出
                 )
                 if isinstance(loaded, dict):
                     vaso_tbl = loaded.get("vaso_ind")
@@ -2758,10 +2730,12 @@ def _match_fio2(
 
             # 🔧 新增：数据库自适应的FiO2单位标准化
             if database is not None and not fio2_subset.empty:
+                logger.debug(f"开始FiO2单位标准化: database={database}, fio2_col={fio2_col}, 数据行数={len(fio2_subset)}")
                 # 调试：显示原始数据范围
                 if fio2_col in fio2_subset.columns:
                     orig_values = fio2_subset[fio2_col].dropna()
                     if len(orig_values) > 0:
+                        logger.debug(f"原始FiO2值范围: {orig_values.min():.3f} - {orig_values.max():.3f}")
 
                 fio2_subset = _standardize_fio2_units(fio2_subset, fio2_col, database)
 
@@ -2769,25 +2743,32 @@ def _match_fio2(
                 if fio2_col in fio2_subset.columns:
                     conv_values = fio2_subset[fio2_col].dropna()
                     if len(conv_values) > 0:
+                        logger.debug(f"转换后FiO2值范围: {conv_values.min():.3f} - {conv_values.max():.3f}")
             else:
+                logger.debug(f"跳过FiO2单位标准化: database={database}, fio2_subset.empty={fio2_subset.empty}")
 
             # 移除NaN时间值（NaN会导致排序问题）
             o2_subset = o2_subset.dropna(subset=[index_column])
             fio2_subset = fio2_subset.dropna(subset=[index_column])
             
-            # 🚀 优化：使用sort_values替代分组排序，更高效
+            # 关键：merge_asof要求每个by分组内的on列必须严格排序
+            # 必须按by列+on列排序，确保每个分组内on列都是递增的
             if id_columns:
-                # 直接按id+time排序，无需分组循环
-                o2_subset = o2_subset.sort_values(by=id_columns + [index_column], kind='mergesort')
-                fio2_subset = fio2_subset.sort_values(by=id_columns + [index_column], kind='mergesort')
-            else:
-                o2_subset = o2_subset.sort_values(by=index_column, kind='mergesort')
-                fio2_subset = fio2_subset.sort_values(by=index_column, kind='mergesort')
-            
-            # 旧代码保留作为后备（已注释）
-            if False:  # 旧的分组排序方法
+                # 方法：按分组逐个排序，确保每个分组内时间列严格递增
+                # 这样可以避免pandas sort_values在某些边界情况下的问题
                 o2_groups = []
                 for id_val in o2_subset[id_columns[0]].unique():
+                    group = o2_subset[o2_subset[id_columns[0]] == id_val]
+                    # 确保每个分组内时间列严格排序 - sort_values creates a copy
+                    group = group.sort_values(by=index_column, kind='mergesort')
+                    o2_groups.append(group)
+                if o2_groups:
+                    o2_subset = pd.concat(o2_groups, ignore_index=True)
+                else:
+                    o2_subset = pd.DataFrame()
+                
+                fio2_groups = []
+                for id_val in fio2_subset[id_columns[0]].unique():
                     group = fio2_subset[fio2_subset[id_columns[0]] == id_val]
                     # 确保每个分组内时间列严格排序 - sort_values creates a copy
                     group = group.sort_values(by=index_column, kind='mergesort')
@@ -3280,7 +3261,7 @@ def _callback_vent_ind(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    from .ts_utils import expand, fill_gaps
+    from .ts_utils import expand
 
     interval = ctx.interval or pd.Timedelta(hours=1)
     if not isinstance(interval, pd.Timedelta):
@@ -3555,19 +3536,17 @@ def _callback_vent_ind(
     if mech_result is None and event_result is None:
         return _empty_result()
 
-    if mech_result is None and event_result is None:
-        return _empty_result()
-
     if mech_result is None:
-        combined = event_result.data.copy()
-    elif event_result is None:
-        combined = mech_result.data.copy()
-    else:
-        # Combine both sources instead of picking the longest. ricu unions any
-        # evidence of ventilation, so we take the OR across timelines.
-        combined = pd.concat(
-            [event_result.data, mech_result.data], ignore_index=True, copy=False
-        )
+        return event_result  # type: ignore[return-value]
+
+    if event_result is None:
+        return mech_result
+
+    # Combine both sources instead of picking the longest. ricu unions any
+    # evidence of ventilation, so we take the OR across timelines.
+    combined = pd.concat(
+        [event_result.data, mech_result.data], ignore_index=True, copy=False
+    )
 
     # Ensure duplicate timestamps collapse to a single True indicator.
     group_cols = list(id_columns)
@@ -3579,152 +3558,11 @@ def _callback_vent_ind(
             combined.groupby(group_cols, as_index=False)["vent_ind"].any()
         )
 
-    combined = combined.sort_values(group_cols).reset_index(drop=True)
-
-    if time_column and time_column in combined.columns:
-        limits = _build_eicu_unit_limits(ctx, id_columns)
-        if limits is None:
-            limits = _compose_fill_limits(
-                combined,
-                id_columns,
-                time_column,
-                ctx,
-                expand_forward=True,
-            )
-        filled = fill_gaps(
-            combined,
-            id_cols=list(id_columns),
-            index_col=time_column,
-            interval=interval,
-            limits=limits,
-            method="none",
-        )
-        if "vent_ind" in filled.columns:
-            values = filled["vent_ind"]
-            if pd.api.types.is_bool_dtype(values):
-                filled["vent_ind"] = values.fillna(False)
-            else:
-                numeric = pd.to_numeric(values, errors="coerce").fillna(0.0)
-                filled["vent_ind"] = numeric > 0
-        else:
-            filled["vent_ind"] = False
-        combined = filled.reset_index(drop=True)
-
     return _as_icutbl(
         combined,
         id_columns=id_columns,
         index_column=time_column,
         value_column="vent_ind",
-    )
-
-
-def _callback_tco2(
-    tables: Dict[str, ICUTable],
-    ctx: ConceptCallbackContext,
-) -> ICUTable:
-    from .datasource import FilterSpec, FilterOp
-
-    ds = ctx.data_source
-    if ds is None:
-        cols = ["patientunitstayid", "charttime", "tco2"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=["patientunitstayid"], index_column="charttime", value_column="tco2")
-
-    patient_ids = _normalize_patient_ids(ctx.patient_ids, "patientunitstayid")
-    filters = [FilterSpec("labname", FilterOp.EQ, "Total CO2")]
-    if patient_ids:
-        filters.append(FilterSpec("patientunitstayid", FilterOp.IN, patient_ids))
-
-    try:
-        lab_tbl = ds.load_table(
-            "lab",
-            columns=[
-                "patientunitstayid",
-                "labresultoffset",
-                "labresult",
-                "labname",
-            ],
-            filters=filters,
-            verbose=False,
-        )
-    except Exception:
-        cols = ["patientunitstayid", "charttime", "tco2"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=["patientunitstayid"], index_column="charttime", value_column="tco2")
-
-    df = lab_tbl.data.copy()
-    if df.empty:
-        cols = ["patientunitstayid", "charttime", "tco2"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=["patientunitstayid"], index_column="charttime", value_column="tco2")
-
-    df["charttime"] = pd.to_numeric(df.get("labresultoffset"), errors="coerce") / 60.0
-    df["tco2"] = pd.to_numeric(df.get("labresult"), errors="coerce")
-    df = df.dropna(subset=["patientunitstayid", "charttime", "tco2"])
-    if df.empty:
-        cols = ["patientunitstayid", "charttime", "tco2"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=["patientunitstayid"], index_column="charttime", value_column="tco2")
-
-    frame = df[["patientunitstayid", "charttime", "tco2"]].copy()
-    frame = frame.sort_values(["patientunitstayid", "charttime"]).reset_index(drop=True)
-
-    return _as_icutbl(
-        frame,
-        id_columns=["patientunitstayid"],
-        index_column="charttime",
-        value_column="tco2",
-    )
-
-
-def _callback_ca(
-    tables: Dict[str, ICUTable],
-    ctx: ConceptCallbackContext,
-) -> ICUTable:
-    from .datasource import FilterSpec, FilterOp
-
-    ds = ctx.data_source
-    if ds is None:
-        cols = ["patientunitstayid", "charttime", "ca"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=["patientunitstayid"], index_column="charttime", value_column="ca")
-
-    patient_ids = _normalize_patient_ids(ctx.patient_ids, "patientunitstayid")
-    filters = [FilterSpec("labname", FilterOp.EQ, "calcium")]
-    if patient_ids:
-        filters.append(FilterSpec("patientunitstayid", FilterOp.IN, patient_ids))
-
-    try:
-        lab_tbl = ds.load_table(
-            "lab",
-            columns=[
-                "patientunitstayid",
-                "labresultoffset",
-                "labresult",
-                "labname",
-            ],
-            filters=filters,
-            verbose=False,
-        )
-    except Exception:
-        cols = ["patientunitstayid", "charttime", "ca"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=["patientunitstayid"], index_column="charttime", value_column="ca")
-
-    df = lab_tbl.data.copy()
-    if df.empty:
-        cols = ["patientunitstayid", "charttime", "ca"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=["patientunitstayid"], index_column="charttime", value_column="ca")
-
-    df["charttime"] = pd.to_numeric(df.get("labresultoffset"), errors="coerce") / 60.0
-    df["ca"] = pd.to_numeric(df.get("labresult"), errors="coerce") * 4.0
-    df = df.dropna(subset=["patientunitstayid", "charttime", "ca"])
-    if df.empty:
-        cols = ["patientunitstayid", "charttime", "ca"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=["patientunitstayid"], index_column="charttime", value_column="ca")
-
-    frame = df[["patientunitstayid", "charttime", "ca"]].copy()
-    frame = frame.sort_values(["patientunitstayid", "charttime"]).reset_index(drop=True)
-
-    return _as_icutbl(
-        frame,
-        id_columns=["patientunitstayid"],
-        index_column="charttime",
-        value_column="ca",
     )
 
 
@@ -4528,12 +4366,14 @@ def _callback_vaso60(
     if len(existing_id_cols) != len(id_columns):
         missing_cols = set(id_columns) - set(existing_id_cols)
         import logging
+        logging.debug(f"_callback_vaso60: Missing ID columns {missing_cols} in duration dataframe. Using available columns: {existing_id_cols}")
 
     # If no valid ID columns exist, create a dummy one for processing
     if not existing_id_cols:
         dur_df["__dummy_id"] = 1
         existing_id_cols = ["__dummy_id"]
         import logging
+        logging.debug("_callback_vaso60: No valid ID columns found. Using dummy ID column.")
 
     intervals = _merge_intervals(
         dur_df[existing_id_cols + ["__start", "__end"]],
@@ -4633,38 +4473,39 @@ def _callback_vaso60(
                         "Ensure a weight concept is available or pass 'weight_table' via ctx.kwargs."
                     )
 
-            # 🚀 优化: 向量化单位转换，避免循环
-            # 预计算所有转换系数
-            conversion_factors = pd.Series(1.0, index=rate_df.index)
-            
             for unit in unit_tokens[needs_conversion_mask].unique():
                 if not unit:
                     continue
                 mask = unit_tokens == unit
-                
                 if unit in {"ug/min", "mcg/min"}:
-                    # ug/min to ug/kg/min: rate / weight
                     weights = rate_df.loc[mask, weight_merge_col]
-                    conversion_factors.loc[mask] = 1.0 / weights
+                    rate_df.loc[mask, rate_col] = convert_vaso_rate(
+                        rate_df.loc[mask, rate_col],
+                        "ug/min",
+                        weight_kg=weights,
+                    )
                 elif unit in {"mg/h", "mg/hr"}:
-                    # mg/h to ug/kg/min: (mg/h * 1000 ug/mg) / (weight_kg * 60 min/h)
                     weights = rate_df.loc[mask, weight_merge_col]
-                    conversion_factors.loc[mask] = 1000.0 / (weights * 60.0)
+                    source_unit = "mg/h" if unit == "mg/h" else "mg/hr"
+                    rate_df.loc[mask, rate_col] = convert_vaso_rate(
+                        rate_df.loc[mask, rate_col],
+                        source_unit,
+                        weight_kg=weights,
+                    )
                 elif unit in simple_conversions:
-                    # mg/kg/h to ug/kg/min: (mg/kg/h * 1000 ug/mg) / (60 min/h)
-                    conversion_factors.loc[mask] = 1000.0 / 60.0
+                    source_unit = "mg/kg/h" if unit == "mg/kg/h" else "mg/kg/hr"
+                    rate_df.loc[mask, rate_col] = convert_vaso_rate(
+                        rate_df.loc[mask, rate_col],
+                        source_unit,
+                    )
                 else:
                     print(
                         f"⚠️  Warning: unsupported vasopressor rate unit '{unit}' encountered in {ctx.concept_name}; leaving values unconverted."
                     )
-                    conversion_factors.loc[mask] = 1.0
                     continue
 
                 if rate_unit_col in rate_df.columns:
                     rate_df.loc[mask, rate_unit_col] = "ug/kg/min"
-            
-            # 一次性应用所有转换（向量化操作）
-            rate_df.loc[needs_conversion_mask, rate_col] = rate_df.loc[needs_conversion_mask, rate_col] * conversion_factors[needs_conversion_mask]
 
             if weight_merge_col and weight_merge_col in rate_df.columns:
                 rate_df = rate_df.drop(columns=[weight_merge_col])
@@ -4762,31 +4603,23 @@ def _callback_vaso60(
                 if grid.empty:
                     continue
                 grid_ns = grid.to_numpy(dtype="datetime64[ns]")
-                
-                # 🚀 优化: 使用向量化操作替代循环searchsorted
-                # 使用pd.cut将times分组到grid bins中，然后groupby聚合
-                if len(times_ns) == 0:
-                    sampled = np.full(len(grid_ns), np.nan)
-                else:
-                    # 创建bins: [grid[0], grid[0]+interval, grid[1], grid[1]+interval, ...]
-                    bins = np.empty(len(grid_ns) * 2, dtype='datetime64[ns]')
-                    bins[::2] = grid_ns
-                    bins[1::2] = grid_ns + interval_delta
-                    
-                    # 使用searchsorted批量查找（一次性，而非循环）
-                    indices = np.searchsorted(bins, times_ns, side='right')
-                    
-                    # 创建分组标签: 属于哪个grid点
-                    grid_labels = (indices - 1) // 2
-                    grid_labels = np.clip(grid_labels, 0, len(grid_ns) - 1)
-                    
-                    # 使用pandas groupby进行快速聚合
-                    temp_df = pd.DataFrame({'grid_idx': grid_labels, 'value': value_arr})
-                    grouped = temp_df.groupby('grid_idx')['value'].max()
-                    
-                    # 填充所有grid点（包括没有数据的）
-                    sampled = np.full(len(grid_ns), np.nan)
-                    sampled[grouped.index.values] = grouped.values
+                sampled_list: list[float] = []
+                for point in grid_ns:
+                    start_pos = np.searchsorted(times_ns, point, side="right") - 1
+                    end_boundary = point + interval_delta
+                    end_pos = np.searchsorted(times_ns, end_boundary, side="left")
+                    candidates: list[float] = []
+                    if start_pos >= 0:
+                        candidates.append(value_arr[start_pos])
+                    slice_start = max(start_pos + 1, 0)
+                    if end_pos > slice_start:
+                        candidates.extend(value_arr[slice_start:end_pos])
+                    if candidates:
+                        valid_vals = np.array(candidates, dtype=float)
+                        sampled_list.append(float(np.nanmax(valid_vals)) if np.any(np.isfinite(valid_vals)) else np.nan)
+                    else:
+                        sampled_list.append(np.nan)
+                sampled = np.array(sampled_list, dtype=float)
                 frame = pd.DataFrame({rate_index_col: grid, ctx.concept_name: sampled})
                 for col in group_key_cols:
                     frame[col] = first[col]
@@ -4896,16 +4729,6 @@ def _callback_gcs(
         else:
             ds_name = getattr(ctx.data_source, "name", "") or ""
     ignore_tgcs = ds_name.lower() in {"miiv", "mimiciv"}
-    if data.empty and ds_name.lower() in {"eicu", "eicu_demo"}:
-        fallback = _load_eicu_gcs_total(ctx, id_columns, index_column)
-        if fallback is not None and not fallback.empty:
-            data = fallback.copy()
-            if not id_columns:
-                id_columns = [col for col in ["patientunitstayid", "admissionid", "stay_id"] if col in data.columns]
-                if not id_columns and "patientunitstayid" in data.columns:
-                    id_columns = ["patientunitstayid"]
-            if not index_column and "nursingchartoffset" in data.columns:
-                index_column = "nursingchartoffset"
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["gcs"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="gcs")
@@ -4915,28 +4738,6 @@ def _callback_gcs(
     set_na_max = ctx.kwargs.get("set_na_max", True)
 
     tgcs = None if ignore_tgcs else pd.to_numeric(data.get("tgcs"), errors="coerce")
-    if (tgcs is None or (isinstance(tgcs, pd.Series) and tgcs.isna().all())) and ds_name.lower() in {"eicu", "eicu_demo"}:
-        fallback = _load_eicu_gcs_total(ctx, id_columns, index_column)
-        if fallback is not None and not fallback.empty:
-            key_cols = list(id_columns) if id_columns else []
-            if index_column:
-                key_cols.append(index_column)
-            fallback = fallback.rename(columns={"tgcs": "tgcs_fallback"})
-            if not key_cols:
-                data = fallback.rename(columns={"tgcs_fallback": "tgcs"})
-                id_columns = [col for col in ["patientunitstayid", "admissionid", "stay_id"] if col in data.columns]
-                if not id_columns and "patientunitstayid" in data.columns:
-                    id_columns = ["patientunitstayid"]
-                if not index_column and "nursingchartoffset" in data.columns:
-                    index_column = "nursingchartoffset"
-            else:
-                data = data.merge(fallback, on=key_cols, how="outer")
-                data["tgcs"] = pd.to_numeric(data.get("tgcs"), errors="coerce").combine_first(
-                    pd.to_numeric(data.get("tgcs_fallback"), errors="coerce")
-                )
-                data = data.drop(columns=["tgcs_fallback"], errors="ignore")
-            tgcs = pd.to_numeric(data.get("tgcs"), errors="coerce")
-
     egcs = pd.to_numeric(data.get("egcs"), errors="coerce")
     mgcs = pd.to_numeric(data.get("mgcs"), errors="coerce")
     vgcs = pd.to_numeric(data.get("vgcs"), errors="coerce")
@@ -5045,6 +4846,10 @@ def _callback_rrt_criteria(
                 tables[missing_concepts[0]] = loaded
         except (KeyError, ValueError) as e:
             # 如果批量加载失败,静默处理(某些概念可能在字典中不存在)
+            if os.environ.get('DEBUG'):
+                print(f"   ⚠️  无法加载部分RRT依赖概念: {e}")
+    
+    # Extract tables
     crea_tbl = tables.get("crea")
     uo_6h_tbl = tables.get("uo_6h")
     uo_12h_tbl = tables.get("uo_12h")
@@ -5306,70 +5111,6 @@ def _callback_sum_components(
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=output_col)
 
 
-def _load_eicu_gcs_total(
-    ctx: ConceptCallbackContext,
-    id_columns: Sequence[str],
-    index_column: Optional[str],
-) -> Optional[pd.DataFrame]:
-    """Load ``GCS Total`` rows from eICU nursecharting for fallback scoring."""
-
-    if ctx is None or getattr(ctx, "data_source", None) is None:
-        return None
-    if not ctx.patient_ids:
-        return None
-
-    id_candidates = list(id_columns) if id_columns else []
-    if "patientunitstayid" not in id_candidates:
-        id_candidates.insert(0, "patientunitstayid")
-
-    raw_ids = ctx.patient_ids
-    if isinstance(raw_ids, dict):
-        id_col = next((key for key in ("patientunitstayid", "stay_id", "admissionid") if key in raw_ids and raw_ids[key]), None)
-        if id_col is None:
-            id_col = next((key for key, vals in raw_ids.items() if vals), "patientunitstayid")
-        id_values = list(raw_ids.get(id_col, []))
-    else:
-        id_col = next((col for col in id_candidates if col in {"patientunitstayid", "admissionid", "stay_id"}), "patientunitstayid")
-        id_values = list(raw_ids)
-    if not id_values:
-        return None
-
-    time_col = index_column or "nursingchartoffset"
-
-    filters = [FilterSpec(id_col, FilterOp.IN, id_values), FilterSpec("nursingchartcelltypevalname", FilterOp.EQ, "GCS Total")]
-    columns = [id_col, time_col, "nursingchartvalue", "nursingchartcelltypevalname"]
-
-    try:
-        table = ctx.data_source.load_table(
-            "nursecharting",
-            columns=columns,
-            filters=filters,
-            verbose=False,
-        )
-    except Exception:
-        return None
-
-    df = table.data.copy()
-    if df.empty or "nursingchartvalue" not in df.columns:
-        return None
-
-    df["tgcs"] = pd.to_numeric(df["nursingchartvalue"], errors="coerce")
-    df = df.dropna(subset=["tgcs"])
-    if df.empty:
-        return None
-
-    if time_col in df.columns:
-        time_series = pd.to_numeric(df[time_col], errors="coerce")
-        # Convert offsets (minutes) to hours and align to hourly grid
-        df[time_col] = (time_series / 60.0).round().astype(float)
-
-    output_cols = [id_col]
-    if time_col in df.columns:
-        output_cols.append(time_col)
-    output_cols.append("tgcs")
-    return df[output_cols]
-
-
 def _callback_miiv_icu_patients_filter(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -5441,8 +5182,6 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "supp_o2": _callback_supp_o2,
     "supp_o2_aumc": _callback_supp_o2_aumc,
     "vent_ind": _callback_vent_ind,
-    "tco2": _callback_tco2,
-    "ca": _callback_ca,
     "urine24": _callback_urine24,
     "vaso_ind": _callback_vaso_ind,
     "vaso_ind_rate": _callback_vaso_ind_rate,
