@@ -4769,10 +4769,17 @@ def _callback_gcs(
         if vgcs is not None:
             vgcs = vgcs.fillna(5.0)
 
-    # Calculate GCS: use tgcs if available, otherwise sum components
-    combined = tgcs.copy() if tgcs is not None else pd.Series(index=data.index, dtype=float)
+    # Calculate GCS: use tgcs if available AND valid (>=3), otherwise sum components
+    # 🔧 FIX: tgcs computed by sum_components may have incorrect values when vgcs is missing
+    # GCS minimum is 3 (E1+M1+V1), so if tgcs<3, it's invalid and should be recalculated
+    combined = pd.Series(index=data.index, dtype=float)
     
-    # For rows where tgcs is NA, calculate from components
+    if tgcs is not None:
+        # Use tgcs where it's valid (>=3 or NaN)
+        valid_tgcs = tgcs.where((tgcs >= 3) | tgcs.isna())
+        combined = valid_tgcs.copy()
+    
+    # For rows where tgcs is NA or invalid (<3), calculate from components
     if egcs is not None and mgcs is not None and vgcs is not None:
         component_sum = egcs.add(mgcs, fill_value=np.nan).add(vgcs, fill_value=np.nan)
         combined = combined.fillna(component_sum)
