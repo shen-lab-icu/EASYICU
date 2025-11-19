@@ -3069,10 +3069,7 @@
       ],
       "miiv": [
         {
-          "ids": [
-            221289,
-            229617
-          ],
+          "ids": [221289, 229617],
           "table": "inputevents",
           "sub_var": "itemid",
           "stop_var": "endtime",
@@ -5464,10 +5461,10 @@
     ],
     "min": 0,
     "max": 3,
-    "description": "norepinephrine rate",
-    "omopid": 1321341,
-    "category": "medications",
-    "aggregate": "max",
+  "description": "norepinephrine rate",
+  "omopid": 1321341,
+  "category": "medications",
+  "aggregate": "max",
     "sources": {
       "aumc": [
         {
@@ -6945,6 +6942,7 @@
         {
           "table": "patients",
           "val_var": "gender",
+          "callback": "apply_map(c(M = 'Male', F = 'Female'))",
           "class_name": "col_itm"
         }
       ],
@@ -7219,9 +7217,7 @@
     "sources": {
       "aumc": [
         {
-          "concepts": [
-            "vent_ind"
-          ],
+          "concepts": ["vent_ind"],
           "callback": "supp_o2_aumc",
           "class_name": "rec_cncpt"
         }

@@ -13,7 +13,7 @@
       "icustay": {
         "id": "patientunitstayid",
         "position": 2,
-        "start": "unitadmitoffset",
+        "start": "hospitaladmitoffset",
         "end": "unitdischargeoffset",
         "table": "patient"
       }
@@ -2001,7 +2001,7 @@
       "icustay": {
         "id": "patientunitstayid",
         "position": 2,
-        "start": "unitadmitoffset",
+        "start": "hospitaladmitoffset",
         "end": "unitdischargeoffset",
         "table": "patient"
       }

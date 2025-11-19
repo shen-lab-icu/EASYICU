@@ -35,6 +35,7 @@ from .callbacks import (
     sofa2_cns,
     sofa_resp,
     sofa_score,
+    miiv_icu_patients_filter,
 )
 from .sofa2 import sofa2_score as sofa2_score_fn
 from .sepsis import sep3 as sep3_detector, susp_inf as susp_inf_detector
@@ -44,6 +45,90 @@ from .table import ICUTable, WinTbl
 logger = logging.getLogger(__name__)
 from .utils import coalesce
 from .unit_conversion import convert_vaso_rate
+
+
+def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str) -> pd.DataFrame:
+    """将FiO2标准化为百分比形式（0-100）以实现跨数据库兼容性
+
+    Args:
+        fio2_df: FiO2数据DataFrame
+        fio2_col: FiO2列名
+        database: 数据库名称
+
+    Returns:
+        标准化后的DataFrame
+    """
+    if fio2_df.empty or fio2_col not in fio2_df.columns:
+        return fio2_df
+
+    # 创建副本避免修改原数据
+    result_df = fio2_df.copy()
+
+    # 获取非空的FiO2值进行分析
+    fio2_values = result_df[fio2_col].dropna()
+
+    if len(fio2_values) == 0:
+        return result_df
+
+    max_val = fio2_values.max()
+    min_val = fio2_values.min()
+
+    # 数据库特定的单位转换逻辑
+    if database.lower() == 'miiv':
+        # MIMIC-IV: 如果最大值<=1.0且中位数>0.1，认为是分数形式，需要转换为百分比
+        if max_val <= 1.0 and min_val >= 0.0 and fio2_values.median() > 0.1:
+            result_df[fio2_col] = result_df[fio2_col] * 100
+            logger.debug(f"MIMIC-IV FiO2从分数形式转换为百分比形式 (max_val: {max_val}, median: {fio2_values.median()})")
+        # 如果值在0-1之间但有些异常值，检查大部分数据
+        elif max_val <= 1.5 and (fio2_values.quantile(0.95) <= 1.0) and fio2_values.median() > 0.1:
+            result_df[fio2_col] = result_df[fio2_col] * 100
+            logger.debug(f"MIMIC-IV FiO2从分数形式转换为百分比形式 (95%分位数: {fio2_values.quantile(0.95)}, median: {fio2_values.median()})")
+
+    elif database.lower() == 'eicu':
+        # eICU: 通常已经是百分比形式，但进行验证
+        if max_val <= 1.0 and min_val >= 0.0 and fio2_values.median() > 0.1:
+            result_df[fio2_col] = result_df[fio2_col] * 100
+            logger.debug(f"eICU FiO2从分数形式转换为百分比形式 (max_val: {max_val}, median: {fio2_values.median()})")
+
+    elif database.lower() == 'aumc':
+        # AUMC: 特殊处理 - 已知大部分是百分比形式，只有少数itemid可能是分数
+        # 检查是否存在明显的分数形式数据（如0.21, 0.4等典型的分数值）
+        fraction_like_values = fio2_values[(fio2_values > 0.1) & (fio2_values < 1.0)]
+
+        if len(fraction_like_values) > 0:
+            # 如果有>20%的值看起来像分数形式，则全部转换
+            fraction_ratio = len(fraction_like_values) / len(fio2_values)
+            if fraction_ratio > 0.2:
+                result_df[fio2_col] = result_df[fio2_col] * 100
+                logger.debug(f"AUMC FiO2从分数形式转换为百分比形式 (fraction_ratio: {fraction_ratio:.2f})")
+            else:
+                # 否则只转换明显是分数的值，保留已经是百分比的值
+                mask = (result_df[fio2_col] > 0.1) & (result_df[fio2_col] < 1.0)
+                result_df.loc[mask, fio2_col] = result_df.loc[mask, fio2_col] * 100
+                logger.debug(f"AUMC FiO2选择性转换：{mask.sum()}个值从分数转为百分比")
+
+        # 特殊处理：将可疑的0值和异常值设为NaN，让后续逻辑处理
+        # AUMC中0.0通常表示缺失值而不是真实的FiO2值
+        zero_mask = result_df[fio2_col] == 0.0
+        if zero_mask.sum() > 0:
+            result_df.loc[zero_mask, fio2_col] = float('nan')
+            logger.debug(f"AUMC FiO2: 将{zero_mask.sum()}个0值设为NaN")
+
+    # 验证转换后的值在合理范围内（0-100）
+    converted_values = result_df[fio2_col].dropna()
+    if len(converted_values) > 0:
+        conv_max = converted_values.max()
+        conv_min = converted_values.min()
+
+        # 如果转换后的值超出合理范围，发出警告
+        if conv_max > 100 or conv_min < 0:
+            logger.warning(f"数据库 {database} FiO2值超出合理范围 [0,100]: min={conv_min}, max={conv_max}")
+
+        # 记录转换信息
+        if max_val <= 1.0:
+            logger.info(f"数据库 {database} FiO2单位已标准化为百分比形式")
+
+    return result_df
 
 
 def _safe_group_apply(grouped, func):
@@ -1211,6 +1296,75 @@ def _callback_aumc_rass(
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
 
 
+def _callback_aumc_dur(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """AUMC duration callback: calc duration from start to stop by group.
+    
+    Replicates ricu's aumc_dur which calls calc_dur(x, val_var, index_var(x), stop_var, grp_var).
+    
+    This callback:
+    1. Groups data by ID + optional grp_var (e.g., orderid)
+    2. Finds min(start_time) and max(stop_time) per group
+    3. Returns duration = stop - start
+    """
+    from ..callback_utils import calc_dur
+    
+    if not tables or len(tables) == 0:
+        return _empty_icutbl(ctx)
+    
+    input_table = list(tables.values())[0]
+    data = input_table.df.copy()
+    
+    if data.empty:
+        return input_table
+    
+    id_columns = input_table.id_columns
+    index_column = input_table.index_column or ctx.index_column
+    value_column = ctx.concept_name  # e.g., dopa_dur
+    
+    # Get metadata from item definition
+    item_def = getattr(ctx, 'item_definition', None) if hasattr(ctx, 'item_definition') else None
+    stop_var = None
+    grp_var = None
+    
+    if item_def:
+        stop_var = item_def.get('stop_var')
+        grp_var = item_def.get('grp_var')
+    
+    if not stop_var or stop_var not in data.columns:
+        # Fall back to common AUMC stop column names
+        for candidate in ['stop', 'endtime', 'stoptime']:
+            if candidate in data.columns:
+                stop_var = candidate
+                break
+    
+    if not stop_var or stop_var not in data.columns:
+        # Can't calculate duration without stop time
+        logger.warning(f"aumc_dur: stop_var not found for {ctx.concept_name}, columns: {data.columns.tolist()}")
+        return input_table
+    
+    if not index_column or index_column not in data.columns:
+        logger.warning(f"aumc_dur: index_column '{index_column}' not found, columns: {data.columns.tolist()}")
+        return input_table
+    
+    # Call calc_dur from callback_utils
+    try:
+        result = calc_dur(
+            data,
+            val_var=value_column,
+            min_var=index_column,
+            max_var=stop_var,
+            grp_var=grp_var,
+            id_vars=id_columns
+        )
+        return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
+    except Exception as e:
+        logger.error(f"aumc_dur failed for {ctx.concept_name}: {e}")
+        return input_table
+
+
 def _callback_blood_cell_ratio(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -1435,7 +1589,7 @@ def _callback_sofa_component(
                     merge=False,
                     aggregate={"vaso_ind": "max"},
                     patient_ids=ctx.patient_ids,
-                    interval=ctx.interval,
+                    interval=None,
                     align_to_admission=True,
                 )
                 if isinstance(loaded, dict):
@@ -2425,6 +2579,7 @@ def _match_fio2(
     mode: str = "match_vals",
     fix_na_fio2: bool = True,
     ctx: Optional[ConceptCallbackContext] = None,  # Use ConceptCallbackContext
+    database: str = None,  # 数据库名称，用于FiO2单位转换
 ) -> tuple[pd.DataFrame, list[str], Optional[str]]:
     """
     Match FiO2 with PO2/O2Sat measurements within a time window.
@@ -2525,7 +2680,26 @@ def _match_fio2(
             # 先选择需要的列，然后排序
             o2_subset = o2_df[id_columns + [index_column, o2_col]]
             fio2_subset = fio2_df[id_columns + [index_column, fio2_col]]
-            
+
+            # 🔧 新增：数据库自适应的FiO2单位标准化
+            if database is not None and not fio2_subset.empty:
+                logger.debug(f"开始FiO2单位标准化: database={database}, fio2_col={fio2_col}, 数据行数={len(fio2_subset)}")
+                # 调试：显示原始数据范围
+                if fio2_col in fio2_subset.columns:
+                    orig_values = fio2_subset[fio2_col].dropna()
+                    if len(orig_values) > 0:
+                        logger.debug(f"原始FiO2值范围: {orig_values.min():.3f} - {orig_values.max():.3f}")
+
+                fio2_subset = _standardize_fio2_units(fio2_subset, fio2_col, database)
+
+                # 调试：显示转换后数据范围
+                if fio2_col in fio2_subset.columns:
+                    conv_values = fio2_subset[fio2_col].dropna()
+                    if len(conv_values) > 0:
+                        logger.debug(f"转换后FiO2值范围: {conv_values.min():.3f} - {conv_values.max():.3f}")
+            else:
+                logger.debug(f"跳过FiO2单位标准化: database={database}, fio2_subset.empty={fio2_subset.empty}")
+
             # 移除NaN时间值（NaN会导致排序问题）
             o2_subset = o2_subset.dropna(subset=[index_column])
             fio2_subset = fio2_subset.dropna(subset=[index_column])
@@ -2753,6 +2927,7 @@ def _callback_pafi(
     source_col_a: str,  # po2 or o2sat
     source_col_b: str,  # fio2
     output_col: str,    # pafi or safi
+    database: str = None,  # 数据库名称，用于FiO2单位转换
 ) -> ICUTable:
     """
     Calculate PaO2/FiO2 ratio (pafi) or SpO2/FiO2 ratio (safi).
@@ -2835,13 +3010,14 @@ def _callback_pafi(
     
     # Match FiO2 with O2 measurements
     data, id_columns, index_column = _match_fio2(
-        cleaned_tables, 
-        source_col_a, 
-        source_col_b, 
-        match_win, 
-        mode, 
+        cleaned_tables,
+        source_col_a,
+        source_col_b,
+        match_win,
+        mode,
         fix_na_fio2,
-        ctx=ctx  # Pass callback context directly
+        ctx=ctx,  # Pass callback context directly
+        database=database  # Pass database for FiO2 unit conversion
     )
     
     if data.empty:
@@ -2999,6 +3175,39 @@ def _callback_supp_o2(
 
     cols = [index_column, "supp_o2"]
     return _as_icutbl(result[cols], id_columns=id_columns, index_column=index_column, value_column="supp_o2")
+
+
+def _callback_supp_o2_aumc(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """AUMC-specific supplemental oxygen callback.
+
+    AUMC database lacks FiO2 data (itemid 12279 is empty), so we rely only on
+    mechanical ventilation indicator to determine supplemental oxygen use.
+    """
+    vent_tbl = tables["vent_ind"]
+
+    # Handle ID and time columns
+    id_columns = vent_tbl.id_columns or []
+    index_column = vent_tbl.index_column or "starttime"
+    vent_col = vent_tbl.value_column or "vent_ind"
+
+    vent_df = vent_tbl.data.copy()
+
+    # For AUMC, supplemental oxygen is equivalent to mechanical ventilation
+    # since we don't have reliable FiO2 data
+    vent_df["supp_o2"] = vent_df[vent_col].astype(bool)
+
+    result_cols = id_columns + ([index_column] if index_column else []) + ["supp_o2"]
+    result_df = vent_df[result_cols].reset_index(drop=True)
+
+    return _as_icutbl(
+        result_df,
+        id_columns=id_columns,
+        index_column=index_column,
+        value_column="supp_o2"
+    )
 
 
 def _callback_vent_ind(
@@ -3522,6 +3731,32 @@ def _callback_vaso_ind(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    # When upstream concepts request hourly alignment (ctx.interval != None),
+    # the duration tables may already have their start times floored to the hour.
+    # Reload the raw sub-concepts without interval coercion so we preserve the
+    # original infusion boundaries before we expand them into hourly grids.
+    if ctx.interval:
+        refreshed: Dict[str, ICUTable] = {}
+        for name, tbl in tables.items():
+            raw_tbl = tbl
+            try:
+                loaded = ctx.resolver.load_concepts(
+                    [name],
+                    ctx.data_source,
+                    merge=False,
+                    aggregate=None,
+                    interval=None,
+                    patient_ids=ctx.patient_ids,
+                    align_to_admission=True,
+                )
+                candidate = loaded.get(name) if isinstance(loaded, dict) else loaded
+                if isinstance(candidate, ICUTable) and not candidate.data.empty:
+                    raw_tbl = candidate
+            except Exception:
+                pass
+            refreshed[name] = raw_tbl
+        tables = refreshed
+
     merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     time_col = index_column or "starttime"
     cols = list(id_columns) + ([time_col] if time_col else [])
@@ -3555,6 +3790,19 @@ def _callback_vaso_ind(
     def _coerce_duration(series: pd.Series) -> pd.Series:
         if pd.api.types.is_timedelta64_dtype(series):
             return series
+        # 🔧 FIX: Check if it's datetime type (bug in some duration columns)
+        if pd.api.types.is_datetime64_any_dtype(series):
+            # This might be a datetime column mistakenly used as duration
+            # Try to interpret as offset from base time
+            dt_series = pd.to_datetime(series, errors="coerce")
+            base = pd.Timestamp("2000-01-01")
+            # If values are close to base_time, they might represent durations stored as timestamps
+            time_diffs = (dt_series - base).dt.total_seconds()
+            # Check if these look like reasonable durations (< 1 year in seconds)
+            if time_diffs.notna().any() and (time_diffs[time_diffs.notna()].abs() < 365*24*3600).all():
+                return pd.to_timedelta(time_diffs, unit="s", errors="coerce")
+            # Otherwise, return NaT for all invalid entries
+            return pd.Series([pd.NaT] * len(series), index=series.index, dtype='timedelta64[ns]')
         converted = pd.to_timedelta(series, errors="coerce")
         if converted.notna().any():
             return converted
@@ -3624,8 +3872,17 @@ def _callback_vaso_ind(
         end = row["__end"]
         if pd.isna(start) or pd.isna(end) or start > end:
             continue
-        grid = pd.date_range(start=start, end=end, freq=final_interval)
-        if grid.empty:
+        grid: pd.DatetimeIndex
+        if final_interval is not None and final_interval > pd.Timedelta(0):
+            aligned_start = start.floor(final_interval)
+            epsilon = min(final_interval / 1000, pd.Timedelta(microseconds=1))
+            aligned_end = end - epsilon
+            if aligned_end < aligned_start:
+                aligned_end = aligned_start
+            grid = pd.date_range(start=aligned_start, end=aligned_end, freq=final_interval)
+            if grid.empty:
+                grid = pd.DatetimeIndex([aligned_start])
+        else:
             grid = pd.DatetimeIndex([start])
         frame = pd.DataFrame({time_col: grid, "vaso_ind": True})
         for col in existing_id_cols:
@@ -3653,6 +3910,155 @@ def _callback_vaso_ind(
     result_cols = list(id_columns) + [time_col, "vaso_ind"] if id_columns else [time_col, "vaso_ind"]
     expanded = expanded[result_cols].reset_index(drop=True)
     return _as_icutbl(expanded, id_columns=id_columns, index_column=time_col, value_column="vaso_ind")
+
+
+def _callback_vaso_ind_rate(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Vasopressor indicator based on rate data (alternative for eICU where duration calculation fails).
+
+    This callback uses vasopressor rate data instead of duration data to determine
+    when vasopressors were administered. It's specifically designed for eICU database
+    where the duration calculation has issues.
+    """
+    merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
+    time_col = index_column or "starttime"
+    cols = list(id_columns) + ([time_col] if time_col else [])
+    empty_cols = cols + ["vaso_ind"]
+
+    if merged.empty or time_col not in merged.columns:
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=id_columns,
+            index_column=time_col,
+            value_column="vaso_ind",
+        )
+
+    vaso_cols = [col for col in merged.columns if col not in cols]
+    if not vaso_cols:
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=id_columns,
+            index_column=time_col,
+            value_column="vaso_ind",
+        )
+
+    # Create result data: for each time point where any vaso drug has rate > 0, set vaso_ind = True
+    result_rows = []
+
+    # Get unique time points
+    time_points = merged[time_col].dropna().unique()
+
+    # Get interval for time grid generation
+    final_interval = ctx.interval
+    if isinstance(final_interval, str):
+        try:
+            final_interval = pd.to_timedelta(final_interval)
+        except Exception:
+            final_interval = pd.Timedelta(hours=1)
+    elif final_interval is None or final_interval <= pd.Timedelta(0):
+        final_interval = pd.Timedelta(hours=1)
+
+    # For each ID combination and time point, check if any vaso drug is active
+    id_groups = merged[list(id_columns)].drop_duplicates() if id_columns else [pd.Series([None])]
+
+    for _, id_group in id_groups.iterrows() if id_columns else [(None, None)]:
+        # Filter data for this ID group
+        if id_columns:
+            mask = pd.Series([True] * len(merged))
+            for col in id_columns:
+                mask = mask & (merged[col] == id_group[col])
+            group_data = merged[mask]
+        else:
+            group_data = merged
+
+        if group_data.empty:
+            continue
+
+        # Get time range for this ID group
+        min_time = group_data[time_col].min()
+        max_time = group_data[time_col].max()
+
+        if pd.isna(min_time) or pd.isna(max_time):
+            continue
+
+        # Create time grid
+        if pd.api.types.is_numeric_dtype(group_data[time_col]):
+            time_grid = np.arange(min_time, max_time + final_interval.total_seconds()/3600,
+                                 final_interval.total_seconds()/3600)
+        else:
+            time_grid = pd.date_range(start=min_time, end=max_time, freq=final_interval)
+
+        # For each time point, check if any vaso drug is active
+        for time_point in time_grid:
+            # Check if any vaso drug has rate > 0 at this time point (or nearest time)
+            # Handle both numeric and datetime time columns
+            if pd.api.types.is_numeric_dtype(group_data[time_col]):
+                # Numeric time column
+                time_diff = abs(group_data[time_col] - time_point)
+                threshold = final_interval.total_seconds()/7200  # half interval
+            else:
+                # Datetime/timedelta time column
+                # Convert time_point to timedelta if it's numeric hours
+                if isinstance(time_point, (int, float)):
+                    time_point_td = pd.Timedelta(hours=time_point)
+                elif hasattr(time_point, 'total_seconds'):  # Already timedelta-like
+                    time_point_td = time_point
+                else:
+                    # Try to convert from datetime string to timedelta (relative to some base)
+                    try:
+                        # Check if it's a datetime string that needs conversion
+                        if isinstance(time_point, str) and ('-' in time_point or ':' in time_point):
+                            # This looks like a datetime string, convert to timedelta relative to start of day
+                            time_dt = pd.to_datetime(time_point)
+                            time_point_td = pd.Timedelta(hours=time_dt.hour, minutes=time_dt.minute,
+                                                      seconds=time_dt.second, microseconds=time_dt.microsecond)
+                        else:
+                            # Try direct timedelta conversion
+                            time_point_td = pd.to_timedelta(time_point)
+                    except:
+                        # If all conversions fail, use numeric conversion
+                        time_point_td = pd.Timedelta(hours=float(str(time_point)))
+
+                # Ensure both operands are timedelta for subtraction
+                time_col_vals = pd.to_timedelta(group_data[time_col]) if not pd.api.types.is_timedelta64_dtype(group_data[time_col]) else group_data[time_col]
+                time_diff = abs(time_col_vals - time_point_td)
+                threshold = final_interval / 2
+
+            time_mask = time_diff <= threshold
+            nearby_data = group_data[time_mask]
+
+            has_vaso = False
+            for _, row in nearby_data.iterrows():
+                for col in vaso_cols:
+                    val = row.get(col)
+                    if pd.notna(val) and float(val) > 0:
+                        has_vaso = True
+                        break
+                if has_vaso:
+                    break
+
+            # Create result row
+            result_row = {time_col: time_point, "vaso_ind": has_vaso}
+            if id_columns:
+                for col in id_columns:
+                    result_row[col] = id_group[col]
+            result_rows.append(result_row)
+
+    if not result_rows:
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=id_columns,
+            index_column=time_col,
+            value_column="vaso_ind",
+        )
+
+    result_df = pd.DataFrame(result_rows)
+    result_cols = list(id_columns) + [time_col, "vaso_ind"] if id_columns else [time_col, "vaso_ind"]
+    result_df = result_df[result_cols].reset_index(drop=True)
+
+    return _as_icutbl(result_df, id_columns=id_columns, index_column=time_col, value_column="vaso_ind")
 
 
 def _callback_sep3(
@@ -4125,6 +4531,7 @@ def _callback_vaso60(
             times_ns = times.to_numpy(dtype="datetime64[ns]")
             value_arr = values.to_numpy()
 
+            interval_delta = np.timedelta64(int(final_interval.value), "ns")
             for start, end in windows:
                 if pd.isna(start) or pd.isna(end) or start > end:
                     continue
@@ -4132,14 +4539,23 @@ def _callback_vaso60(
                 if grid.empty:
                     continue
                 grid_ns = grid.to_numpy(dtype="datetime64[ns]")
-                idx = np.searchsorted(times_ns, grid_ns, side="right") - 1
-                valid_idx = idx >= 0
-                if not valid_idx.any():
-                    continue
-                idx_safe = idx.copy()
-                idx_safe[idx_safe < 0] = 0
-                sampled = value_arr[idx_safe].astype(float, copy=False)
-                sampled[~valid_idx] = np.nan
+                sampled_list: list[float] = []
+                for point in grid_ns:
+                    start_pos = np.searchsorted(times_ns, point, side="right") - 1
+                    end_boundary = point + interval_delta
+                    end_pos = np.searchsorted(times_ns, end_boundary, side="left")
+                    candidates: list[float] = []
+                    if start_pos >= 0:
+                        candidates.append(value_arr[start_pos])
+                    slice_start = max(start_pos + 1, 0)
+                    if end_pos > slice_start:
+                        candidates.extend(value_arr[slice_start:end_pos])
+                    if candidates:
+                        valid_vals = np.array(candidates, dtype=float)
+                        sampled_list.append(float(np.nanmax(valid_vals)) if np.any(np.isfinite(valid_vals)) else np.nan)
+                    else:
+                        sampled_list.append(np.nan)
+                sampled = np.array(sampled_list, dtype=float)
                 frame = pd.DataFrame({rate_index_col: grid, ctx.concept_name: sampled})
                 for col in group_key_cols:
                     frame[col] = first[col]
@@ -4241,6 +4657,14 @@ def _callback_gcs(
         ICUTable with GCS values
     """
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
+    ds_name = ""
+    if ctx is not None and getattr(ctx, "data_source", None) is not None:
+        source_cfg = getattr(ctx.data_source, "config", None)
+        if source_cfg is not None and hasattr(source_cfg, "name"):
+            ds_name = getattr(source_cfg, "name", "") or ""
+        else:
+            ds_name = getattr(ctx.data_source, "name", "") or ""
+    ignore_tgcs = ds_name.lower() in {"miiv", "mimiciv"}
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["gcs"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="gcs")
@@ -4249,7 +4673,7 @@ def _callback_gcs(
     sed_impute = ctx.kwargs.get("sed_impute", "max")
     set_na_max = ctx.kwargs.get("set_na_max", True)
 
-    tgcs = pd.to_numeric(data.get("tgcs"), errors="coerce")
+    tgcs = None if ignore_tgcs else pd.to_numeric(data.get("tgcs"), errors="coerce")
     egcs = pd.to_numeric(data.get("egcs"), errors="coerce")
     mgcs = pd.to_numeric(data.get("mgcs"), errors="coerce")
     vgcs = pd.to_numeric(data.get("vgcs"), errors="coerce")
@@ -4610,6 +5034,46 @@ def _callback_sum_components(
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=output_col)
 
 
+def _callback_miiv_icu_patients_filter(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Filter MIMIC-IV cohorts so demographics align with ICU stay IDs."""
+
+    from ..datasource import ICUDataSource
+
+    database = ctx.database if ctx.database else "miiv"
+    if database != "miiv":
+        return next(iter(tables.values()))
+
+    try:
+        ds = ICUDataSource.get_instance(database)
+        icustays_df = ds.load_table("icustays", columns=["stay_id", "subject_id"])
+        if icustays_df.empty:
+            main_table = next(iter(tables.values()))
+            from ..table import IdTbl
+
+            cols = ["stay_id"] + [col for col in main_table.columns if col != "subject_id"]
+            return IdTbl(pd.DataFrame(columns=cols), id_vars=["stay_id"])
+
+        main_table = next(iter(tables.values()))
+        data_df = main_table.to_pandas()
+        if "subject_id" in data_df.columns and "subject_id" in icustays_df.columns:
+            merged = icustays_df.merge(
+                data_df.astype({ "subject_id": icustays_df["subject_id"].dtype }),
+                on="subject_id",
+                how="inner",
+            )
+            merged = merged.drop(columns=["subject_id"], errors="ignore")
+            merged = merged.set_index("stay_id")
+            from ..table import IdTbl
+
+            return IdTbl(merged, id_vars=["stay_id"])
+        return main_table
+    except Exception:
+        return next(iter(tables.values()))
+
+
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "bmi": _callback_bmi,
     "avpu": _callback_avpu,
@@ -4633,13 +5097,17 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "qsofa_score": _callback_qsofa,
     "sirs_score": _callback_sirs,
     # PaFi = PaO2/FiO2 ratio (arterial oxygen pressure / inspired oxygen fraction)
-    "pafi": lambda tables, ctx: _callback_pafi(tables, ctx, source_col_a="po2", source_col_b="fio2", output_col="pafi"),
-    # SaFi = SpO2/FiO2 ratio (oxygen saturation / inspired oxygen fraction) 
-    "safi": lambda tables, ctx: _callback_pafi(tables, ctx, source_col_a="o2sat", source_col_b="fio2", output_col="safi"),
+    "pafi": lambda tables, ctx: _callback_pafi(tables, ctx, source_col_a="po2", source_col_b="fio2", output_col="pafi",
+                                         database=getattr(ctx.data_source.config, 'name', '') if hasattr(ctx.data_source, 'config') and hasattr(ctx.data_source.config, 'name') else None),
+    # SaFi = SpO2/FiO2 ratio (oxygen saturation / inspired oxygen fraction)
+    "safi": lambda tables, ctx: _callback_pafi(tables, ctx, source_col_a="o2sat", source_col_b="fio2", output_col="safi",
+                                         database=getattr(ctx.data_source.config, 'name', '') if hasattr(ctx.data_source, 'config') and hasattr(ctx.data_source.config, 'name') else None),
     "supp_o2": _callback_supp_o2,
+    "supp_o2_aumc": _callback_supp_o2_aumc,
     "vent_ind": _callback_vent_ind,
     "urine24": _callback_urine24,
     "vaso_ind": _callback_vaso_ind,
+    "vaso_ind_rate": _callback_vaso_ind_rate,
     "sep3": _callback_sep3,
     "vaso60": _callback_vaso60,
     "susp_inf": _callback_susp_inf,
@@ -4655,8 +5123,10 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "aumc_death": _callback_aumc_death,
     "aumc_bxs": _callback_aumc_bxs,
     "aumc_rass": _callback_aumc_rass,
+    "aumc_dur": _callback_aumc_dur,
     "blood_cell_ratio": _callback_blood_cell_ratio,
     "transform_fun(aumc_rass)": _callback_aumc_rass,  # Handle transform_fun wrapper
+    "miiv_icu_patients_filter": _callback_miiv_icu_patients_filter,  # Filter MIMIC-IV patients to ICU only
 }
 
 
@@ -4677,3 +5147,153 @@ def execute_concept_callback(
     if func is None:
         raise NotImplementedError(f"Concept-level callback '{name}' not implemented.")
     return func(tables, ctx)
+
+
+def _callback_miiv_icu_patients_filter(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext
+) -> ICUTable:
+    """Filter MIMIC-IV patients data to only include ICU patients.
+
+    This callback connects patients table with icustays table to ensure
+    that demographic data (age, sex) only includes ICU patients,
+    matching the ID system used by other concepts (stay_id).
+
+    Args:
+        tables: Dictionary containing loaded tables
+        ctx: Callback context with database and other information
+
+    Returns:
+        Filtered table with ICU patients only
+    """
+    from ..datasource import ICUDataSource
+
+    # Get database name from context
+    database = ctx.database if ctx.database else 'miiv'
+
+    if database != 'miiv':
+        # For non-MIMIC-IV databases, return first table unchanged
+        return next(iter(tables.values()))
+
+    try:
+        # Get ICUDataSource instance
+        ds = ICUDataSource.get_instance(database)
+
+        # Load icustays table to get mapping between subject_id and stay_id
+        icustays_df = ds.load_table('icustays', columns=['stay_id', 'subject_id'])
+
+        if icustays_df.empty:
+            # If no icustays data, return empty table with expected structure
+            main_table = next(iter(tables.values()))
+            from ..table import IdTbl
+            empty_df = pd.DataFrame(columns=['stay_id'] + [col for col in main_table.columns if col != 'subject_id'])
+            return IdTbl(empty_df, id_vars=['stay_id'])
+
+        # Get the main table (patients data)
+        main_table = next(iter(tables.values()))
+        data_df = main_table.to_pandas()
+
+        # Merge patients data with icustays to filter only ICU patients
+        if 'subject_id' in data_df.columns and 'subject_id' in icustays_df.columns:
+            # Ensure both subject_id columns are the same type for proper merging
+            data_copy = data_df.copy()
+            icustays_copy = icustays_df.copy()
+
+            data_copy['subject_id'] = data_copy['subject_id'].astype(icustays_copy['subject_id'].dtype)
+
+            # Merge to keep only ICU patients
+            merged = pd.merge(
+                icustays_copy[['stay_id', 'subject_id']],
+                data_copy,
+                on='subject_id',
+                how='inner'
+            )
+
+            # Set stay_id as the primary ID column
+            merged = merged.set_index('stay_id')
+
+            # Remove subject_id column as stay_id is now primary
+            merged = merged.drop(columns=['subject_id'], errors='ignore')
+
+            # Convert back to ICUTable
+            return IdTbl(merged, id_vars=['stay_id'])
+        else:
+            # If expected columns not found, return original table
+            return main_table
+
+    except Exception:
+        # If any error occurs during filtering, return original table
+        # This ensures the system doesn't break if icustays table is unavailable
+        return next(iter(tables.values()))
+
+def miiv_icu_patients_filter(tbl, ctx):
+    """
+    MIMIC-IV ICU患者过滤callback
+
+    这个函数过滤patients表，只保留ICU患者的数据。
+    它通过ICU stays表来建立stay_id和subject_id之间的映射。
+
+    Args:
+        tbl: 加载的患者数据表
+        ctx: 概念加载上下文，包含data_source和patient_ids
+
+    Returns:
+        过滤后的表，只包含ICU患者的数据
+    """
+    if not hasattr(tbl, 'data') or tbl.data.empty:
+        return tbl
+
+    # 如果没有指定患者ID，返回所有数据（保持原有行为）
+    if not ctx.patient_ids:
+        return tbl
+
+    try:
+        # 加载ICU stays表来建立映射
+        icustays_tbl = ctx.data_source.load_table(
+            'icustays',
+            columns=['stay_id', 'subject_id'],
+            filters=None,
+            verbose=False
+        )
+
+        if icustays_tbl.data.empty:
+            return tbl  # 如果没有ICU数据，返回原表
+
+        # 确定patient_ids是什么类型的ID，并获取对应的subject_id
+        patient_ids = list(ctx.patient_ids)
+        
+        # 首先尝试作为stay_id处理
+        mapped_icu = icustays_tbl.data[icustays_tbl.data['stay_id'].isin(patient_ids)]
+        
+        if len(mapped_icu) == 0:
+            # 如果没有找到匹配，尝试作为subject_id处理
+            mapped_icu = icustays_tbl.data[icustays_tbl.data['subject_id'].isin(patient_ids)]
+
+        if len(mapped_icu) == 0:
+            return tbl  # 如果没有找到匹配，返回原表
+
+        # 获取对应的subject_id列表
+        target_subject_ids = mapped_icu['subject_id'].unique().tolist()
+
+        # 过滤原始患者数据
+        if 'subject_id' in tbl.data.columns:
+            filtered_data = tbl.data[tbl.data['subject_id'].isin(target_subject_ids)].copy()
+            
+            # 创建新的ICUTable对象
+            from .table import IdTbl
+            return IdTbl(filtered_data, tbl.id_vars, tbl.index_var, tbl.value_var, tbl.unit_var)
+        else:
+            return tbl
+
+    except Exception:
+        # 如果任何错误发生，返回原表以确保系统不会中断
+        return tbl
+
+
+# 注册新的callback函数
+try:
+    from . import CALLBACK_REGISTRY
+    CALLBACK_REGISTRY['miiv_icu_patients_filter'] = miiv_icu_patients_filter
+except ImportError:
+    # CALLBACK_REGISTRY可能还没有初始化
+    pass

@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 # 全局调试开关 - 设置为 False 可以减少输出
 DEBUG_MODE = False
 
+# Concepts that require hourly maxima (vasoactive infusion rates)
+VASO_RATE_CONCEPTS = {"dopa_rate", "dobu_rate", "epi_rate", "norepi_rate", "adh_rate"}
+
 
 def _debug(msg: str) -> None:
     if DEBUG_MODE:
@@ -2136,7 +2139,51 @@ class ConceptResolver:
                 f"Recursive concept '{concept_name}' requires a callback."
             )
 
+        # 🔧 IMPORTANT FIX: Check for database-specific sub_concepts override
+        db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
         sub_names = list(definition.sub_concepts)
+
+        # DEBUG: Print database detection info
+        if verbose and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"🔍 Database-specific config check for concept '{concept_name}':")
+            logger.debug(f"   db_name: '{db_name}'")
+            logger.debug(f"   original sub_concepts: {sub_names}")
+            logger.debug(f"   definition has sources: {hasattr(definition, 'sources')}")
+            if hasattr(definition, 'sources'):
+                logger.debug(f"   definition.sources: {definition.sources}")
+
+        # Check if there's a database-specific configuration that overrides sub_concepts
+        if db_name and hasattr(definition, 'sources') and db_name in definition.sources:
+            db_sources = definition.sources[db_name]
+            # db_sources is a list of ConceptSource objects, but concept-dict.json might load it as a dict
+            if isinstance(db_sources, list):
+                for db_source in db_sources:
+                    if hasattr(db_source, '__dict__'):
+                        # This is a ConceptSource object
+                        db_source_dict = db_source.__dict__
+                    else:
+                        # This is already a dict
+                        db_source_dict = db_source
+
+                    if 'concepts' in db_source_dict:
+                        # Use database-specific sub_concepts
+                        sub_names = list(db_source_dict['concepts'])
+                        if verbose and logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"🔄 Using {db_name}-specific sub_concepts for '{concept_name}': {sub_names}")
+                        break
+                    elif 'params' in db_source_dict and isinstance(db_source_dict['params'], dict) and 'concepts' in db_source_dict['params']:
+                        # Use database-specific sub_concepts from params
+                        sub_names = list(db_source_dict['params']['concepts'])
+                        if verbose and logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"🔄 Using {db_name}-specific sub_concepts from params for '{concept_name}': {sub_names}")
+                        break
+            else:
+                # db_sources is a dict (loaded from JSON)
+                if 'concepts' in db_sources:
+                    sub_names = list(db_sources['concepts'])
+                    if verbose and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"🔄 Using {db_name}-specific sub_concepts for '{concept_name}': {sub_names}")
+
         if not sub_names:
             raise ValueError(
                 f"Recursive concept '{concept_name}' specifies no sub concepts."
@@ -2253,7 +2300,50 @@ class ConceptResolver:
             patient_ids=patient_ids,
             kwargs=kwargs,  # Pass kwargs to callback context
         )
-        result = execute_concept_callback(definition.callback, sub_tables, ctx)
+
+        # 🔧 IMPORTANT FIX: Check for database-specific callback override
+        callback_name = definition.callback
+
+        # DEBUG: Print callback detection info
+        if verbose and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"🔍 Callback detection for concept '{concept_name}':")
+            logger.debug(f"   original callback: '{callback_name}'")
+            logger.debug(f"   db_name: '{db_name}'")
+            logger.debug(f"   has sources: {hasattr(definition, 'sources')}")
+
+        if db_name and hasattr(definition, 'sources') and db_name in definition.sources:
+            db_sources = definition.sources[db_name]
+            # db_sources is a list of ConceptSource objects, but concept-dict.json might load it as a dict
+            if isinstance(db_sources, list):
+                for db_source in db_sources:
+                    if hasattr(db_source, '__dict__'):
+                        # This is a ConceptSource object
+                        db_source_dict = db_source.__dict__
+                    else:
+                        # This is already a dict
+                        db_source_dict = db_source
+
+                    if 'callback' in db_source_dict and db_source_dict['callback'] is not None:
+                        # Use database-specific callback only if explicitly specified
+                        callback_name = db_source_dict['callback']
+                        if verbose and logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"🔄 Using {db_name}-specific callback '{callback_name}' for '{concept_name}'")
+                        break
+            else:
+                # db_sources is a dict (loaded from JSON)
+                if 'callback' in db_sources and db_sources['callback'] is not None:
+                    callback_name = db_sources['callback']
+                    if verbose and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"🔄 Using {db_name}-specific callback '{callback_name}' for '{concept_name}'")
+
+        # 🔧 CRITICAL FIX: Validate callback_name before execution
+        if callback_name is None:
+            raise ValueError(f"Concept '{concept_name}' has no callback specified. Both original and database-specific callbacks are None.")
+
+        if verbose and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"🎯 Executing callback '{callback_name}' for concept '{concept_name}' with {len(sub_tables)} sub-tables")
+
+        result = execute_concept_callback(callback_name, sub_tables, ctx)
 
         # 🔧 CRITICAL: Align WinTbl result time columns immediately after callback
         # This ensures that when this concept is used as a sub-concept in parent recursion,
@@ -2443,6 +2533,14 @@ class ConceptResolver:
             if concept_name == 'gcs':
                 if agg_method is None or (isinstance(agg_method, str) and agg_method != 'min'):
                     agg_method = 'min'
+            if agg_method in (None, "auto") and concept_name in VASO_RATE_CONCEPTS:
+                agg_method = "max"
+            # SOFA cardiovascular components must retain the highest severity within the window.
+            # Using the default 'median' aggregation diluted vasopressor-driven spikes (e.g. 2 and 4
+            # becoming 3, or 1 and 2 becoming 1.5). ricu keeps the window maximum, so align here.
+            sofa_max_concepts = {'sofa_cardio', 'sofa2_cardio'}
+            if agg_method is None and concept_name in sofa_max_concepts:
+                agg_method = 'max'
             # 如果仍然没有指定，根据值列类型自动选择
             if agg_method is None:
                 # Get value column based on result type
@@ -4054,6 +4152,16 @@ def _apply_callback(
     if expr == "transform_fun(eicu_age)":
         from .callback_utils import eicu_age
         return eicu_age(frame, val_col=concept_name)
+
+    # Handle aumc_rass callback
+    if expr == "transform_fun(aumc_rass)":
+        # Apply aumc_rass transformation: extract first 2 characters as integer
+        # Similar to ricu's: as.integer(substr(x, 1L, 2L))
+        series = frame[concept_name].copy()
+        series = series.astype(str).str[:2]
+        series = pd.to_numeric(series, errors='coerce')
+        frame[concept_name] = series
+        return frame
 
     if expr.strip() == "distribute_amount":
         from .callback_utils import distribute_amount
