@@ -413,11 +413,15 @@ class ICUDataSource:
         # 🚀 OPTIMIZATION: 缓存键不包含patient_ids_filter以实现跨概念共享
         # 对于同一批患者的多个概念加载,只在第一次读取表,后续从缓存中过滤
         # 这将chartevents等大表的加载从N次(每概念一次)减少到1次
+        # 🔧 CRITICAL FIX: 跳过需要subject_id→stay_id映射的表，这些表缓存会导致patient过滤失效
+        skip_cache_tables = ['labevents', 'microbiologyevents', 'inputevents', 'admissions']
+        enable_caching = self.enable_cache and table_name not in skip_cache_tables
+        
         cache_key = (table_name, tuple(sorted(columns)) if columns else None)
         
         # 检查缓存
         cached_frame = None
-        if self.enable_cache:
+        if enable_caching:
             with self._lock:
                 cached_frame = self._table_cache.get(cache_key)
         
@@ -501,7 +505,8 @@ class ICUDataSource:
         # 🚀 OPTIMIZATION: 缓存完整表(未经patient过滤)以实现跨概念共享
         # patient过滤在从缓存读取时应用(见上面cached_frame分支)
         # ⚡ 性能优化: 缓存原始frame，返回过滤后的结果
-        if self.enable_cache:
+        # 🔧 FIX: 不缓存需要特殊处理的表（labevents/admissions等）
+        if enable_caching:
             with self._lock:
                 # 缓存原始未过滤的表
                 self._table_cache[cache_key] = frame

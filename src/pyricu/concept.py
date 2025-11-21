@@ -900,9 +900,15 @@ class ConceptResolver:
             
             cache_key = (source.table, patient_filter_key)
             
+            # 🔧 CRITICAL FIX: 跳过需要特殊处理表的缓存
+            # labevents/admissions等需要subject_id→stay_id映射，缓存会保存映射前的数据导致patient过滤失效
+            skip_cache_for_special_tables = source.table in ['labevents', 'microbiologyevents', 'inputevents', 'admissions']
+            
             # 尝试从缓存获取
-            with self._cache_lock:
-                cached_table = self._table_cache.get(cache_key)
+            cached_table = None
+            if not skip_cache_for_special_tables:
+                with self._cache_lock:
+                    cached_table = self._table_cache.get(cache_key)
             if cached_table is not None:
                 if verbose or DEBUG_MODE:
                     if DEBUG_MODE: print(f"   ♻️  使用缓存的表: {source.table} (跳过 {len(patient_filter_in_filters.value) if patient_filter_in_filters else 0} 个患者的加载)")
@@ -1105,8 +1111,9 @@ class ConceptResolver:
                                 )
                     
                     
-                    # 仅当有患者过滤器时才缓存
-                    if patient_filter_in_filters:
+                    # 仅当有患者过滤器且不是特殊处理表时才缓存
+                    # 🔧 FIX: labevents/admissions等需要subject_id→stay_id映射，不应缓存原始subject_id级别数据
+                    if patient_filter_in_filters and not skip_cache_for_special_tables:
                         # 缓存只应用了患者过滤器的表
                         patient_only_table = data_source.load_table(
                             source.table,
@@ -1332,6 +1339,15 @@ class ConceptResolver:
                             
                         # 🔗 关键修复：如果用户提供了特定的 stay_id，在映射后再次过滤
                         # 确保只返回用户指定的 stay_id 的数据
+                        print(f"   🔍 [{concept_name}] DEBUG: 检查stay_id过滤条件")
+                        print(f"       - 'stay_id' in frame.columns: {'stay_id' in frame.columns}")
+                        print(f"       - patient_ids存在: {patient_ids is not None}")
+                        if patient_ids:
+                            print(f"       - patient_ids内容: {patient_ids}")
+                        print(f"       - current_expanded_patient_ids存在: {current_expanded_patient_ids is not None}")
+                        if current_expanded_patient_ids:
+                            print(f"       - current_expanded_patient_ids: {current_expanded_patient_ids}")
+                        
                         if 'stay_id' in frame.columns and patient_ids:
                             # 使用之前保存的current_expanded_patient_ids
                             if current_expanded_patient_ids and isinstance(current_expanded_patient_ids, dict) and 'stay_id' in current_expanded_patient_ids:
@@ -1339,8 +1355,9 @@ class ConceptResolver:
                                 if specified_stay_ids:
                                     before_stay_filter = len(frame)
                                     frame = frame[frame['stay_id'].isin(specified_stay_ids)].copy()
-                                    if DEBUG_MODE and before_stay_filter > len(frame):
-                                        print(f"      🔍 [{concept_name}] stay_id过滤: {before_stay_filter}行 → {len(frame)}行 (保留{len(specified_stay_ids)}个stay_id)")
+                                    print(f"      🔍 [{concept_name}] stay_id过滤: {before_stay_filter}行 → {len(frame)}行 (保留{len(specified_stay_ids)}个stay_id: {specified_stay_ids})")
+                            else:
+                                print(f"       ❌ 无法进行stay_id过滤: current_expanded_patient_ids={'dict' if isinstance(current_expanded_patient_ids, dict) else type(current_expanded_patient_ids)}, 'stay_id' in dict={('stay_id' in current_expanded_patient_ids) if isinstance(current_expanded_patient_ids, dict) else 'N/A'}")
                         
                         if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
                                 id_columns = ['stay_id']
@@ -1357,6 +1374,57 @@ class ConceptResolver:
                         import traceback
                         traceback.print_exc()
                     # 失败时不做强制映射，保持原逻辑
+            
+            # MIMIC-IV特殊处理：admissions表只有subject_id和hadm_id，需要映射到stay_id
+            if source.table == 'admissions' and 'subject_id' in frame.columns and 'stay_id' not in frame.columns:
+                if DEBUG_MODE: print(f"   ➡️  进入 MIMIC-IV admissions特殊处理")
+                try:
+                    # 加载icustays获取subject_id→hadm_id→stay_id映射
+                    icustay_filters = []
+                    current_expanded_patient_ids = None
+                    if patient_ids:
+                        current_expanded_patient_ids = self._expand_patient_ids(
+                            patient_ids, 
+                            'subject_id',
+                            data_source,
+                            verbose=False
+                        )
+                        subj_vals = current_expanded_patient_ids.get('subject_id') if isinstance(current_expanded_patient_ids, dict) else current_expanded_patient_ids
+                        if subj_vals:
+                            icustay_filters.append(
+                                FilterSpec(column='subject_id', op=FilterOp.IN, value=subj_vals)
+                            )
+                    
+                    icustays = data_source.load_table('icustays', filters=icustay_filters if icustay_filters else None, verbose=verbose)
+                    if hasattr(icustays, 'data'):
+                        icu_df = icustays.data[['subject_id', 'hadm_id', 'stay_id']].drop_duplicates()
+                    else:
+                        icu_df = icustays[['subject_id', 'hadm_id', 'stay_id']].drop_duplicates()
+                    
+                    # 通过hadm_id映射到stay_id（admissions是hospital级别，icustays是ICU级别）
+                    if 'hadm_id' in frame.columns and 'hadm_id' in icu_df.columns:
+                        before_merge = len(frame)
+                        frame = frame.merge(icu_df[['hadm_id', 'stay_id']], on='hadm_id', how='inner')
+                        if DEBUG_MODE:
+                            print(f"      🏥 [{concept_name}] admissions→icustays映射: {before_merge}行 → {len(frame)}行")
+                        
+                        # 最终stay_id过滤
+                        if patient_ids and current_expanded_patient_ids and isinstance(current_expanded_patient_ids, dict) and 'stay_id' in current_expanded_patient_ids:
+                            specified_stay_ids = current_expanded_patient_ids['stay_id']
+                            if specified_stay_ids:
+                                before_stay_filter = len(frame)
+                                frame = frame[frame['stay_id'].isin(specified_stay_ids)].copy()
+                                if DEBUG_MODE and before_stay_filter > len(frame):
+                                    print(f"      🔍 [{concept_name}] stay_id过滤: {before_stay_filter}行 → {len(frame)}行")
+                        
+                        if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
+                            id_columns = ['stay_id']
+                            if DEBUG_MODE: print(f"   🔄 MIMIC-IV特殊处理: admissions ID列从 subject_id → stay_id")
+                except Exception as ex:
+                    print(f"⚠️  Warning: Failed to map admissions to icu stays: {ex}")
+                    if verbose:
+                        import traceback
+                        traceback.print_exc()
 
             # 如果配置中没有ID列，尝试从数据中自动检测
             if not table.id_columns:
