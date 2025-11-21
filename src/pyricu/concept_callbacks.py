@@ -49,7 +49,6 @@ logger = logging.getLogger(__name__)
 from .utils import coalesce
 from .unit_conversion import convert_vaso_rate
 
-
 def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str) -> pd.DataFrame:
     """将FiO2标准化为百分比形式（0-100）以实现跨数据库兼容性
 
@@ -133,7 +132,6 @@ def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str)
 
     return result_df
 
-
 def _safe_group_apply(grouped, func):
     """Compatibility helper for pandas include_groups default change."""
     try:
@@ -143,17 +141,14 @@ def _safe_group_apply(grouped, func):
     except TypeError:  # pandas < 2.1
         return grouped.apply(func)
 
-
 # Helper functions to unify WinTbl and ICUTable attribute access
 def _get_id_columns(table):
     """Get ID columns from either WinTbl (id_vars) or ICUTable (id_columns)."""
     return list(table.id_vars if isinstance(table, WinTbl) else table.id_columns)
 
-
 def _get_index_column(table):
     """Get index column from either WinTbl (index_var) or ICUTable (index_column)."""
     return table.index_var if isinstance(table, WinTbl) else table.index_column
-
 
 def _coerce_hour_scalar(value) -> float:
     """Convert timestamps/timedeltas/numeric offsets to floating hour units."""
@@ -183,7 +178,6 @@ def _coerce_hour_scalar(value) -> float:
     except (TypeError, ValueError):
         return np.nan
 
-
 def _coerce_duration_hours(value) -> float:
     """Convert duration column to floating hour units."""
     if value is None or (isinstance(value, float) and np.isnan(value)):
@@ -201,9 +195,7 @@ def _coerce_duration_hours(value) -> float:
     except (TypeError, ValueError):
         return np.nan
 
-
 _STAY_LIMIT_CACHE: Dict[int, pd.DataFrame] = {}
-
 
 def _normalize_patient_ids(patient_ids, column: str) -> Optional[List[object]]:
     """Resolve the list of patient ids matching the requested id column."""
@@ -229,7 +221,6 @@ def _normalize_patient_ids(patient_ids, column: str) -> Optional[List[object]]:
         except (TypeError, ValueError):
             continue
     return normalized or None
-
 
 def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[str]) -> Optional[pd.DataFrame]:
     """Compute per-stay start/end offsets (hours) using admission windows."""
@@ -338,7 +329,6 @@ def _build_stay_window_limits(ctx: "ConceptCallbackContext", id_columns: List[st
     _STAY_LIMIT_CACHE[cache_key] = limits
     return limits
 
-
 def _compose_fill_limits(
     data: pd.DataFrame,
     id_columns: List[str],
@@ -369,7 +359,7 @@ def _compose_fill_limits(
     if observed.empty:
         return None
     
-    # 🔧 CRITICAL FIX: Match ricu's symmetric timeline expansion
+    # Match ricu's symmetric timeline expansion
     # Ricu extends the end time to create a symmetric window around time 0.
     # Formula: new_end = original_end + abs(start)
     # Example: [-663, 512] becomes [-663, 512 + 663] = [-663, 1175]
@@ -379,7 +369,6 @@ def _compose_fill_limits(
         observed['end'] = observed['end'] + abs(observed['start'])
     
     return observed[id_columns + ["start", "end"]]
-
 
 def _expand_win_table_to_interval(
     win_tbl: WinTbl,
@@ -457,7 +446,6 @@ def _expand_win_table_to_interval(
         value_column=value_column,
     )
 
-
 def _get_numeric_series(
     data: pd.DataFrame,
     column: str,
@@ -489,9 +477,7 @@ def _get_numeric_series(
 
     return pd.to_numeric(series, errors="coerce")
 
-
 CallbackFn = Callable[[Dict[str, ICUTable], "ConceptCallbackContext"], ICUTable]
-
 
 @dataclass
 class ConceptCallbackContext:
@@ -510,7 +496,6 @@ class ConceptCallbackContext:
         if self.kwargs is None:
             self.kwargs = {}
 
-
 class ConceptResolverProtocol:
     """Protocol subset used from :class:`~pyricu.concept.ConceptResolver`."""
 
@@ -525,12 +510,10 @@ class ConceptResolverProtocol:
     ):
         raise NotImplementedError
 
-
 class ICUDataSourceProtocol:
     """Protocol subset for :class:`~pyricu.datasource.ICUDataSource`."""
 
     config: object
-
 
 def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: str) -> Optional[pd.DataFrame]:
     """
@@ -548,7 +531,7 @@ def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: s
         DataFrame with columns [from_col, to_col] and optionally 'subject_id'
     """
     try:
-        # 🔧 FIX: eICU doesn't use icustays table, skip for eICU databases
+        # eICU doesn't use icustays table, skip for eICU databases
         db_name = ctx.data_source.config.name if hasattr(ctx.data_source, 'config') and hasattr(ctx.data_source.config, 'name') else ''
         if db_name in ['eicu', 'eicu_demo']:
             # eICU uses patientunitstayid as the primary ID, no mapping needed
@@ -593,7 +576,6 @@ def _load_id_mapping_table(ctx: ConceptCallbackContext, from_col: str, to_col: s
             traceback.print_exc()
     return None
 
-
 def _convert_id_column(
     data: pd.DataFrame,
     from_col: str,
@@ -633,7 +615,6 @@ def _convert_id_column(
         result = result.drop(columns=[from_col])
     
     return result
-
 
 def _assert_shared_schema(
     tables: Dict[str, ICUTable], 
@@ -811,7 +792,6 @@ def _assert_shared_schema(
     
     return id_columns or [], index_column, converted_tables
 
-
 def _merge_tables(
     tables: Dict[str, ICUTable],
     *,
@@ -878,7 +858,7 @@ def _merge_tables(
             target_time_type = 'datetime'
     
     for name, (frame, table) in standardized_tables.items():
-        # 🔧 跳过空表 - 它们对合并没有贡献，且可能有不正确的列类型
+        # 跳过空表 - 它们对合并没有贡献，且可能有不正确的列类型
         if frame.empty:
             continue
 
@@ -892,7 +872,7 @@ def _merge_tables(
             table_name=name,
         )
         
-        # 🔧 处理 WinTbl (没有 value_column，使用 name 本身)
+        # 处理 WinTbl (没有 value_column，使用 name 本身)
         from pyricu.table import WinTbl
         if isinstance(table, WinTbl):
             value_col = name  # WinTbl 的值列就是概念名本身
@@ -913,7 +893,7 @@ def _merge_tables(
                     col_to_rename = matching_cols[0]
                 frame = frame.rename(columns={col_to_rename: name})
         
-        # 🔧 FIX: 先处理frame中的重复列（例如合并多个item时可能产生重复的measuredat列）
+        # 先处理frame中的重复列（例如合并多个item时可能产生重复的measuredat列）
         if frame.columns.duplicated().any():
             # 对于重复列，只保留第一个
             frame = frame.loc[:, ~frame.columns.duplicated()]
@@ -929,7 +909,7 @@ def _merge_tables(
         else:
             # 时间类型已经在前面统一，直接merge
             try:
-                # 🔧 CRITICAL FIX: 检查merge所需的键列是否都存在
+                # 检查merge所需的键列是否都存在
                 actual_key_cols = [col for col in key_cols if col in frame.columns and col in merged.columns]
                 if len(actual_key_cols) < len(key_cols):
                     missing_in_frame = [col for col in key_cols if col not in frame.columns]
@@ -937,7 +917,7 @@ def _merge_tables(
                     print(f"   ⚠️  跳过 '{name}': 缺少合并键列 (frame缺少: {missing_in_frame}, merged缺少: {missing_in_merged})")
                     continue
 
-                # 🔧 FIX: 如果frame有与merged重复的列（除了actual_key_cols），先删除frame中的重复列
+                # 如果frame有与merged重复的列（除了actual_key_cols），先删除frame中的重复列
                 # 这通常发生在时间列（如measuredat, registeredat）在多个源表中都存在的情况
                 duplicate_cols = [c for c in frame.columns if c in merged.columns and c not in actual_key_cols]
                 if duplicate_cols:
@@ -959,7 +939,6 @@ def _merge_tables(
             merged[value_col] = pd.Series(dtype="float64")
 
     return merged, id_columns, index_column
-
 
 def _ensure_time_column_type(
     frame: pd.DataFrame,
@@ -1059,7 +1038,6 @@ def _ensure_time_column_type(
 
     return frame
 
-
 def _as_icutbl(
     frame: pd.DataFrame,
     *,
@@ -1078,7 +1056,6 @@ def _as_icutbl(
         unit_column=unit_column,
     )
 
-
 def _ensure_time_index(table: ICUTable) -> ICUTable:
     """Ensure that a time-indexed table is sorted and gap-free."""
 
@@ -1094,7 +1071,6 @@ def _ensure_time_index(table: ICUTable) -> ICUTable:
         unit_column=table.unit_column,
         time_columns=list(table.time_columns),
     )
-
 
 def _infer_interval_from_table(table: ICUTable) -> Optional[pd.Timedelta]:
     idx = table.index_column
@@ -1123,7 +1099,6 @@ def _infer_interval_from_table(table: ICUTable) -> Optional[pd.Timedelta]:
         return None
 
     return diffs.min()
-
 
 def _merge_intervals(
     df: pd.DataFrame,
@@ -1160,7 +1135,6 @@ def _merge_intervals(
 
     columns = list(id_columns) + ["__start", "__end"]
     return pd.DataFrame.from_records(records, columns=columns)
-
 
 # ============================================================================
 # AUMC-specific callbacks
@@ -1206,7 +1180,6 @@ def _callback_aumc_death(
     result = data[output_cols].copy()
     
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column='death')
-
 
 def _callback_aumc_bxs(
     tables: Dict[str, ICUTable],
@@ -1265,7 +1238,6 @@ def _callback_aumc_bxs(
     
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
 
-
 def _callback_aumc_rass(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -1297,7 +1269,6 @@ def _callback_aumc_rass(
     result = data[output_cols].dropna(subset=[value_column]).copy()
     
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
-
 
 def _callback_aumc_dur(
     tables: Dict[str, ICUTable],
@@ -1350,7 +1321,7 @@ def _callback_aumc_dur(
         logger.warning(f"aumc_dur: index_column '{index_column}' not found, columns: {data.columns.tolist()}")
         return input_table
     
-    # 🔧 FIX: AUMC times are in milliseconds (numeric), not datetime
+    # AUMC times are in milliseconds (numeric), not datetime
     # We need to calculate duration differently than calc_dur which assumes datetime
     
     # Build grouping columns
@@ -1404,7 +1375,6 @@ def _callback_aumc_dur(
         
         return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
 
-
 def _callback_blood_cell_ratio(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -1438,7 +1408,6 @@ def _callback_blood_cell_ratio(
     
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
 
-
 def _callback_bmi(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -1457,7 +1426,6 @@ def _callback_bmi(
     merged = merged[(merged["bmi"] >= 10) & (merged["bmi"] <= 100)]
 
     return _as_icutbl(merged.reset_index(drop=True), id_columns=id_columns, index_column=None, value_column="bmi")
-
 
 def _callback_avpu(
     tables: Dict[str, ICUTable],
@@ -1524,7 +1492,6 @@ def _callback_avpu(
         index_column=gcs_tbl.index_column,
         value_column="avpu",
     )
-
 
 def _callback_norepi_equiv(
     tables: Dict[str, ICUTable],
@@ -1608,7 +1575,6 @@ def _callback_norepi_equiv(
         value_column="norepi_equiv",
     )
 
-
 def _callback_sofa_component(
     func: Callable[..., pd.Series],
 ) -> CallbackFn:
@@ -1644,7 +1610,7 @@ def _callback_sofa_component(
                 pass
         # CRITICAL: For single concept (sofa_single type), ricu_code's collect_dots returns the data directly
         # For multiple concepts, use outer join (replicates R ricu merge_dat = TRUE)
-        # In ricu_code: sofa_single("plt", "sofa_coag", fun) -> collect_dots("plt", ...) returns plt data
+        # In ricu_code: sofa_single("plt", "sofa_coag", fun) -> collect_dots("plt", .
         # Then: dat[, c("sofa_coag") := fun(get("plt"))] -> rm_cols(dat, "plt", by_ref = TRUE)
         if len(tables) == 1:
             # Single concept: directly use the table data (replicates collect_dots for single concept)
@@ -1745,7 +1711,7 @@ def _callback_sofa_component(
                     # Convert to Series first
                     kwargs[name] = pd.to_numeric(pd.Series(col_data), errors="coerce")
             else:
-                # 🔧 FIX: For optional parameters (like vasopressors in sofa_cardio, urine24 in sofa_renal), 
+                # For optional parameters (like vasopressors in sofa_cardio, urine24 in sofa_renal), 
                 # if the column is missing and all values would be NaN, pass None instead
                 # This allows the callback function to handle missing data correctly
                 # For sofa_cardio, missing vasopressors should be None (will be filled with 0 in callback)
@@ -1846,7 +1812,7 @@ def _callback_sofa_component(
                 
         # For optional parameters (like urine24 in sofa_renal), ensure they are None if all NaN
         # This replicates R ricu's behavior where missing optional params are treated as NULL
-        # 🔧 FIX: Handle optional parameters correctly - convert all-NaN Series to None
+        # Handle optional parameters correctly - convert all-NaN Series to None
         if ctx.concept_name == 'sofa_renal' and 'urine24' in kwargs:
             # If urine24 is all NaN or None, remove it from kwargs and call again
             urine24_val = kwargs['urine24']
@@ -1875,7 +1841,7 @@ def _callback_sofa_component(
         cols = id_columns + ([index_column] if index_column else []) + [ctx.concept_name]
         frame = data[cols]
         
-        # 🔧 FIX: Remove duplicate timestamps (can occur when merging tables with outer join
+        # Remove duplicate timestamps (can occur when merging tables with outer join
         # or when raw data has multiple records at same timestamp)
         # Keep first occurrence for each (admissionid, measuredat) pair
         dedup_cols = list(id_columns) + ([index_column] if index_column else [])
@@ -1884,7 +1850,6 @@ def _callback_sofa_component(
         return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=ctx.concept_name)
 
     return wrapper
-
 
 def _callback_sofa_resp(
     tables: Dict[str, ICUTable],
@@ -1987,7 +1952,7 @@ def _callback_sofa_resp(
                 expanded_rows = []
                 id_cols = [col for col in vent_id_cols if col in vent_df.columns]
 
-                # 🔧 CRITICAL FIX: 完全复制R ricu的expand逻辑
+                # 完全复制R ricu的expand逻辑
                 # R ricu的expand为每个interval生成时间序列，然后aggregate处理重叠
                 for idx, row in vent_df.iterrows():
                     start_val = start_vals.iloc[idx]
@@ -2143,7 +2108,7 @@ def _callback_sofa_resp(
                 f"id_columns: {id_columns}, index_column: {index_column}"
             )
     
-    # 🔧 FIX: 统一ID列名 - 不同概念可能使用不同的ID列名（stay_id vs admissionid等）
+    # 统一ID列名 - 不同概念可能使用不同的ID列名（stay_id vs admissionid等）
     # 如果vent_df和pafi_df的ID列名不一致，重命名为统一的列名
     id_col_map = {
         'stay_id': ['stay_id', 'icustay_id', 'admissionid', 'patientunitstayid'],
@@ -2255,7 +2220,7 @@ def _callback_sofa_resp(
         how="outer"
     )
     
-    # 🔧 CRITICAL FIX: R's behavior for sofa_resp
+    # R's behavior for sofa_resp
     # R uses expand() on vent_ind which fills the full time range,
     # but pafi is NOT forward-filled infinitely. Instead:
     # 1. vent_ind is expanded to full time range (already done above)
@@ -2268,7 +2233,7 @@ def _callback_sofa_resp(
     # not on the input data. So we should not fill gaps here.
     # Instead, just handle the merge and calculate score, leaving NaN as NaN.
     
-    # 🔧 CRITICAL FIX: 移除错误的PaFi调整逻辑
+    # 移除错误的PaFi调整逻辑
     # 原逻辑错误地调整了PaFi值：if pafi < 200 and NOT on ventilation, set pafi = 200
     # 但根据SOFA临床指南，PaFi评分应基于实际值，不应因通气状态而调整
     # R ricu可能没有这个调整，或调整条件不同（如仅针对无创通气）
@@ -2302,7 +2267,6 @@ def _callback_sofa_resp(
         index_column=index_column,
         value_column=ctx.concept_name
     )
-
 
 def _callback_sofa_score(
     tables: Dict[str, ICUTable],
@@ -2358,7 +2322,7 @@ def _callback_sofa_score(
     # SOFA components
     required = ["sofa_resp", "sofa_coag", "sofa_liver", "sofa_cardio", "sofa_cns", "sofa_renal"]
 
-    # 🔧 CRITICAL FIX: Ensure all components exist with proper missing data handling
+    # Ensure all components exist with proper missing data handling
     for name in required:
         data[name] = data.get(name)
     
@@ -2390,7 +2354,7 @@ def _callback_sofa_score(
             if comp in data.columns:
                 agg_dict[comp] = worst_val_fun
         
-        # Apply slide (replicates R ricu slide(res, !!expr, before = win_length, full_window = FALSE))
+        # Apply slide (replicates R ricu slide(res, !
         if agg_dict:
             data = slide(
                 data,
@@ -2403,7 +2367,7 @@ def _callback_sofa_score(
             )
     
     # Calculate total SOFA score (replicates R ricu rowSums(.SD, na.rm = TRUE))
-    # 🔧 FINAL FIX: Smart interpolation for time=0 to match R ricu behavior
+    # Smart interpolation for time=0 to match R ricu behavior
     # Apply final calculation (sum components; NA treated as 0 via row sum)
     data["sofa"] = data[required].fillna(0).sum(axis=1)
     
@@ -2418,7 +2382,6 @@ def _callback_sofa_score(
     frame = data[cols]
     
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="sofa")
-
 
 def _callback_sofa2_score(
     tables: Dict[str, ICUTable],
@@ -2532,7 +2495,6 @@ def _callback_sofa2_score(
     
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="sofa2")
 
-
 def _callback_mews(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -2552,7 +2514,6 @@ def _callback_mews(
     data["mews"] = result
     cols = id_columns + ([index_column] if index_column else []) + ["mews"]
     return _as_icutbl(data[cols].reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="mews")
-
 
 def _callback_news(
     tables: Dict[str, ICUTable],
@@ -2577,7 +2538,6 @@ def _callback_news(
     cols = id_columns + ([index_column] if index_column else []) + ["news"]
     return _as_icutbl(data[cols].reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="news")
 
-
 def _callback_qsofa(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -2594,7 +2554,6 @@ def _callback_qsofa(
     )
     cols = id_columns + ([index_column] if index_column else []) + ["qsofa"]
     return _as_icutbl(data[cols].reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="qsofa")
-
 
 def _callback_sirs(
     tables: Dict[str, ICUTable],
@@ -2616,7 +2575,6 @@ def _callback_sirs(
     )
     cols = id_columns + ([index_column] if index_column else []) + ["sirs"]
     return _as_icutbl(data[cols].reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="sirs")
-
 
 def _match_fio2(
     tables: Dict[str, ICUTable],
@@ -2728,7 +2686,7 @@ def _match_fio2(
             o2_subset = o2_df[id_columns + [index_column, o2_col]]
             fio2_subset = fio2_df[id_columns + [index_column, fio2_col]]
 
-            # 🔧 新增：数据库自适应的FiO2单位标准化
+            # 新增：数据库自适应的FiO2单位标准化
             if database is not None and not fio2_subset.empty:
                 logger.debug(f"开始FiO2单位标准化: database={database}, fio2_col={fio2_col}, 数据行数={len(fio2_subset)}")
                 # 调试：显示原始数据范围
@@ -2821,7 +2779,7 @@ def _match_fio2(
                     o2_group = o2_subset[o2_mask]
                     fio2_group = fio2_subset[fio2_mask]
                     
-                    # 🔧 CRITICAL FIX: 如果 o2_group 为空，跳过
+                    # 如果 o2_group 为空，跳过
                     # 但如果 fio2_group 为空，不跳过！应该填充 fio2=21%
                     if len(o2_group) == 0:
                         continue
@@ -2965,7 +2923,6 @@ def _match_fio2(
         merged[fio2_col] = merged[fio2_col].fillna(21.0)
     
     return merged, id_columns, index_column
-
 
 def _callback_pafi(
     tables: Dict[str, ICUTable],
@@ -3119,7 +3076,6 @@ def _callback_pafi(
     
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=output_col)
 
-
 def _callback_supp_o2(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -3143,12 +3099,12 @@ def _callback_supp_o2(
     vent_df = vent_tbl.data.copy()
     fio2_df = fio2_tbl.data.copy()
 
-    # 🔧 FIX: vent_ind is often a WinTbl indexed by starttime while fio2 uses charttime.
+    # vent_ind is often a WinTbl indexed by starttime while fio2 uses charttime.
     # Align the index column names so we can merge on a common timeline.
     vent_index = vent_tbl.index_column
     fio2_index = fio2_tbl.index_column
 
-    # Prefer the fio2 index (charttime) for the merged timeline. If missing, fall back to vent index.
+    # Prefer the fio2 index (charttime) for the merged timeline.
     if fio2_index is None and "charttime" in fio2_df.columns:
         fio2_index = "charttime"
     if vent_index is None and "charttime" in vent_df.columns:
@@ -3223,7 +3179,6 @@ def _callback_supp_o2(
     cols = [index_column, "supp_o2"]
     return _as_icutbl(result[cols], id_columns=id_columns, index_column=index_column, value_column="supp_o2")
 
-
 def _callback_supp_o2_aumc(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -3255,7 +3210,6 @@ def _callback_supp_o2_aumc(
         index_column=index_column,
         value_column="supp_o2"
     )
-
 
 def _callback_vent_ind(
     tables: Dict[str, ICUTable],
@@ -3565,7 +3519,6 @@ def _callback_vent_ind(
         value_column="vent_ind",
     )
 
-
 def _callback_urine24(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -3605,7 +3558,7 @@ def _callback_urine24(
         df[urine_col] = 0.0
     df[urine_col] = pd.to_numeric(df[urine_col], errors="coerce").fillna(0.0)
     
-    # 🔧 性能优化：对于AUMC和HiRID等高频数据，先按interval聚合再处理
+    # 性能优化：对于AUMC和HiRID等高频数据，先按interval聚合再处理
     # 这些数据库的采样频率很高（每分钟甚至更频繁），需要先降采样
     # ⚠️  暂时禁用这个优化，因为可能导致性能问题
     time_col = urine_tbl.index_column
@@ -3773,7 +3726,6 @@ def _callback_urine24(
     cols = list(urine_tbl.id_columns) + [urine_tbl.index_column, "urine24"]
     return _as_icutbl(result[cols], id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="urine24")
 
-
 def _callback_vaso_ind(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -3837,7 +3789,7 @@ def _callback_vaso_ind(
     def _coerce_duration(series: pd.Series) -> pd.Series:
         if pd.api.types.is_timedelta64_dtype(series):
             return series
-        # 🔧 FIX: Check if it's datetime type (bug in some duration columns)
+        # Check if it's datetime type (bug in some duration columns)
         if pd.api.types.is_datetime64_any_dtype(series):
             # This might be a datetime column mistakenly used as duration
             # Try to interpret as offset from base time
@@ -3859,8 +3811,8 @@ def _callback_vaso_ind(
     for col in vaso_cols:
         merged[col] = _coerce_duration(merged[col])
 
-    # 🔧 FIX: 采用R ricu的pmax逻辑 - 对每行的所有duration取max,只有当某行至少有一个valid duration时才创建vaso_ind
-    # R: res <- res[, c("vaso_ind", cnc) := list(pmax(get("dopa_dur"), ..., na.rm = TRUE), NULL, ...)]
+    # 采用R ricu的pmax逻辑 - 对每行的所有duration取max,只有当某行至少有一个valid duration时才创建vaso_ind
+    # R: res <- res[, c("vaso_ind", cnc) := list(pmax(get("dopa_dur"), .
     # 计算每行的max duration (跳过NA)
     merged["__max_duration"] = merged[vaso_cols].max(axis=1, skipna=True)
     
@@ -3972,7 +3924,6 @@ def _callback_vaso_ind(
     result_cols = list(id_columns) + [time_col, "vaso_ind"] if id_columns else [time_col, "vaso_ind"]
     expanded = expanded[result_cols].reset_index(drop=True)
     return _as_icutbl(expanded, id_columns=id_columns, index_column=time_col, value_column="vaso_ind")
-
 
 def _callback_vaso_ind_rate(
     tables: Dict[str, ICUTable],
@@ -4122,7 +4073,6 @@ def _callback_vaso_ind_rate(
 
     return _as_icutbl(result_df, id_columns=id_columns, index_column=time_col, value_column="vaso_ind")
 
-
 def _callback_sep3(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -4180,7 +4130,6 @@ def _callback_sep3(
 
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3")
 
-
 def _callback_vaso60(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -4196,7 +4145,7 @@ def _callback_vaso60(
     rate_tbl = tables[rate_name]
     dur_tbl = tables[dur_name]
     
-    # 🔧 FIX: Handle empty input data
+    # Handle empty input data
     if rate_tbl.data.empty or dur_tbl.data.empty:
         # Return empty result with proper schema
         id_cols = rate_tbl.id_columns or dur_tbl.id_columns or ['stay_id']
@@ -4226,7 +4175,7 @@ def _callback_vaso60(
     rate_col = rate_tbl.value_column or rate_name
     dur_col = dur_tbl.value_column or dur_name
     
-    #  🔧 修复：确保index_column在两个DataFrame中都存在
+    # 修复：确保index_column在两个DataFrame中都存在
     # change_interval可能将列名改为'start',需要使用实际的列名
     rate_index_col = index_column if index_column in rate_df.columns else (rate_tbl.index_column if rate_tbl.index_column and rate_tbl.index_column in rate_df.columns else None)
     dur_index_col = index_column if index_column in dur_df.columns else (dur_tbl.index_column if dur_tbl.index_column and dur_tbl.index_column in dur_df.columns else None)
@@ -4296,7 +4245,7 @@ def _callback_vaso60(
         ds_cfg = getattr(getattr(ctx, 'data_source', None), 'config', None)
         ds_name = getattr(ds_cfg, 'name', '') if ds_cfg is not None else ''
     
-    # 🔧 FIX: AUMC times are already converted to MINUTES in datasource.py
+    # AUMC times are already converted to MINUTES in datasource.py
     # So we should use 'min' unit, not 'ms'
     numeric_unit = 'min' if isinstance(ds_name, str) and ds_name.lower() == 'aumc' else 'h'
 
@@ -4328,7 +4277,7 @@ def _callback_vaso60(
         # Just set durations to NaN to avoid crash
         durations = pd.Series([pd.NaT] * len(durations), index=durations.index, dtype='timedelta64[ns]')
     else:
-        # 🔧 FIX: For AUMC, skip pd.to_timedelta() without unit because it treats
+        # For AUMC, skip pd.to_timedelta() without unit because it treats
         # numbers as DAYS, not hours. We know AUMC durations are in hours.
         is_aumc = isinstance(ds_name, str) and ds_name.lower() == 'aumc'
         
@@ -4376,7 +4325,7 @@ def _callback_vaso60(
     max_gap = pd.Timedelta(minutes=5)
 
     # Filter id_columns to only include columns that actually exist in dur_df
-    # This handles cases where ID columns were filtered out during processing (e.g., eICU infusiondrug)
+    # This handles cases where ID columns were filtered out during processing (e.
     existing_id_cols = [col for col in id_columns if col in dur_df.columns]
     if len(existing_id_cols) != len(id_columns):
         missing_cols = set(id_columns) - set(existing_id_cols)
@@ -4620,7 +4569,7 @@ def _callback_vaso60(
                 grid_ns = grid.to_numpy(dtype="datetime64[ns]")
                 sampled_list: list[float] = []
                 
-                # 🔧 FIX: Forward-fill logic - 每个时间点使用该时间点之前最近的rate值
+                # Forward-fill logic - 每个时间点使用该时间点之前最近的rate值
                 # R ricu的change_interval会在整个duration内forward-fill最近的rate
                 for point in grid_ns:
                     # 找到该时间点之前最近的rate记录
@@ -4673,7 +4622,6 @@ def _callback_vaso60(
         value_column=ctx.concept_name,
     )
 
-
 def _callback_susp_inf(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -4712,7 +4660,6 @@ def _callback_susp_inf(
     )
 
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="susp_inf")
-
 
 def _callback_gcs(
     tables: Dict[str, ICUTable],
@@ -4790,7 +4737,7 @@ def _callback_gcs(
             vgcs = vgcs.fillna(5.0)
 
     # Calculate GCS: use tgcs if available AND valid (>=3), otherwise sum components
-    # 🔧 FIX: tgcs computed by sum_components may have incorrect values when vgcs is missing
+    # tgcs computed by sum_components may have incorrect values when vgcs is missing
     # GCS minimum is 3 (E1+M1+V1), so if tgcs<3, it's invalid and should be recalculated
     combined = pd.Series(index=data.index, dtype=float)
     
@@ -4812,13 +4759,12 @@ def _callback_gcs(
     cols = id_columns + ([index_column] if index_column else []) + ["gcs"]
     frame = data[cols].dropna(subset=["gcs"])
     
-    # 🔧 FIX: Remove duplicate timestamps (outer merge may create duplicates)
+    # Remove duplicate timestamps (outer merge may create duplicates)
     # Keep first occurrence for each (admissionid, measuredat) pair
     dedup_cols = list(id_columns) + ([index_column] if index_column else [])
     frame = frame.drop_duplicates(subset=dedup_cols, keep='first')
     
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="gcs")
-
 
 def _callback_rrt_criteria(
     tables: Dict[str, ICUTable],
@@ -4916,7 +4862,6 @@ def _callback_rrt_criteria(
     frame = data[cols].dropna(subset=["rrt_criteria"])
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="rrt_criteria")
 
-
 def _callback_urine_mlkgph(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -4977,7 +4922,6 @@ def _callback_urine_mlkgph(
         index_column=urine_tbl.index_column,
         value_column="urine_mlkgph"
     )
-
 
 def _callback_uo_window(
     tables: Dict[str, ICUTable],
@@ -5066,21 +5010,17 @@ def _callback_uo_window(
         value_column=output_col
     )
 
-
 def _callback_uo_6h(tables: Dict[str, ICUTable], ctx: ConceptCallbackContext) -> ICUTable:
     """6-hour rolling average urine output (mL/kg/h)."""
     return _callback_uo_window(tables, ctx, window_hours=6, output_col="uo_6h")
-
 
 def _callback_uo_12h(tables: Dict[str, ICUTable], ctx: ConceptCallbackContext) -> ICUTable:
     """12-hour rolling average urine output (mL/kg/h)."""
     return _callback_uo_window(tables, ctx, window_hours=12, output_col="uo_12h")
 
-
 def _callback_uo_24h(tables: Dict[str, ICUTable], ctx: ConceptCallbackContext) -> ICUTable:
     """24-hour rolling average urine output (mL/kg/h)."""
     return _callback_uo_window(tables, ctx, window_hours=24, output_col="uo_24h")
-
 
 def _callback_sum_components(
     tables: Dict[str, ICUTable],
@@ -5123,7 +5063,6 @@ def _callback_sum_components(
     frame = data[cols].dropna(subset=[output_col])
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=output_col)
 
-
 def _callback_miiv_icu_patients_filter(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -5163,7 +5102,6 @@ def _callback_miiv_icu_patients_filter(
     except Exception:
         return next(iter(tables.values()))
 
-
 def _callback_simple_passthrough(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -5201,7 +5139,6 @@ def _callback_simple_passthrough(
     
     # Return the ICUTable for this concept
     return result_dict[concept_name]
-
 
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "bmi": _callback_bmi,
@@ -5261,12 +5198,10 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "ca": lambda tables, ctx: _callback_simple_passthrough(tables, ctx, "ca"),
 }
 
-
 def register_callback(name: str, func: CallbackFn) -> None:
     """Register a new concept callback."""
 
     CALLBACK_REGISTRY[name] = func
-
 
 def execute_concept_callback(
     name: str,
@@ -5279,7 +5214,6 @@ def execute_concept_callback(
     if func is None:
         raise NotImplementedError(f"Concept-level callback '{name}' not implemented.")
     return func(tables, ctx)
-
 
 def _callback_miiv_icu_patients_filter(
     tables: Dict[str, ICUTable],
@@ -5420,7 +5354,6 @@ def miiv_icu_patients_filter(tbl, ctx):
     except Exception:
         # 如果任何错误发生，返回原表以确保系统不会中断
         return tbl
-
 
 # 注册新的callback函数
 try:

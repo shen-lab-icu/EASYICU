@@ -11,7 +11,6 @@ from typing import Mapping, Optional, Sequence, Dict, Any
 import math
 import os
 
-
 @dataclass(frozen=True)
 class LoaderDefaults:
     chunk_size: Optional[int]
@@ -39,7 +38,6 @@ class LoaderDefaults:
             "progress": progress,
         }
 
-
 _DEFAULT_ENV_KEYS: Dict[str, Sequence[str]] = {
     "chunk": ("PYRICU_CHUNK_SIZE",),
     "parallel": ("PYRICU_PARALLEL_WORKERS",),
@@ -56,7 +54,6 @@ _DEFAULT_TIERS = (
     {"max_patients": 8000, "profile": "large", "chunk": 400, "workers": 2, "concept_workers": 1, "backend": "thread"},
     {"max_patients": math.inf, "profile": "xlarge", "chunk": 800, "workers": 4, "concept_workers": 1, "backend": "thread"},
 )
-
 
 def resolve_loader_defaults(
     patient_goal: Optional[int],
@@ -122,14 +119,12 @@ def resolve_loader_defaults(
         },
     )
 
-
 def _select_tier(target: int, tiers: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
     for tier in tiers:
         threshold = tier.get("max_patients", math.inf)
         if target <= threshold:
             return tier
     return tiers[-1]
-
 
 def _dedupe_keys(custom: Optional[Sequence[str]], defaults: Optional[Sequence[str]]) -> Sequence[str]:
     seen = set()
@@ -140,7 +135,6 @@ def _dedupe_keys(custom: Optional[Sequence[str]], defaults: Optional[Sequence[st
                 seen.add(key)
                 ordered.append(key)
     return tuple(ordered)
-
 
 def _read_int(
     keys: Sequence[str],
@@ -159,7 +153,6 @@ def _read_int(
         if value >= minimum:
             return value, f"env({key})"
     return None, None
-
 
 def _read_choice(
     keys: Sequence[str],

@@ -9,7 +9,6 @@ from typing import Optional, Union
 import pandas as pd
 import numpy as np
 
-
 def write_psv(
     data: pd.DataFrame,
     output_dir: Union[str, Path],
@@ -73,7 +72,6 @@ def write_psv(
     
     print(f"Wrote {data[id_col].nunique()} PSV files to {output_dir}")
 
-
 def read_psv(
     input_dir: Union[str, Path],
     id_col: str = "stay_id",
@@ -131,7 +129,6 @@ def read_psv(
     
     return result
 
-
 def export_wide_format(
     data: pd.DataFrame,
     output_file: Union[str, Path],
@@ -153,7 +150,6 @@ def export_wide_format(
     
     data.to_csv(output_file, sep=sep, index=False, na_rep='NA')
     print(f"Exported to {output_file}")
-
 
 def export_long_format(
     data: pd.DataFrame,
@@ -196,7 +192,6 @@ def export_long_format(
     long_data.to_csv(output_file, sep=sep, index=False, na_rep='NA')
     print(f"Exported to {output_file} (long format)")
 
-
 def export_summary(
     data: pd.DataFrame,
     output_file: Union[str, Path],
@@ -224,7 +219,6 @@ def export_summary(
     
     summary.to_csv(output_file)
     print(f"Exported summary to {output_file}")
-
 
 def export_cohort_info(
     data: pd.DataFrame,
@@ -269,7 +263,6 @@ def export_cohort_info(
     info_df.to_csv(output_file, index=False)
     print(f"Exported cohort info to {output_file}")
 
-
 # ============================================================================
 # Additional export formats
 # ============================================================================
@@ -301,7 +294,6 @@ def export_parquet(
     data.to_parquet(output_file, compression=compression)
     print(f"Exported to {output_file} (Parquet format)")
 
-
 def export_feather(
     data: pd.DataFrame,
     output_file: Union[str, Path],
@@ -328,7 +320,6 @@ def export_feather(
     data.to_feather(output_file, compression=compression)
     print(f"Exported to {output_file} (Feather format)")
 
-
 def export_json(
     data: pd.DataFrame,
     output_file: Union[str, Path],
@@ -351,7 +342,6 @@ def export_json(
     
     data.to_json(output_file, orient=orient, indent=indent, date_format='iso')
     print(f"Exported to {output_file} (JSON format)")
-
 
 def export_data(
     data: pd.DataFrame,
@@ -415,7 +405,6 @@ def export_data(
     
     else:
         raise ValueError(f"Unknown format: {format}")
-
 
 def data_quality_report(
     data: pd.DataFrame,

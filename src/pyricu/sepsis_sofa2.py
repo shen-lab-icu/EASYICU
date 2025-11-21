@@ -34,7 +34,6 @@ from .sepsis import (
     _si_or
 )
 
-
 def sep3_sofa2(
     sofa2: pd.DataFrame,
     susp_inf_df: pd.DataFrame,
@@ -204,7 +203,6 @@ def sep3_sofa2(
     
     return out
 
-
 def label_sep3_sofa2(
     sofa2_data: pd.DataFrame,
     susp_inf_data: pd.DataFrame,
@@ -252,7 +250,6 @@ def label_sep3_sofa2(
         keep_components=keep_components,
         **kwargs
     )
-
 
 __all__ = [
     "sep2",

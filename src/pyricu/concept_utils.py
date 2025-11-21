@@ -11,7 +11,6 @@ from pathlib import Path
 from .concept import ConceptDictionary, ConceptDefinition
 from .resources import load_dictionary
 
-
 def add_concept(
     dict_name: str,
     concept_name: str,
@@ -41,7 +40,6 @@ def add_concept(
     
     # Note: In a real implementation, you would save the dictionary back to file
     # For now, this is an in-memory operation
-
 
 def concept_availability(
     concepts: Union[str, List[str]],
@@ -86,7 +84,6 @@ def concept_availability(
     
     return result
 
-
 def explain_dictionary(
     dict_name: Optional[str] = None,
     dict_dirs: Optional[List[Union[str, Path]]] = None,
@@ -127,7 +124,6 @@ def explain_dictionary(
         lines.append("")
     
     return "\n".join(lines)
-
 
 def subset_src(
     concept: Union[str, ConceptDefinition],

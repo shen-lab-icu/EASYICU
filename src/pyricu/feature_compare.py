@@ -1,9 +1,35 @@
 #!/usr/bin/env python3
-"""Reusable feature comparison utilities between ricu CSV outputs and pyricu.
+"""
+⚠️ DEPRECATED: 该模块的功能应该迁移到测试框架 ⚠️
+
+参考ricu的设计哲学：
+- ricu没有单独的"feature_compare"模块
+- 验证逻辑在tests/testthat/test-*.R中
+- 使用标准测试框架（testthat）而非独立脚本
+
+pyricu应该遵循相同模式：
+- 核心对比逻辑 → tests/helpers.py (pytest fixtures)
+- 验证断言 → tests/test_ricu_alignment.py (pytest测试用例)
+- CLI工具 → multi_db_feature_alignment.py可保留作为便捷脚本
+
+迁移计划：
+1. ✅ 已创建 tests/helpers.py - 提供load_ricu_csv, assert_coverage_similar等函数
+2. ✅ 已创建 tests/test_ricu_alignment.py - pytest测试用例
+3. ⏳ 逐步将依赖feature_compare的脚本迁移到使用tests/helpers
+4. ⏳ 最终删除此文件
+
+临时保留原因：
+- multi_db_feature_alignment.py当前依赖此模块
+- 需要时间将所有验证逻辑迁移到pytest
+
+---
+
+原文档：
+Reusable feature comparison utilities between ricu CSV outputs and pyricu.
 
 This module hosts the heavy lifting that used to live in the legacy
 ``compare_ricu_pyricu.py`` script so that other tools (and downstream users)
-can leverage the same logic programmatically.  The thin CLI wrapper now just
+can leverage the same logic programmatically. The thin CLI wrapper now just
 parses arguments and delegates to :func:`main`.
 """
 
@@ -32,7 +58,6 @@ from .project_config import (
 )
 from .runtime_defaults import resolve_loader_defaults
 
-
 @dataclass
 class FeatureModule:
     """Metadata describing a ricu CSV <-> pyricu concept family."""
@@ -43,7 +68,6 @@ class FeatureModule:
     id_column: str = "stay_id"
     time_column: Optional[str] = "charttime"
     description: str = ""
-
 
 MODULES: List[FeatureModule] = [
     FeatureModule(
@@ -170,7 +194,6 @@ MODULES: List[FeatureModule] = [
     ),
 ]
 
-
 SOFA_COMPONENT_DEPENDENCIES: Dict[str, List[str]] = {
     "sofa_resp": ["pafi", "safi", "vent_ind", "supp_o2", "fio2", "resp", "o2sat", "sao2"],
     "sofa_coag": ["plt", "inr_pt", "ptt"],
@@ -230,7 +253,6 @@ PATIENT_ID_SOURCES: Dict[str, tuple[str, str]] = {
     "hirid": ("general.parquet", "patientid"),
 }
 
-
 @dataclass
 class SeriesStats:
     rows: int
@@ -242,7 +264,6 @@ class SeriesStats:
     @property
     def coverage(self) -> float:
         return (self.non_null / self.rows) if self.rows else 0.0
-
 
 class FeatureComparison:
     """Holds normalised ricu/pyricu time series for a module."""
@@ -323,7 +344,6 @@ class FeatureComparison:
                 first_signal = float(signal_times.min())
 
         return SeriesStats(rows=len(df), non_null=int(values.notna().sum()), mean=mean, maximum=maximum, first_signal=first_signal)
-
 
 class RicuPyricuComparator:
     """Loads ricu CSVs and pyricu concepts and produces coverage comparisons."""
@@ -462,7 +482,7 @@ class RicuPyricuComparator:
                     df = df.dropna(subset=["id", "time"])
                     aligned = grid.merge(df, on=["id", "time"], how="left")
                     
-                    # 🔧 FIX: 对于静态概念（如los_icu），用forward-fill填充所有时间点
+                    # 对于静态概念（如los_icu），用forward-fill填充所有时间点
                     # 检测方法：如果某患者有任何非NA值，且这些值都相同，就是静态概念
                     if "value" in aligned.columns and "id" in aligned.columns:
                         for patient_id in aligned["id"].unique():
@@ -488,7 +508,7 @@ class RicuPyricuComparator:
             if concept in frames:
                 continue
             placeholder: Optional[pd.DataFrame] = None
-            # 🔧 FIX: 检查reference_series中该概念是否有时间列
+            # 检查reference_series中该概念是否有时间列
             # 静态概念（如los_icu, death）不应使用时间网格placeholder
             is_time_series_concept = False
             if reference_series and concept in reference_series:
@@ -593,7 +613,7 @@ class RicuPyricuComparator:
                 rename_map[time_col] = "time"
                 cols.append(time_col)
             elif module.time_column:
-                # 🔧 FIX: 对于需要时间列的module，如果概念没有时间列（如death, los_icu），
+                # 对于需要时间列的module，如果概念没有时间列（如death, los_icu），
                 # 添加time=0作为默认时间点，以便后续对齐时可以扩展到整个时间网格
                 df["time"] = 0.0
                 rename_map["time"] = "time"
@@ -1129,7 +1149,6 @@ class RicuPyricuComparator:
                 break
         return unique_ids
 
-
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare ricu CSV exports with pyricu outputs.")
     parser.add_argument(
@@ -1162,7 +1181,6 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     return parser.parse_args(argv)
 
-
 def _format_path_template(template: Optional[str], database: str, fallback: Optional[Path]) -> Path:
     if not template:
         if fallback is None:
@@ -1170,7 +1188,6 @@ def _format_path_template(template: Optional[str], database: str, fallback: Opti
         return fallback
     value = template.format(db=database)
     return Path(value).expanduser().resolve()
-
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _parse_args(argv)
@@ -1191,7 +1208,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             header = header.lstrip("\n")
         print(header)
         comparator.run()
-
 
 __all__ = [
     "FeatureModule",

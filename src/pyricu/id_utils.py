@@ -30,7 +30,6 @@ except ImportError:
         if not has_cols(df, cols):
             raise AssertionError(msg or f"Missing columns: {cols}")
 
-
 class IDMapper:
     """ID 映射器 - 处理不同ID层级的转换"""
     
@@ -129,7 +128,6 @@ class IDMapper:
             return table, [to_id, from_id] if len(cols) == 2 else cols
         
         raise ValueError(f"No mapping defined between '{from_id}' and '{to_id}' for '{data_source}'")
-
 
 def change_id(
     data: pd.DataFrame,
@@ -246,7 +244,6 @@ def change_id(
     
     return result
 
-
 def id_map(
     data: pd.DataFrame,
     from_ids: List[str],
@@ -273,7 +270,6 @@ def id_map(
     # 完整实现需要处理时间窗口等复杂逻辑
     return data
 
-
 def id_name_to_type(data_source: Union[str, 'ICUDataSource'], id_var: str) -> str:
     """
     将ID列名转换为ID类型名称
@@ -288,7 +284,6 @@ def id_name_to_type(data_source: Union[str, 'ICUDataSource'], id_var: str) -> st
     # 简化实现：直接返回列名
     # 完整实现需要查询数据源配置
     return id_var
-
 
 def get_id_vars(data: pd.DataFrame) -> List[str]:
     """
@@ -314,7 +309,6 @@ def get_id_vars(data: pd.DataFrame) -> List[str]:
     
     found_ids = [col for col in common_ids if col in data.columns]
     return found_ids[:1] if found_ids else []
-
 
 def set_id_vars(data: pd.DataFrame, id_vars: Union[str, List[str]]) -> pd.DataFrame:
     """

@@ -7,7 +7,6 @@ import sys
 from typing import Any, Callable, List, Optional
 from contextlib import contextmanager
 
-
 # ============================================================================
 # Interactive check
 # ============================================================================
@@ -19,7 +18,6 @@ def is_interactive() -> bool:
         True if running interactively
     """
     return sys.__stdin__.isatty()
-
 
 # ============================================================================
 # Progress reporting
@@ -86,7 +84,6 @@ class ProgressBar:
         if target > self.current:
             self.tick(target - self.current)
 
-
 def progress_init(length: Optional[int] = None, msg: str = "loading",
                  what: bool = True) -> Optional[ProgressBar]:
     """Initialize progress bar (R ricu progress_init).
@@ -107,7 +104,6 @@ def progress_init(length: Optional[int] = None, msg: str = "loading",
             print(f"{msg}")
             print(f"{'=' * 60}")
         return None
-
 
 def progress_tick(info: Optional[str] = None, progress_bar: Optional[ProgressBar] = None,
                  length: int = 1):
@@ -137,7 +133,6 @@ def progress_tick(info: Optional[str] = None, progress_bar: Optional[ProgressBar
     else:
         progress_bar.tick(n=length)
 
-
 @contextmanager
 def with_progress(progress_bar: Optional[ProgressBar] = None):
     """Context manager for progress reporting (R ricu with_progress).
@@ -156,7 +151,6 @@ def with_progress(progress_bar: Optional[ProgressBar] = None):
         
         if progress_bar is not False:
             print(f"{'=' * 60}")
-
 
 # ============================================================================
 # Message formatting
@@ -184,7 +178,6 @@ def msg_ricu(msg: str, type: str = "info", indent: int = 0, exdent: int = 0):
     else:
         print(f"{prefix}{msg}")
 
-
 def warn_ricu(msg: str, **kwargs):
     """Print warning message (R ricu warn_ricu).
     
@@ -193,7 +186,6 @@ def warn_ricu(msg: str, **kwargs):
         **kwargs: Additional arguments for msg_ricu
     """
     msg_ricu(msg, type="warning", **kwargs)
-
 
 def stop_ricu(msg: str, **kwargs):
     """Print error message and raise exception (R ricu stop_ricu).
@@ -208,7 +200,6 @@ def stop_ricu(msg: str, **kwargs):
     msg_ricu(msg, type="error", **kwargs)
     raise RuntimeError(msg)
 
-
 def msg_progress(msg: str):
     """Print progress message (R ricu msg_progress).
     
@@ -216,7 +207,6 @@ def msg_progress(msg: str):
         msg: Message to print
     """
     msg_ricu(msg, type="progress_body", indent=2, exdent=4)
-
 
 # ============================================================================
 # Formatting utilities
@@ -252,7 +242,6 @@ def fmt_msg(msg: str, indent: int = 0, exdent: int = 0, width: int = 80) -> str:
     
     return '\n'.join(formatted_lines)
 
-
 def bullet(text: str, level: int = 1) -> str:
     """Create bulleted text (R ricu bullet).
     
@@ -267,7 +256,6 @@ def bullet(text: str, level: int = 1) -> str:
     bullet_char = bullets.get(level, "•")
     return f"{bullet_char} {text}"
 
-
 def big_mark(x: int, sep: str = ",") -> str:
     """Format number with thousands separator (R ricu big_mark).
     
@@ -280,7 +268,6 @@ def big_mark(x: int, sep: str = ",") -> str:
     """
     return f"{x:,}".replace(",", sep)
 
-
 def quote_bt(x: str) -> str:
     """Quote string with backticks (R ricu quote_bt).
     
@@ -291,7 +278,6 @@ def quote_bt(x: str) -> str:
         Quoted string
     """
     return f"`{x}`"
-
 
 def enbraket(x: str) -> str:
     """Surround with brackets (R ricu enbraket).
@@ -304,7 +290,6 @@ def enbraket(x: str) -> str:
     """
     return f"[{x}]"
 
-
 def concat(*args, sep: str = ", ") -> str:
     """Concatenate strings (R ricu concat).
     
@@ -316,7 +301,6 @@ def concat(*args, sep: str = ", ") -> str:
         Concatenated string
     """
     return sep.join(str(arg) for arg in args)
-
 
 def prcnt(x: float, tot: Optional[float] = None, digits: int = 2) -> str:
     """Format as percentage (R ricu prcnt).
@@ -335,7 +319,6 @@ def prcnt(x: float, tot: Optional[float] = None, digits: int = 2) -> str:
         pct = x
     
     return f"{pct:.{digits}f}%"
-
 
 # ============================================================================
 # User interaction
@@ -376,7 +359,6 @@ def ask_yes_no(question: str, default: Optional[bool] = None) -> bool:
         
         print("Please answer 'y' or 'n'")
 
-
 # ============================================================================
 # CLI rule
 # ============================================================================
@@ -399,7 +381,6 @@ def cli_rule(msg: str = "", width: int = 60):
         print(rule)
     else:
         print("=" * width)
-
 
 # ============================================================================
 # Color support (optional rich integration)
@@ -454,30 +435,24 @@ class ColorText:
         """Print heading (bold)."""
         self.print(text, style="bold")
 
-
 # Global color text instance
 color_text = ColorText()
-
 
 def print_info(msg: str):
     """Print info message with color."""
     color_text.info(msg)
 
-
 def print_success(msg: str):
     """Print success message with color."""
     color_text.success(msg)
-
 
 def print_warning(msg: str):
     """Print warning message with color."""
     color_text.warning(msg)
 
-
 def print_error(msg: str):
     """Print error message with color."""
     color_text.error(msg)
-
 
 def print_heading(msg: str):
     """Print heading with style."""

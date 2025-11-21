@@ -28,7 +28,6 @@ import pandas as pd
 
 from .api import load_concepts
 
-
 def load_vitals(
     data_path: Union[str, Path],
     patient_ids: Optional[List[int]] = None,
@@ -83,7 +82,6 @@ def load_vitals(
 
     return df
 
-
 def load_labs(
     data_path: Union[str, Path],
     patient_ids: Optional[List[int]] = None,
@@ -130,7 +128,6 @@ def load_labs(
 
     return df
 
-
 def load_sofa_score(
     data_path: Union[str, Path],
     patient_ids: Optional[List[int]] = None,
@@ -166,7 +163,6 @@ def load_sofa_score(
     )
 
     return df
-
 
 def load_sepsis(
     data_path: Union[str, Path],
@@ -213,7 +209,6 @@ def load_sepsis(
 
     return df
 
-
 def load_custom(
     data_path: Union[str, Path],
     concepts: Union[str, List[str]],
@@ -254,7 +249,6 @@ def load_custom(
     )
 
     return df
-
 
 def quick_summary(
     data_path: Union[str, Path],

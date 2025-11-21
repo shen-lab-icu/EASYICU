@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
-
 def read_parquet(
     file_path: Union[str, Path],
     columns: Optional[List[str]] = None,
@@ -58,7 +57,6 @@ def read_parquet(
         filters=filters,
         use_threads=use_threads
     )
-
 
 def read_parquet_parallel(
     file_paths: List[Union[str, Path]],
@@ -118,7 +116,6 @@ def read_parquet_parallel(
     
     return result
 
-
 def parquet_metadata(file_path: Union[str, Path]) -> dict:
     """
     获取 Parquet 文件元数据（无需读取数据）
@@ -141,7 +138,6 @@ def parquet_metadata(file_path: Union[str, Path]) -> dict:
         'size_bytes': Path(file_path).stat().st_size,
         'schema': parquet_file.schema.to_string()
     }
-
 
 def parquet_peek(
     file_path: Union[str, Path],
@@ -168,7 +164,6 @@ def parquet_peek(
     df = first_batch.to_pandas()
     
     return df.head(n)
-
 
 def optimize_parquet_for_filtering(
     input_path: Union[str, Path],
@@ -208,7 +203,6 @@ def optimize_parquet_for_filtering(
         # partition_by=partition_cols,  # 可选：创建分区文件夹
     )
 
-
 # 兼容性别名
 def read_table_parquet(
     file_path: Union[str, Path],
@@ -219,7 +213,6 @@ def read_table_parquet(
     兼容 datasource.py 的接口
     """
     return read_parquet(file_path, columns=columns, filters=filters)
-
 
 __all__ = [
     'read_parquet',

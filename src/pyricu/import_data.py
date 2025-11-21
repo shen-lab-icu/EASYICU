@@ -17,7 +17,6 @@ from .config import DataSourceConfig, TableConfig
 
 LOGGER = logging.getLogger(__name__)
 
-
 def import_table(
     table_cfg: TableConfig,
     data_dir: Path,
@@ -97,7 +96,6 @@ def import_table(
             parquet_file.unlink()
         raise
 
-
 def _import_single_csv(
     csv_file: Path,
     table_cfg: TableConfig,
@@ -167,7 +165,6 @@ def _import_single_csv(
 
     return df
 
-
 def _map_dtype(type_str: str) -> Optional[str]:
     """Map configuration type strings to pandas dtypes.
 
@@ -184,7 +181,6 @@ def _map_dtype(type_str: str) -> Optional[str]:
         "logical": "boolean",
     }
     return type_map.get(type_str.lower())
-
 
 def import_src(
     config: DataSourceConfig,
@@ -260,7 +256,6 @@ def import_src(
                         csv_file.unlink()
                         if verbose:
                             LOGGER.info(f"Removed {csv_file.name}")
-
 
 def import_sources(
     source_names: Iterable[str],

@@ -65,11 +65,9 @@ from typing import Optional, Dict
 import numpy as np
 import pandas as pd
 
-
 def _is_true(series: pd.Series) -> pd.Series:
     """Replicate R's is_true: non-NA and True."""
     return series.fillna(False).astype(bool)
-
 
 def sofa2_resp(
     pafi: Optional[pd.Series] = None,
@@ -173,7 +171,6 @@ def sofa2_resp(
 
     return score
 
-
 def sofa2_coag(plt: pd.Series) -> pd.Series:
     """SOFA-2 hemostasis/coagulation component (platelets ×10³/μL).
 
@@ -207,7 +204,6 @@ def sofa2_coag(plt: pd.Series) -> pd.Series:
     score[p <= 80] = 3
     score[p <= 50] = 4
     return score
-
 
 def sofa2_liver(bili: pd.Series) -> pd.Series:
     """SOFA-2 liver component (bilirubin mg/dL).
@@ -250,7 +246,6 @@ def sofa2_liver(bili: pd.Series) -> pd.Series:
     score[b > 6.0] = 3
     score[b > 12.0] = 4
     return score
-
 
 def sofa2_cardio(
     map: pd.Series,
@@ -365,7 +360,6 @@ def sofa2_cardio(
 
     return score
 
-
 def sofa2_cns(
     gcs: pd.Series,
     *,
@@ -464,7 +458,6 @@ def sofa2_cns(
         score[mask] = np.maximum(score[mask], 1)
 
     return score
-
 
 def sofa2_renal(
     crea: pd.Series,
@@ -583,7 +576,6 @@ def sofa2_renal(
     score[c > 3.50] = np.maximum(score[c > 3.50], 3)
 
     return score
-
 
 def sofa2_score(data_dict: Dict[str, pd.DataFrame], *, keep_components: bool = False) -> pd.DataFrame:
     """Aggregate SOFA-2 score from component DataFrames.

@@ -11,7 +11,6 @@ import pandas as pd
 from .table import IdTbl, TsTbl, WinTbl, ICUTable
 from .assertions import assert_that, is_string
 
-
 def do_callback(
     callback: Optional[Callable],
     data: Union[IdTbl, TsTbl, WinTbl, pd.DataFrame],
@@ -43,7 +42,6 @@ def do_callback(
     except Exception as e:
         raise RuntimeError(f"Callback execution failed: {e}") from e
 
-
 def do_itm_load(
     item: Any,
     data: Union[IdTbl, TsTbl, WinTbl, pd.DataFrame],
@@ -72,7 +70,6 @@ def do_itm_load(
     
     # Default: return data as-is
     return data
-
 
 def set_callback(
     item: Any,
@@ -106,7 +103,6 @@ def set_callback(
             raise AttributeError(f"Cannot set callback on {type(item)}")
     
     return item
-
 
 def prepare_query(
     item: Any,
@@ -153,7 +149,6 @@ def prepare_query(
     
     return None
 
-
 def add_weight(
     concept: Any,
     weight: float,
@@ -187,7 +182,6 @@ def add_weight(
     
     return concept
 
-
 def get_target(
     concept: Any,
 ) -> Optional[str]:
@@ -210,7 +204,6 @@ def get_target(
         return concept.val_var
     
     return None
-
 
 def set_target(
     concept: Any,
@@ -244,7 +237,6 @@ def set_target(
             raise AttributeError(f"Cannot set target on {type(concept)}")
     
     return concept
-
 
 def get_itm_var(
     item: Any,

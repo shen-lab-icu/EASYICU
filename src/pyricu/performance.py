@@ -17,7 +17,6 @@ import pyarrow.dataset as ds
 
 logger = logging.getLogger(__name__)
 
-
 class TablePreloader:
     """
     表数据预加载器
@@ -161,7 +160,6 @@ class TablePreloader:
             'd_items': ['itemid', 'label', 'category'],
         }
 
-
 class BatchProcessor:
     """
     批处理器
@@ -261,7 +259,6 @@ class BatchProcessor:
         
         return results
 
-
 class PerformanceOptimizer:
     """
     性能优化器主类
@@ -322,10 +319,8 @@ class PerformanceOptimizer:
         """清除缓存"""
         self.preloader.clear_cache()
 
-
 # 全局优化器实例
 _global_optimizer: Optional[PerformanceOptimizer] = None
-
 
 def get_optimizer(
     data_path: Path,
@@ -347,7 +342,6 @@ def get_optimizer(
         )
     
     return _global_optimizer
-
 
 def enable_performance_optimization(
     data_path: Path,

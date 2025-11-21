@@ -11,7 +11,6 @@ from .datasource import ICUDataSource
 
 LOGGER = logging.getLogger(__name__)
 
-
 class DataSourceEnvironment:
     """Environment container for attached data sources.
 
@@ -114,10 +113,8 @@ class DataSourceEnvironment:
         sources = ", ".join(self.list_sources())
         return f"DataSourceEnvironment({sources})"
 
-
 # Global data environment instance
 data = DataSourceEnvironment()
-
 
 def attach_src(
     source_name: str,
@@ -146,7 +143,6 @@ def attach_src(
     else:
         return ICUDataSource(config, base_path=data_dir)
 
-
 def detach_src(source_name: str) -> None:
     """Detach a data source.
 
@@ -155,7 +151,6 @@ def detach_src(source_name: str) -> None:
     """
     data.detach_src(source_name)
 
-
 def list_attached() -> list[str]:
     """List all attached data sources.
 
@@ -163,7 +158,6 @@ def list_attached() -> list[str]:
         List of attached source names
     """
     return data.list_sources()
-
 
 def src_data_avail(source_name: Optional[str] = None) -> Dict[str, bool]:
     """Check data availability for attached sources.
@@ -200,7 +194,6 @@ def src_data_avail(source_name: Optional[str] = None) -> Dict[str, bool]:
         availability[name] = all_available
 
     return availability
-
 
 def setup_src_data(
     source_name: str,

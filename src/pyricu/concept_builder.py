@@ -11,7 +11,6 @@ import pandas as pd
 from .concept import ConceptDefinition, ConceptSource
 from .assertions import assert_that, is_string
 
-
 def new_concept(
     name: str,
     sources: Optional[List[ConceptSource]] = None,
@@ -43,7 +42,6 @@ def new_concept(
     }
     
     return ConceptDefinition.from_name_and_payload(name, payload)
-
 
 def new_item(
     name: str,
@@ -83,7 +81,6 @@ def new_item(
     
     return item_dict
 
-
 def new_itm(
     item_type: str,
     **kwargs
@@ -108,7 +105,6 @@ def new_itm(
     }
     
     return item_dict
-
 
 def new_cncpt(
     concept_type: str,
@@ -137,7 +133,6 @@ def new_cncpt(
     }
     
     return concept_dict
-
 
 def init_cncpt(
     concept: Union[str, Dict[str, Any]],
@@ -171,7 +166,6 @@ def init_cncpt(
     
     return concept_dict
 
-
 def init_itm(
     item: Union[str, Dict[str, Any]],
     **kwargs
@@ -204,7 +198,6 @@ def init_itm(
     
     return item_dict
 
-
 def is_cncpt(x: Any) -> bool:
     """Check if object is a concept (R ricu is_cncpt).
     
@@ -220,7 +213,6 @@ def is_cncpt(x: Any) -> bool:
         return 'type' in x and 'cncpt' in x.get('type', '')
     return False
 
-
 def is_concept(x: Any) -> bool:
     """Check if object is a concept object (R ricu is_concept).
     
@@ -231,7 +223,6 @@ def is_concept(x: Any) -> bool:
         True if object is a concept, False otherwise
     """
     return isinstance(x, ConceptDefinition) or is_cncpt(x)
-
 
 def is_item(x: Any) -> bool:
     """Check if object is an item (R ricu is_item).
@@ -248,7 +239,6 @@ def is_item(x: Any) -> bool:
         return True
     return False
 
-
 def is_itm(x: Any) -> bool:
     """Check if object is an item object (R ricu is_itm).
     
@@ -259,7 +249,6 @@ def is_itm(x: Any) -> bool:
         True if object is an item, False otherwise
     """
     return is_item(x)
-
 
 def new_src_tbl(
     table_name: str,

@@ -22,7 +22,6 @@ from .config import DataSourceConfig, DataSourceRegistry
 
 LOGGER = logging.getLogger(__name__)
 
-
 class PhysioNetDownloader:
     """Handler for downloading data from PhysioNet."""
 
@@ -121,7 +120,6 @@ class PhysioNetDownloader:
         computed_hash = sha256_hash.hexdigest()
         return computed_hash.lower() == expected_hash.lower()
 
-
 def download_src(
     config: DataSourceConfig,
     data_dir: Path,
@@ -196,7 +194,6 @@ def download_src(
             success = downloader.download_file(url, dest, force=force)
             if not success:
                 LOGGER.error(f"Failed to download {table_name}")
-
 
 def download_sources(
     source_names: Iterable[str],

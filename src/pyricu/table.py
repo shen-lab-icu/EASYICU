@@ -13,7 +13,6 @@ from copy import deepcopy
 import pandas as pd
 import numpy as np
 
-
 @dataclass
 class ICUTable:
     """Wrap a :class:`pandas.DataFrame` together with column metadata."""
@@ -99,11 +98,9 @@ class ICUTable:
         )
         return wide
 
-
 # ============================================================================
 # Enhanced table classes (R ricu tbl-class.R)
 # ============================================================================
-
 
 class IdTbl:
     """ID table - static patient data (R ricu id_tbl).
@@ -293,7 +290,6 @@ class IdTbl:
             interval=interval,
             by_ref=False
         )
-
 
 class TsTbl(IdTbl):
     """Time series table (R ricu ts_tbl).
@@ -493,7 +489,6 @@ class TsTbl(IdTbl):
             by_ref=False
         )
 
-
 class WinTbl(TsTbl):
     """Window table (R ricu win_tbl).
     
@@ -627,7 +622,6 @@ class WinTbl(TsTbl):
     def __str__(self) -> str:
         """字符串表示."""
         return self.__repr__()
-
 
 class PvalTbl(TsTbl):
     """P-value table with statistical metadata (R ricu pval_tbl).
@@ -777,11 +771,9 @@ class PvalTbl(TsTbl):
         """字符串表示."""
         return self.__repr__()
 
-
 # ============================================================================
 # Table utility functions (R ricu tbl-base.R)
 # ============================================================================
-
 
 def rbind_tbl(*tables: Union[IdTbl, pd.DataFrame], 
               use_names: bool = True, 
@@ -831,7 +823,6 @@ def rbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
     else:
         return result
 
-
 def cbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
               check_names: bool = False) -> Union[IdTbl, pd.DataFrame]:
     """Column-bind tables (R ricu cbind_id_tbl).
@@ -863,7 +854,6 @@ def cbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
         return type(tables[0])(result, tables[0].id_vars)
     else:
         return result
-
 
 def merge_lst(tables: List[Union[IdTbl, pd.DataFrame]], 
              by: Optional[List[str]] = None,
@@ -920,11 +910,9 @@ def merge_lst(tables: List[Union[IdTbl, pd.DataFrame]],
     else:
         return result
 
-
 # ============================================================================
 # Table validation functions (R ricu tbl-base.R)
 # ============================================================================
-
 
 def is_id_tbl(x) -> bool:
     """Check if object is an IdTbl (R ricu is_id_tbl).
@@ -937,7 +925,6 @@ def is_id_tbl(x) -> bool:
     """
     return isinstance(x, IdTbl)
 
-
 def is_ts_tbl(x) -> bool:
     """Check if object is a TsTbl (R ricu is_ts_tbl).
     
@@ -948,7 +935,6 @@ def is_ts_tbl(x) -> bool:
         True if x is a TsTbl, False otherwise
     """
     return isinstance(x, TsTbl)
-
 
 def is_win_tbl(x) -> bool:
     """Check if object is a WinTbl (R ricu is_win_tbl).
@@ -961,7 +947,6 @@ def is_win_tbl(x) -> bool:
     """
     return isinstance(x, WinTbl)
 
-
 def is_icu_tbl(x) -> bool:
     """Check if object is any ICU table type.
     
@@ -972,7 +957,6 @@ def is_icu_tbl(x) -> bool:
         True if x is an ICUTable, IdTbl, TsTbl, or WinTbl
     """
     return isinstance(x, (ICUTable, IdTbl, TsTbl, WinTbl))
-
 
 def has_time_cols(x) -> bool:
     """Check if table has time columns.
@@ -989,7 +973,6 @@ def has_time_cols(x) -> bool:
         return x.index_column is not None or len(x.time_columns) > 0
     else:
         return False
-
 
 def validate_tbl_structure(
     data: pd.DataFrame,
@@ -1029,7 +1012,6 @@ def validate_tbl_structure(
     if len(data.columns) != len(set(data.columns)):
         raise ValueError("Column names must be unique")
 
-
 def id_vars(x) -> List[str]:
     """Get ID variable names from a table (R ricu id_vars).
     
@@ -1045,7 +1027,6 @@ def id_vars(x) -> List[str]:
         return list(x.id_columns)
     else:
         return []
-
 
 def index_var(x) -> Optional[str]:
     """Get index variable name from a table (R ricu index_var).
@@ -1063,7 +1044,6 @@ def index_var(x) -> Optional[str]:
     else:
         return None
 
-
 def dur_var(x) -> Optional[str]:
     """Get duration variable name from a table (R ricu dur_var).
     
@@ -1077,7 +1057,6 @@ def dur_var(x) -> Optional[str]:
         return x.dur_var
     else:
         return None
-
 
 def meta_vars(x) -> List[str]:
     """Get all metadata variable names from a table (R ricu meta_vars).
@@ -1098,7 +1077,6 @@ def meta_vars(x) -> List[str]:
     else:
         return []
 
-
 def data_vars(x) -> List[str]:
     """Get data variable names from a table (R ricu data_vars).
     
@@ -1116,11 +1094,9 @@ def data_vars(x) -> List[str]:
     else:
         return []
 
-
 # ============================================================================
 # ID type conversion functions (R ricu tbl-utils.R change_id)
 # ============================================================================
-
 
 def upgrade_id(
     data: pd.DataFrame,
@@ -1168,7 +1144,6 @@ def upgrade_id(
         result = result.drop(columns=[from_id])
     
     return result
-
 
 def downgrade_id(
     data: pd.DataFrame,
@@ -1247,7 +1222,6 @@ def downgrade_id(
     
     return result
 
-
 def change_id(
     data: pd.DataFrame,
     id_map: pd.DataFrame,
@@ -1298,7 +1272,6 @@ def change_id(
             result = result.drop(columns=[from_id])
         
         return result
-
 
 def rbind_lst(
     tables: List[Union[pd.DataFrame, ICUTable, IdTbl, TsTbl, WinTbl]],
@@ -1383,7 +1356,6 @@ def rbind_lst(
         )
     
     return result_df
-
 
 def rename_cols(
     data: Union[pd.DataFrame, ICUTable, IdTbl, TsTbl, WinTbl],
@@ -1481,7 +1453,6 @@ def rename_cols(
     else:
         raise TypeError(f"Unsupported type: {type(data)}")
 
-
 def rm_cols(
     data: Union[pd.DataFrame, ICUTable, IdTbl, TsTbl, WinTbl],
     cols: Union[str, List[str]],
@@ -1528,9 +1499,6 @@ def rm_cols(
     
     else:
         raise TypeError(f"Unsupported type: {type(data)}")
-
-
-
 
 # 便捷函数用于加载表
 def load_table(src: str, table_name: str, **kwargs) -> pd.DataFrame:

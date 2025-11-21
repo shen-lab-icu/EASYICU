@@ -30,7 +30,6 @@ MINIMAL_COLUMNS = {
     'd_items': ['itemid', 'label', 'category'],
 }
 
-
 class FilterOp(str, enum.Enum):
     """Supported filter operations for table loading."""
 
@@ -38,7 +37,6 @@ class FilterOp(str, enum.Enum):
     IN = "in"
     BETWEEN = "between"
     REGEX = "regex"
-
 
 @dataclass
 class FilterSpec:
@@ -77,7 +75,6 @@ class FilterSpec:
             mask = frame[self.column].str.contains(self.value, case=False, na=False, regex=True)
             return frame.loc[mask]
         raise ValueError(f"Unsupported filter operation: {self.op}")
-
 
 class ICUDataSource:
     """Lightweight facade that loads tables for a concrete dataset instance."""
@@ -315,7 +312,7 @@ class ICUDataSource:
         if index_column:
             time_like_cols.add(index_column)
         
-        # 🔧 AUMC特殊处理：时间列是毫秒,需要转换为分钟 (参考R ricu的ms_as_mins)
+        # AUMC特殊处理：时间列是毫秒,需要转换为分钟 (参考R ricu的ms_as_mins)
         # R ricu: ms_as_mins <- function(x) min_as_mins(as.integer(x / 6e4))
         # 这样处理后,AUMC的时间单位与其他数据库一致(都是分钟)
         if self.config.name == 'aumc':
@@ -330,16 +327,35 @@ class ICUDataSource:
             if column in frame.columns:
                 frame[column] = _coerce_datetime(frame[column])
 
-        # 🔧 自动补全 stay_id：某些表（如 prescriptions, labevents）只有 hadm_id，需要 JOIN icustays
+        # 自动补全 stay_id：某些表（如 prescriptions, labevents）只有 hadm_id，需要 JOIN icustays
         # 这对于使用这些表的概念（如 delirium_tx）至关重要
         if ('stay_id' not in frame.columns or frame['stay_id'].isna().all()) and 'hadm_id' in frame.columns:
             # 检查是否为 MIMIC-IV 的 hospital 表
             hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy']
             if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo']:
                 try:
-                    # 加载 icustays 映射（仅需要 hadm_id 和 stay_id）
-                    icustays_map = self.load_table('icustays', columns=['hadm_id', 'stay_id'], verbose=False)
+                    # 🔍 提取当前的患者ID过滤器（stay_id 或 subject_id）
+                    # 这样 icustays 只加载我们需要的患者，避免 join 时产生额外的匹配
+                    icustays_filters = []
+                    if filters:
+                        for spec in filters:
+                            # stay_id 或 subject_id 过滤器都可以用于过滤 icustays
+                            if spec.column in ['stay_id', 'subject_id'] and spec.op == FilterOp.IN:
+                                icustays_filters.append(spec)
+                                print(f"🔍 [{table_name}] 提取患者ID过滤器: {spec.column} IN ({len(spec.value)} 个值)")
+                                # 不要 break，可能有多个过滤器
+                    
+                    # 加载 icustays 映射（需要 hadm_id, stay_id, subject_id）
+                    # 如果有患者ID过滤器，传递给 icustays 以避免加载全表
+                    print(f"🔍 [{table_name}] 加载 icustays，filters={len(icustays_filters)}个")
+                    icustays_map = self.load_table(
+                        'icustays', 
+                        columns=['hadm_id', 'stay_id', 'subject_id'], 
+                        filters=icustays_filters if icustays_filters else None,
+                        verbose=False
+                    )
                     icustays_df = icustays_map.data if hasattr(icustays_map, 'data') else icustays_map
+                    print(f"🔍 [{table_name}] icustays 加载完成: {len(icustays_df)} 行")
                     
                     # 保存原始行数用于日志
                     before_rows = len(frame)
@@ -360,10 +376,20 @@ class ICUDataSource:
                     
                     after_rows = len(frame)
                     
+                    # 关键修复：join 后需要再次应用 stay_id 过滤器（如果有）
+                    # 因为 join 可能产生了额外的 stay_ids（同一 subject 的多个 ICU stays）
+                    if filters:
+                        for spec in filters:
+                            if spec.column == 'stay_id' and spec.op == FilterOp.IN:
+                                before_filter = len(frame)
+                                frame = spec.apply(frame)
+                                print(f"🔍 [{table_name}] 应用 stay_id 过滤: {before_filter}行 → {len(frame)}行 (保留{len(spec.value)}个stay_id)")
+                                break
+                    
                     # 记录补全操作
                     if verbose and before_rows != after_rows:
                         logger.info(
-                            "🔧 表 %s: 通过 hadm_id 补全 stay_id (%d → %d 行)",
+                            "表 %s: 通过 hadm_id 补全 stay_id (%d → %d 行)",
                             table_name,
                             before_rows,
                             after_rows
@@ -413,7 +439,7 @@ class ICUDataSource:
         # 🚀 OPTIMIZATION: 缓存键不包含patient_ids_filter以实现跨概念共享
         # 对于同一批患者的多个概念加载,只在第一次读取表,后续从缓存中过滤
         # 这将chartevents等大表的加载从N次(每概念一次)减少到1次
-        # 🔧 CRITICAL FIX: 跳过需要subject_id→stay_id映射的表，这些表缓存会导致patient过滤失效
+        # 跳过需要subject_id→stay_id映射的表，这些表缓存会导致patient过滤失效
         skip_cache_tables = ['labevents', 'microbiologyevents', 'inputevents', 'admissions']
         enable_caching = self.enable_cache and table_name not in skip_cache_tables
         
@@ -441,7 +467,7 @@ class ICUDataSource:
         if loader is None and dataset_cfg is not None:
             frame = self._read_dataset(table_name, dataset_cfg, columns, patient_ids_filter)
         elif loader is None:
-            # 🔧 修复：检查是否为多文件配置，如果是，使用目录路径
+            # 修复：检查是否为多文件配置，如果是，使用目录路径
             table_cfg = self.config.get_table(table_name)
             if len(table_cfg.files) > 1:
                 # 多文件配置：使用目录路径以启用多文件读取
@@ -505,7 +531,7 @@ class ICUDataSource:
         # 🚀 OPTIMIZATION: 缓存完整表(未经patient过滤)以实现跨概念共享
         # patient过滤在从缓存读取时应用(见上面cached_frame分支)
         # ⚡ 性能优化: 缓存原始frame，返回过滤后的结果
-        # 🔧 FIX: 不缓存需要特殊处理的表（labevents/admissions等）
+        # 不缓存需要特殊处理的表（labevents/admissions等）
         if enable_caching:
             with self._lock:
                 # 缓存原始未过滤的表
@@ -819,7 +845,7 @@ class ICUDataSource:
         else:
             if DEBUG_MODE: print(f"   📁 加载 {directory.name} ({num_files} 个 parquet 分区)...")
         
-        # 🔧 修复：传递具体的parquet文件列表，而不是目录，避免混合格式问题
+        # 修复：传递具体的parquet文件列表，而不是目录，避免混合格式问题
         dataset_df = self._read_parquet_dataset(
             directory,
             files,  # 传递具体的parquet文件列表
@@ -880,7 +906,7 @@ class ICUDataSource:
         if filter_spec is not None:
             filter_expr = self._build_dataset_filter(filter_spec)
         try:
-            # 🔧 修复：使用传入的文件列表创建dataset，避免混合格式问题
+            # 修复：使用传入的文件列表创建dataset，避免混合格式问题
             if files is not None:
                 # 使用具体的parquet文件列表
                 dataset = ds.dataset(files, format="parquet")
@@ -984,7 +1010,6 @@ class ICUDataSource:
         return frame
     
 
-
 def load_table(
     data_source: ICUDataSource,
     table_name: str,
@@ -996,7 +1021,6 @@ def load_table(
 
     return data_source.load_table(table_name, columns=columns, filters=filters)
 
-
 def _ensure_sequence(value: Any) -> List[Any]:
     """Normalise scalars/iterables for filter construction."""
     if value is None:
@@ -1007,7 +1031,6 @@ def _ensure_sequence(value: Any) -> List[Any]:
         return list(value)
     except TypeError:
         return [value]
-
 
 def _coerce_datetime(series: pd.Series) -> pd.Series:
     """Coerce a Series to datetime type, handling various edge cases.

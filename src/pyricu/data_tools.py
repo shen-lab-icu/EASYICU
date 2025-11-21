@@ -12,7 +12,6 @@ import numpy as np
 from .table import IdTbl, TsTbl, WinTbl, ICUTable
 from .ts_utils import has_gaps, interval
 
-
 def unmerge(tbl: Union[IdTbl, TsTbl, WinTbl, pd.DataFrame]) -> pd.DataFrame:
     """Unmerge table (R ricu unmerge).
     
@@ -31,7 +30,6 @@ def unmerge(tbl: Union[IdTbl, TsTbl, WinTbl, pd.DataFrame]) -> pd.DataFrame:
     if isinstance(tbl, (IdTbl, TsTbl, WinTbl)):
         return tbl.data.copy()
     return tbl.copy()
-
 
 def rm_na(tbl: Union[IdTbl, TsTbl, WinTbl, pd.DataFrame], 
           columns: Optional[list[str]] = None) -> pd.DataFrame:
@@ -58,7 +56,6 @@ def rm_na(tbl: Union[IdTbl, TsTbl, WinTbl, pd.DataFrame],
         df = df.dropna()
     
     return df
-
 
 def change_dur_unit(
     tbl: WinTbl,
@@ -121,7 +118,6 @@ def change_dur_unit(
         interval=tbl.interval if hasattr(tbl, 'interval') else None
     )
 
-
 def has_no_gaps(tbl: Union[TsTbl, WinTbl]) -> bool:
     """Check if table has no gaps (R ricu has_no_gaps).
     
@@ -139,7 +135,6 @@ def has_no_gaps(tbl: Union[TsTbl, WinTbl]) -> bool:
         raise TypeError("has_no_gaps requires ts_tbl or win_tbl")
     
     return not has_gaps(tbl)
-
 
 def load_src_cfg(src: str) -> Any:
     """Load source configuration (R ricu load_src_cfg).

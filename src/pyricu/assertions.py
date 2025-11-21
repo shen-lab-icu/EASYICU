@@ -11,11 +11,9 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-
 class RicuAssertionError(Exception):
     """Custom assertion error for ricu-style assertions."""
     pass
-
 
 def assert_that(condition: bool, msg: Optional[str] = None, env=None) -> bool:
     """Assert a condition is True (R ricu assert_that).
@@ -47,16 +45,13 @@ def assert_that(condition: bool, msg: Optional[str] = None, env=None) -> bool:
         raise RicuAssertionError(msg)
     return True
 
-
 def is_string(x: Any) -> bool:
     """Check if x is a string (R assertthat::is.string)."""
     return isinstance(x, str)
 
-
 def is_flag(x: Any) -> bool:
     """Check if x is a boolean (R assertthat::is.flag)."""
     return isinstance(x, bool)
-
 
 def is_scalar(x: Any) -> bool:
     """Check if x is a scalar value (R ricu is_scalar)."""
@@ -65,16 +60,13 @@ def is_scalar(x: Any) -> bool:
                          pd.Timedelta, np.timedelta64)) and \
            not isinstance(x, (list, tuple, np.ndarray))
 
-
 def is_number(x: Any) -> bool:
     """Check if x is a numeric scalar (R assertthat::is.number)."""
     return isinstance(x, (int, float, np.integer, np.floating)) and is_scalar(x)
 
-
 def is_count(x: Any) -> bool:
     """Check if x is a positive integer (R assertthat::is.count)."""
     return isinstance(x, (int, np.integer)) and x > 0
-
 
 def is_intish(x: Union[float, np.ndarray, pd.Series]) -> bool:
     """Check if numeric value(s) are integer-like (R ricu is_intish).
@@ -86,7 +78,6 @@ def is_intish(x: Union[float, np.ndarray, pd.Series]) -> bool:
     else:
         return x == int(x) and not pd.isna(x)
 
-
 def no_na(x: Union[pd.Series, pd.DataFrame, np.ndarray]) -> bool:
     """Check if data contains no NA values (R ricu no_na)."""
     if isinstance(x, pd.DataFrame):
@@ -95,7 +86,6 @@ def no_na(x: Union[pd.Series, pd.DataFrame, np.ndarray]) -> bool:
         return not pd.isna(x).any()
     else:
         return not pd.isna(x)
-
 
 def has_length(x: Any, length: Optional[int] = None) -> bool:
     """Check if x has expected length (R ricu has_length).
@@ -114,11 +104,9 @@ def has_length(x: Any, length: Optional[int] = None) -> bool:
     else:
         return actual_len == length
 
-
 def has_rows(x: pd.DataFrame) -> bool:
     """Check if DataFrame has at least one row (R ricu has_rows)."""
     return len(x) > 0
-
 
 def has_cols(x: pd.DataFrame, cols: Optional[Union[str, List[str]]] = None) -> bool:
     """Check if DataFrame has expected columns.
@@ -135,11 +123,9 @@ def has_cols(x: pd.DataFrame, cols: Optional[Union[str, List[str]]] = None) -> b
     
     return all(col in x.columns for col in cols)
 
-
 def has_name(x: Any, name: str) -> bool:
     """Check if object has an attribute (R assertthat::has_name)."""
     return hasattr(x, name)
-
 
 def are_in(x: List[str], opts: List[str], na_rm: bool = False) -> bool:
     """Check if all values are in options (R ricu are_in).
@@ -157,7 +143,6 @@ def are_in(x: List[str], opts: List[str], na_rm: bool = False) -> bool:
     
     return all(v in opts for v in x)
 
-
 def is_unique(x: Union[pd.Series, List, np.ndarray, pd.DataFrame]) -> bool:
     """Check if all values are unique (R ricu is_unique).
     
@@ -172,7 +157,6 @@ def is_unique(x: Union[pd.Series, List, np.ndarray, pd.DataFrame]) -> bool:
     else:
         return len(x) == len(set(x))
 
-
 def is_sorted(x: Union[pd.Series, List, np.ndarray]) -> bool:
     """Check if values are sorted (R ricu is_sorted)."""
     if isinstance(x, pd.Series):
@@ -182,46 +166,37 @@ def is_sorted(x: Union[pd.Series, List, np.ndarray]) -> bool:
     
     return np.all(x[:-1] <= x[1:])
 
-
 def is_disjoint(x: set, y: set) -> bool:
     """Check if two sets are disjoint (no common elements)."""
     return len(x & y) == 0
-
 
 def is_subset(x: set, y: set) -> bool:
     """Check if x is a subset of y."""
     return x <= y
 
-
 def is_directory(path: Union[str, Path]) -> bool:
     """Check if path is a directory (R assertthat::is.dir)."""
     return Path(path).is_dir()
-
 
 def is_file(path: Union[str, Path]) -> bool:
     """Check if path is a file."""
     return Path(path).is_file()
 
-
 def is_data_frame(x: Any) -> bool:
     """Check if x is a DataFrame."""
     return isinstance(x, pd.DataFrame)
-
 
 def is_series(x: Any) -> bool:
     """Check if x is a Series."""
     return isinstance(x, pd.Series)
 
-
 def not_null(x: Any) -> bool:
     """Check if x is not None (R ricu not_null)."""
     return x is not None
 
-
 def null_or(x: Any, condition: Callable) -> bool:
     """Check if x is None or satisfies condition (R ricu null_or)."""
     return x is None or condition(x)
-
 
 # Validation helpers for common patterns
 
@@ -265,7 +240,6 @@ def validate_data_frame(
     
     return True
 
-
 def validate_id_tbl(
     df: pd.DataFrame,
     id_vars: List[str],
@@ -293,7 +267,6 @@ def validate_id_tbl(
                    f"ID column '{id_var}' contains NA values")
     
     return True
-
 
 def validate_ts_tbl(
     df: pd.DataFrame,
@@ -347,7 +320,6 @@ def validate_ts_tbl(
     
     return True
 
-
 def validate_win_tbl(
     df: pd.DataFrame,
     id_vars: List[str],
@@ -383,43 +355,35 @@ def validate_win_tbl(
     
     return True
 
-
 # Convenient assertion wrappers
 
 def assert_string(x: Any, msg: Optional[str] = None):
     """Assert x is a string."""
     assert_that(is_string(x), msg or f"{x} is not a string")
 
-
 def assert_flag(x: Any, msg: Optional[str] = None):
     """Assert x is a boolean."""
     assert_that(is_flag(x), msg or f"{x} is not a boolean")
-
 
 def assert_scalar(x: Any, msg: Optional[str] = None):
     """Assert x is a scalar."""
     assert_that(is_scalar(x), msg or f"{x} is not a scalar")
 
-
 def assert_number(x: Any, msg: Optional[str] = None):
     """Assert x is a number."""
     assert_that(is_number(x), msg or f"{x} is not a number")
-
 
 def assert_count(x: Any, msg: Optional[str] = None):
     """Assert x is a positive integer."""
     assert_that(is_count(x), msg or f"{x} is not a positive integer")
 
-
 def assert_no_na(x: Any, msg: Optional[str] = None):
     """Assert x contains no NA values."""
     assert_that(no_na(x), msg or "Data contains NA values")
 
-
 def assert_has_rows(df: pd.DataFrame, msg: Optional[str] = None):
     """Assert DataFrame has at least one row."""
     assert_that(has_rows(df), msg or "DataFrame has no rows")
-
 
 def assert_has_cols(df: pd.DataFrame, cols: Union[str, List[str]], 
                    msg: Optional[str] = None):
@@ -428,7 +392,6 @@ def assert_has_cols(df: pd.DataFrame, cols: Union[str, List[str]],
         cols = [cols]
     assert_that(has_cols(df, cols), 
                msg or f"DataFrame missing columns: {cols}")
-
 
 # R ricu 特有的断言函数
 
@@ -449,7 +412,6 @@ def all_equal(x: Any, y: Any) -> bool:
     except:
         return False
 
-
 def same_length(x: Any, y: Any) -> bool:
     """Check if x and y have the same length (R ricu same_length)."""
     try:
@@ -457,16 +419,13 @@ def same_length(x: Any, y: Any) -> bool:
     except TypeError:
         return False
 
-
 def are_equal(x: Any, y: Any) -> bool:
     """Alias for all_equal (R assertthat::are_equal)."""
     return all_equal(x, y)
 
-
 def has_attr(x: Any, attr: str) -> bool:
     """Check if object has attribute (R assertthat::has_attr)."""
     return hasattr(x, attr)
-
 
 def is_difftime(x: Any) -> bool:
     """Check if x is a timedelta type (R ricu is_difftime)."""
@@ -476,7 +435,6 @@ def is_difftime(x: Any) -> bool:
         return np.issubdtype(x.dtype, np.timedelta64)
     else:
         return isinstance(x, (pd.Timedelta, np.timedelta64))
-
 
 def is_interval(x: Any, length: Optional[int] = None) -> bool:
     """Check if x is a valid time interval (R ricu is_interval).
@@ -506,7 +464,6 @@ def is_interval(x: Any, length: Optional[int] = None) -> bool:
                 return all(x >= pd.Timedelta(0))
         except:
             return False
-
 
 def obeys_interval(x: Union[pd.Series, np.ndarray], 
                    interval: pd.Timedelta,
@@ -543,7 +500,6 @@ def obeys_interval(x: Union[pd.Series, np.ndarray],
     except:
         return False
 
-
 def same_unit(x: Union[pd.Timedelta, pd.Series], 
               y: Union[pd.Timedelta, pd.Series]) -> bool:
     """Check if x and y have the same time unit (R ricu same_unit).
@@ -552,7 +508,6 @@ def same_unit(x: Union[pd.Timedelta, pd.Series],
     保留此函数是为了 API 兼容性。
     """
     return is_difftime(x) and is_difftime(y)
-
 
 def same_time(x: Union[pd.Timedelta, pd.Series],
               y: Union[pd.Timedelta, pd.Series],
@@ -572,7 +527,6 @@ def same_time(x: Union[pd.Timedelta, pd.Series],
             return all(diff < tolerance)
     except:
         return False
-
 
 def has_interval(df: pd.DataFrame, interval: pd.Timedelta, 
                 index_var: Optional[str] = None) -> bool:
@@ -597,7 +551,6 @@ def has_interval(df: pd.DataFrame, interval: pd.Timedelta,
     
     return obeys_interval(df[index_var], interval)
 
-
 def has_time_cols(df: pd.DataFrame, cols: Union[str, List[str]], 
                  length: Optional[int] = None) -> bool:
     """Check if specified columns are time columns (R ricu has_time_cols).
@@ -617,7 +570,6 @@ def has_time_cols(df: pd.DataFrame, cols: Union[str, List[str]],
         return False
     
     return all(is_difftime(df[col]) for col in cols)
-
 
 def all_fun(x: Any, fun: Callable, *args, na_rm: bool = False, **kwargs) -> bool:
     """Check if function returns True for all elements (R ricu all_fun).
@@ -642,11 +594,9 @@ def all_fun(x: Any, fun: Callable, *args, na_rm: bool = False, **kwargs) -> bool
     except:
         return False
 
-
 def all_null(x: Any) -> bool:
     """Check if all elements are None/null (R ricu all_null)."""
     return all_fun(x, lambda item: item is None or pd.isna(item))
-
 
 def evals_to_fun(x: Any) -> bool:
     """Check if x is or evaluates to a function (R ricu evals_to_fun)."""
@@ -663,13 +613,11 @@ def evals_to_fun(x: Any) -> bool:
     
     return False
 
-
 # 为 id_tbl 和 ts_tbl 特定的验证
 
 def is_id_tbl(x: Any) -> bool:
     """Check if x is an id_tbl (R ricu is_id_tbl)."""
     return isinstance(x, pd.DataFrame) and hasattr(x, 'attrs') and 'id_vars' in x.attrs
-
 
 def is_ts_tbl(x: Any) -> bool:
     """Check if x is a ts_tbl (R ricu is_ts_tbl)."""
@@ -677,11 +625,9 @@ def is_ts_tbl(x: Any) -> bool:
             'index_var' in x.attrs and 
             'interval' in x.attrs)
 
-
 def is_win_tbl(x: Any) -> bool:
     """Check if x is a win_tbl (R ricu is_win_tbl)."""
     return is_ts_tbl(x) and 'dur_var' in x.attrs
-
 
 # 断言包装器（抛出异常而不是返回 False）
 
@@ -689,31 +635,25 @@ def assert_unique(x: Any, msg: Optional[str] = None):
     """Assert all values are unique."""
     assert_that(is_unique(x), msg or "Values are not unique")
 
-
 def assert_sorted(x: Any, msg: Optional[str] = None):
     """Assert values are sorted."""
     assert_that(is_sorted(x), msg or "Values are not sorted")
-
 
 def assert_disjoint(x: set, y: set, msg: Optional[str] = None):
     """Assert sets are disjoint."""
     assert_that(is_disjoint(x, y), msg or "Sets are not disjoint")
 
-
 def assert_interval(x: Any, length: Optional[int] = None, msg: Optional[str] = None):
     """Assert x is a valid interval."""
     assert_that(is_interval(x, length), msg or "Not a valid interval")
-
 
 def assert_id_tbl(x: Any, msg: Optional[str] = None):
     """Assert x is an id_tbl."""
     assert_that(is_id_tbl(x), msg or "Not an id_tbl")
 
-
 def assert_ts_tbl(x: Any, msg: Optional[str] = None):
     """Assert x is a ts_tbl."""
     assert_that(is_ts_tbl(x), msg or "Not a ts_tbl")
-
 
 def assert_win_tbl(x: Any, msg: Optional[str] = None):
     """Assert x is a win_tbl."""

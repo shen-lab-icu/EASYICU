@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union, Generator
 import platform
 
-
 # ============================================================================
 # System utilities
 # ============================================================================
@@ -23,7 +22,6 @@ def sys_name() -> str:
     """
     return platform.system()
 
-
 def sys_env(var: str, unset: str = "") -> str:
     """Get environment variable (R ricu sys_env).
     
@@ -35,7 +33,6 @@ def sys_env(var: str, unset: str = "") -> str:
         Environment variable value or unset value
     """
     return os.environ.get(var, unset)
-
 
 # ============================================================================
 # Data directory management
@@ -90,7 +87,6 @@ def data_dir(subdir: Optional[str] = None, create: bool = True) -> str:
     
     return os.path.normpath(res)
 
-
 def src_data_dir(src: Union[str, List[str]]) -> Union[str, List[str]]:
     """Get source data directory (R ricu src_data_dir).
     
@@ -106,7 +102,6 @@ def src_data_dir(src: Union[str, List[str]]) -> Union[str, List[str]]:
     # For demo datasets, check for package installation
     # For now, just use data_dir
     return data_dir(src, create=False)
-
 
 # ============================================================================
 # Directory operations
@@ -140,7 +135,6 @@ def ensure_dirs(paths: Union[str, List[str]]) -> Union[str, List[str]]:
     
     return path
 
-
 def is_dir(path: str) -> bool:
     """Check if path is a directory (R ricu is.dir).
     
@@ -152,7 +146,6 @@ def is_dir(path: str) -> bool:
     """
     return os.path.isdir(path)
 
-
 def dir_exists(path: str) -> bool:
     """Check if directory exists (R ricu dir.exists).
     
@@ -163,7 +156,6 @@ def dir_exists(path: str) -> bool:
         True if directory exists
     """
     return os.path.isdir(path)
-
 
 def dir_create(path: str, recursive: bool = True) -> bool:
     """Create directory (R ricu dir.create).
@@ -180,7 +172,6 @@ def dir_create(path: str, recursive: bool = True) -> bool:
         return True
     except OSError:
         return False
-
 
 # ============================================================================
 # File operations
@@ -209,7 +200,6 @@ def file_size_format(size: int, binary: bool = True) -> str:
     
     return f"{size:.1f} {units[-1]}"
 
-
 def file_copy_safe(src: str, dst: str, overwrite: bool = False) -> bool:
     """Safely copy file (R ricu file_copy_safe).
     
@@ -235,7 +225,6 @@ def file_copy_safe(src: str, dst: str, overwrite: bool = False) -> bool:
     except Exception:
         return False
 
-
 def read_lines_chunked(file_path: str, chunk_size: int = 10000) -> Generator[List[str], None, None]:
     """Read large file in chunks (R ricu read_lines_chunked).
     
@@ -255,7 +244,6 @@ def read_lines_chunked(file_path: str, chunk_size: int = 10000) -> Generator[Lis
                 chunk = []
         if chunk:
             yield chunk
-
 
 # ============================================================================
 # Configuration management
@@ -278,7 +266,6 @@ def default_config_path() -> str:
         import pkg_resources
         return pkg_resources.resource_filename('pyricu', 'data')
 
-
 def user_config_path() -> Optional[List[str]]:
     """Get user config path from environment (R ricu user_config_path).
     
@@ -291,7 +278,6 @@ def user_config_path() -> Optional[List[str]]:
         return None
     
     return [p.strip() for p in res.split(",")]
-
 
 def config_paths() -> List[str]:
     """Get all config paths (R ricu config_paths).
@@ -306,7 +292,6 @@ def config_paths() -> List[str]:
         return user_paths + [default_path]
     else:
         return [default_path]
-
 
 def get_config(name: str, cfg_dirs: Optional[List[str]] = None,
                combine_fun: Optional[Callable] = None, **kwargs) -> Any:
@@ -357,7 +342,6 @@ def get_config(name: str, cfg_dirs: Optional[List[str]] = None,
     from functools import reduce
     return reduce(combine_fun, results)
 
-
 def read_json(path: str, simplify_vector: bool = True, 
               simplify_dataframe: bool = False,
               simplify_matrix: bool = False, **kwargs) -> Any:
@@ -379,7 +363,6 @@ def read_json(path: str, simplify_vector: bool = True,
     with open(path, 'r') as f:
         return json.load(f, **kwargs)
 
-
 def set_config(x: Any, name: str, dir: Optional[str] = None, **kwargs) -> None:
     """Write configuration to JSON file (R ricu set_config).
     
@@ -396,7 +379,6 @@ def set_config(x: Any, name: str, dir: Optional[str] = None, **kwargs) -> None:
         file_path = os.path.join(dir, file_path)
     
     write_json(x, file_path, **kwargs)
-
 
 def write_json(x: Any, path: str, indent: int = 2, **kwargs) -> None:
     """Write JSON file (R ricu write_json).
@@ -415,7 +397,6 @@ def write_json(x: Any, path: str, indent: int = 2, **kwargs) -> None:
     with open(path, 'w') as f:
         json.dump(x, f, indent=indent, **kwargs)
 
-
 # ============================================================================
 # Auto-attach sources
 # ============================================================================
@@ -433,7 +414,6 @@ def auto_attach_srcs() -> List[str]:
     else:
         return [s.strip() for s in res.split(",")]
 
-
 # ============================================================================
 # Utility functions
 # ============================================================================
@@ -449,7 +429,6 @@ def file_exists(path: str) -> bool:
     """
     return os.path.isfile(path)
 
-
 def get_file_size(path: str) -> int:
     """Get file size in bytes (pyricu utility).
     
@@ -460,7 +439,6 @@ def get_file_size(path: str) -> int:
         File size in bytes
     """
     return os.path.getsize(path)
-
 
 def list_files(directory: str, pattern: Optional[str] = None, 
                recursive: bool = False) -> List[str]:

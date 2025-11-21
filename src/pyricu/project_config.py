@@ -77,7 +77,6 @@ DEBUG_PATIENT_MIIV = [30017005]
 DEBUG_PATIENT_EICU = [2572404]
 DEBUG_PATIENT = DEBUG_PATIENT_MIIV
 
-
 def _load_unique_ids(file_path: Path, column: str, limit: int) -> List[int]:
     if not file_path.exists():
         return []
@@ -94,7 +93,6 @@ def _load_unique_ids(file_path: Path, column: str, limit: int) -> List[int]:
             if len(ids) >= limit:
                 break
     return ids
-
 
 def _load_ids_for_database(database: str, data_path: Path, limit: int) -> List[int]:
     if database == "aumc":
@@ -226,7 +224,6 @@ def get_data_path(source: str = "production", database: str = "miiv") -> Path:
     else:
         raise ValueError(f"Unknown database: {database}")
 
-
 def get_patient_ids(patient_set: str = "default", database: str = "miiv", data_path: Path = None) -> List[int]:
     """Get patient IDs for specified patient set and database.
     
@@ -292,7 +289,6 @@ def get_patient_ids(patient_set: str = "default", database: str = "miiv", data_p
     else:
         raise ValueError(f"Unknown patient set: {patient_set}")
 
-
 def get_concepts(concept_group: str) -> List[str]:
     """Get concept list for specified group.
     
@@ -321,7 +317,6 @@ def get_concepts(concept_group: str) -> List[str]:
         raise ValueError(f"Unknown concept group: {concept_group}")
     
     return concept_map[concept_group]
-
 
 def print_config() -> None:
     """Print current configuration (for debugging).
@@ -355,7 +350,6 @@ def print_config() -> None:
     print(f"Verbose: {VERBOSE}")
     print("=" * 50)
 
-
 # ============================================================================
 # Validation
 # ============================================================================
@@ -386,11 +380,9 @@ def validate_paths() -> bool:
     
     return valid
 
-
 # Auto-validate on import
 if VERBOSE:
     validate_paths()
-
 
 # ============================================================================
 # Export all configuration

@@ -67,6 +67,10 @@ try:
         list_available_concepts,
         list_available_sources,
         get_concept_info,
+        # 增强功能（从api_enhanced.py合并）
+        load_concept_cached,
+        align_to_icu_admission,
+        load_sofa_with_score,
     )
     # 将新API作为主要的load_concepts
     load_concepts = _load_concepts_api
@@ -93,16 +97,9 @@ if _HAS_API:
     load_concepts = _load_concepts_api  # 使用新API
     # load_concept已经从api.py导入，是load_concepts的别名
 
-# 增强API - 支持缓存和时间对齐
-try:
-    from .api_enhanced import (
-        load_concept_cached,
-        align_to_icu_admission,
-        load_sofa_with_score,
-    )
-    _HAS_ENHANCED_API = True
-except ImportError:
-    _HAS_ENHANCED_API = False
+# 增强API - 缓存和时间对齐功能已合并到api.py
+# load_concept_cached, align_to_icu_admission, load_sofa_with_score 从api导入
+_HAS_ENHANCED_API = _HAS_API  # 与主API统一
 
 # Optional imports with availability checks
 try:
@@ -591,28 +588,9 @@ try:
 except ImportError:
     _HAS_MEMORY_OPTIMIZER = False
 
-# 优化的回调函数
-try:
-    from .callbacks_optimized import (
-        OptimizedCallbacks,
-        get_optimized_callbacks,
-        sofa_score as sofa_score_optimized,
-        sofa_resp as sofa_resp_optimized,
-        pafi as pafi_optimized,
-    )
-    _HAS_OPTIMIZED_CALLBACKS = True
-except ImportError:
-    _HAS_OPTIMIZED_CALLBACKS = False
-
-# 优化的数据源
-try:
-    from .datasource_optimized import (
-        OptimizedDataSource,
-        create_optimized_datasource,
-    )
-    _HAS_OPTIMIZED_DATASOURCE = True
-except ImportError:
-    _HAS_OPTIMIZED_DATASOURCE = False
+# 优化的回调和数据源 - 已废弃，功能已整合到主模块
+_HAS_OPTIMIZED_CALLBACKS = False
+_HAS_OPTIMIZED_DATASOURCE = False
 
 # 统一工具函数库
 try:
@@ -630,23 +608,8 @@ try:
 except ImportError:
     _HAS_COMMON_UTILS = False
 
-# 统一API
-try:
-    from .api_unified import (
-        UnifiedConceptLoader,
-        get_loader,
-        load_concepts as load_concepts_unified,
-        load_concept as load_concept_unified,
-        list_available_concepts as list_available_concepts_unified,
-        get_concept_info as get_concept_info_unified,
-        load_sofa as load_sofa_unified,
-        load_sofa2 as load_sofa2_unified,
-        load_vitals as load_vitals_unified,
-        load_labs as load_labs_unified,
-    )
-    _HAS_UNIFIED_API = True
-except ImportError:
-    _HAS_UNIFIED_API = False
+# 统一API - 已废弃，功能已整合到api.py
+_HAS_UNIFIED_API = False
 
 __all__ = [
     # === 推荐使用的API ===

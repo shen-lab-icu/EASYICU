@@ -11,7 +11,6 @@ import operator
 import pandas as pd
 import numpy as np
 
-
 def transform_fun(func: Callable, **kwargs) -> Callable:
     """Create a callback that transforms the value column (R ricu transform_fun).
     
@@ -38,7 +37,6 @@ def transform_fun(func: Callable, **kwargs) -> Callable:
         return data
     
     return callback
-
 
 def binary_op(op: Callable, y: Any) -> Callable:
     """Create a binary operation function (R ricu binary_op).
@@ -81,7 +79,6 @@ def binary_op(op: Callable, y: Any) -> Callable:
 
     return safe_binary_op
 
-
 def comp_na(op: Callable, y: Any) -> Callable:
     """Create a comparison that handles NA values (R ricu comp_na).
     
@@ -110,7 +107,6 @@ def comp_na(op: Callable, y: Any) -> Callable:
     
     return compare
 
-
 def set_val(val: Any) -> Callable:
     """Create a function that sets all values to a constant (R ricu set_val).
     
@@ -134,7 +130,6 @@ def set_val(val: Any) -> Callable:
             return val
     
     return setter
-
 
 def apply_map(mapping: Dict[Any, Any], var: str = 'val_col') -> Callable:
     """Create a callback that maps values (R ricu apply_map).
@@ -196,7 +191,6 @@ def apply_map(mapping: Dict[Any, Any], var: str = 'val_col') -> Callable:
         return data
     
     return callback
-
 
 def convert_unit(
     func: Union[Callable, list],
@@ -274,7 +268,6 @@ def convert_unit(
     
     return callback
 
-
 def combine_callbacks(*callbacks: Callable) -> Callable:
     """Combine multiple callbacks into one (R ricu combine_callbacks).
     
@@ -297,17 +290,14 @@ def combine_callbacks(*callbacks: Callable) -> Callable:
     
     return combined_callback
 
-
 # Common transformations
 def fahr_to_cels(temp: Union[float, pd.Series]) -> Union[float, pd.Series]:
     """Convert Fahrenheit to Celsius."""
     return (temp - 32) * 5 / 9
 
-
 def silent_as_numeric(x: pd.Series) -> pd.Series:
     """Convert to numeric, suppressing warnings."""
     return pd.to_numeric(x, errors='coerce')
-
 
 def force_type(target_type: str) -> Callable:
     """Create a function that forces type conversion.
@@ -330,7 +320,6 @@ def force_type(target_type: str) -> Callable:
     
     return type_map[target_type]
 
-
 # Database-specific helpers
 def eicu_age(data: pd.DataFrame, val_col: str = 'age', **kwargs) -> pd.DataFrame:
     """Process eICU age (handles '> 89')."""
@@ -341,7 +330,6 @@ def eicu_age(data: pd.DataFrame, val_col: str = 'age', **kwargs) -> pd.DataFrame
     data[val_col] = data[val_col].astype(float)
     return data
 
-
 def mimic_age(data: pd.DataFrame, val_col: str = 'age', **kwargs) -> pd.DataFrame:
     """Process MIMIC age (convert from days, cap at 90)."""
     data = data.copy()
@@ -351,14 +339,12 @@ def mimic_age(data: pd.DataFrame, val_col: str = 'age', **kwargs) -> pd.DataFram
     data[val_col] = data[val_col].clip(upper=90)
     return data
 
-
 def percent_as_numeric(x: Union[str, pd.Series]) -> Union[float, pd.Series]:
     """Convert percent strings to numeric (e.g., '50%' -> 50)."""
     if isinstance(x, pd.Series):
         return x.str.replace('%', '').astype(float)
     else:
         return float(str(x).replace('%', ''))
-
 
 def distribute_amount(
     data: pd.DataFrame,
@@ -376,7 +362,7 @@ def distribute_amount(
     data = data.copy()
     
     # Calculate duration in hours
-    # 🔧 FIX: Handle None values to prevent division errors
+    # Handle None values to prevent division errors
     time_diff = pd.to_datetime(data[end_col], errors='coerce') - pd.to_datetime(data[index_col], errors='coerce')
     duration = time_diff.dt.total_seconds() / 3600
     
@@ -384,12 +370,11 @@ def distribute_amount(
     duration = duration.replace(0, 1)
     
     # Calculate rate
-    # 🔧 FIX: Handle None values to prevent division errors
+    # Handle None values to prevent division errors
     data[val_col] = pd.to_numeric(data[val_col], errors='coerce') / duration
     data[unit_col] = data[unit_col] + '/hr'
     
     return data
-
 
 def aggregate_fun(agg_func: str, new_unit: str) -> Callable:
     """Create aggregation callback.
@@ -418,7 +403,6 @@ def aggregate_fun(agg_func: str, new_unit: str) -> Callable:
         return result
     
     return callback
-
 
 def fwd_concept(concept_name: str) -> Callable:
     """Forward reference to another concept (R ricu fwd_concept).
@@ -461,7 +445,6 @@ def fwd_concept(concept_name: str) -> Callable:
         return data_dict[concept_name]
     
     return _fwd_callback
-
 
 def ts_to_win_tbl(
     duration_col: str = 'duration',
@@ -526,7 +509,6 @@ def ts_to_win_tbl(
         return data
     
     return _ts_to_win_callback
-
 
 def locf(max_gap: Optional[pd.Timedelta] = None) -> Callable:
     """Last observation carried forward (R ricu locf).
@@ -595,7 +577,6 @@ def locf(max_gap: Optional[pd.Timedelta] = None) -> Callable:
     
     return _locf_callback
 
-
 def locb(max_gap: Optional[pd.Timedelta] = None) -> Callable:
     """Last observation carried backward (R ricu locb).
     
@@ -658,7 +639,6 @@ def locb(max_gap: Optional[pd.Timedelta] = None) -> Callable:
     
     return _locb_callback
 
-
 def vent_flag(
     data: pd.DataFrame,
     val_col: str = "value",
@@ -686,7 +666,6 @@ def vent_flag(
                 frame[col] = data.loc[frame.index, col]
 
     return frame
-
 
 def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
     """Create callback equivalent to R's eicu_duration(gap_length)."""
@@ -733,7 +712,7 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
                 raise ValueError("Cannot determine time column for eICU duration callback")
             index_var = time_cols[0]
 
-        # 🔧 FIX: Handle numeric offset vs datetime properly
+        # Handle numeric offset vs datetime properly
         is_offset = 'offset' in index_var.lower()
         if is_offset:
             # eICU offset is numeric (minutes from ICU admission)
@@ -773,7 +752,7 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
 
         # Calculate duration per group (R calc_dur logic)
         # Following R ricu's calc_dur implementation
-        # 🔧 FIX: Simplify to match R ricu exactly
+        # Simplify to match R ricu exactly
         
         # Make sure all ID columns actually exist in grouped dataframe
         valid_id_cols = [col for col in id_cols if col in grouped.columns]
@@ -816,7 +795,6 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
         return result
 
     return _callback
-
 
 def mimic_rate_mv(
     data: pd.DataFrame,
@@ -898,7 +876,6 @@ def mimic_rate_mv(
     else:
         # No expansion needed
         return data
-
 
 def calc_dur(
     data: pd.DataFrame,
@@ -1099,7 +1076,6 @@ def calc_dur(
     
     return result
 
-
 def mimic_dur_inmv(
     data: pd.DataFrame,
     val_col: str = 'value',
@@ -1161,7 +1137,6 @@ def mimic_dur_inmv(
     
     return result
 
-
 def mimic_dur_incv(
     data: pd.DataFrame,
     val_col: str = 'value',
@@ -1218,8 +1193,6 @@ def mimic_dur_incv(
             result[val_col] = pd.to_timedelta(result[val_col], errors='coerce')
     
     return result
-
-
 
 def create_intervals(
     data: pd.DataFrame,
@@ -1300,7 +1273,6 @@ def create_intervals(
     
     return data
 
-
 def expand_intervals(
     data: pd.DataFrame,
     keep_vars: Optional[list] = None,
@@ -1369,7 +1341,6 @@ def expand_intervals(
     
     return expanded
 
-
 def mimic_rate_cv(
     data: pd.DataFrame,
     val_col: str = 'value',
@@ -1400,7 +1371,6 @@ def mimic_rate_cv(
     
     # Call expand_intervals
     return expand_intervals(data, keep_vars=keep_vars, grp_var=grp_var)
-
 
 def hirid_vent(
     data: pd.DataFrame,
@@ -1453,7 +1423,6 @@ def hirid_vent(
     data = data.groupby(id_cols, group_keys=False).apply(calc_duration, include_groups=True)
     
     return data
-
 
 def grp_amount_to_rate(
     grp_var: str,
@@ -1539,7 +1508,6 @@ def grp_amount_to_rate(
     
     return callback
 
-
 def aumc_drug(
     data: pd.DataFrame,
     val_col: str = 'value',
@@ -1573,7 +1541,6 @@ def aumc_drug(
     
     return data
 
-
 def ts_to_win_tbl(win_dur: pd.Timedelta) -> Callable:
     """Create callback to convert time series to windowed table (R ricu ts_to_win_tbl).
     
@@ -1595,7 +1562,6 @@ def ts_to_win_tbl(win_dur: pd.Timedelta) -> Callable:
         return data
     
     return callback
-
 
 def fwd_concept(concept_name: str) -> Callable:
     """Create callback that forwards to another concept (R ricu fwd_concept).
@@ -1641,7 +1607,6 @@ def fwd_concept(concept_name: str) -> Callable:
         return concept_data
     
     return callback
-
 
 def dex_to_10(id_list: list, factor_list: list) -> Callable:
     """Create callback to convert dexmedetomidine concentrations (R ricu dex_to_10).
@@ -1699,7 +1664,6 @@ def dex_to_10(id_list: list, factor_list: list) -> Callable:
         return data
     
     return callback
-
 
 def mimv_rate(
     data: pd.DataFrame,
@@ -1761,7 +1725,6 @@ def mimv_rate(
     
     return data
 
-
 def grp_amount_to_rate(
     grp_var: str,
     unit_val: Union[str, dict],
@@ -1785,7 +1748,6 @@ def grp_amount_to_rate(
         grp_var=grp_var,
         filt_fun=filt_fun
     )
-
 
 def grp_mount_to_rate(
     min_dur: pd.Timedelta,
@@ -1924,7 +1886,6 @@ def grp_mount_to_rate(
     
     return callback
 
-
 def padded_capped_diff(
     times: pd.Series,
     padding: pd.Timedelta,
@@ -1962,7 +1923,6 @@ def padded_capped_diff(
     
     return diffs
 
-
 # ============================================================================
 # Additional callback utilities from R ricu
 # ============================================================================
@@ -1998,7 +1958,6 @@ def combine_date_time(
     data.loc[mask, index_var] = data.loc[mask, index_var] + date_shift
     
     return data
-
 
 def add_concept(
     data: pd.DataFrame,
@@ -2081,7 +2040,6 @@ def add_concept(
     
     return result
 
-
 def add_weight(
     data: pd.DataFrame,
     env,
@@ -2128,7 +2086,6 @@ def add_weight(
         # Weight doesn't exist, add it
         return add_concept(data, env, 'weight', var_name=var_name, **kwargs)
 
-
 def blood_cell_ratio(
     data: pd.DataFrame,
     val_col: str = 'value',
@@ -2172,7 +2129,6 @@ def blood_cell_ratio(
     
     return data
 
-
 def silent_as_numeric(x: Union[pd.Series, np.ndarray, Any]) -> Union[pd.Series, np.ndarray, float]:
     """Convert to numeric, suppressing warnings (R ricu silent_as_num).
     
@@ -2191,7 +2147,6 @@ def silent_as_numeric(x: Union[pd.Series, np.ndarray, Any]) -> Union[pd.Series, 
             return float(x)
         except (ValueError, TypeError):
             return np.nan
-
 
 def eicu_extract_unit(x: Union[str, pd.Series]) -> Union[str, pd.Series]:
     """Extract unit from eICU medication strings (R ricu eicu_extract_unit).
@@ -2224,7 +2179,6 @@ def eicu_extract_unit(x: Union[str, pd.Series]) -> Union[str, pd.Series]:
             return unit if unit else np.nan
         return np.nan
 
-
 def sub_trans(regex: str, repl: str) -> Callable:
     """Create a substitution transform function (R ricu sub_trans).
     
@@ -2250,7 +2204,6 @@ def sub_trans(regex: str, repl: str) -> Callable:
             return re.sub(regex, repl, str(x), flags=re.IGNORECASE)
     
     return transformer
-
 
 def get_one_unique(x: Union[pd.Series, list], na_rm: bool = False) -> Any:
     """Get single unique value or NA (R ricu get_one_unique).
@@ -2285,7 +2238,6 @@ def get_one_unique(x: Union[pd.Series, list], na_rm: bool = False) -> Any:
     else:
         return np.nan
 
-
 def units_to_unit(x: pd.Timedelta) -> str:
     """Convert timedelta to unit string (R ricu units_to_unit).
     
@@ -2316,7 +2268,6 @@ def units_to_unit(x: pd.Timedelta) -> str:
     }
     
     return unit_map.get(resolution, 'hour')
-
 
 def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
     """eICU dose rate conversion with weight normalization (R ricu eicu_rate_kg).
@@ -2393,7 +2344,7 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
             # This is a simplified version - full implementation would join tables
             frame[weight_var] = 70.0  # Default weight kg as fallback
         
-        # 🔧 FIX: Convert weight to numeric (handle empty strings in infusiondrug.patientweight)
+        # Convert weight to numeric (handle empty strings in infusiondrug.patientweight)
         if weight_var in frame.columns:
             frame[weight_var] = pd.to_numeric(frame[weight_var], errors='coerce')
         
@@ -2401,10 +2352,10 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         frame['is_per_kg'] = frame['unit_var'].str.contains('/kg/', case=False, na=False)
         
         # For non-kg rates, divide by weight and update unit
-        # 🔧 FIX: Also check weight is not NaN after numeric conversion
+        # Also check weight is not NaN after numeric conversion
         mask_non_kg = ~frame['is_per_kg'] & frame[val_var].notna() & frame[weight_var].notna()
         if mask_non_kg.any():
-            # 🔧 FIX: Convert val_var to float before division to avoid dtype mismatch warning
+            # Convert val_var to float before division to avoid dtype mismatch warning
             frame[val_var] = frame[val_var].astype(float)
             frame.loc[mask_non_kg, val_var] = frame.loc[mask_non_kg, val_var] / frame.loc[mask_non_kg, weight_var]
             frame.loc[mask_non_kg, 'unit_var'] = frame.loc[mask_non_kg, 'unit_var'].apply(
@@ -2455,7 +2406,6 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         return frame
     
     return callback
-
 
 def eicu_rate_units_callback(ml_to_mcg: float, mcg_to_units: float) -> Callable:
     """Convert eICU medication rates to units/min (R ricu eicu_rate_units).
@@ -2543,7 +2493,6 @@ def eicu_rate_units_callback(ml_to_mcg: float, mcg_to_units: float) -> Callable:
 
     return callback
 
-
 def _infer_interval_from_series(series: pd.Series) -> pd.Timedelta:
     """Best-effort detection of interval spacing for offset/time columns."""
 
@@ -2575,7 +2524,6 @@ def _infer_interval_from_series(series: pd.Series) -> pd.Timedelta:
             return pd.to_timedelta(minutes, unit="m")
 
     return pd.Timedelta(hours=1)
-
 
 def eicu_dex_med(
     frame: pd.DataFrame,
@@ -2630,7 +2578,6 @@ def eicu_dex_med(
 
     return work
 
-
 def eicu_dex_inf(
     frame: pd.DataFrame,
     val_var: str,
@@ -2662,10 +2609,8 @@ def eicu_dex_inf(
 
     return work
 
-
 def _aumc_get_id_columns(df: pd.DataFrame) -> List[str]:
     return [col for col in df.columns if isinstance(col, str) and col.lower().endswith('id')]
-
 
 def _aumc_normalize_mass_units(df: pd.DataFrame, unit_col: Optional[str], val_col: str) -> None:
     if not unit_col:
@@ -2695,7 +2640,6 @@ def _aumc_normalize_mass_units(df: pd.DataFrame, unit_col: Optional[str], val_co
     if mask_mcg.any():
         df.loc[mask_mcg, unit_col] = 'mcg'
 
-
 def _aumc_normalize_rate_units(df: pd.DataFrame, rate_uom_col: Optional[str], val_col: str, default: str = 'min') -> Optional[str]:
     if not rate_uom_col:
         return None
@@ -2723,7 +2667,6 @@ def _aumc_normalize_rate_units(df: pd.DataFrame, rate_uom_col: Optional[str], va
 
     df[rate_uom_col] = df[rate_uom_col].replace({'nan': 'min', 'none': 'min'}).fillna('min')
     return rate_uom_col
-
 
 def aumc_rate_kg(
     frame: pd.DataFrame,
@@ -2777,7 +2720,7 @@ def aumc_rate_kg(
             df[unit_col] = df[unit_col] + '/kg/' + df[rate_unit_col]
     elif unit_col and unit_col in df.columns:
         df[unit_col] = df[unit_col] + '/kg/min'
-    # 🔧 FIX: AUMC时间单位处理
+    # AUMC时间单位处理
     # datasource.py已经把AUMC时间从毫秒转换为分钟(numeric)
     # 这里应该转换为小时(numeric),而不是datetime,以保持与其他数据库的一致性
     if index_col and index_col in df.columns and pd.api.types.is_numeric_dtype(df[index_col]):
@@ -2789,7 +2732,7 @@ def aumc_rate_kg(
     id_cols = _aumc_get_id_columns(df)
     result_cols = list(dict.fromkeys(id_cols))
     
-    # 🔧 CRITICAL FIX: 确保时间列总是包含在返回中(即使为空或不存在)
+    # 确保时间列总是包含在返回中(即使为空或不存在)
     # aumc_rate_kg回调在R中调用expand(),保留index_var(时间列)
     # Python中必须显式保留,否则vaso60回调会失败(rate_df没有时间列,dur_df有)
     if index_col:
@@ -2806,7 +2749,6 @@ def aumc_rate_kg(
         result_cols.append(rate_unit_col)
 
     return df[result_cols].dropna(subset=[concept_name])
-
 
 def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
     def callback(
@@ -2881,7 +2823,6 @@ def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
         return df[result_cols].dropna(subset=[concept_name])
 
     return callback
-
 
 def aumc_dur(
     frame: pd.DataFrame,

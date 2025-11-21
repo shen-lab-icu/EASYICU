@@ -77,9 +77,7 @@ MINIMAL_COLUMNS_MAP = {
 # 性能优化开关 - 如果遇到问题可以禁用
 USE_MINIMAL_COLUMNS = True
 
-
 logger = logging.getLogger(__name__)
-
 
 class ConceptLoader:
     """概念加载器 - 复刻 R ricu 的 load_concepts"""
@@ -1114,7 +1112,6 @@ class ConceptLoader:
                 return col
         
         return None
-
 
 def load_concepts(
     concepts: Union[str, List[str]],

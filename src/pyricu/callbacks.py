@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from .table import ICUTable
-
+from .common_utils import SeriesUtils
 
 def _standardize_fio2_units(fio2_df: pd.DataFrame, database: str) -> pd.DataFrame:
     """将FiO2标准化为百分比形式（0-100）以实现跨数据库兼容性
@@ -33,7 +33,7 @@ def _standardize_fio2_units(fio2_df: pd.DataFrame, database: str) -> pd.DataFram
     if len(values) == 0:
         return fio2_df
 
-    # 🔧 基于分析结果的数据库特定转换
+    # 基于分析结果的数据库特定转换
     if database == 'miiv':
         # MIMIC-IV分析显示pafi计算准确，推断不需要转换
         # 但为了安全起见，添加自动检测
@@ -57,24 +57,13 @@ def _standardize_fio2_units(fio2_df: pd.DataFrame, database: str) -> pd.DataFram
 
     return fio2_df
 
-
 def _is_true_safe(series: pd.Series) -> pd.Series:
     """Safely convert series to boolean, handling different dtypes.
 
     Replicates R's is_true: non-NA and True.
     Handles Float64 dtype which can't use fillna(False).
     """
-    try:
-        # Use unified implementation if available
-        from .common_utils import SeriesUtils
-        return SeriesUtils.is_true(series)
-    except ImportError:
-        # Fallback to original implementation
-        if pd.api.types.is_float_dtype(series):
-            return series.notna() & (series != 0)
-        else:
-            return series.fillna(False).astype(bool)
-
+    return SeriesUtils.is_true(series)
 
 def sofa_score(
     data_dict: Dict[str, pd.DataFrame],
@@ -203,7 +192,6 @@ def sofa_score(
             
     return slid_result[final_cols]
 
-
 def sofa_resp(pafi: pd.Series, vent_ind: Optional[pd.Series] = None) -> pd.Series:
     """Calculate respiratory SOFA component.
 
@@ -226,30 +214,23 @@ def sofa_resp(pafi: pd.Series, vent_ind: Optional[pd.Series] = None) -> pd.Serie
     Returns:
         Series with respiratory SOFA scores
     """
-    def is_true(series):
-        """Replicate R's is_true: non-NA and True"""
-        try:
-            from .common_utils import SeriesUtils
-            return SeriesUtils.is_true(series)
-        except ImportError:
-            return series.fillna(False).astype(bool)
 
     pafi_num = pd.to_numeric(pafi, errors="coerce")
     idx = pafi_num.index
     if vent_ind is not None:
-        vent_mask = is_true(vent_ind.reindex(idx, copy=False))
+        vent_mask = SeriesUtils.is_true(vent_ind.reindex(idx, copy=False))
     else:
         vent_mask = pd.Series(False, index=idx)
 
     adj = pafi_num.copy()
-    mask = is_true(adj < 200) & (~vent_mask)
+    mask = SeriesUtils.is_true(adj < 200) & (~vent_mask)
     adj[mask] = 200
 
     score = pd.Series(0, index=idx, dtype=float)
-    mask_100 = is_true(adj < 100)
-    mask_200 = is_true(adj < 200) & ~mask_100
-    mask_300 = is_true(adj < 300) & ~mask_200 & ~mask_100
-    mask_400 = is_true(adj < 400) & ~mask_300 & ~mask_200 & ~mask_100
+    mask_100 = SeriesUtils.is_true(adj < 100)
+    mask_200 = SeriesUtils.is_true(adj < 200) & ~mask_100
+    mask_300 = SeriesUtils.is_true(adj < 300) & ~mask_200 & ~mask_100
+    mask_400 = SeriesUtils.is_true(adj < 400) & ~mask_300 & ~mask_200 & ~mask_100
 
     score[mask_100] = 4
     score[mask_200] = 3
@@ -261,7 +242,6 @@ def sofa_resp(pafi: pd.Series, vent_ind: Optional[pd.Series] = None) -> pd.Serie
     score[missing_mask] = np.nan
 
     return score
-
 
 def sofa_coag(plt: pd.Series) -> pd.Series:
     """Calculate coagulation SOFA component.
@@ -310,7 +290,6 @@ def sofa_coag(plt: pd.Series) -> pd.Series:
     
     return score
 
-
 def sofa_liver(bili: pd.Series) -> pd.Series:
     """Calculate liver SOFA component.
     
@@ -353,7 +332,6 @@ def sofa_liver(bili: pd.Series) -> pd.Series:
     score[valid_mask & (bili >= 12.0)] = 4
     
     return score
-
 
 def sofa_cardio(
     map: pd.Series,
@@ -402,30 +380,24 @@ def sofa_cardio(
     dobu = dobu60.fillna(0) if dobu60 is not None else pd.Series(0, index=map.index)
     epi = epi60.fillna(0) if epi60 is not None else pd.Series(0, index=map.index)
     
-    # Convert to boolean masks for proper handling of NaN
-    def is_true(series):
-        """Replicate R's is_true: non-NA and True"""
-        return series.fillna(False).astype(bool)
-    
     # Chain of fifelse (if-else) with priority from highest to lowest
     # Score 4: highest priority
     score = pd.Series(0, index=map.index, dtype=int)
-    score[is_true((dopa > 15) | (epi > 0.1) | (norepi > 0.1))] = 4
+    score[SeriesUtils.is_true((dopa > 15) | (epi > 0.1) | (norepi > 0.1))] = 4
     
     # Score 3: second priority (only if not already 4)
-    mask3 = is_true((dopa > 5) | ((epi > 0) & (epi <= 0.1)) | ((norepi > 0) & (norepi <= 0.1)))
+    mask3 = SeriesUtils.is_true((dopa > 5) | ((epi > 0) & (epi <= 0.1)) | ((norepi > 0) & (norepi <= 0.1)))
     score[mask3 & (score != 4)] = 3
     
     # Score 2: third priority (only if not already 3 or 4)
-    mask2 = is_true(((dopa > 0) & (dopa <= 5)) | (dobu > 0))
+    mask2 = SeriesUtils.is_true(((dopa > 0) & (dopa <= 5)) | (dobu > 0))
     score[mask2 & (score < 3)] = 2
     
     # Score 1: lowest priority (only if not already 2, 3, or 4)
-    mask1 = is_true(map < 70)
+    mask1 = SeriesUtils.is_true(map < 70)
     score[mask1 & (score < 2)] = 1
     
     return score
-
 
 def sofa_cns(gcs: pd.Series) -> pd.Series:
     """Calculate CNS SOFA component.
@@ -466,7 +438,6 @@ def sofa_cns(gcs: pd.Series) -> pd.Series:
     
     return score
 
-
 def sofa_renal(
     crea: pd.Series,
     urine24: Optional[pd.Series] = None,
@@ -492,9 +463,6 @@ def sofa_renal(
     Returns:
         Series with renal SOFA scores (0-4, with 0 as baseline when data exists)
     """
-    def is_true(series):
-        """Replicate R's is_true: non-NA and True"""
-        return series.fillna(False).astype(bool)
     
     # Convert to numeric, preserving NaN
     crea_num = pd.to_numeric(crea, errors="coerce")
@@ -509,25 +477,24 @@ def sofa_renal(
     score = pd.Series(0, index=crea.index, dtype=int)
 
     # Score 1: crea >= 1.2 & crea < 2 (only based on crea)
-    mask1 = is_true((crea_num >= 1.2) & (crea_num < 2))
+    mask1 = SeriesUtils.is_true((crea_num >= 1.2) & (crea_num < 2))
     score[mask1] = 1
     
     # Score 2: crea >= 2 & crea < 3.5 (only based on crea)
-    mask2 = is_true((crea_num >= 2) & (crea_num < 3.5))
+    mask2 = SeriesUtils.is_true((crea_num >= 2) & (crea_num < 3.5))
     score[mask2] = 2
     
     # Score 3: (crea >= 3.5 & crea < 5) OR urine24 < 500
-    mask_crea_3 = is_true((crea_num >= 3.5) & (crea_num < 5))
-    mask_uri_3 = is_true(uri_num < 500)
+    mask_crea_3 = SeriesUtils.is_true((crea_num >= 3.5) & (crea_num < 5))
+    mask_uri_3 = SeriesUtils.is_true(uri_num < 500)
     score[mask_crea_3 | mask_uri_3] = 3
     
     # Score 4: crea >= 5 OR urine24 < 200
-    mask_crea_4 = is_true(crea_num >= 5)
-    mask_uri_4 = is_true(uri_num < 200)
+    mask_crea_4 = SeriesUtils.is_true(crea_num >= 5)
+    mask_uri_4 = SeriesUtils.is_true(uri_num < 200)
     score[mask_crea_4 | mask_uri_4] = 4
     
     return score
-
 
 def sofa2_renal(
     crea: pd.Series,
@@ -621,7 +588,6 @@ def sofa2_renal(
     
     return score
 
-
 def sofa2_resp(
     pafi: pd.Series,
     spo2: Optional[pd.Series] = None,
@@ -705,7 +671,6 @@ def sofa2_resp(
     
     return score
 
-
 def sofa2_coag(plt: pd.Series) -> pd.Series:
     """Calculate SOFA-2 coagulation component.
     
@@ -732,7 +697,6 @@ def sofa2_coag(plt: pd.Series) -> pd.Series:
     score[valid & (p <= 50)] = 4
     
     return score
-
 
 def sofa2_liver(bili: pd.Series) -> pd.Series:
     """Calculate SOFA-2 liver component.
@@ -761,7 +725,6 @@ def sofa2_liver(bili: pd.Series) -> pd.Series:
     score[valid & (b > 12.0)] = 4
     
     return score
-
 
 def sofa2_cardio(
     map: pd.Series,
@@ -839,7 +802,6 @@ def sofa2_cardio(
     
     return score
 
-
 def sofa2_cns(
     gcs: pd.Series,
     delirium_tx: Optional[pd.Series] = None,
@@ -889,7 +851,6 @@ def sofa2_cns(
     
     return score
 
-
 def sirs_score(
     temp: pd.Series,
     hr: pd.Series,
@@ -938,7 +899,6 @@ def sirs_score(
     
     return score
 
-
 def qsofa_score(
     sbp: pd.Series,
     resp: pd.Series,
@@ -966,7 +926,6 @@ def qsofa_score(
     score[gcs < 15] += 1
     
     return score
-
 
 def apache_ii_score(
     age: pd.Series,
@@ -1028,7 +987,6 @@ def apache_ii_score(
     # This is a placeholder for demonstration
     
     return score.astype(int)
-
 
 def news_score(
     resp: pd.Series,
@@ -1148,7 +1106,6 @@ def news_score(
     
     return news_total
 
-
 def mews_score(
     sbp: pd.Series,
     hr: pd.Series,
@@ -1241,7 +1198,6 @@ def mews_score(
     
     return mews_total
 
-
 def ts_to_win_tbl(win_dur):
     """
     Convert time series table to window table by adding duration variable.
@@ -1263,7 +1219,6 @@ def ts_to_win_tbl(win_dur):
         return result
     
     return callback
-
 
 def pafi(
     po2: pd.DataFrame,
@@ -1315,13 +1270,13 @@ def pafi(
     po2_df = po2_df.rename(columns={po2_val_col: 'po2'})
     fio2_df = fio2_df.rename(columns={fio2_val_col: 'fio2'})
 
-    # 🔧 新增：数据库自适应的FiO2单位标准化
+    # 新增：数据库自适应的FiO2单位标准化
     if database is not None:
         fio2_df = _standardize_fio2_units(fio2_df, database)
 
     # Merge based on mode
     if mode == "match_vals":
-        # 🔧 FIX: 使用 left join 而不是 inner join，保留所有 po2 数据
+        # 使用 left join 而不是 inner join，保留所有 po2 数据
         # 这样即使 fio2 缺失，也能在后面填充为 21（室内空气）
         result = pd.merge(po2_df, fio2_df, on=id_cols + [time_col], how='left')
     
@@ -1372,7 +1327,6 @@ def pafi(
     
     return result
 
-
 def safi(
     o2sat: pd.DataFrame,
     fio2: pd.DataFrame,
@@ -1422,13 +1376,13 @@ def safi(
     o2sat_df = o2sat_df.rename(columns={o2sat_val_col: 'o2sat'})
     fio2_df = fio2_df.rename(columns={fio2_val_col: 'fio2'})
 
-    # 🔧 新增：数据库自适应的FiO2单位标准化
+    # 新增：数据库自适应的FiO2单位标准化
     if database is not None:
         fio2_df = _standardize_fio2_units(fio2_df, database)
 
     # Merge based on mode
     if mode == "match_vals":
-        # 🔧 FIX: 使用 left join 而不是 inner join，保留所有 o2sat 数据
+        # 使用 left join 而不是 inner join，保留所有 o2sat 数据
         # 这样即使 fio2 缺失，也能在后面填充为 21（室内空气）
         result = pd.merge(o2sat_df, fio2_df, on=id_cols + [time_col], how='left')
     
@@ -1479,7 +1433,6 @@ def safi(
     
     return result
 
-
 def uo_6h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = None) -> pd.DataFrame:
     """Calculate 6-hour average urine output in mL/kg/h.
     
@@ -1497,7 +1450,6 @@ def uo_6h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = No
         DataFrame with 'uo_6h' column (mL/kg/h)
     """
     return _urine_window_avg(urine, weight, window_hours=6, min_hours=3, interval=interval)
-
 
 def uo_12h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = None) -> pd.DataFrame:
     """Calculate 12-hour average urine output in mL/kg/h.
@@ -1519,7 +1471,6 @@ def uo_12h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = N
     """
     return _urine_window_avg(urine, weight, window_hours=12, min_hours=6, interval=interval)
 
-
 def uo_24h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = None) -> pd.DataFrame:
     """Calculate 24-hour average urine output in mL/kg/h.
     
@@ -1537,7 +1488,6 @@ def uo_24h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = N
         DataFrame with 'uo_24h' column (mL/kg/h)
     """
     return _urine_window_avg(urine, weight, window_hours=24, min_hours=12, interval=interval)
-
 
 def _urine_window_avg(
     urine: pd.DataFrame,
@@ -1561,7 +1511,7 @@ def _urine_window_avg(
     # Determine ID and time columns
     id_cols = [col for col in urine.columns if col.endswith('_id') or col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']]
     
-    # 🔧 FIX: 不同数据库使用不同的时间列名
+    # 不同数据库使用不同的时间列名
     if 'charttime' in urine.columns:
         time_col = 'charttime'
     elif 'measuredat' in urine.columns:
@@ -1590,7 +1540,7 @@ def _urine_window_avg(
     
     # Merge urine and weight data
     if id_cols:
-        # 🔧 FIX: 检查weight表是否有相同的ID列
+        # 检查weight表是否有相同的ID列
         # 对于AUMC，urine有admissionid但weight只有patientid
         # 需要先join admissions表获取admissionid->patientid映射
         common_ids = [col for col in id_cols if col in weight.columns]
@@ -1692,7 +1642,6 @@ def _urine_window_avg(
     result = result[[col for col in keep_cols if col in result.columns]]
 
     return result
-
 
 def miiv_icu_patients_filter(data: Union[IdTbl, pd.DataFrame], **kwargs) -> Union[IdTbl, pd.DataFrame]:
     """Filter MIMIC-IV patients data to only include ICU patients.

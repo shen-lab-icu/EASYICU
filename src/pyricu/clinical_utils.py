@@ -9,7 +9,6 @@ from typing import Union, Optional
 import pandas as pd
 import numpy as np
 
-
 def avpu(x: Union[pd.Series, str, int]) -> Union[pd.Series, str]:
     """AVPU consciousness level assessment (R ricu avpu).
     
@@ -39,7 +38,6 @@ def avpu(x: Union[pd.Series, str, int]) -> Union[pd.Series, str]:
     
     return _avpu_map(x)
 
-
 def _avpu_map(val) -> Optional[str]:
     """Map value to AVPU."""
     if pd.isna(val):
@@ -57,7 +55,6 @@ def _avpu_map(val) -> Optional[str]:
         return 'U'
     
     return None
-
 
 def bmi(weight_kg: Union[float, pd.Series], height_m: Union[float, pd.Series]) -> Union[float, pd.Series]:
     """Calculate Body Mass Index (R ricu bmi).
@@ -81,7 +78,6 @@ def bmi(weight_kg: Union[float, pd.Series], height_m: Union[float, pd.Series]) -
         return weight_kg / (height_m ** 2)
     
     return weight_kg / (height_m ** 2)
-
 
 def gcs(eye: Optional[Union[int, pd.Series]] = None,
         verbal: Optional[Union[int, pd.Series]] = None,
@@ -123,7 +119,6 @@ def gcs(eye: Optional[Union[int, pd.Series]] = None,
     
     return eye + verbal + motor
 
-
 def norepi_equiv(rate: Union[float, pd.Series], 
                  drug: Optional[Union[str, pd.Series]] = None) -> Union[float, pd.Series]:
     """Norepinephrine equivalent calculation (R ricu norepi_equiv).
@@ -163,7 +158,6 @@ def norepi_equiv(rate: Union[float, pd.Series],
     
     factor = conversion_factors.get(str(drug).lower(), 1.0)
     return rate * factor
-
 
 def supp_o2(o2_flow: Optional[Union[float, pd.Series]] = None,
             o2_device: Optional[Union[str, pd.Series]] = None) -> Union[bool, pd.Series]:
@@ -212,7 +206,6 @@ def supp_o2(o2_flow: Optional[Union[float, pd.Series]] = None,
     
     return result
 
-
 def urine24(urine_vol: Union[float, pd.Series],
             duration_hours: Optional[Union[float, pd.Series]] = None) -> Union[float, pd.Series]:
     """Calculate 24-hour urine output (R ricu urine24).
@@ -238,7 +231,6 @@ def urine24(urine_vol: Union[float, pd.Series],
     
     return urine_vol * (24.0 / duration_hours)
 
-
 def vaso60(rate: Union[float, pd.Series]) -> Union[bool, pd.Series]:
     """Vasoactive drug at 60 minutes indicator (R ricu vaso60).
     
@@ -257,7 +249,6 @@ def vaso60(rate: Union[float, pd.Series]) -> Union[bool, pd.Series]:
     
     return rate > 0 if rate is not None else False
 
-
 def vaso_ind(rate: Union[float, pd.Series]) -> Union[bool, pd.Series]:
     """Vasoactive drug indicator (R ricu vaso_ind).
     
@@ -272,7 +263,6 @@ def vaso_ind(rate: Union[float, pd.Series]) -> Union[bool, pd.Series]:
         True
     """
     return vaso60(rate)  # Same logic
-
 
 def vent_ind(vent_status: Union[bool, str, pd.Series]) -> Union[bool, pd.Series]:
     """Ventilation indicator (R ricu vent_ind).

@@ -13,7 +13,6 @@ from typing import Optional, Callable, Literal, List
 import pandas as pd
 import numpy as np
 
-
 def delta_cummin(x: pd.Series) -> pd.Series:
     """Calculate delta from cumulative minimum (R ricu delta_cummin).
     
@@ -34,7 +33,7 @@ def delta_cummin(x: pd.Series) -> pd.Series:
         >>> delta_cummin(sofa)
         # Returns: [0, 0, 3, 2, 4]  # Increase from cumulative minimum
     """
-    # 🔧 FIX: Use integer.max instead of inf to match R ricu
+    # Use integer.max instead of inf to match R ricu
     # R ricu uses .Machine$integer.max (2^31-1 = 2147483647)
     # This ensures exact compatibility with R ricu's behavior
     integer_max = 2147483647  # .Machine$integer.max in R
@@ -48,7 +47,6 @@ def delta_cummin(x: pd.Series) -> pd.Series:
     result[x.isna()] = np.nan
     
     return result
-
 
 def delta_start(x: pd.Series) -> pd.Series:
     """Calculate delta from start value (R ricu delta_start).
@@ -66,13 +64,12 @@ def delta_start(x: pd.Series) -> pd.Series:
         >>> delta_start(sofa)
         # Returns: [0, -1, 2, 1, 3]  # Increase from first value (2)
     """
-    # 🔧 FIX: Match R ricu behavior - return NaN if all values are NA
+    # Match R ricu behavior - return NaN if all values are NA
     non_na = x.dropna()
     if len(non_na) == 0:
         return pd.Series([np.nan] * len(x), index=x.index)
     first_val = non_na.iloc[0]
     return x - first_val
-
 
 def delta_min(x: pd.Series, shifts: Optional[List[int]] = None) -> pd.Series:
     """Calculate delta from minimum over shifted windows (R ricu delta_min).
@@ -110,7 +107,6 @@ def delta_min(x: pd.Series, shifts: Optional[List[int]] = None) -> pd.Series:
     windowed_min = stacked.min(axis=1, skipna=True)
     
     return x - windowed_min
-
 
 def susp_inf(
     abx: pd.DataFrame,
@@ -187,7 +183,6 @@ def susp_inf(
     
     return result
 
-
 def _process_abx(
     abx: pd.DataFrame,
     id_cols: list,
@@ -219,7 +214,6 @@ def _process_abx(
     abx = abx[abx['abx'] >= min_count].copy()
     return abx
 
-
 def _process_samp(samp: pd.DataFrame, positive_only: bool) -> pd.DataFrame:
     """Process sampling data for SI detection."""
     if samp.empty:
@@ -239,7 +233,6 @@ def _process_samp(samp: pd.DataFrame, positive_only: bool) -> pd.DataFrame:
         samp = samp[samp['samp'].notna()].copy()
     
     return samp
-
 
 def _si_and(
     abx: pd.DataFrame,
@@ -354,7 +347,6 @@ def _si_and(
     result_df['susp_inf'] = True
     return result_df
 
-
 def _si_or(
     abx: pd.DataFrame,
     samp: pd.DataFrame,
@@ -368,7 +360,7 @@ def _si_or(
     - Merge abx and samp with outer join
     - Keep rows where abx OR samp is TRUE
     """
-    # 🔧 FIX: Always use merge to match R ricu behavior
+    # Always use merge to match R ricu behavior
     merge_cols = id_cols + [index_col]
     
     # Prepare data with flags
@@ -396,7 +388,6 @@ def _si_or(
     result['susp_inf'] = True
     
     return result
-
 
 def sep3(
     sofa: pd.DataFrame,
@@ -553,7 +544,6 @@ def sep3(
     
     return result_df
 
-
 # 别名函数 - 为了兼容性
 def label_sep3(
     sofa_data: pd.DataFrame,
@@ -595,14 +585,12 @@ def label_sep3(
         **kwargs
     )
 
-
 def _prepare_series(df: pd.DataFrame, required_cols: List[str], label: str) -> pd.DataFrame:
     """Ensure required columns exist and return a copy containing them."""
     missing = [col for col in required_cols if col not in df.columns]
     if missing:
         raise ValueError(f"{label} 缺少必要列: {missing}")
     return df[required_cols].copy()
-
 
 def compute_sepsis3_onset(
     sofa_df: pd.DataFrame,
@@ -674,7 +662,6 @@ def compute_sepsis3_onset(
         columns.append('sep3')
 
     return renamed[columns]
-
 
 def compare_sepsis_onsets(
     sofa1_onset: pd.DataFrame,

@@ -7,7 +7,6 @@ import pandas as pd
 import numpy as np
 from datetime import timedelta
 
-
 def rename_cols(
     df: pd.DataFrame,
     new: Union[Dict[str, str], List[str], Callable],
@@ -48,7 +47,6 @@ def rename_cols(
     
     return df.rename(columns=new_names)
 
-
 def rm_cols(
     df: pd.DataFrame,
     cols: Union[str, List[str]],
@@ -78,7 +76,6 @@ def rm_cols(
     
     return df.drop(columns=cols, errors='ignore' if skip_absent else 'raise')
 
-
 def rm_na(
     df: pd.DataFrame,
     cols: Optional[Union[str, List[str]]] = None,
@@ -106,7 +103,6 @@ def rm_na(
     else:  # mode == 'any'
         # 任何指定列是 NA 就删除
         return df.dropna(subset=cols)
-
 
 def is_sorted(
     df: pd.DataFrame,
@@ -136,7 +132,6 @@ def is_sorted(
     sorted_df = df[by].sort_values(by=by, ascending=ascending)
     return df[by].equals(sorted_df)
 
-
 def sort_by(
     df: pd.DataFrame,
     by: Union[str, List[str]],
@@ -164,7 +159,6 @@ def sort_by(
     else:
         return df.sort_values(by=by, ascending=ascending)
 
-
 def unique_rows(
     df: pd.DataFrame,
     by: Optional[Union[str, List[str]]] = None,
@@ -188,7 +182,6 @@ def unique_rows(
             by = [by]
         return df.drop_duplicates(subset=by, keep=keep)
 
-
 def is_unique(
     df: pd.DataFrame,
     by: Optional[Union[str, List[str]]] = None
@@ -209,7 +202,6 @@ def is_unique(
         if isinstance(by, str):
             by = [by]
         return not df.duplicated(subset=by).any()
-
 
 def aggregate_by(
     df: pd.DataFrame,
@@ -237,7 +229,6 @@ def aggregate_by(
         agg_dict = {col: agg_func for col in df.columns if col not in by}
     
     return df.groupby(by, as_index=False).agg(agg_dict)
-
 
 def dt_gforce(
     df: pd.DataFrame,
@@ -299,7 +290,6 @@ def dt_gforce(
     
     return result
 
-
 def replace_na(
     df: pd.DataFrame,
     value: Any = None,
@@ -338,7 +328,6 @@ def replace_na(
     
     return df
 
-
 def change_interval(
     df: pd.DataFrame,
     new_interval: timedelta,
@@ -368,7 +357,6 @@ def change_interval(
     df[time_col] = round_to_interval(df[time_col], new_interval)
     
     return df
-
 
 def expand_window(
     df: pd.DataFrame,
@@ -427,7 +415,6 @@ def expand_window(
             results.append(new_row)
     
     return pd.DataFrame(results)
-
 
 # ============================================================================
 # ID System Conversion Functions (R ricu change_id, upgrade_id, downgrade_id)
@@ -498,7 +485,6 @@ def change_id(
         # 降级：多个 src_id 对应一个 target_id
         return downgrade_id(df, target_id, id_map, src_id, time_cols, keep_old_id, by_ref=True)
 
-
 def upgrade_id(
     df: pd.DataFrame,
     target_id: str,
@@ -562,7 +548,6 @@ def upgrade_id(
         df = df.drop(columns=[src_id])
     
     return df
-
 
 def downgrade_id(
     df: pd.DataFrame,
@@ -628,7 +613,6 @@ def downgrade_id(
     
     return df
 
-
 def id_map_helper(
     src_config,
     from_id: str,
@@ -669,7 +653,6 @@ def id_map_helper(
     except Exception as e:
         raise ValueError(f"Cannot create ID map from {from_id} to {to_id}: {e}")
 
-
 # ============================================================================
 # Time adjustment functions for ID changes
 # ============================================================================
@@ -709,7 +692,6 @@ def adjust_time_for_id_change(
     
     return df
 
-
 def set_id_var(
     df: pd.DataFrame,
     id_var: Union[str, List[str]],
@@ -739,7 +721,6 @@ def set_id_var(
     
     return df
 
-
 def get_id_var(df: pd.DataFrame) -> Optional[Union[str, List[str]]]:
     """
     获取 ID 变量 - 对应 R ricu id_vars
@@ -751,7 +732,6 @@ def get_id_var(df: pd.DataFrame) -> Optional[Union[str, List[str]]]:
         ID 列名（单个或列表）
     """
     return df.attrs.get('id_vars', None)
-
 
 def set_index_var(
     df: pd.DataFrame,
@@ -776,7 +756,6 @@ def set_index_var(
     
     return df
 
-
 def get_index_var(df: pd.DataFrame) -> Optional[str]:
     """
     获取索引变量 - 对应 R ricu index_var
@@ -788,7 +767,6 @@ def get_index_var(df: pd.DataFrame) -> Optional[str]:
         索引列名
     """
     return df.attrs.get('index_var', None)
-
 
 def meta_vars(df: pd.DataFrame) -> List[str]:
     """
@@ -815,7 +793,6 @@ def meta_vars(df: pd.DataFrame) -> List[str]:
     
     return vars_list
 
-
 def data_vars(df: pd.DataFrame) -> List[str]:
     """
     获取数据变量（非元数据列）- 对应 R ricu data_vars
@@ -828,7 +805,6 @@ def data_vars(df: pd.DataFrame) -> List[str]:
     """
     meta = meta_vars(df)
     return [col for col in df.columns if col not in meta]
-
 
 def time_vars(df: pd.DataFrame) -> List[str]:
     """

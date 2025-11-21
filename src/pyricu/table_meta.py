@@ -12,7 +12,6 @@ import pandas as pd
 from .table import IdTbl, TsTbl, WinTbl, ICUTable, id_vars, index_var, dur_var, meta_vars, data_vars
 from .assertions import assert_that, is_string
 
-
 def id_var(x: Union[IdTbl, TsTbl, WinTbl, ICUTable]) -> str:
     """Get single ID variable name (R ricu id_var).
     
@@ -34,7 +33,6 @@ def id_var(x: Union[IdTbl, TsTbl, WinTbl, ICUTable]) -> str:
     assert_that(is_string(res), msg="Multiple ID variables exist, use id_vars() instead")
     return res
 
-
 def id_col(x: Union[IdTbl, TsTbl, WinTbl, ICUTable]) -> pd.Series:
     """Get single ID column as Series (R ricu id_col).
     
@@ -52,7 +50,6 @@ def id_col(x: Union[IdTbl, TsTbl, WinTbl, ICUTable]) -> pd.Series:
         Name: id, dtype: int64
     """
     return x.data[id_var(x)]
-
 
 def index_col(x: Union[TsTbl, WinTbl]) -> pd.Series:
     """Get index column as Series (R ricu index_col).
@@ -77,7 +74,6 @@ def index_col(x: Union[TsTbl, WinTbl]) -> pd.Series:
         raise ValueError("Table has no index variable")
     return x.data[idx_var]
 
-
 def dur_col(x: WinTbl) -> pd.Series:
     """Get duration column as Series (R ricu dur_col).
     
@@ -101,7 +97,6 @@ def dur_col(x: WinTbl) -> pd.Series:
         raise ValueError("Table has no duration variable")
     return x.data[dur]
 
-
 def dur_unit(x: WinTbl) -> str:
     """Get duration unit (R ricu dur_unit).
     
@@ -121,7 +116,6 @@ def dur_unit(x: WinTbl) -> str:
             # Extract unit from timedelta
             return 'minutes'  # Default, could be improved
     return 'minutes'  # Default
-
 
 def data_var(x: Union[IdTbl, TsTbl, WinTbl, ICUTable]) -> str:
     """Get single data variable name (R ricu data_var).
@@ -144,7 +138,6 @@ def data_var(x: Union[IdTbl, TsTbl, WinTbl, ICUTable]) -> str:
     assert_that(is_string(res), msg="Multiple data variables exist, use data_vars() instead")
     return res
 
-
 def data_col(x: Union[IdTbl, TsTbl, WinTbl, ICUTable]) -> pd.Series:
     """Get single data column as Series (R ricu data_col).
     
@@ -162,7 +155,6 @@ def data_col(x: Union[IdTbl, TsTbl, WinTbl, ICUTable]) -> pd.Series:
         Name: val, dtype: int64
     """
     return x.data[data_var(x)]
-
 
 def time_unit(x: Union[TsTbl, WinTbl]) -> str:
     """Get time unit of interval (R ricu time_unit).
@@ -192,7 +184,6 @@ def time_unit(x: Union[TsTbl, WinTbl]) -> str:
             return 'seconds'
     return 'minutes'  # Default
 
-
 def time_step(x: Union[TsTbl, WinTbl]) -> float:
     """Get time step size in time_unit (R ricu time_step).
     
@@ -218,7 +209,6 @@ def time_step(x: Union[TsTbl, WinTbl]) -> float:
         else:
             return interval_obj.total_seconds()
     return 1.0  # Default
-
 
 def interval(x: Union[TsTbl, WinTbl]) -> pd.Timedelta:
     """Get time series interval (R ricu interval).
@@ -254,7 +244,6 @@ def interval(x: Union[TsTbl, WinTbl]) -> pd.Timedelta:
     # Default: 1 hour
     return pd.Timedelta(hours=1)
 
-
 def id_var_opts(x: Any) -> list[str]:
     """Get ID variable options (R ricu id_var_opts).
     
@@ -281,7 +270,6 @@ def id_var_opts(x: Any) -> list[str]:
         return id_vars(x) if isinstance(id_vars(x), list) else [id_vars(x)]
     
     return []
-
 
 def default_vars(x: Any) -> dict[str, Any]:
     """Get default variables (R ricu default_vars).

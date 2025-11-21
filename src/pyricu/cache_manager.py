@@ -14,7 +14,6 @@ from .project_config import AUTO_CLEAR_CACHE, CACHE_DIR
 
 logger = logging.getLogger(__name__)
 
-
 class CacheManager:
     """全局缓存管理器"""
 
@@ -152,10 +151,8 @@ class CacheManager:
 
         return info
 
-
 # 全局缓存管理器实例
 _cache_manager = None
-
 
 def get_cache_manager() -> CacheManager:
     """获取全局缓存管理器实例"""
@@ -163,7 +160,6 @@ def get_cache_manager() -> CacheManager:
     if _cache_manager is None:
         _cache_manager = CacheManager()
     return _cache_manager
-
 
 def auto_clear_cache_if_enabled():
     """如果启用了自动清除，则清除缓存"""
@@ -175,18 +171,15 @@ def auto_clear_cache_if_enabled():
         logger.info("ℹ️  自动缓存清除已禁用")
         return None
 
-
 def clear_pyricu_cache():
     """手动清除pyricu缓存的便捷函数"""
     cache_manager = get_cache_manager()
     return cache_manager.clear_all_cache()
 
-
 def get_cache_status():
     """获取缓存状态的便捷函数"""
     cache_manager = get_cache_manager()
     return cache_manager.get_cache_info()
-
 
 # 在模块导入时自动执行（如果启用）
 def _initialize_cache_manager():

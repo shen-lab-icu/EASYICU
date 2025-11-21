@@ -19,7 +19,6 @@ except ImportError:
         return None
 from .resources import load_data_sources
 
-
 def src_name(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv, DataEnv]) -> str:
     """Get data source name (R ricu src_name).
     
@@ -57,7 +56,6 @@ def src_name(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv, DataEnv]) ->
         pass
     
     raise TypeError(f"Cannot extract source name from {type(x)}")
-
 
 def src_prefix(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv]) -> list[str]:
     """Get data source class prefix (R ricu src_prefix).
@@ -100,7 +98,6 @@ def src_prefix(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv]) -> list[s
     
     return []
 
-
 def src_extra_cfg(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv]) -> Dict[str, Any]:
     """Get extra configuration for data source (R ricu src_extra_cfg).
     
@@ -124,7 +121,6 @@ def src_extra_cfg(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv]) -> Dic
             return {}
     
     return {}
-
 
 def src_data_avail(src: str, data_dir: Optional[Union[str, Path]] = None) -> bool:
     """Check if data source data is available (R ricu src_data_avail).
@@ -151,7 +147,6 @@ def src_data_avail(src: str, data_dir: Optional[Union[str, Path]] = None) -> boo
         return dir_exists(data_dir)
     except Exception:
         return False
-
 
 def src_tbl_avail(src: str, tbl: str, data_dir: Optional[Union[str, Path]] = None) -> bool:
     """Check if a table is available for a data source (R ricu src_tbl_avail).
@@ -197,7 +192,6 @@ def src_tbl_avail(src: str, tbl: str, data_dir: Optional[Union[str, Path]] = Non
     except Exception:
         return False
 
-
 def is_data_avail(src: str, data_dir: Optional[Union[str, Path]] = None) -> bool:
     """Check if data is available (R ricu is_data_avail).
     
@@ -211,7 +205,6 @@ def is_data_avail(src: str, data_dir: Optional[Union[str, Path]] = None) -> bool
         True if data is available, False otherwise
     """
     return src_data_avail(src, data_dir)
-
 
 def is_tbl_avail(src: str, tbl: str, data_dir: Optional[Union[str, Path]] = None) -> bool:
     """Check if a table is available (R ricu is_tbl_avail).
@@ -227,7 +220,6 @@ def is_tbl_avail(src: str, tbl: str, data_dir: Optional[Union[str, Path]] = None
         True if table is available, False otherwise
     """
     return src_tbl_avail(src, tbl, data_dir)
-
 
 def is_src_tbl(x: Any) -> bool:
     """Check if object is a source table (R ricu is_src_tbl).
