@@ -4619,21 +4619,19 @@ def _callback_vaso60(
                     continue
                 grid_ns = grid.to_numpy(dtype="datetime64[ns]")
                 sampled_list: list[float] = []
+                
+                # 🔧 FIX: Forward-fill logic - 每个时间点使用该时间点之前最近的rate值
+                # R ricu的change_interval会在整个duration内forward-fill最近的rate
                 for point in grid_ns:
-                    start_pos = np.searchsorted(times_ns, point, side="right") - 1
-                    end_boundary = point + interval_delta
-                    end_pos = np.searchsorted(times_ns, end_boundary, side="left")
-                    candidates: list[float] = []
-                    if start_pos >= 0:
-                        candidates.append(value_arr[start_pos])
-                    slice_start = max(start_pos + 1, 0)
-                    if end_pos > slice_start:
-                        candidates.extend(value_arr[slice_start:end_pos])
-                    if candidates:
-                        valid_vals = np.array(candidates, dtype=float)
-                        sampled_list.append(float(np.nanmax(valid_vals)) if np.any(np.isfinite(valid_vals)) else np.nan)
+                    # 找到该时间点之前最近的rate记录
+                    pos = np.searchsorted(times_ns, point, side="right") - 1
+                    if pos >= 0 and pos < len(value_arr):
+                        # 使用最近的rate值
+                        sampled_list.append(float(value_arr[pos]))
                     else:
+                        # 如果在第一个rate记录之前,使用NaN
                         sampled_list.append(np.nan)
+                
                 sampled = np.array(sampled_list, dtype=float)
                 frame = pd.DataFrame({rate_index_col: grid, ctx.concept_name: sampled})
                 for col in group_key_cols:
