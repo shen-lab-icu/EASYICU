@@ -444,22 +444,133 @@ class RicuPyricuComparator:
         reference_series: Optional[Dict[str, pd.DataFrame]] = None,
     ) -> Dict[str, pd.DataFrame]:
         frames: Dict[str, pd.DataFrame] = {}
-        for name in module.concepts:
-            try:
-                frame = self._load_concept_frame(name, self.test_patients or None, module)
-            except Exception as exc:
-                print(f"   ⚠️  concept {name} failed in module {module.name}: {exc}")
-                continue
-            if name == "fio2" and self._fio2_override is not None:
-                frame = self._fio2_override.copy()
-            series = self._normalize_concept_frame(frame, module, name)
-            if self._should_retry_per_patient(series, frame):
-                retry = self._reload_concept_per_patient(name, module)
-                if retry is not None:
-                    series = retry
-            if series is not None:
-                frames[name] = series
+        
+        # 🔧 强制模仿 ricu.R：一次性加载整个模块的所有概念
+        # ricu.R 使用 load_concepts(c('concept1', 'concept2', ...), interval=hours(1))
+        # 这会将所有概念 merge 到共同的时间网格上，缺失值填充为 NA
+        try:
+            # 🔧 关键修复：明确指定使用 stay_id（或相应数据库的 ID 列）
+            # 避免将 stay_id 误认为 subject_id 而加载多个 ICU stay
+            id_type_map = {
+                'miiv': 'stay_id',
+                'mimic': 'icustay_id',
+                'eicu': 'patientunitstayid',
+                'aumc': 'admissionid',
+                'hirid': 'patientid',
+            }
+            id_type = id_type_map.get(self.database, 'icustay')
+            
+            # 将 patient_ids 包装为字典格式以明确指定 ID 类型
+            patient_ids_dict = None
+            if self.test_patients:
+                patient_ids_dict = {id_type: self.test_patients}
+            
+            merged_frame = load_concepts(
+                list(module.concepts),
+                src=self.database,
+                patient_ids=patient_ids_dict,
+                data_path=str(self.data_path),
+                interval="1h" if module.time_column else None,
+                merge=True,  # 关键：merge=True 会执行 outer join
+                verbose=False,
+                _allow_missing_concept=True,
+                **self._loader_kwargs,
+            )
+            
+            # 将 merged DataFrame 拆分成单个概念的 series
+            if merged_frame is not None and not merged_frame.empty:
+                # 🔧 关键修复：批量加载（outer join）会导致 stay_id 列有大量 NA
+                # 需要先用 subject_id 填充 stay_id，再进行过滤
+                if self.test_patients and 'stay_id' in merged_frame.columns:
+                    # 先填充缺失的 stay_id（使用 subject_id 映射）
+                    if merged_frame['stay_id'].isna().any() and 'subject_id' in merged_frame.columns:
+                        lookup = self._load_icustay_times()
+                        if not lookup.empty and 'subject_id' in lookup.columns and 'stay_id' in lookup.columns:
+                            # 只映射我们关心的 stay_id
+                            target_subjects = lookup[lookup['stay_id'].isin(self.test_patients)]['subject_id'].unique()
+                            subject_to_stay = lookup[lookup['subject_id'].isin(target_subjects)][['subject_id', 'stay_id']].drop_duplicates()
+                            # 只填充NA的行
+                            na_mask = merged_frame['stay_id'].isna()
+                            if na_mask.any():
+                                merged_frame = merged_frame.merge(
+                                    subject_to_stay.rename(columns={'stay_id': 'stay_id_filled'}),
+                                    on='subject_id',
+                                    how='left'
+                                )
+                                merged_frame.loc[na_mask, 'stay_id'] = merged_frame.loc[na_mask, 'stay_id_filled']
+                                merged_frame = merged_frame.drop(columns=['stay_id_filled'], errors='ignore')
+                    
+                    # 现在进行过滤
+                    original_rows = len(merged_frame)
+                    merged_frame = merged_frame[merged_frame['stay_id'].isin(self.test_patients)]
+                    filtered_rows = len(merged_frame)
+                    # 只在过滤掉大量行时输出
+                    if original_rows != filtered_rows and (original_rows - filtered_rows > 100 or filtered_rows < original_rows * 0.5):
+                        print(f"   🔍 过滤额外的 stay_id: {original_rows} → {filtered_rows} 行")
+                
+                for name in module.concepts:
+                    if name in merged_frame.columns:
+                        # 关键修复：提取概念时，清除其他概念的辅助列（endtime, duration）
+                        concept_frame = self._extract_concept_from_merged(merged_frame, name, module)
+                        if concept_frame is not None and not concept_frame.empty:
+                            series = self._normalize_concept_frame(concept_frame, module, name)
+                            if series is not None:
+                                frames[name] = series
+        except Exception as exc:
+            # 批量加载失败是正常的（某些模块的概念无法批量合并），静默回退到单个加载
+            # print(f"   ⚠️  批量加载模块 {module.name} 失败，回退到单个加载: {exc}")
+            # 回退到原来的单个加载逻辑
+            # 🔧 关键修复：单个加载时也需要正确的 patient_ids 格式和过滤
+            patient_ids_dict = None
+            if self.test_patients:
+                patient_ids_dict = {id_type: self.test_patients}
+            
+            for name in module.concepts:
+                try:
+                    frame = self._load_concept_frame(name, patient_ids_dict, module)
+                    
+                    # 🔧 关键修复：过滤掉额外的 stay_id（处理静态概念）
+                    if self.test_patients and not frame.empty:
+                        # 如果有 stay_id 列，直接过滤
+                        if 'stay_id' in frame.columns:
+                            original_rows = len(frame)
+                            frame = frame[frame['stay_id'].isin(self.test_patients)]
+                            filtered_rows = len(frame)
+                            # 只在过滤掉大量行时输出（超过100行或超过50%）
+                            if original_rows != filtered_rows and (original_rows - filtered_rows > 100 or filtered_rows < original_rows * 0.5):
+                                print(f"   🔍 [{name}] 过滤额外的 stay_id: {original_rows} → {filtered_rows} 行")
+                        # 如果只有 subject_id，需要转换为 stay_id 再过滤
+                        elif 'subject_id' in frame.columns and 'stay_id' not in frame.columns:
+                            lookup = self._load_icustay_times()
+                            if not lookup.empty and 'subject_id' in lookup.columns and 'stay_id' in lookup.columns:
+                                original_rows = len(frame)
+                                # 先合并 stay_id
+                                frame = frame.merge(
+                                    lookup[['subject_id', 'stay_id']].drop_duplicates(),
+                                    on='subject_id',
+                                    how='left'
+                                )
+                                # 再过滤
+                                frame = frame[frame['stay_id'].isin(self.test_patients)]
+                                filtered_rows = len(frame)
+                                # 只在过滤掉大量行时输出
+                                if original_rows != filtered_rows and (original_rows - filtered_rows > 100 or filtered_rows < original_rows * 0.5):
+                                    print(f"   🔍 [{name}] 通过 subject_id→stay_id 过滤: {original_rows} → {filtered_rows} 行")
+                
+                except Exception as exc:
+                    print(f"   ⚠️  concept {name} failed in module {module.name}: {exc}")
+                    continue
+                if name == "fio2" and self._fio2_override is not None:
+                    frame = self._fio2_override.copy()
+                series = self._normalize_concept_frame(frame, module, name)
+                if self._should_retry_per_patient(series, frame):
+                    retry = self._reload_concept_per_patient(name, module)
+                    if retry is not None:
+                        series = retry
+                if series is not None:
+                    frames[name] = series
 
+        # 批量加载后不需要再次对齐，因为已经在共同的时间网格上了
         align_grid: Optional[pd.DataFrame] = None
         if module.time_column:
             if reference_grid is not None and not reference_grid.empty:
@@ -482,8 +593,14 @@ class RicuPyricuComparator:
                     df = df.dropna(subset=["id", "time"])
                     aligned = grid.merge(df, on=["id", "time"], how="left")
                     
-                    # 对于静态概念（如los_icu），用forward-fill填充所有时间点
-                    # 检测方法：如果某患者有任何非NA值，且这些值都相同，就是静态概念
+                    # 静态概念填充逻辑：
+                    # 静态概念（los_icu, death, age, sex）应该在所有时间点填充相同的值
+                    # 时间序列概念（bnd, abx等）只保留实际测量点
+                    # 判断标准：如果某患者有非NA值，且所有非NA值都相同，且这些值只在1-2个时间点出现，
+                    # 则认为是静态概念，需要填充到所有时间点
+                    static_concepts = {"los_icu", "death", "age", "sex", "bmi", "height", "weight"}
+                    is_static_concept = name in static_concepts
+                    
                     if "value" in aligned.columns and "id" in aligned.columns:
                         for patient_id in aligned["id"].unique():
                             if pd.isna(patient_id):
@@ -492,10 +609,20 @@ class RicuPyricuComparator:
                             patient_values = aligned.loc[patient_mask, "value"]
                             non_na_values = patient_values.dropna()
                             
-                            # 如果有非NA值且都相同，forward-fill
-                            if len(non_na_values) > 0 and non_na_values.nunique() == 1:
+                            # 静态概念：有值且所有值相同 → forward-fill
+                            if is_static_concept and len(non_na_values) > 0 and non_na_values.nunique() == 1:
                                 fill_value = non_na_values.iloc[0]
                                 aligned.loc[patient_mask, "value"] = fill_value
+                    
+                    # 清理额外的ID列（subject_id, hadm_id等），只保留id, time, value
+                    keep_cols = ["id", "time"]
+                    if "value" in aligned.columns:
+                        keep_cols.append("value")
+                    # 保留必要的辅助列（如endtime, duration）
+                    for aux_col in ["endtime", "duration"]:
+                        if aux_col in aligned.columns:
+                            keep_cols.append(aux_col)
+                    aligned = aligned[keep_cols]
                     
                     frames[name] = aligned
                 align_grid = grid
@@ -661,6 +788,122 @@ class RicuPyricuComparator:
         df = self._expand_interval_rows(df, module, concept)
         return df
 
+    def _extract_concept_from_merged(
+        self,
+        merged_frame: pd.DataFrame,
+        concept: str,
+        module: FeatureModule,
+    ) -> pd.DataFrame:
+        """从批量加载的 merged DataFrame 中提取单个概念，只保留该概念相关的列。
+        
+        关键：保留共享的辅助列（endtime, duration, stoptime），以便后续展开窗口。
+        """
+        if merged_frame is None or merged_frame.empty:
+            return pd.DataFrame()
+        
+        # 基础列
+        id_cols = ["stay_id", "subject_id", "hadm_id"] if module.id_column else []
+        time_cols = ["starttime", "charttime"] if module.time_column else []
+        base_cols = [col for col in id_cols + time_cols if col in merged_frame.columns]
+        
+        # 概念值列
+        if concept not in merged_frame.columns:
+            return pd.DataFrame()
+        
+        # 概念特定的辅助列（以概念名开头的列）
+        concept_aux_cols = [
+            col for col in merged_frame.columns
+            if col.startswith(f"{concept}_")
+        ]
+        
+        # 共享的辅助列（所有概念共用的时间列）
+        shared_aux_cols = [
+            col for col in ["endtime", "stoptime", "duration", "dose_unit_rx"]
+            if col in merged_frame.columns
+        ]
+        
+        # 选择列：基础列 + 概念值 + 概念特定辅助列 + 共享辅助列
+        keep_cols = list(set(base_cols + [concept] + concept_aux_cols + shared_aux_cols))
+        keep_cols = [col for col in keep_cols if col in merged_frame.columns]
+        
+        result = merged_frame[keep_cols].copy()
+        
+        # 🔧 关键修复：批量加载时，endtime/duration 是共享列，可能不属于当前概念
+        # 判断当前概念是否需要这些时间列：
+        # - *_rate, *_dur, mech_vent 等窗口型概念：需要 endtime/duration
+        # - 其他点值概念（norepi_equiv, vaso_ind等）：不需要，应移除
+        concept_lower = concept.lower()
+        needs_window = (
+            concept_lower.endswith('_rate') or 
+            concept_lower.endswith('_dur') or
+            concept_lower in {'mech_vent', 'vent_ind'}
+        )
+        
+        if not needs_window:
+            # 点值概念：完全移除 endtime/duration，避免错误展开
+            for time_col in ["endtime", "stoptime", "duration"]:
+                if time_col in result.columns:
+                    result = result.drop(columns=[time_col])
+        else:
+            # 窗口型概念：清除没有值的行的时间信息，并转换 endtime 为小时数
+            if concept in result.columns:
+                concept_has_value = result[concept].notna()
+                for time_col in ["endtime", "stoptime", "duration"]:
+                    if time_col in result.columns:
+                        result.loc[~concept_has_value, time_col] = pd.NaT if time_col != "duration" else None
+            
+            # 🔧 关键修复：转换 endtime 从 datetime64 到小时数
+            # 问题：批量加载时 starttime 已是小时数，但 endtime 仍是时间戳
+            # 需要用每行对应的 stay_id 的 intime 来转换
+            if "endtime" in result.columns and not pd.api.types.is_numeric_dtype(result["endtime"]):
+                # 加载 icustay_times 获取 intime
+                icu = self._load_icustay_times()
+                if not icu.empty and "intime" in icu.columns:
+                    # 确定 ID 列名（优先 stay_id）
+                    id_col = None
+                    for candidate in ["stay_id", "subject_id", "hadm_id"]:
+                        if candidate in result.columns:
+                            id_col = candidate
+                            # 必须确保 icu 表中也有这个列
+                            if id_col == "stay_id" and "stay_id" in icu.columns:
+                                break
+                            elif id_col == "subject_id" and "subject_id" in icu.columns:
+                                break
+                            elif id_col == "hadm_id" and "hadm_id" in icu.columns:
+                                break
+                            id_col = None
+                    
+                    if id_col and id_col in icu.columns:
+                        # 构建 intime 映射表，只保留需要的 ID
+                        result_ids = result[id_col].unique()
+                        icu_map = icu[icu[id_col].isin(result_ids)][[id_col, "intime"]].dropna().drop_duplicates()
+                        icu_map["intime"] = pd.to_datetime(icu_map["intime"], errors="coerce")
+                        if hasattr(icu_map["intime"].dtype, 'tz') and icu_map["intime"].dt.tz is not None:
+                            icu_map["intime"] = icu_map["intime"].dt.tz_localize(None)
+                        
+                        # 合并获取 intime
+                        result = result.merge(icu_map, on=id_col, how="left")
+                        
+                        # 转换 endtime
+                        end_dt = pd.to_datetime(result["endtime"], errors="coerce")
+                        if hasattr(end_dt.dtype, 'tz') and end_dt.dt.tz is not None:
+                            end_dt = end_dt.dt.tz_localize(None)
+                        
+                        result["endtime"] = (end_dt - result["intime"]).dt.total_seconds() / 3600.0
+                        result = result.drop(columns=["intime"], errors="ignore")
+                        
+                        # 清除异常值（可能由于 ID 匹配失败导致）
+                        if pd.api.types.is_numeric_dtype(result["endtime"]):
+                            # 先转换为object类型以避免FutureWarning
+                            mask = (result["endtime"] > 10000) | (result["endtime"] < -10000)
+                            if mask.any():
+                                result["endtime"] = result["endtime"].astype(object)
+                                result.loc[mask, "endtime"] = pd.NaT
+        
+        # 注意：不过滤空值行，保持 ricu 的完整时间网格
+        
+        return result
+    
     def _load_concept_frame(
         self,
         concept: str,
@@ -674,8 +917,8 @@ class RicuPyricuComparator:
 
         frame = load_concepts(
             concept,
+            src=self.database,  # 修正：使用 src= 而不是 database=
             patient_ids=patient_ids,
-            database=self.database,
             data_path=str(self.data_path),
             interval="1h" if module.time_column else None,
             merge=True,
@@ -801,7 +1044,10 @@ class RicuPyricuComparator:
         # should NOT be expanded into continuous time series. They represent
         # discrete events (e.g., antibiotic administration started at time X),
         # not continuous states. Expanding them would incorrectly fill gaps.
-        logical_concepts = {"abx", "samp", "cort"}  # Add other event-based concepts as needed
+        logical_concepts = {
+            "abx", "samp", "cort", "vaso_ind", "dobu60", 
+            "susp_inf", "sep3", "ett_gcs", "avpu"
+        }
         if concept_lower in logical_concepts:
             return df.drop(columns=["endtime", "duration"], errors="ignore")
 
@@ -817,47 +1063,45 @@ class RicuPyricuComparator:
 
         working = df.copy()
         
-        # Debug
-        if has_end:
-            import sys
-            print(f"DEBUG _expand_interval_rows: concept={concept}, has_end={has_end}", file=sys.stderr)
-            print(f"DEBUG endtime dtype: {working['endtime'].dtype}", file=sys.stderr)
-            print(f"DEBUG endtime is_numeric: {pd.api.types.is_numeric_dtype(working['endtime'])}", file=sys.stderr)
-            if len(working) > 0:
-                print(f"DEBUG endtime first value: {working['endtime'].iloc[0]}", file=sys.stderr)
-            print(f"DEBUG working has 'id' column: {'id' in working.columns}", file=sys.stderr)
-            print(f"DEBUG working columns: {working.columns.tolist()}", file=sys.stderr)
+        # 🔧 关键修复：批量加载时，endtime 是共享列，可能包含其他概念的值
+        # 只展开当前概念有值的行，忽略只有 endtime 但没有 value 的行
+        if "value" in working.columns and (has_end or has_duration):
+            # 只保留有值的行
+            has_value = working["value"].notna()
+            working = working[has_value].copy()
+            
+            # 如果过滤后没有行了，直接返回空
+            if working.empty:
+                return pd.DataFrame(columns=["id", "time", "value"])
 
         if has_end and not pd.api.types.is_numeric_dtype(working["endtime"]):
-            import sys
             icu = self._load_icustay_times()
-            print(f"DEBUG: ICU times loaded, empty={icu.empty}, has_intime={'intime' in icu.columns if not icu.empty else False}", file=sys.stderr)
             
             if not icu.empty and "intime" in icu.columns:
                 # Determine the ID column in working DataFrame
                 id_col_in_working = "id" if "id" in working.columns else "stay_id" if "stay_id" in working.columns else None
-                print(f"DEBUG: id_col_in_working={id_col_in_working}", file=sys.stderr)
                 
                 if id_col_in_working:
                     icu_map = icu[["stay_id", "intime"]].dropna().drop_duplicates()
-                    icu_map["intime"] = pd.to_datetime(icu_map["intime"], errors="coerce").dt.tz_localize(None)
-                    print(f"DEBUG: icu_map shape={icu_map.shape}, first intime={icu_map['intime'].iloc[0] if len(icu_map) > 0 else 'N/A'}", file=sys.stderr)
+                    # 统一处理时区：移除时区信息以避免比较错误
+                    icu_map["intime"] = pd.to_datetime(icu_map["intime"], errors="coerce")
+                    if hasattr(icu_map["intime"].dtype, 'tz') and icu_map["intime"].dt.tz is not None:
+                        icu_map["intime"] = icu_map["intime"].dt.tz_localize(None)
                     
                     # Rename to match working's ID column
                     if id_col_in_working != "stay_id":
                         icu_map = icu_map.rename(columns={"stay_id": id_col_in_working})
                     
-                    print(f"DEBUG: Before merge, working shape={working.shape}", file=sys.stderr)
                     working = working.merge(icu_map, on=id_col_in_working, how="left")
-                    print(f"DEBUG: After merge, working shape={working.shape}, has_intime={'intime' in working.columns}", file=sys.stderr)
                     
-                    end_dt = pd.to_datetime(working["endtime"], errors="coerce").dt.tz_localize(None)
-                    print(f"DEBUG: end_dt first value={end_dt.iloc[0] if len(end_dt) > 0 else 'N/A'}", file=sys.stderr)
+                    # 统一 endtime 时区处理
+                    end_dt = pd.to_datetime(working["endtime"], errors="coerce")
+                    if hasattr(end_dt.dtype, 'tz') and end_dt.dt.tz is not None:
+                        end_dt = end_dt.dt.tz_localize(None)
                     
                     working["endtime"] = (
                         (end_dt - working["intime"]).dt.total_seconds() / 3600.0
                     )
-                    print(f"DEBUG: After conversion, endtime first value={working['endtime'].iloc[0] if len(working) > 0 else 'N/A'}", file=sys.stderr)
                     working = working.drop(columns=["intime"], errors="ignore")
                 else:
                     # Fallback: try to parse as timestamp

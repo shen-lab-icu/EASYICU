@@ -157,6 +157,11 @@ try:
     _HAS_IMPORT = True
 except ImportError:
     _HAS_IMPORT = False
+try:
+    from .setup_data import setup_data
+    _HAS_SETUP = True
+except ImportError:
+    _HAS_SETUP = False
 
 try:
     from .ts_utils import (

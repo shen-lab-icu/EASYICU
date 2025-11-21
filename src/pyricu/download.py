@@ -22,6 +22,7 @@ from .config import DataSourceConfig, DataSourceRegistry
 
 LOGGER = logging.getLogger(__name__)
 
+
 class PhysioNetDownloader:
     """Handler for downloading data from PhysioNet."""
 
@@ -63,8 +64,15 @@ class PhysioNetDownloader:
             True if download was successful, False otherwise
         """
         if destination.exists() and not force:
-            LOGGER.info(f"File {destination.name} already exists, skipping")
-            return True
+            if verify_hash:
+                if self._verify_sha256(destination, verify_hash):
+                    LOGGER.info(f"File {destination.name} already exists and verified, skipping")
+                    return True
+                else:
+                    LOGGER.warning(f"File {destination.name} exists but hash mismatch, re-downloading")
+            else:
+                LOGGER.info(f"File {destination.name} already exists, skipping")
+                return True
 
         destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -120,6 +128,7 @@ class PhysioNetDownloader:
         computed_hash = sha256_hash.hexdigest()
         return computed_hash.lower() == expected_hash.lower()
 
+
 def download_src(
     config: DataSourceConfig,
     data_dir: Path,
@@ -171,8 +180,14 @@ def download_src(
     # Get base URL from config or construct it
     base_url = config.extra.get("url", "")
     if not base_url:
-        LOGGER.warning("No download URL found in configuration")
-        return
+        # Try to infer URL from source name if it's a known source
+        if config.name == "mimic_demo":
+            base_url = "https://physionet.org/files/mimic-iv-demo/2.2/"
+        elif config.name == "eicu_demo":
+            base_url = "https://physionet.org/files/eicu-crd-demo/2.0/"
+        else:
+            LOGGER.warning("No download URL found in configuration")
+            return
 
     downloader = PhysioNetDownloader(username, password)
 
@@ -187,13 +202,17 @@ def download_src(
 
             url = urljoin(base_url, file_path)
             dest = data_dir / file_path
+            
+            # Check for hash in file entry
+            verify_hash = file_entry.get("hash")
 
             if verbose:
                 LOGGER.info(f"Downloading table {table_name}: {file_path}")
 
-            success = downloader.download_file(url, dest, force=force)
+            success = downloader.download_file(url, dest, verify_hash=verify_hash, force=force)
             if not success:
                 LOGGER.error(f"Failed to download {table_name}")
+
 
 def download_sources(
     source_names: Iterable[str],
@@ -215,3 +234,37 @@ def download_sources(
             download_src(config, Path(data_dir), **kwargs)
         except Exception as e:
             LOGGER.error(f"Failed to download {source_name}: {e}")
+
+
+def download_demo(
+    data_dir: Path | str,
+    source: str = "mimic_demo",
+    force: bool = False,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+) -> None:
+    """Download demo data (MIMIC-IV Demo or eICU Demo).
+
+    Args:
+        data_dir: Directory where data will be downloaded
+        source: 'mimic_demo' or 'eicu_demo'
+        force: If True, re-download existing files
+        username: PhysioNet username
+        password: PhysioNet password
+    """
+    from .resources import load_data_sources
+    
+    registry = load_data_sources()
+    try:
+        config = registry.get(source)
+    except KeyError:
+        LOGGER.error(f"Demo source '{source}' not found in registry")
+        return
+
+    download_src(
+        config, 
+        Path(data_dir), 
+        force=force, 
+        username=username, 
+        password=password
+    )
