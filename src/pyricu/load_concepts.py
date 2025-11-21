@@ -5,6 +5,7 @@
 from typing import List, Optional, Union, Dict, Any, Callable, Iterable, Sequence, Mapping
 import logging
 from datetime import timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -359,24 +360,84 @@ class ConceptLoader:
         if interval is None:
             interval = timedelta(hours=1)
         
-        # 3. 加载每个概念
+        # 3. 加载每个概念 - 支持并行加载
         results = {}
-        for concept in concept_objs:
+        
+        # 🚀 检测是否启用并行加载
+        parallel_workers = kwargs.get('concept_workers', 1)
+        enable_parallel = len(concept_objs) > 1 and parallel_workers > 1
+        
+        if enable_parallel:
+            # 🔍 分析表依赖：提取所有概念需要的表
+            required_tables = set()
+            for concept in concept_objs:
+                sources = concept.for_data_source(self.src)
+                for source in sources:
+                    if source.table:
+                        required_tables.add(source.table)
+            
+            # 🚀 预加载共享表到缓存（避免并行时重复IO）
+            if verbose and required_tables:
+                print(f"⚡ 并行模式：预加载 {len(required_tables)} 张共享表到缓存...")
+            
+            if self._data_source is not None and hasattr(self._data_source, '_table_cache'):
+                for table_name in required_tables:
+                    try:
+                        # 触发表加载，自动进入缓存
+                        _ = self._safe_load_table(table_name, None)
+                    except Exception as e:
+                        if verbose:
+                            print(f"  ⚠️  预加载表 {table_name} 失败: {e}")
+            
+            # 🚀 并行加载概念
+            max_workers = min(parallel_workers, len(concept_objs))
             if verbose:
-                print(f"加载概念: {concept.name}")
+                print(f"🚀 启动 {max_workers} 个并行工作线程加载 {len(concept_objs)} 个概念...")
             
-            # 加载单个概念
-            data = self._load_one_concept(
-                concept=concept,
-                patient_ids=patient_ids,
-                id_type=id_type,
-                interval=interval,
-                aggregate=aggregate if not isinstance(aggregate, dict) else aggregate.get(concept.name),
-                **kwargs
-            )
-            
-            if data is not None and len(data) > 0:
-                results[concept.name] = data
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_concept = {
+                    executor.submit(
+                        self._load_one_concept,
+                        concept=concept,
+                        patient_ids=patient_ids,
+                        id_type=id_type,
+                        interval=interval,
+                        aggregate=aggregate if not isinstance(aggregate, dict) else aggregate.get(concept.name),
+                        **kwargs
+                    ): concept
+                    for concept in concept_objs
+                }
+                
+                for future in as_completed(future_to_concept):
+                    concept = future_to_concept[future]
+                    try:
+                        data = future.result()
+                        if verbose:
+                            print(f"✅ 完成概念: {concept.name}")
+                        if data is not None and len(data) > 0:
+                            results[concept.name] = data
+                    except Exception as e:
+                        if verbose:
+                            print(f"❌ 加载概念 {concept.name} 失败: {e}")
+                        logger.error(f"加载概念 {concept.name} 失败", exc_info=True)
+        else:
+            # 串行加载（默认行为）
+            for concept in concept_objs:
+                if verbose:
+                    print(f"加载概念: {concept.name}")
+                
+                # 加载单个概念
+                data = self._load_one_concept(
+                    concept=concept,
+                    patient_ids=patient_ids,
+                    id_type=id_type,
+                    interval=interval,
+                    aggregate=aggregate if not isinstance(aggregate, dict) else aggregate.get(concept.name),
+                    **kwargs
+                )
+                
+                if data is not None and len(data) > 0:
+                    results[concept.name] = data
         
         # 4. 合并或返回
         if not merge_data:

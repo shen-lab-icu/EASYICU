@@ -5151,6 +5151,45 @@ def _callback_miiv_icu_patients_filter(
         return next(iter(tables.values()))
 
 
+def _callback_simple_passthrough(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+    concept_name: str,
+) -> ICUTable:
+    """Simple passthrough callback for concepts that just need to load from source.
+    
+    Some concepts like tco2 and ca have a concept-level callback defined in the
+    dictionary but don't require any special aggregation - they just load directly
+    from the source table. This callback handles those cases.
+    
+    Args:
+        tables: Dictionary of loaded tables (should be empty when callback is called)
+        ctx: Callback context
+        concept_name: Name of the concept to load
+        
+    Returns:
+        The loaded concept data
+    """
+    # Load the concept normally through the resolver
+    from .concept import ConceptResolver
+    
+    resolver = ctx.resolver if ctx.resolver else ConceptResolver()
+    
+    # Load the concept without the callback to avoid infinite recursion
+    # merge=False returns a dict of {concept_name: ICUTable}
+    result_dict = resolver.load_concepts(
+        [concept_name],
+        data_source=ctx.data_source,
+        interval=ctx.interval,
+        patient_ids=ctx.patient_ids,
+        merge=False,  # Don't merge, return dict
+        _bypass_callback=True,  # Special flag to skip callback
+    )
+    
+    # Return the ICUTable for this concept
+    return result_dict[concept_name]
+
+
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "bmi": _callback_bmi,
     "avpu": _callback_avpu,
@@ -5204,6 +5243,9 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "blood_cell_ratio": _callback_blood_cell_ratio,
     "transform_fun(aumc_rass)": _callback_aumc_rass,  # Handle transform_fun wrapper
     "miiv_icu_patients_filter": _callback_miiv_icu_patients_filter,  # Filter MIMIC-IV patients to ICU only
+    # Simple passthrough callbacks for concepts that just load from source
+    "tco2": lambda tables, ctx: _callback_simple_passthrough(tables, ctx, "tco2"),
+    "ca": lambda tables, ctx: _callback_simple_passthrough(tables, ctx, "ca"),
 }
 
 

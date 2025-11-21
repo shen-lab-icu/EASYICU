@@ -581,7 +581,10 @@ class ConceptResolver:
         required_names = self._expand_dependencies(names)  # Ensure dependencies are expanded
         tables: Dict[str, ICUTable] = {}
         aggregators = self._normalise_aggregators(aggregate, required_names)
-        self._concept_cache = {}
+        # 🚀 性能优化: 不要清空 _concept_cache，保留用于递归调用的缓存
+        # 只在顶层调用时初始化（检查是否已存在）
+        if not hasattr(self, '_concept_cache') or self._concept_cache is None:
+            self._concept_cache = {}
         # 初始化当前线程的inflight集合
         self._get_inflight().clear()
 
@@ -698,7 +701,8 @@ class ConceptResolver:
             )
         
         # Check if this concept has a concept-level callback
-        if definition.callback:
+        # Skip callback if _bypass_callback flag is set (to avoid infinite recursion)
+        if definition.callback and not kwargs.get('_bypass_callback', False):
             # Try to execute the callback if it's registered
             try:
                 # Create empty tables dict - callback will load dependencies if needed
@@ -1889,14 +1893,31 @@ class ConceptResolver:
                         dur_var=duration_col,
                     )
         
-        return ICUTable(
-            data=combined,
-            id_columns=id_columns,
-            index_column=index_column,  # Already updated for eICU if needed
-            value_column=concept_name,
-            unit_column=final_unit_column,
-            time_columns=[col for col in time_columns if col],
-        )
+        if concept_name == "infusionoffset" and index_column and index_column in combined.columns:
+            combined[concept_name] = combined[index_column]
+            combined = combined.drop(columns=["drugrate"], errors="ignore")
+        try:
+            return ICUTable(
+                data=combined,
+                id_columns=id_columns,
+                index_column=index_column,  # Already updated for eICU if needed
+                value_column=concept_name,
+                unit_column=final_unit_column,
+                time_columns=[col for col in time_columns if col],
+            )
+        except KeyError as exc:
+            if concept_name == "infusionoffset" and index_column and index_column in combined.columns:
+                combined[concept_name] = combined[index_column]
+                combined = combined.drop(columns=["drugrate"], errors="ignore")
+                return ICUTable(
+                    data=combined,
+                    id_columns=id_columns,
+                    index_column=index_column,
+                    value_column=concept_name,
+                    unit_column=final_unit_column,
+                    time_columns=[col for col in time_columns if col],
+                )
+            raise exc
     
     def _align_time_to_admission(
         self,
@@ -3203,7 +3224,7 @@ class ConceptResolver:
         align_to_admission: bool,
         kwargs: Dict[str, object],
     ) -> ICUTable:
-        # 🚀 优化：首先检查概念数据缓存（避免重复加载相同概念，如urine）
+        # 🚀 优化：增强概念数据缓存（避免重复加载相同概念，如urine、vaso_ind、pafi）
         patient_ids_hash = hash(frozenset(patient_ids)) if patient_ids else None
         agg_value = aggregators.get(concept_name, "auto")
         if agg_value in (None, "auto"):
@@ -3211,14 +3232,27 @@ class ConceptResolver:
             if definition and definition.aggregate is not None:
                 agg_value = definition.aggregate
         
-        concept_cache_key = (concept_name, patient_ids_hash, str(interval), str(agg_value))
+        # 🔥 关键优化: 扩展缓存键包含kwargs中的关键参数，确保不同配置不会混淆
+        # 但对于子概念（如vaso_ind），kwargs通常相同，所以可以安全缓存
+        kwargs_hash = hash(frozenset(sorted(kwargs.items()))) if kwargs else 0
+        concept_cache_key = (concept_name, patient_ids_hash, str(interval), str(agg_value), kwargs_hash)
         
         with self._cache_lock:
-            # 检查概念数据缓存
+            # 检查增强的概念数据缓存
             if concept_cache_key in self._concept_data_cache:
                 if verbose and logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("✨ 从内存缓存加载概念 '%s'", concept_name)
+                    logger.debug("✨ 从内存缓存加载概念 '%s' (命中增强缓存)", concept_name)
                 return self._concept_data_cache[concept_cache_key]
+            
+            # 回退检查旧的简单缓存（用于向后兼容）
+            simple_key = (concept_name, patient_ids_hash, str(interval), str(agg_value))
+            if simple_key in self._concept_data_cache:
+                if verbose and logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("✨ 从内存缓存加载概念 '%s' (命中简单缓存)", concept_name)
+                result = self._concept_data_cache[simple_key]
+                # 同步到新的缓存键
+                self._concept_data_cache[concept_cache_key] = result
+                return result
             
             # 检查旧的概念缓存
             cached = self._concept_cache.get(concept_name)
