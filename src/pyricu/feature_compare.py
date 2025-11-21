@@ -461,6 +461,22 @@ class RicuPyricuComparator:
                     df["time"] = pd.to_numeric(df["time"], errors="coerce")
                     df = df.dropna(subset=["id", "time"])
                     aligned = grid.merge(df, on=["id", "time"], how="left")
+                    
+                    # 🔧 FIX: 对于静态概念（如los_icu），用forward-fill填充所有时间点
+                    # 检测方法：如果某患者有任何非NA值，且这些值都相同，就是静态概念
+                    if "value" in aligned.columns and "id" in aligned.columns:
+                        for patient_id in aligned["id"].unique():
+                            if pd.isna(patient_id):
+                                continue
+                            patient_mask = aligned["id"] == patient_id
+                            patient_values = aligned.loc[patient_mask, "value"]
+                            non_na_values = patient_values.dropna()
+                            
+                            # 如果有非NA值且都相同，forward-fill
+                            if len(non_na_values) > 0 and non_na_values.nunique() == 1:
+                                fill_value = non_na_values.iloc[0]
+                                aligned.loc[patient_mask, "value"] = fill_value
+                    
                     frames[name] = aligned
                 align_grid = grid
             else:
@@ -472,7 +488,16 @@ class RicuPyricuComparator:
             if concept in frames:
                 continue
             placeholder: Optional[pd.DataFrame] = None
-            if base_placeholder is not None:
+            # 🔧 FIX: 检查reference_series中该概念是否有时间列
+            # 静态概念（如los_icu, death）不应使用时间网格placeholder
+            is_time_series_concept = False
+            if reference_series and concept in reference_series:
+                ref_df = reference_series[concept]
+                if not ref_df.empty and "time" in ref_df.columns:
+                    is_time_series_concept = True
+            
+            if base_placeholder is not None and is_time_series_concept:
+                # 只为时间序列概念使用时间网格placeholder
                 placeholder = base_placeholder.assign(value=np.nan)
             elif reference_series and concept in reference_series:
                 ref_df = reference_series[concept]
