@@ -1137,10 +1137,18 @@ class ConceptResolver:
                 try:
                     # 仅加载相关subject的icustays，并携带intime/outtime用于窗口过滤
                     icustay_filters = []
+                    # 🔧 FIX: 保存expanded_patient_ids到当前作用域,避免后续locals()检查失效
+                    current_expanded_patient_ids = None
                     if patient_ids:
-                        # 使用扩展后的 patient_ids（如果之前已经扩展）
-                        current_patient_ids = expanded_patient_ids if 'expanded_patient_ids' in locals() else patient_ids
-                        subj_vals = current_patient_ids.get('subject_id') if isinstance(current_patient_ids, dict) else current_patient_ids
+                        # 使用扩展后的 patient_ids（从外部作用域传入）
+                        # 因为expanded_patient_ids在外部作用域,这里无法直接访问,需要重新扩展
+                        current_expanded_patient_ids = self._expand_patient_ids(
+                            patient_ids, 
+                            'subject_id',  # labevents使用subject_id
+                            data_source,
+                            verbose=False
+                        )
+                        subj_vals = current_expanded_patient_ids.get('subject_id') if isinstance(current_expanded_patient_ids, dict) else current_expanded_patient_ids
                         if subj_vals:
                             icustay_filters.append(
                                 FilterSpec(column='subject_id', op=FilterOp.IN, value=subj_vals)
@@ -1325,11 +1333,14 @@ class ConceptResolver:
                         # 🔗 关键修复：如果用户提供了特定的 stay_id，在映射后再次过滤
                         # 确保只返回用户指定的 stay_id 的数据
                         if 'stay_id' in frame.columns and patient_ids:
-                            current_patient_ids = expanded_patient_ids if 'expanded_patient_ids' in locals() else patient_ids
-                            if isinstance(current_patient_ids, dict) and 'stay_id' in current_patient_ids:
-                                specified_stay_ids = current_patient_ids['stay_id']
+                            # 使用之前保存的current_expanded_patient_ids
+                            if current_expanded_patient_ids and isinstance(current_expanded_patient_ids, dict) and 'stay_id' in current_expanded_patient_ids:
+                                specified_stay_ids = current_expanded_patient_ids['stay_id']
                                 if specified_stay_ids:
+                                    before_stay_filter = len(frame)
                                     frame = frame[frame['stay_id'].isin(specified_stay_ids)].copy()
+                                    if DEBUG_MODE and before_stay_filter > len(frame):
+                                        print(f"      🔍 [{concept_name}] stay_id过滤: {before_stay_filter}行 → {len(frame)}行 (保留{len(specified_stay_ids)}个stay_id)")
                         
                         if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
                                 id_columns = ['stay_id']
