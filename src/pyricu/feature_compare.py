@@ -773,18 +773,43 @@ class RicuPyricuComparator:
             print(f"DEBUG endtime is_numeric: {pd.api.types.is_numeric_dtype(working['endtime'])}", file=sys.stderr)
             if len(working) > 0:
                 print(f"DEBUG endtime first value: {working['endtime'].iloc[0]}", file=sys.stderr)
+            print(f"DEBUG working has 'id' column: {'id' in working.columns}", file=sys.stderr)
+            print(f"DEBUG working columns: {working.columns.tolist()}", file=sys.stderr)
 
         if has_end and not pd.api.types.is_numeric_dtype(working["endtime"]):
+            import sys
             icu = self._load_icustay_times()
+            print(f"DEBUG: ICU times loaded, empty={icu.empty}, has_intime={'intime' in icu.columns if not icu.empty else False}", file=sys.stderr)
+            
             if not icu.empty and "intime" in icu.columns:
-                icu_map = icu[["stay_id", "intime"]].dropna().drop_duplicates().rename(columns={"stay_id": "id"})
-                icu_map["intime"] = pd.to_datetime(icu_map["intime"], errors="coerce").dt.tz_localize(None)
-                working = working.merge(icu_map, on="id", how="left")
-                end_dt = pd.to_datetime(working["endtime"], errors="coerce").dt.tz_localize(None)
-                working["endtime"] = (
-                    (end_dt - working["intime"]).dt.total_seconds() / 3600.0
-                )
-                working = working.drop(columns=["intime"], errors="ignore")
+                # Determine the ID column in working DataFrame
+                id_col_in_working = "id" if "id" in working.columns else "stay_id" if "stay_id" in working.columns else None
+                print(f"DEBUG: id_col_in_working={id_col_in_working}", file=sys.stderr)
+                
+                if id_col_in_working:
+                    icu_map = icu[["stay_id", "intime"]].dropna().drop_duplicates()
+                    icu_map["intime"] = pd.to_datetime(icu_map["intime"], errors="coerce").dt.tz_localize(None)
+                    print(f"DEBUG: icu_map shape={icu_map.shape}, first intime={icu_map['intime'].iloc[0] if len(icu_map) > 0 else 'N/A'}", file=sys.stderr)
+                    
+                    # Rename to match working's ID column
+                    if id_col_in_working != "stay_id":
+                        icu_map = icu_map.rename(columns={"stay_id": id_col_in_working})
+                    
+                    print(f"DEBUG: Before merge, working shape={working.shape}", file=sys.stderr)
+                    working = working.merge(icu_map, on=id_col_in_working, how="left")
+                    print(f"DEBUG: After merge, working shape={working.shape}, has_intime={'intime' in working.columns}", file=sys.stderr)
+                    
+                    end_dt = pd.to_datetime(working["endtime"], errors="coerce").dt.tz_localize(None)
+                    print(f"DEBUG: end_dt first value={end_dt.iloc[0] if len(end_dt) > 0 else 'N/A'}", file=sys.stderr)
+                    
+                    working["endtime"] = (
+                        (end_dt - working["intime"]).dt.total_seconds() / 3600.0
+                    )
+                    print(f"DEBUG: After conversion, endtime first value={working['endtime'].iloc[0] if len(working) > 0 else 'N/A'}", file=sys.stderr)
+                    working = working.drop(columns=["intime"], errors="ignore")
+                else:
+                    # Fallback: try to parse as timestamp
+                    working["endtime"] = self._time_to_hours(working["endtime"], None)
             else:
                 working["endtime"] = self._time_to_hours(working["endtime"], working.get("id"))
         if has_duration:

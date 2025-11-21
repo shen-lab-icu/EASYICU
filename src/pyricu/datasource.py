@@ -23,7 +23,7 @@ MINIMAL_COLUMNS = {
     'chartevents': ['stay_id', 'charttime', 'itemid', 'valuenum', 'valueuom', 'value'],
     'labevents': ['subject_id', 'hadm_id', 'charttime', 'itemid', 'valuenum', 'valueuom'],
     'outputevents': ['stay_id', 'charttime', 'itemid', 'value'],
-    'procedureevents': ['stay_id', 'starttime', 'itemid', 'value'],
+    'procedureevents': ['stay_id', 'starttime', 'endtime', 'itemid', 'value'],  # 添加endtime列用于WinTbl
     'datetimeevents': ['stay_id', 'charttime', 'itemid', 'value'],
     'inputevents': ['stay_id', 'starttime', 'endtime', 'itemid', 'amount', 'amountuom'],
     'icustays': ['stay_id', 'subject_id', 'hadm_id', 'intime', 'outtime', 'los'],
