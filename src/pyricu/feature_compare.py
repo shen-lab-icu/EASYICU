@@ -592,6 +592,13 @@ class RicuPyricuComparator:
             if time_col:
                 rename_map[time_col] = "time"
                 cols.append(time_col)
+            elif module.time_column:
+                # 🔧 FIX: 对于需要时间列的module，如果概念没有时间列（如death, los_icu），
+                # 添加time=0作为默认时间点，以便后续对齐时可以扩展到整个时间网格
+                df["time"] = 0.0
+                rename_map["time"] = "time"
+                cols.append("time")
+                time_col = "time"
         value_col = concept if concept in df.columns else self._detect_value_column(df, cols)
         if value_col is None:
             return None

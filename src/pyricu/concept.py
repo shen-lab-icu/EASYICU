@@ -1339,15 +1339,6 @@ class ConceptResolver:
                             
                         # 🔗 关键修复：如果用户提供了特定的 stay_id，在映射后再次过滤
                         # 确保只返回用户指定的 stay_id 的数据
-                        print(f"   🔍 [{concept_name}] DEBUG: 检查stay_id过滤条件")
-                        print(f"       - 'stay_id' in frame.columns: {'stay_id' in frame.columns}")
-                        print(f"       - patient_ids存在: {patient_ids is not None}")
-                        if patient_ids:
-                            print(f"       - patient_ids内容: {patient_ids}")
-                        print(f"       - current_expanded_patient_ids存在: {current_expanded_patient_ids is not None}")
-                        if current_expanded_patient_ids:
-                            print(f"       - current_expanded_patient_ids: {current_expanded_patient_ids}")
-                        
                         if 'stay_id' in frame.columns and patient_ids:
                             # 使用之前保存的current_expanded_patient_ids
                             if current_expanded_patient_ids and isinstance(current_expanded_patient_ids, dict) and 'stay_id' in current_expanded_patient_ids:
@@ -1355,9 +1346,8 @@ class ConceptResolver:
                                 if specified_stay_ids:
                                     before_stay_filter = len(frame)
                                     frame = frame[frame['stay_id'].isin(specified_stay_ids)].copy()
-                                    print(f"      🔍 [{concept_name}] stay_id过滤: {before_stay_filter}行 → {len(frame)}行 (保留{len(specified_stay_ids)}个stay_id: {specified_stay_ids})")
-                            else:
-                                print(f"       ❌ 无法进行stay_id过滤: current_expanded_patient_ids={'dict' if isinstance(current_expanded_patient_ids, dict) else type(current_expanded_patient_ids)}, 'stay_id' in dict={('stay_id' in current_expanded_patient_ids) if isinstance(current_expanded_patient_ids, dict) else 'N/A'}")
+                                    if DEBUG_MODE and before_stay_filter > len(frame):
+                                        print(f"      🔍 [{concept_name}] stay_id过滤: {before_stay_filter}行 → {len(frame)}行 (保留{len(specified_stay_ids)}个stay_id)")
                         
                         if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
                                 id_columns = ['stay_id']
