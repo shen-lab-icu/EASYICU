@@ -3859,18 +3859,33 @@ def _callback_vaso_ind(
     for col in vaso_cols:
         merged[col] = _coerce_duration(merged[col])
 
+    # 🔧 FIX: 采用R ricu的pmax逻辑 - 对每行的所有duration取max,只有当某行至少有一个valid duration时才创建vaso_ind
+    # R: res <- res[, c("vaso_ind", cnc) := list(pmax(get("dopa_dur"), ..., na.rm = TRUE), NULL, ...)]
+    # 计算每行的max duration (跳过NA)
+    merged["__max_duration"] = merged[vaso_cols].max(axis=1, skipna=True)
+    
+    # 只保留至少有一个valid duration的行 (max不是NA且>0)
+    valid_mask = merged["__max_duration"].notna() & (merged["__max_duration"] > pd.Timedelta(0))
+    valid_rows = merged[valid_mask].copy()
+    
+    if valid_rows.empty:
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=id_columns,
+            index_column=time_col,
+            value_column="vaso_ind",
+        )
+
     window_records: list[tuple] = []
-    for _, row in merged.iterrows():
+    for _, row in valid_rows.iterrows():
         start_dt = row["__start_dt"]
         if pd.isna(start_dt):
             continue
         id_values = tuple(row[col] for col in id_columns) if id_columns else tuple()
-        for col in vaso_cols:
-            duration = row[col]
-            if pd.isna(duration) or duration <= pd.Timedelta(0):
-                continue
-            end_dt = start_dt + duration
-            window_records.append((*id_values, start_dt, end_dt))
+        # 使用max_duration创建一个window (而不是为每个vasopressor单独创建)
+        max_duration = row["__max_duration"]
+        end_dt = start_dt + max_duration
+        window_records.append((*id_values, start_dt, end_dt))
 
     if not window_records:
         return _as_icutbl(
