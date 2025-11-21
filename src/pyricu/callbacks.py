@@ -15,6 +15,17 @@ import pandas as pd
 from .table import ICUTable
 from .common_utils import SeriesUtils
 
+# Import missing callbacks
+from .callbacks_missing import (
+    rrt_criteria,
+    sum_components,
+    blood_cell_ratio,
+    aumc_bxs,
+    blood_cell_count,
+    delta_cummin,
+    delta_start,
+    delta_min,
+)
 def _standardize_fio2_units(fio2_df: pd.DataFrame, database: str) -> pd.DataFrame:
     """将FiO2标准化为百分比形式（0-100）以实现跨数据库兼容性
 

@@ -247,7 +247,7 @@ class ICUDataSource:
             # 应用列过滤（避免提前复制整张表）
             if columns is not None:
                 available_cols = [c for c in columns if c in frame_view.columns]
-                frame_view = frame_view.loc[:, available_cols]
+                frame_view = frame_view.loc[ :, available_cols]
 
             # 应用行过滤
             if filters:
@@ -269,6 +269,12 @@ class ICUDataSource:
 
             # 提取 patient_ids 过滤器用于分区预过滤
             patient_ids_filter = None
+            
+            # 🚀 优化：对于缺少 stay_id 的表（如 labevents），如果过滤条件是 stay_id，
+            # 需要先查 icustays 转换成 hadm_id 或 subject_id，以便在读取 parquet 时就能过滤
+            hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy']
+            mapped_filter = None
+            
             if filters:
                 for spec in filters:
                     # 支持各数据库的ID列名
@@ -276,8 +282,37 @@ class ICUDataSource:
                                  'admissionid', 'patientid',  # AUMC
                                  'patientunitstayid',  # eICU
                                  'patientid']  # HiRID
+                    
                     if spec.op == FilterOp.IN and spec.column in id_columns:
                         patient_ids_filter = spec
+                        
+                        # 特殊处理：如果表是 hospital table 且过滤器是 stay_id
+                        if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo'] and spec.column == 'stay_id':
+                            try:
+                                if verbose:
+                                    logger.info(f"🔄 [{table_name}] 将 stay_id 过滤器转换为 hadm_id 以优化读取...")
+                                
+                                # 加载 icustays 获取映射
+                                icustays_map = self.load_table(
+                                    'icustays', 
+                                    columns=['stay_id', 'hadm_id'], 
+                                    filters=[spec],
+                                    verbose=False
+                                )
+                                icustays_df = icustays_map.dataframe()
+                                
+                                # 获取对应的 hadm_id 列表
+                                valid_hadm_ids = icustays_df['hadm_id'].dropna().unique()
+                                
+                                if len(valid_hadm_ids) > 0:
+                                    # 创建新的过滤器
+                                    mapped_filter = FilterSpec(column='hadm_id', op=FilterOp.IN, value=valid_hadm_ids)
+                                    patient_ids_filter = mapped_filter
+                                    if verbose:
+                                        logger.info(f"✅ [{table_name}] 映射成功: {len(spec.value)} stay_ids -> {len(valid_hadm_ids)} hadm_ids")
+                            except Exception as e:
+                                logger.warning(f"⚠️ [{table_name}] 过滤器映射失败: {e}")
+                        
                         # 只在verbose模式下输出，且只输出一次
                         if verbose:
                             cache_key = f"_filter_logged_{table_name}"
@@ -472,9 +507,15 @@ class ICUDataSource:
             if len(table_cfg.files) > 1:
                 # 多文件配置：使用目录路径以启用多文件读取
                 base_path = self.base_path or Path.cwd()
-                if table_cfg.files and table_cfg.files[0].get('path'):
-                    # 获取目录路径
-                    first_path = Path(table_cfg.files[0]['path'])
+                if table_cfg.files:
+                    # 获取目录路径（从第一个文件路径中提取）
+                    first_file = table_cfg.files[0]
+                    # 处理字符串或字典格式
+                    if isinstance(first_file, dict):
+                        first_path = Path(first_file.get('path', first_file.get('name', '')))
+                    else:
+                        first_path = Path(first_file)
+                    
                     multi_file_dir = base_path / first_path.parent
                     if multi_file_dir.is_dir():
                         loader = multi_file_dir
@@ -486,12 +527,13 @@ class ICUDataSource:
                     loader = self._resolve_loader_from_disk(table_name)
             else:
                 loader = self._resolve_loader_from_disk(table_name)
+            
+            # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
             if loader is None:
                 # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
                 # 这允许在demo数据中缺少某些表时继续运行
                 if self.config.name == 'miiv' and table_name in self.config.tables:
-                    # DEBUG: 这个路径导致返回空DataFrame!
-                    logger.debug(f"loader is None for {table_name}, returning empty DataFrame")
+                    logger.warning(f"Table {table_name} not found on disk, returning empty DataFrame")
                     # 返回空DataFrame，保持与配置中表结构一致的列
                     table_cfg = self.config.get_table(table_name)
                     defaults = table_cfg.defaults
@@ -550,6 +592,7 @@ class ICUDataSource:
         
         table_cfg = self.config.get_table(table_name)
         explicit = table_cfg.first_file()
+        
         if explicit:
             explicit_path = self.base_path / explicit
             if explicit_path.exists():
@@ -689,36 +732,9 @@ class ICUDataSource:
                 df.columns = pandas.io.common.dedup_names(df.columns, is_potential_multiindex=False)
             return df
         
-        # Fallback: CSV (optionally compressed)
-        is_csv_gz = suffix == ".gz" and len(suffixes) >= 2 and suffixes[-2] == ".csv"
-        if suffix == ".csv" or is_csv_gz:
-            compression = "gzip" if is_csv_gz else None
-            return self._read_csv_file(path, columns, patient_ids_filter, compression=compression)
-
         raise ValueError(
-            f"Unsupported file format '{path.suffix}' for {path.name}. Provide Parquet or CSV inputs."
+            f"Unsupported file format '{path.suffix}' for {path.name}. Only Parquet format is supported."
         )
-
-    def _read_csv_file(
-        self,
-        path: Path,
-        columns: Optional[Iterable[str]],
-        patient_ids_filter: Optional[FilterSpec],
-        *,
-        compression: Optional[str] = None,
-    ) -> pd.DataFrame:
-        logger.warning(
-            "⚠️  Falling back to CSV read for %s. Consider generating Parquet files for better performance.",
-            path.name,
-        )
-        usecols = list(columns) if columns else None
-        df = pd.read_csv(path, usecols=usecols, compression=compression, low_memory=False)
-        if patient_ids_filter and patient_ids_filter.column in df.columns:
-            values = patient_ids_filter.value
-            if not isinstance(values, (list, tuple, set, pd.Series)):
-                values = [values]
-            df = df[df[patient_ids_filter.column].isin(values)]
-        return df
     
     def _read_partitioned_data_optimized(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
         """读取分区数据（优化版本：自动忽略.fst文件，只读取.parquet）"""

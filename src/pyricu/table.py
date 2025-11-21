@@ -291,6 +291,29 @@ class IdTbl:
             by_ref=False
         )
 
+def as_id_tbl(data: Union[pd.DataFrame, 'IdTbl'], id_vars: Union[str, List[str]], **kwargs) -> 'IdTbl':
+    """Convert DataFrame to IdTbl (R ricu as_id_tbl factory function).
+    
+    Args:
+        data: DataFrame or existing IdTbl
+        id_vars: ID column name(s)
+        **kwargs: Additional arguments passed to IdTbl constructor
+        
+    Returns:
+        IdTbl instance
+        
+    Examples:
+        >>> df = pd.DataFrame({'patient_id': [1, 2], 'value': [10, 20]})
+        >>> tbl = as_id_tbl(df, id_vars='patient_id')
+    """
+    if isinstance(data, IdTbl):
+        # Already an IdTbl, optionally update id_vars
+        if id_vars is not None:
+            return IdTbl(data.data, id_vars=id_vars, **kwargs)
+        return data
+    
+    return IdTbl(data, id_vars=id_vars, **kwargs)
+
 class TsTbl(IdTbl):
     """Time series table (R ricu ts_tbl).
     
@@ -1509,12 +1532,14 @@ def load_table(src: str, table_name: str, **kwargs) -> pd.DataFrame:
         src: 数据源名称
         table_name: 表名
         **kwargs: 其他参数传递给 ICUDataSource.load_table
+                 可以包含 'path' 参数指定数据文件的基础路径
         
     Returns:
         DataFrame
         
     Examples:
         >>> df = load_table('mimic_demo', 'patients')
+        >>> df = load_table('miiv', 'labevents', path='/data/mimic-iv/3.1')
     """
     from .attach import data
     
@@ -1524,9 +1549,72 @@ def load_table(src: str, table_name: str, **kwargs) -> pd.DataFrame:
     else:
         # 如果没有附加，尝试从配置创建
         from .config import load_src_cfg
+        from pathlib import Path
+        import os
         config = load_src_cfg(src)
         from .datasource import ICUDataSource
-        data_source = ICUDataSource(config)
+        
+        # 提取 path 参数（如果提供）
+        base_path = kwargs.pop('path', None)
+        
+        # 如果没有提供 path，尝试从环境变量获取
+        if base_path is None:
+            env_var = f"PYRICU_{src.upper()}_PATH"
+            base_path = os.environ.get(env_var)
+            if base_path is None:
+                # 尝试通用环境变量
+                base_path = os.environ.get("PYRICU_DATA_PATH")
+        
+        # 创建数据源
+        data_source = ICUDataSource(
+            config,
+            base_path=Path(base_path) if base_path else None
+        )
     
     icu_table = data_source.load_table(table_name, **kwargs)
     return icu_table.data
+
+def load_id_tbl(src: str, id_type: str, **kwargs) -> pd.DataFrame:
+    """
+    Load ID table for a given ID type (R ricu load_id_tbl).
+    
+    Args:
+        src: Data source name
+        id_type: ID type (e.g., 'icustay', 'hadm', 'patient')
+        **kwargs: Additional arguments passed to load_table
+        
+    Returns:
+        DataFrame containing ID information
+        
+    Examples:
+        >>> df = load_id_tbl('mimic_demo', 'icustay')
+    """
+    from .config import load_src_cfg
+    
+    # Load source configuration
+    cfg = load_src_cfg(src)
+    
+    # Try to find table from id_configs
+    table_name = None
+    if hasattr(cfg, 'id_configs') and id_type in cfg.id_configs:
+        id_cfg = cfg.id_configs[id_type]
+        if id_cfg.table:
+            table_name = id_cfg.table
+    
+    # Fallback logic if not explicitly configured
+    if not table_name:
+        if id_type == 'icustay':
+            table_name = 'icustays'
+        elif id_type == 'hadm':
+            table_name = 'admissions'
+        elif id_type == 'patient':
+            table_name = 'patients'
+        else:
+            raise ValueError(f"Unknown id_type '{id_type}' for source '{src}'")
+    
+    # Load the table
+    try:
+        return load_table(src, table_name, **kwargs)
+    except Exception as e:
+        # If specific table load fails, try to provide a helpful error
+        raise ValueError(f"Failed to load ID table for '{id_type}' (table: '{table_name}'): {e}")

@@ -127,6 +127,7 @@ class DataSourceConfig(BaseModel):
     class_prefix: List[str] = Field(default_factory=list, alias="class_prefix")
     id_configs: Dict[str, IdentifierConfig] = Field(default_factory=dict)
     tables: Dict[str, TableConfig] = Field(default_factory=dict)
+    extra: Dict[str, object] = Field(default_factory=dict)
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -149,6 +150,12 @@ class DataSourceConfig(BaseModel):
         transformed = dict(values)
         transformed["id_configs"] = id_cfg
         transformed["tables"] = tables
+
+        # Extract extra fields
+        known = {"name", "class_prefix", "id_cfg", "tables", "id_configs"}
+        extra = {k: v for k, v in values.items() if k not in known}
+        transformed["extra"] = extra
+        
         return transformed
 
     def list_tables(self) -> List[str]:

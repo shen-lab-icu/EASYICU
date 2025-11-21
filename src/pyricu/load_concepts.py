@@ -82,12 +82,13 @@ logger = logging.getLogger(__name__)
 class ConceptLoader:
     """概念加载器 - 复刻 R ricu 的 load_concepts"""
     
-    def __init__(self, src: Union[str, DataSource, DataSourceConfig]):
+    def __init__(self, src: Union[str, DataSource, DataSourceConfig], data_path: Optional[str] = None):
         """
         初始化概念加载器
         
         Args:
             src: 数据源名称或 DataSource 对象
+            data_path: 数据路径
         """
         self._data_source: Optional[ICUDataSource] = None
         if isinstance(src, ICUDataSource):
@@ -100,7 +101,9 @@ class ConceptLoader:
         else:
             raise TypeError(f"不支持的数据源类型: {type(src)}")
         self._src_name = self.src.name
+        self.data_path = data_path
         self._id_lookup_cache: Optional[pd.DataFrame] = None
+        self._table_cache: Dict[str, pd.DataFrame] = {}
     
     def _get_table_config(self, table_name: Optional[str]) -> Optional[TableConfig]:
         """根据表名获取配置。"""
@@ -184,13 +187,17 @@ class ConceptLoader:
         columns: Optional[Iterable[str]],
     ) -> pd.DataFrame:
         """在列过滤失败时回退到全表加载。"""
+        # Check cache first
+        if table_name in self._table_cache:
+            return self._table_cache[table_name]
+
         if columns:
             try:
-                return load_table(self._src_name, table_name, columns=list(columns))
+                return load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
             except Exception:
                 # 回退到加载全部列，确保兼容缺少列描述的表
-                return load_table(self._src_name, table_name)
-        return load_table(self._src_name, table_name)
+                return load_table(self._src_name, table_name, path=self.data_path)
+        return load_table(self._src_name, table_name, path=self.data_path)
     
     def _columns_for_source(self, source, id_type: str) -> Optional[List[str]]:
         """提取 ConceptSource 所需的列。"""
@@ -358,6 +365,9 @@ class ConceptLoader:
         if interval is None:
             interval = timedelta(hours=1)
         
+        # 🚀 Preload tables
+        self._preload_tables(concept_objs, patient_ids, id_type, verbose=verbose)
+        
         # 3. 加载每个概念 - 支持并行加载
         results = {}
         
@@ -439,16 +449,21 @@ class ConceptLoader:
         
         # 4. 合并或返回
         if not merge_data:
+            # 转换时间列为相对小时数
+            for name in results:
+                results[name] = self._convert_time_to_hours(results[name], id_type)
             return results
         
         if len(results) == 0:
             return pd.DataFrame()
         
         if len(results) == 1:
-            return list(results.values())[0]
+            single_result = list(results.values())[0]
+            return self._convert_time_to_hours(single_result, id_type)
         
         # 合并多个概念为宽格式
-        return self._merge_concepts(results, id_type)
+        merged = self._merge_concepts(results, id_type)
+        return self._convert_time_to_hours(merged, id_type)
     
     def _load_one_concept(
         self,
@@ -472,7 +487,47 @@ class ConceptLoader:
         Returns:
             DataFrame
         """
-        # 检查是否为递归概念（有子概念）
+        # 🚀 优化：对于 rec_cncpt 类型的概念（如 vent_ind），
+        # 直接使用 ConceptResolver，因为它们需要concept_callbacks中的回调函数
+        if hasattr(concept, 'class_name') and concept.class_name == 'rec_cncpt':
+            from .concept import ConceptResolver
+            from .ts_utils import ICUTable
+            
+            # 🚀 重要：必须重用 ConceptLoader 的数据源，以便共享表缓存和预加载的数据
+            # 如果创建新的数据源，预加载的表会丢失
+            if self._data_source is None:
+                raise RuntimeError("rec_cncpt concepts require a data source, but none is available")
+            
+            data_source = self._data_source
+            
+            # 创建 ConceptResolver（它会从数据源加载表）
+            resolver = ConceptResolver(load_dictionary(self._src_name))
+            
+            # 使用 ConceptResolver 加载
+            # 过滤掉 ConceptLoader 特有的参数和已经显式传递的参数
+            excluded_kwargs = {'verbose', 'merge_data', 'id_type', 'merge', 'patient_ids', 'interval', 'aggregate'}
+            resolver_kwargs = {k: v for k, v in kwargs.items() if k not in excluded_kwargs}
+            
+            result = resolver.load_concepts(
+                [concept.name],
+                data_source=data_source,
+                merge=False,
+                patient_ids=patient_ids,
+                interval=interval,
+                aggregate=aggregate,
+                verbose=kwargs.get('verbose', False),
+                **resolver_kwargs
+            )
+            
+            # 提取DataFrame
+            if isinstance(result, dict) and concept.name in result:
+                result_table = result[concept.name]
+                if isinstance(result_table, ICUTable):
+                    return result_table.data
+                return result_table
+            return pd.DataFrame()
+        
+        # 检查是否为递归概念（有子概念）- 这个分支现在主要用于非 rec_cncpt 类型
         if concept.sub_concepts and len(concept.sub_concepts) > 0:
             # 递归概念 - 使用回调
             return self._load_recursive_concept(
@@ -791,22 +846,19 @@ class ConceptLoader:
         
         try:
             # 1. 加载子概念
-            sub_concepts = concept.items if hasattr(concept, 'items') else {}
+            # 使用 sub_concepts 属性（而非 items），这是 ConceptDefinition 的标准字段
+            sub_concept_names = concept.sub_concepts if hasattr(concept, 'sub_concepts') else []
             sub_data = {}
             
             # 按照依赖顺序加载子概念
-            for sub_name in sub_concepts:
+            for sub_name in sub_concept_names:
                 try:
-                    # 获取子概念定义
-                    if isinstance(sub_concepts[sub_name], Concept):
-                        sub_concept = sub_concepts[sub_name]
-                    else:
-                        # 从字典中加载
-                        concept_dict = load_dictionary(self._src_name)
-                        if sub_name not in concept_dict:
-                            print(f"警告: 找不到子概念 {sub_name}")
-                            continue
-                        sub_concept = concept_dict[sub_name]
+                    # 从字典中加载子概念定义
+                    concept_dict = load_dictionary(self._src_name)
+                    if sub_name not in concept_dict:
+                        print(f"警告: 找不到子概念 {sub_name}")
+                        continue
+                    sub_concept = concept_dict[sub_name]
                     
                     # 递归加载子概念
                     data = self._load_one_concept(
@@ -818,30 +870,68 @@ class ConceptLoader:
                         
                 except Exception as e:
                     print(f"警告: 加载子概念 {sub_name} 失败: {e}")
+                    import traceback
+                    traceback.print_exc()
                     continue
             
             if not sub_data:
                 result = pd.DataFrame()
             else:
                 # 2. 应用回调函数
-                callback = concept.callback if hasattr(concept, 'callback') else None
+                # rec_cncpt 类型的概念需要通过回调函数处理子概念
+                # 但是 ConceptLoader 架构与 ConceptResolver 不同
+                # 我们需要委托给 ConceptResolver 来处理回调
                 
-                if callback:
-                    # 构建回调函数并应用
-                    if callable(callback):
-                        result = callback(sub_data, interval=interval, src=self.src, **kwargs)
-                    else:
-                        # 如果是字符串或其他类型，尝试从callback_utils构建
-                        from .callback_utils import build_callback
-                        cb_func = build_callback(callback)
-                        result = cb_func(sub_data, interval=interval, src=self.src, **kwargs)
-                else:
-                    # 如果没有回调，尝试简单合并
+                # 如果没有回调函数，简单合并子概念
+                callback_name = concept.callback if hasattr(concept, 'callback') else None
+                
+                if not callback_name:
+                    # 没有回调，尝试简单合并
                     if len(sub_data) == 1:
                         result = list(sub_data.values())[0]
                     else:
-                        # 多个子概念，需要合并
                         result = self._merge_sub_concepts(sub_data, id_type, interval)
+                else:
+                    # 有回调，需要通过 ConceptResolver 处理
+                    # 这里我们需要使用不同的路径：直接委托给 ConceptResolver
+                    from .concept import ConceptResolver
+                    from .datasource import ICUDataSource
+                    from .config import load_src_cfg
+                    from pathlib import Path
+                    
+                    # 创建或获取数据源
+                    if self._data_source is not None:
+                        data_source = self._data_source
+                    else:
+                        # 创建新的数据源
+                        config = load_src_cfg(self._src_name)
+                        data_source = ICUDataSource(config, base_path=Path(self.data_path) if self.data_path else None)
+                    
+                    # 创建 ConceptResolver
+                    resolver = ConceptResolver(load_dictionary(self._src_name))
+                    
+                    # 使用 ConceptResolver 加载这个概念
+                    result_dict = resolver.load_concepts(
+                        [concept.name],
+                        data_source=data_source,
+                        merge=False,
+                        patient_ids=patient_ids,
+                        interval=interval,
+                        aggregate=aggregate,
+                        verbose=kwargs.get('verbose', False),
+                        **kwargs
+                    )
+                    
+                    # 提取结果
+                    if isinstance(result_dict, dict) and concept.name in result_dict:
+                        from .ts_utils import ICUTable
+                        result_table = result_dict[concept.name]
+                        if isinstance(result_table, ICUTable):
+                            result = result_table.data
+                        else:
+                            result = result_table
+                    else:
+                        result = pd.DataFrame()
             
             # 缓存结果
             self._concept_cache[cache_key] = result.copy() if len(result) > 0 else result
@@ -935,6 +1025,108 @@ class ConceptLoader:
         result = data.groupby(group_cols, as_index=False).agg(agg_dict)
         
         return result
+    
+    def _convert_time_to_hours(self, df: pd.DataFrame, id_type: str) -> pd.DataFrame:
+        """
+        将time列从datetime转换为相对ICU入院的小时数,并清理列格式以匹配ricu输出
+        
+        Args:
+            df: 包含time列的DataFrame
+            id_type: ID类型
+            
+        Returns:
+            time列转换为数值、列格式与ricu一致的DataFrame
+        """
+        print(f"[DEBUG _convert_time_to_hours] Input: shape={df.shape}, columns={df.columns.tolist()}, id_type={id_type}")
+        
+        if df.empty:
+            return df
+        
+        df = df.copy()
+        
+        # 检测时间列名(可能是time或charttime)
+        time_col_name = None
+        if 'time' in df.columns:
+            time_col_name = 'time'
+        elif 'charttime' in df.columns:
+            time_col_name = 'charttime'
+        
+        # 1. 转换时间列为相对小时数
+        if time_col_name and not pd.api.types.is_numeric_dtype(df[time_col_name]):
+            # 加载ICU入院时间
+            from pyricu.table import load_id_tbl
+            icu_times = load_id_tbl(self._src_name, id_type, path=self.data_path)
+            
+            if not icu_times.empty and 'intime' in icu_times.columns:
+                # 确定ID列名
+                id_col = self._get_id_column(df, id_type)
+                if id_col and id_col in df.columns:
+                    # 合并入院时间
+                    df = df.merge(icu_times[[id_col, 'intime']], on=id_col, how='left')
+                    
+                    # 转换时间列为相对小时数
+                    df[time_col_name] = pd.to_datetime(df[time_col_name], errors='coerce')
+                    df['intime'] = pd.to_datetime(df['intime'], errors='coerce')
+                    
+                    # 计算时间差(小时)
+                    time_diff = (df[time_col_name] - df['intime']).dt.total_seconds() / 3600
+                    df[time_col_name] = time_diff.round(2)
+                    
+                    # 删除intime辅助列
+                    df = df.drop(columns=['intime'])
+        
+        # 2. 清理列格式以匹配ricu输出
+        # 确定主ID列(根据id_type)
+        id_mappings = {
+            'patient': ['subject_id', 'patientid', 'patient_id'],
+            'hadm': ['hadm_id', 'admissionid', 'admission_id'],
+            'icustay': ['stay_id', 'icustay_id', 'patientunitstayid'],
+        }
+        
+        # 找到主ID列
+        id_col = None
+        possible_names = id_mappings.get(id_type, [id_type])
+        for name in possible_names:
+            if name in df.columns:
+                id_col = name
+                break
+        
+        if not id_col:
+            # 回退到_get_id_column
+            id_col = self._get_id_column(df, id_type)
+        
+        print(f"[DEBUG _convert_time_to_hours] id_col={id_col}, all columns={df.columns.tolist()}")
+        
+        # 移除多余的ID列(保留主ID列)
+        all_id_cols = set()
+        for names in id_mappings.values():
+            all_id_cols.update(names)
+        
+        extra_id_cols = [col for col in df.columns if col in all_id_cols and col != id_col]
+        
+        print(f"[DEBUG _convert_time_to_hours] all_id_cols={all_id_cols}, extra_id_cols={extra_id_cols}")
+        
+        if extra_id_cols:
+            df = df.drop(columns=extra_id_cols)
+            print(f"[DEBUG _convert_time_to_hours] After drop: columns={df.columns.tolist()}")
+        
+        # 3. 统一时间列名为charttime(ricu使用charttime)
+        if 'time' in df.columns:
+            df = df.rename(columns={'time': 'charttime'})
+            time_col_name = 'charttime'
+        
+        # 4. 调整列顺序: [id_col, charttime, concept1, concept2, ...]
+        cols = [id_col]
+        if time_col_name and time_col_name in df.columns:
+            cols.append(time_col_name)
+        
+        # 添加其他列(概念值、辅助列等)
+        other_cols = [col for col in df.columns if col not in cols]
+        cols.extend(other_cols)
+        
+        df = df[cols]
+        
+        return df
     
     def _merge_concepts(
         self,
@@ -1113,6 +1305,182 @@ class ConceptLoader:
         
         return None
 
+    def _ensure_id_column(self, df: pd.DataFrame, id_type: str) -> pd.DataFrame:
+        """Ensure the dataframe has the target ID column, augmenting if necessary."""
+        target_col = self._canonical_id_column(id_type)
+        
+        # Check if target column already exists
+        existing_col = self._get_id_column(df, id_type)
+        if existing_col:
+            return df
+            
+        # If not exists, try to map from other ID columns
+        available_ids = []
+        for col in df.columns:
+            if col in ['hadm_id', 'subject_id', 'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']:
+                available_ids.append(col)
+        
+        if not available_ids:
+            return df
+            
+        # Load ID lookup table
+        lookup = self._load_id_lookup()
+        if lookup.empty:
+            return df
+            
+        if target_col not in lookup.columns:
+            return df
+            
+        for avail_id in available_ids:
+            if avail_id in lookup.columns:
+                # Merge
+                subset = lookup[[avail_id, target_col]].dropna().drop_duplicates()
+                # Use left merge to preserve data rows
+                df = df.merge(subset, on=avail_id, how='left')
+                return df
+                
+        return df
+
+    def _filter_by_patient(
+        self, 
+        df: pd.DataFrame, 
+        patient_ids: Union[List, pd.DataFrame], 
+        id_type: str
+    ) -> pd.DataFrame:
+        """Filter dataframe by patient IDs."""
+        if patient_ids is None:
+            return df
+            
+        id_col = self._get_id_column(df, id_type)
+        if id_col:
+            filter_values: Optional[List[Any]] = None
+            if isinstance(patient_ids, pd.DataFrame):
+                if id_col in patient_ids.columns:
+                    filter_values = [val for val in patient_ids[id_col].tolist() if not pd.isna(val)]
+                else:
+                    canonical_col = self._canonical_id_column(id_type)
+                    if canonical_col in patient_ids.columns:
+                        base_values = [val for val in patient_ids[canonical_col].tolist() if not pd.isna(val)]
+                        filter_values = self._map_patient_ids_to_column(base_values, id_type, id_col)
+            else:
+                base_values = self._coerce_patient_list(patient_ids)
+                filter_values = self._map_patient_ids_to_column(base_values, id_type, id_col)
+
+            if filter_values is not None:
+                if not filter_values:
+                    return df.iloc[0:0] # Empty dataframe with same columns
+                df = df[df[id_col].isin(filter_values)]
+        
+        return df
+
+    def _preload_tables(
+        self,
+        concept_objs: List[Concept],
+        patient_ids: Optional[Union[List, pd.DataFrame]],
+        id_type: str,
+        verbose: bool = False
+    ):
+        """Preload and filter tables for all concepts."""
+        if verbose:
+            print("⚡ Preloading tables...")
+        
+        # 🚀 初始化 ICUDataSource（如果还没有）
+        # 这对 rec_cncpt 概念至关重要，因为 ConceptResolver 需要数据源对象
+        if self._data_source is None:
+            from .datasource import ICUDataSource
+            from pathlib import Path
+            self._data_source = ICUDataSource(
+                self.src,
+                base_path=Path(self.data_path) if self.data_path else None
+            )
+            if verbose:
+                print(f"  初始化数据源: {self._src_name}")
+            
+        # 1. Identify required tables and columns
+        table_columns = {} # table_name -> set of columns
+        
+        # Helper to process a concept
+        def process_concept(c):
+            sources = c.for_data_source(self.src)
+            for source in sources:
+                if not source.table:
+                    continue
+                
+                cols = self._columns_for_source(source, id_type)
+                if cols:
+                    if source.table not in table_columns:
+                        table_columns[source.table] = set()
+                    table_columns[source.table].update(cols)
+            
+            # Handle sub-concepts if available as objects
+            if hasattr(c, 'items') and c.items:
+                for sub in c.items.values():
+                    if isinstance(sub, Concept):
+                        process_concept(sub)
+
+        for concept in concept_objs:
+            process_concept(concept)
+        
+        # 2. Load and filter
+        for table_name, columns in table_columns.items():
+            if table_name in self._table_cache:
+                continue
+                
+            if verbose:
+                print(f"  Loading {table_name} with {len(columns)} columns...")
+            
+            try:
+                # 🚀 优化：如果有 data_source，使用它并传递患者过滤器以在读取时就过滤
+                if self._data_source is not None and patient_ids is not None:
+                    # 构造患者过滤器
+                    from .datasource import FilterSpec, FilterOp
+                    # 确定ID列名
+                    id_col = self._canonical_id_column(id_type)
+                    # 转换患者ID列表
+                    if isinstance(patient_ids, pd.DataFrame):
+                        if id_col in patient_ids.columns:
+                            patient_list = patient_ids[id_col].dropna().unique().tolist()
+                        else:
+                            patient_list = None
+                    else:
+                        patient_list = self._coerce_patient_list(patient_ids)
+                    
+                    if patient_list:
+                        patient_filter = FilterSpec(column=id_col, op=FilterOp.IN, value=patient_list)
+                        icu_table = self._data_source.load_table(
+                            table_name,
+                            columns=list(columns),
+                            filters=[patient_filter],
+                            verbose=verbose
+                        )
+                        df = icu_table.data
+                    else:
+                        # 没有有效的患者ID，回退到普通加载
+                        try:
+                            df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
+                        except:
+                            df = load_table(self._src_name, table_name, path=self.data_path)
+                        df = self._ensure_id_column(df, id_type)
+                        if patient_ids is not None:
+                            df = self._filter_by_patient(df, patient_ids, id_type)
+                else:
+                    # 没有 data_source 或 patient_ids，使用原有逻辑
+                    try:
+                        df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
+                    except:
+                        df = load_table(self._src_name, table_name, path=self.data_path)
+                    
+                    df = self._ensure_id_column(df, id_type)
+                    if patient_ids is not None:
+                        df = self._filter_by_patient(df, patient_ids, id_type)
+                
+                # Store in cache
+                self._table_cache[table_name] = df
+                
+            except Exception as e:
+                if verbose:
+                    print(f"  ⚠️  Failed to preload {table_name}: {e}")
+
 def load_concepts(
     concepts: Union[str, List[str]],
     src: Union[str, DataSource],
@@ -1137,5 +1505,6 @@ def load_concepts(
         >>> vitals = load_concepts(['hr', 'sbp', 'dbp'], 'mimic', 
         ...                        interval=timedelta(hours=1))
     """
-    loader = ConceptLoader(src)
+    data_path = kwargs.pop('data_path', None)
+    loader = ConceptLoader(src, data_path=data_path)
     return loader.load_concepts(concepts, **kwargs)
