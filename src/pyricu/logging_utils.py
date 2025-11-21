@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-
 def configure_logging(level: str | int = "INFO", *, force: bool = False) -> None:
     """Configure root logging for pyricu workloads.
 
@@ -35,6 +34,5 @@ def configure_logging(level: str | int = "INFO", *, force: bool = False) -> None
         datefmt="%Y-%m-%d %H:%M:%S",
         force=force,
     )
-
 
 __all__ = ["configure_logging"]

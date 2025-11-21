@@ -12,7 +12,6 @@ import pandas as pd
 
 from .table import ICUTable
 
-
 def stay_windows(
     data: pd.DataFrame,
     id_cols: List[str],
@@ -133,7 +132,6 @@ def stay_windows(
     
     return result_df
 
-
 def id_windows(
     data: pd.DataFrame,
     id_cols: List[str],
@@ -188,7 +186,6 @@ def id_windows(
     
     return windows
 
-
 def id_origin(
     data: pd.DataFrame,
     id_col: str,
@@ -219,7 +216,6 @@ def id_origin(
     origins.columns = [id_col, 'origin']
     
     return origins
-
 
 def upgrade_id(
     data: pd.DataFrame,
@@ -273,7 +269,6 @@ def upgrade_id(
     
     return result
 
-
 def change_id_type(
     table: ICUTable,
     target_id: str,
@@ -319,7 +314,6 @@ def change_id_type(
         time_columns=table.time_columns,
     )
 
-
 def merge_tables(
     tables: Sequence[ICUTable],
     *,
@@ -360,7 +354,6 @@ def merge_tables(
         result = pd.merge(result, table.data, on=on, how=how)
 
     return result
-
 
 def aggregate_table(
     table: ICUTable,
@@ -408,7 +401,6 @@ def aggregate_table(
         time_columns=table.time_columns,
     )
 
-
 def filter_table(
     table: ICUTable,
     condition: Any,
@@ -435,7 +427,6 @@ def filter_table(
         unit_column=table.unit_column,
         time_columns=table.time_columns,
     )
-
 
 def pivot_table(
     table: ICUTable,
@@ -464,7 +455,6 @@ def pivot_table(
         columns=columns,
         aggfunc=aggfunc,
     )
-
 
 def rename_columns(
     table: ICUTable,
@@ -496,7 +486,6 @@ def rename_columns(
         unit_column=unit_column,
         time_columns=time_columns,
     )
-
 
 def select_columns(
     table: ICUTable,
@@ -530,7 +519,6 @@ def select_columns(
         time_columns=time_columns,
     )
 
-
 def add_column(
     table: ICUTable,
     name: str,
@@ -557,7 +545,6 @@ def add_column(
         unit_column=table.unit_column,
         time_columns=table.time_columns,
     )
-
 
 def drop_columns(
     table: ICUTable,
@@ -590,7 +577,6 @@ def drop_columns(
         time_columns=time_columns,
     )
 
-
 def sort_table(
     table: ICUTable,
     by: List[str],
@@ -616,7 +602,6 @@ def sort_table(
         unit_column=table.unit_column,
         time_columns=table.time_columns,
     )
-
 
 # ============================================================================
 # Additional utilities from R ricu
@@ -665,7 +650,6 @@ def id_origin(
     
     return result
 
-
 def id_windows(
     data: pd.DataFrame,
     id_var: str = "icustay_id",
@@ -700,7 +684,6 @@ def id_windows(
     result = result.rename(columns={start_var: 'start', end_var: 'end'})
     
     return result
-
 
 def id_map(
     data: pd.DataFrame,
@@ -744,7 +727,6 @@ def id_map(
     result = result.sort_values([source_id, start_col])
     
     return result
-
 
 def change_id(
     data: pd.DataFrame,
@@ -795,7 +777,6 @@ def change_id(
     
     return result
 
-
 def merge_patid(
     data: pd.DataFrame,
     patient_ids: Optional[List[Any]] = None,
@@ -823,7 +804,6 @@ def merge_patid(
             raise ValueError(f"Patient ID column '{id_col}' not found")
     
     return data[data[id_col].isin(patient_ids)].copy()
-
 
 def re_time(
     times: pd.Series,

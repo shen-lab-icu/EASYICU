@@ -15,7 +15,6 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 class SeriesUtils:
     """Unified Series utility functions."""
 
@@ -74,7 +73,6 @@ class SeriesUtils:
                 result = pd.to_numeric(result, downcast='float')
 
         return result
-
 
 class DataFrameUtils:
     """Unified DataFrame utility functions."""
@@ -211,7 +209,6 @@ class DataFrameUtils:
 
         return pd.concat(results, ignore_index=True, sort=False)
 
-
 class TimeSeriesUtils:
     """Unified time series utility functions."""
 
@@ -301,7 +298,6 @@ class TimeSeriesUtils:
             result[value_cols] = result.groupby(id_cols)[value_cols].ffill()
             return result
 
-
 class ValidationUtils:
     """Unified validation utility functions."""
 
@@ -374,7 +370,6 @@ class ValidationUtils:
                     f"({memory_info['rows']:,} rows x {memory_info['cols']} cols)")
 
         return memory_info
-
 
 # Convenience functions for backward compatibility
 def is_true(series: Union[pd.Series, np.ndarray]) -> Union[pd.Series, np.ndarray]:

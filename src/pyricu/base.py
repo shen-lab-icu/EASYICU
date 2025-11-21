@@ -24,7 +24,6 @@ from .table import ICUTable
 
 logger = logging.getLogger(__name__)
 
-
 class BaseICULoader:
     """
     Unified base loader class that consolidates common initialization and loading logic.
@@ -523,7 +522,7 @@ class BaseICULoader:
             logger.info(f"⚡ 数据规模({len(all_patient_ids)}患者)，预加载功能暂时禁用")
             # if len(all_patient_ids) >= 1000:
             #     preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
-            #     logger.info(f"📦 大规模数据({len(all_patient_ids)}患者)，预加载大表: {', '.join(preload_tables)}")
+            #     logger.
             #     self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)
             # else:
             #     logger.info(f"⚡ 小规模数据({len(all_patient_ids)}患者)，跳过预加载以提升性能")
@@ -763,21 +762,17 @@ class BaseICULoader:
             seq = list(values)
         return seq
 
-
 def get_default_data_path(database: str) -> Optional[Path]:
     """Get default data path for database (convenience function)"""
     loader = BaseICULoader(database=database, verbose=False)
     return loader.data_path
-
 
 def detect_database_type() -> str:
     """Auto-detect database type from environment (convenience function)"""
     loader = BaseICULoader(verbose=False)
     return loader.database
 
-
 _PROCESS_WORKER_LOADER: Optional[BaseICULoader] = None
-
 
 def _init_parallel_chunk_worker(payload: Dict[str, Any]) -> None:
     """Initializer for process-based chunk workers."""
@@ -797,7 +792,6 @@ def _init_parallel_chunk_worker(payload: Dict[str, Any]) -> None:
     loader.concept_resolver = ConceptResolver(dictionary=loader.concept_dict)
     loader._thread_local_resolver = threading.local()
     _PROCESS_WORKER_LOADER = loader
-
 
 def _process_chunk_task(args: tuple) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """Execute a patient chunk inside a worker process."""

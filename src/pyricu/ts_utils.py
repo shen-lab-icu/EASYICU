@@ -27,7 +27,6 @@ except ImportError:
 
 from .table import ICUTable
 
-
 def _safe_group_apply(grouped, func):
     """Call groupby.apply explicitly keeping group columns in the result."""
     try:
@@ -36,7 +35,6 @@ def _safe_group_apply(grouped, func):
         return grouped.apply(func, include_groups=True)
     except TypeError:  # pandas < 2.1
         return grouped.apply(func)
-
 
 def change_interval(
     table: ICUTable | pd.DataFrame,
@@ -71,7 +69,7 @@ def change_interval(
     target_interval = pd.to_timedelta(interval if interval is not None else new_interval)
 
     def _detect_time_columns(df: pd.DataFrame) -> List[str]:
-        # 🔧 CRITICAL FIX: Exclude duration columns (timedelta) from time column rounding
+        # Exclude duration columns (timedelta) from time column rounding
         # Duration columns like norepi_dur, dopa_dur should NOT be rounded to interval
         # Only actual timestamp columns (datetime64) should be rounded
         # Common duration column patterns: *_dur, *_duration, duration
@@ -147,7 +145,7 @@ def change_interval(
     group_cols = list(table.id_columns) + [table.index_column]
 
     # Filter group_cols to only include columns that actually exist in the dataframe
-    # This handles cases where ID columns were filtered out during processing (e.g., eICU infusiondrug)
+    # This handles cases where ID columns were filtered out during processing (e.
     existing_group_cols = [col for col in group_cols if col in df.columns]
     if len(existing_group_cols) != len(group_cols):
         missing_cols = set(group_cols) - set(existing_group_cols)
@@ -209,7 +207,6 @@ def change_interval(
         time_columns=table.time_columns,
     )
 
-
 def stay_windows(
     table: ICUTable,
     start_var: str,
@@ -241,7 +238,6 @@ def stay_windows(
     result = result.drop_duplicates()
 
     return result
-
 
 def expand_intervals(
     table: ICUTable,
@@ -291,7 +287,6 @@ def expand_intervals(
         unit_column=table.unit_column,
         time_columns=table.time_columns,
     )
-
 
 def expand(
     data: pd.DataFrame,
@@ -396,7 +391,6 @@ def expand(
     
     return result
 
-
 def collapse(
     data: pd.DataFrame,
     id_cols: list,
@@ -455,7 +449,6 @@ def collapse(
     })
     
     return result
-
 
 def fill_gaps(
     data: pd.DataFrame,
@@ -668,7 +661,6 @@ def fill_gaps(
     result = pd.concat(filled_groups, ignore_index=True)
     return result
 
-
 def replace_na(
     data: pd.DataFrame,
     columns: Optional[list] = None,
@@ -747,7 +739,6 @@ def replace_na(
         return data.reset_index(drop=True)
     else:
         return _fill_na_single(data, columns, method, value, limit, max_gap, index_col)
-
 
 def _fill_na_single(
     data: pd.DataFrame,
@@ -832,7 +823,6 @@ def _fill_na_single(
     
     return data
 
-
 # 🚀 Numba-accelerated window computation core
 @jit(nopython=True, cache=True)
 def _compute_window_bounds(times: np.ndarray, before_val: float, after_val: float):
@@ -871,7 +861,6 @@ def _compute_window_bounds(times: np.ndarray, before_val: float, after_val: floa
         window_ends[i] = left
     
     return window_starts, window_ends
-
 
 def slide(
     data: pd.DataFrame,
@@ -929,7 +918,6 @@ def slide(
         # print(f"⚠️ 使用循环 slide (loop path, after={after})", flush=True)
         # Fallback to loop-based version for forward windows
         return _slide_loop(data, id_cols, index_col, before, after, agg_func, full_window)
-
 
 def _slide_vectorized(
     data: pd.DataFrame,
@@ -1094,7 +1082,6 @@ def _slide_vectorized(
     
     return pd.concat(results, ignore_index=True)
 
-
 def _slide_loop(
     data: pd.DataFrame,
     id_cols: list,
@@ -1176,7 +1163,6 @@ def _slide_loop(
         return pd.DataFrame()
     
     return pd.concat(results, ignore_index=True)
-
 
 def _slide_loop_single_group(
     group: pd.DataFrame,
@@ -1300,12 +1286,10 @@ def _slide_loop_single_group(
     
     return pd.DataFrame(results)
 
-
 # Remove old duplicated code below
 def _old_slide_code_placeholder():
     """This is a placeholder to mark where old code was removed."""
     pass
-
 
 def slide_index(
     data: pd.DataFrame,
@@ -1414,7 +1398,6 @@ def slide_index(
     
     return pd.DataFrame(results)
 
-
 def hop(
     data: pd.DataFrame,
     windows: pd.DataFrame,
@@ -1517,7 +1500,6 @@ def hop(
     
     return pd.DataFrame(results)
 
-
 def has_gaps(
     data: pd.DataFrame,
     id_cols: list,
@@ -1547,7 +1529,6 @@ def has_gaps(
     
     return False
 
-
 def is_regular(
     data: pd.DataFrame,
     id_cols: list,
@@ -1575,7 +1556,6 @@ def is_regular(
     
     # Check for gaps
     return not has_gaps(data, id_cols, index_col, interval)
-
 
 def slide_windows(
     table: ICUTable,
@@ -1650,7 +1630,6 @@ def slide_windows(
 
     return pd.DataFrame(windows)
 
-
 def locf(
     data: pd.DataFrame,
     id_cols: Optional[list] = None,
@@ -1720,7 +1699,6 @@ def locf(
             data = data.fillna(method='ffill')
     
     return data
-
 
 def locb(
     data: pd.DataFrame,
@@ -1792,7 +1770,6 @@ def locb(
     
     return data
 
-
 def calc_dur(
     data: pd.DataFrame,
     start_col: str,
@@ -1829,7 +1806,6 @@ def calc_dur(
     data[dur_col] = data[end_col] - data[start_col]
     
     return data
-
 
 def remove_gaps(
     data: pd.DataFrame,
@@ -1870,36 +1846,29 @@ def remove_gaps(
     
     return data[mask].copy()
 
-
 def hours(n: float) -> pd.Timedelta:
     """Create a timedelta representing n hours."""
     return pd.Timedelta(hours=n)
-
 
 def minutes(n: float) -> pd.Timedelta:
     """Create a timedelta representing n minutes."""
     return pd.Timedelta(minutes=n)
 
-
 def mins(n: float) -> pd.Timedelta:
     """Create a timedelta representing n minutes (alias for minutes)."""
     return pd.Timedelta(minutes=n)
-
 
 def days(n: float) -> pd.Timedelta:
     """Create a timedelta representing n days."""
     return pd.Timedelta(days=n)
 
-
 def secs(n: float) -> pd.Timedelta:
     """Create a timedelta representing n seconds."""
     return pd.Timedelta(seconds=n)
 
-
 def weeks(n: float) -> pd.Timedelta:
     """Create a timedelta representing n weeks."""
     return pd.Timedelta(weeks=n)
-
 
 def merge_ranges(
     data: pd.DataFrame,
@@ -1998,7 +1967,6 @@ def merge_ranges(
     
     return result_df
 
-
 def group_measurements(
     data: pd.DataFrame,
     id_cols: list,
@@ -2056,7 +2024,6 @@ def group_measurements(
 
     result = indexed.reset_index()
     return result.reset_index(drop=True)
-
 
 def create_intervals(
     data: pd.DataFrame,
@@ -2122,10 +2089,8 @@ def create_intervals(
     result = indexed.reset_index()
     return result.reset_index(drop=True)
 
-
 # Re-export for compatibility with ICUTable interface
 from .table import ICUTable  # noqa: E402
-
 
 def fill_gaps_table(
     table: ICUTable,
@@ -2162,9 +2127,7 @@ def fill_gaps_table(
         time_columns=table.time_columns,
     )
 
-
 # 新增函数 - 完全复刻 R ricu
-
 
 def round_to_interval(
     times: Union[pd.Series, pd.Index, pd.Timestamp, pd.Timedelta, timedelta, float, int],
@@ -2250,7 +2213,6 @@ def round_to_interval(
         return float(np.floor(times / step_hours) * step_hours)
 
     return times
-
 
 def aggregate_data(
     df: pd.DataFrame,

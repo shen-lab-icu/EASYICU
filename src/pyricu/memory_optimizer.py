@@ -14,7 +14,6 @@ import numpy as np
 from dataclasses import dataclass
 import warnings
 
-
 @dataclass
 class MemoryConfig:
     """Memory configuration for 16GB systems."""
@@ -34,7 +33,6 @@ class MemoryConfig:
     warning_threshold: float = 0.7  # 70% memory usage triggers warning
     cleanup_threshold: float = 0.85  # 85% triggers cleanup
     emergency_threshold: float = 0.95  # 95% triggers emergency cleanup
-
 
 class MemoryMonitor:
     """Monitor and manage memory usage during data processing."""
@@ -105,7 +103,6 @@ class MemoryMonitor:
 
         print(f"📊 [{operation}] Memory: {usage['process_mb']:.1f}MB "
               f"({usage['system_percent']:.1f}% system) [{pressure}]")
-
 
 class MemoryEfficientTable:
     """Memory-efficient DataFrame operations."""
@@ -236,7 +233,6 @@ class MemoryEfficientTable:
 
         return result
 
-
 class MemoryOptimizedCallbacks:
     """Memory-optimized versions of callback functions."""
 
@@ -365,7 +361,6 @@ class MemoryOptimizedCallbacks:
         else:
             return pd.DataFrame(columns=['stay_id', 'time', 'sofa'])
 
-
 # Global memory monitor instance
 _global_monitor = None
 
@@ -390,7 +385,7 @@ def optimize_for_16gb():
     # Configure pandas for memory efficiency
     pd.set_option('mode.chained_assignment', 'warn')
 
-    print(f"🔧 Optimized for 16GB RAM:")
+    print(f"Optimized for 16GB RAM:")
     print(f"   Chunk size: {config.chunk_size}")
     print(f"   Max workers: {config.max_workers}")
     print(f"   Cache limit: {config.cache_limit // (1024**2)}MB")

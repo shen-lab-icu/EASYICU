@@ -7,7 +7,6 @@ import pandas as pd
 import numpy as np
 import re
 
-
 class UnitConverter:
     """医学单位转换器 - 完整实现 R ricu 的单位转换功能"""
     
@@ -310,7 +309,6 @@ class UnitConverter:
         converted = cls.convert(series.values, from_unit, to_unit, substance)
         return pd.Series(converted, index=series.index, name=series.name)
 
-
 def convert_unit(value: Union[float, np.ndarray, 'pd.Series'],
                  from_unit: str, to_unit: str,
                  substance: Optional[str] = None) -> Union[float, np.ndarray, 'pd.Series']:
@@ -349,57 +347,46 @@ def convert_unit(value: Union[float, np.ndarray, 'pd.Series'],
     
     return UnitConverter.convert(value, from_unit, to_unit, substance)
 
-
 # 预定义的常用转换函数
 def celsius_to_fahrenheit(temp: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """摄氏度转华氏度"""
     return temp * 9/5 + 32
 
-
 def fahrenheit_to_celsius(temp: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """华氏度转摄氏度"""
     return (temp - 32) * 5/9
-
 
 def glucose_mg_to_mmol(glucose: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """葡萄糖 mg/dL -> mmol/L"""
     return glucose / 18.0
 
-
 def glucose_mmol_to_mg(glucose: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """葡萄糖 mmol/L -> mg/dL"""
     return glucose * 18.0
-
 
 def creatinine_mg_to_umol(creat: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """肌酐 mg/dL -> µmol/L"""
     return creat * 88.4
 
-
 def creatinine_umol_to_mg(creat: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """肌酐 µmol/L -> mg/dL"""
     return creat / 88.4
-
 
 def lactate_mg_to_mmol(lactate: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """乳酸 mg/dL -> mmol/L"""
     return lactate / 9.0
 
-
 def lactate_mmol_to_mg(lactate: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """乳酸 mmol/L -> mg/dL"""
     return lactate * 9.0
-
 
 def mmhg_to_kpa(pressure: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """压力 mmHg -> kPa"""
     return pressure * 0.133322
 
-
 def kpa_to_mmhg(pressure: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """压力 kPa -> mmHg"""
     return pressure / 0.133322
-
 
 def convert_vaso_rate(
     rate: Union[float, np.ndarray, 'pd.Series'],
@@ -492,5 +479,4 @@ def convert_vaso_rate(
         f"Unsupported vasopressor rate unit: '{from_unit}'. "
         f"Supported: 'ug/kg/min', 'ug/min', 'mg/h', 'mg/kg/h'"
     )
-
 

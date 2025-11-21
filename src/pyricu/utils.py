@@ -14,7 +14,6 @@ import warnings
 
 T = TypeVar('T')
 
-
 # ============================================================================
 # Numeric operations
 # ============================================================================
@@ -37,14 +36,12 @@ def round_to(x: Union[float, np.ndarray], to: float = 1.0) -> Union[float, np.nd
     """
     return np.round(x / to) * to
 
-
 def is_val(x: Union[Any, np.ndarray, pd.Series], val: Any) -> Union[bool, np.ndarray]:
     """Check if value equals val, ignoring NA (R ricu is_val)."""
     if isinstance(x, (np.ndarray, pd.Series)):
         return ~pd.isna(x) & (x == val)
     else:
         return not pd.isna(x) and x == val
-
 
 def not_val(x: Union[Any, np.ndarray, pd.Series], val: Any) -> Union[bool, np.ndarray]:
     """Check if value not equals val, ignoring NA (R ricu not_val)."""
@@ -53,14 +50,12 @@ def not_val(x: Union[Any, np.ndarray, pd.Series], val: Any) -> Union[bool, np.nd
     else:
         return not pd.isna(x) and x != val
 
-
 def val_or_na(x: Union[Any, np.ndarray, pd.Series], val: Any) -> Union[bool, np.ndarray]:
     """Check if value equals val or is NA (R ricu val_or_na)."""
     if isinstance(x, (np.ndarray, pd.Series)):
         return pd.isna(x) | (x == val)
     else:
         return pd.isna(x) or x == val
-
 
 # ============================================================================
 # Logical operations
@@ -73,14 +68,12 @@ def is_true(x: Union[bool, np.ndarray, pd.Series]) -> Union[bool, np.ndarray]:
     else:
         return not pd.isna(x) and x
 
-
 def is_false(x: Union[bool, np.ndarray, pd.Series]) -> Union[bool, np.ndarray]:
     """Check if value is False (not NA or False) (R ricu is_false)."""
     if isinstance(x, (np.ndarray, pd.Series)):
         return ~(pd.isna(x) | x)
     else:
         return not (pd.isna(x) or x)
-
 
 # ============================================================================
 # Sequence operations
@@ -95,7 +88,6 @@ def first_elem(x: Union[List, np.ndarray, pd.Series]) -> Any:
     else:
         return x[0] if len(x) > 0 else None
 
-
 def last_elem(x: Union[List, np.ndarray, pd.Series]) -> Any:
     """Get last element (R ricu last_elem)."""
     if isinstance(x, pd.Series):
@@ -105,14 +97,12 @@ def last_elem(x: Union[List, np.ndarray, pd.Series]) -> Any:
     else:
         return x[-1] if len(x) > 0 else None
 
-
 def rep_along(x: Any, times: Union[List, int]) -> List:
     """Repeat x along times (R ricu rep_along)."""
     if isinstance(times, int):
         return [x] * times
     else:
         return [x] * len(times)
-
 
 # ============================================================================
 # Functional programming utilities
@@ -122,18 +112,15 @@ def reduce(func: Callable, x: List, *args, **kwargs) -> Any:
     """Reduce a list with a function (R ricu reduce)."""
     return functools_reduce(lambda a, b: func(a, b, *args, **kwargs), x)
 
-
 def map_list(func: Callable, *iterables) -> List:
     """Map function over iterables, returning list (R ricu map)."""
     return list(map(func, *iterables))
-
 
 def do_call(func: Callable, args: List, kwargs: Optional[Dict] = None) -> Any:
     """Call function with args and kwargs (R ricu do_call)."""
     if kwargs is None:
         kwargs = {}
     return func(*args, **kwargs)
-
 
 # ============================================================================
 # List operations
@@ -151,7 +138,6 @@ def unlst(x: List, recursive: bool = False, use_names: bool = False) -> List:
             else:
                 result.append(item)
         return result
-
 
 def lst_inv(x: Dict[Any, List]) -> Dict[Any, Any]:
     """Invert a dictionary of lists (R ricu lst_inv).
@@ -172,7 +158,6 @@ def lst_inv(x: Dict[Any, List]) -> Dict[Any, Any]:
             result[value] = key
     return result
 
-
 # ============================================================================
 # Coalescing and default values
 # ============================================================================
@@ -189,7 +174,6 @@ def coalesce(*args) -> Any:
             return arg
     return None
 
-
 def rep_arg(arg: Any, names: List[str]) -> Dict[str, Any]:
     """Replicate argument for each name (R ricu rep_arg).
     
@@ -205,7 +189,6 @@ def rep_arg(arg: Any, names: List[str]) -> Dict[str, Any]:
     else:
         return {name: arg for name in names}
 
-
 # ============================================================================
 # Set operations
 # ============================================================================
@@ -216,7 +199,6 @@ def set_names(obj: Union[List, Dict], names: List[str]) -> Union[List, Dict]:
         return {name: val for name, val in zip(names, obj.values())}
     else:
         return dict(zip(names, obj))
-
 
 def new_names(old_names: List[str] = None, n: int = 1, 
               prefix: str = "V") -> List[str]:
@@ -243,7 +225,6 @@ def new_names(old_names: List[str] = None, n: int = 1,
     
     return new
 
-
 # ============================================================================
 # Time utilities
 # ============================================================================
@@ -252,11 +233,9 @@ def ms_as_mins(x: Union[int, float]) -> pd.Timedelta:
     """Convert milliseconds to minutes (R ricu ms_as_mins)."""
     return pd.Timedelta(minutes=x / 60000)
 
-
 def min_as_mins(x: Union[int, float]) -> pd.Timedelta:
     """Convert numeric minutes to timedelta (R ricu min_as_mins)."""
     return pd.Timedelta(minutes=x)
-
 
 # ============================================================================
 # Apply-like functions
@@ -267,30 +246,25 @@ def chr_ply(x: List, func: Callable, *args, length: int = 1,
     """Apply function expecting string results (R ricu chr_ply)."""
     return [str(func(item, *args, **kwargs)) for item in x]
 
-
 def lgl_ply(x: List, func: Callable, *args, length: int = 1,
            use_names: bool = False, **kwargs) -> List[bool]:
     """Apply function expecting boolean results (R ricu lgl_ply)."""
     return [bool(func(item, *args, **kwargs)) for item in x]
-
 
 def int_ply(x: List, func: Callable, *args, length: int = 1,
            use_names: bool = False, **kwargs) -> List[int]:
     """Apply function expecting integer results (R ricu int_ply)."""
     return [int(func(item, *args, **kwargs)) for item in x]
 
-
 def dbl_ply(x: List, func: Callable, *args, length: int = 1,
            use_names: bool = False, **kwargs) -> List[float]:
     """Apply function expecting float results (R ricu dbl_ply)."""
     return [float(func(item, *args, **kwargs)) for item in x]
 
-
 def col_ply(df: pd.DataFrame, cols: List[str], func: Callable,
            ply_func: Callable = lgl_ply, *args, **kwargs) -> Any:
     """Apply function to specified columns (R ricu col_ply)."""
     return ply_func([df[col] for col in cols], func, *args, **kwargs)
-
 
 # ============================================================================
 # Extract utilities
@@ -300,26 +274,21 @@ def lst_xtr(x: List[Dict], key: str) -> List:
     """Extract key from list of dicts (R ricu lst_xtr)."""
     return [item.get(key) for item in x]
 
-
 def chr_xtr(x: List[Dict], key: str, length: int = 1) -> List[str]:
     """Extract key as strings (R ricu chr_xtr)."""
     return chr_ply(x, lambda item: item.get(key, ""), length=length)
-
 
 def lgl_xtr(x: List[Dict], key: str, length: int = 1) -> List[bool]:
     """Extract key as booleans (R ricu lgl_xtr)."""
     return lgl_ply(x, lambda item: item.get(key, False), length=length)
 
-
 def int_xtr(x: List[Dict], key: str, length: int = 1) -> List[int]:
     """Extract key as integers (R ricu int_xtr)."""
     return int_ply(x, lambda item: item.get(key, 0), length=length)
 
-
 def dbl_xtr(x: List[Dict], key: str, length: int = 1) -> List[float]:
     """Extract key as floats (R ricu dbl_xtr)."""
     return dbl_ply(x, lambda item: item.get(key, 0.0), length=length)
-
 
 # ============================================================================
 # String utilities
@@ -329,16 +298,13 @@ def concat(*args, sep: str = ", ") -> str:
     """Concatenate strings (R ricu concat)."""
     return sep.join(str(arg) for arg in args)
 
-
 def quote_bt(x: str) -> str:
     """Quote string with backticks (R ricu quote_bt)."""
     return f"`{x}`"
 
-
 def enbraket(x: str) -> str:
     """Surround with brackets (R ricu enbraket)."""
     return f"[{x}]"
-
 
 # ============================================================================
 # Formatting utilities
@@ -353,11 +319,9 @@ def prcnt(x: Union[int, float, List], tot: Optional[Union[int, float]] = None) -
     
     return f"{(x / tot * 100):.1f}%"
 
-
 def big_mark(x: Union[int, float], sep: str = ",") -> str:
     """Format number with thousands separator (R ricu big_mark)."""
     return f"{x:,}".replace(",", sep)
-
 
 # ============================================================================
 # System utilities
@@ -368,12 +332,10 @@ def sys_name() -> str:
     import platform
     return platform.system()
 
-
 def sys_env(var: str, default: Optional[str] = None) -> Optional[str]:
     """Get environment variable (R ricu sys_env)."""
     import os
     return os.environ.get(var, default)
-
 
 # ============================================================================
 # Null handling
@@ -383,11 +345,9 @@ def not_null(x: Any) -> bool:
     """Check if not None (R ricu not_null)."""
     return x is not None
 
-
 def null_or(x: Any, func: Callable) -> bool:
     """Check if None or satisfies condition (R ricu null_or)."""
     return x is None or func(x)
-
 
 # ============================================================================
 # Aggregation utilities
@@ -413,7 +373,6 @@ def agg_or_na(agg_func: Callable) -> Callable:
         return agg_func(x, *args, **kwargs)
     
     return wrapper
-
 
 def min_or_na(x: Union[pd.Series, np.ndarray, List]) -> Any:
     """Return minimum or NA if all values are NA (R ricu min_or_na).
@@ -447,7 +406,6 @@ def min_or_na(x: Union[pd.Series, np.ndarray, List]) -> Any:
         if len(x_clean) == 0:
             return np.nan
         return min(x_clean)
-
 
 def max_or_na(x: Union[pd.Series, np.ndarray, List]) -> Any:
     """Return maximum or NA if all values are NA (R ricu max_or_na).
@@ -485,11 +443,9 @@ def max_or_na(x: Union[pd.Series, np.ndarray, List]) -> Any:
             return np.nan
         return max(x_clean)
 
-
 # Commonly used aggregation functions
 mean_or_na = agg_or_na(np.nanmean)
 sum_or_na = agg_or_na(np.nansum)
-
 
 # ============================================================================
 # Pandas-specific utilities
@@ -501,14 +457,12 @@ def safe_concat(dfs: List[pd.DataFrame], *args, **kwargs) -> pd.DataFrame:
         return pd.DataFrame()
     return pd.concat(dfs, *args, **kwargs)
 
-
 def safe_merge(left: pd.DataFrame, right: pd.DataFrame, 
               *args, **kwargs) -> pd.DataFrame:
     """Safely merge DataFrames, handling empty cases."""
     if len(left) == 0 or len(right) == 0:
         return pd.DataFrame()
     return pd.merge(left, right, *args, **kwargs)
-
 
 # ============================================================================
 # Additional utilities from R ricu
@@ -527,7 +481,6 @@ def split_msg(msg: str, width: int = 80) -> List[str]:
     import textwrap
     return textwrap.wrap(msg, width=width)
 
-
 def fmt_class(obj: Any) -> str:
     """Format object class name (R ricu fmt_class).
     
@@ -535,7 +488,6 @@ def fmt_class(obj: Any) -> str:
         String representation of class name
     """
     return obj.__class__.__name__
-
 
 def is_dt(x: Any) -> bool:
     """Check if datetime type (R ricu is_dt).
@@ -553,7 +505,6 @@ def is_dt(x: Any) -> bool:
     else:
         return isinstance(x, (pd.Timestamp, np.datetime64, pd.DatetimeIndex))
 
-
 def is_unique(x: Union[List, np.ndarray, pd.Series]) -> bool:
     """Check if all elements are unique (R ricu is_unique).
     
@@ -569,7 +520,6 @@ def is_unique(x: Union[List, np.ndarray, pd.Series]) -> bool:
         return len(x) == len(np.unique(x))
     else:
         return len(x) == len(set(x))
-
 
 def all_equal(x: Any, y: Any) -> bool:
     """Check if two values are equal (R ricu all_equal).
@@ -595,7 +545,6 @@ def all_equal(x: Any, y: Any) -> bool:
     
     return x == y
 
-
 def digest_lst(x: List) -> str:
     """Create hash digest of list (R ricu digest_lst).
     
@@ -608,7 +557,6 @@ def digest_lst(x: List) -> str:
     serialized = pickle.dumps(x, protocol=pickle.HIGHEST_PROTOCOL)
     return hashlib.md5(serialized).hexdigest()
 
-
 def digest(*args) -> str:
     """Create hash digest of arguments (R ricu digest).
     
@@ -620,7 +568,6 @@ def digest(*args) -> str:
     """
     return digest_lst(list(args))
 
-
 def cat_line(*args) -> None:
     """Print line (R ricu cat_line).
     
@@ -629,7 +576,6 @@ def cat_line(*args) -> None:
     """
     line = ' '.join(str(arg) for arg in args).rstrip()
     print(line)
-
 
 def unlst_str(x: List[str]) -> List[str]:
     """Unlist strings (R ricu unlst_str).
@@ -643,7 +589,6 @@ def unlst_str(x: List[str]) -> List[str]:
         List of strings
     """
     return [str(item) for item in x]
-
 
 def has_length(x: Any, length: Optional[int] = None) -> bool:
     """Check if object has length (R ricu has_length).
@@ -663,7 +608,6 @@ def has_length(x: Any, length: Optional[int] = None) -> bool:
     except TypeError:
         return False
 
-
 def is_scalar(x: Any) -> bool:
     """Check if scalar value (R ricu is.scalar).
     
@@ -674,7 +618,6 @@ def is_scalar(x: Any) -> bool:
         True if x is scalar
     """
     return np.isscalar(x) or (isinstance(x, (pd.Series, np.ndarray)) and len(x) == 1)
-
 
 def xtr_null(x: Dict, key: str, default: Any = None) -> Any:
     """Extract from dict or return default (R ricu xtr_null).
@@ -688,7 +631,6 @@ def xtr_null(x: Dict, key: str, default: Any = None) -> Any:
         Value from dict or default
     """
     return x.get(key, default)
-
 
 def chr_xtr_null(x: List[Dict], key: str, length: int = 1, 
                  default: str = "") -> List[str]:
@@ -705,12 +647,10 @@ def chr_xtr_null(x: List[Dict], key: str, length: int = 1,
     """
     return [str(xtr_null(item, key, default)) for item in x]
 
-
 def lgl_xtr_null(x: List[Dict], key: str, length: int = 1,
                  default: bool = False) -> List[bool]:
     """Extract key as booleans with null handling (R ricu lgl_xtr_null)."""
     return [bool(xtr_null(item, key, default)) for item in x]
-
 
 def int_xtr_null(x: List[Dict], key: str, length: int = 1,
                  default: int = 0) -> List[int]:
@@ -724,7 +664,6 @@ def int_xtr_null(x: List[Dict], key: str, length: int = 1,
             result.append(default)
     return result
 
-
 def dbl_xtr_null(x: List[Dict], key: str, length: int = 1,
                  default: float = 0.0) -> List[float]:
     """Extract key as floats with null handling (R ricu dbl_xtr_null)."""
@@ -736,7 +675,6 @@ def dbl_xtr_null(x: List[Dict], key: str, length: int = 1,
         except (ValueError, TypeError):
             result.append(default)
     return result
-
 
 def bullet(text: str, level: int = 1) -> str:
     """Create bulleted text (R ricu bullet).
@@ -751,7 +689,6 @@ def bullet(text: str, level: int = 1) -> str:
     bullets = {1: "•", 2: "○", 3: "-"}
     bullet_char = bullets.get(level, "•")
     return f"{bullet_char} {text}"
-
 
 def ensure_list(x: Any) -> List:
     """Ensure value is a list (pyricu utility).
@@ -771,7 +708,6 @@ def ensure_list(x: Any) -> List:
     else:
         return [x]
 
-
 def flatten_list(x: List[Any]) -> List[Any]:
     """Flatten nested list one level (pyricu utility).
     
@@ -788,7 +724,6 @@ def flatten_list(x: List[Any]) -> List[Any]:
         else:
             result.append(item)
     return result
-
 
 # ============================================================================
 # NA/NULL replacement utilities
@@ -843,7 +778,6 @@ def replace_na(
     else:
         return val if pd.isna(x) else x
 
-
 def has_interval(x: pd.DataFrame, id_vars: List[str], index_var: str) -> bool:
     """Check if time series has regular intervals (R ricu has_interval).
     
@@ -891,7 +825,6 @@ def has_interval(x: pd.DataFrame, id_vars: List[str], index_var: str) -> bool:
     
     return True
 
-
 def is_regular(x: Union[pd.Series, pd.DatetimeIndex, pd.TimedeltaIndex]) -> bool:
     """Check if time index is regular (R ricu is_regular).
     
@@ -921,7 +854,6 @@ def is_regular(x: Union[pd.Series, pd.DatetimeIndex, pd.TimedeltaIndex]) -> bool
     # Check if all differences are equal
     return np.all(diffs == diffs[0])
 
-
 def binary_op(op: Callable, value: Any) -> Callable:
     """Create unary function from binary operation (R ricu binary_op).
     
@@ -947,7 +879,6 @@ def binary_op(op: Callable, value: Any) -> Callable:
         return op(x, value)
     return unary_op
 
-
 def identity(x: Any) -> Any:
     """Identity function - returns input unchanged (R ricu identity).
     
@@ -965,7 +896,6 @@ def identity(x: Any) -> Any:
     """
     return x
 
-
 def compact(x: List) -> List:
     """Remove NULL/None values from list (R ricu compact).
     
@@ -981,7 +911,6 @@ def compact(x: List) -> List:
     """
     return [item for item in x if item is not None]
 
-
 def keep_cols(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
     """Keep only specified columns (R dplyr::select).
     
@@ -995,7 +924,6 @@ def keep_cols(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
     available = [c for c in cols if c in df.columns]
     return df[available].copy()
 
-
 def drop_cols(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
     """Drop specified columns (R dplyr::select with -).
     
@@ -1007,7 +935,6 @@ def drop_cols(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
         DataFrame with specified columns removed
     """
     return df.drop(columns=[c for c in cols if c in df.columns])
-
 
 def rename_cols(df: pd.DataFrame, rename_dict: Dict[str, str],
                 by_ref: bool = False) -> pd.DataFrame:
@@ -1034,7 +961,6 @@ def rename_cols(df: pd.DataFrame, rename_dict: Dict[str, str],
     else:
         return df.rename(columns=rename_dict)
 
-
 def arrange(df: pd.DataFrame, by: Union[str, List[str]], 
            ascending: Union[bool, List[bool]] = True) -> pd.DataFrame:
     """Sort DataFrame by columns (R dplyr::arrange).
@@ -1056,7 +982,6 @@ def arrange(df: pd.DataFrame, by: Union[str, List[str]],
         0  3  1
     """
     return df.sort_values(by=by, ascending=ascending).reset_index(drop=True)
-
 
 def distinct(df: pd.DataFrame, subset: Optional[List[str]] = None, 
             keep: str = 'first') -> pd.DataFrame:

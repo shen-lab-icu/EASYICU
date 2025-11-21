@@ -9,7 +9,6 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-
 class DataQualityValidator:
     """Validate data quality for ICU datasets."""
     
@@ -312,7 +311,6 @@ class DataQualityValidator:
         
         return report
 
-
 def validate_data_quality(
     data: pd.DataFrame,
     concept_name: str,
@@ -361,7 +359,6 @@ def validate_data_quality(
             report['duplicates'] = dup_check
     
     return report
-
 
 def print_quality_summary(report: Dict[str, Any]) -> None:
     """Print a human-readable summary of quality report.

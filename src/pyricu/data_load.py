@@ -18,7 +18,6 @@ from .src_utils import src_name
 from .ts_utils import change_interval, hours, mins, minutes
 from .table_meta import id_var_opts, default_vars, time_vars
 
-
 def load_src(
     x: Union[str, ICUDataSource, Any],
     rows: Optional[Callable] = None,
@@ -154,7 +153,6 @@ def load_src(
 
     return frame
 
-
 def load_difftime(
     x: Union[str, ICUDataSource, Any],
     rows: Optional[Callable] = None,
@@ -266,7 +264,6 @@ def load_difftime(
     # Return as IdTbl
     return as_id_tbl(data, id_vars=id_col)
 
-
 def load_id(
     x: Union[str, ICUDataSource, Any],
     rows: Optional[Callable] = None,
@@ -303,7 +300,6 @@ def load_id(
         tbl = change_id(tbl, id_var)
     
     return tbl
-
 
 def load_ts(
     x: Union[str, ICUDataSource, Any],
@@ -364,7 +360,6 @@ def load_ts(
     
     return ts_tbl
 
-
 def load_win(
     x: Union[str, ICUDataSource, Any],
     rows: Optional[Callable] = None,
@@ -418,7 +413,6 @@ def load_win(
     win_tbl = as_win_tbl(ts_tbl, dur_var=dur_var)
     
     return win_tbl
-
 
 def _resolve_id_hint(data: pd.DataFrame, config: DataSourceConfig, hint: Optional[str]) -> str:
     """Resolve ID column from hint (R ricu resolve_id_hint).

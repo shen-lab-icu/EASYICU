@@ -15,7 +15,6 @@ import pandas as pd
 from .config import SrcConfig
 from .file_utils import ensure_dirs_exist
 
-
 class SrcEnv:
     """Source environment for lazy loading tables (R ricu src_env).
     
@@ -202,10 +201,8 @@ class SrcEnv:
         """Check if table is available."""
         return table_name in self.list_tables()
 
-
 # Global registry of attached environments
 _attached_envs: Dict[str, SrcEnv] = {}
-
 
 def attached_srcs() -> List[str]:
     """List attached source names (R ricu attached_srcs).
@@ -221,7 +218,6 @@ def attached_srcs() -> List[str]:
     """
     return list(_attached_envs.keys())
 
-
 def get_src_env(name: str) -> Optional[SrcEnv]:
     """Get a source environment by name.
     
@@ -232,7 +228,6 @@ def get_src_env(name: str) -> Optional[SrcEnv]:
         SrcEnv if attached, None otherwise
     """
     return _attached_envs.get(name)
-
 
 def attach_src(
     name: str,
@@ -261,7 +256,6 @@ def attach_src(
     env = SrcEnv(name, config=config, data_dir=data_dir, auto_attach=True)
     return env
 
-
 def detach_src(name: str) -> None:
     """Detach a source environment (R ricu detach_src).
     
@@ -275,12 +269,10 @@ def detach_src(name: str) -> None:
         env = _attached_envs[name]
         env.detach()
 
-
 def detach_all_srcs() -> None:
     """Detach all source environments."""
     for name in list(_attached_envs.keys()):
         detach_src(name)
-
 
 def src_env_available(name: str) -> bool:
     """Check if a source environment is available.
@@ -308,7 +300,6 @@ def src_env_available(name: str) -> bool:
     except Exception:
         return False
 
-
 def is_tbl_avail(tbl: str, env: Union[str, SrcEnv]) -> bool:
     """Check if table is available in source (R ricu is_tbl_avail).
     
@@ -326,7 +317,6 @@ def is_tbl_avail(tbl: str, env: Union[str, SrcEnv]) -> bool:
         return False
     
     return tbl in env
-
 
 def src_tbl_avail(env: Union[str, SrcEnv], tbls: Optional[List[str]] = None) -> Dict[str, bool]:
     """Check availability of multiple tables (R ricu src_tbl_avail).
@@ -348,7 +338,6 @@ def src_tbl_avail(env: Union[str, SrcEnv], tbls: Optional[List[str]] = None) -> 
         tbls = env.list_tables()
     
     return {tbl: is_tbl_avail(tbl, env) for tbl in tbls}
-
 
 def src_data_avail(src: Union[str, List[str], SrcEnv] = None) -> pd.DataFrame:
     """Get data availability report (R ricu src_data_avail).
@@ -391,7 +380,6 @@ def src_data_avail(src: Union[str, List[str], SrcEnv] = None) -> pd.DataFrame:
     
     return pd.DataFrame(results)
 
-
 def is_data_avail(src: Union[str, List[str]] = None) -> Dict[str, bool]:
     """Check if all data is available for sources (R ricu is_data_avail).
     
@@ -403,7 +391,6 @@ def is_data_avail(src: Union[str, List[str]] = None) -> Dict[str, bool]:
     """
     df = src_data_avail(src)
     return dict(zip(df['name'], df['available']))
-
 
 class DataEnv:
     """Data environment manager (R ricu data_env).
@@ -507,7 +494,6 @@ class DataEnv:
         sources = ', '.join(self.sources.keys())
         return f"<DataEnv with {n_sources} sources: {sources}>"
 
-
 # Convenience functions
 
 def new_src_env(name: str, **kwargs) -> SrcEnv:
@@ -522,7 +508,6 @@ def new_src_env(name: str, **kwargs) -> SrcEnv:
     """
     return SrcEnv(name, **kwargs)
 
-
 def src_env_objects() -> Dict[str, SrcEnv]:
     """Get all attached source environment objects.
     
@@ -530,7 +515,6 @@ def src_env_objects() -> Dict[str, SrcEnv]:
         Dictionary mapping source names to SrcEnv objects
     """
     return _attached_envs.copy()
-
 
 def is_src_env(obj: Any) -> bool:
     """Check if object is a SrcEnv.

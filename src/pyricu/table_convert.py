@@ -11,7 +11,6 @@ import pandas as pd
 from .table import IdTbl, TsTbl, WinTbl, ICUTable, as_id_tbl, as_ts_tbl, as_win_tbl
 from .config import TableConfig, TableDefaults, IdentifierConfig, DataSourceConfig
 
-
 def reclass_tbl(x: Union[pd.DataFrame, IdTbl, TsTbl, WinTbl], 
                 to: Optional[str] = None) -> Union[pd.DataFrame, IdTbl, TsTbl, WinTbl]:
     """Reclassify table (R ricu reclass_tbl).
@@ -60,7 +59,6 @@ def reclass_tbl(x: Union[pd.DataFrame, IdTbl, TsTbl, WinTbl],
     
     raise ValueError(f"Unknown target class: {to}")
 
-
 def unclass_tbl(x: Union[IdTbl, TsTbl, WinTbl]) -> pd.DataFrame:
     """Unclassify table (R ricu unclass_tbl).
     
@@ -78,7 +76,6 @@ def unclass_tbl(x: Union[IdTbl, TsTbl, WinTbl]) -> pd.DataFrame:
     if isinstance(x, (IdTbl, TsTbl, WinTbl)):
         return x.data.copy()
     return x
-
 
 def as_col_cfg(x: Any) -> Dict[str, Any]:
     """Convert to column configuration (R ricu as_col_cfg).
@@ -118,7 +115,6 @@ def as_col_cfg(x: Any) -> Dict[str, Any]:
     
     return {}
 
-
 def as_id_cfg(x: Any) -> Dict[str, IdentifierConfig]:
     """Convert to ID configuration (R ricu as_id_cfg).
     
@@ -137,7 +133,6 @@ def as_id_cfg(x: Any) -> Dict[str, IdentifierConfig]:
             return config.id_configs
     
     return {}
-
 
 def as_src_cfg(x: Any) -> DataSourceConfig:
     """Convert to source configuration (R ricu as_src_cfg).
@@ -163,7 +158,6 @@ def as_src_cfg(x: Any) -> DataSourceConfig:
         return registry.get(x)
     
     raise TypeError(f"Cannot convert {type(x)} to DataSourceConfig")
-
 
 def as_tbl_cfg(x: Any, table_name: Optional[str] = None) -> TableConfig:
     """Convert to table configuration (R ricu as_tbl_cfg).
@@ -196,7 +190,6 @@ def as_tbl_cfg(x: Any, table_name: Optional[str] = None) -> TableConfig:
     
     raise TypeError(f"Cannot convert {type(x)} to TableConfig")
 
-
 def as_src_tbl(x: Any, src: Optional[str] = None) -> Any:
     """Convert to source table (R ricu as_src_tbl).
     
@@ -221,7 +214,6 @@ def as_src_tbl(x: Any, src: Optional[str] = None) -> Any:
         return x
     
     return x
-
 
 def as_ptype(x: Any) -> type:
     """Convert to prototype type (R ricu as_ptype).

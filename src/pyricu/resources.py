@@ -13,7 +13,6 @@ from .config import DataSourceRegistry
 
 _DATA_PACKAGE = "pyricu.data"
 
-
 @contextmanager
 def package_path(filename: str) -> Iterator[Path]:
     """Yield a filesystem path to a bundled data file."""
@@ -24,7 +23,6 @@ def package_path(filename: str) -> Iterator[Path]:
 
     with resources.as_file(resource) as extracted:
         yield Path(extracted)
-
 
 def _resolve_external(
     filename: str,
@@ -38,14 +36,12 @@ def _resolve_external(
             return candidate
     return None
 
-
 def _load_package_json(filename: str) -> object:
     resource = resources.files(_DATA_PACKAGE).joinpath(filename)
     if not resource.is_file():
         raise FileNotFoundError(f"{filename} not found in package data directory")
     text = resource.read_text(encoding="utf8")
     return json.loads(text)
-
 
 def _load_json_payload(
     name: str,
@@ -64,7 +60,6 @@ def _load_json_payload(
         raise TypeError(f"Expected mapping payload in {filename}, got {type(payload)!r}")
     return payload
 
-
 def resolve_resource(
     name: str,
     directories: Optional[Sequence[Path | str]] = None,
@@ -75,7 +70,6 @@ def resolve_resource(
 
     filename = name if name.endswith(suffix) else f"{name}{suffix}"
     return _resolve_external(filename, directories)
-
 
 def load_data_sources(
     name: str = "data-sources",
@@ -91,7 +85,6 @@ def load_data_sources(
         name if name.endswith(".json") else f"{name}.json"
     )
     return DataSourceRegistry.from_payload(payload)
-
 
 def load_dictionary(
     name: str = "concept-dict",

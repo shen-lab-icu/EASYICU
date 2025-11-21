@@ -15,7 +15,6 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
-
 class IdentifierConfig(BaseModel):
     """Describe one identifier system (e.g. patient, admission, icu stay)."""
 
@@ -27,7 +26,6 @@ class IdentifierConfig(BaseModel):
     table: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True)
-
 
 class TableDefaults(BaseModel):
     """Default metadata that describes how to interpret a table."""
@@ -51,7 +49,6 @@ class TableDefaults(BaseModel):
             return [str(item) for item in value]
         raise TypeError("time_vars must be a string or an iterable of strings")
 
-
 class DatasetOptions(BaseModel):
     """Optional declaration describing a PyArrow Dataset layout for a table."""
 
@@ -61,7 +58,6 @@ class DatasetOptions(BaseModel):
     options: Dict[str, object] = Field(default_factory=dict)
 
     model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
-
 
 class TableConfig(BaseModel):
     """Configuration for one logical table within a data source."""
@@ -124,7 +120,6 @@ class TableConfig(BaseModel):
         path = file_entry.get("path") or file_entry.get("file")
         return path
 
-
 class DataSourceConfig(BaseModel):
     """Complete configuration for a data source (e.g. ``mimic_demo``)."""
 
@@ -175,7 +170,6 @@ class DataSourceConfig(BaseModel):
     def id_options(self) -> Dict[str, IdentifierConfig]:
         return dict(self.id_configs)
 
-
 class DataSourceRegistry:
     """Container holding multiple :class:`DataSourceConfig` objects."""
 
@@ -211,7 +205,6 @@ class DataSourceRegistry:
         with path.open("r", encoding="utf8") as handle:
             payload = json.load(handle)
         return cls.from_payload(payload)
-
 
 # ============================================================================
 # Global configuration management (R ricu config-utils.R)
@@ -304,10 +297,8 @@ class GlobalConfig:
         items = [f"{k}={repr(v)}" for k, v in self._config.items()]
         return f"GlobalConfig({', '.join(items)})"
 
-
 # Global configuration instance
 global_config = GlobalConfig()
-
 
 def get_config(key: str, default: Any = None) -> Any:
     """Get global configuration value (R ricu get_config).
@@ -327,7 +318,6 @@ def get_config(key: str, default: Any = None) -> Any:
     """
     return global_config.get(key, default)
 
-
 def set_config(**kwargs) -> None:
     """Set global configuration values (R ricu set_config).
     
@@ -340,7 +330,6 @@ def set_config(**kwargs) -> None:
     """
     global_config.update(**kwargs)
 
-
 def reset_config() -> None:
     """Reset configuration to defaults (R ricu reset_config).
     
@@ -348,7 +337,6 @@ def reset_config() -> None:
         >>> reset_config()
     """
     global_config.reset()
-
 
 def list_config() -> Dict[str, Any]:
     """List all configuration options (R ricu list_config).
@@ -361,7 +349,6 @@ def list_config() -> Dict[str, Any]:
         >>> print(config['data_dir'])
     """
     return global_config.get_all()
-
 
 def load_src_cfg(src_name: str) -> DataSourceConfig:
     """
@@ -396,7 +383,6 @@ def load_src_cfg(src_name: str) -> DataSourceConfig:
             tables={}
         )
 
-
 # ============================================================================
 # Persistent Configuration Storage (R ricu config persistence)
 # ============================================================================
@@ -405,7 +391,6 @@ import os
 from pathlib import Path
 import json
 from typing import Any, Dict, Optional
-
 
 def get_config_dir() -> Path:
     """Get pyricu configuration directory (R ricu config_paths).
@@ -429,7 +414,6 @@ def get_config_dir() -> Path:
     
     return config_dir
 
-
 def get_config_file(name: str = 'pyricu') -> Path:
     """Get path to persistent configuration file (R ricu get_config_file).
     
@@ -440,7 +424,6 @@ def get_config_file(name: str = 'pyricu') -> Path:
         Path to configuration JSON file
     """
     return get_config_dir() / f'{name}.json'
-
 
 def save_config(config: Optional[Dict[str, Any]] = None, 
                 name: str = 'pyricu') -> None:
@@ -471,7 +454,6 @@ def save_config(config: Optional[Dict[str, Any]] = None,
         json.dump(serializable_config, f, indent=2)
     
     print(f"Configuration saved to {config_file}")
-
 
 def load_config(name: str = 'pyricu', 
                 merge: bool = True) -> Optional[Dict[str, Any]]:
@@ -507,7 +489,6 @@ def load_config(name: str = 'pyricu',
     
     return config
 
-
 def delete_config(name: str = 'pyricu') -> None:
     """Delete persistent configuration file (R ricu delete_config).
     
@@ -524,7 +505,6 @@ def delete_config(name: str = 'pyricu') -> None:
         print(f"Configuration file deleted: {config_file}")
     else:
         print(f"Configuration file not found: {config_file}")
-
 
 def list_config_files() -> List[str]:
     """List all saved configuration files (R ricu list_config_files).
@@ -544,7 +524,6 @@ def list_config_files() -> List[str]:
     
     config_files = list(config_dir.glob('*.json'))
     return [f.stem for f in config_files]
-
 
 def export_config(config: Dict[str, Any], 
                   output_file: Path) -> None:
@@ -572,7 +551,6 @@ def export_config(config: Dict[str, Any],
         json.dump(serializable_config, f, indent=2)
     
     print(f"Configuration exported to {output_file}")
-
 
 def import_config(input_file: Path, 
                   merge: bool = True) -> Dict[str, Any]:
@@ -605,7 +583,6 @@ def import_config(input_file: Path,
         global_config.update(**config)
     
     return config
-
 
 # ============================================================================
 # Configuration validation and migration
@@ -656,7 +633,6 @@ def validate_config(config: Optional[Dict[str, Any]] = None) -> bool:
     
     return valid
 
-
 def migrate_config(old_version: str = '0.1', 
                    new_version: str = '0.2') -> Dict[str, Any]:
     """Migrate configuration between versions (R ricu migrate_config).
@@ -679,7 +655,6 @@ def migrate_config(old_version: str = '0.1',
     # (Add logic here as configuration format evolves)
     
     return config
-
 
 # ============================================================================
 # Auto-load configuration on import
@@ -704,7 +679,6 @@ def load_data_sources() -> DataSourceRegistry:
         # Return empty registry if no config file found
         return DataSourceRegistry()
 
-
 def _auto_load_config():
     """Automatically load saved configuration when module is imported."""
     try:
@@ -713,7 +687,6 @@ def _auto_load_config():
             pass  # Config already merged
     except Exception:
         pass  # Silently ignore errors during auto-load
-
 
 # Auto-load on import
 _auto_load_config()

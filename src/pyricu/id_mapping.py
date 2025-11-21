@@ -15,11 +15,9 @@ from .table_meta import id_var_opts
 from .config import DataSourceConfig
 from .datasource import ICUDataSource
 
-
 # Cache for ID maps
 _id_map_cache: Dict[str, pd.DataFrame] = {}
 _id_origin_cache: Dict[str, pd.DataFrame] = {}
-
 
 def id_map(
     x: Union[str, DataSourceConfig, ICUDataSource],
@@ -91,7 +89,6 @@ def id_map(
     
     return as_id_tbl(res, id_vars=id_var)
 
-
 def id_map_helper(
     x: Union[str, DataSourceConfig, ICUDataSource],
     id_var: str,
@@ -154,7 +151,6 @@ def id_map_helper(
         # Fallback: try to construct from tables
         # This is a simplified implementation
         raise NotImplementedError(f"ID mapping from {id_var} to {win_var} requires table lookup")
-
 
 def id_origin(
     x: Union[str, DataSourceConfig, ICUDataSource],
@@ -221,7 +217,6 @@ def id_origin(
     
     return res
 
-
 def id_orig_helper(
     x: Union[str, DataSourceConfig, ICUDataSource],
     id: str,
@@ -287,7 +282,6 @@ def id_orig_helper(
     
     return as_id_tbl(result, id_vars=cfg.id)
 
-
 def id_windows(
     x: Union[str, DataSourceConfig, ICUDataSource],
     copy: bool = True,
@@ -323,7 +317,6 @@ def id_windows(
         res = res.copy()
     
     return res
-
 
 def id_win_helper(
     x: Union[str, DataSourceConfig, ICUDataSource],
@@ -432,7 +425,6 @@ def id_win_helper(
     # Use first ID as primary
     first_id = sorted_ids[0][1].id
     return as_id_tbl(result, id_vars=first_id)
-
 
 def as_src_env(x: Any) -> Any:
     """Convert to source environment (R ricu as_src_env).

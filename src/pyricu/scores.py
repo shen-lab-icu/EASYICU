@@ -14,7 +14,6 @@ from typing import Optional, Literal, Callable
 import pandas as pd
 import numpy as np
 
-
 def _locf(series: pd.Series) -> any:
     """Last observation carried forward (R ricu locf)."""
     # Get last non-NA value
@@ -22,7 +21,6 @@ def _locf(series: pd.Series) -> any:
     if len(non_na) > 0:
         return non_na.iloc[-1]
     return np.nan
-
 
 def _map_vals(values: list, breaks: list) -> Callable:
     """Map continuous values to discrete scores based on breaks.
@@ -47,7 +45,6 @@ def _map_vals(values: list, breaks: list) -> Callable:
         return values[-1]
     
     return mapper
-
 
 def sirs_score(
     temp: pd.DataFrame,
@@ -157,7 +154,6 @@ def sirs_score(
     
     return data[result_cols]
 
-
 def qsofa_score(
     gcs: pd.DataFrame,
     sbp: pd.DataFrame,
@@ -222,7 +218,6 @@ def qsofa_score(
         result_cols.extend(component_cols)
     
     return data[result_cols]
-
 
 def news_score(
     hr: pd.DataFrame,
@@ -352,7 +347,6 @@ def news_score(
         result_cols.extend(component_cols)
     
     return data[result_cols]
-
 
 def mews_score(
     hr: pd.DataFrame,
