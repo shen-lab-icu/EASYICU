@@ -330,6 +330,52 @@ class ICUDataSource:
             if column in frame.columns:
                 frame[column] = _coerce_datetime(frame[column])
 
+        # 🔧 自动补全 stay_id：某些表（如 prescriptions, labevents）只有 hadm_id，需要 JOIN icustays
+        # 这对于使用这些表的概念（如 delirium_tx）至关重要
+        if ('stay_id' not in frame.columns or frame['stay_id'].isna().all()) and 'hadm_id' in frame.columns:
+            # 检查是否为 MIMIC-IV 的 hospital 表
+            hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy']
+            if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo']:
+                try:
+                    # 加载 icustays 映射（仅需要 hadm_id 和 stay_id）
+                    icustays_map = self.load_table('icustays', columns=['hadm_id', 'stay_id'], verbose=False)
+                    icustays_df = icustays_map.data if hasattr(icustays_map, 'data') else icustays_map
+                    
+                    # 保存原始行数用于日志
+                    before_rows = len(frame)
+                    
+                    # JOIN 补全 stay_id
+                    frame = frame.merge(
+                        icustays_df[['hadm_id', 'stay_id']],
+                        on='hadm_id',
+                        how='inner',  # 只保留有 ICU 住院的记录
+                        suffixes=('', '_new')
+                    )
+                    
+                    # 清理可能的重复列
+                    if 'stay_id_new' in frame.columns:
+                        # 如果原来有 stay_id 列但是全 NaN，用新的替换
+                        frame['stay_id'] = frame['stay_id_new']
+                        frame = frame.drop(columns=['stay_id_new'])
+                    
+                    after_rows = len(frame)
+                    
+                    # 记录补全操作
+                    if verbose and before_rows != after_rows:
+                        logger.info(
+                            "🔧 表 %s: 通过 hadm_id 补全 stay_id (%d → %d 行)",
+                            table_name,
+                            before_rows,
+                            after_rows
+                        )
+                except Exception as e:
+                    # 如果补全失败，记录警告但不中断流程
+                    logger.warning(
+                        "⚠️  表 %s: 无法补全 stay_id: %s",
+                        table_name,
+                        str(e)
+                    )
+
         if verbose and logger.isEnabledFor(logging.INFO):
             id_label = id_columns[0] if id_columns else defaults.id_var or "N/A"
             unique_count = (

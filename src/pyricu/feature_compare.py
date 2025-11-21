@@ -539,7 +539,24 @@ class RicuPyricuComparator:
             df = frame.copy()
         if df.empty:
             return None
+        
+        # Enhanced ID column detection: try preferred column, then fallbacks
         id_col = self._detect_column(df, module.id_column, ID_CANDIDATES)
+        
+        # Special handling: if we got subject_id but need stay_id (or vice versa),
+        # convert it now using icustays mapping BEFORE renaming to "id"
+        needs_conversion = False
+        if id_col == "subject_id" and module.id_column == "stay_id":
+            needs_conversion = True
+        elif id_col == "stay_id" and module.id_column == "subject_id":
+            needs_conversion = True
+        
+        # Convert BEFORE renaming to preserve original column name
+        if needs_conversion:
+            df = self._convert_id_column(df, from_col=id_col, to_col=module.id_column)
+            # Update id_col to reflect the converted column
+            id_col = module.id_column
+        
         if id_col is None:
             return None
         rename_map = {id_col: "id"}
@@ -582,7 +599,10 @@ class RicuPyricuComparator:
             df["time"] = self._time_to_hours(df["time"], id_ref)
         if "time" in df.columns:
             df = df.dropna(subset=["time"])
+        
+        # Fill any remaining missing IDs
         df = self._fill_missing_ids(df)
+        
         if force_id is not None and "id" in df.columns:
             df["id"] = df["id"].fillna(force_id)
         df = df.dropna(subset=["id"]).reset_index(drop=True)
@@ -649,9 +669,45 @@ class RicuPyricuComparator:
         combined = combined.sort_values(sort_cols).reset_index(drop=True)
         return combined
 
-    def _fill_missing_ids(self, df: pd.DataFrame) -> pd.DataFrame:
-        if "id" not in df.columns or df["id"].notna().any():
+    def _convert_id_column(self, df: pd.DataFrame, from_col: str, to_col: str) -> pd.DataFrame:
+        """Convert between ID column types (e.g., subject_id <-> stay_id).
+        
+        This function expects the ORIGINAL column name (e.g., 'subject_id')
+        and replaces it with the target column (e.g., 'stay_id').
+        """
+        if from_col not in df.columns:
+            logger.warning(f"Cannot convert {from_col} to {to_col}: {from_col} not in columns")
             return df
+        
+        lookup = self._load_icustay_times()
+        if lookup.empty or from_col not in lookup.columns or to_col not in lookup.columns:
+            logger.warning(f"Cannot convert {from_col} to {to_col}: missing in lookup table")
+            return df
+        
+        # Build mapping table: from_col → to_col
+        bridge = lookup[[from_col, to_col]].dropna().drop_duplicates()
+        if bridge.empty:
+            logger.warning(f"Cannot convert {from_col} to {to_col}: no valid mappings")
+            return df
+        
+        # Merge directly on original column name
+        merged = df.merge(bridge, on=from_col, how="left")
+        
+        # Drop the old column, keep the new one
+        if from_col in merged.columns:
+            merged = merged.drop(columns=[from_col])
+        
+        return merged
+    
+    def _fill_missing_ids(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Fill missing ID values using backup ID columns."""
+        if "id" not in df.columns:
+            return df
+        
+        # If all IDs are present, nothing to do
+        if df["id"].notna().all():
+            return df
+        
         lookup = self._load_icustay_times()
         if lookup.empty:
             return df
@@ -668,6 +724,8 @@ class RicuPyricuComparator:
             if mapped_col in merged.columns:
                 merged["id"] = merged["id"].fillna(merged[mapped_col])
                 merged = merged.drop(columns=[mapped_col])
+        
+        # Clean up backup ID columns
         for cleanup in ("subject_id", "hadm_id", "patientunitstayid"):
             if cleanup in merged.columns:
                 merged = merged.drop(columns=[cleanup])
