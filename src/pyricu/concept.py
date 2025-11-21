@@ -80,6 +80,7 @@ class ConceptSource:
     value_var: Optional[str] = None
     unit_var: Optional[str] = None
     index_var: Optional[str] = None
+    dur_var: Optional[str] = None  # 持续时间列，可能是duration或endtime
     regex: Optional[str] = None
     class_name: Optional[str] = None
     callback: Optional[str] = None
@@ -118,6 +119,9 @@ class ConceptSource:
         index_var = payload.pop("index_var", payload.pop("time_var", None))
         if isinstance(index_var, bool):
             index_var = None
+        dur_var = payload.pop("dur_var", None)
+        if isinstance(dur_var, bool):
+            dur_var = None
 
         regex = payload.pop("regex", None)
         class_name = payload.pop("class", payload.pop("class_name", None))
@@ -132,6 +136,7 @@ class ConceptSource:
             value_var=str(value_var) if value_var is not None else None,
             unit_var=str(unit_var) if unit_var is not None else None,
             index_var=str(index_var) if index_var is not None else None,
+            dur_var=str(dur_var) if dur_var is not None else None,
             regex=str(regex) if regex is not None else None,
             class_name=str(class_name) if class_name is not None else None,
             callback=str(callback) if callback is not None else None,
@@ -1376,6 +1381,31 @@ class ConceptResolver:
                 }
             )
 
+            # 🔧 处理 dur_var：如果指定了 dur_var="endtime"，计算 duration = endtime - starttime
+            # 参考 R ricu load_win.R 中的 dur_is_end 逻辑
+            if source.dur_var and source.dur_var in frame.columns:
+                if source_index_column and source_index_column in frame.columns:
+                    # 检查 dur_var 是否是 endtime 类型（而不是 duration）
+                    # 如果是 datetime 类型，计算 duration = endtime - starttime
+                    if pd.api.types.is_datetime64_any_dtype(frame[source.dur_var]):
+                        # 确保 starttime 也是 datetime
+                        if not pd.api.types.is_datetime64_any_dtype(frame[source_index_column]):
+                            frame[source_index_column] = pd.to_datetime(frame[source_index_column], errors='coerce')
+                        
+                        # 计算 duration (timedelta)
+                        duration_col = concept_name + '_dur'
+                        frame[duration_col] = frame[source.dur_var] - frame[source_index_column]
+                        
+                        # ⚠️ IMPORTANT: 不要将duration列加入time_columns！
+                        # duration是时间间隔（timedelta），不是时间戳（datetime），不需要时间对齐
+                        # time_columns 只应包含需要对齐到ICU admission的datetime列
+                        
+                        # 从frame中删除原始的endtime列（WinTbl使用duration，不需要endtime）
+                        frame = frame.drop(columns=[source.dur_var])
+                        
+                        if DEBUG_MODE:
+                            print(f"   🔧 dur_var '{source.dur_var}' → duration '{duration_col}' (示例: {frame[duration_col].head(1).tolist()})")
+
             value_column = source.value_var or table.value_column
             if value_column is None:
                 raise ValueError(
@@ -1545,6 +1575,12 @@ class ConceptResolver:
             if '_duration_val' in frame.columns:
                 keep_cols.add('_duration_val')
             
+            # 🔧 保留 duration 列（如果存在），用于 WinTbl
+            # duration列通常命名为 concept_name + '_dur'
+            duration_col_name = concept_name + '_dur'
+            if duration_col_name in frame.columns:
+                keep_cols.add(duration_col_name)
+            
             # 只检查必需的列：id_columns, index_column, concept_name
             # 注意：对于多源概念，不同源可能使用不同的时间列名（如starttime vs charttime）
             # 所以对于索引列，我们只检查是否在数据中有任何时间列
@@ -1612,6 +1648,11 @@ class ConceptResolver:
             ordered_cols.append(concept_name)
             if source_unit_column and source_unit_column not in ordered_cols:
                 ordered_cols.append(source_unit_column)
+            
+            # 🔧 添加 duration 列（如果存在）
+            duration_col_name = concept_name + '_dur'
+            if duration_col_name in frame.columns and duration_col_name not in ordered_cols:
+                ordered_cols.append(duration_col_name)
             
             ordered_cols = [col for col in ordered_cols if col in frame.columns]
             
