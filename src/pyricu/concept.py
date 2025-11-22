@@ -588,6 +588,11 @@ class ConceptResolver:
 
         # 存储患者ID用于ricu格式转换
         self._last_patient_ids = list(patient_ids) if patient_ids else None
+        
+        # 🔧 关键修复：在merge模式下，设置标志以保留NaN行，匹配ricu的完整时间网格风格
+        if merge and len(names) > 1:
+            kwargs = dict(kwargs)  # 复制kwargs避免修改原始字典
+            kwargs['_keep_na_rows'] = True
 
         if merge and len(names) > 1 and any(
             aggregators[name] is False for name in names
@@ -845,11 +850,29 @@ class ConceptResolver:
                         
                         # DEBUG
                         if id_values:
+                            # ✅ 关键修复：对于 hospital tables（如 labevents），如果使用 subject_id 过滤
+                            # 需要在 metadata 中保存原始的 stay_id，供 datasource 在 join 后精确过滤
+                            metadata = None
+                            db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                            hospital_tables = ['labevents', 'prescriptions', 'microbiologyevents', 'emar', 'pharmacy']
+                            
+                            if (db_name in ['miiv', 'mimic_demo'] and 
+                                source.table in hospital_tables and 
+                                effective_id_var == 'subject_id' and 
+                                'stay_id' in expanded_patient_ids):
+                                # 保存原始 stay_id 到 metadata
+                                original_stay_ids = expanded_patient_ids.get('stay_id')
+                                if original_stay_ids:
+                                    metadata = {'original_stay_ids': original_stay_ids}
+                                    if DEBUG_MODE:
+                                        print(f"   💾 在 subject_id 过滤器中附加原始 stay_id: {len(original_stay_ids)} 个")
+                            
                             filters.append(
                                 FilterSpec(
                                     column=effective_id_var,
                                     op=FilterOp.IN,
                                     value=id_values,
+                                    metadata=metadata,
                                 )
                             )
                     else:
@@ -941,6 +964,14 @@ class ConceptResolver:
                             print(f"       前3行:\\n{table.data.head(3)}")
                     
                     frame = table.data.copy()
+                    
+                    # 🔍 DEBUG: 检查 datasource 返回的数据
+                    if source.table in ['labevents', 'microbiologyevents', 'inputevents']:
+                        has_stay_id = 'stay_id' in frame.columns
+                        has_subject_id = 'subject_id' in frame.columns
+                        print(f"   📊 [{source.table}] datasource返回: {len(frame)}行, stay_id={has_stay_id}, subject_id={has_subject_id}")
+                        if has_stay_id:
+                            print(f"       stay_id 唯一值: {frame['stay_id'].nunique()} 个")
                     
                     # 调试：检查过滤是否成功
                     if verbose and patient_ids and table.id_columns:
@@ -1135,24 +1166,20 @@ class ConceptResolver:
             if source.table in ['labevents', 'microbiologyevents', 'inputevents'] and 'subject_id' in frame.columns and 'stay_id' not in frame.columns:
                 if DEBUG_MODE: print(f"   ➡️  进入 MIMIC-IV 特殊处理: {source.table}")
                 try:
-                    # 仅加载相关subject的icustays，并携带intime/outtime用于窗口过滤
+                    # 仅加载相关stay的icustays，并携带intime/outtime用于窗口过滤
                     icustay_filters = []
                     # 保存expanded_patient_ids到当前作用域,避免后续locals()检查失效
                     current_expanded_patient_ids = None
+                    
+                    # 🔥 关键修复: 使用原始 stay_id 而不是 subject_id
+                    # 这样避免加载同一患者的所有ICU入住记录
                     if patient_ids:
-                        # 使用扩展后的 patient_ids（从外部作用域传入）
-                        # 因为expanded_patient_ids在外部作用域,这里无法直接访问,需要重新扩展
-                        current_expanded_patient_ids = self._expand_patient_ids(
-                            patient_ids, 
-                            'subject_id',  # labevents使用subject_id
-                            data_source,
-                            verbose=False
+                        # patient_ids 本身就是 stay_id 列表
+                        icustay_filters.append(
+                            FilterSpec(column='stay_id', op=FilterOp.IN, value=patient_ids)
                         )
-                        subj_vals = current_expanded_patient_ids.get('subject_id') if isinstance(current_expanded_patient_ids, dict) else current_expanded_patient_ids
-                        if subj_vals:
-                            icustay_filters.append(
-                                FilterSpec(column='subject_id', op=FilterOp.IN, value=subj_vals)
-                            )
+                        print(f"   🎯 [icustays] 使用原始 stay_id 过滤: {len(patient_ids)} 个, IDs={patient_ids}")
+                    
                     icustays = data_source.load_table('icustays', filters=icustay_filters if icustay_filters else None, verbose=verbose)
                     if hasattr(icustays, 'data'):
                         # 包含hadm_id以便匹配同一住院的数据
@@ -1161,6 +1188,8 @@ class ConceptResolver:
                     else:
                         cols = ['subject_id', 'stay_id', 'hadm_id', 'intime', 'outtime']
                         icu_df = icustays[[c for c in cols if c in icustays.columns]].drop_duplicates()
+                    
+                    print(f"   ✅ [icustays] 加载后: {len(icu_df)} stays, stay_id={sorted(icu_df['stay_id'].unique())[:10]}")
 
                     # 选择用于时间匹配的列
                     time_col = None
@@ -1462,8 +1491,9 @@ class ConceptResolver:
                         # duration是时间间隔（timedelta），不是时间戳（datetime），不需要时间对齐
                         # time_columns 只应包含需要对齐到ICU admission的datetime列
                         
-                        # 从frame中删除原始的endtime列（WinTbl使用duration，不需要endtime）
-                        frame = frame.drop(columns=[source.dur_var])
+                        # ⚠️ 不要立即删除endtime列！Callback (如mimv_rate)可能需要它
+                        # endtime列会在callback处理后自动清理
+                        # frame = frame.drop(columns=[source.dur_var])
                         
                         if DEBUG_MODE:
                             print(f"   dur_var '{source.dur_var}' → duration '{duration_col}' (示例: {frame[duration_col].head(1).tolist()})")
@@ -1603,10 +1633,14 @@ class ConceptResolver:
                 frame = frame[frame[concept_name] <= definition.maximum]
             
             # 在值范围过滤后，删除无效的NaN（但保留有效范围内的NaN用于后续处理）
+            # 🔧 关键修复：在merge模式下保留NaN行，以匹配ricu的完整时间网格风格
             if concept_name in frame.columns:
-                # 只删除明显无效的NaN（在值范围过滤之后）
-                # 这样可以确保有效值不会被误删
-                frame = frame.dropna(subset=[concept_name])
+                # 检查是否在merge模式（通过kwargs传递）
+                keep_na_rows = kwargs.get('_keep_na_rows', False)
+                if not keep_na_rows:
+                    # 只在非merge模式下删除NaN（单独加载概念时）
+                    frame = frame.dropna(subset=[concept_name])
+                # 在merge模式下，保留NaN行以便后续合并时创建完整时间网格
 
             # 如果使用了 apply_map(var='sub_var')，将映射后的 sub_var 复制到 concept_name
             if uses_sub_var_mapping and source.sub_var in frame.columns:
@@ -1765,6 +1799,15 @@ class ConceptResolver:
                 if frame.columns.duplicated().any():
                     # Keep only first occurrence of duplicate columns
                     frames[i] = frame.loc[:, ~frame.columns.duplicated()]
+            
+            # 🔍 DEBUG: 检查每个 frame 的患者数
+            if concept_name == 'plt':
+                print(f"\\n🔍 [plt合并] 准备合并 {len(frames)} 个 sources:")
+                for i, frame in enumerate(frames):
+                    if 'stay_id' in frame.columns:
+                        print(f"  Source {i+1}: {len(frame)}行, {frame['stay_id'].nunique()}个患者, IDs={sorted(frame['stay_id'].unique())[:5]}")
+                    else:
+                        print(f"  Source {i+1}: {len(frame)}行, 无stay_id列")
             
             combined = pd.concat(frames, ignore_index=True)
             
@@ -3726,9 +3769,6 @@ def _apply_callback(
         return frame
 
     expr = callback.strip()
-    
-    if DEBUG_MODE:
-        print(f"   应用回调: {expr} (输入行数={len(frame)})")
 
     if expr == "identity_callback":
         return frame
@@ -3959,9 +3999,6 @@ def _apply_callback(
         symbol, value = _parse_binary_op(arguments[0])
         new_unit = _strip_quotes(arguments[1]) if len(arguments) > 1 else None
         old_unit = _strip_quotes(arguments[2]) if len(arguments) > 2 else None
-        
-        if DEBUG_MODE:
-            print(f"       convert_unit: symbol={symbol}, value={value}, new_unit={new_unit}, old_unit={old_unit}")
 
         frame = frame.copy()
         
@@ -3979,30 +4016,21 @@ def _apply_callback(
             if old_unit:
                 case_flag = False
                 try:
-                    regex_mask = unit_series.str.contains(old_unit, case=case_flag, na=False, regex=True)
+                    mask = unit_series.str.contains(old_unit, case=case_flag, na=False, regex=True)
                 except re.error:
-                    regex_mask = unit_series.str.contains(re.escape(old_unit), case=case_flag, na=False, regex=True)
-                empty_mask = unit_series.str.strip().eq('').fillna(False) | unit_series.str.lower().eq('none')
-                mask = regex_mask | empty_mask
+                    mask = unit_series.str.contains(re.escape(old_unit), case=case_flag, na=False, regex=True)
+                # ⚠️ 不匹配空单位行: MIMIC-IV中单位为空时值已经正确
             else:
+                # 如果old_unit为None，转换所有行（R ricu行为）
                 mask = pd.Series(True, index=frame.index)
-            
-            if DEBUG_MODE:
-                print(f"       unit_var={actual_unit_var}, 匹配行数={mask.sum()}/{len(frame)}")
-                if mask.sum() > 0:
-                    print(f"       匹配的单位: {unit_series[mask].unique()[:5]}")
         else:
             mask = pd.Series(True, index=frame.index)
-            if DEBUG_MODE:
-                print(f"       无unit_var，处理所有行")
 
         numeric = pd.to_numeric(frame.loc[mask, concept_name], errors="coerce")
         transformed = _apply_binary_op(symbol, numeric, value)
+        
         # 明确转换类型以避免 dtype 不兼容警告
         frame.loc[mask, concept_name] = transformed.astype('float64')
-        
-        if DEBUG_MODE:
-            print(f"       转换后非NaN行数: {transformed.notna().sum()}/{len(transformed)}")
 
         # 更新单位列
         if new_unit and actual_unit_var and actual_unit_var in frame.columns:
@@ -4020,6 +4048,59 @@ def _apply_callback(
             nested_source = replace(source, callback=nested)
             frame_result = _apply_callback(frame_result, nested_source, concept_name, unit_column)
         return frame_result
+    
+    # Handle dex_to_10 callback (convert different dextrose concentrations to D10 equivalent)
+    # Format: dex_to_10(ids, factors) or dex_to_10(c(...), c(...))
+    match = re.fullmatch(r"dex_to_10\((.+)\)", expr, flags=re.DOTALL)
+    if match:
+        args = _split_arguments(match.group(1))
+        if len(args) >= 2:
+            # Parse itemids and factors
+            id_arg = args[0].strip()
+            factor_arg = args[1].strip()
+            
+            # Parse list/vector syntax: c(228140L, 220952L) or list(...)
+            def parse_vector(s):
+                # Handle c(...) or list(...)
+                vec_match = re.search(r'(?:c|list)\(([^)]+)\)', s)
+                if vec_match:
+                    items_str = vec_match.group(1)
+                    items = [int(re.sub(r'L$', '', x.strip())) for x in items_str.split(',')]
+                    return items
+                # Handle single value
+                else:
+                    return [int(re.sub(r'L$', '', s.strip()))]
+            
+            try:
+                itemids = parse_vector(id_arg)
+                factors = parse_vector(factor_arg)
+                
+                # Apply conversion factors
+                sub_var = source.sub_var if hasattr(source, 'sub_var') else 'itemid'
+                # Try to find the value column: concept_name, or unit_column (which is the value column before renaming)
+                val_col = None
+                if concept_name in frame.columns:
+                    val_col = concept_name
+                elif unit_column and unit_column in frame.columns:
+                    val_col = unit_column
+                # Fallback: try common value column names
+                elif 'rate' in frame.columns:
+                    val_col = 'rate'
+                elif 'amount' in frame.columns:
+                    val_col = 'amount'
+                elif 'valuenum' in frame.columns:
+                    val_col = 'valuenum'
+                
+                if sub_var in frame.columns and val_col:
+                    frame = frame.copy()
+                    for itemid, factor in zip(itemids, factors):
+                        mask = frame[sub_var] == itemid
+                        if mask.any():
+                            frame.loc[mask, val_col] = frame.loc[mask, val_col] * factor
+            except Exception:
+                # Silently skip if parsing fails
+                pass
+        return frame
     
     # Handle ts_to_win_tbl callback
     match = re.fullmatch(r"ts_to_win_tbl\((.+)\)", expr, flags=re.DOTALL)
@@ -4339,16 +4420,25 @@ def _apply_callback(
             end_col = source.params.get("dur_var") or source.params.get("end_var")
         if not end_col and "endtime" in frame.columns:
             end_col = "endtime"
-        if end_col and end_col in frame.columns and start_col and start_col in frame.columns:
-            start = pd.to_datetime(frame[start_col], errors="coerce")
-            stop = pd.to_datetime(frame[end_col], errors="coerce")
-            frame = frame.copy()
-            frame["__duration__"] = stop - start
-            duration_col = "__duration__"
-        elif end_col and end_col in frame.columns:
-            duration_col = end_col
-        elif "duration" in frame.columns:
-            duration_col = "duration"
+        
+        # 首先检查是否已经有计算好的duration列 (概念名_dur格式)
+        possible_dur_cols = [concept_name + '_dur', 'duration', '__duration__']
+        for col in possible_dur_cols:
+            if col in frame.columns:
+                duration_col = col
+                break
+        
+        # 如果没有现成的duration列，尝试从start和end计算
+        if not duration_col:
+            if end_col and end_col in frame.columns and start_col and start_col in frame.columns:
+                start = pd.to_datetime(frame[start_col], errors="coerce")
+                stop = pd.to_datetime(frame[end_col], errors="coerce")
+                frame = frame.copy()
+                frame["__duration__"] = stop - start
+                duration_col = "__duration__"
+            elif end_col and end_col in frame.columns:
+                duration_col = end_col
+        
         if not duration_col or duration_col not in frame.columns:
             return frame
         amount_col = concept_name
