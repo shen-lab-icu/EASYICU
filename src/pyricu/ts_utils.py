@@ -329,6 +329,59 @@ def expand(
     if keep_vars is None:
         keep_vars = []
     
+    # 🔧 CRITICAL FIX: Handle numeric time columns (hours since admission)
+    # When align_to_admission=True, time columns are converted to float (hours)
+    # We need to handle both datetime and numeric time formats
+    is_numeric_time = pd.api.types.is_numeric_dtype(data[start_var])
+    
+    if is_numeric_time:
+        # Numeric time (hours since admission) - use numeric expansion
+        # Convert step_size from Timedelta to hours
+        step_hours = step_size.total_seconds() / 3600.0
+        
+        # Determine end column
+        if end_var not in data.columns:
+            raise ValueError(f"End variable '{end_var}' not found in data")
+        
+        end_col = end_var
+        
+        # Filter valid rows (non-NA, start <= end)
+        valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
+        valid_data = data[valid_mask]
+        
+        if len(valid_data) == 0:
+            result_cols = [start_var] + id_cols + keep_vars
+            return pd.DataFrame(columns=result_cols)
+        
+        # Expand using numeric ranges
+        expanded_chunks = []
+        for idx, row in valid_data.iterrows():
+            start_hours = row[start_var]
+            end_hours = row[end_col]
+            
+            # Generate hourly time points
+            n_points = int((end_hours - start_hours) / step_hours) + 1
+            if n_points <= 0:
+                continue
+            
+            time_range = [start_hours + i * step_hours for i in range(n_points)]
+            
+            # Build chunk data
+            chunk_data = {start_var: time_range}
+            for col in id_cols + keep_vars:
+                if col in row.index:
+                    chunk_data[col] = [row[col]] * len(time_range)
+            
+            expanded_chunks.append(pd.DataFrame(chunk_data))
+        
+        if not expanded_chunks:
+            result_cols = [start_var] + id_cols + keep_vars
+            return pd.DataFrame(columns=result_cols)
+        
+        result = pd.concat(expanded_chunks, ignore_index=True)
+        return result
+    
+    # Original datetime expansion logic
     # 🚀 优化: 避免不必要的 copy，使用视图
     # Ensure start and end are datetime
     if not pd.api.types.is_datetime64_any_dtype(data[start_var]):

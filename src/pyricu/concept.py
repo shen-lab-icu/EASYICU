@@ -2274,6 +2274,22 @@ class ConceptResolver:
             
             data[index_column] = hours
             
+            # 🔧 CRITICAL FIX: Also convert ALL other datetime columns to relative hours
+            # This fixes the norepi_rate issue where starttime was float but endtime was datetime,
+            # causing expand() to generate 30 million invalid rows
+            # Common time columns that need conversion: endtime, stop_var, stoptime, etc.
+            time_related_cols = [col for col in data.columns 
+                                if col not in [index_column, 'intime', 'outtime', primary_id] 
+                                and pd.api.types.is_datetime64_any_dtype(data[col])]
+            
+            for time_col in time_related_cols:
+                # Remove timezone if present
+                if hasattr(data[time_col].dt, 'tz') and data[time_col].dt.tz is not None:
+                    data[time_col] = data[time_col].dt.tz_localize(None)
+                # Convert to hours since admission
+                time_diff_col = data[time_col] - data['intime']
+                data[time_col] = time_diff_col.dt.total_seconds() / 3600.0
+            
             # 注意：不过滤负时间（入ICU前）或超过outtime的数据，匹配 R ricu 行为
             
             # Drop the temporary alignment columns
@@ -3534,6 +3550,55 @@ class ConceptResolver:
         unit_column: Optional[str],
         aggregator: object,
     ) -> pd.DataFrame:
+        # 🚀 CRITICAL FIX for norepi_rate: WinTbl expand before aggregation
+        # R ricu does: aggregate(expand(...)), but pyricu was skipping expand
+        # 
+        # Check if this is WinTbl-style data (has endtime/duration)
+        # and needs to be expanded before aggregation
+        has_endtime = 'endtime' in frame.columns
+        has_duration = 'duration' in frame.columns
+        
+        if (has_endtime or has_duration) and index_column and aggregator not in (None, False):
+            # This is WinTbl data that needs expansion to time series
+            from .ts_utils import expand
+            import pandas as pd
+            
+            # Determine end column
+            end_col = 'duration' if has_duration else 'endtime'
+            
+            # Determine step size (default 1 hour for ICU data)
+            step_size = pd.Timedelta(hours=1)
+            
+            # Determine columns to keep (value columns + unit if present)
+            keep_vars = [concept_name] if concept_name in frame.columns else []
+            if unit_column and unit_column in frame.columns:
+                keep_vars.append(unit_column)
+            
+            # Additional value columns (not ID, not time, not end, not unit)
+            excluded = set(id_columns + [index_column, end_col])
+            if unit_column:
+                excluded.add(unit_column)
+            value_cols = [col for col in frame.columns 
+                         if col not in excluded and col != concept_name]
+            keep_vars.extend(value_cols)
+            
+            # Expand windows to hourly time series
+            try:
+                frame = expand(
+                    frame,
+                    start_var=index_column,
+                    end_var=end_col,
+                    step_size=step_size,
+                    id_cols=id_columns,
+                    keep_vars=keep_vars,
+                )
+                # After expand, index_column becomes the time column (no more endtime/duration)
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to expand WinTbl data for {concept_name}: {e}")
+                # Continue without expansion
+        
         key_cols = [col for col in id_columns if col]
         if index_column:
             key_cols.append(index_column)
