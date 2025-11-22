@@ -44,6 +44,7 @@ def change_interval(
     time_col: str = None,
     aggregation: Optional[str] = None,
     fill_gaps: bool = False,
+    fill_method: str = "none",
 ) -> ICUTable | pd.DataFrame:
     """Change the time resolution of a time series table.
     
@@ -190,12 +191,15 @@ def change_interval(
         fill_fn = globals().get("fill_gaps")
         if not callable(fill_fn):
             raise RuntimeError("fill_gaps helper is not available")
+        # 🔧 CRITICAL FIX: Use appropriate fill method based on concept type
+        # - "ffill": For medication rate concepts (locf behavior)
+        # - "none": For urine/vent_ind (only fill time points, not values)
         df = fill_fn(
             df,
             list(table.id_columns),
             table.index_column,
             target_interval,
-            method="none",
+            method=fill_method,
         )
 
     return ICUTable(
@@ -414,8 +418,14 @@ def expand(
         start = row[start_var]
         end = row[end_col]
         
-        # 生成时间范围
-        time_range = pd.date_range(start=start, end=end, freq=step_size)
+        # 🔧 CRITICAL FIX: Floor start time to hour boundary (match R ricu behavior)
+        # R ricu expands on hour boundaries, not on arbitrary start times
+        # Example: 06:08:00 → 06:00:00, then generate [06:00, 07:00, 08:00...]
+        # This ensures integer hours after conversion to relative time
+        start_floored = start.floor(step_size)
+        
+        # 生成时间范围 (从整点开始)
+        time_range = pd.date_range(start=start_floored, end=end, freq=step_size)
         n_points = len(time_range)
         
         if n_points == 0:

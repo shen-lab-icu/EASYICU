@@ -451,20 +451,22 @@ class RicuPyricuComparator:
     ) -> Dict[str, pd.DataFrame]:
         frames: Dict[str, pd.DataFrame] = {}
         
+        # 🔧 关键修复：id_type定义移到try块外,避免UnboundLocalError
+        id_type_map = {
+            'miiv': 'stay_id',
+            'mimic': 'icustay_id',
+            'eicu': 'patientunitstayid',
+            'aumc': 'admissionid',
+            'hirid': 'patientid',
+        }
+        id_type = id_type_map.get(self.database, 'icustay')
+        
         # 🔧 强制模仿 ricu.R：一次性加载整个模块的所有概念
         # ricu.R 使用 load_concepts(c('concept1', 'concept2', ...), interval=hours(1))
         # 这会将所有概念 merge 到共同的时间网格上，缺失值填充为 NA
         try:
             # 🔧 关键修复：明确指定使用 stay_id（或相应数据库的 ID 列）
             # 避免将 stay_id 误认为 subject_id 而加载多个 ICU stay
-            id_type_map = {
-                'miiv': 'stay_id',
-                'mimic': 'icustay_id',
-                'eicu': 'patientunitstayid',
-                'aumc': 'admissionid',
-                'hirid': 'patientid',
-            }
-            id_type = id_type_map.get(self.database, 'icustay')
             
             # 将 patient_ids 包装为字典格式以明确指定 ID 类型
             patient_ids_dict = None
@@ -562,19 +564,20 @@ class RicuPyricuComparator:
                                 # 只在过滤掉大量行时输出
                                 if original_rows != filtered_rows and (original_rows - filtered_rows > 100 or filtered_rows < original_rows * 0.5):
                                     print(f"   🔍 [{name}] 通过 subject_id→stay_id 过滤: {original_rows} → {filtered_rows} 行")
+                    
+                    if name == "fio2" and self._fio2_override is not None:
+                        frame = self._fio2_override.copy()
+                    series = self._normalize_concept_frame(frame, module, name)
+                    if self._should_retry_per_patient(series, frame):
+                        retry = self._reload_concept_per_patient(name, module)
+                        if retry is not None:
+                            series = retry
+                    if series is not None:
+                        frames[name] = series
                 
                 except Exception as exc:
                     print(f"   ⚠️  concept {name} failed in module {module.name}: {exc}")
                     continue
-                if name == "fio2" and self._fio2_override is not None:
-                    frame = self._fio2_override.copy()
-                series = self._normalize_concept_frame(frame, module, name)
-                if self._should_retry_per_patient(series, frame):
-                    retry = self._reload_concept_per_patient(name, module)
-                    if retry is not None:
-                        series = retry
-                if series is not None:
-                    frames[name] = series
 
         # 批量加载后不需要再次对齐，因为已经在共同的时间网格上了
         align_grid: Optional[pd.DataFrame] = None
