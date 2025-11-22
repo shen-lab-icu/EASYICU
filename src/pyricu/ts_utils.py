@@ -707,9 +707,9 @@ def fill_gaps(
         group = _assign_ids(group, id_vals)
 
         if method == "ffill":
-            group = group.fillna(method="ffill")
+            group = group.ffill()
         elif method == "bfill":
-            group = group.fillna(method="bfill")
+            group = group.bfill()
         elif method == "interpolate":
             numeric_cols = group.select_dtypes(include="number").columns
             group[numeric_cols] = group[numeric_cols].interpolate()
