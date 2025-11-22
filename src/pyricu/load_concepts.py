@@ -52,9 +52,10 @@ MINIMAL_COLUMNS_MAP = {
     # 包含value列以支持字符串型数据（如药物名称等）
     'chartevents': ['stay_id', 'charttime', 'itemid', 'value', 'valuenum', 'valueuom'],
     
-    # MIMIC-IV labevents: 只需要5列而非全部16列  
+    # MIMIC-IV labevents: 只需要6列而非全部16列  
     # 注意: labevents没有stay_id，需要subject_id+hadm_id后续关联
-    'labevents': ['subject_id', 'hadm_id', 'charttime', 'itemid', 'valuenum'],
+    # 包含valueuom用于单位转换回调（如CRP的mg/dL转mg/L）
+    'labevents': ['subject_id', 'hadm_id', 'charttime', 'itemid', 'valuenum', 'valueuom'],
     
     # MIMIC-IV inputevents: 输入事件的核心列
     # 包含hadm_id用于某些需要住院级别聚合的概念（如abx）

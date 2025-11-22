@@ -2326,27 +2326,43 @@ def _callback_sofa_score(
     for name in required:
         data[name] = data.get(name)
     
-    # CRITICAL: Fill gaps in time series (replicates R ricu fill_gaps(dat))
-    # This ensures all time points are present before sliding window calculation
+    # Fill gaps using data's inherent interval (matches R ricu fill_gaps(dat))
+    # R infers interval from data; we infer from median time diff in merged data
     if index_column and index_column in data.columns:
-        interval = ctx.interval or pd.Timedelta(hours=1)
-        # Fill gaps for each patient group
         id_cols_to_group = list(id_columns) if id_columns else []
-
-        if id_cols_to_group:
-            # Enable forward expansion for SOFA to match ricu's extended timelines
-            limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx, expand_forward=True)
-            data = fill_gaps(
-                data,
-                id_cols=id_cols_to_group,
-                index_col=index_column,
-                interval=interval,
-                limits=limits_df,
-                method="none",
-            )
-        
-        # Sort data by time
         data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
+        
+        # Infer interval from data (median time difference per patient)
+        if id_cols_to_group and len(data) > 1:
+            time_diffs = []
+            for _, group in data.groupby(id_cols_to_group):
+                if len(group) > 1:
+                    sorted_times = group[index_column].sort_values()
+                    diffs = sorted_times.diff().dropna()
+                    time_diffs.extend(diffs.tolist())
+            if time_diffs:
+                inferred_interval = pd.Series(time_diffs).median()
+                # Handle numeric (hours) vs timedelta
+                if isinstance(inferred_interval, (int, float)):
+                    # Numeric time in hours
+                    interval = pd.Timedelta(hours=max(1, round(inferred_interval)))
+                else:
+                    # Timedelta
+                    inferred_hours = round(inferred_interval.total_seconds() / 3600)
+                    interval = pd.Timedelta(hours=max(1, inferred_hours))
+                
+                # Fill gaps with inferred interval
+                # Use expand_forward=True to match ricu's symmetric timeline expansion
+                limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx, expand_forward=True)
+                data = fill_gaps(
+                    data,
+                    id_cols=id_cols_to_group,
+                    index_col=index_column,
+                    interval=interval,
+                    limits=limits_df,
+                    method="none",
+                )
+                data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
         
         # Apply sliding window to each component (replicates R ricu slide)
         agg_dict = {}
@@ -2367,9 +2383,9 @@ def _callback_sofa_score(
             )
     
     # Calculate total SOFA score (replicates R ricu rowSums(.SD, na.rm = TRUE))
-    # Smart interpolation for time=0 to match R ricu behavior
-    # Apply final calculation (sum components; NA treated as 0 via row sum)
-    data["sofa"] = data[required].fillna(0).sum(axis=1)
+    # R's na.rm=TRUE means skip NA, NOT fill with 0
+    # sum(axis=1, skipna=True) matches R behavior: only sum non-NA values
+    data["sofa"] = data[required].sum(axis=1, skipna=True)
     
     # Select output columns
     if keep_components:
@@ -2439,22 +2455,38 @@ def _callback_sofa2_score(
     
     # Fill gaps and apply sliding window (same logic as SOFA-1)
     if index_column and index_column in data.columns:
-        interval = ctx.interval or pd.Timedelta(hours=1)
         id_cols_to_group = list(id_columns) if id_columns else []
-        
-        if id_cols_to_group:
-            limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
-            data = fill_gaps(
-                data,
-                id_cols=id_cols_to_group,
-                index_col=index_column,
-                interval=interval,
-                limits=limits_df,
-                method="none",
-            )
-        
-        # Sort data by time
         data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
+        
+        # Infer interval from data (same as SOFA-1)
+        if id_cols_to_group and len(data) > 1:
+            time_diffs = []
+            for _, group in data.groupby(id_cols_to_group):
+                if len(group) > 1:
+                    sorted_times = group[index_column].sort_values()
+                    diffs = sorted_times.diff().dropna()
+                    time_diffs.extend(diffs.tolist())
+            
+            if time_diffs:
+                inferred_interval = pd.Series(time_diffs).median()
+                # Handle numeric (hours) vs timedelta
+                if isinstance(inferred_interval, (int, float)):
+                    interval = pd.Timedelta(hours=max(1, round(inferred_interval)))
+                else:
+                    inferred_hours = round(inferred_interval.total_seconds() / 3600)
+                    interval = pd.Timedelta(hours=max(1, inferred_hours))
+                
+                # Fill gaps with inferred interval (match SOFA-1)
+                limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx, expand_forward=True)
+                data = fill_gaps(
+                    data,
+                    id_cols=id_cols_to_group,
+                    index_col=index_column,
+                    interval=interval,
+                    limits=limits_df,
+                    method="none",
+                )
+                data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
         
         # Apply sliding window to each component
         agg_dict = {}
@@ -2474,11 +2506,10 @@ def _callback_sofa2_score(
             )
     
     # Calculate total SOFA-2 score (note: output column is 'sofa2')
+    # R's na.rm=TRUE means skip NA, NOT fill with 0
     data["sofa2"] = (
         data[required]
-        .fillna(0)
-        .astype(float)
-        .sum(axis=1)
+        .sum(axis=1, skipna=True)
         .round()
         .astype(int)
     )

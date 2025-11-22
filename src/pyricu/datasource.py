@@ -45,6 +45,7 @@ class FilterSpec:
     column: str
     op: FilterOp
     value: Any
+    metadata: Optional[Dict[str, Any]] = field(default=None)  # ✅ 存储额外信息，如原始 stay_id
     _value_set: Optional[set] = field(default=None, init=False, repr=False)  # ⚡ 缓存set版本的value
 
     def __post_init__(self):
@@ -235,6 +236,19 @@ class ICUDataSource:
         
         table_cfg = self.config.get_table(table_name)
 
+        # ✅ 关键修复：提前保存原始 stay_id 过滤器值
+        # 因为后续对于 hospital tables (labevents等) 会将 stay_id 转换成 subject_id/hadm_id
+        # 但转换后无法恢复原始 stay_id，导致 join 后引入额外患者
+        hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy']
+        original_stay_ids = None
+        if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo']:
+            if filters:
+                for spec in filters:
+                    if spec.column == 'stay_id' and spec.op == FilterOp.IN:
+                        original_stay_ids = set(spec.value)  # 保存原始目标 stay_ids
+                        print(f"💾 [{table_name}] 保存原始 stay_id 过滤器: {len(original_stay_ids)} 个患者")
+                        break
+
         # 🚀 优化1：优先使用预加载的表
         preloaded_frame = None
         with self._lock:
@@ -365,7 +379,9 @@ class ICUDataSource:
         # 自动补全 stay_id：某些表（如 prescriptions, labevents）只有 hadm_id，需要 JOIN icustays
         # 这对于使用这些表的概念（如 delirium_tx）至关重要
         if ('stay_id' not in frame.columns or frame['stay_id'].isna().all()) and 'hadm_id' in frame.columns:
-            # 检查是否为 MIMIC-IV 的 hospital 表
+            # ⚠️ 问题：对于 hospital tables (如 labevents), 原表没有 stay_id，需要通过 hadm_id join icustays 补全
+            # 但 join 会引入该 hadm_id 的所有 stay_id (同一住院可能多次ICU入住)
+            # 解决方案：在函数开始时已保存 original_stay_ids，join 后再过滤
             hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy']
             if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo']:
                 try:
@@ -411,15 +427,38 @@ class ICUDataSource:
                     
                     after_rows = len(frame)
                     
-                    # 关键修复：join 后需要再次应用 stay_id 过滤器（如果有）
-                    # 因为 join 可能产生了额外的 stay_ids（同一 subject 的多个 ICU stays）
-                    if filters:
-                        for spec in filters:
+                    # ✅ 关键修复：join 后必须再次应用原始 stay_id 过滤
+                    # 因为 join 可能产生了额外的 stay_ids (同一 subject 或 hadm_id 的多个 ICU stays)
+                    # 
+                    # 三种情况：
+                    # 1. 如果原始过滤器是 stay_id，使用保存的 original_stay_ids
+                    # 2. 如果原始过滤器是 subject_id，从 FilterSpec.metadata 中提取原始 stay_id
+                    # 3. 从 icustays_filters 中查找
+                    target_stay_ids = original_stay_ids
+                    
+                    if not target_stay_ids and icustays_filters:
+                        for spec in icustays_filters:
                             if spec.column == 'stay_id' and spec.op == FilterOp.IN:
-                                before_filter = len(frame)
-                                frame = spec.apply(frame)
-                                print(f"🔍 [{table_name}] 应用 stay_id 过滤: {before_filter}行 → {len(frame)}行 (保留{len(spec.value)}个stay_id)")
+                                target_stay_ids = set(spec.value)
+                                print(f"💡 [{table_name}] 从 stay_id 过滤器获取: {len(target_stay_ids)} stays")
                                 break
+                            elif spec.column == 'subject_id' and spec.op == FilterOp.IN:
+                                # 从 metadata 中提取原始 stay_ids
+                                if spec.metadata and 'original_stay_ids' in spec.metadata:
+                                    target_stay_ids = set(spec.metadata['original_stay_ids'])
+                                    print(f"💡 [{table_name}] 从 subject_id 过滤器的 metadata 获取原始 stay_id: {len(target_stay_ids)} stays")
+                                    break
+                    
+                    if target_stay_ids:
+                        before_filter = len(frame)
+                        if 'stay_id' in frame.columns:
+                            frame = frame[frame['stay_id'].isin(target_stay_ids)]
+                            print(
+                                f"🔍 [{table_name}] 应用 stay_id 过滤: {before_filter}行 → {len(frame)}行 "
+                                f"(保留 {len(target_stay_ids)} 个目标 stay_id)"
+                            )
+                        else:
+                            print(f"⚠️  [{table_name}] join 后仍无 stay_id 列，无法应用过滤")
                     
                     # 记录补全操作
                     if verbose and before_rows != after_rows:
@@ -429,6 +468,13 @@ class ICUDataSource:
                             before_rows,
                             after_rows
                         )
+                    
+                    # ✅ 关键修复：补全 stay_id 后，更新 id_columns
+                    # 这样下游 concept.py 会保留 stay_id 列而不是只保留 subject_id
+                    if 'stay_id' in frame.columns:
+                        id_columns = ['stay_id']
+                        print(f"✅ [{table_name}] 补全 stay_id 后更新 id_columns: subject_id → stay_id")
+                        
                 except Exception as e:
                     # 如果补全失败，记录警告但不中断流程
                     logger.warning(

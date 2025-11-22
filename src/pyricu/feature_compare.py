@@ -387,13 +387,19 @@ class RicuPyricuComparator:
 
         self._concept_cache: Dict[Tuple[str, bool], pd.DataFrame] = {}
 
-    def run(self) -> Dict[str, FeatureComparison]:
+    def run(self, module_filter: Optional[List[str]] = None) -> Dict[str, FeatureComparison]:
         self._ensure_fio2_patch()
         results: Dict[str, FeatureComparison] = {}
         print(
             f"⚙️  Loader profile [{self.database}]: {self._loader_defaults.summary()}"
         )
-        for module in MODULES:
+        modules_to_test = MODULES
+        if module_filter:
+            modules_to_test = [m for m in MODULES if m.name in module_filter]
+            if not modules_to_test:
+                available = ', '.join(m.name for m in MODULES)
+                raise ValueError(f"No valid modules found in {module_filter}. Available: {available}")
+        for module in modules_to_test:
             comparison = self._compare_module(module)
             results[module.name] = comparison
             self._print_module_summary(module, comparison)
