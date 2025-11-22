@@ -563,7 +563,7 @@ class RicuPyricuComparator:
                                 filtered_rows = len(frame)
                                 # 只在过滤掉大量行时输出
                                 if original_rows != filtered_rows and (original_rows - filtered_rows > 100 or filtered_rows < original_rows * 0.5):
-                                    print(f"   🔍 [{name}] 通过 subject_id→stay_id 过滤: {original_rows} → {filtered_rows} 行")
+                                    logger.debug(f"[{name}] 通过 subject_id→stay_id 过滤: {original_rows} → {filtered_rows} 行")
                     
                     if name == "fio2" and self._fio2_override is not None:
                         frame = self._fio2_override.copy()
@@ -859,7 +859,13 @@ class RicuPyricuComparator:
                 concept_has_value = result[concept].notna()
                 for time_col in ["endtime", "stoptime", "duration"]:
                     if time_col in result.columns:
-                        result.loc[~concept_has_value, time_col] = pd.NaT if time_col != "duration" else None
+                        # 修复 dtype 兼容性：先转换列类型再赋值
+                        if time_col != "duration":
+                            if not pd.api.types.is_datetime64_any_dtype(result[time_col]):
+                                result[time_col] = pd.to_datetime(result[time_col], errors='coerce')
+                            result.loc[~concept_has_value, time_col] = pd.NaT
+                        else:
+                            result.loc[~concept_has_value, time_col] = None
             
             # 🔧 关键修复：转换 endtime 从 datetime64 到小时数
             # 问题：批量加载时 starttime 已是小时数，但 endtime 仍是时间戳

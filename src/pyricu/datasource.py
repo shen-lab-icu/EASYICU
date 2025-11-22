@@ -393,12 +393,14 @@ class ICUDataSource:
                             # stay_id 或 subject_id 过滤器都可以用于过滤 icustays
                             if spec.column in ['stay_id', 'subject_id'] and spec.op == FilterOp.IN:
                                 icustays_filters.append(spec)
-                                print(f"🔍 [{table_name}] 提取患者ID过滤器: {spec.column} IN ({len(spec.value)} 个值)")
+                                if verbose:
+                                    logger.debug(f"[{table_name}] 提取患者ID过滤器: {spec.column} IN ({len(spec.value)} 个值)")
                                 # 不要 break，可能有多个过滤器
                     
                     # 加载 icustays 映射（需要 hadm_id, stay_id, subject_id）
                     # 如果有患者ID过滤器，传递给 icustays 以避免加载全表
-                    print(f"🔍 [{table_name}] 加载 icustays，filters={len(icustays_filters)}个")
+                    if verbose:
+                        logger.debug(f"[{table_name}] 加载 icustays，filters={len(icustays_filters)}个")
                     icustays_map = self.load_table(
                         'icustays', 
                         columns=['hadm_id', 'stay_id', 'subject_id'], 
@@ -406,7 +408,8 @@ class ICUDataSource:
                         verbose=False
                     )
                     icustays_df = icustays_map.data if hasattr(icustays_map, 'data') else icustays_map
-                    print(f"🔍 [{table_name}] icustays 加载完成: {len(icustays_df)} 行")
+                    if verbose:
+                        logger.debug(f"[{table_name}] icustays 加载完成: {len(icustays_df)} 行")
                     
                     # 保存原始行数用于日志
                     before_rows = len(frame)
@@ -440,25 +443,29 @@ class ICUDataSource:
                         for spec in icustays_filters:
                             if spec.column == 'stay_id' and spec.op == FilterOp.IN:
                                 target_stay_ids = set(spec.value)
-                                print(f"💡 [{table_name}] 从 stay_id 过滤器获取: {len(target_stay_ids)} stays")
+                                if verbose:
+                                    logger.debug(f"[{table_name}] 从 stay_id 过滤器获取: {len(target_stay_ids)} stays")
                                 break
                             elif spec.column == 'subject_id' and spec.op == FilterOp.IN:
                                 # 从 metadata 中提取原始 stay_ids
                                 if spec.metadata and 'original_stay_ids' in spec.metadata:
                                     target_stay_ids = set(spec.metadata['original_stay_ids'])
-                                    print(f"💡 [{table_name}] 从 subject_id 过滤器的 metadata 获取原始 stay_id: {len(target_stay_ids)} stays")
+                                    if verbose:
+                                        logger.debug(f"[{table_name}] 从 subject_id 过滤器的 metadata 获取原始 stay_id: {len(target_stay_ids)} stays")
                                     break
                     
                     if target_stay_ids:
                         before_filter = len(frame)
                         if 'stay_id' in frame.columns:
                             frame = frame[frame['stay_id'].isin(target_stay_ids)]
-                            print(
-                                f"🔍 [{table_name}] 应用 stay_id 过滤: {before_filter}行 → {len(frame)}行 "
-                                f"(保留 {len(target_stay_ids)} 个目标 stay_id)"
-                            )
+                            if verbose:
+                                logger.debug(
+                                    f"[{table_name}] 应用 stay_id 过滤: {before_filter}行 → {len(frame)}行 "
+                                    f"(保留 {len(target_stay_ids)} 个目标 stay_id)"
+                                )
                         else:
-                            print(f"⚠️  [{table_name}] join 后仍无 stay_id 列，无法应用过滤")
+                            if verbose:
+                                logger.warning(f"[{table_name}] join 后仍无 stay_id 列，无法应用过滤")
                     
                     # 记录补全操作
                     if verbose and before_rows != after_rows:
@@ -473,7 +480,8 @@ class ICUDataSource:
                     # 这样下游 concept.py 会保留 stay_id 列而不是只保留 subject_id
                     if 'stay_id' in frame.columns:
                         id_columns = ['stay_id']
-                        print(f"✅ [{table_name}] 补全 stay_id 后更新 id_columns: subject_id → stay_id")
+                        if verbose:
+                            logger.debug(f"[{table_name}] 补全 stay_id 后更新 id_columns: subject_id → stay_id")
                         
                 except Exception as e:
                     # 如果补全失败，记录警告但不中断流程

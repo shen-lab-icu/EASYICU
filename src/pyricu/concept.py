@@ -596,6 +596,7 @@ class ConceptResolver:
         align_to_admission: bool = True,  # Align time to ICU admission as anchor
         ricu_compatible: bool = False,  # Return ricu.R compatible format
         concept_workers: int = 1,
+        _batch_loading: bool = False,  # 🔧 批量加载模式标志，减少诊断输出
         **kwargs,  # Additional parameters for callbacks (e.g., win_length, worst_val_fun)
     ):
         names = [name for name in concept_names]
@@ -616,6 +617,10 @@ class ConceptResolver:
         if merge and len(names) > 1:
             kwargs = dict(kwargs)  # 复制kwargs避免修改原始字典
             kwargs['_keep_na_rows'] = True
+            # 设置批量加载标志以减少诊断输出
+            if len(names) > 3:  # 只在加载多个概念时启用
+                _batch_loading = True
+                kwargs['_batch_loading'] = True
 
         if merge and len(names) > 1 and any(
             aggregators[name] is False for name in names
@@ -717,6 +722,10 @@ class ConceptResolver:
         align_to_admission: bool = True,
         **kwargs,  # Additional parameters for callbacks
     ) -> ICUTable:
+        # 🔧 批量加载模式：减少诊断输出
+        batch_loading = kwargs.get('_batch_loading', False)
+        if batch_loading:
+            verbose = False  # 批量加载时抑制verbose输出
         definition = self.dictionary[concept_name]
         if definition.sub_concepts:  # Check for sub-concepts
             return self._load_recursive_concept(
@@ -993,16 +1002,16 @@ class ConceptResolver:
                     
                     frame = table.data.copy()
                     
-                    # 🔍 DEBUG: 检查 datasource 返回的数据
-                    if source.table in ['labevents', 'microbiologyevents', 'inputevents']:
+                    # 🔍 DEBUG: 检查 datasource 返回的数据（只在调试模式下显示）
+                    if DEBUG_MODE and source.table in ['labevents', 'microbiologyevents', 'inputevents']:
                         has_stay_id = 'stay_id' in frame.columns
                         has_subject_id = 'subject_id' in frame.columns
                         print(f"   📊 [{source.table}] datasource返回: {len(frame)}行, stay_id={has_stay_id}, subject_id={has_subject_id}")
                         if has_stay_id:
                             print(f"       stay_id 唯一值: {frame['stay_id'].nunique()} 个")
                     
-                    # 调试：检查过滤是否成功
-                    if verbose and patient_ids and table.id_columns:
+                    # 调试：检查过滤是否成功（只在调试模式下显示）
+                    if DEBUG_MODE and patient_ids and table.id_columns:
                         id_col = table.id_columns[0] if table.id_columns else None
                         if id_col and id_col in frame.columns:
                             unique_ids = frame[id_col].unique()
@@ -1828,8 +1837,8 @@ class ConceptResolver:
                     # Keep only first occurrence of duplicate columns
                     frames[i] = frame.loc[:, ~frame.columns.duplicated()]
             
-            # 🔍 DEBUG: 检查每个 frame 的患者数
-            if concept_name == 'plt':
+            # 🔍 DEBUG: 检查每个 frame 的患者数（只在调试模式下显示）
+            if DEBUG_MODE and concept_name == 'plt':
                 print(f"\\n🔍 [plt合并] 准备合并 {len(frames)} 个 sources:")
                 for i, frame in enumerate(frames):
                     if 'stay_id' in frame.columns:
