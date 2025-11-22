@@ -424,9 +424,32 @@ class ConceptResolver:
         if "lgl_cncpt" in class_names:
             return False
         
+        # 🔧 CRITICAL FIX: Fill gaps for medication rate concepts
+        # These concepts use expand() to generate hourly time series from intervals
+        # The last observation should carry forward (locf) until the next change
+        # Example: norepi infusion from hour 51-78 should have values at all hours
+        if concept.endswith('_rate') or concept.endswith('_equiv'):
+            return True
+        
         # Only a handful of concepts in ricu explicitly require dense hourly grids.
         fill_concepts = {"vent_ind", "urine", "urine24"}
         return concept in fill_concepts
+    
+    def _get_fill_method(self, concept_name: str, definition: ConceptDefinition) -> str:
+        """Determine fill method for fill_gaps.
+        
+        Returns:
+            - 'ffill': Forward fill for medication rate concepts (locf)
+            - 'none': Only fill time points for urine/vent_ind
+        """
+        concept = concept_name.lower()
+        
+        # Medication rate concepts need locf (last observation carried forward)
+        if concept.endswith('_rate') or concept.endswith('_equiv'):
+            return 'ffill'
+        
+        # Urine/vent_ind only need time grid, not value propagation
+        return 'none'
     
     def _expand_patient_ids(
         self, 
@@ -601,9 +624,14 @@ class ConceptResolver:
                 "Aggregation must be enabled for all concepts when merge=True."
             )
 
-        # Note: interval can be None, which means return raw time points without alignment
-        # Only force default interval if the user explicitly wants time series but didn't specify interval
-        # For now, respect None as "no interval"
+        # 🔧 CRITICAL FIX: Match R ricu's default interval behavior
+        # R ricu uses interval=hours(1L) by default when aggregation is enabled
+        # If user specifies aggregate but not interval, default to 1 hour
+        if interval is None and aggregate is not None and aggregate is not False:
+            # Check if any aggregator is not False
+            has_aggregation = any(agg is not False for agg in aggregators.values())
+            if has_aggregation:
+                interval = pd.Timedelta(hours=1)
         
         total = len(names)
 
@@ -1958,13 +1986,15 @@ class ConceptResolver:
             )
 
             fill_missing = self._should_fill_gaps(concept_name, definition)
+            fill_method = self._get_fill_method(concept_name, definition)
             
             # Apply interval change with aggregation (SINGLE aggregation on relative time)
             combined_result = change_interval(
                 temp_table,
                 interval=interval,
                 aggregation=agg_method,
-                fill_gaps=fill_missing
+                fill_gaps=fill_missing,
+                fill_method=fill_method
             )
             
             # Extract data if ICUTable is returned
@@ -2749,11 +2779,13 @@ class ConceptResolver:
             if agg_method and has_time_column and has_time_column in result.data.columns and not result.data.empty and not isinstance(result, WinTbl):
                 try:
                     fill_missing = self._should_fill_gaps(concept_name, definition)
+                    fill_method = self._get_fill_method(concept_name, definition)
                     combined_result = change_interval(
                         result,
                         interval=interval,
                         aggregation=agg_method,
-                        fill_gaps=fill_missing
+                        fill_gaps=fill_missing,
+                        fill_method=fill_method
                     )
                     
                     # Extract data if ICUTable is returned
@@ -3561,7 +3593,6 @@ class ConceptResolver:
         if (has_endtime or has_duration) and index_column and aggregator not in (None, False):
             # This is WinTbl data that needs expansion to time series
             from .ts_utils import expand
-            import pandas as pd
             
             # Determine end column
             end_col = 'duration' if has_duration else 'endtime'
