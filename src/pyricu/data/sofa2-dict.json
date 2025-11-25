@@ -148,7 +148,18 @@
           "ids": [
             223848,
             223849,
-            225411
+            225411,
+            227577,
+            227583,
+            225949
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "procedureevents",
+          "sub_var": "itemid",
+          "ids": [
+            225794
           ],
           "callback": "transform_fun(set_val(TRUE))"
         },
@@ -256,7 +267,7 @@
   },
   "ecmo_indication": {
     "class_name": "chr_cncpt",
-    "description": "ECMO indication (respiratory/cardiovascular)",
+    "description": "ECMO indication (respiratory/cardiovascular). Note: MIMIC-IV ECMO itemids use numeric values making VA/VV distinction difficult. Default to 'respiratory' per SOFA-2 guidelines; cardiovascular indication inferred from concurrent high-dose vasopressors in scoring logic.",
     "category": "respiratory",
     "sources": {
       "miiv": [
@@ -354,7 +365,11 @@
             224272,
             224322,
             225979,
-            220128
+            220128,
+            228154,
+            229254,
+            223775,
+            224363
           ],
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -523,6 +538,14 @@
             225803,
             225809,
             225955
+          ],
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            227290
           ],
           "callback": "transform_fun(set_val(TRUE))"
         }

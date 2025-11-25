@@ -248,9 +248,10 @@ def sofa_resp(pafi: pd.Series, vent_ind: Optional[pd.Series] = None) -> pd.Serie
     score[mask_300] = 2
     score[mask_400] = 1
 
-    # If no PaFi measurement and no ventilation status, drop the row (ricu wouldn't emit it)
-    missing_mask = pafi_num.isna() & ~vent_mask
-    score[missing_mask] = np.nan
+    # R ricu returns 0 if pafi is missing (via is_true checks failing)
+    # So we should NOT set missing values to NaN if we want to match R's behavior
+    # missing_mask = pafi_num.isna() & ~vent_mask
+    # score[missing_mask] = np.nan
 
     return score
 

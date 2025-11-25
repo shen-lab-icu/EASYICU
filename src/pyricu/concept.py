@@ -21,6 +21,7 @@ from .config import DataSourceConfig
 from .datasource import FilterOp, FilterSpec, ICUDataSource
 from .table import ICUTable, WinTbl
 from .concept_callbacks import ConceptCallbackContext, execute_concept_callback
+from . import ricu_compat
 
 logger = logging.getLogger(__name__)
 
@@ -424,15 +425,29 @@ class ConceptResolver:
         if "lgl_cncpt" in class_names:
             return False
         
-        # 🔧 CRITICAL FIX: Fill gaps for medication rate concepts
-        # These concepts use expand() to generate hourly time series from intervals
-        # The last observation should carry forward (locf) until the next change
-        # Example: norepi infusion from hour 51-78 should have values at all hours
+        # 🔧 CRITICAL FIX 2024-12: Do NOT fill gaps for medication rate concepts
+        # These concepts (norepi_rate, dobu_rate, etc.) have interval data (start/end times)
+        # and are already correctly expanded by expand() in _apply_aggregation.
+        # Global fill_gaps with ffill would incorrectly fill across DISCONTINUOUS time segments.
+        # Example: Patient with norepi from hour 8-150 and hour 980-982 would have
+        # hours 151-979 incorrectly filled with the value from hour 150.
+        # This caused pyricu coverage (90%) >> ricu coverage (36%) for norepi_rate.
+        # Solution: disable global fill_gaps; ricu handles this per-segment in expand().
         if concept.endswith('_rate') or concept.endswith('_equiv'):
-            return True
+            return False  # Changed from True to False
         
-        # Only a handful of concepts in ricu explicitly require dense hourly grids.
-        fill_concepts = {"vent_ind", "urine", "urine24"}
+        # 🔧 CRITICAL FIX: Do NOT fill gaps for vent_ind
+        # R ricu's vent_ind callback only returns time points where ventilation is active.
+        # It does NOT fill gaps between ventilation windows.
+        # The expand() function in sofa_resp handles vent_ind expansion, not fill_gaps.
+        # Filling gaps would create NaN rows for non-ventilated time points,
+        # which causes row inflation (67 → 157 rows for patient 30009597).
+        if concept == 'vent_ind':
+            return False
+        
+        # Only urine/urine24 concepts require fill_gaps for dense hourly grids.
+        # These concepts measure cumulative output and need complete time coverage.
+        fill_concepts = {"urine", "urine24"}
         return concept in fill_concepts
     
     def _get_fill_method(self, concept_name: str, definition: ConceptDefinition) -> str:
@@ -440,7 +455,7 @@ class ConceptResolver:
         
         Returns:
             - 'ffill': Forward fill for medication rate concepts (locf)
-            - 'none': Only fill time points for urine/vent_ind
+            - 'none': Only fill time points, do NOT fill values (keep NaN)
         """
         concept = concept_name.lower()
         
@@ -448,7 +463,12 @@ class ConceptResolver:
         if concept.endswith('_rate') or concept.endswith('_equiv'):
             return 'ffill'
         
-        # Urine/vent_ind only need time grid, not value propagation
+        # ⚠️ CRITICAL FIX: For urine/vent_ind, use 'none' to match ricu
+        # ricu does NOT fill missing urine values with 0 - it keeps them as NaN
+        # Only the time grid is filled, not the data values
+        # This prevents false coverage (pyricu 100% vs ricu 2.74% for urine)
+        
+        # Default to none (only fill time grid, keep NaN for missing values)
         return 'none'
     
     def _expand_patient_ids(
@@ -594,7 +614,7 @@ class ConceptResolver:
         verbose: bool = True,
         interval: Optional[pd.Timedelta] = None,  # Default 1 hour interval
         align_to_admission: bool = True,  # Align time to ICU admission as anchor
-        ricu_compatible: bool = False,  # Return ricu.R compatible format
+        ricu_compatible: bool = True,  # 默认启用ricu.R兼容格式
         concept_workers: int = 1,
         _batch_loading: bool = False,  # 🔧 批量加载模式标志，减少诊断输出
         **kwargs,  # Additional parameters for callbacks (e.g., win_length, worst_val_fun)
@@ -697,12 +717,11 @@ class ConceptResolver:
                     return self._to_ricu_format(tables[concept_name], concept_name)
                 return tables
 
-            merged = self._merge_tables(tables)
-
-            # 如果是ricu_compatible模式，转换为ricu.R格式
+            # 如果是ricu_compatible模式，使用增强的ricu风格合并
             if ricu_compatible:
-                return self._to_ricu_format_merged(merged, names)
+                return self._to_ricu_format_merged_enhanced(tables, names, interval)
 
+            merged = self._merge_tables(tables)
             return merged
         finally:
             with self._cache_lock:
@@ -989,8 +1008,25 @@ class ConceptResolver:
             else:
                 # 从数据源加载
                 try:
-                    # Load table with filters
-                    table = data_source.load_table(source.table, filters=filters, verbose=verbose)
+                    # 🔧 构建需要的列列表：基于 source 的 value_var, sub_var, unit_var, index_var
+                    # 这确保了像 eICU vitalperiodic 的 sao2 等特定值列会被加载
+                    extra_columns: List[str] = []
+                    if getattr(source, 'sub_var', None):
+                        extra_columns.append(source.sub_var)
+                    if getattr(source, 'value_var', None):
+                        extra_columns.append(source.value_var)
+                    if getattr(source, 'index_var', None):
+                        extra_columns.append(source.index_var)
+                    if getattr(source, 'unit_var', None):
+                        extra_columns.append(source.unit_var)
+                    
+                    # Load table with filters and required columns
+                    table = data_source.load_table(
+                        source.table, 
+                        columns=extra_columns if extra_columns else None,
+                        filters=filters, 
+                        verbose=verbose
+                    )
                     
                     # 🔍 DEBUG: 检查table.data
                     if DEBUG_MODE:
@@ -1215,7 +1251,7 @@ class ConceptResolver:
                         icustay_filters.append(
                             FilterSpec(column='stay_id', op=FilterOp.IN, value=patient_ids)
                         )
-                        print(f"   🎯 [icustays] 使用原始 stay_id 过滤: {len(patient_ids)} 个, IDs={patient_ids}")
+                        if DEBUG_MODE: print(f"   🎯 [icustays] 使用原始 stay_id 过滤: {len(patient_ids)} 个, IDs={patient_ids}")
                     
                     icustays = data_source.load_table('icustays', filters=icustay_filters if icustay_filters else None, verbose=verbose)
                     if hasattr(icustays, 'data'):
@@ -1226,7 +1262,27 @@ class ConceptResolver:
                         cols = ['subject_id', 'stay_id', 'hadm_id', 'intime', 'outtime']
                         icu_df = icustays[[c for c in cols if c in icustays.columns]].drop_duplicates()
                     
-                    print(f"   ✅ [icustays] 加载后: {len(icu_df)} stays, stay_id={sorted(icu_df['stay_id'].unique())[:10]}")
+                    if DEBUG_MODE: print(f"   ✅ [icustays] 加载后: {len(icu_df)} stays, stay_id={sorted(icu_df['stay_id'].unique())[:10]}")
+                    
+                    # 🔥 CRITICAL FIX: 为了实现 rolling join，需要加载同一 hadm_id 下的所有 stays
+                    # 这样才能正确判断数据点属于哪个 stay
+                    if 'hadm_id' in icu_df.columns and 'hadm_id' in frame.columns and len(icu_df) > 0:
+                        target_hadm_ids = icu_df['hadm_id'].unique().tolist()
+                        # 加载同一 hadm_id 下的所有 stays（用于 rolling join 时间边界判断）
+                        all_stays_in_hadm = data_source.load_table(
+                            'icustays',
+                            filters=[FilterSpec(column='hadm_id', op=FilterOp.IN, value=target_hadm_ids)],
+                            verbose=False
+                        )
+                        if hasattr(all_stays_in_hadm, 'data'):
+                            all_stays_df = all_stays_in_hadm.data[[c for c in cols if c in all_stays_in_hadm.data.columns]].drop_duplicates()
+                        else:
+                            all_stays_df = all_stays_in_hadm[[c for c in cols if c in all_stays_in_hadm.columns]].drop_duplicates()
+                        
+                        if len(all_stays_df) > len(icu_df):
+                            if DEBUG_MODE: print(f"   🔄 [Rolling Join准备] 同一 hadm_id 下有更多 stays: {len(icu_df)} → {len(all_stays_df)}")
+                            # 用完整的 stays 列表替换 icu_df，用于后续 rolling join
+                            icu_df = all_stays_df
 
                     # 选择用于时间匹配的列
                     time_col = None
@@ -1259,6 +1315,66 @@ class ConceptResolver:
                         else:
                             # 如果没有hadm_id，只能按subject_id匹配（可能混入其他住院数据）
                             tmp = frame.merge(icu_df, on='subject_id', how='inner')
+                        
+                        # CRITICAL FIX: 实现 ricu 的 rolling join 逻辑
+                        # 当同一个 hadm_id/subject_id 有多个 stay_id 时，数据会被复制到所有匹配的 stay_id
+                        # 需要根据时间将数据只保留在正确的 stay_id 下
+                        # ricu 使用 roll = -Inf (向前滚动)：数据分配给时间之后最近的 stay_id
+                        target_stay_ids = set(patient_ids) if patient_ids else None
+                        
+                        if time_col is not None and 'stay_id' in tmp.columns and 'intime' in tmp.columns and len(tmp) > 0:
+                            # 获取所有唯一的 stay_id 及其 intime，按 intime 排序
+                            stay_info = tmp[['stay_id', 'intime']].drop_duplicates().sort_values('intime')
+                            
+                            if len(stay_info) > 1:
+                                # 有多个 stay_id，需要实现 rolling join
+                                stays_list = stay_info['stay_id'].tolist()
+                                intimes_list = stay_info['intime'].tolist()
+                                
+                                if DEBUG_MODE:
+                                    print(f"      🔄 [Rolling Join] 检测到多个 stay_id: {stays_list}")
+                                    print(f"      🔄 [Rolling Join] 对应 intime: {intimes_list}")
+                                    print(f"      🔄 [Rolling Join] 目标 stay_id: {target_stay_ids}")
+                                
+                                # 为每个 stay_id 计算其有效时间范围
+                                # stay_i 的有效范围是: [prev_stay_outtime, next_stay_intime)
+                                # 但使用 roll = -Inf 意味着：data_time < next_stay_intime
+                                
+                                result_frames = []
+                                for i, (stay_id, intime) in enumerate(zip(stays_list, intimes_list)):
+                                    # 只处理用户请求的 stay_id
+                                    if target_stay_ids and stay_id not in target_stay_ids:
+                                        continue
+                                    
+                                    # 过滤属于当前 stay_id 的行
+                                    stay_mask = tmp['stay_id'] == stay_id
+                                    
+                                    if i < len(stays_list) - 1:
+                                        # 不是最后一个 stay，数据时间必须小于下一个 stay 的 intime
+                                        next_intime = intimes_list[i + 1]
+                                        time_mask = tmp[time_col] < next_intime
+                                        stay_data = tmp[stay_mask & time_mask].copy()
+                                        if DEBUG_MODE:
+                                            print(f"      🔄 [Rolling Join] stay_id={stay_id}: time < {next_intime}, 保留 {len(stay_data)} 行")
+                                    else:
+                                        # 最后一个 stay，没有时间上限
+                                        stay_data = tmp[stay_mask].copy()
+                                        if DEBUG_MODE:
+                                            print(f"      🔄 [Rolling Join] stay_id={stay_id}: 最后一个stay, 保留 {len(stay_data)} 行")
+                                    
+                                    result_frames.append(stay_data)
+                                
+                                if result_frames:
+                                    tmp = pd.concat(result_frames, ignore_index=True)
+                                    if DEBUG_MODE:
+                                        print(f"      🔄 [Rolling Join] 多 stay_id 时间过滤完成: {len(tmp)} 行")
+                        
+                        # 确保只保留用户请求的 stay_id（防止遗漏过滤）
+                        if target_stay_ids and 'stay_id' in tmp.columns:
+                            before_filter = len(tmp)
+                            tmp = tmp[tmp['stay_id'].isin(target_stay_ids)]
+                            if DEBUG_MODE and len(tmp) != before_filter:
+                                print(f"      🎯 [最终过滤] 只保留目标 stay_id: {before_filter} → {len(tmp)} 行")
 
                         # CRITICAL FIX: Load admission data to get hospital discharge time (ricu.
                         # ricu.R uses hospital admission window, not ICU window
@@ -2003,7 +2119,8 @@ class ConceptResolver:
                 interval=interval,
                 aggregation=agg_method,
                 fill_gaps=fill_missing,
-                fill_method=fill_method
+                fill_method=fill_method,
+                copy=False
             )
             
             # Extract data if ICUTable is returned
@@ -2422,6 +2539,8 @@ class ConceptResolver:
         # Prepare kwargs for sub-concepts, allowing them to be optional
         sub_kwargs = {**kwargs, '_allow_missing_concept': True}
         
+        # 🔥 CRITICAL: 内部递归调用必须使用 ricu_compatible=False
+        # 否则会返回 DataFrame 而不是 Dict[str, ICUTable]，导致后续处理失败
         sub_tables = self.load_concepts(
             sub_names,
             data_source,
@@ -2431,6 +2550,8 @@ class ConceptResolver:
             verbose=verbose,
             interval=interval,  # Pass interval to recursive calls
             align_to_admission=align_to_admission,  # Pass align flag
+            ricu_compatible=False,  # 🔥 内部调用必须返回 Dict[str, ICUTable]
+            concept_workers=1,  # 🔧 子概念顺序加载，避免过度并行导致线程竞争
             **sub_kwargs,  # Pass kwargs with allow_missing flag
         )
 
@@ -2794,7 +2915,8 @@ class ConceptResolver:
                         interval=interval,
                         aggregation=agg_method,
                         fill_gaps=fill_missing,
-                        fill_method=fill_method
+                        fill_method=fill_method,
+                        copy=False
                     )
                     
                     # Extract data if ICUTable is returned
@@ -3862,6 +3984,112 @@ class ConceptResolver:
             return result
         else:
             return frame
+
+    def _to_ricu_format_merged_enhanced(
+        self, 
+        tables: Mapping[str, ICUTable], 
+        concept_names: List[str],
+        interval: Optional[pd.Timedelta] = None,
+    ) -> pd.DataFrame:
+        """
+        将多个概念表以ricu风格合并，实现完整的时间网格对齐和窗口展开
+        
+        这是增强版本，直接在原始tables上操作，实现：
+        1. 窗口型概念的时间展开（mech_vent, *_rate等）
+        2. 统一时间网格构建
+        3. 所有概念对齐到网格
+        4. 静态概念填充
+        
+        Args:
+            tables: 概念名称到ICUTable的映射
+            concept_names: 概念名称列表（保持顺序）
+            interval: 时间间隔，默认1小时
+            
+        Returns:
+            ricu风格的宽格式DataFrame
+        """
+        interval_hours = 1.0
+        if interval is not None:
+            if hasattr(interval, 'total_seconds'):
+                interval_hours = interval.total_seconds() / 3600.0
+            elif isinstance(interval, (int, float)):
+                interval_hours = float(interval)
+            else:
+                interval_hours = 1.0
+        
+        # 将ICUTable转换为DataFrame字典
+        concept_data: Dict[str, pd.DataFrame] = {}
+        for name, table in tables.items():
+            if isinstance(table, ICUTable):
+                df = table.data.copy()
+                # 重命名值列为概念名
+                if name not in df.columns:
+                    # 查找可能的值列
+                    value_candidates = ['value', 'valuenum', table.index_column] if hasattr(table, 'index_column') else ['value', 'valuenum']
+                    for cand in value_candidates:
+                        if cand in df.columns and cand != name:
+                            df = df.rename(columns={cand: name})
+                            break
+                concept_data[name] = df
+            elif isinstance(table, pd.DataFrame):
+                df = table.copy()
+                if name not in df.columns:
+                    for cand in ['value', 'valuenum']:
+                        if cand in df.columns and cand != name:
+                            df = df.rename(columns={cand: name})
+                            break
+                concept_data[name] = df
+        
+        if not concept_data:
+            return pd.DataFrame()
+        
+        # 检测ID列和时间列
+        id_col = None
+        time_col = None
+        for df in concept_data.values():
+            if df is None or df.empty:
+                continue
+            # 检测ID列
+            for cand in ['stay_id', 'subject_id', 'patientunitstayid', 'admissionid', 'patientid']:
+                if cand in df.columns:
+                    id_col = cand
+                    break
+            # 检测时间列
+            for cand in ['charttime', 'time', 'starttime', 'index_var', 'measuredat']:
+                if cand in df.columns:
+                    time_col = cand
+                    break
+            if id_col and time_col:
+                break
+        
+        if not id_col:
+            id_col = 'stay_id'  # 默认值
+        if not time_col:
+            time_col = 'charttime'  # 默认值
+        
+        # 使用ricu_compat模块进行合并
+        result = ricu_compat.merge_concepts_ricu_style(
+            concept_data,
+            id_col=id_col,
+            time_col=time_col,
+            interval_hours=interval_hours,
+        )
+        
+        # 确保概念列按请求的顺序排列
+        final_cols = [id_col, time_col]
+        for name in concept_names:
+            if name in result.columns:
+                final_cols.append(name)
+        
+        # 添加任何其他值列（可能是子组件）
+        for col in result.columns:
+            if col not in final_cols:
+                final_cols.append(col)
+        
+        final_cols = [c for c in final_cols if c in result.columns]
+        result = result[final_cols]
+        
+        return result
 
 def _apply_callback(
     frame: pd.DataFrame,

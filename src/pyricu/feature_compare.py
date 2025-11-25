@@ -58,170 +58,27 @@ from .project_config import (
 )
 from .runtime_defaults import resolve_loader_defaults
 
-@dataclass
-class FeatureModule:
-    """Metadata describing a ricu CSV <-> pyricu concept family."""
+# Import shared configuration from modules_config
+from .modules_config import (
+    FeatureModule,
+    MODULES,
+    MODULES_BY_NAME,
+    ALL_CONCEPTS,
+    SOFA_COMPONENT_DEPENDENCIES,
+    SUPPORTED_DATABASES,
+    DATABASE_ID_COLUMNS,
+    ID_CANDIDATES,
+    TIME_CANDIDATES,
+)
 
-    name: str
-    ricu_file: str
-    concepts: List[str]
-    id_column: str = "stay_id"
-    time_column: Optional[str] = "charttime"
-    description: str = ""
+# Note: FeatureModule, MODULES, MODULES_BY_NAME, ALL_CONCEPTS, SOFA_COMPONENT_DEPENDENCIES,
+# SUPPORTED_DATABASES, DATABASE_ID_COLUMNS, ID_CANDIDATES, TIME_CANDIDATES are now imported
+# from modules_config.py
 
-MODULES: List[FeatureModule] = [
-    FeatureModule(
-        name="outcome",
-        ricu_file="{db}_outcome.csv",
-        concepts=[
-            "sofa",
-            "sofa_resp",
-            "sofa_coag",
-            "sofa_liver",
-            "sofa_cardio",
-            "sofa_cns",
-            "sofa_renal",
-            "qsofa",
-            "sirs",
-            "death",
-            "los_icu",
-        ],
-        time_column="index_var",
-        description="SOFA outcome timeline",
-    ),
-    FeatureModule(
-        name="resp",
-        ricu_file="{db}_resp.csv",
-        concepts=[
-            "pafi",
-            "safi",
-            "resp",
-            "supp_o2",
-            "vent_ind",
-            "o2sat",
-            "sao2",
-            "mech_vent",
-            "ett_gcs",
-            "fio2",
-        ],
-        description="Respiratory chain (PaFi/SaFi/Vent indicators)",
-    ),
-    FeatureModule(
-        name="blood",
-        ricu_file="{db}_blood.csv",
-        concepts=["be", "cai", "fio2", "hbco", "lact", "methb", "pco2", "ph", "po2", "tco2"],
-        description="Arterial blood gas",
-    ),
-    FeatureModule(
-        name="lab",
-        ricu_file="{db}_lab.csv",
-        concepts=[
-            "alb",
-            "alp",
-            "alt",
-            "ast",
-            "bicar",
-            "bili",
-            "bili_dir",
-            "bun",
-            "ca",
-            "ck",
-            "ckmb",
-            "cl",
-            "crea",
-            "crp",
-            "glu",
-            "k",
-            "mg",
-            "na",
-            "phos",
-            "tnt",
-        ],
-        description="General chemistry",
-    ),
-    FeatureModule(
-        name="hematology",
-        ricu_file="{db}_hematology.csv",
-        concepts=["bnd", "esr", "fgn", "hgb", "inr_pt", "lymph", "mch", "mchc", "mcv", "neut", "plt", "ptt", "wbc"],
-        description="Heme/Coag profile",
-    ),
-    FeatureModule(
-        name="med",
-        ricu_file="{db}_med.csv",
-        concepts=[
-            "abx",
-            "adh_rate",
-            "cort",
-            "dex",
-            "dobu_dur",
-            "dobu_rate",
-            "dobu60",
-            "epi_dur",
-            "epi_rate",
-            "ins",
-            "norepi_dur",
-            "norepi_equiv",
-            "norepi_rate",
-            "vaso_ind",
-        ],
-        time_column="starttime",
-        description="Vasopressors / medications",
-    ),
-    FeatureModule(
-        name="vital",
-        ricu_file="{db}_vital.csv",
-        concepts=["dbp", "etco2", "hr", "map", "sbp", "temp"],
-        description="Bedside vitals",
-    ),
-    FeatureModule(
-        name="output",
-        ricu_file="{db}_output.csv",
-        concepts=["urine", "urine24"],
-        description="Urine output",
-    ),
-    FeatureModule(
-        name="neu",
-        ricu_file="{db}_neu.csv",
-        concepts=["avpu", "egcs", "gcs", "mgcs", "rass", "vgcs"],
-        description="Neurologic assessments",
-    ),
-    FeatureModule(
-        name="demo",
-        ricu_file="{db}_demo.csv",
-        concepts=["age", "bmi", "height", "sex", "weight"],
-        time_column=None,
-        description="Demographics",
-    ),
-]
-
-SOFA_COMPONENT_DEPENDENCIES: Dict[str, List[str]] = {
-    "sofa_resp": ["pafi", "safi", "vent_ind", "supp_o2", "fio2", "resp", "o2sat", "sao2"],
-    "sofa_coag": ["plt", "inr_pt", "ptt"],
-    "sofa_liver": ["bili", "bili_dir", "alp", "ast", "alt"],
-    "sofa_cardio": ["map", "vaso_ind", "norepi_rate", "dobu_rate", "epi_rate", "adh_rate"],
-    "sofa_cns": ["gcs", "mgcs", "rass", "avpu"],
-    "sofa_renal": ["crea", "bun", "urine", "urine24"],
-}
-
-ID_CANDIDATES = ["stay_id", "subject_id", "patientunitstayid", "admissionid", "patientid"]
-TIME_CANDIDATES = [
-    "charttime",
-    "index_var",
-    "starttime",
-    "time",
-    "measuredat",
-    "registeredat",
-    "nursingchartoffset",
-    "labresultoffset",
-    "observationoffset",
-    "chartoffset",
-    "offset",
-]
 FIO2_ITEMIDS = [223835, 50816]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RICU_ROOT = REPO_ROOT / "ricu_data"
-SUPPORTED_DATABASES = ("miiv", "eicu", "aumc", "hirid")
 
 ALIGNMENT_ENV_KEYS = {
     "chunk": ("RICU_ALIGN_CHUNK", "PYRICU_CHUNK_SIZE"),
@@ -475,7 +332,7 @@ class RicuPyricuComparator:
             
             merged_frame = load_concepts(
                 list(module.concepts),
-                src=self.database,
+                database=self.database,
                 patient_ids=patient_ids_dict,
                 data_path=str(self.data_path),
                 interval="1h" if module.time_column else None,
@@ -932,7 +789,7 @@ class RicuPyricuComparator:
 
         frame = load_concepts(
             concept,
-            src=self.database,  # 修正：使用 src= 而不是 database=
+            database=self.database,  # 修正：使用 database= 而不是 src=
             patient_ids=patient_ids,
             data_path=str(self.data_path),
             interval="1h" if module.time_column else None,
@@ -1149,14 +1006,22 @@ class RicuPyricuComparator:
                 continue
             if span >= self._interval_cap_hours:
                 skipped += 1
+            # 🔧 修复：与 ricu 的 expand() 行为一致
+            # ricu 使用 seq(min, max, step_size)，不会超过 max 值
+            # 例如：start=28.93, end=29.23 → 只生成 hour 28, 29（因为 29 <= 29.23）
+            # 而非之前的 ceil(29.23)=30 → hour 28, 29, 30
             start_hour = int(math.floor(start))
-            end_hour = int(math.ceil(min(end, start + self._interval_cap_hours)))
+            end_hour = int(math.floor(min(end, start + self._interval_cap_hours)))
             for hour in range(start_hour, end_hour + 1):
                 records.append({"id": stay_id, "time": float(hour), "value": value})
         if not records:
             return df.drop(columns=["endtime", "duration"], errors="ignore")
         expanded = pd.DataFrame.from_records(records)
-        expanded = expanded.drop_duplicates(subset=["id", "time", "value"]).reset_index(drop=True)
+        # 🔧 修复：按 (id, time) 聚合，保留最后一个值
+        # 这与 ricu 的 aggregate 行为一致：同一时间点有多个测量时取最后一个
+        # 之前使用 drop_duplicates(subset=["id", "time", "value"]) 不会去除
+        # 同一 (id, time) 但 value 不同的行，导致 merge 时产生重复
+        expanded = expanded.groupby(["id", "time"], as_index=False).last()
         return expanded
 
     def _detect_column(self, df: pd.DataFrame, preferred: Optional[str], fallbacks: Iterable[str]) -> Optional[str]:
@@ -1243,9 +1108,22 @@ class RicuPyricuComparator:
 
     def _load_pyricu_fio2(self) -> pd.DataFrame:
         try:
+            # 🔧 关键修复：明确指定使用 stay_id，避免歧义
+            id_type_map = {
+                'miiv': 'stay_id',
+                'mimic': 'icustay_id',
+                'eicu': 'patientunitstayid',
+                'aumc': 'admissionid',
+                'hirid': 'patientid',
+            }
+            id_type = id_type_map.get(self.database, 'stay_id')
+            patient_ids_dict = None
+            if self.test_patients:
+                patient_ids_dict = {id_type: self.test_patients}
+
             df = load_concepts(
                 "fio2",
-                patient_ids=self.test_patients or None,
+                patient_ids=patient_ids_dict,
                 database=self.database,
                 data_path=str(self.data_path),
                 merge=True,
@@ -1261,9 +1139,23 @@ class RicuPyricuComparator:
         chart_path = Path(self.data_path) / "chartevents.parquet"
         if not chart_path.exists():
             return pd.DataFrame(columns=["stay_id", "charttime", "fio2"])
-        chart = pd.read_parquet(chart_path, columns=["stay_id", "charttime", "itemid", "valuenum"])
+        
+        # 🚀 OPTIMIZATION: Use pushdown filters if possible
+        columns = ["stay_id", "charttime", "itemid", "valuenum"]
+        filters = None
         if self.test_patients:
-            chart = chart[chart["stay_id"].isin(self.test_patients)]
+            # PyArrow filters format: [('col', 'op', val), ...]
+            # For 'in' operator, val must be a set/list
+            filters = [('stay_id', 'in', set(self.test_patients))]
+        
+        try:
+            chart = pd.read_parquet(chart_path, columns=columns, filters=filters)
+        except Exception:
+            # Fallback if filters not supported or other error
+            chart = pd.read_parquet(chart_path, columns=columns)
+            if self.test_patients:
+                chart = chart[chart["stay_id"].isin(self.test_patients)]
+
         chart = chart[chart["itemid"].isin(FIO2_ITEMIDS)]
         chart = chart.dropna(subset=["valuenum", "charttime"])
         if chart.empty:

@@ -45,6 +45,7 @@ def change_interval(
     aggregation: Optional[str] = None,
     fill_gaps: bool = False,
     fill_method: str = "none",
+    copy: bool = True,
 ) -> ICUTable | pd.DataFrame:
     """Change the time resolution of a time series table.
     
@@ -59,6 +60,7 @@ def change_interval(
         time_col: Time column name (for DataFrame input)
         aggregation: Aggregation method ('mean', 'median', 'first', 'last', etc.)
         fill_gaps: Whether to fill missing time points (default True, matches R ricu)
+        copy: Whether to copy the input data (default True). Set to False for performance if input can be modified.
 
     Returns:
         New ICUTable or DataFrame with adjusted time resolution
@@ -92,7 +94,7 @@ def change_interval(
 
     # Handle DataFrame input
     if isinstance(table, pd.DataFrame):
-        df = table.copy()
+        df = table.copy() if copy else table
 
         detected_time_cols = _detect_time_columns(df)
         primary_time_col = time_col or (detected_time_cols[0] if detected_time_cols else None)
@@ -129,7 +131,7 @@ def change_interval(
     if not table.index_column or table.index_column not in table.data.columns:
         return table
 
-    df = table.data.copy()
+    df = table.data.copy() if copy else table.data
     time_cols: List[str] = []
     if table.index_column:
         time_cols.append(table.index_column)
@@ -175,11 +177,15 @@ def change_interval(
                     agg_dict[col] = 'first'
 
         if agg_dict:
-            try:
-                df = df.groupby(group_cols, as_index=False).agg(agg_dict)
-            except Exception:
-                # 聚合失败时退化为去重，避免抛错
-                df = df.drop_duplicates(subset=group_cols, keep="first")
+            # Optimization: If all aggregations are 'first', use drop_duplicates (much faster)
+            if all(agg == 'first' for agg in agg_dict.values()):
+                df = df.drop_duplicates(subset=group_cols, keep='first')
+            else:
+                try:
+                    df = df.groupby(group_cols, as_index=False).agg(agg_dict)
+                except Exception:
+                    # 聚合失败时退化为去重，避免抛错
+                    df = df.drop_duplicates(subset=group_cols, keep="first")
         else:
             # 无可聚合列，退化为去重
             df = df.drop_duplicates(subset=group_cols, keep="first")
@@ -358,32 +364,40 @@ def expand(
             return pd.DataFrame(columns=result_cols)
         
         # Expand using numeric ranges
-        expanded_chunks = []
-        for idx, row in valid_data.iterrows():
-            start_hours = row[start_var]
-            end_hours = row[end_col]
-            
-            # Generate hourly time points
-            n_points = int((end_hours - start_hours) / step_hours) + 1
-            if n_points <= 0:
-                continue
-            
-            time_range = [start_hours + i * step_hours for i in range(n_points)]
-            
-            # Build chunk data
-            chunk_data = {start_var: time_range}
-            for col in id_cols + keep_vars:
-                if col in row.index:
-                    chunk_data[col] = [row[col]] * len(time_range)
-            
-            expanded_chunks.append(pd.DataFrame(chunk_data))
+        # 🚀 性能优化：向量化实现替代逐行循环
         
-        if not expanded_chunks:
+        # Calculate number of points for each row
+        # (end - start) / step + 1
+        diff = valid_data[end_col] - valid_data[start_var]
+        counts = (diff / step_hours).astype(int) + 1
+        counts = np.maximum(counts, 0) # Ensure non-negative
+        
+        # Filter out rows with 0 counts
+        row_mask = counts > 0
+        if not row_mask.any():
             result_cols = [start_var] + id_cols + keep_vars
             return pd.DataFrame(columns=result_cols)
+            
+        valid_data = valid_data[row_mask]
+        counts = counts[row_mask]
         
-        result = pd.concat(expanded_chunks, ignore_index=True)
-        return result
+        # Repeat rows
+        # valid_data.index.repeat(counts) repeats the index, then loc selects rows
+        expanded_df = valid_data.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
+        
+        # Generate time offsets: 0, 1, 2... for each group
+        # Using list comprehension with numpy is much faster than pandas iterrows
+        offsets = np.concatenate([np.arange(c) for c in counts])
+        
+        # Calculate new times
+        expanded_df[start_var] = expanded_df[start_var] + offsets * step_hours
+        
+        # Select columns
+        result_cols = [start_var] + id_cols + keep_vars
+        # Ensure columns exist and are in order
+        available_cols = [c for c in result_cols if c in expanded_df.columns]
+        return expanded_df[available_cols]
+
     
     # Original datetime expansion logic
     # 🚀 优化: 避免不必要的 copy，使用视图
@@ -414,45 +428,59 @@ def expand(
         return pd.DataFrame(columns=result_cols)
     
     # 🚀 向量化: 批量处理每一行
-    for idx, row in valid_data.iterrows():
-        start = row[start_var]
-        end = row[end_col]
-        
-        # 🔧 CRITICAL FIX: Floor start time to hour boundary (match R ricu behavior)
-        # R ricu expands on hour boundaries, not on arbitrary start times
-        # Example: 06:08:00 → 06:00:00, then generate [06:00, 07:00, 08:00...]
-        # This ensures integer hours after conversion to relative time
-        start_floored = start.floor(step_size)
-        
-        # 生成时间范围 (从整点开始)
-        time_range = pd.date_range(start=start_floored, end=end, freq=step_size)
-        n_points = len(time_range)
-        
-        if n_points == 0:
-            continue
-        
-        # 🚀 优化: 使用 dict + repeat 而不是逐个 append
-        chunk_data = {start_var: time_range}
-        
-        # 重复 ID 列和 keep_vars
-        for col in id_cols + keep_vars:
-            if col in row:
-                chunk_data[col] = [row[col]] * n_points
-        
-        expanded_chunks.append(pd.DataFrame(chunk_data))
+    # 🔧 CRITICAL FIX: Floor start time to hour boundary (match R ricu behavior)
+    # R ricu expands on hour boundaries, not on arbitrary start times
+    # Example: 06:08:00 → 06:00:00, then generate [06:00, 07:00, 08:00...]
+    # This ensures integer hours after conversion to relative time
     
-    # 🚀 合并所有chunks
-    if not expanded_chunks:
+    # Vectorized floor
+    start_floored = valid_data[start_var].dt.floor(step_size)
+    
+    # Calculate number of points
+    # (end - start_floored) // step + 1
+    # Note: pd.date_range includes end if it matches freq, but here we use integer division
+    # We need to be careful to match pd.date_range behavior
+    # pd.date_range(start, end, freq) includes start, and includes end if (end-start) % freq == 0
+    
+    diff = valid_data[end_col] - start_floored
+    counts = (diff / step_size).astype(int) + 1
+    counts = np.maximum(counts, 0)
+    
+    # Filter out rows with 0 counts
+    mask = counts > 0
+    if not mask.any():
         result_cols = [start_var] + id_cols + keep_vars
         return pd.DataFrame(columns=result_cols)
+        
+    valid_data = valid_data[mask]
+    start_floored = start_floored[mask]
+    counts = counts[mask]
     
-    result = pd.concat(expanded_chunks, ignore_index=True)
+    # Repeat rows
+    expanded_df = valid_data.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
+    
+    # Generate time offsets
+    offsets = np.concatenate([np.arange(c) for c in counts])
+    
+    # Calculate new times
+    # We need to repeat start_floored to match expanded_df
+    start_floored_repeated = start_floored.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
+    
+    # Add offsets * step_size
+    # Note: adding timedelta array to datetime array is fast
+    expanded_df[start_var] = start_floored_repeated + pd.to_timedelta(offsets * step_size.total_seconds(), unit='s')
+    
+    # Select columns
+    result_cols = [start_var] + id_cols + keep_vars
+    available_cols = [c for c in result_cols if c in expanded_df.columns]
+    result = expanded_df[available_cols]
     
     # Clean up temporary column
     if '_end_abs' in data.columns:
         data.drop('_end_abs', axis=1, inplace=True)
     
     return result
+
 
 def collapse(
     data: pd.DataFrame,
@@ -578,23 +606,37 @@ def fill_gaps(
             return pd.to_timedelta(values, errors="coerce")
         return pd.to_numeric(values, errors="coerce")
 
+    # Optimization: Pre-build limits lookup dictionary
+    limits_lookup = {}
+
     def _select_limits(id_vals: Any) -> tuple[Any, Any]:
-        if limits_df is None:
+        """Lookup per-id fill limits while tolerating pandas tuple keys."""
+        if not limits_lookup:
             return None, None
+
         if not id_cols:
-            row = limits_df.iloc[:1]
-        else:
-            if isinstance(id_vals, tuple):
-                mask = pd.Series(True, index=limits_df.index)
-                for idx, col in enumerate(id_cols):
-                    mask &= limits_df[col] == id_vals[idx]
-            else:
-                mask = limits_df[id_cols[0]] == id_vals
-            row = limits_df[mask]
-        if row.empty:
+            entry = limits_lookup.get(None)
+            if entry:
+                return entry["start"], entry["end"]
             return None, None
-        first = row.iloc[0]
-        return first["start"], first["end"]
+
+        entry = limits_lookup.get(id_vals)
+        if entry:
+            return entry["start"], entry["end"]
+
+        # pandas >=2.1 emits tuple keys even for single column groupbys when
+        # dropna=False; handle both tuple and scalar variants so limits stay in sync
+        if isinstance(id_vals, tuple):
+            if len(id_vals) == 1:
+                entry = limits_lookup.get(id_vals[0])
+                if entry:
+                    return entry["start"], entry["end"]
+        elif len(id_cols) == 1:
+            entry = limits_lookup.get((id_vals,))
+            if entry:
+                return entry["start"], entry["end"]
+
+        return None, None
 
     time_series, time_kind = _normalize_time(data[index_col])
     data[index_col] = time_series
@@ -636,6 +678,16 @@ def fill_gaps(
                 raise ValueError("limits must contain 'start' and 'end' columns")
         limits_df["start"] = _coerce_limits(limits_df["start"], time_kind)
         limits_df["end"] = _coerce_limits(limits_df["end"], time_kind)
+        
+        # Build lookup dictionary for O(1) access
+        if id_cols:
+            if len(id_cols) == 1:
+                limits_lookup = limits_df.set_index(id_cols[0])[['start', 'end']].to_dict('index')
+            else:
+                limits_lookup = limits_df.set_index(id_cols)[['start', 'end']].to_dict('index')
+        else:
+            if not limits_df.empty:
+                limits_lookup = {None: {'start': limits_df.iloc[0]['start'], 'end': limits_df.iloc[0]['end']}}
 
     step_hours = interval / pd.Timedelta(hours=1)
 
@@ -713,6 +765,18 @@ def fill_gaps(
         elif method == "interpolate":
             numeric_cols = group.select_dtypes(include="number").columns
             group[numeric_cols] = group[numeric_cols].interpolate()
+        elif method == "zero":
+            # Fill numeric columns with 0 (useful for vent_ind, urine)
+            numeric_cols = group.select_dtypes(include="number").columns
+            # Exclude index column if it's numeric
+            cols_to_fill = [c for c in numeric_cols if c != index_col]
+            group[cols_to_fill] = group[cols_to_fill].fillna(0)
+        elif method == "none":
+            # R ricu's "none" method: only fill time gaps, don't fill data values
+            # This is the default R behavior when method is not specified
+            pass
+        else:
+            raise ValueError(f"Unknown fill method: {method}")
 
         group = group.reset_index()
         group.rename(columns={"index": index_col}, inplace=True)
@@ -1145,27 +1209,6 @@ def _slide_vectorized(
     
     return pd.concat(results, ignore_index=True)
 
-def _slide_loop(
-    data: pd.DataFrame,
-    id_cols: list,
-    index_col: str,
-    before: pd.Timedelta,
-    after: pd.Timedelta,
-    agg_func: dict,
-    full_window: bool = False,
-) -> pd.DataFrame:
-    """Loop-based slide implementation - FALLBACK for complex cases.
-    
-    Used when:
-    - after != 0 (forward looking window)
-    - Custom aggregation functions
-    - Numeric time columns
-    """
-    if len(data) == 0:
-        return pd.DataFrame()
-    
-    # Handle both datetime and numeric (hours) time columns
-    is_numeric_time = pd.api.types.is_numeric_dtype(data[index_col])
 def _slide_loop(
     data: pd.DataFrame,
     id_cols: list,
@@ -2229,27 +2272,27 @@ def round_to_interval(
             return times
 
         if pd.api.types.is_datetime64_any_dtype(times):
-            return _series_from(_floor_ns(times.astype("int64", copy=False)), times, pd.to_datetime)
+            # 🚀 Optimization: Use dt.floor for datetime series (much faster)
+            return times.dt.floor(interval_td)
 
         if pd.api.types.is_timedelta64_dtype(times):
-            return _series_from(_floor_ns(times.astype("int64", copy=False)), times,
-                                lambda arr: pd.to_timedelta(arr, unit="ns"))
+            # 🚀 Optimization: Use dt.floor for timedelta series
+            return times.dt.floor(interval_td)
 
         if pd.api.types.is_numeric_dtype(times):
             return _floor_numeric(times)
 
         as_dt = pd.to_datetime(times, errors="coerce")
         if as_dt.notna().any():
-            floored = _floor_ns(as_dt.astype("int64", copy=False))
-            result = _series_from(floored, times, pd.to_datetime)
+            # 🚀 Optimization: Use dt.floor for mixed/object datetime series
+            result = as_dt.dt.floor(interval_td)
             result[as_dt.isna()] = pd.NaT
             return result
 
         as_td = pd.to_timedelta(times, errors="coerce")
         if as_td.notna().any():
-            floored = _floor_ns(as_td.astype("int64", copy=False))
-            result = _series_from(floored, times,
-                                  lambda arr: pd.to_timedelta(arr, unit="ns"))
+            # 🚀 Optimization: Use dt.floor for mixed/object timedelta series
+            result = as_td.dt.floor(interval_td)
             result[as_td.isna()] = pd.NaT
             return result
 

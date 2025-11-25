@@ -366,42 +366,22 @@ class ConceptLoader:
         if interval is None:
             interval = timedelta(hours=1)
         
-        # 🚀 Preload tables
-        self._preload_tables(concept_objs, patient_ids, id_type, verbose=verbose)
+        # 🚀 检测是否启用并行加载（提前决定以优化预加载策略）
+        parallel_workers = kwargs.get('concept_workers', 1)
+        enable_parallel = len(concept_objs) > 1 and parallel_workers > 1
+        
+        # 🚀 Preload tables（优化：并行模式下更激进的预加载）
+        self._preload_tables(concept_objs, patient_ids, id_type, verbose=verbose, 
+                             parallel_mode=enable_parallel)
         
         # 3. 加载每个概念 - 支持并行加载
         results = {}
         
-        # 🚀 检测是否启用并行加载
-        parallel_workers = kwargs.get('concept_workers', 1)
-        enable_parallel = len(concept_objs) > 1 and parallel_workers > 1
-        
         if enable_parallel:
-            # 🔍 分析表依赖：提取所有概念需要的表
-            required_tables = set()
-            for concept in concept_objs:
-                sources = concept.for_data_source(self.src)
-                for source in sources:
-                    if source.table:
-                        required_tables.add(source.table)
-            
-            # 🚀 预加载共享表到缓存（避免并行时重复IO）
-            if verbose and required_tables:
-                print(f"⚡ 并行模式：预加载 {len(required_tables)} 张共享表到缓存...")
-            
-            if self._data_source is not None and hasattr(self._data_source, '_table_cache'):
-                for table_name in required_tables:
-                    try:
-                        # 触发表加载，自动进入缓存
-                        _ = self._safe_load_table(table_name, None)
-                    except Exception as e:
-                        if verbose:
-                            print(f"  ⚠️  预加载表 {table_name} 失败: {e}")
-            
             # 🚀 并行加载概念
             max_workers = min(parallel_workers, len(concept_objs))
             if verbose:
-                print(f"🚀 启动 {max_workers} 个并行工作线程加载 {len(concept_objs)} 个概念...")
+                print(f"🚀 并行加载 {len(concept_objs)} 个概念 (工作线程: {max_workers})...")
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_concept = {
@@ -422,12 +402,12 @@ class ConceptLoader:
                     try:
                         data = future.result()
                         if verbose:
-                            print(f"✅ 完成概念: {concept.name}")
+                            print(f"  ✅ {concept.name}")
                         if data is not None and len(data) > 0:
                             results[concept.name] = data
                     except Exception as e:
                         if verbose:
-                            print(f"❌ 加载概念 {concept.name} 失败: {e}")
+                            print(f"  ❌ {concept.name}: {e}")
                         logger.error(f"加载概念 {concept.name} 失败", exc_info=True)
         else:
             # 串行加载（默认行为）
@@ -1379,11 +1359,17 @@ class ConceptLoader:
         concept_objs: List[Concept],
         patient_ids: Optional[Union[List, pd.DataFrame]],
         id_type: str,
-        verbose: bool = False
+        verbose: bool = False,
+        parallel_mode: bool = False
     ):
-        """Preload and filter tables for all concepts."""
+        """Preload and filter tables for all concepts.
+        
+        Args:
+            parallel_mode: If True, use more aggressive caching strategy for parallel execution
+        """
         if verbose:
-            print("⚡ Preloading tables...")
+            mode_str = "并行" if parallel_mode else "串行"
+            print(f"⚡ 预加载表 ({mode_str}模式)...")
         
         # 🚀 初始化 ICUDataSource（如果还没有）
         # 这对 rec_cncpt 概念至关重要，因为 ConceptResolver 需要数据源对象
@@ -1397,8 +1383,45 @@ class ConceptLoader:
             if verbose:
                 print(f"  初始化数据源: {self._src_name}")
             
-        # 1. Identify required tables and columns
+        # 1. Identify required tables and columns - 递归收集所有依赖
         table_columns = {} # table_name -> set of columns
+        
+        # 🚀 优化：递归收集所有依赖概念的表（特别是SOFA组件）
+        def collect_dependencies(concept_name: str, visited: set = None):
+            """递归收集概念的所有依赖表"""
+            if visited is None:
+                visited = set()
+            if concept_name in visited:
+                return
+            visited.add(concept_name)
+            
+            try:
+                from .concept import load_dictionary
+                dict_obj = load_dictionary(self._src_name, include_sofa2='sofa2' in concept_name)
+                if concept_name not in dict_obj._concepts:
+                    return
+                    
+                concept = dict_obj._concepts[concept_name]
+                
+                # 处理当前概念
+                sources = concept.for_data_source(self.src)
+                for source in sources:
+                    if not source.table:
+                        continue
+                    cols = self._columns_for_source(source, id_type)
+                    if cols:
+                        if source.table not in table_columns:
+                            table_columns[source.table] = set()
+                        table_columns[source.table].update(cols)
+                
+                # 递归处理依赖
+                if hasattr(concept, 'items') and concept.items:
+                    for dep_name in concept.items.keys():
+                        collect_dependencies(dep_name, visited)
+                        
+            except Exception as e:
+                if verbose:
+                    print(f"  ⚠️  收集依赖 {concept_name} 失败: {e}")
         
         # Helper to process a concept
         def process_concept(c):
@@ -1413,14 +1436,20 @@ class ConceptLoader:
                         table_columns[source.table] = set()
                     table_columns[source.table].update(cols)
             
-            # Handle sub-concepts if available as objects
-            if hasattr(c, 'items') and c.items:
+            # 🚀 并行模式：递归收集依赖以避免后续重复加载
+            if parallel_mode and hasattr(c, 'name'):
+                collect_dependencies(c.name)
+            elif hasattr(c, 'items') and c.items:
+                # 串行模式：只处理直接子概念
                 for sub in c.items.values():
                     if isinstance(sub, Concept):
                         process_concept(sub)
 
         for concept in concept_objs:
             process_concept(concept)
+        
+        if verbose and table_columns:
+            print(f"  需要加载 {len(table_columns)} 张表")
         
         # 2. Load and filter
         for table_name, columns in table_columns.items():
