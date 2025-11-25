@@ -310,12 +310,12 @@ class BaseICULoader:
         self,
         concepts: Union[str, List[str]],
         patient_ids: Optional[List] = None,
-        interval: Optional[Union[str, pd.Timedelta]] = None,
+        interval: Optional[Union[str, pd.Timedelta]] = '1h',  # ricu默认: hours(1L)
         win_length: Optional[Union[str, pd.Timedelta]] = None,
         aggregate: Optional[Union[str, Dict]] = None,
         keep_components: bool = False,
         merge: bool = True,
-        ricu_compatible: bool = False,  # 新增：ricu.R兼容模式
+        ricu_compatible: bool = True,  # 默认启用ricu.R兼容模式
         chunk_size: Optional[int] = None,
         progress: bool = False,
         parallel_workers: Optional[int] = None,

@@ -171,7 +171,9 @@ ENABLE_CACHE = True
 CACHE_SIZE_LIMIT = int(os.getenv('PYRICU_CACHE_SIZE_MB', '0'))  # 0 = unlimited cache by default
 
 # Auto-clear cache on startup - helps prevent stale data issues
-AUTO_CLEAR_CACHE = os.getenv('PYRICU_AUTO_CLEAR_CACHE', 'True').lower() in ('true', '1', 'yes')
+# 🚀 性能优化：默认禁用自动缓存清除，避免每次导入都清除缓存
+# 如需清除缓存，可设置环境变量 PYRICU_AUTO_CLEAR_CACHE=True 或调用 clear_cache()
+AUTO_CLEAR_CACHE = os.getenv('PYRICU_AUTO_CLEAR_CACHE', 'False').lower() in ('true', '1', 'yes')
 
 # Number of parallel workers - optimized for 16GB systems
 MAX_WORKERS = int(os.getenv('PYRICU_MAX_WORKERS', '999'))  # Reduced from 4 to 2 for memory efficiency

@@ -815,10 +815,13 @@ def _merge_tables(
     # (e.g., charttime from chartevents, starttime from inputevents)
     standardized_tables = {}
     for name, table in tables.items():
-        frame = table.data.copy()
+        # Avoid full data copy if possible
+        frame = table.data
         
         # 展平MultiIndex列，避免合并时的MultiIndex错误
         if isinstance(frame.columns, pd.MultiIndex):
+            # Must copy (shallow) if we are modifying columns
+            frame = frame.copy(deep=False)
             new_cols = []
             for col in frame.columns:
                 if isinstance(col, tuple):
@@ -1108,33 +1111,53 @@ def _merge_intervals(
     end_col: str,
     max_gap: pd.Timedelta,
 ) -> pd.DataFrame:
-    records = []
-    sort_cols = list(id_columns) + [start_col]
-    for key, group in df.sort_values(sort_cols).groupby(list(id_columns), sort=False):
-        current_start = None
-        current_end = None
-        for _, row in group.iterrows():
-            start = row[start_col]
-            end = row[end_col]
-            if current_start is None:
-                current_start, current_end = start, end
-                continue
-            if start <= current_end + max_gap:
-                if end > current_end:
-                    current_end = end
-            else:
-                key_tuple = key if isinstance(key, tuple) else (key,)
-                records.append((*key_tuple, current_start, current_end))
-                current_start, current_end = start, end
-        if current_start is not None:
-            key_tuple = key if isinstance(key, tuple) else (key,)
-            records.append((*key_tuple, current_start, current_end))
-
-    if not records:
+    if df.empty:
         return pd.DataFrame(columns=list(id_columns) + ["__start", "__end"])
 
-    columns = list(id_columns) + ["__start", "__end"]
-    return pd.DataFrame.from_records(records, columns=columns)
+    # Sort by ID and start time
+    sort_cols = list(id_columns) + [start_col]
+    df = df.sort_values(sort_cols).copy()
+
+    # Vectorized interval merging
+    # 1. Calculate running maximum of end time per group
+    #    (groupby().cummax() is efficient)
+    df['cum_max_end'] = df.groupby(list(id_columns))[end_col].cummax()
+    
+    # 2. Get previous row's cumulative max end
+    #    (shift globally, but we'll handle group boundaries via mask)
+    prev_max_end = df['cum_max_end'].shift()
+    
+    # 3. Identify start of new interval groups
+    #    Condition: Current start > Previous Max End + Gap
+    #    OR: It's the first row of a patient (ID change)
+    
+    # Check gap condition
+    gap_condition = df[start_col] > (prev_max_end + max_gap)
+    
+    # Check ID change (first row of each ID group)
+    # Since we sorted by ID, ~duplicated(keep='first') identifies the first row of each group
+    is_first_row = ~df.duplicated(subset=id_columns, keep='first')
+    
+    # Combine conditions
+    is_new_group = gap_condition | is_first_row
+    
+    # 4. Assign group IDs
+    df['group_id'] = is_new_group.cumsum()
+    
+    # 5. Aggregate to find min start and max end for each group
+    agg_dict = {start_col: 'min', end_col: 'max'}
+    
+    # Group by ID columns + group_id
+    # We include id_columns in groupby to preserve them in the result
+    merged = df.groupby(list(id_columns) + ['group_id'], as_index=False).agg(agg_dict)
+    
+    # Drop the temporary group_id
+    merged = merged.drop(columns=['group_id'])
+    
+    # Rename columns to match expected output if needed (but here they are already correct)
+    # The caller expects __start and __end columns, which are preserved if start_col/end_col are __start/__end
+    
+    return merged
 
 # ============================================================================
 # AUMC-specific callbacks
@@ -2352,8 +2375,9 @@ def _callback_sofa_score(
                     interval = pd.Timedelta(hours=max(1, inferred_hours))
                 
                 # Fill gaps with inferred interval
-                # Use expand_forward=True to match ricu's symmetric timeline expansion
-                limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx, expand_forward=True)
+                # ✅ FIX: Use default expand_forward=True to match ricu's symmetric timeline
+                # This generates complete hourly grid covering the full patient timeline
+                limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
                 data = fill_gaps(
                     data,
                     id_cols=id_cols_to_group,
@@ -2476,8 +2500,9 @@ def _callback_sofa2_score(
                     inferred_hours = round(inferred_interval.total_seconds() / 3600)
                     interval = pd.Timedelta(hours=max(1, inferred_hours))
                 
-                # Fill gaps with inferred interval (match SOFA-1)
-                limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx, expand_forward=True)
+                # Fill gaps with inferred interval
+                # ✅ FIX: Use default expand_forward=True to match ricu's symmetric timeline
+                limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
                 data = fill_gaps(
                     data,
                     id_cols=id_cols_to_group,
@@ -2743,30 +2768,18 @@ def _match_fio2(
             # 关键：merge_asof要求每个by分组内的on列必须严格排序
             # 必须按by列+on列排序，确保每个分组内on列都是递增的
             if id_columns:
-                # 方法：按分组逐个排序，确保每个分组内时间列严格递增
-                # 这样可以避免pandas sort_values在某些边界情况下的问题
-                o2_groups = []
-                for id_val in o2_subset[id_columns[0]].unique():
-                    group = o2_subset[o2_subset[id_columns[0]] == id_val]
-                    # 确保每个分组内时间列严格排序 - sort_values creates a copy
-                    group = group.sort_values(by=index_column, kind='mergesort')
-                    o2_groups.append(group)
-                if o2_groups:
-                    o2_subset = pd.concat(o2_groups, ignore_index=True)
-                else:
-                    o2_subset = pd.DataFrame()
+                # 🚀 性能优化：使用全局排序替代逐个分组排序
+                # 原始循环方式在2000患者时耗时严重 (O(N*M))
+                # 全局排序 (O(N*M*log(N*M))) 在Pandas中通常更快，因为是C层实现
                 
-                fio2_groups = []
-                for id_val in fio2_subset[id_columns[0]].unique():
-                    group = fio2_subset[fio2_subset[id_columns[0]] == id_val]
-                    # 确保每个分组内时间列严格排序 - sort_values creates a copy
-                    group = group.sort_values(by=index_column, kind='mergesort')
-                    fio2_groups.append(group)
-                if fio2_groups:
-                    fio2_subset = pd.concat(fio2_groups, ignore_index=True)
-                else:
-                    # 如果 fio2_groups 为空，返回空 DataFrame
-                    fio2_subset = pd.DataFrame()
+                # 确保排序稳定 (kind='mergesort')
+                sort_cols = id_columns + [index_column]
+                
+                if not o2_subset.empty:
+                    o2_subset = o2_subset.sort_values(by=sort_cols, kind='mergesort')
+                
+                if not fio2_subset.empty:
+                    fio2_subset = fio2_subset.sort_values(by=sort_cols, kind='mergesort')
                 
                 # 关键修复：如果o2_subset为空，返回空结果
                 # 但如果fio2_subset为空，不返回空结果（后面会用21%填充）
@@ -3349,7 +3362,10 @@ def _callback_vent_ind(
         if work.empty:
             return _empty_result()
 
-        work["_end_dt"] = work["_start_dt"] + work["vent_dur_td"]
+        # 🔥 R ricu expand 行为: endtime 是 exclusive（不包含）
+        # 例如: start=0, dur=16h → 展开为 0,1,2,...,15（不含16）
+        # 为了匹配这个行为，end_dt 应该是 start + dur - 1小时
+        work["_end_dt"] = work["_start_dt"] + work["vent_dur_td"] - interval
         expanded = expand(
             work,
             start_var="_start_dt",
@@ -3410,16 +3426,23 @@ def _callback_vent_ind(
         if isinstance(mech, WinTbl) and mech.dur_var and mech.dur_var in df.columns:
             dur_series = df[mech.dur_var]
         else:
-            end_col = next(
-                (col for col in ("endtime", "end_time", "stop", "end") if col in df.columns),
+            # 🔥 首先检查 mech_vent_dur 列（MIMIC-IV mech_vent 使用这个列名）
+            dur_col = next(
+                (col for col in ("mech_vent_dur", "duration", "dur") if col in df.columns),
                 None,
             )
-            if end_col is not None:
-                end_hours = _relative_hours(df, end_col)
-                dur_hours = end_hours - start_hours
-                dur_series = pd.to_timedelta(dur_hours, unit="h")
-            elif "duration" in df.columns:
-                dur_series = pd.to_timedelta(df["duration"], errors="coerce")
+            if dur_col is not None:
+                dur_series = pd.to_timedelta(df[dur_col], errors="coerce")
+            else:
+                # 其次检查 endtime 列
+                end_col = next(
+                    (col for col in ("endtime", "end_time", "stop", "end") if col in df.columns),
+                    None,
+                )
+                if end_col is not None:
+                    end_hours = _relative_hours(df, end_col)
+                    dur_hours = end_hours - start_hours
+                    dur_series = pd.to_timedelta(dur_hours, unit="h")
 
         if dur_series is None:
             dur_series = pd.Series(match_win, index=df.index)
@@ -3510,45 +3533,35 @@ def _callback_vent_ind(
             return None
         return result
 
+    # 🔥 R ricu vent_ind 逻辑:
+    # 如果 mech_vent 有数据 → 只使用 mech_vent，忽略 vent_start/vent_end
+    # 否则 → 使用 vent_start + vent_end 匹配
+    # 
+    # 参考 R 代码:
+    #   if (has_rows(res[[3L]])) {  # mech_vent
+    #     assert_that(nrow(res[[1L]]) == 0L, nrow(res[[2L]]) == 0L)  # vent_start/end should be empty
+    #     res <- res[[3L]][, c("vent_ind", "mech_vent") := ...]
+    #     return(res)
+    #   }
+    #   # else: use vent_start/vent_end
+    
     mech_result = None
     if mech_tbl is not None and not mech_tbl.data.empty:
         mech_result = _normalize_result(_windows_from_mech(mech_tbl))
+    
+    # 🔥 关键修复: 如果 mech_vent 有结果，直接返回，不合并 vent_start/vent_end
+    if mech_result is not None:
+        return mech_result
 
+    # 只有当 mech_vent 没有数据时，才使用 vent_start/vent_end
     event_result = None
     if start_tbl is not None and not start_tbl.data.empty:
         event_result = _normalize_result(_windows_from_events(start_tbl, end_tbl))
 
-    if mech_result is None and event_result is None:
+    if event_result is None:
         return _empty_result()
 
-    if mech_result is None:
-        return event_result  # type: ignore[return-value]
-
-    if event_result is None:
-        return mech_result
-
-    # Combine both sources instead of picking the longest. ricu unions any
-    # evidence of ventilation, so we take the OR across timelines.
-    combined = pd.concat(
-        [event_result.data, mech_result.data], ignore_index=True, copy=False
-    )
-
-    # Ensure duplicate timestamps collapse to a single True indicator.
-    group_cols = list(id_columns)
-    if time_column:
-        group_cols += [time_column]
-
-    if group_cols:
-        combined = (
-            combined.groupby(group_cols, as_index=False)["vent_ind"].any()
-        )
-
-    return _as_icutbl(
-        combined,
-        id_columns=id_columns,
-        index_column=time_column,
-        value_column="vent_ind",
-    )
+    return event_result
 
 def _callback_urine24(
     tables: Dict[str, ICUTable],
@@ -4797,6 +4810,8 @@ def _callback_gcs(
     
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="gcs")
 
+from .callbacks import uo_6h as calc_uo_6h, uo_12h as calc_uo_12h, uo_24h as calc_uo_24h
+
 def _callback_rrt_criteria(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -4815,14 +4830,30 @@ def _callback_rrt_criteria(
     ⚡ 性能优化: 依赖概念应该在调用前就已加载好,避免在callback中递归加载
     """
     # ⚡ 优化: 检查是否所有依赖都已提供,如果缺失则一次性批量加载
-    required_concepts = ["crea", "uo_6h", "uo_12h", "uo_24h", "potassium", "ph", "bicarb", "rrt"]
-    missing_concepts = [c for c in required_concepts if c not in tables]
+    # 注意：uo_6h/12h/24h 是计算概念，依赖 urine 和 weight
+    # 为了避免递归调用 load_concepts 导致重复加载 urine/weight，我们手动处理这些依赖
     
-    if missing_concepts:
-        # ⚡ 批量加载所有缺失的概念(而非逐个加载)
+    direct_deps = ["crea", "potassium", "ph", "bicarb", "rrt"]
+    uo_deps = ["uo_6h", "uo_12h", "uo_24h"]
+    
+    # 检查缺失的直接依赖
+    missing_direct = [c for c in direct_deps if c not in tables]
+    
+    # 检查缺失的UO依赖
+    missing_uo = [c for c in uo_deps if c not in tables]
+    
+    # 如果有缺失的UO依赖，我们需要 urine 和 weight
+    if missing_uo:
+        if "urine" not in tables:
+            missing_direct.append("urine")
+        if "weight" not in tables:
+            missing_direct.append("weight")
+    
+    if missing_direct:
+        # ⚡ 批量加载所有缺失的基础概念
         try:
             loaded = ctx.resolver.load_concepts(
-                missing_concepts,  # 一次性加载所有缺失概念
+                missing_direct,
                 ctx.data_source,
                 merge=False,
                 aggregate=None,
@@ -4832,12 +4863,55 @@ def _callback_rrt_criteria(
             # 将加载的概念添加到tables
             if isinstance(loaded, dict):
                 tables.update(loaded)
-            elif isinstance(loaded, ICUTable) and len(missing_concepts) == 1:
-                tables[missing_concepts[0]] = loaded
+            elif isinstance(loaded, ICUTable) and len(missing_direct) == 1:
+                tables[missing_direct[0]] = loaded
         except (KeyError, ValueError) as e:
-            # 如果批量加载失败,静默处理(某些概念可能在字典中不存在)
             if os.environ.get('DEBUG'):
                 print(f"   ⚠️  无法加载部分RRT依赖概念: {e}")
+    
+    # 手动计算缺失的 UO 概念，避免递归调用 load_concepts
+    if missing_uo and "urine" in tables and "weight" in tables:
+        urine_tbl = tables["urine"]
+        weight_tbl = tables["weight"]
+        
+        # 确保数据不为空
+        if not urine_tbl.data.empty and not weight_tbl.data.empty:
+            # 提取DataFrame并确保列名正确
+            urine_df = urine_tbl.data.copy()
+            weight_df = weight_tbl.data.copy()
+            
+            # 确保urine列名为'urine'
+            urine_val_col = urine_tbl.value_column or "urine"
+            if urine_val_col != "urine" and urine_val_col in urine_df.columns:
+                urine_df = urine_df.rename(columns={urine_val_col: "urine"})
+            elif "urine" not in urine_df.columns:
+                # 尝试找到值列
+                cols = [c for c in urine_df.columns if c not in urine_tbl.id_columns and c != urine_tbl.index_column]
+                if cols:
+                    urine_df = urine_df.rename(columns={cols[0]: "urine"})
+            
+            # 确保weight列名为'weight'
+            weight_val_col = weight_tbl.value_column or "weight"
+            if weight_val_col != "weight" and weight_val_col in weight_df.columns:
+                weight_df = weight_df.rename(columns={weight_val_col: "weight"})
+            elif "weight" not in weight_df.columns:
+                # 尝试找到值列
+                cols = [c for c in weight_df.columns if c not in weight_tbl.id_columns and c != weight_tbl.index_column]
+                if cols:
+                    weight_df = weight_df.rename(columns={cols[0]: "weight"})
+            
+            # 计算并封装为 ICUTable
+            if "uo_6h" in missing_uo:
+                df = calc_uo_6h(urine_df, weight_df, interval=ctx.interval)
+                tables["uo_6h"] = _as_icutbl(df, id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="uo_6h")
+            
+            if "uo_12h" in missing_uo:
+                df = calc_uo_12h(urine_df, weight_df, interval=ctx.interval)
+                tables["uo_12h"] = _as_icutbl(df, id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="uo_12h")
+                
+            if "uo_24h" in missing_uo:
+                df = calc_uo_24h(urine_df, weight_df, interval=ctx.interval)
+                tables["uo_24h"] = _as_icutbl(df, id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="uo_24h")
     
     # Extract tables
     crea_tbl = tables.get("crea")

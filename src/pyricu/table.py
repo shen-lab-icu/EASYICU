@@ -1618,3 +1618,51 @@ def load_id_tbl(src: str, id_type: str, **kwargs) -> pd.DataFrame:
     except Exception as e:
         # If specific table load fails, try to provide a helpful error
         raise ValueError(f"Failed to load ID table for '{id_type}' (table: '{table_name}'): {e}")
+
+def as_ts_tbl(
+    data: Union[pd.DataFrame, 'TsTbl'], 
+    id_vars: Union[str, List[str]], 
+    index_var: Optional[str] = None, 
+    **kwargs
+) -> 'TsTbl':
+    """Convert DataFrame to TsTbl (R ricu as_ts_tbl factory function).
+    
+    Args:
+        data: DataFrame or existing TsTbl
+        id_vars: ID column name(s)
+        index_var: Time index column name
+        **kwargs: Additional arguments passed to TsTbl constructor
+        
+    Returns:
+        TsTbl instance
+    """
+    if isinstance(data, TsTbl):
+        # Already a TsTbl
+        return data
+    
+    return TsTbl(data, id_vars=id_vars, index_var=index_var, **kwargs)
+
+def as_win_tbl(
+    data: Union[pd.DataFrame, 'WinTbl'], 
+    id_vars: Union[str, List[str]], 
+    index_var: Optional[str] = None, 
+    dur_var: Optional[str] = None, 
+    **kwargs
+) -> 'WinTbl':
+    """Convert DataFrame to WinTbl (R ricu as_win_tbl factory function).
+    
+    Args:
+        data: DataFrame or existing WinTbl
+        id_vars: ID column name(s)
+        index_var: Time index column name
+        dur_var: Duration column name
+        **kwargs: Additional arguments passed to WinTbl constructor
+        
+    Returns:
+        WinTbl instance
+    """
+    if isinstance(data, WinTbl):
+        # Already a WinTbl
+        return data
+    
+    return WinTbl(data, id_vars=id_vars, index_var=index_var, dur_var=dur_var, **kwargs)

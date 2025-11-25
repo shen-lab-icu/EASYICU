@@ -77,8 +77,8 @@ def load_concepts(
     # 数据源参数 - 智能默认值
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    # 时间参数 - 可选
-    interval: Optional[Union[str, pd.Timedelta]] = None,
+    # 时间参数 - 默认与ricu一致 (interval=hours(1L))
+    interval: Optional[Union[str, pd.Timedelta]] = '1h',  # ricu默认: hours(1L)
     win_length: Optional[Union[str, pd.Timedelta]] = None,
     # 聚合参数
     aggregate: Optional[Union[str, Dict]] = None,
@@ -88,7 +88,7 @@ def load_concepts(
     verbose: bool = False,
     use_sofa2: bool = False,  # 新增：是否使用SOFA2字典
     merge: bool = True,       # 新增：是否合并结果
-    ricu_compatible: bool = False,  # 新增：返回ricu.R兼容格式
+    ricu_compatible: bool = True,  # 默认启用ricu.R兼容格式
     dict_path: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
     chunk_size: Optional[int] = None,
     progress: bool = False,
@@ -122,10 +122,11 @@ def load_concepts(
             - None: 从环境变量或常见路径自动查找
             - str/Path: 显式指定路径
 
-        # === 时间参数 (可选) ===
-        interval: 时间对齐间隔
+        # === 时间参数 (默认与ricu一致) ===
+        interval: 时间对齐间隔 (默认'1h'，与ricu的hours(1L)一致)
+            - '1h': 默认值，与ricu R包一致
+            - '6h', '12h': 其他时间间隔
             - None: 使用原始时间点（不对齐）
-            - '1h', '6h': 字符串格式
             - pd.Timedelta(hours=1): Timedelta对象
         win_length: 滑动窗口长度（用于SOFA等评分）
             - None: 点数据（不使用窗口）
