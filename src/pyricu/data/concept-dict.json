@@ -746,7 +746,8 @@
   "alp": {
     "unit": [
       "IU/L",
-      "U/l"
+      "U/l",
+      "E/l"
     ],
     "min": 0,
     "description": "alkaline phosphatase",
@@ -818,7 +819,8 @@
   "alt": {
     "unit": [
       "IU/L",
-      "U/l"
+      "U/l",
+      "E/l"
     ],
     "min": 0,
     "description": "alanine aminotransferase",
@@ -890,7 +892,8 @@
   "ast": {
     "unit": [
       "IU/L",
-      "U/l"
+      "U/l",
+      "E/l"
     ],
     "min": 0,
     "description": "aspartate aminotransferase",
@@ -1625,7 +1628,8 @@
   "ck": {
     "unit": [
       "IU/L",
-      "U/l"
+      "U/l",
+      "E/l"
     ],
     "min": 0,
     "description": "creatine kinase",
@@ -1880,16 +1884,6 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "callback": "transform_fun(set_val(TRUE))"
-        }
-      ],
-      "miiv": [
-        {
-          "table": "prescriptions",
-          "sub_var": "drug",
-          "regex": "(hydrocortisone|methylpred|prednisone|dexameth)",
-          "callback": "transform_fun(set_val(TRUE))",
-          "class_name": "rgx_itm",
-          "target": "id_tbl"
         }
       ]
     }
@@ -3181,7 +3175,8 @@
   "esr": {
     "unit": [
       "mm/hr",
-      "mm/1h"
+      "mm/1h",
+      "mm/uur"
     ],
     "min": 0,
     "max": 200,
@@ -3848,7 +3843,7 @@
     "sources": {
       "aumc": [
         {
-          "val_var": "heightgroup",
+          "val_var": "lengthgroup",
           "table": "admissions",
           "callback": "apply_map(c(`159-` = 150, `160-169` = 165, `170-179` = 175, `180-189` = 185, `190+` = 200))",
           "class_name": "col_itm"
@@ -4506,7 +4501,14 @@
     }
   },
   "lymph": {
-    "unit": "%",
+    "unit": [
+      "%",
+      "10^9/l",
+      "10^9/L",
+      "G/l",
+      "G/L",
+      "Geen"
+    ],
     "min": 0,
     "max": 100,
     "description": "lymphocytes",
@@ -4753,7 +4755,11 @@
     }
   },
   "mchc": {
-    "unit": "%",
+    "unit": [
+      "%",
+      "g/dL",
+      "g/dl"
+    ],
     "min": 20,
     "max": 50,
     "description": "mean corpuscular hemoglobin concentration",
@@ -5243,7 +5249,14 @@
     }
   },
   "neut": {
-    "unit": "%",
+    "unit": [
+      "%",
+      "10^9/l",
+      "10^9/L",
+      "G/l",
+      "G/L",
+      "Geen"
+    ],
     "min": 0,
     "max": 100,
     "description": "neutrophils",
@@ -6038,7 +6051,9 @@
   "plt": {
     "unit": [
       "K/uL",
-      "G/l"
+      "G/l",
+      "10(3)/mcL",
+      "10^3/mcL"
     ],
     "min": 5,
     "max": 1200,
@@ -7469,7 +7484,11 @@
     }
   },
   "tnt": {
-    "unit": "ng/mL",
+    "unit": [
+      "ng/mL",
+      "\u00b5g/l",
+      "ug/l"
+    ],
     "min": 0,
     "description": "troponin t",
     "omopid": 4005525,
@@ -7763,32 +7782,7 @@
     "omopid": 3655896,
     "category": "medications",
     "callback": "vaso_ind",
-    "class_name": "rec_cncpt",
-    "sources": {
-      "eicu": [
-        {
-          "concepts": [
-            "norepi_rate",
-            "dobu_rate",
-            "epi_rate"
-          ],
-          "callback": "vaso_ind_rate",
-          "class_name": "rec_cncpt"
-        }
-      ],
-      "aumc": [
-        {
-          "concepts": [
-            "norepi_rate",
-            "dobu_rate",
-            "dopa_rate",
-            "epi_rate"
-          ],
-          "callback": "vaso_ind_rate",
-          "class_name": "rec_cncpt"
-        }
-      ]
-    }
+    "class_name": "rec_cncpt"
   },
   "vent_end": {
     "class_name": "lgl_cncpt",
@@ -8246,7 +8240,9 @@
   "wbc": {
     "unit": [
       "K/uL",
-      "G/l"
+      "G/l",
+      "10(3)/mcL",
+      "10^3/mcL"
     ],
     "min": 0,
     "description": "white blood cell count",
@@ -8613,15 +8609,7 @@
     "min": 3,
     "max": 15,
     "sources": {
-      "miiv": [
-        {
-          "table": "chartevents",
-          "sub_var": "itemid",
-          "ids": [
-            220739
-          ]
-        }
-      ],
+      "miiv": [],
       "eicu": [
         {
           "table": "nursecharting",

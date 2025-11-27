@@ -42,6 +42,45 @@ logger = logging.getLogger(__name__)
 _global_loader = None
 _loader_config = None
 
+
+def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: bool = False) -> List:
+    """
+    从数据库中采样患者ID（用于 max_patients 参数）
+    
+    根据数据库类型，从对应的住院/ICU表中获取前N个患者ID。
+    这样可以在读取大表时就应用过滤，显著提升性能。
+    """
+    db_name = loader.database
+    
+    # 数据库 -> (表名, ID列名) 映射
+    id_table_map = {
+        'miiv': ('icustays', 'stay_id'),
+        'mimic': ('icustays', 'icustay_id'),
+        'mimic_demo': ('icustays', 'icustay_id'),
+        'eicu': ('patient', 'patientunitstayid'),
+        'eicu_demo': ('patient', 'patientunitstayid'),
+        'aumc': ('admissions', 'admissionid'),
+        'hirid': ('general', 'patientid'),
+    }
+    
+    table_name, id_col = id_table_map.get(db_name, ('icustays', 'stay_id'))
+    
+    try:
+        # 只加载ID列，限制行数
+        id_table = loader.datasource.load_table(table_name, columns=[id_col], verbose=False)
+        all_ids = id_table.data[id_col].dropna().unique()
+        sampled_ids = list(all_ids[:max_patients])
+        
+        if verbose:
+            print(f"🎯 max_patients={max_patients}: 从 {table_name}.{id_col} 采样 {len(sampled_ids)} 个患者")
+        
+        return sampled_ids
+    except Exception as e:
+        if verbose:
+            print(f"⚠️ 采样患者ID失败: {e}，将加载所有患者")
+        return None
+
+
 def _get_global_loader(
     database: Optional[str] = None,
     data_path: Optional[Path] = None,
@@ -95,6 +134,7 @@ def load_concepts(
     parallel_workers: Optional[int] = None,
     concept_workers: int = 1,
     parallel_backend: str = 'auto',
+    max_patients: Optional[int] = None,  # 新增：限制加载的患者数量（自动采样）
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
@@ -208,6 +248,10 @@ def load_concepts(
         use_sofa2=use_sofa2,
         verbose=verbose
     )
+
+    # 🚀 max_patients 支持：自动从数据库采样患者ID
+    if max_patients is not None and patient_ids is None:
+        patient_ids = _sample_patient_ids(loader, max_patients, verbose)
 
     # 规范化患者ID
     if patient_ids is not None and not isinstance(patient_ids, dict):

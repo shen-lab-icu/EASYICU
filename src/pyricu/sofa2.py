@@ -364,7 +364,7 @@ def sofa2_cns(
     gcs: pd.Series,
     *,
     delirium_tx: Optional[pd.Series] = None,
-    sedated_gcs: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
     motor_response: Optional[pd.Series] = None,
 ) -> pd.Series:
     """SOFA-2 brain/CNS component.
@@ -380,17 +380,13 @@ def sofa2_cns(
     │   4    │ 3-5          │ Extension/no response/myoclonus      │
     └────────┴──────────────┴──────────────────────────────────────┘
     
-    NEW in SOFA-2: Delirium treatment rule
+    NEW in SOFA-2: Delirium treatment/assessment rule
     - If receiving delirium treatment drugs → score 1pt even if GCS=15
+    - If CAM-ICU positive → score 1pt even if GCS=15
     - Delirium drugs (PADIS Guidelines):
       * Haloperidol, quetiapine, olanzapine, risperidone
       * Dexmedetomidine (if used for delirium)
     - Applies to short-term OR long-term treatment
-    
-    Sedated patients (NEW explicit rule in SOFA-2):
-    - Use GCS recorded BEFORE sedation
-    - If previous GCS unknown → score 0pt
-    - Rationale: Non-measurement suggests stability
     
     When GCS 3 domains cannot be assessed:
     - Use best motor scale domain score
@@ -398,14 +394,13 @@ def sofa2_cns(
     
     Comparison with SOFA-1:
     - SOFA-1: Only GCS thresholds, no delirium consideration
-    - SOFA-2: Adds delirium treatment criterion
-    - SOFA-2: Explicit sedation rules
+    - SOFA-2: Adds delirium treatment/assessment criterion
     - SOFA-2: Motor-only alternatives formalized
     
     Args:
         gcs: Glasgow Coma Scale (3-15)
         delirium_tx: Boolean - receiving delirium treatment
-        sedated_gcs: GCS before sedation (for currently sedated patients)
+        delirium_positive: Boolean - positive CAM-ICU or delirium assessment
         motor_response: Motor response score when GCS cannot be fully assessed
                        (6=localizing, 5=withdrawal, 4=flexion, 3=extension, 2=no response)
 
@@ -413,18 +408,11 @@ def sofa2_cns(
         Series of brain/CNS SOFA-2 scores (0-4)
 
     Notes:
-    - For sedated patients without sedated_gcs: use last known GCS or 0
-    - Delirium treatment overrides GCS=15 to minimum 1pt
+    - Delirium treatment OR positive assessment overrides GCS=15 to minimum 1pt
     - Motor alternatives allow scoring in intubated/non-verbal patients
     - When GCS 3 domains cannot be assessed, use best motor scale domain score
     """
-    # Use pre-sedation GCS if available, otherwise use current GCS
-    if sedated_gcs is not None:
-        g = pd.to_numeric(sedated_gcs, errors="coerce")
-        # Fill missing sedated_gcs with current gcs
-        g = g.combine_first(pd.to_numeric(gcs, errors="coerce"))
-    else:
-        g = pd.to_numeric(gcs, errors="coerce")
+    g = pd.to_numeric(gcs, errors="coerce")
 
     score = pd.Series(0, index=g.index, dtype=int)
 
@@ -455,6 +443,13 @@ def sofa2_cns(
     if delirium_tx is not None:
         dtx = _is_true(delirium_tx)
         mask = (g == 15) & dtx
+        score[mask] = np.maximum(score[mask], 1)
+
+    # SOFA-2 NEW: Positive delirium assessment rule
+    # If CAM-ICU positive and GCS==15, upgrade to 1pt
+    if delirium_positive is not None:
+        dp = _is_true(delirium_positive)
+        mask = (g == 15) & dp
         score[mask] = np.maximum(score[mask], 1)
 
     return score

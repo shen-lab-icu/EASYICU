@@ -1345,58 +1345,61 @@ def _callback_aumc_dur(
         return input_table
     
     # AUMC times are in milliseconds (numeric), not datetime
-    # We need to calculate duration differently than calc_dur which assumes datetime
+    # R ricu calc_dur with re_time:
+    #   1. ms_as_mins: as.integer(x / 6e4) - floors to integer minutes
+    #   2. re_time: round_to(x, as.double(interval)) - floors to interval (1 hour = 60 min)
+    #   3. calc_dur: max(stop) - min(start) where both are floored to hours
+    # So: duration = floor(max_stop_min/60) - floor(min_start_min/60)
     
     # Build grouping columns
     group_cols = list(id_columns)
     if grp_var and grp_var in data.columns:
         group_cols.append(grp_var)
     
-    # Group and aggregate: min(start), max(stop)
+    # Ensure numeric types for time columns
+    data[index_column] = pd.to_numeric(data[index_column], errors='coerce')
+    data[stop_var] = pd.to_numeric(data[stop_var], errors='coerce')
+    
+    # Drop rows with NaN times
+    data = data.dropna(subset=[index_column, stop_var])
+    
+    if data.empty:
+        result = pd.DataFrame(columns=group_cols + [index_column, value_column])
+        return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
+    
+    # Convert ms to integer minutes (floor) - matches R ricu's ms_as_mins: as.integer(x / 6e4)
+    data['_start_mins'] = (data[index_column] / 60000.0).astype(int)
+    data['_stop_mins'] = (data[stop_var] / 60000.0).astype(int)
+    
+    # Group and aggregate: min(start), max(stop) in minutes
     if group_cols:
-        # Ensure numeric types for time columns
-        data[index_column] = pd.to_numeric(data[index_column], errors='coerce')
-        data[stop_var] = pd.to_numeric(data[stop_var], errors='coerce')
-        
-        # Drop rows with NaN times
-        data = data.dropna(subset=[index_column, stop_var])
-        
-        if data.empty:
-            result = pd.DataFrame(columns=group_cols + [index_column, value_column])
-            return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
-        
-        # Aggregate
         agg_dict = {
-            index_column: 'min',  # min start time
-            stop_var: 'max'  # max stop time
+            '_start_mins': 'min',  # min start time (integer minutes)
+            '_stop_mins': 'max'    # max stop time (integer minutes)
         }
         
         grouped = data.groupby(group_cols, dropna=False).agg(agg_dict).reset_index()
-        
-        # Calculate duration in milliseconds
-        duration_ms = grouped[stop_var] - grouped[index_column]
-        
-        # Convert to hours: ms / (1000 * 60 * 60)
-        grouped[value_column] = duration_ms / (1000.0 * 60.0 * 60.0)
-        
-        # Keep group cols, index_column, and value column
-        keep_cols = group_cols + [index_column, value_column]
-        result = grouped[[col for col in keep_cols if col in grouped.columns]].copy()
-        
-        return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
     else:
-        # No grouping, simple duration calculation
-        data[index_column] = pd.to_numeric(data[index_column], errors='coerce')
-        data[stop_var] = pd.to_numeric(data[stop_var], errors='coerce')
-        data = data.dropna(subset=[index_column, stop_var])
-        
-        duration_ms = data[stop_var] - data[index_column]
-        data[value_column] = duration_ms / (1000.0 * 60.0 * 60.0)
-        
-        keep_cols = list(id_columns) + [index_column, value_column]
-        result = data[[col for col in keep_cols if col in data.columns]].copy()
-        
-        return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
+        # No grouping - aggregate over entire dataset per row
+        grouped = data.copy()
+    
+    # R ricu re_time floors to hours: round_to(mins, 60) = floor(mins/60)*60
+    # Then calc_dur: duration = max_stop_hours - min_start_hours
+    # Combined: duration = floor(max_stop_mins/60) - floor(min_start_mins/60)
+    start_hours_floor = (grouped['_start_mins'] / 60.0).apply(lambda x: int(x) if pd.notna(x) else x)
+    stop_hours_floor = (grouped['_stop_mins'] / 60.0).apply(lambda x: int(x) if pd.notna(x) else x)
+    duration_hours = stop_hours_floor - start_hours_floor
+    
+    grouped[value_column] = duration_hours.astype(float)
+    
+    # Index column is start time in hours (floored)
+    grouped[index_column] = start_hours_floor.astype(float)
+    
+    # Keep group cols, index_column, and value column
+    keep_cols = group_cols + [index_column, value_column]
+    result = grouped[[col for col in keep_cols if col in grouped.columns]].copy()
+    
+    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
 
 def _callback_blood_cell_ratio(
     tables: Dict[str, ICUTable],
@@ -1755,7 +1758,7 @@ def _callback_sofa_component(
                 elif ctx.concept_name == 'sofa2_resp' and name in ['spo2', 'fio2', 'adv_resp', 'ecmo', 'ecmo_indication']:
                     # SOFA-2 respiratory optional parameters - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_cns' and name in ['delirium_tx', 'sedated_gcs']:
+                elif ctx.concept_name == 'sofa2_cns' and name in ['delirium_tx', 'delirium_positive', 'motor_response']:
                     # SOFA-2 CNS optional parameters - pass None
                     kwargs[name] = None
                 else:
@@ -3846,11 +3849,15 @@ def _callback_vaso_ind(
                 return pd.to_timedelta(time_diffs, unit="s", errors="coerce")
             # Otherwise, return NaT for all invalid entries
             return pd.Series([pd.NaT] * len(series), index=series.index, dtype='timedelta64[ns]')
-        converted = pd.to_timedelta(series, errors="coerce")
-        if converted.notna().any():
-            return converted
+        # For numeric values, assume duration is in HOURS (consistent with eICU/ricu conventions)
+        # pd.to_timedelta on raw numbers defaults to nanoseconds, which is wrong
+        # First try to convert to numeric - if successful, interpret as hours
         numeric = pd.to_numeric(series, errors="coerce")
-        return pd.to_timedelta(numeric, unit="h", errors="coerce")
+        if numeric.notna().any():
+            return pd.to_timedelta(numeric, unit="h", errors="coerce")
+        # Last resort: try string parsing (e.g., "1 hour", "30 minutes")
+        converted = pd.to_timedelta(series, errors="coerce")
+        return converted
 
     for col in vaso_cols:
         merged[col] = _coerce_duration(merged[col])
@@ -3860,8 +3867,24 @@ def _callback_vaso_ind(
     # 计算每行的max duration (跳过NA)
     merged["__max_duration"] = merged[vaso_cols].max(axis=1, skipna=True)
     
-    # 只保留至少有一个valid duration的行 (max不是NA且>0)
-    valid_mask = merged["__max_duration"].notna() & (merged["__max_duration"] > pd.Timedelta(0))
+    # R ricu expand() 的行为：res <- res[get(start_var) <= get(end_var), ...]
+    # 其中 end_var = "vaso_ind" 即 duration 值本身（不是 start + duration）
+    # 这意味着只有 charttime <= duration 的行才会被展开
+    # 例如：charttime=0, duration=142 → 0 <= 142 → True（保留）
+    #       charttime=154, duration=58 → 154 <= 58 → False（过滤掉）
+    # 这是 R ricu 的特性，我们需要复制它以保持兼容
+    
+    # 将 duration 转换为小时数进行比较
+    merged["__duration_hours"] = merged["__max_duration"].dt.total_seconds() / 3600
+    # 获取 start 的小时数（相对于 base_time）
+    merged["__start_hours"] = (merged["__start_dt"] - base_time).dt.total_seconds() / 3600
+    
+    # 只保留 start_hours <= duration_hours 的行（复制 R ricu expand 的过滤行为）
+    valid_mask = (
+        merged["__max_duration"].notna() & 
+        (merged["__max_duration"] > pd.Timedelta(0)) &
+        (merged["__start_hours"] <= merged["__duration_hours"])
+    )
     valid_rows = merged[valid_mask].copy()
     
     if valid_rows.empty:
@@ -3878,9 +3901,12 @@ def _callback_vaso_ind(
         if pd.isna(start_dt):
             continue
         id_values = tuple(row[col] for col in id_columns) if id_columns else tuple()
-        # 使用max_duration创建一个window (而不是为每个vasopressor单独创建)
+        # R ricu expand 的行为：seq(start, end) 其中 end = duration 值本身
+        # 不是 start + duration！
+        # 例如：start=165, duration=287 → seq(165, 287) = 165,166,...,287
         max_duration = row["__max_duration"]
-        end_dt = start_dt + max_duration
+        # end 是 duration 作为绝对时间（从 base_time 开始计算）
+        end_dt = base_time + max_duration
         window_records.append((*id_values, start_dt, end_dt))
 
     if not window_records:
@@ -3933,10 +3959,9 @@ def _callback_vaso_ind(
         grid: pd.DatetimeIndex
         if final_interval is not None and final_interval > pd.Timedelta(0):
             aligned_start = start.floor(final_interval)
-            epsilon = min(final_interval / 1000, pd.Timedelta(microseconds=1))
-            aligned_end = end - epsilon
-            if aligned_end < aligned_start:
-                aligned_end = aligned_start
+            # R ricu seq(start, end) 包含 end，所以不减去 epsilon
+            # 使用 end + small_amount 来确保 end 被包含在 date_range 中
+            aligned_end = end.floor(final_interval)
             grid = pd.date_range(start=aligned_start, end=aligned_end, freq=final_interval)
             if grid.empty:
                 grid = pd.DatetimeIndex([aligned_start])
@@ -4321,32 +4346,33 @@ def _callback_vaso60(
         # Just set durations to NaN to avoid crash
         durations = pd.Series([pd.NaT] * len(durations), index=durations.index, dtype='timedelta64[ns]')
     else:
-        # For AUMC, skip pd.to_timedelta() without unit because it treats
-        # numbers as DAYS, not hours. We know AUMC durations are in hours.
+        # Duration is numeric (hours) - this is the common case for MIMIC-IV and most databases
+        # Convert numeric durations to timedelta
+        # IMPORTANT: pd.to_timedelta() without unit treats numbers as NANOSECONDS, not hours!
+        # We need to explicitly specify the unit based on the database
+        numeric_durations = pd.to_numeric(durations, errors="coerce")
+        
         is_aumc = isinstance(ds_name, str) and ds_name.lower() == 'aumc'
+        is_miiv = isinstance(ds_name, str) and ds_name.lower() in ('miiv', 'mimic', 'mimic_demo')
         
-        if not is_aumc:
-            converted = pd.to_timedelta(durations, errors="coerce")
-            if converted.notna().any():
-                durations = converted
-            else:
-                # Fall through to numeric conversion
-                is_aumc = True  # Treat as numeric
-        
-        if is_aumc:
-            numeric_durations = pd.to_numeric(durations, errors="coerce")
-            if isinstance(ds_name, str) and ds_name.lower() == 'aumc':
-                # AUMC: duration is in hours
-                hours_based = pd.to_timedelta(numeric_durations, unit="h", errors="coerce")
+        if is_aumc or is_miiv:
+            # AUMC and MIMIC: duration is in hours
+            durations = pd.to_timedelta(numeric_durations, unit="h", errors="coerce")
+        else:
+            # Other databases: try hours first (most common for ICU data),
+            # then fall back to minutes if hours gives unreasonably large values
+            hours_based = pd.to_timedelta(numeric_durations, unit="h", errors="coerce")
+            # Check if values are reasonable (< 1000 hours = ~41 days max stay)
+            if hours_based.notna().any() and (hours_based.max() < pd.Timedelta(hours=1000) if hours_based.notna().any() else True):
                 durations = hours_based
             else:
-                # Other databases: try minutes first, then seconds
+                # Try minutes
                 minutes_based = pd.to_timedelta(numeric_durations, unit="m", errors="coerce")
                 if minutes_based.notna().any():
                     durations = minutes_based
                 else:
-                    seconds_based = pd.to_timedelta(numeric_durations, unit="s", errors="coerce")
-                    durations = seconds_based
+                    # Fall back to seconds
+                    durations = pd.to_timedelta(numeric_durations, unit="s", errors="coerce")
 
     dur_df["__duration"] = durations
     dur_df = dur_df.dropna(subset=["__duration", dur_index_col])

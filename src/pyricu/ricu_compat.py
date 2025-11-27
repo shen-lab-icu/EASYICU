@@ -123,14 +123,20 @@ RICU_MODULES: Dict[str, ConceptModule] = {
 }
 
 
-# 静态概念列表（不需要时间网格的概念）
-STATIC_CONCEPTS = {"age", "sex", "bmi", "height", "weight", "los_icu", "death"}
+# 静态概念列表（target=id_tbl，需要填充到所有时间点的概念）
+# 注意：death 不是静态概念，它是 lgl_cncpt，只在死亡时刻有值
+STATIC_CONCEPTS = {"age", "sex", "bmi", "height", "weight", "los_icu"}
 
 # 窗口型概念（需要展开start/end时间的概念）
+# 包括：
+# - 机械通气指标: mech_vent, vent_ind, supp_o2
+# - 血管活性药物速率: *_rate, vaso_ind
+# - 输液概念 (有 dur_var/end_var): dex, ins
 WINDOW_CONCEPTS = {
     "mech_vent", "vent_ind", "supp_o2",
     "norepi_rate", "epi_rate", "dobu_rate", "adh_rate",
-    "dopa_rate", "phn_rate", "vaso_ind"
+    "dopa_rate", "phn_rate", "vaso_ind",
+    "dex", "ins"  # 输液概念，有 dur_var=endtime 或 end_var=endtime
 }
 
 # 点事件概念（不应展开为连续时间序列）
@@ -493,7 +499,12 @@ def merge_concepts_ricu_style(
             df_copy = df_copy.rename(columns={found_id: "id"})
         
         # 检测和重命名时间列
-        time_candidates = [time_col, "charttime", "time", "starttime", "index_var"]
+        # 🔧 FIX: 添加 eICU 的时间列（包括 intakeoutputoffset）和 death 的 deathtime
+        time_candidates = [time_col, "charttime", "time", "starttime", "index_var", 
+                          "nursingchartoffset", "labresultoffset", "observationoffset",
+                          "measuredat", "respchartoffset", "intakeoutputoffset",
+                          "infusionoffset", "drugstartoffset", "deathtime",
+                          "unitdischargeoffset", "dateofdeath"]
         found_time = None
         for cand in time_candidates:
             if cand in df_copy.columns:
@@ -502,6 +513,12 @@ def merge_concepts_ricu_style(
         
         if found_time and found_time != "time":
             df_copy = df_copy.rename(columns={found_time: "time"})
+        
+        # 🔧 FIX: 删除其他可能导致笛卡尔积的额外时间列
+        extra_time_cols = ["intakeoutputentryoffset"]
+        for col in extra_time_cols:
+            if col in df_copy.columns and col != found_time:
+                df_copy = df_copy.drop(columns=[col])
         
         # 转换时间为小时数
         if "time" in df_copy.columns and not pd.api.types.is_numeric_dtype(df_copy["time"]):

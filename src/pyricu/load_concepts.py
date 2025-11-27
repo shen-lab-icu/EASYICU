@@ -72,7 +72,8 @@ MINIMAL_COLUMNS_MAP = {
                       'respiration', 'systemicsystolic', 'systemicdiastolic', 'systemicmean'],
     
     # eICU lab: 实验室检查
-    'lab': ['patientunitstayid', 'labresultoffset', 'labname', 'labresult'],
+    # 包含labmeasurenameinterface用于单位转换回调（如calcium的mmol/l转mg/dL）
+    'lab': ['patientunitstayid', 'labresultoffset', 'labname', 'labresult', 'labmeasurenameinterface'],
 }
 
 # 性能优化开关 - 如果遇到问题可以禁用
@@ -486,7 +487,7 @@ class ConceptLoader:
             
             # 使用 ConceptResolver 加载
             # 过滤掉 ConceptLoader 特有的参数和已经显式传递的参数
-            excluded_kwargs = {'verbose', 'merge_data', 'id_type', 'merge', 'patient_ids', 'interval', 'aggregate'}
+            excluded_kwargs = {'verbose', 'merge_data', 'id_type', 'merge', 'patient_ids', 'interval', 'aggregate', 'ricu_compatible'}
             resolver_kwargs = {k: v for k, v in kwargs.items() if k not in excluded_kwargs}
             
             result = resolver.load_concepts(
@@ -497,6 +498,7 @@ class ConceptLoader:
                 interval=interval,
                 aggregate=aggregate,
                 verbose=kwargs.get('verbose', False),
+                ricu_compatible=False,  # 🔧 FIX: 强制返回 dict[str, ICUTable]，以便正确提取数据
                 **resolver_kwargs
             )
             
@@ -506,6 +508,9 @@ class ConceptLoader:
                 if isinstance(result_table, ICUTable):
                     return result_table.data
                 return result_table
+            # 🔧 FIX: 如果返回的是 DataFrame（ricu_compatible=True 的情况），直接返回
+            elif isinstance(result, pd.DataFrame):
+                return result
             return pd.DataFrame()
         
         # 检查是否为递归概念（有子概念）- 这个分支现在主要用于非 rec_cncpt 类型
