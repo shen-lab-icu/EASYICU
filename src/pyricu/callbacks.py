@@ -817,7 +817,8 @@ def sofa2_cardio(
 def sofa2_cns(
     gcs: pd.Series,
     delirium_tx: Optional[pd.Series] = None,
-    sedated_gcs: Optional[pd.Series] = None,
+    delirium_positive: Optional[pd.Series] = None,
+    motor_response: Optional[pd.Series] = None,
 ) -> pd.Series:
     """Calculate SOFA-2 CNS (brain) component.
     
@@ -825,25 +826,24 @@ def sofa2_cns(
     - Score 4: GCS 3-5 (or extension/no response to pain, myoclonus)
     - Score 3: GCS 6-8 (or flexion to pain)
     - Score 2: GCS 9-12 (or withdrawal to pain)
-    - Score 1: GCS 13-14 (or localizing to pain) OR delirium treatment
-    - Score 0: GCS 15 (unless on delirium treatment)
+    - Score 1: GCS 13-14 (or localizing to pain) OR delirium treatment/positive CAM-ICU
+    - Score 0: GCS 15 (unless on delirium treatment or positive CAM-ICU)
     
     Special rules:
-    - Use sedated_gcs (GCS before sedation) if available
-    - If receiving delirium treatment and GCS=15, score 1 point
-    - Motor scale can substitute full GCS if unavailable
+    - If receiving delirium treatment OR has positive CAM-ICU and GCS=15, score 1 point
+    - Motor response scale can substitute full GCS if unavailable
     
     Args:
         gcs: Glasgow Coma Scale (3-15)
         delirium_tx: Receiving delirium treatment (haloperidol, etc.)
-        sedated_gcs: GCS before sedation (for sedated patients)
+        delirium_positive: CAM-ICU assessment positive for delirium (itemid 228332)
+        motor_response: GCS Motor component (1-6) for alternative scoring
         
     Returns:
         Series with SOFA-2 CNS scores (0-4)
     """
-    # Use sedated_gcs if available, otherwise use regular gcs
-    g = pd.to_numeric(sedated_gcs, errors="coerce") if sedated_gcs is not None else pd.Series(np.nan, index=gcs.index)
-    g = g.fillna(pd.to_numeric(gcs, errors="coerce"))
+    # Start with regular GCS
+    g = pd.to_numeric(gcs, errors="coerce")
     
     idx = g.index
     score = pd.Series(0, index=idx, dtype=int)
@@ -854,11 +854,18 @@ def sofa2_cns(
     score[valid & (g >= 6) & (g <= 8)] = 3
     score[valid & (g >= 3) & (g <= 5)] = 4
     
-    # SOFA-2 NEW: Delirium treatment rule
-    # If receiving delirium treatment and GCS==15, upgrade to 1pt
+    # SOFA-2 NEW: Delirium rule
+    # If receiving delirium treatment OR has positive CAM-ICU and GCS==15, upgrade to 1pt
+    has_delirium = pd.Series(False, index=idx)
+    
     if delirium_tx is not None:
-        dtx = _is_true_safe(delirium_tx)
-        mask = (g == 15) & dtx
+        has_delirium = has_delirium | _is_true_safe(delirium_tx)
+    
+    if delirium_positive is not None:
+        has_delirium = has_delirium | _is_true_safe(delirium_positive)
+    
+    if has_delirium.any():
+        mask = (g == 15) & has_delirium
         score[mask] = np.maximum(score[mask], 1)
     
     return score

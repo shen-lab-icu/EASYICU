@@ -352,27 +352,66 @@ def distribute_amount(
     unit_col: str = 'unit',
     end_col: str = 'endtime',
     index_col: str = 'time',
+    interval_hours: float = 1.0,  # 默认 1 小时间隔
     **kwargs
 ) -> pd.DataFrame:
     """Distribute total amount over duration to get rate.
     
     For drug administrations given as total amount over a duration,
     converts to rate per hour.
+    
+    R ricu 逻辑:
+    1. 时间会被舍入到 interval (默认 1 小时)
+    2. 过滤掉 endtime - starttime < 0 的行
+    3. 对于舍入后 duration == 0 的行（即 duration < interval），设置 endtime = starttime + 1hr
+    4. 计算速率 = amount / duration * 1hr
+    5. 展开时间窗口
+    
+    注意：R ricu 的 re_time 函数会将时间舍入到 interval，
+    所以 1 分钟的 duration 在 1 小时 interval 下会被视为 0。
     """
     data = data.copy()
     
-    # Calculate duration in hours
-    # Handle None values to prevent division errors
-    time_diff = pd.to_datetime(data[end_col], errors='coerce') - pd.to_datetime(data[index_col], errors='coerce')
-    duration = time_diff.dt.total_seconds() / 3600
+    # 确保时间列是 datetime 类型
+    start_time = pd.to_datetime(data[index_col], errors='coerce')
+    end_time = pd.to_datetime(data[end_col], errors='coerce')
     
-    # Avoid division by zero
-    duration = duration.replace(0, 1)
+    # 计算时间差
+    time_diff = end_time - start_time
     
-    # Calculate rate
-    # Handle None values to prevent division errors
-    data[val_col] = pd.to_numeric(data[val_col], errors='coerce') / duration
-    data[unit_col] = data[unit_col] + '/hr'
+    # 过滤掉 endtime - starttime < 0 的行 (R: x <- x[get(end_var) - get(idx) >= 0, ])
+    valid_mask = time_diff >= pd.Timedelta(0)
+    data = data[valid_mask].copy()
+    start_time = start_time[valid_mask]
+    end_time = end_time[valid_mask]
+    time_diff = time_diff[valid_mask]
+    
+    if data.empty:
+        return data
+    
+    # R ricu 的 re_time 会将时间舍入到 interval
+    # 对于 duration < interval 的情况，舍入后 duration 变成 0
+    # 此时 R 会将 endtime 设置为 starttime + 1hr
+    interval_td = pd.Timedelta(hours=interval_hours)
+    
+    # 检查 duration 是否小于 interval（会被舍入为 0）
+    short_duration_mask = time_diff < interval_td
+    if short_duration_mask.any():
+        end_time = end_time.copy()
+        end_time.loc[short_duration_mask] = start_time.loc[short_duration_mask] + interval_td
+        data.loc[short_duration_mask, end_col] = end_time.loc[short_duration_mask]
+        time_diff = end_time - start_time
+    
+    # 计算速率 = amount / duration_hours * 1hr
+    duration_hours = time_diff.dt.total_seconds() / 3600
+    duration_hours = duration_hours.replace(0, 1)  # 避免除以零
+    
+    data[val_col] = pd.to_numeric(data[val_col], errors='coerce') / duration_hours
+    if unit_col in data.columns:
+        data[unit_col] = data[unit_col].astype(str) + '/hr'
+    
+    # 注意：展开逻辑在 concept.py 的 WINDOW_CONCEPTS 处理中完成
+    # 这里确保 endtime 列被保留
     
     return data
 
@@ -1074,6 +1113,16 @@ def calc_dur(
             if col in data.columns:
                 result[col] = data[col].iloc[0]
     
+    # Convert timedelta to hours (ricu returns hours as numeric)
+    if val_col in result.columns:
+        if pd.api.types.is_timedelta64_dtype(result[val_col]):
+            result[val_col] = result[val_col].dt.total_seconds() / 3600.0
+        elif hasattr(result[val_col].iloc[0] if len(result) > 0 else None, 'total_seconds'):
+            # Handle case where timedelta is stored as object
+            result[val_col] = result[val_col].apply(
+                lambda x: x.total_seconds() / 3600.0 if pd.notna(x) and hasattr(x, 'total_seconds') else x
+            )
+    
     return result
 
 def mimic_dur_inmv(
@@ -1114,7 +1163,7 @@ def mimic_dur_inmv(
     
     index_var = time_cols[0]
     
-    # Call calc_dur
+    # Call calc_dur (returns hours as numeric, not timedelta)
     result = calc_dur(
         data,
         val_col=val_col,
@@ -1125,15 +1174,8 @@ def mimic_dur_inmv(
         unit_col=unit_col
     )
     
-    # Ensure val_col is timedelta type (not datetime)
-    if val_col in result.columns and not pd.api.types.is_timedelta64_dtype(result[val_col]):
-        # If it's datetime type, it's likely a bug - duration should be timedelta
-        # For now, convert to NaT to avoid crashing
-        if pd.api.types.is_datetime64_any_dtype(result[val_col]):
-            result[val_col] = pd.Series([pd.NaT] * len(result), dtype='timedelta64[ns]')
-        else:
-            # Try to convert numeric or string to timedelta
-            result[val_col] = pd.to_timedelta(result[val_col], errors='coerce')
+    # calc_dur now returns hours as numeric (matching ricu behavior)
+    # No need to convert to timedelta
     
     return result
 
@@ -1171,7 +1213,7 @@ def mimic_dur_incv(
     
     index_var = time_cols[0]
     
-    # Call calc_dur with same column for min and max
+    # Call calc_dur with same column for min and max (returns hours as numeric)
     result = calc_dur(
         data,
         val_col=val_col,
@@ -1182,15 +1224,8 @@ def mimic_dur_incv(
         unit_col=unit_col
     )
     
-    # Ensure val_col is timedelta type (not datetime)
-    if val_col in result.columns and not pd.api.types.is_timedelta64_dtype(result[val_col]):
-        # If it's datetime type, it's likely a bug - duration should be timedelta
-        # For now, convert to NaT to avoid crashing
-        if pd.api.types.is_datetime64_any_dtype(result[val_col]):
-            result[val_col] = pd.Series([pd.NaT] * len(result), dtype='timedelta64[ns]')
-        else:
-            # Try to convert numeric or string to timedelta
-            result[val_col] = pd.to_timedelta(result[val_col], errors='coerce')
+    # calc_dur now returns hours as numeric (matching ricu behavior)
+    # No need to convert to timedelta
     
     return result
 
@@ -1200,6 +1235,7 @@ def create_intervals(
     overhang: pd.Timedelta = pd.Timedelta(hours=1),
     max_len: pd.Timedelta = pd.Timedelta(hours=6),
     end_var: str = 'endtime',
+    interval: pd.Timedelta = pd.Timedelta(hours=1),  # Add interval parameter
     **kwargs
 ) -> pd.DataFrame:
     """Create intervals for CareVue infusion data (R ricu create_intervals).
@@ -1207,12 +1243,19 @@ def create_intervals(
     When stop times are not available, creates estimated end times based on
     subsequent measurements or default overhang period.
     
+    R ricu logic:
+    1. Calculate diff to next time (or use overhang for last record)
+    2. Truncate diff to [0, max_len]
+    3. Subtract interval (typically 1 hour)
+    4. endtime = start + adjusted_diff
+    
     Args:
         data: Input DataFrame
         by_cols: Columns to group by
         overhang: Default duration to add if no next measurement
         max_len: Maximum interval length
         end_var: Output column name for end time
+        interval: Time interval to subtract from diff (default 1 hour)
         **kwargs: Additional arguments
         
     Returns:
@@ -1223,19 +1266,23 @@ def create_intervals(
         data[end_var] = pd.NaT
         return data
     
-    # Infer time column
-    time_cols = [col for col in data.columns if 'time' in col.lower()]
+    # Infer time column - support eICU's infusionoffset
+    time_col_patterns = ['time', 'offset', 'charttime', 'starttime']
+    time_cols = []
+    for col in data.columns:
+        col_lower = col.lower()
+        if any(pattern in col_lower for pattern in time_col_patterns):
+            time_cols.append(col)
+    
     if not time_cols:
         return data
     
     index_var = time_cols[0]
     
-    # Ensure datetime type
-    if not pd.api.types.is_datetime64_any_dtype(data[index_var]):
-        data = data.copy()
-        data[index_var] = pd.to_datetime(data[index_var])
-    else:
-        data = data.copy()
+    # Check if time column is numeric (hours since admission) vs datetime
+    is_numeric_time = pd.api.types.is_numeric_dtype(data[index_var])
+    
+    data = data.copy()
     
     # Infer by_cols if not provided
     if by_cols is None:
@@ -1245,33 +1292,79 @@ def create_intervals(
     sort_cols = by_cols + [index_var]
     data = data.sort_values(sort_cols)
     
-    # Calculate end times
-    if by_cols:
-        # Group and calculate next time or add overhang
-        def calc_end(group):
-            group = group.copy()
-            # Get next time within group
-            group[end_var] = group[index_var].shift(-1)
-            # For last row, use overhang
-            mask = group[end_var].isna()
-            group.loc[mask, end_var] = group.loc[mask, index_var] + overhang
-            # Cap at max_len
-            duration = group[end_var] - group[index_var]
-            too_long = duration > max_len
-            group.loc[too_long, end_var] = group.loc[too_long, index_var] + max_len
-            return group
+    # Convert overhang, max_len, and interval to appropriate units for numeric time
+    if is_numeric_time:
+        # Assume numeric time is in HOURS (expand_intervals converts eICU minutes to hours first)
+        overhang_hours = overhang.total_seconds() / 3600.0  # 1 hour
+        max_len_hours = max_len.total_seconds() / 3600.0    # 6 hours
+        interval_hours = interval.total_seconds() / 3600.0  # 1 hour
         
-        data = data.groupby(by_cols, group_keys=False).apply(calc_end, include_groups=True)
+        # R ricu logic:
+        # 1. diff = next_time - start (or overhang for last record)
+        # 2. diff = trunc(diff, 0, max_len)
+        # 3. diff = diff - interval
+        # 4. endtime = start + diff
+        
+        if by_cols:
+            def calc_end(group):
+                group = group.copy()
+                # Step 1: Calculate diff to next time (padded_diff)
+                next_times = group[index_var].shift(-1)
+                diff = next_times - group[index_var]
+                # For last row, use overhang
+                diff = diff.fillna(overhang_hours)
+                
+                # Step 2: Truncate to [0, max_len]
+                diff = diff.clip(lower=0, upper=max_len_hours)
+                
+                # Step 3: Subtract interval
+                diff = diff - interval_hours
+                
+                # Ensure diff is not negative
+                diff = diff.clip(lower=0)
+                
+                # Step 4: endtime = start + diff
+                group[end_var] = group[index_var] + diff
+                return group
+            
+            data = data.groupby(by_cols, group_keys=False).apply(calc_end, include_groups=True)
+        else:
+            next_times = data[index_var].shift(-1)
+            diff = next_times - data[index_var]
+            diff = diff.fillna(overhang_hours)
+            diff = diff.clip(lower=0, upper=max_len_hours)
+            diff = diff - interval_hours
+            diff = diff.clip(lower=0)
+            data[end_var] = data[index_var] + diff
     else:
-        # No grouping
-        data[end_var] = data[index_var].shift(-1)
-        mask = data[end_var].isna()
-        data.loc[mask, end_var] = data.loc[mask, index_var] + overhang
-        duration = data[end_var] - data[index_var]
-        too_long = duration > max_len
-        data.loc[too_long, end_var] = data.loc[too_long, index_var] + max_len
+        # Original datetime logic
+        if not pd.api.types.is_datetime64_any_dtype(data[index_var]):
+            data[index_var] = pd.to_datetime(data[index_var])
+        
+        if by_cols:
+            def calc_end(group):
+                group = group.copy()
+                next_times = group[index_var].shift(-1)
+                diff = next_times - group[index_var]
+                diff = diff.fillna(overhang)
+                diff = diff.clip(lower=pd.Timedelta(0), upper=max_len)
+                diff = diff - interval
+                diff = diff.clip(lower=pd.Timedelta(0))
+                group[end_var] = group[index_var] + diff
+                return group
+            
+            data = data.groupby(by_cols, group_keys=False).apply(calc_end, include_groups=True)
+        else:
+            next_times = data[index_var].shift(-1)
+            diff = next_times - data[index_var]
+            diff = diff.fillna(overhang)
+            diff = diff.clip(lower=pd.Timedelta(0), upper=max_len)
+            diff = diff - interval
+            diff = diff.clip(lower=pd.Timedelta(0))
+            data[end_var] = data[index_var] + diff
     
     return data
+
 
 def expand_intervals(
     data: pd.DataFrame,
@@ -1293,6 +1386,7 @@ def expand_intervals(
         Expanded DataFrame
     """
     from .ts_utils import expand
+    import numpy as np
     
     # Infer ID columns
     id_cols = [col for col in data.columns if 'id' in col.lower()]
@@ -1302,7 +1396,33 @@ def expand_intervals(
     if grp_var and grp_var in data.columns:
         by_cols.append(grp_var)
     
-    # Create intervals
+    # Infer index variable - support eICU's infusionoffset
+    time_col_patterns = ['time', 'offset', 'charttime', 'starttime']
+    time_cols = []
+    for col in data.columns:
+        if col == 'endtime':
+            continue
+        col_lower = col.lower()
+        if any(pattern in col_lower for pattern in time_col_patterns):
+            time_cols.append(col)
+    
+    if not time_cols:
+        return data
+    
+    index_var = time_cols[0]
+    
+    # 🔧 CRITICAL FIX: Detect eICU minute-based data
+    # eICU uses infusionoffset in MINUTES since admission
+    # R ricu uses hours() for overhang/max_len but converts to minutes internally
+    # We need to convert minute data to hours for proper expansion, then back to minutes
+    is_eicu_minutes = index_var.lower() == 'infusionoffset' and pd.api.types.is_numeric_dtype(data[index_var])
+    
+    if is_eicu_minutes:
+        # Convert minutes to hours for proper interval creation and expansion
+        data = data.copy()
+        data[index_var] = data[index_var] / 60.0  # Minutes to hours
+    
+    # Create intervals (overhang=1 hour, max_len=6 hours)
     data = create_intervals(
         data,
         by_cols=by_cols,
@@ -1310,13 +1430,6 @@ def expand_intervals(
         max_len=pd.Timedelta(hours=6),
         end_var='endtime'
     )
-    
-    # Infer index variable
-    time_cols = [col for col in data.columns if 'time' in col.lower() and col != 'endtime']
-    if not time_cols:
-        return data
-    
-    index_var = time_cols[0]
     
     # Prepare keep_vars
     if keep_vars is None:
@@ -1329,7 +1442,7 @@ def expand_intervals(
     if 'endtime' not in keep_vars and 'endtime' in data.columns:
         keep_vars.append('endtime')
     
-    # Expand
+    # Expand with step_size=1 hour
     expanded = expand(
         data,
         start_var=index_var,
@@ -1338,6 +1451,22 @@ def expand_intervals(
         id_cols=id_cols,
         keep_vars=keep_vars
     )
+    
+    if is_eicu_minutes and len(expanded) > 0:
+        # 🔧 CRITICAL: Round time to floor hour and deduplicate
+        # R ricu uses re_time(floor) to round times to integer hours
+        # Then keeps only unique hour values per patient
+        expanded = expanded.copy()
+        
+        # Floor to integer hours
+        expanded[index_var] = np.floor(expanded[index_var])
+        
+        # Deduplicate by patient and hour, keeping last value (LOCF style)
+        dedup_cols = list(id_cols) + [index_var]
+        expanded = expanded.drop_duplicates(subset=dedup_cols, keep='last')
+        
+        # Convert hours back to minutes for output (integer hours * 60)
+        expanded[index_var] = (expanded[index_var] * 60).astype(int)
     
     return expanded
 
@@ -2272,14 +2401,15 @@ def units_to_unit(x: pd.Timedelta) -> str:
 def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
     """eICU dose rate conversion with weight normalization (R ricu eicu_rate_kg).
     
-    Converts various dose rate units to mcg/kg/min, handling:
-    - /hr -> /min (divide by 60)
-    - mg/ -> mcg/ (multiply by 1000)
-    - units/kg/min -> NA (not convertible)
-    - ml/ -> mcg/ (multiply by ml_to_mcg)
-    - nanograms/ -> mcg/ (divide by 1000)
-    - Unknown/ml units -> NA
-    - Add /kg/ for non-kg-normalized rates using patient weight
+    Converts various dose rate units to mcg/kg/min, following R ricu logic:
+    1. First apply unit conversions:
+       - /hr -> /min (divide by 60)
+       - mg/ -> mcg/ (multiply by 1000)
+       - units/ -> NA (not convertible)
+       - ml/ -> mcg/ (multiply by ml_to_mcg)
+       - nanograms/ -> mcg/ (divide by 1000)
+       - Unknown/ml -> NA
+    2. Then for non-/kg/ rates, divide by patient weight (from patient table)
     
     Args:
         ml_to_mcg: Conversion factor from ml to mcg (drug concentration)
@@ -2288,8 +2418,8 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         Callback function
         
     Examples:
-        >>> # Norepinephrine: 1 ml = 1600 mcg
-        >>> norepi_callback = eicu_rate_kg_callback(ml_to_mcg=1600)
+        >>> # Norepinephrine: ml_to_mcg=32 (standard concentration)
+        >>> norepi_callback = eicu_rate_kg_callback(ml_to_mcg=32)
     """
     def callback(
         frame: pd.DataFrame,
@@ -2297,15 +2427,19 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         sub_var: str,
         weight_var: str,
         concept_name: str,
+        data_source=None,
+        patient_ids=None,
     ) -> pd.DataFrame:
-        """Apply eICU rate/kg conversion.
+        """Apply eICU rate/kg conversion following R ricu logic.
         
         Args:
             frame: Input dataframe
-            val_var: Value column name
-            sub_var: Sub-variable column (contains unit info)
+            val_var: Value column name (e.g., 'drugrate')
+            sub_var: Sub-variable column containing unit info (e.g., 'drugname')
             weight_var: Weight column name (from patient table)
             concept_name: Output concept name
+            data_source: ICUDataSource for loading weight concept
+            patient_ids: Patient IDs for weight loading
             
         Returns:
             Converted dataframe
@@ -2316,94 +2450,262 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         if val_var in frame.columns:
             frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
         
-        # Extract unit from sub_var (e.g., "drugname (mcg/kg/min)")
+        # Extract unit from sub_var (e.g., "Norepinephrine (mcg/min)" -> "mcg/min")
         if sub_var in frame.columns:
-            # eICU format: "drugname (unit)" or just "unit"
             def extract_unit(s):
                 if pd.isna(s):
                     return None
                 s = str(s)
-                # Match pattern like "(unit)" or just return as-is
                 match = re.search(r'\(([^)]+)\)$', s)
                 if match:
                     return match.group(1)
-                # Check if it's already a unit-like string
                 if '/' in s or s.lower() in ['mg', 'mcg', 'ml', 'units']:
                     return s
                 return None
             
             frame['unit_var'] = frame[sub_var].apply(extract_unit)
         else:
-            # No sub_var, assume all are same unit or unknown
             frame['unit_var'] = 'Unknown'
         
-        # Load weight if needed (merge from patient table)
-        # For now, we'll use a placeholder - in practice, this should join with patient table
-        if weight_var not in frame.columns:
-            # Try to get weight from patient table via patientunitstayid
-            # This is a simplified version - full implementation would join tables
-            frame[weight_var] = 70.0  # Default weight kg as fallback
-        
-        # Convert weight to numeric (handle empty strings in infusiondrug.patientweight)
+        # Get weight from patient table (following R ricu add_weight logic)
+        # First check if weight_var exists in frame
         if weight_var in frame.columns:
-            frame[weight_var] = pd.to_numeric(frame[weight_var], errors='coerce')
+            frame['_weight'] = pd.to_numeric(frame[weight_var], errors='coerce')
+        else:
+            frame['_weight'] = np.nan
         
-        # Normalize to /kg/ if not already
-        frame['is_per_kg'] = frame['unit_var'].str.contains('/kg/', case=False, na=False)
+        # Load weight from patient table if data_source is available
+        if data_source is not None and frame['_weight'].isna().any():
+            try:
+                from .datasource import FilterSpec, FilterOp
+                
+                # Determine ID column
+                id_col = None
+                for candidate in ['patientunitstayid', 'stay_id', 'hadm_id', 'icustay_id']:
+                    if candidate in frame.columns:
+                        id_col = candidate
+                        break
+                
+                if id_col:
+                    # Load weight concept
+                    patient_list = frame[id_col].unique().tolist()
+                    weight_table = data_source.load_table(
+                        'patient',
+                        columns=['patientunitstayid', 'admissionweight'],
+                        filters=[FilterSpec(column='patientunitstayid', op=FilterOp.IN, value=patient_list)]
+                    )
+                    
+                    # Extract DataFrame from ICUTable if needed
+                    if hasattr(weight_table, 'data'):
+                        weight_df = weight_table.data
+                    else:
+                        weight_df = weight_table
+                    
+                    if weight_df is not None and len(weight_df) > 0:
+                        weight_df = weight_df.rename(columns={'admissionweight': '_loaded_weight'})
+                        weight_df['_loaded_weight'] = pd.to_numeric(weight_df['_loaded_weight'], errors='coerce')
+                        
+                        # Merge weight
+                        frame = frame.merge(
+                            weight_df[['patientunitstayid', '_loaded_weight']],
+                            on='patientunitstayid',
+                            how='left'
+                        )
+                        
+                        # Fill NaN weights with loaded weight
+                        mask = frame['_weight'].isna()
+                        frame.loc[mask, '_weight'] = frame.loc[mask, '_loaded_weight']
+                        frame = frame.drop(columns=['_loaded_weight'], errors='ignore')
+            except Exception as e:
+                logging.debug(f"Failed to load weight from patient table: {e}")
         
-        # For non-kg rates, divide by weight and update unit
-        # Also check weight is not NaN after numeric conversion
-        mask_non_kg = ~frame['is_per_kg'] & frame[val_var].notna() & frame[weight_var].notna()
-        if mask_non_kg.any():
-            # Convert val_var to float before division to avoid dtype mismatch warning
-            frame[val_var] = frame[val_var].astype(float)
-            frame.loc[mask_non_kg, val_var] = frame.loc[mask_non_kg, val_var] / frame.loc[mask_non_kg, weight_var]
-            frame.loc[mask_non_kg, 'unit_var'] = frame.loc[mask_non_kg, 'unit_var'].apply(
-                lambda u: u.replace('/', '/kg/') if u and '/' in u else f'{u}/kg' if u else 'Unknown/kg'
-            )
+        # Fill remaining missing weights with default 70 kg
+        frame['_weight'] = frame['_weight'].fillna(70.0)
         
-        # Now apply unit conversions to standardize to mcg/kg/min
-        def convert_to_mcg_kg_min(row):
+        # Apply unit conversions FIRST (following R ricu logic)
+        # Then divide by weight for non-/kg/ units
+        def convert_value(row):
             val = row[val_var]
             unit = row.get('unit_var', '')
+            weight = row.get('_weight', 70.0)
             
             if pd.isna(val) or not unit:
-                return val
-            
-            unit = str(unit).strip()
-            
-            # /hr -> /min
-            if '/hr' in unit or '/hour' in unit:
-                val = val / 60
-                unit = re.sub(r'/h(ou)?r', '/min', unit, flags=re.IGNORECASE)
-            
-            # mg -> mcg
-            if unit.startswith('mg/') or 'mg/kg' in unit:
-                val = val * 1000
-                unit = unit.replace('mg/', 'mcg/').replace('mg/kg', 'mcg/kg')
-            
-            # ml -> mcg
-            if unit.startswith('ml/') or 'ml/kg' in unit:
-                val = val * ml_to_mcg
-                unit = unit.replace('ml/', 'mcg/').replace('ml/kg', 'mcg/kg')
-            
-            # nanograms -> mcg
-            if unit.startswith('nanograms/') or 'nanograms/kg' in unit:
-                val = val / 1000
-                unit = unit.replace('nanograms/', 'mcg/').replace('nanograms/kg', 'mcg/kg')
-            
-            # Set to NA for incompatible units
-            if 'units/' in unit.lower() or unit.lower() in ['unknown', 'ml', 'unknown/kg', 'ml/kg']:
                 return np.nan
+            
+            unit = str(unit).strip().lower()
+            
+            # Check for incompatible units first
+            if unit.startswith('units/') or unit in ['unknown', 'ml', '']:
+                return np.nan
+            
+            # Step 1: /hr -> /min (divide by 60)
+            if '/hr' in unit:
+                val = val / 60
+                unit = unit.replace('/hr', '/min')
+            
+            # Step 2: mg/ -> mcg/ (multiply by 1000)
+            if unit.startswith('mg/'):
+                val = val * 1000
+                unit = 'mcg' + unit[2:]
+            
+            # Step 3: ml/ -> mcg/ (multiply by ml_to_mcg)
+            if unit.startswith('ml/'):
+                val = val * ml_to_mcg
+                unit = 'mcg' + unit[2:]
+            
+            # Step 4: nanograms/ -> mcg/ (divide by 1000)
+            if unit.startswith('nanograms/'):
+                val = val / 1000
+                unit = 'mcg' + unit[9:]
+            
+            # Step 5: For non-/kg/ units, divide by weight
+            if '/kg/' not in unit:
+                val = val / weight
             
             return val
         
-        frame[concept_name] = frame.apply(convert_to_mcg_kg_min, axis=1)
+        frame[concept_name] = frame.apply(convert_value, axis=1)
         
         # Clean up temporary columns
-        frame = frame.drop(columns=['unit_var', 'is_per_kg'], errors='ignore')
+        frame = frame.drop(columns=['unit_var', '_weight'], errors='ignore')
         
-        return frame
+        # Expand intervals to match R ricu's expand_intervals behavior
+        # For eICU, infusionoffset is in minutes - need to convert to hours and expand
+        
+        # Check for infusionoffset column (eICU-specific)
+        time_col = None
+        for candidate in ['infusionoffset', 'charttime', 'starttime']:
+            if candidate in frame.columns:
+                time_col = candidate
+                break
+        
+        if time_col is None:
+            return frame
+        
+        # Determine ID column
+        id_col = None
+        for candidate in ['patientunitstayid', 'stay_id', 'hadm_id', 'icustay_id']:
+            if candidate in frame.columns:
+                id_col = candidate
+                break
+        
+        if id_col is None:
+            return frame
+        
+        # Remove rows with NaN concept values (already converted)
+        frame = frame[frame[concept_name].notna()].copy()
+        
+        if len(frame) == 0:
+            result_cols = [id_col, time_col, concept_name]
+            return pd.DataFrame(columns=result_cols)
+        
+        # R ricu expand_intervals logic for eICU:
+        # 1. Convert minutes to hours (floor division)
+        # 2. Aggregate by hour (take max if multiple values)
+        # 3. Create intervals: diff = min(next_hour - current_hour, max_len) - interval
+        # 4. Expand each record to [current_hour, current_hour + diff]
+        
+        # Step 1: Convert to hours
+        frame['_hour'] = (frame[time_col] // 60).astype(int)
+        
+        # Step 2: Aggregate by patient and hour (take max)
+        hourly = frame.groupby([id_col, '_hour'], as_index=False).agg({
+            concept_name: 'max'
+        })
+        hourly = hourly.sort_values([id_col, '_hour'])
+        
+        # Step 3: Create intervals using R ricu's create_intervals logic
+        # R: endtime = padded_diff(hour, overhang=1)  # diff to next, or 1 for last
+        # R: endtime = trunc(endtime, 0, max_len=6) - interval=1
+        # R: endtime = hour + endtime
+        overhang = 1  # hours
+        max_len = 6   # hours  
+        interval = 1  # hours (time step)
+        
+        def create_intervals_ricu(group):
+            group = group.copy()
+            # padded_diff: next - current, or overhang for last
+            group['_diff'] = group['_hour'].shift(-1) - group['_hour']
+            group.loc[group['_diff'].isna(), '_diff'] = overhang
+            # trunc to max_len
+            group['_diff'] = group['_diff'].clip(upper=max_len)
+            # subtract interval (key step to avoid overlap!)
+            group['_diff'] = group['_diff'] - interval
+            # Calculate end hour
+            group['_end_hour'] = group['_hour'] + group['_diff']
+            return group
+        
+        hourly = hourly.groupby(id_col, group_keys=False, sort=False).apply(
+            create_intervals_ricu, include_groups=True
+        )
+        
+        # Step 4: Expand each record using R's seq(start, end, step=1)
+        # NOTE: Return time in MINUTES (hour * 60) so that _align_time_to_admission
+        # can perform the standard minutes -> hours conversion for eICU data
+        expanded_rows = []
+        for _, row in hourly.iterrows():
+            start_hour = int(row['_hour'])
+            end_hour = int(row['_end_hour'])
+            value = row[concept_name]
+            patient_id = row[id_col]
+            
+            # R seq(start, end, 1) includes both endpoints
+            # Return time in minutes (hour * 60) for consistency with eICU offset format
+            for hour in range(start_hour, end_hour + 1):
+                expanded_rows.append({
+                    id_col: patient_id,
+                    time_col: hour * 60,  # Convert hours back to minutes for _align_time_to_admission
+                    concept_name: value
+                })
+        
+        if not expanded_rows:
+            result_cols = [id_col, time_col, concept_name]
+            return pd.DataFrame(columns=result_cols)
+        
+        expanded = pd.DataFrame(expanded_rows)
+        
+        # If multiple values at same hour (from overlapping intervals), take max
+        # R ricu default aggregation for rate concepts is 'max'
+        expanded = expanded.groupby([id_col, time_col], as_index=False).agg({
+            concept_name: 'max'
+        })
+        
+        # Sort final result
+        expanded = expanded.sort_values([id_col, time_col]).reset_index(drop=True)
+        
+        # 🔧 CRITICAL FIX: Apply LOCF (last observation carried forward) to fill gaps
+        # R ricu's expand_intervals creates the interval data, then locf fills gaps
+        # This ensures continuous time series from min to max hour
+        def fill_gaps_locf(group):
+            if len(group) < 2:
+                return group
+            
+            # Get hour range
+            min_hour = int(group[time_col].min() / 60)  # Convert back from minutes
+            max_hour = int(group[time_col].max() / 60)
+            
+            # Create complete hourly grid
+            all_hours = list(range(min_hour, max_hour + 1))
+            all_minutes = [h * 60 for h in all_hours]
+            
+            # Create grid dataframe
+            grid = pd.DataFrame({
+                id_col: group[id_col].iloc[0],
+                time_col: all_minutes
+            })
+            
+            # Merge with data
+            merged = grid.merge(group[[time_col, concept_name]], on=time_col, how='left')
+            
+            # Forward fill (locf)
+            merged[concept_name] = merged[concept_name].ffill()
+            
+            return merged
+        
+        expanded = expanded.groupby(id_col, group_keys=False).apply(fill_gaps_locf)
+        expanded = expanded.reset_index(drop=True)
+        
+        return expanded
     
     return callback
 
@@ -2837,14 +3139,16 @@ def aumc_dur(
     Calculate duration for AUMC database items.
     
     NOTE: AUMC times are preprocessed in datasource.py and converted from 
-    milliseconds to MINUTES (ms / 60000). So when we receive the data here,
-    start/stop are already in MINUTES, not milliseconds!
+    milliseconds to INTEGER MINUTES (floor(ms / 60000)) to match R ricu's as.integer().
     
-    This function groups items by patient and order, then calculates the duration
-    in hours from start to stop timestamps (which are in minutes).
+    R ricu's calc_dur behavior:
+    1. Times are first processed by re_time which floors to interval (1 hour)
+    2. Then calc_dur computes: duration = max(stop_floor_hours) - min(start_floor_hours)
+    
+    So: duration = floor(max_stop_min/60) - floor(min_start_min/60)
     
     Args:
-        frame: Input dataframe with AUMC data (times already in MINUTES)
+        frame: Input dataframe with AUMC data (times in INTEGER MINUTES)
         val_col: Name of the value column (will be replaced with duration)
         stop_var: Column name containing stop timestamps in MINUTES
         grp_var: Column name for grouping (e.g., 'orderid')
@@ -2852,7 +3156,7 @@ def aumc_dur(
         concept_name: Name of the concept being calculated
         
     Returns:
-        DataFrame with duration column in hours
+        DataFrame with duration column in hours (integer) and start in hours (integer)
     """
     if frame.empty or not stop_var or stop_var not in frame.columns:
         return frame
@@ -2875,23 +3179,27 @@ def aumc_dur(
         if grp_var not in group_cols:
             group_cols.append(grp_var)
     
-    # Times are already in MINUTES (converted in datasource.py)
-    # Just ensure they're numeric
+    # Times are in INTEGER MINUTES (converted in datasource.py)
     df[start_col] = pd.to_numeric(df[start_col], errors='coerce')
     df[stop_var] = pd.to_numeric(df[stop_var], errors='coerce')
     
     # Group by patient (and orderid if available) and aggregate start/stop
     grouped = df.groupby(group_cols, as_index=False).agg({
-        start_col: 'min',  # earliest start time
-        stop_var: 'max',   # latest stop time
+        start_col: 'min',  # earliest start time (minutes)
+        stop_var: 'max',   # latest stop time (minutes)
     })
     
-    # Calculate duration: times are in MINUTES, convert to HOURS
-    duration_minutes = grouped[stop_var] - grouped[start_col]
-    duration_hours = duration_minutes / 60.0  # minutes -> hours
+    # R ricu uses floor(hours) for both start and stop before computing duration
+    # duration = floor(max_stop/60) - floor(min_start/60)
+    start_hours_floor = (grouped[start_col] / 60.0).apply(lambda x: int(x) if pd.notna(x) else x)
+    stop_hours_floor = (grouped[stop_var] / 60.0).apply(lambda x: int(x) if pd.notna(x) else x)
+    duration_hours = stop_hours_floor - start_hours_floor
     
-    # Create a clean result with the duration
-    grouped[concept_name] = duration_hours
+    # Create a clean result with the duration (as float for consistency but integer values)
+    grouped[concept_name] = duration_hours.astype(float)
+    
+    # Start time is also floor'd to integer hours
+    grouped[start_col] = start_hours_floor.astype(float)
     
     # Keep only necessary columns for the result
     result_cols = group_cols + [concept_name]

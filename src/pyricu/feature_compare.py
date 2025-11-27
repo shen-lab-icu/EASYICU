@@ -460,11 +460,10 @@ class RicuPyricuComparator:
                     aligned = grid.merge(df, on=["id", "time"], how="left")
                     
                     # 静态概念填充逻辑：
-                    # 静态概念（los_icu, death, age, sex）应该在所有时间点填充相同的值
-                    # 时间序列概念（bnd, abx等）只保留实际测量点
-                    # 判断标准：如果某患者有非NA值，且所有非NA值都相同，且这些值只在1-2个时间点出现，
-                    # 则认为是静态概念，需要填充到所有时间点
-                    static_concepts = {"los_icu", "death", "age", "sex", "bmi", "height", "weight"}
+                    # 静态概念（los_icu, age, sex等，即target=id_tbl）应该在所有时间点填充相同的值
+                    # 时间序列概念（bnd, abx, death等）只保留实际测量点
+                    # 注意：death是lgl_cncpt，只在死亡时刻有TRUE，其他时间点应该是NA
+                    static_concepts = {"los_icu", "age", "sex", "bmi", "height", "weight"}
                     is_static_concept = name in static_concepts
                     
                     if "value" in aligned.columns and "id" in aligned.columns:

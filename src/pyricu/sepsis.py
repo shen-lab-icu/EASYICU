@@ -401,19 +401,10 @@ def sep3(
     si_upr: pd.Timedelta = pd.Timedelta(hours=24),
     keep_components: bool = False,
 ) -> pd.DataFrame:
-    """Detect Sepsis-3 (R ricu sep3).
+    """Detect Sepsis-3 (R ricu sep3) - 向量化优化版本.
     
     Sepsis-3 is defined as a ≥2 point increase in SOFA score within
     the suspected infection window.
-    
-    Implementation follows R ricu's sep3 function:
-    1. Filter SI events where susp_inf == TRUE
-    2. Apply si_window filter ("first", "last", or "any")
-    3. Create time windows: [si_time - si_lwr, si_time + si_upr]
-    4. Join with SOFA scores using the window
-    5. Calculate delta_sofa using delta_fun within each window
-    6. Keep events where delta_sofa >= sofa_thresh
-    7. Take first occurrence per patient
     
     Args:
         sofa: SOFA score data (must have 'sofa' column)
@@ -434,21 +425,21 @@ def sep3(
     if 'susp_inf' in susp_inf.columns:
         si_events = susp_inf[susp_inf['susp_inf'] == True].copy()
     else:
-        # If no susp_inf column, assume all rows are SI events
         si_events = susp_inf.copy()
     
-    if si_events.empty:
+    if si_events.empty or sofa.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])
     
     # Determine if time is numeric (hours) or datetime
     si_time_is_numeric = pd.api.types.is_numeric_dtype(si_events[index_col])
-    sofa_time_is_numeric = pd.api.types.is_numeric_dtype(sofa[index_col]) if index_col in sofa.columns else False
     
     # Convert Timedelta to hours if time is numeric
     if si_time_is_numeric:
-        si_lwr_hours = si_lwr.total_seconds() / 3600.0
-        si_upr_hours = si_upr.total_seconds() / 3600.0
+        si_lwr_val = si_lwr.total_seconds() / 3600.0
+        si_upr_val = si_upr.total_seconds() / 3600.0
     else:
+        si_lwr_val = si_lwr
+        si_upr_val = si_upr
         # Ensure time columns are datetime
         if index_col in si_events.columns:
             si_events[index_col] = pd.to_datetime(si_events[index_col], errors='coerce')
@@ -460,89 +451,64 @@ def sep3(
     if si_window in ["first", "last"]:
         if si_window == "first":
             si_events = si_events.sort_values(index_col).groupby(id_cols, as_index=False).first()
-        else:  # last
+        else:
             si_events = si_events.sort_values(index_col).groupby(id_cols, as_index=False).last()
-    # If "any", keep all SI events
     
-    # Define SI windows - matches R ricu logic
-    # R ricu: [si_time - si_lwr, si_time + si_upr]
-    if si_time_is_numeric:
-        si_events['si_lwr'] = si_events[index_col] - si_lwr_hours
-        si_events['si_upr'] = si_events[index_col] + si_upr_hours
-    else:
-        si_events['si_lwr'] = si_events[index_col] - si_lwr
-        si_events['si_upr'] = si_events[index_col] + si_upr
+    # Calculate SI windows
+    si_events = si_events.copy()
+    si_events['_si_lwr'] = si_events[index_col] - si_lwr_val
+    si_events['_si_upr'] = si_events[index_col] + si_upr_val
+    si_events['_si_time'] = si_events[index_col]  # 保存原始 SI 时间
     
-    # Prepare SOFA data with join columns
-    # R ricu uses: sofa[, c("join_time1", "join_time2") := list(time, time)]
+    # 准备 SOFA 数据
     sofa_prep = sofa.copy()
-    sofa_prep['join_time1'] = sofa_prep[index_col]
-    sofa_prep['join_time2'] = sofa_prep[index_col]
+    sofa_prep['_sofa_time'] = sofa_prep[index_col]
     
-    results = []
+    # ========== 向量化 merge 替代 iterrows() ==========
+    # 使用 cross join + filter 的方式，对于中等数据集效率更高
     
-    # For each SI event, find SOFA scores in window and calculate delta
-    # R ricu: sofa[susp, list(delta_sofa = delta_fun(sofa), ...), 
-    #              on = .(id, join_time1 >= si_lwr, join_time2 <= si_upr), 
-    #              by = .EACHI, nomatch = NULL]
-    for _, si_row in si_events.iterrows():
-        # Match by patient ID
-        id_match = pd.Series(True, index=sofa_prep.index)
-        for col in id_cols:
-            if col in sofa_prep.columns:
-                id_match = id_match & (sofa_prep[col] == si_row[col])
-        
-        # Match by time window: join_time1 >= si_lwr AND join_time2 <= si_upr
-        # This is equivalent to: si_lwr <= time <= si_upr
-        time_match = (sofa_prep['join_time1'] >= si_row['si_lwr']) & \
-                     (sofa_prep['join_time2'] <= si_row['si_upr'])
-        
-        window_sofa = sofa_prep[id_match & time_match].copy()
-        
-        if len(window_sofa) == 0:
-            continue
-        
-        # Sort by time and calculate SOFA delta using delta_fun
-        # R ricu: delta_sofa = delta_fun(sofa)
-        window_sofa = window_sofa.sort_values(index_col)
-        window_sofa['delta_sofa'] = delta_fun(window_sofa['sofa'])
-        
-        # Filter by threshold: delta_sofa >= sofa_thresh
-        # R ricu: res[delta_sofa >= sofa_thresh]
-        sep3_rows = window_sofa[window_sofa['delta_sofa'] >= sofa_thresh]
-        
-        if len(sep3_rows) == 0:
-            continue
-        
-        # Take first occurrence (earliest time meeting threshold)
-        # R ricu: res[, head(.SD, n = 1L), by = id_vars(res)]
-        first_sep3 = sep3_rows.iloc[0]
-        
-        result_row = {index_col: first_sep3[index_col]}
-        for col in id_cols:
-            result_row[col] = si_row[col]
-        
-        result_row['sep3'] = True
-        
-        if keep_components:
-            result_row['delta_sofa'] = first_sep3['delta_sofa']
-            if 'samp_time' in si_row:
-                result_row['samp_time'] = si_row['samp_time']
-            if 'abx_time' in si_row:
-                result_row['abx_time'] = si_row['abx_time']
-        
-        results.append(result_row)
+    # 首先按 id_cols 分组计算 delta_sofa
+    sofa_prep = sofa_prep.sort_values(id_cols + [index_col])
+    sofa_prep['_delta_sofa'] = sofa_prep.groupby(id_cols)['sofa'].transform(delta_fun)
     
-    if not results:
+    # Merge SI events with SOFA on id_cols
+    merged = si_events.merge(sofa_prep, on=id_cols, how='inner', suffixes=('_si', '_sofa'))
+    
+    if merged.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])
     
-    result_df = pd.DataFrame(results)
+    # Filter by time window: _si_lwr <= _sofa_time <= _si_upr
+    time_col_sofa = f'{index_col}_sofa' if f'{index_col}_sofa' in merged.columns else '_sofa_time'
+    in_window = (merged['_sofa_time'] >= merged['_si_lwr']) & (merged['_sofa_time'] <= merged['_si_upr'])
+    merged = merged[in_window]
     
-    # Keep only first Sepsis-3 event per patient
-    # R ricu: res[, head(.SD, n = 1L), by = id_vars(res)]
-    result_df = result_df.sort_values(index_col).groupby(id_cols, as_index=False).first()
+    if merged.empty:
+        return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])
     
-    return result_df
+    # Filter by threshold
+    meets_thresh = merged['_delta_sofa'] >= sofa_thresh
+    sep3_events = merged[meets_thresh].copy()
+    
+    if sep3_events.empty:
+        return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])
+    
+    # Take first occurrence per patient (earliest SOFA time meeting criteria)
+    sep3_events = sep3_events.sort_values('_sofa_time')
+    first_sep3 = sep3_events.groupby(id_cols, as_index=False).first()
+    
+    # Build result
+    result = first_sep3[id_cols].copy()
+    result[index_col] = first_sep3['_sofa_time']
+    result['sep3'] = True
+    
+    if keep_components:
+        result['delta_sofa'] = first_sep3['_delta_sofa']
+        if 'samp_time' in first_sep3.columns:
+            result['samp_time'] = first_sep3['samp_time']
+        if 'abx_time' in first_sep3.columns:
+            result['abx_time'] = first_sep3['abx_time']
+    
+    return result.reset_index(drop=True)
 
 # 别名函数 - 为了兼容性
 def label_sep3(

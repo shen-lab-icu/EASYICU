@@ -77,13 +77,20 @@ def change_interval(
         # Only actual timestamp columns (datetime64) should be rounded
         # Common duration column patterns: *_dur, *_duration, duration
         duration_patterns = ('_dur', '_duration', 'duration')
+        # 🔧 FIX: 排除 endtime/stop 类型的列
+        # 窗口概念（如 ins, mech_vent）需要保留 endtime 的原始值用于展开
+        # 只有 starttime（index_column）应该被 floor
+        endtime_patterns = ('endtime', 'end_time', 'stop', 'stoptime', 'end')
         return [
             col
             for col in df.columns
-            if pd.api.types.is_datetime64_any_dtype(df[col])
-            # Exclude timedelta columns (durations) unless they are actual time columns
-            or (pd.api.types.is_timedelta64_dtype(df[col]) 
-                and not any(col.endswith(pat) or col.startswith('dur') for pat in duration_patterns))
+            if (pd.api.types.is_datetime64_any_dtype(df[col])
+                # Exclude timedelta columns (durations) unless they are actual time columns
+                or (pd.api.types.is_timedelta64_dtype(df[col]) 
+                    and not any(col.endswith(pat) or col.startswith('dur') for pat in duration_patterns)))
+            # 🔧 排除 endtime 类型的列，它们用于窗口展开
+            and col.lower() not in endtime_patterns
+            and not any(col.lower().endswith(pat) for pat in endtime_patterns)
         ]
 
     def _round_time_columns(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
@@ -135,7 +142,12 @@ def change_interval(
     time_cols: List[str] = []
     if table.index_column:
         time_cols.append(table.index_column)
-    time_cols.extend(table.time_columns or [])
+    # 🔧 FIX: 从 time_columns 中排除 endtime 类型的列
+    endtime_patterns = ('endtime', 'end_time', 'stop', 'stoptime', 'end')
+    for tc in (table.time_columns or []):
+        if tc.lower() not in endtime_patterns and not any(tc.lower().endswith(pat) for pat in endtime_patterns):
+            if tc not in time_cols:
+                time_cols.append(tc)
 
     detected = _detect_time_columns(df)
     for col in detected:

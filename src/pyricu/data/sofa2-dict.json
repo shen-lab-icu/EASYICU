@@ -71,9 +71,10 @@
     "concepts": [
       "gcs",
       "delirium_tx",
-      "sedated_gcs"
+      "delirium_positive",
+      "motor_response"
     ],
-    "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; delirium treatment → 1pt even if GCS=15)",
+    "description": "SOFA-2 brain component (GCS 15/13-14/9-12/6-8/3-5; delirium treatment or positive CAM-ICU → 1pt even if GCS=15; motor response as GCS alternative)",
     "category": "outcome",
     "callback": "sofa2_cns",
     "class_name": "rec_cncpt"
@@ -111,7 +112,7 @@
       "urine",
       "weight"
     ],
-    "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h → Score 1)",
+    "description": "6-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for 6-12h \u2192 Score 1)",
     "category": "output",
     "callback": "uo_6h",
     "class_name": "rec_cncpt"
@@ -121,7 +122,7 @@
       "urine",
       "weight"
     ],
-    "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for ≥12h → Score 2; anuria ≥12h → Score 3)",
+    "description": "12-hour average urine output in mL/kg/h (for SOFA-2: <0.5 for \u226512h \u2192 Score 2; anuria \u226512h \u2192 Score 3)",
     "category": "output",
     "callback": "uo_12h",
     "class_name": "rec_cncpt"
@@ -131,14 +132,14 @@
       "urine",
       "weight"
     ],
-    "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for ≥24h → Score 3)",
+    "description": "24-hour average urine output in mL/kg/h (for SOFA-2: <0.3 for \u226524h \u2192 Score 3)",
     "category": "output",
     "callback": "uo_24h",
     "class_name": "rec_cncpt"
   },
   "adv_resp": {
     "class_name": "lgl_cncpt",
-    "description": "Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP)",
+    "description": "Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP) - validated: 39280 stays with ventilator, 6152 with HFNC",
     "category": "respiratory",
     "sources": {
       "miiv": [
@@ -148,30 +149,22 @@
           "ids": [
             223848,
             223849,
-            225411,
             227577,
             227583,
             225949
           ],
-          "callback": "transform_fun(set_val(TRUE))"
-        },
-        {
-          "table": "procedureevents",
-          "sub_var": "itemid",
-          "ids": [
-            225794
-          ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "223848=Ventilator Type (39280 stays), 223849=Ventilator Mode (27164), 227577=BiPap Mode (3918), 227583=Autoset/CPAP (2791), 225949=NIV Mask (2041)"
         },
         {
           "table": "chartevents",
-          "sub_var": "value",
-          "ids": [
-            "High Flow Nasal Cannula",
-            "HFNC",
-            "Optiflow"
-          ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "sub_var": "itemid",
+          "ids": [226732],
+          "val_var": "value",
+          "regex": "High flow|HFNC|Bipap|CPAP",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "226732=Oxygen Delivery Device, filter for HFNC/BiPAP/CPAP values (6152 stays with high flow)"
         }
       ],
       "eicu": [
@@ -222,7 +215,7 @@
   },
   "ecmo": {
     "class_name": "lgl_cncpt",
-    "description": "Extracorporeal membrane oxygenation in use",
+    "description": "Extracorporeal membrane oxygenation in use - validated: 155 stays with Circuit Config, 41 with Oxygenator/ECMO",
     "category": "respiratory",
     "sources": {
       "miiv": [
@@ -230,10 +223,13 @@
           "table": "chartevents",
           "sub_var": "itemid",
           "ids": [
+            229268,
+            228193,
             224660,
-            228193
+            229270
           ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "229268=Circuit Configuration (155 stays, best indicator), 228193=Oxygenator/ECMO (41), 224660=ECMO (5), 229270=Flow (ECMO)"
         }
       ],
       "eicu": [
@@ -267,18 +263,17 @@
   },
   "ecmo_indication": {
     "class_name": "chr_cncpt",
-    "description": "ECMO indication (respiratory/cardiovascular). Note: MIMIC-IV ECMO itemids use numeric values making VA/VV distinction difficult. Default to 'respiratory' per SOFA-2 guidelines; cardiovascular indication inferred from concurrent high-dose vasopressors in scoring logic.",
+    "description": "ECMO indication - MIMIC-IV 229268 has explicit VV/VA values (17950 VV, 9926 VA)",
     "category": "respiratory",
     "sources": {
       "miiv": [
         {
           "table": "chartevents",
           "sub_var": "itemid",
-          "ids": [
-            224660,
-            228193
-          ],
-          "callback": "transform_fun(set_val('respiratory'))"
+          "ids": [229268],
+          "val_var": "value",
+          "callback": "apply_map(c(`VV` = 'respiratory', `VA` = 'cardiovascular', `VAV` = 'cardiovascular'), var = 'value')",
+          "_comment": "229268=Circuit Configuration: VV=17950 (respiratory), VA=9926 (cardiovascular), VAV=41"
         }
       ],
       "eicu": [
@@ -310,51 +305,67 @@
       "hirid": []
     }
   },
-  "sedated_gcs": {
+  "motor_response": {
     "class_name": "num_cncpt",
-    "description": "GCS before sedation (for sedated patients)",
+    "description": "GCS Motor Response (1-6 scale) - for SOFA-2 when full GCS unavailable",
     "category": "neurology",
     "unit": "score",
-    "min": 3,
-    "max": 15,
+    "min": 1,
+    "max": 6,
     "sources": {
       "miiv": [
         {
           "table": "chartevents",
           "sub_var": "itemid",
-          "ids": [
-            220739
-          ]
+          "ids": [223901],
+          "_comment": "223901=GCS - Motor Response"
         }
       ],
       "eicu": [
         {
           "table": "nursecharting",
           "sub_var": "nursingchartcelltypevallabel",
-          "regex": "GCS.*prior.*sedation",
+          "regex": "GCS.*Motor",
           "class_name": "rgx_itm"
         }
       ],
-      "aumc": [
+      "aumc": [],
+      "hirid": []
+    }
+  },
+  "delirium_positive": {
+    "class_name": "lgl_cncpt",
+    "description": "Positive delirium assessment (CAM-ICU positive) - 72944 stays with assessment, 119052 positive results",
+    "category": "neurology",
+    "sources": {
+      "miiv": [
         {
-          "table": "numericitems",
-          "sub_var": "item",
-          "regex": "GCS.*pre.*sedat",
-          "class_name": "rgx_itm"
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [228332],
+          "val_var": "value",
+          "regex": "^Positive$",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "228332=Delirium assessment: Positive=119052, Negative=361125, UTA=130455"
         }
       ],
-      "hirid": [
+      "eicu": [
         {
-          "table": "observations",
-          "sub_var": "variableid",
-          "ids": []
+          "table": "nursecharting",
+          "sub_var": "nursingchartcelltypevallabel",
+          "regex": "CAM-ICU.*positive|Delirium.*positive",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
         }
-      ]
+      ],
+      "aumc": [],
+      "hirid": []
     }
   },
   "mech_circ_support": {
     "class_name": "lgl_cncpt",
-    "description": "Mechanical circulatory support (IABP/LVAD/Impella)",
+    "description": "Mechanical circulatory support - validated: IABP (1226 stays), Impella (220), Tandem (41), LVAD (11), RVAD (6)",
     "category": "cardiovascular",
     "sources": {
       "miiv": [
@@ -362,23 +373,22 @@
           "table": "chartevents",
           "sub_var": "itemid",
           "ids": [
-            224272,
             224322,
             225979,
-            220128,
             228154,
+            228198,
             229254,
-            223775,
-            224363
+            220128
           ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "224322=IABP Mean (1226 stays), 225979=IABP Size (1154), 228154=Flow Rate Impella (220), 228198=Tandem Heart Flow (41), 229254=Flow LVAD (11), 220128=RVAD Flow (6)"
         }
       ],
       "eicu": [
         {
           "table": "treatment",
           "sub_var": "treatmentstring",
-          "regex": "IABP|balloon pump|LVAD|Impella",
+          "regex": "IABP|balloon pump|LVAD|Impella|Tandem",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -412,7 +422,7 @@
   },
   "other_vaso": {
     "class_name": "lgl_cncpt",
-    "description": "Other vasoactive medication present (vasopressin/phenylephrine/milrinone)",
+    "description": "Other vasoactive medication - validated: Phenylephrine (14428 stays), Vasopressin (5626), Milrinone (1279)",
     "category": "cardiovascular",
     "sources": {
       "miiv": [
@@ -420,11 +430,14 @@
           "table": "inputevents",
           "sub_var": "itemid",
           "ids": [
-            222315,
             221749,
-            221986
+            222315,
+            221986,
+            229630,
+            229632
           ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "221749=Phenylephrine (14428), 222315=Vasopressin (5626), 221986=Milrinone (1279), 229630=Phenylephrine 50/250 (3778), 229632=Phenylephrine 200/250 (453)"
         }
       ],
       "eicu": [
@@ -449,7 +462,7 @@
         {
           "table": "drugitems",
           "sub_var": "item",
-          "regex": "(Fenylefrine|vasopressin)",
+          "regex": "(Fenylefrine|vasopressin|milrinone)",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -469,24 +482,24 @@
   },
   "delirium_tx": {
     "class_name": "lgl_cncpt",
-    "description": "Delirium treatment administered (e.g., haloperidol, quetiapine)",
+    "description": "Delirium treatment - validated: Haloperidol IV (3972 stays), prescriptions much larger (16198+ patients)",
     "category": "neurology",
     "sources": {
       "miiv": [
         {
           "table": "inputevents",
           "sub_var": "itemid",
-          "ids": [
-            221824
-          ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "ids": [221824],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "221824=Haloperidol IV (3972 stays, 14988 records)"
         },
         {
           "table": "prescriptions",
           "sub_var": "drug",
-          "regex": "haloperidol|quetiapine|olanzapine|risperidone",
+          "regex": "[Hh]aloperidol|[Qq]uetiapine|[Oo]lanzapine|[Rr]isperidone",
           "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "Haloperidol=16198 patients, Quetiapine=10770+, Olanzapine=6236+, Risperidone=1647+"
         }
       ],
       "eicu": [
@@ -525,29 +538,26 @@
   },
   "rrt": {
     "class_name": "lgl_cncpt",
-    "description": "Renal replacement therapy in use",
+    "description": "Renal replacement therapy - validated: CRRT mode (2780 stays), Hemodialysis (2746), CRRT procedure (2274)",
     "category": "renal",
     "sources": {
       "miiv": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [227290],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "227290=CRRT mode (2780 stays, 203035 records) - best RRT indicator"
+        },
         {
           "table": "procedureevents",
           "sub_var": "itemid",
           "ids": [
             225441,
-            225802,
-            225803,
-            225809,
-            225955
+            225802
           ],
-          "callback": "transform_fun(set_val(TRUE))"
-        },
-        {
-          "table": "chartevents",
-          "sub_var": "itemid",
-          "ids": [
-            227290
-          ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "225441=Hemodialysis (2746 stays), 225802=Dialysis-CRRT (2274 stays)"
         }
       ],
       "eicu": [
@@ -588,7 +598,7 @@
   },
   "rrt_criteria": {
     "class_name": "lgl_cncpt",
-    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+≥6.0 OR acidosis pH≤7.20+HCO3≤12)",
+    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+\u22656.0 OR acidosis pH\u22647.20+HCO3\u226412)",
     "category": "renal",
     "sources": {
       "miiv": [],

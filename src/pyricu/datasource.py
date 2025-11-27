@@ -376,12 +376,13 @@ class ICUDataSource:
         
         # AUMC特殊处理：时间列是毫秒,需要转换为分钟 (参考R ricu的ms_as_mins)
         # R ricu: ms_as_mins <- function(x) min_as_mins(as.integer(x / 6e4))
+        # 关键: as.integer() 会 floor 到整数分钟!
         # 这样处理后,AUMC的时间单位与其他数据库一致(都是分钟)
         if self.config.name == 'aumc':
             for column in time_like_cols:
                 if column in frame.columns and pd.api.types.is_numeric_dtype(frame[column]):
-                    # 将毫秒转换为分钟: ms / 60000
-                    frame[column] = (frame[column] / 60000.0).astype('float64')
+                    # 将毫秒转换为整数分钟: floor(ms / 60000) - 匹配 R ricu 的 as.integer()
+                    frame[column] = (frame[column] / 60000.0).apply(lambda x: int(x) if pd.notna(x) else x).astype('float64')
         
         for column in time_like_cols:
             # 只有当列存在且不是numeric类型时才转换
