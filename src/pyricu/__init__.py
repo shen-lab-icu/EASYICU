@@ -1149,6 +1149,20 @@ __all__.extend([
     "get_cache_status",
 ])
 
+# 数据转换器
+try:
+    from .data_converter import (
+        DataConverter,
+        ensure_database_ready,
+    )
+    _HAS_DATA_CONVERTER = True
+    __all__.extend([
+        "DataConverter",
+        "ensure_database_ready",
+    ])
+except ImportError:
+    _HAS_DATA_CONVERTER = False
+
 # 模块初始化时自动执行缓存清理（如果启用）
 try:
     from .cache_manager import _initialize_cache_manager

@@ -2724,12 +2724,10 @@ def _match_fio2(
             # 然后在merge后转换回numeric类型
             o2_time_backup = None
             fio2_time_backup = None
-            numeric_unit = 'h'
-            if ctx is not None:
-                ds_cfg = getattr(getattr(ctx, "data_source", None), "config", None)
-                ds_name = getattr(ds_cfg, "name", "") if ds_cfg is not None else ""
-                if isinstance(ds_name, str) and ds_name.lower() == "aumc":
-                    numeric_unit = 'ms'
+            # 🔧 FIX: 经过 downsampling 后，所有数据库的时间都已转换为小时
+            # AUMC 原始数据是毫秒 -> datasource.py 转换为分钟 -> downsampling 转换为小时
+            # 所以这里统一使用小时单位，不需要数据库特定处理
+            numeric_unit = 'h'  # 所有数据库在 downsampling 后都使用小时
             if o2_time_is_numeric:
                 o2_time_backup = o2_df[index_column]
                 # 对于numeric类型，需要转换为datetime进行merge_asof
