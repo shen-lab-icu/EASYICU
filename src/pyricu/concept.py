@@ -369,6 +369,8 @@ class ConceptResolver:
         self._concept_data_cache: Dict[tuple, pd.DataFrame] = {}
         # 多线程支持：使用线程局部存储避免循环依赖误报
         self._thread_local = thread_local()
+        # 🔧 嵌套调用深度跟踪：防止递归概念的内部调用清除缓存
+        self._load_depth = 0
         self.cache_dir = cache_dir if cache_dir else None
         self.cache_schema_version = "1"
         self.dictionary_signature = self._compute_dictionary_signature()
@@ -623,6 +625,12 @@ class ConceptResolver:
         required_names = self._expand_dependencies(names)  # Ensure dependencies are expanded
         tables: Dict[str, ICUTable] = {}
         aggregators = self._normalise_aggregators(aggregate, required_names)
+        
+        # 🔧 嵌套调用深度跟踪：递归概念会嵌套调用 load_concepts
+        # 只有顶层调用才应该清除缓存
+        is_top_level = self._load_depth == 0
+        self._load_depth += 1
+        
         # 🚀 性能优化: 不要清空 _concept_cache，保留用于递归调用的缓存
         # 只在顶层调用时初始化（检查是否已存在）
         if not hasattr(self, '_concept_cache') or self._concept_cache is None:
@@ -731,10 +739,15 @@ class ConceptResolver:
             merged = self._merge_tables(tables)
             return merged
         finally:
-            with self._cache_lock:
-                self._concept_cache.clear()
-                # 清除当前线程的inflight集合
-                self._get_inflight().clear()
+            # 🔧 嵌套调用深度跟踪：减少深度计数器
+            self._load_depth -= 1
+            # 🔧 只有顶层调用才清除缓存，避免递归概念内部调用清除外层所需的缓存
+            if is_top_level:
+                with self._cache_lock:
+                    self._concept_cache.clear()
+                    self._concept_data_cache.clear()
+                    # 清除当前线程的inflight集合
+                    self._get_inflight().clear()
 
     def _load_single_concept(
         self,
@@ -850,9 +863,6 @@ class ConceptResolver:
         index_column: Optional[str] = None
         unit_column: Optional[str] = None
         time_columns: List[str] = []
-        
-        # DEBUG: 临时启用调试模式
-        DEBUG_MODE = False
 
         for source in sources:
             if source.class_name == "fun_itm":
@@ -1082,6 +1092,14 @@ class ConceptResolver:
                         print(f"   📊 [{source.table}] datasource返回: {len(frame)}行, stay_id={has_stay_id}, subject_id={has_subject_id}")
                         if has_stay_id:
                             print(f"       stay_id 唯一值: {frame['stay_id'].nunique()} 个")
+                    # 全局调试：在加载任何表后打印 AUMC numericitems 的负时间计数（便于排查）
+                    if DEBUG_MODE and source.table == 'numericitems':
+                        if 'measuredat' in frame.columns:
+                            try:
+                                negc = int((frame['measuredat'] < 0).sum())
+                                print(f"   🐞 [LOAD] {source.table}: rows={len(frame)}, neg_measuredat={negc}")
+                            except Exception:
+                                pass
                     
                     # 调试：检查过滤是否成功（只在调试模式下显示）
                     if DEBUG_MODE and patient_ids and table.id_columns:
@@ -1146,7 +1164,15 @@ class ConceptResolver:
                                 if is_numeric_time:
                                     # 数值时间：四舍五入到interval
                                     interval_hours = target_interval.total_seconds() / 3600.0
-                                    frame[time_col + '_rounded'] = (frame[time_col] / interval_hours).round() * interval_hours
+                                    # 对于某些高频数据库（AUMC/HiRID），数值时间列单位为分钟（而不是小时）
+                                    # 因此需要在原始单位上进行取整，以保留负时间点并避免单位错位。
+                                    if db_name in ['aumc', 'hirid']:
+                                        # 原始单位为分钟：将 interval 从小时转换为分钟
+                                        native_interval = interval_hours * 60.0
+                                    else:
+                                        native_interval = interval_hours
+                                    # 使用向下取整保留入ICU前的负时间点（避免 .round() 将小于0的值四舍五入到0）
+                                    frame[time_col + '_rounded'] = np.floor(frame[time_col] / native_interval) * native_interval
                                     
                                     # 聚合：根据数据类型选择聚合函数
                                     # 对于输出类数据（尿量等）使用sum，其他使用mean
@@ -1880,11 +1906,30 @@ class ConceptResolver:
                 # 归一化数据中的单位
                 series = frame[source_unit_column].astype(str).str.strip()
                 normalized_series = series.replace(unit_equivalents).str.lower()
+                
+                # 🔧 进一步归一化：去除非字母数字字符后比较
+                # 这处理了 mmHg 的各种变体：mm Hg, mm/Hg, mm(hg), mm[Hg] 等
+                # NOTE: re 模块已在文件顶部导入，不要在此处重新导入，否则会导致 UnboundLocalError
+                def normalize_unit_for_comparison(unit_str):
+                    """归一化单位字符串，仅保留字母数字字符"""
+                    if not unit_str or pd.isna(unit_str) or unit_str in ['', 'none', 'None', 'nan']:
+                        return ''
+                    return re.sub(r'[^a-z0-9]', '', str(unit_str).lower())
+                
+                normalized_allowed = {normalize_unit_for_comparison(u) for u in definition.units}
+                normalized_data = normalized_series.apply(normalize_unit_for_comparison)
 
                 # 处理None/空字符串单位的情况
                 # 对于FiO2等数据，valueuom=None时应该保留数据，而不是过滤掉
                 # 将'none'和空字符串视为匹配任何单位
-                mask = normalized_series.isin(allowed_units) | (normalized_series == '') | (normalized_series == 'none')
+                # 🔧 FIX: 添加 'geen' (荷兰语 "无") 和其他无单位标记的支持
+                # AUMC 数据使用 'Geen' 表示无单位（如 sao2 的 0.xx 格式值）
+                no_unit_markers = {'', 'none', 'geen', 'null', 'na', 'n/a', '-'}
+                mask = (
+                    normalized_series.isin(allowed_units) |  # 原始比较
+                    normalized_data.isin(normalized_allowed) |  # 归一化比较
+                    (normalized_series.isin(no_unit_markers))  # 无单位标记
+                )
 
                 before_unit = len(frame)
                 frame = frame[mask]
@@ -2255,14 +2300,17 @@ class ConceptResolver:
             agg_method = agg_value if agg_value not in (None, False, "auto") else None
             if agg_method in (None, "auto"):
                 agg_method = None
-            # Default to 'median' for numeric values if no aggregate specified (matches R ricu)
+            # Default aggregation based on value type (matches R ricu)
             if agg_method is None:
-                # Check if value column is numeric
+                # Check value column type
                 if concept_name in combined.columns:
-                    if pd.api.types.is_numeric_dtype(combined[concept_name]):
-                        agg_method = 'median'  # Matches R ricu default
+                    col_dtype = combined[concept_name].dtype
+                    if pd.api.types.is_bool_dtype(col_dtype):
+                        agg_method = 'any'  # R ricu: logical -> "any"
+                    elif pd.api.types.is_numeric_dtype(col_dtype):
+                        agg_method = 'median'  # R ricu: numeric -> "median"
                     else:
-                        agg_method = 'first'  # For non-numeric, keep first
+                        agg_method = 'first'  # R ricu: character/other -> "first"
             
             # Create ICUTable temporarily to use change_interval
             temp_table = ICUTable(
@@ -2416,7 +2464,17 @@ class ConceptResolver:
             # 转换为小时以与其他数据库保持一致
             if index_column in data.columns and pd.api.types.is_numeric_dtype(data[index_column]):
                 # 将分钟转换为小时
+                if DEBUG_MODE:
+                    try:
+                        print(f"   🐞 [_align_time_to_admission] before conversion min/max: {data[index_column].min()} / {data[index_column].max()}")
+                    except Exception:
+                        pass
                 data[index_column] = data[index_column] / 60.0
+                if DEBUG_MODE:
+                    try:
+                        print(f"   🐞 [_align_time_to_admission] after conversion min/max: {data[index_column].min()} / {data[index_column].max()}")
+                    except Exception:
+                        pass
             return data
         
         # Early return checks (no verbose output for performance)
@@ -2969,16 +3027,31 @@ class ConceptResolver:
                             logger.debug("   扩展 WinTbl '%s' 到时间序列 (interval=%s)", concept_name, interval)
                     
                     # 扩展窗口到时间序列
+                    interval_hours = interval.total_seconds() / 3600.0
                     expanded_rows = []
                     for _, row in result.data.iterrows():
                         start_time = row[idx_col]
                         duration = row[dur_col]
                         
+                        # FIX: 对于 duration=0 的行，只添加一个时间点（对齐到 interval）
+                        if duration <= 0:
+                            aligned_time = np.floor(start_time / interval_hours) * interval_hours
+                            new_row = {idx_col: aligned_time}
+                            # 复制 ID 列
+                            for col in id_cols:
+                                if col in row.index:
+                                    new_row[col] = row[col]
+                            # 复制值列（除了 dur_col）
+                            for col in result.data.columns:
+                                if col not in [idx_col, dur_col] and col not in id_cols:
+                                    new_row[col] = row[col]
+                            expanded_rows.append(new_row)
+                            continue
+                        
                         # 计算结束时间（小时）
                         end_time = start_time + duration
                         
                         # 生成时间序列（每个 interval）
-                        interval_hours = interval.total_seconds() / 3600.0
                         current_time = np.floor(start_time / interval_hours) * interval_hours
                         
                         while current_time < end_time:
@@ -3413,17 +3486,17 @@ class ConceptResolver:
             literal = _parse_literal(comp_match.group(2))
             series = data[value_col]
             if op_symbol == "<=":
-                mask = pd.to_numeric(series, errors="coerce") <= literal
+                # comp_na: NA -> False, 否则根据比较结果
+                numeric_series = pd.to_numeric(series, errors="coerce")
+                mask = (~numeric_series.isna()) & (numeric_series <= literal)
             elif op_symbol == "==":
-                mask = series.astype(str) == str(literal)
+                mask = (~series.isna()) & (series.astype(str) == str(literal))
             elif op_symbol == "!=":
-                mask = series.astype(str) != str(literal)
+                mask = (~series.isna()) & (series.astype(str) != str(literal))
             else:
                 raise NotImplementedError(f"Unsupported comparison operator '{op_symbol}'")
         else:
             mask = pd.Series(True, index=data.index)
-
-        data = data[mask].copy()
 
         if "ts_to_win_tbl" in callback:
             # 如果 base_table 为空或没有 index_column，返回空的 WinTbl
@@ -3453,16 +3526,24 @@ class ConceptResolver:
                     index_var=idx_col,
                     dur_var=concept_name + "_dur",
                 )
-            dur_match = re.search(r"ts_to_win_tbl\((.+)\)", callback, flags=re.DOTALL)
-            duration = self._parse_interval_expression(dur_match.group(1) if dur_match else "mins(60)")
+            # 使用非贪婪匹配，并支持嵌套括号（如 mins(360L)）
+            dur_match = re.search(r"ts_to_win_tbl\(([^)]+\))\)", callback, flags=re.DOTALL)
+            if not dur_match:
+                # 备用：简单匹配
+                dur_match = re.search(r"ts_to_win_tbl\((.+?)\)", callback, flags=re.DOTALL)
+            duration = self._parse_interval_expression(dur_match.group(1).strip() if dur_match else "mins(60)")
             # 将 timedelta 转换为小时（float）
             if isinstance(duration, pd.Timedelta):
                 duration_hours = duration.total_seconds() / 3600.0
             else:
                 duration_hours = float(duration)
+            
+            # FIX: 为所有行创建 WinTbl，True 行有窗口持续时间，False 行持续时间为 0
+            # 这样在 downsampling 时，True 的窗口会扩展，False 的只保留原始时间点
             win_df = data[list(base_table.id_columns) + [base_table.index_column]].copy()
-            win_df["duration"] = duration_hours
-            win_df[concept_name] = True
+            # True 行使用完整窗口持续时间，False 行使用 0（只表示该时间点存在）
+            win_df["duration"] = np.where(mask.values, duration_hours, 0.0)
+            win_df[concept_name] = mask.values
             return WinTbl(
                 data=win_df.rename(columns={"duration": concept_name + "_dur"}),
                 id_vars=list(base_table.id_columns),
@@ -3491,22 +3572,27 @@ class ConceptResolver:
             raise ValueError(f"Unsupported interval expression '{expression}'")
 
         unit = match.group(1).lower()
-        value = _parse_literal(match.group(2))
+        raw_value = match.group(2).strip()
+        
+        # 移除 R 语言的整数后缀 'L'（例如 360L -> 360）
+        # 注意：R 的 'L' 只是表示整数，不是时间单位
+        if raw_value.endswith('L'):
+            raw_value = raw_value[:-1]
+        
+        value = _parse_literal(raw_value)
         if isinstance(value, pd.Timedelta):
             return value
-        # 如果value是字符串（如"60m"），需要先检查是否是有效的时间字符串
+        # 如果value是字符串，尝试解析为数值
         if isinstance(value, str):
             # 移除可能的尾随字符（如括号）
             value = value.strip().rstrip(')')
+            # 再次检查 L 后缀
+            if value.endswith('L'):
+                value = value[:-1]
             try:
-                # 使用 'ms' 替代已弃用的 'L'
-                return pd.to_timedelta(value.replace('L', 'ms'))
-            except Exception:
-                # 如果不是有效的时间字符串，尝试解析为数值
-                try:
-                    value = float(value)
-                except ValueError:
-                    raise ValueError(f"Cannot parse interval value '{value}' in expression '{expression}'")
+                value = float(value)
+            except ValueError:
+                raise ValueError(f"Cannot parse interval value '{value}' in expression '{expression}'")
         # value是数值，需要加上unit
         if unit in {"min", "mins", "minute", "minutes"}:
             return pd.to_timedelta(value, unit="m")
@@ -5007,6 +5093,25 @@ def _apply_callback(
             index_var=index_var,
             concept_name=concept_name,
         )
+
+    # Handle aumc_bxs callback - negate values where direction is '-'
+    # R implementation: x[get(dir_var) == "-", val_var := -1L * get(val_var)]
+    if expr == "aumc_bxs":
+        dir_var = getattr(source, 'dir_var', None)
+        if not dir_var and source.params:
+            dir_var = source.params.get("dir_var")
+        if not dir_var:
+            dir_var = "tag"  # default for AUMC
+        
+        val_var = concept_name  # Value column has already been renamed to concept_name
+        
+        if dir_var in frame.columns and val_var in frame.columns:
+            # Negate values where direction is '-'
+            mask = frame[dir_var] == '-'
+            if mask.any():
+                frame = frame.copy()
+                frame.loc[mask, val_var] = -1 * frame.loc[mask, val_var]
+        return frame
 
     # Handle eicu_age callback
     if expr == "transform_fun(eicu_age)":

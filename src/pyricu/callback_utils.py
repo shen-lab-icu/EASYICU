@@ -685,20 +685,53 @@ def vent_flag(
     id_cols: Optional[list] = None,
     **kwargs,
 ) -> pd.DataFrame:
-    """Filter to ventilated rows and coerce value column to boolean."""
-
+    """Filter to ventilated rows and use val_col as new time index.
+    
+    This replicates R ricu's vent_flag behavior exactly:
+    ```R
+    vent_flag <- function(x, val_var, ...) {
+      x <- x[as.logical(get(val_var)), ]
+      set(x, j = c(index_var(x), val_var),
+          value = list(x[[val_var]], rep(TRUE, nrow(x))))
+    }
+    ```
+    
+    The key insight is that val_var (e.g., ventstartoffset=1566) becomes
+    the new time index, and the value column is set to TRUE.
+    """
     if val_col not in data.columns:
         return data.copy()
 
     frame = data.copy()
-    mask = frame[val_col].astype(bool)
+    
+    # 🔥 R ricu: x <- x[as.logical(get(val_var)), ]
+    # 过滤只保留 val_col 为真值的行（非零、非NA）
+    numeric_val = pd.to_numeric(frame[val_col], errors='coerce')
+    mask = numeric_val.notna() & (numeric_val != 0)
     frame = frame.loc[mask].copy()
+    
+    if frame.empty:
+        return frame
+    
+    # 🔥 R ricu: set(x, j = c(index_var(x), val_var), value = list(x[[val_var]], rep(TRUE, nrow(x))))
+    # 这意味着：
+    # 1. index_var 列被设置为 val_col 的原始值（时间戳）
+    # 2. val_col 列被设置为 TRUE
+    
+    # 保存 val_col 的原始值（这将成为新的时间索引）
+    original_val = numeric_val.loc[frame.index]
+    
+    # 如果 index_var 存在，用 val_col 的值替换它
+    if index_var and index_var in frame.columns:
+        frame[index_var] = original_val.values
+    elif index_var:
+        # 如果 index_var 不存在，创建它
+        frame[index_var] = original_val.values
+    
+    # 将 val_col 设置为 TRUE
     frame[val_col] = True
-
-    # Ensure index/id columns are preserved if not already present after filtering
-    if index_var and index_var not in frame.columns and index_var in data.columns:
-        frame[index_var] = data.loc[frame.index, index_var]
-
+    
+    # Ensure id columns are preserved
     if id_cols:
         for col in id_cols:
             if col not in frame.columns and col in data.columns:

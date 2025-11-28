@@ -3470,7 +3470,7 @@
       ],
       "eicu": [
         {
-          "regex": "FIO2.*%.*",
+          "regex": "(?i)fio2",
           "table": "respiratorycharting",
           "sub_var": "respchartvaluelabel",
           "callback": "transform_fun(percent_as_numeric)",
@@ -3485,7 +3485,7 @@
       ],
       "eicu_demo": [
         {
-          "regex": "FIO2.*%.*",
+          "regex": "(?i)fio2",
           "table": "respiratorycharting",
           "sub_var": "respchartvaluelabel",
           "callback": "transform_fun(percent_as_numeric)",
@@ -7263,7 +7263,7 @@
     "class_name": "rec_cncpt"
   },
   "tco2": {
-    "unit": "mEq/L",
+    "unit": ["mEq/L", "mmol/L"],
     "min": 5,
     "max": 60,
     "description": "totcal CO2",
@@ -7275,7 +7275,7 @@
           "ids": "Total CO2",
           "table": "lab",
           "sub_var": "labname",
-          "callback": "convert_unit(set_val(NA), 'mEq/L', 'lpm')"
+          "callback": "combine_callbacks(convert_unit(set_val(NA), 'mEq/L', 'lpm'), convert_unit(binary_op(`*`, 1), 'mEq/L', '(?i)mmol'))"
         }
       ],
       "eicu_demo": [
@@ -7283,7 +7283,7 @@
           "ids": "Total CO2",
           "table": "lab",
           "sub_var": "labname",
-          "callback": "convert_unit(set_val(NA), 'mEq/L', 'lpm')"
+          "callback": "combine_callbacks(convert_unit(set_val(NA), 'mEq/L', 'lpm'), convert_unit(binary_op(`*`, 1), 'mEq/L', '(?i)mmol'))"
         }
       ],
       "miiv": [

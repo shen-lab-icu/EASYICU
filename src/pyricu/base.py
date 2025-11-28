@@ -58,6 +58,9 @@ class BaseICULoader:
         self._dict_path = dict_path
         self._use_sofa2 = use_sofa2
 
+        # Check and prepare data (convert CSV to Parquet if needed)
+        self._ensure_data_ready()
+
         # Initialize data source
         self._init_datasource()
 
@@ -89,9 +92,66 @@ class BaseICULoader:
         return 'miiv'
 
     def _setup_data_path(self, data_path: Optional[Union[str, Path]], database: str) -> Path:
-        """Setup and validate data path"""
+        """Setup and validate data path
+        
+        智能处理数据路径：
+        - 如果用户传入完整的数据库路径（包含数据文件），直接使用
+        - 如果用户传入的是基础路径（如 /home/1_publicData/icu_databases），自动查找数据库子目录
+        """
         if data_path:
-            return Path(data_path)
+            user_path = Path(data_path)
+            
+            # 检查用户路径是否直接包含数据文件（如 admissions.parquet, numericitems/ 等）
+            if user_path.is_dir():
+                # 检查是否是有效的数据库目录（包含特征文件）
+                # AUMC 特征文件: admissions.csv/parquet, numericitems/
+                # MIIV 特征文件: admissions.csv/parquet, chartevents/
+                # eICU 特征文件: patient.csv, vitalPeriodic.csv
+                marker_files = {
+                    'aumc': ['admissions.csv', 'admissions.parquet', 'numericitems'],
+                    'miiv': ['admissions.csv', 'admissions.parquet', 'chartevents'],
+                    'eicu': ['patient.csv', 'patient.csv.gz', 'vitalPeriodic.csv'],
+                    'hirid': ['general_table.csv', 'observations'],
+                }
+                
+                db_markers = marker_files.get(database, [])
+                is_valid_db_dir = any((user_path / marker).exists() for marker in db_markers)
+                
+                if is_valid_db_dir:
+                    if self.verbose:
+                        logger.info(f"Using user-provided database path: {user_path}")
+                    return user_path
+                
+                # 如果不是有效的数据库目录，尝试查找子目录
+                # AUMC 特殊处理：通常在 aumc/1.0.2/ 子目录
+                # MIIV 特殊处理：通常在 mimiciv/3.1/ 子目录
+                # eICU 特殊处理：通常在 eicu/2.0.1/ 子目录
+                # 先尝试精确版本匹配，再尝试通用目录
+                possible_subpaths = [
+                    user_path / database,  # /base/aumc
+                    user_path / database / '1.0.2',  # /base/aumc/1.0.2 (AUMC)
+                    user_path / database / '3.1',    # /base/miiv/3.1 (MIIV)
+                    user_path / database / '2.0.1',  # /base/eicu/2.0.1 (eICU)
+                    user_path / database / '2.0',    # /base/eicu/2.0 (eICU old)
+                    # 支持 mimiciv 命名变体
+                    user_path / 'mimiciv' / '3.1',
+                ]
+                
+                # 如果没找到，尝试动态搜索子目录
+                for subpath in possible_subpaths:
+                    if subpath.is_dir():
+                        is_valid = any((subpath / marker).exists() for marker in db_markers)
+                        if is_valid:
+                            if self.verbose:
+                                logger.info(f"Auto-detected database path: {subpath} (from base: {user_path})")
+                            return subpath
+                
+                # 回退：返回用户路径（可能导致后续错误，但保持向后兼容）
+                if self.verbose:
+                    logger.warning(f"Could not find valid {database} data in {user_path}, using as-is")
+                return user_path
+            
+            return user_path
 
         # Check environment variables
         env_var = f'{database.upper()}_PATH'
@@ -131,6 +191,48 @@ class BaseICULoader:
         if self.verbose:
             logger.info(f"Using default path: {default_path}")
         return default_path
+
+    def _ensure_data_ready(self):
+        """Ensure data files are ready (convert CSV to Parquet if needed)
+        
+        This method checks if Parquet files exist for the database's tables.
+        If only CSV/CSV.GZ files exist, a warning will be logged.
+        Use DataConverter or CLI to convert files before loading.
+        """
+        try:
+            from .data_converter import DataConverter
+            
+            converter = DataConverter(
+                data_path=self.data_path,
+                database=self.database,
+                verbose=False  # Suppress verbose output for status check
+            )
+            
+            # Check status without auto-converting
+            is_ready, missing = converter.is_ready()
+            
+            if not is_ready:
+                # Log warning about missing parquet files
+                logger.warning(
+                    f"⚠️ {len(missing)} CSV files need to be converted to Parquet for optimal performance.\n"
+                    f"   Run: python -m pyricu.data_converter {self.data_path}\n"
+                    f"   Or use: DataConverter('{self.data_path}').ensure_parquet_ready()"
+                )
+                if self.verbose:
+                    for msg in missing[:5]:
+                        logger.warning(f"   - {msg}")
+                    if len(missing) > 5:
+                        logger.warning(f"   ... and {len(missing) - 5} more")
+            elif self.verbose:
+                logger.info(f"✅ All data files are ready in {self.data_path}")
+            
+        except ImportError:
+            if self.verbose:
+                logger.debug("data_converter module not available, skipping data preparation check")
+        except Exception as e:
+            # Don't fail initialization if data check fails
+            if self.verbose:
+                logger.warning(f"Data preparation check failed: {e}")
 
     def _init_datasource(self):
         """Initialize the data source"""
