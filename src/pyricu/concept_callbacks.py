@@ -334,20 +334,18 @@ def _compose_fill_limits(
     id_columns: List[str],
     index_column: str,
     ctx: "ConceptCallbackContext",
-    expand_forward: bool = True,
+    expand_forward: bool = False,
 ) -> Optional[pd.DataFrame]:
     """Build fill_gaps limits matching ricu's collapse(x) behavior.
     
-    By default (matching ricu), uses observed data range (min/max per ID).
-    When expand_forward=True (default, matching ricu), the end time is extended
-    by the absolute value of the start time to create a symmetric timeline.
-    
-    Formula: new_end = max + abs(min)
-    Example: min=-20, max=112 → new_end = 112 + 20 = 132
+    Returns the observed data range (min/max per ID) without expansion.
+    This matches R ricu's collapse() function which simply computes:
+    - start = min(index_var) per ID
+    - end = max(index_var) per ID
     
     Args:
-        expand_forward: If True, expand end time by abs(start) to create
-                       symmetric timeline. This matches ricu's observed behavior.
+        expand_forward: Deprecated, kept for compatibility. Should always be False.
+                       R ricu's collapse() does NOT expand the time range.
     """
     if not id_columns or index_column not in data.columns:
         return None
@@ -361,14 +359,10 @@ def _compose_fill_limits(
     if observed.empty:
         return None
     
-    # Match ricu's symmetric timeline expansion
-    # Ricu extends the end time to create a symmetric window around time 0.
-    # Formula: new_end = original_end + abs(start)
-    # Example: [-663, 512] becomes [-663, 512 + 663] = [-663, 1175]
-    # This matches ricu's observed behavior in outcome.csv
-    if expand_forward:
-        # Extend forward by the same distance as backward from time 0
-        observed['end'] = observed['end'] + abs(observed['start'])
+    # R ricu's collapse() simply returns min/max without any expansion
+    # Do NOT expand end time - this was a bug that caused AUMC sofa to generate
+    # millions of extra rows (e.g., patient 14 with admittedat=57961 hours 
+    # would generate rows from 0 to 115890 instead of just 57911 to 57979)
     
     return observed[id_columns + ["start", "end"]]
 
@@ -2575,14 +2569,110 @@ def _callback_news(
     cols = id_columns + ([index_column] if index_column else []) + ["news"]
     return _as_icutbl(data[cols].reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="news")
 
+
+def _apply_locf_24h(
+    data: pd.DataFrame,
+    id_columns: List[str],
+    index_column: Optional[str],
+    value_columns: List[str],
+    win_length_hours: float = 24.0,
+) -> pd.DataFrame:
+    """
+    Apply Last Observation Carried Forward (LOCF) within a 24-hour sliding window.
+    
+    This replicates the R ricu behavior:
+    - slide(res, !!exp, before = win_length, .SDcols = cnc)
+    - where exp = substitute(lapply(.SD, fun), list(fun = locf))
+    
+    For each time point, look backward within the window at ORIGINAL observations
+    (not LOCF-filled values) and take the last non-NA value. This prevents
+    cascading propagation beyond the original window.
+    
+    Args:
+        data: DataFrame with measurements
+        id_columns: List of ID columns for grouping (e.g., ['stay_id'])
+        index_column: Time column name (e.g., 'charttime')
+        value_columns: List of columns to apply LOCF on
+        win_length_hours: Window length in hours (default 24)
+        
+    Returns:
+        DataFrame with LOCF applied to specified columns
+    """
+    if data.empty or not index_column or not value_columns:
+        return data
+    
+    # Ensure data is sorted by id and time
+    sort_cols = id_columns + [index_column]
+    data = data.sort_values(sort_cols).reset_index(drop=True)
+    
+    # Convert index_column to numeric (hours) if it's not already
+    time_col = data[index_column]
+    if pd.api.types.is_timedelta64_dtype(time_col):
+        time_hours = time_col.dt.total_seconds() / 3600
+    elif pd.api.types.is_numeric_dtype(time_col):
+        time_hours = time_col  # Assume already in hours
+    else:
+        try:
+            time_hours = pd.to_timedelta(time_col).dt.total_seconds() / 3600
+        except:
+            # If cannot convert, use simple forward fill without time limit
+            for col in value_columns:
+                if col in data.columns:
+                    data[col] = data.groupby(id_columns, dropna=False)[col].ffill()
+            return data
+    
+    data["_time_hours_"] = time_hours
+    
+    # For each patient, apply LOCF within the time window
+    # IMPORTANT: Use ORIGINAL values only, not values that were already LOCF-filled
+    def locf_within_window(group):
+        group = group.sort_values("_time_hours_")
+        times = group["_time_hours_"].values
+        n = len(times)
+        
+        for col in value_columns:
+            if col not in group.columns:
+                continue
+            # Keep original values separate to avoid cascading propagation
+            original_values = group[col].values.copy()
+            result_values = original_values.copy()
+            
+            for i in range(n):
+                if pd.isna(result_values[i]):
+                    # Look backward within the window for the LAST ORIGINAL non-NA value
+                    # This matches R locf: last_elem(x[!is.na(x)])
+                    last_valid = np.nan
+                    for j in range(i - 1, -1, -1):
+                        if times[i] - times[j] <= win_length_hours:
+                            if pd.notna(original_values[j]):
+                                last_valid = original_values[j]
+                                break  # Found the most recent original value
+                        else:
+                            break  # Outside window, stop looking
+                    result_values[i] = last_valid
+            
+            group[col] = result_values
+        return group
+    
+    result = data.groupby(id_columns, dropna=False, group_keys=False).apply(locf_within_window)
+    result = result.drop(columns=["_time_hours_"], errors="ignore")
+    
+    return result
+
+
 def _callback_qsofa(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    """Calculate qSOFA score with 24-hour LOCF as in R ricu."""
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["qsofa"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="qsofa")
+
+    # Apply 24-hour LOCF to input columns (matching R ricu slide + locf)
+    value_cols = ["sbp", "resp", "gcs"]
+    data = _apply_locf_24h(data, id_columns, index_column, value_cols, win_length_hours=24.0)
 
     data["qsofa"] = qsofa_score(
         sbp=pd.to_numeric(data.get("sbp")),
@@ -2596,10 +2686,15 @@ def _callback_sirs(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    """Calculate SIRS score with 24-hour LOCF as in R ricu."""
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["sirs"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="sirs")
+
+    # Apply 24-hour LOCF to input columns (matching R ricu slide + locf)
+    value_cols = ["temp", "hr", "resp", "wbc", "pco2", "bnd"]
+    data = _apply_locf_24h(data, id_columns, index_column, value_cols, win_length_hours=24.0)
 
     index = data.index
     data["sirs"] = sirs_score(
@@ -3350,10 +3445,26 @@ def _callback_vent_ind(
         if work.empty:
             return _empty_result()
 
-        # 🔥 R ricu expand 行为: endtime 是 exclusive（不包含）
-        # 例如: start=0, dur=16h → 展开为 0,1,2,...,15（不含16）
-        # 为了匹配这个行为，end_dt 应该是 start + dur - 1小时
-        work["_end_dt"] = work["_start_dt"] + work["vent_dur_td"] - interval
+        # 🔧 FIX 2024-11-29: Match R ricu expand() behavior
+        # R ricu: end = re_time(start + dur, interval) -- NO subtraction!
+        # R seq(start, end, step) is INCLUSIVE on both ends
+        # pyricu expand() also uses inclusive end (after ts_utils fix)
+        # So end = start + dur is correct
+        work["_end_dt"] = work["_start_dt"] + work["vent_dur_td"]
+        
+        # 🔧 FIX 2024-11-30: Match R ricu's end < 0 correction
+        # R ricu code: x <- x[get(end_var) < 0, c(end_var) := as.difftime(0, units = time_unit)]
+        # This ensures windows with negative end times extend to time 0
+        # Example: start=-5h, dur=1h → original_end=-4h → corrected_end=0h → covers -5,-4,-3,-2,-1,0
+        #
+        # The base timestamp represents time 0 (ICU admission)
+        # _coerce_time converts numeric hours to datetime as: base + timedelta(hours=value)
+        # So time 0 = base, negative times < base
+        base = pd.Timestamp("1970-01-01")
+        negative_end_mask = work["_end_dt"] < base
+        if negative_end_mask.any():
+            work.loc[negative_end_mask, "_end_dt"] = base
+        
         expanded = expand(
             work,
             start_var="_start_dt",
@@ -3550,8 +3661,12 @@ def _callback_vent_ind(
             match_win_hours = match_win.total_seconds() / 3600.0
             merged["vent_dur_td"] = pd.to_timedelta(start_hours + match_win_hours, unit="h")
 
-        # 确保 vent_dur_td 是 timedelta 类型，并限制最小值
-        merged["vent_dur_td"] = pd.to_timedelta(merged["vent_dur_td"], errors="coerce").clip(lower=min_length)
+        # 🔧 FIX 2024-11-30: Match R ricu's min_length filter
+        # R ricu code: res <- res[get(var) >= min_length, ]
+        # This FILTERS OUT rows where dur < min_length, NOT clips them!
+        # Example: start_hours=-7, dur = -7 + 6 = -1 hour → filtered out (not kept)
+        # Previously we used clip() which would keep these rows with dur=min_length
+        merged["vent_dur_td"] = pd.to_timedelta(merged["vent_dur_td"], errors="coerce")
         merged = merged[merged["vent_dur_td"] >= min_length]
         if merged.empty:
             return _empty_result()
