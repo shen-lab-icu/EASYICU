@@ -2450,13 +2450,14 @@ class ConceptResolver:
         Returns:
             DataFrame with time converted to hours since ICU admission
         """
-        # eICU和AUMC时间列已经是相对时间,不需要对齐
+        # eICU和AUMC时间列需要特殊处理
         # eICU uses offset columns (labresultoffset, observationoffset, etc.) which are
         # already in MINUTES from ICU admission. Convert to HOURS for consistency.
-        # AUMC times are also converted to MINUTES in datasource.py, need to convert to HOURS here.
+        # AUMC times are ABSOLUTE timestamps in MINUTES (converted from ms in datasource.py).
+        # For AUMC, we need to subtract admittedat to get relative time since ICU admission.
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-        if db_name in ['eicu', 'eicu_demo', 'aumc']:
-            # eICU/AUMC时间列是相对于入院时间的offset,单位是分钟（在datasource.py中已转换）
+        if db_name in ['eicu', 'eicu_demo']:
+            # eICU时间列是相对于入院时间的offset,单位是分钟
             # 转换为小时以与其他数据库保持一致
             
             # 收集所有需要转换的时间列
@@ -2465,36 +2466,103 @@ class ConceptResolver:
                 cols_to_convert.add(index_column)
             
             # 添加额外的时间列 (如 stop 等)
-            # 注意：不再包含 *_dur 列，因为这些是 duration 值，已经是小时了
             if time_columns:
                 for col in time_columns:
                     if col and col in data.columns:
-                        # 跳过 *_dur 列 - 这些是 duration 值，由 callback 计算并返回小时格式
                         if not col.endswith('_dur'):
                             cols_to_convert.add(col)
             
             # 自动检测其他可能的时间列 (start, stop)
-            # 注意：不再自动检测 *_dur 列，因为这些是 duration 值，已经是小时了
             for col in data.columns:
                 if col in ['start', 'stop']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
-                # 不再自动转换 *_dur 列，因为这些是 duration 值，由 callback 返回时已经是小时
             
             # 转换所有时间列（从分钟到小时）
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
-                    if DEBUG_MODE:
-                        try:
-                            print(f"   🐞 [_align_time_to_admission] {col} before conversion min/max: {data[col].min()} / {data[col].max()}")
-                        except Exception:
-                            pass
                     data[col] = data[col] / 60.0
+            return data
+        
+        if db_name == 'aumc':
+            # AUMC时间列是绝对时间戳（毫秒，已在datasource.py中转换为分钟）
+            # 需要减去 admittedat 得到相对于 ICU 入住的时间
+            # 这对于多次入住的患者（如patient 14，admittedat=208661820000ms）很重要
+            
+            # 收集所有需要转换的时间列
+            cols_to_convert = set()
+            if index_column and index_column in data.columns:
+                cols_to_convert.add(index_column)
+            
+            if time_columns:
+                for col in time_columns:
+                    if col and col in data.columns:
+                        if not col.endswith('_dur'):
+                            cols_to_convert.add(col)
+            
+            for col in data.columns:
+                if col in ['start', 'stop']:
+                    if pd.api.types.is_numeric_dtype(data[col]):
+                        cols_to_convert.add(col)
+            
+            if not cols_to_convert:
+                return data
+            
+            # 获取 admittedat 以计算相对时间
+            # 对于 AUMC，ID 列是 admissionid
+            id_col = 'admissionid' if 'admissionid' in data.columns else (id_columns[0] if id_columns else None)
+            
+            if id_col and id_col in data.columns:
+                try:
+                    # 加载 admissions 表获取 admittedat
+                    admissions = data_source.load_table('admissions', 
+                                                         columns=['admissionid', 'admittedat'], 
+                                                         verbose=False)
+                    if hasattr(admissions, 'data'):
+                        admissions_df = admissions.data
+                    else:
+                        admissions_df = admissions
+                    
+                    # admittedat 也是毫秒，需要转换为分钟
+                    if 'admittedat' in admissions_df.columns:
+                        admissions_df['admittedat_min'] = (admissions_df['admittedat'] / 60000.0).apply(
+                            lambda x: int(x) if pd.notna(x) else x).astype('float64')
+                        
+                        # 合并 admittedat 到数据中
+                        data = data.merge(admissions_df[['admissionid', 'admittedat_min']], 
+                                         on='admissionid', how='left')
+                        
+                        # 从时间列中减去 admittedat_min 得到相对时间
+                        for col in cols_to_convert:
+                            if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
+                                if DEBUG_MODE:
+                                    try:
+                                        print(f"   🐞 [AUMC _align_time] {col} before subtract: min/max = {data[col].min()} / {data[col].max()}")
+                                    except Exception:
+                                        pass
+                                # 减去 admittedat_min 得到相对分钟
+                                data[col] = data[col] - data['admittedat_min']
+                                # 转换为小时
+                                data[col] = data[col] / 60.0
+                                if DEBUG_MODE:
+                                    try:
+                                        print(f"   🐞 [AUMC _align_time] {col} after subtract & hours: min/max = {data[col].min()} / {data[col].max()}")
+                                    except Exception:
+                                        pass
+                        
+                        # 删除辅助列
+                        if 'admittedat_min' in data.columns:
+                            data = data.drop(columns=['admittedat_min'])
+                        
+                        return data
+                except Exception as e:
                     if DEBUG_MODE:
-                        try:
-                            print(f"   🐞 [_align_time_to_admission] {col} after conversion min/max: {data[col].min()} / {data[col].max()}")
-                        except Exception:
-                            pass
+                        print(f"   ⚠️ [AUMC _align_time] Failed to load admittedat: {e}")
+            
+            # 回退：如果无法获取 admittedat，只做单位转换
+            for col in cols_to_convert:
+                if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
+                    data[col] = data[col] / 60.0
             return data
         
         # Early return checks (no verbose output for performance)
