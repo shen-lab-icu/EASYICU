@@ -3046,7 +3046,15 @@ def eicu_dex_inf(
     return work
 
 def _aumc_get_id_columns(df: pd.DataFrame) -> List[str]:
-    return [col for col in df.columns if isinstance(col, str) and col.lower().endswith('id')]
+    """Get the actual patient/stay ID columns, not all columns ending with 'id'.
+    
+    This is used for grouping in aggregation. We only want the true identifier
+    columns (admissionid, icustay_id, stay_id, etc.), not item/order IDs.
+    """
+    # True ID columns for ICU data
+    true_id_cols = ['admissionid', 'icustay_id', 'stay_id', 'subject_id', 'patientid', 
+                    'hadm_id', 'patientunitstayid']
+    return [col for col in df.columns if col.lower() in [c.lower() for c in true_id_cols]]
 
 def _aumc_normalize_mass_units(df: pd.DataFrame, unit_col: Optional[str], val_col: str) -> None:
     if not unit_col:
@@ -3207,12 +3215,22 @@ def aumc_rate_kg(
                 continue
             if stop_min <= start_min:
                 continue
-                
-            # Generate time points at each hour within the interval
-            # Use numpy for efficiency
-            time_points = np.arange(start_min, stop_min, step_minutes)
+            
+            # 🔧 CRITICAL FIX 2024-11-29: Match R ricu expand() behavior
+            # R ricu uses floor(start) to floor(end) for hourly intervals
+            # Example: start=1602 min (26.7h), stop=2480 min (41.33h)
+            # → floor to hours: 26h to 41h → 16 rows
+            # Previous bug: np.arange(start, stop, step) gave 15 rows (stop exclusive)
+            #
+            # Floor start and stop to hour boundaries
+            start_hour = np.floor(start_min / step_minutes) * step_minutes
+            stop_hour = np.floor(stop_min / step_minutes) * step_minutes
+            
+            # Generate time points from floor(start) to floor(stop) inclusive
+            # Add step_minutes to stop_hour to make it inclusive
+            time_points = np.arange(start_hour, stop_hour + step_minutes, step_minutes)
             if len(time_points) == 0:
-                time_points = np.array([start_min])
+                time_points = np.array([start_hour])
             
             for t in time_points:
                 new_row = row.copy()
@@ -3224,6 +3242,19 @@ def aumc_rate_kg(
             # Drop stop_col from result (not needed after expand)
             if stop_col in result.columns:
                 result = result.drop(columns=[stop_col])
+            
+            # 🔧 FIX 2024-11-30: Match R ricu expand() aggregation behavior
+            # When multiple intervals overlap at the same time point, R ricu aggregates
+            # using mean (based on analysis of R ricu output for norepi_rate)
+            # This ensures consistent results with R ricu for rate calculations
+            if not result.empty:
+                # Group by ID columns + time column and take mean of value column
+                group_cols = [c for c in result.columns if c in id_cols or c == index_col]
+                if group_cols and concept_name in result.columns:
+                    result = result.groupby(group_cols, as_index=False).agg({
+                        concept_name: 'mean',  # Mean for overlapping intervals
+                        **{c: 'first' for c in result.columns if c not in group_cols and c != concept_name}
+                    })
         else:
             result = pd.DataFrame(columns=[c for c in result.columns if c != stop_col])
     

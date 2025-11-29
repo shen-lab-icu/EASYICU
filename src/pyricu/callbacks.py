@@ -880,11 +880,15 @@ def sirs_score(
 ) -> pd.Series:
     """Calculate SIRS (Systemic Inflammatory Response Syndrome) score.
 
-    SIRS criteria (score 1 for each):
+    SIRS criteria (score 1 for each, total max 4):
     - Temperature < 36°C or > 38°C
     - Heart rate > 90 bpm
-    - Respiratory rate > 20/min or PaCO2 < 32 mmHg
-    - WBC < 4000 or > 12000 or >10% bands
+    - Respiratory rate > 20/min OR PaCO2 < 32 mmHg (combined as one criterion)
+    - WBC < 4 or > 12 OR >10% bands (combined as one criterion)
+
+    This matches the R ricu implementation where:
+    - rspi: resp > 20 | pco2 < 32 → 1 point
+    - wbcn: wbc < 4 | wbc > 12 | bnd > 10 → 1 point
 
     Args:
         temp: Temperature values (°C)
@@ -899,22 +903,27 @@ def sirs_score(
     """
     score = pd.Series(0, index=temp.index, dtype=int)
     
-    # Temperature criterion
+    # Temperature criterion: temp < 36 or temp > 38
     score[(temp < 36) | (temp > 38)] += 1
     
-    # Heart rate criterion
+    # Heart rate criterion: hr > 90
     score[hr > 90] += 1
     
-    # Respiratory criterion
-    score[resp > 20] += 1
+    # Respiratory criterion: resp > 20 OR pco2 < 32 (combined as one point)
+    # Match R ricu: rspi <- function(re, pa) fifelse(re > 20 | pa < 32, 1L, 0L)
+    resp_crit = (resp > 20)
     if pco2 is not None:
-        score[pco2 < 32] += 1
+        resp_crit = resp_crit | (pco2 < 32)
+    score[resp_crit] += 1
     
-    # WBC criterion
+    # WBC criterion: wbc < 4 OR wbc > 12 OR bnd > 10 (combined as one point)
+    # Match R ricu: wbcn <- function(wb, ba) fifelse(wb < 4 | wb > 12 | ba > 10, 1L, 0L)
+    wbc_crit = pd.Series(False, index=temp.index)
     if wbc is not None:
-        score[(wbc < 4) | (wbc > 12)] += 1
+        wbc_crit = wbc_crit | (wbc < 4) | (wbc > 12)
     if bnd is not None:
-        score[bnd > 10] += 1
+        wbc_crit = wbc_crit | (bnd > 10)
+    score[wbc_crit] += 1
     
     return score
 
@@ -928,7 +937,7 @@ def qsofa_score(
     qSOFA criteria (score 1 for each):
     - SBP ≤ 100 mmHg
     - Respiratory rate ≥ 22/min
-    - Altered mentation (GCS < 15)
+    - Altered mentation (GCS ≤ 13)
 
     Args:
         sbp: Systolic blood pressure values
@@ -942,7 +951,7 @@ def qsofa_score(
     
     score[sbp <= 100] += 1
     score[resp >= 22] += 1
-    score[gcs < 15] += 1
+    score[gcs <= 13] += 1  # ricu uses gcs <= 13 for altered mentation
     
     return score
 

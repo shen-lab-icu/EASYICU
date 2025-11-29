@@ -369,20 +369,34 @@ def expand(
         
         # Filter valid rows (non-NA, start <= end)
         valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
-        valid_data = data[valid_mask]
+        valid_data = data[valid_mask].copy()
         
         if len(valid_data) == 0:
             result_cols = [start_var] + id_cols + keep_vars
             return pd.DataFrame(columns=result_cols)
         
-        # Expand using numeric ranges
-        # 🚀 性能优化：向量化实现替代逐行循环
+        # 🔧 CRITICAL FIX 2024-11-29: Match R ricu expand() behavior for numeric time
+        # R ricu's expand() uses floor(start) to floor(end) for hourly intervals
+        # Example: start=26.70, end=41.33 → hours 26,27,28,...,41 (16 rows)
+        # Previous bug: used raw diff which gave 15 rows instead of 16
+        #
+        # 🔧 CRITICAL FIX 2024-11-30: R ricu clips end < 0 to 0
+        # R ricu code: x <- x[get(end_var) < 0, c(end_var) := as.difftime(0, units = time_unit)]
+        # This ensures that windows with negative end times extend to 0
+        # Example: start=-5, dur=1 → original_end=-4 → clipped_end=0 → covers -5,-4,-3,-2,-1,0
+        #
+        # Floor start and end to integer hours before calculating count
+        start_floored = np.floor(valid_data[start_var] / step_hours) * step_hours
         
-        # Calculate number of points for each row
-        # (end - start) / step + 1
-        diff = valid_data[end_col] - valid_data[start_var]
+        # Get end values and apply R ricu's end < 0 correction
+        end_values = valid_data[end_col].values.copy()
+        end_values = np.where(end_values < 0, 0, end_values)  # Clip negative ends to 0
+        end_floored = np.floor(end_values / step_hours) * step_hours
+        
+        # Calculate number of points: (floor_end - floor_start) / step + 1
+        diff = end_floored - start_floored
         counts = (diff / step_hours).astype(int) + 1
-        counts = np.maximum(counts, 0) # Ensure non-negative
+        counts = np.maximum(counts, 0)  # Ensure non-negative
         
         # Filter out rows with 0 counts
         row_mask = counts > 0
@@ -392,17 +406,21 @@ def expand(
             
         valid_data = valid_data[row_mask]
         counts = counts[row_mask]
+        start_floored = start_floored[row_mask]
         
         # Repeat rows
         # valid_data.index.repeat(counts) repeats the index, then loc selects rows
         expanded_df = valid_data.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
         
+        # Repeat floored start times for offset calculation
+        start_floored_expanded = start_floored.repeat(counts).values
+        
         # Generate time offsets: 0, 1, 2... for each group
         # Using list comprehension with numpy is much faster than pandas iterrows
         offsets = np.concatenate([np.arange(c) for c in counts])
         
-        # Calculate new times
-        expanded_df[start_var] = expanded_df[start_var] + offsets * step_hours
+        # Calculate new times from floored start (not original start)
+        expanded_df[start_var] = start_floored_expanded + offsets * step_hours
         
         # Select columns
         result_cols = [start_var] + id_cols + keep_vars

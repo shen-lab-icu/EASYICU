@@ -2486,8 +2486,9 @@ class ConceptResolver:
         
         if db_name == 'aumc':
             # AUMC时间列是绝对时间戳（毫秒，已在datasource.py中转换为分钟）
-            # 需要减去 admittedat 得到相对于 ICU 入住的时间
-            # 这对于多次入住的患者（如patient 14，admittedat=208661820000ms）很重要
+            # R ricu 的 load_eiau 函数只做 ms_as_mins 转换（ms / 60000 = 分钟）
+            # 不减去 admittedat，保持绝对时间（大数值，如 32000000 分钟）
+            # 这与 MIMIC-IV 的行为不同（MIMIC-IV 计算相对于入院的时间差）
             
             # 收集所有需要转换的时间列
             cols_to_convert = set()
@@ -2508,58 +2509,8 @@ class ConceptResolver:
             if not cols_to_convert:
                 return data
             
-            # 获取 admittedat 以计算相对时间
-            # 对于 AUMC，ID 列是 admissionid
-            id_col = 'admissionid' if 'admissionid' in data.columns else (id_columns[0] if id_columns else None)
-            
-            if id_col and id_col in data.columns:
-                try:
-                    # 加载 admissions 表获取 admittedat
-                    admissions = data_source.load_table('admissions', 
-                                                         columns=['admissionid', 'admittedat'], 
-                                                         verbose=False)
-                    if hasattr(admissions, 'data'):
-                        admissions_df = admissions.data
-                    else:
-                        admissions_df = admissions
-                    
-                    # admittedat 也是毫秒，需要转换为分钟
-                    if 'admittedat' in admissions_df.columns:
-                        admissions_df['admittedat_min'] = (admissions_df['admittedat'] / 60000.0).apply(
-                            lambda x: int(x) if pd.notna(x) else x).astype('float64')
-                        
-                        # 合并 admittedat 到数据中
-                        data = data.merge(admissions_df[['admissionid', 'admittedat_min']], 
-                                         on='admissionid', how='left')
-                        
-                        # 从时间列中减去 admittedat_min 得到相对时间
-                        for col in cols_to_convert:
-                            if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
-                                if DEBUG_MODE:
-                                    try:
-                                        print(f"   🐞 [AUMC _align_time] {col} before subtract: min/max = {data[col].min()} / {data[col].max()}")
-                                    except Exception:
-                                        pass
-                                # 减去 admittedat_min 得到相对分钟
-                                data[col] = data[col] - data['admittedat_min']
-                                # 转换为小时
-                                data[col] = data[col] / 60.0
-                                if DEBUG_MODE:
-                                    try:
-                                        print(f"   🐞 [AUMC _align_time] {col} after subtract & hours: min/max = {data[col].min()} / {data[col].max()}")
-                                    except Exception:
-                                        pass
-                        
-                        # 删除辅助列
-                        if 'admittedat_min' in data.columns:
-                            data = data.drop(columns=['admittedat_min'])
-                        
-                        return data
-                except Exception as e:
-                    if DEBUG_MODE:
-                        print(f"   ⚠️ [AUMC _align_time] Failed to load admittedat: {e}")
-            
-            # 回退：如果无法获取 admittedat，只做单位转换
+            # 只做单位转换：分钟转小时（不减 admittedat）
+            # 这匹配 R ricu 的 ms_as_mins 行为（数据已在 datasource.py 转为分钟）
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     data[col] = data[col] / 60.0
