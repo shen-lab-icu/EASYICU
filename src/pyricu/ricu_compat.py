@@ -357,32 +357,62 @@ def build_time_grid(
 ) -> Optional[pd.DataFrame]:
     """构建所有概念的统一时间网格
     
+    注意：这个函数确保包含所有患者，即使他们只有静态概念数据（无时间列）。
+    对于只有静态数据的患者，在网格中创建一个 time=NaN 的占位行。
+    
     Args:
         series_dict: 概念名称到DataFrame的映射
         id_col: ID列名
         time_col: 时间列名
         
     Returns:
-        包含所有(id, time)组合的DataFrame，或None（如果没有时间数据）
+        包含所有(id, time)组合的DataFrame，或None（如果没有数据）
     """
-    frames = []
-    for name, df in series_dict.items():
-        if not isinstance(df, pd.DataFrame):
-            continue
-        if id_col not in df.columns or time_col not in df.columns:
-            continue
-        frames.append(df[[id_col, time_col]])
+    time_frames = []
+    static_ids = set()
     
-    if not frames:
+    for name, df in series_dict.items():
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+        if id_col not in df.columns:
+            continue
+            
+        if time_col in df.columns:
+            # 有时间数据的概念
+            time_frames.append(df[[id_col, time_col]])
+        else:
+            # 静态概念：收集患者ID
+            static_ids.update(df[id_col].dropna().unique())
+    
+    if not time_frames and not static_ids:
         return None
     
-    grid = (
-        pd.concat(frames, ignore_index=True)
-        .dropna(subset=[id_col, time_col])
-        .drop_duplicates()
-        .sort_values([id_col, time_col])
-        .reset_index(drop=True)
-    )
+    if time_frames:
+        grid = (
+            pd.concat(time_frames, ignore_index=True)
+            .dropna(subset=[id_col, time_col])
+            .drop_duplicates()
+            .sort_values([id_col, time_col])
+            .reset_index(drop=True)
+        )
+        # 确保静态概念的患者也在网格中
+        grid_ids = set(grid[id_col].unique())
+        missing_ids = static_ids - grid_ids
+        if missing_ids:
+            # 为缺失的患者添加一个 time=NaN 的占位行
+            # 这样在后续的 left join 中，他们的静态数据可以被保留
+            missing_rows = pd.DataFrame({
+                id_col: list(missing_ids),
+                time_col: [np.nan] * len(missing_ids)
+            })
+            grid = pd.concat([grid, missing_rows], ignore_index=True)
+            grid = grid.sort_values([id_col, time_col]).reset_index(drop=True)
+    else:
+        # 只有静态数据，创建一个只有ID的网格（time=NaN）
+        grid = pd.DataFrame({
+            id_col: list(static_ids),
+            time_col: [np.nan] * len(static_ids)
+        })
     
     return grid if not grid.empty else None
 
