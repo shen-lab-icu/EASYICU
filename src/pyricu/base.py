@@ -53,7 +53,8 @@ class BaseICULoader:
             verbose: Enable verbose logging
         """
         self.verbose = verbose
-        self.database = self._detect_database(database)
+        # 检测数据库类型 - 如果用户没有指定，先尝试从路径推断
+        self.database = self._detect_database(database, data_path)
         self.data_path = self._setup_data_path(data_path, self.database)
         self._dict_path = dict_path
         self._use_sofa2 = use_sofa2
@@ -73,10 +74,58 @@ class BaseICULoader:
         # Thread-local storage for per-worker concept resolvers
         self._thread_local_resolver = threading.local()
 
-    def _detect_database(self, database: Optional[str]) -> str:
-        """Detect database type from environment or use default"""
+    def _detect_database(self, database: Optional[str], data_path: Optional[Union[str, Path]] = None) -> str:
+        """Detect database type from data_path, environment or use default
+        
+        优先级:
+        1. 用户显式指定的 database 参数
+        2. 从 data_path 路径推断（检查路径名和数据文件）
+        3. 环境变量
+        4. 默认值 miiv
+        """
         if database:
             return database
+        
+        # 尝试从 data_path 推断数据库类型
+        if data_path:
+            path = Path(data_path)
+            path_str = str(path).lower()
+            
+            # 1. 检查路径名称中是否包含数据库标识
+            db_patterns = {
+                'eicu': ['eicu', 'eicu-crd'],
+                'aumc': ['aumc', 'amsterdam'],
+                'hirid': ['hirid'],
+                'miiv': ['miiv', 'mimiciv', 'mimic-iv', 'mimic_iv'],
+                'mimic': ['mimic', 'mimic-iii', 'mimic_iii', 'mimiciii'],
+            }
+            for db_name, patterns in db_patterns.items():
+                if any(p in path_str for p in patterns):
+                    if self.verbose:
+                        logger.info(f"Auto-detected database: {db_name} from path: {path}")
+                    return db_name
+            
+            # 2. 检查数据文件来推断数据库类型
+            if path.is_dir():
+                marker_files = {
+                    'eicu': ['patient.parquet', 'patient.csv', 'patient.csv.gz', 'vitalPeriodic.parquet'],
+                    'aumc': ['numericitems', 'admissions.parquet'],
+                    'miiv': ['chartevents', 'icustays.parquet'],
+                    'hirid': ['general_table.parquet', 'observations'],
+                }
+                for db_name, markers in marker_files.items():
+                    if any((path / m).exists() for m in markers):
+                        # 额外确认：避免误判
+                        if db_name == 'eicu' and (path / 'patient.parquet').exists():
+                            # 确认是 eicu 而不是其他有 patient 表的数据库
+                            if not (path / 'chartevents').exists():
+                                if self.verbose:
+                                    logger.info(f"Auto-detected database: {db_name} from data files in: {path}")
+                                return db_name
+                        elif db_name != 'eicu':
+                            if self.verbose:
+                                logger.info(f"Auto-detected database: {db_name} from data files in: {path}")
+                            return db_name
 
         # Check environment variables
         for db_name in ['miiv', 'mimic', 'eicu', 'hirid', 'aumc']:

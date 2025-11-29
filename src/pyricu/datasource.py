@@ -425,6 +425,27 @@ class ICUDataSource:
                     if verbose:
                         logger.debug(f"[{table_name}] icustays 加载完成: {len(icustays_df)} 行")
                     
+                    # 🔥 CRITICAL FIX: 为了正确实现 rolling join，需要加载同一 hadm_id 下的所有 stays
+                    # 当请求单个 stay 时，可能同一 hadm_id 有多个 ICU stays
+                    # ricu 的 rolling join 需要知道所有 stays 的 intime 来正确分配数据
+                    requested_hadm_ids = icustays_df['hadm_id'].unique().tolist()
+                    if requested_hadm_ids and len(icustays_df) > 0:
+                        # 加载这些 hadm_ids 对应的所有 stays（可能比请求的更多）
+                        all_stays_for_hadms = self.load_table(
+                            'icustays',
+                            columns=['hadm_id', 'stay_id', 'subject_id', 'intime', 'outtime'],
+                            filters=[FilterSpec(column='hadm_id', op=FilterOp.IN, value=requested_hadm_ids)],
+                            verbose=False
+                        )
+                        all_stays_df = all_stays_for_hadms.data if hasattr(all_stays_for_hadms, 'data') else all_stays_for_hadms
+                        
+                        # 检查是否有新增的 stays（同一 hadm_id 下的其他 stays）
+                        if len(all_stays_df) > len(icustays_df):
+                            if verbose:
+                                logger.debug(f"[{table_name}] 发现同一 hadm_id 下有额外的 stays: {len(icustays_df)} → {len(all_stays_df)}")
+                            # 使用完整的 stays 列表进行 join
+                            icustays_df = all_stays_df
+                    
                     # 保存原始行数用于日志
                     before_rows = len(frame)
                     
@@ -447,82 +468,108 @@ class ICUDataSource:
                     after_join_rows = len(frame)
                     
                     # 🔥 CRITICAL FIX: 实现 ricu 的 rolling join 逻辑
-                    # 当同一 hadm_id 有多个 stay_id 时，数据会被复制到所有匹配的 stay_id
-                    # 需要根据数据时间将每条记录只分配给正确的 stay_id
-                    # ricu 使用 roll = -Inf (向前滚动)：数据分配给 intime 在数据时间之后最近的 stay_id
+                    # 
+                    # ricu 使用 roll = -Inf, rollends = TRUE：
+                    # - 关键发现：ricu 使用 **ICU outtime** 作为 rolling join 的 key！
+                    # - roll = -Inf：向未来滚动，找 outtime >= charttime 的最近 stay
+                    # - rollends = TRUE：边界外的数据也会被分配给最近的边界 stay
+                    #
+                    # 这意味着：
+                    # - 如果 charttime < 第一个 stay 的 outtime，分配给第一个 stay
+                    # - 如果 charttime >= 第一个 stay 的 outtime 但 < 第二个 stay 的 outtime，
+                    #   分配给第二个 stay
+                    # - 以此类推
+                    #
+                    # 当同一 hadm_id 有多个 stay_id 时，需要使用真正的 rolling join
                     time_col = None
                     for cand in ['charttime', 'storetime', 'starttime', 'specimen_time']:
                         if cand in frame.columns:
                             time_col = cand
                             break
                     
-                    if time_col and 'stay_id' in frame.columns and 'intime' in frame.columns:
+                    if time_col and 'stay_id' in frame.columns and 'outtime' in frame.columns:
                         # 检查是否有同一 hadm_id 下的多个 stay_id
                         stays_per_hadm = frame.groupby('hadm_id')['stay_id'].nunique()
                         multi_stay_hadms = stays_per_hadm[stays_per_hadm > 1].index.tolist()
                         
                         if multi_stay_hadms:
                             if verbose:
-                                logger.debug(f"[{table_name}] 检测到 {len(multi_stay_hadms)} 个 hadm_id 有多个 stay_id，执行 rolling join")
+                                logger.debug(f"[{table_name}] 检测到 {len(multi_stay_hadms)} 个 hadm_id 有多个 stay_id，执行 rolling join (使用 outtime)")
                             
                             # 规范化时间列
                             frame[time_col] = pd.to_datetime(frame[time_col], errors='coerce', utc=True)
                             if frame[time_col].dt.tz is not None:
                                 frame[time_col] = frame[time_col].dt.tz_localize(None)
-                            frame['intime'] = pd.to_datetime(frame['intime'], errors='coerce', utc=True)
-                            if frame['intime'].dt.tz is not None:
-                                frame['intime'] = frame['intime'].dt.tz_localize(None)
-                            if 'outtime' in frame.columns:
-                                frame['outtime'] = pd.to_datetime(frame['outtime'], errors='coerce', utc=True)
-                                if frame['outtime'].dt.tz is not None:
-                                    frame['outtime'] = frame['outtime'].dt.tz_localize(None)
+                            if 'intime' in frame.columns:
+                                frame['intime'] = pd.to_datetime(frame['intime'], errors='coerce', utc=True)
+                                if frame['intime'].dt.tz is not None:
+                                    frame['intime'] = frame['intime'].dt.tz_localize(None)
+                            frame['outtime'] = pd.to_datetime(frame['outtime'], errors='coerce', utc=True)
+                            if frame['outtime'].dt.tz is not None:
+                                frame['outtime'] = frame['outtime'].dt.tz_localize(None)
                             
                             # 分离需要 rolling join 的数据和不需要的数据
                             single_stay_mask = ~frame['hadm_id'].isin(multi_stay_hadms)
                             single_stay_data = frame[single_stay_mask].copy()
                             multi_stay_data = frame[~single_stay_mask].copy()
                             
-                            # 对多 stay 的 hadm_id 执行 rolling join
+                            # 🔥 使用 pd.merge_asof 实现真正的 rolling join
+                            # 首先，获取唯一的数据记录（去除 join 导致的重复）
+                            data_cols = [c for c in multi_stay_data.columns 
+                                        if c not in ['stay_id', 'intime', 'outtime']]
+                            unique_data = multi_stay_data[data_cols].drop_duplicates()
+                            
+                            # 获取每个 hadm_id 的 stay 信息，按 outtime 排序
+                            stay_cols = ['hadm_id', 'stay_id', 'outtime']
+                            if 'intime' in multi_stay_data.columns:
+                                stay_cols.append('intime')
+                            stay_info = multi_stay_data[stay_cols].drop_duplicates()
+                            stay_info = stay_info.sort_values(['hadm_id', 'outtime'])
+                            
+                            # 对每个 hadm_id 分别做 merge_asof
                             result_frames = [single_stay_data]
                             
                             for hadm_id in multi_stay_hadms:
-                                hadm_data = multi_stay_data[multi_stay_data['hadm_id'] == hadm_id].copy()
-                                
-                                # 获取该 hadm_id 下所有 stay 的 intime 和 outtime，按 intime 排序
-                                stay_cols = ['stay_id', 'intime']
-                                if 'outtime' in hadm_data.columns:
-                                    stay_cols.append('outtime')
-                                stay_info = hadm_data[stay_cols].drop_duplicates().sort_values('intime')
-                                stays_list = stay_info['stay_id'].tolist()
-                                intimes_list = stay_info['intime'].tolist()
-                                outtimes_list = stay_info['outtime'].tolist() if 'outtime' in stay_info.columns else [None] * len(stays_list)
-                                
-                                # 🔥 CRITICAL FIX: 使用 ricu 的 rolling join 逻辑
-                                # ricu 使用 roll = -Inf：数据分配给 prev_stay_outtime 之后的 stay
-                                # 即：对于 stay[i]，数据时间必须 >= stay[i-1].outtime（如果存在）
-                                for i, (stay_id, intime) in enumerate(zip(stays_list, intimes_list)):
-                                    stay_mask = hadm_data['stay_id'] == stay_id
+                                # 获取该 hadm_id 的数据
+                                hadm_unique = unique_data[unique_data['hadm_id'] == hadm_id].copy()
+                                if hadm_unique.empty:
+                                    continue
                                     
-                                    if i > 0:
-                                        # 不是第一个 stay：数据时间必须 >= 前一个 stay 的 outtime
-                                        prev_outtime = outtimes_list[i - 1]
-                                        if prev_outtime is not None and pd.notna(prev_outtime):
-                                            time_mask = hadm_data[time_col] >= prev_outtime
-                                            stay_data = hadm_data[stay_mask & time_mask].copy()
-                                        else:
-                                            # 如果没有前一个 stay 的 outtime，使用当前 stay 的 intime 作为下界
-                                            time_mask = hadm_data[time_col] >= intime
-                                            stay_data = hadm_data[stay_mask & time_mask].copy()
-                                    else:
-                                        # 第一个 stay：没有时间下限，但有上限（下一个 stay 的 intime）
-                                        if len(stays_list) > 1:
-                                            next_intime = intimes_list[1]
-                                            time_mask = hadm_data[time_col] < next_intime
-                                            stay_data = hadm_data[stay_mask & time_mask].copy()
-                                        else:
-                                            stay_data = hadm_data[stay_mask].copy()
-                                    
-                                    result_frames.append(stay_data)
+                                # 获取该 hadm_id 的 stay 信息，按 outtime 排序
+                                hadm_stays = stay_info[stay_info['hadm_id'] == hadm_id].copy()
+                                hadm_stays = hadm_stays.sort_values('outtime')
+                                stays_list = hadm_stays['stay_id'].tolist()
+                                outtimes_list = hadm_stays['outtime'].tolist()
+                                
+                                # 确保数据按时间排序
+                                hadm_unique = hadm_unique.sort_values(time_col)
+                                
+                                # 🔥 关键修正：使用 outtime 而不是 intime 做 rolling join
+                                # direction='forward' 等价于 roll = -Inf（向未来滚动）
+                                # 找 outtime >= charttime 的最近 stay
+                                merge_cols = ['stay_id', 'outtime']
+                                if 'intime' in hadm_stays.columns:
+                                    merge_cols.append('intime')
+                                merged = pd.merge_asof(
+                                    hadm_unique,
+                                    hadm_stays[merge_cols],
+                                    left_on=time_col,
+                                    right_on='outtime',
+                                    direction='forward',  # 向未来滚动：找 outtime >= charttime
+                                    allow_exact_matches=True
+                                )
+                                
+                                # 处理 rollends = TRUE: 
+                                # 如果 charttime > 最后一个 outtime，分配给最后一个 stay
+                                last_stay = stays_list[-1]
+                                last_outtime = outtimes_list[-1]
+                                merged.loc[merged['stay_id'].isna(), 'stay_id'] = last_stay
+                                merged.loc[merged['outtime'].isna(), 'outtime'] = last_outtime
+                                
+                                # 确保 stay_id 是整数
+                                merged['stay_id'] = merged['stay_id'].astype(int)
+                                
+                                result_frames.append(merged)
                             
                             frame = pd.concat(result_frames, ignore_index=True)
                             
@@ -973,6 +1020,11 @@ class ICUDataSource:
         
         try:
             con = duckdb.connect()
+            # 🔧 CRITICAL FIX: 设置 DuckDB 时区为 UTC
+            # DuckDB 默认将 UTC 时间转换为本地时区，这会导致时间偏移
+            # 例如：UTC 15:37 会被转换成 Asia/Shanghai 23:37 (+8 小时)
+            # 设置时区为 UTC 可以保持原始 UTC 时间不变
+            con.execute("SET timezone='UTC'")
             df = con.execute(query).fetchdf()
             con.close()
             return df

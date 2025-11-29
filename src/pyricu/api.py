@@ -249,6 +249,14 @@ def load_concepts(
         verbose=verbose
     )
 
+    # 🚀 从 kwargs 中提取患者 ID（支持通过 patientunitstayid=, admissionid=, stay_id= 等传入）
+    if patient_ids is None:
+        id_kwargs = ['patientunitstayid', 'admissionid', 'stay_id', 'subject_id', 'patientid']
+        for id_key in id_kwargs:
+            if id_key in kwargs:
+                patient_ids = {id_key: kwargs.pop(id_key)}
+                break
+
     # 🚀 max_patients 支持：自动从数据库采样患者ID
     if max_patients is not None and patient_ids is None:
         patient_ids = _sample_patient_ids(loader, max_patients, verbose)

@@ -355,65 +355,166 @@ def distribute_amount(
     interval_hours: float = 1.0,  # 默认 1 小时间隔
     **kwargs
 ) -> pd.DataFrame:
-    """Distribute total amount over duration to get rate.
+    """Distribute total amount over duration to get rate, then expand.
     
     For drug administrations given as total amount over a duration,
-    converts to rate per hour.
+    converts to rate per hour AND expands to hourly time points.
     
-    R ricu 逻辑:
-    1. 时间会被舍入到 interval (默认 1 小时)
-    2. 过滤掉 endtime - starttime < 0 的行
-    3. 对于舍入后 duration == 0 的行（即 duration < interval），设置 endtime = starttime + 1hr
-    4. 计算速率 = amount / duration * 1hr
-    5. 展开时间窗口
-    
-    注意：R ricu 的 re_time 函数会将时间舍入到 interval，
-    所以 1 分钟的 duration 在 1 小时 interval 下会被视为 0。
+    R ricu 逻辑 (distribute_amount):
+    1. 过滤掉 endtime - starttime < 0 的行
+    2. 对于 duration == 0 的行，设置 endtime = starttime + 1hr
+    3. 计算速率 = amount / duration * 1hr
+    4. 调用 expand() 展开时间窗口到每个小时
+    5. 设置单位为 units/hr
     """
     data = data.copy()
     
-    # 确保时间列是 datetime 类型
-    start_time = pd.to_datetime(data[index_col], errors='coerce')
-    end_time = pd.to_datetime(data[end_col], errors='coerce')
+    # 检测 ID 列
+    id_cols = [c for c in data.columns if c.lower().endswith('id') or c.lower() == 'stay_id']
     
-    # 计算时间差
-    time_diff = end_time - start_time
-    
-    # 过滤掉 endtime - starttime < 0 的行 (R: x <- x[get(end_var) - get(idx) >= 0, ])
-    valid_mask = time_diff >= pd.Timedelta(0)
-    data = data[valid_mask].copy()
-    start_time = start_time[valid_mask]
-    end_time = end_time[valid_mask]
-    time_diff = time_diff[valid_mask]
-    
-    if data.empty:
+    # 确保时间列存在
+    if index_col not in data.columns or end_col not in data.columns:
         return data
     
-    # R ricu 的 re_time 会将时间舍入到 interval
-    # 对于 duration < interval 的情况，舍入后 duration 变成 0
-    # 此时 R 会将 endtime 设置为 starttime + 1hr
-    interval_td = pd.Timedelta(hours=interval_hours)
+    # 将时间转换为小时（如果是数值）或 datetime
+    start_time = data[index_col].copy()
+    end_time = data[end_col].copy()
     
-    # 检查 duration 是否小于 interval（会被舍入为 0）
-    short_duration_mask = time_diff < interval_td
-    if short_duration_mask.any():
-        end_time = end_time.copy()
-        end_time.loc[short_duration_mask] = start_time.loc[short_duration_mask] + interval_td
-        data.loc[short_duration_mask, end_col] = end_time.loc[short_duration_mask]
+    # 判断时间是数值（小时）还是 datetime
+    is_numeric = pd.api.types.is_numeric_dtype(start_time)
+    
+    if is_numeric:
+        # 时间已经是小时数
+        pass
+    else:
+        # 转换为 datetime 然后计算小时差
+        start_time = pd.to_datetime(start_time, errors='coerce')
+        end_time = pd.to_datetime(end_time, errors='coerce')
+        
+        # 假设时间已经是相对于某个参考点的
+        # 转换为相对小时数（如果需要）
+        if start_time.notna().any():
+            # 保持原始逻辑
+            pass
+    
+    if is_numeric:
+        # 计算时间差（小时）
+        time_diff_hours = end_time - start_time
+        
+        # 过滤掉 endtime - starttime < 0 的行
+        valid_mask = time_diff_hours >= 0
+        data = data[valid_mask].copy()
+        start_time = start_time[valid_mask]
+        end_time = end_time[valid_mask]
+        time_diff_hours = time_diff_hours[valid_mask]
+        
+        if data.empty:
+            return data
+        
+        # 对于 duration == 0 的行，设置 endtime = starttime + 1
+        zero_duration_mask = time_diff_hours == 0
+        if zero_duration_mask.any():
+            end_time = end_time.copy()
+            end_time.loc[zero_duration_mask] = start_time.loc[zero_duration_mask] + 1.0
+            data.loc[zero_duration_mask, end_col] = end_time.loc[zero_duration_mask]
+            time_diff_hours = end_time - start_time
+        
+        # 计算速率 = amount / duration_hours
+        time_diff_hours = time_diff_hours.replace(0, 1)  # 避免除以零
+        data[val_col] = pd.to_numeric(data[val_col], errors='coerce') / time_diff_hours
+        
+        # 展开时间窗口
+        expanded_rows = []
+        for idx, row in data.iterrows():
+            start_hr = int(np.floor(start_time.loc[idx]))
+            end_hr = int(np.floor(end_time.loc[idx]))
+            
+            # 展开每个小时
+            for hr in range(start_hr, end_hr + 1):
+                new_row = {c: row[c] for c in id_cols if c in row.index}
+                new_row[index_col] = hr
+                new_row[val_col] = row[val_col]
+                expanded_rows.append(new_row)
+        
+        if expanded_rows:
+            result = pd.DataFrame(expanded_rows)
+            if unit_col and unit_col in data.columns:
+                result[unit_col] = 'units/hr'
+            return result
+        else:
+            return data
+    
+    else:
+        # datetime 逻辑 - 也需要展开
+        start_time = pd.to_datetime(data[index_col], errors='coerce')
+        end_time = pd.to_datetime(data[end_col], errors='coerce')
+        
         time_diff = end_time - start_time
-    
-    # 计算速率 = amount / duration_hours * 1hr
-    duration_hours = time_diff.dt.total_seconds() / 3600
-    duration_hours = duration_hours.replace(0, 1)  # 避免除以零
-    
-    data[val_col] = pd.to_numeric(data[val_col], errors='coerce') / duration_hours
-    if unit_col in data.columns:
-        data[unit_col] = data[unit_col].astype(str) + '/hr'
-    
-    # 注意：展开逻辑在 concept.py 的 WINDOW_CONCEPTS 处理中完成
-    # 这里确保 endtime 列被保留
-    
-    return data
+        valid_mask = time_diff >= pd.Timedelta(0)
+        data = data[valid_mask].copy()
+        start_time = start_time[valid_mask]
+        end_time = end_time[valid_mask]
+        time_diff = time_diff[valid_mask]
+        
+        if data.empty:
+            return data
+        
+        interval_td = pd.Timedelta(hours=interval_hours)
+        
+        short_duration_mask = time_diff < interval_td
+        if short_duration_mask.any():
+            end_time = end_time.copy()
+            end_time.loc[short_duration_mask] = start_time.loc[short_duration_mask] + interval_td
+            data.loc[short_duration_mask, end_col] = end_time.loc[short_duration_mask]
+            time_diff = end_time - start_time
+        
+        duration_hours = time_diff.dt.total_seconds() / 3600
+        duration_hours = duration_hours.replace(0, 1)
+        
+        data[val_col] = pd.to_numeric(data[val_col], errors='coerce') / duration_hours
+        
+        # 🔧 CRITICAL FIX 2024-12: Do NOT floor absolute datetime
+        # 
+        # R ricu's distribute_amount calls expand() which uses seq(start, end, step)
+        # on RELATIVE time (hours since admission), then floor happens in change_interval().
+        # 
+        # pyricu was incorrectly flooring ABSOLUTE datetime here, which caused:
+        # - 20:12 floor to 20:00
+        # - Then relative time = (20:00 - 12:09) = 7.85h → floor → 7
+        # 
+        # But ricu does:
+        # - Relative time = (20:12 - 12:09) = 8.05h → floor → 8
+        #
+        # The fix: Use original datetime for expansion, then floor happens later
+        # when converting to relative hours.
+        
+        # 展开时间窗口 - 使用原始时间（不 floor）
+        expanded_rows = []
+        for idx, row in data.iterrows():
+            row_start = start_time.loc[idx]
+            row_end = end_time.loc[idx]
+            
+            if pd.isna(row_start) or pd.isna(row_end):
+                continue
+            
+            # Generate time points using original start time (not floored)
+            # Use step = 1 hour, similar to R's seq(start, end, step)
+            duration = (row_end - row_start).total_seconds() / 3600
+            num_steps = int(duration) + 1
+            
+            for i in range(num_steps):
+                new_row = {c: row[c] for c in id_cols if c in row.index}
+                new_row[index_col] = row_start + pd.Timedelta(hours=i)
+                new_row[val_col] = row[val_col]
+                expanded_rows.append(new_row)
+        
+        if expanded_rows:
+            result = pd.DataFrame(expanded_rows)
+            if unit_col and unit_col in data.columns:
+                result[unit_col] = 'units/hr'
+            return result
+        else:
+            return data
 
 def aggregate_fun(agg_func: str, new_unit: str) -> Callable:
     """Create aggregation callback.
@@ -3055,12 +3156,11 @@ def aumc_rate_kg(
             df[unit_col] = df[unit_col] + '/kg/' + df[rate_unit_col]
     elif unit_col and unit_col in df.columns:
         df[unit_col] = df[unit_col] + '/kg/min'
-    # AUMC时间单位处理
-    # datasource.py已经把AUMC时间从毫秒转换为分钟(numeric)
-    # 这里应该转换为小时(numeric),而不是datetime,以保持与其他数据库的一致性
-    if index_col and index_col in df.columns and pd.api.types.is_numeric_dtype(df[index_col]):
-        # 将分钟转换为小时(保持数值型)
-        df[index_col] = pd.to_numeric(df[index_col], errors='coerce') / 60.0
+    # 🚀 FIX: 不要在这里转换时间单位！
+    # datasource.py 已经把 AUMC 时间从毫秒转换为分钟
+    # _align_time_to_admission (concept.py) 会统一把分钟转换为小时
+    # 如果这里也做转换，会导致时间被除以 60 两次，变得非常小
+    # 保持时间列为分钟，让 _align_time_to_admission 统一处理
 
     df[concept_name] = df[val_col]
 
@@ -3083,7 +3183,51 @@ def aumc_rate_kg(
     if rate_unit_col and rate_unit_col in df.columns:
         result_cols.append(rate_unit_col)
 
-    return df[result_cols].dropna(subset=[concept_name])
+    result = df[result_cols].dropna(subset=[concept_name])
+    
+    # 🔧 CRITICAL: Call expand() like R ricu does
+    # R ricu: expand(res, index_var(x), stop_var, keep_vars = c(id_vars(x), val_var, unit_var))
+    # This expands interval data (start/stop) into hourly time points
+    # Without this, we get only ~40 rows instead of ~1000 rows
+    if stop_col and stop_col in df.columns and index_col and index_col in df.columns:
+        # Add stop_col to result for expand
+        result[stop_col] = df.loc[result.index, stop_col]
+        
+        # Time is in minutes (from datasource), expand at 60-minute intervals
+        # This matches R ricu's 1-hour interval
+        step_minutes = 60.0  # 1 hour = 60 minutes
+        
+        # Expand intervals into hourly points
+        expanded_rows = []
+        for _, row in result.iterrows():
+            start_min = row[index_col]
+            stop_min = row[stop_col]
+            
+            if pd.isna(start_min) or pd.isna(stop_min):
+                continue
+            if stop_min <= start_min:
+                continue
+                
+            # Generate time points at each hour within the interval
+            # Use numpy for efficiency
+            time_points = np.arange(start_min, stop_min, step_minutes)
+            if len(time_points) == 0:
+                time_points = np.array([start_min])
+            
+            for t in time_points:
+                new_row = row.copy()
+                new_row[index_col] = t
+                expanded_rows.append(new_row)
+        
+        if expanded_rows:
+            result = pd.DataFrame(expanded_rows)
+            # Drop stop_col from result (not needed after expand)
+            if stop_col in result.columns:
+                result = result.drop(columns=[stop_col])
+        else:
+            result = pd.DataFrame(columns=[c for c in result.columns if c != stop_col])
+    
+    return result
 
 def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
     def callback(
@@ -3138,10 +3282,13 @@ def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
             else:
                 df[unit_col] = df[unit_col] + '/min'
 
-        base_time = pd.Timestamp('2000-01-01')
+        # 🔧 FIX: 不再将时间列转换为 datetime
+        # AUMC 时间列已经在 datasource.py 中从毫秒转换为分钟 (float)
+        # 保持为分钟格式，后续 _align_time_to_admission 会转换为小时
+        # base_time = pd.Timestamp('2000-01-01')
         index_col = next((col for col in ['start', 'charttime', 'time'] if col in df.columns), None)
-        if index_col and pd.api.types.is_numeric_dtype(df[index_col]):
-            df[index_col] = base_time + pd.to_timedelta(pd.to_numeric(df[index_col], errors='coerce'), unit='ms')
+        # if index_col and pd.api.types.is_numeric_dtype(df[index_col]):
+        #     df[index_col] = base_time + pd.to_timedelta(pd.to_numeric(df[index_col], errors='coerce'), unit='ms')
 
         df[concept_name] = df[val_col]
 
@@ -3180,6 +3327,9 @@ def aumc_dur(
     
     So: duration = floor(max_stop_min/60) - floor(min_start_min/60)
     
+    IMPORTANT: This function returns times in MINUTES to allow _align_time_to_admission
+    to perform the final conversion to hours. Only the duration value is in hours.
+    
     Args:
         frame: Input dataframe with AUMC data (times in INTEGER MINUTES)
         val_col: Name of the value column (will be replaced with duration)
@@ -3189,7 +3339,9 @@ def aumc_dur(
         concept_name: Name of the concept being calculated
         
     Returns:
-        DataFrame with duration column in hours (integer) and start in hours (integer)
+        DataFrame with:
+        - duration column (concept_name) in HOURS (integer)
+        - start column (index_var) in MINUTES (to be converted by _align_time_to_admission)
     """
     if frame.empty or not stop_var or stop_var not in frame.columns:
         return frame
@@ -3228,11 +3380,13 @@ def aumc_dur(
     stop_hours_floor = (grouped[stop_var] / 60.0).apply(lambda x: int(x) if pd.notna(x) else x)
     duration_hours = stop_hours_floor - start_hours_floor
     
-    # Create a clean result with the duration (as float for consistency but integer values)
+    # Create a clean result with the duration in HOURS
     grouped[concept_name] = duration_hours.astype(float)
     
-    # Start time is also floor'd to integer hours
-    grouped[start_col] = start_hours_floor.astype(float)
+    # IMPORTANT: Keep start time in MINUTES (not hours!)
+    # _align_time_to_admission will convert minutes to hours later
+    # This prevents double conversion: aumc_dur converts to hours, then _align_time_to_admission divides by 60 again
+    # Start time stays as grouped[start_col] which is already in minutes
     
     # Keep only necessary columns for the result
     result_cols = group_cols + [concept_name]

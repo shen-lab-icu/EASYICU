@@ -131,17 +131,20 @@ STATIC_CONCEPTS = {"age", "sex", "bmi", "height", "weight", "los_icu"}
 # 包括：
 # - 机械通气指标: mech_vent, vent_ind, supp_o2
 # - 血管活性药物速率: *_rate, vaso_ind
-# - 输液概念 (有 dur_var/end_var): dex, ins
+# - dex: 输液概念，有 dur_var（aumc 使用 stop）
+# - ett_gcs: 使用 ts_to_win_tbl(mins(360L)) 展开为 6 小时窗口
+# 注意：ins 不在这里，因为 ricu 中它是 ts_tbl 而不是 win_tbl
 WINDOW_CONCEPTS = {
     "mech_vent", "vent_ind", "supp_o2",
     "norepi_rate", "epi_rate", "dobu_rate", "adh_rate",
     "dopa_rate", "phn_rate", "vaso_ind",
-    "dex", "ins"  # 输液概念，有 dur_var=endtime 或 end_var=endtime
+    "dex",  # dex 在 aumc/eicu 有 dur_var，需要展开
+    "ett_gcs",     # FIX: ett_gcs 使用 ts_to_win_tbl 展开窗口
 }
 
 # 点事件概念（不应展开为连续时间序列）
 POINT_EVENT_CONCEPTS = {
-    "abx", "samp", "cort", "dobu60", "susp_inf", "sep3", "ett_gcs", "avpu"
+    "abx", "samp", "cort", "dobu60", "susp_inf", "sep3", "avpu"
 }
 
 # 时长概念（已编码持续时间，不需要展开）
@@ -433,16 +436,17 @@ def align_to_grid(
         # 左连接到网格
         result = grid_copy.merge(df_copy, on=[id_col, time_col], how="left")
         
-        # 静态概念填充
-        if name in STATIC_CONCEPTS and value_col in result.columns:
+        # 静态概念填充 - 使用概念名称作为值列，而不是默认的 value_col
+        concept_value_col = name if name in result.columns else value_col
+        if name in STATIC_CONCEPTS and concept_value_col in result.columns:
             for patient_id in result[id_col].unique():
                 if pd.isna(patient_id):
                     continue
                 patient_mask = result[id_col] == patient_id
-                patient_values = result.loc[patient_mask, value_col]
+                patient_values = result.loc[patient_mask, concept_value_col]
                 non_na = patient_values.dropna()
                 if len(non_na) > 0 and non_na.nunique() == 1:
-                    result.loc[patient_mask, value_col] = non_na.iloc[0]
+                    result.loc[patient_mask, concept_value_col] = non_na.iloc[0]
         
         aligned[name] = result
     
@@ -500,7 +504,8 @@ def merge_concepts_ricu_style(
         
         # 检测和重命名时间列
         # 🔧 FIX: 添加 eICU 的时间列（包括 intakeoutputoffset）和 death 的 deathtime
-        time_candidates = [time_col, "charttime", "time", "starttime", "index_var", 
+        # 🔧 FIX: 添加 start 列（区间格式数据的开始时间）
+        time_candidates = [time_col, "charttime", "time", "starttime", "start", "index_var", 
                           "nursingchartoffset", "labresultoffset", "observationoffset",
                           "measuredat", "respchartoffset", "intakeoutputoffset",
                           "infusionoffset", "drugstartoffset", "deathtime",
@@ -535,6 +540,20 @@ def merge_concepts_ricu_style(
                 if cand in df_copy.columns and cand != name:
                     df_copy = df_copy.rename(columns={cand: name})
                     break
+        
+        # 🔧 FIX: 标准化窗口概念的列名
+        # mech_vent 等概念返回 start/stop/{name}_dur，需要重命名为 time/endtime/duration
+        if name in WINDOW_CONCEPTS or name.endswith("_rate"):
+            # 重命名 start -> time (如果还没有 time 列)
+            if "start" in df_copy.columns and "time" not in df_copy.columns:
+                df_copy = df_copy.rename(columns={"start": "time"})
+            # 重命名 stop -> endtime
+            if "stop" in df_copy.columns:
+                df_copy = df_copy.rename(columns={"stop": "endtime"})
+            # 重命名 {name}_dur -> duration
+            dur_col = f"{name}_dur"
+            if dur_col in df_copy.columns:
+                df_copy = df_copy.rename(columns={dur_col: "duration"})
         
         # 窗口展开
         if name in WINDOW_CONCEPTS or name.endswith("_rate"):
@@ -603,6 +622,7 @@ def merge_concepts_ricu_style(
     
     # 按时间网格合并
     merged = grid.copy()
+    boolean_concepts = []  # 跟踪布尔概念，以便后续 fillna(False)
     for name, df in aligned.items():
         if df is None or df.empty:
             merged[name] = np.nan
@@ -627,7 +647,36 @@ def merge_concepts_ricu_style(
             merged[name] = np.nan
             continue
         
-        to_merge = df[keep_cols].drop_duplicates(subset=["id", "time"], keep="last")
+        # FIX: 对于布尔型概念（如 ett_gcs），使用 any() 聚合而不是 drop_duplicates(keep="last")
+        # 因为同一时间点可能有多个值（TRUE 和 FALSE），应该取 any(TRUE) = TRUE
+        # 注意：left join 后 dtype 可能从 bool 变为 object（因为 NaN），需要特殊检测
+        is_boolean_col = False
+        if name in df.columns:
+            col = df[name]
+            # 检查 dtype 或者检查非 NA 值是否都是布尔
+            if col.dtype == bool or col.dtype == 'boolean':
+                is_boolean_col = True
+            elif col.dtype == object:
+                # 检查非 NA 值是否为布尔型
+                non_na = col.dropna()
+                if len(non_na) > 0:
+                    is_boolean_col = all(isinstance(v, (bool, np.bool_)) for v in non_na.head(100))
+        
+        if is_boolean_col:
+            # 重新聚合：如果同一 (id, time) 有任何 TRUE，则为 TRUE
+            # 但要保留全 NA 组为 NA（不转为 FALSE）
+            def bool_agg_with_na(x):
+                """布尔聚合，保留全 NA 为 NA"""
+                non_na = x.dropna()
+                if len(non_na) == 0:
+                    return np.nan
+                return non_na.any()
+            
+            to_merge = df[keep_cols].groupby(["id", "time"], as_index=False).agg({name: bool_agg_with_na})
+            boolean_concepts.append(name)  # 记录布尔概念
+        else:
+            to_merge = df[keep_cols].drop_duplicates(subset=["id", "time"], keep="last")
+        
         merged = merged.merge(to_merge, on=["id", "time"], how="left", suffixes=('', '_drop'))
         # 删除重复列
         merged = merged[[c for c in merged.columns if not c.endswith('_drop')]]
