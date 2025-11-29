@@ -140,7 +140,8 @@ MODULES: List[FeatureModule] = [
     FeatureModule(
         name="neu",
         ricu_file="{db}_neu.csv",
-        concepts=["avpu", "egcs", "gcs", "mgcs", "rass", "vgcs"],
+        # 注意：AUMC 使用 tgcs，eICU/MIIV 使用 gcs
+        concepts=["avpu", "egcs", "gcs", "mgcs", "rass", "tgcs", "vgcs"],
         description="Neurologic assessments",
     ),
     FeatureModule(

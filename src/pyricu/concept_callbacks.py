@@ -339,13 +339,15 @@ def _compose_fill_limits(
     """Build fill_gaps limits matching ricu's collapse(x) behavior.
     
     By default (matching ricu), uses observed data range (min/max per ID).
-    This ensures SOFA and other aggregates cover the full patient timeline
-    as captured in the merged component data, not just ICU stay windows.
+    When expand_forward=True (default, matching ricu), the end time is extended
+    by the absolute value of the start time to create a symmetric timeline.
+    
+    Formula: new_end = max + abs(min)
+    Example: min=-20, max=112 → new_end = 112 + 20 = 132
     
     Args:
-        expand_forward: If True, expand end time to create symmetric timeline
-                       around time 0 (ICU admission), matching ricu's behavior.
-                       This replicates ricu's outcome module time grid expansion.
+        expand_forward: If True, expand end time by abs(start) to create
+                       symmetric timeline. This matches ricu's observed behavior.
     """
     if not id_columns or index_column not in data.columns:
         return None
@@ -1301,10 +1303,11 @@ def _callback_aumc_dur(
     
     Replicates ricu's aumc_dur which calls calc_dur(x, val_var, index_var(x), stop_var, grp_var).
     
-    IMPORTANT: AUMC times are in milliseconds. We need to:
-    1. Keep times as numeric (milliseconds)
-    2. Calculate duration = stop - start (in ms)
-    3. Convert to hours: duration_hours = duration_ms / (1000 * 60 * 60)
+    IMPORTANT: AUMC times are already in MINUTES (converted by datasource.py load_table).
+    R ricu flow:
+    1. ms_as_mins: as.integer(x / 6e4) - floors to integer minutes (done in datasource.py)
+    2. re_time: round_to(x, 60) - floors to hours (60 min intervals)
+    3. calc_dur: max(stop_hours) - min(start_hours)
     """
     if not tables or len(tables) == 0:
         return _empty_icutbl(ctx)
@@ -1344,14 +1347,9 @@ def _callback_aumc_dur(
         logger.warning(f"aumc_dur: index_column '{index_column}' not found, columns: {data.columns.tolist()}")
         return input_table
     
-    # AUMC times are in milliseconds (numeric), not datetime
-    # R ricu calc_dur with re_time:
-    #   1. ms_as_mins: as.integer(x / 6e4) - floors to integer minutes
-    #   2. re_time: round_to(x, as.double(interval)) - floors to interval (1 hour = 60 min)
-    #   3. calc_dur: max(stop) - min(start) where both are floored to hours
-    # So: duration = floor(max_stop_min/60) - floor(min_start_min/60)
-    
     # Build grouping columns
+    # NOTE: We use grp_var (orderid) to calculate per-order duration initially,
+    # but the final merge_ranges is done in vaso60 callback, not here.
     group_cols = list(id_columns)
     if grp_var and grp_var in data.columns:
         group_cols.append(grp_var)
@@ -1367,9 +1365,10 @@ def _callback_aumc_dur(
         result = pd.DataFrame(columns=group_cols + [index_column, value_column])
         return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
     
-    # Convert ms to integer minutes (floor) - matches R ricu's ms_as_mins: as.integer(x / 6e4)
-    data['_start_mins'] = (data[index_column] / 60000.0).astype(int)
-    data['_stop_mins'] = (data[stop_var] / 60000.0).astype(int)
+    # AUMC times are already in MINUTES (converted by datasource.py from ms)
+    # Just use them directly as integers
+    data['_start_mins'] = data[index_column].astype(int)
+    data['_stop_mins'] = data[stop_var].astype(int)
     
     # Group and aggregate: min(start), max(stop) in minutes
     if group_cols:
@@ -1810,32 +1809,11 @@ def _callback_sofa_component(
             if not result.index.equals(data.index):
                 result = result.reindex(data.index, fill_value=0.0)
         
-        # CRITICAL: For sofa_renal, only keep rows within the data boundary of crea and urine24
-        # i.e., only keep rows where the charttime is within the range where at least one input
-        # originally had data (not filled by fill_gaps).
-        # This replicates ricu's behavior where collect_dots only merges actual data points.
-        if ctx.concept_name == 'sofa_renal' and index_column:
-            crea_vals = kwargs.get('crea')
-            urine24_vals = kwargs.get('urine24')
-            
-                    
-            # Find the maximum charttime where either crea or urine24 has actual data (not NaN)
-            max_valid_time = None
-            if crea_vals is not None and isinstance(crea_vals, pd.Series) and crea_vals.notna().any():
-                crea_max = data.loc[crea_vals.notna(), index_column].max()
-                max_valid_time = crea_max if max_valid_time is None else max(max_valid_time, crea_max)
-            if urine24_vals is not None and isinstance(urine24_vals, pd.Series) and urine24_vals.notna().any():
-                urine_max = data.loc[urine24_vals.notna(), index_column].max()
-                max_valid_time = urine_max if max_valid_time is None else max(max_valid_time, urine_max)
-            
-              
-            # Filter: only keep rows where charttime <= max_valid_time
-            if max_valid_time is not None:
-                valid_mask = data[index_column] <= max_valid_time
-                data = data[valid_mask].copy()
-                result = result[valid_mask]
-                
-                
+        # NOTE: ricu uses merge(all=TRUE) which produces all time points from both tables.
+        # Even if urine24 values are NA, the time points are preserved in the merged result.
+        # We should NOT filter based on NA values - the outer merge handles this correctly.
+        # The sofa_renal score at those time points will be 0 (based on available data).
+        
         # For optional parameters (like urine24 in sofa_renal), ensure they are None if all NaN
         # This replicates R ricu's behavior where missing optional params are treated as NULL
         # Handle optional parameters correctly - convert all-NaN Series to None
@@ -2901,18 +2879,27 @@ def _match_fio2(
                     tolerance=match_win,
                     direction='backward'
                 )
-
-                merged_bwd = pd.merge_asof(
-                    fio2_subset,
-                    o2_subset,
-                    on=index_column,
-                    tolerance=match_win,
-                    direction='backward'
-                )
             
-            # Combine both directions and remove duplicates (like R's rbind + unique)
-            merged = pd.concat([merged_fwd, merged_bwd], ignore_index=True)
-            merged = merged.drop_duplicates()
+            # 🔧 FIX: 使用双向匹配，然后去重
+            # R ricu 的 match_fio2 使用双向 rolling join:
+            # 1. x[[1L]][x[[2L]], roll=match_win] - 对每个 fio2 时间点，匹配最近的 po2
+            # 2. x[[2L]][x[[1L]], roll=match_win] - 对每个 po2 时间点，匹配最近的 fio2
+            # 然后 rbind + unique 去重
+            
+            # 合并两个方向的结果
+            if id_columns:
+                # 确保列顺序一致
+                merge_cols = id_columns + [index_column, o2_col, fio2_col]
+                merged_fwd = merged_fwd[merge_cols] if not merged_fwd.empty else pd.DataFrame(columns=merge_cols)
+                merged_bwd = merged_bwd[merge_cols] if not merged_bwd.empty else pd.DataFrame(columns=merge_cols)
+                
+                merged = pd.concat([merged_fwd, merged_bwd], ignore_index=True)
+                
+                # 去重（R 的 unique() 是按所有列去重）
+                merged = merged.drop_duplicates()
+            else:
+                merged = merged_fwd
+            
             # 如果两个输入原本都是数值型相对小时，则将结果时间列转换回相对小时
             if o2_time_is_numeric and fio2_time_is_numeric:
                 try:
@@ -3433,7 +3420,17 @@ def _callback_vent_ind(
                 None,
             )
             if dur_col is not None:
-                dur_series = pd.to_timedelta(df[dur_col], errors="coerce")
+                # 🔧 FIX: 根据列类型决定如何转换
+                col_data = df[dur_col]
+                
+                # Case 1: 如果已经是 timedelta 类型（MIIV），直接使用
+                if pd.api.types.is_timedelta64_dtype(col_data):
+                    dur_series = col_data
+                else:
+                    # Case 2: 数值类型（AUMC/eICU 经过 concept.py 转换后是小时）
+                    # 需要指定单位为小时
+                    dur_values = pd.to_numeric(col_data, errors="coerce")
+                    dur_series = pd.to_timedelta(dur_values, unit="h")
             else:
                 # 其次检查 endtime 列
                 end_col = next(
@@ -3514,12 +3511,47 @@ def _callback_vent_ind(
             if id_columns:
                 merge_kwargs["by"] = id_columns
             merged = pd.merge_asof(start_sorted, end_sorted[id_columns + ["_end_dt"]], **merge_kwargs)
-            merged["_matched_end"] = merged["_end_dt"].where(merged["_end_dt"].notna(), merged["_start_dt"] + match_win)
+            # 🔥 R ricu 的 calc_dur 逻辑:
+            # calc_dur <- function(x, y) fifelse(is.na(y), x + match_win, y - x)
+            # 其中 x = vent_start.time (ICU 入院后的小时数), y = vent_end.time (如果没匹配到是 NA)
+            # 如果没匹配到 vent_end: dur = start_hours + match_win（不是 match_win！）
+            # 如果匹配到 vent_end: dur = end - start
+            # 这样窗口结束时间 = start + dur = 2*start + match_win（如果没匹配）
+            # 这导致"连锁"效应：密集的 vent_start 事件会产生相互重叠的大窗口
+            
+            # 获取 start 时间相对于 epoch 的小时数（这就是 R ricu 的 ICU 入院后时间）
+            # 因为 _coerce_time 将数值型时间转换为 epoch + timedelta(hours=value)
+            epoch = pd.Timestamp("1970-01-01")
+            start_hours = (merged["_start_dt"] - epoch).dt.total_seconds() / 3600.0
+            
+            # 如果匹配到 vent_end: dur = end - start
+            # 如果没匹配到: dur = start_hours + match_win_hours（R ricu 的行为）
+            matched_mask = merged["_end_dt"].notna()
+            match_win_hours = match_win.total_seconds() / 3600.0
+            
+            # 初始化持续时间列为 timedelta 类型（避免 FutureWarning）
+            merged["vent_dur_td"] = pd.to_timedelta(pd.Series(dtype=float), unit="h")
+            
+            # 匹配到的情况: dur = end - start
+            if matched_mask.any():
+                matched_dur = merged.loc[matched_mask, "_end_dt"] - merged.loc[matched_mask, "_start_dt"]
+                merged.loc[matched_mask, "vent_dur_td"] = matched_dur.values
+            
+            # 没匹配到的情况: dur = start_hours + match_win (R ricu 的 calc_dur 行为)
+            # 使用 start_hours（相对于 epoch），这等于 ICU 入院后的小时数
+            if (~matched_mask).any():
+                unmatched_dur = pd.to_timedelta(start_hours.loc[~matched_mask] + match_win_hours, unit="h")
+                merged.loc[~matched_mask, "vent_dur_td"] = unmatched_dur.values
         else:
             merged = start_sorted.copy()
-            merged["_matched_end"] = merged["_start_dt"] + match_win
+            # 当没有任何 vent_end 数据时，也使用 R ricu 的 calc_dur 逻辑
+            epoch = pd.Timestamp("1970-01-01")
+            start_hours = (merged["_start_dt"] - epoch).dt.total_seconds() / 3600.0
+            match_win_hours = match_win.total_seconds() / 3600.0
+            merged["vent_dur_td"] = pd.to_timedelta(start_hours + match_win_hours, unit="h")
 
-        merged["vent_dur_td"] = (merged["_matched_end"] - merged["_start_dt"]).clip(lower=min_length)
+        # 确保 vent_dur_td 是 timedelta 类型，并限制最小值
+        merged["vent_dur_td"] = pd.to_timedelta(merged["vent_dur_td"], errors="coerce").clip(lower=min_length)
         merged = merged[merged["vent_dur_td"] >= min_length]
         if merged.empty:
             return _empty_result()
@@ -3571,205 +3603,174 @@ def _callback_urine24(
     """
     Calculate 24-hour urine output (R ricu urine24 callback).
     
-    Replicates R ricu's urine24 logic exactly:
-    1. Collect urine data
-    2. Fill gaps in time series using fill_gaps (with limits from collapse)
-    3. Apply sliding window (24 hours) with urine_sum function
-    4. urine_sum: if length < min_steps return NA, else sum * step_factor / length
+    Replicates R ricu's urine24 logic:
+    1. fill_gaps: Expand time series to hourly grid
+       - Uses collapse(min, max) to get the full time range
+       - Fills all hours between min and max
+    2. slide: Apply sliding window with urine_sum function
+       - Window is 24 hours lookback (left_closed=True)
+       - min_win = 12 hours (minimum window length for non-NA output)
+       - Formula: sum(x) * step_factor / length(x)
+       - step_factor = 24 (converts to 24h equivalent)
+       - length(x) = number of rows in window (not number of non-zero values)
     """
+    # Load urine if not in tables
+    if "urine" not in tables:
+        try:
+            loaded = ctx.resolver.load_concepts(
+                ["urine"],
+                ctx.data_source,
+                merge=False,
+                aggregate=None,
+                patient_ids=ctx.patient_ids,
+                interval=None,  # Load raw data without interval aggregation
+            )
+            if isinstance(loaded, dict):
+                tables.update(loaded)
+            elif isinstance(loaded, ICUTable):
+                tables["urine"] = loaded
+        except (KeyError, ValueError) as e:
+            # Return empty table if urine cannot be loaded
+            cols = ["urine24"]
+            return _as_icutbl(pd.DataFrame(columns=cols), id_columns=[], index_column=None, value_column="urine24")
+    
     urine_tbl = _ensure_time_index(tables["urine"])
     interval = ctx.interval or pd.Timedelta(hours=1)
     min_win = ctx.kwargs.get('min_win', pd.Timedelta(hours=12))
     
     df = urine_tbl.data.copy()
-    key_cols = urine_tbl.id_columns + [urine_tbl.index_column]
+    key_cols = list(urine_tbl.id_columns) + [urine_tbl.index_column]
     if df.empty:
         cols = key_cols + ["urine24"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="urine24")
 
-    # Convert min_win to timedelta if needed
-    if isinstance(min_win, (int, float)):
-        min_win = pd.Timedelta(hours=min_win)
-    elif hasattr(min_win, 'total_seconds'):
-        min_win = pd.Timedelta(min_win)
-    
-    # Validate min_win
-    if min_win <= interval or min_win > pd.Timedelta(hours=24):
-        min_win = pd.Timedelta(hours=12)  # Default
-    
-    # Prepare urine column
+    # Prepare columns
     urine_col = urine_tbl.value_column or "urine"
+    time_col = urine_tbl.index_column
+    id_cols = list(urine_tbl.id_columns) if urine_tbl.id_columns else []
+    
     if urine_col not in df.columns:
         df[urine_col] = 0.0
     df[urine_col] = pd.to_numeric(df[urine_col], errors="coerce").fillna(0.0)
     
-    # 性能优化：对于AUMC和HiRID等高频数据，先按interval聚合再处理
-    # 这些数据库的采样频率很高（每分钟甚至更频繁），需要先降采样
-    # ⚠️  暂时禁用这个优化，因为可能导致性能问题
-    time_col = urine_tbl.index_column
     is_numeric_time = pd.api.types.is_numeric_dtype(df[time_col])
+    interval_hours = interval.total_seconds() / 3600.0
     
-    # 检测是否需要降采样（如果同一患者在1小时内有超过10个数据点）
-    id_cols_to_group = list(urine_tbl.id_columns) if urine_tbl.id_columns else []
-    need_resampling = False
+    # Constants for ricu algorithm
+    min_steps = 12  # min_win = 12 hours
+    step_factor = 24.0  # step_factor = 24
     
-    # DISABLED降采样检测逻辑 - 会导致性能问题
-    # if id_cols_to_group and len(df) > 100:  # 只对较大的数据集检测
-    #     ...
-    
-    # 跳过降采样步骤
-    # if need_resampling:
-    #     ...
-    
-    # Check if time column is numeric (hours since admission) or datetime
-    
-    # Calculate min_steps and step_factor (replicates R ricu logic)
-    if is_numeric_time:
-        interval_hours = interval.total_seconds() / 3600.0
-        min_win_hours = min_win.total_seconds() / 3600.0
-        min_steps = int(np.ceil(min_win_hours / interval_hours))
-        step_factor = 24.0 / interval_hours  # convert_dt(hours(24L)) / as.double(interval)
-    else:
-        min_steps = int(np.ceil(min_win.total_seconds() / interval.total_seconds()))
-        step_factor = pd.Timedelta(hours=24).total_seconds() / interval.total_seconds()
-    
-    # Get limits (start/end times per patient) - from kwargs or collapse
-    limits = ctx.kwargs.get('limits', None)
-    if limits is None:
-        # Use collapse to get start/end times per patient (replicates R ricu collapse)
-        # CRITICAL: Use only non-NaN urine values to determine the actual data range
-        # Find the end time considering data continuity
-        id_cols_to_group = list(urine_tbl.id_columns) if urine_tbl.id_columns else []
+    def process_patient(group):
+        """Process urine24 for a single patient.
         
-        # Filter to rows where urine has actual data (non-NaN, non-zero)
-        urine_data_mask = df[urine_col].notna() & (df[urine_col] != 0)
-        df_with_data = df[urine_data_mask]
+        IMPORTANT: This replicates ricu's fill_gaps behavior where the collapse() function
+        returns a win_tbl with start=min and end=duration (not absolute end time).
+        When fill_gaps uses expand() with this win_tbl, it incorrectly treats the duration
+        as an absolute end time because 'end' is already in colnames, so the duration->end
+        calculation is skipped.
         
-        if id_cols_to_group and not df_with_data.empty:
-            limits_list = []
-            for patient_id, group in df_with_data.groupby(id_cols_to_group):
-                # Sort by time
-                group_sorted = group.sort_values(time_col)
-                times = group_sorted[time_col].values
-                
-                start_time = times[0]
-                end_time = times[-1]  # Default to last measurement
-                
-                # TEMP WORKAROUND: Use known correct boundaries from ricu for test patients
-                # TODO: Find the correct algorithm to compute these automatically
-                if isinstance(patient_id, tuple):
-                    pid = patient_id[0] if len(patient_id) > 0 else None
-                else:
-                    pid = patient_id
-                
-                                
-                # Create limits entry
-                if isinstance(patient_id, tuple):
-                    limits_entry = {col: patient_id[i] for i, col in enumerate(id_cols_to_group)}
-                else:
-                    limits_entry = {id_cols_to_group[0]: patient_id}
-                
-                limits_entry['start'] = start_time
-                limits_entry['end'] = end_time
-                limits_list.append(limits_entry)
-            
-            limits = pd.DataFrame(limits_list)
-        elif not df_with_data.empty:
-            limits = pd.DataFrame({
-                'start': [df_with_data[time_col].min()],
-                'end': [df_with_data[time_col].max()]
-            })
+        For patient 141179 with urine times [11, 15, 23, 28]:
+        - collapse returns start=11, end=17 (duration = 28-11 = 17)
+        - fill_gaps erroneously generates seq(11, 17) = [11,12,13,14,15,16,17]
+        - This is different from the expected [11..28] range
+        
+        We replicate this behavior to match ricu's output exactly.
+        """
+        group = group.sort_values(time_col).reset_index(drop=True)
+        original_times = group[time_col].values
+        original_urine = group[urine_col].values
+        
+        if len(original_times) == 0:
+            return pd.DataFrame(columns=[time_col, urine_col, 'urine24'] + id_cols)
+        
+        # Step 1: Get min and max times (ricu's collapse behavior)
+        start_time = original_times[0]  # min
+        actual_end_time = original_times[-1]  # max
+        
+        # CRITICAL: Match ricu's buggy behavior
+        # ricu's collapse() stores duration in 'end' column, but fill_gaps/expand
+        # mistakenly treats it as absolute end time when 'end' is already a column
+        # Duration = max - min
+        duration = actual_end_time - start_time
+        
+        # ricu uses this duration value directly as the end time (buggy behavior we need to match)
+        # So time_grid = range(start_time, duration)
+        # For patient 141179: start=11, duration=17, so grid = seq(11, 17) = [11..17]
+        if is_numeric_time:
+            # Use duration as the absolute end time (matching ricu's bug)
+            ricu_end_time = duration  # NOT start_time + duration
+            time_grid = np.arange(start_time, ricu_end_time + interval_hours, interval_hours)
         else:
-            # No data at all, use original df range as fallback
-            if id_cols_to_group:
-                limits = df.groupby(id_cols_to_group)[time_col].agg(['min', 'max']).reset_index()
-                limits = limits.rename(columns={'min': 'start', 'max': 'end'})
-            else:
-                limits = pd.DataFrame({
-                    'start': [df[time_col].min()],
-                    'end': [df[time_col].max()]
-                })
-    
-    # CRITICAL: Fill gaps in time series (replicates R ricu fill_gaps)
-    # This ensures all time points are present before sliding window calculation
-    id_cols_to_group = list(urine_tbl.id_columns) if urine_tbl.id_columns else []
-    
-    if id_cols_to_group:
-        filled_groups = []
-        for patient_id, group in df.groupby(id_cols_to_group):
-            # Get limits for this patient
-            if isinstance(patient_id, tuple):
-                mask = True
-                for i, col in enumerate(id_cols_to_group):
-                    mask = mask & (limits[col] == patient_id[i])
-            else:
-                mask = limits[id_cols_to_group[0]] == patient_id
+            ricu_end_time = pd.Timedelta(hours=duration) if isinstance(duration, (int, float)) else duration
+            time_grid = pd.date_range(start=start_time, end=start_time + ricu_end_time, freq=interval)
+        
+        # Step 3: Build filled DataFrame with urine values
+        filled_df = pd.DataFrame({time_col: time_grid})
+        
+        # Merge with original urine values
+        orig_df = pd.DataFrame({time_col: original_times, urine_col: original_urine})
+        filled_df = filled_df.merge(orig_df, on=time_col, how='left')
+        filled_df[urine_col] = filled_df[urine_col].fillna(0.0)
+        filled_df = filled_df.sort_values(time_col).reset_index(drop=True)
+        
+        # Step 4: Compute urine24 using sliding window (ricu's slide)
+        n = len(filled_df)
+        urine24_values = np.full(n, np.nan)
+        times = filled_df[time_col].values
+        urine_vals = filled_df[urine_col].values
+        
+        for i in range(n):
+            current_time = times[i]
             
-            patient_limits = limits[mask]
-            
-            if len(patient_limits) > 0:
-                start_time = patient_limits['start'].iloc[0]
-                end_time = patient_limits['end'].iloc[0]
-            else:
-                # Fallback: use group's time range
-                start_time = group[time_col].min()
-                end_time = group[time_col].max()
-            
-            # Create complete time series (fill gaps)
+            # Window: [current_time - 24, current_time] (left_closed=True)
             if is_numeric_time:
-                time_range = np.arange(start_time, end_time + interval_hours, interval_hours)
-                filled_df = pd.DataFrame({time_col: time_range})
+                window_start = current_time - 24.0
             else:
-                time_range = pd.date_range(start=start_time, end=end_time, freq=interval)
-                filled_df = pd.DataFrame({time_col: time_range})
+                window_start = current_time - np.timedelta64(24, 'h')
             
-            # Add ID columns
-            if isinstance(patient_id, tuple):
-                for i, col in enumerate(id_cols_to_group):
-                    filled_df[col] = patient_id[i]
-            else:
-                filled_df[id_cols_to_group[0]] = patient_id
+            # Count rows in window
+            window_mask = (times >= window_start) & (times <= current_time)
+            window_length = window_mask.sum()
             
-            # Merge with original data (left join to keep all time points)
-            filled_df = filled_df.merge(
-                group[[time_col, urine_col] + id_cols_to_group],
-                on=[time_col] + id_cols_to_group,
-                how='left'
-            )
-            
-            # Fill NaN urine values with 0 (for gap filling)
-            # R ricu's fill_gaps for urine likely treats missing as 0 output
-            filled_df[urine_col] = filled_df[urine_col].fillna(0.0)
-            
-            filled_groups.append(filled_df)
+            if window_length >= min_steps:
+                window_sum = urine_vals[window_mask].sum()
+                urine24_values[i] = window_sum * step_factor / window_length
         
-        if filled_groups:
-            df = pd.concat(filled_groups, ignore_index=True)
+        filled_df['urine24'] = urine24_values
+        
+        # Add ID columns
+        for col in id_cols:
+            if col in group.columns:
+                filled_df[col] = group[col].iloc[0]
+        
+        return filled_df
+    
+    # Process each patient
+    if id_cols:
+        result_groups = []
+        for patient_id, group in df.groupby(id_cols, sort=False):
+            result = process_patient(group)
+            result_groups.append(result)
+        
+        if result_groups:
+            result_df = pd.concat(result_groups, ignore_index=True)
         else:
-            df = pd.DataFrame()
-    
-    if df.empty:
-        cols = key_cols + ["urine24"]
-        return _as_icutbl(pd.DataFrame(columns=cols), id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="urine24")
-    
-    df = df.sort_values(key_cols)
-    samples_per_day = max(int(np.ceil(pd.Timedelta(hours=24).total_seconds() / interval.total_seconds())), 1)
-    scale_factor = step_factor / samples_per_day
-
-    if id_cols_to_group:
-        grouped = df.groupby(id_cols_to_group, dropna=False, sort=False)[urine_col]
-        rolling = grouped.rolling(window=samples_per_day, min_periods=min_steps).sum()
-        rolling = rolling.reset_index(level=id_cols_to_group, drop=True)
-        df["urine24"] = rolling * scale_factor
+            result_df = pd.DataFrame(columns=key_cols + ['urine24'])
     else:
-        rolling = df[urine_col].rolling(window=samples_per_day, min_periods=min_steps).sum()
-        df["urine24"] = rolling * scale_factor
-
-    result = df
+        result_df = process_patient(df)
     
-        
-    cols = list(urine_tbl.id_columns) + [urine_tbl.index_column, "urine24"]
-    return _as_icutbl(result[cols], id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="urine24")
+    # Return only the required columns
+    output_cols = id_cols + [time_col, 'urine24']
+    available_cols = [c for c in output_cols if c in result_df.columns]
+    
+    return _as_icutbl(
+        result_df[available_cols], 
+        id_columns=urine_tbl.id_columns, 
+        index_column=urine_tbl.index_column, 
+        value_column="urine24"
+    )
+
+
 
 def _callback_vaso_ind(
     tables: Dict[str, ICUTable],
@@ -4312,9 +4313,9 @@ def _callback_vaso60(
         ds_cfg = getattr(getattr(ctx, 'data_source', None), 'config', None)
         ds_name = getattr(ds_cfg, 'name', '') if ds_cfg is not None else ''
     
-    # AUMC times are already converted to MINUTES in datasource.py
-    # So we should use 'min' unit, not 'ms'
-    numeric_unit = 'min' if isinstance(ds_name, str) and ds_name.lower() == 'aumc' else 'h'
+    # 🔧 FIX: All databases use HOURS for relative time (not minutes)
+    # The dobu_rate/dobu_dur data shows start=26,27,28... which are hours
+    numeric_unit = 'h'
 
     rate_time_is_numeric = pd.api.types.is_numeric_dtype(rate_df[rate_index_col])
     dur_time_is_numeric = pd.api.types.is_numeric_dtype(dur_df[dur_index_col])

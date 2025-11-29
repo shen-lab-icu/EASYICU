@@ -412,10 +412,22 @@ def expand(
 
     
     # Original datetime expansion logic
-    # 🚀 优化: 避免不必要的 copy，使用视图
+    # 🔧 CRITICAL FIX 2024-12: Do NOT floor datetime in expand()
+    # 
+    # R ricu's expand() works on RELATIVE time (hours since admission).
+    # It uses seq(start, end, step) WITHOUT flooring.
+    # The floor happens LATER in change_interval() / round_to() / re_time().
+    #
+    # pyricu was incorrectly flooring ABSOLUTE datetime here, which caused
+    # 06:39:00 → 06:00:00 (floor). After converting to relative time,
+    # 06:00:00 becomes hour 12, but 06:39:00 should be hour 13.
+    #
+    # The fix: Use original datetime (no floor) in seq, then floor happens
+    # later when converting to relative hours.
+    
     # Ensure start and end are datetime
     if not pd.api.types.is_datetime64_any_dtype(data[start_var]):
-        data = data.copy()  # 只在需要修改时才复制
+        data = data.copy()
         data[start_var] = pd.to_datetime(data[start_var])
     
     # Handle end_var as duration or absolute time
@@ -427,34 +439,21 @@ def expand(
             data[end_var] = pd.to_datetime(data[end_var])
         end_col = end_var
     
-    # 🚀 优化: 向量化处理，避免 iterrows()
-    expanded_chunks = []
-    
-    # 预先过滤有效行（非 NA，start <= end）
+    # Filter valid rows (non-NA, start <= end)
     valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
     valid_data = data[valid_mask]
     
     if len(valid_data) == 0:
-        # 返回空结果
         result_cols = [start_var] + id_cols + keep_vars
         return pd.DataFrame(columns=result_cols)
     
-    # 🚀 向量化: 批量处理每一行
-    # 🔧 CRITICAL FIX: Floor start time to hour boundary (match R ricu behavior)
-    # R ricu expands on hour boundaries, not on arbitrary start times
-    # Example: 06:08:00 → 06:00:00, then generate [06:00, 07:00, 08:00...]
-    # This ensures integer hours after conversion to relative time
+    # 🔧 FIX: Use original start time (no floor) for expansion
+    # R ricu uses seq(start, end, step) on raw relative times
+    # The floor is applied AFTER expansion via change_interval()
     
-    # Vectorized floor
-    start_floored = valid_data[start_var].dt.floor(step_size)
-    
-    # Calculate number of points
-    # (end - start_floored) // step + 1
-    # Note: pd.date_range includes end if it matches freq, but here we use integer division
-    # We need to be careful to match pd.date_range behavior
-    # pd.date_range(start, end, freq) includes start, and includes end if (end-start) % freq == 0
-    
-    diff = valid_data[end_col] - start_floored
+    # Calculate number of points: floor((end - start) / step) + 1
+    # This matches R's seq() behavior
+    diff = valid_data[end_col] - valid_data[start_var]
     counts = (diff / step_size).astype(int) + 1
     counts = np.maximum(counts, 0)
     
@@ -465,22 +464,18 @@ def expand(
         return pd.DataFrame(columns=result_cols)
         
     valid_data = valid_data[mask]
-    start_floored = start_floored[mask]
     counts = counts[mask]
     
     # Repeat rows
     expanded_df = valid_data.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
     
-    # Generate time offsets
+    # Generate time offsets: 0, 1, 2, ... for each row
     offsets = np.concatenate([np.arange(c) for c in counts])
     
-    # Calculate new times
-    # We need to repeat start_floored to match expanded_df
-    start_floored_repeated = start_floored.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
-    
-    # Add offsets * step_size
-    # Note: adding timedelta array to datetime array is fast
-    expanded_df[start_var] = start_floored_repeated + pd.to_timedelta(offsets * step_size.total_seconds(), unit='s')
+    # Calculate new times: start + offset * step_size
+    # Use original start time (not floored)
+    start_repeated = valid_data[start_var].loc[valid_data.index.repeat(counts)].reset_index(drop=True)
+    expanded_df[start_var] = start_repeated + pd.to_timedelta(offsets * step_size.total_seconds(), unit='s')
     
     # Select columns
     result_cols = [start_var] + id_cols + keep_vars

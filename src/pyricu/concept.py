@@ -447,10 +447,21 @@ class ConceptResolver:
         if concept == 'vent_ind':
             return False
         
-        # Only urine/urine24 concepts require fill_gaps for dense hourly grids.
-        # These concepts measure cumulative output and need complete time coverage.
-        fill_concepts = {"urine", "urine24"}
-        return concept in fill_concepts
+        # 🔧 CRITICAL FIX 2024-12: Do NOT fill gaps for urine
+        # R ricu's fill_gaps for urine only fills the FIRST continuous segment (~50 hours),
+        # then only keeps original data points for later segments.
+        # Simple fill_gaps fills the entire range (min_time to max_time), which is wrong.
+        # The urine24 callback handles the proper ricu-style segmented fill logic.
+        # ONLY fill for urine24 if needed (but the callback does its own fill)
+        if concept == 'urine':
+            return False
+        
+        # urine24 doesn't need fill_gaps either - callback handles it
+        if concept == 'urine24':
+            return False
+        
+        # All other concepts: no fill_gaps by default
+        return False
     
     def _get_fill_method(self, concept_name: str, definition: ConceptDefinition) -> str:
         """Determine fill method for fill_gaps.
@@ -619,6 +630,7 @@ class ConceptResolver:
         ricu_compatible: bool = True,  # 默认启用ricu.R兼容格式
         concept_workers: int = 1,
         _batch_loading: bool = False,  # 🔧 批量加载模式标志，减少诊断输出
+        _skip_concept_cache: bool = False,  # 🔧 跳过概念缓存，用于回调内部加载
         **kwargs,  # Additional parameters for callbacks (e.g., win_length, worst_val_fun)
     ):
         names = [name for name in concept_names]
@@ -685,6 +697,7 @@ class ConceptResolver:
                 interval,
                 align_to_admission,
                 kwargs,
+                _skip_concept_cache=_skip_concept_cache,
             )
             if verbose and logger.isEnabledFor(logging.INFO):
                 if isinstance(concept_table, ICUTable):
@@ -1184,7 +1197,8 @@ class ConceptResolver:
                                     agg_dict = {}
                                     for col in frame.columns:
                                         # 跳过分组列（ID列和时间列已经在group_cols中）
-                                        if col in group_cols or col == time_col + '_rounded':
+                                        # 🔧 FIX: 也跳过原始时间列，避免重命名后产生重复列
+                                        if col in group_cols or col == time_col + '_rounded' or col == time_col:
                                             continue
                                         # value列：先检查类型，只有数值型才能聚合
                                         elif col == value_col:
@@ -1483,122 +1497,27 @@ class ConceptResolver:
                             if DEBUG_MODE and len(tmp) != before_filter:
                                 print(f"      🎯 [最终过滤] 只保留目标 stay_id: {before_filter} → {len(tmp)} 行")
 
-                        # CRITICAL FIX: Load admission data to get hospital discharge time (ricu.
-                        # ricu.R uses hospital admission window, not ICU window
+                        # CRITICAL FIX: Use ICU outtime as upper bound
+                        # ricu.R uses ICU discharge (outtime) as the time window, NOT hospital discharge
+                        # See ricu/R/data-utils.R: id_win_helper.miiv_env uses icustay's intime/outtime
                         before_filter = len(tmp)
 
-                        # Debug output for hospital window fix
+                        # Debug output for ICU window filter
                         if DEBUG_MODE:
-                            print(f"      🏥 [住院窗口] 开始处理: 表={source.table}, 行数={len(tmp)}")
-                            if 'hadm_id' in tmp.columns:
-                                print(f"      🏥 [住院窗口] tmp包含hadm_id: {tmp['hadm_id'].notna().sum()}个有效值")
+                            print(f"      🏥 [ICU窗口] 开始处理: 表={source.table}, 行数={len(tmp)}")
+                            if 'outtime' in tmp.columns:
+                                print(f"      🏥 [ICU窗口] tmp包含outtime: {tmp['outtime'].notna().sum()}个有效值")
                             else:
-                                print(f"      🏥 [住院窗口] ❌ tmp不包含hadm_id列!")
+                                print(f"      🏥 [ICU窗口] ❌ tmp不包含outtime列!")
 
-                        # Load admissions table for hospital discharge times
-                        if DEBUG_MODE:
-                            print(f"      🏥 [住院窗口] 开始加载admissions表...")
-
-                        # Try to load admissions table for hospital discharge times
-                        hospital_disch_times = {}
-                        if 'hadm_id' in tmp.columns:
-                            try:
-                                # Load admissions data
-                                admissions_table = data_source.load_table('admissions')
-
-                                # Convert ICUTable to pandas DataFrame
-                                if hasattr(admissions_table, 'data'):
-                                    admissions_df = admissions_table.data
-                                elif hasattr(admissions_table, 'df'):
-                                    admissions_df = admissions_table.df
-                                else:
-                                    # Fallback: try direct usage
-                                    admissions_df = admissions_table
-
-                                # Validate DataFrame and proceed
-                                if admissions_df is not None and hasattr(admissions_df, '__len__') and len(admissions_df) > 0:
-                                    # Filter to relevant admissions
-                                    unique_hadm_ids = tmp['hadm_id'].unique()
-                                    relevant_admissions = admissions_df[
-                                        admissions_df['hadm_id'].isin(unique_hadm_ids)
-                                    ].copy()
-
-                                    if not relevant_admissions.empty:
-                                        # Convert discharge times
-                                        relevant_admissions['dischtime'] = pd.to_datetime(
-                                            relevant_admissions['dischtime'], errors='coerce', utc=True
-                                        ).dt.tz_localize(None)
-
-                                        # Create mapping from hadm_id to discharge time
-                                        hospital_disch_times = dict(zip(
-                                            relevant_admissions['hadm_id'],
-                                            relevant_admissions['dischtime']
-                                        ))
-
-                                        if DEBUG_MODE and hospital_disch_times:
-                                            print(f"      🏥 [住院窗口] 加载住院出院时间: {len(hospital_disch_times)}个记录")
-                            except Exception as e:
-                                if DEBUG_MODE:
-                                    print(f"      ⚠️  [住院数据] 加载失败: {str(e)[:50]}")
-
-                        # CRITICAL FIX: Use hospital discharge time as upper bound (ricu.R behavior)
-                        # ricu.R includes data up to hospital discharge, not ICU discharge
-                        if hospital_disch_times:
-                            # Map hospital discharge times to each row
-                            tmp['hospital_dischtime'] = tmp['hadm_id'].map(hospital_disch_times)
-
-                            # Filter: keep data up to hospital discharge time
-                            # Allow negative time (pre-ICU data) - matches ricu.R behavior
-                            mask_time = (
-                                tmp['hospital_dischtime'].isna() |
-                                (tmp[time_col] <= tmp['hospital_dischtime'])
-                            )
+                        # Use ICU outtime for filtering (ricu.R behavior)
+                        # Data points after ICU discharge should be excluded
+                        if 'outtime' in tmp.columns:
+                            mask_time = tmp['outtime'].isna() | (tmp[time_col] <= tmp['outtime'])
                             tmp = tmp[mask_time].copy()
-                            tmp = tmp.drop(columns=['hospital_dischtime'])
-
-                            filter_type = "住院出院窗口"
+                            filter_type = "ICU出院窗口"
                         else:
-                            # FORCE FIX: Always try to use hospital discharge time (ricu.R behavior)
-                            # Load hospital discharge times (retry)
-                            hospital_disch_times = {}
-                            try:
-                                admissions_table = data_source.load_table('admissions')
-                                if not admissions_table.empty:
-                                    if 'hadm_id' in tmp.columns:
-                                        relevant_admissions = admissions_table[
-                                            admissions_table['hadm_id'].isin(tmp['hadm_id'].unique())
-                                        ].copy()
-
-                                        relevant_admissions['dischtime'] = pd.to_datetime(
-                                            relevant_admissions['dischtime'], errors='coerce', utc=True
-                                        ).dt.tz_localize(None)
-
-                                        hospital_disch_times = dict(zip(
-                                            relevant_admissions['hadm_id'],
-                                            relevant_admissions['dischtime']
-                                        ))
-
-                                        if DEBUG_MODE and hospital_disch_times:
-                                            print(f"      📋 [强制住院窗口重试] {len(hospital_disch_times)}个住院记录")
-                            except Exception as e:
-                                if DEBUG_MODE:
-                                    print(f"      ⚠️  [强制住院窗口] 重试失败: {str(e)[:50]}")
-
-                            # Apply hospital discharge if available, else ICU fallback
-                            if hospital_disch_times:
-                                tmp['hospital_dischtime'] = tmp['hadm_id'].map(hospital_disch_times)
-                                mask_time = (
-                                    tmp['hospital_dischtime'].isna() |
-                                    (tmp[time_col] <= tmp['hospital_dischtime'])
-                                )
-                                tmp = tmp[mask_time].copy()
-                                tmp = tmp.drop(columns=['hospital_dischtime'])
-                                filter_type = "强制住院出院窗口"
-                            else:
-                                # Last resort: ICU discharge
-                                mask_time = tmp['outtime'].isna() | (tmp[time_col] <= tmp['outtime'])
-                                tmp = tmp[mask_time].copy()
-                                filter_type = "ICU出院窗口(最后备用)"
+                            filter_type = "无时间过滤(缺少outtime)"
 
                         after_filter = len(tmp)
                         # 只在调试模式下打印时间过滤信息
@@ -1745,30 +1664,62 @@ class ConceptResolver:
             )
 
             # 处理 dur_var：如果指定了 dur_var="endtime"，计算 duration = endtime - starttime
-            # 参考 R ricu load_win.R 中的 dur_is_end 逻辑
+            # 参考 R ricu load_win.R 中的 dur_is_end 逻辑:
+            # if (dur_is_end) {
+            #   res <- res[, c(dur_var) := get(dur_var) - get(index_var)]
+            # }
             if source.dur_var and source.dur_var in frame.columns:
                 if source_index_column and source_index_column in frame.columns:
-                    # 检查 dur_var 是否是 endtime 类型（而不是 duration）
-                    # 如果是 datetime 类型，计算 duration = endtime - starttime
+                    duration_col = concept_name + '_dur'
+                    dur_is_end = False  # 是否需要计算 duration = endtime - starttime
+                    
+                    # Case 1: datetime 类型的 endtime
                     if pd.api.types.is_datetime64_any_dtype(frame[source.dur_var]):
+                        dur_is_end = True
                         # 确保 starttime 也是 datetime
                         if not pd.api.types.is_datetime64_any_dtype(frame[source_index_column]):
                             frame[source_index_column] = pd.to_datetime(frame[source_index_column], errors='coerce')
                         
                         # 计算 duration (timedelta)
-                        duration_col = concept_name + '_dur'
                         frame[duration_col] = frame[source.dur_var] - frame[source_index_column]
-                        
-                        # ⚠️ IMPORTANT: 不要将duration列加入time_columns！
-                        # duration是时间间隔（timedelta），不是时间戳（datetime），不需要时间对齐
-                        # time_columns 只应包含需要对齐到ICU admission的datetime列
-                        
-                        # ⚠️ 不要立即删除endtime列！Callback (如mimv_rate)可能需要它
-                        # endtime列会在callback处理后自动清理
-                        # frame = frame.drop(columns=[source.dur_var])
-                        
-                        if DEBUG_MODE:
-                            print(f"   dur_var '{source.dur_var}' → duration '{duration_col}' (示例: {frame[duration_col].head(1).tolist()})")
+                    
+                    # Case 2: 数值类型的 endtime (如 AUMC 的毫秒时间)
+                    # 检测：如果 dur_var 是数值且通常大于 index_var，说明是 endtime
+                    elif pd.api.types.is_numeric_dtype(frame[source.dur_var]) and \
+                         pd.api.types.is_numeric_dtype(frame[source_index_column]):
+                        # 检查 dur_var 是否大于 index_var（表示它是 endtime）
+                        # 使用抽样检查以提高性能
+                        sample_size = min(100, len(frame))
+                        if sample_size > 0:
+                            sample = frame.head(sample_size)
+                            dur_vals = pd.to_numeric(sample[source.dur_var], errors='coerce')
+                            idx_vals = pd.to_numeric(sample[source_index_column], errors='coerce')
+                            valid_mask = dur_vals.notna() & idx_vals.notna()
+                            if valid_mask.sum() > 0:
+                                # 如果大部分 dur_var > index_var，则认为是 endtime
+                                ratio = (dur_vals[valid_mask] > idx_vals[valid_mask]).mean()
+                                if ratio > 0.8:  # 80% 以上的值满足 dur_var > index_var
+                                    dur_is_end = True
+                                    # 计算 duration = endtime - starttime (数值)
+                                    # 结果单位与 start/stop 相同：
+                                    # - AUMC: 分钟（datasource.py 已将 ms 转为分钟）
+                                    # - eICU: 分钟（offset 列本身就是分钟）
+                                    frame[duration_col] = frame[source.dur_var] - frame[source_index_column]
+                                    
+                                    # 🔧 FIX: 将 duration 从分钟转换为小时
+                                    # 这与 _align_time_to_admission 对 start/stop 的转换保持一致
+                                    db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                                    if db_name in ['eicu', 'eicu_demo', 'aumc']:
+                                        frame[duration_col] = frame[duration_col] / 60.0
+                                        if DEBUG_MODE:
+                                            print(f"   🔧 {db_name}: 将 {duration_col} 从分钟转换为小时")
+                                    
+                                    if DEBUG_MODE:
+                                        print(f"   🔧 AUMC dur_is_end=True: {source.dur_var}={dur_vals.head(3).tolist()}, "
+                                              f"{source_index_column}={idx_vals.head(3).tolist()}")
+                    
+                    if dur_is_end and DEBUG_MODE:
+                        print(f"   dur_var '{source.dur_var}' → duration '{duration_col}' (示例: {frame[duration_col].head(1).tolist()})")
 
             value_column = source.value_var or table.value_column
             if value_column is None:
@@ -1845,7 +1796,15 @@ class ConceptResolver:
                         regex_column = source.value_var  # 会在下面触发跳过
                 else:
                     # 标准 rgx_itm 模式：regex 过滤 sub_var
-                    regex_column = source.sub_var
+                    # 🔧 FIX: 如果 sub_var == value_var，则 sub_var 已被重命名为 concept_name
+                    # 需要使用 concept_name 而不是 sub_var
+                    if source.sub_var == source.value_var:
+                        regex_column = concept_name
+                    elif source.sub_var in frame.columns:
+                        regex_column = source.sub_var
+                    else:
+                        # sub_var 可能被重命名了，尝试 concept_name
+                        regex_column = concept_name if concept_name in frame.columns else source.sub_var
                 
                 if not regex_column:
                     raise ValueError(
@@ -1896,45 +1855,74 @@ class ConceptResolver:
                 
                 # 单位归一化：处理等价单位
                 # 例如 '10^9/l' 等价于 'G/l' (Giga = 10^9)
+                # 🔧 mcL 和 uL 是等价单位：micro-Liter
                 unit_equivalents = {
                     '10^9/l': 'g/l',
                     '10^9/L': 'g/l',
                     '10e9/l': 'g/l',
                     'K/ul': 'k/ul',  # 大小写归一化
+                    'K/mcL': 'k/ul',  # eICU uses mcL instead of uL (microliter)
+                    'k/mcl': 'k/ul',  # eICU uses mcL instead of uL (microliter)
+                    '10^3/mcL': '10(3)/mcl',  # Alternative notation
+                    '10^3/uL': '10(3)/mcl',   # Alternative notation
+                    # eICU 单位归一化
+                    'Units/L': 'iu/l',  # eICU uses 'Units/L' for enzyme activities (ALP, ALT, AST, etc.)
+                    'units/l': 'iu/l',  # eICU uses 'Units/L' for enzyme activities
+                    'U/L': 'iu/l',      # Common alternative
+                    'u/l': 'iu/l',      # Common alternative (lowercase)
+                    # AUMC 荷兰语单位
+                    'ie': 'units',  # Internationale Eenheden (国际单位)
+                    'ie/uur': 'units/hr',  # 单位/小时
+                    'iu': 'units',  # International Units
+                    'iu/hr': 'units/hr',
                 }
                 
-                # 归一化数据中的单位
-                series = frame[source_unit_column].astype(str).str.strip()
-                normalized_series = series.replace(unit_equivalents).str.lower()
+                # 🔧 CRITICAL: 对于 AUMC 数据库，放宽单位匹配
+                # AUMC 使用荷兰语单位（如 IE 代表国际单位）
+                # 并且某些概念（如 ins）使用 dose 列但概念定义期望 units/hr
+                # 为保持与 R ricu 一致，对 AUMC 禁用严格单位过滤
+                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                skip_unit_filter = db_name == 'aumc'
                 
-                # 🔧 进一步归一化：去除非字母数字字符后比较
-                # 这处理了 mmHg 的各种变体：mm Hg, mm/Hg, mm(hg), mm[Hg] 等
-                # NOTE: re 模块已在文件顶部导入，不要在此处重新导入，否则会导致 UnboundLocalError
-                def normalize_unit_for_comparison(unit_str):
-                    """归一化单位字符串，仅保留字母数字字符"""
-                    if not unit_str or pd.isna(unit_str) or unit_str in ['', 'none', 'None', 'nan']:
-                        return ''
-                    return re.sub(r'[^a-z0-9]', '', str(unit_str).lower())
+                if skip_unit_filter:
+                    # AUMC: 跳过严格单位过滤，但仍记录调试信息
+                    if DEBUG_MODE:
+                        series = frame[source_unit_column].astype(str).str.strip()
+                        print(f"   ⚠️ AUMC: 跳过单位过滤 (原单位: {series.unique()[:5]}, 期望: {definition.units})")
+                else:
+                    # 非 AUMC 数据库：应用严格单位过滤
+                    # 归一化数据中的单位
+                    series = frame[source_unit_column].astype(str).str.strip()
+                    normalized_series = series.replace(unit_equivalents).str.lower()
                 
-                normalized_allowed = {normalize_unit_for_comparison(u) for u in definition.units}
-                normalized_data = normalized_series.apply(normalize_unit_for_comparison)
+                    # 🔧 进一步归一化：去除非字母数字字符后比较
+                    # 这处理了 mmHg 的各种变体：mm Hg, mm/Hg, mm(hg), mm[Hg] 等
+                    # NOTE: re 模块已在文件顶部导入，不要在此处重新导入，否则会导致 UnboundLocalError
+                    def normalize_unit_for_comparison(unit_str):
+                        """归一化单位字符串，仅保留字母数字字符"""
+                        if not unit_str or pd.isna(unit_str) or unit_str in ['', 'none', 'None', 'nan']:
+                            return ''
+                        return re.sub(r'[^a-z0-9]', '', str(unit_str).lower())
+                    
+                    normalized_allowed = {normalize_unit_for_comparison(u) for u in definition.units}
+                    normalized_data = normalized_series.apply(normalize_unit_for_comparison)
 
-                # 处理None/空字符串单位的情况
-                # 对于FiO2等数据，valueuom=None时应该保留数据，而不是过滤掉
-                # 将'none'和空字符串视为匹配任何单位
-                # 🔧 FIX: 添加 'geen' (荷兰语 "无") 和其他无单位标记的支持
-                # AUMC 数据使用 'Geen' 表示无单位（如 sao2 的 0.xx 格式值）
-                no_unit_markers = {'', 'none', 'geen', 'null', 'na', 'n/a', '-'}
-                mask = (
-                    normalized_series.isin(allowed_units) |  # 原始比较
-                    normalized_data.isin(normalized_allowed) |  # 归一化比较
-                    (normalized_series.isin(no_unit_markers))  # 无单位标记
-                )
+                    # 处理None/空字符串单位的情况
+                    # 对于FiO2等数据，valueuom=None时应该保留数据，而不是过滤掉
+                    # 将'none'和空字符串视为匹配任何单位
+                    # 🔧 FIX: 添加 'geen' (荷兰语 "无") 和其他无单位标记的支持
+                    # AUMC 数据使用 'Geen' 表示无单位（如 sao2 的 0.xx 格式值）
+                    no_unit_markers = {'', 'none', 'geen', 'null', 'na', 'n/a', '-'}
+                    mask = (
+                        normalized_series.isin(allowed_units) |  # 原始比较
+                        normalized_data.isin(normalized_allowed) |  # 归一化比较
+                        (normalized_series.isin(no_unit_markers))  # 无单位标记
+                    )
 
-                before_unit = len(frame)
-                frame = frame[mask]
-                if before_unit != len(frame) and DEBUG_MODE:
-                    print(f"   ✓ 单位过滤 (允许{definition.units}): {before_unit} → {len(frame)} 行")
+                    before_unit = len(frame)
+                    frame = frame[mask]
+                    if before_unit != len(frame) and DEBUG_MODE:
+                        print(f"   ✓ 单位过滤 (允许{definition.units}): {before_unit} → {len(frame)} 行")
             
             # 只有在concept_name列存在时才dropna
             # 但不要过早删除，因为某些回调函数可能会处理NaN值
@@ -2157,7 +2145,10 @@ class ConceptResolver:
                 'labresultoffset', 'observationoffset', 'nursecharting_offset', 
                 'respiratorycharting_offset', 'intakeoutput_offset', 'respchartoffset',
                 'infusionoffset', 'drugstartoffset', 'drugstopoffset', 'drugorderoffset',
-                'culturetakenoffset', 'cultureoffset'
+                'culturetakenoffset', 'cultureoffset',
+                # 🔥 添加 respiratorycare 表的时间列
+                'respcarestatusoffset', 'ventstartoffset', 'ventendoffset',
+                'priorventstartoffset', 'priorventendoffset',
             ]
             
             offset_cols_in_data = [col for col in combined.columns if col in eicu_time_cols]
@@ -2352,6 +2343,9 @@ class ConceptResolver:
                 index_column
             )
         
+        # 🔧 NOTE: 不过滤负时间（入ICU前的数据），ricu 保留这些数据
+        # 例如：AUMC esr measuredat=-2 表示入院前2小时的数据，ricu 也保留
+        
         # 最终验证：确保index_column存在于combined中
         if index_column and index_column not in combined.columns:
             # 尝试查找可能的时间列
@@ -2439,6 +2433,7 @@ class ConceptResolver:
         data_source: ICUDataSource,
         id_columns: List[str],
         index_column: str,
+        time_columns: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """Align time column to ICU admission time as anchor (R ricu as_dt_min).
         
@@ -2450,6 +2445,7 @@ class ConceptResolver:
             data_source: Data source instance
             id_columns: ID columns (e.g., ['stay_id'])
             index_column: Time column name (e.g., 'charttime')
+            time_columns: Additional time columns to convert (e.g., ['stop', 'mech_vent_dur'])
             
         Returns:
             DataFrame with time converted to hours since ICU admission
@@ -2462,19 +2458,43 @@ class ConceptResolver:
         if db_name in ['eicu', 'eicu_demo', 'aumc']:
             # eICU/AUMC时间列是相对于入院时间的offset,单位是分钟（在datasource.py中已转换）
             # 转换为小时以与其他数据库保持一致
-            if index_column in data.columns and pd.api.types.is_numeric_dtype(data[index_column]):
-                # 将分钟转换为小时
-                if DEBUG_MODE:
-                    try:
-                        print(f"   🐞 [_align_time_to_admission] before conversion min/max: {data[index_column].min()} / {data[index_column].max()}")
-                    except Exception:
-                        pass
-                data[index_column] = data[index_column] / 60.0
-                if DEBUG_MODE:
-                    try:
-                        print(f"   🐞 [_align_time_to_admission] after conversion min/max: {data[index_column].min()} / {data[index_column].max()}")
-                    except Exception:
-                        pass
+            
+            # 收集所有需要转换的时间列
+            cols_to_convert = set()
+            if index_column and index_column in data.columns:
+                cols_to_convert.add(index_column)
+            
+            # 添加额外的时间列 (如 stop 等)
+            # 注意：不再包含 *_dur 列，因为这些是 duration 值，已经是小时了
+            if time_columns:
+                for col in time_columns:
+                    if col and col in data.columns:
+                        # 跳过 *_dur 列 - 这些是 duration 值，由 callback 计算并返回小时格式
+                        if not col.endswith('_dur'):
+                            cols_to_convert.add(col)
+            
+            # 自动检测其他可能的时间列 (start, stop)
+            # 注意：不再自动检测 *_dur 列，因为这些是 duration 值，已经是小时了
+            for col in data.columns:
+                if col in ['start', 'stop']:
+                    if pd.api.types.is_numeric_dtype(data[col]):
+                        cols_to_convert.add(col)
+                # 不再自动转换 *_dur 列，因为这些是 duration 值，由 callback 返回时已经是小时
+            
+            # 转换所有时间列（从分钟到小时）
+            for col in cols_to_convert:
+                if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
+                    if DEBUG_MODE:
+                        try:
+                            print(f"   🐞 [_align_time_to_admission] {col} before conversion min/max: {data[col].min()} / {data[col].max()}")
+                        except Exception:
+                            pass
+                    data[col] = data[col] / 60.0
+                    if DEBUG_MODE:
+                        try:
+                            print(f"   🐞 [_align_time_to_admission] {col} after conversion min/max: {data[col].min()} / {data[col].max()}")
+                        except Exception:
+                            pass
             return data
         
         # Early return checks (no verbose output for performance)
@@ -3049,12 +3069,13 @@ class ConceptResolver:
                             continue
                         
                         # 计算结束时间（小时）
+                        # R ricu 使用 seq(min, max, step) 包含终点，所以这里用 <=
                         end_time = start_time + duration
                         
                         # 生成时间序列（每个 interval）
                         current_time = np.floor(start_time / interval_hours) * interval_hours
                         
-                        while current_time < end_time:
+                        while current_time <= end_time:
                             new_row = {idx_col: current_time}
                             # 复制 ID 列
                             for col in id_cols:
@@ -3165,6 +3186,8 @@ class ConceptResolver:
                     # If change_interval fails, log but continue
                     if verbose:
                         print(f"  ⚠️ 警告: {concept_name} 的interval处理失败: {e}")
+
+        # 🔧 NOTE: 不过滤负时间（入ICU前的数据），ricu 保留这些数据
 
         return result
 
@@ -3853,6 +3876,7 @@ class ConceptResolver:
         interval: pd.Timedelta,
         align_to_admission: bool,
         kwargs: Dict[str, object],
+        _skip_concept_cache: bool = False,  # 🔧 跳过概念缓存
     ) -> ICUTable:
         # 🚀 优化：增强概念数据缓存（避免重复加载相同概念，如urine、vaso_ind、pafi）
         patient_ids_hash = hash(frozenset(patient_ids)) if patient_ids else None
@@ -3875,34 +3899,44 @@ class ConceptResolver:
         kwargs_hash = hash(frozenset(_hashable_kwargs_items(kwargs))) if kwargs else 0
         concept_cache_key = (concept_name, patient_ids_hash, str(interval), str(agg_value), kwargs_hash)
         
-        with self._cache_lock:
-            # 检查增强的概念数据缓存
-            if concept_cache_key in self._concept_data_cache:
-                if verbose and logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("✨ 从内存缓存加载概念 '%s' (命中增强缓存)", concept_name)
-                return self._concept_data_cache[concept_cache_key]
-            
-            # 回退检查旧的简单缓存（用于向后兼容）
-            simple_key = (concept_name, patient_ids_hash, str(interval), str(agg_value))
-            if simple_key in self._concept_data_cache:
-                if verbose and logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("✨ 从内存缓存加载概念 '%s' (命中简单缓存)", concept_name)
-                result = self._concept_data_cache[simple_key]
-                # 同步到新的缓存键
-                self._concept_data_cache[concept_cache_key] = result
-                return result
-            
-            # 检查旧的概念缓存
-            cached = self._concept_cache.get(concept_name)
-            if cached is not None:
-                # 同时更新到新缓存
-                self._concept_data_cache[concept_cache_key] = cached
-                return cached
-            # 线程安全的循环依赖检测
-            inflight = self._get_inflight()
-            if concept_name in inflight:
-                raise RuntimeError(f"Circular dependency detected for concept '{concept_name}'")
-            inflight.add(concept_name)
+        # 🔧 如果 _skip_concept_cache=True，跳过所有缓存检查和缓存写入
+        # 这用于回调内部加载概念，避免污染主缓存
+        if not _skip_concept_cache:
+            with self._cache_lock:
+                # 检查增强的概念数据缓存
+                if concept_cache_key in self._concept_data_cache:
+                    if verbose and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug("✨ 从内存缓存加载概念 '%s' (命中增强缓存)", concept_name)
+                    return self._concept_data_cache[concept_cache_key]
+                
+                # 回退检查旧的简单缓存（用于向后兼容）
+                simple_key = (concept_name, patient_ids_hash, str(interval), str(agg_value))
+                if simple_key in self._concept_data_cache:
+                    if verbose and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug("✨ 从内存缓存加载概念 '%s' (命中简单缓存)", concept_name)
+                    result = self._concept_data_cache[simple_key]
+                    # 同步到新的缓存键
+                    self._concept_data_cache[concept_cache_key] = result
+                    return result
+                
+                # 检查旧的概念缓存
+                cached = self._concept_cache.get(concept_name)
+                if cached is not None:
+                    # 同时更新到新缓存
+                    self._concept_data_cache[concept_cache_key] = cached
+                    return cached
+                # 线程安全的循环依赖检测
+                inflight = self._get_inflight()
+                if concept_name in inflight:
+                    raise RuntimeError(f"Circular dependency detected for concept '{concept_name}'")
+                inflight.add(concept_name)
+        else:
+            # 跳过缓存模式也需要设置 inflight 以检测循环依赖
+            with self._cache_lock:
+                inflight = self._get_inflight()
+                if concept_name in inflight:
+                    raise RuntimeError(f"Circular dependency detected for concept '{concept_name}'")
+                inflight.add(concept_name)
 
         definition = self.dictionary[concept_name]
         for dependency in definition.depends_on:
@@ -3915,6 +3949,7 @@ class ConceptResolver:
                 interval,
                 align_to_admission,
                 kwargs,
+                _skip_concept_cache=_skip_concept_cache,  # 传递跳过缓存标志
             )
 
         cache_key = self._build_cache_key(
@@ -3927,13 +3962,15 @@ class ConceptResolver:
             kwargs,
         )
 
-        disk_hit = self._load_from_disk_cache(concept_name, data_source, cache_key)
-        if disk_hit is not None:
-            with self._cache_lock:
-                self._concept_cache[concept_name] = disk_hit
-                self._concept_data_cache[concept_cache_key] = disk_hit  # 🚀 也存入新缓存
-                self._get_inflight().discard(concept_name)
-            return disk_hit
+        # 🔧 如果 _skip_concept_cache=True，跳过磁盘缓存
+        if not _skip_concept_cache:
+            disk_hit = self._load_from_disk_cache(concept_name, data_source, cache_key)
+            if disk_hit is not None:
+                with self._cache_lock:
+                    self._concept_cache[concept_name] = disk_hit
+                    self._concept_data_cache[concept_cache_key] = disk_hit  # 🚀 也存入新缓存
+                    self._get_inflight().discard(concept_name)
+                return disk_hit
 
         try:
             result = self._load_single_concept(
@@ -3967,13 +4004,14 @@ class ConceptResolver:
                         duration = row[dur_col]
                         
                         # 计算结束时间（小时）
+                        # R ricu 使用 seq(min, max, step) 包含终点，所以这里用 <=
                         end_time = start_time + duration
                         
                         # 生成时间序列（每个 interval）
                         interval_hours = interval.total_seconds() / 3600.0
                         current_time = np.floor(start_time / interval_hours) * interval_hours
                         
-                        while current_time < end_time:
+                        while current_time <= end_time:
                             new_row = {idx_col: current_time}
                             # 复制 ID 列
                             for col in id_cols:
@@ -4009,12 +4047,18 @@ class ConceptResolver:
                 self._get_inflight().discard(concept_name)
             raise
 
-        self._store_in_disk_cache(concept_name, data_source, cache_key, result)
+        # 🔧 如果 _skip_concept_cache=True，跳过缓存写入
+        if not _skip_concept_cache:
+            self._store_in_disk_cache(concept_name, data_source, cache_key, result)
 
-        with self._cache_lock:
-            self._concept_cache[concept_name] = result
-            self._concept_data_cache[concept_cache_key] = result  # 🚀 存入新缓存
-            self._get_inflight().discard(concept_name)
+            with self._cache_lock:
+                self._concept_cache[concept_name] = result
+                self._concept_data_cache[concept_cache_key] = result  # 🚀 存入新缓存
+                self._get_inflight().discard(concept_name)
+        else:
+            # 仅清除 inflight 标记
+            with self._cache_lock:
+                self._get_inflight().discard(concept_name)
         return result
 
     def _apply_aggregation(
@@ -4431,8 +4475,10 @@ class ConceptResolver:
                 if cand in df.columns:
                     id_col = cand
                     break
-            # 检测时间列
-            for cand in ['charttime', 'time', 'starttime', 'index_var', 'measuredat']:
+            # 检测时间列 - FIX: 添加 eICU 的时间列和区间格式的 start 列
+            for cand in ['charttime', 'time', 'starttime', 'start', 'index_var', 'measuredat',
+                         'nursingchartoffset', 'labresultoffset', 'observationoffset',
+                         'respchartoffset', 'intakeoutputoffset', 'infusionoffset']:
                 if cand in df.columns:
                     time_col = cand
                     break
@@ -4922,9 +4968,28 @@ def _apply_callback(
 
         id_cols = [col for col in frame.columns if 'id' in col.lower()]
         index_var = source.index_var
+        
+        # 🔥 FIX: 如果 source.index_var 是 None，尝试从表配置获取默认 index_var
+        # eICU vent_start 源有 index_var: None，但表 respiratorycare 的默认是 respcarestatusoffset
+        if index_var is None and data_source is not None:
+            try:
+                table_cfg = data_source.config.get_table(source.table)
+                if table_cfg and table_cfg.defaults:
+                    index_var = table_cfg.defaults.index_var
+                    if DEBUG_MODE:
+                        print(f"   🔧 vent_flag: source.index_var=None，使用表默认 index_var='{index_var}'")
+            except Exception:
+                pass
+        
+        # 🔥 R ricu vent_flag: val_var 是原始列名（如 ventstartoffset），不是概念名
+        # vent_flag 会将 val_var 的值作为新的时间索引，然后将 val_var 设为 TRUE
+        # 🔧 FIX: 如果 value_var 已被重命名为 concept_name，使用 concept_name
+        val_col = source.value_var if hasattr(source, 'value_var') and source.value_var else concept_name
+        if val_col not in frame.columns and concept_name in frame.columns:
+            val_col = concept_name
         return vent_flag(
             frame,
-            val_col=concept_name,
+            val_col=val_col,
             index_var=index_var,
             id_cols=id_cols,
         )
@@ -5038,6 +5103,43 @@ def _apply_callback(
         if not index_var and source.table == 'drugitems':
             index_var = 'start'
 
+        # 🔧 FIX: 获取体重概念并合并到 frame 中
+        # R ricu 在回调中使用 add_weight(res, env, "weight") 获取体重
+        # pyricu 需要在调用回调前加载 weight 概念
+        if 'weight' not in frame.columns and resolver is not None and data_source is not None:
+            try:
+                # 获取患者ID列
+                id_cols = [c for c in frame.columns if c.lower().endswith('id') and c != 'itemid']
+                if id_cols:
+                    unique_ids = frame[id_cols[0]].unique().tolist()
+                    # 加载 weight 概念
+                    weight_table = resolver._load_single_concept(
+                        'weight',
+                        data_source,
+                        aggregator=False,  # 不聚合，保留原始值
+                        patient_ids={id_cols[0]: unique_ids},
+                        verbose=False,
+                        _bypass_callback=True,  # 避免回调循环
+                    )
+                    if weight_table is not None and not weight_table.data.empty:
+                        weight_df = weight_table.data
+                        # 确保weight列是数值型
+                        if 'weight' in weight_df.columns:
+                            weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
+                            # 合并到frame
+                            merge_cols = [c for c in id_cols if c in weight_df.columns]
+                            if merge_cols:
+                                frame = frame.merge(
+                                    weight_df[merge_cols + ['weight']].drop_duplicates(),
+                                    on=merge_cols,
+                                    how='left'
+                                )
+            except Exception as e:
+                # 如果获取体重失败，使用默认值
+                if DEBUG_MODE:
+                    print(f"   ⚠️  获取体重失败: {e}")
+                pass
+
         return aumc_rate_kg(
             frame,
             concept_name=concept_name,
@@ -5048,6 +5150,20 @@ def _apply_callback(
             index_col=index_var,
             stop_col=stop_var,
         )
+
+    # Handle aumc_rate callback - combine unit_var and rate_var into unit/rate format
+    # R: x <- x[, c(unit_var) := do_call(.SD, paste, sep = "/"), .SDcols = c(unit_var, rate_var)]
+    if expr == "aumc_rate":
+        rate_var = getattr(source, 'rate_var', None)
+        if not rate_var and source.params:
+            rate_var = source.params.get("rate_var")
+        unit_var = source.unit_var or unit_column
+        
+        if rate_var and unit_var and rate_var in frame.columns and unit_var in frame.columns:
+            frame = frame.copy()
+            # Combine unit and rate into "unit/rate" format
+            frame[unit_var] = frame[unit_var].astype(str) + "/" + frame[rate_var].astype(str)
+        return frame
 
     match = re.fullmatch(r"aumc_rate_units\(\s*([0-9eE+\-\.]+)\s*\)", expr)
     if match:
@@ -5068,7 +5184,7 @@ def _apply_callback(
             val_col=val_var,
             unit_col=unit_var,
             rate_unit_col=rate_uom,
-            stop_var=stop_var,
+            stop_col=stop_var,
             concept_name=concept_name,
         )
 
@@ -5332,6 +5448,8 @@ def _apply_callback(
             # Load WBC concept for the same patients
             # IMPORTANT: Use merge=False to get Dict[str, ICUTable] instead of merged DataFrame
             # IMPORTANT: Must pass data_source for resolver.load_concepts to work
+            # IMPORTANT: Use _skip_concept_cache=True to avoid polluting the main cache
+            # This way, the internal wbc load won't affect subsequent wbc loads
             if data_source is None:
                 if DEBUG_CALLBACK:
                     print(f"    [SKIP] data_source is None")
@@ -5340,14 +5458,15 @@ def _apply_callback(
                 return frame
             
             if DEBUG_CALLBACK:
-                print(f"    加载 WBC...")
+                print(f"    加载 WBC (跳过缓存)...")
             
             wbc_result = resolver.load_concepts(
                 ['wbc'],
                 data_source,
-                patient_ids=frame_patient_ids,
+                patient_ids=frame_patient_ids,  # Only load for needed patients
                 ricu_compatible=False,
                 merge=False,
+                _skip_concept_cache=True,  # Don't cache this internal call
             )
             
             if 'wbc' not in wbc_result or wbc_result['wbc'].data.empty:
