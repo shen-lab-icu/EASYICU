@@ -139,7 +139,7 @@
   },
   "adv_resp": {
     "class_name": "lgl_cncpt",
-    "description": "Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP) - validated: 39280 stays with ventilator, 6152 with HFNC",
+    "description": "Advanced respiratory support (IMV/NIV/HFNC/CPAP/BiPAP) - validated: 39364 with PEEP, 39280 with Ventilator Type, 30177 Total PEEP, 4056 HFNC, 5762 BiPap, 2993 CPAP",
     "category": "respiratory",
     "sources": {
       "miiv": [
@@ -149,22 +149,28 @@
           "ids": [
             223848,
             223849,
+            229314,
+            220339,
+            224700,
             227577,
+            227578,
+            227579,
+            227580,
             227583,
             225949
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "223848=Ventilator Type (39280 stays), 223849=Ventilator Mode (27164), 227577=BiPap Mode (3918), 227583=Autoset/CPAP (2791), 225949=NIV Mask (2041)"
+          "_comment": "223848=Ventilator Type (39280), 223849=Ventilator Mode (27164), 229314=Ventilator Mode Hamilton (16703), 220339=PEEP set (39364), 224700=Total PEEP Level (30177), 227577=BiPap Mode (3918), 227578=BiPap Mask (4262), 227579=BiPap EPAP (3840), 227580=BiPap IPAP (3604), 227583=Autoset/CPAP (2791), 225949=NIV Mask (2041)"
         },
         {
           "table": "chartevents",
           "sub_var": "itemid",
           "ids": [226732],
           "val_var": "value",
-          "regex": "High flow|HFNC|Bipap|CPAP",
+          "regex": "High flow|HFNC|Bipap|CPAP|Endotracheal|Tracheostomy",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "226732=Oxygen Delivery Device, filter for HFNC/BiPAP/CPAP values (6152 stays with high flow)"
+          "_comment": "226732=O2 Delivery Device: High flow nasal cannula (4056), Bipap mask (5762), CPAP mask (2993), Endotracheal tube (35879), Tracheostomy tube (3672)"
         }
       ],
       "eicu": [
@@ -177,7 +183,7 @@
         {
           "table": "respiratorycharting",
           "sub_var": "respchartvaluelabel",
-          "regex": "CPAP|BiPAP|NIV|PEEP/CPAP|Bipap|HFNC|High Flow",
+          "regex": "CPAP|BiPAP|NIV|PEEP|Bipap|HFNC|High Flow|ventilator|mechanical vent",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -186,7 +192,7 @@
         {
           "table": "listitems",
           "sub_var": "item",
-          "regex": "(CPAP|Bipap|NIV|IPPV|SIMV|ASB|MMV|BIPAP|HFNC|High Flow)",
+          "regex": "(CPAP|Bipap|NIV|IPPV|SIMV|ASB|MMV|BIPAP|HFNC|High Flow|beademing|ventilat)",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         },
@@ -208,14 +214,15 @@
             3845,
             15001552
           ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "3845=Respiratory mode, 15001552=Mechanical ventilation indicator"
         }
       ]
     }
   },
   "ecmo": {
     "class_name": "lgl_cncpt",
-    "description": "Extracorporeal membrane oxygenation in use - validated: 155 stays with Circuit Config, 41 with Oxygenator/ECMO",
+    "description": "Extracorporeal membrane oxygenation in use - validated: 155 stays with Circuit Config, 150 with ECMO category items, 147 with Flow/Speed",
     "category": "respiratory",
     "sources": {
       "miiv": [
@@ -224,19 +231,24 @@
           "sub_var": "itemid",
           "ids": [
             229268,
+            229270,
+            229277,
+            229278,
+            229280,
+            229274,
+            229266,
             228193,
-            224660,
-            229270
+            224660
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "229268=Circuit Configuration (155 stays, best indicator), 228193=Oxygenator/ECMO (41), 224660=ECMO (5), 229270=Flow (ECMO)"
+          "_comment": "229268=Circuit Configuration (155), 229270=Flow ECMO (147), 229277=Speed ECMO (147), 229278=Sweep ECMO (146), 229280=FiO2 ECMO (146), 229274=Oxygenator visible (150), 229266=Cannula sites (150), 228193=Oxygenator/ECMO (41), 224660=ECMO Hemodynamics (5)"
         }
       ],
       "eicu": [
         {
           "table": "treatment",
           "sub_var": "treatmentstring",
-          "regex": "ECMO",
+          "regex": "ECMO|extracorporeal membrane",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -253,7 +265,7 @@
         {
           "table": "procedureorderitems",
           "sub_var": "item",
-          "regex": "ECMO",
+          "regex": "ECMO|extracorporeal",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -323,19 +335,38 @@
       ],
       "eicu": [
         {
+          "ids": "Motor",
           "table": "nursecharting",
-          "sub_var": "nursingchartcelltypevallabel",
-          "regex": "GCS.*Motor",
-          "class_name": "rgx_itm"
+          "sub_var": "nursingchartcelltypevalname"
         }
       ],
-      "aumc": [],
-      "hirid": []
+      "aumc": [
+        {
+          "ids": 6734,
+          "table": "listitems",
+          "sub_var": "itemid",
+          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken` = 2, `Decortatie reflex (abnormaal buigen)` = 3, `Spastische reactie (terugtrekken)` = 4, `Localiseert pijn` = 5, `Volgt verbale commando's op` = 6) )"
+        },
+        {
+          "ids": 13072,
+          "table": "listitems",
+          "sub_var": "itemid",
+          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken op pijn` = 2, `Abnormaal buigen bij pijn` = 3, `Terugtrekken bij pijn` = 4, `Localiseren pijn` = 5, `Voert opdrachten uit` = 6) )"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 10000200,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ]
     }
   },
   "delirium_positive": {
     "class_name": "lgl_cncpt",
-    "description": "Positive delirium assessment (CAM-ICU positive) - 72944 stays with assessment, 119052 positive results",
+    "description": "Positive delirium assessment (CAM-ICU positive) - 72944 stays with assessment, 22462 stays with Positive result",
     "category": "neurology",
     "sources": {
       "miiv": [
@@ -347,14 +378,24 @@
           "regex": "^Positive$",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "228332=Delirium assessment: Positive=119052, Negative=361125, UTA=130455"
+          "_comment": "228332=Delirium assessment: Positive=119052 records (22462 stays), Negative=361125, UTA=130455"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [229326, 228337, 228300],
+          "val_var": "value",
+          "regex": "^Yes$|Positive|Acute",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "229326=CAM-ICU MS Change (46961), 228337=CAM-ICU MS Change (23703), 228300=CAM-ICU MS change (1665) - Yes indicates positive"
         }
       ],
       "eicu": [
         {
           "table": "nursecharting",
           "sub_var": "nursingchartcelltypevallabel",
-          "regex": "CAM-ICU.*positive|Delirium.*positive",
+          "regex": "CAM-ICU.*positive|Delirium.*positive|delirium.*yes",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -365,7 +406,7 @@
   },
   "mech_circ_support": {
     "class_name": "lgl_cncpt",
-    "description": "Mechanical circulatory support - validated: IABP (1226 stays), Impella (220), Tandem (41), LVAD (11), RVAD (6)",
+    "description": "Mechanical circulatory support - validated: IABP (1232 stays with Assisted Systole), Impella (223), Tandem (41), LVAD (11), RVAD (6)",
     "category": "cardiovascular",
     "sources": {
       "miiv": [
@@ -373,22 +414,32 @@
           "table": "chartevents",
           "sub_var": "itemid",
           "ids": [
+            224309,
+            224652,
+            224654,
+            224311,
+            224310,
             224322,
+            227980,
+            228866,
             225979,
             228154,
+            228156,
+            228151,
+            228158,
             228198,
             229254,
             220128
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "224322=IABP Mean (1226 stays), 225979=IABP Size (1154), 228154=Flow Rate Impella (220), 228198=Tandem Heart Flow (41), 229254=Flow LVAD (11), 220128=RVAD Flow (6)"
+          "_comment": "IABP: 224309=Assisted Systole (1232), 224652=Unassisted Systole (1230), 224654=PAEDP (1229), 224311=BAEDP (1229), 224310=Augmented Diastole (1229), 224322=IABP Mean (1226), 227980=IABP Setting (1175), 228866=Plateau Pressure IABP (900), 225979=IABP Size (1154); Impella: 228154=Flow Rate (220), 228156=Performance (223), 228151=Aortic Pressure Diastolic (220), 228158=Purge Pressure (220); 228198=Tandem Heart Flow (41); 229254=Flow LVAD (11); 220128=RVAD Flow (6)"
         }
       ],
       "eicu": [
         {
           "table": "treatment",
           "sub_var": "treatmentstring",
-          "regex": "IABP|balloon pump|LVAD|Impella|Tandem",
+          "regex": "IABP|intra.?aortic|balloon pump|LVAD|VAD|Impella|Tandem|ventricular assist",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -397,7 +448,7 @@
         {
           "table": "procedureorderitems",
           "sub_var": "item",
-          "regex": "(IABP|balloon|Impella|LVAD)",
+          "regex": "(IABP|intra.?aortic|balloon|Impella|LVAD|VAD|ventricular assist)",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         },
@@ -410,14 +461,7 @@
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
-      "hirid": [
-        {
-          "table": "observations",
-          "sub_var": "variableid",
-          "ids": [],
-          "callback": "transform_fun(set_val(TRUE))"
-        }
-      ]
+      "hirid": []
     }
   },
   "other_vaso": {
@@ -434,17 +478,19 @@
             222315,
             221986,
             229630,
-            229632
+            229632,
+            229709,
+            229764
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "221749=Phenylephrine (14428), 222315=Vasopressin (5626), 221986=Milrinone (1279), 229630=Phenylephrine 50/250 (3778), 229632=Phenylephrine 200/250 (453)"
+          "_comment": "221749=Phenylephrine (14428), 222315=Vasopressin (5626), 221986=Milrinone (1279), 229630=Phenylephrine 50/250 (3778), 229632=Phenylephrine 200/250 (453), 229709=Angiotensin II Giapreza mg (10), 229764=Angiotensin II Giapreza ng (42)"
         }
       ],
       "eicu": [
         {
           "table": "medication",
           "sub_var": "drugname",
-          "regex": "vasopressin|phenylephrine|milrinone",
+          "regex": "vasopressin|phenylephrine|milrinone|angiotensin",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))",
           "val_var": "drugname"
@@ -452,7 +498,7 @@
         {
           "table": "infusiondrug",
           "sub_var": "drugname",
-          "regex": "vasopressin|phenylephrine|milrinone",
+          "regex": "vasopressin|phenylephrine|milrinone|angiotensin",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))",
           "val_var": "drugname"
@@ -462,7 +508,7 @@
         {
           "table": "drugitems",
           "sub_var": "item",
-          "regex": "(Fenylefrine|vasopressin|milrinone)",
+          "regex": "(Fenylefrine|vasopressin|milrinone|angiotensin)",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -482,7 +528,7 @@
   },
   "delirium_tx": {
     "class_name": "lgl_cncpt",
-    "description": "Delirium treatment - validated: Haloperidol IV (3972 stays), prescriptions much larger (16198+ patients)",
+    "description": "Delirium treatment per PADIS Guidelines (antipsychotics: haloperidol, quetiapine, olanzapine, risperidone, ziprasidone, aripiprazole) - validated: Haloperidol IV (4251 stays), prescriptions: haloperidol (16219), quetiapine (14883), olanzapine (13571), risperidone (3847), ziprasidone (672), aripiprazole (2849)",
     "category": "neurology",
     "sources": {
       "miiv": [
@@ -491,15 +537,15 @@
           "sub_var": "itemid",
           "ids": [221824],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "221824=Haloperidol IV (3972 stays, 14988 records)"
+          "_comment": "221824=Haloperidol IV (4251 stays, 14988 records)"
         },
         {
           "table": "prescriptions",
           "sub_var": "drug",
-          "regex": "[Hh]aloperidol|[Qq]uetiapine|[Oo]lanzapine|[Rr]isperidone",
+          "regex": "[Hh]aloperidol|[Qq]uetiapine|[Ss]eroquel|[Oo]lanzapine|[Zz]yprexa|[Rr]isperidone|[Rr]isperdal|[Zz]iprasidone|[Gg]eodon|[Aa]ripiprazole|[Aa]bilify",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "Haloperidol=16198 patients, Quetiapine=10770+, Olanzapine=6236+, Risperidone=1647+"
+          "_comment": "Per PADIS Guidelines: Haloperidol=16219, Quetiapine=14883, Olanzapine=13571, Risperidone=3847, Ziprasidone=672, Aripiprazole=2849 patients"
         }
       ],
       "eicu": [
@@ -507,7 +553,7 @@
           "table": "medication",
           "sub_var": "drugname",
           "val_var": "drugname",
-          "regex": "haloperidol|quetiapine|olanzapine|risperidone",
+          "regex": "haloperidol|quetiapine|seroquel|olanzapine|zyprexa|risperidone|risperdal|ziprasidone|geodon|aripiprazole|abilify",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -516,55 +562,55 @@
         {
           "table": "drugitems",
           "sub_var": "itemid",
-          "ids": [
-            7097,
-            13012,
-            16360
-          ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "ids": [7097, 12630, 13012, 16360],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "7097=Haloperidol, 12630=Risperidon, 13012=Olanzapine, 16360=Quetiapine"
         }
       ],
       "hirid": [
         {
           "table": "pharma",
           "sub_var": "pharmaid",
-          "ids": [
-            239
-          ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "ids": [239],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "239=Haloperidol"
         }
       ]
     }
   },
   "rrt": {
     "class_name": "lgl_cncpt",
-    "description": "Renal replacement therapy - validated: CRRT mode (2780 stays), Hemodialysis (2746), CRRT procedure (2274)",
+    "description": "Renal replacement therapy - validated: CRRT mode (2780 stays), Hemodialysis (2746), CRRT procedure (2274), Dialysis Catheter (4464)",
     "category": "renal",
     "sources": {
       "miiv": [
         {
           "table": "chartevents",
           "sub_var": "itemid",
-          "ids": [227290],
+          "ids": [227290, 225436],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "227290=CRRT mode (2780 stays, 203035 records) - best RRT indicator"
+          "_comment": "227290=CRRT mode (2780 stays, 203035 records), 225436=CRRT Filter Change (240 stays)"
         },
         {
           "table": "procedureevents",
           "sub_var": "itemid",
           "ids": [
             225441,
-            225802
+            225802,
+            225803,
+            225809,
+            225805,
+            224270
           ],
           "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "225441=Hemodialysis (2746 stays), 225802=Dialysis-CRRT (2274 stays)"
+          "_comment": "225441=Hemodialysis (2746 stays), 225802=Dialysis-CRRT (2274), 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF, 225805=Peritoneal Dialysis (180), 224270=Dialysis Catheter (4464)"
         }
       ],
       "eicu": [
         {
           "table": "treatment",
           "sub_var": "treatmentstring",
-          "regex": "(CRRT|hemodialysis|dialysis)",
+          "regex": "(CRRT|hemodialysis|dialysis|CVVH|ultrafiltration|renal replacement)",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
@@ -573,7 +619,7 @@
         {
           "table": "procedureorderitems",
           "sub_var": "item",
-          "regex": "(CRRT|Hemodialysis|Dialysis|CVVH)",
+          "regex": "(CRRT|[Hh]emodialysis|[Dd]ialysis|CVVH|hemofiltrat)",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         },
@@ -586,14 +632,7 @@
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
-      "hirid": [
-        {
-          "table": "observations",
-          "sub_var": "variableid",
-          "ids": [],
-          "callback": "transform_fun(set_val(TRUE))"
-        }
-      ]
+      "hirid": []
     }
   },
   "rrt_criteria": {

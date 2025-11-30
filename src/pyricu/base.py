@@ -615,6 +615,21 @@ class BaseICULoader:
                 verbose=verbose_flag,
                 **params,
             )
+            # Compatibility fix: when running in ricu_compatible mode, R ricu
+            # applies sed_impute='max' for total GCS (tgcs) when ett_gcs == TRUE.
+            # Some tgcs are computed via sum_components and therefore miss the
+            # sed_impute adjustment. Apply the adjustment here on the merged
+            # DataFrame so tgcs matches R ricu semantics when both columns
+            # are present.
+            try:
+                if ricu_compatible and isinstance(result, pd.DataFrame):
+                    if 'tgcs' in result.columns and 'ett_gcs' in result.columns:
+                        mask = result['ett_gcs'].where(result['ett_gcs'].notna(), False).astype(bool)
+                        if mask.any():
+                            result.loc[mask, 'tgcs'] = 15.0
+            except Exception:
+                # Do not fail loading if this adjustment fails
+                pass
         finally:
             # 只有在不需要保留缓存时才清除
             if not should_preserve_cache:

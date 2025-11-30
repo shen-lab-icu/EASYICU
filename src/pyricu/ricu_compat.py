@@ -312,6 +312,11 @@ def expand_interval_rows(
     else:
         ends = starts
     
+    # 🔧 注意：R ricu 不对原始 endtime 做 floor
+    # 只有在 endtime 不在列中时，R ricu 才会用 re_time(start + dur, interval) 计算
+    # 对于 MIIV inputevents，endtime 已经在列中，所以直接使用原始值
+    # seq(start, end, step) 会产生所有 <= end 的时间点
+    
     # 展开
     records = []
     for idx, (start, end, value, stay_id) in enumerate(
@@ -326,22 +331,46 @@ def expand_interval_rows(
         
         span = min(end - start, max_span_hours)
         if span <= 0:
-            records.append({id_col: stay_id, time_col: float(start), value_col: value})
+            records.append({id_col: stay_id, time_col: float(math.floor(start)), value_col: value})
             continue
         
-        # 与ricu的expand()一致：使用floor
-        start_hour = int(math.floor(start))
-        end_hour = int(math.floor(min(end, start + max_span_hours)))
+        # 🔧 FIX: 使用 R seq(start, end, step) 的行为
+        # R 的 seq(17.84, 20, 1) 产生 [17.84, 18.84, 19.84]
+        # 然后取 floor 得到 [17, 18, 19]
+        # 
+        # 实现：从 start 开始，每次加 1，直到超过 end
+        time_points = []
+        current = start
+        while current <= end + 1e-9:  # 加小量避免浮点误差
+            time_points.append(math.floor(current))
+            current += interval_hours
         
-        for hour in range(start_hour, end_hour + 1):
+        # 去重（因为 floor 可能产生重复）
+        time_points = sorted(set(time_points))
+        
+        for hour in time_points:
             records.append({id_col: stay_id, time_col: float(hour), value_col: value})
     
     if not records:
         return df.drop(columns=[endtime_col, duration_col], errors="ignore")
     
     expanded = pd.DataFrame.from_records(records)
-    # 按(id, time)聚合，保留最后一个值（与ricu一致）
-    expanded = expanded.groupby([id_col, time_col], as_index=False).last()
+    
+    # 🔧 FIX: 按(id, time)聚合，根据数据类型选择聚合函数
+    # 参考: ricu/R/tbl-utils.R 第 741-751 行:
+    #   - numeric → median
+    #   - logical → sum (或 any)  
+    #   - character → first
+    value_dtype = expanded[value_col].dtype
+    if pd.api.types.is_numeric_dtype(value_dtype):
+        agg_func = 'median'
+    elif pd.api.types.is_bool_dtype(value_dtype):
+        agg_func = 'any'
+    else:
+        # object/string/category → first
+        agg_func = 'first'
+    
+    expanded = expanded.groupby([id_col, time_col], as_index=False).agg({value_col: agg_func})
     
     return expanded
 
@@ -559,9 +588,22 @@ def merge_concepts_ricu_style(
         if "time" in df_copy.columns and not pd.api.types.is_numeric_dtype(df_copy["time"]):
             df_copy["time"] = time_to_hours(df_copy["time"], df_copy.get("id"))
         
-        # 四舍五入到间隔
-        if "time" in df_copy.columns:
+        # 🔧 FIX: 窗口概念不取整时间，保留原始值给 expand_interval_rows 处理
+        # R ricu 的 expand() 使用原始浮点时间来计算 seq()
+        # 取整将在 expand_interval_rows 内部进行
+        is_window_concept = name in WINDOW_CONCEPTS or name.endswith("_rate")
+        if "time" in df_copy.columns and not is_window_concept:
             df_copy["time"] = round_to_interval(df_copy["time"], interval_hours)
+        
+        # 🔧 FIX: 对 duration 概念的值列进行 floor 舍入
+        # R ricu 在 change_interval 中对所有 difftime 类型（包括 duration）进行 re_time 舍入
+        # re_time = round_to(`units<-`(x, units(interval)), as.double(interval))
+        # round_to = floor(x / interval) * interval
+        # 对于 interval=1h 的 duration, 这等于 floor(hours)
+        if name in DURATION_CONCEPTS or name.endswith("_dur"):
+            if name in df_copy.columns and pd.api.types.is_numeric_dtype(df_copy[name]):
+                # floor 舍入: 2.6 -> 2.0
+                df_copy[name] = np.floor(df_copy[name] / interval_hours) * interval_hours
         
         # 确保有值列
         if name not in df_copy.columns:

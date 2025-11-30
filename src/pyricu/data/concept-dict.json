@@ -2792,6 +2792,7 @@
   "egcs": {
     "min": 1,
     "max": 4,
+    "aggregate": "min",
     "description": "GCS eye",
     "omopid": 4084277,
     "category": "neurological",
@@ -5086,6 +5087,7 @@
   "mgcs": {
     "min": 1,
     "max": 6,
+    "aggregate": "min",
     "description": "GCS motor",
     "omopid": 4083352,
     "category": "neurological",
@@ -5471,7 +5473,6 @@
     "description": "norepinephrine rate",
     "omopid": 1321341,
     "category": "medications",
-    "aggregate": "max",
     "sources": {
       "aumc": [
         {
@@ -7436,6 +7437,18 @@
     "callback": "sum_components",
     "class_name": "rec_cncpt",
     "sources": {
+      "aumc": [
+        {
+          "concepts": [
+            "egcs",
+            "mgcs",
+            "vgcs",
+            "ett_gcs"
+          ],
+          "callback": "gcs",
+          "class_name": "rec_cncpt"
+        }
+      ],
       "eicu": [
         {
           "ids": "GCS Total",
@@ -8162,6 +8175,7 @@
   "vgcs": {
     "min": 1,
     "max": 5,
+    "aggregate": "min",
     "description": "GCS verbal",
     "omopid": 4084912,
     "category": "neurological",
@@ -8639,6 +8653,45 @@
     "min": 0,
     "max": 10,
     "sources": {
+      "aumc": [
+        {
+          "ids": [
+            6835,
+            9556,
+            9927,
+            10285
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "potassium",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "potassium",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            20000500,
+            24000520,
+            24000833,
+            24000867
+          ],
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
       "miiv": [
         {
           "ids": [
@@ -8648,6 +8701,30 @@
           "table": "labevents",
           "sub_var": "itemid",
           "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50971,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50971,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            463,
+            685
+          ],
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
         }
       ]
     }
@@ -8662,6 +8739,38 @@
     "min": 5,
     "max": 50,
     "sources": {
+      "aumc": [
+        {
+          "ids": [
+            6810,
+            9992
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "bicarbonate",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "bicarbonate",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": 20004200,
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
       "miiv": [
         {
           "ids": [
@@ -8670,6 +8779,32 @@
           "table": "labevents",
           "sub_var": "itemid",
           "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50882,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50882,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            451,
+            456,
+            666,
+            667
+          ],
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
         }
       ]
     }

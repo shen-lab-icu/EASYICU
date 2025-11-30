@@ -68,8 +68,9 @@ MINIMAL_COLUMNS_MAP = {
     'procedureevents': ['stay_id', 'starttime', 'endtime', 'itemid', 'value'],
     
     # eICU vitalperiodic: 生命体征周期表
+    # 🔧 FIX: 添加 sao2 列用于 o2sat 和 spo2 概念
     'vitalperiodic': ['patientunitstayid', 'observationoffset', 'temperature', 'heartrate', 
-                      'respiration', 'systemicsystolic', 'systemicdiastolic', 'systemicmean'],
+                      'respiration', 'systemicsystolic', 'systemicdiastolic', 'systemicmean', 'sao2'],
     
     # eICU lab: 实验室检查
     # 包含labmeasurenameinterface用于单位转换回调（如calcium的mmol/l转mg/dL）

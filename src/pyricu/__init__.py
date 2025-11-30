@@ -5,6 +5,12 @@ interface for loading intensive care datasets, working with configuration
 metadata, and resolving clinical concepts across heterogeneous sources.
 """
 
+import warnings
+
+# 全局忽略 pandas groupby.apply 相关的 FutureWarning
+warnings.filterwarnings('ignore', message='.*DataFrameGroupBy.apply.*', category=FutureWarning)
+warnings.filterwarnings('ignore', message='.*Downcasting behavior.*', category=FutureWarning)
+
 from .config import DataSourceConfig, DataSourceRegistry
 from .concept import ConceptDictionary, ConceptResolver
 from .datasource import FilterOp, FilterSpec, ICUDataSource, load_table
