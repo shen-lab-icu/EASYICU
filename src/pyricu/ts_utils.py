@@ -29,12 +29,15 @@ from .table import ICUTable
 
 def _safe_group_apply(grouped, func):
     """Call groupby.apply explicitly keeping group columns in the result."""
-    try:
-        # include_groups=True preserves ID columns for pandas ≥2.1 while
-        # maintaining backwards compatibility with earlier versions.
-        return grouped.apply(func, include_groups=True)
-    except TypeError:  # pandas < 2.1
-        return grouped.apply(func)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', message='.*DataFrameGroupBy.apply.*', category=FutureWarning)
+        try:
+            # include_groups=True preserves ID columns for pandas ≥2.1 while
+            # maintaining backwards compatibility with earlier versions.
+            return grouped.apply(func, include_groups=True)
+        except TypeError:  # pandas < 2.1
+            return grouped.apply(func)
 
 def change_interval(
     table: ICUTable | pd.DataFrame,
@@ -46,6 +49,7 @@ def change_interval(
     fill_gaps: bool = False,
     fill_method: str = "none",
     copy: bool = True,
+    is_window_concept: bool = False,
 ) -> ICUTable | pd.DataFrame:
     """Change the time resolution of a time series table.
     
@@ -139,11 +143,17 @@ def change_interval(
         return table
 
     df = table.data.copy() if copy else table.data
+    
+    # 🔧 FIX: 窗口概念由调用者明确指定，不再基于列名自动检测
+    # 这修复了 AUMC drugitems 表的 'stop' 列被错误识别为窗口结束列的问题
+    has_endtime = is_window_concept
+    
+    endtime_patterns = ('endtime', 'end_time', 'stop', 'stoptime')
+    
     time_cols: List[str] = []
     if table.index_column:
         time_cols.append(table.index_column)
     # 🔧 FIX: 从 time_columns 中排除 endtime 类型的列
-    endtime_patterns = ('endtime', 'end_time', 'stop', 'stoptime', 'end')
     for tc in (table.time_columns or []):
         if tc.lower() not in endtime_patterns and not any(tc.lower().endswith(pat) for pat in endtime_patterns):
             if tc not in time_cols:
@@ -154,7 +164,9 @@ def change_interval(
         if col not in time_cols:
             time_cols.append(col)
 
-    df = _round_time_columns(df, time_cols)
+    # 🔧 FIX: 窗口概念不取整时间，保留原始值给 expand_interval_rows
+    if not has_endtime:
+        df = _round_time_columns(df, time_cols)
 
     # Group by ID columns and rounded time, and aggregate
     group_cols = list(table.id_columns) + [table.index_column]
@@ -175,13 +187,18 @@ def change_interval(
         group_cols = ['__dummy_group']
         import logging
         logging.debug("change_interval: No valid grouping columns found. Using dummy group column.")
-
-    if aggregation:
-        # Apply aggregation - only aggregate numeric columns
+    
+    # 🔧 对于窗口概念（有 endtime），完全跳过聚合，只做时间取整
+    # 聚合将在 expand_interval_rows 展开后进行
+    if has_endtime:
+        # 窗口概念：只取整时间，不聚合
+        # 时间已经在上面的 _round_time_columns 中取整了
+        pass
+    elif aggregation:
+        # 普通概念：正常聚合
         agg_dict = {}
         for col in df.columns:
             if col not in group_cols:
-                # Only aggregate numeric columns
                 if pd.api.types.is_numeric_dtype(df[col]):
                     agg_dict[col] = aggregation
                 else:
@@ -317,6 +334,7 @@ def expand(
     step_size: pd.Timedelta,
     id_cols: Optional[list] = None,
     keep_vars: Optional[list] = None,
+    admission_times: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Expand intervals into individual time points (R ricu expand).
     
@@ -330,6 +348,9 @@ def expand(
         step_size: Time step for expansion (e.g., pd.Timedelta(hours=1))
         id_cols: ID columns to group by (inferred if None)
         keep_vars: Additional columns to keep (values repeated)
+        admission_times: DataFrame with id and intime columns for R ricu-compatible
+                        floor behavior. When provided, floor is applied to
+                        relative time (time - intime), not absolute datetime.
         
     Returns:
         Expanded DataFrame with one row per time step
@@ -422,26 +443,51 @@ def expand(
         # Calculate new times from floored start (not original start)
         expanded_df[start_var] = start_floored_expanded + offsets * step_hours
         
-        # Select columns
-        result_cols = [start_var] + id_cols + keep_vars
-        # Ensure columns exist and are in order
+        # Select columns - remove duplicates while preserving order
+        result_cols = [start_var]
+        seen = {start_var}
+        for col in id_cols + keep_vars:
+            if col not in seen:
+                result_cols.append(col)
+                seen.add(col)
+        
+        # Ensure columns exist, remove duplicated column names from expanded_df
+        if expanded_df.columns.duplicated().any():
+            expanded_df = expanded_df.loc[:, ~expanded_df.columns.duplicated()]
+        
         available_cols = [c for c in result_cols if c in expanded_df.columns]
         return expanded_df[available_cols]
 
     
-    # Original datetime expansion logic
-    # 🔧 CRITICAL FIX 2024-12: Do NOT floor datetime in expand()
+    # 🔧 CRITICAL FIX 2024-12: Match R ricu expand() behavior for datetime
     # 
-    # R ricu's expand() works on RELATIVE time (hours since admission).
-    # It uses seq(start, end, step) WITHOUT flooring.
-    # The floor happens LATER in change_interval() / round_to() / re_time().
+    # R ricu's expand() uses floor for BOTH numeric and datetime:
+    #   seq(floor(start), floor(end), by = step)
+    # 
+    # For datetime, this means flooring to the hour:
+    #   04:41:00 → 04:00:00
+    #   05:35:00 → 05:00:00
     #
-    # pyricu was incorrectly flooring ABSOLUTE datetime here, which caused
-    # 06:39:00 → 06:00:00 (floor). After converting to relative time,
-    # 06:00:00 becomes hour 12, but 06:39:00 should be hour 13.
+    # The interval 04:41 to 05:35 should expand to hours 4, 5 (2 points)
+    # NOT just the start time 04:41 (1 point)
     #
-    # The fix: Use original datetime (no floor) in seq, then floor happens
-    # later when converting to relative hours.
+    # 🔧 CRITICAL FIX 2024-11-30: R ricu floor behavior with admission times
+    #
+    # R ricu's load_mihi() converts datetime to relative time (difftime) BEFORE callbacks.
+    # This means expand() operates on relative hours, and floor() is applied to relative hours.
+    #
+    # Example (patient 30000484):
+    #   - admission: 2136-01-14 17:23:32
+    #   - starttime: 2136-01-15 06:39:00 -> relative 13.26 hours -> floor -> 13
+    #   - endtime:   2136-01-15 07:00:00 -> relative 13.61 hours -> floor -> 13
+    #   - Result: 1 row at hour 13
+    #
+    # Old pyricu behavior (WRONG):
+    #   - starttime: 06:39 -> floor -> 06:00 (absolute)
+    #   - After time alignment: 06:00 relative -> 12.61 hours -> hour 12
+    #   - Result: 1 row at hour 12 (wrong!)
+    #
+    # When admission_times is provided, we use relative-time-aware floor.
     
     # Ensure start and end are datetime
     if not pd.api.types.is_datetime64_any_dtype(data[start_var]):
@@ -459,44 +505,160 @@ def expand(
     
     # Filter valid rows (non-NA, start <= end)
     valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
-    valid_data = data[valid_mask]
+    valid_data = data[valid_mask].copy()
     
     if len(valid_data) == 0:
         result_cols = [start_var] + id_cols + keep_vars
         return pd.DataFrame(columns=result_cols)
     
-    # 🔧 FIX: Use original start time (no floor) for expansion
-    # R ricu uses seq(start, end, step) on raw relative times
-    # The floor is applied AFTER expansion via change_interval()
+    # 🔧 CRITICAL FIX 2024-11-30: Use relative-time-aware floor when admission_times provided
+    step_hours = step_size.total_seconds() / 3600.0
     
-    # Calculate number of points: floor((end - start) / step) + 1
-    # This matches R's seq() behavior
-    diff = valid_data[end_col] - valid_data[start_var]
+    if admission_times is not None and not admission_times.empty:
+        # Find the ID column to join on
+        id_col_for_join = None
+        for col in id_cols:
+            if col in valid_data.columns and col in admission_times.columns:
+                id_col_for_join = col
+                break
+        
+        if id_col_for_join is not None:
+            # Merge admission times
+            intime_col = 'intime' if 'intime' in admission_times.columns else None
+            if intime_col is None:
+                for col in admission_times.columns:
+                    if 'intime' in col.lower() or 'admittime' in col.lower():
+                        intime_col = col
+                        break
+            
+            if intime_col is not None:
+                # Merge and calculate relative hours
+                valid_data = valid_data.merge(
+                    admission_times[[id_col_for_join, intime_col]].drop_duplicates(),
+                    on=id_col_for_join,
+                    how='left'
+                )
+                
+                # Ensure intime is datetime
+                valid_data[intime_col] = pd.to_datetime(valid_data[intime_col])
+                
+                # Calculate relative hours
+                start_rel = (valid_data[start_var] - valid_data[intime_col]).dt.total_seconds() / 3600.0
+                end_rel = (valid_data[end_col] - valid_data[intime_col]).dt.total_seconds() / 3600.0
+                
+                # Floor relative hours (R ricu behavior)
+                start_floored_rel = np.floor(start_rel / step_hours) * step_hours
+                end_floored_rel = np.floor(end_rel / step_hours) * step_hours
+                
+                # Calculate counts based on floored relative hours
+                diff_hours = end_floored_rel - start_floored_rel
+                counts = (diff_hours / step_hours).astype(int) + 1
+                counts = np.maximum(counts, 0)
+                
+                # Filter out rows with 0 counts
+                row_mask = counts > 0
+                if not row_mask.any():
+                    result_cols = [start_var] + id_cols + keep_vars
+                    return pd.DataFrame(columns=result_cols)
+                    
+                valid_data = valid_data[row_mask].copy()
+                counts = counts[row_mask]
+                start_floored_rel = start_floored_rel[row_mask]
+                intime_values = valid_data[intime_col].values
+                
+                # Repeat rows
+                expanded_df = valid_data.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
+                
+                # Repeat start floored relative hours and intime for offset calculation
+                start_floored_rel_expanded = np.repeat(start_floored_rel.values, counts)
+                intime_expanded = np.repeat(intime_values, counts)
+                
+                # Generate time offsets: 0, 1, 2, ... for each row
+                offsets = np.concatenate([np.arange(c) for c in counts])
+                
+                # Calculate new absolute times from floored relative time + intime
+                # 🔧 PERFORMANCE FIX: Use numpy timedelta64 instead of pd.to_timedelta
+                new_rel_hours = start_floored_rel_expanded + offsets * step_hours
+                new_rel_seconds = (new_rel_hours * 3600).astype('timedelta64[s]')
+                new_abs_times = pd.to_datetime(intime_expanded) + new_rel_seconds
+                expanded_df[start_var] = new_abs_times
+                
+                # Remove temporary intime column
+                if intime_col in expanded_df.columns:
+                    expanded_df = expanded_df.drop(columns=[intime_col])
+                
+                # Select columns - remove duplicates while preserving order
+                result_cols = [start_var]
+                seen = {start_var}
+                for col in id_cols + keep_vars:
+                    if col not in seen and col != intime_col:
+                        result_cols.append(col)
+                        seen.add(col)
+                
+                # Ensure columns exist, remove duplicated column names from expanded_df
+                if expanded_df.columns.duplicated().any():
+                    expanded_df = expanded_df.loc[:, ~expanded_df.columns.duplicated()]
+                
+                available_cols = [c for c in result_cols if c in expanded_df.columns]
+                result = expanded_df[available_cols]
+                
+                # Clean up temporary column
+                if '_end_abs' in data.columns:
+                    data.drop('_end_abs', axis=1, inplace=True)
+                
+                return result
+    
+    # Fallback: Original datetime floor behavior (when no admission_times)
+    # 🔧 CRITICAL FIX: Floor both start and end to step boundaries
+    # This matches R ricu's seq(floor(start), floor(end), by)
+    # For hourly steps, floor to the hour (remove minutes/seconds)
+    start_floored = valid_data[start_var].dt.floor(step_size)
+    end_floored = valid_data[end_col].dt.floor(step_size)
+    
+    # Calculate number of points: (floor_end - floor_start) / step + 1
+    diff = end_floored - start_floored
     counts = (diff / step_size).astype(int) + 1
     counts = np.maximum(counts, 0)
     
     # Filter out rows with 0 counts
-    mask = counts > 0
-    if not mask.any():
+    row_mask = counts > 0
+    if not row_mask.any():
         result_cols = [start_var] + id_cols + keep_vars
         return pd.DataFrame(columns=result_cols)
         
-    valid_data = valid_data[mask]
-    counts = counts[mask]
+    valid_data = valid_data[row_mask]
+    counts = counts[row_mask]
+    start_floored = start_floored[row_mask]
     
     # Repeat rows
     expanded_df = valid_data.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
     
+    # Repeat floored start times for offset calculation
+    start_floored_expanded = start_floored.repeat(counts).values
+    
     # Generate time offsets: 0, 1, 2, ... for each row
     offsets = np.concatenate([np.arange(c) for c in counts])
     
-    # Calculate new times: start + offset * step_size
-    # Use original start time (not floored)
-    start_repeated = valid_data[start_var].loc[valid_data.index.repeat(counts)].reset_index(drop=True)
-    expanded_df[start_var] = start_repeated + pd.to_timedelta(offsets * step_size.total_seconds(), unit='s')
+    # Calculate new times: floored_start + offset * step_size
+    # Use floored start time to generate aligned hour boundaries
+    # 🔧 PERFORMANCE FIX: Use numpy timedelta64 instead of pd.to_timedelta
+    # pd.to_timedelta is very slow for large arrays due to type inference
+    step_seconds = int(step_size.total_seconds())
+    offsets_td = (offsets * step_seconds).astype('timedelta64[s]')
+    expanded_df[start_var] = start_floored_expanded + offsets_td
     
-    # Select columns
-    result_cols = [start_var] + id_cols + keep_vars
+    # Select columns - remove duplicates while preserving order
+    result_cols = [start_var]
+    seen = {start_var}
+    for col in id_cols + keep_vars:
+        if col not in seen:
+            result_cols.append(col)
+            seen.add(col)
+    
+    # Ensure columns exist, remove duplicated column names from expanded_df
+    if expanded_df.columns.duplicated().any():
+        expanded_df = expanded_df.loc[:, ~expanded_df.columns.duplicated()]
+    
     available_cols = [c for c in result_cols if c in expanded_df.columns]
     result = expanded_df[available_cols]
     

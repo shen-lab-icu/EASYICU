@@ -360,10 +360,35 @@ def _si_or(
     - Merge abx and samp with outer join
     - Keep rows where abx OR samp is TRUE
     """
-    # Always use merge to match R ricu behavior
     merge_cols = id_cols + [index_col]
     
-    # Prepare data with flags
+    # Handle empty DataFrames
+    abx_empty = abx.empty or not all(c in abx.columns for c in merge_cols)
+    samp_empty = samp.empty or not all(c in samp.columns for c in merge_cols)
+    
+    if abx_empty and samp_empty:
+        # Both empty
+        return pd.DataFrame(columns=merge_cols + ['susp_inf'])
+    
+    if abx_empty:
+        # Only samp data
+        result = samp[merge_cols].copy()
+        result['susp_inf'] = True
+        if keep_components:
+            result['samp_time'] = result[index_col]
+            result['abx_time'] = pd.NaT
+        return result
+    
+    if samp_empty:
+        # Only abx data
+        result = abx[merge_cols].copy()
+        result['susp_inf'] = True
+        if keep_components:
+            result['abx_time'] = result[index_col]
+            result['samp_time'] = pd.NaT
+        return result
+    
+    # Both have data - do outer merge
     abx_prep = abx[merge_cols].copy()
     abx_prep['_abx_flag'] = True
     

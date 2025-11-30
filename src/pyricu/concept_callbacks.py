@@ -1579,13 +1579,14 @@ def _callback_norepi_equiv(
 
     combined = pd.concat(scaled_frames, ignore_index=True)
 
+    # R ricu uses median aggregation for numeric data (see tbl-utils.R aggregate.id_tbl)
     if key_cols:
         aggregated = (
-            combined.groupby(key_cols)["norepi_equiv"].sum(min_count=1).reset_index()
+            combined.groupby(key_cols)["norepi_equiv"].median().reset_index()
         )
         aggregated = aggregated.sort_values(key_cols).reset_index(drop=True)
     else:
-        aggregated = pd.DataFrame({"norepi_equiv": [combined["norepi_equiv"].sum(min_count=1)]})
+        aggregated = pd.DataFrame({"norepi_equiv": [combined["norepi_equiv"].median()]})
 
     return _as_icutbl(
         aggregated,
@@ -1616,16 +1617,27 @@ def _callback_sofa_component(
                     patient_ids=ctx.patient_ids,
                     interval=None,
                     align_to_admission=True,
+                    ricu_compatible=False,  # Return ICUTable, not DataFrame
                 )
                 if isinstance(loaded, dict):
                     vaso_tbl = loaded.get("vaso_ind")
                 else:
                     vaso_tbl = loaded
+                # Handle both ICUTable and DataFrame returns
                 if isinstance(vaso_tbl, ICUTable) and not vaso_tbl.data.empty:
                     tables["vaso_ind"] = vaso_tbl
-            except Exception:
+                elif isinstance(vaso_tbl, pd.DataFrame) and not vaso_tbl.empty:
+                    # Convert DataFrame to ICUTable
+                    # Detect id and index columns
+                    id_cols = [c for c in vaso_tbl.columns if c in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid']]
+                    time_cols = [c for c in vaso_tbl.columns if 'time' in c.lower() and c not in id_cols]
+                    index_col = time_cols[0] if time_cols else None
+                    value_col = 'vaso_ind' if 'vaso_ind' in vaso_tbl.columns else None
+                    tables["vaso_ind"] = _as_icutbl(vaso_tbl, id_columns=id_cols, index_column=index_col, value_column=value_col)
+            except Exception as e:
                 # Missing indicator should not break SOFA computation; simply skip
                 # zeroing when it is unavailable.
+                logger.debug(f"sofa_cardio: vaso_ind load exception: {e}")
                 pass
         # CRITICAL: For single concept (sofa_single type), ricu_code's collect_dots returns the data directly
         # For multiple concepts, use outer join (replicates R ricu merge_dat = TRUE)
@@ -1665,27 +1677,11 @@ def _callback_sofa_component(
             sort_cols = id_columns + [index_column] if id_columns else [index_column]
             data = data.sort_values(sort_cols)
 
-        # ricu keeps vasopressor rates active until the infusion ends. Our raw
-        # vaso rate/equivalent rows only appear when the rate table logs a change,
-        # so after the outer merge with MAP we must forward-fill those values and
-        # zero them once the patient is off vasopressors.
-        if ctx.concept_name == "sofa_cardio":
-            vaso_tokens = ("norepi", "dobu", "dopa", "epi", "adh")
-            vaso_cols: list[str] = [
-                col
-                for col in data.columns
-                if col != "vaso_ind" and any(token in col for token in vaso_tokens)
-            ]
-            if vaso_cols:
-                if id_columns:
-                    data[vaso_cols] = data.groupby(id_columns, dropna=False)[vaso_cols].ffill()
-                else:
-                    data[vaso_cols] = data[vaso_cols].ffill()
-
-                if "vaso_ind" in data.columns:
-                    vaso_mask = pd.to_numeric(data["vaso_ind"], errors="coerce").fillna(0.0) != 0
-                    for col in vaso_cols:
-                        data.loc[~vaso_mask, col] = 0.0
+        # NOTE: R ricu's sofa_cardio does NOT forward-fill vasopressor values.
+        # It simply merges the data and calculates scores directly.
+        # Forward-fill was incorrectly added here which caused vasopressor values
+        # to persist beyond the end of infusion, inflating SOFA scores.
+        # Removed forward-fill to match R ricu behavior.
 
         # Extract data from merged DataFrame
         # The data DataFrame already has columns from all tables merged by key columns
@@ -3891,6 +3887,17 @@ def _callback_vaso_ind(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    """R ricu vaso_ind callback 的精确复制.
+    
+    R ricu 的 vaso_ind 回调有一个特殊行为：
+    1. 计算 pmax(dopa_dur, norepi_dur, dobu_dur, epi_dur) 作为 vaso_ind 列
+    2. 调用 expand(res, index_var(res), "vaso_ind")
+    3. 由于 "vaso_ind" 列已存在，expand 直接使用它作为 end_var
+    4. 这导致 seq(starttime, duration) 而不是 seq(starttime, starttime+duration)
+    5. R 的 seq(1, 4.18, 1) = 1,2,3,4（不包含超过 4.18 的值）
+    
+    我们需要精确复制这个行为。
+    """
     # When upstream concepts request hourly alignment (ctx.interval != None),
     # the duration tables may already have their start times floored to the hour.
     # Reload the raw sub-concepts without interval coercion so we preserve the
@@ -3981,23 +3988,15 @@ def _callback_vaso_ind(
     # 计算每行的max duration (跳过NA)
     merged["__max_duration"] = merged[vaso_cols].max(axis=1, skipna=True)
     
-    # R ricu expand() 的行为：res <- res[get(start_var) <= get(end_var), ...]
-    # 其中 end_var = "vaso_ind" 即 duration 值本身（不是 start + duration）
-    # 这意味着只有 charttime <= duration 的行才会被展开
-    # 例如：charttime=0, duration=142 → 0 <= 142 → True（保留）
-    #       charttime=154, duration=58 → 154 <= 58 → False（过滤掉）
-    # 这是 R ricu 的特性，我们需要复制它以保持兼容
-    
-    # 将 duration 转换为小时数进行比较
+    # 将 duration 转换为小时数
     merged["__duration_hours"] = merged["__max_duration"].dt.total_seconds() / 3600
     # 获取 start 的小时数（相对于 base_time）
     merged["__start_hours"] = (merged["__start_dt"] - base_time).dt.total_seconds() / 3600
     
-    # 只保留 start_hours <= duration_hours 的行（复制 R ricu expand 的过滤行为）
+    # 只保留 duration > 0 的行
     valid_mask = (
         merged["__max_duration"].notna() & 
-        (merged["__max_duration"] > pd.Timedelta(0)) &
-        (merged["__start_hours"] <= merged["__duration_hours"])
+        (merged["__max_duration"] > pd.Timedelta(0))
     )
     valid_rows = merged[valid_mask].copy()
     
@@ -4009,21 +4008,42 @@ def _callback_vaso_ind(
             value_column="vaso_ind",
         )
 
-    window_records: list[tuple] = []
+    # R ricu vaso_ind 的特殊行为：
+    # 1. vaso_ind 列被设置为 pmax(durations)，即 duration 值
+    # 2. expand(res, index_var(res), "vaso_ind") 被调用
+    # 3. 由于 "vaso_ind" 列已存在，expand 直接使用它作为 end_var
+    # 4. 所以实际执行的是 seq(starttime, duration) 而不是 seq(starttime, starttime+duration)
+    # 5. R 的 seq(1, 4.18, 1) = [1, 2, 3, 4] (不包含超过 4.18 的值)
+    #
+    # 我们需要模拟这个行为：对于每一行，生成从 start_hour 到 floor(duration_hour) 的序列
+    # 注意：R seq(a, b, 1) 生成的是 a, a+1, a+2, ... 直到 <= b
+    
+    expanded_records: list[tuple] = []
     for _, row in valid_rows.iterrows():
-        start_dt = row["__start_dt"]
-        if pd.isna(start_dt):
+        start_hours = row["__start_hours"]
+        duration_hours = row["__duration_hours"]
+        if pd.isna(start_hours) or pd.isna(duration_hours) or duration_hours <= 0:
             continue
         id_values = tuple(row[col] for col in id_columns) if id_columns else tuple()
-        # R ricu expand 的行为：seq(start, end) 其中 end = duration 值本身
-        # 不是 start + duration！
-        # 例如：start=165, duration=287 → seq(165, 287) = 165,166,...,287
-        max_duration = row["__max_duration"]
-        # end 是 duration 作为绝对时间（从 base_time 开始计算）
-        end_dt = base_time + max_duration
-        window_records.append((*id_values, start_dt, end_dt))
-
-    if not window_records:
+        
+        # R ricu 的行为：seq(start, duration, 1)
+        # 例如：start=1, duration=4.18 → seq(1, 4.18, 1) = [1, 2, 3, 4]
+        # 例如：start=1, duration=6.05 → seq(1, 6.05, 1) = [1, 2, 3, 4, 5, 6]
+        start_int = int(start_hours)
+        # R 的 seq 行为：生成 start, start+1, start+2, ... 直到值 <= end
+        # 所以最大值是 start + floor(end - start) = start + floor(duration - start + start) 的最大整数 <= duration
+        # 简化：最大值是 floor(duration)，但不能小于 start
+        end_int = int(duration_hours)  # floor(duration)
+        
+        # 生成序列 [start_int, start_int+1, ..., end_int] 如果 end_int >= start_int
+        # 但由于 duration 通常比 start 大，我们需要确保这是正确的
+        # R seq(1, 4.18, 1) 意味着 seq(start=1, to=4.18, by=1)
+        # 结果是 [1, 2, 3, 4] 因为 5 > 4.18
+        for hour in range(start_int, end_int + 1):
+            if hour <= duration_hours + 1e-9:  # 包含 duration_hours 本身（如果是整数）
+                expanded_records.append((*id_values, float(hour)))
+    
+    if not expanded_records:
         return _as_icutbl(
             pd.DataFrame(columns=empty_cols),
             id_columns=id_columns,
@@ -4031,79 +4051,13 @@ def _callback_vaso_ind(
             value_column="vaso_ind",
         )
 
-    window_cols = list(id_columns) + ["__start", "__end"]
-    window_df = pd.DataFrame(window_records, columns=window_cols)
-
-    existing_id_cols = list(id_columns)
-    if not existing_id_cols:
-        window_df["__dummy_id"] = 1
-        existing_id_cols = ["__dummy_id"]
-
-    intervals = _merge_intervals(
-        window_df[existing_id_cols + ["__start", "__end"]],
-        id_columns=existing_id_cols,
-        start_col="__start",
-        end_col="__end",
-        max_gap=pd.Timedelta(0),
-    )
-
-    if intervals.empty:
-        return _as_icutbl(
-            pd.DataFrame(columns=empty_cols),
-            id_columns=id_columns,
-            index_column=time_col,
-            value_column="vaso_ind",
-        )
-
-    final_interval = ctx.interval
-    if isinstance(final_interval, str):
-        try:
-            final_interval = pd.to_timedelta(final_interval)
-        except Exception:
-            final_interval = None
-    if final_interval is None or final_interval <= pd.Timedelta(0):
-        final_interval = pd.Timedelta(hours=1)
-
-    expanded_frames: list[pd.DataFrame] = []
-    for _, row in intervals.iterrows():
-        start = row["__start"]
-        end = row["__end"]
-        if pd.isna(start) or pd.isna(end) or start > end:
-            continue
-        grid: pd.DatetimeIndex
-        if final_interval is not None and final_interval > pd.Timedelta(0):
-            aligned_start = start.floor(final_interval)
-            # R ricu seq(start, end) 包含 end，所以不减去 epsilon
-            # 使用 end + small_amount 来确保 end 被包含在 date_range 中
-            aligned_end = end.floor(final_interval)
-            grid = pd.date_range(start=aligned_start, end=aligned_end, freq=final_interval)
-            if grid.empty:
-                grid = pd.DatetimeIndex([aligned_start])
-        else:
-            grid = pd.DatetimeIndex([start])
-        frame = pd.DataFrame({time_col: grid, "vaso_ind": True})
-        for col in existing_id_cols:
-            frame[col] = row[col]
-        expanded_frames.append(frame)
-
-    if not expanded_frames:
-        return _as_icutbl(
-            pd.DataFrame(columns=empty_cols),
-            id_columns=id_columns,
-            index_column=time_col,
-            value_column="vaso_ind",
-        )
-
-    expanded = pd.concat(expanded_frames, ignore_index=True)
-    if "__dummy_id" in expanded.columns:
-        expanded = expanded.drop(columns=["__dummy_id"])
+    result_cols = list(id_columns) + [time_col]
+    expanded = pd.DataFrame(expanded_records, columns=result_cols)
+    expanded["vaso_ind"] = True
+    
+    # 去重（同一患者同一小时只保留一条记录）
     expanded = expanded.drop_duplicates(subset=list(id_columns) + [time_col] if id_columns else [time_col])
-
-    if time_is_numeric:
-        expanded[time_col] = (
-            pd.to_datetime(expanded[time_col], errors="coerce") - base_time
-        ) / pd.Timedelta(hours=1)
-
+    
     result_cols = list(id_columns) + [time_col, "vaso_ind"] if id_columns else [time_col, "vaso_ind"]
     expanded = expanded[result_cols].reset_index(drop=True)
     return _as_icutbl(expanded, id_columns=id_columns, index_column=time_col, value_column="vaso_ind")
@@ -4448,6 +4402,14 @@ def _callback_vaso60(
         # 双方原本均为datetime，标准化为tz-naive
         rate_df[rate_index_col] = pd.to_datetime(rate_df[rate_index_col], errors='coerce')
         dur_df[dur_index_col] = pd.to_datetime(dur_df[dur_index_col], errors='coerce')
+
+    # 🔧 FIX for ricu compatibility: R ricu applies change_interval (re_time with floor)
+    # to sub-concepts BEFORE passing them to the vaso60 callback.
+    # This means the start times are floored to whole hours.
+    # We need to replicate this behavior to match ricu's join conditions.
+    # Example: dur_starttime=13.26h should become 13:00, not 13:15.
+    rate_df[rate_index_col] = rate_df[rate_index_col].dt.floor('h')
+    dur_df[dur_index_col] = dur_df[dur_index_col].dt.floor('h')
 
     durations = dur_df[dur_col]
     if pd.api.types.is_timedelta64_dtype(durations):
@@ -4810,6 +4772,32 @@ def _callback_susp_inf(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    """Detect suspected infection (疑似感染).
+    
+    Suspected infection is defined as co-occurrence of antibiotic treatment
+    and body-fluid sampling. Supports multiple detection modes via si_mode:
+    
+    - "and": Both ABX and sampling required (Sepsis-3 standard, default for MIMIC-IV/AUMC)
+    - "or": Either ABX or sampling (default for eICU due to sparse microlab data)
+    - "abx": Only ABX required
+    - "samp": Only sampling required
+    - "auto": Automatically select based on database data coverage
+    
+    Database-specific defaults (si_mode="auto"):
+    - MIMIC-IV: "and" (microlab coverage ~95%)
+    - eICU: "or" (microlab coverage only 1.5%)
+    - AUMC: "and" (microlab coverage ~33%)
+    - HiRID: "and" (default)
+    
+    Args:
+        tables: Dictionary with 'abx' and 'samp' ICUTable objects
+        ctx: Callback context with kwargs:
+            - si_mode: Detection mode ("and", "or", "abx", "samp", "auto")
+            - abx_win: Time window after ABX for sampling (default 24h)
+            - samp_win: Time window after sampling for ABX (default 72h)
+            - abx_min_count: Minimum antibiotic administrations required
+            - positive_cultures: Whether to require positive cultures
+    """
     # Convert ID columns if needed (hadm_id → stay_id) before merging
     # This replicates R ricu's automatic ID conversion in collect_dots()
     id_columns, index_column, converted_tables = _assert_shared_schema(
@@ -4836,11 +4824,62 @@ def _callback_susp_inf(
     if samp_tbl.index_column and samp_tbl.index_column != index_column and samp_tbl.index_column in samp_data.columns:
         samp_data = samp_data.rename(columns={samp_tbl.index_column: index_column})
 
+    # Get si_mode from context kwargs, default to "auto"
+    si_mode = ctx.kwargs.get("si_mode", "auto") if ctx and ctx.kwargs else "auto"
+    
+    # Determine database name for auto mode
+    ds_name = ""
+    if ctx is not None and getattr(ctx, "data_source", None) is not None:
+        source_cfg = getattr(ctx.data_source, "config", None)
+        if source_cfg is not None and hasattr(source_cfg, "name"):
+            ds_name = getattr(source_cfg, "name", "") or ""
+        else:
+            ds_name = getattr(ctx.data_source, "name", "") or ""
+    ds_name = ds_name.lower()
+    
+    # Auto mode: select si_mode based on database
+    # eICU has very sparse microlab data (1.5%), so default to "or"
+    # Other databases have better coverage, so use "and" (Sepsis-3 standard)
+    if si_mode == "auto":
+        # Database-specific defaults based on data coverage analysis:
+        # - eICU: microlab only 1.5% coverage -> use "or" 
+        # - MIMIC-IV: microlab ~95% coverage -> use "and"
+        # - AUMC: microlab ~33% coverage -> use "and" (borderline, but usable)
+        # - HiRID: default to "and"
+        sparse_microlab_databases = {"eicu"}  # Databases with <5% microlab coverage
+        
+        if ds_name in sparse_microlab_databases:
+            si_mode = "or"
+            import logging
+            logger = logging.getLogger("pyricu")
+            logger.info(f"susp_inf: Using si_mode='or' for {ds_name} (sparse microlab data)")
+        else:
+            si_mode = "and"
+    
+    # Get other parameters from kwargs
+    abx_win = ctx.kwargs.get("abx_win", pd.Timedelta(hours=24)) if ctx and ctx.kwargs else pd.Timedelta(hours=24)
+    samp_win = ctx.kwargs.get("samp_win", pd.Timedelta(hours=72)) if ctx and ctx.kwargs else pd.Timedelta(hours=72)
+    abx_min_count = ctx.kwargs.get("abx_min_count", 1) if ctx and ctx.kwargs else 1
+    positive_cultures = ctx.kwargs.get("positive_cultures", False) if ctx and ctx.kwargs else False
+    keep_components = ctx.kwargs.get("keep_components", False) if ctx and ctx.kwargs else False
+    
+    # Convert string timedelta if needed
+    if isinstance(abx_win, str):
+        abx_win = pd.Timedelta(abx_win)
+    if isinstance(samp_win, str):
+        samp_win = pd.Timedelta(samp_win)
+
     result = susp_inf_detector(
         abx=abx_data,
         samp=samp_data,
         id_cols=list(id_columns),
         index_col=index_column,
+        si_mode=si_mode,
+        abx_win=abx_win,
+        samp_win=samp_win,
+        abx_min_count=abx_min_count,
+        positive_cultures=positive_cultures,
+        keep_components=keep_components,
     )
 
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="susp_inf")
@@ -4939,16 +4978,18 @@ def _callback_gcs(
     if set_na_max:
         combined = combined.fillna(15.0)
 
-    data["gcs"] = combined
-    cols = id_columns + ([index_column] if index_column else []) + ["gcs"]
-    frame = data[cols].dropna(subset=["gcs"])
+    # Use ctx.concept_name to support both 'gcs' and 'tgcs' concepts
+    output_col = ctx.concept_name if ctx is not None else "gcs"
+    data[output_col] = combined
+    cols = id_columns + ([index_column] if index_column else []) + [output_col]
+    frame = data[cols].dropna(subset=[output_col])
     
     # Remove duplicate timestamps (outer merge may create duplicates)
     # Keep first occurrence for each (admissionid, measuredat) pair
     dedup_cols = list(id_columns) + ([index_column] if index_column else [])
     frame = frame.drop_duplicates(subset=dedup_cols, keep='first')
     
-    return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="gcs")
+    return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=output_col)
 
 from .callbacks import uo_6h as calc_uo_6h, uo_12h as calc_uo_12h, uo_24h as calc_uo_24h
 
@@ -5082,7 +5123,10 @@ def _callback_rrt_criteria(
     if rrt_series is not None and len(rrt_series) > 0:
         # Convert to boolean, treating NaN/NA/0 as False
         # First convert to numeric if needed, then to bool
-        if pd.api.types.is_numeric_dtype(rrt_series):
+        if pd.api.types.is_bool_dtype(rrt_series) or str(rrt_series.dtype) == 'boolean':
+            # Boolean type - fill NA with False
+            rrt_active = rrt_series.fillna(False).astype(bool)
+        elif pd.api.types.is_numeric_dtype(rrt_series):
             rrt_active = (rrt_series.fillna(0) > 0).astype(bool)
         else:
             rrt_active = rrt_series.fillna(False).astype(bool)
@@ -5271,7 +5315,14 @@ def _callback_sum_components(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """Sum multiple component tables together (e.g., for GCS total = eye + motor + verbal)."""
+    """Sum multiple component tables together (e.g., for GCS total = eye + motor + verbal).
+    
+    For GCS (tgcs), this implements R ricu's set_na_max=TRUE behavior:
+    - egcs NA -> 4 (max eye response)
+    - vgcs NA -> 5 (max verbal response)  
+    - mgcs NA -> 6 (max motor response)
+    - tgcs NA -> 15 (max total)
+    """
     
     if not tables:
         raise ValueError("sum_components requires at least one input table")
@@ -5288,11 +5339,39 @@ def _callback_sum_components(
     
     # Sum all component columns
     component_cols = [tbl.value_column or name for name, tbl in tables.items()]
+    
+    # 🔧 FIX: R ricu set_na_max=TRUE behavior for GCS
+    # When computing tgcs, fill missing GCS components with their max values:
+    # egcs=4, vgcs=5, mgcs=6
+    # See R ricu callback-cncpt.R gcs() function
+    try:
+        ricu_mode = bool(ctx.kwargs.get('ricu_compatible', True)) if ctx and getattr(ctx, 'kwargs', None) is not None else True
+    except Exception:
+        ricu_mode = True
+    
+    is_tgcs = output_col and output_col.lower() == 'tgcs'
+    
+    # GCS component max values (R ricu set_na_max defaults)
+    gcs_max_values = {
+        'egcs': 4.0,  # Eye response max
+        'vgcs': 5.0,  # Verbal response max
+        'mgcs': 6.0,  # Motor response max
+    }
+    
     total = pd.Series(0, index=data.index, dtype=float)
     
     for col in component_cols:
         if col in data.columns:
-            total += pd.to_numeric(data[col], errors='coerce').fillna(0)
+            col_values = pd.to_numeric(data[col], errors='coerce')
+            
+            # Apply set_na_max for tgcs in ricu_compatible mode
+            if ricu_mode and is_tgcs and col.lower() in gcs_max_values:
+                max_val = gcs_max_values[col.lower()]
+                col_values = col_values.fillna(max_val)
+            else:
+                col_values = col_values.fillna(0)
+            
+            total += col_values
     
     data[output_col] = total
     
@@ -5303,7 +5382,82 @@ def _callback_sum_components(
             mask |= data[col].notna()
     
     data = data[mask]
-    
+    # 🔧 FIX: R ricu 在计算 GCS 时对插管患者会应用 sed_impute='max'，将 tgcs 设为 15
+    # 当以 ricu_compatible 模式运行并且存在 ett_gcs 信息时，模仿该行为。
+
+    if ricu_mode and is_tgcs:
+        # 如果合并数据中直接包含 ett_gcs 列，则直接使用；否则尝试通过 resolver 加载 ett_gcs
+        ett_series = None
+        if 'ett_gcs' in data.columns:
+            ett_series = data['ett_gcs']
+        else:
+            # 尝试加载 ett_gcs（以 dict 形式返回，不触发外层递归的回调缓存）
+            try:
+                if ctx and getattr(ctx, 'resolver', None) is not None and getattr(ctx, 'data_source', None) is not None:
+                    # 请求不合并的载入以获得 ICUTable，避免触发子概念内部的额外回调污染
+                    sub = ctx.resolver.load_concepts(
+                        ['ett_gcs'],
+                        ctx.data_source,
+                        merge=False,
+                        patient_ids=ctx.patient_ids,
+                        ricu_compatible=False,
+                        _skip_concept_cache=True,
+                        _allow_missing_concept=True,
+                    )
+                    if isinstance(sub, dict) and 'ett_gcs' in sub:
+                        ett_tbl = sub['ett_gcs']
+                        if hasattr(ett_tbl, 'data') and not ett_tbl.data.empty:
+                            # Merge ett_gcs data onto our merged 'data' using id + index columns
+                            join_cols = [c for c in getattr(ett_tbl, 'id_columns', []) if c in data.columns]
+                            idx_col = getattr(ett_tbl, 'index_column', None)
+                            if idx_col and idx_col in data.columns:
+                                join_cols = join_cols + [idx_col]
+                            if join_cols:
+                                # Align types and perform left merge
+                                ett_df = ett_tbl.data[[*join_cols, ett_tbl.value_column]] if ett_tbl.value_column in ett_tbl.data.columns else ett_tbl.data[join_cols]
+                                ett_df = ett_df.rename(columns={ett_tbl.value_column: 'ett_gcs'}) if ett_tbl.value_column and ett_tbl.value_column in ett_df.columns else ett_df
+                                merged = data.merge(ett_df, on=join_cols, how='left', suffixes=(None, '_ett'))
+                                if 'ett_gcs' in merged.columns:
+                                    # Replace data with merged frame so indices align
+                                    data = merged
+                                    ett_series = data['ett_gcs']
+            except Exception:
+                # 如果加载失败，则忽略并继续（不要中断主计算）
+                ett_series = None
+
+        # 如果找到 ett_series，则把 tgcs 在 ett==True 的位置设为 15
+        try:
+            if ett_series is not None:
+                # 将 NA 视为 False，再转换为布尔索引（根据 data 的索引对齐）
+                ett_bool = ett_series.where(ett_series.notna(), False).astype(bool)
+                # 重新计算 total 以匹配 data 的索引（如果 data 被替换为 merged）
+                # 使用 set_na_max 逻辑填充缺失的 GCS 组件
+                total = pd.Series(0, index=data.index, dtype=float)
+                for col in component_cols:
+                    if col in data.columns:
+                        col_values = pd.to_numeric(data[col], errors='coerce')
+                        # Apply set_na_max for GCS components
+                        if col.lower() in gcs_max_values:
+                            col_values = col_values.fillna(gcs_max_values[col.lower()])
+                        else:
+                            col_values = col_values.fillna(0)
+                        total += col_values
+
+                # 将 tgcs 在 ett==True 的位置设为 15
+                if isinstance(ett_bool, pd.Series) and not ett_bool.empty:
+                    # 对齐索引后赋值
+                    mask_idx = ett_bool.index.intersection(total.index)
+                    # 使用 loc 根据布尔掩码赋值
+                    total.loc[mask_idx] = total.loc[mask_idx].where(~ett_bool.loc[mask_idx], 15.0)
+                data[output_col] = total
+        except Exception:
+            # 忽略任何错误以保持回调的稳健性
+            pass
+        
+        # 🔧 R ricu set_na_max: 如果 tgcs 仍然是 NA，设置为 15
+        if output_col in data.columns:
+            data[output_col] = data[output_col].fillna(15.0)
+
     cols = id_columns + ([index_column] if index_column else []) + [output_col]
     frame = data[cols].dropna(subset=[output_col])
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=output_col)

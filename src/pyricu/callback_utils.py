@@ -975,6 +975,7 @@ def mimic_rate_mv(
     unit_col: Optional[str] = None,
     stop_var: Optional[str] = None,
     id_cols: Optional[list] = None,
+    admission_times: Optional[pd.DataFrame] = None,
     **kwargs
 ) -> pd.DataFrame:
     """MIMIC MetaVision infusion rate callback (R ricu mimic_rate_mv).
@@ -988,6 +989,7 @@ def mimic_rate_mv(
         unit_col: Unit column (rate units)
         stop_var: End time variable for expansion
         id_cols: ID columns for grouping
+        admission_times: DataFrame with id and intime columns for time alignment
         **kwargs: Additional arguments
         
     Returns:
@@ -996,6 +998,13 @@ def mimic_rate_mv(
     Note:
         This is a simplified version that expands intervals.
         In ricu, it calls expand(x, index_var(x), stop_var, keep_vars = ...)
+        
+        🔧 CRITICAL FIX 2024-11-30: R ricu converts datetime to relative time 
+        BEFORE calling expand(). This affects the floor() behavior:
+        - R ricu: 06:39 -> relative 13.26h -> floor -> 13
+        - Old pyricu: 06:39 -> floor -> 06:00 -> relative 12.61h -> 12
+        
+        We now pass admission_times to expand() to fix this discrepancy.
     """
     # Handle empty data - preserve column structure
     if data.empty:
@@ -1043,7 +1052,8 @@ def mimic_rate_mv(
             end_var=stop_var,
             step_size=step_size,
             id_cols=id_cols,
-            keep_vars=keep_vars
+            keep_vars=keep_vars,
+            admission_times=admission_times,  # 🔧 Pass admission times for proper floor behavior
         )
         return expanded
     else:
@@ -3084,14 +3094,55 @@ def _aumc_normalize_mass_units(df: pd.DataFrame, unit_col: Optional[str], val_co
     if mask_mcg.any():
         df.loc[mask_mcg, unit_col] = 'mcg'
 
-def _aumc_normalize_rate_units(df: pd.DataFrame, rate_uom_col: Optional[str], val_col: str, default: str = 'min') -> Optional[str]:
+def _aumc_normalize_rate_units(df: pd.DataFrame, rate_uom_col: Optional[str], val_col: str, 
+                               default: str = 'min', interval_mins: float = 60.0) -> Optional[str]:
+    """
+    Normalize AUMC rate units to per-minute.
+    
+    This function handles:
+    1. Converting 'uur' (hour) to min: divide value by 60
+    2. Converting 'dag' (day) to min: divide value by 1440
+    3. Converting bolus doses (NA rate_uom) to per-minute: divide value by interval
+    
+    R ricu's aumc_rate_units does this (callback-itm.R lines 599-602):
+        x <- x[is.na(get(rate_uom)), c(val_var, rate_uom) := list(
+          sum(get(val_var)) * frac, "min"), by = c(meta_vars(x))
+        ]
+    where frac = 1 / interval_in_minutes (typically 1/60 for hourly interval)
+    
+    Args:
+        df: DataFrame to modify in-place
+        rate_uom_col: Name of the rate unit column
+        val_col: Name of the value column  
+        default: Default rate unit if column doesn't exist
+        interval_mins: Interval in minutes for bolus dose conversion (default 60)
+    """
     if not rate_uom_col:
         return None
     if rate_uom_col not in df.columns:
-        df[rate_uom_col] = default
+        # If no rate_uom column exists, treat all as bolus doses
+        # Convert by dividing by interval (e.g., 60 mins) to get per-minute rate
+        df[val_col] = df[val_col] / interval_mins
+        df[rate_uom_col] = 'min'
         return rate_uom_col
 
+    # Convert to string and handle NA values
+    # First identify actual NA/None values before converting to string
+    is_na_mask = df[rate_uom_col].isna()
+    
     df[rate_uom_col] = df[rate_uom_col].astype(str).str.strip()
+    rate_lower = df[rate_uom_col].str.lower()
+    
+    # Expand NA mask to include string versions of NA
+    is_na_mask = is_na_mask | rate_lower.isin({'nan', 'none', 'nat', ''})
+    
+    # Handle bolus doses (NA rate_uom) - R ricu divides by interval
+    # This is the key fix: bolus doses need to be converted to per-minute rate
+    if is_na_mask.any():
+        df.loc[is_na_mask, val_col] = df.loc[is_na_mask, val_col] / interval_mins
+        df.loc[is_na_mask, rate_uom_col] = 'min'
+
+    # Recalculate rate_lower after NA handling
     rate_lower = df[rate_uom_col].str.lower()
 
     mask_hour = rate_lower.isin({'uur', 'u', 'hour', 'hours', 'h'})
@@ -3109,6 +3160,7 @@ def _aumc_normalize_rate_units(df: pd.DataFrame, rate_uom_col: Optional[str], va
         df.loc[mask_sec, val_col] = df.loc[mask_sec, val_col] * 60.0
         df.loc[mask_sec, rate_uom_col] = 'min'
 
+    # Final cleanup - ensure all are 'min'
     df[rate_uom_col] = df[rate_uom_col].replace({'nan': 'min', 'none': 'min'}).fillna('min')
     return rate_uom_col
 
@@ -3243,24 +3295,49 @@ def aumc_rate_kg(
             if stop_col in result.columns:
                 result = result.drop(columns=[stop_col])
             
-            # 🔧 FIX 2024-11-30: Match R ricu expand() aggregation behavior
-            # When multiple intervals overlap at the same time point, R ricu aggregates
-            # using mean (based on analysis of R ricu output for norepi_rate)
-            # This ensures consistent results with R ricu for rate calculations
-            if not result.empty:
-                # Group by ID columns + time column and take mean of value column
-                group_cols = [c for c in result.columns if c in id_cols or c == index_col]
-                if group_cols and concept_name in result.columns:
-                    result = result.groupby(group_cols, as_index=False).agg({
-                        concept_name: 'mean',  # Mean for overlapping intervals
-                        **{c: 'first' for c in result.columns if c not in group_cols and c != concept_name}
-                    })
+            # 🔧 FIX 2024-12-01: Do NOT aggregate in expand()
+            # R ricu's expand() does NOT aggregate by default (aggregate=FALSE)
+            # Aggregation should be done at a higher level based on the concept's
+            # aggregate parameter (e.g., 'max' for dopa60 in sofa_cardio)
+            # 
+            # Previous code used mean aggregation here, which caused:
+            # - dopa60 at time=1 = mean(5.33, 4.44, 3.56) = 4.44 (incorrect)
+            # - sofa_cardio score = 2 (because 4.44 <= 5)
+            #
+            # Correct behavior:
+            # - dopa60 at time=1 should keep all values (5.33, 4.44, 3.56)
+            # - External aggregation with max gives 5.33
+            # - sofa_cardio score = 3 (because 5.33 > 5)
+            #
+            # Note: This may result in duplicate rows at the same time point,
+            # which is expected and will be handled by external aggregation.
         else:
             result = pd.DataFrame(columns=[c for c in result.columns if c != stop_col])
     
     return result
 
 def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
+    """
+    AUMC rate units callback - converts dose units and expands intervals.
+    
+    This callback matches R ricu's aumc_rate_units function (callback-itm.R lines 580-608):
+    1. Converts µg → mcg, mg → mcg → units (using mcg_to_units factor)
+    2. Converts rate units: dag → min (/1440), uur → min (/60)
+    3. Handles bolus doses (NA rate_uom) by dividing by interval (60 min)
+    4. Expands intervals from start to stop time
+    
+    R ricu code:
+        to_units <- convert_unit(...)  # µg→mcg, mg→mcg, mcg→units
+        to_min <- convert_unit(...)    # dag→uur (/24), uur→min (/60)
+        x[is.na(rate_uom), ...] <- sum(val) * frac, by = meta_vars  # bolus handling
+        x <- to_units(to_min(x, val_var, rate_uom), val_var, unit_var)
+        expand(x, index_var, stop_var, ...)  # interval expansion
+    
+    Args:
+        mcg_to_units: Conversion factor from mcg to units (e.g., 0.53 for vasopressin)
+    """
+    from .ts_utils import expand
+    
     def callback(
         frame: pd.DataFrame,
         val_col: str,
@@ -3313,17 +3390,86 @@ def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
             else:
                 df[unit_col] = df[unit_col] + '/min'
 
-        # 🔧 FIX: 不再将时间列转换为 datetime
-        # AUMC 时间列已经在 datasource.py 中从毫秒转换为分钟 (float)
-        # 保持为分钟格式，后续 _align_time_to_admission 会转换为小时
-        # base_time = pd.Timestamp('2000-01-01')
+        # Find time columns
         index_col = next((col for col in ['start', 'charttime', 'time'] if col in df.columns), None)
-        # if index_col and pd.api.types.is_numeric_dtype(df[index_col]):
-        #     df[index_col] = base_time + pd.to_timedelta(pd.to_numeric(df[index_col], errors='coerce'), unit='ms')
-
+        
+        # Set concept value
         df[concept_name] = df[val_col]
 
         id_cols = _aumc_get_id_columns(df)
+        
+        # 🔧 CRITICAL FIX: Expand intervals from start to stop (R ricu expand)
+        # R ricu calls: expand(x, index_var(x), stop_var, keep_vars = ...)
+        # This creates hourly rows from start to stop time
+        if stop_col and stop_col in df.columns and index_col:
+            # Prepare for expansion
+            keep_vars = [concept_name]
+            if unit_col and unit_col in df.columns:
+                keep_vars.append(unit_col)
+            
+            # AUMC times are in minutes at this point (converted from ms in datasource.py)
+            # Convert to hours for expand, but DON'T modify the original df yet
+            # because _align_time_to_admission will also convert to hours
+            # 
+            # Actually, we need to convert to hours for expand() to work correctly
+            # with step_size=1 hour. But then we need to return the data in minutes
+            # so that _align_time_to_admission can convert it properly.
+            #
+            # Solution: Convert to hours for expand, which will create hourly rows,
+            # then the result is already in hours, so _align_time_to_admission
+            # should NOT divide by 60 again.
+            #
+            # Wait, that's wrong. Let me trace the flow:
+            # 1. datasource.py: ms -> minutes (floor)
+            # 2. aumc_rate_units_callback: minutes -> (expand with step=1h) -> hours
+            # 3. _align_time_to_admission: minutes -> hours (/ 60)
+            #
+            # The bug is that expand() outputs times in hours, but 
+            # _align_time_to_admission expects minutes and divides by 60 again.
+            #
+            # Fix: expand() should output times in minutes (same as input),
+            # and _align_time_to_admission will convert to hours.
+            
+            if pd.api.types.is_numeric_dtype(df[index_col]):
+                # Save original times in minutes
+                start_min = df[index_col].copy()
+                stop_min = df[stop_col].copy()
+                
+                # Convert to hours for expand (step_size is in hours)
+                df[index_col] = df[index_col] / 60.0
+                df[stop_col] = df[stop_col] / 60.0
+                
+                try:
+                    df = expand(
+                        df,
+                        start_var=index_col,
+                        end_var=stop_col,
+                        step_size=pd.Timedelta(hours=1),
+                        id_cols=id_cols,
+                        keep_vars=keep_vars,
+                    )
+                    # After expand, times are in hours (integer hours)
+                    # Convert back to minutes for _align_time_to_admission
+                    if index_col in df.columns:
+                        df[index_col] = df[index_col] * 60.0
+                except Exception as e:
+                    # If expand fails, restore original times and continue
+                    df[index_col] = start_min
+                    df[stop_col] = stop_min
+            else:
+                try:
+                    df = expand(
+                        df,
+                        start_var=index_col,
+                        end_var=stop_col,
+                        step_size=pd.Timedelta(hours=1),
+                        id_cols=id_cols,
+                        keep_vars=keep_vars,
+                    )
+                except Exception as e:
+                    pass
+                pass
+
         result_cols = list(dict.fromkeys(id_cols))
         if index_col and index_col in df.columns:
             result_cols.append(index_col)
@@ -3332,6 +3478,9 @@ def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
             result_cols.append(unit_col)
         if rate_unit_col and rate_unit_col in df.columns:
             result_cols.append(rate_unit_col)
+        
+        # Filter to only existing columns
+        result_cols = [c for c in result_cols if c in df.columns]
 
         return df[result_cols].dropna(subset=[concept_name])
 

@@ -1128,7 +1128,19 @@ class ConceptResolver:
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                     is_high_freq_db = db_name in ['aumc', 'hirid']
                     
-                    if is_high_freq_db and table.index_column and len(frame) > 1000:
+                    # 🔧 FIX: 不对有callback的源做预降采样！
+                    # 原因：aumc_rate_kg等callback内部有expand()逻辑，需要原始interval数据
+                    # 预降采样会错误地聚合不同infusion记录，导致值计算错误
+                    # 例如：norepi_rate患者2有4条记录，预降采样用mean合并为2条，
+                    # 然后callback对错误的mean值做单位转换，最终结果与R ricu不一致
+                    has_callback = getattr(source, 'callback', None) is not None
+                    skip_resample_callbacks = ['aumc_rate_kg', 'aumc_rate_units', 'mimic_rate_cv', 
+                                               'mimic_rate_mv', 'aumc_rate', 'sic_rate_kg', 
+                                               'eicu_rate', 'hirid_rate', 'vaso60', 'vaso_ind']
+                    callback_name = source.callback if has_callback else ''
+                    skip_resample = has_callback and any(cb in callback_name for cb in skip_resample_callbacks)
+                    
+                    if is_high_freq_db and table.index_column and len(frame) > 1000 and not skip_resample:
                         time_col = table.index_column
                         is_numeric_time = pd.api.types.is_numeric_dtype(frame[time_col])
                         
@@ -1288,7 +1300,15 @@ class ConceptResolver:
                     # 仅当有患者过滤器且不是特殊处理表时才缓存
                     # labevents/admissions等需要subject_id→stay_id映射，不应缓存原始subject_id级别数据
                     if patient_filter_in_filters and not skip_cache_for_special_tables:
-                        # 缓存只应用了患者过滤器的表
+                        # 🔧 FIX: 缓存只应用了患者过滤器的表（不包含 sub_var/itemid 过滤）
+                        # 这样其他概念可以正确地从缓存中过滤出它们需要的 itemid
+                        # 注意：需要确保加载的表包含所有可能需要的列（使用 value_var 参数）
+                        # 对于像 vitalperiodic.sao2 这样的列，它们是通过 value_var 指定的
+                        # 我们需要在缓存时确保这些列被加载
+                        #
+                        # 但是！我们不能缓存当前的 table.data，因为它已经应用了 itemid 过滤
+                        # （例如 hr 加载时只有 itemid=220045 的数据）
+                        # 所以我们需要重新加载不带 itemid 过滤的表
                         patient_only_table = data_source.load_table(
                             source.table,
                             filters=[patient_filter_in_filters],
@@ -2802,6 +2822,9 @@ class ConceptResolver:
         
         # 🔥 CRITICAL: 内部递归调用必须使用 ricu_compatible=False
         # 否则会返回 DataFrame 而不是 Dict[str, ICUTable]，导致后续处理失败
+        # 🔥 CRITICAL FIX: 使用 _skip_concept_cache=True 避免子概念被缓存
+        # 原因：后续代码会修改 sub_tables（重命名列、对齐时间等），如果子概念被缓存，
+        # 这些修改会污染缓存，导致其他调用者获得错误的数据
         sub_tables = self.load_concepts(
             sub_names,
             data_source,
@@ -2813,6 +2836,7 @@ class ConceptResolver:
             align_to_admission=align_to_admission,  # Pass align flag
             ricu_compatible=False,  # 🔥 内部调用必须返回 Dict[str, ICUTable]
             concept_workers=1,  # 🔧 子概念顺序加载，避免过度并行导致线程竞争
+            _skip_concept_cache=True,  # 🔥 不缓存子概念，避免缓存污染
             **sub_kwargs,  # Pass kwargs with allow_missing flag
         )
 
@@ -3153,8 +3177,9 @@ class ConceptResolver:
             if concept_name == 'gcs':
                 if agg_method is None or (isinstance(agg_method, str) and agg_method != 'min'):
                     agg_method = 'min'
-            if agg_method in (None, "auto") and concept_name in VASO_RATE_CONCEPTS:
-                agg_method = "max"
+            # 🔧 FIX 2024-12-01: 删除 VASO_RATE_CONCEPTS 使用 max 聚合的特殊处理
+            # R ricu 对所有数值概念默认使用 median 聚合，VASO_RATE_CONCEPTS 也不例外
+            # 之前的 max 聚合导致 norepi_rate 等概念与 ricu 不一致
             # SOFA cardiovascular components must retain the highest severity within the window.
             # Using the default 'median' aggregation diluted vasopressor-driven spikes (e.g. 2 and 4
             # becoming 3, or 1 and 2 becoming 1.5). ricu keeps the window maximum, so align here.
@@ -3926,7 +3951,11 @@ class ConceptResolver:
                 if concept_cache_key in self._concept_data_cache:
                     if verbose and logger.isEnabledFor(logging.DEBUG):
                         logger.debug("✨ 从内存缓存加载概念 '%s' (命中增强缓存)", concept_name)
-                    return self._concept_data_cache[concept_cache_key]
+                    # 🔥 CRITICAL FIX: 返回深拷贝，避免缓存污染
+                    # 问题：_load_recursive_concept 会修改返回的表（如重命名列、对齐时间）
+                    # 如果直接返回缓存引用，这些修改会污染缓存，导致后续加载获得错误数据
+                    cached = self._concept_data_cache[concept_cache_key]
+                    return cached.copy() if hasattr(cached, 'copy') else cached
                 
                 # 回退检查旧的简单缓存（用于向后兼容）
                 simple_key = (concept_name, patient_ids_hash, str(interval), str(agg_value))
@@ -3936,14 +3965,16 @@ class ConceptResolver:
                     result = self._concept_data_cache[simple_key]
                     # 同步到新的缓存键
                     self._concept_data_cache[concept_cache_key] = result
-                    return result
+                    # 🔥 返回深拷贝
+                    return result.copy() if hasattr(result, 'copy') else result
                 
                 # 检查旧的概念缓存
                 cached = self._concept_cache.get(concept_name)
                 if cached is not None:
                     # 同时更新到新缓存
                     self._concept_data_cache[concept_cache_key] = cached
-                    return cached
+                    # 🔥 返回深拷贝
+                    return cached.copy() if hasattr(cached, 'copy') else cached
                 # 线程安全的循环依赖检测
                 inflight = self._get_inflight()
                 if concept_name in inflight:
@@ -3989,7 +4020,8 @@ class ConceptResolver:
                     self._concept_cache[concept_name] = disk_hit
                     self._concept_data_cache[concept_cache_key] = disk_hit  # 🚀 也存入新缓存
                     self._get_inflight().discard(concept_name)
-                return disk_hit
+                # 🔥 返回深拷贝，避免缓存污染
+                return disk_hit.copy() if hasattr(disk_hit, 'copy') else disk_hit
 
         try:
             result = self._load_single_concept(
@@ -4649,7 +4681,24 @@ def _apply_callback(
             raise NotImplementedError(
                 f"Unsupported comparison operator '{op_token}' in callback '{expr}'."
             )
-        series = frame[concept_name]
+        # 🔧 FIX: 确定要比较的列 - 优先使用 concept_name，如果不存在则使用 source.value_var
+        # 这修复了 ett_gcs 等概念在 callback 执行前 value_column 尚未重命名的情况
+        compare_col = concept_name
+        if compare_col not in frame.columns:
+            # 尝试使用 source.value_var
+            if source.value_var and source.value_var in frame.columns:
+                compare_col = source.value_var
+            # 或者尝试常见的值列名
+            elif 'value' in frame.columns:
+                compare_col = 'value'
+            elif 'valuenum' in frame.columns:
+                compare_col = 'valuenum'
+        
+        if compare_col not in frame.columns:
+            # 如果仍然找不到列，返回原始 frame（不做任何处理）
+            return frame
+        
+        series = frame[compare_col]
         if isinstance(value, (int, float)) and not pd.api.types.is_numeric_dtype(series):
             series = pd.to_numeric(series, errors="coerce")
         comparator = op_map[op_token]
@@ -4657,7 +4706,9 @@ def _apply_callback(
             lambda item: False if pd.isna(item) else comparator(item, value)
         ).astype("boolean")
         frame = frame.copy()
-        frame.drop(columns=[concept_name], inplace=True)
+        # 如果比较的是 concept_name 列，删除它；否则保留原列
+        if compare_col == concept_name:
+            frame.drop(columns=[concept_name], inplace=True)
         frame[concept_name] = comparison
         return frame
 
@@ -4828,30 +4879,21 @@ def _apply_callback(
         return frame_result
     
     # Handle dex_to_10 callback (convert different dextrose concentrations to D10 equivalent)
-    # Format: dex_to_10(ids, factors) or dex_to_10(c(...), c(...))
+    # Format: dex_to_10(ids, factors) or dex_to_10(c(...), c(...)) or dex_to_10(list(...), c(...))
     match = re.fullmatch(r"dex_to_10\((.+)\)", expr, flags=re.DOTALL)
     if match:
         args = _split_arguments(match.group(1))
         if len(args) >= 2:
-            # Parse itemids and factors
+            # Parse itemids and factors using _parse_r_value which handles nested list/c structures
             id_arg = args[0].strip()
             factor_arg = args[1].strip()
             
-            # Parse list/vector syntax: c(228140L, 220952L) or list(...)
-            def parse_vector(s):
-                # Handle c(...) or list(...)
-                vec_match = re.search(r'(?:c|list)\(([^)]+)\)', s)
-                if vec_match:
-                    items_str = vec_match.group(1)
-                    items = [int(re.sub(r'L$', '', x.strip())) for x in items_str.split(',')]
-                    return items
-                # Handle single value
-                else:
-                    return [int(re.sub(r'L$', '', s.strip()))]
-            
             try:
-                itemids = parse_vector(id_arg)
-                factors = parse_vector(factor_arg)
+                itemids = _parse_r_value(id_arg)    # e.g., list(7255L, 7256L, c(8940L, 9571L)) -> [7255, 7256, [8940, 9571]]
+                factors = _parse_r_value(factor_arg)  # e.g., c(2, 3, 4) -> [2, 3, 4]
+                
+                # Flatten itemids if needed for simple structure, or handle nested mapping
+                # Nested structure means: itemids[i] can be a list, all items in that list get factors[i]
                 
                 # Apply conversion factors
                 sub_var = source.sub_var if hasattr(source, 'sub_var') else 'itemid'
@@ -4871,13 +4913,21 @@ def _apply_callback(
                 
                 if sub_var in frame.columns and val_col:
                     frame = frame.copy()
-                    for itemid, factor in zip(itemids, factors):
-                        mask = frame[sub_var] == itemid
-                        if mask.any():
-                            frame.loc[mask, val_col] = frame.loc[mask, val_col] * factor
-            except Exception:
-                # Silently skip if parsing fails
-                pass
+                    for ids_item, factor in zip(itemids, factors):
+                        # ids_item can be a single value or a list
+                        if isinstance(ids_item, (list, tuple)):
+                            ids_to_check = ids_item
+                        else:
+                            ids_to_check = [ids_item]
+                        
+                        for itemid in ids_to_check:
+                            mask = frame[sub_var] == itemid
+                            if mask.any():
+                                frame.loc[mask, val_col] = frame.loc[mask, val_col] * factor
+            except Exception as e:
+                # Log warning but continue
+                import logging
+                logging.warning(f"dex_to_10 parsing failed: {e}")
         return frame
     
     # Handle ts_to_win_tbl callback
@@ -4916,12 +4966,42 @@ def _apply_callback(
         unit_col = source.unit_var if hasattr(source, 'unit_var') else None
         val_col = concept_name
         
+        # 🔧 CRITICAL FIX 2024-11-30: Get admission times for R ricu-compatible floor behavior
+        # R ricu converts datetime to relative time BEFORE callbacks (in load_mihi).
+        # This affects floor() behavior in expand().
+        admission_times = None
+        if data_source is not None:
+            try:
+                # Load icustays to get admission times
+                icustays_result = data_source.load_table('icustays')
+                # Handle ICUTable or DataFrame result
+                if hasattr(icustays_result, 'data'):
+                    icustays = icustays_result.data
+                else:
+                    icustays = icustays_result
+                    
+                if icustays is not None and len(icustays) > 0:
+                    # Find ID column
+                    id_col = None
+                    for col in id_cols:
+                        if col in icustays.columns:
+                            id_col = col
+                            break
+                    if id_col is not None:
+                        # Filter to patients in the current frame
+                        patient_ids_in_frame = frame[id_col].unique() if id_col in frame.columns else None
+                        if patient_ids_in_frame is not None:
+                            admission_times = icustays[icustays[id_col].isin(patient_ids_in_frame)][[id_col, 'intime']].drop_duplicates()
+            except Exception:
+                pass  # Fail silently - will use fallback floor behavior
+        
         return mimic_rate_mv(
             frame,
             val_col=val_col,
             unit_col=unit_col,
             stop_var=stop_var,
-            id_cols=id_cols
+            id_cols=id_cols,
+            admission_times=admission_times,  # 🔧 Pass admission times for proper floor behavior
         )
     
     # Handle mimic_dur_inmv callback (for infusion durations)
@@ -5795,7 +5875,15 @@ def _strip_quotes(token: str | None) -> Optional[str]:
         text.startswith('"') and text.endswith('"')
     ):
         text = text[1:-1]
-    return text.encode("utf8").decode("unicode_escape")
+    # 🔧 FIX: 只对包含 R 风格转义序列（如 \n, \t）的字符串进行 unicode_escape 解码
+    # 直接的 UTF-8 字符（如荷兰语 ï）不应该被转换
+    # unicode_escape 会错误地将 UTF-8 字节解释为转义序列
+    if '\\' in text:
+        try:
+            return text.encode("utf8").decode("unicode_escape")
+        except UnicodeDecodeError:
+            return text
+    return text
 
 def _maybe_float(value: object) -> Optional[float]:
     if value is None:
