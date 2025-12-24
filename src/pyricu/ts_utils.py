@@ -194,6 +194,11 @@ def change_interval(
         # 窗口概念：只取整时间，不聚合
         # 时间已经在上面的 _round_time_columns 中取整了
         pass
+    elif aggregation is False:
+        # 🔧 FIX 2024-12-17: When aggregation is explicitly False, skip ALL aggregation/dedup
+        # This is critical for vaso60 sub-concepts which need ALL rows (even duplicates)
+        # for the callback's own max aggregation logic
+        pass
     elif aggregation:
         # 普通概念：正常聚合
         agg_dict = {}
@@ -396,28 +401,46 @@ def expand(
             result_cols = [start_var] + id_cols + keep_vars
             return pd.DataFrame(columns=result_cols)
         
-        # 🔧 CRITICAL FIX 2024-11-29: Match R ricu expand() behavior for numeric time
-        # R ricu's expand() uses floor(start) to floor(end) for hourly intervals
-        # Example: start=26.70, end=41.33 → hours 26,27,28,...,41 (16 rows)
-        # Previous bug: used raw diff which gave 15 rows instead of 16
+        # 🔧 CRITICAL FIX 2024-12-16: Match R ricu expand() behavior exactly
+        # 
+        # R ricu's expand() uses:
+        #   seq(start, end, step)  -- using original values, not floored!
         #
-        # 🔧 CRITICAL FIX 2024-11-30: R ricu clips end < 0 to 0
+        # The key insight is that R's seq(from, to, by) generates:
+        #   from, from+by, from+2*by, ... until value exceeds 'to'
+        #
+        # Example: start=2.595556, end=2.612222, step=1
+        #   seq(2.595556, 2.612222, 1) = [2.595556] (only 1 value)
+        #   Because 2.595556 + 1 = 3.595556 > 2.612222
+        #
+        # Example: start=-0.15, end=5.57, step=1
+        #   seq(-0.15, 5.57, 1) = [-0.15, 0.85, 1.85, 2.85, 3.85, 4.85] (6 values)
+        #   
+        # After change_interval/aggregate, values are floored:
+        #   floor([-0.15, 0.85, 1.85, 2.85, 3.85, 4.85]) = [-1, 0, 1, 2, 3, 4]
+        #
+        # 🔧 R ricu also clips end < 0 to 0:
         # R ricu code: x <- x[get(end_var) < 0, c(end_var) := as.difftime(0, units = time_unit)]
-        # This ensures that windows with negative end times extend to 0
-        # Example: start=-5, dur=1 → original_end=-4 → clipped_end=0 → covers -5,-4,-3,-2,-1,0
         #
-        # Floor start and end to integer hours before calculating count
-        start_floored = np.floor(valid_data[start_var] / step_hours) * step_hours
+        # Get original start values (NO floor!)
+        start_values = valid_data[start_var].values.copy()
         
         # Get end values and apply R ricu's end < 0 correction
         end_values = valid_data[end_col].values.copy()
         end_values = np.where(end_values < 0, 0, end_values)  # Clip negative ends to 0
-        end_floored = np.floor(end_values / step_hours) * step_hours
         
-        # Calculate number of points: (floor_end - floor_start) / step + 1
-        diff = end_floored - start_floored
-        counts = (diff / step_hours).astype(int) + 1
-        counts = np.maximum(counts, 0)  # Ensure non-negative
+        # 🔧 FIX 2024-12-16: Use original end values, NOT floor(end)!
+        # R's seq(start, end, step) generates values starting from start,
+        # incrementing by step, as long as value <= end.
+        # This means seq(2.59, 2.61, 1) = [2.59] (1 value, not 0)
+        #
+        # Calculate number of points using R's seq() behavior:
+        # seq(start, end, step) = [start, start+step, ..., start+n*step]
+        # where start + n*step <= end and start + (n+1)*step > end
+        # So n = floor((end - start) / step), and count = n + 1
+        diff = end_values - start_values
+        counts = np.floor(diff / step_hours).astype(int) + 1
+        counts = np.maximum(counts, 1)  # 🔧 FIX: R seq() always returns at least 1 value when start <= end
         
         # Filter out rows with 0 counts
         row_mask = counts > 0
@@ -427,21 +450,22 @@ def expand(
             
         valid_data = valid_data[row_mask]
         counts = counts[row_mask]
-        start_floored = start_floored[row_mask]
+        start_values = start_values[row_mask]
         
         # Repeat rows
         # valid_data.index.repeat(counts) repeats the index, then loc selects rows
         expanded_df = valid_data.loc[valid_data.index.repeat(counts)].reset_index(drop=True)
         
-        # Repeat floored start times for offset calculation
-        start_floored_expanded = start_floored.repeat(counts).values
+        # Repeat original start times for offset calculation
+        start_expanded = np.repeat(start_values, counts)
         
         # Generate time offsets: 0, 1, 2... for each group
         # Using list comprehension with numpy is much faster than pandas iterrows
         offsets = np.concatenate([np.arange(c) for c in counts])
         
-        # Calculate new times from floored start (not original start)
-        expanded_df[start_var] = start_floored_expanded + offsets * step_hours
+        # Calculate new times: start + offset * step (using original start, not floored)
+        # The values will be floored later by change_interval
+        expanded_df[start_var] = start_expanded + offsets * step_hours
         
         # Select columns - remove duplicates while preserving order
         result_cols = [start_var]

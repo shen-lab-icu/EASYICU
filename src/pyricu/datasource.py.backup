@@ -411,32 +411,9 @@ class ICUDataSource:
 
             frame = self._load_raw_frame(table_name, columns, patient_ids_filter=patient_ids_filter)
 
-            # 应用过滤器，但跳过已经被 patient_ids_filter 处理的过滤器
-            # 关键修复：如果 patient_ids_filter 被转换过（例如 stay_id → hadm_id），
-            # 不应该再应用原始的 stay_id 过滤器（因为表没有 stay_id 列）
             if filters:
                 for spec in filters:
-                    # 跳过已经作为 patient_ids_filter 处理的过滤器
-                    if patient_ids_filter is not None:
-                        # 如果原始过滤器的列名和 patient_ids_filter 的列名不同，
-                        # 说明过滤器被转换过（例如 stay_id → hadm_id）
-                        if spec.column != patient_ids_filter.column and spec.op == FilterOp.IN:
-                            # 检查是否是同类型的 ID 过滤器（都是 patient ID 类型）
-                            id_columns_set = {'subject_id', 'icustay_id', 'hadm_id', 'stay_id',
-                                             'admissionid', 'patientid', 'patientunitstayid'}
-                            if spec.column in id_columns_set and patient_ids_filter.column in id_columns_set:
-                                # 这个过滤器已经被转换处理了，跳过
-                                continue
-                        elif spec.column == patient_ids_filter.column and spec.op == patient_ids_filter.op:
-                            # 完全相同的过滤器，已经在 _load_raw_frame 中处理，跳过
-                            continue
-                    
-                    # 安全检查：只应用列存在的过滤器
-                    if spec.column in frame.columns:
-                        frame = spec.apply(frame)
-                    elif spec.op == FilterOp.IN and spec.column not in frame.columns:
-                        # ID 列不存在，但可能通过后续的 join 补全，暂时跳过
-                        pass
+                    frame = spec.apply(frame)
             else:
                 frame = frame.copy()
 
@@ -795,8 +772,6 @@ class ICUDataSource:
                 val = tuple(val)
             elif isinstance(val, set):
                 val = tuple(sorted(val))
-            elif hasattr(val, 'tolist'):  # numpy array
-                val = tuple(val.tolist())
             # 包含列名和操作符，确保唯一性
             filter_key = (patient_ids_filter.column, patient_ids_filter.op, val)
 
@@ -1513,9 +1488,6 @@ def _ensure_sequence(value: Any) -> List[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return list(value)
     try:
-        # 🔧 FIX: 字符串不应该被转换为字符列表
-        if isinstance(value, (str, bytes)):
-            return [value]
         return list(value)
     except TypeError:
         return [value]

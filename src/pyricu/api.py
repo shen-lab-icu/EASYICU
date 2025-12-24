@@ -134,7 +134,8 @@ def load_concepts(
     parallel_workers: Optional[int] = None,
     concept_workers: int = 1,
     parallel_backend: str = 'auto',
-    max_patients: Optional[int] = None,  # 新增：限制加载的患者数量（自动采样）
+    max_patients: Optional[int] = None,  # 限制加载的患者数量（自动采样）
+    limit: Optional[int] = None,  # max_patients 的别名（兼容 extract_sofa_data.py）
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
@@ -257,9 +258,14 @@ def load_concepts(
                 patient_ids = {id_key: kwargs.pop(id_key)}
                 break
 
+    # 🚀 处理 limit 别名（兼容性）
+    effective_max_patients = max_patients
+    if effective_max_patients is None and limit is not None:
+        effective_max_patients = limit
+
     # 🚀 max_patients 支持：自动从数据库采样患者ID
-    if max_patients is not None and patient_ids is None:
-        patient_ids = _sample_patient_ids(loader, max_patients, verbose)
+    if effective_max_patients is not None and patient_ids is None:
+        patient_ids = _sample_patient_ids(loader, effective_max_patients, verbose)
 
     # 规范化患者ID
     if patient_ids is not None and not isinstance(patient_ids, dict):

@@ -913,7 +913,8 @@ def _merge_tables(
                 if len(actual_key_cols) < len(key_cols):
                     missing_in_frame = [col for col in key_cols if col not in frame.columns]
                     missing_in_merged = [col for col in key_cols if col not in merged.columns]
-                    print(f"   ⚠️  跳过 '{name}': 缺少合并键列 (frame缺少: {missing_in_frame}, merged缺少: {missing_in_merged})")
+                    # 使用 logging.debug 代替 print，避免在每个 chunk 都打印重复警告
+                    logging.debug(f"跳过 '{name}': 缺少合并键列 (frame缺少: {missing_in_frame}, merged缺少: {missing_in_merged})")
                     continue
 
                 # 如果frame有与merged重复的列（除了actual_key_cols），先删除frame中的重复列
@@ -1165,7 +1166,12 @@ def _callback_aumc_death(
 ) -> ICUTable:
     """AUMC death callback: marks death if it occurred within 72 hours of ICU discharge.
     
-    Similar to ricu's: x[, val_var := is_true(index_var - val_var < hours(72L))]
+    R ricu logic: x[, val_var := is_true(index_var - val_var < hours(72L))]
+    where index_var = dateofdeath, val_var = dischargedat
+    
+    - If dateofdeath is NA: death = FALSE (survived)
+    - If dateofdeath is not NA and (dateofdeath - dischargedat) < 72h: death = TRUE
+    - Time is in milliseconds in AUMC, 72 hours = 72 * 3600 * 1000 ms
     """
     if not tables or len(tables) == 0:
         return _empty_icutbl(ctx)
@@ -1178,27 +1184,35 @@ def _callback_aumc_death(
         return _empty_icutbl(ctx)
     
     id_columns = input_table.id_columns
-    index_column = input_table.index_column or ctx.index_column
-    value_column = input_table.value_column or list(tables.keys())[0]
+    # For AUMC death: index_var = dateofdeath, val_var = dischargedat
+    index_column = input_table.index_column or ctx.index_column  # dateofdeath
+    value_column = input_table.value_column  # dischargedat
     
-    # Check if death occurred within 72 hours
-    # index_column is typically the time of observation (e.g., charttime in hours)
-    # value_column contains the time of death
+    # R ricu logic: is_true(dateofdeath - dischargedat < 72 hours)
+    # is_true returns TRUE only if the condition is TRUE (not NA)
+    # If dateofdeath is NA, result is FALSE (survived)
+    
+    # AUMC times are in milliseconds, 72 hours = 72 * 3600 * 1000 = 259200000 ms
+    hours_72_ms = 72 * 3600 * 1000
+    
     if index_column in data.columns and value_column in data.columns:
-        # Convert to numeric to handle time differences
-        index_vals = pd.to_numeric(data[index_column], errors='coerce')
-        value_vals = pd.to_numeric(data[value_column], errors='coerce')
+        # dateofdeath and dischargedat
+        dateofdeath = pd.to_numeric(data[index_column], errors='coerce')
+        dischargedat = pd.to_numeric(data[value_column], errors='coerce')
         
-        # Death within 72 hours: (time_of_observation - time_of_death) < 72
-        data['death'] = (index_vals - value_vals < 72).astype(int)
+        # is_true: returns TRUE only if condition is TRUE (not NA)
+        # If dateofdeath is NA, the subtraction result is NA, so is_true returns FALSE
+        diff = dateofdeath - dischargedat
+        # death = TRUE if dateofdeath is not NA AND (dateofdeath - dischargedat) < 72h
+        data['death'] = (~dateofdeath.isna() & (diff < hours_72_ms)).astype(bool)
     else:
-        # If columns are missing, mark all as death=1 (conservative)
-        data['death'] = 1
+        # If columns are missing, mark all as death=False (conservative - assume survived)
+        data['death'] = False
     
-    output_cols = list(id_columns) + ([index_column] if index_column else []) + ['death']
+    output_cols = list(id_columns) + ['death']
     result = data[output_cols].copy()
     
-    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column='death')
+    return _as_icutbl(result, id_columns=id_columns, index_column=None, value_column='death')
 
 def _callback_aumc_bxs(
     tables: Dict[str, ICUTable],
@@ -2566,6 +2580,28 @@ def _callback_news(
     return _as_icutbl(data[cols].reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="news")
 
 
+def _apply_locf_window(
+    data: pd.DataFrame,
+    id_columns: List[str],
+    index_column: Optional[str],
+    value_columns: List[str],
+    window_hours: float = 6.0,
+) -> pd.DataFrame:
+    """
+    Apply Last Observation Carried Forward (LOCF) within a sliding window.
+    
+    This is an alias for _apply_locf_24h with a configurable window size.
+    Used by GCS callback with default 6-hour window.
+    """
+    return _apply_locf_24h(
+        data=data,
+        id_columns=id_columns,
+        index_column=index_column,
+        value_columns=value_columns,
+        win_length_hours=window_hours,
+    )
+
+
 def _apply_locf_24h(
     data: pd.DataFrame,
     id_columns: List[str],
@@ -3510,6 +3546,27 @@ def _callback_vent_ind(
         if idx_col not in df.columns:
             return None
 
+        # 🔧 CRITICAL FIX 2024-12-16: Check if mech_vent is already expanded
+        # R ricu behavior: if mech_vent has data, use it directly as vent_ind = !is.na(mech_vent)
+        # Do NOT re-expand already-expanded data!
+        #
+        # Detection: if mech_vent has NO duration/endtime columns, it's already expanded
+        duration_cols = [col for col in ("mech_vent_dur", "duration", "dur", "endtime", "end_time", "stop", "end") 
+                        if col in df.columns]
+        
+        if not duration_cols:
+            # Already expanded - just set vent_ind = True for all rows
+            result = df[[idx_col] + id_columns].copy()
+            result["vent_ind"] = True
+            result = result.rename(columns={idx_col: time_column})
+            
+            # Group by ID and time to remove duplicates
+            group_cols = list(id_columns) + [time_column]
+            result = result.groupby(group_cols, as_index=False)["vent_ind"].any()
+            result = result.reset_index(drop=True)
+            return _as_icutbl(result, id_columns=id_columns, index_column=time_column, value_column="vent_ind")
+
+        # Not expanded yet - need to expand windows
         start_times, revert_fn = _coerce_time(df[idx_col])
         start_hours = _relative_hours(df, idx_col)
         df = df.assign(_start_dt=start_times, _start_hours=start_hours).dropna(subset=["_start_dt", "_start_hours"])
@@ -3993,10 +4050,13 @@ def _callback_vaso_ind(
     # 获取 start 的小时数（相对于 base_time）
     merged["__start_hours"] = (merged["__start_dt"] - base_time).dt.total_seconds() / 3600
     
-    # 只保留 duration > 0 的行
+    # R ricu 的 expand 函数只保留 start <= end 的行
+    # 对于 vaso_ind，end_var = vaso_ind = duration（pmax 结果）
+    # 所以当 start=0, duration=0 时，0 <= 0 为 TRUE，会保留这一行
+    # 修复：允许 duration >= 0（而不是 duration > 0）
     valid_mask = (
         merged["__max_duration"].notna() & 
-        (merged["__max_duration"] > pd.Timedelta(0))
+        (merged["__max_duration"] >= pd.Timedelta(0))
     )
     valid_rows = merged[valid_mask].copy()
     
@@ -4014,6 +4074,7 @@ def _callback_vaso_ind(
     # 3. 由于 "vaso_ind" 列已存在，expand 直接使用它作为 end_var
     # 4. 所以实际执行的是 seq(starttime, duration) 而不是 seq(starttime, starttime+duration)
     # 5. R 的 seq(1, 4.18, 1) = [1, 2, 3, 4] (不包含超过 4.18 的值)
+    # 6. R 的 seq(0, 0, 1) = [0] (当 start=end 时返回单个值)
     #
     # 我们需要模拟这个行为：对于每一行，生成从 start_hour 到 floor(duration_hour) 的序列
     # 注意：R seq(a, b, 1) 生成的是 a, a+1, a+2, ... 直到 <= b
@@ -4022,11 +4083,13 @@ def _callback_vaso_ind(
     for _, row in valid_rows.iterrows():
         start_hours = row["__start_hours"]
         duration_hours = row["__duration_hours"]
-        if pd.isna(start_hours) or pd.isna(duration_hours) or duration_hours <= 0:
+        # R expand 只检查 start <= end，所以 duration >= 0 都可以
+        if pd.isna(start_hours) or pd.isna(duration_hours) or duration_hours < 0:
             continue
         id_values = tuple(row[col] for col in id_columns) if id_columns else tuple()
         
         # R ricu 的行为：seq(start, duration, 1)
+        # 例如：start=0, duration=0 → seq(0, 0, 1) = [0]
         # 例如：start=1, duration=4.18 → seq(1, 4.18, 1) = [1, 2, 3, 4]
         # 例如：start=1, duration=6.05 → seq(1, 6.05, 1) = [1, 2, 3, 4, 5, 6]
         start_int = int(start_hours)
@@ -4035,8 +4098,14 @@ def _callback_vaso_ind(
         # 简化：最大值是 floor(duration)，但不能小于 start
         end_int = int(duration_hours)  # floor(duration)
         
+        # 当 start > duration 时，R 会返回空（不满足 start <= end）
+        # 但前面的 valid_mask 已经处理了 duration >= 0 的情况
+        # 实际上对于 vaso_ind，start 和 duration 应该都 >= 0
+        if start_int > duration_hours + 1e-9:
+            # start > duration，跳过（R expand 的 start <= end 条件）
+            continue
+        
         # 生成序列 [start_int, start_int+1, ..., end_int] 如果 end_int >= start_int
-        # 但由于 duration 通常比 start 大，我们需要确保这是正确的
         # R seq(1, 4.18, 1) 意味着 seq(start=1, to=4.18, by=1)
         # 结果是 [1, 2, 3, 4] 因为 5 > 4.18
         for hour in range(start_int, end_int + 1):
@@ -4331,7 +4400,14 @@ def _callback_vaso60(
     rate_unit_col = rate_tbl.unit_column
     if (rate_unit_col is None or rate_unit_col not in rate_df.columns) and not rate_df.empty:
         for candidate in rate_df.columns:
-            if "unit" in candidate.lower():
+            # 🔧 FIX 2025-01: More precise unit column matching
+            # Avoid matching ID columns like 'patientunitstayid' which contain 'unit'
+            # Only match columns that look like unit columns: 'unit', 'rate_unit', 'drugunit' etc.
+            candidate_lower = candidate.lower()
+            if candidate_lower in id_columns:
+                continue  # Skip ID columns
+            # Match 'unit' as a word boundary, not just substring
+            if candidate_lower == 'unit' or candidate_lower.endswith('_unit') or candidate_lower.startswith('unit_') or 'rateunit' in candidate_lower or 'drugunit' in candidate_lower:
                 rate_unit_col = candidate
                 break
 
@@ -4658,91 +4734,18 @@ def _callback_vaso60(
     grouped[ctx.concept_name] = grouped[rate_col]
     grouped = grouped.drop(columns=[rate_col])
 
-    # Expand vasopressor rates across their active windows so that every hour
-    # within an infusion inherits the most recent setting, matching ricu's
-    # vaso60 (change_interval + aggregate).
-    if final_interval is not None and not grouped.empty and not intervals.empty:
-        interval_id_cols = [col for col in id_columns if col in intervals.columns]
-
-        def _normalize_key(values: Sequence[object]) -> tuple:
-            normalized = []
-            for val in values:
-                if pd.isna(val):
-                    normalized.append("__nan__")
-                else:
-                    normalized.append(val)
-            return tuple(normalized) if normalized else ("__all__",)
-
-        interval_map: Dict[tuple, List[tuple[pd.Timestamp, pd.Timestamp]]] = {}
-        for _, row in intervals.iterrows():
-            key = _normalize_key([row[col] for col in interval_id_cols])
-            interval_map.setdefault(key, []).append((row["__start"], row["__end"]))
-
-        expanded_frames: List[pd.DataFrame] = []
-        group_key_cols = [col for col in id_columns if col in grouped.columns]
-
-        if group_key_cols:
-            grouped_iter = grouped.sort_values(group_key_cols + [rate_index_col]).groupby(group_key_cols, dropna=False)
-        else:
-            grouped_iter = [(None, grouped.sort_values([rate_index_col]))]
-
-        for _, grp in grouped_iter:
-            if grp.empty:
-                continue
-            first = grp.iloc[0]
-            key = _normalize_key([first[col] for col in interval_id_cols])
-            windows = interval_map.get(key)
-            if not windows:
-                continue
-
-            times = pd.to_datetime(grp[rate_index_col], errors="coerce")
-            values = pd.to_numeric(grp[ctx.concept_name], errors="coerce")
-            valid_mask = times.notna() & values.notna()
-            if not valid_mask.any():
-                continue
-            times = times[valid_mask]
-            values = values[valid_mask]
-            times_ns = times.to_numpy(dtype="datetime64[ns]")
-            value_arr = values.to_numpy()
-
-            interval_delta = np.timedelta64(int(final_interval.value), "ns")
-            for start, end in windows:
-                if pd.isna(start) or pd.isna(end) or start > end:
-                    continue
-                grid = pd.date_range(start=start, end=end, freq=final_interval)
-                if grid.empty:
-                    continue
-                grid_ns = grid.to_numpy(dtype="datetime64[ns]")
-                sampled_list: list[float] = []
-                
-                # Forward-fill logic - 每个时间点使用该时间点之前最近的rate值
-                # R ricu的change_interval会在整个duration内forward-fill最近的rate
-                for point in grid_ns:
-                    # 找到该时间点之前最近的rate记录
-                    pos = np.searchsorted(times_ns, point, side="right") - 1
-                    if pos >= 0 and pos < len(value_arr):
-                        # 使用最近的rate值
-                        sampled_list.append(float(value_arr[pos]))
-                    else:
-                        # 如果在第一个rate记录之前,使用NaN
-                        sampled_list.append(np.nan)
-                
-                sampled = np.array(sampled_list, dtype=float)
-                frame = pd.DataFrame({rate_index_col: grid, ctx.concept_name: sampled})
-                for col in group_key_cols:
-                    frame[col] = first[col]
-                frame = frame.dropna(subset=[ctx.concept_name])
-                if not frame.empty:
-                    expanded_frames.append(frame)
-
-        if expanded_frames:
-            expanded = pd.concat(expanded_frames, ignore_index=True)
-            agg_cols = [col for col in group_key_cols] + [rate_index_col]
-            grouped = (
-                expanded.groupby(agg_cols, dropna=False)[ctx.concept_name]
-                .max()
-                .reset_index()
-            )
+    # 🔧 FIX: R ricu's vaso60 does NOT expand/fill missing hours with max values.
+    # It simply joins rate to duration windows and keeps the ACTUAL hourly rate values.
+    # The only aggregation is when the same hour has multiple rate values (takes max).
+    # The previous expansion code incorrectly replaced all hourly values with the window max.
+    #
+    # R ricu logic:
+    # 1. Join rate where rate.time >= dur.start AND rate.time <= dur.end
+    # 2. change_interval() to floor times to hours (already done above)
+    # 3. aggregate("max") - only aggregates if same hour has multiple values
+    #
+    # The `grouped` variable already contains the correct hourly values from step 1 and 3.
+    # No expansion is needed.
 
     if final_interval is not None and not grouped.empty:
         grouped[rate_index_col] = grouped[rate_index_col].dt.floor(final_interval)
@@ -4774,32 +4777,124 @@ def _callback_susp_inf(
 ) -> ICUTable:
     """Detect suspected infection (疑似感染).
     
-    Suspected infection is defined as co-occurrence of antibiotic treatment
-    and body-fluid sampling. Supports multiple detection modes via si_mode:
+    Supports multiple detection modes via si_mode:
     
     - "and": Both ABX and sampling required (Sepsis-3 standard, default for MIMIC-IV/AUMC)
-    - "or": Either ABX or sampling (default for eICU due to sparse microlab data)
+    - "or": Either ABX or sampling
     - "abx": Only ABX required
     - "samp": Only sampling required
-    - "auto": Automatically select based on database data coverage
+    - "icd_abx": ICD infection diagnosis (定人) + antibiotics (定时) - eICU新策略
+    - "auto": Automatically select based on database
     
     Database-specific defaults (si_mode="auto"):
-    - MIMIC-IV: "and" (microlab coverage ~95%)
-    - eICU: "or" (microlab coverage only 1.5%)
-    - AUMC: "and" (microlab coverage ~33%)
+    - MIMIC-IV: "and" (ABX + 血培养, microlab coverage ~95%)
+    - eICU: "icd_abx" (ICD感染诊断 + 抗生素, microlab coverage only 1.5%)
+    - AUMC: "and" (ABX + 血培养, procedureorderitems coverage ~33%)
     - HiRID: "and" (default)
     
     Args:
-        tables: Dictionary with 'abx' and 'samp' ICUTable objects
+        tables: Dictionary with component ICUTable objects:
+            - 'abx': Antibiotic data (required)
+            - 'samp': Body fluid sampling data (required for "and"/"or"/"samp" modes)
+            - 'infection_icd': ICD infection diagnosis data (required for "icd_abx" mode)
         ctx: Callback context with kwargs:
-            - si_mode: Detection mode ("and", "or", "abx", "samp", "auto")
+            - si_mode: Detection mode ("and", "or", "abx", "samp", "icd_abx", "auto")
             - abx_win: Time window after ABX for sampling (default 24h)
             - samp_win: Time window after sampling for ABX (default 72h)
             - abx_min_count: Minimum antibiotic administrations required
             - positive_cultures: Whether to require positive cultures
     """
+    import logging
+    logger = logging.getLogger("pyricu")
+    
+    # Determine database name
+    ds_name = ""
+    if ctx is not None and getattr(ctx, "data_source", None) is not None:
+        source_cfg = getattr(ctx.data_source, "config", None)
+        if source_cfg is not None and hasattr(source_cfg, "name"):
+            ds_name = getattr(source_cfg, "name", "") or ""
+        else:
+            ds_name = getattr(ctx.data_source, "name", "") or ""
+    ds_name = ds_name.lower()
+    
+    # Get si_mode from context kwargs, default to "auto"
+    si_mode = ctx.kwargs.get("si_mode", "auto") if ctx and ctx.kwargs else "auto"
+    
+    # Auto mode: select si_mode based on database
+    if si_mode == "auto":
+        # Database-specific defaults:
+        # - eICU: Use "icd_abx" (ICD感染诊断定人 + 抗生素定时) due to sparse microlab (1.5%)
+        # - MIMIC-IV/AUMC: Use "and" (ABX + 血培养, Sepsis-3 standard)
+        if ds_name in {"eicu", "eicu_demo"}:
+            si_mode = "icd_abx"
+            logger.info(f"susp_inf: Using si_mode='icd_abx' for {ds_name} (ICD感染诊断 + 抗生素)")
+        else:
+            si_mode = "and"
+            logger.debug(f"susp_inf: Using si_mode='and' for {ds_name}")
+    
+    # ===== eICU新策略: icd_abx (ICD感染诊断定人 + 抗生素定时) =====
+    if si_mode == "icd_abx":
+        # 需要 infection_icd 和 abx 两个概念
+        if "infection_icd" not in tables or "abx" not in tables:
+            raise ValueError(
+                f"si_mode='icd_abx' requires 'infection_icd' and 'abx' concepts. "
+                f"Available: {list(tables.keys())}"
+            )
+        
+        # 获取感染诊断数据 (定人 - 只需要患者有感染诊断即可)
+        infection_tbl = tables["infection_icd"]
+        abx_tbl = tables["abx"]
+        
+        # 转换ID列
+        id_columns, index_column, converted_tables = _assert_shared_schema(
+            {"infection_icd": infection_tbl, "abx": abx_tbl},
+            ctx=ctx,
+            convert_ids=True
+        )
+        
+        infection_data = converted_tables["infection_icd"].data.copy()
+        abx_data = converted_tables["abx"].data.copy()
+        
+        if index_column is None:
+            raise ValueError("susp_inf requires time-indexed component tables")
+        
+        # 统一时间列名
+        abx_idx = converted_tables["abx"].index_column
+        if abx_idx and abx_idx != index_column and abx_idx in abx_data.columns:
+            abx_data = abx_data.rename(columns={abx_idx: index_column})
+        
+        infection_idx = converted_tables["infection_icd"].index_column
+        if infection_idx and infection_idx != index_column and infection_idx in infection_data.columns:
+            infection_data = infection_data.rename(columns={infection_idx: index_column})
+        
+        # ICD感染诊断"定人" - 获取有感染诊断的患者列表
+        id_col_list = list(id_columns)
+        infection_patients = infection_data[id_col_list].drop_duplicates()
+        
+        # 抗生素"定时" - 获取使用抗生素的时间点
+        abx_events = abx_data[id_col_list + [index_column]].drop_duplicates()
+        
+        # 合并: 有感染诊断的患者 + 使用抗生素的时间点
+        # 这意味着: 患者必须有感染诊断，抗生素使用时间即为疑似感染时间
+        result = abx_events.merge(infection_patients, on=id_col_list, how="inner")
+        result['susp_inf'] = True
+        
+        logger.info(
+            f"susp_inf (icd_abx): {len(infection_patients)} patients with infection ICD, "
+            f"{len(result)} suspected infection events"
+        )
+        
+        return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="susp_inf")
+    
+    # ===== 原有策略: and/or/abx/samp =====
+    # 需要 abx 和 samp 两个概念
+    if "abx" not in tables or "samp" not in tables:
+        raise ValueError(
+            f"si_mode='{si_mode}' requires 'abx' and 'samp' concepts. "
+            f"Available: {list(tables.keys())}"
+        )
+    
     # Convert ID columns if needed (hadm_id → stay_id) before merging
-    # This replicates R ricu's automatic ID conversion in collect_dots()
     id_columns, index_column, converted_tables = _assert_shared_schema(
         {"abx": tables["abx"], "samp": tables["samp"]},
         ctx=ctx,
@@ -4813,48 +4908,14 @@ def _callback_susp_inf(
     if index_column is None:
         raise ValueError("susp_inf requires time-indexed component tables")
     
-    # Standardize time column names - both need to use the same column name
-    # abx might have 'starttime', samp might have 'charttime' or 'chartdate'
+    # Standardize time column names
     abx_data = abx_tbl.data.copy()
     samp_data = samp_tbl.data.copy()
     
-    # Rename time columns to index_column if they differ
     if abx_tbl.index_column and abx_tbl.index_column != index_column and abx_tbl.index_column in abx_data.columns:
         abx_data = abx_data.rename(columns={abx_tbl.index_column: index_column})
     if samp_tbl.index_column and samp_tbl.index_column != index_column and samp_tbl.index_column in samp_data.columns:
         samp_data = samp_data.rename(columns={samp_tbl.index_column: index_column})
-
-    # Get si_mode from context kwargs, default to "auto"
-    si_mode = ctx.kwargs.get("si_mode", "auto") if ctx and ctx.kwargs else "auto"
-    
-    # Determine database name for auto mode
-    ds_name = ""
-    if ctx is not None and getattr(ctx, "data_source", None) is not None:
-        source_cfg = getattr(ctx.data_source, "config", None)
-        if source_cfg is not None and hasattr(source_cfg, "name"):
-            ds_name = getattr(source_cfg, "name", "") or ""
-        else:
-            ds_name = getattr(ctx.data_source, "name", "") or ""
-    ds_name = ds_name.lower()
-    
-    # Auto mode: select si_mode based on database
-    # eICU has very sparse microlab data (1.5%), so default to "or"
-    # Other databases have better coverage, so use "and" (Sepsis-3 standard)
-    if si_mode == "auto":
-        # Database-specific defaults based on data coverage analysis:
-        # - eICU: microlab only 1.5% coverage -> use "or" 
-        # - MIMIC-IV: microlab ~95% coverage -> use "and"
-        # - AUMC: microlab ~33% coverage -> use "and" (borderline, but usable)
-        # - HiRID: default to "and"
-        sparse_microlab_databases = {"eicu"}  # Databases with <5% microlab coverage
-        
-        if ds_name in sparse_microlab_databases:
-            si_mode = "or"
-            import logging
-            logger = logging.getLogger("pyricu")
-            logger.info(f"susp_inf: Using si_mode='or' for {ds_name} (sparse microlab data)")
-        else:
-            si_mode = "and"
     
     # Get other parameters from kwargs
     abx_win = ctx.kwargs.get("abx_win", pd.Timedelta(hours=24)) if ctx and ctx.kwargs else pd.Timedelta(hours=24)
@@ -4892,6 +4953,7 @@ def _callback_gcs(
     Calculate GCS (Glasgow Coma Scale) with sed_impute logic.
     
     Replicates R ricu's GCS callback logic:
+    - valid_win = hours(6L): Apply LOCF within a 6-hour window
     - sed_impute="max" (default): Intubated patients get GCS=15
     - sed_impute="none": Use actual measured values
     - set_na_max=True (default): Fill remaining NA with max values (egcs=4, mgcs=6, vgcs=5)
@@ -4919,6 +4981,20 @@ def _callback_gcs(
     # Get parameters from context (matching R ricu defaults)
     sed_impute = ctx.kwargs.get("sed_impute", "max")
     set_na_max = ctx.kwargs.get("set_na_max", True)
+    valid_win = ctx.kwargs.get("valid_win", 6.0)  # 6 hours, default in R ricu
+    
+    # CRITICAL: Apply LOCF within valid_win before processing
+    # R ricu: slide(res, !!expr, before = valid_win) where expr = substitute(lapply(.SD, fun), list(fun = locf))
+    gcs_components = ["egcs", "vgcs", "mgcs", "tgcs"]
+    available_components = [c for c in gcs_components if c in data.columns]
+    if available_components and index_column:
+        data = _apply_locf_window(
+            data=data,
+            id_columns=id_columns,
+            index_column=index_column,
+            value_columns=available_components,
+            window_hours=valid_win,
+        )
 
     tgcs = None if ignore_tgcs else pd.to_numeric(data.get("tgcs"), errors="coerce")
     egcs = pd.to_numeric(data.get("egcs"), errors="coerce")

@@ -40,8 +40,8 @@ class SeriesUtils:
                 # For float dtypes, check if not NaN and convert to bool
                 return series.notna() & (series != 0)
             else:
-                # For other types, use standard fillna
-                return series.fillna(False).astype(bool)
+                # For other types, use infer_objects to avoid FutureWarning
+                return series.fillna(False).infer_objects(copy=False).astype(bool)
         else:  # numpy array
             series = pd.Series(series)
             if pd.api.types.is_float_dtype(series):

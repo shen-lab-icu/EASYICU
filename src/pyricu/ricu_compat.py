@@ -595,15 +595,9 @@ def merge_concepts_ricu_style(
         if "time" in df_copy.columns and not is_window_concept:
             df_copy["time"] = round_to_interval(df_copy["time"], interval_hours)
         
-        # 🔧 FIX: 对 duration 概念的值列进行 floor 舍入
-        # R ricu 在 change_interval 中对所有 difftime 类型（包括 duration）进行 re_time 舍入
-        # re_time = round_to(`units<-`(x, units(interval)), as.double(interval))
-        # round_to = floor(x / interval) * interval
-        # 对于 interval=1h 的 duration, 这等于 floor(hours)
-        if name in DURATION_CONCEPTS or name.endswith("_dur"):
-            if name in df_copy.columns and pd.api.types.is_numeric_dtype(df_copy[name]):
-                # floor 舍入: 2.6 -> 2.0
-                df_copy[name] = np.floor(df_copy[name] / interval_hours) * interval_hours
+        # 🔧 NOTE: Duration 概念的值（如 dobu_dur）已经在 calc_dur 中使用 floor(end_h) - floor(start_h) 计算
+        # 不需要再对 duration 值做额外处理
+        # R ricu 的 calc_dur 在时间已经被 floor 到小时后计算 max(end) - min(start)
         
         # 确保有值列
         if name not in df_copy.columns:
