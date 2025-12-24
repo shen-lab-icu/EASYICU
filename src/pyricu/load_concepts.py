@@ -75,6 +75,16 @@ MINIMAL_COLUMNS_MAP = {
     # eICU lab: 实验室检查
     # 包含labmeasurenameinterface用于单位转换回调（如calcium的mmol/l转mg/dL）
     'lab': ['patientunitstayid', 'labresultoffset', 'labname', 'labresult', 'labmeasurenameinterface'],
+    
+    # AUMC numericitems: 数值项目表 - 包含 measuredat 时间列
+    # AUMC 时间单位: measuredat 是毫秒，需要减去 admittedat 并转换为小时
+    # 🔧 FIX: 添加 tag 列用于 aumc_bxs 回调（be 概念需要根据 tag='-' 取反值）
+    'numericitems': ['admissionid', 'itemid', 'value', 'unit', 'measuredat', 'tag'],
+    
+    # 注意：admissions 表不同数据库列名不同，不纳入优化
+    # AUMC: admissionid, patientid, admittedat, dischargedat, destination
+    # MIIV: hadm_id, subject_id, admittime, dischtime, deathtime, hospital_expire_flag
+    # 因此不在此处配置，让系统加载所有列
 }
 
 # 性能优化开关 - 如果遇到问题可以禁用
@@ -132,9 +142,9 @@ class ConceptLoader:
                     if col and col not in base_cols:
                         base_cols.append(col)
             
-            # 确保有ID列
+            # 确保有ID列 - 包括 AUMC 的 admissionid
             has_id = any(id_col in base_cols for id_col in 
-                        ['stay_id', 'icustay_id', 'subject_id', 'patientunitstayid', 'hadm_id'])
+                        ['stay_id', 'icustay_id', 'subject_id', 'patientunitstayid', 'hadm_id', 'admissionid'])
             if not has_id:
                 # 添加ID类型对应的列
                 id_candidates = ID_TYPE_HINTS.get(id_type, ['stay_id'])
@@ -1067,7 +1077,7 @@ class ConceptLoader:
         id_mappings = {
             'patient': ['subject_id', 'patientid', 'patient_id'],
             'hadm': ['hadm_id', 'admissionid', 'admission_id'],
-            'icustay': ['stay_id', 'icustay_id', 'patientunitstayid'],
+            'icustay': ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid'],
         }
         
         # 找到主ID列

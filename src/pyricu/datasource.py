@@ -18,6 +18,66 @@ from .table import ICUTable
 DEBUG_MODE = False
 logger = logging.getLogger(__name__)
 
+# 🚀 AUMC numericitems 优化：只加载 SOFA 相关的 itemids
+# 原始表 80GB，过滤后约 5GB，性能提升约 15 倍
+# 这些 itemids 来自 concept-dict.json 和 sofa2-dict.json 中 AUMC numericitems 源
+AUMC_NUMERICITEMS_ITEMIDS = {
+    6640, 6641, 6642, 6643, 6684, 6707, 6709, 6773, 6774, 6776, 6777, 6778, 6779, 
+    6786, 6789, 6796, 6797, 6800, 6801, 6803, 6806, 6807, 6808, 6810, 6812, 6813, 
+    6815, 6817, 6822, 6824, 6825, 6828, 6833, 6835, 6836, 6837, 6839, 6840, 6846, 
+    6848, 6850, 7433, 8658, 8794, 8874, 8884, 8885, 8903, 8915, 9553, 9555, 9556, 
+    9557, 9560, 9561, 9580, 9658, 9924, 9927, 9930, 9933, 9935, 9937, 9941, 9943, 
+    9945, 9947, 9952, 9960, 9962, 9964, 9965, 9967, 9968, 9989, 9990, 9992, 9994, 
+    9996, 10053, 10079, 10175, 10267, 10284, 10285, 10286, 10407, 10409, 11423, 
+    11545, 11586, 11679, 11690, 11692, 11710, 11812, 11846, 11856, 11893, 11902, 
+    11978, 11984, 11990, 11998, 12266, 12279, 12310, 12311, 12356, 12805, 13076, 
+    13952, 14216, 14252, 14254, 14256, 14258, 16110, 16166, 17982, 18666, 18952, 
+    19703, 20656, 21213, 21214,
+    # 🆕 SOFA-2 adv_resp (高级呼吸支持) itemids - 用于 PEEP 检测
+    # 6694=Eind exp. druk/PEEP (15.6M rows), 12284=PEEP Set (15.6M rows), 8862=PEEP/CPAP (85K rows)
+    6694, 12284, 8862,
+    # 🆕 SOFA-2 rrt (肾脏替代治疗) itemids
+    # 7666, 7667, 7668=透析相关, 8805=CRRT, 10736=血液透析, 12444=腹膜透析
+    7666, 7667, 7668, 8805, 10736, 12444,
+}
+
+# 🚀 MIIV chartevents 优化：只加载 SOFA 相关的 93 个 itemids
+# 原始表 11GB，过滤后大幅减少
+MIIV_CHARTEVENTS_ITEMIDS = {
+    467, 469, 220045, 220050, 220051, 220052, 220128, 220179, 220180, 220181, 
+    220210, 220227, 220277, 220339, 220739, 223761, 223762, 223835, 223848, 223849, 
+    223900, 223901, 224027, 224309, 224310, 224311, 224322, 224419, 224652, 224654, 
+    224660, 224684, 224685, 224686, 224687, 224688, 224689, 224690, 224695, 224696, 
+    224697, 224700, 224701, 224702, 224703, 224704, 224705, 224706, 224707, 224709, 
+    224738, 224746, 224747, 224750, 225312, 225436, 225949, 225979, 226253, 226512, 
+    226707, 226732, 226873, 227187, 227290, 227577, 227578, 227579, 227580, 227583, 
+    227980, 228096, 228151, 228154, 228156, 228158, 228193, 228198, 228300, 228332, 
+    228337, 228640, 228866, 229254, 229266, 229268, 229270, 229274, 229277, 229278, 
+    229280, 229314, 229326,
+}
+
+# 🚀 MIIV labevents 优化：只加载 SOFA 相关的 53 个 itemids
+# 原始表 8GB，过滤后大幅减少
+MIIV_LABEVENTS_ITEMIDS = {
+    50802, 50804, 50808, 50809, 50813, 50814, 50816, 50817, 50818, 50820, 50821, 
+    50822, 50852, 50861, 50862, 50863, 50878, 50882, 50883, 50885, 50889, 50893, 
+    50902, 50910, 50911, 50912, 50931, 50960, 50970, 50971, 50983, 51002, 51003, 
+    51006, 51144, 51146, 51200, 51214, 51221, 51222, 51237, 51244, 51248, 51249, 
+    51250, 51256, 51265, 51274, 51275, 51277, 51279, 51288, 51301,
+}
+
+# 🚀 eICU nursecharting 优化：只加载 SOFA 相关的字符串 IDs
+# 原始表 4.3GB，过滤后大幅减少
+# 注意：eICU nursecharting 使用 nursingchartcelltypevalname 列进行过滤
+EICU_NURSECHARTING_IDS = {
+    # GCS 相关
+    'GCS Total', 'Eyes', 'Sedation Score', 'Motor', 'Verbal',
+    # 谵妄相关 (SOFA-2 delirium_positive) - 使用 nursingchartcelltypevalname 的值
+    'Value', 'Delirium Score', 'Delirium Scale',
+    # ECMO 相关 (通过 O2 Admin Device 记录)
+    'O2 Admin Device',
+}
+
 # 🚀 性能优化：最小必要列集（自动应用）
 MINIMAL_COLUMNS = {
     'chartevents': ['stay_id', 'charttime', 'itemid', 'valuenum', 'valueuom', 'value'],
@@ -351,9 +411,32 @@ class ICUDataSource:
 
             frame = self._load_raw_frame(table_name, columns, patient_ids_filter=patient_ids_filter)
 
+            # 应用过滤器，但跳过已经被 patient_ids_filter 处理的过滤器
+            # 关键修复：如果 patient_ids_filter 被转换过（例如 stay_id → hadm_id），
+            # 不应该再应用原始的 stay_id 过滤器（因为表没有 stay_id 列）
             if filters:
                 for spec in filters:
-                    frame = spec.apply(frame)
+                    # 跳过已经作为 patient_ids_filter 处理的过滤器
+                    if patient_ids_filter is not None:
+                        # 如果原始过滤器的列名和 patient_ids_filter 的列名不同，
+                        # 说明过滤器被转换过（例如 stay_id → hadm_id）
+                        if spec.column != patient_ids_filter.column and spec.op == FilterOp.IN:
+                            # 检查是否是同类型的 ID 过滤器（都是 patient ID 类型）
+                            id_columns_set = {'subject_id', 'icustay_id', 'hadm_id', 'stay_id',
+                                             'admissionid', 'patientid', 'patientunitstayid'}
+                            if spec.column in id_columns_set and patient_ids_filter.column in id_columns_set:
+                                # 这个过滤器已经被转换处理了，跳过
+                                continue
+                        elif spec.column == patient_ids_filter.column and spec.op == patient_ids_filter.op:
+                            # 完全相同的过滤器，已经在 _load_raw_frame 中处理，跳过
+                            continue
+                    
+                    # 安全检查：只应用列存在的过滤器
+                    if spec.column in frame.columns:
+                        frame = spec.apply(frame)
+                    elif spec.op == FilterOp.IN and spec.column not in frame.columns:
+                        # ID 列不存在，但可能通过后续的 join 补全，暂时跳过
+                        pass
             else:
                 frame = frame.copy()
 
@@ -382,7 +465,10 @@ class ICUDataSource:
             for column in time_like_cols:
                 if column in frame.columns and pd.api.types.is_numeric_dtype(frame[column]):
                     # 将毫秒转换为整数分钟: floor(ms / 60000) - 匹配 R ricu 的 as.integer()
-                    frame[column] = (frame[column] / 60000.0).apply(lambda x: int(x) if pd.notna(x) else x).astype('float64')
+                    # 🔧 PERFORMANCE FIX: Use numpy floor instead of slow apply+lambda
+                    import numpy as np
+                    values = frame[column].values / 60000.0
+                    frame[column] = np.where(np.isnan(values), np.nan, np.floor(values))
         
         for column in time_like_cols:
             # 只有当列存在且不是numeric类型时才转换
@@ -537,9 +623,20 @@ class ICUDataSource:
                                     
                                 # 获取该 hadm_id 的 stay 信息，按 outtime 排序
                                 hadm_stays = stay_info[stay_info['hadm_id'] == hadm_id].copy()
+                                # 🔧 FIX: 过滤掉 outtime 为空的行，避免 merge_asof 报错
+                                # "Merge keys contain null values on right side"
+                                hadm_stays = hadm_stays.dropna(subset=['outtime'])
+                                if hadm_stays.empty:
+                                    continue
                                 hadm_stays = hadm_stays.sort_values('outtime')
                                 stays_list = hadm_stays['stay_id'].tolist()
                                 outtimes_list = hadm_stays['outtime'].tolist()
+                                
+                                # 🔧 FIX: 过滤掉时间列为空的行，避免 merge_asof 报错
+                                # "Merge keys contain null values on left side"
+                                hadm_unique = hadm_unique.dropna(subset=[time_col])
+                                if hadm_unique.empty:
+                                    continue
                                 
                                 # 确保数据按时间排序
                                 hadm_unique = hadm_unique.sort_values(time_col)
@@ -683,9 +780,10 @@ class ICUDataSource:
         # 🚀 OPTIMIZATION: 缓存键不包含patient_ids_filter以实现跨概念共享
         # 对于同一批患者的多个概念加载,只在第一次读取表,后续从缓存中过滤
         # 这将chartevents等大表的加载从N次(每概念一次)减少到1次
-        # 跳过需要subject_id→stay_id映射的表，这些表缓存会导致patient过滤失效
-        # 🔧 FIX: labevents 也可以缓存，只要我们在key中包含filter信息
-        skip_cache_tables = ['microbiologyevents', 'inputevents', 'admissions']
+        # 🔧 FIX: inputevents 现在也可以缓存，因为 key 中包含了 filter 信息
+        # 之前排除 inputevents 是因为担心 subject_id→stay_id 映射问题
+        # 但实际上 inputevents 表有 stay_id 列，可以直接过滤
+        skip_cache_tables = ['microbiologyevents', 'admissions']  # 移除 inputevents
         enable_caching = self.enable_cache and table_name not in skip_cache_tables
         
         # 🔧 FIX: 如果表是经过过滤加载的，必须将filter包含在cache key中
@@ -697,6 +795,8 @@ class ICUDataSource:
                 val = tuple(val)
             elif isinstance(val, set):
                 val = tuple(sorted(val))
+            elif hasattr(val, 'tolist'):  # numpy array
+                val = tuple(val.tolist())
             # 包含列名和操作符，确保唯一性
             filter_key = (patient_ids_filter.column, patient_ids_filter.op, val)
 
@@ -785,7 +885,7 @@ class ICUDataSource:
         if callable(loader):
             frame = loader()
         else:
-            frame = self._read_file(Path(loader), columns, patient_ids_filter=patient_ids_filter)
+            frame = self._read_file(Path(loader), columns, patient_ids_filter=patient_ids_filter, table_name=table_name)
 
         if columns is not None:
             missing = set(columns) - set(frame.columns)
@@ -916,7 +1016,26 @@ class ICUDataSource:
         """获取表的最小必要列集（性能优化）"""
         return MINIMAL_COLUMNS.get(table_name)
     
-    def _read_file(self, path: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
+    def _read_file(self, path: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, table_name: Optional[str] = None) -> pd.DataFrame:
+        # 🚀 大表 itemid 预过滤配置
+        # 检测是否为需要 itemid 过滤的大表
+        # 🔧 2024-12-02: 重新启用白名单过滤，白名单已包含所有 sofa2-dict.json 中定义的 itemid
+        itemid_filter_config = None
+        db_name = self.config.name
+        
+        if db_name == 'aumc' and table_name == 'numericitems':
+            # AUMC numericitems: 80GB → 约5GB
+            itemid_filter_config = ('itemid', AUMC_NUMERICITEMS_ITEMIDS)
+        elif db_name in ('miiv', 'mimic_demo') and table_name == 'chartevents':
+            # MIIV chartevents: 11GB
+            itemid_filter_config = ('itemid', MIIV_CHARTEVENTS_ITEMIDS)
+        elif db_name in ('miiv', 'mimic_demo') and table_name == 'labevents':
+            # MIIV labevents: 8GB
+            itemid_filter_config = ('itemid', MIIV_LABEVENTS_ITEMIDS)
+        elif db_name == 'eicu' and table_name == 'nursecharting':
+            # eICU nursecharting: 4.3GB - 使用字符串列
+            itemid_filter_config = ('nursingchartcelltypevalname', EICU_NURSECHARTING_IDS)
+        
         # Handle directory (partitioned data)
         if path.is_dir():
             if DEBUG_MODE:
@@ -932,9 +1051,9 @@ class ICUDataSource:
                     use_duckdb = len(values) <= 100
             
             if use_duckdb:
-                return self._read_partitioned_data_duckdb(path, columns, patient_ids_filter)
+                return self._read_partitioned_data_duckdb(path, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
             else:
-                return self._read_partitioned_data_optimized(path, columns, patient_ids_filter)
+                return self._read_partitioned_data_optimized(path, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
         
         suffix = path.suffix.lower()
         suffixes = [s.lower() for s in path.suffixes]
@@ -973,16 +1092,19 @@ class ICUDataSource:
             f"Unsupported file format '{path.suffix}' for {path.name}. Only Parquet format is supported."
         )
     
-    def _read_partitioned_data_duckdb(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
+    def _read_partitioned_data_duckdb(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None) -> pd.DataFrame:
         """使用 DuckDB 读取分区数据（高性能版本）
         
         DuckDB 对单患者/小批量患者查询特别高效，比 PyArrow 快 5-6 倍。
+        
+        Args:
+            itemid_filter_config: 可选的 (列名, itemid集合) 元组，用于大表预过滤
         """
         try:
             import duckdb
         except ImportError:
             # DuckDB 未安装，回退到 PyArrow
-            return self._read_partitioned_data_optimized(directory, columns, patient_ids_filter)
+            return self._read_partitioned_data_optimized(directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
         
         # 构建 SQL 查询
         glob_pattern = str(directory / "*.parquet")
@@ -993,8 +1115,10 @@ class ICUDataSource:
         else:
             select_cols = "*"
         
-        # WHERE 子句
-        where_clause = ""
+        # WHERE 子句（支持多个条件）
+        where_conditions = []
+        
+        # 患者 ID 过滤
         if patient_ids_filter and patient_ids_filter.value:
             id_col = patient_ids_filter.column
             values = patient_ids_filter.value
@@ -1011,10 +1135,30 @@ class ICUDataSource:
             
             if value_list:
                 if len(value_list) == 1:
-                    where_clause = f"WHERE {id_col} = {value_list[0]}"
+                    where_conditions.append(f"{id_col} = {value_list[0]}")
                 else:
                     values_str = ", ".join(map(str, value_list))
-                    where_clause = f"WHERE {id_col} IN ({values_str})"
+                    where_conditions.append(f"{id_col} IN ({values_str})")
+        
+        # 🚀 大表 itemid 预过滤优化
+        if itemid_filter_config:
+            filter_col, filter_ids = itemid_filter_config
+            # 检查是否为字符串类型的 ID（如 eICU nursecharting）
+            is_string_ids = any(isinstance(x, str) for x in filter_ids)
+            if is_string_ids:
+                # 字符串 ID 需要加引号
+                id_str = ", ".join(f"'{x}'" for x in sorted(filter_ids))
+            else:
+                # 数字 ID
+                id_str = ", ".join(map(str, sorted(filter_ids)))
+            where_conditions.append(f"{filter_col} IN ({id_str})")
+            if DEBUG_MODE:
+                logger.info(f"🚀 大表优化: {filter_col} 过滤 {len(filter_ids)} 个 ID")
+        
+        # 构建 WHERE 子句
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
         
         query = f"SELECT {select_cols} FROM read_parquet('{glob_pattern}') {where_clause}"
         
@@ -1030,10 +1174,14 @@ class ICUDataSource:
             return df
         except Exception as e:
             logger.warning(f"DuckDB 读取失败，回退到 PyArrow: {e}")
-            return self._read_partitioned_data_optimized(directory, columns, patient_ids_filter)
+            return self._read_partitioned_data_optimized(directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
     
-    def _read_partitioned_data_optimized(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
-        """读取分区数据（优化版本）"""
+    def _read_partitioned_data_optimized(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None) -> pd.DataFrame:
+        """读取分区数据（优化版本）
+        
+        Args:
+            itemid_filter_config: 可选的 (列名, itemid集合) 元组，用于大表预过滤
+        """
         try:
             import pyarrow.dataset as ds
             
@@ -1045,7 +1193,10 @@ class ICUDataSource:
                 exclude_invalid_files=True
             )
             
-            filter_expr = None
+            # 构建过滤表达式（支持多个条件）
+            filter_exprs = []
+            
+            # 患者 ID 过滤
             if patient_ids_filter:
                 id_col = patient_ids_filter.column
                 values = patient_ids_filter.value
@@ -1064,9 +1215,26 @@ class ICUDataSource:
                     return pd.DataFrame(columns=wanted_cols)
 
                 try:
-                    filter_expr = ds.field(id_col).isin(value_list)
+                    filter_exprs.append(ds.field(id_col).isin(value_list))
                 except Exception:
-                    filter_expr = None
+                    pass
+            
+            # 🚀 大表优化：itemid 预过滤 (AUMC numericitems, MIIV chartevents/labevents)
+            if itemid_filter_config:
+                try:
+                    filter_col, filter_ids = itemid_filter_config
+                    filter_exprs.append(ds.field(filter_col).isin(list(filter_ids)))
+                    if DEBUG_MODE:
+                        logger.info(f"🚀 大表优化 (PyArrow): {filter_col} 过滤 {len(filter_ids)} 个 ID")
+                except Exception:
+                    pass
+            
+            # 合并过滤条件
+            filter_expr = None
+            if filter_exprs:
+                filter_expr = filter_exprs[0]
+                for expr in filter_exprs[1:]:
+                    filter_expr = filter_expr & expr
 
             # 批量读取，启用多线程（优化大规模提取）
             # 🚀 优化：为90000+患者提取增加线程池
@@ -1345,6 +1513,9 @@ def _ensure_sequence(value: Any) -> List[Any]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return list(value)
     try:
+        # 🔧 FIX: 字符串不应该被转换为字符列表
+        if isinstance(value, (str, bytes)):
+            return [value]
         return list(value)
     except TypeError:
         return [value]

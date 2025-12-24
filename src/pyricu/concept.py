@@ -1200,8 +1200,8 @@ class ConceptResolver:
                                     frame[time_col + '_rounded'] = np.floor(frame[time_col] / native_interval) * native_interval
                                     
                                     # 聚合：根据数据类型选择聚合函数
-                                    # 对于输出类数据（尿量等）使用sum，其他使用mean
-                                    agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'mean'
+                                    # 对于输出类数据（尿量等）使用sum，其他使用median (R ricu默认)
+                                    agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'median'
                                     group_cols = id_cols + [time_col + '_rounded']
                                     
                                     # 保留所有列，不只是value_col
@@ -1246,7 +1246,7 @@ class ConceptResolver:
                                     # datetime时间：使用resample
                                     if id_cols:
                                         resampled_groups = []
-                                        agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'mean'
+                                        agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'median'
                                         
                                         for group_id, group_df in frame.groupby(id_cols):
                                             group_df = group_df.set_index(time_col)
@@ -1256,12 +1256,12 @@ class ConceptResolver:
                                             if value_col in numeric_cols:
                                                 # value_col使用特定的聚合函数
                                                 agg_dict = {value_col: agg_func}
-                                                # 其他数值列使用mean
+                                                # 其他数值列使用median (R ricu默认)
                                                 for col in numeric_cols:
                                                     if col != value_col:
-                                                        agg_dict[col] = 'mean'
+                                                        agg_dict[col] = 'median'
                                             else:
-                                                agg_dict = {col: 'mean' for col in numeric_cols}
+                                                agg_dict = {col: 'median' for col in numeric_cols}
                                             
                                             resampled = group_df[numeric_cols].resample(target_interval).agg(agg_dict)
                                             resampled = resampled.reset_index()
@@ -1279,9 +1279,9 @@ class ConceptResolver:
                                             frame = pd.concat(resampled_groups, ignore_index=True)
                                     else:
                                         frame = frame.set_index(time_col)
-                                        agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'mean'
+                                        agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'median'
                                         numeric_cols = frame.select_dtypes(include=[np.number]).columns.tolist()
-                                        agg_dict = {col: agg_func if col == value_col else 'mean' for col in numeric_cols}
+                                        agg_dict = {col: agg_func if col == value_col else 'median' for col in numeric_cols}
                                         frame = frame[numeric_cols].resample(target_interval).agg(agg_dict).reset_index()
                                 
                                 if verbose:
@@ -1547,6 +1547,30 @@ class ConceptResolver:
                         # CRITICAL FIX: 无论tmp是否为空，都要更新frame
                         # 如果tmp为空（没有匹配的数据或被时间过滤），frame也应该为空
                         if not tmp.empty:
+                            # 🔧 FIX: Convert datetime columns to relative hours BEFORE removing intime
+                            # This matches R ricu's load_mihi which converts times relative to origin
+                            # before any callbacks (like calc_dur) are called.
+                            # 
+                            # R ricu flow: dt_round_min <- function(x, y) round_to(difftime(x, y, units = "mins"))
+                            # This floors all time columns to integer minutes, then later to hours.
+                            # 
+                            # For duration calculation, we need: floor(end_h) - floor(start_h)
+                            if 'intime' in tmp.columns and tmp['intime'].notna().any():
+                                # Convert all datetime time columns to relative hours
+                                datetime_cols = []
+                                for col in tmp.columns:
+                                    if col in ['starttime', 'endtime', 'charttime', 'storetime'] and col != 'intime':
+                                        if pd.api.types.is_datetime64_any_dtype(tmp[col]):
+                                            datetime_cols.append(col)
+                                
+                                if datetime_cols:
+                                    for col in datetime_cols:
+                                        # Convert to relative hours (from intime)
+                                        relative_td = tmp[col] - tmp['intime']
+                                        tmp[col] = relative_td.dt.total_seconds() / 3600.0
+                                    if DEBUG_MODE:
+                                        print(f"      🕐 [时间转换] {datetime_cols} 从 datetime → 相对小时数")
+                            
                             # 将过滤后的数据作为新frame，仅保留必要列
                             frame = tmp.drop(columns=['intime', 'outtime'])
                             if DEBUG_MODE: print(f"   ✅ [{concept_name}] MIMIC-IV {source.table}: 合并+过滤后 {len(frame)} 行")
@@ -1608,25 +1632,103 @@ class ConceptResolver:
                     
                     icustays = data_source.load_table('icustays', filters=icustay_filters if icustay_filters else None, verbose=verbose)
                     if hasattr(icustays, 'data'):
-                        icu_df = icustays.data[['subject_id', 'hadm_id', 'stay_id']].drop_duplicates()
+                        icu_df = icustays.data[['subject_id', 'hadm_id', 'stay_id', 'intime']].drop_duplicates()
                     else:
-                        icu_df = icustays[['subject_id', 'hadm_id', 'stay_id']].drop_duplicates()
+                        icu_df = icustays[['subject_id', 'hadm_id', 'stay_id', 'intime']].drop_duplicates()
+                    
+                    # 🔧 FIX: 实现 ricu 的 rolling join 逻辑用于 death 概念
+                    # 当同一个 hadm_id 有多个 ICU stay 时，death 应该分配给最近的 stay
+                    # ricu 使用 roll = -Inf (向前滚动): 找第一个 intime >= data_time 的 stay
+                    # 如果没有找到，分配给最后一个 stay
                     
                     # 通过hadm_id映射到stay_id（admissions是hospital级别，icustays是ICU级别）
                     if 'hadm_id' in frame.columns and 'hadm_id' in icu_df.columns:
                         before_merge = len(frame)
-                        frame = frame.merge(icu_df[['hadm_id', 'stay_id']], on='hadm_id', how='inner')
+                        
+                        # 获取用户请求的 stay_id 列表（用于最终过滤）
+                        specified_stay_ids = None
+                        if patient_ids and current_expanded_patient_ids and isinstance(current_expanded_patient_ids, dict) and 'stay_id' in current_expanded_patient_ids:
+                            specified_stay_ids = set(current_expanded_patient_ids['stay_id'])
+                        
+                        # 检查是否需要 rolling join（同一 hadm_id 有多个 stay）
+                        stays_per_hadm = icu_df.groupby('hadm_id')['stay_id'].count()
+                        multi_stay_hadms = stays_per_hadm[stays_per_hadm > 1].index.tolist()
+                        
+                        # 获取时间列: 使用 source.index_var（配置中的 index_var，如 deathtime）
+                        time_col_for_rolling = source.index_var
+                        
+                        if multi_stay_hadms and time_col_for_rolling and time_col_for_rolling in frame.columns:
+                            # 有多 stay 的 hadm_id，需要 rolling join
+                            if DEBUG_MODE:
+                                print(f"      🔄 [{concept_name}] 检测到多 stay hadm_id: {multi_stay_hadms}")
+                            
+                            # 确保时间列是 datetime 类型
+                            frame[time_col_for_rolling] = pd.to_datetime(frame[time_col_for_rolling], errors='coerce')
+                            icu_df['intime'] = pd.to_datetime(icu_df['intime'], errors='coerce')
+                            
+                            result_frames = []
+                            
+                            for hadm_id in frame['hadm_id'].unique():
+                                hadm_frame = frame[frame['hadm_id'] == hadm_id].copy()
+                                hadm_stays = icu_df[icu_df['hadm_id'] == hadm_id].sort_values('intime')
+                                
+                                if len(hadm_stays) <= 1:
+                                    # 单 stay，直接合并
+                                    if not hadm_stays.empty:
+                                        merged = hadm_frame.merge(hadm_stays[['hadm_id', 'stay_id']], on='hadm_id', how='inner')
+                                        result_frames.append(merged)
+                                else:
+                                    # 多 stay，需要 rolling join
+                                    # 对每一行数据，找到最近的 stay
+                                    for _, row in hadm_frame.iterrows():
+                                        data_time = row[time_col_for_rolling]
+                                        
+                                        if pd.isna(data_time):
+                                            # 没有时间，跳过
+                                            continue
+                                        
+                                        # ricu rolling join: roll = -Inf
+                                        # 找第一个 intime >= data_time 的 stay
+                                        future_stays = hadm_stays[hadm_stays['intime'] >= data_time]
+                                        
+                                        if not future_stays.empty:
+                                            # 找到了，分配给第一个
+                                            assigned_stay_id = future_stays.iloc[0]['stay_id']
+                                        else:
+                                            # 没找到（data_time 在所有 stay 之后），分配给最后一个 stay
+                                            assigned_stay_id = hadm_stays.iloc[-1]['stay_id']
+                                        
+                                        # 检查是否是用户请求的 stay_id
+                                        if specified_stay_ids and assigned_stay_id not in specified_stay_ids:
+                                            if DEBUG_MODE:
+                                                print(f"      🔄 [{concept_name}] rolling join: data_time={data_time} → stay_id={assigned_stay_id} (不在请求列表中，跳过)")
+                                            continue
+                                        
+                                        # 创建结果行
+                                        result_row = row.to_frame().T.copy()
+                                        result_row['stay_id'] = assigned_stay_id
+                                        result_frames.append(result_row)
+                                        
+                                        if DEBUG_MODE:
+                                            print(f"      🔄 [{concept_name}] rolling join: data_time={data_time} → stay_id={assigned_stay_id}")
+                            
+                            if result_frames:
+                                frame = pd.concat(result_frames, ignore_index=True)
+                            else:
+                                frame = pd.DataFrame(columns=list(frame.columns) + ['stay_id'])
+                        else:
+                            # 没有多 stay 的 hadm_id 或没有时间列，直接合并
+                            frame = frame.merge(icu_df[['hadm_id', 'stay_id']], on='hadm_id', how='inner')
+                        
                         if DEBUG_MODE:
                             print(f"      🏥 [{concept_name}] admissions→icustays映射: {before_merge}行 → {len(frame)}行")
                         
-                        # 最终stay_id过滤
-                        if patient_ids and current_expanded_patient_ids and isinstance(current_expanded_patient_ids, dict) and 'stay_id' in current_expanded_patient_ids:
-                            specified_stay_ids = current_expanded_patient_ids['stay_id']
-                            if specified_stay_ids:
-                                before_stay_filter = len(frame)
-                                frame = frame[frame['stay_id'].isin(specified_stay_ids)].copy()
-                                if DEBUG_MODE and before_stay_filter > len(frame):
-                                    print(f"      🔍 [{concept_name}] stay_id过滤: {before_stay_filter}行 → {len(frame)}行")
+                        # 最终stay_id过滤（如果还没有在 rolling join 中过滤）
+                        if specified_stay_ids and 'stay_id' in frame.columns:
+                            before_stay_filter = len(frame)
+                            frame = frame[frame['stay_id'].isin(specified_stay_ids)].copy()
+                            if DEBUG_MODE and before_stay_filter > len(frame):
+                                print(f"      🔍 [{concept_name}] stay_id过滤: {before_stay_filter}行 → {len(frame)}行")
                         
                         if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
                             id_columns = ['stay_id']
@@ -2084,10 +2186,11 @@ class ConceptResolver:
             if duration_col_name in frame.columns and duration_col_name not in ordered_cols:
                 ordered_cols.append(duration_col_name)
             
-            # 🔧 FIX: 保留 endtime 列用于窗口概念展开
+            # 🔧 FIX: 保留 endtime/stoptime 列用于窗口概念展开
             # mech_vent 等窗口概念需要 endtime 来进行时间展开
+            # prescriptions 表使用 stoptime 作为结束时间
             # 如果有 dur_var="endtime" 的定义，endtime 列必须保留
-            for endtime_candidate in ['endtime', 'end_time', 'stop']:
+            for endtime_candidate in ['endtime', 'end_time', 'stop', 'stoptime']:
                 if endtime_candidate in frame.columns and endtime_candidate not in ordered_cols:
                     ordered_cols.append(endtime_candidate)
                     break
@@ -2159,19 +2262,32 @@ class ConceptResolver:
         # For multi-source concepts (like abx), different sources may use different offset columns
         # Rename all offset columns to 'charttime' to enable unified processing
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-        if db_name in ['eicu', 'eicu_demo'] and index_column:
+        if db_name in ['eicu', 'eicu_demo']:
             # All possible eICU time offset columns
             eicu_time_cols = [
-                'labresultoffset', 'observationoffset', 'nursecharting_offset', 
+                'labresultoffset', 'observationoffset', 'nursingchartoffset', 
                 'respiratorycharting_offset', 'intakeoutput_offset', 'respchartoffset',
                 'infusionoffset', 'drugstartoffset', 'drugstopoffset', 'drugorderoffset',
                 'culturetakenoffset', 'cultureoffset',
                 # 🔥 添加 respiratorycare 表的时间列
                 'respcarestatusoffset', 'ventstartoffset', 'ventendoffset',
                 'priorventstartoffset', 'priorventendoffset',
+                # 🔥 添加 treatment 和 nursecharting 表的时间列
+                'treatmentoffset', 'nursingchartentryoffset',
             ]
             
+            # 🔧 CRITICAL FIX: 查找有效的时间列（非全NaN）
+            # 当多个源合并时，如果第一个源是空的，index_column 可能指向一个全是 NaN 的列
+            # 需要找到第一个有数据的时间列
             offset_cols_in_data = [col for col in combined.columns if col in eicu_time_cols]
+            
+            # 对offset列按有效数据量排序，优先使用数据更多的列
+            def count_valid(col):
+                if col in combined.columns:
+                    return combined[col].notna().sum()
+                return 0
+            
+            offset_cols_in_data = sorted(offset_cols_in_data, key=count_valid, reverse=True)
             
             if offset_cols_in_data:
                 # 重命名第一个offset列为charttime
@@ -2308,20 +2424,123 @@ class ConceptResolver:
                 # DEBUG
             # Determine aggregation method for change_interval
             # This is the ONLY aggregation we should do (on relative time)
-            agg_method = agg_value if agg_value not in (None, False, "auto") else None
-            if agg_method in (None, "auto"):
-                agg_method = None
-            # Default aggregation based on value type (matches R ricu)
-            if agg_method is None:
-                # Check value column type
-                if concept_name in combined.columns:
-                    col_dtype = combined[concept_name].dtype
-                    if pd.api.types.is_bool_dtype(col_dtype):
-                        agg_method = 'any'  # R ricu: logical -> "any"
-                    elif pd.api.types.is_numeric_dtype(col_dtype):
-                        agg_method = 'median'  # R ricu: numeric -> "median"
+            # 🔧 FIX 2024-12-17: When agg_value is explicitly False, skip ALL aggregation
+            # This is critical for vaso60 sub-concepts which need raw data for callback's own max aggregation
+            if agg_value is False:
+                agg_method = False  # Explicitly no aggregation
+            else:
+                agg_method = agg_value if agg_value not in (None, "auto") else None
+                if agg_method in (None, "auto"):
+                    agg_method = None
+                # Default aggregation based on value type (matches R ricu)
+                if agg_method is None:
+                    # Check value column type
+                    if concept_name in combined.columns:
+                        col_dtype = combined[concept_name].dtype
+                        if pd.api.types.is_bool_dtype(col_dtype):
+                            agg_method = 'any'  # R ricu: logical -> "any"
+                        elif pd.api.types.is_numeric_dtype(col_dtype):
+                            agg_method = 'median'  # R ricu: numeric -> "median"
+                        else:
+                            agg_method = 'first'  # R ricu: character/other -> "first"
+            
+            # 🚀 CRITICAL FIX: Expand win_tbl data BEFORE change_interval
+            # R ricu does: expand(win_tbl) -> change_interval(ts_tbl)
+            # Without this, mech_vent with 3 events only returns 2 rows instead of 439
+            # 🔧 FIX: Also check for 'stoptime' (used by prescriptions table) and 'stop' (used by AUMC drugitems)
+            has_endtime = 'endtime' in combined.columns
+            has_stoptime = 'stoptime' in combined.columns  # prescriptions uses stoptime
+            has_duration = 'duration' in combined.columns
+            
+            # 🔧 FIX 2024-12-17: 'stop' column should ONLY trigger expand if the concept has dur_var='stop' in its source definition
+            # AUMC drugitems table always has start/stop columns, but only concepts with dur_var='stop' should be expanded
+            # e.g., 'dex' has dur_var='stop' → expand; 'ins' has no dur_var → no expand
+            has_stop = False
+            if 'stop' in combined.columns:
+                # Check if any source for this concept has dur_var='stop'
+                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                if db_name and hasattr(definition, 'sources') and db_name in definition.sources:
+                    db_sources = definition.sources[db_name]
+                    if isinstance(db_sources, list):
+                        for src in db_sources:
+                            src_dict = src.__dict__ if hasattr(src, '__dict__') else src
+                            if src_dict.get('dur_var') == 'stop':
+                                has_stop = True
+                                break
+            
+            # 🔧 FIX: Only expand true window concepts, NOT point event concepts
+            # POINT_EVENT_CONCEPTS like 'abx' have endtime/stoptime columns from source tables
+            # but should NOT be expanded - they use set_val(TRUE) callback for point events
+            from .ricu_compat import POINT_EVENT_CONCEPTS, DURATION_CONCEPTS
+            is_point_event = concept_name in POINT_EVENT_CONCEPTS
+            is_duration_concept = concept_name in DURATION_CONCEPTS or concept_name.endswith('_dur')
+            
+            should_expand = (has_endtime or has_stoptime or has_stop or has_duration) and not is_point_event and not is_duration_concept
+            
+            if should_expand:
+                from .ts_utils import expand
+                
+                # 🔧 FIX: When both endtime and stoptime exist (multi-source concepts like abx),
+                # merge stoptime into endtime to handle rows from different tables
+                if has_endtime and has_stoptime:
+                    # Fill endtime nulls with stoptime values
+                    combined['endtime'] = combined['endtime'].fillna(combined['stoptime'])
+                    # Drop the stoptime column after merging
+                    combined = combined.drop(columns=['stoptime'])
+                    has_stoptime = False  # Reset flag since we merged it
+                
+                # 🔧 FIX: Merge stop column into endtime (for AUMC drugitems)
+                if has_stop:
+                    if has_endtime:
+                        combined['endtime'] = combined['endtime'].fillna(combined['stop'])
                     else:
-                        agg_method = 'first'  # R ricu: character/other -> "first"
+                        combined['endtime'] = combined['stop']
+                    combined = combined.drop(columns=['stop'])
+                    has_endtime = True
+                    has_stop = False
+                
+                # Determine end column: prefer duration, then endtime, then stoptime
+                if has_duration:
+                    end_col = 'duration'
+                elif has_endtime:
+                    end_col = 'endtime'
+                else:
+                    end_col = 'stoptime'
+                
+                # Determine columns to keep (value columns + unit)
+                keep_vars = [concept_name] if concept_name in combined.columns else []
+                if final_unit_column and final_unit_column in combined.columns:
+                    keep_vars.append(final_unit_column)
+                
+                # Additional value columns (not ID, not time, not end, not unit)
+                # 🔧 FIX: Also exclude duration columns like {concept_name}_dur
+                excluded = set(id_columns + [index_column, end_col])
+                if final_unit_column:
+                    excluded.add(final_unit_column)
+                # Exclude all duration-related columns (they shouldn't be expanded)
+                dur_cols = [col for col in combined.columns 
+                           if col.endswith('_dur') or col == 'duration' or col.endswith('_duration')]
+                excluded.update(dur_cols)
+                
+                value_cols = [col for col in combined.columns 
+                             if col not in excluded and col != concept_name]
+                keep_vars.extend(value_cols)
+                
+                # Expand windows to hourly time series
+                try:
+                    combined = expand(
+                        combined,
+                        start_var=index_column,
+                        end_var=end_col,
+                        step_size=interval,
+                        id_cols=id_columns,
+                        keep_vars=keep_vars,
+                    )
+                    if verbose:
+                        logger.info(f"   ✅ 展开 win_tbl '{concept_name}' 到 {len(combined)} 行")
+                except Exception as e:
+                    logger.warning(f"Failed to expand win_tbl data for {concept_name}: {e}")
+                    # Continue without expansion
             
             # Create ICUTable temporarily to use change_interval
             temp_table = ICUTable(
@@ -2506,9 +2725,16 @@ class ConceptResolver:
         
         if db_name == 'aumc':
             # AUMC时间列是绝对时间戳（毫秒，已在datasource.py中转换为分钟）
-            # R ricu 的 load_eiau 函数只做 ms_as_mins 转换（ms / 60000 = 分钟）
-            # 不减去 admittedat，保持绝对时间（大数值，如 32000000 分钟）
-            # 这与 MIMIC-IV 的行为不同（MIMIC-IV 计算相对于入院的时间差）
+            # R ricu 的行为：使用绝对时间（小时），不减去 admittedat
+            # 
+            # 🔧 ricu 兼容模式：
+            # ricu 的 change_id 对于 AUMC 不做时间相对化，因为数据默认是 admissionid 级别
+            # 当 id_var == target_id 时，change_id 直接返回不处理时间
+            # 因此 ricu 导出的 CSV 使用绝对时间（floor(ms/3600000) = 小时）
+            # 
+            # 为了与 ricu 兼容，pyricu 也使用绝对时间：
+            # - 不减去 admittedat
+            # - 只将分钟转换为小时
             
             # 收集所有需要转换的时间列
             cols_to_convert = set()
@@ -2529,11 +2755,12 @@ class ConceptResolver:
             if not cols_to_convert:
                 return data
             
-            # 只做单位转换：分钟转小时（不减 admittedat）
-            # 这匹配 R ricu 的 ms_as_mins 行为（数据已在 datasource.py 转为分钟）
+            # 时间转换：只将分钟转换为小时（不减去 admittedat）
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
+                    # 分钟转小时
                     data[col] = data[col] / 60.0
+            
             return data
         
         # Early return checks (no verbose output for performance)
@@ -2816,15 +3043,32 @@ class ConceptResolver:
                 agg_value = self._coerce_final_aggregator(fallback_agg)
 
         aggregate_mapping = self._build_sub_aggregate(definition.aggregate, sub_names)
+        
+        # 🔧 FIX 2024-12-16: vaso60 callback requires UNAGGREGATED rate data!
+        # R ricu's vaso60 joins raw rate data to duration windows, then does its own
+        # change_interval + aggregate("max"). If we pre-aggregate with median,
+        # we lose the ability to get the correct max value for each hour.
+        # 
+        # Example: Patient has two rate records in hour 13: 1.0 and 2.0
+        # - R ricu: vaso60 receives both → max(1.0, 2.0) = 2.0
+        # - Pyricu (old): sub-concept aggregated first → median(1.0, 2.0) = 1.5 → vaso60 → 1.5
+        #
+        # Solution: For vaso60 callback, set aggregate=False for all sub-concepts
+        if definition.callback == "vaso60":
+            aggregate_mapping = {name: False for name in sub_names}
 
         # Prepare kwargs for sub-concepts, allowing them to be optional
         sub_kwargs = {**kwargs, '_allow_missing_concept': True}
         
+        # 🔧 FIX: Use concept's own interval (like R ricu's coalesce(x[["interval"]], interval))
+        # This is critical for vaso60-type concepts where interval="00:01:00" (1 minute)
+        # ensures rate data is loaded at fine granularity before being aggregated by callback
+        sub_interval = definition.interval if definition.interval is not None else interval
+        
         # 🔥 CRITICAL: 内部递归调用必须使用 ricu_compatible=False
         # 否则会返回 DataFrame 而不是 Dict[str, ICUTable]，导致后续处理失败
-        # 🔥 CRITICAL FIX: 使用 _skip_concept_cache=True 避免子概念被缓存
-        # 原因：后续代码会修改 sub_tables（重命名列、对齐时间等），如果子概念被缓存，
-        # 这些修改会污染缓存，导致其他调用者获得错误的数据
+        # 🔥 优化：使用缓存以避免重复加载相同的子概念（如 fio2 被 pafi 和 safi 共享）
+        # 缓存命中时会返回深拷贝，所以后续修改不会污染缓存
         sub_tables = self.load_concepts(
             sub_names,
             data_source,
@@ -2832,11 +3076,11 @@ class ConceptResolver:
             aggregate=aggregate_mapping,
             patient_ids=patient_ids,
             verbose=verbose,
-            interval=interval,  # Pass interval to recursive calls
+            interval=sub_interval,  # Use concept's own interval (1min for vaso60 concepts)
             align_to_admission=align_to_admission,  # Pass align flag
             ricu_compatible=False,  # 🔥 内部调用必须返回 Dict[str, ICUTable]
             concept_workers=1,  # 🔧 子概念顺序加载，避免过度并行导致线程竞争
-            _skip_concept_cache=True,  # 🔥 不缓存子概念，避免缓存污染
+            _skip_concept_cache=False,  # 🚀 启用缓存以避免重复加载共享子概念
             **sub_kwargs,  # Pass kwargs with allow_missing flag
         )
 
@@ -2919,10 +3163,15 @@ class ConceptResolver:
                 aligned_sub_tables[name] = table
             sub_tables = aligned_sub_tables
 
+        # 🔧 FIX 2025-01: Use passed interval parameter, falling back to definition.interval
+        # This ensures user-specified interval (e.g., '1h') is passed to callbacks
+        # instead of always using the concept's default interval (which may be '1min')
+        effective_interval = interval if interval is not None else definition.interval
+        
         ctx = ConceptCallbackContext(
             concept_name=concept_name,
             target=definition.target,
-            interval=definition.interval,
+            interval=effective_interval,
             resolver=self,
             data_source=data_source,
             patient_ids=patient_ids,
@@ -3957,24 +4206,11 @@ class ConceptResolver:
                     cached = self._concept_data_cache[concept_cache_key]
                     return cached.copy() if hasattr(cached, 'copy') else cached
                 
-                # 回退检查旧的简单缓存（用于向后兼容）
-                simple_key = (concept_name, patient_ids_hash, str(interval), str(agg_value))
-                if simple_key in self._concept_data_cache:
-                    if verbose and logger.isEnabledFor(logging.DEBUG):
-                        logger.debug("✨ 从内存缓存加载概念 '%s' (命中简单缓存)", concept_name)
-                    result = self._concept_data_cache[simple_key]
-                    # 同步到新的缓存键
-                    self._concept_data_cache[concept_cache_key] = result
-                    # 🔥 返回深拷贝
-                    return result.copy() if hasattr(result, 'copy') else result
-                
-                # 检查旧的概念缓存
-                cached = self._concept_cache.get(concept_name)
-                if cached is not None:
-                    # 同时更新到新缓存
-                    self._concept_data_cache[concept_cache_key] = cached
-                    # 🔥 返回深拷贝
-                    return cached.copy() if hasattr(cached, 'copy') else cached
+                # 🔧 FIX: 移除旧的简单缓存和概念缓存回退逻辑
+                # 这些旧缓存不区分聚合方式，导致错误的缓存命中
+                # 例如：safi 内部用 min 聚合加载 o2sat，缓存后
+                # 独立加载 o2sat（应该用默认聚合）会错误地命中这个缓存
+                # 只使用 _concept_data_cache（包含完整的聚合信息）
                 # 线程安全的循环依赖检测
                 inflight = self._get_inflight()
                 if concept_name in inflight:
@@ -4103,8 +4339,9 @@ class ConceptResolver:
             self._store_in_disk_cache(concept_name, data_source, cache_key, result)
 
             with self._cache_lock:
-                self._concept_cache[concept_name] = result
-                self._concept_data_cache[concept_cache_key] = result  # 🚀 存入新缓存
+                # 🔧 FIX: 只存入 _concept_data_cache（包含完整的聚合信息）
+                # 移除对 _concept_cache 的写入，避免不同聚合方式的缓存冲突
+                self._concept_data_cache[concept_cache_key] = result
                 self._get_inflight().discard(concept_name)
         else:
             # 仅清除 inflight 标记
@@ -4585,6 +4822,9 @@ def _apply_callback(
 
     if expr == "aumc_death":
         # R ricu logic: is_true(index_var - val_var < hours(72L))
+        # where index_var = dateofdeath, val_var = dischargedat
+        # AUMC times are in milliseconds, 72 hours = 72 * 3600 * 1000 = 259200000 ms
+        # is_true(x) returns TRUE if x is TRUE (not NA)
         def _pick(col: Optional[str], fallbacks: List[str]) -> Optional[str]:
             ordered = [col] if col else []
             ordered.extend(fallbacks)
@@ -4600,12 +4840,29 @@ def _apply_callback(
             return frame
 
         df = frame.copy()
-        death_ts = pd.to_datetime(df[index_col], errors="coerce")
-        discharge_ts = pd.to_datetime(df[value_col], errors="coerce")
-        delta = death_ts - discharge_ts
-        within_window = delta < pd.Timedelta(hours=72)
-        within_window = within_window & death_ts.notna() & discharge_ts.notna()
-        df[value_col] = within_window.astype(int)
+        # Use raw millisecond values directly (like R ricu does)
+        # Don't convert to datetime - AUMC stores times as milliseconds relative to admission
+        dateofdeath = pd.to_numeric(df[index_col], errors='coerce')
+        dischargedat = pd.to_numeric(df[value_col], errors='coerce')
+        
+        # 72 hours in milliseconds
+        hours_72_ms = 72 * 3600 * 1000
+        
+        # Calculate diff in ms
+        diff_ms = dateofdeath - dischargedat
+        
+        # is_true: TRUE if dateofdeath is not NA AND (dateofdeath - dischargedat) < 72h
+        # For rows where dateofdeath is NA, result should be NA (not FALSE)
+        # This matches ricu behavior where survived patients have death=NA
+        within_window = (diff_ms < hours_72_ms) & dateofdeath.notna()
+        
+        # Set death value: TRUE if within 72h, FALSE if beyond 72h, NA if no dateofdeath
+        # Use object dtype to support True/False/None
+        death_values = pd.Series(index=df.index, dtype=object)
+        death_values[dateofdeath.notna()] = within_window[dateofdeath.notna()]
+        # Rows with dateofdeath NA remain as None (NA)
+        
+        df[value_col] = death_values
         return df
 
     # Handle eicu_age - process eICU age data (convert '> 89' to 90)
@@ -4875,7 +5132,10 @@ def _apply_callback(
             if not nested:
                 continue
             nested_source = replace(source, callback=nested)
-            frame_result = _apply_callback(frame_result, nested_source, concept_name, unit_column)
+            frame_result = _apply_callback(
+                frame_result, nested_source, concept_name, unit_column,
+                resolver=resolver, patient_ids=patient_ids, data_source=data_source
+            )
         return frame_result
     
     # Handle dex_to_10 callback (convert different dextrose concentrations to D10 equivalent)
@@ -4897,15 +5157,24 @@ def _apply_callback(
                 
                 # Apply conversion factors
                 sub_var = source.sub_var if hasattr(source, 'sub_var') else 'itemid'
-                # Try to find the value column: concept_name, or unit_column (which is the value column before renaming)
+                # 🔧 FIX: 确定值列
+                # 对于 MIIV: mimv_rate 会将计算结果写入 rate 列
+                # 对于 AUMC drugitems: 默认值列是 dose（不是 rate）
+                # 策略：优先使用 source 配置的 val_var，然后 concept_name，最后回退到 dose/rate
                 val_col = None
-                if concept_name in frame.columns:
+                # 1. 优先使用 source 配置的 value_var
+                if hasattr(source, 'value_var') and source.value_var and source.value_var in frame.columns:
+                    val_col = source.value_var
+                # 2. 使用 concept_name 列（如果已创建）
+                elif concept_name in frame.columns:
                     val_col = concept_name
-                elif unit_column and unit_column in frame.columns:
-                    val_col = unit_column
-                # Fallback: try common value column names
-                elif 'rate' in frame.columns:
+                # 3. AUMC drugitems 默认用 dose 列
+                elif 'dose' in frame.columns and frame['dose'].notna().any():
+                    val_col = 'dose'
+                # 4. 回退到 rate 列（MIIV inputevents）
+                elif 'rate' in frame.columns and frame['rate'].notna().any():
                     val_col = 'rate'
+                # 5. 其他常见值列
                 elif 'amount' in frame.columns:
                     val_col = 'amount'
                 elif 'valuenum' in frame.columns:
@@ -4964,7 +5233,10 @@ def _apply_callback(
         # stop_var is stored in params dict
         stop_var = source.params.get('stop_var', None) if source.params else None
         unit_col = source.unit_var if hasattr(source, 'unit_var') else None
-        val_col = concept_name
+        # 🔧 FIX: mimic_rate_mv 应使用表的 'rate' 列，而不是 concept_name
+        # R ricu 中 mimic_rate_mv 使用 inputevents 表的 'rate' 列作为输出值
+        # 原始数据中 'rate' 是速率 (mcg/kg/min)，'amount' 是总量 (mg)
+        val_col = 'rate' if 'rate' in frame.columns else concept_name
         
         # 🔧 CRITICAL FIX 2024-11-30: Get admission times for R ricu-compatible floor behavior
         # R ricu converts datetime to relative time BEFORE callbacks (in load_mihi).
@@ -4995,7 +5267,7 @@ def _apply_callback(
             except Exception:
                 pass  # Fail silently - will use fallback floor behavior
         
-        return mimic_rate_mv(
+        result = mimic_rate_mv(
             frame,
             val_col=val_col,
             unit_col=unit_col,
@@ -5003,6 +5275,10 @@ def _apply_callback(
             id_cols=id_cols,
             admission_times=admission_times,  # 🔧 Pass admission times for proper floor behavior
         )
+        # 🔧 FIX: 将 'rate' 列重命名为 concept_name（如果不同）
+        if val_col != concept_name and val_col in result.columns:
+            result = result.rename(columns={val_col: concept_name})
+        return result
     
     # Handle mimic_dur_inmv callback (for infusion durations)
     if expr.strip() == "mimic_dur_inmv":
@@ -5016,13 +5292,35 @@ def _apply_callback(
         unit_col = unit_column or (source.unit_var if hasattr(source, 'unit_var') else None)
         val_col = concept_name
         
+        # Load admission times for proper floor(end_h) - floor(start_h) calculation
+        # R ricu uses: duration = floor(end_hours) - floor(start_hours)
+        # where hours are relative to intime
+        admission_times = None
+        if data_source is not None:
+            try:
+                icustays_result = data_source.load_table('icustays')
+                # ICUTable has .data attribute for the underlying DataFrame
+                if hasattr(icustays_result, 'data'):
+                    icustays_table = icustays_result.data
+                else:
+                    icustays_table = icustays_result
+                if icustays_table is not None and not icustays_table.empty:
+                    # Find the id column and intime column
+                    id_col_name = id_cols[0] if id_cols else 'stay_id'
+                    if id_col_name in icustays_table.columns:
+                        # Keep the original id column name (e.g., 'stay_id') instead of renaming to 'id'
+                        admission_times = icustays_table[[id_col_name, 'intime']].copy()
+            except Exception:
+                pass  # Fallback to floor(duration) if icustays not available
+        
         return mimic_dur_inmv(
             frame,
             val_col=val_col,
             grp_var=grp_var,
             stop_var=stop_var,
             id_cols=id_cols,
-            unit_col=unit_col
+            unit_col=unit_col,
+            admission_times=admission_times,
         )
     
     # Handle mimic_dur_incv callback (for CareVue durations)
@@ -5367,12 +5665,43 @@ def _apply_callback(
             return frame
         if not index_col or index_col not in frame.columns:
             return frame
+        
+        # 🔧 FIX 2025-01: Get admission times for R ricu-compatible floor behavior
+        # R ricu converts datetime to relative time BEFORE callbacks (in load_mihi).
+        # This affects floor() behavior in expand().
+        admission_times = None
+        if data_source is not None:
+            try:
+                # Load icustays to get admission times
+                icustays_result = data_source.load_table('icustays')
+                # Handle ICUTable or DataFrame result
+                if hasattr(icustays_result, 'data'):
+                    icustays = icustays_result.data
+                else:
+                    icustays = icustays_result
+                    
+                if icustays is not None and len(icustays) > 0:
+                    # Find ID column
+                    id_col = None
+                    for col in id_cols:
+                        if col in icustays.columns:
+                            id_col = col
+                            break
+                    if id_col is not None:
+                        # Filter to patients in the current frame
+                        patient_ids_in_frame = frame[id_col].unique() if id_col in frame.columns else None
+                        if patient_ids_in_frame is not None:
+                            admission_times = icustays[icustays[id_col].isin(patient_ids_in_frame)][[id_col, 'intime']].drop_duplicates()
+            except Exception:
+                pass  # Fail silently - will use fallback floor behavior
+        
         return distribute_amount(
             frame,
             val_col=concept_name,
             unit_col=unit_col,
             end_col=end_col,
             index_col=index_col,
+            admission_times=admission_times,  # 🔧 Pass admission times for proper floor behavior
         )
 
     if expr.strip() == "mimv_rate":
@@ -5408,11 +5737,22 @@ def _apply_callback(
         
         if not duration_col or duration_col not in frame.columns:
             return frame
-        amount_col = concept_name
+        # 🔧 FIX: amount_col 应优先使用 'amount' 列（inputevents 表的默认列）
+        # R ricu mimv_rate 使用 amount 列来计算 rate = amount / duration
+        # concept_name (如 'dex') 在回调执行时还不存在
+        amount_col = None
         if source.params:
             alt_amount = source.params.get("amount_var")
             if alt_amount and alt_amount in frame.columns:
                 amount_col = alt_amount
+        if not amount_col:
+            # 优先使用 'amount' 列（inputevents 表的标准列名）
+            if 'amount' in frame.columns:
+                amount_col = 'amount'
+            elif concept_name in frame.columns:
+                amount_col = concept_name
+        if not amount_col or amount_col not in frame.columns:
+            return frame
         unit_col = unit_column or source.unit_var
         if not unit_col:
             if "rateuom" in frame.columns:
@@ -5427,9 +5767,15 @@ def _apply_callback(
                 auom_col = "amountuom"
             else:
                 auom_col = unit_col
+        
+        # 🔧 FIX: mimv_rate 应使用表的默认 rate 列，而不是 concept_name
+        # R ricu 中 mimv_rate 使用 val_var='rate' (来自 inputevents 表配置)
+        # mimv_rate 计算 rate = amount / duration，结果写入 rate 列
+        rate_col = 'rate' if 'rate' in frame.columns else concept_name
+        
         return mimv_rate(
             frame,
-            val_col=concept_name,
+            val_col=rate_col,
             unit_col=unit_col,
             dur_var=duration_col,
             amount_var=amount_col,
@@ -5620,7 +5966,6 @@ def _apply_callback(
                 # CRITICAL FIX: For AUMC, frame's measuredat is in MINUTES (raw from datasource),
                 # but wbc_df's measuredat is in HOURS (after load_concepts processing).
                 # We need to convert frame's time to HOURS before merge.
-                # Detect AUMC by checking for large time values (>1000 typically means minutes)
                 frame_time_max = frame[index_col].abs().max()
                 wbc_time_max = wbc_df[index_col].abs().max() if not wbc_df.empty else 0
                 
@@ -5628,16 +5973,42 @@ def _apply_callback(
                 frame_work = frame.copy()
                 wbc_work = wbc_df.copy()
                 
-                # If frame has much larger time values than wbc, convert frame from minutes to hours
+                # Improved time unit detection:
+                # 1. Large absolute threshold (>1000) clearly indicates minutes
+                # 2. Relative comparison: if frame_time >> wbc_time (e.g., 5x+), convert
+                # 3. For AUMC with measuredat, frame comes from raw table (minutes) while
+                #    wbc comes from load_concepts (hours)
+                need_frame_to_hours = False
+                need_wbc_to_hours = False
+                
                 if frame_time_max > 1000 and wbc_time_max < 1000 and wbc_time_max > 0:
+                    # Clear case: frame is in minutes (>1000), wbc is in hours
+                    need_frame_to_hours = True
+                elif frame_time_max < 1000 and wbc_time_max > 1000:
+                    # Opposite: wbc is in minutes, frame is in hours
+                    need_wbc_to_hours = True
+                elif frame_time_max > 0 and wbc_time_max > 0:
+                    # Both are < 1000, but may still have different units
+                    # If ratio is significantly different (5x+), assume different units
+                    ratio = frame_time_max / wbc_time_max if wbc_time_max > 0 else 0
+                    if ratio > 5:
+                        # frame is much larger, likely in minutes vs hours
+                        need_frame_to_hours = True
+                        if DEBUG_CALLBACK:
+                            print(f"    [TIME FIX] 基于比率检测时间单位不匹配:")
+                            print(f"      ratio = {ratio:.2f}")
+                    elif ratio < 0.2 and ratio > 0:
+                        # wbc is much larger
+                        need_wbc_to_hours = True
+                
+                if need_frame_to_hours:
                     if DEBUG_CALLBACK:
                         print(f"    [TIME FIX] 检测到时间单位不匹配:")
-                        print(f"      frame max time: {frame_time_max} (可能是分钟)")
-                        print(f"      wbc max time: {wbc_time_max} (可能是小时)")
+                        print(f"      frame max time: {frame_time_max} (分钟)")
+                        print(f"      wbc max time: {wbc_time_max} (小时)")
                         print(f"      -> 将 frame 时间从分钟转换为小时")
                     frame_work[index_col] = frame_work[index_col] / 60.0
-                elif frame_time_max < 1000 and wbc_time_max > 1000:
-                    # Opposite case: wbc is in minutes, frame is in hours
+                elif need_wbc_to_hours:
                     if DEBUG_CALLBACK:
                         print(f"    [TIME FIX] 检测到时间单位不匹配（反向）:")
                         print(f"      frame max time: {frame_time_max}")

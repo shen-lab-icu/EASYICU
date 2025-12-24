@@ -160,12 +160,25 @@ def sep3_sofa2(
     # Group by patient IDs and SI index
     group_cols = id_cols + ['_si_idx']
     
-    # Use transform-based approach to preserve index and columns
-    merged['delta_sofa2'] = np.nan
+    # 优化：对于 delta_cummin，直接用向量化操作避免逐组循环
     if 'sofa2' in merged.columns:
-        for key, group_idx in merged.groupby(group_cols).groups.items():
-            group_sofa = merged.loc[group_idx, 'sofa2']
-            merged.loc[group_idx, 'delta_sofa2'] = delta_fun(group_sofa).values
+        if delta_fun is delta_cummin or getattr(delta_fun, '__name__', None) == 'delta_cummin':
+            # 向量化计算 delta_cummin: x - cummin(x) per group
+            integer_max = 2147483647
+            sofa_filled = merged['sofa2'].fillna(integer_max)
+            # 计算每组内的 cummin
+            cummin_vals = sofa_filled.groupby([merged[c] for c in group_cols], sort=False).cummin()
+            merged['delta_sofa2'] = merged['sofa2'] - cummin_vals
+            # NaN 的位置保持 NaN
+            merged.loc[merged['sofa2'].isna(), 'delta_sofa2'] = np.nan
+        else:
+            # 其他 delta 函数使用逐组循环
+            merged['delta_sofa2'] = np.nan
+            for key, group_idx in merged.groupby(group_cols).groups.items():
+                group_sofa = merged.loc[group_idx, 'sofa2']
+                merged.loc[group_idx, 'delta_sofa2'] = delta_fun(group_sofa).values
+    else:
+        merged['delta_sofa2'] = np.nan
     
     if len(merged) == 0:
         return pd.DataFrame(columns=id_cols + [index_col, "sep3_sofa2"])

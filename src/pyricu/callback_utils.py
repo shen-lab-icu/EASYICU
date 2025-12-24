@@ -353,6 +353,7 @@ def distribute_amount(
     end_col: str = 'endtime',
     index_col: str = 'time',
     interval_hours: float = 1.0,  # 默认 1 小时间隔
+    admission_times: pd.DataFrame = None,  # 🔧 For proper relative time floor behavior
     **kwargs
 ) -> pd.DataFrame:
     """Distribute total amount over duration to get rate, then expand.
@@ -366,6 +367,10 @@ def distribute_amount(
     3. 计算速率 = amount / duration * 1hr
     4. 调用 expand() 展开时间窗口到每个小时
     5. 设置单位为 units/hr
+    
+    Args:
+        admission_times: DataFrame with id_col and 'intime' columns for relative time calculation.
+                        Required for proper floor() behavior matching R ricu.
     """
     data = data.copy()
     
@@ -445,7 +450,18 @@ def distribute_amount(
             return data
     
     else:
-        # datetime 逻辑 - 也需要展开
+        # datetime 逻辑 - 需要转换为相对时间然后展开
+        # 
+        # R ricu 的处理流程：
+        # 1. load_difftime() 将 datetime 转换为相对时间（分钟）
+        # 2. change_interval(floor) 将分钟转换为小时并 floor
+        # 3. distribute_amount 接收 floor 后的时间:
+        #    - 如果 end - start == 0，设置 end = start + 1
+        #    - 计算速率 = amount / (end - start) * 1hr
+        # 4. expand() 展开到每个小时
+        #
+        # 关键点：R ricu 计算速率时使用的是 floor 后的持续时间！
+        
         start_time = pd.to_datetime(data[index_col], errors='coerce')
         end_time = pd.to_datetime(data[end_col], errors='coerce')
         
@@ -454,42 +470,32 @@ def distribute_amount(
         data = data[valid_mask].copy()
         start_time = start_time[valid_mask]
         end_time = end_time[valid_mask]
-        time_diff = time_diff[valid_mask]
         
         if data.empty:
             return data
         
-        interval_td = pd.Timedelta(hours=interval_hours)
-        
-        short_duration_mask = time_diff < interval_td
-        if short_duration_mask.any():
-            end_time = end_time.copy()
-            end_time.loc[short_duration_mask] = start_time.loc[short_duration_mask] + interval_td
-            data.loc[short_duration_mask, end_col] = end_time.loc[short_duration_mask]
-            time_diff = end_time - start_time
-        
-        duration_hours = time_diff.dt.total_seconds() / 3600
-        duration_hours = duration_hours.replace(0, 1)
-        
-        data[val_col] = pd.to_numeric(data[val_col], errors='coerce') / duration_hours
-        
-        # 🔧 CRITICAL FIX 2024-12: Do NOT floor absolute datetime
-        # 
-        # R ricu's distribute_amount calls expand() which uses seq(start, end, step)
-        # on RELATIVE time (hours since admission), then floor happens in change_interval().
-        # 
-        # pyricu was incorrectly flooring ABSOLUTE datetime here, which caused:
-        # - 20:12 floor to 20:00
-        # - Then relative time = (20:00 - 12:09) = 7.85h → floor → 7
-        # 
-        # But ricu does:
-        # - Relative time = (20:12 - 12:09) = 8.05h → floor → 8
-        #
-        # The fix: Use original datetime for expansion, then floor happens later
-        # when converting to relative hours.
-        
-        # 展开时间窗口 - 使用原始时间（不 floor）
         expanded_rows = []
+        
+        # 检测 ID 列
+        id_col = None
+        for col in id_cols:
+            if col in data.columns:
+                id_col = col
+                break
+        
+        # 获取每个患者的 intime 用于计算相对时间
+        intime_map = {}
+        if admission_times is not None and id_col is not None:
+            for _, row in admission_times.iterrows():
+                if id_col in row.index and 'intime' in row.index:
+                    patient_id = row[id_col]
+                    intime = pd.to_datetime(row['intime'], errors='coerce')
+                    if pd.notna(intime):
+                        # 确保时区一致
+                        if intime.tzinfo is None:
+                            intime = intime.tz_localize('UTC')
+                        intime_map[patient_id] = intime
+        
         for idx, row in data.iterrows():
             row_start = start_time.loc[idx]
             row_end = end_time.loc[idx]
@@ -497,16 +503,70 @@ def distribute_amount(
             if pd.isna(row_start) or pd.isna(row_end):
                 continue
             
-            # Generate time points using original start time (not floored)
-            # Use step = 1 hour, similar to R's seq(start, end, step)
-            duration = (row_end - row_start).total_seconds() / 3600
-            num_steps = int(duration) + 1
+            # 确保时区一致
+            if row_start.tzinfo is None:
+                row_start = row_start.tz_localize('UTC')
+            if row_end.tzinfo is None:
+                row_end = row_end.tz_localize('UTC')
             
-            for i in range(num_steps):
-                new_row = {c: row[c] for c in id_cols if c in row.index}
-                new_row[index_col] = row_start + pd.Timedelta(hours=i)
-                new_row[val_col] = row[val_col]
-                expanded_rows.append(new_row)
+            # 获取患者的 intime
+            patient_id = row[id_col] if id_col and id_col in row.index else None
+            intime = intime_map.get(patient_id) if patient_id is not None else None
+            
+            # 获取原始值
+            amount = pd.to_numeric(row[val_col], errors='coerce')
+            if pd.isna(amount):
+                continue
+            
+            if intime is not None:
+                # 🔧 正确的 R ricu 兼容逻辑：
+                # 1. 计算相对时间（小时）
+                start_rel_hours = (row_start - intime).total_seconds() / 3600
+                end_rel_hours = (row_end - intime).total_seconds() / 3600
+                
+                # 2. floor 相对时间
+                start_floor = int(np.floor(start_rel_hours))
+                end_floor = int(np.floor(end_rel_hours))
+                
+                # 3. 如果 floor 后 end == start，设置 end = start + 1
+                #    (R ricu: x <- x[get(end_var) - get(idx) == 0, c(end_var) := get(idx) + hr])
+                if end_floor == start_floor:
+                    end_floor = start_floor + 1
+                
+                # 4. 计算速率 = amount / (end_floor - start_floor) * 1hr
+                #    注意：使用 floor 后的持续时间，不是原始持续时间！
+                duration_hours = end_floor - start_floor
+                rate = amount / duration_hours  # 已经是 units/hr
+                
+                # 5. 生成时间点 seq(start_floor, end_floor, 1)
+                #    🔧 FIX: 直接返回相对小时数，而不是转换回绝对 datetime
+                #    这样避免后续 change_interval 再次 floor 导致时间偏移
+                for hr in range(start_floor, end_floor + 1):
+                    new_row = {c: row[c] for c in id_cols if c in row.index}
+                    # 直接存储相对小时数（float）
+                    new_row[index_col] = float(hr)
+                    new_row[val_col] = rate
+                    expanded_rows.append(new_row)
+            else:
+                # Fallback: 使用绝对 datetime floor（不那么精确但可以工作）
+                start_floor = row_start.floor('h')
+                end_floor = row_end.floor('h')
+                
+                # 如果 floor 后相同，加 1 小时
+                if start_floor == end_floor:
+                    end_floor = start_floor + pd.Timedelta(hours=1)
+                
+                # 计算持续时间（小时）
+                duration_hours = (end_floor - start_floor).total_seconds() / 3600
+                rate = amount / duration_hours
+                
+                time_points = pd.date_range(start=start_floor, end=end_floor, freq='h')
+                
+                for t in time_points:
+                    new_row = {c: row[c] for c in id_cols if c in row.index}
+                    new_row[index_col] = t
+                    new_row[val_col] = rate
+                    expanded_rows.append(new_row)
         
         if expanded_rows:
             result = pd.DataFrame(expanded_rows)
@@ -1028,12 +1088,13 @@ def mimic_rate_mv(
     
     index_var = time_cols[0]
     
-    # Prepare keep_vars
+    # Prepare keep_vars - IMPORTANT: do NOT include stop_var, matching R ricu behavior
+    # R ricu mimic_rate_mv: keep_vars = c(id_vars(x), val_var, unit_var) - no stop_var
+    # Keeping stop_var would cause double expand in _load_single_concept
     keep_vars = list(id_cols) + [val_col]
     if unit_col and unit_col in data.columns:
         keep_vars.append(unit_col)
-    if stop_var and stop_var in data.columns:
-        keep_vars.append(stop_var)
+    # NOTE: DO NOT add stop_var to keep_vars - it should be removed after expand
     
     # 确保 index_var (starttime) 被保留在 keep_vars 中，因为它是时间索引
     if index_var not in keep_vars:
@@ -1068,6 +1129,7 @@ def calc_dur(
     grp_var: Optional[str] = None,
     id_cols: Optional[list] = None,
     unit_col: Optional[str] = None,
+    admission_times: Optional[pd.DataFrame] = None,
     **kwargs
 ) -> pd.DataFrame:
     """Calculate duration for grouped events (R ricu calc_dur).
@@ -1083,6 +1145,7 @@ def calc_dur(
         grp_var: Optional grouping variable (e.g., linkorderid)
         id_cols: ID columns for patient grouping
         unit_col: Optional unit column to preserve
+        admission_times: DataFrame with id_col and intime columns for relative time calculation
         **kwargs: Additional arguments
         
     Returns:
@@ -1132,12 +1195,19 @@ def calc_dur(
     
     # Group and aggregate
     if group_cols:
-        # Ensure datetime columns are properly typed before aggregation
         data = data.copy()
-        data[min_var] = pd.to_datetime(data[min_var], errors='coerce')
-        data[max_var] = pd.to_datetime(data[max_var], errors='coerce')
         
-        # Drop rows where min_var or max_var is NaT
+        # Check if time columns are already numeric (relative hours) or datetime
+        min_is_numeric = pd.api.types.is_numeric_dtype(data[min_var])
+        max_is_numeric = pd.api.types.is_numeric_dtype(data[max_var])
+        
+        if not min_is_numeric:
+            # Try to convert to datetime if not already numeric
+            data[min_var] = pd.to_datetime(data[min_var], errors='coerce')
+        if not max_is_numeric:
+            data[max_var] = pd.to_datetime(data[max_var], errors='coerce')
+        
+        # Drop rows where min_var or max_var is NaN/NaT
         data = data.dropna(subset=[min_var, max_var])
         
         if data.empty:
@@ -1224,9 +1294,68 @@ def calc_dur(
                     result[result.index.name] = result.index.values
             result = result.reset_index(drop=True)
         
-        # Calculate duration: max - min
+        # 🔧 FIX: R ricu's duration calculation uses floor(end_hours) - floor(start_hours)
+        # This is because R ricu applies round_to (floor) to all time columns before calc_dur
+        # 
+        # R ricu flow:
+        # 1. load_mihi: dt_round_min <- function(x, y) round_to(difftime(x, y, units = "mins"))
+        #    This floors all time columns to integer minutes relative to origin
+        # 2. change_interval: re_time floors minutes to hours
+        # 3. calc_dur: computes max(end) - min(start) on already-floored hours
+        #
+        # So effectively: duration = floor(max_end_hours) - floor(min_start_hours)
+        
+        # Calculate duration: floor(max_end) - floor(min_start) in hours
         # After aggregation, max_var contains max(endtime), min_var contains min(starttime)
-        result[val_col] = result[max_var] - result[min_var]
+        import numpy as np
+        
+        # Check if times are already in numeric hours (converted earlier) or datetime
+        if pd.api.types.is_numeric_dtype(result[min_var]) and pd.api.types.is_numeric_dtype(result[max_var]):
+            # Times are already in relative hours - use floor(end_h) - floor(start_h)
+            min_hours = result[min_var].astype(float)
+            max_hours = result[max_var].astype(float)
+            result[val_col] = np.floor(max_hours) - np.floor(min_hours)
+        else:
+            # Times are datetime - need to compute relative hours using intime
+            # R ricu formula: floor(end_hours) - floor(start_hours) where hours are relative to intime
+            
+            # Find ID column
+            id_col = None
+            for col in id_cols if id_cols else []:
+                if col in result.columns:
+                    id_col = col
+                    break
+            
+            if admission_times is not None and id_col is not None and 'intime' in admission_times.columns:
+                # Merge intime into result
+                intime_df = admission_times[[id_col, 'intime']].drop_duplicates()
+                intime_df['intime'] = pd.to_datetime(intime_df['intime'], errors='coerce')
+                result_with_intime = result.merge(intime_df, on=id_col, how='left')
+                
+                # Convert datetime to relative hours
+                result[min_var] = pd.to_datetime(result[min_var], errors='coerce')
+                result[max_var] = pd.to_datetime(result[max_var], errors='coerce')
+                
+                min_hours = (result_with_intime[min_var] - result_with_intime['intime']).dt.total_seconds() / 3600.0
+                max_hours = (result_with_intime[max_var] - result_with_intime['intime']).dt.total_seconds() / 3600.0
+                
+                # Use floor(end_h) - floor(start_h) formula
+                result[val_col] = np.floor(max_hours) - np.floor(min_hours)
+            else:
+                # Fallback: no intime available, use floor(duration)
+                duration_td = result[max_var] - result[min_var]
+                
+                if pd.api.types.is_timedelta64_dtype(duration_td):
+                    duration_hours = duration_td.dt.total_seconds() / 3600.0
+                else:
+                    # duration_td might be object dtype containing timedeltas
+                    duration_hours = duration_td.apply(
+                        lambda x: x.total_seconds() / 3600.0 if hasattr(x, 'total_seconds') else float(x)
+                    )
+                
+                # Without intime, we can only floor the duration directly
+                # This is less accurate than floor(end_h) - floor(start_h)
+                result[val_col] = np.floor(duration_hours)
         
         # Rename min_var to index_var (for consistency with time column naming)
         # The index_var should be the start time (min_var)
@@ -1234,12 +1363,11 @@ def calc_dur(
         if min_var != index_var and min_var in result.columns:
             result = result.rename(columns={min_var: index_var})
         
-        # Keep group cols, time cols, unit col, and value column
-        # Ensure all necessary columns are present
-        keep_cols = []
-        for col in group_cols + [index_var] + [col for col in time_cols_to_keep if col != min_var] + [val_col]:
-            if col in result.columns:
-                keep_cols.append(col)
+        # 🔧 FIX: R ricu calc_dur only returns: id_vars + index_var (start time) + val_var (duration)
+        # It does NOT keep endtime/max_var column!
+        # Keeping endtime causes _load_single_concept to mistakenly expand duration concepts
+        # as if they were window concepts (win_tbl).
+        keep_cols = list(id_cols) + [index_var, val_col]
         if unit_col and unit_col in result.columns:
             keep_cols.append(unit_col)
         # Remove duplicates while preserving order
@@ -1248,24 +1376,33 @@ def calc_dur(
         result = result[[col for col in keep_cols if col in result.columns]]
     else:
         # No grouping, just compute overall min/max
+        import numpy as np
+        min_time = data[min_var].min()
+        max_time = data[max_var].max()
+        
+        # Check if times are already in numeric hours or datetime
+        if pd.api.types.is_numeric_dtype(data[min_var]) and pd.api.types.is_numeric_dtype(data[max_var]):
+            # Times are already in relative hours
+            min_hours = float(min_time)
+            max_hours = float(max_time)
+        else:
+            # Times are datetime - compute duration and convert
+            duration_td = max_time - min_time
+            if hasattr(duration_td, 'total_seconds'):
+                min_hours = 0  # Reference point
+                max_hours = duration_td.total_seconds() / 3600.0
+            else:
+                min_hours = float(min_time)
+                max_hours = float(max_time)
+        
         result = pd.DataFrame({
-            index_var: [data[min_var].min()],
-            val_col: [data[max_var].max() - data[min_var].min()]
+            index_var: [min_time],
+            val_col: [np.floor(max_hours) - np.floor(min_hours)]
         })
         # Add ID columns if they exist
         for col in id_cols:
             if col in data.columns:
                 result[col] = data[col].iloc[0]
-    
-    # Convert timedelta to hours (ricu returns hours as numeric)
-    if val_col in result.columns:
-        if pd.api.types.is_timedelta64_dtype(result[val_col]):
-            result[val_col] = result[val_col].dt.total_seconds() / 3600.0
-        elif hasattr(result[val_col].iloc[0] if len(result) > 0 else None, 'total_seconds'):
-            # Handle case where timedelta is stored as object
-            result[val_col] = result[val_col].apply(
-                lambda x: x.total_seconds() / 3600.0 if pd.notna(x) and hasattr(x, 'total_seconds') else x
-            )
     
     return result
 
@@ -1276,6 +1413,7 @@ def mimic_dur_inmv(
     stop_var: Optional[str] = None,
     id_cols: Optional[list] = None,
     unit_col: Optional[str] = None,
+    admission_times: Optional[pd.DataFrame] = None,
     **kwargs
 ) -> pd.DataFrame:
     """MIMIC MetaVision infusion duration callback (R ricu mimic_dur_inmv).
@@ -1289,6 +1427,7 @@ def mimic_dur_inmv(
         stop_var: End time variable
         id_cols: ID columns for patient grouping
         unit_col: Optional unit column to preserve
+        admission_times: DataFrame with id_col and intime columns for relative time calculation
         **kwargs: Additional arguments
         
     Returns:
@@ -1315,7 +1454,8 @@ def mimic_dur_inmv(
         max_var=stop_var or index_var,
         grp_var=grp_var,
         id_cols=id_cols,
-        unit_col=unit_col
+        unit_col=unit_col,
+        admission_times=admission_times
     )
     
     # calc_dur now returns hours as numeric (matching ricu behavior)
@@ -1583,8 +1723,9 @@ def expand_intervals(
     
     keep_vars = list(id_cols) + list(keep_vars)
     keep_vars = [v for v in keep_vars if v in data.columns and v != index_var]
-    if 'endtime' not in keep_vars and 'endtime' in data.columns:
-        keep_vars.append('endtime')
+    # NOTE: DO NOT add 'endtime' to keep_vars - it should be removed after expand
+    # R ricu expand_intervals does NOT keep endtime in output
+    # Keeping it would cause double expand in _load_single_concept
     
     # Expand with step_size=1 hour
     expanded = expand(
@@ -2664,7 +2805,9 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
                 logging.debug(f"Failed to load weight from patient table: {e}")
         
         # Fill remaining missing weights with default 70 kg
+        # Also replace 0 or negative weights with default (prevents division by zero)
         frame['_weight'] = frame['_weight'].fillna(70.0)
+        frame.loc[frame['_weight'] <= 0, '_weight'] = 70.0
         
         # Apply unit conversions FIRST (following R ricu logic)
         # Then divide by weight for non-/kg/ units
@@ -2672,6 +2815,10 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
             val = row[val_var]
             unit = row.get('unit_var', '')
             weight = row.get('_weight', 70.0)
+            
+            # Ensure weight is positive to prevent division by zero
+            if pd.isna(weight) or weight <= 0:
+                weight = 70.0
             
             if pd.isna(val) or not unit:
                 return np.nan
@@ -3188,6 +3335,19 @@ def aumc_rate_kg(
     df = df.dropna(subset=[val_col])
     if df.empty:
         return df
+
+    # 🔧 FIX: Match R ricu rm_na(x, c(unit_var, rate_uom), "any")
+    # Remove rows where unit_col or rate_unit_col is NA
+    # This is critical for AUMC epi_rate where some records have no doserateunit
+    na_cols = []
+    if unit_col and unit_col in df.columns:
+        na_cols.append(unit_col)
+    if rate_unit_col and rate_unit_col in df.columns:
+        na_cols.append(rate_unit_col)
+    if na_cols:
+        df = df.dropna(subset=na_cols, how='any')
+        if df.empty:
+            return df
 
     _aumc_normalize_mass_units(df, unit_col, val_col)
     rate_unit_col = _aumc_normalize_rate_units(df, rate_unit_col, val_col) or rate_unit_col

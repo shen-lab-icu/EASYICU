@@ -191,19 +191,17 @@
       "aumc": [
         {
           "table": "listitems",
-          "sub_var": "item",
-          "regex": "(CPAP|Bipap|NIV|IPPV|SIMV|ASB|MMV|BIPAP|HFNC|High Flow|beademing|ventilat)",
-          "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "sub_var": "itemid",
+          "ids": [12290, 6685, 9534],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "12290=Ventilatie Mode Set (15.6M records, main ventilator mode), 6685=Type Beademing Evita 4 (44K), 9534=Type beademing Evita 1 (42K)"
         },
         {
-          "table": "listitems",
+          "table": "numericitems",
           "sub_var": "itemid",
-          "ids": [
-            6685,
-            6694
-          ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "ids": [6694, 12284, 8862],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "PEEP indicators: 6694=Eind exp. druk/PEEP (15.6M), 12284=PEEP Set (15.6M), 8862=PEEP/CPAP (85K)"
         }
       ],
       "hirid": [
@@ -251,6 +249,14 @@
           "regex": "ECMO|extracorporeal membrane",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "nursecharting",
+          "sub_var": "nursingchartvalue",
+          "regex": "ECMO",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "O2 Admin Device = ventilator/ECMO: 46 records, 1 patient - rare but exists in nursecharting"
         }
       ],
       "aumc": [
@@ -345,13 +351,22 @@
           "ids": 6734,
           "table": "listitems",
           "sub_var": "itemid",
-          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken` = 2, `Decortatie reflex (abnormaal buigen)` = 3, `Spastische reactie (terugtrekken)` = 4, `Localiseert pijn` = 5, `Volgt verbale commando's op` = 6) )"
+          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken` = 2, `Decortatie reflex (abnormaal buigen)` = 3, `Spastische reactie (terugtrekken)` = 4, `Localiseert pijn` = 5, `Volgt verbale commando's op` = 6) )",
+          "_comment": "Beste motore reactie van de armen (198321)"
         },
         {
           "ids": 13072,
           "table": "listitems",
           "sub_var": "itemid",
-          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken op pijn` = 2, `Abnormaal buigen bij pijn` = 3, `Terugtrekken bij pijn` = 4, `Localiseren pijn` = 5, `Voert opdrachten uit` = 6) )"
+          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken op pijn` = 2, `Abnormaal buigen bij pijn` = 3, `Terugtrekken bij pijn` = 4, `Localiseren pijn` = 5, `Voert opdrachten uit` = 6) )",
+          "_comment": "A_Motoriek (10611)"
+        },
+        {
+          "ids": 16634,
+          "table": "listitems",
+          "sub_var": "itemid",
+          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken op pijn` = 2, `Abnormaal buigen bij pijn` = 3, `Terugtrekken bij pijn` = 4, `Localiseren pijn` = 5, `Voert opdrachten uit` = 6) )",
+          "_comment": "MCA_Motoriek (1922)"
         }
       ],
       "hirid": [
@@ -395,12 +410,25 @@
         {
           "table": "nursecharting",
           "sub_var": "nursingchartcelltypevallabel",
-          "regex": "CAM-ICU.*positive|Delirium.*positive|delirium.*yes",
+          "regex": "^Symptoms of Delirium Present$",
+          "val_var": "nursingchartvalue",
           "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "apply_map(c(`Yes` = TRUE, `No` = FALSE), var = 'nursingchartvalue')",
+          "_comment": "Symptoms of Delirium Present: Yes=8766 (positive), No=243690 - use apply_map to convert to logical"
         }
       ],
-      "aumc": [],
+      "aumc": [
+        {
+          "table": "listitems",
+          "sub_var": "itemid",
+          "ids": [20351],
+          "val_var": "value",
+          "class_name": "rgx_itm",
+          "regex": "^POSITIEF$",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "CAM-ICU score: POSITIEF=1767 (positive delirium), NEGATIEF=15910"
+        }
+      ],
       "hirid": []
     }
   },
@@ -507,10 +535,10 @@
       "aumc": [
         {
           "table": "drugitems",
-          "sub_var": "item",
-          "regex": "(Fenylefrine|vasopressin|milrinone|angiotensin)",
-          "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "sub_var": "itemid",
+          "ids": [7196, 12467, 19929, 9126],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "7196=Enoximon/Perfan (13556, PDE inhibitor like milrinone), 12467=Terlipressine/Glypressin (313, vasopressin analogue), 19929=Fenylefrine (100), 9126=Fenylefrine phenylephrine (5)"
         }
       ],
       "hirid": [
@@ -612,7 +640,16 @@
           "sub_var": "treatmentstring",
           "regex": "(CRRT|hemodialysis|dialysis|CVVH|ultrafiltration|renal replacement)",
           "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "treatment table: 40191 records"
+        },
+        {
+          "table": "intakeoutput",
+          "sub_var": "cellpath",
+          "regex": "Dialysis",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "intakeoutput dialysis records: In=8446, Out=28628"
         }
       ],
       "aumc": [
@@ -621,15 +658,15 @@
           "sub_var": "item",
           "regex": "(CRRT|[Hh]emodialysis|[Dd]ialysis|CVVH|hemofiltrat)",
           "class_name": "rgx_itm",
-          "callback": "transform_fun(set_val(TRUE))"
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "CVVH-lab afnemen (12651), Resetten CVVH (7795), Filter CVVH wisselen (1376), etc."
         },
         {
           "table": "numericitems",
           "sub_var": "itemid",
-          "ids": [
-            6684
-          ],
-          "callback": "transform_fun(set_val(TRUE))"
+          "ids": [8805, 7666, 7667, 7668, 10736, 12444, 6684],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "CRRT indicators: 8805=CVVH Onttrokken (98K), 7666=Arteriele druk (83K), 7667=Pre Filter PBE (83K), 7668=Veneuze druk (83K), 10736=Bloed-flow (79K), 12444=Bloedflow ingesteld (70K), 6684=Vloeistofvolume ingesteld (68K)"
         }
       ],
       "hirid": []

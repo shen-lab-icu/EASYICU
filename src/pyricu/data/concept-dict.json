@@ -4072,6 +4072,33 @@
       ]
     }
   },
+  "infection_icd": {
+    "class_name": "lgl_cncpt",
+    "description": "ICD infection diagnosis for suspected infection in eICU (based on Angus 2001 criteria)",
+    "category": "outcome",
+    "sources": {
+      "eicu": [
+        {
+          "regex": "(?i)(sepsis|septic|infection|infectious|bacteremia|fungemia|pneumonia|meningitis|encephalitis|endocarditis|pericarditis|peritonitis|abscess|empyema|cellulitis|osteomyelitis|necrotizing.fasciitis|pyelonephritis|cystitis|cholangitis|cholecystitis|appendicitis|diverticulitis|colitis|enteritis|bronchitis|epiglottitis|sinusitis|tuberculosis|fungal|candida|gangrene)",
+          "table": "diagnosis",
+          "sub_var": "diagnosisstring",
+          "val_var": "diagnosisstring",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?i)(sepsis|septic|infection|infectious|bacteremia|fungemia|pneumonia|meningitis|encephalitis|endocarditis|pericarditis|peritonitis|abscess|empyema|cellulitis|osteomyelitis|necrotizing.fasciitis|pyelonephritis|cystitis|cholangitis|cholecystitis|appendicitis|diverticulitis|colitis|enteritis|bronchitis|epiglottitis|sinusitis|tuberculosis|fungal|candida|gangrene)",
+          "table": "diagnosis",
+          "sub_var": "diagnosisstring",
+          "val_var": "diagnosisstring",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ]
+    }
+  },
   "inr_pt": {
     "description": "prothrombin time/international normalized ratio",
     "omopid": 4306239,
@@ -5097,13 +5124,22 @@
           "ids": 6734,
           "table": "listitems",
           "sub_var": "itemid",
-          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken` = 2, `Decortatie reflex (abnormaal buigen)` = 3, `Spastische reactie (terugtrekken)` = 4, `Localiseert pijn` = 5, `Volgt verbale commando's op` = 6) )"
+          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken` = 2, `Decortatie reflex (abnormaal buigen)` = 3, `Spastische reactie (terugtrekken)` = 4, `Localiseert pijn` = 5, `Volgt verbale commando's op` = 6) )",
+          "_comment": "Beste motore reactie van de armen (198321)"
         },
         {
           "ids": 13072,
           "table": "listitems",
           "sub_var": "itemid",
-          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken op pijn` = 2, `Abnormaal buigen bij pijn` = 3, `Terugtrekken bij pijn` = 4, `Localiseren pijn` = 5, `Voert opdrachten uit` = 6) )"
+          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken op pijn` = 2, `Abnormaal buigen bij pijn` = 3, `Terugtrekken bij pijn` = 4, `Localiseren pijn` = 5, `Voert opdrachten uit` = 6) )",
+          "_comment": "A_Motoriek (10611)"
+        },
+        {
+          "ids": 16634,
+          "table": "listitems",
+          "sub_var": "itemid",
+          "callback": "apply_map( c(`Geen reactie` = 1, `Strekken op pijn` = 2, `Abnormaal buigen bij pijn` = 3, `Terugtrekken bij pijn` = 4, `Localiseren pijn` = 5, `Voert opdrachten uit` = 6) )",
+          "_comment": "MCA_Motoriek (1922)"
         }
       ],
       "eicu": [
@@ -7238,7 +7274,8 @@
   "susp_inf": {
     "concepts": [
       "abx",
-      "samp"
+      "samp",
+      "infection_icd"
     ],
     "description": "suspected infection",
     "omopid": 43021378,
@@ -8420,6 +8457,29 @@
           "regex": "ECMO",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "nursecharting",
+          "sub_var": "nursingchartcelltypevallabel",
+          "regex": "ECMO",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "ECMO",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "table": "nursecharting",
+          "sub_var": "nursingchartcelltypevallabel",
+          "regex": "ECMO",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ],
       "aumc": [
@@ -8470,6 +8530,36 @@
           "table": "treatment",
           "sub_var": "treatmentstring",
           "regex": "VA.*ECMO|ECMO.*cardio",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val('cardiovascular'))"
+        },
+        {
+          "table": "nursecharting",
+          "sub_var": "nursingchartcelltypevallabel",
+          "regex": "ECMO",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val('cardiovascular'))"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "VV.*ECMO|ECMO.*respiratory",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val('respiratory'))"
+        },
+        {
+          "table": "treatment",
+          "sub_var": "treatmentstring",
+          "regex": "VA.*ECMO|ECMO.*cardio",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val('cardiovascular'))"
+        },
+        {
+          "table": "nursecharting",
+          "sub_var": "nursingchartcelltypevallabel",
+          "regex": "ECMO",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val('cardiovascular'))"
         }

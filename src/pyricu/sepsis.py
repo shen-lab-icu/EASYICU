@@ -43,8 +43,10 @@ def delta_cummin(x: pd.Series) -> pd.Series:
     # Calculate delta
     result = x - cummin
     
-    # Handle cases where x was NaN
-    result[x.isna()] = np.nan
+    # Handle cases where x was NaN - 使用 numpy 向量化操作避免 __repr__ 开销
+    na_mask = x.isna()
+    if na_mask.any():
+        result = result.where(~na_mask, np.nan)
     
     return result
 
@@ -116,7 +118,7 @@ def susp_inf(
     abx_count_win: pd.Timedelta = pd.Timedelta(hours=24),
     abx_min_count: int = 1,
     positive_cultures: bool = False,
-    si_mode: Literal["and", "or", "abx", "samp"] = "and",
+    si_mode: Literal["and", "or", "abx", "samp", "icd_abx"] = "and",
     abx_win: pd.Timedelta = pd.Timedelta(hours=24),
     samp_win: pd.Timedelta = pd.Timedelta(hours=72),
     keep_components: bool = False,
@@ -138,6 +140,7 @@ def susp_inf(
        - "or": Either ABX or sampling (si_or)
        - "abx": Only ABX required
        - "samp": Only sampling required
+       - "icd_abx": ICD infection diagnosis + ABX (eICU新策略，在callback中处理)
     
     Time window logic (si_mode="and"):
     - ABX followed by sampling: sampling within [abx_time, abx_time + abx_win)
@@ -177,6 +180,11 @@ def susp_inf(
         result['susp_inf'] = True
     elif si_mode == "samp":
         result = samp_processed.copy()
+        result['susp_inf'] = True
+    elif si_mode == "icd_abx":
+        # icd_abx模式在callback中处理，这里只作为fallback
+        # 如果直接调用susp_inf函数且模式为icd_abx，则使用abx作为时间点
+        result = abx_processed.copy()
         result['susp_inf'] = True
     else:
         raise ValueError(f"Unknown si_mode: {si_mode}")
@@ -399,8 +407,8 @@ def _si_or(
     result = pd.merge(abx_prep, samp_prep, on=merge_cols, how='outer')
     
     # Keep rows where abx OR samp occurred
-    result['_abx_flag'] = result['_abx_flag'].fillna(False)
-    result['_samp_flag'] = result['_samp_flag'].fillna(False)
+    result['_abx_flag'] = result['_abx_flag'].fillna(False).infer_objects(copy=False)
+    result['_samp_flag'] = result['_samp_flag'].fillna(False).infer_objects(copy=False)
     result = result[result['_abx_flag'] | result['_samp_flag']].copy()
     
     # Add component times if requested
@@ -493,8 +501,22 @@ def sep3(
     # 使用 cross join + filter 的方式，对于中等数据集效率更高
     
     # 首先按 id_cols 分组计算 delta_sofa
+    # 优化：对于 delta_cummin，直接用向量化操作避免 transform 的开销
     sofa_prep = sofa_prep.sort_values(id_cols + [index_col])
-    sofa_prep['_delta_sofa'] = sofa_prep.groupby(id_cols)['sofa'].transform(delta_fun)
+    
+    if delta_fun is delta_cummin or delta_fun.__name__ == 'delta_cummin':
+        # 向量化计算 delta_cummin: x - cummin(x) per group
+        # 使用 expanding().min() 代替 cummin() 可以利用分组
+        integer_max = 2147483647
+        sofa_filled = sofa_prep['sofa'].fillna(integer_max)
+        # 计算每组内的 cummin
+        cummin_vals = sofa_filled.groupby([sofa_prep[c] for c in id_cols], sort=False).cummin()
+        sofa_prep['_delta_sofa'] = sofa_prep['sofa'] - cummin_vals
+        # NaN 的位置保持 NaN
+        sofa_prep.loc[sofa_prep['sofa'].isna(), '_delta_sofa'] = np.nan
+    else:
+        # 其他 delta 函数使用 transform
+        sofa_prep['_delta_sofa'] = sofa_prep.groupby(id_cols)['sofa'].transform(delta_fun)
     
     # Merge SI events with SOFA on id_cols
     merged = si_events.merge(sofa_prep, on=id_cols, how='inner', suffixes=('_si', '_sofa'))
