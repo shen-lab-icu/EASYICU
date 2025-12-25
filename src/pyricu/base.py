@@ -175,6 +175,7 @@ class BaseICULoader:
                 # AUMC 特殊处理：通常在 aumc/1.0.2/ 子目录
                 # MIIV 特殊处理：通常在 mimiciv/3.1/ 子目录
                 # eICU 特殊处理：通常在 eicu/2.0.1/ 子目录
+                # HiRID 特殊处理：通常在 hirid/1.1.1/ 子目录
                 # 先尝试精确版本匹配，再尝试通用目录
                 possible_subpaths = [
                     user_path / database,  # /base/aumc
@@ -182,6 +183,7 @@ class BaseICULoader:
                     user_path / database / '3.1',    # /base/miiv/3.1 (MIIV)
                     user_path / database / '2.0.1',  # /base/eicu/2.0.1 (eICU)
                     user_path / database / '2.0',    # /base/eicu/2.0 (eICU old)
+                    user_path / database / '1.1.1',  # /base/hirid/1.1.1 (HiRID)
                     # 支持 mimiciv 命名变体
                     user_path / 'mimiciv' / '3.1',
                 ]

@@ -565,6 +565,7 @@ def merge_concepts_ricu_style(
         # 🔧 FIX: 添加 eICU 的时间列（包括 intakeoutputoffset）和 death 的 deathtime
         # 🔧 FIX: 添加 start 列（区间格式数据的开始时间）
         time_candidates = [time_col, "charttime", "time", "starttime", "start", "index_var", 
+                          "datetime", "givenat",  # HiRID time columns
                           "nursingchartoffset", "labresultoffset", "observationoffset",
                           "measuredat", "respchartoffset", "intakeoutputoffset",
                           "infusionoffset", "drugstartoffset", "deathtime",

@@ -833,20 +833,37 @@ class ICUDataSource:
                 # 多文件配置：使用目录路径以启用多文件读取
                 base_path = self.base_path or Path.cwd()
                 if table_cfg.files:
-                    # 获取目录路径（从第一个文件路径中提取）
-                    first_file = table_cfg.files[0]
-                    # 处理字符串或字典格式
-                    if isinstance(first_file, dict):
-                        first_path = Path(first_file.get('path', first_file.get('name', '')))
-                    else:
-                        first_path = Path(first_file)
+                    # HiRID特殊处理：配置中的CSV路径与实际parquet目录不同
+                    # observation_tables/csv/ -> observations/
+                    # pharma_records/csv/ -> pharma/
+                    if self.config.name == 'hirid':
+                        hirid_table_dir_mapping = {
+                            'observations': 'observations',
+                            'pharma': 'pharma',
+                        }
+                        if table_name in hirid_table_dir_mapping:
+                            mapped_dir = base_path / hirid_table_dir_mapping[table_name]
+                            if mapped_dir.is_dir():
+                                parquet_files = list(mapped_dir.glob("*.parquet")) + list(mapped_dir.glob("*.pq"))
+                                if parquet_files:
+                                    loader = mapped_dir
                     
-                    multi_file_dir = base_path / first_path.parent
-                    if multi_file_dir.is_dir():
-                        loader = multi_file_dir
-                    else:
-                        # 回退到单个文件解析
-                        loader = self._resolve_loader_from_disk(table_name)
+                    # 如果HiRID映射未找到，使用默认逻辑
+                    if loader is None:
+                        # 获取目录路径（从第一个文件路径中提取）
+                        first_file = table_cfg.files[0]
+                        # 处理字符串或字典格式
+                        if isinstance(first_file, dict):
+                            first_path = Path(first_file.get('path', first_file.get('name', '')))
+                        else:
+                            first_path = Path(first_file)
+                        
+                        multi_file_dir = base_path / first_path.parent
+                        if multi_file_dir.is_dir():
+                            loader = multi_file_dir
+                        else:
+                            # 回退到单个文件解析
+                            loader = self._resolve_loader_from_disk(table_name)
                 else:
                     # 回退到单个文件解析
                     loader = self._resolve_loader_from_disk(table_name)
