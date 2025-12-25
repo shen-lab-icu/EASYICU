@@ -3737,3 +3737,662 @@ def aumc_dur(
     result = grouped[result_cols]
     
     return result
+
+
+def hirid_rate_kg(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    val_col: str,
+    unit_col: Optional[str],
+    grp_var: Optional[str],
+    index_col: Optional[str],
+    default_weight: float = 70.0,
+) -> pd.DataFrame:
+    """
+    HiRID rate per kg callback - converts dose to mcg/kg/min.
+    
+    Implements R ricu's hirid_rate_kg:
+    1. Convert mg to µg (multiply by 1000)
+    2. Filter to only µg unit records
+    3. Group by (patientid, time, infusionid) and sum doses
+    4. Get patient weight
+    5. Calculate rate = dose_per_interval / (interval_minutes * weight)
+    
+    HiRID interval is 1 hour = 60 minutes, so:
+    rate_mcg_kg_min = givendose / 60 / weight
+    
+    Then expand intervals to hourly time points.
+    """
+    # Create empty result with concept_name column
+    empty_result = pd.DataFrame(columns=list(frame.columns) + [concept_name])
+    
+    if frame.empty:
+        return empty_result
+    
+    df = frame.copy()
+    
+    # Handle case where val_col was renamed to concept_name before callback
+    # This happens when the frame is renamed (givendose -> norepi_rate) before callback
+    actual_val_col = val_col
+    if val_col not in df.columns:
+        if concept_name in df.columns:
+            actual_val_col = concept_name
+        else:
+            return empty_result
+    
+    df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors='coerce')
+    df = df.dropna(subset=[actual_val_col])
+    if df.empty:
+        return empty_result
+    
+    # Step 1: Convert mg to µg
+    if unit_col and unit_col in df.columns:
+        mg_mask = df[unit_col].astype(str).str.lower().str.strip() == 'mg'
+        if mg_mask.any():
+            df.loc[mg_mask, actual_val_col] = df.loc[mg_mask, actual_val_col] * 1000
+            df.loc[mg_mask, unit_col] = 'µg'
+    
+    # Step 2: Filter to only µg unit records
+    if unit_col and unit_col in df.columns:
+        unit_series = df[unit_col].astype(str).str.lower().str.strip()
+        # Accept µg, ug, mcg variations
+        ug_mask = unit_series.isin(['µg', 'ug', 'mcg', 'μg'])
+        old_len = len(df)
+        df = df[ug_mask]
+        if len(df) < old_len:
+            pass  # Lost some rows due to unexpected units
+    
+    if df.empty:
+        return empty_result
+    
+    # Identify patient ID column
+    id_col = None
+    for cand in ['patientid', 'stay_id', 'admissionid', 'patientunitstayid']:
+        if cand in df.columns:
+            id_col = cand
+            break
+    
+    if id_col is None:
+        return df
+    
+    # Step 3: Get patient weight
+    if 'weight' not in df.columns:
+        df['weight'] = default_weight
+    df['weight'] = pd.to_numeric(df['weight'], errors='coerce').fillna(default_weight)
+    
+    # Detect time column if not specified
+    if not index_col:
+        for cand in ['datetime', 'givenat', 'charttime', 'time']:
+            if cand in df.columns:
+                index_col = cand
+                break
+    
+    if index_col and index_col in df.columns:
+        # Floor time to hours
+        time_series = df[index_col]
+        if pd.api.types.is_numeric_dtype(time_series):
+            # Already in hours (from datetime conversion)
+            df['_hour'] = np.floor(time_series).astype(int)
+        else:
+            # This shouldn't happen for HiRID after datetime conversion
+            df['_hour'] = time_series
+    else:
+        df['_hour'] = 0
+    
+    # Step 4: Group by (patientid, hour, infusionid) and sum doses
+    group_cols = [id_col, '_hour']
+    if grp_var and grp_var in df.columns:
+        group_cols.append(grp_var)
+    
+    # Aggregate weight (take first value per patient)
+    weight_map = df.groupby(id_col)['weight'].first().to_dict()
+    
+    grouped = df.groupby(group_cols, as_index=False).agg({
+        actual_val_col: 'sum',  # Sum doses within each hour
+    })
+    
+    # Map weight back
+    grouped['weight'] = grouped[id_col].map(weight_map).fillna(default_weight)
+    
+    # Step 5: Calculate rate = dose / interval_minutes / weight
+    # HiRID interval is 1 hour = 60 minutes
+    interval_minutes = 60.0
+    grouped[concept_name] = grouped[actual_val_col] / interval_minutes / grouped['weight']
+    
+    # Rename _hour to datetime for consistency
+    grouped = grouped.rename(columns={'_hour': index_col if index_col else 'datetime'})
+    
+    # Set unit
+    if unit_col:
+        grouped[unit_col] = 'mcg/kg/min'
+    
+    # Keep only necessary columns
+    result_cols = [id_col, index_col if index_col else 'datetime', concept_name]
+    if grp_var and grp_var in grouped.columns:
+        result_cols.append(grp_var)
+    if unit_col:
+        result_cols.append(unit_col)
+    
+    # Filter to existing columns
+    result_cols = [c for c in result_cols if c in grouped.columns]
+    result = grouped[result_cols].dropna(subset=[concept_name])
+    
+    return result
+
+
+def hirid_rate(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    val_col: str,
+    unit_col: Optional[str],
+    grp_var: Optional[str],
+    index_col: Optional[str],
+) -> pd.DataFrame:
+    """
+    HiRID rate callback - converts dose to rate per minute (no weight normalization).
+    
+    Implements R ricu's hirid_rate:
+    1. Get the most frequent unit in the data
+    2. Filter to only records with that unit
+    3. Group by (patientid, time, infusionid) and sum doses
+    4. Calculate rate = dose_per_interval / interval_minutes
+    5. Append /min to the unit
+    
+    This differs from hirid_rate_kg in that:
+    - No weight normalization
+    - Uses the most common unit from data, not forcing µg
+    - Output unit is "{original_unit}/min"
+    
+    Used for drugs like vasopressin (adh_rate) that don't need weight-based dosing.
+    
+    HiRID interval is 1 hour = 60 minutes, so:
+    rate = givendose / 60
+    """
+    empty_result = pd.DataFrame(columns=list(frame.columns) + [concept_name])
+    
+    if frame.empty:
+        return empty_result
+    
+    df = frame.copy()
+    
+    # Handle case where val_col was renamed to concept_name before callback
+    actual_val_col = val_col
+    if val_col not in df.columns:
+        if concept_name in df.columns:
+            actual_val_col = concept_name
+        else:
+            return empty_result
+    
+    df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors='coerce')
+    df = df.dropna(subset=[actual_val_col])
+    if df.empty:
+        return empty_result
+    
+    # Step 1: Get the most frequent unit
+    target_unit = None
+    if unit_col and unit_col in df.columns:
+        unit_counts = df[unit_col].value_counts()
+        if len(unit_counts) > 0:
+            target_unit = unit_counts.index[0]
+    
+    # Step 2: Filter to only that unit
+    if target_unit is not None and unit_col in df.columns:
+        old_len = len(df)
+        df = df[df[unit_col] == target_unit]
+        if len(df) < old_len:
+            pass  # Lost some rows due to unexpected units
+    
+    if df.empty:
+        return empty_result
+    
+    # Identify patient ID column
+    id_col = None
+    for cand in ['patientid', 'stay_id', 'admissionid', 'patientunitstayid']:
+        if cand in df.columns:
+            id_col = cand
+            break
+    
+    if id_col is None:
+        return df
+    
+    # Detect time column if not specified
+    if not index_col:
+        for cand in ['datetime', 'givenat', 'charttime', 'time']:
+            if cand in df.columns:
+                index_col = cand
+                break
+    
+    if index_col and index_col in df.columns:
+        # Floor time to hours
+        time_series = df[index_col]
+        if pd.api.types.is_numeric_dtype(time_series):
+            df['_hour'] = np.floor(time_series).astype(int)
+        else:
+            df['_hour'] = time_series
+    else:
+        df['_hour'] = 0
+    
+    # Step 3: Group by (patientid, hour, infusionid) and sum doses
+    group_cols = [id_col, '_hour']
+    if grp_var and grp_var in df.columns:
+        group_cols.append(grp_var)
+    
+    grouped = df.groupby(group_cols, as_index=False).agg({
+        actual_val_col: 'sum',  # Sum doses within each hour
+    })
+    
+    # Step 4: Calculate rate = dose / interval_minutes
+    # HiRID interval is 1 hour = 60 minutes
+    interval_minutes = 60.0
+    grouped[concept_name] = grouped[actual_val_col] / interval_minutes
+    
+    # Rename _hour to datetime for consistency
+    grouped = grouped.rename(columns={'_hour': index_col if index_col else 'datetime'})
+    
+    # Step 5: Set unit to "{original_unit}/min"
+    output_unit = f"{target_unit}/min" if target_unit else "units/min"
+    if unit_col:
+        grouped[unit_col] = output_unit
+    
+    # Keep only necessary columns
+    result_cols = [id_col, index_col if index_col else 'datetime', concept_name]
+    if grp_var and grp_var in grouped.columns:
+        result_cols.append(grp_var)
+    if unit_col:
+        result_cols.append(unit_col)
+    
+    # Filter to existing columns
+    result_cols = [c for c in result_cols if c in grouped.columns]
+    result = grouped[result_cols].dropna(subset=[concept_name])
+    
+    return result
+
+
+def hirid_urine(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    val_col: str,
+    unit_col: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    HiRID urine callback - converts cumulative urine output to incremental values.
+    
+    Implements R ricu's hirid_urine:
+    1. Group by patient ID
+    2. Calculate diff of cumulative values
+    3. Set negative diffs to 0 (cumulative can't decrease)
+    4. Set unit to "mL"
+    
+    Args:
+        frame: DataFrame with urine data
+        concept_name: Name of the output column
+        val_col: Name of the value column (cumulative urine)
+        unit_col: Name of the unit column
+        
+    Returns:
+        DataFrame with incremental urine values
+    """
+    if frame.empty:
+        return frame
+    
+    df = frame.copy()
+    
+    # Handle case where val_col was renamed to concept_name before callback
+    actual_val_col = val_col
+    if val_col not in df.columns:
+        if concept_name in df.columns:
+            actual_val_col = concept_name
+        else:
+            return df
+    
+    # Identify patient ID column
+    id_col = None
+    for cand in ['patientid', 'stay_id', 'admissionid', 'patientunitstayid', 'subject_id']:
+        if cand in df.columns:
+            id_col = cand
+            break
+    
+    if id_col is None:
+        # No ID column, can't do diff per patient
+        return df
+    
+    # Convert to numeric
+    df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors='coerce')
+    
+    # Sort by patient and time
+    time_col = None
+    for cand in ['datetime', 'charttime', 'time', 'givenat']:
+        if cand in df.columns:
+            time_col = cand
+            break
+    
+    if time_col:
+        df = df.sort_values([id_col, time_col])
+    else:
+        df = df.sort_values([id_col])
+    
+    # Calculate diff per patient
+    def do_diff(x):
+        """Calculate diff and set negative values to 0."""
+        if len(x) == 0:
+            return x
+        result = x.diff()
+        result.iloc[0] = x.iloc[0]  # First value is the first cumulative
+        result = result.clip(lower=0)  # Negative diffs become 0
+        return result
+    
+    df[actual_val_col] = df.groupby(id_col)[actual_val_col].transform(do_diff)
+    
+    # Set unit to mL
+    if unit_col and unit_col in df.columns:
+        df[unit_col] = 'mL'
+    
+    # Rename to concept_name if needed
+    if actual_val_col != concept_name:
+        df = df.rename(columns={actual_val_col: concept_name})
+    
+    return df
+
+
+def hirid_vent(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    val_col: Optional[str] = None,
+    index_col: Optional[str] = None,
+    dur_var: str = 'dur_var',
+    padding_hours: float = 4.0,
+    max_gap_hours: float = 12.0,
+    expand_to_hourly: bool = True,
+) -> pd.DataFrame:
+    """
+    HiRID ventilation callback - converts time series to window table with durations.
+    
+    Implements R ricu's hirid_vent:
+    1. Calculate time differences between consecutive records per patient
+    2. Pad the last difference with padding_hours
+    3. Cap differences > max_gap_hours to padding_hours
+    4. Store as dur_var for window table processing
+    5. Expand windows to hourly time series (like R ricu's expand())
+    
+    Args:
+        frame: DataFrame with ventilation records
+        concept_name: Name of the output column
+        val_col: Name of the value column
+        index_col: Name of the time/index column
+        dur_var: Name of the duration column to create
+        padding_hours: Duration to use for last record and capped gaps
+        max_gap_hours: Maximum allowed gap between records
+        expand_to_hourly: If True, expand windows to hourly time series
+        
+    Returns:
+        DataFrame with hourly expanded ventilation indicator
+    """
+    if frame.empty:
+        return frame
+    
+    df = frame.copy()
+    
+    # Identify patient ID column
+    id_col = None
+    for cand in ['patientid', 'stay_id', 'admissionid', 'patientunitstayid', 'subject_id']:
+        if cand in df.columns:
+            id_col = cand
+            break
+    
+    if id_col is None:
+        # No ID column, add default duration
+        df[dur_var] = padding_hours
+        return df
+    
+    # Detect time column
+    actual_index_col = index_col
+    if not actual_index_col:
+        for cand in ['datetime', 'charttime', 'time', 'givenat']:
+            if cand in df.columns:
+                actual_index_col = cand
+                break
+    
+    if not actual_index_col or actual_index_col not in df.columns:
+        # No time column, add default duration
+        df[dur_var] = padding_hours
+        return df
+    
+    # Sort by patient and time
+    df = df.sort_values([id_col, actual_index_col])
+    
+    # Calculate padded_capped_diff per patient
+    def padded_capped_diff(time_series: pd.Series) -> pd.Series:
+        """
+        Calculate time diffs, pad last with padding_hours, cap at max_gap_hours.
+        
+        R: padded_diff <- function(x, final) c(diff(x), final)
+        R: padded_capped_diff <- function(x, final, max) { res <- padded_diff(x, final); res[res > max] <- final; res }
+        """
+        if len(time_series) == 0:
+            return pd.Series(dtype=float)
+        
+        if len(time_series) == 1:
+            return pd.Series([padding_hours], index=time_series.index)
+        
+        # Get values and convert to hours if needed
+        time_vals = time_series.values
+        
+        # Handle datetime/timedelta types
+        if np.issubdtype(time_vals.dtype, np.datetime64):
+            # Convert to hours relative to first value
+            time_vals = (time_vals - time_vals[0]).astype('timedelta64[h]').astype(float)
+        elif np.issubdtype(time_vals.dtype, np.timedelta64):
+            # Already timedelta, convert to hours
+            time_vals = time_vals.astype('timedelta64[h]').astype(float)
+        else:
+            # Assume already numeric (hours)
+            time_vals = np.asarray(time_vals, dtype=float)
+        
+        # Calculate diff
+        diff_vals = np.diff(time_vals)
+        
+        # Pad with final value
+        padded = np.append(diff_vals, padding_hours)
+        
+        # Cap values > max_gap_hours
+        padded[padded > max_gap_hours] = padding_hours
+        
+        return pd.Series(padded, index=time_series.index)
+    
+    # Apply per patient
+    df[dur_var] = df.groupby(id_col)[actual_index_col].transform(padded_capped_diff)
+    
+    # Expand to hourly time series (like R ricu's expand())
+    if expand_to_hourly:
+        df = _expand_hirid_vent_to_hourly(
+            df, 
+            id_col=id_col, 
+            index_col=actual_index_col, 
+            dur_col=dur_var,
+            value_col=val_col,
+            concept_name=concept_name,
+        )
+    
+    return df
+
+
+def _expand_hirid_vent_to_hourly(
+    df: pd.DataFrame,
+    id_col: str,
+    index_col: str,
+    dur_col: str,
+    value_col: Optional[str],
+    concept_name: str,
+) -> pd.DataFrame:
+    """
+    Expand window table to hourly time series.
+    
+    Implements R ricu's expand() for win_tbl:
+    - For each window (start_time, duration), generate rows for each hour
+    - Each row has the patient ID, hour index, and value
+    
+    Args:
+        df: DataFrame with windows (id, start_time, duration, value)
+        id_col: Patient ID column
+        index_col: Start time column
+        dur_col: Duration column (in hours)
+        value_col: Value column (optional)
+        concept_name: Name for the output value column
+        
+    Returns:
+        Expanded DataFrame with hourly rows
+    """
+    if df.empty:
+        return df
+    
+    records = []
+    
+    # Ensure index is numeric (hours from ICU admission)
+    time_col_data = df[index_col]
+    if pd.api.types.is_datetime64_any_dtype(time_col_data):
+        # Convert datetime to hours relative to first time per patient
+        # This should already be done upstream, but handle it just in case
+        df = df.copy()
+        df['_start_hours'] = df.groupby(id_col)[index_col].transform(
+            lambda x: (x - x.min()).dt.total_seconds() / 3600
+        )
+        start_col = '_start_hours'
+    elif hasattr(time_col_data.dtype, 'kind') and time_col_data.dtype.kind == 'm':  # timedelta
+        # Convert timedelta to hours
+        df = df.copy()
+        df['_start_hours'] = time_col_data.dt.total_seconds() / 3600
+        start_col = '_start_hours'
+    else:
+        # Already numeric
+        start_col = index_col
+    
+    for _, row in df.iterrows():
+        patient_id = row[id_col]
+        start_hours = float(row[start_col])
+        duration_hours = float(row[dur_col])
+        
+        if np.isnan(start_hours) or np.isnan(duration_hours) or duration_hours <= 0:
+            continue
+        
+        # Get value
+        if value_col and value_col in row.index:
+            value = row[value_col]
+        else:
+            value = True  # Default indicator value
+        
+        # Generate hourly rows
+        end_hours = start_hours + duration_hours
+        current_hour = int(np.floor(start_hours))
+        
+        while current_hour < end_hours:
+            records.append({
+                id_col: patient_id,
+                index_col: float(current_hour),
+                concept_name: value,
+            })
+            current_hour += 1
+    
+    if not records:
+        return pd.DataFrame(columns=[id_col, index_col, concept_name])
+    
+    result = pd.DataFrame(records)
+    
+    # Remove duplicates (same patient, same hour)
+    result = result.drop_duplicates(subset=[id_col, index_col], keep='first')
+    
+    # Sort by patient and time
+    result = result.sort_values([id_col, index_col]).reset_index(drop=True)
+    
+    return result
+
+
+def hirid_duration(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    val_col: Optional[str] = None,
+    index_col: Optional[str] = None,
+    grp_var: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    HiRID duration callback - calculates infusion durations.
+    
+    Implements R ricu's hirid_duration via calc_dur:
+    For each (patient, infusion) group: duration = max(time) - min(time)
+    
+    Args:
+        frame: DataFrame with infusion records
+        concept_name: Name of the output column (duration)
+        val_col: Name of the value column (not used, for compatibility)
+        index_col: Name of the time/index column
+        grp_var: Grouping variable (e.g., infusionid)
+        
+    Returns:
+        DataFrame with duration per patient (and per group if grp_var specified)
+    """
+    if frame.empty:
+        return pd.DataFrame(columns=[concept_name])
+    
+    df = frame.copy()
+    
+    # Identify patient ID column
+    id_col = None
+    for cand in ['patientid', 'stay_id', 'admissionid', 'patientunitstayid', 'subject_id']:
+        if cand in df.columns:
+            id_col = cand
+            break
+    
+    if id_col is None:
+        # No ID column, return empty
+        return pd.DataFrame(columns=[concept_name])
+    
+    # Detect time column
+    actual_index_col = index_col
+    if not actual_index_col:
+        for cand in ['datetime', 'charttime', 'time', 'givenat']:
+            if cand in df.columns:
+                actual_index_col = cand
+                break
+    
+    if not actual_index_col or actual_index_col not in df.columns:
+        # No time column, return empty
+        return pd.DataFrame(columns=[concept_name])
+    
+    # Convert time to numeric if needed
+    time_series = df[actual_index_col]
+    if pd.api.types.is_datetime64_any_dtype(time_series):
+        # Convert to hours (assuming times are in same units)
+        df['_time_numeric'] = (time_series - time_series.min()).dt.total_seconds() / 3600.0
+    elif hasattr(time_series.dtype, 'kind') and time_series.dtype.kind == 'm':
+        # timedelta type
+        df['_time_numeric'] = time_series.dt.total_seconds() / 3600.0
+    else:
+        df['_time_numeric'] = pd.to_numeric(time_series, errors='coerce')
+    
+    # Group by (patient_id, grp_var)
+    group_cols = [id_col]
+    if grp_var and grp_var in df.columns:
+        group_cols.append(grp_var)
+    
+    # Calculate duration: max(time) - min(time)
+    result = df.groupby(group_cols, as_index=False).agg(
+        _min_time=('_time_numeric', 'min'),
+        _max_time=('_time_numeric', 'max'),
+    )
+    
+    result[concept_name] = result['_max_time'] - result['_min_time']
+    
+    # Add index_col as the start time (min_time)
+    result[actual_index_col] = result['_min_time']
+    
+    # Drop temp columns
+    result = result.drop(columns=['_min_time', '_max_time'])
+    
+    # Keep only positive durations
+    result = result[result[concept_name] > 0]
+    
+    return result

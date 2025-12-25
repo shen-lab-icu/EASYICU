@@ -876,6 +876,9 @@ class ConceptResolver:
         index_column: Optional[str] = None
         unit_column: Optional[str] = None
         time_columns: List[str] = []
+        
+        # 🔧 提取数据库名称，用于后续的数据库特定处理
+        db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
 
         for source in sources:
             if source.class_name == "fun_itm":
@@ -1065,6 +1068,53 @@ class ConceptResolver:
                     value_column=cached_table.value_column,
                     unit_column=cached_table.unit_column,
                 )
+                
+                # 🔧 FIX: HiRID缓存分支时间转换
+                # 缓存的数据保留原始datetime格式，需要在使用时转换为相对小时数
+                # 这确保从缓存加载的概念也能正确处理时间
+                if db_name == 'hirid':
+                    time_col = table.index_column or 'datetime'
+                    if time_col in frame.columns and pd.api.types.is_datetime64_any_dtype(frame[time_col]):
+                        try:
+                            # 加载general表获取入院时间
+                            general = data_source.load_table('general', verbose=False)
+                            if hasattr(general, 'data'):
+                                general_df = general.data
+                            else:
+                                general_df = general
+                            
+                            if 'admissiontime' in general_df.columns and 'patientid' in general_df.columns:
+                                # 获取目标患者的入院时间
+                                target_patient_ids = frame['patientid'].unique().tolist()
+                                adm_df = general_df[general_df['patientid'].isin(target_patient_ids)][['patientid', 'admissiontime']].copy()
+                                adm_df['admissiontime'] = pd.to_datetime(adm_df['admissiontime'], errors='coerce')
+                                
+                                # 确保datetime列没有时区信息（与admissiontime对齐）
+                                if frame[time_col].dt.tz is not None:
+                                    frame[time_col] = frame[time_col].dt.tz_localize(None)
+                                
+                                # 合并入院时间
+                                frame = frame.merge(adm_df, on='patientid', how='left')
+                                
+                                # 计算相对小时数：(datetime - admissiontime) / 3600
+                                if 'admissiontime' in frame.columns:
+                                    frame[time_col] = (frame[time_col] - frame['admissiontime']).dt.total_seconds() / 3600.0
+                                    frame = frame.drop(columns=['admissiontime'])
+                                    
+                                    # 更新 table 对象
+                                    table = ICUTable(
+                                        data=frame,
+                                        id_columns=cached_table.id_columns,
+                                        index_column=cached_table.index_column,
+                                        value_column=cached_table.value_column,
+                                        unit_column=cached_table.unit_column,
+                                    )
+                                    
+                                    if verbose or DEBUG_MODE:
+                                        print(f"   🕐 [HiRID缓存] 时间转换: {time_col} 从datetime → 相对小时数")
+                        except Exception as e:
+                            if DEBUG_MODE:
+                                print(f"   ⚠️  [HiRID缓存] 时间转换失败: {e}")
             else:
                 # 从数据源加载
                 try:
@@ -1123,6 +1173,43 @@ class ConceptResolver:
                             if len(unique_ids) <= 10:
                                 print(f"       ID列表: {sorted(unique_ids)}")
                     
+                    # 🔧 HiRID特殊处理：将datetime时间转换为相对入院时间的小时数
+                    # HiRID使用绝对datetime时间戳，需要从general表获取admissiontime
+                    if db_name == 'hirid':
+                        time_col = table.index_column or 'datetime'
+                        if time_col in frame.columns and pd.api.types.is_datetime64_any_dtype(frame[time_col]):
+                            try:
+                                # 加载general表获取入院时间
+                                general = data_source.load_table('general', verbose=False)
+                                if hasattr(general, 'data'):
+                                    general_df = general.data
+                                else:
+                                    general_df = general
+                                
+                                if 'admissiontime' in general_df.columns and 'patientid' in general_df.columns:
+                                    # 获取目标患者的入院时间
+                                    target_patient_ids = frame['patientid'].unique().tolist()
+                                    adm_df = general_df[general_df['patientid'].isin(target_patient_ids)][['patientid', 'admissiontime']].copy()
+                                    adm_df['admissiontime'] = pd.to_datetime(adm_df['admissiontime'], errors='coerce')
+                                    
+                                    # 确保datetime列没有时区信息（与admissiontime对齐）
+                                    if frame[time_col].dt.tz is not None:
+                                        frame[time_col] = frame[time_col].dt.tz_localize(None)
+                                    
+                                    # 合并入院时间
+                                    frame = frame.merge(adm_df, on='patientid', how='left')
+                                    
+                                    # 计算相对小时数：(datetime - admissiontime) / 3600
+                                    if 'admissiontime' in frame.columns:
+                                        frame[time_col] = (frame[time_col] - frame['admissiontime']).dt.total_seconds() / 3600.0
+                                        frame = frame.drop(columns=['admissiontime'])
+                                        
+                                        if verbose or DEBUG_MODE:
+                                            print(f"   🕐 [HiRID] 时间转换: {time_col} 从datetime → 相对小时数")
+                            except Exception as e:
+                                if DEBUG_MODE:
+                                    print(f"   ⚠️  [HiRID] 时间转换失败: {e}")
+                    
                     # 性能优化：对于AUMC/HiRID等高频数据，在表加载后立即降采样
                     # 检测数据库类型和数据频率
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
@@ -1136,7 +1223,7 @@ class ConceptResolver:
                     has_callback = getattr(source, 'callback', None) is not None
                     skip_resample_callbacks = ['aumc_rate_kg', 'aumc_rate_units', 'mimic_rate_cv', 
                                                'mimic_rate_mv', 'aumc_rate', 'sic_rate_kg', 
-                                               'eicu_rate', 'hirid_rate', 'vaso60', 'vaso_ind']
+                                               'eicu_rate', 'hirid_rate', 'hirid_rate_kg', 'vaso60', 'vaso_ind']
                     callback_name = source.callback if has_callback else ''
                     skip_resample = has_callback and any(cb in callback_name for cb in skip_resample_callbacks)
                     
@@ -1189,12 +1276,14 @@ class ConceptResolver:
                                 if is_numeric_time:
                                     # 数值时间：四舍五入到interval
                                     interval_hours = target_interval.total_seconds() / 3600.0
-                                    # 对于某些高频数据库（AUMC/HiRID），数值时间列单位为分钟（而不是小时）
+                                    # 对于AUMC，数值时间列单位为分钟（而不是小时）
+                                    # 对于HiRID，时间已经转换为小时，不需要乘以60
                                     # 因此需要在原始单位上进行取整，以保留负时间点并避免单位错位。
-                                    if db_name in ['aumc', 'hirid']:
-                                        # 原始单位为分钟：将 interval 从小时转换为分钟
+                                    if db_name == 'aumc':
+                                        # AUMC: 原始单位为分钟，将 interval 从小时转换为分钟
                                         native_interval = interval_hours * 60.0
                                     else:
+                                        # HiRID和其他数据库：时间已经是小时
                                         native_interval = interval_hours
                                     # 使用向下取整保留入ICU前的负时间点（避免 .round() 将小于0的值四舍五入到0）
                                     frame[time_col + '_rounded'] = np.floor(frame[time_col] / native_interval) * native_interval
@@ -2059,14 +2148,14 @@ class ConceptResolver:
             # 现在值已经经过转换（如华氏度→摄氏度），可以安全过滤
             if definition.minimum is not None:
                 # 确保列是数值类型，避免字符串比较错误
-                if concept_name in frame.columns:
+                if concept_name in frame.columns and isinstance(frame[concept_name], pd.Series):
                     frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
-                frame = frame[frame[concept_name] >= definition.minimum]
+                    frame = frame[frame[concept_name] >= definition.minimum]
             if definition.maximum is not None:
                 # 确保列是数值类型
-                if concept_name in frame.columns:
+                if concept_name in frame.columns and isinstance(frame[concept_name], pd.Series):
                     frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
-                frame = frame[frame[concept_name] <= definition.maximum]
+                    frame = frame[frame[concept_name] <= definition.maximum]
             
             # 在值范围过滤后，删除无效的NaN（但保留有效范围内的NaN用于后续处理）
             # 🔧 关键修复：在merge模式下保留NaN行，以匹配ricu的完整时间网格风格
@@ -3587,14 +3676,32 @@ class ConceptResolver:
             raise ValueError("los_callback requires 'win_type' parameter.")
 
         id_cfg = data_source.config.id_configs.get(win_type)
-        if id_cfg is None or not id_cfg.table or not id_cfg.start or not id_cfg.end:
+        # 🔧 FIX: 允许 end 为空（HiRID 需要从 observations 合成 end 时间）
+        if id_cfg is None or not id_cfg.table or not id_cfg.start:
             raise ValueError(f"Identifier configuration for '{win_type}' is incomplete.")
 
-        required_cols = [id_cfg.id, id_cfg.start, id_cfg.end]
+        # 🔧 FIX: 如果 id_cfg 没有 end，使用占位符名称（将在后续合成）
+        end_col_name = id_cfg.end if id_cfg.end else '_synthesized_end'
+        
+        required_cols = [id_cfg.id, id_cfg.start]
+        if id_cfg.end:
+            required_cols.append(id_cfg.end)
+        
         table = data_source.load_table(id_cfg.table, columns=required_cols)
 
         base_frame = table.data.copy()
-        missing_required = [col for col in required_cols if col not in base_frame.columns]
+        
+        # 🔧 HiRID 特殊处理：如果没有 end 列，从 observations 合成
+        if not id_cfg.end or end_col_name not in base_frame.columns:
+            fallback = self._synthesise_los_column(end_col_name, data_source, base_frame)
+            if fallback is not None:
+                base_frame[end_col_name] = fallback
+            else:
+                raise KeyError(
+                    f"Required end column missing for LOS calculation and cannot be synthesized for '{data_source.config.name}'"
+                )
+        
+        missing_required = [col for col in [id_cfg.id, id_cfg.start, end_col_name] if col not in base_frame.columns]
         if missing_required:
             for column in missing_required:
                 fallback = self._synthesise_los_column(column, data_source, base_frame)
@@ -3604,12 +3711,12 @@ class ConceptResolver:
                     )
                 base_frame[column] = fallback
 
-        frame = base_frame[required_cols].copy()
-        frame = frame.dropna(subset=[id_cfg.start, id_cfg.end])
+        frame = base_frame[[id_cfg.id, id_cfg.start, end_col_name]].copy()
+        frame = frame.dropna(subset=[id_cfg.start, end_col_name])
 
         # Detect time format and database type
         start_col = frame[id_cfg.start]
-        end_col = frame[id_cfg.end]
+        end_col = frame[end_col_name]  # 🔧 FIX: 使用 end_col_name 而不是 id_cfg.end
         is_numeric_time = pd.api.types.is_numeric_dtype(start_col)
         ds_name = (data_source.config.name or "").lower()
         
@@ -3642,9 +3749,19 @@ class ConceptResolver:
             
             frame[concept_name] = los_days
         else:
-            # MIIV/eICU: times are datetime objects
+            # MIIV/eICU/HiRID: times are datetime objects
             start_time = pd.to_datetime(start_col, errors="coerce")
             end_time = pd.to_datetime(end_col, errors="coerce")
+            
+            # 🔧 FIX: 统一时区（如果一个有时区一个没有）
+            # HiRID 的合成 end_time 可能是 tz-aware (UTC)，而 start_time 可能是 tz-naive
+            if start_time.dt.tz is None and end_time.dt.tz is not None:
+                # 移除 end_time 的时区信息
+                end_time = end_time.dt.tz_localize(None)
+            elif start_time.dt.tz is not None and end_time.dt.tz is None:
+                # 移除 start_time 的时区信息
+                start_time = start_time.dt.tz_localize(None)
+            
             valid_mask = start_time.notna() & end_time.notna() & (end_time >= start_time)
             frame = frame.loc[valid_mask].copy()
             if frame.empty:
@@ -3712,17 +3829,21 @@ class ConceptResolver:
                         concept_name: los_val,
                     })
             else:
-                # MIIV/eICU: use datetime and convert later
+                # MIIV/eICU/HiRID: use datetime and convert to relative hours
                 start_dt = start_time.loc[idx]
                 end_dt = end_time.loc[idx]
-                current_time = start_dt - pd.Timedelta(hours=1)
-                while current_time < end_dt:
+                
+                # 🔧 FIX: 对于 HiRID 和其他使用 datetime 的数据库，
+                # 直接计算相对小时数，而不是存储 datetime
+                # 从 start_dt - 1小时 开始，到 end_dt 结束
+                start_hour = -1  # 从 admission 前 1 小时开始
+                end_hour = int((end_dt - start_dt).total_seconds() / 3600) + 1
+                for hour in range(start_hour, end_hour):
                     rows.append({
                         id_cfg.id: stay_id,
-                        "index_var": current_time,
+                        "index_var": float(hour),
                         concept_name: los_val,
                     })
-                    current_time += pd.Timedelta(hours=1)
 
         if not rows:
             return ICUTable(
@@ -3758,6 +3879,57 @@ class ConceptResolver:
                 data_source.config.name,
             )
             return pd.Series(0, index=frame.index, dtype="float64")
+        
+        # 🔧 HiRID: 合成 end 时间（从 observations 表获取每个患者的最后观察时间）
+        # R ricu 在 id_win_helper.hirid_env 中使用 max(datetime) from observations
+        if ds_name == "hirid" and "patientid" in frame.columns:
+            try:
+                import pyarrow.parquet as pq
+                import pyarrow as pa
+                from pathlib import Path
+                
+                # 获取目标患者
+                target_patients = frame['patientid'].unique().tolist()
+                
+                # 使用 PyArrow 直接读取并过滤 observations 表（高效）
+                # 🔧 FIX: 使用 base_path 而不是 data_dir
+                if hasattr(data_source, 'base_path') and data_source.base_path is not None:
+                    obs_path = Path(data_source.base_path) / 'observations'
+                else:
+                    obs_path = None
+                    
+                if obs_path and obs_path.is_dir():
+                    parquet_files = sorted(obs_path.glob('*.parquet'))
+                    if parquet_files:
+                        tables = []
+                        for f in parquet_files:
+                            # 使用过滤器直接在读取时过滤患者
+                            t = pq.read_table(
+                                f, 
+                                columns=['patientid', 'datetime'],
+                                filters=[('patientid', 'in', target_patients)]
+                            )
+                            if t.num_rows > 0:
+                                tables.append(t)
+                        
+                        if tables:
+                            combined = pa.concat_tables(tables)
+                            obs_df = combined.to_pandas()
+                            
+                            # 获取每个患者的最后观察时间
+                            max_datetime = obs_df.groupby('patientid')['datetime'].max().reset_index()
+                            max_datetime.columns = ['patientid', 'end_time']
+                            
+                            # 与 frame 合并（保持原始索引）
+                            merged = frame[['patientid']].reset_index().merge(
+                                max_datetime, on='patientid', how='left'
+                            ).set_index('index')
+                            
+                            if 'end_time' in merged.columns:
+                                return merged['end_time']
+            except Exception as e:
+                logger.warning(f"Failed to synthesize HiRID end time: {e}")
+        
         return None
 
     def _load_fun_item_forward(
@@ -4763,8 +4935,8 @@ class ConceptResolver:
                 if cand in df.columns:
                     id_col = cand
                     break
-            # 检测时间列 - FIX: 添加 eICU 的时间列和区间格式的 start 列
-            for cand in ['charttime', 'time', 'starttime', 'start', 'index_var', 'measuredat',
+            # 检测时间列 - FIX: 添加 eICU 的时间列、HiRID 的 datetime/givenat 和区间格式的 start 列
+            for cand in ['datetime', 'givenat', 'charttime', 'time', 'starttime', 'start', 'index_var', 'measuredat',
                          'nursingchartoffset', 'labresultoffset', 'observationoffset',
                          'respchartoffset', 'intakeoutputoffset', 'infusionoffset']:
                 if cand in df.columns:
@@ -4864,6 +5036,63 @@ def _apply_callback(
         
         df[value_col] = death_values
         return df
+
+    # 🔧 HiRID death callback
+    # R ricu logic:
+    # 1. Get last observation per patient (by datetime)
+    # 2. Load discharge_status from general table
+    # 3. Keep only patients where discharge_status == "dead"
+    # 4. Set value to TRUE
+    if expr == "hirid_death":
+        if data_source is None:
+            return frame
+        
+        df = frame.copy()
+        
+        # 确定 ID 列和时间列
+        id_col = 'patientid'
+        time_col = source.index_var or 'datetime'
+        
+        if id_col not in df.columns:
+            # 尝试其他可能的 ID 列名
+            for alt in ['patientid', 'patient_id']:
+                if alt in df.columns:
+                    id_col = alt
+                    break
+            else:
+                return frame  # 找不到 ID 列
+        
+        if time_col not in df.columns:
+            for alt in ['datetime', 'time', 'givenat']:
+                if alt in df.columns:
+                    time_col = alt
+                    break
+        
+        # 获取每个患者的最后一条记录
+        if time_col in df.columns:
+            df = df.sort_values(time_col)
+            df = df.groupby(id_col, as_index=False).last()
+        else:
+            df = df.groupby(id_col, as_index=False).first()
+        
+        # 加载 general 表获取 discharge_status
+        try:
+            general = data_source.load_table('general', columns=['patientid', 'discharge_status'])
+            general_df = general.data if hasattr(general, 'data') else general
+            
+            # 只保留 dead 的患者
+            dead_patients = general_df[general_df['discharge_status'] == 'dead']['patientid'].tolist()
+            
+            # 过滤出死亡患者
+            df = df[df[id_col].isin(dead_patients)].copy()
+            
+            # 设置 death 值为 True
+            df[concept_name] = True
+            
+            return df
+        except Exception as e:
+            logger.warning(f"Failed to load general table for hirid_death: {e}")
+            return frame
 
     # Handle eicu_age - process eICU age data (convert '> 89' to 90)
     if re.fullmatch(r"transform_fun\(eicu_age\)", expr):
@@ -4977,6 +5206,78 @@ def _apply_callback(
         series = pd.to_numeric(frame[concept_name], errors="coerce")
         result = _apply_binary_op(symbol, series, value)
         frame.loc[:, concept_name] = result
+        return frame
+
+    # Handle transform_fun(floor) - apply floor function to values
+    if re.fullmatch(r"transform_fun\(floor\)", expr):
+        frame = frame.copy()
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
+        if val_col in frame.columns:
+            frame[val_col] = pd.to_numeric(frame[val_col], errors='coerce').apply(np.floor)
+        return frame
+
+    # Handle transform_fun(ceiling) or transform_fun(ceil) - apply ceiling function
+    if re.fullmatch(r"transform_fun\(ceil(ing)?\)", expr):
+        frame = frame.copy()
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
+        if val_col in frame.columns:
+            frame[val_col] = pd.to_numeric(frame[val_col], errors='coerce').apply(np.ceil)
+        return frame
+
+    # Handle transform_fun(round) - apply round function
+    if re.fullmatch(r"transform_fun\(round\)", expr):
+        frame = frame.copy()
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
+        if val_col in frame.columns:
+            frame[val_col] = pd.to_numeric(frame[val_col], errors='coerce').round()
+        return frame
+
+    # Handle aggregate_fun('sum', 'units') - aggregate by sum and set unit
+    match = re.fullmatch(r"aggregate_fun\(['\"](\w+)['\"],\s*['\"](.+?)['\"]\)", expr)
+    if match:
+        agg_func = match.group(1)  # e.g., 'sum'
+        new_unit = match.group(2)  # e.g., 'units'
+        
+        frame = frame.copy()
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
+        unit_col = source.unit_var
+        
+        # Identify ID and time columns
+        id_col = None
+        for cand in ['patientid', 'stay_id', 'admissionid', 'patientunitstayid', 'subject_id']:
+            if cand in frame.columns:
+                id_col = cand
+                break
+        
+        time_col = None
+        for cand in ['datetime', 'charttime', 'time', 'givenat']:
+            if cand in frame.columns:
+                time_col = cand
+                break
+        
+        if id_col and time_col and val_col in frame.columns:
+            # Convert to numeric
+            frame[val_col] = pd.to_numeric(frame[val_col], errors='coerce')
+            
+            # Group by id and time, apply aggregation
+            group_cols = [id_col, time_col]
+            if agg_func == 'sum':
+                result = frame.groupby(group_cols, as_index=False)[val_col].sum()
+            elif agg_func == 'mean':
+                result = frame.groupby(group_cols, as_index=False)[val_col].mean()
+            elif agg_func == 'max':
+                result = frame.groupby(group_cols, as_index=False)[val_col].max()
+            elif agg_func == 'min':
+                result = frame.groupby(group_cols, as_index=False)[val_col].min()
+            else:
+                result = frame  # Unknown aggregation, return as-is
+            
+            # Set unit
+            if unit_col:
+                result[unit_col] = new_unit
+            
+            return result
+        
         return frame
 
     # 匹配 mimic_sampling (R ricu callback-itm.R)
@@ -5503,7 +5804,8 @@ def _apply_callback(
         # 🔧 FIX: 获取体重概念并合并到 frame 中
         # R ricu 在回调中使用 add_weight(res, env, "weight") 获取体重
         # pyricu 需要在调用回调前加载 weight 概念
-        if 'weight' not in frame.columns and resolver is not None and data_source is not None:
+        # 🔧 FIX 2: Only try to get weight if frame is not empty
+        if not frame.empty and 'weight' not in frame.columns and resolver is not None and data_source is not None:
             try:
                 # 获取患者ID列
                 id_cols = [c for c in frame.columns if c.lower().endswith('id') and c != 'itemid']
@@ -5546,6 +5848,134 @@ def _apply_callback(
             rate_unit_col=rate_uom,
             index_col=index_var,
             stop_col=stop_var,
+        )
+
+    # Handle hirid_duration callback - calculate infusion durations
+    if expr == "hirid_duration":
+        from .callback_utils import hirid_duration
+        
+        index_var = source.index_var or 'givenat'
+        val_var = source.value_var
+        grp_var = source.params.get("grp_var") if source.params else None
+        if not grp_var:
+            grp_var = getattr(source, 'grp_var', None)
+        if not grp_var and 'infusionid' in frame.columns:
+            grp_var = 'infusionid'
+        
+        return hirid_duration(
+            frame,
+            concept_name=concept_name,
+            val_col=val_var,
+            index_col=index_var,
+            grp_var=grp_var,
+        )
+
+    # Handle hirid_vent callback - convert ventilation records to window table
+    if expr == "hirid_vent":
+        from .callback_utils import hirid_vent
+        
+        index_var = source.index_var or 'datetime'
+        val_var = source.value_var
+        
+        return hirid_vent(
+            frame,
+            concept_name=concept_name,
+            val_col=val_var,
+            index_col=index_var,
+            dur_var='dur_var',
+            padding_hours=4.0,
+            max_gap_hours=12.0,
+        )
+
+    # Handle hirid_urine callback - convert cumulative urine to incremental
+    if expr == "hirid_urine":
+        from .callback_utils import hirid_urine
+        
+        val_var = source.value_var or 'value'
+        unit_var = source.unit_var
+        
+        return hirid_urine(
+            frame,
+            concept_name=concept_name,
+            val_col=val_var,
+            unit_col=unit_var,
+        )
+
+    # Handle hirid_rate_kg callback - HiRID dose rate per kg
+    if expr == "hirid_rate_kg":
+        from .callback_utils import hirid_rate_kg
+
+        val_var = source.value_var or 'givendose'
+        unit_var = source.unit_var or 'doseunit'
+        grp_var = source.params.get("grp_var") if source.params else None
+        if not grp_var:
+            grp_var = getattr(source, 'grp_var', None)
+        if not grp_var and 'infusionid' in frame.columns:
+            grp_var = 'infusionid'
+        index_var = source.index_var or 'givenat'
+        
+        # 🔧 FIX: Only try to get weight if frame is not empty
+        # Avoids reading huge observations table (70M rows) when there's no data
+        if not frame.empty and 'weight' not in frame.columns and resolver is not None and data_source is not None:
+            try:
+                id_col = None
+                for cand in ['patientid', 'stay_id', 'admissionid']:
+                    if cand in frame.columns:
+                        id_col = cand
+                        break
+                if id_col:
+                    unique_ids = frame[id_col].unique().tolist()
+                    weight_table = resolver._load_single_concept(
+                        'weight',
+                        data_source,
+                        aggregator=False,
+                        patient_ids={id_col: unique_ids},
+                        verbose=False,
+                        _bypass_callback=True,
+                    )
+                    if weight_table is not None and not weight_table.data.empty:
+                        weight_df = weight_table.data
+                        if 'weight' in weight_df.columns:
+                            weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
+                            merge_cols = [c for c in [id_col] if c in weight_df.columns]
+                            if merge_cols:
+                                # Take first weight per patient
+                                weight_per_patient = weight_df.groupby(id_col)['weight'].first().reset_index()
+                                frame = frame.merge(weight_per_patient, on=id_col, how='left')
+            except Exception as e:
+                if DEBUG_MODE:
+                    print(f"   ⚠️  获取体重失败: {e}")
+                pass
+
+        return hirid_rate_kg(
+            frame,
+            concept_name=concept_name,
+            val_col=val_var,
+            unit_col=unit_var,
+            grp_var=grp_var,
+            index_col=index_var,
+        )
+
+    # Handle hirid_rate callback - HiRID dose rate (no weight normalization)
+    if expr == "hirid_rate":
+        from .callback_utils import hirid_rate
+
+        val_var = source.value_var or 'givendose'
+        unit_var = source.unit_var or 'doseunit'
+        grp_var = source.params.get("grp_var") if source.params else None
+        if not grp_var:
+            grp_var = getattr(source, 'grp_var', None)
+        if not grp_var and 'infusionid' in frame.columns:
+            grp_var = 'infusionid'
+        index_var = source.index_var or 'givenat'
+
+        return hirid_rate(
+            frame,
+            concept_name=concept_name,
+            val_col=val_var,
+            unit_col=unit_var,
+            grp_var=grp_var,
+            index_col=index_var,
         )
 
     # Handle aumc_rate callback - combine unit_var and rate_var into unit/rate format
