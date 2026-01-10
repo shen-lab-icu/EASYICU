@@ -1550,8 +1550,8 @@ def create_intervals(
         data[end_var] = pd.NaT
         return data
     
-    # Infer time column - support eICU's infusionoffset
-    time_col_patterns = ['time', 'offset', 'charttime', 'starttime']
+    # Infer time column - support eICU's infusionoffset and HiRID's givenat/datetime
+    time_col_patterns = ['time', 'offset', 'charttime', 'starttime', 'givenat', 'datetime']
     time_cols = []
     for col in data.columns:
         col_lower = col.lower()
@@ -1660,28 +1660,38 @@ def expand_intervals(
     
     Creates intervals using create_intervals and then expands them.
     
+    R ricu behavior:
+    - create_intervals groups by (id_vars, grp_var) to create intervals per infusion
+    - expand only keeps id_vars in output, NOT grp_var
+    - When multiple infusions have overlapping times, expand produces duplicate rows
+    - These duplicates are aggregated later by aggregate() using median for numeric values
+    
     Args:
         data: Input DataFrame
         keep_vars: Variables to keep in expansion
-        grp_var: Optional grouping variable
+        grp_var: Optional grouping variable (e.g., infusionid) - used for interval creation
+                but NOT kept in output
         **kwargs: Additional arguments
         
     Returns:
-        Expanded DataFrame
+        Expanded DataFrame with duplicates aggregated by median
     """
     from .ts_utils import expand
     import numpy as np
     
-    # Infer ID columns
+    # Infer ID columns - EXCLUDE grp_var from id_cols
+    # R ricu's id_vars() returns only the patient-level ID, not infusion-level IDs
     id_cols = [col for col in data.columns if 'id' in col.lower()]
+    if grp_var and grp_var in id_cols:
+        id_cols = [c for c in id_cols if c != grp_var]
     
-    # Build by_cols for create_intervals
+    # Build by_cols for create_intervals - INCLUDE grp_var for grouping
     by_cols = list(id_cols)
     if grp_var and grp_var in data.columns:
         by_cols.append(grp_var)
     
-    # Infer index variable - support eICU's infusionoffset
-    time_col_patterns = ['time', 'offset', 'charttime', 'starttime']
+    # Infer index variable - support eICU's infusionoffset and HiRID's givenat/datetime
+    time_col_patterns = ['time', 'offset', 'charttime', 'starttime', 'givenat', 'datetime']
     time_cols = []
     for col in data.columns:
         if col == 'endtime':
@@ -1715,7 +1725,7 @@ def expand_intervals(
         end_var='endtime'
     )
     
-    # Prepare keep_vars
+    # Prepare keep_vars - EXCLUDE grp_var to match R behavior
     if keep_vars is None:
         keep_vars = []
     elif isinstance(keep_vars, str):
@@ -1726,6 +1736,7 @@ def expand_intervals(
     # NOTE: DO NOT add 'endtime' to keep_vars - it should be removed after expand
     # R ricu expand_intervals does NOT keep endtime in output
     # Keeping it would cause double expand in _load_single_concept
+    # Also DO NOT add grp_var - R ricu expand drops it after intervals are created
     
     # Expand with step_size=1 hour
     expanded = expand(
@@ -1752,6 +1763,25 @@ def expand_intervals(
         
         # Convert hours back to minutes for output (integer hours * 60)
         expanded[index_var] = (expanded[index_var] * 60).astype(int)
+    
+    # 🔧 CRITICAL FIX: Aggregate duplicate (patient, time) combinations
+    # When multiple infusions overlap in time, expand produces multiple rows
+    # R ricu's aggregate() uses median for numeric values
+    if len(expanded) > 0:
+        group_cols = list(id_cols) + [index_var]
+        if expanded.duplicated(subset=group_cols).any():
+            # Find numeric columns to aggregate
+            val_cols = [c for c in expanded.columns if c not in group_cols]
+            if val_cols:
+                # Use median for numeric columns (R ricu default for numeric)
+                agg_dict = {}
+                for col in val_cols:
+                    if pd.api.types.is_numeric_dtype(expanded[col]):
+                        agg_dict[col] = 'median'
+                    else:
+                        agg_dict[col] = 'first'
+                if agg_dict:
+                    expanded = expanded.groupby(group_cols, as_index=False).agg(agg_dict)
     
     return expanded
 
@@ -1972,7 +2002,27 @@ def ts_to_win_tbl(win_dur: pd.Timedelta) -> Callable:
     """
     def callback(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
         data = data.copy()
-        data['dur_var'] = win_dur
+        
+        # 检测charttime的类型，确保dur_var与其兼容
+        # 如果charttime是数值型（小时），则dur_var也应该是数值型（小时）
+        # 如果charttime是datetime型，则dur_var应该是Timedelta
+        index_col = None
+        for col in ['charttime', 'starttime', 'start', 'time']:
+            if col in data.columns:
+                index_col = col
+                break
+        
+        if index_col and index_col in data.columns:
+            if pd.api.types.is_numeric_dtype(data[index_col]):
+                # charttime是数值型（小时），dur_var也用小时
+                data['dur_var'] = win_dur.total_seconds() / 3600.0
+            else:
+                # charttime是datetime型，dur_var用Timedelta
+                data['dur_var'] = win_dur
+        else:
+            # 默认使用Timedelta
+            data['dur_var'] = win_dur
+            
         return data
     
     return callback
@@ -2261,15 +2311,35 @@ def grp_mount_to_rate(
         
         result['dur_var'] = result[max_time_col] - result[min_time_col]
         
-        # Apply min_dur for zero-duration events
-        zero_dur_mask = result['dur_var'] == pd.Timedelta(0)
-        result.loc[zero_dur_mask, 'dur_var'] = min_dur
+        # Detect if time is in float hours (HiRID) or datetime
+        time_is_float = result['dur_var'].dtype in ['float64', 'float32', 'int64', 'int32']
         
-        # Add extra_dur to all durations
-        result['dur_var'] = result['dur_var'] + extra_dur
-        
-        # Calculate rate: amount / duration (convert to hours for rate/hour)
-        dur_hours = result['dur_var'].dt.total_seconds() / 3600
+        if time_is_float:
+            # Time is in hours, dur_var is in hours (float)
+            # Convert min_dur and extra_dur from Timedelta to hours
+            min_dur_hours = min_dur.total_seconds() / 3600
+            extra_dur_hours = extra_dur.total_seconds() / 3600
+            
+            # Apply min_dur for zero-duration events
+            zero_dur_mask = result['dur_var'] == 0
+            result.loc[zero_dur_mask, 'dur_var'] = min_dur_hours
+            
+            # Add extra_dur to all durations
+            result['dur_var'] = result['dur_var'] + extra_dur_hours
+            
+            # Calculate rate: amount / duration (dur_var is already in hours)
+            dur_hours = result['dur_var']
+        else:
+            # Time is datetime/timedelta
+            # Apply min_dur for zero-duration events
+            zero_dur_mask = result['dur_var'] == pd.Timedelta(0)
+            result.loc[zero_dur_mask, 'dur_var'] = min_dur
+            
+            # Add extra_dur to all durations
+            result['dur_var'] = result['dur_var'] + extra_dur
+            
+            # Calculate rate: amount / duration (convert to hours for rate/hour)
+            dur_hours = result['dur_var'].dt.total_seconds() / 3600
         result[val_col] = result[f"{val_col}_sum"] / dur_hours
         
         # Set units
@@ -2283,8 +2353,9 @@ def grp_mount_to_rate(
                 result[unit_col] = closure_unit_val
         elif unit_col in result.columns:
             # Append rate unit to existing unit
+            # Use 'hr' instead of 'hour' to match R ricu conventions (ml/hr, mcg/kg/hr, etc.)
             base_unit = result.get(f"{unit_col}_<lambda>", result.get(unit_col, 'unit'))
-            result[unit_col] = base_unit.astype(str) + '/hour'
+            result[unit_col] = base_unit.astype(str) + '/hr'
         
         # Rename min time back to index_var
         result = result.rename(columns={min_time_col: index_var})
@@ -3124,7 +3195,15 @@ def eicu_dex_med(
     dur_var: str,
     concept_name: str,
 ) -> pd.DataFrame:
-    """Dexmedetomidine eICU infusion normalisation (R ricu eicu_dex_med)."""
+    """Dexmedetomidine eICU infusion normalisation (R ricu eicu_dex_med).
+    
+    R ricu logic (callback-itm.R line 856-872):
+    1. Split dosage into value and unit
+    2. If unit is mg, multiply by 2
+    3. Filter: duration > 0 (set to 1 min if <= 0)
+    4. Filter: duration <= 12 hours
+    5. rate = value / duration_minutes * 5
+    """
 
     if val_var not in frame.columns or dur_var not in frame.columns:
         return frame
@@ -3139,35 +3218,57 @@ def eicu_dex_med(
         .str.replace(r"\s+", " ", regex=True)
         .str.split(" ", n=1, expand=True)
     )
-    work[val_var] = tokens[0]
-    work["unit_var"] = tokens[1] if tokens.shape[1] > 1 else np.nan
+    # Handle case where split produces only one column (no space in value)
+    if tokens.shape[1] >= 1:
+        work[val_var] = tokens.iloc[:, 0]
+        work["unit_var"] = tokens.iloc[:, 1] if tokens.shape[1] > 1 else np.nan
+    else:
+        work["unit_var"] = np.nan
 
     work[val_var] = pd.to_numeric(
-        work[val_var].str.replace(r"^(.+-|Manual)", "", regex=True), errors="coerce"
+        work[val_var].astype(str).str.replace(r"^(.+-|Manual)", "", regex=True), errors="coerce"
     )
 
-    mg_mask = work["unit_var"].str.contains(r"^m?g.*m?", case=False, na=False)
+    mg_mask = work["unit_var"].astype(str).str.contains(r"^m?g.*m?", case=False, na=False)
     if mg_mask.any():
         work.loc[mg_mask, val_var] = work.loc[mg_mask, val_var] * 2.0
 
-    duration = pd.to_timedelta(work[dur_var], errors="coerce")
-    if duration.isna().all():
-        fallback = pd.to_numeric(work[dur_var], errors="coerce")
-        duration = pd.to_timedelta(fallback, unit="m")
+    # dur_var可能是:
+    # 1. {concept_name}_dur - 已计算的duration，单位是小时（dur_is_end逻辑）
+    # 2. drugstopoffset - 原始offset，单位是分钟
+    # 需要判断并统一转换为分钟
+    
+    dur_vals = pd.to_numeric(work[dur_var], errors="coerce")
+    
+    # 判断dur_var是否是已计算的duration列（单位是小时）
+    is_computed_duration = dur_var.endswith('_dur')
+    
+    if is_computed_duration:
+        # dur_var是已计算的duration，单位是小时，转换为分钟
+        duration_minutes = dur_vals * 60.0
+    else:
+        # dur_var是原始的offset，需要看情况处理
+        # 如果传入的是drugstopoffset，它本身就是停止时间偏移量，不是duration
+        # 这种情况不应该发生（因为我们优先使用{concept}_dur列）
+        # 但作为回退，假设它是分钟
+        duration_minutes = dur_vals
 
-    duration = duration.fillna(pd.Timedelta(minutes=1))
-    duration = duration.mask(duration <= pd.Timedelta(0), pd.Timedelta(minutes=1))
+    # Filter: duration <= 0 set to 1 min
+    duration_minutes = duration_minutes.fillna(1.0)
+    duration_minutes = duration_minutes.where(duration_minutes > 0, 1.0)
 
-    mask = duration <= pd.Timedelta(hours=12)
+    # Filter: duration <= 12 hours (720 minutes)
+    mask = duration_minutes <= 720.0
     work = work.loc[mask].copy()
-    duration = duration.loc[mask]
+    duration_minutes = duration_minutes.loc[mask]
 
-    minutes = duration.dt.total_seconds() / 60.0
-    minutes = minutes.where(minutes > 0, 1.0)
-
-    work[val_var] = work[val_var] / minutes * 5.0
+    # rate = value / duration_minutes * 5
+    duration_minutes = duration_minutes.where(duration_minutes > 0, 1.0)
+    work[val_var] = work[val_var] / duration_minutes * 5.0
     work["unit_var"] = "ml/min"
-    work[dur_var] = duration
+    
+    # 保存duration（小时，与charttime单位一致，用于后续expand）
+    work[dur_var] = duration_minutes / 60.0
 
     return work
 
@@ -3197,7 +3298,10 @@ def eicu_dex_inf(
     if idx_col and idx_col in work.columns:
         interval = _infer_interval_from_series(work[idx_col])
 
-    work["dur_var"] = interval
+    # 🔧 FIX: 使用数值类型（小时）而不是Timedelta，与eicu_dex_med保持一致
+    # 这样在合并两个表时不会有类型冲突
+    interval_hours = interval.total_seconds() / 3600.0
+    work["dur_var"] = interval_hours
     work["unit_var"] = "ml/hr"
 
     return work
@@ -3748,6 +3852,7 @@ def hirid_rate_kg(
     grp_var: Optional[str],
     index_col: Optional[str],
     default_weight: float = 70.0,
+    interval_minutes: float = 60.0,
 ) -> pd.DataFrame:
     """
     HiRID rate per kg callback - converts dose to mcg/kg/min.
@@ -3759,8 +3864,16 @@ def hirid_rate_kg(
     4. Get patient weight
     5. Calculate rate = dose_per_interval / (interval_minutes * weight)
     
-    HiRID interval is 1 hour = 60 minutes, so:
-    rate_mcg_kg_min = givendose / 60 / weight
+    Args:
+        interval_minutes: The concept's interval in minutes. Default is 60 (1 hour).
+            R ricu uses frac = 1 / interval(x), where interval(x) is the concept's
+            interval attribute. For dobu_rate (no interval defined), default 60min
+            is used. For dobu60 (interval="00:01:00"), 1min is used.
+            
+            This affects the rate calculation:
+            - interval=60min: groups data by hour, sums doses, rate = sum/60/weight
+            - interval=1min: each point is independent, rate = dose/1/weight
+              (this results in 60x higher values, matching R ricu's behavior)
     
     Then expand intervals to hourly time points.
     """
@@ -3829,19 +3942,28 @@ def hirid_rate_kg(
                 break
     
     if index_col and index_col in df.columns:
-        # Floor time to hours
+        # 🔧 FIX: Floor time based on interval_minutes to match R ricu's change_interval behavior
+        # - interval=60min (1h): floor to hours, so multiple 15-min records in same hour get summed
+        # - interval=1min: floor to minutes, so each 15-min record stays separate (no aggregation)
         time_series = df[index_col]
         if pd.api.types.is_numeric_dtype(time_series):
             # Already in hours (from datetime conversion)
-            df['_hour'] = np.floor(time_series).astype(int)
+            if interval_minutes >= 60:
+                # Floor to hours
+                df['_time_bin'] = np.floor(time_series).astype(int)
+            else:
+                # Floor to minutes: time_hours * 60 -> minutes, floor, back to hours for consistency
+                # But keep original time for minute-level grouping
+                time_in_minutes = time_series * 60
+                df['_time_bin'] = np.floor(time_in_minutes).astype(int) / 60  # Keep in hours but with minute precision
         else:
             # This shouldn't happen for HiRID after datetime conversion
-            df['_hour'] = time_series
+            df['_time_bin'] = time_series
     else:
-        df['_hour'] = 0
+        df['_time_bin'] = 0
     
-    # Step 4: Group by (patientid, hour, infusionid) and sum doses
-    group_cols = [id_col, '_hour']
+    # Step 4: Group by (patientid, time_bin, infusionid) and sum doses
+    group_cols = [id_col, '_time_bin']
     if grp_var and grp_var in df.columns:
         group_cols.append(grp_var)
     
@@ -3856,12 +3978,15 @@ def hirid_rate_kg(
     grouped['weight'] = grouped[id_col].map(weight_map).fillna(default_weight)
     
     # Step 5: Calculate rate = dose / interval_minutes / weight
-    # HiRID interval is 1 hour = 60 minutes
-    interval_minutes = 60.0
+    # 🔧 FIX: R ricu uses frac = 1 / interval(x), where interval(x) is the concept's
+    # interval attribute. This affects the grouping and rate calculation:
+    # - interval=60min: data is grouped by hour, doses summed, rate = sum/60/weight
+    # - interval=1min: each point is independent (no aggregation beyond same minute),
+    #   rate = dose/1/weight (60x higher values)
     grouped[concept_name] = grouped[actual_val_col] / interval_minutes / grouped['weight']
     
-    # Rename _hour to datetime for consistency
-    grouped = grouped.rename(columns={'_hour': index_col if index_col else 'datetime'})
+    # Rename _time_bin to index_col for consistency
+    grouped = grouped.rename(columns={'_time_bin': index_col if index_col else 'datetime'})
     
     # Set unit
     if unit_col:
@@ -3877,6 +4002,15 @@ def hirid_rate_kg(
     # Filter to existing columns
     result_cols = [c for c in result_cols if c in grouped.columns]
     result = grouped[result_cols].dropna(subset=[concept_name])
+    
+    # 🔧 FIX: R ricu calls expand_intervals at the end of hirid_rate_kg
+    # This creates time intervals and expands to fill gaps (forward-fill)
+    # expand_intervals(x, val_var, grp_var) creates intervals using create_intervals
+    # with overhang=1h, max_len=6h, then expands with 1h step_size
+    keep_vars = [concept_name]
+    if unit_col and unit_col in result.columns:
+        keep_vars.append(unit_col)
+    result = expand_intervals(result, keep_vars=keep_vars, grp_var=grp_var)
     
     return result
 
@@ -4378,13 +4512,23 @@ def hirid_duration(
     if grp_var and grp_var in df.columns:
         group_cols.append(grp_var)
     
-    # Calculate duration: max(time) - min(time)
+    # Calculate duration: floor(max(time)) - floor(min(time))
+    # 🔧 FIX: R ricu's calc_dur operates on times that have already been floored
+    # by dt_round_min in load_mihi. So the effective calculation is:
+    # duration = floor(max_hours) - floor(min_hours)
+    # NOT: duration = max_hours - min_hours
+    # 
+    # Example: Patient 2, infusion 289451
+    #   min_time = 2.8333 (01:25 - 22:35 = 2:50 = 2.833h)
+    #   max_time = 17.0833 (15:40 - 22:35 = 17:05 = 17.083h)
+    #   Wrong: 17.0833 - 2.8333 = 14.25 → floor = 14
+    #   Correct: floor(17.0833) - floor(2.8333) = 17 - 2 = 15
     result = df.groupby(group_cols, as_index=False).agg(
         _min_time=('_time_numeric', 'min'),
         _max_time=('_time_numeric', 'max'),
     )
     
-    result[concept_name] = result['_max_time'] - result['_min_time']
+    result[concept_name] = np.floor(result['_max_time']) - np.floor(result['_min_time'])
     
     # Add index_col as the start time (min_time)
     result[actual_index_col] = result['_min_time']
@@ -4392,7 +4536,8 @@ def hirid_duration(
     # Drop temp columns
     result = result.drop(columns=['_min_time', '_max_time'])
     
-    # Keep only positive durations
-    result = result[result[concept_name] > 0]
+    # Note: R ricu does NOT filter out duration=0 records
+    # Keep all durations including 0 for consistency
+    result = result[result[concept_name] >= 0]
     
     return result

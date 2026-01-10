@@ -204,13 +204,22 @@ class ConceptLoader:
         if table_name in self._table_cache:
             return self._table_cache[table_name]
 
+        # 🚀 加载表并存入缓存
+        df = None
         if columns:
             try:
-                return load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
+                df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
             except Exception:
                 # 回退到加载全部列，确保兼容缺少列描述的表
-                return load_table(self._src_name, table_name, path=self.data_path)
-        return load_table(self._src_name, table_name, path=self.data_path)
+                df = load_table(self._src_name, table_name, path=self.data_path)
+        else:
+            df = load_table(self._src_name, table_name, path=self.data_path)
+        
+        # 🚀 存入缓存以供后续复用
+        if df is not None:
+            self._table_cache[table_name] = df
+        
+        return df
     
     def _columns_for_source(self, source, id_type: str) -> Optional[List[str]]:
         """提取 ConceptSource 所需的列。"""
@@ -700,7 +709,32 @@ class ConceptLoader:
         if not table_name:
             return pd.DataFrame()
         
-        required_columns = self._columns_for_source(source, id_type)
+        # 🔧 FIX: 对于有callback的概念，需要加载callback所需的所有列
+        # 例如 hirid_rate_kg 需要 givendose, doseunit, infusionid 等
+        has_callback = getattr(source, 'callback', None) is not None
+        
+        if has_callback:
+            # 对于有callback的概念，加载表中所有相关列而不是只加载标准列
+            # 因为callback函数需要访问更多的列（如 givendose, doseunit, infusionid）
+            required_columns = self._columns_for_source(source, id_type)
+            # 添加callback可能需要的额外列
+            callback_extra_cols = []
+            if source.callback in ('hirid_rate_kg', 'hirid_rate', 'hirid_duration'):
+                callback_extra_cols = ['givendose', 'doseunit', 'infusionid', 'givenat']
+            elif source.callback in ('aumc_rate_kg', 'aumc_rate'):
+                callback_extra_cols = ['dose', 'doseunit', 'doseunitid', 'rate', 'rateunit', 'infusionid', 'start', 'stop']
+            elif source.callback in ('mimic_rate_cv', 'mimic_rate_mv'):
+                callback_extra_cols = ['amount', 'amountuom', 'rate', 'rateuom', 'ordercategorydescription']
+            
+            if required_columns is None:
+                required_columns = callback_extra_cols
+            else:
+                for col in callback_extra_cols:
+                    if col not in required_columns:
+                        required_columns.append(col)
+        else:
+            required_columns = self._columns_for_source(source, id_type)
+        
         try:
             df = self._safe_load_table(table_name, required_columns)
         except Exception as e:
@@ -718,8 +752,8 @@ class ConceptLoader:
             return pd.DataFrame()
         
         # 3. 过滤患者
+        id_col = self._get_id_column(df, id_type)
         if patient_ids is not None:
-            id_col = self._get_id_column(df, id_type)
             if id_col:
                 filter_values: Optional[List[Any]] = None
                 if isinstance(patient_ids, pd.DataFrame):
@@ -739,7 +773,37 @@ class ConceptLoader:
                         return pd.DataFrame()
                     df = df[df[id_col].isin(filter_values)]
         
-        # 4. 确定值列
+        # 🔧 FIX: 对于有callback的概念，调用callback处理数据
+        # callback会处理列选择、值转换、时间扩展等逻辑
+        if has_callback:
+            from .concept import _apply_callback
+            
+            # 获取patient weight（如果callback需要）
+            if source.callback in ('hirid_rate_kg', 'aumc_rate_kg', 'sic_rate_kg') and 'weight' not in df.columns:
+                weight_df = self._get_patient_weights(df, id_col, id_type)
+                if weight_df is not None and not weight_df.empty:
+                    df = df.merge(weight_df, on=id_col, how='left')
+            
+            # 转换时间列为数值（如果需要）
+            time_col = source.index_var or self._get_time_column(df)
+            if time_col and time_col in df.columns:
+                df = self._convert_time_column_to_hours(df, time_col, id_col)
+            
+            # 调用callback
+            df = _apply_callback(
+                frame=df,
+                source=source,
+                concept_name=concept_name,
+                unit_column=source.unit_var,
+                resolver=None,  # ConceptLoader不使用resolver
+                patient_ids=patient_ids,
+                data_source=self._data_source,
+                interval=interval,
+            )
+            
+            return df
+        
+        # 4. 确定值列（无callback时的原有逻辑）
         val_col = source.value_var or 'valuenum'  # 默认使用 valuenum
         if val_col not in df.columns:
             # 尝试其他可能的值列
@@ -749,7 +813,6 @@ class ConceptLoader:
                     break
         
         # 5. 选择需要的列
-        id_col = self._get_id_column(df, id_type)
         required_cols = [id_col] if id_col else []
         
         # 时间列
@@ -781,6 +844,91 @@ class ConceptLoader:
         # 7. 对齐时间间隔
         if 'time' in df.columns and interval:
             df = change_interval(df, interval=interval, time_col='time')
+        
+        return df
+    
+    def _get_patient_weights(
+        self,
+        df: pd.DataFrame,
+        id_col: str,
+        id_type: str
+    ) -> Optional[pd.DataFrame]:
+        """获取患者体重数据"""
+        try:
+            from .concept import load_dictionary
+            concept_dict = load_dictionary(self._src_name)
+            if 'weight' not in concept_dict:
+                return None
+            
+            unique_ids = df[id_col].unique().tolist()
+            weight_data = self._load_one_concept(
+                concept=concept_dict['weight'],
+                patient_ids=unique_ids,
+                id_type=id_type,
+                interval=timedelta(hours=1),
+                aggregate='median'
+            )
+            
+            if weight_data is not None and not weight_data.empty:
+                # 确保只返回id和weight列
+                weight_cols = [id_col, 'weight'] if 'weight' in weight_data.columns else [id_col]
+                if 'value' in weight_data.columns and 'weight' not in weight_data.columns:
+                    weight_data = weight_data.rename(columns={'value': 'weight'})
+                    weight_cols = [id_col, 'weight']
+                
+                # 取每个患者的中位数体重
+                if 'weight' in weight_data.columns:
+                    weight_data['weight'] = pd.to_numeric(weight_data['weight'], errors='coerce')
+                    weight_data = weight_data.groupby(id_col)['weight'].median().reset_index()
+                    return weight_data
+            return None
+        except Exception as e:
+            logger.debug(f"获取体重数据失败: {e}")
+            return None
+    
+    def _convert_time_column_to_hours(
+        self,
+        df: pd.DataFrame,
+        time_col: str,
+        id_col: str
+    ) -> pd.DataFrame:
+        """将时间列从datetime转换为相对ICU入院的小时数"""
+        if time_col not in df.columns:
+            return df
+        
+        time_series = df[time_col]
+        if pd.api.types.is_numeric_dtype(time_series):
+            # 已经是数值，不需要转换
+            return df
+        
+        # 尝试转换为datetime
+        try:
+            df = df.copy()
+            df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
+            
+            # 获取ICU入院时间
+            from .table import load_id_tbl
+            icu_times = load_id_tbl(self._src_name, 'icustay', path=self.data_path)
+            
+            # 🔧 FIX: 支持不同数据库的入院时间列名
+            # MIMIC-IV: intime, HiRID: admissiontime, eICU: hospitaladmittime, AUMC: admittedat
+            intime_candidates = ['intime', 'admissiontime', 'hospitaladmittime', 'admittedat']
+            intime_col = None
+            for cand in intime_candidates:
+                if cand in icu_times.columns:
+                    intime_col = cand
+                    break
+            
+            if not icu_times.empty and intime_col:
+                if id_col and id_col in df.columns and id_col in icu_times.columns:
+                    df = df.merge(icu_times[[id_col, intime_col]], on=id_col, how='left')
+                    df[intime_col] = pd.to_datetime(df[intime_col], errors='coerce')
+                    
+                    time_diff = (df[time_col] - df[intime_col]).dt.total_seconds() / 3600
+                    df[time_col] = time_diff
+                    df = df.drop(columns=[intime_col])
+        except Exception as e:
+            logger.debug(f"时间转换失败: {e}")
         
         return df
     
@@ -1293,8 +1441,13 @@ class ConceptLoader:
         Returns:
             列名或None
         """
+        # 🔧 FIX: Added more time column candidates for different databases
+        # - givenat: HiRID pharma table
+        # - infusionoffset: eICU inputOutput table
+        # - start, stop: AUMC tables
         time_cols = ['charttime', 'time', 'datetime', 'timestamp', 
-                     'starttime', 'observationoffset']
+                     'starttime', 'observationoffset', 'givenat',
+                     'infusionoffset', 'start', 'stop', 'entertime']
         
         for col in df.columns:
             if col.lower() in [t.lower() for t in time_cols]:

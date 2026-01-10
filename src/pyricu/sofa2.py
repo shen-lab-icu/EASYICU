@@ -115,61 +115,71 @@ def sofa2_resp(
     Returns:
         Series of respiratory SOFA-2 scores (0-4)
     """
+    # Determine index from available inputs
+    if pafi is not None:
+        idx = pafi.index
+    elif spo2 is not None:
+        idx = spo2.index
+    elif fio2 is not None:
+        idx = fio2.index
+    else:
+        raise ValueError("sofa2_resp requires at least one of: pafi, spo2, or fio2")
+    
     # Build support/ECMO masks
-    support = _is_true(adv_resp) if adv_resp is not None else pd.Series(False, index=(pafi.index if pafi is not None else (spo2.index if spo2 is not None else fio2.index)))
-    on_ecmo = _is_true(ecmo) if ecmo is not None else pd.Series(False, index=support.index)
+    support = _is_true(adv_resp) if adv_resp is not None else pd.Series(False, index=idx)
+    on_ecmo = _is_true(ecmo) if ecmo is not None else pd.Series(False, index=idx)
+    sup_or_ecmo = support | on_ecmo
     
     # Determine if ECMO is for respiratory indication
-    ecmo_resp = pd.Series(False, index=support.index)
+    ecmo_resp = pd.Series(False, index=idx)
     if ecmo_indication is not None and ecmo is not None:
         ecmo_resp = _is_true(ecmo) & (ecmo_indication == 'respiratory')
-
-    idx = None
-    if pafi is not None:
-        metric = pd.to_numeric(pafi, errors="coerce")
-        idx = metric.index
-        use_sf = False
-    else:
-        # Derive S/F if possible (only when SpO2 < 98% per SOFA-2 guidelines)
-        if spo2 is not None and fio2 is not None:
-            s = pd.to_numeric(spo2, errors="coerce")
-            f = pd.to_numeric(fio2, errors="coerce")
-            # Convert fio2 percent to fraction if looks like 21-100
-            f_adj = f.copy()
-            f_adj[(f_adj > 1) & (f_adj <= 100)] = f_adj[(f_adj > 1) & (f_adj <= 100)] / 100.0
-            with np.errstate(invalid="ignore", divide="ignore"):
-                metric = s / f_adj
-            # Only use SpO2/FiO2 when SpO2 < 98%
-            metric[s >= 98] = np.nan
-            idx = metric.index
-            use_sf = True
-        else:
-            raise ValueError("sofa2_resp requires either pafi or (spo2 and fio2)")
-
+    
+    # Initialize score
     score = pd.Series(0, index=idx, dtype=int)
-    sup_or_ecmo = _is_true(support | on_ecmo)
-
-    if not 'use_sf' in locals():
-        use_sf = False
-
-    if not use_sf:
-        # P/F thresholds (SOFA-2)
-        score[(metric <= 300)] = 1
-        score[(metric <= 225)] = 2
-        # For 3/4, advanced support or ECMO is required
-        score[(metric <= 150) & sup_or_ecmo] = 3
-        score[(metric <= 75) & sup_or_ecmo] = 4
-    else:
-        # S/F thresholds (SOFA-2 alternative)
-        score[(metric <= 300)] = 1
-        score[(metric <= 250)] = 2
-        score[(metric <= 200) & sup_or_ecmo] = 3
-        score[(metric <= 120) & sup_or_ecmo] = 4
+    
+    # Prepare P/F ratio (per-row availability check)
+    pf = pd.to_numeric(pafi, errors="coerce") if pafi is not None else pd.Series(np.nan, index=idx)
+    pf_available = pf.notna()
+    
+    # Prepare S/F ratio (only applicable when SpO2 < 98%)
+    sf = pd.Series(np.nan, index=idx)
+    sf_applicable = pd.Series(False, index=idx)
+    
+    if spo2 is not None and fio2 is not None:
+        s = pd.to_numeric(spo2, errors="coerce")
+        f = pd.to_numeric(fio2, errors="coerce")
+        # Convert fio2 percent to fraction if looks like 21-100
+        f_adj = f.where(~((f > 1) & (f <= 100)), f / 100.0)
+        
+        with np.errstate(invalid="ignore", divide="ignore"):
+            sf = s / f_adj
+        
+        # S/F only applicable when SpO2 < 98% (per SOFA-2 definition)
+        sf_applicable = (s < 98) & sf.notna()
+    
+    # === Per-row scoring logic ===
+    
+    # Case 1: P/F available → use P/F thresholds
+    pf_mask = pf_available
+    score[pf_mask & (pf <= 300)] = 1
+    score[pf_mask & (pf <= 225)] = 2
+    # For 3/4, advanced support or ECMO is required
+    score[pf_mask & (pf <= 150) & sup_or_ecmo] = 3
+    score[pf_mask & (pf <= 75) & sup_or_ecmo] = 4
+    
+    # Case 2: P/F unavailable but S/F applicable → use S/F thresholds
+    sf_mask = ~pf_available & sf_applicable
+    score[sf_mask & (sf <= 300)] = 1
+    score[sf_mask & (sf <= 250)] = 2
+    score[sf_mask & (sf <= 200) & sup_or_ecmo] = 3
+    score[sf_mask & (sf <= 120) & sup_or_ecmo] = 4
     
     # ECMO for respiratory indication → auto 4pt
     score[ecmo_resp] = 4
 
     return score
+
 
 def sofa2_coag(plt: pd.Series) -> pd.Series:
     """SOFA-2 hemostasis/coagulation component (platelets ×10³/μL).

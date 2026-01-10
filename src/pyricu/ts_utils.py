@@ -76,22 +76,21 @@ def change_interval(
     target_interval = pd.to_timedelta(interval if interval is not None else new_interval)
 
     def _detect_time_columns(df: pd.DataFrame) -> List[str]:
-        # Exclude duration columns (timedelta) from time column rounding
-        # Duration columns like norepi_dur, dopa_dur should NOT be rounded to interval
-        # Only actual timestamp columns (datetime64) should be rounded
-        # Common duration column patterns: *_dur, *_duration, duration
-        duration_patterns = ('_dur', '_duration', 'duration')
-        # 🔧 FIX: 排除 endtime/stop 类型的列
-        # 窗口概念（如 ins, mech_vent）需要保留 endtime 的原始值用于展开
-        # 只有 starttime（index_column）应该被 floor
+        # 🔧 FIX 2024-12-17: Match R ricu behavior exactly
+        # R ricu's time_vars.data.frame returns ALL difftime columns:
+        #   time_vars.data.frame <- function(x) colnames(x)[lgl_ply(x, is_difftime)]
+        # This means duration columns (norepi_dur, epi_dur, etc.) ARE included
+        # and re_time (floor to interval) is applied to them.
+        #
+        # Exception: endtime columns for window concepts need to be preserved
+        # for expand() to work correctly.
         endtime_patterns = ('endtime', 'end_time', 'stop', 'stoptime', 'end')
         return [
             col
             for col in df.columns
             if (pd.api.types.is_datetime64_any_dtype(df[col])
-                # Exclude timedelta columns (durations) unless they are actual time columns
-                or (pd.api.types.is_timedelta64_dtype(df[col]) 
-                    and not any(col.endswith(pat) or col.startswith('dur') for pat in duration_patterns)))
+                # Include ALL timedelta columns (durations) - matches R ricu
+                or pd.api.types.is_timedelta64_dtype(df[col]))
             # 🔧 排除 endtime 类型的列，它们用于窗口展开
             and col.lower() not in endtime_patterns
             and not any(col.lower().endswith(pat) for pat in endtime_patterns)
@@ -419,15 +418,20 @@ def expand(
         # After change_interval/aggregate, values are floored:
         #   floor([-0.15, 0.85, 1.85, 2.85, 3.85, 4.85]) = [-1, 0, 1, 2, 3, 4]
         #
-        # 🔧 R ricu also clips end < 0 to 0:
-        # R ricu code: x <- x[get(end_var) < 0, c(end_var) := as.difftime(0, units = time_unit)]
+        # 🔧 R ricu clips end < 0 to 0, BUT ONLY for win_tbl when end_var is not present
+        # (i.e., when endtime is calculated from duration, not when it's already provided)
+        # R ricu code: 
+        #   if (is_win_tbl(x) && !end_var %in% colnames(x)) {
+        #     x <- x[get(end_var) < 0, c(end_var) := as.difftime(0, units = time_unit)]
+        #   }
+        # Since expand_intervals always calls create_intervals first (which adds endtime),
+        # we should NOT clip end values here - they are already computed correctly.
         #
         # Get original start values (NO floor!)
         start_values = valid_data[start_var].values.copy()
         
-        # Get end values and apply R ricu's end < 0 correction
+        # Get end values - do NOT clip to 0, R ricu only does that for win_tbl without endtime
         end_values = valid_data[end_col].values.copy()
-        end_values = np.where(end_values < 0, 0, end_values)  # Clip negative ends to 0
         
         # 🔧 FIX 2024-12-16: Use original end values, NOT floor(end)!
         # R's seq(start, end, step) generates values starting from start,

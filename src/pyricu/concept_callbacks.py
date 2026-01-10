@@ -4965,6 +4965,15 @@ def _callback_gcs(
     Returns:
         ICUTable with GCS values
     """
+    # 🔧 FIX: R ricu separates ett_gcs from the main GCS components merge
+    # R code: sed <- res[[cnc[5L]]]  # Store ett_gcs separately
+    #         res <- reduce(merge, res[cnc[-5L]], all = TRUE)  # Merge only egcs, vgcs, mgcs, tgcs
+    # This prevents ett_gcs (which is expanded hourly from mech_vent) from adding extra time points
+    
+    # Separate ett_gcs from other components
+    ett_gcs_table = tables.pop("ett_gcs", None)
+    
+    # Merge only the GCS components (egcs, vgcs, mgcs, tgcs)
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     ds_name = ""
     if ctx is not None and getattr(ctx, "data_source", None) is not None:
@@ -5000,7 +5009,27 @@ def _callback_gcs(
     egcs = pd.to_numeric(data.get("egcs"), errors="coerce")
     mgcs = pd.to_numeric(data.get("mgcs"), errors="coerce")
     vgcs = pd.to_numeric(data.get("vgcs"), errors="coerce")
-    ett_gcs = data.get("ett_gcs") if "ett_gcs" in data.columns else None
+    
+    # 🔧 FIX: Get ett_gcs from the separated table, not from merged data
+    # R ricu: sed <- res[[cnc[5L]]] - ett_gcs is kept separate
+    ett_gcs = None
+    if ett_gcs_table is not None:
+        if hasattr(ett_gcs_table, 'data'):
+            ett_df = ett_gcs_table.data
+        else:
+            ett_df = ett_gcs_table
+        if 'ett_gcs' in ett_df.columns and not ett_df.empty:
+            # Merge ett_gcs to data on id and time columns (left join to preserve data's time points)
+            merge_cols = list(id_columns) + ([index_column] if index_column else [])
+            if all(c in ett_df.columns for c in merge_cols):
+                ett_subset = ett_df[merge_cols + ['ett_gcs']].copy()
+                # R ricu: sed <- sed[is_true(get(cnc[5L])), ] - only keep TRUE rows
+                # Then inner join with data to find intubated time points
+                ett_true = ett_subset[ett_subset['ett_gcs'] == True]
+                if not ett_true.empty:
+                    # Mark which rows in data are intubated
+                    data = data.merge(ett_true[merge_cols + ['ett_gcs']], on=merge_cols, how='left')
+                    ett_gcs = data.get("ett_gcs")
 
     # CRITICAL FIX: Replicate R ricu's sed_impute logic
     # If sed_impute="max" (default) and patient is intubated (ett_gcs=True), set tgcs=15
