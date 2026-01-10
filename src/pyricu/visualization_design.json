@@ -1,0 +1,157 @@
+{
+  "project": "PyRICU Visualization & Interactive Interface",
+  "version": "1.0.0",
+  "description": "本地化ICU数据可视化和交互式界面工具包",
+  "deployment_mode": "local_only",
+  "cloud_service": false,
+  "notes": [
+    "所有数据由用户自行下载到本地",
+    "所有计算在用户本地机器执行",
+    "不提供云端存储或计算服务",
+    "支持离线使用"
+  ],
+  
+  "modules": {
+    "visualization": {
+      "path": "pyricu/src/pyricu/visualization/",
+      "description": "静态可视化模块",
+      "status": "completed",
+      "submodules": {
+        "__init__.py": {
+          "description": "模块初始化和统一导出",
+          "status": "completed"
+        },
+        "utils.py": {
+          "description": "通用工具函数",
+          "functions": [
+            "setup_theme - 设置Plotly主题",
+            "save_figure - 保存图表",
+            "get_concept_label - 获取概念显示名称",
+            "get_concept_color - 获取概念颜色",
+            "prepare_timeseries_data - 数据预处理",
+            "create_time_axis_label - 创建时间轴标签"
+          ],
+          "status": "completed"
+        },
+        "timeseries.py": {
+          "description": "时序数据可视化",
+          "functions": [
+            "plot_timeline - 单概念时序图",
+            "plot_vitals_panel - 多概念面板图",
+            "plot_medications_gantt - 药物给药甘特图",
+            "plot_lab_heatmap - 实验室检查热力图"
+          ],
+          "status": "completed"
+        },
+        "scores.py": {
+          "description": "评分系统可视化",
+          "functions": [
+            "plot_sofa_breakdown - SOFA分解堆叠图",
+            "plot_sofa_trajectory - SOFA轨迹图",
+            "plot_sepsis_timeline - Sepsis-3事件时间线"
+          ],
+          "status": "completed"
+        },
+        "cohort.py": {
+          "description": "队列级可视化",
+          "functions": [
+            "plot_missing_heatmap - 缺失值热力图",
+            "plot_concept_distribution - 数值分布图",
+            "plot_database_comparison - 跨数据库对比",
+            "plot_cohort_summary - 队列综合摘要"
+          ],
+          "status": "completed"
+        },
+        "patient.py": {
+          "description": "单患者综合视图",
+          "classes": ["PatientDashboard - 患者仪表板类"],
+          "functions": ["render_patient_report - 生成患者报告"],
+          "status": "completed"
+        }
+      }
+    },
+    "webapp": {
+      "path": "pyricu/src/pyricu/webapp/",
+      "description": "Streamlit交互式界面",
+      "status": "completed",
+      "deployment": {
+        "mode": "local",
+        "command": "streamlit run pyricu/src/pyricu/webapp/app.py",
+        "cli_command": "pyricu-webapp"
+      },
+      "submodules": {
+        "__init__.py": {
+          "description": "模块初始化和run_app函数",
+          "status": "completed"
+        },
+        "app.py": {
+          "description": "Streamlit主应用入口",
+          "pages": [
+            "🏠 首页 - 概览和快速导航",
+            "📈 时序分析 - 时序数据浏览",
+            "🏥 患者视图 - 单患者仪表盘",
+            "📊 数据质量 - 缺失率评估",
+            "💾 数据导出 - CSV/Excel/Parquet导出"
+          ],
+          "status": "completed"
+        }
+      }
+    }
+  },
+  
+  "dependencies": {
+    "visualization": {
+      "install": "pip install pyricu[viz]",
+      "packages": ["plotly>=5.15", "kaleido>=0.2.1"]
+    },
+    "webapp": {
+      "install": "pip install pyricu[webapp]",
+      "packages": ["streamlit>=1.28", "plotly>=5.15", "kaleido>=0.2.1", "openpyxl>=3.1"]
+    },
+    "all": {
+      "install": "pip install pyricu[all]"
+    }
+  },
+  
+  "supported_databases": [
+    {"name": "miiv", "display": "MIMIC-IV", "id_col": "stay_id"},
+    {"name": "mimic", "display": "MIMIC-III", "id_col": "icustay_id"},
+    {"name": "eicu", "display": "eICU-CRD", "id_col": "patientunitstayid"},
+    {"name": "aumc", "display": "AmsterdamUMCdb", "id_col": "admissionid"},
+    {"name": "hirid", "display": "HiRID", "id_col": "patientid"}
+  ],
+  
+  "concept_categories": [
+    {"id": "vitals", "display": "生命体征", "icon": "❤️", "concepts": ["hr", "map", "sbp", "dbp", "resp", "temp", "spo2"]},
+    {"id": "labs", "display": "实验室检查", "icon": "🧪", "concepts": ["bili", "crea", "lac", "plt", "wbc", "hgb", "pao2", "paco2"]},
+    {"id": "medications", "display": "药物治疗", "icon": "💊", "concepts": ["norepi_rate", "epi_rate", "dopa_rate", "dobu_rate", "vaso_rate"]},
+    {"id": "scores", "display": "评分系统", "icon": "📊", "concepts": ["sofa", "sirs", "qsofa", "gcs"]},
+    {"id": "diagnostics", "display": "诊断指标", "icon": "🔍", "concepts": ["sep3", "susp_inf", "vent_ind", "vaso_ind"]}
+  ],
+  
+  "usage_examples": {
+    "visualization": [
+      "from pyricu.visualization import plot_timeline, plot_sofa_breakdown",
+      "from pyricu import load_concepts",
+      "",
+      "data = load_concepts('/path/to/miiv', concepts=['hr', 'sofa'], patient_ids=[10001])",
+      "fig = plot_timeline(data['hr'], title='Heart Rate')",
+      "fig.show()"
+    ],
+    "webapp": [
+      "# 命令行启动",
+      "pyricu-webapp",
+      "",
+      "# 或 Python 代码",
+      "from pyricu.webapp import run_app",
+      "run_app(port=8501)"
+    ]
+  },
+  
+  "implementation_status": {
+    "phase1_visualization": "completed",
+    "phase2_webapp": "completed",
+    "phase3_optimization": "pending",
+    "phase4_documentation": "pending"
+  }
+}

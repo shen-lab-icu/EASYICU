@@ -1,0 +1,38 @@
+# Streamlit 配置文件 - 防止休眠和超时
+
+[server]
+# 无头模式运行
+headless = true
+
+# 启用 CORS
+enableCORS = false
+enableXsrfProtection = false
+
+# 禁用文件监视器（减少资源占用）
+fileWatcherType = "none"
+
+# 增加连接超时时间（秒）
+# 默认是 60 秒，设置为更长时间
+maxUploadSize = 200
+
+# 允许的最大消息大小（MB）
+maxMessageSize = 200
+
+[browser]
+# 禁止自动打开浏览器
+serverAddress = "localhost"
+gatherUsageStats = false
+
+[runner]
+# 禁用魔术命令（提高性能）
+magicEnabled = false
+
+# 快速重新运行
+fastReruns = true
+
+[client]
+# 显示错误详情
+showErrorDetails = true
+
+# 工具栏模式
+toolbarMode = "minimal"

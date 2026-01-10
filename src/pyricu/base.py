@@ -524,14 +524,14 @@ class BaseICULoader:
                 ricu_compatible,
                 concept_workers,
                 kwargs,
-                preserve_cache=False,
+                preserve_cache=len(concepts) > 1,  # 🚀 多概念时保留缓存以加速
             )
 
         except Exception as e:
             raise RuntimeError(f"Failed to load concepts {concepts}: {e}")
-        finally:
-            if hasattr(self, "concept_resolver"):
-                self.concept_resolver.clear_table_cache()
+        # 🚀 优化：移除finally中的强制清除缓存
+        # _load_concepts_once 已经有条件地管理缓存，无需在此再清除
+        # 这样批量加载多个概念时可以共享表缓存，大幅提升性能
 
     def _merge_concepts(self, results: Dict[str, pd.DataFrame], keep_components: bool) -> pd.DataFrame:
         """Merge multiple concept DataFrames"""

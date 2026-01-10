@@ -1221,9 +1221,17 @@ class ConceptResolver:
                     # 例如：norepi_rate患者2有4条记录，预降采样用mean合并为2条，
                     # 然后callback对错误的mean值做单位转换，最终结果与R ricu不一致
                     has_callback = getattr(source, 'callback', None) is not None
-                    skip_resample_callbacks = ['aumc_rate_kg', 'aumc_rate_units', 'mimic_rate_cv', 
-                                               'mimic_rate_mv', 'aumc_rate', 'sic_rate_kg', 
-                                               'eicu_rate', 'hirid_rate', 'hirid_rate_kg', 'vaso60', 'vaso_ind']
+                    skip_resample_callbacks = [
+                        # rate 回调：需要原始数据进行单位转换
+                        'aumc_rate_kg', 'aumc_rate_units', 'mimic_rate_cv', 
+                        'mimic_rate_mv', 'aumc_rate', 'sic_rate_kg', 
+                        'eicu_rate', 'hirid_rate', 'hirid_rate_kg',
+                        # duration 回调：需要按infusionid分组计算max(time)-min(time)
+                        'hirid_duration', 'aumc_dur', 'eicu_duration', 'mimic_dur', 
+                        'mimic_dur_inmv', 'calc_dur',
+                        # 聚合回调
+                        'vaso60', 'vaso_ind'
+                    ]
                     callback_name = source.callback if has_callback else ''
                     skip_resample = has_callback and any(cb in callback_name for cb in skip_resample_callbacks)
                     
@@ -1967,6 +1975,7 @@ class ConceptResolver:
                     resolver=self,
                     patient_ids=patient_ids,
                     data_source=data_source,
+                    interval=interval,
                 )
                 callback_applied = True  # 标记回调已应用
                 # 如果callback创建了concept_name，更新value_column
@@ -2058,6 +2067,7 @@ class ConceptResolver:
                     resolver=self,
                     patient_ids=patient_ids,
                     data_source=data_source,
+                    interval=interval,
                 )
             
             # 单位过滤（在回调之后）
@@ -2279,12 +2289,18 @@ class ConceptResolver:
             # mech_vent 等窗口概念需要 endtime 来进行时间展开
             # prescriptions 表使用 stoptime 作为结束时间
             # 如果有 dur_var="endtime" 的定义，endtime 列必须保留
-            for endtime_candidate in ['endtime', 'end_time', 'stop', 'stoptime']:
+            # 🔧 FIX: dur_var 列由 grp_mount_to_rate 回调生成，需要保留用于后续展开
+            for endtime_candidate in ['endtime', 'end_time', 'stop', 'stoptime', 'dur_var']:
                 if endtime_candidate in frame.columns and endtime_candidate not in ordered_cols:
                     ordered_cols.append(endtime_candidate)
-                    break
+                    # 不要 break，保留所有存在的结束时间列
             
             ordered_cols = [col for col in ordered_cols if col in frame.columns]
+            
+            # DEBUG: 检查dur_var是否被保留
+            if DEBUG_MODE and 'dur_var' in frame.columns:
+                print(f"   🔍 DEBUG: frame有dur_var列, ordered_cols中是否有dur_var: {'dur_var' in ordered_cols}")
+                print(f"   🔍 DEBUG: ordered_cols = {ordered_cols}")
             
             # Check and remove duplicate columns before appending
             frame_subset = frame.loc[:, ordered_cols]
@@ -2345,6 +2361,10 @@ class ConceptResolver:
             
             combined = pd.concat(frames, ignore_index=True)
             
+            # DEBUG: 检查combined是否有dur_var
+            if DEBUG_MODE and 'dur_var' in combined.columns:
+                print(f"   🔍 DEBUG: combined有dur_var列, 行数={len(combined)}")
+        
         # DEBUG
         # Standardize time column name for eICU BEFORE any processing
         # eICU uses different time column names (labresultoffset, observationoffset, etc.)
@@ -2540,6 +2560,8 @@ class ConceptResolver:
             has_endtime = 'endtime' in combined.columns
             has_stoptime = 'stoptime' in combined.columns  # prescriptions uses stoptime
             has_duration = 'duration' in combined.columns
+            # 🔧 FIX 2024-12-26: Also check for 'dur_var' column (from grp_mount_to_rate callback for HiRID dex, etc.)
+            has_dur_var = 'dur_var' in combined.columns
             
             # 🔧 FIX 2024-12-17: 'stop' column should ONLY trigger expand if the concept has dur_var='stop' in its source definition
             # AUMC drugitems table always has start/stop columns, but only concepts with dur_var='stop' should be expanded
@@ -2564,10 +2586,56 @@ class ConceptResolver:
             is_point_event = concept_name in POINT_EVENT_CONCEPTS
             is_duration_concept = concept_name in DURATION_CONCEPTS or concept_name.endswith('_dur')
             
-            should_expand = (has_endtime or has_stoptime or has_stop or has_duration) and not is_point_event and not is_duration_concept
+            should_expand = (has_endtime or has_stoptime or has_stop or has_duration or has_dur_var) and not is_point_event and not is_duration_concept
             
+            # DEBUG
+            if DEBUG_MODE and (has_dur_var or has_endtime or has_stoptime):
+                print(f"   🔍 DEBUG: should_expand={should_expand}, has_dur_var={has_dur_var}, has_endtime={has_endtime}, is_point_event={is_point_event}")
             if should_expand:
                 from .ts_utils import expand
+                
+                # 🔧 FIX 2024-12-26: Handle dur_var column from grp_mount_to_rate callback
+                # dur_var contains duration as Timedelta or numeric hours, calculate endtime = starttime + dur_var
+                if has_dur_var and not has_endtime:
+                    dur_col = combined['dur_var']
+                    start_col = combined[index_column]
+                    
+                    # Check types of both columns
+                    is_dur_timedelta = 'timedelta' in str(dur_col.dtype).lower()
+                    is_start_datetime = pd.api.types.is_datetime64_any_dtype(start_col)
+                    is_start_numeric = pd.api.types.is_numeric_dtype(start_col)
+                    is_dur_numeric = pd.api.types.is_numeric_dtype(dur_col)
+                    
+                    if is_start_datetime and is_dur_timedelta:
+                        # Both datetime-compatible: datetime + timedelta
+                        combined['endtime'] = start_col + dur_col
+                    elif is_start_datetime and is_dur_numeric:
+                        # datetime + numeric hours
+                        combined['endtime'] = start_col + pd.to_timedelta(dur_col, unit='h')
+                    elif is_start_numeric and is_dur_numeric:
+                        # Both numeric (hours)
+                        combined['endtime'] = start_col + dur_col
+                    elif is_start_numeric and is_dur_timedelta:
+                        # 🔧 FIX: numeric start (hours) + timedelta duration
+                        # Convert timedelta to hours
+                        dur_hours = dur_col.dt.total_seconds() / 3600.0
+                        combined['endtime'] = start_col + dur_hours
+                    else:
+                        # Fallback: try direct addition
+                        try:
+                            combined['endtime'] = start_col + dur_col
+                        except Exception:
+                            # Convert dur to hours as last resort
+                            if is_dur_timedelta:
+                                dur_hours = dur_col.dt.total_seconds() / 3600.0
+                                combined['endtime'] = start_col + dur_hours
+                            else:
+                                combined['endtime'] = start_col + dur_col
+                    
+                    has_endtime = True
+                    # Drop dur_var to avoid confusion
+                    combined = combined.drop(columns=['dur_var'])
+                    has_dur_var = False
                 
                 # 🔧 FIX: When both endtime and stoptime exist (multi-source concepts like abx),
                 # merge stoptime into endtime to handle rows from different tables
@@ -2617,6 +2685,9 @@ class ConceptResolver:
                 
                 # Expand windows to hourly time series
                 try:
+                    if DEBUG_MODE:
+                        print(f"   🔍 DEBUG: expand前, 行数={len(combined)}, start_var={index_column}, end_var={end_col}")
+                        print(f"   🔍 DEBUG: endtime样本: {combined[end_col].head(3).tolist() if end_col in combined.columns else 'N/A'}")
                     combined = expand(
                         combined,
                         start_var=index_column,
@@ -2625,6 +2696,8 @@ class ConceptResolver:
                         id_cols=id_columns,
                         keep_vars=keep_vars,
                     )
+                    if DEBUG_MODE:
+                        print(f"   🔍 DEBUG: expand后, 行数={len(combined)}")
                     if verbose:
                         logger.info(f"   ✅ 展开 win_tbl '{concept_name}' 到 {len(combined)} 行")
                 except Exception as e:
@@ -2644,6 +2717,10 @@ class ConceptResolver:
             fill_missing = self._should_fill_gaps(concept_name, definition)
             fill_method = self._get_fill_method(concept_name, definition)
             
+            # DEBUG
+            if DEBUG_MODE:
+                print(f"   🔍 DEBUG: change_interval前, 行数={len(combined)}")
+            
             # Apply interval change with aggregation (SINGLE aggregation on relative time)
             combined_result = change_interval(
                 temp_table,
@@ -2657,11 +2734,15 @@ class ConceptResolver:
             # Extract data if ICUTable is returned
             if hasattr(combined_result, 'data'):
                 combined = combined_result.data
+                if DEBUG_MODE:
+                    print(f"   🔍 DEBUG: change_interval后, 行数={len(combined)}")
                 # 更新index_column：change_interval可能改变了时间列名(如变为'start')
                 if hasattr(combined_result, 'index_column') and combined_result.index_column:
                     index_column = combined_result.index_column
             else:
                 combined = combined_result
+                if DEBUG_MODE:
+                    print(f"   🔍 DEBUG: change_interval后(raw), 行数={len(combined)}")
         elif align_to_admission:
             # Just alignment, no interval/aggregation
             combined = self._align_time_to_admission(
@@ -4982,6 +5063,7 @@ def _apply_callback(
     resolver: Optional['ConceptResolver'] = None,
     patient_ids: Optional[List] = None,
     data_source: Optional['ICUDataSource'] = None,
+    interval: Optional[Union[str, pd.Timedelta]] = None,
 ) -> pd.DataFrame:
     callback = source.callback
     if not callback:
@@ -5435,7 +5517,8 @@ def _apply_callback(
             nested_source = replace(source, callback=nested)
             frame_result = _apply_callback(
                 frame_result, nested_source, concept_name, unit_column,
-                resolver=resolver, patient_ids=patient_ids, data_source=data_source
+                resolver=resolver, patient_ids=patient_ids, data_source=data_source,
+                interval=interval,
             )
         return frame_result
     
@@ -5500,6 +5583,98 @@ def _apply_callback(
                 logging.warning(f"dex_to_10 parsing failed: {e}")
         return frame
     
+    # Handle grp_mount_to_rate callback (convert grouped amounts to rates)
+    # Format: grp_mount_to_rate(mins(1L), hours(1L)) or similar
+    match = re.fullmatch(r"grp_mount_to_rate\((.+)\)", expr, flags=re.DOTALL)
+    if match:
+        args = _split_arguments(match.group(1))
+        if len(args) >= 2:
+            try:
+                # Parse min_dur and extra_dur
+                min_dur_expr = args[0].strip()
+                extra_dur_expr = args[1].strip()
+                
+                def _parse_duration_expr(dur_expr: str) -> pd.Timedelta:
+                    """Parse R duration expression like mins(1L), hours(1L)."""
+                    if 'mins(' in dur_expr:
+                        mins_match = re.search(r'mins\((\d+)', dur_expr)
+                        if mins_match:
+                            return pd.Timedelta(minutes=int(mins_match.group(1)))
+                    elif 'hours(' in dur_expr:
+                        hours_match = re.search(r'hours\((\d+)', dur_expr)
+                        if hours_match:
+                            return pd.Timedelta(hours=int(hours_match.group(1)))
+                    elif 'secs(' in dur_expr:
+                        secs_match = re.search(r'secs\((\d+)', dur_expr)
+                        if secs_match:
+                            return pd.Timedelta(seconds=int(secs_match.group(1)))
+                    # Default to 1 minute
+                    return pd.Timedelta(minutes=1)
+                
+                min_dur = _parse_duration_expr(min_dur_expr)
+                extra_dur = _parse_duration_expr(extra_dur_expr)
+                
+                # Get group variable from source
+                # 🔧 FIX: grp_var 可能在 source.grp_var 或 source.params['grp_var'] 中
+                grp_var = None
+                if hasattr(source, 'grp_var') and source.grp_var:
+                    grp_var = source.grp_var
+                elif hasattr(source, 'params') and source.params and 'grp_var' in source.params:
+                    grp_var = source.params['grp_var']
+                
+                # Get value and unit columns
+                val_col = source.value_var if hasattr(source, 'value_var') and source.value_var else None
+                if not val_col:
+                    # Try common value columns
+                    for candidate in ['val', 'value', 'amount', 'dose', 'givendose', 'pharmavalue']:
+                        if candidate in frame.columns:
+                            val_col = candidate
+                            break
+                if not val_col:
+                    val_col = concept_name
+                
+                unit_col = source.unit_var if hasattr(source, 'unit_var') and source.unit_var else None
+                if not unit_col:
+                    for candidate in ['unit', 'unit_var', 'amountuom', 'doserateunit', 'doseunit']:
+                        if candidate in frame.columns:
+                            unit_col = candidate
+                            break
+                
+                # Get index_var (time column)
+                index_var = source.index_var if hasattr(source, 'index_var') and source.index_var else None
+                if not index_var:
+                    for candidate in ['datetime', 'givenat', 'starttime', 'charttime', 'time']:
+                        if candidate in frame.columns:
+                            index_var = candidate
+                            break
+                
+                # Get ID columns - only use standard patient/stay ID columns
+                # 🔧 FIX: Don't use "id" substring matching - it incorrectly includes columns like
+                # 'fluidamount_calc', 'typeid', 'subtypeid' which contain "id" but are not patient IDs
+                standard_id_cols = ['patientid', 'stay_id', 'admissionid', 'patientunitstayid', 'subject_id', 'hadm_id', 'icustay_id']
+                id_cols = [col for col in standard_id_cols if col in frame.columns]
+                
+                from .callback_utils import grp_mount_to_rate as grp_mount_fn
+                callback_fn = grp_mount_fn(
+                    min_dur=min_dur,
+                    extra_dur=extra_dur,
+                    grp_var=grp_var
+                )
+                
+                result = callback_fn(
+                    frame,
+                    val_col=val_col if val_col in frame.columns else 'value',
+                    unit_col=unit_col if unit_col and unit_col in frame.columns else 'unit',
+                    index_var=index_var,
+                    id_cols=id_cols
+                )
+                
+                return result
+            except Exception as e:
+                import logging
+                logging.warning(f"grp_mount_to_rate parsing failed: {e}")
+        return frame
+    
     # Handle ts_to_win_tbl callback
     match = re.fullmatch(r"ts_to_win_tbl\((.+)\)", expr, flags=re.DOTALL)
     if match:
@@ -5523,7 +5698,22 @@ def _apply_callback(
         
         # Add duration column
         frame = frame.copy()
-        frame['dur_var'] = duration
+        
+        # 🔧 FIX: 检测charttime的类型，确保dur_var与其兼容
+        # 如果charttime是数值型（小时），则dur_var也应该是数值型（小时）
+        index_col = None
+        for col in ['charttime', 'starttime', 'start', 'time']:
+            if col in frame.columns:
+                index_col = col
+                break
+        
+        if index_col and index_col in frame.columns and pd.api.types.is_numeric_dtype(frame[index_col]):
+            # charttime是数值型（小时），dur_var也用小时
+            frame['dur_var'] = duration.total_seconds() / 3600.0
+        else:
+            # charttime是datetime型或未知，dur_var用Timedelta
+            frame['dur_var'] = duration
+            
         return frame
     
     # Handle mimic_rate_mv callback (for infusion rates)
@@ -5939,14 +6129,32 @@ def _apply_callback(
                             weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
                             merge_cols = [c for c in [id_col] if c in weight_df.columns]
                             if merge_cols:
-                                # Take first weight per patient
-                                weight_per_patient = weight_df.groupby(id_col)['weight'].first().reset_index()
+                                # 🔧 FIX: Use median weight per patient to match R ricu's behavior
+                                # R ricu's weight concept has target="id_tbl", which uses default
+                                # aggregation (median) to get a single weight value per patient.
+                                weight_per_patient = weight_df.groupby(id_col)['weight'].median().reset_index()
                                 frame = frame.merge(weight_per_patient, on=id_col, how='left')
             except Exception as e:
                 if DEBUG_MODE:
                     print(f"   ⚠️  获取体重失败: {e}")
                 pass
 
+        # 🔧 FIX: Calculate interval_minutes from concept's interval
+        # R ricu uses frac = 1 / interval(x), where interval(x) is the concept's interval.
+        # For dobu_rate (no interval): default 60min (1 hour)
+        # For dobu60 (interval="00:01:00"): 1min → rate is 60x higher
+        interval_minutes = 60.0  # default
+        if interval is not None:
+            if isinstance(interval, str):
+                # Parse string like "00:01:00" (1 minute) or "01:00:00" (1 hour)
+                try:
+                    td = pd.to_timedelta(interval)
+                    interval_minutes = td.total_seconds() / 60.0
+                except Exception:
+                    pass
+            elif isinstance(interval, pd.Timedelta):
+                interval_minutes = interval.total_seconds() / 60.0
+        
         return hirid_rate_kg(
             frame,
             concept_name=concept_name,
@@ -5954,6 +6162,7 @@ def _apply_callback(
             unit_col=unit_var,
             grp_var=grp_var,
             index_col=index_var,
+            interval_minutes=interval_minutes,
         )
 
     # Handle hirid_rate callback - HiRID dose rate (no weight normalization)
@@ -6241,14 +6450,23 @@ def _apply_callback(
         from .callback_utils import eicu_dex_med as eicu_dex_med_cb
 
         val_var = source.value_var or concept_name
+        
+        # 优先使用已计算好的duration列 (dur_is_end逻辑产生的 {concept_name}_dur)
+        # 这个列包含真正的duration = stopoffset - startoffset
         dur_var = None
-        if source.params:
-            dur_var = source.params.get("dur_var") or source.params.get("stop_var")
-        if not dur_var or dur_var not in frame.columns:
-            if "duration" in frame.columns:
-                dur_var = "duration"
-            elif "drugstopoffset" in frame.columns:
-                dur_var = "drugstopoffset"
+        duration_col = concept_name + '_dur'
+        if duration_col in frame.columns:
+            dur_var = duration_col
+        elif "duration" in frame.columns:
+            dur_var = "duration"
+        else:
+            # 回退到原始配置
+            if source.params:
+                dur_var = source.params.get("dur_var") or source.params.get("stop_var")
+            if not dur_var or dur_var not in frame.columns:
+                if "drugstopoffset" in frame.columns:
+                    dur_var = "drugstopoffset"
+        
         if not dur_var or dur_var not in frame.columns:
             return frame
 
