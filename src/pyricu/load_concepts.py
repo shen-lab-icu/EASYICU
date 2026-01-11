@@ -387,8 +387,22 @@ class ConceptLoader:
         if interval is None:
             interval = timedelta(hours=1)
         
-        # 🚀 检测是否启用并行加载（提前决定以优化预加载策略）
-        parallel_workers = kwargs.get('concept_workers', 1)
+        # 🚀 智能并行配置：根据概念数量自动优化
+        user_concept_workers = kwargs.get('concept_workers')
+        if user_concept_workers is None:
+            # 自动计算最佳并行数
+            import os
+            num_concepts = len(concept_objs)
+            if num_concepts >= 3:
+                cpu_count = os.cpu_count() or 4
+                parallel_workers = min(num_concepts, max(2, cpu_count // 2))
+            elif num_concepts == 2:
+                parallel_workers = 2
+            else:
+                parallel_workers = 1
+        else:
+            parallel_workers = user_concept_workers
+            
         enable_parallel = len(concept_objs) > 1 and parallel_workers > 1
         
         # 🚀 Preload tables（优化：并行模式下更激进的预加载）

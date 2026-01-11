@@ -28,6 +28,7 @@ pyricu 高层API - 提供简单易用的接口，同时支持高级自定义
 
 from typing import List, Union, Optional, Dict
 from pathlib import Path
+import os
 import pandas as pd
 import os
 import logging
@@ -110,6 +111,42 @@ def _get_global_loader(
 
     return _global_loader
 
+def _get_smart_workers(num_concepts: int, num_patients: Optional[int] = None) -> tuple:
+    """
+    智能计算最佳并行配置
+    
+    Args:
+        num_concepts: 要加载的概念数量
+        num_patients: 患者数量（如果已知）
+    
+    Returns:
+        (concept_workers, parallel_workers): 概念并行数和患者批次并行数
+    """
+    # 检查是否禁用自动优化
+    if os.getenv('PYRICU_NO_AUTO_PARALLEL'):
+        return 1, None
+    
+    cpu_count = os.cpu_count() or 4
+    
+    # 🚀 策略1: 多概念时启用概念级并行
+    # 概念级并行开销较低，通常能提升30-50%性能
+    if num_concepts >= 3:
+        concept_workers = min(num_concepts, max(2, cpu_count // 2))
+    elif num_concepts == 2:
+        concept_workers = 2
+    else:
+        concept_workers = 1
+    
+    # 🚀 策略2: 大量患者时启用患者批次并行
+    # 患者数 > 5000 时，分批处理更高效
+    parallel_workers = None  # 默认不分批
+    if num_patients is not None and num_patients > 5000:
+        # 大规模数据：启用分批 + 线程池
+        parallel_workers = min(4, cpu_count // 2)
+    
+    return concept_workers, parallel_workers
+
+
 def load_concepts(
     concepts: Union[str, List[str]],
     patient_ids: Optional[Union[List, Dict]] = None,
@@ -132,7 +169,7 @@ def load_concepts(
     chunk_size: Optional[int] = None,
     progress: bool = False,
     parallel_workers: Optional[int] = None,
-    concept_workers: int = 1,
+    concept_workers: Optional[int] = None,  # 改为Optional，支持自动检测
     parallel_backend: str = 'auto',
     max_patients: Optional[int] = None,  # 限制加载的患者数量（自动采样）
     limit: Optional[int] = None,  # max_patients 的别名（兼容 extract_sofa_data.py）
@@ -279,6 +316,32 @@ def load_concepts(
         else:
             patient_ids = {'stay_id': patient_ids}
 
+    # 🚀 智能并行配置：根据概念数量和患者数量自动优化
+    num_patients = None
+    if patient_ids is not None:
+        if isinstance(patient_ids, dict):
+            for v in patient_ids.values():
+                if isinstance(v, (list, tuple)):
+                    num_patients = len(v)
+                    break
+        elif isinstance(patient_ids, (list, tuple)):
+            num_patients = len(patient_ids)
+    
+    # 只有当用户没有指定时才使用智能配置
+    effective_concept_workers = concept_workers
+    effective_parallel_workers = parallel_workers
+    
+    if concept_workers is None or parallel_workers is None:
+        smart_concept, smart_parallel = _get_smart_workers(len(concepts_list), num_patients)
+        if concept_workers is None:
+            effective_concept_workers = smart_concept
+        if parallel_workers is None:
+            effective_parallel_workers = smart_parallel
+        
+        if verbose and (effective_concept_workers > 1 or effective_parallel_workers):
+            print(f"   ⚡ 智能优化: concept_workers={effective_concept_workers}, "
+                  f"parallel_workers={effective_parallel_workers or '不分批'}")
+
     # 使用统一加载器加载概念
     return loader.load_concepts(
         concepts=concepts_list,
@@ -291,8 +354,8 @@ def load_concepts(
         ricu_compatible=ricu_compatible,
         chunk_size=chunk_size,
         progress=progress,
-        parallel_workers=parallel_workers,
-        concept_workers=concept_workers,
+        parallel_workers=effective_parallel_workers,
+        concept_workers=effective_concept_workers,
         parallel_backend=parallel_backend,
         **kwargs
     )
@@ -1433,3 +1496,326 @@ def load_sofa_with_score(
     )
     
     return result
+
+
+# ==============================================================================
+# 患者队列筛选 API
+# ==============================================================================
+
+def filter_patients(
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    # 筛选条件
+    age_min: Optional[float] = None,
+    age_max: Optional[float] = None,
+    first_icu_stay: Optional[bool] = None,
+    los_min: Optional[float] = None,
+    los_max: Optional[float] = None,
+    gender: Optional[str] = None,
+    survived: Optional[bool] = None,
+    has_sepsis: Optional[bool] = None,
+    # 输出控制
+    return_dataframe: bool = False,
+    verbose: bool = False,
+) -> Union[List[int], pd.DataFrame]:
+    """
+    根据人口统计学和临床条件筛选ICU患者队列
+    
+    支持的筛选条件:
+    - 年龄范围 (age_min, age_max)
+    - 是否首次入ICU (first_icu_stay)
+    - ICU住院时长 (los_min, los_max，单位：小时)
+    - 性别 (gender: 'M' 或 'F')
+    - 是否存活出院 (survived)
+    - 是否有Sepsis诊断 (has_sepsis)
+    
+    Args:
+        database: 数据库类型 ('miiv', 'eicu', 'aumc', 'hirid')
+        data_path: 数据路径
+        age_min: 最小年龄
+        age_max: 最大年龄
+        first_icu_stay: 是否仅首次入ICU
+        los_min: 最短住院时长（小时）
+        los_max: 最长住院时长（小时）
+        gender: 性别 ('M' 男 / 'F' 女)
+        survived: 是否存活出院
+        has_sepsis: 是否有Sepsis诊断
+        return_dataframe: 是否返回完整DataFrame（包含人口统计学信息）
+        verbose: 显示详细信息
+    
+    Returns:
+        患者ID列表，或人口统计学DataFrame（如果return_dataframe=True）
+    
+    Examples:
+        >>> # 筛选18-80岁首次入ICU的成人患者
+        >>> adult_first_icu = filter_patients(
+        ...     database='miiv',
+        ...     data_path='/path/to/data',
+        ...     age_min=18, age_max=80,
+        ...     first_icu_stay=True
+        ... )
+        >>> print(f"筛选到 {len(adult_first_icu)} 名患者")
+        >>>
+        >>> # 筛选Sepsis存活患者
+        >>> sepsis_survivors = filter_patients(
+        ...     database='miiv',
+        ...     data_path='/path/to/data',
+        ...     has_sepsis=True,
+        ...     survived=True
+        ... )
+        >>>
+        >>> # 获取完整人口统计学信息
+        >>> cohort_df = filter_patients(
+        ...     database='miiv',
+        ...     data_path='/path/to/data',
+        ...     age_min=18,
+        ...     return_dataframe=True
+        ... )
+    """
+    from .patient_filter import PatientFilter
+    
+    # 自动检测数据库和路径
+    if database is None:
+        database = detect_database_type(data_path)
+    if data_path is None:
+        data_path = get_default_data_path(database)
+    
+    pf = PatientFilter(database=database, data_path=data_path, verbose=verbose)
+    
+    return pf.filter(
+        age_min=age_min, age_max=age_max,
+        first_icu_stay=first_icu_stay,
+        los_min=los_min, los_max=los_max,
+        gender=gender, survived=survived,
+        has_sepsis=has_sepsis,
+        return_dataframe=return_dataframe
+    )
+
+
+def load_concepts_filtered(
+    concepts: Union[str, List[str]],
+    # 患者筛选条件
+    age_min: Optional[float] = None,
+    age_max: Optional[float] = None,
+    first_icu_stay: Optional[bool] = None,
+    los_min: Optional[float] = None,
+    los_max: Optional[float] = None,
+    gender: Optional[str] = None,
+    survived: Optional[bool] = None,
+    has_sepsis: Optional[bool] = None,
+    # 其他load_concepts参数
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    interval: Optional[Union[str, pd.Timedelta]] = '1h',
+    win_length: Optional[Union[str, pd.Timedelta]] = None,
+    aggregate: Optional[Union[str, Dict]] = None,
+    keep_components: bool = False,
+    verbose: bool = False,
+    **kwargs
+) -> pd.DataFrame:
+    """
+    根据患者筛选条件加载概念数据 - 整合患者筛选和数据加载
+    
+    这是一个便捷函数，将患者队列筛选和概念加载整合为一步操作：
+    1. 先根据人口统计学条件筛选患者
+    2. 然后加载这些患者的概念数据
+    
+    Args:
+        concepts: 要加载的概念名称或列表
+        
+        # === 患者筛选条件 ===
+        age_min: 最小年龄
+        age_max: 最大年龄
+        first_icu_stay: 是否仅首次入ICU
+        los_min: 最短住院时长（小时）
+        los_max: 最长住院时长（小时）
+        gender: 性别 ('M' 或 'F')
+        survived: 是否存活出院
+        has_sepsis: 是否有Sepsis诊断
+        
+        # === 数据加载参数 ===
+        database: 数据库类型
+        data_path: 数据路径
+        interval: 时间对齐间隔
+        win_length: 窗口长度
+        aggregate: 聚合方式
+        keep_components: 是否保留组件
+        verbose: 显示详细信息
+        **kwargs: 其他参数传递给load_concepts
+    
+    Returns:
+        筛选后患者的概念数据DataFrame
+    
+    Examples:
+        >>> # 加载成人首次入ICU患者的SOFA评分
+        >>> sofa = load_concepts_filtered(
+        ...     'sofa',
+        ...     age_min=18, age_max=80,
+        ...     first_icu_stay=True,
+        ...     database='miiv',
+        ...     data_path='/path/to/data',
+        ...     win_length='24h'
+        ... )
+        >>>
+        >>> # 加载Sepsis患者的生命体征
+        >>> sepsis_vitals = load_concepts_filtered(
+        ...     ['hr', 'sbp', 'temp'],
+        ...     has_sepsis=True,
+        ...     database='miiv',
+        ...     data_path='/path/to/data'
+        ... )
+    """
+    # 自动检测数据库和路径
+    if database is None:
+        database = detect_database_type(data_path)
+    if data_path is None:
+        data_path = get_default_data_path(database)
+    
+    # 第1步：筛选患者
+    has_filter = any([
+        age_min is not None, age_max is not None,
+        first_icu_stay is not None,
+        los_min is not None, los_max is not None,
+        gender is not None, survived is not None,
+        has_sepsis is not None
+    ])
+    
+    if has_filter:
+        if verbose:
+            print("🔍 第1步：筛选患者队列...")
+        
+        patient_ids = filter_patients(
+            database=database,
+            data_path=data_path,
+            age_min=age_min, age_max=age_max,
+            first_icu_stay=first_icu_stay,
+            los_min=los_min, los_max=los_max,
+            gender=gender, survived=survived,
+            has_sepsis=has_sepsis,
+            verbose=verbose
+        )
+        
+        if verbose:
+            print(f"   ✓ 筛选到 {len(patient_ids)} 名患者")
+        
+        if len(patient_ids) == 0:
+            if verbose:
+                print("   ❌ 没有符合条件的患者")
+            return pd.DataFrame()
+    else:
+        patient_ids = None
+    
+    # 第2步：加载概念数据
+    if verbose:
+        print("📊 第2步：加载概念数据...")
+    
+    return load_concepts(
+        concepts=concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        aggregate=aggregate,
+        keep_components=keep_components,
+        verbose=verbose,
+        **kwargs
+    )
+
+
+def get_cohort_comparison(
+    patient_ids: Optional[List[int]] = None,
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+    group_by: str = 'survived',
+    custom_groups: Optional[Dict[str, List[int]]] = None,
+    verbose: bool = False,
+) -> pd.DataFrame:
+    """
+    获取患者队列的分组对比统计
+    
+    可以按以下维度进行分组对比：
+    - survived: 存活 vs 死亡
+    - gender: 男性 vs 女性
+    - first_icu_stay: 首次入ICU vs 再入ICU
+    - 或提供自定义分组
+    
+    Args:
+        patient_ids: 患者ID列表（None=所有患者）
+        database: 数据库类型
+        data_path: 数据路径
+        group_by: 分组依据 ('survived', 'gender', 'first_icu_stay')
+        custom_groups: 自定义分组 {组名: [患者ID列表]}
+        verbose: 显示详细信息
+    
+    Returns:
+        分组统计DataFrame
+    
+    Examples:
+        >>> # 按存活状态对比
+        >>> comparison = get_cohort_comparison(
+        ...     database='miiv',
+        ...     data_path='/path/to/data',
+        ...     group_by='survived'
+        ... )
+        >>> print(comparison)
+        >>>
+        >>> # 自定义分组对比（Sepsis vs 非Sepsis）
+        >>> sepsis_ids = filter_patients(has_sepsis=True, ...)
+        >>> non_sepsis_ids = filter_patients(has_sepsis=False, ...)
+        >>> comparison = get_cohort_comparison(
+        ...     database='miiv',
+        ...     data_path='/path/to/data',
+        ...     custom_groups={'Sepsis': sepsis_ids, '非Sepsis': non_sepsis_ids}
+        ... )
+    """
+    from .patient_filter import PatientFilter
+    
+    # 自动检测
+    if database is None:
+        database = detect_database_type(data_path)
+    if data_path is None:
+        data_path = get_default_data_path(database)
+    
+    pf = PatientFilter(database=database, data_path=data_path, verbose=verbose)
+    
+    # 如果提供了patient_ids，先筛选
+    if patient_ids is not None:
+        pf.filter(return_dataframe=True)  # 加载数据
+        pf._last_result = pf._last_result[pf._last_result['patient_id'].isin(patient_ids)]
+    else:
+        pf.filter(return_dataframe=True)  # 加载所有患者
+    
+    return pf.get_cohort_comparison(group_by=group_by, custom_groups=custom_groups)
+
+
+def get_cohort_stats(
+    patient_ids: List[int],
+    database: Optional[str] = None,
+    data_path: Optional[Union[str, Path]] = None,
+) -> Dict:
+    """
+    获取患者队列的统计摘要
+    
+    Args:
+        patient_ids: 患者ID列表
+        database: 数据库类型
+        data_path: 数据路径
+    
+    Returns:
+        统计信息字典
+    
+    Examples:
+        >>> ids = filter_patients(age_min=18, first_icu_stay=True, ...)
+        >>> stats = get_cohort_stats(ids, database='miiv', data_path='/path/to/data')
+        >>> print(f"患者数: {stats['患者数']}")
+        >>> print(f"年龄: {stats['年龄']['均值']} ± {stats['年龄']['标准差']}")
+    """
+    from .patient_filter import get_cohort_stats as _get_cohort_stats
+    
+    if database is None:
+        database = detect_database_type(data_path)
+    if data_path is None:
+        data_path = get_default_data_path(database)
+    
+    return _get_cohort_stats(patient_ids, database=database, data_path=data_path)
