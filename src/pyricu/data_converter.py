@@ -191,12 +191,12 @@ class DataConverter:
             logger.warning(f"Could not save status file: {e}")
     
     def _get_csv_files(self) -> List[Path]:
-        """Get all CSV/CSV.GZ files in the data directory."""
+        """Get all CSV/CSV.GZ files in the data directory (including subdirs)."""
         csv_files = []
         
-        # Find all CSV and CSV.GZ files
+        # Find all CSV and CSV.GZ files recursively (includes hosp/, icu/ subdirs)
         for pattern in ['*.csv', '*.csv.gz', '*.CSV', '*.CSV.GZ']:
-            csv_files.extend(self.data_path.glob(pattern))
+            csv_files.extend(self.data_path.rglob(pattern))
         
         # Sort by file size (process smaller files first)
         csv_files.sort(key=lambda f: f.stat().st_size)
@@ -204,7 +204,7 @@ class DataConverter:
         return csv_files
     
     def _get_parquet_path(self, csv_path: Path) -> Path:
-        """Get the corresponding parquet path for a CSV file."""
+        """Get the corresponding parquet path for a CSV file, preserving subdirectory structure."""
         # Remove .csv or .csv.gz extension
         name = csv_path.name
         if name.endswith('.csv.gz'):
@@ -216,11 +216,17 @@ class DataConverter:
         elif name.endswith('.CSV'):
             name = name[:-4]
         
+        # Preserve subdirectory structure (e.g., hosp/, icu/)
+        try:
+            rel_parent = csv_path.parent.relative_to(self.data_path)
+        except ValueError:
+            rel_parent = Path()
+        
         # Normalize to lowercase (like ricu)
-        return self.data_path / f"{name.lower()}.parquet"
+        return self.data_path / rel_parent / f"{name.lower()}.parquet"
     
     def _get_shard_dir(self, csv_path: Path) -> Path:
-        """Get the shard directory path for a large CSV file."""
+        """Get the shard directory path for a large CSV file, preserving subdirectory structure."""
         table_name = csv_path.name
         if table_name.endswith('.csv.gz'):
             table_name = table_name[:-7]
@@ -231,7 +237,13 @@ class DataConverter:
         elif table_name.endswith('.CSV'):
             table_name = table_name[:-4]
         
-        return self.data_path / table_name.lower()
+        # Preserve subdirectory structure
+        try:
+            rel_parent = csv_path.parent.relative_to(self.data_path)
+        except ValueError:
+            rel_parent = Path()
+        
+        return self.data_path / rel_parent / table_name.lower()
     
     def _has_valid_shards(self, csv_path: Path) -> Tuple[bool, int]:
         """

@@ -901,8 +901,8 @@ def convert_data_with_progress(data_path: str, database: str):
                     st.caption(skip_msg)
             else:
                 try:
-                    # 执行转换
-                    converter._convert_single_file(csv_file)
+                    # 执行转换 - 使用正确的方法名
+                    converter._convert_file(csv_file)
                     converted += 1
                     with details_container:
                         done_msg = f"✅ Done: {file_name}" if lang == 'en' else f"✅ 完成: {file_name}"
@@ -1228,18 +1228,20 @@ def validate_database_path(data_path: str, database: str) -> dict:
         dict: {'valid': bool, 'message': str, 'suggestion': str (可选)}
     """
     path = Path(data_path)
+    lang = st.session_state.get('language', 'en')
     
-    # 各数据库需要的核心表（Parquet格式）
-    required_parquet_files = {
-        'miiv': ['icustays.parquet', 'chartevents.parquet', 'labevents.parquet', 'inputevents.parquet'],
-        'eicu': ['patient.parquet', 'vitalperiodic.parquet', 'lab.parquet'],
-        'aumc': ['admissions.parquet', 'numericitems.parquet', 'drugitems.parquet'],
-        'hirid': ['general_table.parquet', 'pharma_records.parquet'],
+    # 各数据库需要的核心表（Parquet格式）- 包括分片目录
+    # 格式: 文件名或目录名(对于分片表)
+    required_parquet_tables = {
+        'miiv': ['icustays', 'chartevents', 'labevents', 'inputevents', 'prescriptions'],
+        'eicu': ['patient', 'vitalperiodic', 'lab'],
+        'aumc': ['admissions', 'numericitems', 'drugitems'],
+        'hirid': ['general_table', 'pharma_records'],
     }
     
     # 各数据库需要的核心表（CSV/GZ格式 - 原始文件）
     required_csv_files = {
-        'miiv': ['icustays.csv', 'chartevents.csv', 'labevents.csv'],
+        'miiv': ['icustays.csv', 'chartevents.csv', 'labevents.csv', 'prescriptions.csv'],
         'eicu': ['patient.csv', 'vitalPeriodic.csv', 'lab.csv'],
         'aumc': ['admissions.csv', 'numericitems.csv', 'drugitems.csv'],
         'hirid': ['general_table.csv', 'pharma_records.csv'],
@@ -1250,23 +1252,51 @@ def validate_database_path(data_path: str, database: str) -> dict:
         'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID'
     }.get(database, database.upper())
     
-    # 检查是否存在 Parquet 文件（递归搜索）
+    # 检查Parquet文件和分片目录
     parquet_files = list(path.rglob('*.parquet'))
-    parquet_names = [f.name.lower() for f in parquet_files]
+    parquet_names = [f.name.lower().replace('.parquet', '') for f in parquet_files]
+    # 也检查分片目录（如 chartevents/1.parquet）
+    parquet_dirs = set()
+    for pf in parquet_files:
+        if pf.parent != path and pf.parent.parent.is_relative_to(path):
+            parquet_dirs.add(pf.parent.name.lower())
     
-    required_parquets = required_parquet_files.get(database, [])
-    found_parquets = []
-    for req in required_parquets:
-        if req.lower() in parquet_names:
-            found_parquets.append(req)
+    required_tables = required_parquet_tables.get(database, [])
+    found_tables = []
+    missing_tables = []
     
-    if len(found_parquets) >= len(required_parquets) // 2:
-        # 找到足够的 Parquet 文件
-        lang = st.session_state.get('language', 'en')
+    for req in required_tables:
+        req_lower = req.lower()
+        # 检查是否有 xxx.parquet 或 xxx/1.parquet 格式
+        if req_lower in parquet_names or req_lower in parquet_dirs:
+            found_tables.append(req)
+        else:
+            missing_tables.append(req)
+    
+    # 如果全部找到
+    if len(missing_tables) == 0:
         msg = f'✅ Found {db_name} data ({len(parquet_files)} Parquet files)' if lang == 'en' else f'✅ 找到 {db_name} 数据 ({len(parquet_files)} 个 Parquet 文件)'
         return {
             'valid': True,
             'message': msg
+        }
+    
+    # 如果找到部分但不完整
+    if len(found_tables) > 0:
+        missing_str = ', '.join(missing_tables)
+        if lang == 'en':
+            msg = f'⚠️ Found partial {db_name} Parquet data, missing: {missing_str}'
+            sug = f'💡 Click "Convert to Parquet" to convert remaining files ({len(missing_tables)} tables missing)'
+        else:
+            msg = f'⚠️ 找到部分 {db_name} Parquet 数据，缺少: {missing_str}'
+            sug = f'💡 点击「转换为Parquet」转换剩余文件（缺少 {len(missing_tables)} 个表）'
+        return {
+            'valid': False,  # 不完整时不应该通过
+            'message': msg,
+            'suggestion': sug,
+            'can_convert': True,
+            'csv_path': str(path),
+            'missing_tables': missing_tables,
         }
     
     # 检查是否存在 CSV 文件（可能需要转换）
@@ -1281,9 +1311,8 @@ def validate_database_path(data_path: str, database: str) -> dict:
     
     if len(found_csvs) >= len(required_csvs) // 2:
         # 找到 CSV 文件但没有 Parquet - 需要转换
-        lang = st.session_state.get('language', 'en')
-        msg = f'⚠️ Found {db_name} raw CSV files, but not converted to Parquet format' if lang == 'en' else f'⚠️ 找到 {db_name} 原始 CSV 文件，但未转换为 Parquet 格式'
-        sug = '💡 Click "Convert to Parquet" button below, or use raw data (slower)' if lang == 'en' else '💡 点击下方「转换为Parquet」按钮进行转换，或直接使用原始数据（较慢）'
+        msg = f'⚠️ Found {db_name} raw CSV files ({len(csv_files)} files), need to convert to Parquet' if lang == 'en' else f'⚠️ 找到 {db_name} 原始 CSV 文件 ({len(csv_files)} 个)，需要转换为 Parquet 格式'
+        sug = '💡 Click "Convert to Parquet" button below to convert all files' if lang == 'en' else '💡 点击下方「转换为Parquet」按钮转换所有文件'
         return {
             'valid': False,
             'message': msg,
