@@ -472,7 +472,7 @@ class BaseICULoader:
         chunk_size: Optional[int] = None,
         progress: bool = False,
         parallel_workers: Optional[int] = None,
-        concept_workers: int = 1,
+        concept_workers: Optional[int] = None,  # 改为Optional，支持自动检测
         parallel_backend: str = "auto",
         **kwargs
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
@@ -491,8 +491,22 @@ class BaseICULoader:
             if isinstance(win_length, str):
                 win_length = pd.Timedelta(win_length)
 
+            # 🚀 智能并行配置：如果未指定，根据概念数量自动优化
+            effective_concept_workers = concept_workers
+            if effective_concept_workers is None:
+                num_concepts = len(concepts)
+                if num_concepts >= 3:
+                    cpu_count = os.cpu_count() or 4
+                    effective_concept_workers = min(num_concepts, max(2, cpu_count // 2))
+                elif num_concepts == 2:
+                    effective_concept_workers = 2
+                else:
+                    effective_concept_workers = 1
+            
             if self.verbose:
                 logger.info(f"Loading {len(concepts)} concepts: {', '.join(concepts)}")
+                if effective_concept_workers > 1:
+                    logger.info(f"⚡ Auto-optimized: concept_workers={effective_concept_workers}")
 
             batches = self._build_patient_batches(patient_ids, chunk_size)
             if batches:
@@ -508,7 +522,7 @@ class BaseICULoader:
                     ricu_compatible,
                     progress,
                     worker_count,
-                    concept_workers,
+                    effective_concept_workers,
                     parallel_backend,
                     kwargs,
                 )
@@ -522,7 +536,7 @@ class BaseICULoader:
                 keep_components,
                 merge,
                 ricu_compatible,
-                concept_workers,
+                effective_concept_workers,
                 kwargs,
                 preserve_cache=len(concepts) > 1,  # 🚀 多概念时保留缓存以加速
             )

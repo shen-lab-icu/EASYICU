@@ -36,121 +36,153 @@ st.markdown("""
 # 自定义 CSS - 同时兼容深色和浅色主题
 st.markdown("""
 <style>
-    /* 顶部 Tabs 标签样式 - 更大更显眼 */
-    [data-testid="stTabs"] [data-baseweb="tab-list"] {
-        gap: 8px;
-        margin-top: 0;
-        padding-top: 0;
+    /* 减少页面顶部留白 */
+    .block-container {
+        padding-top: 0.5rem !important;
+        margin-top: 0 !important;
     }
-    [data-testid="stTabs"] [data-baseweb="tab"] {
-        font-size: 1.6rem !important;
-        font-weight: 600 !important;
-        padding: 16px 28px !important;
-        border-radius: 8px 8px 0 0 !important;
-    }
-    [data-testid="stTabs"] [data-baseweb="tab"][aria-selected="true"] {
-        background: linear-gradient(135deg, #1f77b4, #2ca02c) !important;
-        color: white !important;
+    header[data-testid="stHeader"] {
+        height: 0 !important;
+        min-height: 0 !important;
+        visibility: hidden !important;
     }
     
-    /* 主题色彩 */
+    /* 顶部 Tabs 标签样式 - 更大更显眼 */
+    div[data-baseweb="tab-list"] {
+        gap: 8px !important;
+        margin-top: 0 !important;
+        padding-top: 0 !important;
+        background: linear-gradient(180deg, rgba(31,119,180,0.05), transparent) !important;
+        padding: 8px !important;
+        border-radius: 12px !important;
+    }
+    div[data-baseweb="tab-list"] button {
+        font-size: 1.3rem !important;
+        font-weight: 600 !important;
+        padding: 14px 24px !important;
+        border-radius: 10px !important;
+        transition: all 0.3s ease !important;
+    }
+    div[data-baseweb="tab-list"] button:hover {
+        background: rgba(31,119,180,0.15) !important;
+    }
+    div[data-baseweb="tab-list"] button[aria-selected="true"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        color: white !important;
+        box-shadow: 0 4px 15px rgba(102,126,234,0.4) !important;
+    }
+    div[data-baseweb="tab-list"] button p {
+        font-size: 1.3rem !important;
+        font-weight: 600 !important;
+    }
+    
+    /* 主题色彩 - 更现代的配色 */
     :root {
-        --primary-color: #1f77b4;
-        --success-color: #28a745;
-        --warning-color: #ffc107;
-        --danger-color: #dc3545;
-        --info-color: #17a2b8;
+        --primary-color: #667eea;
+        --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --success-color: #10b981;
+        --success-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        --warning-color: #f59e0b;
+        --danger-color: #ef4444;
+        --info-color: #06b6d4;
         --card-bg-light: #ffffff;
-        --card-bg-dark: rgba(30, 40, 50, 0.9);
+        --card-bg-dark: rgba(30, 35, 45, 0.95);
         --text-primary-light: #1e1e1e;
         --text-primary-dark: #e0e0e0;
         --text-secondary-light: #555;
         --text-secondary-dark: #aaa;
     }
     
-    /* 主标题 */
+    /* 主标题 - 现代渐变 */
     .main-header {
-        font-size: 2.0rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #1f77b4, #2ca02c);
+        font-size: 2.2rem;
+        font-weight: 800;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
         margin-top: 0;
-        margin-bottom: 0.3rem;
+        margin-bottom: 0.5rem;
         text-align: center;
+        letter-spacing: -0.5px;
     }
     
     /* 副标题 - 自适应主题 */
     .sub-header {
-        font-size: 1.3rem;
+        font-size: 1.2rem;
         color: #666;
         margin-bottom: 1.5rem;
         text-align: center;
+        font-weight: 400;
     }
     @media (prefers-color-scheme: dark) {
         .sub-header { color: #aaa; }
     }
     
-    /* 卡片样式 - 自适应主题 */
+    /* 卡片样式 - 自适应主题 + 现代设计 */
     .metric-card {
-        background: #f8f9fa;
-        border-radius: 12px;
-        padding: 1.2rem;
+        background: linear-gradient(145deg, #ffffff, #f5f7fa);
+        border-radius: 16px;
+        padding: 1.4rem;
         margin: 0.5rem 0;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        border: 1px solid #e0e0e0;
-        transition: transform 0.2s;
+        box-shadow: 0 4px 15px rgba(102,126,234,0.1);
+        border: 1px solid rgba(102,126,234,0.1);
+        transition: all 0.3s ease;
         color: #1e1e1e;
     }
     @media (prefers-color-scheme: dark) {
         .metric-card {
-            background: rgba(30, 40, 50, 0.9);
-            border: 1px solid rgba(255,255,255,0.1);
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            background: linear-gradient(145deg, rgba(40,45,60,0.95), rgba(30,35,50,0.95));
+            border: 1px solid rgba(102,126,234,0.2);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
             color: #e0e0e0;
         }
     }
-    /* Streamlit 深色模式检测 */
     [data-testid="stAppViewContainer"][data-theme="dark"] .metric-card {
-        background: rgba(30, 40, 50, 0.9);
-        border: 1px solid rgba(255,255,255,0.1);
+        background: linear-gradient(145deg, rgba(40,45,60,0.95), rgba(30,35,50,0.95));
+        border: 1px solid rgba(102,126,234,0.2);
         color: #e0e0e0;
     }
     .metric-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        transform: translateY(-3px);
+        box-shadow: 0 8px 25px rgba(102,126,234,0.2);
+        border-color: rgba(102,126,234,0.3);
     }
     
-    /* 功能卡片 - 自适应主题 */
+    /* 功能卡片 - 自适应主题 + 现代设计 */
     .feature-card {
-        background: #f8f9fa;
-        border-radius: 10px;
+        background: linear-gradient(145deg, #ffffff, #f8f9ff);
+        border-radius: 16px;
         padding: 1.5rem;
-        border: 1px solid #e0e0e0;
+        border: 1px solid rgba(102,126,234,0.15);
         margin: 0.5rem 0;
         color: #333;
-        transition: all 0.3s;
+        transition: all 0.3s ease;
     }
     @media (prefers-color-scheme: dark) {
         .feature-card {
-            background: rgba(30, 40, 50, 0.9);
-            border: 1px solid rgba(255,255,255,0.15);
+            background: linear-gradient(145deg, rgba(40,45,60,0.95), rgba(30,35,50,0.95));
+            border: 1px solid rgba(102,126,234,0.2);
             color: #e0e0e0;
         }
     }
     [data-testid="stAppViewContainer"][data-theme="dark"] .feature-card {
-        background: rgba(30, 40, 50, 0.9);
-        border: 1px solid rgba(255,255,255,0.15);
+        background: linear-gradient(145deg, rgba(40,45,60,0.95), rgba(30,35,50,0.95));
+        border: 1px solid rgba(102,126,234,0.2);
         color: #e0e0e0;
     }
     .feature-card:hover {
-        border-color: #1f77b4;
-        box-shadow: 0 4px 12px rgba(31,119,180,0.3);
+        border-color: #667eea;
+        box-shadow: 0 8px 25px rgba(102,126,234,0.25);
+        transform: translateY(-2px);
     }
     .feature-card h4 {
-        color: #1f77b4;
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
         margin-bottom: 0.8rem;
+        font-weight: 600;
     }
     .feature-card ol, .feature-card li {
         color: inherit;
@@ -159,20 +191,10 @@ st.markdown("""
         color: #666;
     }
     @media (prefers-color-scheme: dark) {
-        .feature-card h4 { color: #4fc3f7; }
-        .feature-card p { color: #999; }
+        .feature-card p { color: #aaa; }
     }
     
-    /* Tab 样式 */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 1rem;
-        padding: 0.5rem;
-        border-radius: 10px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px;
-        padding: 0.5rem 1rem;
-    }
+    /* 移除旧的 Tab 样式，已在上方定义 */
     
     /* 成功/警告框 - 自适应主题 */
     .success-box {
@@ -325,17 +347,33 @@ st.markdown("""
         margin-left: 8px;
     }
     
-    /* 新功能高亮卡片 */
+    /* 新功能高亮卡片 - 白底黑字，更清晰 */
     .highlight-card {
-        background: linear-gradient(135deg, rgba(255, 107, 107, 0.15), rgba(255, 165, 0, 0.15));
-        border: 2px solid #ffa500;
+        background: #ffffff;
+        border: 2px solid #1f77b4;
         border-radius: 12px;
         padding: 1.2rem;
         margin: 1rem 0;
+        color: #333;
     }
     .highlight-card h4 {
-        color: #ffa500;
+        color: #1f77b4;
         margin-bottom: 0.8rem;
+    }
+    .highlight-card p, .highlight-card li {
+        color: #555;
+    }
+    .highlight-card b {
+        color: #1f77b4;
+    }
+    @media (prefers-color-scheme: dark) {
+        .highlight-card {
+            background: #1e2a3a;
+            color: #e0e0e0;
+        }
+        .highlight-card p, .highlight-card li {
+            color: #bbb;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1061,8 +1099,9 @@ TEXTS = {
         'mode_extract': '💾 Data Extraction (New Data)',
         'mode_viz': '📊 Quick Visualization (Existing Data)',
         'step1': 'Step 1: Data Source',
-        'step2': 'Step 2: Select Features',
-        'step3': 'Step 3: Export Data',
+        'step2': 'Step 2: Cohort Selection',
+        'step3': 'Step 3: Select Features',
+        'step4': 'Step 4: Export Data',
         'demo_mode': '🎭 Demo Mode',
         'real_data': '📁 Real Data',
         'demo_mode_desc': 'System generates simulated ICU data',
@@ -1094,6 +1133,7 @@ TEXTS = {
         'timeseries': '📈 Time Series',
         'patient_view': '🏥 Patient View',
         'data_quality': '📊 Data Quality',
+        'cohort_compare': '📊 Cohort Comparison',
         'ready': '🎉 Ready!',
         'ready_desc': 'Data loaded, you can start exploring.',
         'database': 'Database',
@@ -1119,8 +1159,9 @@ TEXTS = {
         'mode_extract': '💾 数据提取导出（新数据）',
         'mode_viz': '📊 快速可视化（已有数据）',
         'step1': '步骤1: 数据源',
-        'step2': '步骤2: 选择特征',
-        'step3': '步骤3: 导出数据',
+        'step2': '步骤2: 队列筛选',
+        'step3': '步骤3: 选择特征',
+        'step4': '步骤4: 导出数据',
         'demo_mode': '🎭 演示模式',
         'real_data': '📁 真实数据',
         'demo_mode_desc': '系统生成模拟ICU数据供体验',
@@ -1152,6 +1193,7 @@ TEXTS = {
         'timeseries': '📈 时序分析',
         'patient_view': '🏥 患者视图',
         'data_quality': '📊 数据质量',
+        'cohort_compare': '📊 队列对比',
         'ready': '🎉 准备就绪！',
         'ready_desc': '数据已加载，您可以开始探索分析了。',
         'database': '数据库',
@@ -1953,33 +1995,29 @@ def render_sidebar():
         </style>
         """, unsafe_allow_html=True)
         
-        # 使用两列放置按钮
+        # 使用两列放置按钮 - 所有模式都用按钮，确保可点击
         mode_cols = st.columns(2)
         
         with mode_cols[0]:
-            # 数据提取按钮
-            if extract_selected:
-                st.markdown(f"""
-                <div class="mode-btn mode-btn-active">
-                    {extract_label}
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                if st.button(extract_label, key="btn_mode_extract", use_container_width=True):
+            # 数据提取按钮 - 总是可点击
+            btn_type = "primary" if extract_selected else "secondary"
+            if st.button(extract_label, key="btn_mode_extract", use_container_width=True, type=btn_type):
+                if not extract_selected:
                     st.session_state.app_mode = 'extract'
+                    # 切换模式时清空已加载数据，避免冲突
+                    st.session_state.loaded_concepts = {}
+                    st.session_state.patient_ids = []
                     st.rerun()
         
         with mode_cols[1]:
-            # 快速可视化按钮
-            if viz_selected:
-                st.markdown(f"""
-                <div class="mode-btn mode-btn-active">
-                    {viz_label}
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                if st.button(viz_label, key="btn_mode_viz", use_container_width=True):
+            # 快速可视化按钮 - 总是可点击
+            btn_type = "primary" if viz_selected else "secondary"
+            if st.button(viz_label, key="btn_mode_viz", use_container_width=True, type=btn_type):
+                if not viz_selected:
                     st.session_state.app_mode = 'viz'
+                    # 切换模式时清空已加载数据，避免冲突
+                    st.session_state.loaded_concepts = {}
+                    st.session_state.patient_ids = []
                     st.rerun()
         
         # 根据选择设置mode变量
@@ -2107,9 +2145,186 @@ def render_sidebar():
         
         st.markdown("---")
         
-        # ============ 步骤2: Concept 选择 ============
-        step2_title = "Step 2: Select Features" if st.session_state.language == 'en' else "步骤2: 选择特征"
-        st.markdown(f"### 🔧 {step2_title}")
+        # ============ 步骤2: 队列筛选（新增） ============
+        step2_cohort_title = "Step 2: Cohort Selection" if st.session_state.language == 'en' else "步骤2: 队列筛选"
+        st.markdown(f"### 👥 {step2_cohort_title}")
+        
+        # 初始化队列筛选的 session state
+        if 'cohort_filter' not in st.session_state:
+            st.session_state.cohort_filter = {
+                'age_min': None,
+                'age_max': None,
+                'first_icu_stay': None,
+                'los_min': None,
+                'los_max': None,
+                'gender': None,
+                'survived': None,
+                'has_sepsis': None,
+            }
+        if 'cohort_enabled' not in st.session_state:
+            st.session_state.cohort_enabled = False
+        if 'filtered_patient_count' not in st.session_state:
+            st.session_state.filtered_patient_count = None
+        
+        # 启用队列筛选开关
+        cohort_toggle_label = "Enable Cohort Filtering" if st.session_state.language == 'en' else "启用队列筛选"
+        cohort_help = "Filter patients by demographics and clinical criteria" if st.session_state.language == 'en' else "根据人口统计学和临床标准筛选患者"
+        cohort_enabled = st.toggle(cohort_toggle_label, value=st.session_state.cohort_enabled, help=cohort_help)
+        st.session_state.cohort_enabled = cohort_enabled
+        
+        if cohort_enabled:
+            # 年龄筛选
+            age_label = "🎂 Age Range" if st.session_state.language == 'en' else "🎂 年龄范围"
+            with st.expander(age_label, expanded=True):
+                age_col1, age_col2 = st.columns(2)
+                with age_col1:
+                    age_min_label = "Min Age" if st.session_state.language == 'en' else "最小年龄"
+                    age_min = st.number_input(
+                        age_min_label, min_value=0, max_value=120, 
+                        value=18 if st.session_state.cohort_filter['age_min'] is None else int(st.session_state.cohort_filter['age_min']),
+                        key="cohort_age_min"
+                    )
+                    if age_min > 0:
+                        st.session_state.cohort_filter['age_min'] = age_min
+                    else:
+                        st.session_state.cohort_filter['age_min'] = None
+                with age_col2:
+                    age_max_label = "Max Age" if st.session_state.language == 'en' else "最大年龄"
+                    age_max = st.number_input(
+                        age_max_label, min_value=0, max_value=120, 
+                        value=100 if st.session_state.cohort_filter['age_max'] is None else int(st.session_state.cohort_filter['age_max']),
+                        key="cohort_age_max"
+                    )
+                    if age_max < 120:
+                        st.session_state.cohort_filter['age_max'] = age_max
+                    else:
+                        st.session_state.cohort_filter['age_max'] = None
+            
+            # 首次入ICU筛选
+            first_icu_label = "🏥 First ICU Stay Only" if st.session_state.language == 'en' else "🏥 仅首次入ICU"
+            first_icu_options = {
+                'any': 'Any' if st.session_state.language == 'en' else '不限',
+                'yes': 'Yes (First ICU only)' if st.session_state.language == 'en' else '是（仅首次）',
+                'no': 'No (Readmissions only)' if st.session_state.language == 'en' else '否（仅再入院）',
+            }
+            first_icu_val = st.radio(
+                first_icu_label,
+                options=list(first_icu_options.keys()),
+                format_func=lambda x: first_icu_options[x],
+                index=0,
+                horizontal=True,
+                key="cohort_first_icu"
+            )
+            if first_icu_val == 'yes':
+                st.session_state.cohort_filter['first_icu_stay'] = True
+            elif first_icu_val == 'no':
+                st.session_state.cohort_filter['first_icu_stay'] = False
+            else:
+                st.session_state.cohort_filter['first_icu_stay'] = None
+            
+            # 住院时长筛选（只需要最短时长，默认24小时）
+            los_label = "⏱️ Min ICU Stay (hours)" if st.session_state.language == 'en' else "⏱️ 最短住院时长（小时）"
+            los_help = "Minimum ICU stay duration to include patients (default 24h)" if st.session_state.language == 'en' else "纳入患者的最短ICU住院时长（默认24小时）"
+            los_min = st.number_input(
+                los_label, min_value=0, max_value=10000, value=24,
+                help=los_help,
+                key="cohort_los_min"
+            )
+            st.session_state.cohort_filter['los_min'] = los_min if los_min > 0 else None
+            st.session_state.cohort_filter['los_max'] = None  # 不再使用max
+            
+            # 性别筛选
+            gender_label = "👤 Gender" if st.session_state.language == 'en' else "👤 性别"
+            gender_options = {
+                'any': 'Any' if st.session_state.language == 'en' else '不限',
+                'M': 'Male' if st.session_state.language == 'en' else '男性',
+                'F': 'Female' if st.session_state.language == 'en' else '女性',
+            }
+            gender_val = st.radio(
+                gender_label,
+                options=list(gender_options.keys()),
+                format_func=lambda x: gender_options[x],
+                index=0,
+                horizontal=True,
+                key="cohort_gender"
+            )
+            st.session_state.cohort_filter['gender'] = gender_val if gender_val != 'any' else None
+            
+            # 存活状态筛选
+            survival_label = "💚 Survival Status" if st.session_state.language == 'en' else "💚 存活状态"
+            survival_options = {
+                'any': 'Any' if st.session_state.language == 'en' else '不限',
+                'survived': 'Survived' if st.session_state.language == 'en' else '存活',
+                'deceased': 'Deceased' if st.session_state.language == 'en' else '死亡',
+            }
+            survival_val = st.radio(
+                survival_label,
+                options=list(survival_options.keys()),
+                format_func=lambda x: survival_options[x],
+                index=0,
+                horizontal=True,
+                key="cohort_survival"
+            )
+            if survival_val == 'survived':
+                st.session_state.cohort_filter['survived'] = True
+            elif survival_val == 'deceased':
+                st.session_state.cohort_filter['survived'] = False
+            else:
+                st.session_state.cohort_filter['survived'] = None
+            
+            # Sepsis筛选
+            sepsis_label = "🦠 Sepsis Diagnosis" if st.session_state.language == 'en' else "🦠 脓毒症诊断"
+            sepsis_options = {
+                'any': 'Any' if st.session_state.language == 'en' else '不限',
+                'yes': 'Has Sepsis' if st.session_state.language == 'en' else '有脓毒症',
+                'no': 'No Sepsis' if st.session_state.language == 'en' else '无脓毒症',
+            }
+            sepsis_val = st.radio(
+                sepsis_label,
+                options=list(sepsis_options.keys()),
+                format_func=lambda x: sepsis_options[x],
+                index=0,
+                horizontal=True,
+                key="cohort_sepsis"
+            )
+            if sepsis_val == 'yes':
+                st.session_state.cohort_filter['has_sepsis'] = True
+            elif sepsis_val == 'no':
+                st.session_state.cohort_filter['has_sepsis'] = False
+            else:
+                st.session_state.cohort_filter['has_sepsis'] = None
+            
+            # 显示当前筛选条件摘要
+            filter_summary = []
+            cf = st.session_state.cohort_filter
+            if cf['age_min'] is not None or cf['age_max'] is not None:
+                age_range = f"{cf['age_min'] or 0}-{cf['age_max'] or '∞'}"
+                filter_summary.append(f"Age: {age_range}" if st.session_state.language == 'en' else f"年龄: {age_range}")
+            if cf['first_icu_stay'] is not None:
+                filter_summary.append(f"First ICU: {'Yes' if cf['first_icu_stay'] else 'No'}" if st.session_state.language == 'en' else f"首次入ICU: {'是' if cf['first_icu_stay'] else '否'}")
+            if cf['gender'] is not None:
+                filter_summary.append(f"Gender: {cf['gender']}" if st.session_state.language == 'en' else f"性别: {'男' if cf['gender']=='M' else '女'}")
+            if cf['survived'] is not None:
+                filter_summary.append(f"Survived: {'Yes' if cf['survived'] else 'No'}" if st.session_state.language == 'en' else f"存活: {'是' if cf['survived'] else '否'}")
+            if cf['has_sepsis'] is not None:
+                filter_summary.append(f"Sepsis: {'Yes' if cf['has_sepsis'] else 'No'}" if st.session_state.language == 'en' else f"脓毒症: {'是' if cf['has_sepsis'] else '否'}")
+            
+            if filter_summary:
+                summary_text = " | ".join(filter_summary)
+                st.info(f"📋 {summary_text}")
+            else:
+                no_filter_msg = "No filters applied (will load all patients)" if st.session_state.language == 'en' else "未设置筛选条件（将加载所有患者）"
+                st.caption(no_filter_msg)
+        else:
+            # 队列筛选禁用时的提示
+            disabled_msg = "💡 Enable cohort filtering to select specific patient populations" if st.session_state.language == 'en' else "💡 启用队列筛选可选择特定患者人群"
+            st.caption(disabled_msg)
+        
+        st.markdown("---")
+        
+        # ============ 步骤3: Concept 选择 ============
+        step3_title = "Step 3: Select Features" if st.session_state.language == 'en' else "步骤3: 选择特征"
+        st.markdown(f"### 🔧 {step3_title}")
         
         # 初始化 session state
         if 'concept_checkboxes' not in st.session_state:
@@ -2185,9 +2400,9 @@ def render_sidebar():
         
         st.markdown("---")
         
-        # ============ 步骤3: 直接导出 ============
-        step3_title = "Step 3: Export Data" if st.session_state.language == 'en' else "步骤3: 导出数据"
-        st.markdown(f"### 💾 {step3_title}")
+        # ============ 步骤4: 直接导出 ============
+        step4_title = "Step 4: Export Data" if st.session_state.language == 'en' else "步骤4: 导出数据"
+        st.markdown(f"### 💾 {step4_title}")
         
         # 导出路径配置 - 实时根据数据库显示子目录
         base_export_path = os.path.expanduser('~/pyricu_export')
@@ -2779,15 +2994,7 @@ def render_data_overview():
     """渲染已加载数据的概览页面。"""
     lang = st.session_state.language
     
-    # 标题
-    if lang == 'en':
-        st.markdown('<div class="main-header">🏥 PyRICU Data Explorer</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-header">Local ICU Data Analytics Platform</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="main-header">🏥 PyRICU 数据探索器</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-header">本地 ICU 数据分析与可视化平台</div>', unsafe_allow_html=True)
-    
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    # 标题已经在main()中渲染，这里不再重复
     
     # 准备就绪提示
     ready_title = "🎉 Ready!" if lang == 'en' else "🎉 准备就绪！"
@@ -2819,7 +3026,19 @@ def render_data_overview():
         ''', unsafe_allow_html=True)
     
     with col3:
-        n_patients = st.session_state.get('all_patient_count', len(st.session_state.patient_ids))
+        # 优先从已加载数据中计算实际患者数
+        n_patients = 0
+        if st.session_state.loaded_concepts:
+            # 从加载的数据中提取实际患者数
+            all_ids = set()
+            id_col = st.session_state.get('id_col', 'stay_id')
+            for df in st.session_state.loaded_concepts.values():
+                if isinstance(df, pd.DataFrame) and id_col in df.columns:
+                    all_ids.update(df[id_col].unique())
+            n_patients = len(all_ids) if all_ids else len(st.session_state.patient_ids)
+        else:
+            n_patients = len(st.session_state.patient_ids)
+        
         pat_label = "Patients" if lang == 'en' else "患者数量"
         st.markdown(f'''
         <div class="metric-card">
@@ -2892,19 +3111,12 @@ def render_home():
     """渲染首页 - 引导式教程，根据用户进度动态显示。"""
     lang = st.session_state.language
     
-    # 如果已加载数据，直接显示数据概览（包含标题）
+    # 如果已加载数据，直接显示数据概览
     if len(st.session_state.loaded_concepts) > 0:
         render_data_overview()
         return
     
-    # 未加载数据时显示标题和教程
-    if lang == 'en':
-        st.markdown('<div class="main-header">🏥 PyRICU Data Explorer</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-header">Local ICU Data Analytics Platform</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="main-header">🏥 PyRICU 数据探索器</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-header">本地 ICU 数据分析与可视化平台</div>', unsafe_allow_html=True)
-    
+    # 标题已经在main()中渲染，这里不再重复
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
     # 获取当前模式 - 使用app_mode（'extract'或'viz'）
@@ -3074,12 +3286,40 @@ def render_home_viz_mode(lang):
 
 def render_home_extract_mode(lang):
     """渲染数据提取导出模式的首页教程。"""
+    
+    # ============ 固定导航栏 - 使用sticky定位 ============
+    nav_labels = [
+        ("📋 " + ("Progress" if lang == 'en' else "进度"), "progress"),
+        ("📍 " + ("Guide" if lang == 'en' else "引导"), "guide"),
+        ("📖 " + ("Dictionary" if lang == 'en' else "数据字典"), "dictionary"),
+    ]
+    
+    # 使用sticky定位的导航栏，更现代的渐变色
+    nav_links = " ".join([f'<a href="#{anchor}" style="color:white;text-decoration:none;padding:10px 24px;background:rgba(255,255,255,0.2);border-radius:25px;font-size:1rem;font-weight:600;margin:0 8px;transition:all 0.3s;backdrop-filter:blur(10px);" onmouseover="this.style.background=\'rgba(255,255,255,0.35)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.2)\'">{label}</a>' for label, anchor in nav_labels])
+    st.markdown(f'''
+    <div style="
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 14px 24px;
+        border-radius: 12px;
+        margin-bottom: 24px;
+        text-align: center;
+        box-shadow: 0 4px 20px rgba(102,126,234,0.4);
+    ">{nav_links}</div>
+    ''', unsafe_allow_html=True)
+    
     # 计算当前步骤完成状态
     step1_done = st.session_state.use_mock_data or (st.session_state.data_path and Path(st.session_state.data_path).exists())
     step2_done = len(st.session_state.get('selected_concepts', [])) > 0
     step3_done = st.session_state.get('export_completed', False) or len(st.session_state.loaded_concepts) > 0
     
     # ============ 进度指示器 ============
+    # 添加锚点和大标题
+    st.markdown('<div id="progress"></div>', unsafe_allow_html=True)
+    progress_title = "📋 Progress" if lang == 'en' else "📋 进度"
+    st.markdown(f'<h2 style="background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;border-bottom:3px solid #667eea;padding-bottom:10px;margin-top:10px;font-size:1.6rem;">{progress_title}</h2>', unsafe_allow_html=True)
     col1, col2, col3 = st.columns(3)
     
     # 状态文本
@@ -3137,67 +3377,30 @@ def render_home_extract_mode(lang):
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
     # ============ 动态引导内容 ============
+    # 添加引导锚点和大标题
+    st.markdown('<div id="guide"></div>', unsafe_allow_html=True)
+    guide_title = "📍 Guide" if lang == 'en' else "📍 引导"
+    st.markdown(f'<h2 style="background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;border-bottom:3px solid #667eea;padding-bottom:10px;margin-top:10px;font-size:1.6rem;">{guide_title}</h2>', unsafe_allow_html=True)
+    
     if not step1_done:
         # 步骤1引导：配置数据源
-        task_header = "📍 Current Task: Configure Data Source" if lang == 'en' else "📍 当前任务：配置数据源"
-        st.markdown(f"## {task_header}")
+        task_hint = "👉 Configure Data Source" if lang == 'en' else "👉 配置数据源"
+        st.markdown(f"**{task_hint}**")
         
         if lang == 'en':
             st.markdown('''
             <div class="highlight-card">
                 <h4>👈 Please configure data source in the left sidebar</h4>
-                <p style="color:#ccc; margin-bottom:12px">
-                    PyRICU supports two data modes, please choose according to your needs:
-                </p>
-                <div style="display:flex; gap:20px; flex-wrap:wrap;">
-                    <div style="flex:1; min-width:250px;">
-                        <b style="color:#ffa500">🎭 Demo Mode (Recommended for new users)</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>No real data required</li>
-                            <li>Auto-generates simulated ICU data</li>
-                            <li>Adjustable patient count and duration</li>
-                            <li>Great for learning and exploration</li>
-                        </ul>
-                    </div>
-                    <div style="flex:1; min-width:250px;">
-                        <b style="color:#ffa500">📊 Real Data Mode</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>Supports MIMIC-IV, eICU, AUMC, HiRID</li>
-                            <li>Specify local data directory path</li>
-                            <li>Data processed locally, secure and safe</li>
-                            <li>Suitable for real research analysis</li>
-                        </ul>
-                    </div>
-                </div>
+                <p><b>🎭 Demo Mode</b> - No data needed, auto-generates simulated ICU data for learning</p>
+                <p><b>📊 Real Data</b> - Supports MIMIC-IV, eICU, AUMC, HiRID (local processing, secure)</p>
             </div>
             ''', unsafe_allow_html=True)
         else:
             st.markdown('''
             <div class="highlight-card">
                 <h4>👈 请在左侧边栏完成数据源配置</h4>
-                <p style="color:#ccc; margin-bottom:12px">
-                    PyRICU 支持两种数据模式，请根据您的需求选择：
-                </p>
-                <div style="display:flex; gap:20px; flex-wrap:wrap;">
-                    <div style="flex:1; min-width:250px;">
-                        <b style="color:#ffa500">🎭 演示模式（推荐新用户）</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>无需真实数据即可体验</li>
-                            <li>自动生成模拟 ICU 数据</li>
-                            <li>可调整患者数量和时长</li>
-                            <li>适合学习和功能探索</li>
-                        </ul>
-                    </div>
-                    <div style="flex:1; min-width:250px;">
-                        <b style="color:#ffa500">📊 真实数据模式</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>支持 MIMIC-IV、eICU、AUMC、HiRID</li>
-                            <li>需指定本地数据目录路径</li>
-                            <li>数据完全本地处理，安全可靠</li>
-                            <li>适合真实研究分析</li>
-                        </ul>
-                    </div>
-                </div>
+                <p><b>🎭 演示模式</b> - 无需数据，自动生成模拟ICU数据，适合学习体验</p>
+                <p><b>📊 真实数据</b> - 支持MIMIC-IV、eICU、AUMC、HiRID（本地处理，安全可靠）</p>
             </div>
             ''', unsafe_allow_html=True)
         
@@ -3216,8 +3419,8 @@ def render_home_extract_mode(lang):
         
     elif not step2_done:
         # 步骤2引导：选择特征
-        task_header = "📍 Current Task: Select Analysis Features" if lang == 'en' else "📍 当前任务：选择分析特征"
-        st.markdown(f"## {task_header}")
+        task_hint = "👉 Select Analysis Features" if lang == 'en' else "👉 选择分析特征"
+        st.markdown(f"**{task_hint}**")
         
         # 显示当前数据源状态
         if st.session_state.use_mock_data:
@@ -3320,8 +3523,8 @@ def render_home_extract_mode(lang):
         
     elif not step3_done:
         # 步骤3引导：导出或预览
-        task_header = "📍 Current Task: Export Data or Load Preview" if lang == 'en' else "📍 当前任务：导出数据或加载预览"
-        st.markdown(f"## {task_header}")
+        task_hint = "👉 Export Data or Load Preview" if lang == 'en' else "👉 导出数据或加载预览"
+        st.markdown(f"**{task_hint}**")
         
         # 显示当前选择摘要
         selected = st.session_state.get('selected_concepts', [])
@@ -3437,8 +3640,7 @@ def render_home_extract_mode(lang):
         # 所有步骤完成 - 显示数据摘要和导航
         ready_title = "🎉 Ready!" if lang == 'en' else "🎉 准备就绪！"
         ready_desc = "Data loaded, you can start exploring and analyzing." if lang == 'en' else "数据已加载，您可以开始探索分析了。"
-        st.markdown(f"## {ready_title}")
-        st.markdown(ready_desc)
+        st.success(f"**{ready_title}** {ready_desc}")
         
         # 状态概览
         col1, col2, col3, col4 = st.columns(4)
@@ -3468,7 +3670,18 @@ def render_home_extract_mode(lang):
             ''', unsafe_allow_html=True)
         
         with col3:
-            n_patients = st.session_state.get('all_patient_count', len(st.session_state.patient_ids))
+            # 优先从已加载数据中计算实际患者数
+            n_patients = 0
+            if st.session_state.loaded_concepts:
+                all_ids = set()
+                id_col = st.session_state.get('id_col', 'stay_id')
+                for df in st.session_state.loaded_concepts.values():
+                    if isinstance(df, pd.DataFrame) and id_col in df.columns:
+                        all_ids.update(df[id_col].unique())
+                n_patients = len(all_ids) if all_ids else len(st.session_state.patient_ids)
+            else:
+                n_patients = len(st.session_state.patient_ids)
+            
             st.markdown(f'''
             <div class="metric-card">
                 <div class="stat-label">{patient_label}</div>
@@ -3517,9 +3730,6 @@ def render_home_extract_mode(lang):
         
         # 数据摘要
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-        st.markdown("### 📋 数据摘要")
-        
-        # 数据摘要
         summary_title = "### 📋 Data Summary" if lang == 'en' else "### 📋 数据摘要"
         st.markdown(summary_title)
         
@@ -3565,6 +3775,10 @@ def render_home_extract_mode(lang):
     
     # ============ 数据字典展示 ============
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    # 添加字典锚点和大标题
+    st.markdown('<div id="dictionary"></div>', unsafe_allow_html=True)
+    dict_header = "📖 Data Dictionary" if lang == 'en' else "📖 数据字典"
+    st.markdown(f'<h2 style="background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;border-bottom:3px solid #667eea;padding-bottom:10px;margin-top:10px;font-size:1.6rem;">{dict_header}</h2>', unsafe_allow_html=True)
     render_home_data_dictionary(lang)
     
     # 页脚信息
@@ -5233,6 +5447,281 @@ def render_quality_page():
             )
 
 
+def render_cohort_comparison_page():
+    """渲染队列对比可视化页面 - 基于侧边栏筛选的患者进行分组对比。"""
+    lang = st.session_state.get('language', 'en')
+    
+    page_title = "📊 Cohort Comparison" if lang == 'en' else "📊 队列对比分析"
+    st.markdown(f"## {page_title}")
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    
+    # 检查是否有数据路径
+    data_path = st.session_state.get('data_path')
+    database = st.session_state.get('database', 'miiv')
+    
+    if not data_path or not Path(data_path).exists():
+        if lang == 'en':
+            st.warning("👈 Please configure data source in sidebar first (Step 1)")
+        else:
+            st.warning("👈 请先在侧边栏配置数据源（步骤1）")
+        return
+    
+    # 检查是否已经加载了数据
+    loaded_concepts = st.session_state.get('loaded_concepts', [])
+    patient_ids = st.session_state.get('patient_ids', [])
+    all_patient_count = st.session_state.get('all_patient_count', 0)
+    
+    # 优先使用特征数据中的患者ID（更准确）
+    if 'concept_results' in st.session_state and st.session_state.concept_results:
+        # 从加载的数据中提取实际患者ID
+        actual_patient_ids = set()
+        for concept_name, df in st.session_state.concept_results.items():
+            if df is not None and 'stay_id' in df.columns:
+                actual_patient_ids.update(df['stay_id'].unique())
+        if actual_patient_ids:
+            patient_ids = list(actual_patient_ids)
+            all_patient_count = len(patient_ids)
+    
+    if not patient_ids or all_patient_count == 0:
+        if lang == 'en':
+            st.info("""
+            **📋 How to use Cohort Comparison:**
+            
+            1. Go to sidebar **Step 1** to configure data source
+            2. Enable **Step 2: Cohort Selection** to filter patients  
+            3. Select features in **Step 3** and click **Load Data**
+            4. Return here to compare patient subgroups
+            
+            The comparison will be based on patients you loaded in the Data Viewer tab.
+            """)
+        else:
+            st.info("""
+            **📋 队列对比使用说明：**
+            
+            1. 在侧边栏**步骤1**配置数据源
+            2. 启用**步骤2：队列筛选**来筛选患者
+            3. 在**步骤3**选择特征并点击**加载数据**
+            4. 返回此页面进行分组对比
+            
+            对比将基于您在数据查看器中加载的患者进行。
+            """)
+        return
+    
+    # 显示当前数据状态
+    if lang == 'en':
+        st.success(f"✅ Working with **{all_patient_count:,}** patients from your loaded data")
+    else:
+        st.success(f"✅ 基于已加载的 **{all_patient_count:,}** 名患者进行对比分析")
+    
+    # 显示当前筛选条件（如果有）
+    cohort_enabled = st.session_state.get('cohort_enabled', False)
+    if cohort_enabled:
+        cf = st.session_state.get('cohort_filter', {})
+        filter_parts = []
+        if cf.get('age_min') is not None or cf.get('age_max') is not None:
+            age_str = f"Age: {cf.get('age_min', 0)}-{cf.get('age_max', '∞')}" if lang == 'en' else f"年龄: {cf.get('age_min', 0)}-{cf.get('age_max', '∞')}"
+            filter_parts.append(age_str)
+        if cf.get('first_icu_stay') is not None:
+            icu_str = f"First ICU: {'Yes' if cf['first_icu_stay'] else 'No'}" if lang == 'en' else f"首次入ICU: {'是' if cf['first_icu_stay'] else '否'}"
+            filter_parts.append(icu_str)
+        if cf.get('los_min') is not None:
+            los_str = f"LOS ≥ {cf['los_min']}h" if lang == 'en' else f"住院≥{cf['los_min']}h"
+            filter_parts.append(los_str)
+        if filter_parts:
+            filter_info = " | ".join(filter_parts)
+            if lang == 'en':
+                st.caption(f"📋 Current filters: {filter_info}")
+            else:
+                st.caption(f"📋 当前筛选条件: {filter_info}")
+    
+    st.markdown("---")
+    
+    # 对比模式选择
+    compare_mode_label = "Select Comparison Mode" if lang == 'en' else "选择对比模式"
+    compare_options = {
+        'survival': ('💀 Survived vs Deceased' if lang == 'en' else '💀 存活 vs 死亡'),
+        'age': ('👴 Age Groups' if lang == 'en' else '👴 年龄分组'),
+        'gender': ('👫 Male vs Female' if lang == 'en' else '👫 男性 vs 女性'),
+        'los': ('🏥 Short vs Long Stay' if lang == 'en' else '🏥 短住院 vs 长住院'),
+    }
+    
+    compare_mode = st.radio(
+        compare_mode_label,
+        options=list(compare_options.keys()),
+        format_func=lambda x: compare_options[x],
+        horizontal=True
+    )
+    
+    st.markdown("---")
+    
+    try:
+        from pyricu.cohort_visualization import CohortVisualizer
+        from pyricu.patient_filter import PatientFilter
+        
+        viz = CohortVisualizer(database=database, data_path=data_path, language=lang)
+        
+        # 获取人口统计学数据用于分组
+        pf = PatientFilter(database=database, data_path=data_path)
+        demographics_df = pf._load_demographics()
+        
+        # 只保留当前加载的患者
+        base_df = demographics_df[demographics_df['patient_id'].isin(patient_ids)]
+        
+        if len(base_df) == 0:
+            if lang == 'en':
+                st.warning("No demographic data available for loaded patients.")
+            else:
+                st.warning("无法获取已加载患者的人口统计学数据。")
+            return
+        
+        group1_ids = []
+        group2_ids = []
+        group1_name = ""
+        group2_name = ""
+        show_mortality = True
+        
+        if compare_mode == 'survival':
+            # 存活 vs 死亡
+            if 'survived' not in base_df.columns:
+                if lang == 'en':
+                    st.warning("Survival data not available in demographics.")
+                else:
+                    st.warning("人口统计学数据中没有存活状态信息。")
+                return
+            
+            survived_df = base_df[base_df['survived'] == 1]
+            deceased_df = base_df[base_df['survived'] == 0]
+            
+            group1_ids = survived_df['patient_id'].tolist()
+            group2_ids = deceased_df['patient_id'].tolist()
+            group1_name = 'Survived' if lang == 'en' else '存活'
+            group2_name = 'Deceased' if lang == 'en' else '死亡'
+            show_mortality = False  # 分组本身就是按存活分的
+            
+        elif compare_mode == 'age':
+            # 年龄分组
+            age_threshold = st.slider(
+                "Age Threshold" if lang == 'en' else "年龄阈值",
+                min_value=30, max_value=90, value=65, step=5
+            )
+            
+            young_df = base_df[base_df['age'] < age_threshold]
+            old_df = base_df[base_df['age'] >= age_threshold]
+            
+            group1_ids = young_df['patient_id'].tolist()
+            group2_ids = old_df['patient_id'].tolist()
+            group1_name = f'Age < {age_threshold}' if lang == 'en' else f'年龄 < {age_threshold}'
+            group2_name = f'Age ≥ {age_threshold}' if lang == 'en' else f'年龄 ≥ {age_threshold}'
+            
+        elif compare_mode == 'gender':
+            # 性别分组
+            if 'gender' not in base_df.columns:
+                if lang == 'en':
+                    st.warning("Gender data not available in demographics.")
+                else:
+                    st.warning("人口统计学数据中没有性别信息。")
+                return
+            
+            male_df = base_df[base_df['gender'] == 'M']
+            female_df = base_df[base_df['gender'] == 'F']
+            
+            group1_ids = male_df['patient_id'].tolist()
+            group2_ids = female_df['patient_id'].tolist()
+            group1_name = 'Male' if lang == 'en' else '男性'
+            group2_name = 'Female' if lang == 'en' else '女性'
+            
+        elif compare_mode == 'los':
+            # 住院时长分组
+            if 'los_hours' not in base_df.columns:
+                if lang == 'en':
+                    st.warning("Length of stay data not available in demographics.")
+                else:
+                    st.warning("人口统计学数据中没有住院时长信息。")
+                return
+            
+            # 使用中位数作为阈值
+            median_los = base_df['los_hours'].median()
+            los_threshold = st.slider(
+                "LOS Threshold (hours)" if lang == 'en' else "住院时长阈值（小时）",
+                min_value=24, max_value=int(min(500, base_df['los_hours'].quantile(0.95))),
+                value=int(median_los), step=12
+            )
+            
+            short_df = base_df[base_df['los_hours'] < los_threshold]
+            long_df = base_df[base_df['los_hours'] >= los_threshold]
+            
+            group1_ids = short_df['patient_id'].tolist()
+            group2_ids = long_df['patient_id'].tolist()
+            group1_name = f'LOS < {los_threshold}h' if lang == 'en' else f'住院 < {los_threshold}h'
+            group2_name = f'LOS ≥ {los_threshold}h' if lang == 'en' else f'住院 ≥ {los_threshold}h'
+        
+        # 显示分组统计
+        st.markdown("---")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(group1_name, f"{len(group1_ids):,}")
+        with col2:
+            st.metric(group2_name, f"{len(group2_ids):,}")
+        with col3:
+            total = len(group1_ids) + len(group2_ids)
+            pct1 = len(group1_ids) / total * 100 if total > 0 else 0
+            ratio_label = "Ratio" if lang == 'en' else "比例"
+            st.metric(ratio_label, f"{pct1:.1f}% / {100-pct1:.1f}%")
+        
+        if len(group1_ids) == 0 or len(group2_ids) == 0:
+            if lang == 'en':
+                st.warning("One of the groups has no patients. Please adjust the criteria.")
+            else:
+                st.warning("其中一个分组没有患者，请调整分组条件。")
+            return
+        
+        # 创建对比可视化
+        st.markdown("---")
+        viz_title = "📊 Demographics Comparison" if lang == 'en' else "📊 人口统计学对比"
+        st.markdown(f"### {viz_title}")
+        
+        fig = viz.compare_demographics(
+            group1_ids=group1_ids,
+            group2_ids=group2_ids,
+            group1_name=group1_name,
+            group2_name=group2_name,
+            show_mortality=show_mortality
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # 统计表格 (TableOne风格)
+        summary_title = "📋 Baseline Characteristics (TableOne)" if lang == 'en' else "📋 基线特征对比 (TableOne)"
+        st.markdown(f"### {summary_title}")
+        summary_df = viz.create_summary_table(
+            group1_ids=group1_ids,
+            group2_ids=group2_ids,
+            group1_name=group1_name,
+            group2_name=group2_name,
+            show_pvalue=True
+        )
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        
+        # 添加统计说明
+        if lang == 'en':
+            stats_note = "**Statistical Methods:** Mann-Whitney U test for continuous variables, Chi-square test for categorical variables."
+        else:
+            stats_note = "**统计方法：** 连续变量使用Mann-Whitney U检验，分类变量使用卡方检验。"
+        st.caption(stats_note)
+        
+    except ImportError as e:
+        if lang == 'en':
+            st.error(f"Required modules not available: {e}")
+        else:
+            st.error(f"缺少必要模块: {e}")
+    except Exception as e:
+        if lang == 'en':
+            st.error(f"Error in cohort comparison: {e}")
+        else:
+            st.error(f"队列对比出错: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
 def render_convert_dialog():
     """Render CSV to Parquet conversion dialog."""
     lang = st.session_state.get('language', 'en')
@@ -5364,6 +5853,59 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     status_text.empty()
     
     return success, failed
+
+
+def _generate_cohort_prefix() -> str:
+    """根据队列筛选条件生成文件名前缀。
+    
+    Returns:
+        筛选条件前缀字符串，如 "age18-80_firstICU_los24h"，无筛选则返回空字符串
+    """
+    if not st.session_state.get('cohort_enabled', False):
+        return ""
+    
+    cf = st.session_state.get('cohort_filter', {})
+    parts = []
+    
+    # 年龄
+    age_min = cf.get('age_min')
+    age_max = cf.get('age_max')
+    if age_min is not None or age_max is not None:
+        age_str = f"age{int(age_min) if age_min else 0}-{int(age_max) if age_max else 'inf'}"
+        parts.append(age_str)
+    
+    # 首次入ICU
+    first_icu = cf.get('first_icu_stay')
+    if first_icu is True:
+        parts.append("firstICU")
+    elif first_icu is False:
+        parts.append("readmit")
+    
+    # 住院时长
+    los_min = cf.get('los_min')
+    if los_min is not None and los_min > 0:
+        parts.append(f"los{int(los_min)}h")
+    
+    # 性别
+    gender = cf.get('gender')
+    if gender is not None:
+        parts.append(f"sex{gender}")
+    
+    # 存活状态
+    survived = cf.get('survived')
+    if survived is True:
+        parts.append("survived")
+    elif survived is False:
+        parts.append("deceased")
+    
+    # Sepsis
+    has_sepsis = cf.get('has_sepsis')
+    if has_sepsis is True:
+        parts.append("sepsis")
+    elif has_sepsis is False:
+        parts.append("noSepsis")
+    
+    return "_".join(parts)
 
 
 def execute_sidebar_export():
@@ -5684,7 +6226,7 @@ def execute_sidebar_export():
             if merged_df is None or len(merged_df) == 0:
                 continue
             
-            # 生成文件名：模块名_特征1_特征2_...
+            # 生成文件名：[筛选条件前缀_]模块名_特征1_特征2_...
             concept_names = list(concept_dfs.keys())
             # 限制特征名长度，避免文件名过长
             if len(concept_names) <= 5:
@@ -5692,11 +6234,17 @@ def execute_sidebar_export():
             else:
                 concepts_suffix = '_'.join(concept_names[:4]) + f'_etc{len(concept_names)}'
             
+            # 🚀 添加队列筛选条件前缀
+            cohort_prefix = _generate_cohort_prefix()
+            
             # 清理文件名中的特殊字符
-            safe_filename = f"{group_name}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
+            if cohort_prefix:
+                safe_filename = f"{cohort_prefix}_{group_name}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
+            else:
+                safe_filename = f"{group_name}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
             # 限制文件名总长度
-            if len(safe_filename) > 100:
-                safe_filename = safe_filename[:100]
+            if len(safe_filename) > 150:
+                safe_filename = safe_filename[:150]
             
             if export_format == 'csv':
                 file_path = export_dir / f"{safe_filename}.csv"
@@ -6136,12 +6684,22 @@ def main():
     if st.session_state.get('show_convert_dialog', False):
         render_convert_dialog()
     
+    # ============ 顶部标题（放在导航栏上方） ============
+    lang = st.session_state.get('language', 'en')
+    if lang == 'en':
+        st.markdown('<div class="main-header">🏥 PyRICU Data Explorer</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">Local ICU Data Analytics Platform</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="main-header">🏥 PyRICU 数据探索器</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">本地 ICU 数据分析与可视化平台</div>', unsafe_allow_html=True)
+    
     # 主页面标签（数据导出已移至左侧边栏）
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         get_text('home'),
         get_text('timeseries'), 
         get_text('patient_view'),
         get_text('data_quality'),
+        get_text('cohort_compare'),
     ])
     
     with tab1:
@@ -6155,6 +6713,9 @@ def main():
     
     with tab4:
         render_quality_page()
+    
+    with tab5:
+        render_cohort_comparison_page()
     
     # 底部状态栏
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)

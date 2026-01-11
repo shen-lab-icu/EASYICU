@@ -77,6 +77,11 @@ try:
         load_concept_cached,
         align_to_icu_admission,
         load_sofa_with_score,
+        # 患者筛选功能 (新增)
+        filter_patients,
+        load_concepts_filtered,
+        get_cohort_comparison,
+        get_cohort_stats,
     )
     # 将新API作为主要的load_concepts
     load_concepts = _load_concepts_api
@@ -84,6 +89,16 @@ try:
 except ImportError as e:
     print(f"Warning: Failed to import api module: {e}")
     _HAS_API = False
+
+# 导入患者筛选模块（直接访问）
+try:
+    from .patient_filter import (
+        PatientFilter,
+        FilterCriteria,
+    )
+    _HAS_PATIENT_FILTER = True
+except ImportError:
+    _HAS_PATIENT_FILTER = False
 
 # 快速启动 API - 已移除 (现在使用统一API)
 # ICUQuickLoader等已被重构为BaseICULoader和统一的api.load_concepts
