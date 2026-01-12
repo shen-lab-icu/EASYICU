@@ -12,6 +12,20 @@ import os
 # 🚀 性能优化：禁用自动缓存清除，保持表缓存在多次加载间复用
 os.environ['PYRICU_AUTO_CLEAR_CACHE'] = 'False'
 
+# ============ 低内存模式配置 ============
+LOW_MEMORY_MODE = os.environ.get('PYRICU_LOW_MEMORY', '0') == '1'
+WORKERS = int(os.environ.get('PYRICU_WORKERS', '0')) or None  # 0 表示自动
+
+if LOW_MEMORY_MODE:
+    # 低内存模式下减少缓存和并行度
+    os.environ['PYRICU_CHUNK_SIZE'] = '50000'  # 更小的块大小
+    os.environ['PYRICU_MAX_CACHE_SIZE'] = '100'  # 减少缓存表数量
+    if WORKERS is None:
+        WORKERS = 2  # 默认减少到 2 个线程
+
+if WORKERS:
+    os.environ['PYRICU_WORKERS'] = str(WORKERS)
+
 # 页面配置
 st.set_page_config(
     page_title="PyRICU Data Explorer",
@@ -2009,6 +2023,10 @@ def render_sidebar():
     
     with st.sidebar:
         st.markdown(f"## {get_text('app_title')}")
+        
+        # 显示运行模式状态
+        if LOW_MEMORY_MODE:
+            st.info("💾 低内存模式" if st.session_state.get('language') == 'zh' else "💾 Low Memory Mode")
         
         # 语言切换 - 更紧凑的布局
         lang = st.selectbox(
