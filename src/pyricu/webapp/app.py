@@ -12,6 +12,28 @@ import os
 # 🚀 性能优化：禁用自动缓存清除，保持表缓存在多次加载间复用
 os.environ['PYRICU_AUTO_CLEAR_CACHE'] = 'False'
 
+# ============ 内存管理配置 ============
+def get_system_memory_gb() -> float:
+    """获取系统总内存（GB）"""
+    try:
+        import psutil
+        return psutil.virtual_memory().total / (1024 ** 3)
+    except Exception:
+        return 8.0  # 默认假设 8GB
+
+def get_available_memory_gb() -> float:
+    """获取当前可用内存（GB）"""
+    try:
+        import psutil
+        return psutil.virtual_memory().available / (1024 ** 3)
+    except Exception:
+        return 4.0  # 默认假设 4GB 可用
+
+# 系统内存信息
+SYSTEM_MEMORY_GB = get_system_memory_gb()
+# 默认内存限制：系统内存的 50%，但不超过 16GB，不低于 4GB
+DEFAULT_MEMORY_LIMIT_GB = max(4, min(16, SYSTEM_MEMORY_GB * 0.5))
+
 # ============ 低内存模式配置 ============
 LOW_MEMORY_MODE = os.environ.get('PYRICU_LOW_MEMORY', '0') == '1'
 WORKERS = int(os.environ.get('PYRICU_WORKERS', '0')) or None  # 0 表示自动
@@ -22,6 +44,7 @@ if LOW_MEMORY_MODE:
     os.environ['PYRICU_MAX_CACHE_SIZE'] = '100'  # 减少缓存表数量
     if WORKERS is None:
         WORKERS = 2  # 默认减少到 2 个线程
+    DEFAULT_MEMORY_LIMIT_GB = min(DEFAULT_MEMORY_LIMIT_GB, 4)  # 低内存模式限制到 4GB
 
 if WORKERS:
     os.environ['PYRICU_WORKERS'] = str(WORKERS)
@@ -2024,9 +2047,12 @@ def render_sidebar():
     with st.sidebar:
         st.markdown(f"## {get_text('app_title')}")
         
-        # 显示运行模式状态
-        if LOW_MEMORY_MODE:
-            st.info("💾 低内存模式" if st.session_state.get('language') == 'zh' else "💾 Low Memory Mode")
+        # 显示系统资源状态
+        available_mem = get_available_memory_gb()
+        if available_mem < 2:
+            st.warning(f"⚠️ Low memory: {available_mem:.1f}GB" if st.session_state.get('language') == 'en' else f"⚠️ 内存不足: {available_mem:.1f}GB")
+        elif LOW_MEMORY_MODE:
+            st.info("💾 Low Memory Mode" if st.session_state.get('language') == 'en' else "💾 低内存模式")
         
         # 语言切换 - 更紧凑的布局
         lang = st.selectbox(
@@ -5857,7 +5883,12 @@ def render_convert_dialog():
     source_info = f"📁 Source directory: `{source_path}`" if lang == 'en' else f"📁 源目录: `{source_path}`"
     st.info(source_info)
     
-    col1, col2 = st.columns(2)
+    # 显示系统内存信息
+    available_mem = get_available_memory_gb()
+    mem_info = f"💻 System: {SYSTEM_MEMORY_GB:.1f}GB total, {available_mem:.1f}GB available" if lang == 'en' else f"💻 系统内存: 共 {SYSTEM_MEMORY_GB:.1f}GB，可用 {available_mem:.1f}GB"
+    st.caption(mem_info)
+    
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         # 目标目录（默认同目录）
@@ -5870,9 +5901,34 @@ def render_convert_dialog():
         )
     
     with col2:
+        # 内存限制选项
+        mem_label = "Memory Limit (GB)" if lang == 'en' else "内存限制 (GB)"
+        mem_help = "Maximum memory to use during conversion. Lower = slower but safer. Default: 8GB" if lang == 'en' else "转换时使用的最大内存。数值越低越安全但更慢。默认: 8GB"
+        
+        # 初始化 session state
+        if 'convert_memory_limit' not in st.session_state:
+            st.session_state.convert_memory_limit = min(8, DEFAULT_MEMORY_LIMIT_GB)
+        
+        memory_limit = st.slider(
+            mem_label,
+            min_value=2,
+            max_value=min(32, int(SYSTEM_MEMORY_GB)),
+            value=int(st.session_state.convert_memory_limit),
+            step=1,
+            help=mem_help
+        )
+        st.session_state.convert_memory_limit = memory_limit
+    
+    with col3:
         # 转换选项
-        overwrite_label = "Overwrite existing Parquet files" if lang == 'en' else "覆盖已存在的Parquet文件"
+        st.markdown("&nbsp;")  # 对齐
+        overwrite_label = "Overwrite existing" if lang == 'en' else "覆盖已存在文件"
         overwrite = st.checkbox(overwrite_label, value=False)
+    
+    # 根据内存限制计算推荐的块大小
+    chunk_size = _calculate_chunk_size(memory_limit)
+    chunk_info = f"📊 Chunk size: {chunk_size:,} rows (based on {memory_limit}GB limit)" if lang == 'en' else f"📊 分块大小: {chunk_size:,} 行（基于 {memory_limit}GB 限制）"
+    st.caption(chunk_info)
     
     # 扫描可转换文件
     if source_path and Path(source_path).exists():
@@ -5900,7 +5956,9 @@ def render_convert_dialog():
             else:
                 spinner_msg = "Converting..." if lang == 'en' else "正在转换..."
                 with st.spinner(spinner_msg):
-                    success, failed = convert_csv_to_parquet(source_path, target_path, overwrite)
+                    # 使用用户设置的内存限制
+                    mem_limit = st.session_state.get('convert_memory_limit', 8)
+                    success, failed = convert_csv_to_parquet(source_path, target_path, overwrite, memory_limit_gb=mem_limit)
                     if success > 0:
                         success_msg = f"✅ Successfully converted {success} files" if lang == 'en' else f"✅ 成功转换 {success} 个文件"
                         st.success(success_msg)
@@ -5929,23 +5987,67 @@ def render_convert_dialog():
             st.rerun()
 
 
-def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
-    """将目录下的CSV文件转换为Parquet格式。"""
+def _calculate_chunk_size(memory_limit_gb: int) -> int:
+    """根据内存限制计算合适的分块大小。
+    
+    假设每行平均约 1KB 内存占用，预留 50% 内存给其他操作。
+    """
+    # 每GB内存大约可处理 500,000 行（保守估计）
+    rows_per_gb = 500_000
+    # 使用 50% 的内存限制用于数据加载
+    chunk_size = int(memory_limit_gb * rows_per_gb * 0.5)
+    # 限制在合理范围内
+    return max(50_000, min(5_000_000, chunk_size))
+
+
+def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False, memory_limit_gb: int = 8) -> tuple:
+    """将目录下的CSV文件转换为Parquet格式。
+    
+    Args:
+        source_dir: 源目录
+        target_dir: 目标目录
+        overwrite: 是否覆盖已存在的文件
+        memory_limit_gb: 内存限制（GB）
+    """
     import time
+    import gc
     
     source_path = Path(source_dir)
     target_path = Path(target_dir)
     
     csv_files = list(source_path.rglob('*.csv')) + list(source_path.rglob('*.csv.gz'))
+    # 按文件大小排序，先处理小文件
+    csv_files.sort(key=lambda f: f.stat().st_size)
     
     success = 0
     failed = 0
     
+    # 根据内存限制计算块大小
+    chunk_size = _calculate_chunk_size(memory_limit_gb)
+    
     progress_bar = st.progress(0)
     status_text = st.empty()
+    memory_text = st.empty()
+    
+    # 大文件阈值（超过此大小使用分块读取）
+    large_file_threshold = 100 * 1024 * 1024  # 100MB
     
     for idx, csv_file in enumerate(csv_files):
         try:
+            # 显示内存使用情况
+            current_mem = get_available_memory_gb()
+            memory_text.caption(f"💾 Available memory: {current_mem:.1f} GB")
+            
+            # 检查内存是否足够
+            if current_mem < 1.0:
+                # 内存不足，强制垃圾回收
+                gc.collect()
+                current_mem = get_available_memory_gb()
+                if current_mem < 0.5:
+                    status_text.warning(f"⚠️ Low memory ({current_mem:.1f}GB), pausing...")
+                    time.sleep(2)  # 等待内存释放
+                    gc.collect()
+            
             # 计算相对路径以保持目录结构
             rel_path = csv_file.relative_to(source_path)
             parquet_name = rel_path.stem.replace('.csv', '') + '.parquet'
@@ -5953,29 +6055,80 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
             
             # 检查是否需要转换
             if parquet_file.exists() and not overwrite:
-                status_text.caption(f"⏭️ 跳过: {csv_file.name} (已存在)")
+                status_text.caption(f"⏭️ Skip: {csv_file.name} (exists)")
                 continue
             
             # 创建目标目录
             parquet_file.parent.mkdir(parents=True, exist_ok=True)
             
-            status_text.markdown(f"**转换中**: `{csv_file.name}` ({idx+1}/{len(csv_files)})")
+            file_size = csv_file.stat().st_size
+            file_size_mb = file_size / (1024 * 1024)
+            status_text.markdown(f"**Converting**: `{csv_file.name}` ({file_size_mb:.1f}MB) ({idx+1}/{len(csv_files)})")
             
-            # 读取CSV并转换
-            df = pd.read_csv(csv_file)
-            df.to_parquet(parquet_file, index=False)
+            # 根据文件大小选择读取方式
+            if file_size > large_file_threshold:
+                # 大文件：使用分块读取并写入
+                _convert_large_csv(csv_file, parquet_file, chunk_size)
+            else:
+                # 小文件：直接读取
+                df = pd.read_csv(csv_file, low_memory=True)
+                df.to_parquet(parquet_file, index=False)
+                del df
+            
             success += 1
+            
+            # 每处理完一个文件后清理内存
+            gc.collect()
             
         except Exception as e:
             failed += 1
-            status_text.caption(f"❌ 失败: {csv_file.name} - {str(e)[:50]}")
+            status_text.caption(f"❌ Failed: {csv_file.name} - {str(e)[:50]}")
+            gc.collect()  # 出错时也要清理内存
         
         progress_bar.progress((idx + 1) / len(csv_files))
     
     progress_bar.progress(1.0)
     status_text.empty()
+    memory_text.empty()
+    gc.collect()
     
     return success, failed
+
+
+def _convert_large_csv(csv_file: Path, parquet_file: Path, chunk_size: int):
+    """分块转换大型CSV文件为Parquet。
+    
+    使用 PyArrow 的增量写入方式，避免一次性加载全部数据到内存。
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import gc
+    
+    # 使用分块读取
+    chunks = pd.read_csv(csv_file, chunksize=chunk_size, low_memory=True)
+    
+    writer = None
+    total_rows = 0
+    
+    try:
+        for chunk in chunks:
+            table = pa.Table.from_pandas(chunk)
+            
+            if writer is None:
+                # 首次写入，创建 ParquetWriter
+                writer = pq.ParquetWriter(str(parquet_file), table.schema)
+            
+            writer.write_table(table)
+            total_rows += len(chunk)
+            
+            # 释放内存
+            del chunk
+            del table
+            gc.collect()
+            
+    finally:
+        if writer:
+            writer.close()
 
 
 def _generate_cohort_prefix() -> str:
