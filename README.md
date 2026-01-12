@@ -40,7 +40,89 @@ PyRICU 是一个专为重症监护室 (ICU) 数据分析设计的 Python 工具�
 
 ---
 
-## 🚀 快速开始
+## 🪟 Windows 用户快速指南 (临床医生推荐)
+
+如果您是第一次接触 Python，建议按照以下步骤操作（总耗时约 15-20 分钟）：
+
+### 第一步：安装 Anaconda (Python 环境)
+
+1. **下载 Anaconda**  
+   访问 [Anaconda 官网](https://www.anaconda.com/download) 下载 Windows 版本（推荐 Python 3.11）  
+   国内镜像：[清华大学镜像站](https://mirrors.tuna.tsinghua.edu.cn/anaconda/archive/)（选择最新的 `Anaconda3-*-Windows-x86_64.exe`）
+
+2. **安装 Anaconda**  
+   - 双击下载的 `.exe` 文件
+   - 勾选 "Add Anaconda to my PATH environment variable"（添加到环境变量）
+   - 其他选项保持默认，点击 "Next" 直到完成
+
+3. **验证安装**  
+   打开 **Anaconda Prompt**（开始菜单搜索 "Anaconda Prompt"），输入：
+   ```bash
+   python --version
+   ```
+   应该显示 Python 3.11.x 或更高版本
+
+### 第二步：安装 PyRICU
+
+在 **Anaconda Prompt** 中执行：
+
+```bash
+# 方式一：直接从 GitHub 安装（推荐）
+pip install "pyricu[all] @ git+https://github.com/shen-lab-icu/pyricu.git"
+
+# 方式二：如果网络慢，可先下载 ZIP 再安装
+# 1. 访问 https://github.com/shen-lab-icu/pyricu
+# 2. 点击绿色 "Code" 按钮 -> Download ZIP
+# 3. 解压到 D:\pyricu (或其他目录)
+# 4. 在 Anaconda Prompt 中进入该目录：
+cd D:\pyricu
+pip install -e ".[all]"
+```
+
+### 第三步：启动 Web 应用
+
+```bash
+# 在 Anaconda Prompt 中输入：
+pyricu-webapp
+```
+
+浏览器会自动打开 `http://localhost:8501`，显示 PyRICU 界面。
+
+### 第四步：准备数据
+
+1. **下载 ICU 数据库**（需要先申请权限）
+   - MIMIC-IV: https://physionet.org/content/mimiciv/
+   - eICU: https://physionet.org/content/eicu-crd/
+
+2. **解压数据到本地**（例如 `D:\mimic-iv\`）
+
+3. **在 Web 界面中转换数据**
+   - 左侧边栏选择数据库类型（如 MIMIC-IV）
+   - 输入数据路径（如 `D:\mimic-iv\`）
+   - 点击 "🔄 转换为 Parquet" 按钮
+
+### 💡 常见问题
+
+**Q: 如何关闭应用？**  
+A: 在 Anaconda Prompt 窗口按 `Ctrl + C`，或直接关闭窗口。
+
+**Q: 如何再次启动？**  
+A: 打开 Anaconda Prompt，输入 `pyricu-webapp`。
+
+**Q: 转换数据需要多久？**  
+A: MIMIC-IV 约 30-60 分钟（取决于电脑配置），转换完成后下次加载只需几秒。
+
+**Q: 需要编程基础吗？**  
+A: 使用 Web 应用**不需要**编程基础。如果需要定制分析，可以学习 Python API（见下文）。
+
+### 📚 推荐工具（可选）
+
+- **VS Code**: [下载链接](https://code.visualstudio.com/) - 用于查看和编辑 Python 代码
+- **Git for Windows**: [下载链接](https://git-scm.com/download/win) - 用于更新 PyRICU 到最新版本
+
+---
+
+## 🚀 快速开始 (开发者 / 高级用户)
 
 ### 安装
 
