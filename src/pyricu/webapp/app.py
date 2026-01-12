@@ -1223,6 +1223,7 @@ def get_text(key: str) -> str:
 def validate_database_path(data_path: str, database: str) -> dict:
     """
     验证数据路径是否包含指定数据库所需的文件。
+    严格检查每个模块所需的所有表。
     
     返回:
         dict: {'valid': bool, 'message': str, 'suggestion': str (可选)}
@@ -1231,17 +1232,34 @@ def validate_database_path(data_path: str, database: str) -> dict:
     lang = st.session_state.get('language', 'en')
     
     # 各数据库需要的核心表（Parquet格式）- 包括分片目录
-    # 格式: 文件名或目录名(对于分片表)
+    # 分为必需表和可选表
     required_parquet_tables = {
-        'miiv': ['icustays', 'chartevents', 'labevents', 'inputevents', 'prescriptions'],
-        'eicu': ['patient', 'vitalperiodic', 'lab'],
-        'aumc': ['admissions', 'numericitems', 'drugitems'],
-        'hirid': ['general_table', 'pharma_records'],
+        'miiv': {
+            'core': ['icustays', 'patients', 'admissions'],  # 核心ID表
+            'clinical': ['chartevents', 'labevents', 'inputevents', 'outputevents'],  # 临床数据
+            'medication': ['prescriptions', 'ingredientevents'],  # 药物数据
+            'other': ['procedureevents', 'd_items', 'd_labitems'],  # 其他
+        },
+        'eicu': {
+            'core': ['patient'],
+            'clinical': ['vitalperiodic', 'lab', 'nursecharting'],
+            'medication': ['infusiondrug', 'medication'],
+        },
+        'aumc': {
+            'core': ['admissions'],
+            'clinical': ['numericitems', 'listitems'],
+            'medication': ['drugitems'],
+        },
+        'hirid': {
+            'core': ['general_table'],
+            'clinical': ['observations'],
+            'medication': ['pharma_records'],
+        },
     }
     
     # 各数据库需要的核心表（CSV/GZ格式 - 原始文件）
     required_csv_files = {
-        'miiv': ['icustays.csv', 'chartevents.csv', 'labevents.csv', 'prescriptions.csv'],
+        'miiv': ['icustays.csv', 'chartevents.csv', 'labevents.csv', 'prescriptions.csv', 'inputevents.csv'],
         'eicu': ['patient.csv', 'vitalPeriodic.csv', 'lab.csv'],
         'aumc': ['admissions.csv', 'numericitems.csv', 'drugitems.csv'],
         'hirid': ['general_table.csv', 'pharma_records.csv'],
@@ -1254,44 +1272,81 @@ def validate_database_path(data_path: str, database: str) -> dict:
     
     # 检查Parquet文件和分片目录
     parquet_files = list(path.rglob('*.parquet'))
-    parquet_names = [f.name.lower().replace('.parquet', '') for f in parquet_files]
-    # 也检查分片目录（如 chartevents/1.parquet）
+    parquet_names = set(f.name.lower().replace('.parquet', '') for f in parquet_files)
+    
+    # 检查分片目录（如 chartevents/1.parquet）
     parquet_dirs = set()
     for pf in parquet_files:
-        if pf.parent != path and pf.parent.parent.is_relative_to(path):
-            parquet_dirs.add(pf.parent.name.lower())
+        try:
+            if pf.parent != path:
+                rel = pf.parent.relative_to(path)
+                # 如果是 xxx/1.parquet 格式，记录 xxx
+                if pf.stem.isdigit():
+                    parquet_dirs.add(pf.parent.name.lower())
+        except ValueError:
+            pass
     
-    required_tables = required_parquet_tables.get(database, [])
+    # 合并所有找到的表（单文件和分片目录）
+    all_found = parquet_names | parquet_dirs
+    
+    # 检查各类别的表
+    db_tables = required_parquet_tables.get(database, {})
     found_tables = []
     missing_tables = []
+    missing_by_category = {}
     
-    for req in required_tables:
-        req_lower = req.lower()
-        # 检查是否有 xxx.parquet 或 xxx/1.parquet 格式
-        if req_lower in parquet_names or req_lower in parquet_dirs:
-            found_tables.append(req)
-        else:
-            missing_tables.append(req)
+    for category, tables in db_tables.items():
+        for table in tables:
+            if table.lower() in all_found:
+                found_tables.append(table)
+            else:
+                missing_tables.append(table)
+                if category not in missing_by_category:
+                    missing_by_category[category] = []
+                missing_by_category[category].append(table)
+    
+    total_required = sum(len(tables) for tables in db_tables.values())
     
     # 如果全部找到
     if len(missing_tables) == 0:
-        msg = f'✅ Found {db_name} data ({len(parquet_files)} Parquet files)' if lang == 'en' else f'✅ 找到 {db_name} 数据 ({len(parquet_files)} 个 Parquet 文件)'
+        msg = f'✅ {db_name}: All {total_required} required tables found ({len(parquet_files)} Parquet files)' if lang == 'en' else f'✅ {db_name}: 所有 {total_required} 个必需表已找到 ({len(parquet_files)} 个 Parquet 文件)'
         return {
             'valid': True,
             'message': msg
         }
     
-    # 如果找到部分但不完整
-    if len(found_tables) > 0:
-        missing_str = ', '.join(missing_tables)
+    # 核心表缺失是严重问题
+    core_missing = missing_by_category.get('core', [])
+    if core_missing:
+        missing_str = ', '.join(core_missing)
         if lang == 'en':
-            msg = f'⚠️ Found partial {db_name} Parquet data, missing: {missing_str}'
-            sug = f'💡 Click "Convert to Parquet" to convert remaining files ({len(missing_tables)} tables missing)'
+            msg = f'❌ {db_name}: Missing core tables: {missing_str}'
+            sug = f'💡 Core tables are required. Please ensure data is properly converted.'
         else:
-            msg = f'⚠️ 找到部分 {db_name} Parquet 数据，缺少: {missing_str}'
-            sug = f'💡 点击「转换为Parquet」转换剩余文件（缺少 {len(missing_tables)} 个表）'
+            msg = f'❌ {db_name}: 缺少核心表: {missing_str}'
+            sug = f'💡 核心表是必需的，请确保数据已正确转换。'
         return {
-            'valid': False,  # 不完整时不应该通过
+            'valid': False,
+            'message': msg,
+            'suggestion': sug,
+            'can_convert': True,
+            'csv_path': str(path),
+            'missing_tables': missing_tables,
+        }
+    
+    # 部分表缺失（非核心）
+    if len(found_tables) > 0:
+        missing_str = ', '.join(missing_tables[:5])
+        if len(missing_tables) > 5:
+            missing_str += f' (+{len(missing_tables)-5} more)'
+        if lang == 'en':
+            msg = f'⚠️ {db_name}: Found {len(found_tables)}/{total_required} tables, missing: {missing_str}'
+            sug = f'💡 Click "Convert to Parquet" to convert missing tables'
+        else:
+            msg = f'⚠️ {db_name}: 找到 {len(found_tables)}/{total_required} 个表，缺少: {missing_str}'
+            sug = f'💡 点击「转换为Parquet」转换缺失的表'
+        return {
+            'valid': False,
             'message': msg,
             'suggestion': sug,
             'can_convert': True,
@@ -1988,7 +2043,7 @@ def render_sidebar():
             extract_label = "📤 数据提取导出"
             viz_label = "📊 快速可视化"
         
-        # 使用HTML渲染漂亮的模式切换按钮
+        # 使用HTML渲染漂亮的模式切换按钮 - 更明显的样式区分
         st.markdown("""
         <style>
         .mode-btn-container {
@@ -2008,18 +2063,39 @@ def render_sidebar():
             border: 2px solid transparent;
         }
         .mode-btn-active {
-            background: linear-gradient(135deg, #FF6B6B 0%, #FF8E53 100%);
-            color: white;
-            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            color: white !important;
+            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.5) !important;
+            transform: scale(1.02);
         }
         .mode-btn-inactive {
-            background: #f0f2f6;
-            color: #666;
-            border: 2px dashed #ccc;
+            background: #f8f9fa !important;
+            color: #666 !important;
+            border: 2px dashed #ccc !important;
+            opacity: 0.7;
         }
         .mode-btn-inactive:hover {
-            background: #e8eaee;
-            border-color: #999;
+            background: #e8eaee !important;
+            border-color: #999 !important;
+            opacity: 1;
+        }
+        /* 覆盖Streamlit按钮样式使选中更明显 */
+        div[data-testid="column"] button[kind="primary"] {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            border: none !important;
+            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.5) !important;
+            font-weight: 700 !important;
+            font-size: 1.1rem !important;
+        }
+        div[data-testid="column"] button[kind="secondary"] {
+            background: #f0f2f6 !important;
+            color: #666 !important;
+            border: 2px dashed #ccc !important;
+            opacity: 0.7;
+        }
+        div[data-testid="column"] button[kind="secondary"]:hover {
+            opacity: 1;
+            border-color: #667eea !important;
         }
         </style>
         """, unsafe_allow_html=True)

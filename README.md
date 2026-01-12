@@ -72,6 +72,58 @@ pip install -e ".[all]"
 
 ---
 
+## 📦 数据准备 (首次使用必读)
+
+PyRICU 使用 Parquet 格式存储数据，以获得最佳性能。如果您的原始数据是 CSV 格式，需要先进行转换。
+
+### 转换方式
+
+#### 方式一：使用 Web 应用 (推荐)
+
+```bash
+pyricu-webapp
+```
+
+在侧边栏：
+1. 选择数据库类型 (如 MIMIC-IV)
+2. 输入数据路径
+3. 点击「🔄 转换为 Parquet」按钮
+
+#### 方式二：使用 Python API
+
+```python
+from pyricu import DataConverter
+
+# 创建转换器
+converter = DataConverter(
+    database='miiv',
+    csv_path='/path/to/mimic-iv/csv',
+    parquet_path='/path/to/mimic-iv/parquet'
+)
+
+# 转换所有表
+converter.convert_all(parallel=True, n_jobs=4)
+```
+
+#### 方式三：使用命令行
+
+```bash
+pyricu-convert --database miiv --input /path/to/csv --output /path/to/parquet
+```
+
+### ⏱️ 转换时间估算
+
+| 数据库 | 表数量 | 预估时间 | 内存需求 |
+|-------|-------|---------|---------|
+| MIMIC-IV | 30+ | 30-60 分钟 | 16GB+ |
+| eICU-CRD | 20+ | 20-40 分钟 | 8GB+ |
+| AmsterdamUMCdb | 15+ | 15-30 分钟 | 8GB+ |
+| HiRID | 10+ | 10-20 分钟 | 8GB+ |
+
+> ⚠️ **注意**: 大表 (如 chartevents、labevents) 会自动分片存储，以便支持更快的并行加载。
+
+---
+
 ## 🌐 Web 应用 (推荐新手使用)
 
 无需编写代码，通过图形界面探索 ICU 数据：
