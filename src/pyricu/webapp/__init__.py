@@ -74,6 +74,8 @@ def run_app(
     debug: bool = False,
     daemon: bool = False,
     background: bool = False,
+    low_memory: bool = False,
+    workers: int = None,
 ):
     """启动 PyRICU Web 应用。
     
@@ -83,11 +85,22 @@ def run_app(
         debug: 是否启用调试模式
         daemon: 守护模式，自动重启崩溃的服务
         background: 后台运行
+        low_memory: 低内存模式，减少内存占用（适用于 8GB 内存以下电脑）
+        workers: 并行工作线程数，默认自动检测，设为 1 可减少内存占用
     """
     check_dependencies()
     
     app_path = Path(__file__).parent / 'app.py'
     config_dir = Path(__file__).parent / '.streamlit'
+    
+    # 设置环境变量传递配置给 app.py
+    env = os.environ.copy()
+    if low_memory:
+        env['PYRICU_LOW_MEMORY'] = '1'
+        print("💾 低内存模式已启用")
+    if workers is not None:
+        env['PYRICU_WORKERS'] = str(workers)
+        print(f"🔧 并行工作线程数: {workers}")
     
     # 构建命令
     cmd = [
@@ -114,6 +127,7 @@ def run_app(
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=env,
         )
         
         with open(pid_file, 'w') as f:
@@ -132,7 +146,7 @@ def run_app(
         while retry_count < max_retries:
             print(f"🚀 启动服务... (尝试 {retry_count + 1}/{max_retries})")
             
-            process = subprocess.Popen(cmd)
+            process = subprocess.Popen(cmd, env=env)
             
             try:
                 # 等待进程退出
@@ -159,7 +173,7 @@ def run_app(
             sys.exit(1)
     else:
         # 普通模式
-        subprocess.run(cmd)
+        subprocess.run(cmd, env=env)
 
 
 def stop_app():
@@ -201,4 +215,63 @@ def status_app(port: int = 8501):
         print(f"❌ 服务未运行 (端口: {port})")
 
 
-__all__ = ['run_app', 'stop_app', 'status_app', 'check_dependencies']
+def main():
+    """命令行入口点，支持参数解析。"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='PyRICU Web 应用 - ICU 数据分析界面',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+示例:
+  pyricu-webapp                      # 默认启动
+  pyricu-webapp --low-memory         # 低内存模式（8GB 以下电脑）
+  pyricu-webapp --workers 1          # 单线程模式（防止卡死）
+  pyricu-webapp --port 8502          # 指定端口
+  pyricu-webapp --low-memory --workers 1  # 最低资源模式
+'''
+    )
+    
+    parser.add_argument(
+        '--host', type=str, default='localhost',
+        help='服务器地址 (默认: localhost)'
+    )
+    parser.add_argument(
+        '--port', type=int, default=8501,
+        help='端口号 (默认: 8501)'
+    )
+    parser.add_argument(
+        '--debug', action='store_true',
+        help='启用调试模式'
+    )
+    parser.add_argument(
+        '--daemon', action='store_true',
+        help='守护模式，服务崩溃后自动重启'
+    )
+    parser.add_argument(
+        '--background', action='store_true',
+        help='后台运行'
+    )
+    parser.add_argument(
+        '--low-memory', action='store_true', dest='low_memory',
+        help='低内存模式：减少缓存、使用更小的数据块 (适用于 8GB 内存以下电脑)'
+    )
+    parser.add_argument(
+        '--workers', type=int, default=None,
+        help='并行工作线程数 (默认: 自动检测，设为 1 可减少内存占用)'
+    )
+    
+    args = parser.parse_args()
+    
+    run_app(
+        host=args.host,
+        port=args.port,
+        debug=args.debug,
+        daemon=args.daemon,
+        background=args.background,
+        low_memory=args.low_memory,
+        workers=args.workers,
+    )
+
+
+__all__ = ['run_app', 'stop_app', 'status_app', 'check_dependencies', 'main']

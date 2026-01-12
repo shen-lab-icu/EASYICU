@@ -49,11 +49,16 @@ PyRICU 是一个专为重症监护室 (ICU) 数据分析设计的 Python 工具�
 1. **下载 Anaconda**  
    访问 [Anaconda 官网](https://www.anaconda.com/download) 下载 Windows 版本（推荐 Python 3.11）  
    国内镜像：[清华大学镜像站](https://mirrors.tuna.tsinghua.edu.cn/anaconda/archive/)（选择最新的 `Anaconda3-*-Windows-x86_64.exe`）
+   
+   > 💡 **轻量替代方案**: 如果 C 盘空间紧张，可使用 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)（仅 ~70MB，而 Anaconda 需要 ~3GB）
 
-2. **安装 Anaconda**  
+2. **安装 Anaconda (避免 C 盘爆满)**  
    - 双击下载的 `.exe` 文件
+   - ⚠️ **重要：更改安装路径** - 点击 "Browse" 将安装目录改为 `D:\Anaconda3` 或其他非 C 盘路径
    - 勾选 "Add Anaconda to my PATH environment variable"（添加到环境变量）
-   - 其他选项保持默认，点击 "Next" 直到完成
+   - 点击 "Next" 直到完成
+   
+   > 💾 **空间需求**: Anaconda ~3GB, Miniconda ~400MB, PyRICU ~200MB
 
 3. **验证安装**  
    打开 **Anaconda Prompt**（开始菜单搜索 "Anaconda Prompt"），输入：
@@ -114,6 +119,92 @@ A: MIMIC-IV 约 30-60 分钟（取决于电脑配置），转换完成后下次�
 
 **Q: 需要编程基础吗？**  
 A: 使用 Web 应用**不需要**编程基础。如果需要定制分析，可以学习 Python API（见下文）。
+
+### ⚠️ 常见问题排查
+
+<details>
+<summary><b>❌ C 盘空间不足 / 磁盘爆满</b></summary>
+
+**原因**: Anaconda 默认安装在 C 盘，占用 3-5GB
+
+**解决方案**:
+
+1. **使用 Miniconda 替代 Anaconda**（推荐）
+   - 下载 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)（仅 70MB）
+   - 安装时选择 D 盘：`D:\Miniconda3`
+   - 安装完成后运行：`pip install "pyricu[all] @ git+https://github.com/shen-lab-icu/pyricu.git"`
+
+2. **迁移已安装的 Anaconda**
+   ```bash
+   # 在 Anaconda Prompt 中
+   conda config --add pkgs_dirs D:\conda_pkgs
+   conda config --add envs_dirs D:\conda_envs
+   ```
+
+3. **清理缓存释放空间**
+   ```bash
+   conda clean --all -y
+   pip cache purge
+   ```
+
+</details>
+
+<details>
+<summary><b>❌ 电脑卡死 / 内存不足</b></summary>
+
+**原因**: 数据转换或加载时占用大量内存（MIMIC-IV chartevents 有 3 亿行）
+
+**解决方案**:
+
+1. **启动时使用低内存模式**
+   ```bash
+   pyricu-webapp --low-memory
+   ```
+
+2. **减少并行处理数**
+   ```bash
+   pyricu-webapp --workers 1
+   ```
+
+3. **只处理少量患者（用于测试）**
+   - 在 Web 界面的「患者数量限制」中设置为 100-500
+
+4. **转换大表时的建议**
+   - 关闭其他程序（浏览器、Office 等）
+   - 确保有 8GB+ 可用内存
+   - 如果仍然卡死，尝试命令行单表转换：
+   ```python
+   from pyricu import DataConverter
+   conv = DataConverter('/path/to/data', chunk_size=100000)  # 更小的块
+   conv.convert_file('chartevents.csv')  # 单独转换一个表
+   ```
+
+5. **推荐配置**
+   | 配置 | 最低要求 | 推荐配置 |
+   |-----|---------|---------|
+   | 内存 | 8GB | 16GB+ |
+   | 硬盘 | 50GB 可用 | 100GB+ SSD |
+   | CPU | 4 核 | 8 核+ |
+
+</details>
+
+<details>
+<summary><b>❌ 网络慢 / GitHub 下载失败</b></summary>
+
+**解决方案**:
+
+1. **使用国内 pip 镜像**
+   ```bash
+   pip install "pyricu[all] @ git+https://github.com/shen-lab-icu/pyricu.git" -i https://pypi.tuna.tsinghua.edu.cn/simple
+   ```
+
+2. **手动下载安装**
+   - 浏览器访问 https://github.com/shen-lab-icu/pyricu
+   - 点击绿色 "Code" → "Download ZIP"
+   - 解压到 `D:\pyricu`
+   - 运行：`cd D:\pyricu && pip install -e ".[all]"`
+
+</details>
 
 ### 📚 推荐工具（可选）
 
