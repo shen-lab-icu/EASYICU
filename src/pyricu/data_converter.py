@@ -503,12 +503,13 @@ class DataConverter:
         - Otherwise: partition by row count
         
         Creates: tablename/1.parquet, 2.parquet, etc. (like ricu)
+        Preserves subdirectory structure (e.g., icu/chartevents/).
         """
         table_name = self._get_table_name(csv_path)
-        shard_dir = self.data_path / table_name
+        shard_dir = self._get_shard_dir(csv_path)  # Uses preserved subdirectory structure
         
         # Create shard directory
-        shard_dir.mkdir(exist_ok=True)
+        shard_dir.mkdir(parents=True, exist_ok=True)
         
         # Check for ricu-style partitioning config
         partition_config = self._get_partitioning_config(table_name)
