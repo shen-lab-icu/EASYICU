@@ -1288,9 +1288,9 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'medication': ['drugitems'],
         },
         'hirid': {
-            'core': ['general_table'],
-            'clinical': ['observations'],
-            'medication': ['pharma_records'],
+            'core': ['general'],  # ricu uses 'general' not 'general_table'
+            'clinical': ['observations', 'ordinal'],
+            'medication': ['pharma'],  # ricu uses 'pharma' not 'pharma_records'
         },
     }
     
@@ -6003,87 +6003,198 @@ def _calculate_chunk_size(memory_limit_gb: int) -> int:
 def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False, memory_limit_gb: int = 8) -> tuple:
     """将目录下的CSV文件转换为Parquet格式。
     
+    使用 DataConverter 类进行专业转换，支持大表分片。
+    
     Args:
         source_dir: 源目录
         target_dir: 目标目录
         overwrite: 是否覆盖已存在的文件
         memory_limit_gb: 内存限制（GB）
     """
-    import time
+    import gc
+    
+    source_path = Path(source_dir)
+    target_path = Path(target_dir)
+    
+    # 根据内存限制计算块大小
+    chunk_size = _calculate_chunk_size(memory_limit_gb)
+    
+    # 尝试使用专业的 DataConverter
+    try:
+        from pyricu.data_converter import DataConverter
+        
+        # 检测数据库类型
+        database = _detect_database_type(source_path)
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        memory_text = st.empty()
+        
+        status_text.info(f"🔍 Detecting database type: {database.upper() if database else 'Unknown'}")
+        
+        # 创建转换器
+        converter = DataConverter(
+            data_path=source_path,
+            database=database,
+            chunk_size=chunk_size,
+            parallel_workers=max(1, min(4, WORKERS or 2)),  # 限制并行数
+            verbose=True,
+        )
+        
+        # 获取需要转换的文件
+        csv_files = converter._get_csv_files()
+        
+        if not csv_files:
+            status_text.warning("⚠️ No CSV files found to convert")
+            return 0, 0
+        
+        status_text.info(f"📊 Found {len(csv_files)} CSV files to convert")
+        
+        success = 0
+        failed = 0
+        skipped = 0
+        
+        for idx, csv_file in enumerate(csv_files):
+            try:
+                # 显示内存状态
+                current_mem = get_available_memory_gb()
+                memory_text.caption(f"💾 Available memory: {current_mem:.1f} GB")
+                
+                # 检查是否需要转换
+                needs_convert, reason = converter._is_conversion_needed(csv_file)
+                
+                if not needs_convert and not overwrite:
+                    status_text.caption(f"⏭️ Skip: {csv_file.name} ({reason})")
+                    skipped += 1
+                    progress_bar.progress((idx + 1) / len(csv_files))
+                    continue
+                
+                file_size_mb = csv_file.stat().st_size / (1024 * 1024)
+                status_text.markdown(f"**Converting**: `{csv_file.name}` ({file_size_mb:.1f}MB) ({idx+1}/{len(csv_files)})")
+                
+                # 使用 DataConverter 的转换方法（支持分片）
+                result = converter._convert_file(csv_file)
+                
+                if result.get('status') == 'completed':
+                    shards = result.get('shards', 0)
+                    rows = result.get('row_count', 0)
+                    if shards > 0:
+                        status_text.caption(f"✅ {csv_file.name}: {rows:,} rows → {shards} shards")
+                    else:
+                        status_text.caption(f"✅ {csv_file.name}: {rows:,} rows")
+                    success += 1
+                else:
+                    failed += 1
+                    status_text.caption(f"❌ {csv_file.name}: {result.get('error', 'Unknown error')}")
+                
+                gc.collect()
+                
+            except Exception as e:
+                failed += 1
+                status_text.caption(f"❌ Failed: {csv_file.name} - {str(e)[:100]}")
+                gc.collect()
+            
+            progress_bar.progress((idx + 1) / len(csv_files))
+        
+        progress_bar.progress(1.0)
+        
+        if skipped > 0:
+            status_text.info(f"📊 Completed: {success} converted, {skipped} skipped, {failed} failed")
+        else:
+            status_text.empty()
+        
+        memory_text.empty()
+        gc.collect()
+        
+        return success + skipped, failed
+        
+    except ImportError:
+        # 回退到简单转换
+        return _simple_convert_csv_to_parquet(source_dir, target_dir, overwrite, memory_limit_gb)
+
+
+def _detect_database_type(path: Path) -> str:
+    """检测数据库类型"""
+    path_str = str(path).lower()
+    
+    if 'eicu' in path_str:
+        return 'eicu'
+    elif 'miiv' in path_str or 'mimic' in path_str:
+        return 'miiv'
+    elif 'aumc' in path_str or 'amsterdam' in path_str:
+        return 'aumc'
+    elif 'hirid' in path_str:
+        return 'hirid'
+    
+    # 尝试从文件名检测
+    files = list(path.rglob('*.csv')) + list(path.rglob('*.csv.gz'))
+    file_names = [f.name.lower() for f in files]
+    
+    if any('patient.csv' in f for f in file_names):
+        return 'eicu'
+    elif any('icustays.csv' in f for f in file_names):
+        return 'miiv'
+    elif any('admissions.csv' in f and 'numericitems.csv' in ' '.join(file_names) for f in file_names):
+        return 'aumc'
+    
+    return 'unknown'
+
+
+def _simple_convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False, memory_limit_gb: int = 8) -> tuple:
+    """简单的 CSV 转 Parquet（回退方案）"""
     import gc
     
     source_path = Path(source_dir)
     target_path = Path(target_dir)
     
     csv_files = list(source_path.rglob('*.csv')) + list(source_path.rglob('*.csv.gz'))
-    # 按文件大小排序，先处理小文件
     csv_files.sort(key=lambda f: f.stat().st_size)
+    
+    chunk_size = _calculate_chunk_size(memory_limit_gb)
+    large_file_threshold = 100 * 1024 * 1024
     
     success = 0
     failed = 0
-    
-    # 根据内存限制计算块大小
-    chunk_size = _calculate_chunk_size(memory_limit_gb)
     
     progress_bar = st.progress(0)
     status_text = st.empty()
     memory_text = st.empty()
     
-    # 大文件阈值（超过此大小使用分块读取）
-    large_file_threshold = 100 * 1024 * 1024  # 100MB
-    
     for idx, csv_file in enumerate(csv_files):
         try:
-            # 显示内存使用情况
             current_mem = get_available_memory_gb()
             memory_text.caption(f"💾 Available memory: {current_mem:.1f} GB")
             
-            # 检查内存是否足够
-            if current_mem < 1.0:
-                # 内存不足，强制垃圾回收
-                gc.collect()
-                current_mem = get_available_memory_gb()
-                if current_mem < 0.5:
-                    status_text.warning(f"⚠️ Low memory ({current_mem:.1f}GB), pausing...")
-                    time.sleep(2)  # 等待内存释放
-                    gc.collect()
-            
-            # 计算相对路径以保持目录结构
             rel_path = csv_file.relative_to(source_path)
             parquet_name = rel_path.stem.replace('.csv', '') + '.parquet'
             parquet_file = target_path / rel_path.parent / parquet_name
             
-            # 检查是否需要转换
             if parquet_file.exists() and not overwrite:
                 status_text.caption(f"⏭️ Skip: {csv_file.name} (exists)")
+                success += 1  # 跳过的也算成功
+                progress_bar.progress((idx + 1) / len(csv_files))
                 continue
             
-            # 创建目标目录
             parquet_file.parent.mkdir(parents=True, exist_ok=True)
             
             file_size = csv_file.stat().st_size
             file_size_mb = file_size / (1024 * 1024)
             status_text.markdown(f"**Converting**: `{csv_file.name}` ({file_size_mb:.1f}MB) ({idx+1}/{len(csv_files)})")
             
-            # 根据文件大小选择读取方式
             if file_size > large_file_threshold:
-                # 大文件：使用分块读取并写入
                 _convert_large_csv(csv_file, parquet_file, chunk_size)
             else:
-                # 小文件：直接读取
                 df = pd.read_csv(csv_file, low_memory=True)
                 df.to_parquet(parquet_file, index=False)
                 del df
             
             success += 1
-            
-            # 每处理完一个文件后清理内存
             gc.collect()
             
         except Exception as e:
             failed += 1
             status_text.caption(f"❌ Failed: {csv_file.name} - {str(e)[:50]}")
-            gc.collect()  # 出错时也要清理内存
+            gc.collect()
         
         progress_bar.progress((idx + 1) / len(csv_files))
     

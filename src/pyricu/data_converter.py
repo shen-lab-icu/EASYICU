@@ -191,21 +191,38 @@ class DataConverter:
             logger.warning(f"Could not save status file: {e}")
     
     def _get_csv_files(self) -> List[Path]:
-        """Get all CSV/CSV.GZ files in the data directory (including subdirs)."""
+        """Get all CSV/CSV.GZ files in the data directory (including subdirs).
+        
+        Deduplicates files with the same table name, preferring:
+        1. Larger files (likely full data, not demo)
+        2. Files closer to root directory
+        """
         csv_files = []
         
         # Find all CSV and CSV.GZ files recursively (includes hosp/, icu/ subdirs)
         for pattern in ['*.csv', '*.csv.gz', '*.CSV', '*.CSV.GZ']:
             csv_files.extend(self.data_path.rglob(pattern))
         
-        # Sort by file size (process smaller files first)
-        csv_files.sort(key=lambda f: f.stat().st_size)
+        # Deduplicate by table name (keep largest file for each table)
+        table_files: Dict[str, Path] = {}
+        for f in csv_files:
+            table_name = self._get_table_name_from_path(f)
+            if table_name not in table_files:
+                table_files[table_name] = f
+            else:
+                # Prefer larger file (full data vs demo)
+                existing = table_files[table_name]
+                if f.stat().st_size > existing.stat().st_size:
+                    table_files[table_name] = f
         
-        return csv_files
+        # Get unique files and sort by size
+        unique_files = list(table_files.values())
+        unique_files.sort(key=lambda f: f.stat().st_size)
+        
+        return unique_files
     
-    def _get_parquet_path(self, csv_path: Path) -> Path:
-        """Get the corresponding parquet path for a CSV file, preserving subdirectory structure."""
-        # Remove .csv or .csv.gz extension
+    def _get_table_name_from_path(self, csv_path: Path) -> str:
+        """Extract table name from CSV path (without extension)."""
         name = csv_path.name
         if name.endswith('.csv.gz'):
             name = name[:-7]
@@ -215,81 +232,94 @@ class DataConverter:
             name = name[:-7]
         elif name.endswith('.CSV'):
             name = name[:-4]
+        return name.lower()
+    
+    def _get_parquet_path(self, csv_path: Path) -> Path:
+        """Get the corresponding parquet path for a CSV file.
         
-        # Preserve subdirectory structure (e.g., hosp/, icu/)
+        ricu style: parquet files are in root directory, not preserving subdirectory structure.
+        """
+        name = self._get_table_name_from_path(csv_path)
+        # ricu puts parquet files in root directory
+        return self.data_path / f"{name}.parquet"
+    
+    def _get_parquet_path_with_subdir(self, csv_path: Path) -> Path:
+        """Get parquet path preserving subdirectory structure (alternative location)."""
+        name = self._get_table_name_from_path(csv_path)
         try:
             rel_parent = csv_path.parent.relative_to(self.data_path)
         except ValueError:
             rel_parent = Path()
-        
-        # Normalize to lowercase (like ricu)
-        return self.data_path / rel_parent / f"{name.lower()}.parquet"
+        return self.data_path / rel_parent / f"{name}.parquet"
     
     def _get_shard_dir(self, csv_path: Path) -> Path:
-        """Get the shard directory path for a large CSV file, preserving subdirectory structure."""
-        table_name = csv_path.name
-        if table_name.endswith('.csv.gz'):
-            table_name = table_name[:-7]
-        elif table_name.endswith('.csv'):
-            table_name = table_name[:-4]
-        elif table_name.endswith('.CSV.GZ'):
-            table_name = table_name[:-7]
-        elif table_name.endswith('.CSV'):
-            table_name = table_name[:-4]
+        """Get the shard directory path for a large CSV file.
         
-        # Preserve subdirectory structure
+        ricu style: shard directories are in root directory (e.g., chartevents/1.parquet).
+        """
+        table_name = self._get_table_name_from_path(csv_path)
+        # ricu puts shard directories in root directory
+        return self.data_path / table_name
+    
+    def _get_shard_dir_with_subdir(self, csv_path: Path) -> Path:
+        """Get shard directory preserving subdirectory structure (alternative location)."""
+        table_name = self._get_table_name_from_path(csv_path)
         try:
             rel_parent = csv_path.parent.relative_to(self.data_path)
         except ValueError:
             rel_parent = Path()
-        
-        return self.data_path / rel_parent / table_name.lower()
+        return self.data_path / rel_parent / table_name
     
     def _has_valid_shards(self, csv_path: Path) -> Tuple[bool, int]:
         """
         Check if valid sharded parquet files exist for a CSV.
+        Checks both root directory and subdirectory locations.
         
         Returns:
             (has_shards, shard_count)
         """
-        shard_dir = self._get_shard_dir(csv_path)
+        # Check both possible shard directory locations
+        for shard_dir in [self._get_shard_dir(csv_path), self._get_shard_dir_with_subdir(csv_path)]:
+            if not shard_dir.is_dir():
+                continue
+            
+            # Count parquet shards (1.parquet, 2.parquet, etc.)
+            shard_files = list(shard_dir.glob('[0-9]*.parquet'))
+            if not shard_files:
+                continue
+            
+            # Verify shards are numbered sequentially from 1
+            shard_nums = sorted([int(f.stem) for f in shard_files if f.stem.isdigit()])
+            if not shard_nums or shard_nums[0] != 1:
+                continue
+            
+            # Check for gaps in sequence
+            expected = list(range(1, len(shard_nums) + 1))
+            if shard_nums != expected:
+                continue
+            
+            return True, len(shard_nums)
         
-        if not shard_dir.is_dir():
-            return False, 0
-        
-        # Count parquet shards (1.parquet, 2.parquet, etc.)
-        shard_files = list(shard_dir.glob('[0-9]*.parquet'))
-        if not shard_files:
-            return False, 0
-        
-        # Verify shards are numbered sequentially from 1
-        shard_nums = sorted([int(f.stem) for f in shard_files if f.stem.isdigit()])
-        if not shard_nums or shard_nums[0] != 1:
-            return False, 0
-        
-        # Check for gaps in sequence
-        expected = list(range(1, len(shard_nums) + 1))
-        if shard_nums != expected:
-            return False, 0
-        
-        return True, len(shard_nums)
+        return False, 0
     
     def _is_conversion_needed(self, csv_path: Path) -> Tuple[bool, str]:
         """
         Check if conversion is needed for a CSV file.
         
         Handles both single parquet files and sharded directories.
+        Checks both root directory and subdirectory locations.
         
         Returns:
             (needs_conversion, reason)
         """
-        parquet_path = self._get_parquet_path(csv_path)
-        
         # First check for sharded directory (for large files)
         has_shards, shard_count = self._has_valid_shards(csv_path)
         if has_shards:
             # Check if CSV is newer than shards
             shard_dir = self._get_shard_dir(csv_path)
+            if not shard_dir.is_dir():
+                shard_dir = self._get_shard_dir_with_subdir(csv_path)
+            
             csv_mtime = csv_path.stat().st_mtime
             
             # Check any shard file's mtime
@@ -301,13 +331,22 @@ class DataConverter:
             
             return False, f"sharded ({shard_count} files)"
         
-        # Check if single parquet file exists
-        if not parquet_path.exists():
+        # Check if single parquet file exists (check both locations)
+        parquet_path = self._get_parquet_path(csv_path)
+        parquet_path_subdir = self._get_parquet_path_with_subdir(csv_path)
+        
+        existing_parquet = None
+        if parquet_path.exists():
+            existing_parquet = parquet_path
+        elif parquet_path_subdir.exists():
+            existing_parquet = parquet_path_subdir
+        
+        if existing_parquet is None:
             return True, "parquet file does not exist"
         
         # Check if CSV is newer than parquet
         csv_mtime = csv_path.stat().st_mtime
-        parquet_mtime = parquet_path.stat().st_mtime
+        parquet_mtime = existing_parquet.stat().st_mtime
         
         if csv_mtime > parquet_mtime:
             return True, "CSV is newer than parquet"
