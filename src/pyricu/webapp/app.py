@@ -5954,19 +5954,22 @@ def render_convert_dialog():
                 err_msg = "❌ Please set a valid output directory" if lang == 'en' else "❌ 请设置有效的输出目录"
                 st.error(err_msg)
             else:
-                spinner_msg = "Converting..." if lang == 'en' else "正在转换..."
-                with st.spinner(spinner_msg):
-                    # 使用用户设置的内存限制
-                    mem_limit = st.session_state.get('convert_memory_limit', 8)
-                    success, failed = convert_csv_to_parquet(source_path, target_path, overwrite, memory_limit_gb=mem_limit)
-                    if success > 0:
-                        success_msg = f"✅ Successfully converted {success} files" if lang == 'en' else f"✅ 成功转换 {success} 个文件"
-                        st.success(success_msg)
-                        st.session_state.path_validated = True
-                        st.session_state.data_path = target_path
-                    if failed > 0:
-                        fail_msg = f"⚠️ {failed} files failed to convert" if lang == 'en' else f"⚠️ {failed} 个文件转换失败"
-                        st.warning(fail_msg)
+                # 不使用 spinner，直接显示进度
+                st.info("🔄 Starting conversion..." if lang == 'en' else "🔄 开始转换...")
+                
+                # 使用用户设置的内存限制
+                mem_limit = st.session_state.get('convert_memory_limit', 8)
+                success, failed = convert_csv_to_parquet(source_path, target_path, overwrite, memory_limit_gb=mem_limit)
+                
+                if success > 0:
+                    success_msg = f"✅ Successfully converted {success} files" if lang == 'en' else f"✅ 成功转换 {success} 个文件"
+                    st.success(success_msg)
+                    st.session_state.path_validated = True
+                    st.session_state.data_path = target_path
+                if failed > 0:
+                    fail_msg = f"⚠️ {failed} files failed to convert" if lang == 'en' else f"⚠️ {failed} 个文件转换失败"
+                    st.warning(fail_msg)
+                    
                 st.session_state.show_convert_dialog = False
                 st.rerun()
     
@@ -6111,6 +6114,13 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     except ImportError:
         # 回退到简单转换
         return _simple_convert_csv_to_parquet(source_dir, target_dir, overwrite, memory_limit_gb)
+    except Exception as e:
+        # 捕获所有其他错误并显示
+        st.error(f"❌ Conversion error: {str(e)}")
+        import traceback
+        with st.expander("Error details"):
+            st.code(traceback.format_exc())
+        return 0, 1
 
 
 def _detect_database_type(path: Path) -> str:
