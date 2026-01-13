@@ -196,6 +196,10 @@ class DataConverter:
         Deduplicates files with the same table name, preferring:
         1. Larger files (likely full data, not demo)
         2. Files closer to root directory
+        
+        Filters out:
+        1. CSV shards inside directories that already have ricu parquet shards
+        2. part-*.csv files that belong to already-converted observation tables
         """
         csv_files = []
         
@@ -203,9 +207,72 @@ class DataConverter:
         for pattern in ['*.csv', '*.csv.gz', '*.CSV', '*.CSV.GZ']:
             csv_files.extend(self.data_path.rglob(pattern))
         
+        # Filter out CSV shards that have already been converted to ricu parquet shards
+        # These are typically in subdirectories like observation_tables/csv/part-*.csv
+        # but ricu has already converted them to observations/*.parquet
+        filtered_files = []
+        
+        # Patterns for CSV shard files that should be skipped if ricu parquet exists
+        shard_patterns = {
+            # HiRID: observation_tables/csv/part-*.csv -> observations/*.parquet
+            'observation_tables': 'observations',
+            'pharma_records': 'pharma',
+            # AUMC: numericitems_split/num_*.csv -> numericitems/*.parquet
+            'numericitems_split': 'numericitems',
+            'listitems_split': 'listitems',
+        }
+        
+        for f in csv_files:
+            skip = False
+            
+            # Check if this is a shard CSV file (part-N.csv or num_NN.csv pattern)
+            fname = f.name.lower()
+            is_shard_csv = (
+                fname.startswith('part-') or 
+                fname.startswith('num_') or
+                (fname[:2].isdigit() and fname.endswith('.csv'))
+            )
+            
+            if is_shard_csv:
+                # Check parent directory to see if ricu parquet shards exist
+                parent_name = f.parent.name.lower()
+                grandparent = f.parent.parent
+                
+                # Map CSV shard directory to ricu parquet shard directory
+                for csv_dir, parquet_dir in shard_patterns.items():
+                    if csv_dir in str(f.parent).lower():
+                        # Check if ricu parquet shards exist
+                        ricu_shard_dir = self.data_path / parquet_dir
+                        if ricu_shard_dir.is_dir():
+                            parquet_shards = list(ricu_shard_dir.glob('[0-9]*.parquet'))
+                            if parquet_shards:
+                                skip = True
+                                break
+                
+                # Also check if parent directory name matches a known shard dir with parquet
+                if not skip and parent_name in ['csv', 'data', 'numericitems_split', 'listitems_split']:
+                    # Get the actual table directory (grandparent or parent)
+                    table_dir_name = f.parent.name.lower()
+                    # Common mappings
+                    mappings = {
+                        'observation_tables': 'observations',
+                        'pharma_records': 'pharma',
+                        'numericitems_split': 'numericitems',
+                        'listitems_split': 'listitems',
+                    }
+                    target_dir = mappings.get(table_dir_name, table_dir_name)
+                    ricu_shard_dir = self.data_path / target_dir
+                    if ricu_shard_dir.is_dir() and ricu_shard_dir != grandparent:
+                        parquet_shards = list(ricu_shard_dir.glob('[0-9]*.parquet'))
+                        if parquet_shards:
+                            skip = True
+            
+            if not skip:
+                filtered_files.append(f)
+        
         # Deduplicate by table name (keep largest file for each table)
         table_files: Dict[str, Path] = {}
-        for f in csv_files:
+        for f in filtered_files:
             table_name = self._get_table_name_from_path(f)
             if table_name not in table_files:
                 table_files[table_name] = f
@@ -221,6 +288,15 @@ class DataConverter:
         
         return unique_files
     
+    # ricu table name mappings (CSV name -> Parquet name)
+    # Some databases use different names for CSV vs Parquet files
+    RICU_TABLE_NAME_MAP = {
+        # HiRID: original CSV uses _table suffix, ricu parquet doesn't
+        'general_table': 'general',
+        'pharma_records': 'pharma',
+        'observation_tables': 'observations',
+    }
+    
     def _get_table_name_from_path(self, csv_path: Path) -> str:
         """Extract table name from CSV path (without extension)."""
         name = csv_path.name
@@ -234,18 +310,24 @@ class DataConverter:
             name = name[:-4]
         return name.lower()
     
+    def _get_ricu_table_name(self, csv_path: Path) -> str:
+        """Get the ricu-style table name (may differ from CSV name)."""
+        csv_name = self._get_table_name_from_path(csv_path)
+        return self.RICU_TABLE_NAME_MAP.get(csv_name, csv_name)
+    
     def _get_parquet_path(self, csv_path: Path) -> Path:
         """Get the corresponding parquet path for a CSV file.
         
         ricu style: parquet files are in root directory, not preserving subdirectory structure.
+        Uses ricu table name mapping for databases like HiRID.
         """
-        name = self._get_table_name_from_path(csv_path)
+        name = self._get_ricu_table_name(csv_path)
         # ricu puts parquet files in root directory
         return self.data_path / f"{name}.parquet"
     
     def _get_parquet_path_with_subdir(self, csv_path: Path) -> Path:
         """Get parquet path preserving subdirectory structure (alternative location)."""
-        name = self._get_table_name_from_path(csv_path)
+        name = self._get_ricu_table_name(csv_path)
         try:
             rel_parent = csv_path.parent.relative_to(self.data_path)
         except ValueError:
@@ -256,14 +338,15 @@ class DataConverter:
         """Get the shard directory path for a large CSV file.
         
         ricu style: shard directories are in root directory (e.g., chartevents/1.parquet).
+        Uses ricu table name mapping.
         """
-        table_name = self._get_table_name_from_path(csv_path)
+        table_name = self._get_ricu_table_name(csv_path)
         # ricu puts shard directories in root directory
         return self.data_path / table_name
     
     def _get_shard_dir_with_subdir(self, csv_path: Path) -> Path:
         """Get shard directory preserving subdirectory structure (alternative location)."""
-        table_name = self._get_table_name_from_path(csv_path)
+        table_name = self._get_ricu_table_name(csv_path)
         try:
             rel_parent = csv_path.parent.relative_to(self.data_path)
         except ValueError:
