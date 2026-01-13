@@ -111,7 +111,7 @@ class BaseICULoader:
                     'eicu': ['patient.parquet', 'patient.csv', 'patient.csv.gz', 'vitalPeriodic.parquet'],
                     'aumc': ['numericitems', 'admissions.parquet'],
                     'miiv': ['chartevents', 'icustays.parquet'],
-                    'hirid': ['general_table.parquet', 'observations'],
+                    'hirid': ['general.parquet', 'observations'],
                 }
                 for db_name, markers in marker_files.items():
                     if any((path / m).exists() for m in markers):
@@ -160,7 +160,7 @@ class BaseICULoader:
                     'aumc': ['admissions.csv', 'admissions.parquet', 'numericitems'],
                     'miiv': ['admissions.csv', 'admissions.parquet', 'chartevents'],
                     'eicu': ['patient.csv', 'patient.csv.gz', 'vitalPeriodic.csv'],
-                    'hirid': ['general_table.csv', 'observations'],
+                    'hirid': ['general.csv', 'observations'],
                 }
                 
                 db_markers = marker_files.get(database, [])
