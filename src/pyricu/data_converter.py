@@ -450,30 +450,85 @@ class DataConverter:
         
         return False, "parquet exists and is up to date"
     
-    def _read_csv_with_encoding(self, csv_path: Path, **kwargs) -> pd.DataFrame:
-        """Read CSV file with automatic encoding detection."""
-        # Determine if gzipped
+    def _detect_encoding(self, csv_path: Path) -> str:
+        """Detect the correct encoding for a CSV file.
+        
+        Uses a quick approach: read raw bytes and check for encoding errors,
+        then verify with pandas on a sample.
+        """
         is_gzipped = csv_path.name.endswith('.gz')
         
-        for encoding in self.ENCODINGS:
-            try:
-                if is_gzipped:
-                    return pd.read_csv(csv_path, encoding=encoding, compression='gzip', **kwargs)
-                else:
-                    return pd.read_csv(csv_path, encoding=encoding, **kwargs)
-            except UnicodeDecodeError:
-                continue
-            except Exception as e:
-                # Other errors should be raised
-                if 'codec' not in str(e).lower() and 'encode' not in str(e).lower():
-                    raise
-                continue
-        
-        # Fallback: use errors='replace'
-        if is_gzipped:
-            return pd.read_csv(csv_path, encoding='utf-8', errors='replace', compression='gzip', **kwargs)
+        # Quick byte-level check for non-gzipped files
+        if not is_gzipped:
+            # Read a sample of raw bytes from different parts of the file
+            file_size = csv_path.stat().st_size
+            samples = []
+            with open(csv_path, 'rb') as f:
+                # Read beginning
+                samples.append(f.read(50000))
+                # Read middle
+                if file_size > 100000:
+                    f.seek(file_size // 2)
+                    samples.append(f.read(50000))
+                # Read near end
+                if file_size > 200000:
+                    f.seek(max(0, file_size - 50000))
+                    samples.append(f.read(50000))
+            
+            sample_bytes = b''.join(samples)
+            
+            for encoding in self.ENCODINGS:
+                try:
+                    sample_bytes.decode(encoding)
+                    # Verify with pandas on first 1000 rows
+                    try:
+                        pd.read_csv(csv_path, encoding=encoding, nrows=1000)
+                        return encoding
+                    except:
+                        continue
+                except (UnicodeDecodeError, LookupError):
+                    continue
         else:
-            return pd.read_csv(csv_path, encoding='utf-8', errors='replace', **kwargs)
+            # For gzipped files, try reading samples with pandas
+            for encoding in self.ENCODINGS:
+                try:
+                    pd.read_csv(csv_path, encoding=encoding, compression='gzip', nrows=5000)
+                    return encoding
+                except UnicodeDecodeError:
+                    continue
+                except Exception as e:
+                    if 'codec' in str(e).lower() or 'encode' in str(e).lower():
+                        continue
+                    return encoding  # Non-encoding error, use this encoding
+        
+        # Fallback to utf-8 with errors='replace'
+        return 'utf-8-replace'
+    
+    def _read_csv_with_encoding(self, csv_path: Path, **kwargs) -> pd.DataFrame:
+        """Read CSV file with automatic encoding detection.
+        
+        For chunked reading (chunksize in kwargs), detects encoding first
+        to avoid errors during iteration.
+        """
+        is_gzipped = csv_path.name.endswith('.gz')
+        chunksize = kwargs.get('chunksize')
+        
+        # Detect encoding first
+        encoding = self._detect_encoding(csv_path)
+        
+        # Handle special utf-8-replace fallback
+        if encoding == 'utf-8-replace':
+            if is_gzipped:
+                return pd.read_csv(csv_path, encoding='utf-8', errors='replace', 
+                                   compression='gzip', **kwargs)
+            else:
+                return pd.read_csv(csv_path, encoding='utf-8', errors='replace', **kwargs)
+        
+        # Use detected encoding
+        if is_gzipped:
+            return pd.read_csv(csv_path, encoding=encoding, compression='gzip', **kwargs)
+        else:
+            return pd.read_csv(csv_path, encoding=encoding, **kwargs)
     
     # Threshold for sharding large files (500MB compressed, ~2GB uncompressed)
     SHARD_THRESHOLD_MB = 500
@@ -494,12 +549,15 @@ class DataConverter:
         return name.lower()  # Normalize to lowercase like ricu
     
     def _should_shard(self, csv_path: Path) -> bool:
-        """Determine if a file should be sharded based on size."""
-        file_size_mb = csv_path.stat().st_size / (1024 * 1024)
-        # For gzipped files, estimate uncompressed size (typically 4-5x larger)
-        if csv_path.name.endswith('.gz'):
-            file_size_mb *= 4
-        return file_size_mb > self.SHARD_THRESHOLD_MB
+        """Determine if a file should be sharded based on ricu's partitioning config.
+        
+        Only tables defined in PARTITIONING_CONFIG should be sharded,
+        regardless of file size. This matches ricu's behavior.
+        """
+        table_name = self._get_table_name(csv_path)
+        # Only shard if table is in PARTITIONING_CONFIG for this database
+        partition_config = self._get_partitioning_config(table_name)
+        return partition_config is not None
     
     def _convert_file(self, csv_path: Path) -> Dict[str, Any]:
         """

@@ -2123,26 +2123,42 @@ def render_sidebar():
             border-color: #999 !important;
             opacity: 1;
         }
-        /* 覆盖Streamlit按钮样式使选中更明显 */
-        div[data-testid="column"] button[kind="primary"] {
+        /* 更强的样式覆盖：选中状态 */
+        div[data-testid="stHorizontalBlock"] div[data-testid="column"]:first-child button[kind="primary"],
+        div[data-testid="stHorizontalBlock"] div[data-testid="column"]:last-child button[kind="primary"] {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-            border: none !important;
-            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.5) !important;
+            border: 3px solid #667eea !important;
+            box-shadow: 0 6px 25px rgba(102, 126, 234, 0.6) !important;
             font-weight: 700 !important;
-            font-size: 1.1rem !important;
+            font-size: 1.05rem !important;
+            transform: scale(1.03);
+            animation: pulse-selected 2s infinite;
         }
-        div[data-testid="column"] button[kind="secondary"] {
-            background: #f0f2f6 !important;
-            color: #666 !important;
+        @keyframes pulse-selected {
+            0%, 100% { box-shadow: 0 6px 25px rgba(102, 126, 234, 0.6); }
+            50% { box-shadow: 0 8px 35px rgba(102, 126, 234, 0.8); }
+        }
+        /* 更明显的未选中样式 */
+        div[data-testid="stHorizontalBlock"] div[data-testid="column"]:first-child button[kind="secondary"],
+        div[data-testid="stHorizontalBlock"] div[data-testid="column"]:last-child button[kind="secondary"] {
+            background: #f8f9fa !important;
+            color: #888 !important;
             border: 2px dashed #ccc !important;
-            opacity: 0.7;
+            opacity: 0.65;
+            font-weight: 500 !important;
         }
-        div[data-testid="column"] button[kind="secondary"]:hover {
+        div[data-testid="stHorizontalBlock"] div[data-testid="column"] button[kind="secondary"]:hover {
             opacity: 1;
             border-color: #667eea !important;
+            background: #f0f0ff !important;
+            color: #667eea !important;
         }
         </style>
         """, unsafe_allow_html=True)
+        
+        # 显示当前选中模式的指示器
+        current_mode_indicator = f"🎯 **{'Data Extraction' if extract_selected else 'Quick Visualization'}** mode active" if st.session_state.language == 'en' else f"🎯 当前模式: **{'数据提取导出' if extract_selected else '快速可视化'}**"
+        st.markdown(current_mode_indicator)
         
         # 使用两列放置按钮 - 所有模式都用按钮，确保可点击
         mode_cols = st.columns(2)
@@ -2153,9 +2169,11 @@ def render_sidebar():
             if st.button(extract_label, key="btn_mode_extract", use_container_width=True, type=btn_type):
                 if not extract_selected:
                     st.session_state.app_mode = 'extract'
-                    # 切换模式时清空已加载数据，避免冲突
+                    # 切换模式时清空已加载数据和相关状态
                     st.session_state.loaded_concepts = {}
                     st.session_state.patient_ids = []
+                    st.session_state.selected_patient = None
+                    st.session_state.concept_dataframes = {}
                     st.rerun()
         
         with mode_cols[1]:
@@ -2164,9 +2182,11 @@ def render_sidebar():
             if st.button(viz_label, key="btn_mode_viz", use_container_width=True, type=btn_type):
                 if not viz_selected:
                     st.session_state.app_mode = 'viz'
-                    # 切换模式时清空已加载数据，避免冲突
+                    # 切换模式时清空已加载数据和相关状态
                     st.session_state.loaded_concepts = {}
                     st.session_state.patient_ids = []
+                    st.session_state.selected_patient = None
+                    st.session_state.concept_dataframes = {}
                     st.rerun()
         
         # 根据选择设置mode变量
