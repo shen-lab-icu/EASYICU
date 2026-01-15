@@ -913,6 +913,10 @@ def convert_data_with_progress(data_path: str, database: str):
                         fail_msg = f"❌ Failed: {file_name} - {str(e)[:50]}" if lang == 'en' else f"❌ 失败: {file_name} - {str(e)[:50]}"
                         st.caption(fail_msg)
             
+            # Force garbage collection after each file to prevent memory buildup
+            import gc
+            gc.collect()
+            
             # 更新进度
             progress = (idx + 1) / total_files
             progress_bar.progress(progress)

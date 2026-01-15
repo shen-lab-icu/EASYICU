@@ -109,8 +109,8 @@ class DataConverter:
     """
     
     # Default chunk size for reading large CSV files (rows)
-    # Use smaller chunks for memory efficiency
-    DEFAULT_CHUNK_SIZE = 100_000
+    # Use smaller chunks (50K) for better memory efficiency on Windows
+    DEFAULT_CHUNK_SIZE = 50_000
     
     # Status file name to track conversion progress
     STATUS_FILE = ".pyricu_conversion_status.json"
@@ -874,9 +874,12 @@ class DataConverter:
         file_size_mb = csv_path.stat().st_size / (1024 * 1024)
         if file_size_mb > 100:
             try:
-                reference_schema = self._infer_stable_schema(csv_path, sample_chunks=10)
+                # Use only 3 chunks to minimize memory overhead
+                reference_schema = self._infer_stable_schema(csv_path, sample_chunks=3)
                 if self.verbose:
                     logger.info(f"  Pre-inferred stable schema with {len(reference_schema)} columns")
+                # Force GC after schema inference
+                gc.collect()
             except Exception as e:
                 logger.warning(f"  Failed to pre-infer schema: {e}")
         
@@ -965,9 +968,9 @@ class DataConverter:
                         write_to_partition(part_num, part_chunk)
                         del part_chunk
                 
-                # Clear chunk reference and collect garbage periodically
+                # Clear chunk reference and collect garbage more frequently on large files
                 del chunk
-                if (chunk_num + 1) % 100 == 0:
+                if (chunk_num + 1) % 20 == 0:
                     gc.collect()
             
             # Close all writers
@@ -1034,12 +1037,14 @@ class DataConverter:
         
         return pa.Table.from_arrays(new_columns, schema=reference_schema)
     
-    def _infer_stable_schema(self, csv_path: Path, sample_chunks: int = 5) -> 'pa.Schema':
+    def _infer_stable_schema(self, csv_path: Path, sample_chunks: int = 3) -> 'pa.Schema':
         """
         Infer a stable schema by reading multiple chunks and merging types.
         
         This prevents schema mismatch errors when some chunks have null columns.
+        Uses minimal memory by only keeping schema objects, not data.
         """
+        import gc
         import pyarrow as pa
         
         schemas = []
@@ -1056,7 +1061,10 @@ class DataConverter:
             chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
             table = pa.Table.from_pandas(chunk, preserve_index=False)
             schemas.append(table.schema)
-            del chunk, table
+            # Explicitly delete to free memory immediately
+            del chunk
+            del table
+            gc.collect()
         
         if not schemas:
             raise ValueError(f"No data to infer schema from {csv_path}")
@@ -1103,9 +1111,12 @@ class DataConverter:
         file_size_mb = csv_path.stat().st_size / (1024 * 1024)
         if file_size_mb > 100:  # For large files, pre-scan for stable schema
             try:
-                reference_schema = self._infer_stable_schema(csv_path, sample_chunks=10)
+                # Use only 3 chunks to minimize memory overhead
+                reference_schema = self._infer_stable_schema(csv_path, sample_chunks=3)
                 if self.verbose:
                     logger.info(f"  Pre-inferred stable schema with {len(reference_schema)} columns")
+                # Force GC after schema inference
+                gc.collect()
             except Exception as e:
                 logger.warning(f"  Failed to pre-infer schema: {e}")
         
@@ -1155,9 +1166,10 @@ class DataConverter:
             # Start new shard when reaching threshold
             if current_shard_rows >= self.ROWS_PER_SHARD:
                 start_new_shard()
+                gc.collect()  # GC after closing each shard
             
-            # Periodic garbage collection
-            if total_rows % 1_000_000 == 0:
+            # Periodic garbage collection - more frequent (every 500K rows)
+            if total_rows % 500_000 == 0:
                 gc.collect()
         
         # Close final shard
