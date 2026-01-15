@@ -46,7 +46,7 @@ all = [
 
 [project.scripts]
 pyricu = "pyricu.scripts.extract_features:main"
-pyricu-webapp = "pyricu.webapp:main"
+pyricu-webapp = "pyricu.webapp:run_app"
 
 [project.urls]
 Homepage = "https://github.com/shen-lab-icu/pyricu"
