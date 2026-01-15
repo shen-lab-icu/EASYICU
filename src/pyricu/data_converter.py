@@ -547,10 +547,11 @@ class DataConverter:
         
         return pd.read_csv(csv_path, **read_args)
     
-    # Threshold for sharding large files (200MB compressed)
-    SHARD_THRESHOLD_MB = 200
-    # Number of rows per shard - 10M rows for better read performance
-    ROWS_PER_SHARD = 10_000_000  # 10M rows per shard
+    # Threshold for sharding large files (1GB compressed)
+    # Only very large tables like chartevents need sharding
+    SHARD_THRESHOLD_MB = 1000
+    # Number of rows per shard - 25M rows to match ~200-250MB parquet files
+    ROWS_PER_SHARD = 25_000_000  # 25M rows per shard
     
     # Known problematic columns that have mixed types in MIMIC-IV
     # These columns often contain mixed numeric/string/bytes data
@@ -835,10 +836,10 @@ class DataConverter:
         # Check for ricu-style partitioning config
         partition_config = self._get_partitioning_config(table_name)
         
-        # ID-based partitioning opens many writers simultaneously, which uses a lot of memory.
-        # For memory-constrained systems, prefer row-based partitioning.
-        # Set USE_ID_PARTITIONING=1 to enable ID-based partitioning (default: disabled)
-        use_id_partitioning = os.environ.get('PYRICU_USE_ID_PARTITIONING', '0') == '1'
+        # ID-based partitioning matches ricu's output format exactly.
+        # Now that memory is not an issue, enable by default for tables with config.
+        # Set PYRICU_USE_ID_PARTITIONING=0 to disable if needed.
+        use_id_partitioning = os.environ.get('PYRICU_USE_ID_PARTITIONING', '1') == '1'
         
         if partition_config and use_id_partitioning:
             # Use ID-based partitioning (ricu style) - opens many writers, uses more memory
