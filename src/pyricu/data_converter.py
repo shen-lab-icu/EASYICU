@@ -109,9 +109,9 @@ class DataConverter:
     """
     
     # Default chunk size for reading large CSV files (rows)
-    # 500K rows per chunk provides good balance between speed and memory
-    # Typical usage: ~2-4GB memory for large files
-    DEFAULT_CHUNK_SIZE = 500_000
+    # 1M rows per chunk for high-performance conversion
+    # Typical usage: ~3-5GB memory for large files
+    DEFAULT_CHUNK_SIZE = 1_000_000
     
     # Status file name to track conversion progress
     STATUS_FILE = ".pyricu_conversion_status.json"
@@ -120,7 +120,7 @@ class DataConverter:
     ENCODINGS = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
     
     # Memory threshold for buffer flush (in rows per partition)
-    PARTITION_BUFFER_THRESHOLD = 1_000_000
+    PARTITION_BUFFER_THRESHOLD = 2_000_000
     
     def __init__(
         self,
