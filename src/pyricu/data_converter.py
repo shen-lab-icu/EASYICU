@@ -109,8 +109,8 @@ class DataConverter:
     """
     
     # Default chunk size for reading large CSV files (rows)
-    # Reduced from 500K to 200K for better memory management on 32GB systems
-    DEFAULT_CHUNK_SIZE = 200_000
+    # Use smaller chunks for memory efficiency
+    DEFAULT_CHUNK_SIZE = 100_000
     
     # Status file name to track conversion progress
     STATUS_FILE = ".pyricu_conversion_status.json"
@@ -119,8 +119,8 @@ class DataConverter:
     ENCODINGS = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
     
     # Memory threshold for buffer flush (in rows per partition)
-    # When any partition buffer exceeds this, flush to disk
-    PARTITION_BUFFER_THRESHOLD = 2_000_000  # 2M rows triggers flush
+    # Keep small to minimize memory usage - flush every 500K rows per partition
+    PARTITION_BUFFER_THRESHOLD = 500_000
     
     def __init__(
         self,
@@ -701,18 +701,23 @@ class DataConverter:
     def _convert_file_single(self, csv_path: Path, result: Dict[str, Any]) -> Dict[str, Any]:
         """Convert a smaller CSV file to a single parquet file.
         
+        Uses streaming write for large files to avoid memory issues.
         Handles mixed-type columns by converting them to string before parquet export.
         """
+        import gc
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        
         parquet_path = self._get_parquet_path(csv_path)
         
-        # Check file size to decide on chunked reading
+        # Check file size to decide on streaming vs direct write
         file_size = csv_path.stat().st_size
-        use_chunks = file_size > 100 * 1024 * 1024  # > 100MB
+        use_streaming = file_size > 50 * 1024 * 1024  # > 50MB use streaming
         
-        if use_chunks:
-            # Read and convert in chunks for large files
-            chunks = []
+        if use_streaming:
+            # Use streaming write for larger files
             total_rows = 0
+            writer = None
             
             chunk_iter = self._read_csv_with_encoding(
                 csv_path, 
@@ -720,42 +725,65 @@ class DataConverter:
                 low_memory=True,
             )
             
-            for i, chunk in enumerate(chunk_iter):
-                chunks.append(chunk)
-                total_rows += len(chunk)
+            try:
+                for i, chunk in enumerate(chunk_iter):
+                    # Fix mixed-type columns in each chunk
+                    chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
+                    
+                    # Convert to PyArrow table
+                    table = pa.Table.from_pandas(chunk, preserve_index=False)
+                    
+                    # Initialize writer on first chunk
+                    if writer is None:
+                        writer = pq.ParquetWriter(parquet_path, table.schema, compression='snappy')
+                    
+                    writer.write_table(table)
+                    total_rows += len(chunk)
+                    
+                    if self.verbose and (i + 1) % 20 == 0:
+                        logger.info(f"  Written {total_rows:,} rows...")
+                    
+                    del chunk, table
+                    if (i + 1) % 50 == 0:
+                        gc.collect()
                 
-                if self.verbose and (i + 1) % 10 == 0:
-                    logger.info(f"  Read {total_rows:,} rows...")
+                if writer is not None:
+                    writer.close()
+                    
+            except Exception as e:
+                if writer is not None:
+                    writer.close()
+                raise
             
-            # Concatenate and save
-            df = pd.concat(chunks, ignore_index=True)
+            result['row_count'] = total_rows
             
         else:
-            # Read entire file at once
+            # Read entire file at once for small files
             df = self._read_csv_with_encoding(csv_path, low_memory=True)
-        
-        # Fix mixed-type columns before parquet export
-        df = self._fix_mixed_type_columns(df, csv_path.name)
-        
-        # Convert to parquet with error handling
-        try:
-            df.to_parquet(parquet_path, index=False, engine='pyarrow')
-        except Exception as e:
-            if 'Expected bytes' in str(e) or 'object' in str(e).lower():
-                # Convert all object columns to string
-                logger.warning(f"  ⚠️ Converting object columns to string for {csv_path.name}")
-                for col in df.select_dtypes(include=['object']).columns:
-                    df[col] = df[col].astype(str)
+            
+            # Fix mixed-type columns before parquet export
+            df = self._fix_mixed_type_columns(df, csv_path.name)
+            
+            # Convert to parquet with error handling
+            try:
                 df.to_parquet(parquet_path, index=False, engine='pyarrow')
-            else:
-                raise
+            except Exception as e:
+                if 'Expected bytes' in str(e) or 'object' in str(e).lower():
+                    # Convert all object columns to string
+                    logger.warning(f"  ⚠️ Converting object columns to string for {csv_path.name}")
+                    for col in df.select_dtypes(include=['object']).columns:
+                        df[col] = df[col].astype(str)
+                    df.to_parquet(parquet_path, index=False, engine='pyarrow')
+                else:
+                    raise
+            
+            result['row_count'] = len(df)
         
         result['status'] = ConversionStatus.COMPLETED
-        result['row_count'] = len(df)
         result['shards'] = 0
         
         if self.verbose:
-            logger.info(f"  ✅ Converted {result['file']}: {len(df):,} rows")
+            logger.info(f"  ✅ Converted {result['file']}: {result['row_count']:,} rows")
         
         return result
     
@@ -820,10 +848,13 @@ class DataConverter:
         Convert using ID-based partitioning (matching ricu's logic).
         
         Partitions data based on breakpoints in a specific column.
-        Uses memory-efficient streaming with periodic flush to disk.
+        Uses memory-efficient streaming - writes directly to partition files
+        without accumulating data in memory.
         """
         import gc
         import bisect
+        import pyarrow as pa
+        import pyarrow.parquet as pq
         
         partition_col = partition_config['col']
         breaks = partition_config['breaks']
@@ -833,151 +864,115 @@ class DataConverter:
         n_partitions = len(breaks) + 1
         
         if self.verbose:
-            logger.info(f"  Using ID-based partitioning on '{partition_col}' with {n_partitions} partitions (memory-optimized)")
+            logger.info(f"  Using ID-based partitioning on '{partition_col}' with {n_partitions} partitions (streaming mode)")
         
-        # Track which partitions have been partially written (for appending)
-        partition_temp_files: Dict[int, List[Path]] = {i: [] for i in range(1, n_partitions + 1)}
-        
-        # Initialize partition buffers with size tracking
-        partition_buffers: Dict[int, List[pd.DataFrame]] = {i: [] for i in range(1, n_partitions + 1)}
-        partition_buffer_rows: Dict[int, int] = {i: 0 for i in range(1, n_partitions + 1)}
+        # Use PyArrow ParquetWriter for each partition - true streaming write
+        partition_writers: Dict[int, pq.ParquetWriter] = {}
+        partition_schemas: Dict[int, pa.Schema] = {}
         partition_total_rows: Dict[int, int] = {i: 0 for i in range(1, n_partitions + 1)}
         
         total_rows = 0
-        temp_file_counter = 0
+        schema_initialized = False
+        base_schema = None
         
-        def flush_partition_buffer(part_num: int):
-            """Flush a partition buffer to a temporary parquet file."""
-            nonlocal temp_file_counter
-            if not partition_buffers[part_num]:
+        def get_partition_path(part_num: int) -> Path:
+            return shard_dir / f"{part_num}.parquet"
+        
+        def write_to_partition(part_num: int, df: pd.DataFrame):
+            """Write DataFrame directly to partition file using streaming."""
+            nonlocal schema_initialized, base_schema
+            
+            if len(df) == 0:
                 return
             
-            part_df = pd.concat(partition_buffers[part_num], ignore_index=True)
-            temp_file_counter += 1
-            temp_path = shard_dir / f".temp_{part_num}_{temp_file_counter}.parquet"
-            part_df.to_parquet(temp_path, index=False, engine='pyarrow')
-            partition_temp_files[part_num].append(temp_path)
+            # Convert to PyArrow table
+            table = pa.Table.from_pandas(df, preserve_index=False)
             
-            if self.verbose:
-                logger.info(f"    💾 Flushed partition {part_num} buffer: {len(part_df):,} rows to temp file")
+            # Initialize writer if needed
+            if part_num not in partition_writers:
+                shard_path = get_partition_path(part_num)
+                partition_writers[part_num] = pq.ParquetWriter(
+                    shard_path, 
+                    table.schema,
+                    compression='snappy'
+                )
+                partition_schemas[part_num] = table.schema
             
-            # Clear buffer and free memory
-            partition_buffers[part_num] = []
-            partition_buffer_rows[part_num] = 0
-            del part_df
-            gc.collect()
+            # Write the batch
+            partition_writers[part_num].write_table(table)
+            partition_total_rows[part_num] += len(df)
         
-        def flush_all_buffers():
-            """Flush all partition buffers that have data."""
-            for part_num in range(1, n_partitions + 1):
-                if partition_buffers[part_num]:
-                    flush_partition_buffer(part_num)
+        def close_all_writers():
+            """Close all partition writers."""
+            for part_num, writer in partition_writers.items():
+                try:
+                    writer.close()
+                    if self.verbose:
+                        logger.info(f"  📁 Wrote partition {part_num}: {partition_total_rows[part_num]:,} rows")
+                except Exception as e:
+                    logger.warning(f"  ⚠️ Error closing partition {part_num}: {e}")
         
-        # Read in chunks and assign to partitions
-        chunk_iter = self._read_csv_with_encoding(
-            csv_path, 
-            chunksize=self.chunk_size,
-            low_memory=True,  # Use low_memory mode to reduce peak usage
-        )
-        
-        for chunk_num, chunk in enumerate(chunk_iter):
-            chunk_rows = len(chunk)
-            total_rows += chunk_rows
+        try:
+            # Read in chunks and stream to partitions
+            chunk_iter = self._read_csv_with_encoding(
+                csv_path, 
+                chunksize=self.chunk_size,
+                low_memory=True,
+            )
             
-            if self.verbose and (chunk_num + 1) % 20 == 0:
-                logger.info(f"  Read {total_rows:,} rows...")
-            
-            # Assign each row to a partition
-            if partition_col not in chunk.columns:
-                logger.warning(f"  Partition column '{partition_col}' not found, using row-based partitioning")
-                # Clean up temp files
-                for temp_files in partition_temp_files.values():
-                    for tf in temp_files:
+            for chunk_num, chunk in enumerate(chunk_iter):
+                chunk_rows = len(chunk)
+                total_rows += chunk_rows
+                
+                if self.verbose and (chunk_num + 1) % 50 == 0:
+                    logger.info(f"  Read {total_rows:,} rows...")
+                
+                # Assign each row to a partition
+                if partition_col not in chunk.columns:
+                    logger.warning(f"  Partition column '{partition_col}' not found, using row-based partitioning")
+                    close_all_writers()
+                    # Clean up partial files
+                    for part_num in range(1, n_partitions + 1):
                         try:
-                            tf.unlink()
+                            get_partition_path(part_num).unlink()
                         except:
                             pass
-                # Fallback to row-based
-                return self._convert_with_row_partitioning(csv_path, shard_dir, result)
-            
-            # Vectorized partition assignment using numpy for speed
-            col_values = chunk[partition_col].values
-            partitions = [bisect.bisect_right(breaks, v) + 1 for v in col_values]
-            chunk['_partition'] = partitions
-            
-            # Split chunk by partition
-            for part_num in range(1, n_partitions + 1):
-                part_chunk = chunk[chunk['_partition'] == part_num].drop(columns=['_partition'])
-                chunk_len = len(part_chunk)
-                if chunk_len > 0:
-                    partition_buffers[part_num].append(part_chunk)
-                    partition_buffer_rows[part_num] += chunk_len
-                    partition_total_rows[part_num] += chunk_len
-                    
-                    # Check if buffer needs flushing (memory management)
-                    if partition_buffer_rows[part_num] >= self.PARTITION_BUFFER_THRESHOLD:
-                        flush_partition_buffer(part_num)
-            
-            # Clear chunk reference
-            del chunk
-            
-            # Periodic memory cleanup
-            if (chunk_num + 1) % 50 == 0:
-                gc.collect()
-        
-        # Flush remaining buffers
-        flush_all_buffers()
-        gc.collect()
-        
-        if self.verbose:
-            logger.info(f"  Merging temp files into final partitions...")
-        
-        # Merge temp files into final partition files
-        for part_num in range(1, n_partitions + 1):
-            temp_files = partition_temp_files[part_num]
-            if not temp_files:
-                continue
-            
-            shard_path = shard_dir / f"{part_num}.parquet"
-            
-            if len(temp_files) == 1:
-                # Single temp file - just rename
-                temp_files[0].rename(shard_path)
-                if self.verbose:
-                    logger.info(f"  📁 Wrote partition {part_num}: {partition_total_rows[part_num]:,} rows")
-            else:
-                # Multiple temp files - merge with streaming to avoid memory spike
-                # Read and concatenate in smaller batches
-                all_chunks = []
-                for tf in temp_files:
-                    df = pd.read_parquet(tf)
-                    all_chunks.append(df)
-                    # Delete temp file after reading
-                    tf.unlink()
+                    return self._convert_with_row_partitioning(csv_path, shard_dir, result)
                 
-                part_df = pd.concat(all_chunks, ignore_index=True)
-                del all_chunks
-                gc.collect()
+                # Vectorized partition assignment
+                col_values = chunk[partition_col].values
+                chunk['_partition'] = [bisect.bisect_right(breaks, v) + 1 for v in col_values]
                 
-                # Sort by partition column (like ricu)
-                part_df = part_df.sort_values(by=partition_col).reset_index(drop=True)
-                part_df.to_parquet(shard_path, index=False, engine='pyarrow')
+                # Write each partition's data directly to file
+                for part_num in range(1, n_partitions + 1):
+                    part_chunk = chunk[chunk['_partition'] == part_num].drop(columns=['_partition'])
+                    if len(part_chunk) > 0:
+                        write_to_partition(part_num, part_chunk)
+                        del part_chunk
                 
-                if self.verbose:
-                    logger.info(f"  📁 Wrote partition {part_num}: {len(part_df):,} rows (merged from {len(temp_files)} temp files)")
-                
-                del part_df
-                gc.collect()
-        
-        result['status'] = ConversionStatus.COMPLETED
-        result['row_count'] = total_rows
-        result['shards'] = n_partitions
-        result['shard_dir'] = str(shard_dir)
-        result['partition_col'] = partition_col
-        result['partition_breaks'] = breaks
-        
-        if self.verbose:
-            logger.info(f"  ✅ Converted {result['file']}: {total_rows:,} rows in {n_partitions} partitions")
+                # Clear chunk reference and collect garbage periodically
+                del chunk
+                if (chunk_num + 1) % 100 == 0:
+                    gc.collect()
+            
+            # Close all writers
+            close_all_writers()
+            gc.collect()
+            
+            result['status'] = ConversionStatus.COMPLETED
+            result['row_count'] = total_rows
+            result['shards'] = n_partitions
+            result['shard_dir'] = str(shard_dir)
+            result['partition_col'] = partition_col
+            result['partition_breaks'] = breaks
+            
+            if self.verbose:
+                logger.info(f"  ✅ Converted {result['file']}: {total_rows:,} rows in {n_partitions} partitions")
+            
+        except Exception as e:
+            # Make sure to close writers on error
+            close_all_writers()
+            raise
         
         return result
     
@@ -989,45 +984,64 @@ class DataConverter:
     ) -> Dict[str, Any]:
         """
         Convert using row-count based partitioning (fallback method).
+        Uses streaming write to avoid memory accumulation.
         """
+        import gc
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        
+        total_rows = 0
+        shard_num = 1
+        current_writer = None
+        current_shard_rows = 0
+        
+        def start_new_shard():
+            nonlocal shard_num, current_writer, current_shard_rows
+            if current_writer is not None:
+                current_writer.close()
+                if self.verbose:
+                    logger.info(f"  📁 Wrote shard {shard_num}: {current_shard_rows:,} rows")
+                shard_num += 1
+            current_shard_rows = 0
+            current_writer = None  # Will be initialized on first write
+        
         # Read and write in chunks
         chunk_iter = self._read_csv_with_encoding(
             csv_path, 
             chunksize=self.chunk_size,
-            low_memory=False,
+            low_memory=True,
         )
         
-        total_rows = 0
-        shard_num = 1
-        current_shard_rows = []
-        current_shard_row_count = 0
-        
         for chunk in chunk_iter:
-            current_shard_rows.append(chunk)
-            current_shard_row_count += len(chunk)
-            total_rows += len(chunk)
+            chunk_len = len(chunk)
+            total_rows += chunk_len
             
-            # Write shard when reaching threshold
-            if current_shard_row_count >= self.ROWS_PER_SHARD:
-                shard_df = pd.concat(current_shard_rows, ignore_index=True)
+            # Initialize writer if needed
+            if current_writer is None:
+                table = pa.Table.from_pandas(chunk, preserve_index=False)
                 shard_path = shard_dir / f"{shard_num}.parquet"
-                shard_df.to_parquet(shard_path, index=False, engine='pyarrow')
-                
-                if self.verbose:
-                    logger.info(f"  📁 Wrote shard {shard_num}: {len(shard_df):,} rows")
-                
-                shard_num += 1
-                current_shard_rows = []
-                current_shard_row_count = 0
-        
-        # Write remaining rows as final shard
-        if current_shard_rows:
-            shard_df = pd.concat(current_shard_rows, ignore_index=True)
-            shard_path = shard_dir / f"{shard_num}.parquet"
-            shard_df.to_parquet(shard_path, index=False, engine='pyarrow')
+                current_writer = pq.ParquetWriter(shard_path, table.schema, compression='snappy')
+                current_writer.write_table(table)
+            else:
+                table = pa.Table.from_pandas(chunk, preserve_index=False)
+                current_writer.write_table(table)
             
+            current_shard_rows += chunk_len
+            del chunk, table
+            
+            # Start new shard when reaching threshold
+            if current_shard_rows >= self.ROWS_PER_SHARD:
+                start_new_shard()
+            
+            # Periodic garbage collection
+            if total_rows % 1_000_000 == 0:
+                gc.collect()
+        
+        # Close final shard
+        if current_writer is not None:
+            current_writer.close()
             if self.verbose:
-                logger.info(f"  📁 Wrote shard {shard_num}: {len(shard_df):,} rows")
+                logger.info(f"  📁 Wrote shard {shard_num}: {current_shard_rows:,} rows")
         
         result['status'] = ConversionStatus.COMPLETED
         result['row_count'] = total_rows
