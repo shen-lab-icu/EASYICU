@@ -109,8 +109,9 @@ class DataConverter:
     """
     
     # Default chunk size for reading large CSV files (rows)
-    # Use smaller chunks (50K) for better memory efficiency on Windows
-    DEFAULT_CHUNK_SIZE = 50_000
+    # 500K rows per chunk provides good balance between speed and memory
+    # Typical usage: ~2-4GB memory for large files
+    DEFAULT_CHUNK_SIZE = 500_000
     
     # Status file name to track conversion progress
     STATUS_FILE = ".pyricu_conversion_status.json"
@@ -119,8 +120,7 @@ class DataConverter:
     ENCODINGS = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
     
     # Memory threshold for buffer flush (in rows per partition)
-    # Keep small to minimize memory usage - flush every 500K rows per partition
-    PARTITION_BUFFER_THRESHOLD = 500_000
+    PARTITION_BUFFER_THRESHOLD = 1_000_000
     
     def __init__(
         self,
@@ -500,12 +500,10 @@ class DataConverter:
         else:
             # For gzipped files, try reading samples with pandas
             # Use only 1000 rows to minimize memory
-            import gc
             for encoding in self.ENCODINGS:
                 try:
                     sample_df = pd.read_csv(csv_path, encoding=encoding, compression='gzip', nrows=1000)
                     del sample_df
-                    gc.collect()
                     return encoding
                 except UnicodeDecodeError:
                     continue
@@ -551,8 +549,8 @@ class DataConverter:
     
     # Threshold for sharding large files (200MB compressed)
     SHARD_THRESHOLD_MB = 200
-    # Number of rows per shard - keep small for memory efficiency
-    ROWS_PER_SHARD = 5_000_000  # 5M rows per shard
+    # Number of rows per shard - 10M rows for better read performance
+    ROWS_PER_SHARD = 10_000_000  # 10M rows per shard
     
     # Known problematic columns that have mixed types in MIMIC-IV
     # These columns often contain mixed numeric/string/bytes data
@@ -745,11 +743,12 @@ class DataConverter:
                     writer.write_table(table)
                     total_rows += len(chunk)
                     
-                    if self.verbose and (i + 1) % 20 == 0:
+                    if self.verbose and (i + 1) % 50 == 0:
                         logger.info(f"  Written {total_rows:,} rows...")
                     
                     del chunk, table
-                    if (i + 1) % 20 == 0:
+                    # GC less frequently for better performance
+                    if (i + 1) % 100 == 0:
                         gc.collect()
                 
                 if writer is not None:
