@@ -6007,16 +6007,16 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
             
             status_text.markdown(f"**转换中**: `{csv_file.name}` ({idx+1}/{len(csv_files)})")
             
-            # Use chunked reading for large files (>50MB)
+            # Use chunked reading for large files (>100MB)
             file_size = csv_file.stat().st_size
-            if file_size > 50 * 1024 * 1024:
+            if file_size > 100 * 1024 * 1024:
                 # Streaming conversion for large files
                 import pyarrow as pa
                 import pyarrow.parquet as pq
                 
                 writer = None
                 total_rows = 0
-                chunk_size = 50000
+                chunk_size = 500_000  # 500K rows per chunk for faster conversion
                 
                 compression = 'gzip' if csv_file.name.endswith('.gz') else None
                 chunk_iter = pd.read_csv(csv_file, chunksize=chunk_size, compression=compression, low_memory=True)
