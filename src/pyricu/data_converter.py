@@ -523,14 +523,14 @@ class DataConverter:
         For chunked reading (chunksize in kwargs), detects encoding first
         to avoid errors during iteration.
         
-        Handles mixed-type columns by keeping them as object dtype.
+        Uses optimized settings for memory-efficient reading.
         """
-        is_gzipped = csv_path.name.endswith('.gz')
+        is_gzipped = csv_path.name.endswith('.gz') or csv_path.name.endswith('.GZ')
         
         # Detect encoding first
         encoding = self._detect_encoding(csv_path)
         
-        # Base read arguments - keep it simple for memory efficiency
+        # Base read arguments - optimized for memory efficiency
         read_args = {
             'on_bad_lines': 'warn',  # Don't fail on bad lines
             'low_memory': True,  # Force low memory mode

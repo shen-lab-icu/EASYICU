@@ -5918,12 +5918,70 @@ def render_convert_dialog():
 
 
 def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
-    """将目录下的CSV文件转换为Parquet格式。"""
-    import time
+    """将目录下的CSV文件转换为Parquet格式。
+    
+    Uses DataConverter for memory-efficient streaming conversion.
+    """
+    import gc
+    from pyricu.data_converter import DataConverter
     
     source_path = Path(source_dir)
     target_path = Path(target_dir)
     
+    # Determine database type from path
+    database = None
+    path_lower = str(source_path).lower()
+    if 'mimic' in path_lower or 'miiv' in path_lower:
+        database = 'miiv'
+    elif 'eicu' in path_lower:
+        database = 'eicu'
+    elif 'aumc' in path_lower:
+        database = 'aumc'
+    elif 'hirid' in path_lower:
+        database = 'hirid'
+    
+    # Use DataConverter if database is detected, otherwise fallback to simple conversion
+    if database:
+        try:
+            converter = DataConverter(target_path, database=database, verbose=True)
+            
+            csv_files = list(source_path.rglob('*.csv')) + list(source_path.rglob('*.csv.gz'))
+            
+            success = 0
+            failed = 0
+            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for idx, csv_file in enumerate(csv_files):
+                try:
+                    # Skip files that don't need conversion
+                    needs_conversion, reason = converter._is_conversion_needed(csv_file)
+                    
+                    if not needs_conversion and not overwrite:
+                        status_text.caption(f"⏭️ 跳过: {csv_file.name} ({reason})")
+                    else:
+                        status_text.markdown(f"**转换中**: `{csv_file.name}` ({idx+1}/{len(csv_files)})")
+                        converter._convert_file(csv_file)
+                        success += 1
+                        
+                except Exception as e:
+                    failed += 1
+                    status_text.caption(f"❌ 失败: {csv_file.name} - {str(e)[:50]}")
+                
+                # Force GC after each file
+                gc.collect()
+                progress_bar.progress((idx + 1) / len(csv_files))
+            
+            progress_bar.progress(1.0)
+            status_text.empty()
+            
+            return success, failed
+            
+        except Exception as e:
+            st.warning(f"DataConverter failed, using simple conversion: {e}")
+    
+    # Fallback: simple conversion for non-standard databases (with streaming for large files)
     csv_files = list(source_path.rglob('*.csv')) + list(source_path.rglob('*.csv.gz'))
     
     success = 0
@@ -5949,15 +6007,50 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
             
             status_text.markdown(f"**转换中**: `{csv_file.name}` ({idx+1}/{len(csv_files)})")
             
-            # 读取CSV并转换
-            df = pd.read_csv(csv_file)
-            df.to_parquet(parquet_file, index=False)
+            # Use chunked reading for large files (>50MB)
+            file_size = csv_file.stat().st_size
+            if file_size > 50 * 1024 * 1024:
+                # Streaming conversion for large files
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+                
+                writer = None
+                total_rows = 0
+                chunk_size = 50000
+                
+                compression = 'gzip' if csv_file.name.endswith('.gz') else None
+                chunk_iter = pd.read_csv(csv_file, chunksize=chunk_size, compression=compression, low_memory=True)
+                
+                try:
+                    for chunk in chunk_iter:
+                        table = pa.Table.from_pandas(chunk, preserve_index=False)
+                        if writer is None:
+                            writer = pq.ParquetWriter(parquet_file, table.schema, compression='snappy')
+                        writer.write_table(table)
+                        total_rows += len(chunk)
+                        del chunk, table
+                    
+                    if writer:
+                        writer.close()
+                finally:
+                    if hasattr(chunk_iter, 'close'):
+                        chunk_iter.close()
+                    gc.collect()
+            else:
+                # Direct conversion for small files
+                compression = 'gzip' if csv_file.name.endswith('.gz') else None
+                df = pd.read_csv(csv_file, compression=compression, low_memory=True)
+                df.to_parquet(parquet_file, index=False)
+                del df
+                gc.collect()
+            
             success += 1
             
         except Exception as e:
             failed += 1
             status_text.caption(f"❌ 失败: {csv_file.name} - {str(e)[:50]}")
         
+        gc.collect()
         progress_bar.progress((idx + 1) / len(csv_files))
     
     progress_bar.progress(1.0)
