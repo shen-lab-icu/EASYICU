@@ -865,19 +865,27 @@ class DataConverter:
         
         # Use PyArrow ParquetWriter for each partition - true streaming write
         partition_writers: Dict[int, pq.ParquetWriter] = {}
-        partition_schemas: Dict[int, pa.Schema] = {}
         partition_total_rows: Dict[int, int] = {i: 0 for i in range(1, n_partitions + 1)}
         
         total_rows = 0
-        schema_initialized = False
-        base_schema = None
+        reference_schema = None
+        
+        # Pre-infer stable schema for large files
+        file_size_mb = csv_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > 100:
+            try:
+                reference_schema = self._infer_stable_schema(csv_path, sample_chunks=10)
+                if self.verbose:
+                    logger.info(f"  Pre-inferred stable schema with {len(reference_schema)} columns")
+            except Exception as e:
+                logger.warning(f"  Failed to pre-infer schema: {e}")
         
         def get_partition_path(part_num: int) -> Path:
             return shard_dir / f"{part_num}.parquet"
         
         def write_to_partition(part_num: int, df: pd.DataFrame):
             """Write DataFrame directly to partition file using streaming."""
-            nonlocal schema_initialized, base_schema
+            nonlocal reference_schema
             
             if len(df) == 0:
                 return
@@ -885,15 +893,22 @@ class DataConverter:
             # Convert to PyArrow table
             table = pa.Table.from_pandas(df, preserve_index=False)
             
+            # Use first table's schema as reference if not pre-inferred
+            if reference_schema is None:
+                reference_schema = table.schema
+            
+            # Normalize schema if different
+            if table.schema != reference_schema:
+                table = self._normalize_schema(table, reference_schema)
+            
             # Initialize writer if needed
             if part_num not in partition_writers:
                 shard_path = get_partition_path(part_num)
                 partition_writers[part_num] = pq.ParquetWriter(
                     shard_path, 
-                    table.schema,
+                    reference_schema,
                     compression='snappy'
                 )
-                partition_schemas[part_num] = table.schema
             
             # Write the batch
             partition_writers[part_num].write_table(table)
@@ -976,6 +991,94 @@ class DataConverter:
         
         return result
     
+    def _normalize_schema(self, table: 'pa.Table', reference_schema: 'pa.Schema') -> 'pa.Table':
+        """
+        Normalize a PyArrow table to match a reference schema.
+        
+        Handles cases where chunks may have different inferred types (e.g., null vs string).
+        Casts columns to match the reference schema.
+        """
+        import pyarrow as pa
+        
+        new_columns = []
+        for i, field in enumerate(reference_schema):
+            col_name = field.name
+            ref_type = field.type
+            table_field = table.schema.field(col_name)
+            table_type = table_field.type
+            
+            col = table.column(col_name)
+            
+            # If types differ, we need to cast
+            if table_type != ref_type:
+                # Handle null type -> actual type casting
+                if pa.types.is_null(table_type):
+                    # Create array of nulls with correct type
+                    null_array = pa.nulls(len(col), type=ref_type)
+                    new_columns.append(null_array)
+                elif pa.types.is_null(ref_type):
+                    # Reference was null but we now have real type - unlikely but handle it
+                    new_columns.append(col)
+                else:
+                    # Try to cast to reference type
+                    try:
+                        new_columns.append(col.cast(ref_type, safe=False))
+                    except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
+                        # If cast fails, convert to string as fallback
+                        if pa.types.is_string(ref_type) or pa.types.is_large_string(ref_type):
+                            new_columns.append(col.cast(pa.string(), safe=False))
+                        else:
+                            new_columns.append(col)
+            else:
+                new_columns.append(col)
+        
+        return pa.Table.from_arrays(new_columns, schema=reference_schema)
+    
+    def _infer_stable_schema(self, csv_path: Path, sample_chunks: int = 5) -> 'pa.Schema':
+        """
+        Infer a stable schema by reading multiple chunks and merging types.
+        
+        This prevents schema mismatch errors when some chunks have null columns.
+        """
+        import pyarrow as pa
+        
+        schemas = []
+        chunk_iter = self._read_csv_with_encoding(
+            csv_path,
+            chunksize=self.chunk_size,
+            low_memory=True,
+        )
+        
+        # Read first few chunks to build stable schema
+        for i, chunk in enumerate(chunk_iter):
+            if i >= sample_chunks:
+                break
+            chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            schemas.append(table.schema)
+            del chunk, table
+        
+        if not schemas:
+            raise ValueError(f"No data to infer schema from {csv_path}")
+        
+        # Merge schemas - prefer non-null types
+        merged_fields = []
+        for i, field in enumerate(schemas[0]):
+            best_type = field.type
+            for schema in schemas[1:]:
+                other_type = schema.field(i).type
+                # Prefer non-null type
+                if pa.types.is_null(best_type) and not pa.types.is_null(other_type):
+                    best_type = other_type
+                # Prefer string over other types for object columns
+                elif not pa.types.is_null(other_type) and other_type != best_type:
+                    # If one is string, prefer string
+                    if pa.types.is_string(other_type) or pa.types.is_large_string(other_type):
+                        best_type = other_type
+            merged_fields.append(pa.field(field.name, best_type))
+        
+        return pa.schema(merged_fields)
+    
     def _convert_with_row_partitioning(
         self,
         csv_path: Path,
@@ -994,6 +1097,17 @@ class DataConverter:
         shard_num = 1
         current_writer = None
         current_shard_rows = 0
+        reference_schema = None
+        
+        # Infer stable schema upfront for large files
+        file_size_mb = csv_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > 100:  # For large files, pre-scan for stable schema
+            try:
+                reference_schema = self._infer_stable_schema(csv_path, sample_chunks=10)
+                if self.verbose:
+                    logger.info(f"  Pre-inferred stable schema with {len(reference_schema)} columns")
+            except Exception as e:
+                logger.warning(f"  Failed to pre-infer schema: {e}")
         
         def start_new_shard():
             nonlocal shard_num, current_writer, current_shard_rows
@@ -1019,15 +1133,21 @@ class DataConverter:
             # Fix mixed-type columns before conversion
             chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
             
-            # Initialize writer if needed
+            # Convert to PyArrow table
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            
+            # Initialize writer if needed (use reference schema if available)
             if current_writer is None:
-                table = pa.Table.from_pandas(chunk, preserve_index=False)
+                if reference_schema is None:
+                    reference_schema = table.schema
                 shard_path = shard_dir / f"{shard_num}.parquet"
-                current_writer = pq.ParquetWriter(shard_path, table.schema, compression='snappy')
-                current_writer.write_table(table)
-            else:
-                table = pa.Table.from_pandas(chunk, preserve_index=False)
-                current_writer.write_table(table)
+                current_writer = pq.ParquetWriter(shard_path, reference_schema, compression='snappy')
+            
+            # Normalize table to match reference schema
+            if table.schema != reference_schema:
+                table = self._normalize_schema(table, reference_schema)
+            
+            current_writer.write_table(table)
             
             current_shard_rows += chunk_len
             del chunk, table
