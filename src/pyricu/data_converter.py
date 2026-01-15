@@ -519,15 +519,14 @@ class DataConverter:
         Handles mixed-type columns by keeping them as object dtype.
         """
         is_gzipped = csv_path.name.endswith('.gz')
-        chunksize = kwargs.get('chunksize')
         
         # Detect encoding first
         encoding = self._detect_encoding(csv_path)
         
-        # Base read arguments for handling problematic columns
+        # Base read arguments - keep it simple for memory efficiency
         read_args = {
             'on_bad_lines': 'warn',  # Don't fail on bad lines
-            'dtype_backend': 'numpy_nullable',  # Better handling of mixed types
+            'low_memory': True,  # Force low memory mode
         }
         read_args.update(kwargs)
         
@@ -541,26 +540,12 @@ class DataConverter:
         if is_gzipped:
             read_args['compression'] = 'gzip'
         
-        try:
-            return pd.read_csv(csv_path, **read_args)
-        except Exception as e:
-            # If dtype_backend causes issues, fall back to default
-            if 'dtype_backend' in str(e) or 'numpy_nullable' in str(e):
-                read_args.pop('dtype_backend', None)
-                try:
-                    return pd.read_csv(csv_path, **read_args)
-                except Exception as e2:
-                    # Last resort: read all as string and convert later
-                    logger.warning(f"  ⚠️ Reading {csv_path.name} with all string types due to: {e2}")
-                    read_args['dtype'] = str
-                    return pd.read_csv(csv_path, **read_args)
-            else:
-                raise
+        return pd.read_csv(csv_path, **read_args)
     
-    # Threshold for sharding large files (500MB compressed, ~2GB uncompressed)
-    SHARD_THRESHOLD_MB = 500
-    # Number of rows per shard (similar to ricu's approach)
-    ROWS_PER_SHARD = 20_000_000  # ~20M rows per shard
+    # Threshold for sharding large files (200MB compressed)
+    SHARD_THRESHOLD_MB = 200
+    # Number of rows per shard - keep small for memory efficiency
+    ROWS_PER_SHARD = 5_000_000  # 5M rows per shard
     
     # Known problematic columns that have mixed types in MIMIC-IV
     # These columns often contain mixed numeric/string/bytes data
@@ -635,15 +620,27 @@ class DataConverter:
         return name.lower()  # Normalize to lowercase like ricu
     
     def _should_shard(self, csv_path: Path) -> bool:
-        """Determine if a file should be sharded based on ricu's partitioning config.
+        """Determine if a file should be sharded.
         
-        Only tables defined in PARTITIONING_CONFIG should be sharded,
-        regardless of file size. This matches ricu's behavior.
+        A file should be sharded if:
+        1. It's defined in PARTITIONING_CONFIG for ID-based partitioning, OR
+        2. The compressed file size exceeds SHARD_THRESHOLD_MB (for row-based partitioning)
+        
+        This ensures large files like emar.csv.gz (774MB) are also sharded.
         """
         table_name = self._get_table_name(csv_path)
-        # Only shard if table is in PARTITIONING_CONFIG for this database
+        
+        # Check if table has ID-based partitioning config
         partition_config = self._get_partitioning_config(table_name)
-        return partition_config is not None
+        if partition_config is not None:
+            return True
+        
+        # Also shard large files even without partition config
+        file_size_mb = csv_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > self.SHARD_THRESHOLD_MB:
+            return True
+        
+        return False
     
     def _convert_file(self, csv_path: Path) -> Dict[str, Any]:
         """
@@ -927,6 +924,9 @@ class DataConverter:
                 if self.verbose and (chunk_num + 1) % 50 == 0:
                     logger.info(f"  Read {total_rows:,} rows...")
                 
+                # Fix mixed-type columns before conversion
+                chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
+                
                 # Assign each row to a partition
                 if partition_col not in chunk.columns:
                     logger.warning(f"  Partition column '{partition_col}' not found, using row-based partitioning")
@@ -1015,6 +1015,9 @@ class DataConverter:
         for chunk in chunk_iter:
             chunk_len = len(chunk)
             total_rows += chunk_len
+            
+            # Fix mixed-type columns before conversion
+            chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
             
             # Initialize writer if needed
             if current_writer is None:
