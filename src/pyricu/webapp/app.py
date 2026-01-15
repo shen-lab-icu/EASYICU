@@ -12,43 +12,6 @@ import os
 # 🚀 性能优化：禁用自动缓存清除，保持表缓存在多次加载间复用
 os.environ['PYRICU_AUTO_CLEAR_CACHE'] = 'False'
 
-# ============ 内存管理配置 ============
-def get_system_memory_gb() -> float:
-    """获取系统总内存（GB）"""
-    try:
-        import psutil
-        return psutil.virtual_memory().total / (1024 ** 3)
-    except Exception:
-        return 8.0  # 默认假设 8GB
-
-def get_available_memory_gb() -> float:
-    """获取当前可用内存（GB）"""
-    try:
-        import psutil
-        return psutil.virtual_memory().available / (1024 ** 3)
-    except Exception:
-        return 4.0  # 默认假设 4GB 可用
-
-# 系统内存信息
-SYSTEM_MEMORY_GB = get_system_memory_gb()
-# 默认内存限制：系统内存的 50%，但不超过 16GB，不低于 4GB
-DEFAULT_MEMORY_LIMIT_GB = max(4, min(16, SYSTEM_MEMORY_GB * 0.5))
-
-# ============ 低内存模式配置 ============
-LOW_MEMORY_MODE = os.environ.get('PYRICU_LOW_MEMORY', '0') == '1'
-WORKERS = int(os.environ.get('PYRICU_WORKERS', '0')) or None  # 0 表示自动
-
-if LOW_MEMORY_MODE:
-    # 低内存模式下减少缓存和并行度
-    os.environ['PYRICU_CHUNK_SIZE'] = '50000'  # 更小的块大小
-    os.environ['PYRICU_MAX_CACHE_SIZE'] = '100'  # 减少缓存表数量
-    if WORKERS is None:
-        WORKERS = 2  # 默认减少到 2 个线程
-    DEFAULT_MEMORY_LIMIT_GB = min(DEFAULT_MEMORY_LIMIT_GB, 4)  # 低内存模式限制到 4GB
-
-if WORKERS:
-    os.environ['PYRICU_WORKERS'] = str(WORKERS)
-
 # 页面配置
 st.set_page_config(
     page_title="PyRICU Data Explorer",
@@ -1288,9 +1251,9 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'medication': ['drugitems'],
         },
         'hirid': {
-            'core': ['general'],  # ricu uses 'general' not 'general_table'
-            'clinical': ['observations', 'ordinal'],
-            'medication': ['pharma'],  # ricu uses 'pharma' not 'pharma_records'
+            'core': ['general_table'],
+            'clinical': ['observations'],
+            'medication': ['pharma_records'],
         },
     }
     
@@ -1908,7 +1871,7 @@ def render_visualization_mode():
     
     # 添加路径检查按钮
     check_btn = "🔍 Check Path" if st.session_state.language == 'en' else "🔍 检查路径"
-    if st.button(check_btn, key="check_viz_path", use_container_width=True):
+    if st.button(check_btn, key="check_viz_path", width="stretch"):
         if data_dir:
             if Path(data_dir).exists():
                 files = list(Path(data_dir).glob('*.csv')) + list(Path(data_dir).glob('*.parquet')) + list(Path(data_dir).glob('*.xlsx'))
@@ -1993,13 +1956,13 @@ def render_visualization_mode():
                     loaded_msg = f"📊 {len(st.session_state.loaded_concepts)} features, {len(st.session_state.patient_ids)} patients loaded" if st.session_state.language == 'en' else f"📊 已加载 {len(st.session_state.loaded_concepts)} 个特征，{len(st.session_state.patient_ids)} 个患者"
                     st.info(loaded_msg)
                 
-                if st.button(get_text('load_data'), type="primary", use_container_width=True):
+                if st.button(get_text('load_data'), type="primary", width="stretch"):
                     loading_msg = "Loading data..." if st.session_state.language == 'en' else "正在加载数据..."
                     with st.spinner(loading_msg):
                         load_from_exported(data_dir, selected_files=selected_files, max_patients=max_patients)
                     st.rerun()
             else:
-                st.button(get_text('load_data'), type="primary", use_container_width=True, disabled=True)
+                st.button(get_text('load_data'), type="primary", width="stretch", disabled=True)
                 warn_msg = "⚠️ Please select at least one table" if st.session_state.language == 'en' else "⚠️ 请选择至少一个表格"
                 st.caption(warn_msg)
             
@@ -2046,13 +2009,6 @@ def render_sidebar():
     
     with st.sidebar:
         st.markdown(f"## {get_text('app_title')}")
-        
-        # 显示系统资源状态
-        available_mem = get_available_memory_gb()
-        if available_mem < 2:
-            st.warning(f"⚠️ Low memory: {available_mem:.1f}GB" if st.session_state.get('language') == 'en' else f"⚠️ 内存不足: {available_mem:.1f}GB")
-        elif LOW_MEMORY_MODE:
-            st.info("💾 Low Memory Mode" if st.session_state.get('language') == 'en' else "💾 低内存模式")
         
         # 语言切换 - 更紧凑的布局
         lang = st.selectbox(
@@ -2123,42 +2079,26 @@ def render_sidebar():
             border-color: #999 !important;
             opacity: 1;
         }
-        /* 更强的样式覆盖：选中状态 */
-        div[data-testid="stHorizontalBlock"] div[data-testid="column"]:first-child button[kind="primary"],
-        div[data-testid="stHorizontalBlock"] div[data-testid="column"]:last-child button[kind="primary"] {
+        /* 覆盖Streamlit按钮样式使选中更明显 */
+        div[data-testid="column"] button[kind="primary"] {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-            border: 3px solid #667eea !important;
-            box-shadow: 0 6px 25px rgba(102, 126, 234, 0.6) !important;
+            border: none !important;
+            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.5) !important;
             font-weight: 700 !important;
-            font-size: 1.05rem !important;
-            transform: scale(1.03);
-            animation: pulse-selected 2s infinite;
+            font-size: 1.1rem !important;
         }
-        @keyframes pulse-selected {
-            0%, 100% { box-shadow: 0 6px 25px rgba(102, 126, 234, 0.6); }
-            50% { box-shadow: 0 8px 35px rgba(102, 126, 234, 0.8); }
-        }
-        /* 更明显的未选中样式 */
-        div[data-testid="stHorizontalBlock"] div[data-testid="column"]:first-child button[kind="secondary"],
-        div[data-testid="stHorizontalBlock"] div[data-testid="column"]:last-child button[kind="secondary"] {
-            background: #f8f9fa !important;
-            color: #888 !important;
+        div[data-testid="column"] button[kind="secondary"] {
+            background: #f0f2f6 !important;
+            color: #666 !important;
             border: 2px dashed #ccc !important;
-            opacity: 0.65;
-            font-weight: 500 !important;
+            opacity: 0.7;
         }
-        div[data-testid="stHorizontalBlock"] div[data-testid="column"] button[kind="secondary"]:hover {
+        div[data-testid="column"] button[kind="secondary"]:hover {
             opacity: 1;
             border-color: #667eea !important;
-            background: #f0f0ff !important;
-            color: #667eea !important;
         }
         </style>
         """, unsafe_allow_html=True)
-        
-        # 显示当前选中模式的指示器
-        current_mode_indicator = f"🎯 **{'Data Extraction' if extract_selected else 'Quick Visualization'}** mode active" if st.session_state.language == 'en' else f"🎯 当前模式: **{'数据提取导出' if extract_selected else '快速可视化'}**"
-        st.markdown(current_mode_indicator)
         
         # 使用两列放置按钮 - 所有模式都用按钮，确保可点击
         mode_cols = st.columns(2)
@@ -2166,27 +2106,23 @@ def render_sidebar():
         with mode_cols[0]:
             # 数据提取按钮 - 总是可点击
             btn_type = "primary" if extract_selected else "secondary"
-            if st.button(extract_label, key="btn_mode_extract", use_container_width=True, type=btn_type):
+            if st.button(extract_label, key="btn_mode_extract", width="stretch", type=btn_type):
                 if not extract_selected:
                     st.session_state.app_mode = 'extract'
-                    # 切换模式时清空已加载数据和相关状态
+                    # 切换模式时清空已加载数据，避免冲突
                     st.session_state.loaded_concepts = {}
                     st.session_state.patient_ids = []
-                    st.session_state.selected_patient = None
-                    st.session_state.concept_dataframes = {}
                     st.rerun()
         
         with mode_cols[1]:
             # 快速可视化按钮 - 总是可点击
             btn_type = "primary" if viz_selected else "secondary"
-            if st.button(viz_label, key="btn_mode_viz", use_container_width=True, type=btn_type):
+            if st.button(viz_label, key="btn_mode_viz", width="stretch", type=btn_type):
                 if not viz_selected:
                     st.session_state.app_mode = 'viz'
-                    # 切换模式时清空已加载数据和相关状态
+                    # 切换模式时清空已加载数据，避免冲突
                     st.session_state.loaded_concepts = {}
                     st.session_state.patient_ids = []
-                    st.session_state.selected_patient = None
-                    st.session_state.concept_dataframes = {}
                     st.rerun()
         
         # 根据选择设置mode变量
@@ -2335,11 +2271,13 @@ def render_sidebar():
         if 'filtered_patient_count' not in st.session_state:
             st.session_state.filtered_patient_count = None
         
-        # 启用队列筛选开关
+        # 启用队列筛选开关 - 使用 key 参数让 Streamlit 自动管理状态
         cohort_toggle_label = "Enable Cohort Filtering" if st.session_state.language == 'en' else "启用队列筛选"
         cohort_help = "Filter patients by demographics and clinical criteria" if st.session_state.language == 'en' else "根据人口统计学和临床标准筛选患者"
-        cohort_enabled = st.toggle(cohort_toggle_label, value=st.session_state.cohort_enabled, help=cohort_help)
-        st.session_state.cohort_enabled = cohort_enabled
+        st.toggle(cohort_toggle_label, key="cohort_enabled", help=cohort_help)
+        
+        # 从 session_state 获取当前值（由 toggle 的 key 自动更新）
+        cohort_enabled = st.session_state.cohort_enabled
         
         if cohort_enabled:
             # 年龄筛选
@@ -5903,12 +5841,7 @@ def render_convert_dialog():
     source_info = f"📁 Source directory: `{source_path}`" if lang == 'en' else f"📁 源目录: `{source_path}`"
     st.info(source_info)
     
-    # 显示系统内存信息
-    available_mem = get_available_memory_gb()
-    mem_info = f"💻 System: {SYSTEM_MEMORY_GB:.1f}GB total, {available_mem:.1f}GB available" if lang == 'en' else f"💻 系统内存: 共 {SYSTEM_MEMORY_GB:.1f}GB，可用 {available_mem:.1f}GB"
-    st.caption(mem_info)
-    
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     
     with col1:
         # 目标目录（默认同目录）
@@ -5921,34 +5854,9 @@ def render_convert_dialog():
         )
     
     with col2:
-        # 内存限制选项
-        mem_label = "Memory Limit (GB)" if lang == 'en' else "内存限制 (GB)"
-        mem_help = "Maximum memory to use during conversion. Lower = slower but safer. Default: 8GB" if lang == 'en' else "转换时使用的最大内存。数值越低越安全但更慢。默认: 8GB"
-        
-        # 初始化 session state
-        if 'convert_memory_limit' not in st.session_state:
-            st.session_state.convert_memory_limit = min(8, DEFAULT_MEMORY_LIMIT_GB)
-        
-        memory_limit = st.slider(
-            mem_label,
-            min_value=2,
-            max_value=min(32, int(SYSTEM_MEMORY_GB)),
-            value=int(st.session_state.convert_memory_limit),
-            step=1,
-            help=mem_help
-        )
-        st.session_state.convert_memory_limit = memory_limit
-    
-    with col3:
         # 转换选项
-        st.markdown("&nbsp;")  # 对齐
-        overwrite_label = "Overwrite existing" if lang == 'en' else "覆盖已存在文件"
+        overwrite_label = "Overwrite existing Parquet files" if lang == 'en' else "覆盖已存在的Parquet文件"
         overwrite = st.checkbox(overwrite_label, value=False)
-    
-    # 根据内存限制计算推荐的块大小
-    chunk_size = _calculate_chunk_size(memory_limit)
-    chunk_info = f"📊 Chunk size: {chunk_size:,} rows (based on {memory_limit}GB limit)" if lang == 'en' else f"📊 分块大小: {chunk_size:,} 行（基于 {memory_limit}GB 限制）"
-    st.caption(chunk_info)
     
     # 扫描可转换文件
     if source_path and Path(source_path).exists():
@@ -5974,22 +5882,17 @@ def render_convert_dialog():
                 err_msg = "❌ Please set a valid output directory" if lang == 'en' else "❌ 请设置有效的输出目录"
                 st.error(err_msg)
             else:
-                # 不使用 spinner，直接显示进度
-                st.info("🔄 Starting conversion..." if lang == 'en' else "🔄 开始转换...")
-                
-                # 使用用户设置的内存限制
-                mem_limit = st.session_state.get('convert_memory_limit', 8)
-                success, failed = convert_csv_to_parquet(source_path, target_path, overwrite, memory_limit_gb=mem_limit)
-                
-                if success > 0:
-                    success_msg = f"✅ Successfully converted {success} files" if lang == 'en' else f"✅ 成功转换 {success} 个文件"
-                    st.success(success_msg)
-                    st.session_state.path_validated = True
-                    st.session_state.data_path = target_path
-                if failed > 0:
-                    fail_msg = f"⚠️ {failed} files failed to convert" if lang == 'en' else f"⚠️ {failed} 个文件转换失败"
-                    st.warning(fail_msg)
-                    
+                spinner_msg = "Converting..." if lang == 'en' else "正在转换..."
+                with st.spinner(spinner_msg):
+                    success, failed = convert_csv_to_parquet(source_path, target_path, overwrite)
+                    if success > 0:
+                        success_msg = f"✅ Successfully converted {success} files" if lang == 'en' else f"✅ 成功转换 {success} 个文件"
+                        st.success(success_msg)
+                        st.session_state.path_validated = True
+                        st.session_state.data_path = target_path
+                    if failed > 0:
+                        fail_msg = f"⚠️ {failed} files failed to convert" if lang == 'en' else f"⚠️ {failed} 个文件转换失败"
+                        st.warning(fail_msg)
                 st.session_state.show_convert_dialog = False
                 st.rerun()
     
@@ -6010,266 +5913,53 @@ def render_convert_dialog():
             st.rerun()
 
 
-def _calculate_chunk_size(memory_limit_gb: int) -> int:
-    """根据内存限制计算合适的分块大小。
-    
-    假设每行平均约 1KB 内存占用，预留 50% 内存给其他操作。
-    """
-    # 每GB内存大约可处理 500,000 行（保守估计）
-    rows_per_gb = 500_000
-    # 使用 50% 的内存限制用于数据加载
-    chunk_size = int(memory_limit_gb * rows_per_gb * 0.5)
-    # 限制在合理范围内
-    return max(50_000, min(5_000_000, chunk_size))
-
-
-def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False, memory_limit_gb: int = 8) -> tuple:
-    """将目录下的CSV文件转换为Parquet格式。
-    
-    使用 DataConverter 类进行专业转换，支持大表分片。
-    
-    Args:
-        source_dir: 源目录
-        target_dir: 目标目录
-        overwrite: 是否覆盖已存在的文件
-        memory_limit_gb: 内存限制（GB）
-    """
-    import gc
-    
-    source_path = Path(source_dir)
-    target_path = Path(target_dir)
-    
-    # 根据内存限制计算块大小
-    chunk_size = _calculate_chunk_size(memory_limit_gb)
-    
-    # 尝试使用专业的 DataConverter
-    try:
-        from pyricu.data_converter import DataConverter
-        
-        # 检测数据库类型
-        database = _detect_database_type(source_path)
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        memory_text = st.empty()
-        
-        status_text.info(f"🔍 Detecting database type: {database.upper() if database else 'Unknown'}")
-        
-        # 创建转换器
-        converter = DataConverter(
-            data_path=source_path,
-            database=database,
-            chunk_size=chunk_size,
-            parallel_workers=max(1, min(4, WORKERS or 2)),  # 限制并行数
-            verbose=True,
-        )
-        
-        # 获取需要转换的文件
-        csv_files = converter._get_csv_files()
-        
-        if not csv_files:
-            status_text.warning("⚠️ No CSV files found to convert")
-            return 0, 0
-        
-        status_text.info(f"📊 Found {len(csv_files)} CSV files to convert")
-        
-        success = 0
-        failed = 0
-        skipped = 0
-        
-        for idx, csv_file in enumerate(csv_files):
-            try:
-                # 显示内存状态
-                current_mem = get_available_memory_gb()
-                memory_text.caption(f"💾 Available memory: {current_mem:.1f} GB")
-                
-                # 检查是否需要转换
-                needs_convert, reason = converter._is_conversion_needed(csv_file)
-                
-                if not needs_convert and not overwrite:
-                    status_text.caption(f"⏭️ Skip: {csv_file.name} ({reason})")
-                    skipped += 1
-                    progress_bar.progress((idx + 1) / len(csv_files))
-                    continue
-                
-                file_size_mb = csv_file.stat().st_size / (1024 * 1024)
-                status_text.markdown(f"**Converting**: `{csv_file.name}` ({file_size_mb:.1f}MB) ({idx+1}/{len(csv_files)})")
-                
-                # 使用 DataConverter 的转换方法（支持分片）
-                result = converter._convert_file(csv_file)
-                
-                if result.get('status') == 'completed':
-                    shards = result.get('shards', 0)
-                    rows = result.get('row_count', 0)
-                    if shards > 0:
-                        status_text.caption(f"✅ {csv_file.name}: {rows:,} rows → {shards} shards")
-                    else:
-                        status_text.caption(f"✅ {csv_file.name}: {rows:,} rows")
-                    success += 1
-                else:
-                    failed += 1
-                    status_text.caption(f"❌ {csv_file.name}: {result.get('error', 'Unknown error')}")
-                
-                gc.collect()
-                
-            except Exception as e:
-                failed += 1
-                status_text.caption(f"❌ Failed: {csv_file.name} - {str(e)[:100]}")
-                gc.collect()
-            
-            progress_bar.progress((idx + 1) / len(csv_files))
-        
-        progress_bar.progress(1.0)
-        
-        if skipped > 0:
-            status_text.info(f"📊 Completed: {success} converted, {skipped} skipped, {failed} failed")
-        else:
-            status_text.empty()
-        
-        memory_text.empty()
-        gc.collect()
-        
-        return success + skipped, failed
-        
-    except ImportError:
-        # 回退到简单转换
-        return _simple_convert_csv_to_parquet(source_dir, target_dir, overwrite, memory_limit_gb)
-    except Exception as e:
-        # 捕获所有其他错误并显示
-        st.error(f"❌ Conversion error: {str(e)}")
-        import traceback
-        with st.expander("Error details"):
-            st.code(traceback.format_exc())
-        return 0, 1
-
-
-def _detect_database_type(path: Path) -> str:
-    """检测数据库类型"""
-    path_str = str(path).lower()
-    
-    if 'eicu' in path_str:
-        return 'eicu'
-    elif 'miiv' in path_str or 'mimic' in path_str:
-        return 'miiv'
-    elif 'aumc' in path_str or 'amsterdam' in path_str:
-        return 'aumc'
-    elif 'hirid' in path_str:
-        return 'hirid'
-    
-    # 尝试从文件名检测
-    files = list(path.rglob('*.csv')) + list(path.rglob('*.csv.gz'))
-    file_names = [f.name.lower() for f in files]
-    
-    if any('patient.csv' in f for f in file_names):
-        return 'eicu'
-    elif any('icustays.csv' in f for f in file_names):
-        return 'miiv'
-    elif any('admissions.csv' in f and 'numericitems.csv' in ' '.join(file_names) for f in file_names):
-        return 'aumc'
-    
-    return 'unknown'
-
-
-def _simple_convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False, memory_limit_gb: int = 8) -> tuple:
-    """简单的 CSV 转 Parquet（回退方案）"""
-    import gc
+def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
+    """将目录下的CSV文件转换为Parquet格式。"""
+    import time
     
     source_path = Path(source_dir)
     target_path = Path(target_dir)
     
     csv_files = list(source_path.rglob('*.csv')) + list(source_path.rglob('*.csv.gz'))
-    csv_files.sort(key=lambda f: f.stat().st_size)
-    
-    chunk_size = _calculate_chunk_size(memory_limit_gb)
-    large_file_threshold = 100 * 1024 * 1024
     
     success = 0
     failed = 0
     
     progress_bar = st.progress(0)
     status_text = st.empty()
-    memory_text = st.empty()
     
     for idx, csv_file in enumerate(csv_files):
         try:
-            current_mem = get_available_memory_gb()
-            memory_text.caption(f"💾 Available memory: {current_mem:.1f} GB")
-            
+            # 计算相对路径以保持目录结构
             rel_path = csv_file.relative_to(source_path)
             parquet_name = rel_path.stem.replace('.csv', '') + '.parquet'
             parquet_file = target_path / rel_path.parent / parquet_name
             
+            # 检查是否需要转换
             if parquet_file.exists() and not overwrite:
-                status_text.caption(f"⏭️ Skip: {csv_file.name} (exists)")
-                success += 1  # 跳过的也算成功
-                progress_bar.progress((idx + 1) / len(csv_files))
+                status_text.caption(f"⏭️ 跳过: {csv_file.name} (已存在)")
                 continue
             
+            # 创建目标目录
             parquet_file.parent.mkdir(parents=True, exist_ok=True)
             
-            file_size = csv_file.stat().st_size
-            file_size_mb = file_size / (1024 * 1024)
-            status_text.markdown(f"**Converting**: `{csv_file.name}` ({file_size_mb:.1f}MB) ({idx+1}/{len(csv_files)})")
+            status_text.markdown(f"**转换中**: `{csv_file.name}` ({idx+1}/{len(csv_files)})")
             
-            if file_size > large_file_threshold:
-                _convert_large_csv(csv_file, parquet_file, chunk_size)
-            else:
-                df = pd.read_csv(csv_file, low_memory=True)
-                df.to_parquet(parquet_file, index=False)
-                del df
-            
+            # 读取CSV并转换
+            df = pd.read_csv(csv_file)
+            df.to_parquet(parquet_file, index=False)
             success += 1
-            gc.collect()
             
         except Exception as e:
             failed += 1
-            status_text.caption(f"❌ Failed: {csv_file.name} - {str(e)[:50]}")
-            gc.collect()
+            status_text.caption(f"❌ 失败: {csv_file.name} - {str(e)[:50]}")
         
         progress_bar.progress((idx + 1) / len(csv_files))
     
     progress_bar.progress(1.0)
     status_text.empty()
-    memory_text.empty()
-    gc.collect()
     
     return success, failed
-
-
-def _convert_large_csv(csv_file: Path, parquet_file: Path, chunk_size: int):
-    """分块转换大型CSV文件为Parquet。
-    
-    使用 PyArrow 的增量写入方式，避免一次性加载全部数据到内存。
-    """
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-    import gc
-    
-    # 使用分块读取
-    chunks = pd.read_csv(csv_file, chunksize=chunk_size, low_memory=True)
-    
-    writer = None
-    total_rows = 0
-    
-    try:
-        for chunk in chunks:
-            table = pa.Table.from_pandas(chunk)
-            
-            if writer is None:
-                # 首次写入，创建 ParquetWriter
-                writer = pq.ParquetWriter(str(parquet_file), table.schema)
-            
-            writer.write_table(table)
-            total_rows += len(chunk)
-            
-            # 释放内存
-            del chunk
-            del table
-            gc.collect()
-            
-    finally:
-        if writer:
-            writer.close()
 
 
 def _generate_cohort_prefix() -> str:

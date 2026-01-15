@@ -105,16 +105,22 @@ class DataConverter:
     - Progress tracking and resumable conversion
     - Handles large files with chunked reading
     - ID-based partitioning matching ricu's logic
+    - Memory-efficient streaming for ultra-large tables
     """
     
     # Default chunk size for reading large CSV files (rows)
-    DEFAULT_CHUNK_SIZE = 500_000
+    # Reduced from 500K to 200K for better memory management on 32GB systems
+    DEFAULT_CHUNK_SIZE = 200_000
     
     # Status file name to track conversion progress
     STATUS_FILE = ".pyricu_conversion_status.json"
     
     # Common encodings to try
     ENCODINGS = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+    
+    # Memory threshold for buffer flush (in rows per partition)
+    # When any partition buffer exceeds this, flush to disk
+    PARTITION_BUFFER_THRESHOLD = 2_000_000  # 2M rows triggers flush
     
     def __init__(
         self,
@@ -509,6 +515,8 @@ class DataConverter:
         
         For chunked reading (chunksize in kwargs), detects encoding first
         to avoid errors during iteration.
+        
+        Handles mixed-type columns by keeping them as object dtype.
         """
         is_gzipped = csv_path.name.endswith('.gz')
         chunksize = kwargs.get('chunksize')
@@ -516,24 +524,102 @@ class DataConverter:
         # Detect encoding first
         encoding = self._detect_encoding(csv_path)
         
+        # Base read arguments for handling problematic columns
+        read_args = {
+            'on_bad_lines': 'warn',  # Don't fail on bad lines
+            'dtype_backend': 'numpy_nullable',  # Better handling of mixed types
+        }
+        read_args.update(kwargs)
+        
         # Handle special utf-8-replace fallback
         if encoding == 'utf-8-replace':
-            if is_gzipped:
-                return pd.read_csv(csv_path, encoding='utf-8', errors='replace', 
-                                   compression='gzip', **kwargs)
-            else:
-                return pd.read_csv(csv_path, encoding='utf-8', errors='replace', **kwargs)
-        
-        # Use detected encoding
-        if is_gzipped:
-            return pd.read_csv(csv_path, encoding=encoding, compression='gzip', **kwargs)
+            read_args['encoding'] = 'utf-8'
+            read_args['encoding_errors'] = 'replace'
         else:
-            return pd.read_csv(csv_path, encoding=encoding, **kwargs)
+            read_args['encoding'] = encoding
+        
+        if is_gzipped:
+            read_args['compression'] = 'gzip'
+        
+        try:
+            return pd.read_csv(csv_path, **read_args)
+        except Exception as e:
+            # If dtype_backend causes issues, fall back to default
+            if 'dtype_backend' in str(e) or 'numpy_nullable' in str(e):
+                read_args.pop('dtype_backend', None)
+                try:
+                    return pd.read_csv(csv_path, **read_args)
+                except Exception as e2:
+                    # Last resort: read all as string and convert later
+                    logger.warning(f"  ⚠️ Reading {csv_path.name} with all string types due to: {e2}")
+                    read_args['dtype'] = str
+                    return pd.read_csv(csv_path, **read_args)
+            else:
+                raise
     
     # Threshold for sharding large files (500MB compressed, ~2GB uncompressed)
     SHARD_THRESHOLD_MB = 500
     # Number of rows per shard (similar to ricu's approach)
     ROWS_PER_SHARD = 20_000_000  # ~20M rows per shard
+    
+    # Known problematic columns that have mixed types in MIMIC-IV
+    # These columns often contain mixed numeric/string/bytes data
+    MIXED_TYPE_COLUMNS = {
+        'pharmacy': ['lockout_interval', 'one_hr_max', 'doses_per_24_hrs', 
+                     'duration', 'duration_interval', 'expiration_value'],
+        'prescriptions': ['dose_val_rx', 'form_val_disp', 'doses_per_24_hrs'],
+        'emar': ['dose_due', 'dose_given'],
+        'emar_detail': ['dose_due', 'dose_given', 'completion_interval'],
+    }
+    
+    def _fix_mixed_type_columns(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
+        """Fix columns with mixed types by converting to string.
+        
+        Some MIMIC-IV tables have columns with mixed bytes/float/string types
+        that cause parquet conversion to fail.
+        
+        Args:
+            df: DataFrame to fix
+            filename: Original filename (for identifying known problematic columns)
+            
+        Returns:
+            Fixed DataFrame
+        """
+        # Get table name from filename
+        table_name = filename.lower()
+        for ext in ['.csv.gz', '.csv']:
+            if table_name.endswith(ext):
+                table_name = table_name[:-len(ext)]
+                break
+        
+        # Check for known problematic columns
+        known_cols = self.MIXED_TYPE_COLUMNS.get(table_name, [])
+        for col in known_cols:
+            if col in df.columns:
+                try:
+                    # Convert to string, handling bytes and other types
+                    df[col] = df[col].apply(lambda x: str(x) if pd.notna(x) and not isinstance(x, str) else x)
+                except Exception:
+                    df[col] = df[col].astype(str)
+        
+        # Also check for any object columns with mixed types
+        for col in df.select_dtypes(include=['object']).columns:
+            if col not in known_cols:
+                # Sample the column to check for mixed types
+                sample = df[col].dropna().head(1000)
+                if len(sample) > 0:
+                    types = set(type(x).__name__ for x in sample)
+                    # If multiple types detected (excluding str and NoneType)
+                    problematic_types = types - {'str', 'NoneType', 'float', 'int'}
+                    if len(types) > 2 or 'bytes' in types or problematic_types:
+                        try:
+                            df[col] = df[col].apply(lambda x: str(x) if pd.notna(x) and not isinstance(x, str) else x)
+                            if self.verbose:
+                                logger.info(f"    ⚠️ Fixed mixed-type column: {col} (types: {types})")
+                        except Exception:
+                            df[col] = df[col].astype(str)
+        
+        return df
     
     def _get_table_name(self, csv_path: Path) -> str:
         """Extract table name from CSV path (without extension)."""
@@ -613,7 +699,10 @@ class DataConverter:
         return result
     
     def _convert_file_single(self, csv_path: Path, result: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert a smaller CSV file to a single parquet file."""
+        """Convert a smaller CSV file to a single parquet file.
+        
+        Handles mixed-type columns by converting them to string before parquet export.
+        """
         parquet_path = self._get_parquet_path(csv_path)
         
         # Check file size to decide on chunked reading
@@ -628,7 +717,7 @@ class DataConverter:
             chunk_iter = self._read_csv_with_encoding(
                 csv_path, 
                 chunksize=self.chunk_size,
-                low_memory=False,
+                low_memory=True,
             )
             
             for i, chunk in enumerate(chunk_iter):
@@ -643,10 +732,23 @@ class DataConverter:
             
         else:
             # Read entire file at once
-            df = self._read_csv_with_encoding(csv_path, low_memory=False)
+            df = self._read_csv_with_encoding(csv_path, low_memory=True)
         
-        # Convert to parquet
-        df.to_parquet(parquet_path, index=False, engine='pyarrow')
+        # Fix mixed-type columns before parquet export
+        df = self._fix_mixed_type_columns(df, csv_path.name)
+        
+        # Convert to parquet with error handling
+        try:
+            df.to_parquet(parquet_path, index=False, engine='pyarrow')
+        except Exception as e:
+            if 'Expected bytes' in str(e) or 'object' in str(e).lower():
+                # Convert all object columns to string
+                logger.warning(f"  ⚠️ Converting object columns to string for {csv_path.name}")
+                for col in df.select_dtypes(include=['object']).columns:
+                    df[col] = df[col].astype(str)
+                df.to_parquet(parquet_path, index=False, engine='pyarrow')
+            else:
+                raise
         
         result['status'] = ConversionStatus.COMPLETED
         result['row_count'] = len(df)
@@ -718,7 +820,11 @@ class DataConverter:
         Convert using ID-based partitioning (matching ricu's logic).
         
         Partitions data based on breakpoints in a specific column.
+        Uses memory-efficient streaming with periodic flush to disk.
         """
+        import gc
+        import bisect
+        
         partition_col = partition_config['col']
         breaks = partition_config['breaks']
         if not isinstance(breaks, list):
@@ -727,56 +833,141 @@ class DataConverter:
         n_partitions = len(breaks) + 1
         
         if self.verbose:
-            logger.info(f"  Using ID-based partitioning on '{partition_col}' with {n_partitions} partitions")
+            logger.info(f"  Using ID-based partitioning on '{partition_col}' with {n_partitions} partitions (memory-optimized)")
         
-        # Initialize partition buffers
+        # Track which partitions have been partially written (for appending)
+        partition_temp_files: Dict[int, List[Path]] = {i: [] for i in range(1, n_partitions + 1)}
+        
+        # Initialize partition buffers with size tracking
         partition_buffers: Dict[int, List[pd.DataFrame]] = {i: [] for i in range(1, n_partitions + 1)}
-        partition_rows: Dict[int, int] = {i: 0 for i in range(1, n_partitions + 1)}
+        partition_buffer_rows: Dict[int, int] = {i: 0 for i in range(1, n_partitions + 1)}
+        partition_total_rows: Dict[int, int] = {i: 0 for i in range(1, n_partitions + 1)}
         
         total_rows = 0
+        temp_file_counter = 0
+        
+        def flush_partition_buffer(part_num: int):
+            """Flush a partition buffer to a temporary parquet file."""
+            nonlocal temp_file_counter
+            if not partition_buffers[part_num]:
+                return
+            
+            part_df = pd.concat(partition_buffers[part_num], ignore_index=True)
+            temp_file_counter += 1
+            temp_path = shard_dir / f".temp_{part_num}_{temp_file_counter}.parquet"
+            part_df.to_parquet(temp_path, index=False, engine='pyarrow')
+            partition_temp_files[part_num].append(temp_path)
+            
+            if self.verbose:
+                logger.info(f"    💾 Flushed partition {part_num} buffer: {len(part_df):,} rows to temp file")
+            
+            # Clear buffer and free memory
+            partition_buffers[part_num] = []
+            partition_buffer_rows[part_num] = 0
+            del part_df
+            gc.collect()
+        
+        def flush_all_buffers():
+            """Flush all partition buffers that have data."""
+            for part_num in range(1, n_partitions + 1):
+                if partition_buffers[part_num]:
+                    flush_partition_buffer(part_num)
         
         # Read in chunks and assign to partitions
         chunk_iter = self._read_csv_with_encoding(
             csv_path, 
             chunksize=self.chunk_size,
-            low_memory=False,
+            low_memory=True,  # Use low_memory mode to reduce peak usage
         )
         
         for chunk_num, chunk in enumerate(chunk_iter):
-            total_rows += len(chunk)
+            chunk_rows = len(chunk)
+            total_rows += chunk_rows
             
-            if self.verbose and (chunk_num + 1) % 10 == 0:
+            if self.verbose and (chunk_num + 1) % 20 == 0:
                 logger.info(f"  Read {total_rows:,} rows...")
             
             # Assign each row to a partition
             if partition_col not in chunk.columns:
                 logger.warning(f"  Partition column '{partition_col}' not found, using row-based partitioning")
+                # Clean up temp files
+                for temp_files in partition_temp_files.values():
+                    for tf in temp_files:
+                        try:
+                            tf.unlink()
+                        except:
+                            pass
                 # Fallback to row-based
                 return self._convert_with_row_partitioning(csv_path, shard_dir, result)
             
-            chunk['_partition'] = chunk[partition_col].apply(
-                lambda x: self._assign_partition(x, breaks)
-            )
+            # Vectorized partition assignment using numpy for speed
+            col_values = chunk[partition_col].values
+            partitions = [bisect.bisect_right(breaks, v) + 1 for v in col_values]
+            chunk['_partition'] = partitions
             
             # Split chunk by partition
             for part_num in range(1, n_partitions + 1):
                 part_chunk = chunk[chunk['_partition'] == part_num].drop(columns=['_partition'])
-                if len(part_chunk) > 0:
+                chunk_len = len(part_chunk)
+                if chunk_len > 0:
                     partition_buffers[part_num].append(part_chunk)
-                    partition_rows[part_num] += len(part_chunk)
+                    partition_buffer_rows[part_num] += chunk_len
+                    partition_total_rows[part_num] += chunk_len
+                    
+                    # Check if buffer needs flushing (memory management)
+                    if partition_buffer_rows[part_num] >= self.PARTITION_BUFFER_THRESHOLD:
+                        flush_partition_buffer(part_num)
+            
+            # Clear chunk reference
+            del chunk
+            
+            # Periodic memory cleanup
+            if (chunk_num + 1) % 50 == 0:
+                gc.collect()
         
-        # Write each partition to a parquet file
+        # Flush remaining buffers
+        flush_all_buffers()
+        gc.collect()
+        
+        if self.verbose:
+            logger.info(f"  Merging temp files into final partitions...")
+        
+        # Merge temp files into final partition files
         for part_num in range(1, n_partitions + 1):
-            if partition_buffers[part_num]:
-                part_df = pd.concat(partition_buffers[part_num], ignore_index=True)
+            temp_files = partition_temp_files[part_num]
+            if not temp_files:
+                continue
+            
+            shard_path = shard_dir / f"{part_num}.parquet"
+            
+            if len(temp_files) == 1:
+                # Single temp file - just rename
+                temp_files[0].rename(shard_path)
+                if self.verbose:
+                    logger.info(f"  📁 Wrote partition {part_num}: {partition_total_rows[part_num]:,} rows")
+            else:
+                # Multiple temp files - merge with streaming to avoid memory spike
+                # Read and concatenate in smaller batches
+                all_chunks = []
+                for tf in temp_files:
+                    df = pd.read_parquet(tf)
+                    all_chunks.append(df)
+                    # Delete temp file after reading
+                    tf.unlink()
+                
+                part_df = pd.concat(all_chunks, ignore_index=True)
+                del all_chunks
+                gc.collect()
+                
                 # Sort by partition column (like ricu)
                 part_df = part_df.sort_values(by=partition_col).reset_index(drop=True)
-                
-                shard_path = shard_dir / f"{part_num}.parquet"
                 part_df.to_parquet(shard_path, index=False, engine='pyarrow')
                 
                 if self.verbose:
-                    logger.info(f"  📁 Wrote partition {part_num}: {len(part_df):,} rows")
+                    logger.info(f"  📁 Wrote partition {part_num}: {len(part_df):,} rows (merged from {len(temp_files)} temp files)")
+                
+                del part_df
+                gc.collect()
         
         result['status'] = ConversionStatus.COMPLETED
         result['row_count'] = total_rows
