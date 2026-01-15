@@ -445,11 +445,14 @@ class DataConverter:
         if file_key in self._status:
             status = self._status[file_key]
             if status.get('status') == ConversionStatus.COMPLETED:
-                # Verify row count
+                # Verify row count using pyarrow metadata (no memory overhead)
                 stored_rows = status.get('row_count', 0)
                 try:
-                    pq = pd.read_parquet(parquet_path)
-                    if len(pq) == stored_rows:
+                    import pyarrow.parquet as pq_reader
+                    # Only read metadata, not actual data
+                    parquet_file = pq_reader.ParquetFile(parquet_path)
+                    actual_rows = parquet_file.metadata.num_rows
+                    if actual_rows == stored_rows:
                         return False, "already converted and verified"
                 except Exception:
                     return True, "parquet file corrupted"
@@ -496,9 +499,13 @@ class DataConverter:
                     continue
         else:
             # For gzipped files, try reading samples with pandas
+            # Use only 1000 rows to minimize memory
+            import gc
             for encoding in self.ENCODINGS:
                 try:
-                    pd.read_csv(csv_path, encoding=encoding, compression='gzip', nrows=5000)
+                    sample_df = pd.read_csv(csv_path, encoding=encoding, compression='gzip', nrows=1000)
+                    del sample_df
+                    gc.collect()
                     return encoding
                 except UnicodeDecodeError:
                     continue
@@ -715,14 +722,15 @@ class DataConverter:
             # Use streaming write for larger files
             total_rows = 0
             writer = None
-            
-            chunk_iter = self._read_csv_with_encoding(
-                csv_path, 
-                chunksize=self.chunk_size,
-                low_memory=True,
-            )
+            chunk_iter = None
             
             try:
+                chunk_iter = self._read_csv_with_encoding(
+                    csv_path, 
+                    chunksize=self.chunk_size,
+                    low_memory=True,
+                )
+                
                 for i, chunk in enumerate(chunk_iter):
                     # Fix mixed-type columns in each chunk
                     chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
@@ -741,7 +749,7 @@ class DataConverter:
                         logger.info(f"  Written {total_rows:,} rows...")
                     
                     del chunk, table
-                    if (i + 1) % 50 == 0:
+                    if (i + 1) % 20 == 0:
                         gc.collect()
                 
                 if writer is not None:
@@ -751,6 +759,13 @@ class DataConverter:
                 if writer is not None:
                     writer.close()
                 raise
+            finally:
+                # Clean up iterator
+                if chunk_iter is not None:
+                    if hasattr(chunk_iter, 'close'):
+                        chunk_iter.close()
+                    del chunk_iter
+                gc.collect()
             
             result['row_count'] = total_rows
             
@@ -821,13 +836,20 @@ class DataConverter:
         # Check for ricu-style partitioning config
         partition_config = self._get_partitioning_config(table_name)
         
-        if partition_config:
-            # Use ID-based partitioning (ricu style)
+        # ID-based partitioning opens many writers simultaneously, which uses a lot of memory.
+        # For memory-constrained systems, prefer row-based partitioning.
+        # Set USE_ID_PARTITIONING=1 to enable ID-based partitioning (default: disabled)
+        use_id_partitioning = os.environ.get('PYRICU_USE_ID_PARTITIONING', '0') == '1'
+        
+        if partition_config and use_id_partitioning:
+            # Use ID-based partitioning (ricu style) - opens many writers, uses more memory
+            if self.verbose:
+                logger.info(f"  Using ID-based partitioning (may use more memory)")
             result = self._convert_with_id_partitioning(
                 csv_path, shard_dir, partition_config, result
             )
         else:
-            # Use row-count based partitioning
+            # Use row-count based partitioning - one writer at a time, memory efficient
             result = self._convert_with_row_partitioning(
                 csv_path, shard_dir, result
             )
@@ -927,6 +949,7 @@ class DataConverter:
                 except Exception as e:
                     logger.warning(f"  ⚠️ Error closing partition {part_num}: {e}")
         
+        chunk_iter = None
         try:
             # Read in chunks and stream to partitions
             chunk_iter = self._read_csv_with_encoding(
@@ -991,6 +1014,13 @@ class DataConverter:
             # Make sure to close writers on error
             close_all_writers()
             raise
+        finally:
+            # Clean up iterator to release file handles and memory
+            if chunk_iter is not None:
+                if hasattr(chunk_iter, 'close'):
+                    chunk_iter.close()
+                del chunk_iter
+            gc.collect()
         
         return result
     
@@ -1054,16 +1084,22 @@ class DataConverter:
             low_memory=True,
         )
         
-        # Read first few chunks to build stable schema
-        for i, chunk in enumerate(chunk_iter):
-            if i >= sample_chunks:
-                break
-            chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
-            table = pa.Table.from_pandas(chunk, preserve_index=False)
-            schemas.append(table.schema)
-            # Explicitly delete to free memory immediately
-            del chunk
-            del table
+        try:
+            # Read first few chunks to build stable schema
+            for i, chunk in enumerate(chunk_iter):
+                if i >= sample_chunks:
+                    break
+                chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
+                table = pa.Table.from_pandas(chunk, preserve_index=False)
+                schemas.append(table.schema)
+                # Explicitly delete to free memory immediately
+                del chunk
+                del table
+        finally:
+            # Close the iterator to release file handle and buffers
+            if hasattr(chunk_iter, 'close'):
+                chunk_iter.close()
+            del chunk_iter
             gc.collect()
         
         if not schemas:
@@ -1130,47 +1166,57 @@ class DataConverter:
             current_shard_rows = 0
             current_writer = None  # Will be initialized on first write
         
-        # Read and write in chunks
-        chunk_iter = self._read_csv_with_encoding(
-            csv_path, 
-            chunksize=self.chunk_size,
-            low_memory=True,
-        )
+        chunk_iter = None
+        try:
+            # Read and write in chunks
+            chunk_iter = self._read_csv_with_encoding(
+                csv_path, 
+                chunksize=self.chunk_size,
+                low_memory=True,
+            )
+            
+            for chunk in chunk_iter:
+                chunk_len = len(chunk)
+                total_rows += chunk_len
+                
+                # Fix mixed-type columns before conversion
+                chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
+                
+                # Convert to PyArrow table
+                table = pa.Table.from_pandas(chunk, preserve_index=False)
+                
+                # Initialize writer if needed (use reference schema if available)
+                if current_writer is None:
+                    if reference_schema is None:
+                        reference_schema = table.schema
+                    shard_path = shard_dir / f"{shard_num}.parquet"
+                    current_writer = pq.ParquetWriter(shard_path, reference_schema, compression='snappy')
+                
+                # Normalize table to match reference schema
+                if table.schema != reference_schema:
+                    table = self._normalize_schema(table, reference_schema)
+                
+                current_writer.write_table(table)
+                
+                current_shard_rows += chunk_len
+                del chunk, table
+                
+                # Start new shard when reaching threshold
+                if current_shard_rows >= self.ROWS_PER_SHARD:
+                    start_new_shard()
+                    gc.collect()  # GC after closing each shard
+                
+                # Periodic garbage collection - more frequent (every 500K rows)
+                if total_rows % 500_000 == 0:
+                    gc.collect()
         
-        for chunk in chunk_iter:
-            chunk_len = len(chunk)
-            total_rows += chunk_len
-            
-            # Fix mixed-type columns before conversion
-            chunk = self._fix_mixed_type_columns(chunk, csv_path.name)
-            
-            # Convert to PyArrow table
-            table = pa.Table.from_pandas(chunk, preserve_index=False)
-            
-            # Initialize writer if needed (use reference schema if available)
-            if current_writer is None:
-                if reference_schema is None:
-                    reference_schema = table.schema
-                shard_path = shard_dir / f"{shard_num}.parquet"
-                current_writer = pq.ParquetWriter(shard_path, reference_schema, compression='snappy')
-            
-            # Normalize table to match reference schema
-            if table.schema != reference_schema:
-                table = self._normalize_schema(table, reference_schema)
-            
-            current_writer.write_table(table)
-            
-            current_shard_rows += chunk_len
-            del chunk, table
-            
-            # Start new shard when reaching threshold
-            if current_shard_rows >= self.ROWS_PER_SHARD:
-                start_new_shard()
-                gc.collect()  # GC after closing each shard
-            
-            # Periodic garbage collection - more frequent (every 500K rows)
-            if total_rows % 500_000 == 0:
-                gc.collect()
+        finally:
+            # Clean up iterator to release file handles and memory
+            if chunk_iter is not None:
+                if hasattr(chunk_iter, 'close'):
+                    chunk_iter.close()
+                del chunk_iter
+            gc.collect()
         
         # Close final shard
         if current_writer is not None:
