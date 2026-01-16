@@ -3066,19 +3066,26 @@ def load_data_for_preview(max_patients: int = 50):
             # 批量失败，回退到逐个加载
             for concept in preview_concepts:
                 try:
-                    df = load_concepts(
+                    result = load_concepts(
                         data_path=st.session_state.data_path,
                         database=st.session_state.get('database'),
                         concepts=[concept],
                         verbose=False,
-                        merge=True,
+                        merge=False,  # 保持与主加载逻辑一致，不合并
                     )
-                    if hasattr(df, 'to_pandas'):
-                        df = df.to_pandas()
-                    elif hasattr(df, 'dataframe'):
-                        df = df.dataframe()
-                    if isinstance(df, pd.DataFrame) and len(df) > 0:
-                        data[concept] = df
+                    # 处理返回结果
+                    if isinstance(result, dict):
+                        for cname, df in result.items():
+                            if hasattr(df, 'to_pandas'):
+                                df = df.to_pandas()
+                            elif hasattr(df, 'dataframe'):
+                                df = df.dataframe()
+                            elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                                df = df.data
+                            if isinstance(df, pd.DataFrame) and len(df) > 0:
+                                data[cname] = df
+                    elif isinstance(result, pd.DataFrame) and len(result) > 0:
+                        data[concept] = result
                 except Exception:
                     pass
         
