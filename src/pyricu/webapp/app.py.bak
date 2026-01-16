@@ -5596,7 +5596,6 @@ def render_quality_page():
 
 
 
-
 def render_cohort_dashboard_page():
     """渲染队列仪表板 - 基于用户导入的模块动态展示。"""
     lang = st.session_state.get('language', 'en')
@@ -5645,13 +5644,72 @@ def render_cohort_dashboard_page():
         st.error("Plotly not installed. Run: pip install plotly")
         return
     
-    # ========== 使用 webapp 本身的 CONCEPT_GROUPS_INTERNAL ==========
-    # 非连续型指标（不适合画分布图）
-    NON_CONTINUOUS = {
-        "sex", "death", "abx", "vaso_ind", "mech_vent", "supp_o2", 
-        "vent_ind", "vent_start", "vent_end", "avpu", "ecmo", "ecmo_indication",
-        "norepi_dur", "dobu_dur", "epi_dur"
+    # ========== 使用RICU模块定义 ==========
+    # 完整的模块定义（与ricu_compat.py一致）
+    RICU_MODULES = {
+        "demo": {
+            "concepts": ["age", "bmi", "height", "sex", "weight"],
+            "label_en": "Demographics",
+            "label_zh": "人口统计",
+        },
+        "outcome": {
+            "concepts": ["death", "los_icu", "qsofa", "sirs", "sofa", 
+                        "sofa_cardio", "sofa_cns", "sofa_coag", "sofa_liver", 
+                        "sofa_renal", "sofa_resp"],
+            "label_en": "Outcomes & Scores",
+            "label_zh": "结局与评分",
+        },
+        "vital": {
+            "concepts": ["dbp", "etco2", "hr", "map", "sbp", "temp"],
+            "label_en": "Vital Signs",
+            "label_zh": "生命体征",
+        },
+        "neu": {
+            "concepts": ["avpu", "egcs", "gcs", "mgcs", "rass", "vgcs", "tgcs"],
+            "label_en": "Neurological",
+            "label_zh": "神经系统",
+        },
+        "output": {
+            "concepts": ["urine", "urine24"],
+            "label_en": "Output",
+            "label_zh": "输出量",
+        },
+        "resp": {
+            "concepts": ["ett_gcs", "mech_vent", "o2sat", "sao2", "pafi", 
+                        "resp", "safi", "supp_o2", "vent_ind", "vent_start", "vent_end"],
+            "label_en": "Respiratory",
+            "label_zh": "呼吸系统",
+        },
+        "lab": {
+            "concepts": ["alb", "alp", "alt", "ast", "bicar", "bili", "bili_dir", 
+                        "bun", "ca", "ck", "ckmb", "cl", "crea", "crp", "glu",
+                        "k", "mg", "na", "phos", "tnt"],
+            "label_en": "Laboratory",
+            "label_zh": "实验室检查",
+        },
+        "blood": {
+            "concepts": ["be", "cai", "fio2", "hbco", "lact", "methb", "pco2", "ph", "po2", "tco2"],
+            "label_en": "Blood Gas",
+            "label_zh": "血气分析",
+        },
+        "hematology": {
+            "concepts": ["bnd", "esr", "fgn", "hgb", "inr_pt", "lymph", "mch", 
+                        "mchc", "mcv", "neut", "plt", "ptt", "wbc"],
+            "label_en": "Hematology",
+            "label_zh": "血液学",
+        },
+        "med": {
+            "concepts": ["abx", "adh_rate", "cort", "dex", "dobu_dur", "dobu_rate", 
+                        "dobu60", "epi_dur", "epi_rate", "ins", "norepi_dur", 
+                        "norepi_equiv", "norepi_rate", "vaso_ind", "dopa_rate"],
+            "label_en": "Medications",
+            "label_zh": "药物治疗",
+        },
     }
+    
+    # 非连续型指标（不适合画分布图）
+    NON_CONTINUOUS = {"sex", "death", "abx", "vaso_ind", "mech_vent", "supp_o2", 
+                      "vent_ind", "vent_start", "vent_end", "avpu"}
     
     # ========== 预处理数据 ==========
     all_patient_ids = set()
@@ -5662,10 +5720,10 @@ def render_cohort_dashboard_page():
         if df is None or len(df) == 0:
             continue
         
-        # 确定所属模块 - 使用 CONCEPT_GROUPS_INTERNAL
+        # 确定所属模块
         module_name = None
-        for mod_name, concepts in CONCEPT_GROUPS_INTERNAL.items():
-            if name in concepts:
+        for mod_name, mod_info in RICU_MODULES.items():
+            if name in mod_info["concepts"]:
                 module_name = mod_name
                 break
         
@@ -5754,12 +5812,11 @@ def render_cohort_dashboard_page():
                     mod_valid += pd.to_numeric(fd['df'][fd['value_col']], errors='coerce').notna().sum()
                 mod_patients.update(fd['patients'])
             
-            # 获取模块标签 - 使用 CONCEPT_GROUP_NAMES (元组: en, zh)
-            if mod_name in CONCEPT_GROUP_NAMES:
-                en_name, zh_name = CONCEPT_GROUP_NAMES[mod_name]
-                label = zh_name if lang == 'zh' else en_name
+            # 获取模块标签
+            if mod_name in RICU_MODULES:
+                label = RICU_MODULES[mod_name]["label_zh" if lang == 'zh' else "label_en"]
             else:
-                label = mod_name.replace("_", " ").title()
+                label = mod_name.title()
             
             module_stats.append({
                 'Module': label,
@@ -5780,18 +5837,16 @@ def render_cohort_dashboard_page():
                 y=mod_df['Module'],
                 orientation='h',
                 marker_color='#3498db',
-                text=[f"{r:,}" for r in mod_df['Records']],
+                text=[f"{r:,} ({f} feat)" for r, f in zip(mod_df['Records'], mod_df['Features'])],
                 textposition='outside',
-                hovertemplate='%{y}<br>Records: %{x:,}<br>Features: ' + 
-                              mod_df['Features'].astype(str) + '<extra></extra>'
+                hovertemplate='%{y}<br>Records: %{x:,}<extra></extra>'
             ))
             
             fig_mod.update_layout(
-                margin=dict(t=20, b=40, l=150, r=100),
-                height=max(250, 30 * len(module_stats) + 80),
+                margin=dict(t=20, b=40, l=120, r=80),
+                height=max(200, 35 * len(module_stats) + 60),
                 xaxis_title="Records" if lang == 'en' else "记录数",
-                showlegend=False,
-                bargap=0.3
+                showlegend=False
             )
             st.plotly_chart(fig_mod, use_container_width=True)
     
@@ -5806,11 +5861,10 @@ def render_cohort_dashboard_page():
                                    if f not in NON_CONTINUOUS 
                                    and feature_data[f]['value_col']]
             if continuous_features:
-                if mod_name in CONCEPT_GROUP_NAMES:
-                    en_name, zh_name = CONCEPT_GROUP_NAMES[mod_name]
-                    label = zh_name if lang == 'zh' else en_name
+                if mod_name in RICU_MODULES:
+                    label = RICU_MODULES[mod_name]["label_zh" if lang == 'zh' else "label_en"]
                 else:
-                    label = mod_name.replace("_", " ").title()
+                    label = mod_name.title()
                 available_modules[mod_name] = {
                     'label': label,
                     'features': continuous_features
@@ -5840,7 +5894,7 @@ def render_cohort_dashboard_page():
                 value_col = fd['value_col']
                 
                 try:
-                    values = pd.to_numeric(df[value_col], errors='coerce').dropna().astype(float)
+                    values = pd.to_numeric(df[value_col], errors='coerce').dropna()
                     
                     if len(values) > 10:
                         # 安全地过滤极端值
@@ -5874,7 +5928,7 @@ def render_cohort_dashboard_page():
                     else:
                         st.info("Not enough data points" if lang == 'en' else "数据点不足")
                 except Exception as e:
-                    st.warning(f"Cannot plot distribution for {selected_feature}: {str(e)[:50]}" if lang == 'en' else f"无法绘制 {selected_feature} 的分布")
+                    st.warning(f"Cannot plot distribution for {selected_feature}" if lang == 'en' else f"无法绘制 {selected_feature} 的分布")
         else:
             st.info("No continuous features available" if lang == 'en' else "无连续型特征")
     
@@ -5896,14 +5950,13 @@ def render_cohort_dashboard_page():
         if temporal_features:
             # 按模块分组可选特征
             trend_options = []
-            for mod_name in sorted(temporal_features.keys()):
-                if mod_name in CONCEPT_GROUP_NAMES:
-                    en_name, zh_name = CONCEPT_GROUP_NAMES[mod_name]
-                    label = zh_name if lang == 'zh' else en_name
+            for mod_name in temporal_features.keys():
+                if mod_name in RICU_MODULES:
+                    label = RICU_MODULES[mod_name]["label_zh" if lang == 'zh' else "label_en"]
                 else:
-                    label = mod_name.replace("_", " ").title()
+                    label = mod_name.title()
                 for f in temporal_features[mod_name]:
-                    trend_options.append(f"{label[:8]}: {f}")
+                    trend_options.append(f"{label[:6]}: {f}")
             
             if trend_options:
                 # 默认选2-3个
@@ -5987,10 +6040,10 @@ def render_cohort_dashboard_page():
         else:
             st.info("No temporal features found" if lang == 'en' else "未找到时序特征")
     
-    # ===== 图表4：数据有效性热力图（全部特征，显示数值） =====
+    # ===== 图表4：数据有效性热力图（全部特征，不显示数值在格子上） =====
     with chart_row2[1]:
         st.markdown("#### 🗺️ " + ("Data Validity by Time" if lang == 'en' else "数据有效性"))
-        st.caption("% patients with valid values" if lang == 'en' else "有有效值的患者比例 (%)")
+        st.caption("% patients with valid values (hover for details)" if lang == 'en' else "有有效值的患者比例（悬停查看详情）")
         
         time_bins = [(0, 6), (6, 12), (12, 24), (24, 48), (48, 72)]
         time_labels = ['0-6h', '6-12h', '12-24h', '24-48h', '48-72h']
@@ -6001,8 +6054,8 @@ def render_cohort_dashboard_page():
             mod_feats = [f for f in features 
                         if feature_data[f]['time_col'] and feature_data[f]['value_col'] 
                         and 'stay_id' in feature_data[f]['df'].columns]
-            # 每个模块最多取3个
-            features_for_matrix.extend(mod_feats[:3])
+            # 每个模块最多取5个
+            features_for_matrix.extend(mod_feats[:5])
         
         if features_for_matrix and n_patients > 0:
             matrix_data = []
@@ -6038,25 +6091,18 @@ def render_cohort_dashboard_page():
                 matrix_df = matrix_df.set_index('feature')
                 matrix_df = matrix_df.reindex(columns=time_labels)
                 
-                # 创建带有数字标注的热力图
-                z_values = matrix_df.values
-                text_values = [[f"{v:.0f}" for v in row] for row in z_values]
-                
                 fig_matrix = go.Figure(data=go.Heatmap(
-                    z=z_values,
+                    z=matrix_df.values,
                     x=matrix_df.columns.tolist(),
                     y=matrix_df.index.tolist(),
                     colorscale='RdYlGn',
                     hovertemplate='%{y}<br>%{x}: %{z:.1f}%<extra></extra>',
                     showscale=True,
-                    colorbar=dict(title='%', ticksuffix='%'),
-                    text=text_values,
-                    texttemplate="%{text}%",
-                    textfont={"size": 10}
+                    colorbar=dict(title='%', ticksuffix='%')
                 ))
                 fig_matrix.update_layout(
-                    margin=dict(t=20, b=40, l=100, r=20),
-                    height=max(300, 25 * len(matrix_data) + 80),
+                    margin=dict(t=20, b=40, l=80, r=20),
+                    height=max(300, 20 * len(matrix_data) + 80),
                     xaxis_title="Time Window" if lang == 'en' else "时间窗口",
                     yaxis=dict(autorange='reversed')
                 )
@@ -6065,78 +6111,7 @@ def render_cohort_dashboard_page():
                 st.info("No valid data for matrix" if lang == 'en' else "无可用数据")
         else:
             st.info("No temporal features found" if lang == 'en' else "未找到时序特征")
-    
-    # ========== 底部：特征汇总表格 ==========
-    st.markdown("---")
-    st.markdown("### 📋 " + ("Feature Summary Table" if lang == 'en' else "特征汇总表"))
-    
-    summary_rows = []
-    for name, fd in feature_data.items():
-        df = fd['df']
-        value_col = fd['value_col']
-        mod = fd['module']
-        
-        # 模块标签 (元组: en, zh)
-        if mod in CONCEPT_GROUP_NAMES:
-            en_name, zh_name = CONCEPT_GROUP_NAMES[mod]
-            mod_label = zh_name if lang == 'zh' else en_name
-        else:
-            mod_label = mod.replace("_", " ").title()
-        
-        n_records = len(df)
-        n_patients_feat = len(fd['patients']) if fd['patients'] else 0
-        
-        # 统计有效值
-        if value_col:
-            try:
-                values = pd.to_numeric(df[value_col], errors='coerce').astype(float)
-                n_valid = int(values.notna().sum())
-                valid_pct = n_valid / n_records * 100 if n_records > 0 else 0
-                
-                valid_values = values.dropna()
-                if len(valid_values) > 0:
-                    mean_val = float(valid_values.mean())
-                    std_val = float(valid_values.std())
-                    min_val = float(valid_values.min())
-                    max_val = float(valid_values.max())
-                    stats_str = f"{mean_val:.2f} ± {std_val:.2f}"
-                    range_str = f"{min_val:.2f} - {max_val:.2f}"
-                else:
-                    stats_str = "-"
-                    range_str = "-"
-            except:
-                n_valid = 0
-                valid_pct = 0
-                stats_str = "-"
-                range_str = "-"
-        else:
-            n_valid = 0
-            valid_pct = 0
-            stats_str = "-"
-            range_str = "-"
-        
-        summary_rows.append({
-            "Module" if lang == 'en' else "模块": mod_label,
-            "Feature" if lang == 'en' else "特征": name,
-            "Records" if lang == 'en' else "记录数": n_records,
-            "Patients" if lang == 'en' else "患者数": n_patients_feat,
-            "Valid %" if lang == 'en' else "有效率%": f"{valid_pct:.1f}%",
-            "Mean ± SD" if lang == 'en' else "均值±标准差": stats_str,
-            "Range" if lang == 'en' else "范围": range_str
-        })
-    
-    if summary_rows:
-        summary_df = pd.DataFrame(summary_rows)
-        # 按模块和特征名排序
-        mod_col = "Module" if lang == 'en' else "模块"
-        summary_df = summary_df.sort_values([mod_col, "Feature" if lang == 'en' else "特征"])
-        
-        st.dataframe(
-            summary_df,
-            use_container_width=True,
-            hide_index=True,
-            height=min(400, 35 * len(summary_rows) + 40)
-        )
+
 
 def render_cohort_comparison_page():
     """渲染队列对比可视化页面 - 基于侧边栏筛选的患者进行分组对比。"""
