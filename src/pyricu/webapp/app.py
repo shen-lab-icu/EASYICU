@@ -1138,6 +1138,7 @@ TEXTS = {
         'patient_view': '🏥 Patient View',
         'data_quality': '📊 Data Quality',
         'cohort_compare': '📊 Cohort Comparison',
+        'cohort_dashboard': '📈 Cohort Dashboard',
         'ready': '🎉 Ready!',
         'ready_desc': 'Data loaded, you can start exploring.',
         'database': 'Database',
@@ -1198,6 +1199,7 @@ TEXTS = {
         'patient_view': '🏥 患者视图',
         'data_quality': '📊 数据质量',
         'cohort_compare': '📊 队列对比',
+        'cohort_dashboard': '📈 队列仪表板',
         'ready': '🎉 准备就绪！',
         'ready_desc': '数据已加载，您可以开始探索分析了。',
         'database': '数据库',
@@ -2004,130 +2006,165 @@ def render_visualization_mode():
 
 
 def render_sidebar():
-    """渲染侧边栏 - 简化版：选择 → 导出，无需加载到内存。"""
+    """渲染侧边栏 - VS Code风格：左侧图标导航 + 右侧内容面板。"""
     # 使用双语特征分组
     concept_groups = get_concept_groups()
     
     # 所有可用的 concepts 列表（用于自定义选择）
     all_available_concepts = sorted(set(c for group_concepts in concept_groups.values() for c in group_concepts))
     
+    # 初始化模式状态
+    if 'app_mode' not in st.session_state:
+        st.session_state.app_mode = 'extract'  # 默认为数据提取模式
+    
     with st.sidebar:
-        st.markdown(f"## {get_text('app_title')}")
-        
-        # 语言切换 - 更紧凑的布局
-        lang = st.selectbox(
-            "🌐 Language",
-            options=['EN', 'ZH'],
-            index=0 if st.session_state.language == 'en' else 1,
-            key="lang_select",
-        )
-        if (lang == 'EN' and st.session_state.language != 'en') or \
-           (lang == 'ZH' and st.session_state.language != 'zh'):
-            st.session_state.language = 'en' if lang == 'EN' else 'zh'
-            st.rerun()
-        
-        st.markdown("---")
-        
-        # ============ 快捷入口：两个并列模式 ============
-        st.markdown(f"**{get_text('select_mode')}**")
-        
-        # 初始化模式状态
-        if 'app_mode' not in st.session_state:
-            st.session_state.app_mode = 'extract'  # 默认为数据提取模式
-        
-        # 自定义样式的模式选择按钮
-        extract_selected = st.session_state.app_mode == 'extract'
-        viz_selected = st.session_state.app_mode == 'viz'
-        
-        # 定义选中和未选中的样式
-        if st.session_state.language == 'en':
-            extract_label = "📤 Data Extraction"
-            viz_label = "📊 Quick Visualization"
-        else:
-            extract_label = "📤 数据提取导出"
-            viz_label = "📊 快速可视化"
-        
-        # 使用HTML渲染漂亮的模式切换按钮 - 更明显的样式区分
+        # ============ VS Code 风格导航栏 ============
+        # 注入自定义CSS样式
         st.markdown("""
         <style>
-        .mode-btn-container {
+        /* VS Code 风格的图标导航栏 */
+        .vscode-nav {
             display: flex;
+            flex-direction: row;
+            background: linear-gradient(180deg, #1e1e2e 0%, #252536 100%);
+            border-radius: 12px;
+            padding: 8px;
+            margin-bottom: 16px;
             gap: 8px;
-            margin: 10px 0;
         }
-        .mode-btn {
+        .nav-icon-btn {
             flex: 1;
-            padding: 16px 12px;
-            border-radius: 10px;
-            text-align: center;
-            font-weight: 600;
-            font-size: 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 12px 8px;
+            border-radius: 8px;
             cursor: pointer;
-            transition: all 0.3s ease;
-            border: 2px solid transparent;
+            transition: all 0.2s ease;
+            border: none;
+            background: transparent;
+            text-decoration: none;
         }
-        .mode-btn-active {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-            color: white !important;
-            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.5) !important;
-            transform: scale(1.02);
+        .nav-icon-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
         }
-        .mode-btn-inactive {
-            background: #f8f9fa !important;
-            color: #666 !important;
-            border: 2px dashed #ccc !important;
-            opacity: 0.7;
+        .nav-icon-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
         }
-        .mode-btn-inactive:hover {
-            background: #e8eaee !important;
-            border-color: #999 !important;
-            opacity: 1;
+        .nav-icon {
+            font-size: 28px;
+            margin-bottom: 4px;
         }
-        /* 覆盖Streamlit按钮样式使选中更明显 */
-        div[data-testid="column"] button[kind="primary"] {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-            border: none !important;
-            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.5) !important;
-            font-weight: 700 !important;
-            font-size: 1.1rem !important;
+        .nav-label {
+            font-size: 11px;
+            color: #a0a0b0;
+            text-align: center;
+            font-weight: 500;
         }
-        div[data-testid="column"] button[kind="secondary"] {
-            background: #f0f2f6 !important;
-            color: #666 !important;
-            border: 2px dashed #ccc !important;
-            opacity: 0.7;
+        .nav-icon-btn.active .nav-label {
+            color: white;
+            font-weight: 600;
         }
-        div[data-testid="column"] button[kind="secondary"]:hover {
-            opacity: 1;
-            border-color: #667eea !important;
+        
+        /* 侧边栏标题样式 */
+        .sidebar-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        /* 当前模式指示器 */
+        .mode-indicator {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+        
+        /* 覆盖Streamlit按钮样式 */
+        .stButton > button {
+            transition: all 0.2s ease;
         }
         </style>
         """, unsafe_allow_html=True)
         
-        # 使用两列放置按钮 - 所有模式都用按钮，确保可点击
-        mode_cols = st.columns(2)
+        # ============ 顶部：应用标题 + 语言切换 ============
+        header_cols = st.columns([3, 1])
+        with header_cols[0]:
+            st.markdown(f"## {get_text('app_title')}")
+        with header_cols[1]:
+            lang = st.selectbox(
+                "🌐",
+                options=['EN', 'ZH'],
+                index=0 if st.session_state.language == 'en' else 1,
+                key="lang_select",
+                label_visibility="collapsed"
+            )
+            if (lang == 'EN' and st.session_state.language != 'en') or \
+               (lang == 'ZH' and st.session_state.language != 'zh'):
+                st.session_state.language = 'en' if lang == 'EN' else 'zh'
+                st.rerun()
         
-        with mode_cols[0]:
-            # 数据提取按钮 - 总是可点击
-            btn_type = "primary" if extract_selected else "secondary"
-            if st.button(extract_label, key="btn_mode_extract", width="stretch", type=btn_type):
+        # ============ VS Code 风格图标导航 ============
+        extract_selected = st.session_state.app_mode == 'extract'
+        viz_selected = st.session_state.app_mode == 'viz'
+        
+        # 使用两列创建图标按钮
+        nav_cols = st.columns(2)
+        
+        with nav_cols[0]:
+            # 数据提取按钮
+            extract_style = "primary" if extract_selected else "secondary"
+            extract_icon = "📤" if not extract_selected else "✅"
+            extract_text = "Data Export" if st.session_state.language == 'en' else "数据提取"
+            if st.button(
+                f"{extract_icon}\n{extract_text}", 
+                key="nav_extract", 
+                type=extract_style,
+                width="stretch"
+            ):
                 if not extract_selected:
                     st.session_state.app_mode = 'extract'
-                    # 切换模式时清空已加载数据，避免冲突
                     st.session_state.loaded_concepts = {}
                     st.session_state.patient_ids = []
                     st.rerun()
         
-        with mode_cols[1]:
-            # 快速可视化按钮 - 总是可点击
-            btn_type = "primary" if viz_selected else "secondary"
-            if st.button(viz_label, key="btn_mode_viz", width="stretch", type=btn_type):
+        with nav_cols[1]:
+            # 快速可视化按钮
+            viz_style = "primary" if viz_selected else "secondary"
+            viz_icon = "📊" if not viz_selected else "✅"
+            viz_text = "Visualization" if st.session_state.language == 'en' else "可视化"
+            if st.button(
+                f"{viz_icon}\n{viz_text}", 
+                key="nav_viz", 
+                type=viz_style,
+                width="stretch"
+            ):
                 if not viz_selected:
                     st.session_state.app_mode = 'viz'
-                    # 切换模式时清空已加载数据，避免冲突
                     st.session_state.loaded_concepts = {}
                     st.session_state.patient_ids = []
                     st.rerun()
+        
+        # 当前模式指示器
+        if st.session_state.language == 'en':
+            mode_text = "📤 Data Export Mode" if extract_selected else "📊 Visualization Mode"
+        else:
+            mode_text = "📤 数据提取模式" if extract_selected else "📊 可视化模式"
+        
+        st.markdown(f"""
+        <div class="mode-indicator">{mode_text}</div>
+        """, unsafe_allow_html=True)
         
         # 根据选择设置mode变量
         mode = get_text('mode_viz') if st.session_state.app_mode == 'viz' else get_text('mode_extract')
@@ -5558,6 +5595,549 @@ def render_quality_page():
             )
 
 
+
+
+def render_cohort_dashboard_page():
+    """渲染队列仪表板 - 基于用户导入的模块动态展示。"""
+    lang = st.session_state.get('language', 'en')
+    
+    page_title = "📈 Cohort Dashboard" if lang == 'en' else "📈 队列仪表板"
+    st.markdown(f"## {page_title}")
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    
+    # 检查是否有已加载的数据
+    concept_results = st.session_state.get('loaded_concepts', {})
+    patient_ids = st.session_state.get('patient_ids', [])
+    
+    if not concept_results:
+        if lang == 'en':
+            st.info("""
+            **📊 Cohort Dashboard**
+            
+            This dashboard provides clinical insights into your ICU cohort.
+            
+            **To get started:**
+            1. Configure your data source in sidebar
+            2. Select features to load
+            3. Click "Load Data"
+            4. Return here to view the dashboard
+            """)
+        else:
+            st.info("""
+            **📊 队列仪表板**
+            
+            此仪表板从临床角度展示ICU队列的关键维度。
+            
+            **使用步骤：**
+            1. 在侧边栏配置数据源
+            2. 选择要加载的特征
+            3. 点击"加载数据"
+            4. 返回此页面查看仪表板
+            """)
+        return
+    
+    # 导入 plotly
+    try:
+        import plotly.express as px
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+    except ImportError:
+        st.error("Plotly not installed. Run: pip install plotly")
+        return
+    
+    # ========== 使用 webapp 本身的 CONCEPT_GROUPS_INTERNAL ==========
+    # 非连续型指标（不适合画分布图）
+    NON_CONTINUOUS = {
+        "sex", "death", "abx", "vaso_ind", "mech_vent", "supp_o2", 
+        "vent_ind", "vent_start", "vent_end", "avpu", "ecmo", "ecmo_indication",
+        "norepi_dur", "dobu_dur", "epi_dur"
+    }
+    
+    # ========== 预处理数据 ==========
+    all_patient_ids = set()
+    feature_data = {}
+    feature_to_module = {}  # 特征到模块的映射
+    
+    for name, df in concept_results.items():
+        if df is None or len(df) == 0:
+            continue
+        
+        # 确定所属模块 - 使用 CONCEPT_GROUPS_INTERNAL
+        module_name = None
+        for mod_name, concepts in CONCEPT_GROUPS_INTERNAL.items():
+            if name in concepts:
+                module_name = mod_name
+                break
+        
+        if module_name is None:
+            module_name = "other"
+        
+        feature_to_module[name] = module_name
+        
+        value_col = None
+        for vc in ['value', 'valuenum', name]:
+            if vc in df.columns:
+                try:
+                    values = pd.to_numeric(df[vc], errors='coerce')
+                    if values.notna().sum() > 0:
+                        value_col = vc
+                        break
+                except:
+                    pass
+        
+        time_col = None
+        for tc in ['charttime', 'time', 'starttime']:
+            if tc in df.columns:
+                time_col = tc
+                break
+        
+        if 'stay_id' in df.columns:
+            feat_patients = set(df['stay_id'].unique())
+            all_patient_ids.update(feat_patients)
+        else:
+            feat_patients = set()
+        
+        feature_data[name] = {
+            'df': df,
+            'value_col': value_col,
+            'time_col': time_col,
+            'patients': feat_patients,
+            'module': module_name
+        }
+    
+    n_patients = len(all_patient_ids) if all_patient_ids else len(patient_ids)
+    
+    # 按模块分组
+    modules_with_data = {}
+    for name, fd in feature_data.items():
+        mod = fd['module']
+        if mod not in modules_with_data:
+            modules_with_data[mod] = []
+        modules_with_data[mod].append(name)
+    
+    # ========== 顶部指标卡 ==========
+    st.markdown("### 📊 " + ("Cohort Overview" if lang == 'en' else "队列概览"))
+    
+    total_records = sum(len(fd['df']) for fd in feature_data.values())
+    valid_records = 0
+    for fd in feature_data.values():
+        if fd['value_col']:
+            valid_records += pd.to_numeric(fd['df'][fd['value_col']], errors='coerce').notna().sum()
+    
+    metric_cols = st.columns(4)
+    with metric_cols[0]:
+        st.metric("👥 " + ("Patients" if lang == 'en' else "患者数"), f"{n_patients:,}")
+    with metric_cols[1]:
+        st.metric("📦 " + ("Modules" if lang == 'en' else "模块数"), f"{len(modules_with_data)}")
+    with metric_cols[2]:
+        st.metric("📋 " + ("Features" if lang == 'en' else "特征数"), f"{len(feature_data)}")
+    with metric_cols[3]:
+        st.metric("📈 " + ("Valid Values" if lang == 'en' else "有效值数"), f"{valid_records:,}")
+    
+    st.markdown("---")
+    
+    # ========== 4个核心图表 ==========
+    chart_row1 = st.columns(2)
+    
+    # ===== 图表1：各模块数据量汇总 =====
+    with chart_row1[0]:
+        st.markdown("#### 📦 " + ("Data Volume by Module" if lang == 'en' else "模块数据量"))
+        
+        module_stats = []
+        for mod_name, features in modules_with_data.items():
+            mod_records = sum(len(feature_data[f]['df']) for f in features)
+            mod_valid = 0
+            mod_patients = set()
+            for f in features:
+                fd = feature_data[f]
+                if fd['value_col']:
+                    mod_valid += pd.to_numeric(fd['df'][fd['value_col']], errors='coerce').notna().sum()
+                mod_patients.update(fd['patients'])
+            
+            # 获取模块标签 - 使用 CONCEPT_GROUP_NAMES (元组: en, zh)
+            if mod_name in CONCEPT_GROUP_NAMES:
+                en_name, zh_name = CONCEPT_GROUP_NAMES[mod_name]
+                label = zh_name if lang == 'zh' else en_name
+            else:
+                label = mod_name.replace("_", " ").title()
+            
+            module_stats.append({
+                'Module': label,
+                'Features': len(features),
+                'Records': mod_records,
+                'Valid': mod_valid,
+                'Patients': len(mod_patients),
+                'mod_key': mod_name
+            })
+        
+        if module_stats:
+            mod_df = pd.DataFrame(module_stats)
+            mod_df = mod_df.sort_values('Records', ascending=True)
+            
+            fig_mod = go.Figure()
+            fig_mod.add_trace(go.Bar(
+                x=mod_df['Records'],
+                y=mod_df['Module'],
+                orientation='h',
+                marker_color='#3498db',
+                text=[f"{r:,}" for r in mod_df['Records']],
+                textposition='outside',
+                hovertemplate='%{y}<br>Records: %{x:,}<br>Features: ' + 
+                              mod_df['Features'].astype(str) + '<extra></extra>'
+            ))
+            
+            fig_mod.update_layout(
+                margin=dict(t=20, b=40, l=150, r=100),
+                height=max(250, 30 * len(module_stats) + 80),
+                xaxis_title="Records" if lang == 'en' else "记录数",
+                showlegend=False,
+                bargap=0.3
+            )
+            st.plotly_chart(fig_mod, use_container_width=True)
+    
+    # ===== 图表2：特征值分布（仅连续型指标） =====
+    with chart_row1[1]:
+        st.markdown("#### 📊 " + ("Feature Distribution" if lang == 'en' else "特征分布"))
+        
+        # 构建可选模块（仅包含连续型特征）
+        available_modules = {}
+        for mod_name, features in modules_with_data.items():
+            continuous_features = [f for f in features 
+                                   if f not in NON_CONTINUOUS 
+                                   and feature_data[f]['value_col']]
+            if continuous_features:
+                if mod_name in CONCEPT_GROUP_NAMES:
+                    en_name, zh_name = CONCEPT_GROUP_NAMES[mod_name]
+                    label = zh_name if lang == 'zh' else en_name
+                else:
+                    label = mod_name.replace("_", " ").title()
+                available_modules[mod_name] = {
+                    'label': label,
+                    'features': continuous_features
+                }
+        
+        if available_modules:
+            col_sel1, col_sel2 = st.columns(2)
+            with col_sel1:
+                selected_module = st.selectbox(
+                    "Module" if lang == 'en' else "模块",
+                    options=list(available_modules.keys()),
+                    format_func=lambda x: available_modules[x]['label'],
+                    key="dashboard_dist_module"
+                )
+            
+            with col_sel2:
+                module_features = available_modules.get(selected_module, {}).get('features', [])
+                selected_feature = st.selectbox(
+                    "Feature" if lang == 'en' else "特征",
+                    options=module_features,
+                    key="dashboard_dist_feature"
+                )
+            
+            if selected_feature and selected_feature in feature_data:
+                fd = feature_data[selected_feature]
+                df = fd['df']
+                value_col = fd['value_col']
+                
+                try:
+                    values = pd.to_numeric(df[value_col], errors='coerce').dropna().astype(float)
+                    
+                    if len(values) > 10:
+                        # 安全地过滤极端值
+                        q1 = float(values.quantile(0.01))
+                        q99 = float(values.quantile(0.99))
+                        values_filtered = values[(values >= q1) & (values <= q99)]
+                        
+                        if len(values_filtered) > 3000:
+                            values_filtered = values_filtered.sample(3000, random_state=42)
+                        
+                        fig_dist = go.Figure()
+                        fig_dist.add_trace(go.Histogram(
+                            x=values_filtered,
+                            nbinsx=40,
+                            marker_color='#9b59b6',
+                            opacity=0.7
+                        ))
+                        
+                        fig_dist.update_layout(
+                            margin=dict(t=20, b=40, l=50, r=20),
+                            height=250,
+                            xaxis_title=selected_feature,
+                            yaxis_title="Count" if lang == 'en' else "计数",
+                            showlegend=False
+                        )
+                        st.plotly_chart(fig_dist, use_container_width=True)
+                        
+                        st.caption(
+                            f"Median: {values.median():.2f} | IQR: {float(values.quantile(0.25)):.2f}-{float(values.quantile(0.75)):.2f} | N: {len(values):,}"
+                        )
+                    else:
+                        st.info("Not enough data points" if lang == 'en' else "数据点不足")
+                except Exception as e:
+                    st.warning(f"Cannot plot distribution for {selected_feature}: {str(e)[:50]}" if lang == 'en' else f"无法绘制 {selected_feature} 的分布")
+        else:
+            st.info("No continuous features available" if lang == 'en' else "无连续型特征")
+    
+    chart_row2 = st.columns(2)
+    
+    # ===== 图表3：首24小时趋势（按模块选择） =====
+    with chart_row2[0]:
+        st.markdown("#### 📈 " + ("First 24h Trends" if lang == 'en' else "首24小时趋势"))
+        
+        # 找所有有时间和数值的连续型特征
+        temporal_features = {}
+        for name, fd in feature_data.items():
+            if fd['time_col'] and fd['value_col'] and name not in NON_CONTINUOUS:
+                mod = fd['module']
+                if mod not in temporal_features:
+                    temporal_features[mod] = []
+                temporal_features[mod].append(name)
+        
+        if temporal_features:
+            # 按模块分组可选特征
+            trend_options = []
+            for mod_name in sorted(temporal_features.keys()):
+                if mod_name in CONCEPT_GROUP_NAMES:
+                    en_name, zh_name = CONCEPT_GROUP_NAMES[mod_name]
+                    label = zh_name if lang == 'zh' else en_name
+                else:
+                    label = mod_name.replace("_", " ").title()
+                for f in temporal_features[mod_name]:
+                    trend_options.append(f"{label[:8]}: {f}")
+            
+            if trend_options:
+                # 默认选2-3个
+                default_sel = trend_options[:min(3, len(trend_options))]
+                
+                selected_trends = st.multiselect(
+                    "Select features (max 5)" if lang == 'en' else "选择特征（最多5个）",
+                    options=trend_options,
+                    default=default_sel,
+                    max_selections=5,
+                    key="dashboard_trend_select"
+                )
+                
+                if selected_trends:
+                    feature_names = [s.split(': ')[-1] for s in selected_trends]
+                    
+                    fig_trend = make_subplots(rows=len(feature_names), cols=1, 
+                                              shared_xaxes=True, vertical_spacing=0.08,
+                                              subplot_titles=feature_names)
+                    
+                    colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6']
+                    
+                    for idx, feat_name in enumerate(feature_names, 1):
+                        if feat_name not in feature_data:
+                            continue
+                        
+                        fd = feature_data[feat_name]
+                        df = fd['df']
+                        value_col = fd['value_col']
+                        time_col = fd['time_col']
+                        
+                        try:
+                            plot_df = df[[time_col, value_col]].copy()
+                            plot_df['_time'] = pd.to_numeric(plot_df[time_col], errors='coerce')
+                            plot_df['_value'] = pd.to_numeric(plot_df[value_col], errors='coerce')
+                            plot_df = plot_df.dropna()
+                            plot_df = plot_df[(plot_df['_time'] >= 0) & (plot_df['_time'] <= 24)]
+                            
+                            if len(plot_df) > 10:
+                                plot_df['hour_bin'] = (plot_df['_time'] // 2) * 2
+                                agg = plot_df.groupby('hour_bin')['_value'].median().reset_index()
+                                agg.columns = ['hour', 'median']
+                                
+                                # IQR
+                                q25_vals = plot_df.groupby('hour_bin')['_value'].quantile(0.25).values
+                                q75_vals = plot_df.groupby('hour_bin')['_value'].quantile(0.75).values
+                                
+                                if len(agg) == len(q25_vals) and len(agg) > 1:
+                                    # IQR区域
+                                    fig_trend.add_trace(go.Scatter(
+                                        x=list(agg['hour']) + list(agg['hour'][::-1]),
+                                        y=list(q75_vals) + list(q25_vals[::-1]),
+                                        fill='toself',
+                                        fillcolor='rgba(100,100,100,0.2)',
+                                        line=dict(color='rgba(255,255,255,0)'),
+                                        showlegend=False,
+                                        hoverinfo='skip'
+                                    ), row=idx, col=1)
+                                
+                                # 中位数线
+                                fig_trend.add_trace(go.Scatter(
+                                    x=agg['hour'],
+                                    y=agg['median'],
+                                    mode='lines+markers',
+                                    line=dict(color=colors[(idx-1) % len(colors)], width=2),
+                                    marker=dict(size=4),
+                                    showlegend=False
+                                ), row=idx, col=1)
+                        except:
+                            pass
+                    
+                    fig_trend.update_layout(
+                        margin=dict(t=40, b=40, l=50, r=20),
+                        height=max(300, 70 * len(feature_names) + 60),
+                    )
+                    fig_trend.update_xaxes(title_text="Hours" if lang == 'en' else "小时", row=len(feature_names), col=1)
+                    
+                    st.plotly_chart(fig_trend, use_container_width=True)
+                else:
+                    st.info("Select at least one feature" if lang == 'en' else "请选择至少一个特征")
+        else:
+            st.info("No temporal features found" if lang == 'en' else "未找到时序特征")
+    
+    # ===== 图表4：数据有效性热力图（全部特征，显示数值） =====
+    with chart_row2[1]:
+        st.markdown("#### 🗺️ " + ("Data Validity by Time" if lang == 'en' else "数据有效性"))
+        st.caption("% patients with valid values" if lang == 'en' else "有有效值的患者比例 (%)")
+        
+        time_bins = [(0, 6), (6, 12), (12, 24), (24, 48), (48, 72)]
+        time_labels = ['0-6h', '6-12h', '12-24h', '24-48h', '48-72h']
+        
+        # 选择有时间和值的特征，每个模块都取
+        features_for_matrix = []
+        for mod_name, features in modules_with_data.items():
+            mod_feats = [f for f in features 
+                        if feature_data[f]['time_col'] and feature_data[f]['value_col'] 
+                        and 'stay_id' in feature_data[f]['df'].columns]
+            # 每个模块最多取3个
+            features_for_matrix.extend(mod_feats[:3])
+        
+        if features_for_matrix and n_patients > 0:
+            matrix_data = []
+            
+            for name in features_for_matrix:
+                fd = feature_data[name]
+                df = fd['df']
+                time_col = fd['time_col']
+                value_col = fd['value_col']
+                
+                try:
+                    df_work = df[['stay_id', time_col, value_col]].copy()
+                    df_work['_time'] = pd.to_numeric(df_work[time_col], errors='coerce')
+                    df_work['_value'] = pd.to_numeric(df_work[value_col], errors='coerce')
+                    
+                    # 只保留有效值
+                    df_valid = df_work[df_work['_value'].notna() & df_work['_time'].notna()]
+                    
+                    row_data = {'feature': name}
+                    
+                    for (t_start, t_end), label in zip(time_bins, time_labels):
+                        mask = (df_valid['_time'] >= t_start) & (df_valid['_time'] < t_end)
+                        patients_with_valid = df_valid[mask]['stay_id'].nunique()
+                        pct = patients_with_valid / n_patients * 100
+                        row_data[label] = pct
+                    
+                    matrix_data.append(row_data)
+                except:
+                    continue
+            
+            if matrix_data:
+                matrix_df = pd.DataFrame(matrix_data)
+                matrix_df = matrix_df.set_index('feature')
+                matrix_df = matrix_df.reindex(columns=time_labels)
+                
+                # 创建带有数字标注的热力图
+                z_values = matrix_df.values
+                text_values = [[f"{v:.0f}" for v in row] for row in z_values]
+                
+                fig_matrix = go.Figure(data=go.Heatmap(
+                    z=z_values,
+                    x=matrix_df.columns.tolist(),
+                    y=matrix_df.index.tolist(),
+                    colorscale='RdYlGn',
+                    hovertemplate='%{y}<br>%{x}: %{z:.1f}%<extra></extra>',
+                    showscale=True,
+                    colorbar=dict(title='%', ticksuffix='%'),
+                    text=text_values,
+                    texttemplate="%{text}%",
+                    textfont={"size": 10}
+                ))
+                fig_matrix.update_layout(
+                    margin=dict(t=20, b=40, l=100, r=20),
+                    height=max(300, 25 * len(matrix_data) + 80),
+                    xaxis_title="Time Window" if lang == 'en' else "时间窗口",
+                    yaxis=dict(autorange='reversed')
+                )
+                st.plotly_chart(fig_matrix, use_container_width=True)
+            else:
+                st.info("No valid data for matrix" if lang == 'en' else "无可用数据")
+        else:
+            st.info("No temporal features found" if lang == 'en' else "未找到时序特征")
+    
+    # ========== 底部：特征汇总表格 ==========
+    st.markdown("---")
+    st.markdown("### 📋 " + ("Feature Summary Table" if lang == 'en' else "特征汇总表"))
+    
+    summary_rows = []
+    for name, fd in feature_data.items():
+        df = fd['df']
+        value_col = fd['value_col']
+        mod = fd['module']
+        
+        # 模块标签 (元组: en, zh)
+        if mod in CONCEPT_GROUP_NAMES:
+            en_name, zh_name = CONCEPT_GROUP_NAMES[mod]
+            mod_label = zh_name if lang == 'zh' else en_name
+        else:
+            mod_label = mod.replace("_", " ").title()
+        
+        n_records = len(df)
+        n_patients_feat = len(fd['patients']) if fd['patients'] else 0
+        
+        # 统计有效值
+        if value_col:
+            try:
+                values = pd.to_numeric(df[value_col], errors='coerce').astype(float)
+                n_valid = int(values.notna().sum())
+                valid_pct = n_valid / n_records * 100 if n_records > 0 else 0
+                
+                valid_values = values.dropna()
+                if len(valid_values) > 0:
+                    mean_val = float(valid_values.mean())
+                    std_val = float(valid_values.std())
+                    min_val = float(valid_values.min())
+                    max_val = float(valid_values.max())
+                    stats_str = f"{mean_val:.2f} ± {std_val:.2f}"
+                    range_str = f"{min_val:.2f} - {max_val:.2f}"
+                else:
+                    stats_str = "-"
+                    range_str = "-"
+            except:
+                n_valid = 0
+                valid_pct = 0
+                stats_str = "-"
+                range_str = "-"
+        else:
+            n_valid = 0
+            valid_pct = 0
+            stats_str = "-"
+            range_str = "-"
+        
+        summary_rows.append({
+            "Module" if lang == 'en' else "模块": mod_label,
+            "Feature" if lang == 'en' else "特征": name,
+            "Records" if lang == 'en' else "记录数": n_records,
+            "Patients" if lang == 'en' else "患者数": n_patients_feat,
+            "Valid %" if lang == 'en' else "有效率%": f"{valid_pct:.1f}%",
+            "Mean ± SD" if lang == 'en' else "均值±标准差": stats_str,
+            "Range" if lang == 'en' else "范围": range_str
+        })
+    
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows)
+        # 按模块和特征名排序
+        mod_col = "Module" if lang == 'en' else "模块"
+        summary_df = summary_df.sort_values([mod_col, "Feature" if lang == 'en' else "特征"])
+        
+        st.dataframe(
+            summary_df,
+            use_container_width=True,
+            hide_index=True,
+            height=min(400, 35 * len(summary_rows) + 40)
+        )
+
 def render_cohort_comparison_page():
     """渲染队列对比可视化页面 - 基于侧边栏筛选的患者进行分组对比。"""
     lang = st.session_state.get('language', 'en')
@@ -6326,7 +6906,7 @@ def execute_sidebar_export():
             id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
             time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'itemtime']
             
-            # 🔧 先统一所有 DataFrame 的时间列名称
+            # 🔧 先统一所有 DataFrame 的时间列名称和类型
             # 不同概念可能使用不同的时间列名（charttime, starttime等）
             # 注意：PyRICU 的时间是相对于 ICU 入院的小时数，不是 datetime
             unified_time_col = 'charttime'  # 统一使用 charttime 作为时间列名
@@ -6351,8 +6931,21 @@ def execute_sidebar_export():
                                 cdf = cdf.drop(columns=other_time_cols)
                             break
                 
-                # 🔧 不再强制转换时间列类型，保持原始的小时数格式
-                # PyRICU 的时间是相对于 ICU 入院的小时数（0, 1, 2, 3...）
+                # 🔧 统一时间列类型为 float64（小时数）
+                # 确保所有 DataFrame 的时间列类型一致，避免 merge 时类型冲突
+                if unified_time_col in cdf.columns:
+                    # 如果是 datetime 类型，尝试转换为小时数（相对于最小时间）
+                    if pd.api.types.is_datetime64_any_dtype(cdf[unified_time_col]):
+                        try:
+                            min_time = cdf[unified_time_col].min()
+                            cdf[unified_time_col] = (cdf[unified_time_col] - min_time).dt.total_seconds() / 3600
+                        except:
+                            pass
+                    # 确保是数值类型
+                    try:
+                        cdf[unified_time_col] = pd.to_numeric(cdf[unified_time_col], errors='coerce')
+                    except:
+                        pass
                 
                 normalized_concept_dfs[cname] = cdf
             concept_dfs = normalized_concept_dfs
@@ -6898,10 +7491,11 @@ def main():
         st.markdown('<div class="sub-header">本地 ICU 数据分析与可视化平台</div>', unsafe_allow_html=True)
     
     # 主页面标签（数据导出已移至左侧边栏）
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         get_text('home'),
         get_text('timeseries'), 
         get_text('patient_view'),
+        get_text('cohort_dashboard'),
         get_text('data_quality'),
         get_text('cohort_compare'),
     ])
@@ -6916,9 +7510,12 @@ def main():
         render_patient_page()
     
     with tab4:
-        render_quality_page()
+        render_cohort_dashboard_page()
     
     with tab5:
+        render_quality_page()
+    
+    with tab6:
         render_cohort_comparison_page()
     
     # 底部状态栏

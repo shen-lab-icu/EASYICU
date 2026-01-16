@@ -206,12 +206,22 @@ class DataConverter:
         Filters out:
         1. CSV shards inside directories that already have ricu parquet shards
         2. part-*.csv files that belong to already-converted observation tables
+        3. cache directory files (pyricu internal cache files)
+        4. demo directory files
         """
         csv_files = []
         
+        # Directories to exclude (case-insensitive)
+        excluded_dirs = {'cache', 'demo', '__pycache__', '.git'}
+        
         # Find all CSV and CSV.GZ files recursively (includes hosp/, icu/ subdirs)
         for pattern in ['*.csv', '*.csv.gz', '*.CSV', '*.CSV.GZ']:
-            csv_files.extend(self.data_path.rglob(pattern))
+            for f in self.data_path.rglob(pattern):
+                # Check if any parent directory is in the excluded list
+                parts_lower = [p.lower() for p in f.relative_to(self.data_path).parts[:-1]]
+                if any(part in excluded_dirs for part in parts_lower):
+                    continue
+                csv_files.append(f)
         
         # Filter out CSV shards that have already been converted to ricu parquet shards
         # These are typically in subdirectories like observation_tables/csv/part-*.csv
@@ -464,8 +474,24 @@ class DataConverter:
         
         Uses a quick approach: read raw bytes and check for encoding errors,
         then verify with pandas on a sample.
+        
+        Special handling for known databases:
+        - AUMC uses latin1 encoding (Dutch medical data)
         """
         is_gzipped = csv_path.name.endswith('.gz')
+        
+        # Check if this is AUMC database (uses latin1 encoding)
+        path_lower = str(csv_path).lower()
+        if 'aumc' in path_lower:
+            # AUMC uses latin1 encoding - verify it works
+            try:
+                if is_gzipped:
+                    pd.read_csv(csv_path, encoding='latin1', compression='gzip', nrows=100)
+                else:
+                    pd.read_csv(csv_path, encoding='latin1', nrows=100)
+                return 'latin1'
+            except:
+                pass  # Fall through to normal detection
         
         # Quick byte-level check for non-gzipped files
         if not is_gzipped:
@@ -553,20 +579,37 @@ class DataConverter:
     # Number of rows per shard - 25M rows to match ~200-250MB parquet files
     ROWS_PER_SHARD = 25_000_000  # 25M rows per shard
     
-    # Known problematic columns that have mixed types in MIMIC-IV
+    # Known problematic columns that have mixed types
     # These columns often contain mixed numeric/string/bytes data
     MIXED_TYPE_COLUMNS = {
+        # MIMIC-IV
         'pharmacy': ['lockout_interval', 'one_hr_max', 'doses_per_24_hrs', 
                      'duration', 'duration_interval', 'expiration_value'],
         'prescriptions': ['dose_val_rx', 'form_val_disp', 'doses_per_24_hrs'],
         'emar': ['dose_due', 'dose_given'],
         'emar_detail': ['dose_due', 'dose_given', 'completion_interval'],
+        # eICU
+        'infusiondrug': ['drugrate', 'infusionrate', 'drugamount', 'volumeoffluid'],
+        'medication': ['dosage', 'loadingdose', 'frequency'],
+        'respiratorycare': ['airwaysize', 'airwayposition', 'cuffpressure', 
+                            'apneaparms', 'lowexhaledminvol', 'potentialblockvalve',
+                            'lowexhaledtv', 'aboression', 'highpeakpress',
+                            'lowpeakpress', 'exhaledmvtime', 'highexhaledmv'],
+        'respiratorycharting': ['respchartvalue', 'respchartvaluelabel'],
+        # AUMC - all object columns should be converted to string
+        'admissions': ['destination', 'origin'],
+        'drugitems': ['ordercategoryname', 'doserateunit', 'doseunitid', 'doserateunitid'],
+        'freetextitems': ['value'],
+        'listitems': ['value'],
+        'numericitems': ['value', 'unit', 'registeredby'],
+        'procedureorderitems': ['ordercategoryname'],
+        'processitems': ['item'],
     }
     
     def _fix_mixed_type_columns(self, df: pd.DataFrame, filename: str) -> pd.DataFrame:
         """Fix columns with mixed types by converting to string.
         
-        Some MIMIC-IV tables have columns with mixed bytes/float/string types
+        Some tables have columns with mixed bytes/float/string types
         that cause parquet conversion to fail.
         
         Args:
@@ -593,22 +636,25 @@ class DataConverter:
                 except Exception:
                     df[col] = df[col].astype(str)
         
-        # Also check for any object columns with mixed types
+        # Aggressively convert ALL object columns to string to avoid mixed type issues
+        # This is safer for parquet export
         for col in df.select_dtypes(include=['object']).columns:
             if col not in known_cols:
-                # Sample the column to check for mixed types
-                sample = df[col].dropna().head(1000)
-                if len(sample) > 0:
-                    types = set(type(x).__name__ for x in sample)
-                    # If multiple types detected (excluding str and NoneType)
-                    problematic_types = types - {'str', 'NoneType', 'float', 'int'}
-                    if len(types) > 2 or 'bytes' in types or problematic_types:
-                        try:
-                            df[col] = df[col].apply(lambda x: str(x) if pd.notna(x) and not isinstance(x, str) else x)
-                            if self.verbose:
-                                logger.info(f"    ⚠️ Fixed mixed-type column: {col} (types: {types})")
-                        except Exception:
-                            df[col] = df[col].astype(str)
+                try:
+                    # Check if column has any non-string values
+                    sample = df[col].dropna().head(100)
+                    has_non_string = False
+                    if len(sample) > 0:
+                        for val in sample:
+                            if not isinstance(val, str):
+                                has_non_string = True
+                                break
+                    
+                    if has_non_string:
+                        df[col] = df[col].apply(lambda x: str(x) if pd.notna(x) and not isinstance(x, str) else x)
+                except Exception:
+                    # If any error, force convert to string
+                    df[col] = df[col].astype(str)
         
         return df
     
@@ -722,6 +768,17 @@ class DataConverter:
             total_rows = 0
             writer = None
             chunk_iter = None
+            reference_schema = None
+            
+            # Pre-infer stable schema for files with potential type issues
+            file_size_mb = file_size / (1024 * 1024)
+            if file_size_mb > 100:
+                try:
+                    reference_schema = self._infer_stable_schema(csv_path, sample_chunks=3)
+                    if self.verbose:
+                        logger.info(f"  Pre-inferred stable schema with {len(reference_schema)} columns")
+                except Exception as e:
+                    logger.warning(f"  Failed to pre-infer schema: {e}")
             
             try:
                 chunk_iter = self._read_csv_with_encoding(
@@ -739,7 +796,13 @@ class DataConverter:
                     
                     # Initialize writer on first chunk
                     if writer is None:
-                        writer = pq.ParquetWriter(parquet_path, table.schema, compression='snappy')
+                        if reference_schema is None:
+                            reference_schema = table.schema
+                        writer = pq.ParquetWriter(parquet_path, reference_schema, compression='snappy')
+                    
+                    # Normalize schema if different from reference
+                    if table.schema != reference_schema:
+                        table = self._normalize_schema(table, reference_schema)
                     
                     writer.write_table(table)
                     total_rows += len(chunk)
@@ -1050,18 +1113,31 @@ class DataConverter:
                     null_array = pa.nulls(len(col), type=ref_type)
                     new_columns.append(null_array)
                 elif pa.types.is_null(ref_type):
-                    # Reference was null but we now have real type - unlikely but handle it
-                    new_columns.append(col)
+                    # Reference was null but we now have real type - use string
+                    try:
+                        new_columns.append(col.cast(pa.string(), safe=False))
+                    except:
+                        new_columns.append(col)
                 else:
                     # Try to cast to reference type
                     try:
                         new_columns.append(col.cast(ref_type, safe=False))
-                    except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
-                        # If cast fails, convert to string as fallback
+                    except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError):
+                        # If cast fails, convert both to string
                         if pa.types.is_string(ref_type) or pa.types.is_large_string(ref_type):
-                            new_columns.append(col.cast(pa.string(), safe=False))
+                            try:
+                                new_columns.append(col.cast(pa.string(), safe=False))
+                            except:
+                                # Last resort: convert via Python
+                                arr = col.to_pylist()
+                                str_arr = [str(x) if x is not None else None for x in arr]
+                                new_columns.append(pa.array(str_arr, type=pa.string()))
                         else:
-                            new_columns.append(col)
+                            # For numeric types that fail, try string
+                            try:
+                                new_columns.append(col.cast(pa.string(), safe=False))
+                            except:
+                                new_columns.append(col)
             else:
                 new_columns.append(col)
         
@@ -1105,7 +1181,7 @@ class DataConverter:
         if not schemas:
             raise ValueError(f"No data to infer schema from {csv_path}")
         
-        # Merge schemas - prefer non-null types
+        # Merge schemas - prefer string types for maximum compatibility
         merged_fields = []
         for i, field in enumerate(schemas[0]):
             best_type = field.type
@@ -1114,11 +1190,21 @@ class DataConverter:
                 # Prefer non-null type
                 if pa.types.is_null(best_type) and not pa.types.is_null(other_type):
                     best_type = other_type
-                # Prefer string over other types for object columns
+                # Handle type conflicts - prefer string for safety
                 elif not pa.types.is_null(other_type) and other_type != best_type:
-                    # If one is string, prefer string
+                    # If either is string, use string (most flexible)
                     if pa.types.is_string(other_type) or pa.types.is_large_string(other_type):
+                        best_type = pa.string()
+                    elif pa.types.is_string(best_type) or pa.types.is_large_string(best_type):
+                        best_type = pa.string()
+                    # If one is double and one is int, use double
+                    elif pa.types.is_floating(other_type) and pa.types.is_integer(best_type):
                         best_type = other_type
+                    elif pa.types.is_floating(best_type) and pa.types.is_integer(other_type):
+                        pass  # keep best_type (floating)
+                    else:
+                        # For any other conflict, use string as safest option
+                        best_type = pa.string()
             merged_fields.append(pa.field(field.name, best_type))
         
         return pa.schema(merged_fields)
