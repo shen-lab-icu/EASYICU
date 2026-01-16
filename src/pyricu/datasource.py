@@ -1177,7 +1177,9 @@ class ICUDataSource:
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
-        query = f"SELECT {select_cols} FROM read_parquet('{glob_pattern}') {where_clause}"
+        # 🔧 CRITICAL FIX: 使用 union_by_name=true 处理不同分区的 schema 差异
+        # HiRID observations 的不同分区有不同的列类型（如 stringvalue）
+        query = f"SELECT {select_cols} FROM read_parquet('{glob_pattern}', union_by_name=true) {where_clause}"
         
         try:
             con = duckdb.connect()
