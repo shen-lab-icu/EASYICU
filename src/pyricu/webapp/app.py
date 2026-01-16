@@ -845,6 +845,7 @@ def check_data_status(data_path: str, database: str) -> dict:
 def convert_data_with_progress(data_path: str, database: str):
     """带进度条的数据转换功能。"""
     import time
+    from pathlib import Path
     
     lang = st.session_state.get('language', 'en')
     
@@ -862,11 +863,65 @@ def convert_data_with_progress(data_path: str, database: str):
         
         converter = DataConverter(data_path, database=database, verbose=True)
         
+        # HiRID: 先解压 tar.gz 文件
+        if database == 'hirid':
+            hirid_path = Path(data_path)
+            tar_files = list(hirid_path.rglob('*.tar.gz'))
+            if tar_files:
+                extract_msg = "📦 Extracting HiRID archives and converting to ricu format..." if lang == 'en' else "📦 正在解压 HiRID 压缩包并转换为 ricu 格式..."
+                with st.spinner(extract_msg):
+                    try:
+                        extracted = converter._extract_hirid_archives()
+                        if extracted:
+                            ex_msg = f"✅ Extracted and converted: {', '.join(extracted)}" if lang == 'en' else f"✅ 已解压并转换: {', '.join(extracted)}"
+                            st.success(ex_msg)
+                    except Exception as e:
+                        ex_err = f"⚠️ Archive extraction warning: {e}" if lang == 'en' else f"⚠️ 解压警告: {e}"
+                        st.warning(ex_err)
+        
         # 获取需要转换的文件列表
         csv_files = converter._get_csv_files()
         total_files = len(csv_files)
         
         if total_files == 0:
+            # 检查是否 HiRID parquet 已经准备好了
+            if database == 'hirid':
+                hirid_path = Path(data_path)
+                # 检查 observations 和 pharma 目录是否已有 parquet shards
+                obs_dir = hirid_path / 'observations'
+                pharma_dir = hirid_path / 'pharma'
+                general_pq = hirid_path / 'general.parquet'
+                
+                has_obs = obs_dir.is_dir() and list(obs_dir.glob('[0-9]*.parquet'))
+                has_pharma = pharma_dir.is_dir() and list(pharma_dir.glob('[0-9]*.parquet'))
+                has_general = general_pq.exists()
+                
+                if has_obs and has_pharma:
+                    # HiRID parquet 数据已就绪
+                    if not has_general:
+                        # 只需要转换 general_table.csv
+                        general_csv = hirid_path / 'general_table.csv'
+                        if general_csv.exists():
+                            conv_msg = "Converting general_table.csv..." if lang == 'en' else "正在转换 general_table.csv..."
+                            with st.spinner(conv_msg):
+                                try:
+                                    converter._convert_file(general_csv)
+                                    st.success("✅ general_table.csv converted" if lang == 'en' else "✅ general_table.csv 转换完成")
+                                except Exception as e:
+                                    st.error(f"❌ Failed to convert general_table.csv: {e}" if lang == 'en' else f"❌ general_table.csv 转换失败: {e}")
+                    
+                    done_msg = "✅ HiRID data is ready! Parquet shards extracted from archives." if lang == 'en' else "✅ HiRID 数据已就绪！已从压缩包解压 parquet 分片。"
+                    st.success(done_msg)
+                    return
+                
+                # 检查是否有未解压的 tar.gz
+                tar_files = list(hirid_path.rglob('*.tar.gz'))
+                if tar_files:
+                    tar_msg = "📦 HiRID tar.gz archives found but extraction failed. Please check:\n" if lang == 'en' else "📦 发现 HiRID tar.gz 压缩包但解压失败。请检查：\n"
+                    for tf in tar_files[:5]:
+                        tar_msg += f"- `{tf.name}`\n"
+                    st.warning(tar_msg)
+            
             err_msg = "No CSV files found to convert" if lang == 'en' else "未找到需要转换的 CSV 文件"
             st.error(err_msg)
             return
@@ -1257,9 +1312,9 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'medication': ['drugitems'],
         },
         'hirid': {
-            'core': ['general_table'],
-            'clinical': ['observations'],
-            'medication': ['pharma_records'],
+            'core': ['general'],  # general_table.csv -> general.parquet
+            'clinical': ['observations'],  # observation_tables -> observations/
+            'medication': ['pharma'],  # pharma_records -> pharma/
         },
     }
     
@@ -6432,6 +6487,10 @@ def render_convert_dialog():
     source_info = f"📁 Source directory: `{source_path}`" if lang == 'en' else f"📁 源目录: `{source_path}`"
     st.info(source_info)
     
+    # 检测数据库类型
+    path_lower = str(source_path).lower()
+    is_hirid = 'hirid' in path_lower
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -6449,20 +6508,46 @@ def render_convert_dialog():
         overwrite_label = "Overwrite existing Parquet files" if lang == 'en' else "覆盖已存在的Parquet文件"
         overwrite = st.checkbox(overwrite_label, value=False)
     
+    # HiRID: 检测 tar.gz 文件
+    tar_files = []
+    if source_path and Path(source_path).exists():
+        tar_files = list(Path(source_path).rglob('*.tar.gz'))
+    
+    if is_hirid and tar_files:
+        hirid_note = f"📦 **HiRID detected**: Found {len(tar_files)} tar.gz archives that need to be extracted first." if lang == 'en' else f"📦 **检测到HiRID**: 发现 {len(tar_files)} 个 tar.gz 压缩包需要先解压。"
+        st.warning(hirid_note)
+        
+        with st.expander("📁 Archive list" if lang == 'en' else "📁 压缩包列表", expanded=True):
+            for tf in tar_files:
+                size_mb = tf.stat().st_size / (1024 * 1024)
+                st.caption(f"• {tf.name} ({size_mb:.1f} MB)")
+    
     # 扫描可转换文件
+    csv_count = 0
     if source_path and Path(source_path).exists():
         csv_files = list(Path(source_path).rglob('*.csv')) + list(Path(source_path).rglob('*.csv.gz'))
-        found_msg = f"**Found {len(csv_files)} CSV files to convert**" if lang == 'en' else f"**发现 {len(csv_files)} 个CSV文件可转换**"
+        # 排除一些特殊目录
+        excluded_dirs = {'cache', 'demo', '__pycache__', '.git', 'imputed_stage', 'merged_stage'}
+        csv_files = [f for f in csv_files if not any(d in str(f).lower() for d in excluded_dirs)]
+        csv_count = len(csv_files)
+        
+        found_msg = f"**Found {csv_count} CSV files to convert**" if lang == 'en' else f"**发现 {csv_count} 个CSV文件可转换**"
         st.markdown(found_msg)
         
-        view_label = "View file list" if lang == 'en' else "查看文件列表"
-        with st.expander(view_label, expanded=False):
-            for f in csv_files[:20]:
-                size_mb = f.stat().st_size / (1024 * 1024)
-                st.caption(f"• {f.name} ({size_mb:.1f} MB)")
-            if len(csv_files) > 20:
-                more_msg = f"... and {len(csv_files) - 20} more files" if lang == 'en' else f"... 及其他 {len(csv_files) - 20} 个文件"
-                st.caption(more_msg)
+        if csv_count > 0:
+            view_label = "View file list" if lang == 'en' else "查看文件列表"
+            with st.expander(view_label, expanded=False):
+                for f in csv_files[:20]:
+                    size_mb = f.stat().st_size / (1024 * 1024)
+                    st.caption(f"• {f.name} ({size_mb:.1f} MB)")
+                if len(csv_files) > 20:
+                    more_msg = f"... and {len(csv_files) - 20} more files" if lang == 'en' else f"... 及其他 {len(csv_files) - 20} 个文件"
+                    st.caption(more_msg)
+    
+    # 如果没有 CSV 但有 tar.gz (HiRID)，提示需要解压
+    if csv_count == 0 and is_hirid and tar_files:
+        extract_note = "⚠️ No CSV files found. Click 'Start Conversion' to extract archives and convert data." if lang == 'en' else "⚠️ 未找到CSV文件。点击「开始转换」将自动解压压缩包并转换数据。"
+        st.info(extract_note)
     
     col1, col2, col3 = st.columns([1, 1, 1])
     
@@ -6473,19 +6558,8 @@ def render_convert_dialog():
                 err_msg = "❌ Please set a valid output directory" if lang == 'en' else "❌ 请设置有效的输出目录"
                 st.error(err_msg)
             else:
-                spinner_msg = "Converting..." if lang == 'en' else "正在转换..."
-                with st.spinner(spinner_msg):
-                    success, failed = convert_csv_to_parquet(source_path, target_path, overwrite)
-                    if success > 0:
-                        success_msg = f"✅ Successfully converted {success} files" if lang == 'en' else f"✅ 成功转换 {success} 个文件"
-                        st.success(success_msg)
-                        st.session_state.path_validated = True
-                        st.session_state.data_path = target_path
-                    if failed > 0:
-                        fail_msg = f"⚠️ {failed} files failed to convert" if lang == 'en' else f"⚠️ {failed} 个文件转换失败"
-                        st.warning(fail_msg)
-                st.session_state.show_convert_dialog = False
-                st.rerun()
+                # 使用专门的转换函数
+                convert_data_with_progress_v2(source_path, target_path, overwrite)
     
     with col2:
         cancel_label = "❌ Cancel" if lang == 'en' else "❌ 取消"
@@ -6502,6 +6576,177 @@ def render_convert_dialog():
             csv_info = "Will use CSV format (slower loading)" if lang == 'en' else "将使用CSV格式（加载较慢）"
             st.info(csv_info)
             st.rerun()
+
+
+def convert_data_with_progress_v2(source_path: str, target_path: str, overwrite: bool = False):
+    """带进度条的数据转换功能（新版本，支持HiRID tar.gz解压）。
+    
+    不会自动跳转，让用户看到转换结果。
+    """
+    import gc
+    from pathlib import Path
+    
+    lang = st.session_state.get('language', 'en')
+    
+    # 检测数据库类型
+    path_lower = str(source_path).lower()
+    database = None
+    if 'mimic' in path_lower or 'miiv' in path_lower:
+        database = 'miiv'
+    elif 'eicu' in path_lower:
+        database = 'eicu'
+    elif 'aumc' in path_lower:
+        database = 'aumc'
+    elif 'hirid' in path_lower:
+        database = 'hirid'
+    
+    if not database:
+        st.error("❌ Unable to detect database type from path. Please ensure the path contains one of: mimic, miiv, eicu, aumc, hirid" if lang == 'en' else "❌ 无法从路径检测数据库类型。请确保路径包含以下之一: mimic, miiv, eicu, aumc, hirid")
+        return
+    
+    try:
+        from pyricu.data_converter import DataConverter
+        
+        converter = DataConverter(target_path, database=database, verbose=True)
+        
+        # === Step 1: HiRID - 解压 tar.gz 文件 ===
+        if database == 'hirid':
+            hirid_path = Path(source_path)
+            tar_files = list(hirid_path.rglob('*.tar.gz'))
+            if tar_files:
+                extract_msg = "📦 Step 1/2: Extracting HiRID archives..." if lang == 'en' else "📦 步骤 1/2: 正在解压 HiRID 压缩包..."
+                st.info(extract_msg)
+                
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                try:
+                    status_text.markdown("🔄 Extracting and converting archives to Parquet format..." if lang == 'en' else "🔄 正在解压并转换为 Parquet 格式...")
+                    extracted = converter._extract_hirid_archives()
+                    progress_bar.progress(100)
+                    
+                    if extracted:
+                        ex_msg = f"✅ Extracted: {', '.join(extracted)}" if lang == 'en' else f"✅ 已解压: {', '.join(extracted)}"
+                        st.success(ex_msg)
+                    else:
+                        st.info("ℹ️ Archives already extracted or no archives to extract" if lang == 'en' else "ℹ️ 压缩包已解压或无需解压")
+                except Exception as e:
+                    st.error(f"❌ Archive extraction failed: {e}" if lang == 'en' else f"❌ 解压失败: {e}")
+                    import traceback
+                    with st.expander("Error details" if lang == 'en' else "错误详情"):
+                        st.code(traceback.format_exc())
+                    return
+        
+        # === Step 2: 转换 CSV 文件 ===
+        csv_step = "📄 Step 2/2: Converting CSV files..." if database == 'hirid' else "📄 Converting CSV files..."
+        csv_step_zh = "📄 步骤 2/2: 正在转换 CSV 文件..." if database == 'hirid' else "📄 正在转换 CSV 文件..."
+        st.info(csv_step if lang == 'en' else csv_step_zh)
+        
+        # 重新获取 CSV 文件列表（解压后可能有新文件）
+        csv_files = converter._get_csv_files()
+        total_files = len(csv_files)
+        
+        if total_files == 0:
+            # 检查 HiRID 是否已经有 parquet shards
+            if database == 'hirid':
+                hirid_path = Path(target_path)
+                obs_dir = hirid_path / 'observations'
+                pharma_dir = hirid_path / 'pharma'
+                
+                has_obs = obs_dir.is_dir() and list(obs_dir.glob('[0-9]*.parquet'))
+                has_pharma = pharma_dir.is_dir() and list(pharma_dir.glob('[0-9]*.parquet'))
+                
+                if has_obs and has_pharma:
+                    st.success("✅ HiRID data is ready! Parquet shards already available." if lang == 'en' else "✅ HiRID 数据已就绪！Parquet 分片已可用。")
+                    st.session_state.path_validated = True
+                    st.session_state.data_path = target_path
+                    
+                    # 显示完成按钮
+                    if st.button("🏠 Return to Main Page" if lang == 'en' else "🏠 返回主页", type="primary"):
+                        st.session_state.show_convert_dialog = False
+                        st.rerun()
+                    return
+            
+            st.error("❌ No CSV files found to convert. Please check if the data directory is correct." if lang == 'en' else "❌ 未找到需要转换的 CSV 文件。请检查数据目录是否正确。")
+            return
+        
+        st.markdown(f"📊 Found **{total_files}** CSV files to convert" if lang == 'en' else f"📊 发现 **{total_files}** 个 CSV 文件需要转换")
+        
+        # 创建进度条
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        details_container = st.container()
+        
+        converted = 0
+        skipped = 0
+        failed = 0
+        failed_files = []
+        
+        for idx, csv_file in enumerate(csv_files):
+            file_name = csv_file.name
+            file_size_mb = csv_file.stat().st_size / (1024 * 1024)
+            
+            status_text.markdown(f"**Processing**: `{file_name}` ({file_size_mb:.1f} MB) [{idx+1}/{total_files}]" if lang == 'en' else f"**正在处理**: `{file_name}` ({file_size_mb:.1f} MB) [{idx+1}/{total_files}]")
+            
+            needs_conversion, reason = converter._is_conversion_needed(csv_file)
+            
+            if not needs_conversion and not overwrite:
+                skipped += 1
+                with details_container:
+                    st.caption(f"⏭️ Skipped: {file_name} ({reason})" if lang == 'en' else f"⏭️ 跳过: {file_name} ({reason})")
+            else:
+                try:
+                    converter._convert_file(csv_file)
+                    converted += 1
+                    with details_container:
+                        st.caption(f"✅ Done: {file_name}" if lang == 'en' else f"✅ 完成: {file_name}")
+                except Exception as e:
+                    failed += 1
+                    failed_files.append((file_name, str(e)))
+                    with details_container:
+                        st.caption(f"❌ Failed: {file_name} - {str(e)[:50]}" if lang == 'en' else f"❌ 失败: {file_name} - {str(e)[:50]}")
+            
+            gc.collect()
+            progress_bar.progress((idx + 1) / total_files)
+        
+        progress_bar.progress(1.0)
+        status_text.empty()
+        
+        # === 显示结果汇总 ===
+        st.markdown("---")
+        st.markdown("### 📊 Conversion Summary" if lang == 'en' else "### 📊 转换汇总")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("✅ Converted" if lang == 'en' else "✅ 已转换", converted)
+        with col2:
+            st.metric("⏭️ Skipped" if lang == 'en' else "⏭️ 跳过", skipped)
+        with col3:
+            st.metric("❌ Failed" if lang == 'en' else "❌ 失败", failed)
+        
+        if failed > 0:
+            st.error(f"⚠️ {failed} files failed to convert:" if lang == 'en' else f"⚠️ {failed} 个文件转换失败:")
+            with st.expander("Failed files" if lang == 'en' else "失败文件列表"):
+                for fname, err in failed_files[:10]:
+                    st.caption(f"• {fname}: {err}")
+                if len(failed_files) > 10:
+                    st.caption(f"... and {len(failed_files) - 10} more" if lang == 'en' else f"... 及其他 {len(failed_files) - 10} 个")
+        
+        if converted > 0 or skipped > 0:
+            st.success("✅ Conversion completed!" if lang == 'en' else "✅ 转换完成！")
+            st.session_state.path_validated = True
+            st.session_state.data_path = target_path
+        
+        # 显示返回按钮
+        if st.button("🏠 Return to Main Page" if lang == 'en' else "🏠 返回主页", type="primary"):
+            st.session_state.show_convert_dialog = False
+            st.rerun()
+            
+    except Exception as e:
+        st.error(f"❌ Conversion error: {e}" if lang == 'en' else f"❌ 转换出错: {e}")
+        import traceback
+        with st.expander("Error details" if lang == 'en' else "错误详情"):
+            st.code(traceback.format_exc())
 
 
 def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:

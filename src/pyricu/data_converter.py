@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import gzip
+import tarfile
 import logging
 import hashlib
 from pathlib import Path
@@ -176,6 +177,138 @@ class DataConverter:
         
         return 'unknown'
     
+    def _extract_hirid_archives(self) -> List[str]:
+        """
+        Extract HiRID tar.gz archives if they exist.
+        
+        HiRID directory structure:
+        - raw_stage/
+            - observation_tables_csv.tar.gz OR observation_tables_parquet.tar.gz
+            - pharma_records_csv.tar.gz OR pharma_records_parquet.tar.gz
+        - reference_data.tar.gz
+        
+        After extraction, converts HiRID parquet shards (part-N.parquet) to
+        numbered format (N.parquet) in the appropriate directories.
+        
+        Returns:
+            List of extracted archive names
+        """
+        extracted = []
+        
+        # Check for HiRID-specific archives
+        # Format: (archive_path, extraction_marker, is_parquet, target_dir)
+        hirid_archives = [
+            (self.data_path / 'reference_data.tar.gz', 'general_table.csv', False, None),
+            (self.data_path / 'raw_stage' / 'observation_tables_parquet.tar.gz', 'observation_tables', True, 'observations'),
+            (self.data_path / 'raw_stage' / 'observation_tables_csv.tar.gz', 'observation_tables', False, None),
+            (self.data_path / 'raw_stage' / 'pharma_records_parquet.tar.gz', 'pharma_records', True, 'pharma'),
+            (self.data_path / 'raw_stage' / 'pharma_records_csv.tar.gz', 'pharma_records', False, None),
+        ]
+        
+        for archive_path, marker, is_parquet, ricu_target in hirid_archives:
+            if not archive_path.exists():
+                continue
+            
+            # Check if Parquet shards already exist (skip extraction)
+            if ricu_target:
+                ricu_dir = self.data_path / ricu_target
+                if ricu_dir.is_dir() and list(ricu_dir.glob('[0-9]*.parquet')):
+                    logger.info(f"Skipping {archive_path.name} - Parquet shards already exist in {ricu_target}/")
+                    continue
+                
+            # Check if already extracted
+            if is_parquet:
+                marker_path = self.data_path / marker
+            else:
+                marker_path = self.data_path / marker if '.' not in marker else self.data_path / marker
+            
+            # Skip CSV if parquet version is already extracted
+            if not is_parquet:
+                parquet_marker = self.data_path / marker
+                if parquet_marker.is_dir():
+                    parquet_subdir = parquet_marker / 'parquet'
+                    if parquet_subdir.is_dir() and any(parquet_subdir.glob('*.parquet')):
+                        logger.info(f"Skipping {archive_path.name} - parquet version already extracted")
+                        continue
+            
+            # Check if extraction is needed
+            needs_extract = True
+            if marker_path.exists():
+                if marker_path.is_dir():
+                    if any(marker_path.iterdir()):
+                        needs_extract = False
+                else:
+                    needs_extract = False
+            
+            if needs_extract:
+                logger.info(f"Extracting {archive_path.name}...")
+                try:
+                    with tarfile.open(archive_path, 'r:gz') as tar:
+                        tar.extractall(path=self.data_path)
+                    extracted.append(archive_path.name)
+                    logger.info(f"Extracted {archive_path.name}")
+                except Exception as e:
+                    logger.warning(f"Failed to extract {archive_path.name}: {e}")
+                    continue
+            
+            # Convert HiRID parquet shards to ricu format if needed
+            if is_parquet and ricu_target:
+                self._convert_hirid_parquet_to_ricu(marker, ricu_target)
+        
+        return extracted
+    
+    def _convert_hirid_parquet_to_ricu(self, source_dir_name: str, ricu_target: str) -> None:
+        """
+        Convert HiRID parquet shards (part-N.parquet) to numbered format (N.parquet).
+        
+        HiRID original format: observation_tables/parquet/part-0.parquet, part-1.parquet, ...
+        Target format: observations/1.parquet, 2.parquet, ...
+        
+        Args:
+            source_dir_name: Source directory name (e.g., 'observation_tables')
+            ricu_target: Target directory name (e.g., 'observations')
+        """
+        import shutil
+        
+        source_parquet_dir = self.data_path / source_dir_name / 'parquet'
+        ricu_dir = self.data_path / ricu_target
+        
+        if not source_parquet_dir.is_dir():
+            logger.debug(f"No parquet directory found at {source_parquet_dir}")
+            return
+        
+        # Check if Parquet shards already exist
+        if ricu_dir.is_dir() and list(ricu_dir.glob('[0-9]*.parquet')):
+            logger.info(f"Parquet shards already exist in {ricu_target}/, skipping conversion")
+            return
+        
+        # Find all part-N.parquet files
+        part_files = sorted(source_parquet_dir.glob('part-*.parquet'), 
+                           key=lambda f: int(f.stem.split('-')[1]))
+        
+        if not part_files:
+            logger.debug(f"No part-*.parquet files found in {source_parquet_dir}")
+            return
+        
+        logger.info(f"Converting {len(part_files)} HiRID parquet shards to {ricu_target}/")
+        
+        # Create target directory
+        ricu_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Copy and rename files: part-0.parquet -> 1.parquet, part-1.parquet -> 2.parquet, etc.
+        for part_file in part_files:
+            # Extract part number (part-0 -> 0, part-1 -> 1, etc.)
+            part_num = int(part_file.stem.split('-')[1])
+            # ricu uses 1-based numbering
+            ricu_num = part_num + 1
+            target_file = ricu_dir / f"{ricu_num}.parquet"
+            
+            if not target_file.exists():
+                shutil.copy2(part_file, target_file)
+                logger.debug(f"Copied {part_file.name} -> {target_file.name}")
+        
+        logger.info(f"✅ Converted {len(part_files)} shards to {ricu_target}/")
+    
     def _load_status(self) -> None:
         """Load conversion status from file."""
         status_file = self.data_path / self.STATUS_FILE
@@ -208,20 +341,38 @@ class DataConverter:
         2. part-*.csv files that belong to already-converted observation tables
         3. cache directory files (pyricu internal cache files)
         4. demo directory files
+        
+        For HiRID: looks in raw_stage/ subdirectory if needed.
         """
         csv_files = []
         
         # Directories to exclude (case-insensitive)
-        excluded_dirs = {'cache', 'demo', '__pycache__', '.git'}
+        excluded_dirs = {'cache', 'demo', '__pycache__', '.git', 'imputed_stage', 'merged_stage'}
         
-        # Find all CSV and CSV.GZ files recursively (includes hosp/, icu/ subdirs)
-        for pattern in ['*.csv', '*.csv.gz', '*.CSV', '*.CSV.GZ']:
-            for f in self.data_path.rglob(pattern):
-                # Check if any parent directory is in the excluded list
-                parts_lower = [p.lower() for p in f.relative_to(self.data_path).parts[:-1]]
-                if any(part in excluded_dirs for part in parts_lower):
-                    continue
-                csv_files.append(f)
+        # For HiRID, also search in raw_stage subdirectory
+        search_paths = [self.data_path]
+        if self.database == 'hirid':
+            raw_stage = self.data_path / 'raw_stage'
+            if raw_stage.is_dir():
+                search_paths.append(raw_stage)
+            # Also search in observation_tables and pharma_records
+            for subdir in ['observation_tables', 'pharma_records']:
+                subdir_path = self.data_path / subdir
+                if subdir_path.is_dir():
+                    search_paths.append(subdir_path)
+        
+        # Find all CSV and CSV.GZ files recursively
+        for search_path in search_paths:
+            for pattern in ['*.csv', '*.csv.gz', '*.CSV', '*.CSV.GZ']:
+                for f in search_path.rglob(pattern):
+                    # Check if any parent directory is in the excluded list
+                    try:
+                        parts_lower = [p.lower() for p in f.relative_to(self.data_path).parts[:-1]]
+                    except ValueError:
+                        parts_lower = [p.lower() for p in f.parts[:-1]]
+                    if any(part in excluded_dirs for part in parts_lower):
+                        continue
+                    csv_files.append(f)
         
         # Filter out CSV shards that have already been converted to ricu parquet shards
         # These are typically in subdirectories like observation_tables/csv/part-*.csv
@@ -1439,6 +1590,15 @@ class DataConverter:
         Returns:
             True if all files are ready, False otherwise
         """
+        # For HiRID, extract tar.gz archives first
+        if self.database == 'hirid':
+            try:
+                extracted = self._extract_hirid_archives()
+                if extracted and self.verbose:
+                    logger.info(f"📦 Extracted HiRID archives: {', '.join(extracted)}")
+            except Exception as e:
+                logger.warning(f"HiRID archive extraction failed: {e}")
+        
         is_ready, missing = self.is_ready()
         
         if is_ready:
