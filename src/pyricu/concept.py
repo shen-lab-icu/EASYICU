@@ -684,6 +684,33 @@ class ConceptResolver:
             if name not in self.dictionary:
                 raise KeyError(f"Concept '{name}' not present in dictionary")
 
+        # 🚀 智能并行策略：分析概念使用的表，对同一表的概念串行加载以共享缓存
+        # 这对HiRID等大表场景特别重要，避免重复读取7.7亿行的observations表
+        effective_workers = concept_workers
+        if concept_workers > 1 and total > 1:
+            # 分析每个概念使用的主表
+            table_to_concepts = {}
+            src_name = data_source.config.name if hasattr(data_source, 'config') else 'miiv'
+            for name in names:
+                concept = self.dictionary.get(name)
+                if concept and hasattr(concept, 'sources') and concept.sources:
+                    src_list = concept.sources.get(src_name, [])
+                    if src_list:
+                        # 获取第一个source的表名
+                        first_src = src_list[0] if isinstance(src_list, list) else src_list
+                        table_name = getattr(first_src, 'table', None)
+                        if table_name:
+                            if table_name not in table_to_concepts:
+                                table_to_concepts[table_name] = []
+                            table_to_concepts[table_name].append(name)
+            
+            # 如果所有概念都来自同一个表，串行加载以利用缓存
+            if len(table_to_concepts) == 1:
+                shared_table = list(table_to_concepts.keys())[0]
+                if verbose:
+                    logger.info(f"🔄 所有 {total} 个概念共享表 '{shared_table}'，使用串行加载以共享缓存")
+                effective_workers = 1
+
         def _resolve(name: str, position: int) -> tuple[str, ICUTable]:
             if verbose and logger.isEnabledFor(logging.INFO):
                 logger.info("➡️  [%d/%d] 加载概念 '%s'", position, total, name)
@@ -711,8 +738,8 @@ class ConceptResolver:
 
         try:
             results: Dict[str, ICUTable] = {}
-            if concept_workers > 1 and total > 1:
-                with ThreadPoolExecutor(max_workers=concept_workers) as executor:
+            if effective_workers > 1 and total > 1:
+                with ThreadPoolExecutor(max_workers=effective_workers) as executor:
                     future_map = {
                         executor.submit(_resolve, name, idx): name
                         for idx, name in enumerate(names, start=1)
