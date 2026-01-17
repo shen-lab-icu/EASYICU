@@ -1015,10 +1015,11 @@ def convert_data_with_progress(data_path: str, database: str):
 # ============ 🚀 智能硬件检测与动态并行配置 ============
 
 def get_system_resources():
-    """检测系统硬件资源。
+    """检测系统硬件资源并推荐内存安全配置。
     
     Returns:
-        dict: 包含 cpu_count, memory_gb, recommended_workers, recommended_backend
+        dict: 包含 cpu_count, memory_gb, recommended_workers, recommended_backend,
+              memory_mode, recommended_patient_limit 等
     """
     import os
     import psutil
@@ -1052,12 +1053,50 @@ def get_system_resources():
     # 对于 ICU 数据加载（I/O密集型），线程池更高效
     recommended_backend = "thread"
     
+    # 🚀 NEW: 智能内存模式检测
+    # 根据可用内存推荐安全的患者数量限制，防止OOM
+    # eICU/HiRID等大型数据库每万患者的vital数据约需1-2GB内存
+    if available_memory_gb >= 64:
+        # 64GB+: 可以处理全量数据
+        memory_mode = 'high'
+        recommended_patient_limit = 0  # 无限制
+        mode_desc_en = 'High Memory (64GB+) - Full data supported'
+        mode_desc_zh = '高内存模式 (64GB+) - 支持全量数据'
+    elif available_memory_gb >= 32:
+        # 32-64GB: 大多数数据库可以全量
+        memory_mode = 'medium-high'
+        recommended_patient_limit = 50000
+        mode_desc_en = 'Medium-High Memory (32-64GB) - Up to 50k patients'
+        mode_desc_zh = '中高内存模式 (32-64GB) - 最多5万患者'
+    elif available_memory_gb >= 16:
+        # 16-32GB: 需要限制
+        memory_mode = 'medium'
+        recommended_patient_limit = 20000
+        mode_desc_en = 'Medium Memory (16-32GB) - Up to 20k patients'
+        mode_desc_zh = '中等内存模式 (16-32GB) - 最多2万患者'
+    elif available_memory_gb >= 8:
+        # 8-16GB: 较严格限制
+        memory_mode = 'low'
+        recommended_patient_limit = 5000
+        mode_desc_en = 'Low Memory (8-16GB) - Up to 5k patients'
+        mode_desc_zh = '低内存模式 (8-16GB) - 最多5千患者'
+    else:
+        # <8GB: 非常保守
+        memory_mode = 'minimal'
+        recommended_patient_limit = 1000
+        mode_desc_en = 'Minimal Memory (<8GB) - Up to 1k patients'
+        mode_desc_zh = '极低内存模式 (<8GB) - 最多1千患者'
+    
     return {
         'cpu_count': cpu_count,
         'total_memory_gb': round(total_memory_gb, 1),
         'available_memory_gb': round(available_memory_gb, 1),
         'recommended_workers': recommended_workers,
         'recommended_backend': recommended_backend,
+        'memory_mode': memory_mode,
+        'recommended_patient_limit': recommended_patient_limit,
+        'mode_desc_en': mode_desc_en,
+        'mode_desc_zh': mode_desc_zh,
     }
 
 
@@ -1139,9 +1178,12 @@ def init_session_state():
         st.session_state.path_validated = False
     if 'language' not in st.session_state:
         st.session_state.language = 'en'  # 默认英文
-    # 🚀 性能优化：患者数量限制（默认0表示全量加载，可设为具体数字如5000来限制）
+    # 🚀 性能优化：患者数量限制（根据内存自动推荐安全值）
     if 'patient_limit' not in st.session_state:
-        st.session_state.patient_limit = 0  # 默认全量
+        # 自动检测可用内存，设置安全的默认值
+        resources = get_system_resources()
+        st.session_state.patient_limit = resources['recommended_patient_limit']
+        st.session_state.memory_mode = resources['memory_mode']
     if 'available_patient_ids' not in st.session_state:
         st.session_state.available_patient_ids = None
 
@@ -2650,21 +2692,56 @@ def render_sidebar():
         )
         st.session_state.export_format = export_format
         
-        # 🚀 患者数量限制（性能优化选项）
+        # 🚀 患者数量限制（性能优化选项）- 根据内存自动推荐
+        resources = get_system_resources()
+        recommended_limit = resources['recommended_patient_limit']
+        memory_mode = resources['memory_mode']
+        
+        # 显示内存模式提示
+        if st.session_state.language == 'en':
+            mode_desc = resources['mode_desc_en']
+            mem_warning = f"⚠️ **Memory Mode**: {mode_desc}"
+            if memory_mode in ['low', 'minimal']:
+                mem_warning += "\n⚠️ Low memory detected! Using safe defaults to prevent crashes."
+        else:
+            mode_desc = resources['mode_desc_zh']
+            mem_warning = f"⚠️ **内存模式**: {mode_desc}"
+            if memory_mode in ['low', 'minimal']:
+                mem_warning += "\n⚠️ 检测到低内存！使用安全默认值防止崩溃。"
+        
+        st.info(mem_warning)
+        
         limit_label = "Patient Limit" if st.session_state.language == 'en' else "患者数量限制"
-        limit_help = "Limit number of patients to speed up loading. 0 = no limit (full data, may be slow)" if st.session_state.language == 'en' else "限制加载的患者数量以加速。0 = 不限制（全量数据，可能较慢）"
-        patient_limit_options = [0, 1000, 5000, 10000, 20000, 50000]
-        patient_limit_labels = {
-            0: "All patients (slower)" if st.session_state.language == 'en' else "全部患者（较慢）",
-            1000: "1,000",
-            5000: "5,000", 
-            10000: "10,000",
-            20000: "20,000",
-            50000: "50,000"
-        }
-        current_limit = st.session_state.get('patient_limit', 0)
+        limit_help = f"Limit number of patients to prevent OOM. Recommended: {recommended_limit if recommended_limit > 0 else 'No limit'} based on {resources['available_memory_gb']:.1f}GB available RAM" if st.session_state.language == 'en' else f"限制患者数量防止内存溢出。推荐值: {recommended_limit if recommended_limit > 0 else '无限制'}（基于 {resources['available_memory_gb']:.1f}GB 可用内存）"
+        
+        # 根据内存模式调整选项
+        if memory_mode == 'minimal':
+            patient_limit_options = [500, 1000, 2000]
+        elif memory_mode == 'low':
+            patient_limit_options = [1000, 2000, 5000]
+        elif memory_mode == 'medium':
+            patient_limit_options = [5000, 10000, 20000]
+        elif memory_mode == 'medium-high':
+            patient_limit_options = [10000, 20000, 50000, 0]
+        else:  # high
+            patient_limit_options = [10000, 20000, 50000, 0]
+        
+        # 生成标签（带推荐标记）
+        patient_limit_labels = {}
+        for opt in patient_limit_options:
+            if opt == 0:
+                label = "All patients" if st.session_state.language == 'en' else "全部患者"
+            else:
+                label = f"{opt:,}"
+            if opt == recommended_limit:
+                label += " ⭐" if st.session_state.language == 'en' else " ⭐推荐"
+            patient_limit_labels[opt] = label
+        
+        current_limit = st.session_state.get('patient_limit', recommended_limit)
         if current_limit not in patient_limit_options:
-            current_limit = 0
+            # 如果当前值不在选项中，选择推荐值或最接近的
+            current_limit = recommended_limit if recommended_limit in patient_limit_options else patient_limit_options[0]
+        
         patient_limit = st.selectbox(
             limit_label,
             options=patient_limit_options,
@@ -2673,6 +2750,13 @@ def render_sidebar():
             help=limit_help
         )
         st.session_state.patient_limit = patient_limit
+        
+        # 如果用户选择的值超过推荐值，显示警告
+        if recommended_limit > 0 and (patient_limit == 0 or patient_limit > recommended_limit):
+            if st.session_state.language == 'en':
+                st.warning(f"⚠️ Selected limit exceeds recommended ({recommended_limit:,}). Risk of memory issues!")
+            else:
+                st.warning(f"⚠️ 选择的数量超过推荐值 ({recommended_limit:,})，可能导致内存问题！")
         
         # 导出按钮
         can_export = (use_mock or (st.session_state.data_path and Path(st.session_state.data_path).exists())) and selected_concepts and export_path and Path(export_path).exists()
@@ -2697,6 +2781,11 @@ def render_sidebar():
         resources = get_system_resources()
         perf_title = "⚡ Performance" if st.session_state.language == 'en' else "⚡ 性能配置"
         with st.expander(perf_title, expanded=False):
+            mem_mode = resources['memory_mode']
+            rec_limit = resources['recommended_patient_limit']
+            rec_limit_str = f"{rec_limit:,}" if rec_limit > 0 else "No limit"
+            rec_limit_str_zh = f"{rec_limit:,}" if rec_limit > 0 else "无限制"
+            
             if st.session_state.language == 'en':
                 st.markdown(f"""
                 **System Resources:**
@@ -2704,9 +2793,12 @@ def render_sidebar():
                 - 💾 RAM: {resources['total_memory_gb']} GB total
                 - 📊 Available: {resources['available_memory_gb']} GB
                 
+                **Memory Mode:** {resources['mode_desc_en']}
+                
                 **Auto-optimized:**
                 - Workers: {resources['recommended_workers']}
                 - Backend: {resources['recommended_backend']}
+                - Safe Patient Limit: {rec_limit_str}
                 """)
             else:
                 st.markdown(f"""
@@ -2715,9 +2807,12 @@ def render_sidebar():
                 - 💾 内存: {resources['total_memory_gb']} GB 总计
                 - 📊 可用: {resources['available_memory_gb']} GB
                 
+                **内存模式:** {resources['mode_desc_zh']}
+                
                 **自动优化配置:**
                 - 并行数: {resources['recommended_workers']}
                 - 后端: {resources['recommended_backend']}
+                - 安全患者数限制: {rec_limit_str_zh}
                 """)
 
 
