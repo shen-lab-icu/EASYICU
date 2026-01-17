@@ -1053,39 +1053,39 @@ def get_system_resources():
     # 对于 ICU 数据加载（I/O密集型），线程池更高效
     recommended_backend = "thread"
     
-    # 🚀 NEW: 智能内存模式检测
-    # 根据可用内存推荐安全的患者数量限制，防止OOM
-    # eICU/HiRID等大型数据库每万患者的vital数据约需1-2GB内存
+    # 🚀 智能内存模式检测 - 用于分批流式导出
+    # 低内存时自动使用分批处理，每批处理完写入磁盘后释放内存
+    # 这样即使8GB内存也能导出全部患者（只是分多批处理）
     if available_memory_gb >= 64:
-        # 64GB+: 可以处理全量数据
         memory_mode = 'high'
-        recommended_patient_limit = 0  # 无限制
-        mode_desc_en = 'High Memory (64GB+) - Full data supported'
-        mode_desc_zh = '高内存模式 (64GB+) - 支持全量数据'
+        recommended_batch_size = 0  # 无需分批，一次加载
+        use_streaming = False
+        mode_desc_en = 'High Memory (64GB+) - Load all at once'
+        mode_desc_zh = '高内存模式 (64GB+) - 一次性加载'
     elif available_memory_gb >= 32:
-        # 32-64GB: 大多数数据库可以全量
         memory_mode = 'medium-high'
-        recommended_patient_limit = 50000
-        mode_desc_en = 'Medium-High Memory (32-64GB) - Up to 50k patients'
-        mode_desc_zh = '中高内存模式 (32-64GB) - 最多5万患者'
+        recommended_batch_size = 50000  # 每批5万患者
+        use_streaming = False  # 可以尝试一次加载
+        mode_desc_en = 'Medium-High Memory (32-64GB) - May need batching for large DBs'
+        mode_desc_zh = '中高内存模式 (32-64GB) - 大库可能需要分批'
     elif available_memory_gb >= 16:
-        # 16-32GB: 需要限制
         memory_mode = 'medium'
-        recommended_patient_limit = 20000
-        mode_desc_en = 'Medium Memory (16-32GB) - Up to 20k patients'
-        mode_desc_zh = '中等内存模式 (16-32GB) - 最多2万患者'
+        recommended_batch_size = 10000  # 每批1万患者
+        use_streaming = True
+        mode_desc_en = 'Medium Memory (16-32GB) - Streaming mode (10k/batch)'
+        mode_desc_zh = '中等内存模式 (16-32GB) - 流式处理 (每批1万)'
     elif available_memory_gb >= 8:
-        # 8-16GB: 较严格限制
         memory_mode = 'low'
-        recommended_patient_limit = 5000
-        mode_desc_en = 'Low Memory (8-16GB) - Up to 5k patients'
-        mode_desc_zh = '低内存模式 (8-16GB) - 最多5千患者'
+        recommended_batch_size = 5000  # 每批5千患者
+        use_streaming = True
+        mode_desc_en = 'Low Memory (8-16GB) - Streaming mode (5k/batch)'
+        mode_desc_zh = '低内存模式 (8-16GB) - 流式处理 (每批5千)'
     else:
-        # <8GB: 非常保守
         memory_mode = 'minimal'
-        recommended_patient_limit = 1000
-        mode_desc_en = 'Minimal Memory (<8GB) - Up to 1k patients'
-        mode_desc_zh = '极低内存模式 (<8GB) - 最多1千患者'
+        recommended_batch_size = 2000  # 每批2千患者
+        use_streaming = True
+        mode_desc_en = 'Minimal Memory (<8GB) - Streaming mode (2k/batch)'
+        mode_desc_zh = '极低内存模式 (<8GB) - 流式处理 (每批2千)'
     
     return {
         'cpu_count': cpu_count,
@@ -1094,7 +1094,8 @@ def get_system_resources():
         'recommended_workers': recommended_workers,
         'recommended_backend': recommended_backend,
         'memory_mode': memory_mode,
-        'recommended_patient_limit': recommended_patient_limit,
+        'recommended_batch_size': recommended_batch_size,
+        'use_streaming': use_streaming,
         'mode_desc_en': mode_desc_en,
         'mode_desc_zh': mode_desc_zh,
     }
@@ -1178,11 +1179,12 @@ def init_session_state():
         st.session_state.path_validated = False
     if 'language' not in st.session_state:
         st.session_state.language = 'en'  # 默认英文
-    # 🚀 性能优化：患者数量限制（根据内存自动推荐安全值）
-    if 'patient_limit' not in st.session_state:
-        # 自动检测可用内存，设置安全的默认值
+    # 🚀 性能优化：流式导出模式（根据内存自动推荐分批大小）
+    if 'use_streaming' not in st.session_state:
+        # 自动检测可用内存，决定是否使用流式处理
         resources = get_system_resources()
-        st.session_state.patient_limit = resources['recommended_patient_limit']
+        st.session_state.use_streaming = resources['use_streaming']
+        st.session_state.batch_size = resources['recommended_batch_size']
         st.session_state.memory_mode = resources['memory_mode']
     if 'available_patient_ids' not in st.session_state:
         st.session_state.available_patient_ids = None
@@ -2692,71 +2694,48 @@ def render_sidebar():
         )
         st.session_state.export_format = export_format
         
-        # 🚀 患者数量限制（性能优化选项）- 根据内存自动推荐
+        # 🚀 流式导出模式（低内存时自动分批处理，可导出全部患者）
         resources = get_system_resources()
-        recommended_limit = resources['recommended_patient_limit']
         memory_mode = resources['memory_mode']
+        use_streaming = resources['use_streaming']
+        batch_size = resources['recommended_batch_size']
         
         # 显示内存模式提示
         if st.session_state.language == 'en':
             mode_desc = resources['mode_desc_en']
-            mem_warning = f"⚠️ **Memory Mode**: {mode_desc}"
-            if memory_mode in ['low', 'minimal']:
-                mem_warning += "\n⚠️ Low memory detected! Using safe defaults to prevent crashes."
+            if use_streaming:
+                mem_info = f"💡 **{mode_desc}**\n\n✅ **Streaming export enabled**: Will process {batch_size:,} patients per batch, then write to disk and release memory. This allows exporting **ALL patients** even with limited RAM."
+            else:
+                mem_info = f"✅ **{mode_desc}**\n\nSufficient memory to load all data at once."
         else:
             mode_desc = resources['mode_desc_zh']
-            mem_warning = f"⚠️ **内存模式**: {mode_desc}"
-            if memory_mode in ['low', 'minimal']:
-                mem_warning += "\n⚠️ 检测到低内存！使用安全默认值防止崩溃。"
-        
-        st.info(mem_warning)
-        
-        limit_label = "Patient Limit" if st.session_state.language == 'en' else "患者数量限制"
-        limit_help = f"Limit number of patients to prevent OOM. Recommended: {recommended_limit if recommended_limit > 0 else 'No limit'} based on {resources['available_memory_gb']:.1f}GB available RAM" if st.session_state.language == 'en' else f"限制患者数量防止内存溢出。推荐值: {recommended_limit if recommended_limit > 0 else '无限制'}（基于 {resources['available_memory_gb']:.1f}GB 可用内存）"
-        
-        # 根据内存模式调整选项
-        if memory_mode == 'minimal':
-            patient_limit_options = [500, 1000, 2000]
-        elif memory_mode == 'low':
-            patient_limit_options = [1000, 2000, 5000]
-        elif memory_mode == 'medium':
-            patient_limit_options = [5000, 10000, 20000]
-        elif memory_mode == 'medium-high':
-            patient_limit_options = [10000, 20000, 50000, 0]
-        else:  # high
-            patient_limit_options = [10000, 20000, 50000, 0]
-        
-        # 生成标签（带推荐标记）
-        patient_limit_labels = {}
-        for opt in patient_limit_options:
-            if opt == 0:
-                label = "All patients" if st.session_state.language == 'en' else "全部患者"
+            if use_streaming:
+                mem_info = f"💡 **{mode_desc}**\n\n✅ **流式导出已启用**: 每批处理 {batch_size:,} 个患者，写入磁盘后释放内存。即使内存有限也可导出**全部患者**。"
             else:
-                label = f"{opt:,}"
-            if opt == recommended_limit:
-                label += " ⭐" if st.session_state.language == 'en' else " ⭐推荐"
-            patient_limit_labels[opt] = label
+                mem_info = f"✅ **{mode_desc}**\n\n内存充足，可一次性加载所有数据。"
         
-        current_limit = st.session_state.get('patient_limit', recommended_limit)
-        if current_limit not in patient_limit_options:
-            # 如果当前值不在选项中，选择推荐值或最接近的
-            current_limit = recommended_limit if recommended_limit in patient_limit_options else patient_limit_options[0]
+        st.info(mem_info)
         
-        patient_limit = st.selectbox(
-            limit_label,
-            options=patient_limit_options,
-            index=patient_limit_options.index(current_limit),
-            format_func=lambda x: patient_limit_labels.get(x, str(x)),
-            help=limit_help
-        )
-        st.session_state.patient_limit = patient_limit
-        
-        # 如果用户选择的值超过推荐值，显示警告
-        if recommended_limit > 0 and (patient_limit == 0 or patient_limit > recommended_limit):
-            if st.session_state.language == 'en':
-                st.warning(f"⚠️ Selected limit exceeds recommended ({recommended_limit:,}). Risk of memory issues!")
-            else:
-                st.warning(f"⚠️ 选择的数量超过推荐值 ({recommended_limit:,})，可能导致内存问题！")
+        # 流式模式下可以调整批次大小
+        if use_streaming:
+            batch_label = "Batch Size" if st.session_state.language == 'en' else "每批患者数"
+            batch_help = "Number of patients to process per batch. Smaller = less memory, slower. Larger = more memory, faster." if st.session_state.language == 'en' else "每批处理的患者数量。越小越省内存但越慢，越大越快但需更多内存。"
+            
+            batch_options = {
+                'minimal': [1000, 2000, 3000],
+                'low': [2000, 5000, 8000],
+                'medium': [5000, 10000, 15000],
+            }
+            options = batch_options.get(memory_mode, [5000, 10000, 20000])
+            
+            selected_batch = st.selectbox(
+                batch_label,
+                options=options,
+                index=options.index(batch_size) if batch_size in options else 0,
+                format_func=lambda x: f"{x:,}",
+                help=batch_help
+            )
+            st.session_state.batch_size = selected_batch
         
         # 导出按钮
         can_export = (use_mock or (st.session_state.data_path and Path(st.session_state.data_path).exists())) and selected_concepts and export_path and Path(export_path).exists()
@@ -2782,9 +2761,10 @@ def render_sidebar():
         perf_title = "⚡ Performance" if st.session_state.language == 'en' else "⚡ 性能配置"
         with st.expander(perf_title, expanded=False):
             mem_mode = resources['memory_mode']
-            rec_limit = resources['recommended_patient_limit']
-            rec_limit_str = f"{rec_limit:,}" if rec_limit > 0 else "No limit"
-            rec_limit_str_zh = f"{rec_limit:,}" if rec_limit > 0 else "无限制"
+            batch_size = resources['recommended_batch_size']
+            streaming = resources['use_streaming']
+            batch_str = f"{batch_size:,}/batch" if streaming else "All at once"
+            batch_str_zh = f"每批{batch_size:,}" if streaming else "一次性加载"
             
             if st.session_state.language == 'en':
                 st.markdown(f"""
@@ -2798,7 +2778,7 @@ def render_sidebar():
                 **Auto-optimized:**
                 - Workers: {resources['recommended_workers']}
                 - Backend: {resources['recommended_backend']}
-                - Safe Patient Limit: {rec_limit_str}
+                - Streaming: {'Yes' if streaming else 'No'} ({batch_str})
                 """)
             else:
                 st.markdown(f"""
@@ -2812,7 +2792,7 @@ def render_sidebar():
                 **自动优化配置:**
                 - 并行数: {resources['recommended_workers']}
                 - 后端: {resources['recommended_backend']}
-                - 安全患者数限制: {rec_limit_str_zh}
+                - 流式处理: {'是' if streaming else '否'} ({batch_str_zh})
                 """)
 
 
@@ -7034,8 +7014,195 @@ def _generate_cohort_prefix() -> str:
     return "_".join(parts)
 
 
+def get_all_patient_ids(data_path: str, database: str) -> tuple:
+    """获取数据库中所有患者ID。
+    
+    Returns:
+        (patient_ids_list, id_column_name)
+    """
+    id_col_map = {
+        'miiv': 'stay_id', 
+        'eicu': 'patientunitstayid', 
+        'aumc': 'admissionid', 
+        'hirid': 'patientid'
+    }
+    id_col = id_col_map.get(database, 'stay_id')
+    
+    data_path = Path(data_path)
+    icustays_files = ['icustays.parquet', 'patient.parquet', 'admissions.parquet']
+    
+    for f in icustays_files:
+        fp = data_path / f
+        if fp.exists():
+            try:
+                df = pd.read_parquet(fp, columns=[id_col])
+                if id_col in df.columns:
+                    return df[id_col].unique().tolist(), id_col
+            except:
+                continue
+    
+    return [], id_col
+
+
+def streaming_export_batch(
+    concepts: list,
+    patient_ids: list,
+    id_col: str,
+    data_path: str,
+    database: str,
+    export_dir: Path,
+    export_format: str,
+    batch_idx: int,
+    progress_callback=None
+) -> dict:
+    """流式导出单个批次的数据。
+    
+    加载指定患者的数据，按模块分组导出，然后返回统计信息。
+    数据在导出后立即释放内存。
+    
+    Returns:
+        dict: {group_name: rows_exported}
+    """
+    from pyricu import load_concepts
+    import gc
+    
+    # 加载这批患者的数据
+    patient_ids_filter = {id_col: patient_ids}
+    
+    load_kwargs = {
+        'data_path': data_path,
+        'database': database,
+        'concepts': concepts,
+        'verbose': False,
+        'merge': False,
+        'patient_ids': patient_ids_filter,
+        'parallel_workers': 1,  # 流式模式下不使用并行，减少内存占用
+        'parallel_backend': 'thread',
+    }
+    
+    try:
+        result = load_concepts(**load_kwargs)
+    except Exception as e:
+        return {'error': str(e)}
+    
+    # 处理返回结果
+    data = {}
+    if isinstance(result, dict):
+        for cname, df in result.items():
+            if hasattr(df, 'to_pandas'):
+                df = df.to_pandas()
+            elif hasattr(df, 'dataframe'):
+                df = df.dataframe()
+            elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                df = df.data
+            
+            if isinstance(df, pd.DataFrame) and len(df) > 0:
+                data[cname] = df
+            elif isinstance(df, pd.Series):
+                data[cname] = df.to_frame().reset_index()
+    
+    if not data:
+        return {'rows': 0}
+    
+    # 按模块分组
+    concept_to_group = {}
+    group_priority = list(CONCEPT_GROUPS_INTERNAL.keys())
+    for group_key in group_priority:
+        concepts_in_group = CONCEPT_GROUPS_INTERNAL[group_key]
+        for c in concepts_in_group:
+            if c not in concept_to_group:
+                concept_to_group[c] = group_key
+    
+    grouped_data = {}
+    for concept_name, df in data.items():
+        if not isinstance(df, pd.DataFrame) or len(df) == 0:
+            continue
+        group_key = concept_to_group.get(concept_name, 'other')
+        if group_key not in grouped_data:
+            grouped_data[group_key] = {}
+        grouped_data[group_key][concept_name] = df
+    
+    # 导出每个分组（追加模式）
+    stats = {}
+    id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
+    time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'itemtime']
+    unified_time_col = 'charttime'
+    
+    for group_name, concept_dfs in grouped_data.items():
+        # 合并同组概念为宽表
+        merged_df = None
+        detected_id_col = None
+        
+        for cname, cdf in concept_dfs.items():
+            cdf = cdf.copy()
+            
+            # 统一时间列
+            if unified_time_col not in cdf.columns:
+                for tc in time_candidates:
+                    if tc in cdf.columns:
+                        cdf = cdf.rename(columns={tc: unified_time_col})
+                        break
+            
+            # 删除多余时间列
+            other_time = [t for t in time_candidates if t in cdf.columns and t != unified_time_col]
+            if other_time:
+                cdf = cdf.drop(columns=other_time)
+            
+            # 检测ID列
+            if detected_id_col is None:
+                for idc in id_candidates:
+                    if idc in cdf.columns:
+                        detected_id_col = idc
+                        break
+            
+            # 重命名值列
+            val_cols = [c for c in cdf.columns if c not in id_candidates and c != unified_time_col]
+            if len(val_cols) == 1 and val_cols[0] != cname:
+                cdf = cdf.rename(columns={val_cols[0]: cname})
+            
+            # 合并
+            if merged_df is None:
+                merged_df = cdf
+            else:
+                merge_cols = [c for c in [detected_id_col, unified_time_col] if c in cdf.columns and c in merged_df.columns]
+                if merge_cols:
+                    merged_df = pd.merge(merged_df, cdf, on=merge_cols, how='outer')
+        
+        if merged_df is None or len(merged_df) == 0:
+            continue
+        
+        # 导出文件（追加模式）
+        file_path = export_dir / f"{group_name}.{export_format}"
+        
+        if export_format == 'parquet':
+            # Parquet 追加需要特殊处理
+            if file_path.exists():
+                existing = pd.read_parquet(file_path)
+                merged_df = pd.concat([existing, merged_df], ignore_index=True)
+            merged_df.to_parquet(file_path, index=False)
+        elif export_format == 'csv':
+            # CSV 可以直接追加
+            mode = 'a' if file_path.exists() else 'w'
+            header = not file_path.exists()
+            merged_df.to_csv(file_path, mode=mode, header=header, index=False)
+        else:  # excel - 不支持追加，累积后最后写
+            if file_path.exists():
+                existing = pd.read_excel(file_path)
+                merged_df = pd.concat([existing, merged_df], ignore_index=True)
+            merged_df.to_excel(file_path, index=False)
+        
+        stats[group_name] = stats.get(group_name, 0) + len(merged_df)
+    
+    # 释放内存
+    del data
+    del grouped_data
+    gc.collect()
+    
+    return stats
+
+
 def execute_sidebar_export():
-    """执行侧边栏触发的数据导出（直接导出到本地目录，带进度条）。"""
+    """执行侧边栏触发的数据导出（支持流式分批导出以处理低内存情况）。"""
     from datetime import datetime
     
     lang = st.session_state.get('language', 'en')
@@ -7095,74 +7262,123 @@ def execute_sidebar_export():
             
             progress_bar.progress(0.3)
         else:
-            # 加载真实数据并导出（批量并行加载）
+            # 加载真实数据并导出
             from pyricu import load_concepts
             import os
+            import gc
             
-            # 批量并行加载所有特征
+            resources = get_system_resources()
+            use_streaming = st.session_state.get('use_streaming', resources['use_streaming'])
+            batch_size = st.session_state.get('batch_size', resources['recommended_batch_size'])
+            database = st.session_state.get('database', 'miiv')
+            data_path = st.session_state.data_path
+            
+            # 获取所有患者ID
+            all_patient_ids, id_col = get_all_patient_ids(data_path, database)
+            total_patients = len(all_patient_ids)
+            
+            if total_patients == 0:
+                err_msg = "❌ No patients found in database" if lang == 'en' else "❌ 数据库中未找到患者"
+                st.error(err_msg)
+                return
+            
+            # 显示系统资源信息
+            if use_streaming:
+                n_batches = (total_patients + batch_size - 1) // batch_size
+                perf_msg = f"🚀 Streaming mode: {total_patients:,} patients in {n_batches} batches ({batch_size:,}/batch)" if lang == 'en' else f"🚀 流式模式: {total_patients:,} 患者分 {n_batches} 批处理 (每批 {batch_size:,})"
+            else:
+                perf_msg = f"🚀 Loading all {total_patients:,} patients at once ({resources['available_memory_gb']:.1f}GB available)" if lang == 'en' else f"🚀 一次性加载 {total_patients:,} 患者 (可用内存 {resources['available_memory_gb']:.1f}GB)"
+            st.info(perf_msg)
+            
+            if use_streaming:
+                # ========== 流式分批导出模式 ==========
+                # 分批加载数据，每批处理完立即写入磁盘并释放内存
+                n_batches = (total_patients + batch_size - 1) // batch_size
+                total_rows_exported = {}
+                
+                for batch_idx in range(n_batches):
+                    start_idx = batch_idx * batch_size
+                    end_idx = min(start_idx + batch_size, total_patients)
+                    batch_patient_ids = all_patient_ids[start_idx:end_idx]
+                    
+                    # 更新进度
+                    progress = (batch_idx + 0.5) / n_batches
+                    progress_bar.progress(progress)
+                    batch_msg = f"**Batch {batch_idx+1}/{n_batches}**: Processing {len(batch_patient_ids):,} patients..." if lang == 'en' else f"**批次 {batch_idx+1}/{n_batches}**: 处理 {len(batch_patient_ids):,} 患者..."
+                    status_text.markdown(batch_msg)
+                    
+                    # 导出这批数据
+                    batch_stats = streaming_export_batch(
+                        concepts=selected_concepts,
+                        patient_ids=batch_patient_ids,
+                        id_col=id_col,
+                        data_path=data_path,
+                        database=database,
+                        export_dir=export_dir,
+                        export_format=export_format,
+                        batch_idx=batch_idx
+                    )
+                    
+                    # 累计统计
+                    if 'error' in batch_stats:
+                        st.warning(f"⚠️ Batch {batch_idx+1} error: {batch_stats['error']}")
+                    else:
+                        for group, rows in batch_stats.items():
+                            total_rows_exported[group] = total_rows_exported.get(group, 0) + rows
+                    
+                    # 强制垃圾回收
+                    gc.collect()
+                
+                progress_bar.progress(1.0)
+                
+                # 生成导出文件列表
+                for group_name in total_rows_exported.keys():
+                    file_path = export_dir / f"{group_name}.{export_format}"
+                    if file_path.exists():
+                        exported_files.append(str(file_path))
+                
+                # 统计结果
+                total_rows = sum(total_rows_exported.values())
+                success_msg = f"✅ Streaming export complete! {len(exported_files)} files, {total_rows:,} rows, {total_patients:,} patients" if lang == 'en' else f"✅ 流式导出完成！{len(exported_files)} 个文件，{total_rows:,} 行，{total_patients:,} 患者"
+                st.success(success_msg)
+                
+                # 显示导出的文件
+                if exported_files:
+                    files_title = "### 📁 Exported Files" if lang == 'en' else "### 📁 已导出文件"
+                    st.markdown(files_title)
+                    for f in exported_files:
+                        st.markdown(f"- `{f}`")
+                
+                st.session_state.export_completed = True
+                return  # 流式导出完成，直接返回
+            
+            # ========== 常规一次性加载模式 ==========
             batch_msg = f"**Loading {total_concepts} features (batch mode)...**" if lang == 'en' else f"**批量加载 {total_concepts} 个特征...**"
             status_text.markdown(batch_msg)
             
-            # 🚀 性能优化：参照 extract_baseline_features.py 的配置
-            patient_limit = st.session_state.get('patient_limit', 0)  # 导出默认不限制
-            
-            # 获取患者ID过滤器
-            patient_ids_filter = None
-            id_col = 'stay_id'
-            if patient_limit and patient_limit > 0:
-                try:
-                    data_path = Path(st.session_state.data_path)
-                    database = st.session_state.get('database', 'miiv')
-                    id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid'}
-                    id_col = id_col_map.get(database, 'stay_id')
-                    
-                    for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:
-                        fp = data_path / f
-                        if fp.exists():
-                            icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
-                            if id_col in icustays_df.columns:
-                                all_ids = icustays_df[id_col].unique().tolist()
-                                sample_ids = all_ids[:patient_limit] if len(all_ids) > patient_limit else all_ids
-                                patient_ids_filter = {id_col: sample_ids}
-                                break
-                except Exception:
-                    pass
-            
-            # 🚀 智能并行配置：根据系统资源和患者数量动态调整
-            num_patients = len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
-            parallel_workers, parallel_backend = get_optimal_parallel_config(num_patients, task_type='export')
-            
-            # 显示系统资源信息（调试用）
-            resources = get_system_resources()
-            perf_msg = f"🚀 System: {resources['cpu_count']} cores, {resources['total_memory_gb']}GB RAM → Using {parallel_workers} workers ({parallel_backend})" if lang == 'en' else f"🚀 系统: {resources['cpu_count']} 核心, {resources['total_memory_gb']}GB 内存 → 使用 {parallel_workers} 并行 ({parallel_backend})"
-            st.info(perf_msg)
+            parallel_workers, parallel_backend = get_optimal_parallel_config(total_patients, task_type='export')
             
             try:
-                # � 优化：批量加载所有概念（而不是逐个加载）
-                # 批量加载可以共享表缓存，对HiRID等大表场景提速3-6倍
+                # 批量加载所有概念
                 data = {}
                 failed_concepts = []
                 
-                # 一次性加载所有概念
                 load_kwargs = {
-                    'data_path': st.session_state.data_path,
-                    'database': st.session_state.get('database'),
+                    'data_path': data_path,
+                    'database': database,
                     'concepts': selected_concepts,
                     'verbose': False,
-                    'merge': False,  # 不合并，保持每个概念独立
+                    'merge': False,
                     'parallel_workers': parallel_workers,
                     'parallel_backend': parallel_backend,
                 }
-                if patient_ids_filter:
-                    load_kwargs['patient_ids'] = patient_ids_filter
                 
                 result = load_concepts(**load_kwargs)
                 progress_bar.progress(0.4)
                 
-                # 处理返回结果（批量加载返回 dict）
+                # 处理返回结果
                 if isinstance(result, dict):
                     for cname, df in result.items():
-                        # 🔧 处理各种返回类型
                         if hasattr(df, 'to_pandas'):
                             df = df.to_pandas()
                         elif hasattr(df, 'dataframe'):
@@ -7175,11 +7391,9 @@ def execute_sidebar_export():
                         elif isinstance(df, pd.Series):
                             data[cname] = df.to_frame().reset_index()
                 elif isinstance(result, pd.DataFrame):
-                    # 单概念加载返回 DataFrame
                     if len(result) > 0 and len(selected_concepts) == 1:
                         data[selected_concepts[0]] = result
                 
-                # 检查哪些概念加载失败
                 failed_concepts = [c for c in selected_concepts if c not in data]
                 
                 progress_bar.progress(0.5)
