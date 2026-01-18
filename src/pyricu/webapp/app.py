@@ -1322,6 +1322,45 @@ def get_text(key: str) -> str:
     return TEXTS.get(lang, TEXTS['en']).get(key, key)
 
 
+def detect_database_from_path(data_path: str) -> str:
+    """从路径自动检测数据库类型。
+    
+    Returns:
+        database: 检测到的数据库类型（miiv, eicu, aumc, hirid），未检测到返回None
+    """
+    if not data_path:
+        return None
+    
+    path_lower = str(data_path).lower()
+    
+    # 基于路径名检测
+    if 'mimic' in path_lower or 'miiv' in path_lower:
+        return 'miiv'
+    elif 'eicu' in path_lower:
+        return 'eicu'
+    elif 'aumc' in path_lower or 'amsterdam' in path_lower:
+        return 'aumc'
+    elif 'hirid' in path_lower:
+        return 'hirid'
+    
+    # 基于文件内容检测
+    path = Path(data_path)
+    if path.exists():
+        # 检查特征文件
+        if (path / 'icustays.parquet').exists() or (path / 'icustays.csv').exists():
+            return 'miiv'
+        elif (path / 'patient.parquet').exists() or (path / 'patient.csv').exists():
+            # eICU的patient表
+            return 'eicu'
+        elif (path / 'admissions.parquet').exists() or (path / 'numericitems.parquet').exists():
+            # AUMC有admissions和numericitems
+            return 'aumc'
+        elif (path / 'general.parquet').exists() or (path / 'general_table.csv').exists():
+            return 'hirid'
+    
+    return None
+
+
 def validate_database_path(data_path: str, database: str) -> dict:
     """
     验证数据路径是否包含指定数据库所需的文件。
@@ -2313,25 +2352,50 @@ def render_sidebar():
             
         else:
             # 真实数据模式
-            db_label = "Select Database" if st.session_state.language == 'en' else "选择数据库"
+            # 先输入路径，然后自动检测/确认数据库类型
+            path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
+            path_help = "Enter the path to your ICU database. Database type will be auto-detected." if st.session_state.language == 'en' else "输入ICU数据库路径，系统将自动检测数据库类型。"
+            
+            # 使用当前已保存的路径
+            current_path = st.session_state.get('data_path', '')
+            data_path = st.text_input(
+                path_label,
+                value=current_path,
+                placeholder="/path/to/icu_database",
+                help=path_help
+            )
+            
+            # 🚀 自动检测数据库类型
+            detected_db = detect_database_from_path(data_path) if data_path else None
+            current_db = st.session_state.get('database', 'miiv')
+            
+            # 如果检测到数据库且与当前不同，自动更新
+            if detected_db and detected_db != current_db:
+                st.session_state.database = detected_db
+                current_db = detected_db
+                db_names = {'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD', 'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID'}
+                detected_name = db_names.get(detected_db, detected_db)
+                if st.session_state.language == 'en':
+                    st.info(f"🔍 Auto-detected database: **{detected_name}**")
+                else:
+                    st.info(f"🔍 自动检测到数据库: **{detected_name}**")
+            
+            # 数据库选择器（允许手动覆盖）
+            db_label = "Database Type" if st.session_state.language == 'en' else "数据库类型"
+            db_options = ['miiv', 'eicu', 'aumc', 'hirid']
+            current_index = db_options.index(current_db) if current_db in db_options else 0
+            
             database = st.selectbox(
                 db_label,
-                options=['miiv', 'eicu', 'aumc', 'hirid'],
-                index=0,
+                options=db_options,
+                index=current_index,
                 format_func=lambda x: {
                     'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD', 
                     'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID'
-                }.get(x, x)
+                }.get(x, x),
+                help="Auto-detected from path. Change if incorrect." if st.session_state.language == 'en' else "从路径自动检测，如有误可手动修改。"
             )
             st.session_state.database = database
-            
-            default_path = "/home/1_publicData/icu_databases/mimiciv/3.1/" if database == 'miiv' else ""
-            path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
-            data_path = st.text_input(
-                path_label,
-                value=st.session_state.data_path or default_path,
-                placeholder=f"/path/to/{database}"
-            )
             
             # 验证按钮
             validate_btn = "🔍 Validate Data Path" if st.session_state.language == 'en' else "🔍 验证数据路径"
@@ -2659,29 +2723,41 @@ def render_sidebar():
             placeholder="Select export directory" if st.session_state.language == 'en' else "选择导出目录",
             help=(f"Data will be exported to this directory (Current database: {db_name.upper()})" if st.session_state.language == 'en' else f"数据将导出到此目录（当前数据库: {db_name.upper()}）")
         )
-        st.session_state.export_path = export_path
         
-        # 检查路径并提供创建选项
-        if export_path:
-            if Path(export_path).exists():
-                path_ok_msg = "✅ Path valid" if st.session_state.language == 'en' else "✅ 路径有效"
-                st.success(path_ok_msg)
+        # 🔧 添加验证按钮（而不是自动验证）
+        validate_export_btn = "🔍 Validate Export Path" if st.session_state.language == 'en' else "🔍 验证导出路径"
+        if st.button(validate_export_btn, width="stretch", key="validate_export_path"):
+            if not export_path:
+                err_msg = "❌ Please enter export path" if st.session_state.language == 'en' else "❌ 请输入导出路径"
+                st.error(err_msg)
             else:
-                col_create, col_info = st.columns([1, 2])
-                with col_create:
-                    create_btn = "📁 Create Directory" if st.session_state.language == 'en' else "📁 创建目录"
-                    if st.button(create_btn, key="create_export_dir"):
-                        try:
-                            Path(export_path).mkdir(parents=True, exist_ok=True)
-                            ok_msg = "✅ Directory created" if st.session_state.language == 'en' else "✅ 目录已创建"
-                            st.success(ok_msg)
-                            st.rerun()
-                        except Exception as e:
-                            err_msg = f"Creation failed: {e}" if st.session_state.language == 'en' else f"创建失败: {e}"
-                            st.error(err_msg)
-                with col_info:
-                    not_exist_msg = "Path does not exist" if st.session_state.language == 'en' else "路径不存在"
-                    st.caption(not_exist_msg)
+                st.session_state.export_path = export_path
+                if Path(export_path).exists():
+                    st.session_state.export_path_validated = True
+                    path_ok_msg = "✅ Export path valid" if st.session_state.language == 'en' else "✅ 导出路径有效"
+                    st.success(path_ok_msg)
+                else:
+                    st.session_state.export_path_validated = False
+                    # 提供创建选项
+                    st.warning("⚠️ Path does not exist" if st.session_state.language == 'en' else "⚠️ 路径不存在")
+        
+        # 显示当前状态或创建选项
+        if export_path:
+            if st.session_state.get('export_path_validated') and st.session_state.export_path == export_path:
+                pass  # 已验证，不显示额外信息
+            elif not Path(export_path).exists():
+                create_btn = "📁 Create Directory" if st.session_state.language == 'en' else "📁 创建目录"
+                if st.button(create_btn, key="create_export_dir"):
+                    try:
+                        Path(export_path).mkdir(parents=True, exist_ok=True)
+                        st.session_state.export_path = export_path
+                        st.session_state.export_path_validated = True
+                        ok_msg = "✅ Directory created" if st.session_state.language == 'en' else "✅ 目录已创建"
+                        st.success(ok_msg)
+                        st.rerun()
+                    except Exception as e:
+                        err_msg = f"Creation failed: {e}" if st.session_state.language == 'en' else f"创建失败: {e}"
+                        st.error(err_msg)
         
         # 导出格式选择（优先Parquet）
         format_label = "Export Format" if st.session_state.language == 'en' else "导出格式"
@@ -7020,6 +7096,7 @@ def get_all_patient_ids(data_path: str, database: str) -> tuple:
     Returns:
         (patient_ids_list, id_column_name)
     """
+    # ID列映射
     id_col_map = {
         'miiv': 'stay_id', 
         'eicu': 'patientunitstayid', 
@@ -7029,17 +7106,66 @@ def get_all_patient_ids(data_path: str, database: str) -> tuple:
     id_col = id_col_map.get(database, 'stay_id')
     
     data_path = Path(data_path)
-    icustays_files = ['icustays.parquet', 'patient.parquet', 'admissions.parquet']
     
-    for f in icustays_files:
+    # 根据数据库类型定义不同的患者表文件搜索顺序
+    db_patient_files = {
+        'miiv': ['icustays.parquet', 'admissions.parquet', 'patients.parquet'],
+        'eicu': ['patient.parquet'],
+        'aumc': ['admissions.parquet', 'admissions/0.parquet'],  # AUMC可能是分片目录
+        'hirid': ['general.parquet', 'general/0.parquet'],  # HiRID也可能是分片
+    }
+    
+    search_files = db_patient_files.get(database, ['icustays.parquet', 'patient.parquet', 'admissions.parquet'])
+    
+    # 先搜索单文件
+    for f in search_files:
         fp = data_path / f
         if fp.exists():
             try:
                 df = pd.read_parquet(fp, columns=[id_col])
                 if id_col in df.columns:
                     return df[id_col].unique().tolist(), id_col
-            except:
+            except Exception:
                 continue
+    
+    # 搜索分片目录（如 admissions/0.parquet, admissions/1.parquet）
+    shard_dirs = {
+        'miiv': 'icustays',
+        'eicu': 'patient', 
+        'aumc': 'admissions',
+        'hirid': 'general'
+    }
+    shard_dir_name = shard_dirs.get(database, 'icustays')
+    shard_dir = data_path / shard_dir_name
+    
+    if shard_dir.exists() and shard_dir.is_dir():
+        shard_files = sorted(shard_dir.glob('*.parquet'))
+        if shard_files:
+            try:
+                # 只读第一个分片获取全部ID可能不够，需要读取所有
+                all_ids = []
+                for sf in shard_files:
+                    df = pd.read_parquet(sf, columns=[id_col])
+                    if id_col in df.columns:
+                        all_ids.extend(df[id_col].unique().tolist())
+                if all_ids:
+                    return list(set(all_ids)), id_col
+            except Exception:
+                pass
+    
+    # 备选：搜索所有parquet文件查找ID列
+    try:
+        for pf in data_path.rglob('*.parquet'):
+            try:
+                # 读取schema检查是否包含id_col
+                df = pd.read_parquet(pf, columns=[id_col])
+                if id_col in df.columns and len(df) > 0:
+                    # 找到了，但这可能不是完整的患者表，继续搜索更大的
+                    return df[id_col].unique().tolist(), id_col
+            except Exception:
+                continue
+    except Exception:
+        pass
     
     return [], id_col
 
@@ -7069,39 +7195,48 @@ def streaming_export_batch(
     # 加载这批患者的数据
     patient_ids_filter = {id_col: patient_ids}
     
-    load_kwargs = {
-        'data_path': data_path,
-        'database': database,
-        'concepts': concepts,
-        'verbose': False,
-        'merge': False,
-        'patient_ids': patient_ids_filter,
-        'parallel_workers': 1,  # 流式模式下不使用并行，减少内存占用
-        'parallel_backend': 'thread',
-    }
-    
-    try:
-        result = load_concepts(**load_kwargs)
-    except Exception as e:
-        return {'error': str(e)}
-    
-    # 处理返回结果
+    # 🔧 逐个加载概念，跳过不支持的概念（如eICU的etco2）
     data = {}
-    if isinstance(result, dict):
-        for cname, df in result.items():
-            if hasattr(df, 'to_pandas'):
-                df = df.to_pandas()
-            elif hasattr(df, 'dataframe'):
-                df = df.dataframe()
-            elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
-                df = df.data
+    failed_concepts = []
+    
+    for concept in concepts:
+        try:
+            load_kwargs = {
+                'data_path': data_path,
+                'database': database,
+                'concepts': [concept],  # 单个概念
+                'verbose': False,
+                'merge': False,
+                'patient_ids': patient_ids_filter,
+                'parallel_workers': 1,
+                'parallel_backend': 'thread',
+            }
+            result = load_concepts(**load_kwargs)
             
-            if isinstance(df, pd.DataFrame) and len(df) > 0:
-                data[cname] = df
-            elif isinstance(df, pd.Series):
-                data[cname] = df.to_frame().reset_index()
+            # 处理返回结果
+            if isinstance(result, dict):
+                for cname, df in result.items():
+                    if hasattr(df, 'to_pandas'):
+                        df = df.to_pandas()
+                    elif hasattr(df, 'dataframe'):
+                        df = df.dataframe()
+                    elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                        df = df.data
+                    
+                    if isinstance(df, pd.DataFrame) and len(df) > 0:
+                        data[cname] = df
+                    elif isinstance(df, pd.Series):
+                        data[cname] = df.to_frame().reset_index()
+            elif isinstance(result, pd.DataFrame) and len(result) > 0:
+                data[concept] = result
+        except Exception as e:
+            # 记录失败但继续处理其他概念
+            failed_concepts.append((concept, str(e)))
+            continue
     
     if not data:
+        if failed_concepts:
+            return {'error': f"All concepts failed: {failed_concepts[0][1]}", 'failed': failed_concepts}
         return {'rows': 0}
     
     # 按模块分组
@@ -7136,6 +7271,12 @@ def streaming_export_batch(
         for cname, cdf in concept_dfs.items():
             cdf = cdf.copy()
             
+            # 🔧 先删除元数据列，避免合并时重复
+            metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type', 'label', 'itemid']
+            cols_to_drop = [c for c in cdf.columns if c in metadata_cols]
+            if cols_to_drop:
+                cdf = cdf.drop(columns=cols_to_drop)
+            
             # 统一时间列
             if unified_time_col not in cdf.columns:
                 for tc in time_candidates:
@@ -7159,6 +7300,10 @@ def streaming_export_batch(
             val_cols = [c for c in cdf.columns if c not in id_candidates and c != unified_time_col]
             if len(val_cols) == 1 and val_cols[0] != cname:
                 cdf = cdf.rename(columns={val_cols[0]: cname})
+            elif len(val_cols) > 1:
+                # 多个值列，添加概念名前缀避免冲突
+                rename_map = {c: f"{cname}_{c}" for c in val_cols if c != cname}
+                cdf = cdf.rename(columns=rename_map)
             
             # 合并
             if merged_df is None:
@@ -7166,10 +7311,21 @@ def streaming_export_batch(
             else:
                 merge_cols = [c for c in [detected_id_col, unified_time_col] if c in cdf.columns and c in merged_df.columns]
                 if merge_cols:
+                    # 🔧 处理可能的重复列：删除cdf中已存在于merged_df的非合并列
+                    existing_cols = set(merged_df.columns) - set(merge_cols)
+                    new_cols = set(cdf.columns) - set(merge_cols)
+                    duplicate_cols = existing_cols & new_cols
+                    if duplicate_cols:
+                        cdf = cdf.drop(columns=list(duplicate_cols))
                     merged_df = pd.merge(merged_df, cdf, on=merge_cols, how='outer')
         
         if merged_df is None or len(merged_df) == 0:
             continue
+        
+        # 🔧 清理可能产生的 _x, _y 后缀列
+        cols_to_drop = [c for c in merged_df.columns if c.endswith('_x') or c.endswith('_y')]
+        if cols_to_drop:
+            merged_df = merged_df.drop(columns=cols_to_drop)
         
         # 导出文件（追加模式）
         file_path = export_dir / f"{group_name}.{export_format}"
@@ -7353,60 +7509,61 @@ def execute_sidebar_export():
                 return  # 流式导出完成，直接返回
             
             # ========== 常规一次性加载模式 ==========
-            batch_msg = f"**Loading {total_concepts} features (batch mode)...**" if lang == 'en' else f"**批量加载 {total_concepts} 个特征...**"
+            batch_msg = f"**Loading {total_concepts} features...**" if lang == 'en' else f"**加载 {total_concepts} 个特征...**"
             status_text.markdown(batch_msg)
             
             parallel_workers, parallel_backend = get_optimal_parallel_config(total_patients, task_type='export')
             
-            try:
-                # 批量加载所有概念
-                data = {}
-                failed_concepts = []
-                
-                load_kwargs = {
-                    'data_path': data_path,
-                    'database': database,
-                    'concepts': selected_concepts,
-                    'verbose': False,
-                    'merge': False,
-                    'parallel_workers': parallel_workers,
-                    'parallel_backend': parallel_backend,
-                }
-                
-                result = load_concepts(**load_kwargs)
-                progress_bar.progress(0.4)
-                
-                # 处理返回结果
-                if isinstance(result, dict):
-                    for cname, df in result.items():
-                        if hasattr(df, 'to_pandas'):
-                            df = df.to_pandas()
-                        elif hasattr(df, 'dataframe'):
-                            df = df.dataframe()
-                        elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
-                            df = df.data
+            # 🔧 逐个加载概念，跳过不可用的（如eICU的etco2）
+            data = {}
+            failed_concepts = []
+            
+            for idx, concept in enumerate(selected_concepts):
+                try:
+                    load_kwargs = {
+                        'data_path': data_path,
+                        'database': database,
+                        'concepts': [concept],  # 单个概念
+                        'verbose': False,
+                        'merge': False,
+                        'parallel_workers': parallel_workers,
+                        'parallel_backend': parallel_backend,
+                    }
+                    
+                    result = load_concepts(**load_kwargs)
+                    
+                    # 处理返回结果
+                    if isinstance(result, dict):
+                        for cname, df in result.items():
+                            if hasattr(df, 'to_pandas'):
+                                df = df.to_pandas()
+                            elif hasattr(df, 'dataframe'):
+                                df = df.dataframe()
+                            elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                                df = df.data
+                            
+                            if isinstance(df, pd.DataFrame) and len(df) > 0:
+                                data[cname] = df
+                            elif isinstance(df, pd.Series):
+                                data[cname] = df.to_frame().reset_index()
+                    elif isinstance(result, pd.DataFrame) and len(result) > 0:
+                        data[concept] = result
                         
-                        if isinstance(df, pd.DataFrame) and len(df) > 0:
-                            data[cname] = df
-                        elif isinstance(df, pd.Series):
-                            data[cname] = df.to_frame().reset_index()
-                elif isinstance(result, pd.DataFrame):
-                    if len(result) > 0 and len(selected_concepts) == 1:
-                        data[selected_concepts[0]] = result
-                
-                failed_concepts = [c for c in selected_concepts if c not in data]
-                
-                progress_bar.progress(0.5)
-                if failed_concepts:
-                    skip_msg = f"⚠️ Skipped {len(failed_concepts)} unavailable: {', '.join(failed_concepts[:5])}" if lang == 'en' else f"⚠️ 跳过 {len(failed_concepts)} 个不可用: {', '.join(failed_concepts[:5])}"
-                    st.warning(skip_msg)
-                loaded_msg = f"✅ Loaded {len(data)}/{total_concepts} features" if lang == 'en' else f"✅ 已加载 {len(data)}/{total_concepts} 个特征"
-                status_text.markdown(loaded_msg)
-                
-            except Exception as e:
-                warn_msg = f"⚠️ Batch loading failed: {e}" if lang == 'en' else f"⚠️ 批量加载失败: {e}"
-                st.warning(warn_msg)
-                data = {}
+                except Exception as e:
+                    # 记录失败但继续处理其他概念
+                    failed_concepts.append((concept, str(e)))
+                    continue
+                    
+                # 更新进度
+                progress_bar.progress(0.1 + 0.4 * (idx + 1) / total_concepts)
+            
+            progress_bar.progress(0.5)
+            if failed_concepts:
+                failed_names = [c for c, e in failed_concepts[:5]]
+                skip_msg = f"⚠️ Skipped {len(failed_concepts)} unavailable: {', '.join(failed_names)}" if lang == 'en' else f"⚠️ 跳过 {len(failed_concepts)} 个不可用: {', '.join(failed_names)}"
+                st.warning(skip_msg)
+            loaded_msg = f"✅ Loaded {len(data)}/{total_concepts} features" if lang == 'en' else f"✅ 已加载 {len(data)}/{total_concepts} 个特征"
+            status_text.markdown(loaded_msg)
         
         # 按模块分组导出（将同一分组的特征合并为宽表）
         merge_msg = "**Merging and exporting by module...**" if lang == 'en' else "**正在按模块合并导出...**"
@@ -7571,6 +7728,10 @@ def execute_sidebar_export():
                     else:
                         # 外连接合并
                         merged_df = pd.merge(merged_df, df, on=merge_cols, how='outer')
+                        # 🔧 清理合并产生的重复列（_x, _y 后缀）
+                        dup_cols = [c for c in merged_df.columns if c.endswith('_x') or c.endswith('_y')]
+                        if dup_cols:
+                            merged_df = merged_df.drop(columns=dup_cols)
             
             if merged_df is None or len(merged_df) == 0:
                 continue
