@@ -95,13 +95,15 @@ logger = logging.getLogger(__name__)
 class ConceptLoader:
     """概念加载器 - 复刻 R ricu 的 load_concepts"""
     
-    def __init__(self, src: Union[str, DataSource, DataSourceConfig], data_path: Optional[str] = None):
+    def __init__(self, src: Union[str, DataSource, DataSourceConfig], data_path: Optional[str] = None, low_memory: Optional[bool] = None):
         """
         初始化概念加载器
         
         Args:
             src: 数据源名称或 DataSource 对象
             data_path: 数据路径
+            low_memory: 低内存模式（None=自动检测，True=强制启用，False=禁用）
+                        低内存模式使用 DuckDB filter pushdown，避免加载全表
         """
         self._data_source: Optional[ICUDataSource] = None
         if isinstance(src, ICUDataSource):
@@ -115,6 +117,30 @@ class ConceptLoader:
             raise TypeError(f"不支持的数据源类型: {type(src)}")
         self._src_name = self.src.name
         self.data_path = data_path
+        
+        # 🚀 低内存模式：自动检测或手动指定
+        # HiRID 强制使用低内存模式（observations 表有 7.77 亿行）
+        if self._src_name == 'hirid':
+            self._low_memory = True
+        elif low_memory is not None:
+            self._low_memory = low_memory
+        else:
+            # 自动检测：可用内存 < 24GB 时启用低内存模式
+            try:
+                import psutil
+                available_gb = psutil.virtual_memory().available / (1024 ** 3)
+                self._low_memory = available_gb < 24
+            except ImportError:
+                self._low_memory = False
+        
+        # 🚀 低内存模式下，自动创建 ICUDataSource 以启用 filter pushdown
+        if self._low_memory and self._data_source is None and data_path:
+            try:
+                self._data_source = ICUDataSource(self.src, base_path=data_path)
+                logger.info(f"🧠 低内存模式启用 for {self._src_name}")
+            except Exception as e:
+                logger.warning(f"无法创建 ICUDataSource: {e}")
+        
         self._id_lookup_cache: Optional[pd.DataFrame] = None
         self._table_cache: Dict[str, pd.DataFrame] = {}
     
@@ -1634,9 +1660,23 @@ class ConceptLoader:
         if verbose and table_columns:
             print(f"  需要加载 {len(table_columns)} 张表")
         
+        # 🚀 HiRID observations 等超大表不应该在预加载阶段加载
+        # 这些表需要概念特定的 variableid 过滤，预加载时无法提供
+        # 跳过这些表，让每个概念单独加载时使用精确过滤
+        skip_preload_tables = set()
+        if self._src_name == 'hirid':
+            # HiRID observations: 7.77亿行，必须按概念精确过滤
+            skip_preload_tables.add('observations')
+        
         # 2. Load and filter
         for table_name, columns in table_columns.items():
             if table_name in self._table_cache:
+                continue
+            
+            # 🚀 跳过需要概念特定过滤的超大表
+            if table_name in skip_preload_tables:
+                if verbose:
+                    print(f"  ⏭️  跳过预加载 {table_name} (将按概念精确过滤)")
                 continue
                 
             if verbose:
