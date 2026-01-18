@@ -6,7 +6,7 @@ import enum
 from dataclasses import dataclass, field
 from pathlib import Path
 import logging
-from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 from threading import RLock
 
 import pandas as pd
@@ -76,6 +76,34 @@ EICU_NURSECHARTING_IDS = {
     'Value', 'Delirium Score', 'Delirium Scale',
     # ECMO 相关 (通过 O2 Admin Device 记录)
     'O2 Admin Device',
+}
+
+# 🚀 HiRID observations 优化：只加载概念字典中定义的 198 个 variableids
+# 原始表 7.77 亿行（~72GB内存），过滤后大幅减少
+# 这些 variableids 来自 concept-dict.json 和 sofa2-dict.json 中 HiRID observations 源
+HIRID_OBSERVATIONS_VARIABLEIDS = {
+    15, 71, 100, 110, 112, 113, 120, 146, 151, 163, 176, 181, 186, 189, 200, 239, 
+    300, 310, 326, 331, 351, 400, 405, 410, 426, 610, 2010, 2200, 3845, 4000, 7100, 
+    8280, 8290, 1000022, 1000060, 1000234, 1000272, 1000273, 1000274, 1000284, 
+    1000299, 1000300, 1000302, 1000304, 1000305, 1000306, 1000315, 1000317, 1000318, 
+    1000320, 1000321, 1000322, 1000325, 1000335, 1000348, 1000352, 1000363, 1000365, 
+    1000383, 1000390, 1000407, 1000408, 1000424, 1000425, 1000426, 1000431, 1000432, 
+    1000433, 1000434, 1000435, 1000437, 1000462, 1000483, 1000486, 1000487, 1000488, 
+    1000507, 1000508, 1000518, 1000519, 1000544, 1000545, 1000549, 1000567, 1000601, 
+    1000648, 1000649, 1000650, 1000655, 1000656, 1000657, 1000658, 1000666, 1000670, 
+    1000671, 1000689, 1000690, 1000724, 1000746, 1000750, 1000760, 1000769, 1000770, 
+    1000781, 1000791, 1000797, 1000812, 1000825, 1000829, 1000830, 1000835, 1000837, 
+    1000838, 1000854, 1000855, 1000893, 1000894, 1000929, 1001005, 1001068, 1001075, 
+    1001079, 1001084, 1001086, 1001095, 1001096, 1001097, 1001098, 1001168, 1001169, 
+    1001170, 1001171, 1001173, 1001193, 1001198, 10000100, 10000200, 10000300, 
+    10000400, 10000450, 15001552, 15001565, 20000110, 20000200, 20000300, 20000400, 
+    20000500, 20000600, 20000700, 20000800, 20000900, 20001200, 20001300, 20002200, 
+    20002500, 20002600, 20002700, 20004100, 20004200, 20004300, 20004410, 20005100, 
+    20005110, 24000150, 24000160, 24000170, 24000210, 24000220, 24000230, 24000330, 
+    24000439, 24000480, 24000519, 24000520, 24000521, 24000522, 24000523, 24000524, 
+    24000526, 24000536, 24000548, 24000549, 24000550, 24000557, 24000560, 24000567, 
+    24000585, 24000605, 24000658, 24000668, 24000806, 24000833, 24000835, 24000836, 
+    24000866, 24000867, 30005110, 30010009,
 }
 
 # 🚀 性能优化：最小必要列集（自动应用）
@@ -356,6 +384,9 @@ class ICUDataSource:
 
             # 提取 patient_ids 过滤器用于分区预过滤
             patient_ids_filter = None
+            # 🚀 HiRID 大表优化：提取 sub_var/ids 过滤器用于 DuckDB 精确过滤
+            # 这确保加载 hr 时只查询 variableid=200，而不是全局白名单的 198 个 ID
+            concept_itemid_filter = None  # (column_name, set_of_ids)
             
             # 🚀 优化：对于缺少 stay_id 的表（如 labevents），如果过滤条件是 stay_id，
             # 需要先查 icustays 转换成 hadm_id 或 subject_id，以便在读取 parquet 时就能过滤
@@ -369,6 +400,21 @@ class ICUDataSource:
                                  'admissionid', 'patientid',  # AUMC
                                  'patientunitstayid',  # eICU
                                  'patientid']  # HiRID
+                    
+                    # 🚀 检测 sub_var/ids 过滤器（用于 HiRID observations 等大表）
+                    # 这些过滤器应该在 DuckDB 层应用，而不是内存中应用
+                    sub_var_columns = ['variableid', 'itemid', 'nursingchartcelltypevalname']
+                    if spec.op == FilterOp.IN and spec.column in sub_var_columns:
+                        # 提取概念特定的 itemid 过滤器
+                        ids = spec.value
+                        if isinstance(ids, (list, tuple)):
+                            ids = set(ids)
+                        elif not isinstance(ids, set):
+                            ids = {ids}
+                        concept_itemid_filter = (spec.column, ids)
+                        if DEBUG_MODE:
+                            logger.info(f"🎯 概念特定过滤器: {spec.column} IN {len(ids)} 个 ID")
+                        continue  # 继续处理，找 patient_id 过滤器
                     
                     if spec.op == FilterOp.IN and spec.column in id_columns:
                         patient_ids_filter = spec
@@ -409,7 +455,11 @@ class ICUDataSource:
                                 setattr(self, cache_key, True)
                         break
 
-            frame = self._load_raw_frame(table_name, columns, patient_ids_filter=patient_ids_filter)
+            frame = self._load_raw_frame(
+                table_name, columns, 
+                patient_ids_filter=patient_ids_filter,
+                concept_itemid_filter=concept_itemid_filter
+            )
 
             # 应用过滤器，但跳过已经被 patient_ids_filter 处理的过滤器
             # 关键修复：如果 patient_ids_filter 被转换过（例如 stay_id → hadm_id），
@@ -772,6 +822,7 @@ class ICUDataSource:
         table_name: str,
         columns: Optional[Iterable[str]],
         patient_ids_filter: Optional[FilterSpec] = None,
+        concept_itemid_filter: Optional[Tuple[str, set]] = None,  # 🚀 概念特定 itemid 过滤器
     ) -> pd.DataFrame:
         # 🔍 调试日志：显示请求的列（仅在DEBUG级别显示）
         if columns:
@@ -783,7 +834,8 @@ class ICUDataSource:
         # 🔧 FIX: inputevents 现在也可以缓存，因为 key 中包含了 filter 信息
         # 之前排除 inputevents 是因为担心 subject_id→stay_id 映射问题
         # 但实际上 inputevents 表有 stay_id 列，可以直接过滤
-        skip_cache_tables = ['microbiologyevents', 'admissions']  # 移除 inputevents
+        # 🔧 HiRID observations: 由于概念特定的 itemid 过滤，不同概念有不同数据，禁用缓存
+        skip_cache_tables = ['microbiologyevents', 'admissions', 'observations']  # 添加 observations
         enable_caching = self.enable_cache and table_name not in skip_cache_tables
         
         # 🔧 FIX: 如果表是经过过滤加载的，必须将filter包含在cache key中
@@ -902,7 +954,12 @@ class ICUDataSource:
         if callable(loader):
             frame = loader()
         else:
-            frame = self._read_file(Path(loader), columns, patient_ids_filter=patient_ids_filter, table_name=table_name)
+            frame = self._read_file(
+                Path(loader), columns, 
+                patient_ids_filter=patient_ids_filter, 
+                table_name=table_name,
+                concept_itemid_filter=concept_itemid_filter  # 🚀 传递概念特定过滤器
+            )
 
         if columns is not None:
             missing = set(columns) - set(frame.columns)
@@ -1033,14 +1090,26 @@ class ICUDataSource:
         """获取表的最小必要列集（性能优化）"""
         return MINIMAL_COLUMNS.get(table_name)
     
-    def _read_file(self, path: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, table_name: Optional[str] = None) -> pd.DataFrame:
+    def _read_file(
+        self, path: Path, columns: Optional[Iterable[str]], 
+        patient_ids_filter: Optional[FilterSpec] = None, 
+        table_name: Optional[str] = None,
+        concept_itemid_filter: Optional[Tuple[str, set]] = None  # 🚀 概念特定 itemid 过滤器
+    ) -> pd.DataFrame:
         # 🚀 大表 itemid 预过滤配置
         # 检测是否为需要 itemid 过滤的大表
         # 🔧 2024-12-02: 重新启用白名单过滤，白名单已包含所有 sofa2-dict.json 中定义的 itemid
         itemid_filter_config = None
         db_name = self.config.name
         
-        if db_name == 'aumc' and table_name == 'numericitems':
+        # 🚀 优先使用概念特定的 itemid 过滤器（精确过滤，性能最佳）
+        # 如果传入了 concept_itemid_filter，直接使用，跳过全局白名单
+        if concept_itemid_filter:
+            itemid_filter_config = concept_itemid_filter
+            if DEBUG_MODE:
+                col, ids = concept_itemid_filter
+                logger.info(f"🎯 使用概念特定过滤: {col} IN {len(ids)} 个 ID (精确模式)")
+        elif db_name == 'aumc' and table_name == 'numericitems':
             # AUMC numericitems: 80GB → 约5GB
             itemid_filter_config = ('itemid', AUMC_NUMERICITEMS_ITEMIDS)
         elif db_name in ('miiv', 'mimic_demo') and table_name == 'chartevents':
@@ -1052,6 +1121,10 @@ class ICUDataSource:
         elif db_name == 'eicu' and table_name == 'nursecharting':
             # eICU nursecharting: 4.3GB - 使用字符串列
             itemid_filter_config = ('nursingchartcelltypevalname', EICU_NURSECHARTING_IDS)
+        elif db_name == 'hirid' and table_name == 'observations':
+            # 🚀 HiRID observations: 7.77亿行 (~72GB) → 大幅减少
+            # 使用 variableid 过滤只加载概念字典中定义的变量
+            itemid_filter_config = ('variableid', HIRID_OBSERVATIONS_VARIABLEIDS)
         
         # Handle directory (partitioned data)
         if path.is_dir():

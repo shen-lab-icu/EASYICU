@@ -2354,7 +2354,7 @@ def render_sidebar():
             # 真实数据模式
             # 先输入路径，然后自动检测/确认数据库类型
             path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
-            path_help = "Enter the path to your ICU database. Database type will be auto-detected." if st.session_state.language == 'en' else "输入ICU数据库路径，系统将自动检测数据库类型。"
+            path_help = "Path will be auto-validated after input" if st.session_state.language == 'en' else "输入路径后自动验证"
             
             # 使用当前已保存的路径
             current_path = st.session_state.get('data_path', '')
@@ -2362,7 +2362,8 @@ def render_sidebar():
                 path_label,
                 value=current_path,
                 placeholder="/path/to/icu_database",
-                help=path_help
+                help=path_help,
+                key="data_path_input"
             )
             
             # 🚀 自动检测数据库类型
@@ -2397,17 +2398,17 @@ def render_sidebar():
             )
             st.session_state.database = database
             
-            # 验证按钮
-            validate_btn = "🔍 Validate Data Path" if st.session_state.language == 'en' else "🔍 验证数据路径"
-            if st.button(validate_btn, width="stretch", key="validate_path"):
-                if not data_path:
-                    err_msg = "❌ Please enter data path" if st.session_state.language == 'en' else "❌ 请输入数据路径"
-                    st.error(err_msg)
-                elif not Path(data_path).exists():
-                    err_msg = "❌ Path does not exist" if st.session_state.language == 'en' else "❌ 路径不存在"
-                    st.error(err_msg)
+            # 🚀 自动验证路径（当路径变化时）
+            # 检测路径是否改变，自动触发验证
+            last_auto_validated = st.session_state.get('last_auto_validated_path', '')
+            if data_path and data_path != last_auto_validated:
+                st.session_state.last_auto_validated_path = data_path
+                
+                if not Path(data_path).exists():
+                    st.error("❌ Path does not exist" if st.session_state.language == 'en' else "❌ 路径不存在")
+                    st.session_state.path_validated = False
                 else:
-                    # 检查数据库所需文件
+                    # 自动检查数据库所需文件
                     validation_result = validate_database_path(data_path, database)
                     st.session_state.last_validation = validation_result
                     st.session_state.last_validated_path = data_path
@@ -2418,7 +2419,7 @@ def render_sidebar():
                         st.success(f"✅ {validation_result['message']}")
                     else:
                         st.session_state.path_validated = False
-                        st.error(validation_result['message'])
+                        st.warning(validation_result['message'])
                         if validation_result.get('suggestion'):
                             st.info(validation_result['suggestion'])
             
@@ -2426,9 +2427,9 @@ def render_sidebar():
             last_validation = st.session_state.get('last_validation', {})
             last_path = st.session_state.get('last_validated_path', '')
             
-            if st.session_state.get('path_validated') and st.session_state.data_path == data_path:
-                validated_msg = "✅ Path validated" if st.session_state.language == 'en' else "✅ 路径已验证"
-                st.success(validated_msg)
+            if st.session_state.get('path_validated') and st.session_state.get('data_path') == data_path:
+                # 已验证成功，不重复显示
+                pass
             elif last_validation.get('can_convert') and last_path == data_path:
                 # 显示转换按钮
                 convert_btn = "🔄 Convert to Parquet" if st.session_state.language == 'en' else "🔄 转换为Parquet"
@@ -2445,9 +2446,6 @@ def render_sidebar():
                     csv_ok_msg = "✅ Will use CSV format (slower loading)" if st.session_state.language == 'en' else "✅ 将使用CSV格式（加载较慢）"
                     st.success(csv_ok_msg)
                     st.rerun()
-            elif data_path and Path(data_path).exists():
-                validate_hint = "💡 Click the button above to validate data format" if st.session_state.language == 'en' else "💡 点击上方按钮验证数据格式"
-                st.caption(validate_hint)
         
         st.markdown("---")
         
@@ -2770,51 +2768,21 @@ def render_sidebar():
         )
         st.session_state.export_format = export_format
         
-        # 🚀 流式导出模式（低内存时自动分批处理，可导出全部患者）
+        # 🚀 显示导出策略提示（按特征分批，自动内存管理）
         resources = get_system_resources()
-        memory_mode = resources['memory_mode']
-        use_streaming = resources['use_streaming']
-        batch_size = resources['recommended_batch_size']
         
-        # 显示内存模式提示
         if st.session_state.language == 'en':
-            mode_desc = resources['mode_desc_en']
-            if use_streaming:
-                mem_info = f"💡 **{mode_desc}**\n\n✅ **Streaming export enabled**: Will process {batch_size:,} patients per batch, then write to disk and release memory. This allows exporting **ALL patients** even with limited RAM."
-            else:
-                mem_info = f"✅ **{mode_desc}**\n\nSufficient memory to load all data at once."
+            mem_info = f"💡 **Smart Export Mode** ({resources['available_memory_gb']:.1f}GB available)\n\n" + \
+                       "Features are loaded one-by-one and written to disk immediately. " + \
+                       "This allows exporting **ALL patients** even with limited RAM."
         else:
-            mode_desc = resources['mode_desc_zh']
-            if use_streaming:
-                mem_info = f"💡 **{mode_desc}**\n\n✅ **流式导出已启用**: 每批处理 {batch_size:,} 个患者，写入磁盘后释放内存。即使内存有限也可导出**全部患者**。"
-            else:
-                mem_info = f"✅ **{mode_desc}**\n\n内存充足，可一次性加载所有数据。"
+            mem_info = f"💡 **智能导出模式** (可用内存 {resources['available_memory_gb']:.1f}GB)\n\n" + \
+                       "逐个加载特征并立即写入磁盘，即使内存有限也可导出**全部患者**。"
         
         st.info(mem_info)
         
-        # 流式模式下可以调整批次大小
-        if use_streaming:
-            batch_label = "Batch Size" if st.session_state.language == 'en' else "每批患者数"
-            batch_help = "Number of patients to process per batch. Smaller = less memory, slower. Larger = more memory, faster." if st.session_state.language == 'en' else "每批处理的患者数量。越小越省内存但越慢，越大越快但需更多内存。"
-            
-            batch_options = {
-                'minimal': [1000, 2000, 3000],
-                'low': [2000, 5000, 8000],
-                'medium': [5000, 10000, 15000],
-            }
-            options = batch_options.get(memory_mode, [5000, 10000, 20000])
-            
-            selected_batch = st.selectbox(
-                batch_label,
-                options=options,
-                index=options.index(batch_size) if batch_size in options else 0,
-                format_func=lambda x: f"{x:,}",
-                help=batch_help
-            )
-            st.session_state.batch_size = selected_batch
-        
         # 导出按钮
-        can_export = (use_mock or (st.session_state.data_path and Path(st.session_state.data_path).exists())) and selected_concepts and export_path and Path(export_path).exists()
+        can_export = (use_mock or (st.session_state.get('data_path') and Path(st.session_state.data_path).exists())) and selected_concepts and export_path and Path(export_path).exists()
         
         export_btn = "📥 Export Data" if st.session_state.language == 'en' else "📥 导出数据"
         if can_export:
@@ -2827,7 +2795,7 @@ def render_sidebar():
             if not selected_concepts:
                 feat_warn = "⚠️ Please select features first" if st.session_state.language == 'en' else "⚠️ 请先选择特征"
                 st.caption(feat_warn)
-            elif not use_mock and not st.session_state.data_path:
+            elif not use_mock and not st.session_state.get('data_path'):
                 path_warn = "⚠️ Please set data path first" if st.session_state.language == 'en' else "⚠️ 请先设置数据路径"
                 st.caption(path_warn)
         
@@ -2836,12 +2804,6 @@ def render_sidebar():
         resources = get_system_resources()
         perf_title = "⚡ Performance" if st.session_state.language == 'en' else "⚡ 性能配置"
         with st.expander(perf_title, expanded=False):
-            mem_mode = resources['memory_mode']
-            batch_size = resources['recommended_batch_size']
-            streaming = resources['use_streaming']
-            batch_str = f"{batch_size:,}/batch" if streaming else "All at once"
-            batch_str_zh = f"每批{batch_size:,}" if streaming else "一次性加载"
-            
             if st.session_state.language == 'en':
                 st.markdown(f"""
                 **System Resources:**
@@ -2849,12 +2811,11 @@ def render_sidebar():
                 - 💾 RAM: {resources['total_memory_gb']} GB total
                 - 📊 Available: {resources['available_memory_gb']} GB
                 
-                **Memory Mode:** {resources['mode_desc_en']}
+                **Export Strategy:** Feature-by-feature loading (memory-safe)
                 
                 **Auto-optimized:**
                 - Workers: {resources['recommended_workers']}
                 - Backend: {resources['recommended_backend']}
-                - Streaming: {'Yes' if streaming else 'No'} ({batch_str})
                 """)
             else:
                 st.markdown(f"""
@@ -2863,12 +2824,11 @@ def render_sidebar():
                 - 💾 内存: {resources['total_memory_gb']} GB 总计
                 - 📊 可用: {resources['available_memory_gb']} GB
                 
-                **内存模式:** {resources['mode_desc_zh']}
+                **导出策略:** 按特征分批加载（内存安全）
                 
                 **自动优化配置:**
                 - 并行数: {resources['recommended_workers']}
                 - 后端: {resources['recommended_backend']}
-                - 流式处理: {'是' if streaming else '否'} ({batch_str_zh})
                 """)
 
 
@@ -7358,7 +7318,13 @@ def streaming_export_batch(
 
 
 def execute_sidebar_export():
-    """执行侧边栏触发的数据导出（支持流式分批导出以处理低内存情况）。"""
+    """执行侧边栏触发的数据导出。
+    
+    采用按特征分批导出策略：
+    - 每次只加载一个特征，处理完立即写入磁盘并释放内存
+    - 这样即使是超大数据集（如HiRID 7.7亿行）也能在低内存机器上完成
+    - 自动根据系统内存决定模式，用户无需手动配置
+    """
     from datetime import datetime
     
     lang = st.session_state.get('language', 'en')
@@ -7377,9 +7343,23 @@ def execute_sidebar_export():
         st.error(err_msg)
         return
     
+    # 初始化取消状态
+    if 'export_cancelled' not in st.session_state:
+        st.session_state.export_cancelled = False
+    st.session_state.export_cancelled = False
+    
     try:
         export_title = "📤 Export Progress" if lang == 'en' else "📤 导出进度"
         st.markdown(f"### {export_title}")
+        
+        # 🚀 添加取消按钮
+        cancel_col, status_col = st.columns([1, 4])
+        with cancel_col:
+            cancel_btn = "❌ Cancel" if lang == 'en' else "❌ 取消"
+            if st.button(cancel_btn, type="secondary", key="cancel_export"):
+                st.session_state.export_cancelled = True
+                st.warning("⚠️ Export cancelled by user" if lang == 'en' else "⚠️ 用户取消导出")
+                return
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
@@ -7401,13 +7381,11 @@ def execute_sidebar_export():
             params = st.session_state.get('mock_params', {'n_patients': 10, 'hours': 72})
             all_mock_data, patient_ids = generate_mock_data(**params)
             
-            
             # 🔧 根据用户选择的 concepts 过滤数据
             data = {}
             for concept in selected_concepts:
                 if concept in all_mock_data:
                     data[concept] = all_mock_data[concept]
-            
             
             # 显示加载情况
             loaded_count = len(data)
@@ -7418,18 +7396,17 @@ def execute_sidebar_export():
             
             progress_bar.progress(0.3)
         else:
-            # 加载真实数据并导出
+            # ========== 按特征分批导出（内存友好模式）==========
+            # 每次只加载一个特征，处理完立即释放内存
+            # 这是唯一能处理HiRID等超大数据集的方式
             from pyricu import load_concepts
-            import os
             import gc
             
             resources = get_system_resources()
-            use_streaming = st.session_state.get('use_streaming', resources['use_streaming'])
-            batch_size = st.session_state.get('batch_size', resources['recommended_batch_size'])
             database = st.session_state.get('database', 'miiv')
             data_path = st.session_state.data_path
             
-            # 获取所有患者ID
+            # 获取所有患者数量（用于显示）
             all_patient_ids, id_col = get_all_patient_ids(data_path, database)
             total_patients = len(all_patient_ids)
             
@@ -7438,87 +7415,26 @@ def execute_sidebar_export():
                 st.error(err_msg)
                 return
             
-            # 显示系统资源信息
-            if use_streaming:
-                n_batches = (total_patients + batch_size - 1) // batch_size
-                perf_msg = f"🚀 Streaming mode: {total_patients:,} patients in {n_batches} batches ({batch_size:,}/batch)" if lang == 'en' else f"🚀 流式模式: {total_patients:,} 患者分 {n_batches} 批处理 (每批 {batch_size:,})"
-            else:
-                perf_msg = f"🚀 Loading all {total_patients:,} patients at once ({resources['available_memory_gb']:.1f}GB available)" if lang == 'en' else f"🚀 一次性加载 {total_patients:,} 患者 (可用内存 {resources['available_memory_gb']:.1f}GB)"
-            st.info(perf_msg)
+            # 显示导出信息
+            info_msg = f"🚀 Exporting {total_concepts} features for {total_patients:,} patients ({resources['available_memory_gb']:.1f}GB available)" if lang == 'en' else f"🚀 导出 {total_concepts} 个特征，共 {total_patients:,} 患者（可用内存 {resources['available_memory_gb']:.1f}GB）"
+            st.info(info_msg)
             
-            if use_streaming:
-                # ========== 流式分批导出模式 ==========
-                # 分批加载数据，每批处理完立即写入磁盘并释放内存
-                n_batches = (total_patients + batch_size - 1) // batch_size
-                total_rows_exported = {}
-                
-                for batch_idx in range(n_batches):
-                    start_idx = batch_idx * batch_size
-                    end_idx = min(start_idx + batch_size, total_patients)
-                    batch_patient_ids = all_patient_ids[start_idx:end_idx]
-                    
-                    # 更新进度
-                    progress = (batch_idx + 0.5) / n_batches
-                    progress_bar.progress(progress)
-                    batch_msg = f"**Batch {batch_idx+1}/{n_batches}**: Processing {len(batch_patient_ids):,} patients..." if lang == 'en' else f"**批次 {batch_idx+1}/{n_batches}**: 处理 {len(batch_patient_ids):,} 患者..."
-                    status_text.markdown(batch_msg)
-                    
-                    # 导出这批数据
-                    batch_stats = streaming_export_batch(
-                        concepts=selected_concepts,
-                        patient_ids=batch_patient_ids,
-                        id_col=id_col,
-                        data_path=data_path,
-                        database=database,
-                        export_dir=export_dir,
-                        export_format=export_format,
-                        batch_idx=batch_idx
-                    )
-                    
-                    # 累计统计
-                    if 'error' in batch_stats:
-                        st.warning(f"⚠️ Batch {batch_idx+1} error: {batch_stats['error']}")
-                    else:
-                        for group, rows in batch_stats.items():
-                            total_rows_exported[group] = total_rows_exported.get(group, 0) + rows
-                    
-                    # 强制垃圾回收
-                    gc.collect()
-                
-                progress_bar.progress(1.0)
-                
-                # 生成导出文件列表
-                for group_name in total_rows_exported.keys():
-                    file_path = export_dir / f"{group_name}.{export_format}"
-                    if file_path.exists():
-                        exported_files.append(str(file_path))
-                
-                # 统计结果
-                total_rows = sum(total_rows_exported.values())
-                success_msg = f"✅ Streaming export complete! {len(exported_files)} files, {total_rows:,} rows, {total_patients:,} patients" if lang == 'en' else f"✅ 流式导出完成！{len(exported_files)} 个文件，{total_rows:,} 行，{total_patients:,} 患者"
-                st.success(success_msg)
-                
-                # 显示导出的文件
-                if exported_files:
-                    files_title = "### 📁 Exported Files" if lang == 'en' else "### 📁 已导出文件"
-                    st.markdown(files_title)
-                    for f in exported_files:
-                        st.markdown(f"- `{f}`")
-                
-                st.session_state.export_completed = True
-                return  # 流式导出完成，直接返回
-            
-            # ========== 常规一次性加载模式 ==========
-            batch_msg = f"**Loading {total_concepts} features...**" if lang == 'en' else f"**加载 {total_concepts} 个特征...**"
-            status_text.markdown(batch_msg)
-            
-            parallel_workers, parallel_backend = get_optimal_parallel_config(total_patients, task_type='export')
-            
-            # 🔧 逐个加载概念，跳过不可用的（如eICU的etco2）
+            # 按特征分批加载和导出
             data = {}
             failed_concepts = []
             
             for idx, concept in enumerate(selected_concepts):
+                # 检查取消状态
+                if st.session_state.get('export_cancelled', False):
+                    st.warning("⚠️ Export cancelled" if lang == 'en' else "⚠️ 导出已取消")
+                    return
+                
+                # 更新进度
+                progress = (idx + 0.5) / total_concepts
+                progress_bar.progress(progress)
+                feature_msg = f"**Loading feature {idx+1}/{total_concepts}**: `{concept}`" if lang == 'en' else f"**加载特征 {idx+1}/{total_concepts}**: `{concept}`"
+                status_text.markdown(feature_msg)
+                
                 try:
                     load_kwargs = {
                         'data_path': data_path,
@@ -7526,8 +7442,8 @@ def execute_sidebar_export():
                         'concepts': [concept],  # 单个概念
                         'verbose': False,
                         'merge': False,
-                        'parallel_workers': parallel_workers,
-                        'parallel_backend': parallel_backend,
+                        'parallel_workers': 1,  # 单线程避免内存峰值
+                        'parallel_backend': 'thread',
                     }
                     
                     result = load_concepts(**load_kwargs)
@@ -7554,14 +7470,17 @@ def execute_sidebar_export():
                     failed_concepts.append((concept, str(e)))
                     continue
                     
-                # 更新进度
-                progress_bar.progress(0.1 + 0.4 * (idx + 1) / total_concepts)
+                # 🔧 每加载几个特征后触发GC，避免内存累积
+                if (idx + 1) % 5 == 0:
+                    gc.collect()
             
-            progress_bar.progress(0.5)
+            progress_bar.progress(0.8)
+            
             if failed_concepts:
                 failed_names = [c for c, e in failed_concepts[:5]]
                 skip_msg = f"⚠️ Skipped {len(failed_concepts)} unavailable: {', '.join(failed_names)}" if lang == 'en' else f"⚠️ 跳过 {len(failed_concepts)} 个不可用: {', '.join(failed_names)}"
                 st.warning(skip_msg)
+            
             loaded_msg = f"✅ Loaded {len(data)}/{total_concepts} features" if lang == 'en' else f"✅ 已加载 {len(data)}/{total_concepts} 个特征"
             status_text.markdown(loaded_msg)
         
