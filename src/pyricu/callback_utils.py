@@ -2044,7 +2044,7 @@ def fwd_concept(concept_name: str) -> Callable:
         >>> gcs_callback = fwd_concept('gcs')
     """
     def callback(data: pd.DataFrame, src: str = None, **kwargs) -> pd.DataFrame:
-        from .load_concepts import load_concept
+        from .api import load_concept
         
         if src is None:
             raise ValueError("Source must be specified for fwd_concept")
@@ -2473,7 +2473,7 @@ def add_concept(
         >>> # Add weight to vasopressor data
         >>> data = add_concept(vaso_data, env, 'weight')
     """
-    from .load_concepts import load_concept
+    from .api import load_concept
     
     if var_name is None:
         var_name = concept
@@ -4468,8 +4468,14 @@ def hirid_duration(
     Returns:
         DataFrame with duration per patient (and per group if grp_var specified)
     """
+    # 🔧 FIX: Return empty DataFrame with all expected columns when input is empty
+    # This prevents "Missing expected columns" errors downstream
     if frame.empty:
-        return pd.DataFrame(columns=[concept_name])
+        # Build expected columns list
+        empty_cols = ['patientid', 'givenat', concept_name]
+        if grp_var:
+            empty_cols.append(grp_var)
+        return pd.DataFrame(columns=empty_cols)
     
     df = frame.copy()
     
@@ -4481,8 +4487,11 @@ def hirid_duration(
             break
     
     if id_col is None:
-        # No ID column, return empty
-        return pd.DataFrame(columns=[concept_name])
+        # No ID column, return empty with expected structure
+        empty_cols = ['patientid', 'givenat', concept_name]
+        if grp_var:
+            empty_cols.append(grp_var)
+        return pd.DataFrame(columns=empty_cols)
     
     # Detect time column
     actual_index_col = index_col
@@ -4493,8 +4502,11 @@ def hirid_duration(
                 break
     
     if not actual_index_col or actual_index_col not in df.columns:
-        # No time column, return empty
-        return pd.DataFrame(columns=[concept_name])
+        # No time column, return empty with expected structure
+        empty_cols = [id_col, 'givenat', concept_name]
+        if grp_var:
+            empty_cols.append(grp_var)
+        return pd.DataFrame(columns=empty_cols)
     
     # Convert time to numeric if needed
     time_series = df[actual_index_col]

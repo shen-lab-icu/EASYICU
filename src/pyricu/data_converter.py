@@ -523,11 +523,23 @@ class DataConverter:
     def _has_valid_shards(self, csv_path: Path) -> Tuple[bool, int]:
         """
         Check if valid sharded parquet files exist for a CSV.
-        Checks both root directory and subdirectory locations.
+        Checks both root directory, subdirectory locations, and bucket directories.
         
         Returns:
             (has_shards, shard_count)
         """
+        table_name = self._get_ricu_table_name(csv_path)
+        
+        # Check for bucket directories first (e.g., nursecharting_bucket/bucket_id=*)
+        bucket_dir = self.data_path / f"{table_name}_bucket"
+        if bucket_dir.is_dir():
+            bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
+            if bucket_subdirs:
+                # Count non-empty buckets
+                non_empty = sum(1 for d in bucket_subdirs if list(d.glob("*.parquet")))
+                if non_empty > 0:
+                    return True, non_empty
+        
         # Check both possible shard directory locations
         for shard_dir in [self._get_shard_dir(csv_path), self._get_shard_dir_with_subdir(csv_path)]:
             if not shard_dir.is_dir():

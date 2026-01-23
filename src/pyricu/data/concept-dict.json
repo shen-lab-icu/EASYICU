@@ -2154,14 +2154,10 @@
       ],
       "hirid": [
         {
-          "ids": [
-            110,
-            200
-          ],
-          "table": "observations",
-          "sub_var": "variableid",
+          "table": "general",
+          "val_var": "discharge_status",
           "callback": "hirid_death",
-          "class_name": "hrd_itm"
+          "class_name": "col_itm"
         }
       ],
       "miiv": [

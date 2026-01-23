@@ -1620,23 +1620,32 @@ def _callback_sofa_component(
         # our forward-fill logic would keep vasopressors active forever.  Fetch the
         # optional dependency lazily via the resolver so we can preserve the
         # original merge behavior when the indicator is available.
+        # 🚀 优化：使用 get_raw_concept 缓存 vaso_ind
         tables = dict(tables)
         if ctx.concept_name in {"sofa_cardio", "sofa2_cardio"} and "vaso_ind" not in tables:
             try:
-                loaded = ctx.resolver.load_concepts(
-                    ["vaso_ind"],
-                    ctx.data_source,
-                    merge=False,
-                    aggregate={"vaso_ind": "max"},
-                    patient_ids=ctx.patient_ids,
-                    interval=None,
-                    align_to_admission=True,
-                    ricu_compatible=False,  # Return ICUTable, not DataFrame
-                )
-                if isinstance(loaded, dict):
-                    vaso_tbl = loaded.get("vaso_ind")
-                else:
-                    vaso_tbl = loaded
+                # 优先尝试从缓存获取
+                vaso_tbl = None
+                if hasattr(ctx.resolver, 'get_raw_concept'):
+                    vaso_tbl = ctx.resolver.get_raw_concept("vaso_ind", ctx.data_source, ctx.patient_ids)
+                
+                # 如果缓存未命中，则加载
+                if vaso_tbl is None:
+                    loaded = ctx.resolver.load_concepts(
+                        ["vaso_ind"],
+                        ctx.data_source,
+                        merge=False,
+                        aggregate={"vaso_ind": "max"},
+                        patient_ids=ctx.patient_ids,
+                        interval=None,
+                        align_to_admission=True,
+                        ricu_compatible=False,  # Return ICUTable, not DataFrame
+                    )
+                    if isinstance(loaded, dict):
+                        vaso_tbl = loaded.get("vaso_ind")
+                    else:
+                        vaso_tbl = loaded
+                
                 # Handle both ICUTable and DataFrame returns
                 if isinstance(vaso_tbl, ICUTable) and not vaso_tbl.data.empty:
                     tables["vaso_ind"] = vaso_tbl
@@ -2740,6 +2749,180 @@ def _callback_sirs(
     cols = id_columns + ([index_column] if index_column else []) + ["sirs"]
     return _as_icutbl(data[cols].reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column="sirs")
 
+
+def _match_fio2_fallback_loop(
+    left_df: pd.DataFrame,
+    right_df: pd.DataFrame,
+    id_columns: list,
+    index_column: str,
+    left_col: str,
+    right_col: str,
+    match_win: pd.Timedelta,
+    direction: str = 'forward'
+) -> pd.DataFrame:
+    """
+    Fallback loop for merge_asof when the by parameter fails.
+    
+    🚀 OPTIMIZATION 2025-01-31: Instead of looping through each patient,
+    we add a large offset to each patient's time values to make the global
+    time column monotonically increasing. This allows using merge_asof's
+    optimized C implementation for the entire dataset at once.
+    """
+    if left_df.empty or right_df.empty:
+        return pd.DataFrame(columns=id_columns + [index_column, left_col, right_col])
+    
+    # 按 key + time 排序
+    left_sorted = left_df.sort_values(by=id_columns + [index_column]).reset_index(drop=True)
+    right_sorted = right_df.sort_values(by=id_columns + [index_column]).reset_index(drop=True)
+    
+    # 创建 key 到整数索引的映射（用于计算偏移量）
+    all_keys = pd.concat([left_sorted[id_columns[0]], right_sorted[id_columns[0]]]).unique()
+    key_to_idx = {k: i for i, k in enumerate(sorted(all_keys))}
+    
+    # 计算足够大的偏移量：比最大时间范围大很多
+    time_range_left = left_sorted[index_column].max() - left_sorted[index_column].min()
+    time_range_right = right_sorted[index_column].max() - right_sorted[index_column].min()
+    
+    # 处理 Timedelta 和数值类型
+    def to_numeric(val):
+        if isinstance(val, pd.Timedelta):
+            return val.total_seconds() / 3600.0  # 转换为小时
+        return val
+    
+    time_range = max(to_numeric(time_range_left), to_numeric(time_range_right))
+    if pd.isna(time_range) or time_range <= 0:
+        time_range = 1000000.0
+    large_offset = time_range * 10  # 10倍时间范围作为偏移
+    
+    # 添加全局单调时间列
+    left_sorted = left_sorted.copy()
+    right_sorted = right_sorted.copy()
+    
+    # 检测时间列类型并转换为数值（小时）
+    is_timedelta = pd.api.types.is_timedelta64_dtype(left_sorted[index_column])
+    is_datetime = pd.api.types.is_datetime64_any_dtype(left_sorted[index_column])
+    
+    if is_timedelta:
+        left_sorted['_time_numeric'] = left_sorted[index_column].dt.total_seconds() / 3600.0
+        right_sorted['_time_numeric'] = right_sorted[index_column].dt.total_seconds() / 3600.0
+        time_col_for_merge = '_time_numeric'
+    elif is_datetime:
+        # 转换为从最小时间开始的小时数
+        min_time = min(left_sorted[index_column].min(), right_sorted[index_column].min())
+        left_sorted['_time_numeric'] = (left_sorted[index_column] - min_time).dt.total_seconds() / 3600.0
+        right_sorted['_time_numeric'] = (right_sorted[index_column] - min_time).dt.total_seconds() / 3600.0
+        time_col_for_merge = '_time_numeric'
+    else:
+        # 已经是数值类型
+        time_col_for_merge = index_column
+    
+    left_sorted['_time_global'] = (
+        left_sorted[time_col_for_merge] + 
+        left_sorted[id_columns[0]].map(key_to_idx) * large_offset
+    )
+    right_sorted['_time_global'] = (
+        right_sorted[time_col_for_merge] + 
+        right_sorted[id_columns[0]].map(key_to_idx) * large_offset
+    )
+    
+    # tolerance 已经是小时单位（因为 _time_global 是小时）
+    effective_tolerance = match_win
+    if isinstance(match_win, pd.Timedelta):
+        effective_tolerance = match_win.total_seconds() / 3600.0
+    
+    try:
+        # 批量 merge_asof - 使用 _time_global 作为 on 列，by 列保持原样
+        merged = pd.merge_asof(
+            left_sorted[[*id_columns, '_time_global', left_col]],
+            right_sorted[[*id_columns, '_time_global', right_col]],
+            on='_time_global',
+            by=id_columns,
+            tolerance=effective_tolerance,
+            direction='backward'
+        )
+        
+        # 恢复原始时间列
+        time_numeric_restored = merged['_time_global'] - merged[id_columns[0]].map(key_to_idx) * large_offset
+        
+        if is_timedelta:
+            # 从数值（小时）转换回 Timedelta
+            merged[index_column] = pd.to_timedelta(time_numeric_restored, unit='h')
+        elif is_datetime:
+            # 从数值（小时）转换回 datetime
+            merged[index_column] = min_time + pd.to_timedelta(time_numeric_restored, unit='h')
+        else:
+            # 数值类型直接使用
+            merged[index_column] = time_numeric_restored
+        
+        # 删除临时列
+        merged = merged.drop(columns=['_time_global'])
+        
+        return merged[id_columns + [index_column, left_col, right_col]]
+        
+    except Exception as e:
+        # 如果批量方法失败，回退到原始的逐个循环方法
+        logger.debug(f"Batch merge_asof failed: {e}, falling back to per-patient loop")
+        return _match_fio2_fallback_loop_original(
+            left_df, right_df, id_columns, index_column,
+            left_col, right_col, match_win, direction
+        )
+
+
+def _match_fio2_fallback_loop_original(
+    left_df: pd.DataFrame,
+    right_df: pd.DataFrame,
+    id_columns: list,
+    index_column: str,
+    left_col: str,
+    right_col: str,
+    match_win: pd.Timedelta,
+    direction: str = 'forward'
+) -> pd.DataFrame:
+    """
+    Original fallback loop - processes each patient individually.
+    Used when the optimized batch method fails.
+    """
+    result_list = []
+    
+    # 转换 tolerance 为数值类型（如果时间列是数值）
+    effective_tolerance = match_win
+    if pd.api.types.is_numeric_dtype(left_df[index_column]):
+        if isinstance(match_win, pd.Timedelta):
+            effective_tolerance = match_win.total_seconds() / 3600.0
+    
+    unique_ids = left_df[id_columns[0]].unique()
+    for id_val in unique_ids:
+        left_mask = left_df[id_columns[0]] == id_val
+        right_mask = right_df[id_columns[0]] == id_val
+        
+        left_group = left_df[left_mask].sort_values(by=index_column).reset_index(drop=True)
+        right_group = right_df[right_mask]
+        
+        if len(right_group) == 0:
+            continue
+            
+        right_group = right_group.sort_values(by=index_column).reset_index(drop=True)
+        
+        try:
+            merged = pd.merge_asof(
+                left_group[[index_column, left_col]],
+                right_group[[index_column, right_col]],
+                on=index_column,
+                tolerance=effective_tolerance,
+                direction='backward'
+            )
+            for col in id_columns:
+                merged[col] = id_val
+            result_list.append(merged)
+        except Exception:
+            continue
+    
+    if result_list:
+        return pd.concat(result_list, ignore_index=True)
+    else:
+        return pd.DataFrame(columns=id_columns + [index_column, left_col, right_col])
+
+
 def _match_fio2(
     tables: Dict[str, ICUTable],
     o2_col: str,  # po2 or o2sat
@@ -2775,6 +2958,28 @@ def _match_fio2(
     o2_tbl = tables[o2_col]
     fio2_tbl = tables[fio2_col]
     
+    # 🔧 FIX 2025-01-31: 提前检查空数据并返回空结果
+    # 当两个输入表都为空时，没必要继续处理，直接返回空结果
+    o2_empty = (not hasattr(o2_tbl, 'data') or o2_tbl.data is None or len(o2_tbl.data) == 0)
+    fio2_empty = (not hasattr(fio2_tbl, 'data') or fio2_tbl.data is None or len(fio2_tbl.data) == 0)
+    
+    if o2_empty and fio2_empty:
+        # 两个输入都为空，返回空 DataFrame
+        # 从 ctx.data_source.config 获取默认的 ID 列和时间列
+        default_id_col = 'stay_id'  # 通用默认值
+        default_idx_col = 'charttime'
+        if ctx is not None and hasattr(ctx, 'data_source') and ctx.data_source is not None:
+            cfg = ctx.data_source.config
+            # 优先使用 icustay 的 ID（如 AUMC 的 admissionid）
+            if hasattr(cfg, 'id_configs') and 'icustay' in cfg.id_configs:
+                default_id_col = cfg.id_configs['icustay'].id
+            elif hasattr(cfg, 'stay_id'):
+                default_id_col = cfg.stay_id
+            if hasattr(cfg, 'index_column'):
+                default_idx_col = cfg.index_column
+        empty_df = pd.DataFrame(columns=[default_id_col, default_idx_col, o2_col, fio2_col])
+        return empty_df, [default_id_col], default_idx_col
+    
     # Try automatic ID conversion if IDs don't match and ctx is available
     if ctx is not None:
         id_columns, index_column, converted_tables = _assert_shared_schema(
@@ -2798,8 +3003,57 @@ def _match_fio2(
     if mode == "match_vals":
         # Rolling join: merge o2 and fio2 within time window
         # This matches R's rolling join behavior
-        o2_df = o2_tbl.data
-        fio2_df = fio2_tbl.data
+        o2_df = o2_tbl.data.copy()
+        fio2_df = fio2_tbl.data.copy()
+        
+        # CRITICAL FIX: Standardize time column names before processing
+        # o2_tbl and fio2_tbl may have different index_column names (e.g., 'charttime' vs 'measuredat_minutes')
+        # We need to rename them to a common name for merge_asof to work
+        o2_idx_col = o2_tbl.index_column
+        fio2_idx_col = fio2_tbl.index_column
+        
+        # 🔧 FIX 2025-01-30: 智能检测并统一时间列
+        # 问题场景：
+        #   - _assert_shared_schema 返回 index_column='measuredat'（来自 ICUTable.index_column 属性）
+        #   - 但实际数据列是 'measuredat_minutes'（来自 DuckDB 聚合）
+        # 解决方案：检测数据中实际存在的时间列，并统一重命名为 charttime
+        
+        time_col_priority = ['charttime', 'measuredat_minutes', 'datetime', 'givenat', 'measuredat']
+        
+        def detect_actual_time_col(df, declared_idx_col):
+            """检测数据中实际的时间列"""
+            # 优先使用声明的 index_column（如果在数据中存在且有有效值）
+            if declared_idx_col and declared_idx_col in df.columns:
+                if not df[declared_idx_col].isna().all():
+                    return declared_idx_col
+            # 按优先级查找有有效值的时间列
+            for col in time_col_priority:
+                if col in df.columns and not df[col].isna().all():
+                    return col
+            # 回退到声明的列（即使全是 NaN）
+            return declared_idx_col
+        
+        o2_actual_time_col = detect_actual_time_col(o2_df, o2_idx_col)
+        fio2_actual_time_col = detect_actual_time_col(fio2_df, fio2_idx_col)
+        
+        # 统一使用 'charttime' 作为标准时间列名
+        unified_time_col = 'charttime'
+        
+        # 删除冗余的时间列，只保留实际使用的那个
+        for df_ref, actual_col in [(o2_df, o2_actual_time_col), (fio2_df, fio2_actual_time_col)]:
+            cols_to_drop = [col for col in time_col_priority 
+                           if col in df_ref.columns and col != actual_col]
+            if cols_to_drop:
+                df_ref.drop(columns=cols_to_drop, inplace=True)
+            
+            # 重命名为统一的时间列名
+            if actual_col and actual_col != unified_time_col and actual_col in df_ref.columns:
+                df_ref.rename(columns={actual_col: unified_time_col}, inplace=True)
+        
+        # 更新 index_column 为统一的时间列名
+        index_column = unified_time_col
+        o2_idx_col = unified_time_col
+        fio2_idx_col = unified_time_col
         
         # Rename value columns
         o2_val_col = o2_tbl.value_column or o2_col
@@ -2812,6 +3066,8 @@ def _match_fio2(
         
         # Use pd.merge_asof for rolling join (similar to R's data.table rolling join)
         if index_column:
+            # 时间列已在上面统一为 unified_time_col，无需再次重命名
+            
             # 保存原始时间列类型（numeric或datetime）
             o2_time_is_numeric = pd.api.types.is_numeric_dtype(o2_df[index_column])
             fio2_time_is_numeric = pd.api.types.is_numeric_dtype(fio2_df[index_column])
@@ -2913,90 +3169,96 @@ def _match_fio2(
                 o2_subset = o2_subset.sort_values(by=index_column, kind='mergesort')
                 fio2_subset = fio2_subset.sort_values(by=index_column, kind='mergesort')
             
-            # 关键修复：pandas的merge_asof对排序检查非常严格，即使看起来排序了也可能失败
-            # 解决方法：按分组逐个处理，不使用by参数，避免pandas的严格检查
+            # 🚀 OPTIMIZATION 2025-01-31: 使用 merge_asof 的 by 参数进行批量处理
+            # 之前的实现对每个患者ID分别调用 merge_asof (2*N 次调用)
+            # 优化后使用 by 参数，只需要 2 次调用
             if id_columns:
-                merged_fwd_list = []
-                merged_bwd_list = []
+                # 处理 fio2 为空的患者
+                o2_patient_ids = set(o2_subset[id_columns[0]].unique())
+                fio2_patient_ids = set(fio2_subset[id_columns[0]].unique())
                 
-                # 按每个ID分组处理
-                unique_ids = o2_subset[id_columns[0]].unique()
-                for id_val in unique_ids:
-                    # 获取当前ID的数据
-                    o2_mask = o2_subset[id_columns[0]] == id_val
-                    fio2_mask = fio2_subset[id_columns[0]] == id_val
+                # 找出只有 o2 数据但没有 fio2 数据的患者
+                patients_without_fio2 = o2_patient_ids - fio2_patient_ids
+                
+                # 对于没有 fio2 的患者，直接创建 NaN 结果
+                if patients_without_fio2:
+                    o2_no_fio2 = o2_subset[o2_subset[id_columns[0]].isin(patients_without_fio2)]
+                    merged_no_fio2 = o2_no_fio2.assign(**{fio2_col: float('nan')})
+                else:
+                    merged_no_fio2 = pd.DataFrame(columns=id_columns + [index_column, o2_col, fio2_col])
+                
+                # 对于有 fio2 数据的患者，使用 merge_asof 的 by 参数进行批量处理
+                patients_with_fio2 = o2_patient_ids & fio2_patient_ids
+                
+                if patients_with_fio2:
+                    o2_with_fio2 = o2_subset[o2_subset[id_columns[0]].isin(patients_with_fio2)].copy()
+                    fio2_with_fio2 = fio2_subset[fio2_subset[id_columns[0]].isin(patients_with_fio2)].copy()
                     
-                    o2_group = o2_subset[o2_mask]
-                    fio2_group = fio2_subset[fio2_mask]
+                    # 🔧 FIX: merge_asof 的 by 参数要求每个 by 组内的 on 列必须单调递增
+                    # 先按 by+on 排序，然后重置索引以确保符合 merge_asof 的严格要求
+                    o2_with_fio2 = o2_with_fio2.sort_values(
+                        by=id_columns + [index_column], 
+                        kind='mergesort'
+                    ).reset_index(drop=True)
+                    fio2_with_fio2 = fio2_with_fio2.sort_values(
+                        by=id_columns + [index_column],
+                        kind='mergesort'
+                    ).reset_index(drop=True)
                     
-                    # 如果 o2_group 为空，跳过
-                    # 但如果 fio2_group 为空，不跳过！应该填充 fio2=21%
-                    if len(o2_group) == 0:
-                        continue
+                    # 🔧 FIX: 当时间列是数值类型（小时）时，tolerance 也需要转换为数值
+                    effective_tolerance = match_win
+                    if pd.api.types.is_numeric_dtype(o2_with_fio2[index_column]):
+                        # 时间列已经是小时单位，tolerance 也转换为小时
+                        effective_tolerance = match_win.total_seconds() / 3600.0
                     
-                    # 如果 fio2_group 为空，为当前患者创建 fio2=NaN 的数据，后续会被填充为 21%
-                    if len(fio2_group) == 0:
-                        merged_fwd_group = o2_group[[index_column, o2_col]].assign(**{fio2_col: float('nan')})
-                        # 添加ID列
-                        for col in id_columns:
-                            merged_fwd_group[col] = id_val
-                        merged_fwd_list.append(merged_fwd_group)
-                        continue
-                    
-                    # 确保每个分组内时间列严格排序（单独排序，避免跨分组问题）
-                    o2_group = o2_group.sort_values(by=index_column, kind='mergesort').reset_index(drop=True)
-                    fio2_group = fio2_group.sort_values(by=index_column, kind='mergesort').reset_index(drop=True)
-                    
-                    # 验证排序
-                    if not o2_group[index_column].is_monotonic_increasing:
-                        o2_group = o2_group.sort_values(by=index_column, kind='mergesort').reset_index(drop=True)
-                    if not fio2_group[index_column].is_monotonic_increasing:
-                        fio2_group = fio2_group.sort_values(by=index_column, kind='mergesort').reset_index(drop=True)
-                    
-                    # Forward join: 不使用by参数，因为已经按ID分组了
                     try:
-                        merged_fwd_group = pd.merge_asof(
-                            o2_group[[index_column, o2_col]],
-                            fio2_group[[index_column, fio2_col]],
+                        # Forward join: 使用 by 参数批量处理
+                        merged_fwd = pd.merge_asof(
+                            o2_with_fio2[[*id_columns, index_column, o2_col]],
+                            fio2_with_fio2[[*id_columns, index_column, fio2_col]],
                             on=index_column,
-                            tolerance=match_win,
+                            by=id_columns,
+                            tolerance=effective_tolerance,
                             direction='backward'
                         )
-                        # 添加ID列
-                        for col in id_columns:
-                            merged_fwd_group[col] = id_val
-                        merged_fwd_list.append(merged_fwd_group)
                     except Exception as e:
-                        # 如果merge_asof失败，跳过这个分组
-                        continue
+                        # 如果 by 参数失败（例如 pandas 的全局排序要求），回退到逐个处理
+                        # 这是预期行为，因为 pandas 的 merge_asof 即使使用 by 参数
+                        # 也要求 on 列全局单调递增，这在多患者数据中很难满足
+                        merged_fwd = _match_fio2_fallback_loop(
+                            o2_with_fio2, fio2_with_fio2, id_columns, index_column, 
+                            o2_col, fio2_col, match_win, 'forward'
+                        )
                     
-                    # Backward join
                     try:
-                        merged_bwd_group = pd.merge_asof(
-                            fio2_group[[index_column, fio2_col]],
-                            o2_group[[index_column, o2_col]],
+                        # Backward join: 使用 by 参数批量处理
+                        merged_bwd = pd.merge_asof(
+                            fio2_with_fio2[[*id_columns, index_column, fio2_col]],
+                            o2_with_fio2[[*id_columns, index_column, o2_col]],
                             on=index_column,
-                            tolerance=match_win,
+                            by=id_columns,
+                            tolerance=effective_tolerance,
                             direction='backward'
                         )
-                        # 添加ID列
-                        for col in id_columns:
-                            merged_bwd_group[col] = id_val
-                        merged_bwd_list.append(merged_bwd_group)
                     except Exception as e:
-                        # 如果merge_asof失败，跳过这个分组
-                        continue
-                
-                # 合并所有分组的结果
-                if merged_fwd_list:
-                    merged_fwd = pd.concat(merged_fwd_list, ignore_index=True)
+                        # 回退到逐个处理
+                        merged_bwd = _match_fio2_fallback_loop(
+                            fio2_with_fio2, o2_with_fio2, id_columns, index_column,
+                            fio2_col, o2_col, match_win, 'backward'
+                        )
+                    
+                    # 合并两个方向的结果
+                    merge_cols = id_columns + [index_column, o2_col, fio2_col]
+                    merged_fwd = merged_fwd[merge_cols] if not merged_fwd.empty else pd.DataFrame(columns=merge_cols)
+                    merged_bwd = merged_bwd[merge_cols] if not merged_bwd.empty else pd.DataFrame(columns=merge_cols)
+                    
+                    merged_with_fio2 = pd.concat([merged_fwd, merged_bwd], ignore_index=True)
+                    merged_with_fio2 = merged_with_fio2.drop_duplicates()
                 else:
-                    merged_fwd = pd.DataFrame(columns=id_columns + [index_column, o2_col, fio2_col])
+                    merged_with_fio2 = pd.DataFrame(columns=id_columns + [index_column, o2_col, fio2_col])
                 
-                if merged_bwd_list:
-                    merged_bwd = pd.concat(merged_bwd_list, ignore_index=True)
-                else:
-                    merged_bwd = pd.DataFrame(columns=id_columns + [index_column, o2_col, fio2_col])
+                # 合并有 fio2 和无 fio2 的结果
+                merged = pd.concat([merged_with_fio2, merged_no_fio2], ignore_index=True)
             else:
                 # 没有ID列，直接处理
                 merged_fwd = pd.merge_asof(
@@ -3006,25 +3268,6 @@ def _match_fio2(
                     tolerance=match_win,
                     direction='backward'
                 )
-            
-            # 🔧 FIX: 使用双向匹配，然后去重
-            # R ricu 的 match_fio2 使用双向 rolling join:
-            # 1. x[[1L]][x[[2L]], roll=match_win] - 对每个 fio2 时间点，匹配最近的 po2
-            # 2. x[[2L]][x[[1L]], roll=match_win] - 对每个 po2 时间点，匹配最近的 fio2
-            # 然后 rbind + unique 去重
-            
-            # 合并两个方向的结果
-            if id_columns:
-                # 确保列顺序一致
-                merge_cols = id_columns + [index_column, o2_col, fio2_col]
-                merged_fwd = merged_fwd[merge_cols] if not merged_fwd.empty else pd.DataFrame(columns=merge_cols)
-                merged_bwd = merged_bwd[merge_cols] if not merged_bwd.empty else pd.DataFrame(columns=merge_cols)
-                
-                merged = pd.concat([merged_fwd, merged_bwd], ignore_index=True)
-                
-                # 去重（R 的 unique() 是按所有列去重）
-                merged = merged.drop_duplicates()
-            else:
                 merged = merged_fwd
             
             # 如果两个输入原本都是数值型相对小时，则将结果时间列转换回相对小时
@@ -3782,21 +4025,28 @@ def _callback_urine24(
        - step_factor = 24 (converts to 24h equivalent)
        - length(x) = number of rows in window (not number of non-zero values)
     """
-    # Load urine if not in tables
+    # Load urine if not in tables - 🚀 优化：使用 get_raw_concept 缓存
     if "urine" not in tables:
         try:
-            loaded = ctx.resolver.load_concepts(
-                ["urine"],
-                ctx.data_source,
-                merge=False,
-                aggregate=None,
-                patient_ids=ctx.patient_ids,
-                interval=None,  # Load raw data without interval aggregation
-            )
-            if isinstance(loaded, dict):
-                tables.update(loaded)
-            elif isinstance(loaded, ICUTable):
-                tables["urine"] = loaded
+            urine_tbl = None
+            if hasattr(ctx.resolver, 'get_raw_concept'):
+                urine_tbl = ctx.resolver.get_raw_concept("urine", ctx.data_source, ctx.patient_ids)
+            
+            if urine_tbl is not None:
+                tables["urine"] = urine_tbl
+            else:
+                loaded = ctx.resolver.load_concepts(
+                    ["urine"],
+                    ctx.data_source,
+                    merge=False,
+                    aggregate=None,
+                    patient_ids=ctx.patient_ids,
+                    interval=None,  # Load raw data without interval aggregation
+                )
+                if isinstance(loaded, dict):
+                    tables.update(loaded)
+                elif isinstance(loaded, ICUTable):
+                    tables["urine"] = loaded
         except (KeyError, ValueError) as e:
             # Return empty table if urine cannot be loaded
             cols = ["urine24"]
@@ -3881,28 +4131,31 @@ def _callback_urine24(
         filled_df[urine_col] = filled_df[urine_col].fillna(0.0)
         filled_df = filled_df.sort_values(time_col).reset_index(drop=True)
         
-        # Step 4: Compute urine24 using sliding window (ricu's slide)
+        # Step 4: Compute urine24 using vectorized sliding window
+        # 🚀 OPTIMIZATION 2025-01-31: Replace per-row loop with pandas rolling
         n = len(filled_df)
-        urine24_values = np.full(n, np.nan)
-        times = filled_df[time_col].values
         urine_vals = filled_df[urine_col].values
         
-        for i in range(n):
-            current_time = times[i]
-            
-            # Window: [current_time - 24, current_time] (left_closed=True)
-            if is_numeric_time:
-                window_start = current_time - 24.0
-            else:
-                window_start = current_time - np.timedelta64(24, 'h')
-            
-            # Count rows in window
-            window_mask = (times >= window_start) & (times <= current_time)
-            window_length = window_mask.sum()
-            
-            if window_length >= min_steps:
-                window_sum = urine_vals[window_mask].sum()
-                urine24_values[i] = window_sum * step_factor / window_length
+        if is_numeric_time:
+            window_size = int(24.0 / interval_hours)
+        else:
+            window_size = int(pd.Timedelta(hours=24) / interval)
+        
+        # Use pandas rolling for vectorized computation
+        rolling_sum = pd.Series(urine_vals).rolling(
+            window=window_size, min_periods=min_steps, center=False
+        ).sum()
+        
+        # Calculate actual window lengths for all positions
+        positions = np.arange(n) + 1
+        actual_window_lens = np.minimum(positions, window_size)
+        
+        # Calculate urine24: sum * step_factor / window_length
+        urine24_values = np.where(
+            (actual_window_lens >= min_steps) & pd.notna(rolling_sum.values),
+            rolling_sum.values * step_factor / actual_window_lens,
+            np.nan
+        )
         
         filled_df['urine24'] = urine24_values
         
@@ -3913,17 +4166,12 @@ def _callback_urine24(
         
         return filled_df
     
-    # Process each patient
+    # Process each patient using groupby.apply
     if id_cols:
-        result_groups = []
-        for patient_id, group in df.groupby(id_cols, sort=False):
-            result = process_patient(group)
-            result_groups.append(result)
-        
-        if result_groups:
-            result_df = pd.concat(result_groups, ignore_index=True)
-        else:
-            result_df = pd.DataFrame(columns=key_cols + ['urine24'])
+        df = df.sort_values(id_cols + [time_col]).reset_index(drop=True)
+        result_df = df.groupby(id_cols, sort=False, group_keys=False).apply(
+            process_patient, include_groups=False
+        ).reset_index(drop=True)
     else:
         result_df = process_patient(df)
     
@@ -3957,27 +4205,16 @@ def _callback_vaso_ind(
     """
     # When upstream concepts request hourly alignment (ctx.interval != None),
     # the duration tables may already have their start times floored to the hour.
-    # Reload the raw sub-concepts without interval coercion so we preserve the
-    # original infusion boundaries before we expand them into hourly grids.
+    # 🚀 优化：使用 get_raw_concept 缓存原始数据，避免重复加载
     if ctx.interval:
         refreshed: Dict[str, ICUTable] = {}
         for name, tbl in tables.items():
             raw_tbl = tbl
-            try:
-                loaded = ctx.resolver.load_concepts(
-                    [name],
-                    ctx.data_source,
-                    merge=False,
-                    aggregate=None,
-                    interval=None,
-                    patient_ids=ctx.patient_ids,
-                    align_to_admission=True,
-                )
-                candidate = loaded.get(name) if isinstance(loaded, dict) else loaded
-                if isinstance(candidate, ICUTable) and not candidate.data.empty:
-                    raw_tbl = candidate
-            except Exception:
-                pass
+            # 尝试从缓存获取原始数据
+            if hasattr(ctx.resolver, 'get_raw_concept'):
+                cached_raw = ctx.resolver.get_raw_concept(name, ctx.data_source, ctx.patient_ids)
+                if cached_raw is not None and not cached_raw.data.empty:
+                    raw_tbl = cached_raw
             refreshed[name] = raw_tbl
         tables = refreshed
 
@@ -5010,6 +5247,17 @@ def _callback_gcs(
     mgcs = pd.to_numeric(data.get("mgcs"), errors="coerce")
     vgcs = pd.to_numeric(data.get("vgcs"), errors="coerce")
     
+    # Ensure all GCS components are Series (pd.to_numeric may return scalar for single-row data)
+    # Use repeat() to broadcast scalar to match data.index length
+    if tgcs is not None and not isinstance(tgcs, pd.Series):
+        tgcs = pd.Series(np.repeat(tgcs, len(data.index)), index=data.index, dtype=float)
+    if egcs is not None and not isinstance(egcs, pd.Series):
+        egcs = pd.Series(np.repeat(egcs, len(data.index)), index=data.index, dtype=float)
+    if mgcs is not None and not isinstance(mgcs, pd.Series):
+        mgcs = pd.Series(np.repeat(mgcs, len(data.index)), index=data.index, dtype=float)
+    if vgcs is not None and not isinstance(vgcs, pd.Series):
+        vgcs = pd.Series(np.repeat(vgcs, len(data.index)), index=data.index, dtype=float)
+    
     # 🔧 FIX: Get ett_gcs from the separated table, not from merged data
     # R ricu: sed <- res[[cnc[5L]]] - ett_gcs is kept separate
     ett_gcs = None
@@ -5330,23 +5578,33 @@ def _callback_uo_window(
     """
     from .callbacks import _urine_window_avg
     
-    # Load required concepts
+    # Load required concepts - 🚀 优化：使用 get_raw_concept 缓存
     required = ["urine", "weight"]
     missing = [c for c in required if c not in tables]
     
     if missing:
-        loaded = ctx.resolver.load_concepts(
-            missing,
-            ctx.data_source,
-            merge=False,
-            aggregate=None,
-            patient_ids=ctx.patient_ids,
-            interval=ctx.interval,
-        )
-        if isinstance(loaded, ICUTable):
-            tables[missing[0]] = loaded
-        else:
-            tables.update(loaded)
+        # 优先从缓存获取
+        for concept in missing[:]:  # 使用副本迭代
+            if hasattr(ctx.resolver, 'get_raw_concept'):
+                cached = ctx.resolver.get_raw_concept(concept, ctx.data_source, ctx.patient_ids)
+                if cached is not None:
+                    tables[concept] = cached
+                    missing.remove(concept)
+        
+        # 剩余的批量加载
+        if missing:
+            loaded = ctx.resolver.load_concepts(
+                missing,
+                ctx.data_source,
+                merge=False,
+                aggregate=None,
+                patient_ids=ctx.patient_ids,
+                interval=ctx.interval,
+            )
+            if isinstance(loaded, ICUTable):
+                tables[missing[0]] = loaded
+            else:
+                tables.update(loaded)
     
     urine_tbl = tables.get("urine")
     weight_tbl = tables.get("weight")
@@ -5487,79 +5745,13 @@ def _callback_sum_components(
             mask |= data[col].notna()
     
     data = data[mask]
-    # 🔧 FIX: R ricu 在计算 GCS 时对插管患者会应用 sed_impute='max'，将 tgcs 设为 15
-    # 当以 ricu_compatible 模式运行并且存在 ett_gcs 信息时，模仿该行为。
-
+    
+    # 🔧 FIX: R ricu set_na_max: 如果 tgcs 仍然是 NA，设置为 15
+    # 注意: 移除了 ett_gcs 加载逻辑，因为：
+    # 1. R ricu 的 sum_components() 函数只是简单求和，不涉及 sedation imputation
+    # 2. ett_gcs 的 sedation imputation 只在完整的 gcs() callback 中使用
+    # 3. 加载 ett_gcs 需要扫描大量数据（57个桶），严重影响性能（从2s变成200s+）
     if ricu_mode and is_tgcs:
-        # 如果合并数据中直接包含 ett_gcs 列，则直接使用；否则尝试通过 resolver 加载 ett_gcs
-        ett_series = None
-        if 'ett_gcs' in data.columns:
-            ett_series = data['ett_gcs']
-        else:
-            # 尝试加载 ett_gcs（以 dict 形式返回，不触发外层递归的回调缓存）
-            try:
-                if ctx and getattr(ctx, 'resolver', None) is not None and getattr(ctx, 'data_source', None) is not None:
-                    # 请求不合并的载入以获得 ICUTable，避免触发子概念内部的额外回调污染
-                    sub = ctx.resolver.load_concepts(
-                        ['ett_gcs'],
-                        ctx.data_source,
-                        merge=False,
-                        patient_ids=ctx.patient_ids,
-                        ricu_compatible=False,
-                        _skip_concept_cache=True,
-                        _allow_missing_concept=True,
-                    )
-                    if isinstance(sub, dict) and 'ett_gcs' in sub:
-                        ett_tbl = sub['ett_gcs']
-                        if hasattr(ett_tbl, 'data') and not ett_tbl.data.empty:
-                            # Merge ett_gcs data onto our merged 'data' using id + index columns
-                            join_cols = [c for c in getattr(ett_tbl, 'id_columns', []) if c in data.columns]
-                            idx_col = getattr(ett_tbl, 'index_column', None)
-                            if idx_col and idx_col in data.columns:
-                                join_cols = join_cols + [idx_col]
-                            if join_cols:
-                                # Align types and perform left merge
-                                ett_df = ett_tbl.data[[*join_cols, ett_tbl.value_column]] if ett_tbl.value_column in ett_tbl.data.columns else ett_tbl.data[join_cols]
-                                ett_df = ett_df.rename(columns={ett_tbl.value_column: 'ett_gcs'}) if ett_tbl.value_column and ett_tbl.value_column in ett_df.columns else ett_df
-                                merged = data.merge(ett_df, on=join_cols, how='left', suffixes=(None, '_ett'))
-                                if 'ett_gcs' in merged.columns:
-                                    # Replace data with merged frame so indices align
-                                    data = merged
-                                    ett_series = data['ett_gcs']
-            except Exception:
-                # 如果加载失败，则忽略并继续（不要中断主计算）
-                ett_series = None
-
-        # 如果找到 ett_series，则把 tgcs 在 ett==True 的位置设为 15
-        try:
-            if ett_series is not None:
-                # 将 NA 视为 False，再转换为布尔索引（根据 data 的索引对齐）
-                ett_bool = ett_series.where(ett_series.notna(), False).astype(bool)
-                # 重新计算 total 以匹配 data 的索引（如果 data 被替换为 merged）
-                # 使用 set_na_max 逻辑填充缺失的 GCS 组件
-                total = pd.Series(0, index=data.index, dtype=float)
-                for col in component_cols:
-                    if col in data.columns:
-                        col_values = pd.to_numeric(data[col], errors='coerce')
-                        # Apply set_na_max for GCS components
-                        if col.lower() in gcs_max_values:
-                            col_values = col_values.fillna(gcs_max_values[col.lower()])
-                        else:
-                            col_values = col_values.fillna(0)
-                        total += col_values
-
-                # 将 tgcs 在 ett==True 的位置设为 15
-                if isinstance(ett_bool, pd.Series) and not ett_bool.empty:
-                    # 对齐索引后赋值
-                    mask_idx = ett_bool.index.intersection(total.index)
-                    # 使用 loc 根据布尔掩码赋值
-                    total.loc[mask_idx] = total.loc[mask_idx].where(~ett_bool.loc[mask_idx], 15.0)
-                data[output_col] = total
-        except Exception:
-            # 忽略任何错误以保持回调的稳健性
-            pass
-        
-        # 🔧 R ricu set_na_max: 如果 tgcs 仍然是 NA，设置为 15
         if output_col in data.columns:
             data[output_col] = data[output_col].fillna(15.0)
 

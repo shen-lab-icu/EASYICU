@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # 全局加载器实例，用于复用初始化开销
 _global_loader = None
 _loader_config = None
-
+import numpy as np
 
 def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: bool = False) -> List:
     """
@@ -82,6 +82,54 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
         return None
 
 
+def _compress_dtypes(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
+    """
+    压缩 DataFrame 的数据类型以减少内存使用
+    
+    - int64 -> int32 (如果值范围允许)
+    - float64 -> float32 (对于非精确值)
+    - 保持 datetime64 不变
+    
+    可以节省约 50-60% 的内存
+    """
+    if df.empty:
+        return df
+    
+    original_mem = df.memory_usage(deep=True).sum()
+    
+    for col in df.columns:
+        col_type = df[col].dtype
+        
+        # 整数类型压缩
+        if col_type == np.int64:
+            col_min, col_max = df[col].min(), df[col].max()
+            if col_min >= np.iinfo(np.int32).min and col_max <= np.iinfo(np.int32).max:
+                df[col] = df[col].astype(np.int32)
+            elif col_min >= np.iinfo(np.int16).min and col_max <= np.iinfo(np.int16).max:
+                df[col] = df[col].astype(np.int16)
+        
+        # 浮点类型压缩 - SOFA 分数等小整数可以用 int8
+        elif col_type == np.float64:
+            # 检查是否都是整数值
+            if df[col].dropna().apply(lambda x: x == int(x)).all():
+                col_min, col_max = df[col].min(), df[col].max()
+                if not np.isnan(col_min) and col_min >= -128 and col_max <= 127:
+                    # 小整数用 Int8 (可空整数)
+                    df[col] = df[col].astype('Int8')
+                elif not np.isnan(col_min) and col_min >= np.iinfo(np.int16).min and col_max <= np.iinfo(np.int16).max:
+                    df[col] = df[col].astype('Int16')
+            else:
+                # 一般浮点数用 float32
+                df[col] = df[col].astype(np.float32)
+    
+    if verbose:
+        new_mem = df.memory_usage(deep=True).sum()
+        saved = (original_mem - new_mem) / original_mem * 100
+        print(f"💾 内存压缩: {original_mem/1024/1024:.1f}MB → {new_mem/1024/1024:.1f}MB (节省 {saved:.0f}%)")
+    
+    return df
+
+
 def _get_global_loader(
     database: Optional[str] = None,
     data_path: Optional[Path] = None,
@@ -98,7 +146,10 @@ def _get_global_loader(
     else:
         dict_key = str(dict_path)
 
-    current_config = (database, data_path, dict_key, frozenset(kwargs.items()))
+    # 🚀 只比较影响加载器初始化的关键参数，忽略运行时参数（如 verbose）
+    # 这允许在多次调用之间复用加载器，共享缓存
+    config_kwargs = {k: v for k, v in kwargs.items() if k in ('use_sofa2',)}
+    current_config = (database, str(data_path) if data_path else None, dict_key, frozenset(config_kwargs.items()))
 
     if _global_loader is None or _loader_config != current_config:
         _global_loader = BaseICULoader(
@@ -173,6 +224,8 @@ def load_concepts(
     parallel_backend: str = 'auto',
     max_patients: Optional[int] = None,  # 限制加载的患者数量（自动采样）
     limit: Optional[int] = None,  # max_patients 的别名（兼容 extract_sofa_data.py）
+    batch_size: Optional[int] = None,  # 🆕 分批处理大小（默认30000，适合12GB内存）
+    memory_efficient: bool = False,  # 🆕 内存优化模式（压缩数据类型）
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
@@ -271,7 +324,14 @@ def load_concepts(
     else:
         concepts_list = list(concepts)
 
-    if any('sofa2' in c.lower() for c in concepts_list):
+    # SOFA2 相关概念集合（需要加载 sofa2-dict）
+    sofa2_concepts = {'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 
+                      'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
+                      'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria', 'rrt',
+                      'adv_resp', 'ecmo', 'ecmo_indication', 'sedated_gcs',
+                      'mech_circ_support', 'other_vaso', 'delirium_tx',
+                      'motor_response', 'delirium_positive'}
+    if any(c in sofa2_concepts or 'sofa2' in c.lower() for c in concepts_list):
         use_sofa2 = True
 
     if verbose:
@@ -342,8 +402,88 @@ def load_concepts(
             print(f"   ⚡ 智能优化: concept_workers={effective_concept_workers}, "
                   f"parallel_workers={effective_parallel_workers or '不分批'}")
 
+    # 🆕 分批处理支持（用于内存控制）
+    if batch_size is not None and patient_ids is not None:
+        # 提取患者ID列表
+        if isinstance(patient_ids, dict):
+            id_col = list(patient_ids.keys())[0]
+            all_patient_ids = list(patient_ids.values())[0]
+        else:
+            id_col = 'stay_id'  # 默认
+            all_patient_ids = list(patient_ids)
+        
+        total_patients = len(all_patient_ids)
+        if total_patients > batch_size:
+            if verbose:
+                print(f"🔄 分批处理: {total_patients} 患者，每批 {batch_size} 患者")
+            
+            import gc
+            results = []
+            for i in range(0, total_patients, batch_size):
+                batch_ids = all_patient_ids[i:i+batch_size]
+                batch_patient_ids = {id_col: batch_ids}
+                
+                if verbose:
+                    batch_num = i // batch_size + 1
+                    total_batches = (total_patients + batch_size - 1) // batch_size
+                    print(f"   📦 处理批次 {batch_num}/{total_batches} ({len(batch_ids)} 患者)...")
+                
+                # 🔧 清除缓存以确保每批使用正确的患者ID
+                loader.clear_cache()
+                
+                batch_result = loader.load_concepts(
+                    concepts=concepts_list,
+                    patient_ids=batch_patient_ids,
+                    interval=interval,
+                    win_length=win_length,
+                    aggregate=aggregate,
+                    keep_components=keep_components,
+                    merge=merge,
+                    ricu_compatible=ricu_compatible,
+                    chunk_size=chunk_size,
+                    progress=progress,
+                    parallel_workers=effective_parallel_workers,
+                    concept_workers=effective_concept_workers,
+                    parallel_backend=parallel_backend,
+                    **kwargs
+                )
+                
+                if isinstance(batch_result, pd.DataFrame) and len(batch_result) > 0:
+                    results.append(batch_result)
+                elif isinstance(batch_result, dict):
+                    results.append(batch_result)
+                
+                # 释放内存
+                gc.collect()
+            
+            # 合并结果
+            if results:
+                if isinstance(results[0], pd.DataFrame):
+                    final_result = pd.concat(results, ignore_index=True)
+                    # 🆕 内存优化模式：压缩数据类型
+                    if memory_efficient:
+                        final_result = _compress_dtypes(final_result, verbose=verbose)
+                    if verbose:
+                        print(f"✅ 分批完成: 共 {len(final_result)} 行")
+                    return final_result
+                else:
+                    # dict 结果合并
+                    merged_dict = {}
+                    for r in results:
+                        for k, v in r.items():
+                            if k not in merged_dict:
+                                merged_dict[k] = []
+                            merged_dict[k].append(v)
+                    final_dict = {k: pd.concat(vs, ignore_index=True) for k, vs in merged_dict.items()}
+                    # 🆕 内存优化模式：压缩数据类型
+                    if memory_efficient:
+                        final_dict = {k: _compress_dtypes(v, verbose=verbose) for k, v in final_dict.items()}
+                    return final_dict
+            else:
+                return pd.DataFrame()
+
     # 使用统一加载器加载概念
-    return loader.load_concepts(
+    result = loader.load_concepts(
         concepts=concepts_list,
         patient_ids=patient_ids,
         interval=interval,
@@ -359,6 +499,15 @@ def load_concepts(
         parallel_backend=parallel_backend,
         **kwargs
     )
+    
+    # 🆕 内存优化模式：压缩数据类型
+    if memory_efficient:
+        if isinstance(result, pd.DataFrame):
+            result = _compress_dtypes(result, verbose=verbose)
+        elif isinstance(result, dict):
+            result = {k: _compress_dtypes(v, verbose=verbose) for k, v in result.items()}
+    
+    return result
 
 # 为了兼容旧代码，保留旧的函数名
 def load_concept(*args, **kwargs):
@@ -1819,3 +1968,137 @@ def get_cohort_stats(
         data_path = get_default_data_path(database)
     
     return _get_cohort_stats(patient_ids, database=database, data_path=data_path)
+
+
+# =============================================================================
+# 工具函数导出 - 供 webapp 和外部使用
+# =============================================================================
+
+# 数据库 -> (表名, ID列名) 的标准映射
+# 这是单一真相来源，避免在多处重复定义
+DATABASE_ID_CONFIG = {
+    'miiv': {'table': 'icustays', 'id_col': 'stay_id'},
+    'mimic': {'table': 'icustays', 'id_col': 'icustay_id'},
+    'mimic_demo': {'table': 'icustays', 'id_col': 'icustay_id'},
+    'eicu': {'table': 'patient', 'id_col': 'patientunitstayid'},
+    'eicu_demo': {'table': 'patient', 'id_col': 'patientunitstayid'},
+    'aumc': {'table': 'admissions', 'id_col': 'admissionid'},
+    'hirid': {'table': 'general', 'id_col': 'patientid'},
+}
+
+
+def get_id_col_for_database(database: str) -> str:
+    """获取指定数据库的患者ID列名
+    
+    Args:
+        database: 数据库类型 ('miiv', 'eicu', 'aumc', 'hirid' 等)
+    
+    Returns:
+        ID 列名，如 'stay_id', 'patientunitstayid' 等
+    
+    Examples:
+        >>> get_id_col_for_database('miiv')
+        'stay_id'
+        >>> get_id_col_for_database('eicu')
+        'patientunitstayid'
+    """
+    config = DATABASE_ID_CONFIG.get(database, DATABASE_ID_CONFIG['miiv'])
+    return config['id_col']
+
+
+def get_patient_table_for_database(database: str) -> str:
+    """获取指定数据库的患者表名
+    
+    Args:
+        database: 数据库类型
+    
+    Returns:
+        表名，如 'icustays', 'patient', 'admissions' 等
+    """
+    config = DATABASE_ID_CONFIG.get(database, DATABASE_ID_CONFIG['miiv'])
+    return config['table']
+
+
+def get_all_patient_ids(
+    data_path: Union[str, Path],
+    database: Optional[str] = None,
+    max_patients: Optional[int] = None,
+) -> tuple:
+    """获取数据库中所有（或部分）患者ID
+    
+    这是统一的患者ID获取接口，供 webapp 和其他模块使用。
+    
+    Args:
+        data_path: 数据路径
+        database: 数据库类型（可自动检测）
+        max_patients: 限制返回的患者数量（None = 全部）
+    
+    Returns:
+        (patient_ids_list, id_column_name)
+    
+    Examples:
+        >>> ids, id_col = get_all_patient_ids('/path/to/miiv')
+        >>> print(f"共 {len(ids)} 个患者, ID列: {id_col}")
+    """
+    if database is None:
+        database = detect_database_type(data_path)
+    
+    id_col = get_id_col_for_database(database)
+    table_name = get_patient_table_for_database(database)
+    
+    data_path = Path(data_path)
+    
+    # 尝试加载患者表
+    try:
+        # 首选：直接加载 parquet 文件
+        parquet_file = data_path / f'{table_name}.parquet'
+        if parquet_file.exists():
+            df = pd.read_parquet(parquet_file, columns=[id_col])
+            all_ids = df[id_col].dropna().unique().tolist()
+        else:
+            # 备选：尝试分片目录
+            shard_dir = data_path / table_name
+            if shard_dir.exists() and shard_dir.is_dir():
+                all_ids = []
+                for sf in sorted(shard_dir.glob('*.parquet')):
+                    shard_df = pd.read_parquet(sf, columns=[id_col])
+                    all_ids.extend(shard_df[id_col].dropna().unique().tolist())
+                all_ids = list(set(all_ids))
+            else:
+                # 最后尝试使用 BaseICULoader
+                loader = BaseICULoader(database=database, data_path=data_path, verbose=False)
+                sampled = _sample_patient_ids(loader, max_patients or 999999999, verbose=False)
+                return (sampled or [], id_col)
+        
+        # 限制患者数量
+        if max_patients and len(all_ids) > max_patients:
+            all_ids = all_ids[:max_patients]
+        
+        return (all_ids, id_col)
+    
+    except Exception as e:
+        logger.warning(f"获取患者ID失败: {e}")
+        return ([], id_col)
+
+
+def get_smart_parallel_config(
+    num_concepts: int = 1,
+    num_patients: Optional[int] = None,
+) -> tuple:
+    """智能计算最佳并行配置
+    
+    根据概念数量和患者数量自动选择最优的并行策略。
+    
+    Args:
+        num_concepts: 要加载的概念数量
+        num_patients: 患者数量（如果已知）
+    
+    Returns:
+        (concept_workers, parallel_workers): 概念并行数和患者批次并行数
+    
+    Examples:
+        >>> concept_workers, parallel_workers = get_smart_parallel_config(5, 10000)
+        >>> print(f"概念并行: {concept_workers}, 患者批次并行: {parallel_workers}")
+    """
+    return _get_smart_workers(num_concepts, num_patients)
+

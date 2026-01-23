@@ -845,7 +845,6 @@ def check_data_status(data_path: str, database: str) -> dict:
 def convert_data_with_progress(data_path: str, database: str):
     """带进度条的数据转换功能。"""
     import time
-    from pathlib import Path
     
     lang = st.session_state.get('language', 'en')
     
@@ -863,65 +862,11 @@ def convert_data_with_progress(data_path: str, database: str):
         
         converter = DataConverter(data_path, database=database, verbose=True)
         
-        # HiRID: 先解压 tar.gz 文件
-        if database == 'hirid':
-            hirid_path = Path(data_path)
-            tar_files = list(hirid_path.rglob('*.tar.gz'))
-            if tar_files:
-                extract_msg = "📦 Extracting HiRID archives and converting to ricu format..." if lang == 'en' else "📦 正在解压 HiRID 压缩包并转换为 ricu 格式..."
-                with st.spinner(extract_msg):
-                    try:
-                        extracted = converter._extract_hirid_archives()
-                        if extracted:
-                            ex_msg = f"✅ Extracted and converted: {', '.join(extracted)}" if lang == 'en' else f"✅ 已解压并转换: {', '.join(extracted)}"
-                            st.success(ex_msg)
-                    except Exception as e:
-                        ex_err = f"⚠️ Archive extraction warning: {e}" if lang == 'en' else f"⚠️ 解压警告: {e}"
-                        st.warning(ex_err)
-        
         # 获取需要转换的文件列表
         csv_files = converter._get_csv_files()
         total_files = len(csv_files)
         
         if total_files == 0:
-            # 检查是否 HiRID parquet 已经准备好了
-            if database == 'hirid':
-                hirid_path = Path(data_path)
-                # 检查 observations 和 pharma 目录是否已有 parquet shards
-                obs_dir = hirid_path / 'observations'
-                pharma_dir = hirid_path / 'pharma'
-                general_pq = hirid_path / 'general.parquet'
-                
-                has_obs = obs_dir.is_dir() and list(obs_dir.glob('[0-9]*.parquet'))
-                has_pharma = pharma_dir.is_dir() and list(pharma_dir.glob('[0-9]*.parquet'))
-                has_general = general_pq.exists()
-                
-                if has_obs and has_pharma:
-                    # HiRID parquet 数据已就绪
-                    if not has_general:
-                        # 只需要转换 general_table.csv
-                        general_csv = hirid_path / 'general_table.csv'
-                        if general_csv.exists():
-                            conv_msg = "Converting general_table.csv..." if lang == 'en' else "正在转换 general_table.csv..."
-                            with st.spinner(conv_msg):
-                                try:
-                                    converter._convert_file(general_csv)
-                                    st.success("✅ general_table.csv converted" if lang == 'en' else "✅ general_table.csv 转换完成")
-                                except Exception as e:
-                                    st.error(f"❌ Failed to convert general_table.csv: {e}" if lang == 'en' else f"❌ general_table.csv 转换失败: {e}")
-                    
-                    done_msg = "✅ HiRID data is ready! Parquet shards extracted from archives." if lang == 'en' else "✅ HiRID 数据已就绪！已从压缩包解压 parquet 分片。"
-                    st.success(done_msg)
-                    return
-                
-                # 检查是否有未解压的 tar.gz
-                tar_files = list(hirid_path.rglob('*.tar.gz'))
-                if tar_files:
-                    tar_msg = "📦 HiRID tar.gz archives found but extraction failed. Please check:\n" if lang == 'en' else "📦 发现 HiRID tar.gz 压缩包但解压失败。请检查：\n"
-                    for tf in tar_files[:5]:
-                        tar_msg += f"- `{tf.name}`\n"
-                    st.warning(tar_msg)
-            
             err_msg = "No CSV files found to convert" if lang == 'en' else "未找到需要转换的 CSV 文件"
             st.error(err_msg)
             return
@@ -968,10 +913,6 @@ def convert_data_with_progress(data_path: str, database: str):
                         fail_msg = f"❌ Failed: {file_name} - {str(e)[:50]}" if lang == 'en' else f"❌ 失败: {file_name} - {str(e)[:50]}"
                         st.caption(fail_msg)
             
-            # Force garbage collection after each file to prevent memory buildup
-            import gc
-            gc.collect()
-            
             # 更新进度
             progress = (idx + 1) / total_files
             progress_bar.progress(progress)
@@ -1015,11 +956,10 @@ def convert_data_with_progress(data_path: str, database: str):
 # ============ 🚀 智能硬件检测与动态并行配置 ============
 
 def get_system_resources():
-    """检测系统硬件资源并推荐内存安全配置。
+    """检测系统硬件资源。
     
     Returns:
-        dict: 包含 cpu_count, memory_gb, recommended_workers, recommended_backend,
-              memory_mode, recommended_patient_limit 等
+        dict: 包含 cpu_count, memory_gb, recommended_workers, recommended_backend
     """
     import os
     import psutil
@@ -1040,52 +980,21 @@ def get_system_resources():
     # 规则：
     # - 每个 worker 大约需要 2GB 内存用于处理 ICU 数据
     # - 不超过 CPU 核心数的 75%（保留系统响应能力）
-    # - 🔧 FIX: 最大限制为 16 个 workers（64个太多，启动开销大）
+    # - 最大不超过 64 个 workers（避免过度并行的开销）
     
     max_workers_by_memory = int(available_memory_gb / 2)  # 每 worker 约 2GB
     max_workers_by_cpu = int(cpu_count * 0.75)  # 使用 75% 的 CPU
     
-    recommended_workers = min(max_workers_by_memory, max_workers_by_cpu, 16)  # 🔧 从64改为16
+    recommended_workers = min(max_workers_by_memory, max_workers_by_cpu, 64)
     recommended_workers = max(recommended_workers, 1)  # 至少 1 个
     
-    # 🔧 FIX: 始终使用 thread 后端
-    # loky 进程池启动开销大（每个进程需要加载Python和库）
-    # 对于 ICU 数据加载（I/O密集型），线程池更高效
-    recommended_backend = "thread"
-    
-    # 🚀 智能内存模式检测 - 用于分批流式导出
-    # 低内存时自动使用分批处理，每批处理完写入磁盘后释放内存
-    # 这样即使8GB内存也能导出全部患者（只是分多批处理）
-    if available_memory_gb >= 64:
-        memory_mode = 'high'
-        recommended_batch_size = 0  # 无需分批，一次加载
-        use_streaming = False
-        mode_desc_en = 'High Memory (64GB+) - Load all at once'
-        mode_desc_zh = '高内存模式 (64GB+) - 一次性加载'
-    elif available_memory_gb >= 32:
-        memory_mode = 'medium-high'
-        recommended_batch_size = 50000  # 每批5万患者
-        use_streaming = False  # 可以尝试一次加载
-        mode_desc_en = 'Medium-High Memory (32-64GB) - May need batching for large DBs'
-        mode_desc_zh = '中高内存模式 (32-64GB) - 大库可能需要分批'
-    elif available_memory_gb >= 16:
-        memory_mode = 'medium'
-        recommended_batch_size = 10000  # 每批1万患者
-        use_streaming = True
-        mode_desc_en = 'Medium Memory (16-32GB) - Streaming mode (10k/batch)'
-        mode_desc_zh = '中等内存模式 (16-32GB) - 流式处理 (每批1万)'
-    elif available_memory_gb >= 8:
-        memory_mode = 'low'
-        recommended_batch_size = 5000  # 每批5千患者
-        use_streaming = True
-        mode_desc_en = 'Low Memory (8-16GB) - Streaming mode (5k/batch)'
-        mode_desc_zh = '低内存模式 (8-16GB) - 流式处理 (每批5千)'
+    # 根据配置选择后端
+    # - 高核心数(>16)且内存充足(>32GB): 使用 loky 进程池获得更好的 GIL 规避
+    # - 中等配置: 使用 thread 线程池，开销更小
+    if cpu_count >= 16 and total_memory_gb >= 32:
+        recommended_backend = "loky"
     else:
-        memory_mode = 'minimal'
-        recommended_batch_size = 2000  # 每批2千患者
-        use_streaming = True
-        mode_desc_en = 'Minimal Memory (<8GB) - Streaming mode (2k/batch)'
-        mode_desc_zh = '极低内存模式 (<8GB) - 流式处理 (每批2千)'
+        recommended_backend = "thread"
     
     return {
         'cpu_count': cpu_count,
@@ -1093,11 +1002,6 @@ def get_system_resources():
         'available_memory_gb': round(available_memory_gb, 1),
         'recommended_workers': recommended_workers,
         'recommended_backend': recommended_backend,
-        'memory_mode': memory_mode,
-        'recommended_batch_size': recommended_batch_size,
-        'use_streaming': use_streaming,
-        'mode_desc_en': mode_desc_en,
-        'mode_desc_zh': mode_desc_zh,
     }
 
 
@@ -1179,13 +1083,10 @@ def init_session_state():
         st.session_state.path_validated = False
     if 'language' not in st.session_state:
         st.session_state.language = 'en'  # 默认英文
-    # 🚀 性能优化：流式导出模式（根据内存自动推荐分批大小）
-    if 'use_streaming' not in st.session_state:
-        # 自动检测可用内存，决定是否使用流式处理
-        resources = get_system_resources()
-        st.session_state.use_streaming = resources['use_streaming']
-        st.session_state.batch_size = resources['recommended_batch_size']
-        st.session_state.memory_mode = resources['memory_mode']
+    # 🚀 性能优化：患者数量限制（默认0表示全量加载）
+    # 全量 MIIV 约 5万患者/4000万行，加载需 ~50s；1000患者约3s
+    if 'patient_limit' not in st.session_state:
+        st.session_state.patient_limit = 0  # 默认全量加载
     if 'available_patient_ids' not in st.session_state:
         st.session_state.available_patient_ids = None
 
@@ -1234,7 +1135,6 @@ TEXTS = {
         'patient_view': '🏥 Patient View',
         'data_quality': '📊 Data Quality',
         'cohort_compare': '📊 Cohort Comparison',
-        'cohort_dashboard': '📈 Cohort Dashboard',
         'ready': '🎉 Ready!',
         'ready_desc': 'Data loaded, you can start exploring.',
         'database': 'Database',
@@ -1295,7 +1195,6 @@ TEXTS = {
         'patient_view': '🏥 患者视图',
         'data_quality': '📊 数据质量',
         'cohort_compare': '📊 队列对比',
-        'cohort_dashboard': '📈 队列仪表板',
         'ready': '🎉 准备就绪！',
         'ready_desc': '数据已加载，您可以开始探索分析了。',
         'database': '数据库',
@@ -1320,45 +1219,6 @@ def get_text(key: str) -> str:
     """根据当前语言获取文本。"""
     lang = st.session_state.get('language', 'en')
     return TEXTS.get(lang, TEXTS['en']).get(key, key)
-
-
-def detect_database_from_path(data_path: str) -> str:
-    """从路径自动检测数据库类型。
-    
-    Returns:
-        database: 检测到的数据库类型（miiv, eicu, aumc, hirid），未检测到返回None
-    """
-    if not data_path:
-        return None
-    
-    path_lower = str(data_path).lower()
-    
-    # 基于路径名检测
-    if 'mimic' in path_lower or 'miiv' in path_lower:
-        return 'miiv'
-    elif 'eicu' in path_lower:
-        return 'eicu'
-    elif 'aumc' in path_lower or 'amsterdam' in path_lower:
-        return 'aumc'
-    elif 'hirid' in path_lower:
-        return 'hirid'
-    
-    # 基于文件内容检测
-    path = Path(data_path)
-    if path.exists():
-        # 检查特征文件
-        if (path / 'icustays.parquet').exists() or (path / 'icustays.csv').exists():
-            return 'miiv'
-        elif (path / 'patient.parquet').exists() or (path / 'patient.csv').exists():
-            # eICU的patient表
-            return 'eicu'
-        elif (path / 'admissions.parquet').exists() or (path / 'numericitems.parquet').exists():
-            # AUMC有admissions和numericitems
-            return 'aumc'
-        elif (path / 'general.parquet').exists() or (path / 'general_table.csv').exists():
-            return 'hirid'
-    
-    return None
 
 
 def validate_database_path(data_path: str, database: str) -> dict:
@@ -1392,9 +1252,9 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'medication': ['drugitems'],
         },
         'hirid': {
-            'core': ['general'],  # general_table.csv -> general.parquet
-            'clinical': ['observations'],  # observation_tables -> observations/
-            'medication': ['pharma'],  # pharma_records -> pharma/
+            'core': ['general_table'],
+            'clinical': ['observations'],
+            'medication': ['pharma_records'],
         },
     }
     
@@ -2141,165 +2001,130 @@ def render_visualization_mode():
 
 
 def render_sidebar():
-    """渲染侧边栏 - VS Code风格：左侧图标导航 + 右侧内容面板。"""
+    """渲染侧边栏 - 简化版：选择 → 导出，无需加载到内存。"""
     # 使用双语特征分组
     concept_groups = get_concept_groups()
     
     # 所有可用的 concepts 列表（用于自定义选择）
     all_available_concepts = sorted(set(c for group_concepts in concept_groups.values() for c in group_concepts))
     
-    # 初始化模式状态
-    if 'app_mode' not in st.session_state:
-        st.session_state.app_mode = 'extract'  # 默认为数据提取模式
-    
     with st.sidebar:
-        # ============ VS Code 风格导航栏 ============
-        # 注入自定义CSS样式
+        st.markdown(f"## {get_text('app_title')}")
+        
+        # 语言切换 - 更紧凑的布局
+        lang = st.selectbox(
+            "🌐 Language",
+            options=['EN', 'ZH'],
+            index=0 if st.session_state.language == 'en' else 1,
+            key="lang_select",
+        )
+        if (lang == 'EN' and st.session_state.language != 'en') or \
+           (lang == 'ZH' and st.session_state.language != 'zh'):
+            st.session_state.language = 'en' if lang == 'EN' else 'zh'
+            st.rerun()
+        
+        st.markdown("---")
+        
+        # ============ 快捷入口：两个并列模式 ============
+        st.markdown(f"**{get_text('select_mode')}**")
+        
+        # 初始化模式状态
+        if 'app_mode' not in st.session_state:
+            st.session_state.app_mode = 'extract'  # 默认为数据提取模式
+        
+        # 自定义样式的模式选择按钮
+        extract_selected = st.session_state.app_mode == 'extract'
+        viz_selected = st.session_state.app_mode == 'viz'
+        
+        # 定义选中和未选中的样式
+        if st.session_state.language == 'en':
+            extract_label = "📤 Data Extraction"
+            viz_label = "📊 Quick Visualization"
+        else:
+            extract_label = "📤 数据提取导出"
+            viz_label = "📊 快速可视化"
+        
+        # 使用HTML渲染漂亮的模式切换按钮 - 更明显的样式区分
         st.markdown("""
         <style>
-        /* VS Code 风格的图标导航栏 */
-        .vscode-nav {
+        .mode-btn-container {
             display: flex;
-            flex-direction: row;
-            background: linear-gradient(180deg, #1e1e2e 0%, #252536 100%);
-            border-radius: 12px;
-            padding: 8px;
-            margin-bottom: 16px;
             gap: 8px;
+            margin: 10px 0;
         }
-        .nav-icon-btn {
+        .mode-btn {
             flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 12px 8px;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            border: none;
-            background: transparent;
-            text-decoration: none;
-        }
-        .nav-icon-btn:hover {
-            background: rgba(255, 255, 255, 0.1);
-        }
-        .nav-icon-btn.active {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-        }
-        .nav-icon {
-            font-size: 28px;
-            margin-bottom: 4px;
-        }
-        .nav-label {
-            font-size: 11px;
-            color: #a0a0b0;
+            padding: 16px 12px;
+            border-radius: 10px;
             text-align: center;
-            font-weight: 500;
-        }
-        .nav-icon-btn.active .nav-label {
-            color: white;
             font-weight: 600;
-        }
-        
-        /* 侧边栏标题样式 */
-        .sidebar-title {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: #333;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        /* 当前模式指示器 */
-        .mode-indicator {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-weight: 600;
-            text-align: center;
-            margin-bottom: 12px;
             font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
         }
-        
-        /* 覆盖Streamlit按钮样式 */
-        .stButton > button {
-            transition: all 0.2s ease;
+        .mode-btn-active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            color: white !important;
+            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.5) !important;
+            transform: scale(1.02);
+        }
+        .mode-btn-inactive {
+            background: #f8f9fa !important;
+            color: #666 !important;
+            border: 2px dashed #ccc !important;
+            opacity: 0.7;
+        }
+        .mode-btn-inactive:hover {
+            background: #e8eaee !important;
+            border-color: #999 !important;
+            opacity: 1;
+        }
+        /* 覆盖Streamlit按钮样式使选中更明显 */
+        div[data-testid="column"] button[kind="primary"] {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            border: none !important;
+            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.5) !important;
+            font-weight: 700 !important;
+            font-size: 1.1rem !important;
+        }
+        div[data-testid="column"] button[kind="secondary"] {
+            background: #f0f2f6 !important;
+            color: #666 !important;
+            border: 2px dashed #ccc !important;
+            opacity: 0.7;
+        }
+        div[data-testid="column"] button[kind="secondary"]:hover {
+            opacity: 1;
+            border-color: #667eea !important;
         }
         </style>
         """, unsafe_allow_html=True)
         
-        # ============ 顶部：应用标题 + 语言切换 ============
-        header_cols = st.columns([3, 1])
-        with header_cols[0]:
-            st.markdown(f"## {get_text('app_title')}")
-        with header_cols[1]:
-            lang = st.selectbox(
-                "🌐",
-                options=['EN', 'ZH'],
-                index=0 if st.session_state.language == 'en' else 1,
-                key="lang_select",
-                label_visibility="collapsed"
-            )
-            if (lang == 'EN' and st.session_state.language != 'en') or \
-               (lang == 'ZH' and st.session_state.language != 'zh'):
-                st.session_state.language = 'en' if lang == 'EN' else 'zh'
-                st.rerun()
+        # 使用两列放置按钮 - 所有模式都用按钮，确保可点击
+        mode_cols = st.columns(2)
         
-        # ============ VS Code 风格图标导航 ============
-        extract_selected = st.session_state.app_mode == 'extract'
-        viz_selected = st.session_state.app_mode == 'viz'
-        
-        # 使用两列创建图标按钮
-        nav_cols = st.columns(2)
-        
-        with nav_cols[0]:
-            # 数据提取按钮
-            extract_style = "primary" if extract_selected else "secondary"
-            extract_icon = "📤" if not extract_selected else "✅"
-            extract_text = "Data Export" if st.session_state.language == 'en' else "数据提取"
-            if st.button(
-                f"{extract_icon}\n{extract_text}", 
-                key="nav_extract", 
-                type=extract_style,
-                width="stretch"
-            ):
+        with mode_cols[0]:
+            # 数据提取按钮 - 总是可点击
+            btn_type = "primary" if extract_selected else "secondary"
+            if st.button(extract_label, key="btn_mode_extract", width="stretch", type=btn_type):
                 if not extract_selected:
                     st.session_state.app_mode = 'extract'
+                    # 切换模式时清空已加载数据，避免冲突
                     st.session_state.loaded_concepts = {}
                     st.session_state.patient_ids = []
                     st.rerun()
         
-        with nav_cols[1]:
-            # 快速可视化按钮
-            viz_style = "primary" if viz_selected else "secondary"
-            viz_icon = "📊" if not viz_selected else "✅"
-            viz_text = "Visualization" if st.session_state.language == 'en' else "可视化"
-            if st.button(
-                f"{viz_icon}\n{viz_text}", 
-                key="nav_viz", 
-                type=viz_style,
-                width="stretch"
-            ):
+        with mode_cols[1]:
+            # 快速可视化按钮 - 总是可点击
+            btn_type = "primary" if viz_selected else "secondary"
+            if st.button(viz_label, key="btn_mode_viz", width="stretch", type=btn_type):
                 if not viz_selected:
                     st.session_state.app_mode = 'viz'
+                    # 切换模式时清空已加载数据，避免冲突
                     st.session_state.loaded_concepts = {}
                     st.session_state.patient_ids = []
                     st.rerun()
-        
-        # 当前模式指示器
-        if st.session_state.language == 'en':
-            mode_text = "📤 Data Export Mode" if extract_selected else "📊 Visualization Mode"
-        else:
-            mode_text = "📤 数据提取模式" if extract_selected else "📊 可视化模式"
-        
-        st.markdown(f"""
-        <div class="mode-indicator">{mode_text}</div>
-        """, unsafe_allow_html=True)
         
         # 根据选择设置mode变量
         mode = get_text('mode_viz') if st.session_state.app_mode == 'viz' else get_text('mode_extract')
@@ -2352,63 +2177,37 @@ def render_sidebar():
             
         else:
             # 真实数据模式
-            # 先输入路径，然后自动检测/确认数据库类型
-            path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
-            path_help = "Path will be auto-validated after input" if st.session_state.language == 'en' else "输入路径后自动验证"
-            
-            # 使用当前已保存的路径
-            current_path = st.session_state.get('data_path', '')
-            data_path = st.text_input(
-                path_label,
-                value=current_path,
-                placeholder="/path/to/icu_database",
-                help=path_help,
-                key="data_path_input"
-            )
-            
-            # 🚀 自动检测数据库类型
-            detected_db = detect_database_from_path(data_path) if data_path else None
-            current_db = st.session_state.get('database', 'miiv')
-            
-            # 如果检测到数据库且与当前不同，自动更新
-            if detected_db and detected_db != current_db:
-                st.session_state.database = detected_db
-                current_db = detected_db
-                db_names = {'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD', 'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID'}
-                detected_name = db_names.get(detected_db, detected_db)
-                if st.session_state.language == 'en':
-                    st.info(f"🔍 Auto-detected database: **{detected_name}**")
-                else:
-                    st.info(f"🔍 自动检测到数据库: **{detected_name}**")
-            
-            # 数据库选择器（允许手动覆盖）
-            db_label = "Database Type" if st.session_state.language == 'en' else "数据库类型"
-            db_options = ['miiv', 'eicu', 'aumc', 'hirid']
-            current_index = db_options.index(current_db) if current_db in db_options else 0
-            
+            db_label = "Select Database" if st.session_state.language == 'en' else "选择数据库"
             database = st.selectbox(
                 db_label,
-                options=db_options,
-                index=current_index,
+                options=['miiv', 'eicu', 'aumc', 'hirid'],
+                index=0,
                 format_func=lambda x: {
                     'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD', 
                     'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID'
-                }.get(x, x),
-                help="Auto-detected from path. Change if incorrect." if st.session_state.language == 'en' else "从路径自动检测，如有误可手动修改。"
+                }.get(x, x)
             )
             st.session_state.database = database
             
-            # 🚀 自动验证路径（当路径变化时）
-            # 检测路径是否改变，自动触发验证
-            last_auto_validated = st.session_state.get('last_auto_validated_path', '')
-            if data_path and data_path != last_auto_validated:
-                st.session_state.last_auto_validated_path = data_path
-                
-                if not Path(data_path).exists():
-                    st.error("❌ Path does not exist" if st.session_state.language == 'en' else "❌ 路径不存在")
-                    st.session_state.path_validated = False
+            default_path = "/home/1_publicData/icu_databases/mimiciv/3.1/" if database == 'miiv' else ""
+            path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
+            data_path = st.text_input(
+                path_label,
+                value=st.session_state.data_path or default_path,
+                placeholder=f"/path/to/{database}"
+            )
+            
+            # 验证按钮
+            validate_btn = "🔍 Validate Data Path" if st.session_state.language == 'en' else "🔍 验证数据路径"
+            if st.button(validate_btn, width="stretch", key="validate_path"):
+                if not data_path:
+                    err_msg = "❌ Please enter data path" if st.session_state.language == 'en' else "❌ 请输入数据路径"
+                    st.error(err_msg)
+                elif not Path(data_path).exists():
+                    err_msg = "❌ Path does not exist" if st.session_state.language == 'en' else "❌ 路径不存在"
+                    st.error(err_msg)
                 else:
-                    # 自动检查数据库所需文件
+                    # 检查数据库所需文件
                     validation_result = validate_database_path(data_path, database)
                     st.session_state.last_validation = validation_result
                     st.session_state.last_validated_path = data_path
@@ -2419,7 +2218,7 @@ def render_sidebar():
                         st.success(f"✅ {validation_result['message']}")
                     else:
                         st.session_state.path_validated = False
-                        st.warning(validation_result['message'])
+                        st.error(validation_result['message'])
                         if validation_result.get('suggestion'):
                             st.info(validation_result['suggestion'])
             
@@ -2427,9 +2226,9 @@ def render_sidebar():
             last_validation = st.session_state.get('last_validation', {})
             last_path = st.session_state.get('last_validated_path', '')
             
-            if st.session_state.get('path_validated') and st.session_state.get('data_path') == data_path:
-                # 已验证成功，不重复显示
-                pass
+            if st.session_state.get('path_validated') and st.session_state.data_path == data_path:
+                validated_msg = "✅ Path validated" if st.session_state.language == 'en' else "✅ 路径已验证"
+                st.success(validated_msg)
             elif last_validation.get('can_convert') and last_path == data_path:
                 # 显示转换按钮
                 convert_btn = "🔄 Convert to Parquet" if st.session_state.language == 'en' else "🔄 转换为Parquet"
@@ -2446,6 +2245,9 @@ def render_sidebar():
                     csv_ok_msg = "✅ Will use CSV format (slower loading)" if st.session_state.language == 'en' else "✅ 将使用CSV格式（加载较慢）"
                     st.success(csv_ok_msg)
                     st.rerun()
+            elif data_path and Path(data_path).exists():
+                validate_hint = "💡 Click the button above to validate data format" if st.session_state.language == 'en' else "💡 点击上方按钮验证数据格式"
+                st.caption(validate_hint)
         
         st.markdown("---")
         
@@ -2721,41 +2523,29 @@ def render_sidebar():
             placeholder="Select export directory" if st.session_state.language == 'en' else "选择导出目录",
             help=(f"Data will be exported to this directory (Current database: {db_name.upper()})" if st.session_state.language == 'en' else f"数据将导出到此目录（当前数据库: {db_name.upper()}）")
         )
+        st.session_state.export_path = export_path
         
-        # 🔧 添加验证按钮（而不是自动验证）
-        validate_export_btn = "🔍 Validate Export Path" if st.session_state.language == 'en' else "🔍 验证导出路径"
-        if st.button(validate_export_btn, width="stretch", key="validate_export_path"):
-            if not export_path:
-                err_msg = "❌ Please enter export path" if st.session_state.language == 'en' else "❌ 请输入导出路径"
-                st.error(err_msg)
-            else:
-                st.session_state.export_path = export_path
-                if Path(export_path).exists():
-                    st.session_state.export_path_validated = True
-                    path_ok_msg = "✅ Export path valid" if st.session_state.language == 'en' else "✅ 导出路径有效"
-                    st.success(path_ok_msg)
-                else:
-                    st.session_state.export_path_validated = False
-                    # 提供创建选项
-                    st.warning("⚠️ Path does not exist" if st.session_state.language == 'en' else "⚠️ 路径不存在")
-        
-        # 显示当前状态或创建选项
+        # 检查路径并提供创建选项
         if export_path:
-            if st.session_state.get('export_path_validated') and st.session_state.export_path == export_path:
-                pass  # 已验证，不显示额外信息
-            elif not Path(export_path).exists():
-                create_btn = "📁 Create Directory" if st.session_state.language == 'en' else "📁 创建目录"
-                if st.button(create_btn, key="create_export_dir"):
-                    try:
-                        Path(export_path).mkdir(parents=True, exist_ok=True)
-                        st.session_state.export_path = export_path
-                        st.session_state.export_path_validated = True
-                        ok_msg = "✅ Directory created" if st.session_state.language == 'en' else "✅ 目录已创建"
-                        st.success(ok_msg)
-                        st.rerun()
-                    except Exception as e:
-                        err_msg = f"Creation failed: {e}" if st.session_state.language == 'en' else f"创建失败: {e}"
-                        st.error(err_msg)
+            if Path(export_path).exists():
+                path_ok_msg = "✅ Path valid" if st.session_state.language == 'en' else "✅ 路径有效"
+                st.success(path_ok_msg)
+            else:
+                col_create, col_info = st.columns([1, 2])
+                with col_create:
+                    create_btn = "📁 Create Directory" if st.session_state.language == 'en' else "📁 创建目录"
+                    if st.button(create_btn, key="create_export_dir"):
+                        try:
+                            Path(export_path).mkdir(parents=True, exist_ok=True)
+                            ok_msg = "✅ Directory created" if st.session_state.language == 'en' else "✅ 目录已创建"
+                            st.success(ok_msg)
+                            st.rerun()
+                        except Exception as e:
+                            err_msg = f"Creation failed: {e}" if st.session_state.language == 'en' else f"创建失败: {e}"
+                            st.error(err_msg)
+                with col_info:
+                    not_exist_msg = "Path does not exist" if st.session_state.language == 'en' else "路径不存在"
+                    st.caption(not_exist_msg)
         
         # 导出格式选择（优先Parquet）
         format_label = "Export Format" if st.session_state.language == 'en' else "导出格式"
@@ -2768,21 +2558,32 @@ def render_sidebar():
         )
         st.session_state.export_format = export_format
         
-        # 🚀 显示导出策略提示（按特征分批，自动内存管理）
-        resources = get_system_resources()
-        
-        if st.session_state.language == 'en':
-            mem_info = f"💡 **Smart Export Mode** ({resources['available_memory_gb']:.1f}GB available)\n\n" + \
-                       "Features are loaded one-by-one and written to disk immediately. " + \
-                       "This allows exporting **ALL patients** even with limited RAM."
-        else:
-            mem_info = f"💡 **智能导出模式** (可用内存 {resources['available_memory_gb']:.1f}GB)\n\n" + \
-                       "逐个加载特征并立即写入磁盘，即使内存有限也可导出**全部患者**。"
-        
-        st.info(mem_info)
+        # 🚀 患者数量限制（性能优化选项）
+        limit_label = "Patient Limit" if st.session_state.language == 'en' else "患者数量限制"
+        limit_help = "Limit number of patients to speed up loading. 0 = no limit (full data, may be slow)" if st.session_state.language == 'en' else "限制加载的患者数量以加速。0 = 不限制（全量数据，可能较慢）"
+        patient_limit_options = [0, 1000, 5000, 10000, 20000, 50000]
+        patient_limit_labels = {
+            0: "All patients (slower)" if st.session_state.language == 'en' else "全部患者（较慢）",
+            1000: "1,000",
+            5000: "5,000", 
+            10000: "10,000",
+            20000: "20,000",
+            50000: "50,000"
+        }
+        current_limit = st.session_state.get('patient_limit', 0)
+        if current_limit not in patient_limit_options:
+            current_limit = 0
+        patient_limit = st.selectbox(
+            limit_label,
+            options=patient_limit_options,
+            index=patient_limit_options.index(current_limit),
+            format_func=lambda x: patient_limit_labels.get(x, str(x)),
+            help=limit_help
+        )
+        st.session_state.patient_limit = patient_limit
         
         # 导出按钮
-        can_export = (use_mock or (st.session_state.get('data_path') and Path(st.session_state.data_path).exists())) and selected_concepts and export_path and Path(export_path).exists()
+        can_export = (use_mock or (st.session_state.data_path and Path(st.session_state.data_path).exists())) and selected_concepts and export_path and Path(export_path).exists()
         
         export_btn = "📥 Export Data" if st.session_state.language == 'en' else "📥 导出数据"
         if can_export:
@@ -2795,7 +2596,7 @@ def render_sidebar():
             if not selected_concepts:
                 feat_warn = "⚠️ Please select features first" if st.session_state.language == 'en' else "⚠️ 请先选择特征"
                 st.caption(feat_warn)
-            elif not use_mock and not st.session_state.get('data_path'):
+            elif not use_mock and not st.session_state.data_path:
                 path_warn = "⚠️ Please set data path first" if st.session_state.language == 'en' else "⚠️ 请先设置数据路径"
                 st.caption(path_warn)
         
@@ -2811,8 +2612,6 @@ def render_sidebar():
                 - 💾 RAM: {resources['total_memory_gb']} GB total
                 - 📊 Available: {resources['available_memory_gb']} GB
                 
-                **Export Strategy:** Feature-by-feature loading (memory-safe)
-                
                 **Auto-optimized:**
                 - Workers: {resources['recommended_workers']}
                 - Backend: {resources['recommended_backend']}
@@ -2823,8 +2622,6 @@ def render_sidebar():
                 - 🖥️ CPU: {resources['cpu_count']} 核心
                 - 💾 内存: {resources['total_memory_gb']} GB 总计
                 - 📊 可用: {resources['available_memory_gb']} GB
-                
-                **导出策略:** 按特征分批加载（内存安全）
                 
                 **自动优化配置:**
                 - 并行数: {resources['recommended_workers']}
@@ -2883,38 +2680,39 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
         # 从宽表中提取每个特征列作为单独的concept
         data = {}
         
-        # 找到ID列和时间列
+        # 首先确定全局ID列（用于患者筛选）
         id_col_found = 'stay_id'
-        time_col_found = 'time'
-        
         for file_name, df in raw_data.items():
             if isinstance(df, pd.DataFrame):
-                # 找ID列
                 for col in id_candidates:
                     if col in df.columns:
                         id_col_found = col
                         break
-                # 找时间列
-                for col in time_candidates:
-                    if col in df.columns:
-                        time_col_found = col
-                        break
                 break
         
         # 从每个宽表中提取特征列
+        # 注意：每个文件可能有不同的时间列，需要单独检测
         for file_name, df in raw_data.items():
             if isinstance(df, pd.DataFrame):
-                # 获取特征列（排除ID列和时间列）
-                feature_cols = [c for c in df.columns if c not in exclude_cols]
+                # 为当前文件找时间列（每个文件单独检测）
+                file_time_col = None
+                for col in time_candidates:
+                    if col in df.columns:
+                        file_time_col = col
+                        break
+                
+                # 获取特征列（排除ID列、时间列和元数据列如_concept）
+                meta_cols = {'_concept'}
+                feature_cols = [c for c in df.columns if c not in exclude_cols and c not in meta_cols]
                 
                 # 为每个特征创建单独的DataFrame
                 for feat_col in feature_cols:
-                    # 保留ID列、时间列和该特征列
+                    # 保留ID列、该文件的时间列和该特征列
                     keep_cols = []
                     if id_col_found in df.columns:
                         keep_cols.append(id_col_found)
-                    if time_col_found in df.columns:
-                        keep_cols.append(time_col_found)
+                    if file_time_col and file_time_col in df.columns:
+                        keep_cols.append(file_time_col)
                     keep_cols.append(feat_col)
                     
                     feat_df = df[keep_cols].copy()
@@ -3054,47 +2852,49 @@ def load_data():
             parallel_workers, parallel_backend = get_optimal_parallel_config(num_patients, task_type='load')
             
             try:
-                # � 优化：批量加载所有概念（共享表缓存，对HiRID等大表提速3-6倍）
+                # 🔧 逐个加载概念，跳过不可用的（某些概念在特定数据库中没有数据源配置）
                 data = {}
                 failed_concepts = []
                 
-                # 一次性加载所有概念
-                load_kwargs = {
-                    'data_path': st.session_state.data_path,
-                    'database': st.session_state.get('database'),
-                    'concepts': concepts_list,
-                    'verbose': False,
-                    'merge': False,
-                    'parallel_workers': parallel_workers,
-                    'parallel_backend': parallel_backend,
-                }
-                if patient_ids_filter:
-                    load_kwargs['patient_ids'] = patient_ids_filter
-                
-                result = load_concepts(**load_kwargs)
-                
-                # 处理返回结果（批量加载返回 dict）
-                if isinstance(result, dict):
-                    for cname, df in result.items():
-                        # 🔧 处理各种返回类型（ICUTable, ConceptFrame等）
-                        if hasattr(df, 'to_pandas'):
-                            df = df.to_pandas()
-                        elif hasattr(df, 'dataframe'):
-                            df = df.dataframe()
-                        elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
-                            df = df.data
+                for i, concept in enumerate(concepts_list):
+                    try:
+                        load_kwargs = {
+                            'data_path': st.session_state.data_path,
+                            'database': st.session_state.get('database'),
+                            'concepts': [concept],
+                            'verbose': False,
+                            'merge': False,
+                            'concept_workers': 1,
+                            'parallel_workers': parallel_workers,
+                            'parallel_backend': parallel_backend,
+                        }
+                        if patient_ids_filter:
+                            load_kwargs['patient_ids'] = patient_ids_filter
                         
-                        if isinstance(df, pd.DataFrame) and len(df) > 0:
-                            data[cname] = df
-                        elif isinstance(df, pd.Series):
-                            data[cname] = df.to_frame().reset_index()
-                elif isinstance(result, pd.DataFrame):
-                    # 单概念加载返回 DataFrame
-                    if len(result) > 0 and len(concepts_list) == 1:
-                        data[concepts_list[0]] = result
-                
-                # 检查哪些概念加载失败
-                failed_concepts = [c for c in concepts_list if c not in data]
+                        result = load_concepts(**load_kwargs)
+                        
+                        # 处理返回结果（可能是 dict 或 DataFrame）
+                        if isinstance(result, dict):
+                            for cname, df in result.items():
+                                # 🔧 处理各种返回类型（ICUTable, ConceptFrame等）
+                                if hasattr(df, 'to_pandas'):
+                                    df = df.to_pandas()
+                                elif hasattr(df, 'dataframe'):
+                                    df = df.dataframe()
+                                elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                                    df = df.data
+                                
+                                if isinstance(df, pd.DataFrame) and len(df) > 0:
+                                    data[cname] = df
+                                elif isinstance(df, pd.Series):
+                                    data[cname] = df.to_frame().reset_index()
+                        elif isinstance(result, pd.DataFrame):
+                            # 单概念加载返回 DataFrame
+                            if len(result) > 0:
+                                data[concept] = result
+                    except Exception:
+                        failed_concepts.append(concept)
+                        continue  # 跳过失败的概念，继续加载其他的
                 
                 if failed_concepts:
                     skip_msg = f"⚠️ Skipped {len(failed_concepts)} unavailable: {', '.join(failed_concepts[:5])}" if lang == 'en' else f"⚠️ 跳过 {len(failed_concepts)} 个不可用: {', '.join(failed_concepts[:5])}"
@@ -3227,26 +3027,19 @@ def load_data_for_preview(max_patients: int = 50):
             # 批量失败，回退到逐个加载
             for concept in preview_concepts:
                 try:
-                    result = load_concepts(
+                    df = load_concepts(
                         data_path=st.session_state.data_path,
                         database=st.session_state.get('database'),
                         concepts=[concept],
                         verbose=False,
-                        merge=False,  # 保持与主加载逻辑一致，不合并
+                        merge=True,
                     )
-                    # 处理返回结果
-                    if isinstance(result, dict):
-                        for cname, df in result.items():
-                            if hasattr(df, 'to_pandas'):
-                                df = df.to_pandas()
-                            elif hasattr(df, 'dataframe'):
-                                df = df.dataframe()
-                            elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
-                                df = df.data
-                            if isinstance(df, pd.DataFrame) and len(df) > 0:
-                                data[cname] = df
-                    elif isinstance(result, pd.DataFrame) and len(result) > 0:
-                        data[concept] = result
+                    if hasattr(df, 'to_pandas'):
+                        df = df.to_pandas()
+                    elif hasattr(df, 'dataframe'):
+                        df = df.dataframe()
+                    if isinstance(df, pd.DataFrame) and len(df) > 0:
+                        data[concept] = df
                 except Exception:
                     pass
         
@@ -5763,549 +5556,6 @@ def render_quality_page():
             )
 
 
-
-
-def render_cohort_dashboard_page():
-    """渲染队列仪表板 - 基于用户导入的模块动态展示。"""
-    lang = st.session_state.get('language', 'en')
-    
-    page_title = "📈 Cohort Dashboard" if lang == 'en' else "📈 队列仪表板"
-    st.markdown(f"## {page_title}")
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    
-    # 检查是否有已加载的数据
-    concept_results = st.session_state.get('loaded_concepts', {})
-    patient_ids = st.session_state.get('patient_ids', [])
-    
-    if not concept_results:
-        if lang == 'en':
-            st.info("""
-            **📊 Cohort Dashboard**
-            
-            This dashboard provides clinical insights into your ICU cohort.
-            
-            **To get started:**
-            1. Configure your data source in sidebar
-            2. Select features to load
-            3. Click "Load Data"
-            4. Return here to view the dashboard
-            """)
-        else:
-            st.info("""
-            **📊 队列仪表板**
-            
-            此仪表板从临床角度展示ICU队列的关键维度。
-            
-            **使用步骤：**
-            1. 在侧边栏配置数据源
-            2. 选择要加载的特征
-            3. 点击"加载数据"
-            4. 返回此页面查看仪表板
-            """)
-        return
-    
-    # 导入 plotly
-    try:
-        import plotly.express as px
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
-    except ImportError:
-        st.error("Plotly not installed. Run: pip install plotly")
-        return
-    
-    # ========== 使用 webapp 本身的 CONCEPT_GROUPS_INTERNAL ==========
-    # 非连续型指标（不适合画分布图）
-    NON_CONTINUOUS = {
-        "sex", "death", "abx", "vaso_ind", "mech_vent", "supp_o2", 
-        "vent_ind", "vent_start", "vent_end", "avpu", "ecmo", "ecmo_indication",
-        "norepi_dur", "dobu_dur", "epi_dur"
-    }
-    
-    # ========== 预处理数据 ==========
-    all_patient_ids = set()
-    feature_data = {}
-    feature_to_module = {}  # 特征到模块的映射
-    
-    for name, df in concept_results.items():
-        if df is None or len(df) == 0:
-            continue
-        
-        # 确定所属模块 - 使用 CONCEPT_GROUPS_INTERNAL
-        module_name = None
-        for mod_name, concepts in CONCEPT_GROUPS_INTERNAL.items():
-            if name in concepts:
-                module_name = mod_name
-                break
-        
-        if module_name is None:
-            module_name = "other"
-        
-        feature_to_module[name] = module_name
-        
-        value_col = None
-        for vc in ['value', 'valuenum', name]:
-            if vc in df.columns:
-                try:
-                    values = pd.to_numeric(df[vc], errors='coerce')
-                    if values.notna().sum() > 0:
-                        value_col = vc
-                        break
-                except:
-                    pass
-        
-        time_col = None
-        for tc in ['charttime', 'time', 'starttime']:
-            if tc in df.columns:
-                time_col = tc
-                break
-        
-        if 'stay_id' in df.columns:
-            feat_patients = set(df['stay_id'].unique())
-            all_patient_ids.update(feat_patients)
-        else:
-            feat_patients = set()
-        
-        feature_data[name] = {
-            'df': df,
-            'value_col': value_col,
-            'time_col': time_col,
-            'patients': feat_patients,
-            'module': module_name
-        }
-    
-    n_patients = len(all_patient_ids) if all_patient_ids else len(patient_ids)
-    
-    # 按模块分组
-    modules_with_data = {}
-    for name, fd in feature_data.items():
-        mod = fd['module']
-        if mod not in modules_with_data:
-            modules_with_data[mod] = []
-        modules_with_data[mod].append(name)
-    
-    # ========== 顶部指标卡 ==========
-    st.markdown("### 📊 " + ("Cohort Overview" if lang == 'en' else "队列概览"))
-    
-    total_records = sum(len(fd['df']) for fd in feature_data.values())
-    valid_records = 0
-    for fd in feature_data.values():
-        if fd['value_col']:
-            valid_records += pd.to_numeric(fd['df'][fd['value_col']], errors='coerce').notna().sum()
-    
-    metric_cols = st.columns(4)
-    with metric_cols[0]:
-        st.metric("👥 " + ("Patients" if lang == 'en' else "患者数"), f"{n_patients:,}")
-    with metric_cols[1]:
-        st.metric("📦 " + ("Modules" if lang == 'en' else "模块数"), f"{len(modules_with_data)}")
-    with metric_cols[2]:
-        st.metric("📋 " + ("Features" if lang == 'en' else "特征数"), f"{len(feature_data)}")
-    with metric_cols[3]:
-        st.metric("📈 " + ("Valid Values" if lang == 'en' else "有效值数"), f"{valid_records:,}")
-    
-    st.markdown("---")
-    
-    # ========== 4个核心图表 ==========
-    chart_row1 = st.columns(2)
-    
-    # ===== 图表1：各模块数据量汇总 =====
-    with chart_row1[0]:
-        st.markdown("#### 📦 " + ("Data Volume by Module" if lang == 'en' else "模块数据量"))
-        
-        module_stats = []
-        for mod_name, features in modules_with_data.items():
-            mod_records = sum(len(feature_data[f]['df']) for f in features)
-            mod_valid = 0
-            mod_patients = set()
-            for f in features:
-                fd = feature_data[f]
-                if fd['value_col']:
-                    mod_valid += pd.to_numeric(fd['df'][fd['value_col']], errors='coerce').notna().sum()
-                mod_patients.update(fd['patients'])
-            
-            # 获取模块标签 - 使用 CONCEPT_GROUP_NAMES (元组: en, zh)
-            if mod_name in CONCEPT_GROUP_NAMES:
-                en_name, zh_name = CONCEPT_GROUP_NAMES[mod_name]
-                label = zh_name if lang == 'zh' else en_name
-            else:
-                label = mod_name.replace("_", " ").title()
-            
-            module_stats.append({
-                'Module': label,
-                'Features': len(features),
-                'Records': mod_records,
-                'Valid': mod_valid,
-                'Patients': len(mod_patients),
-                'mod_key': mod_name
-            })
-        
-        if module_stats:
-            mod_df = pd.DataFrame(module_stats)
-            mod_df = mod_df.sort_values('Records', ascending=True)
-            
-            fig_mod = go.Figure()
-            fig_mod.add_trace(go.Bar(
-                x=mod_df['Records'],
-                y=mod_df['Module'],
-                orientation='h',
-                marker_color='#3498db',
-                text=[f"{r:,}" for r in mod_df['Records']],
-                textposition='outside',
-                hovertemplate='%{y}<br>Records: %{x:,}<br>Features: ' + 
-                              mod_df['Features'].astype(str) + '<extra></extra>'
-            ))
-            
-            fig_mod.update_layout(
-                margin=dict(t=20, b=40, l=150, r=100),
-                height=max(250, 30 * len(module_stats) + 80),
-                xaxis_title="Records" if lang == 'en' else "记录数",
-                showlegend=False,
-                bargap=0.3
-            )
-            st.plotly_chart(fig_mod, use_container_width=True)
-    
-    # ===== 图表2：特征值分布（仅连续型指标） =====
-    with chart_row1[1]:
-        st.markdown("#### 📊 " + ("Feature Distribution" if lang == 'en' else "特征分布"))
-        
-        # 构建可选模块（仅包含连续型特征）
-        available_modules = {}
-        for mod_name, features in modules_with_data.items():
-            continuous_features = [f for f in features 
-                                   if f not in NON_CONTINUOUS 
-                                   and feature_data[f]['value_col']]
-            if continuous_features:
-                if mod_name in CONCEPT_GROUP_NAMES:
-                    en_name, zh_name = CONCEPT_GROUP_NAMES[mod_name]
-                    label = zh_name if lang == 'zh' else en_name
-                else:
-                    label = mod_name.replace("_", " ").title()
-                available_modules[mod_name] = {
-                    'label': label,
-                    'features': continuous_features
-                }
-        
-        if available_modules:
-            col_sel1, col_sel2 = st.columns(2)
-            with col_sel1:
-                selected_module = st.selectbox(
-                    "Module" if lang == 'en' else "模块",
-                    options=list(available_modules.keys()),
-                    format_func=lambda x: available_modules[x]['label'],
-                    key="dashboard_dist_module"
-                )
-            
-            with col_sel2:
-                module_features = available_modules.get(selected_module, {}).get('features', [])
-                selected_feature = st.selectbox(
-                    "Feature" if lang == 'en' else "特征",
-                    options=module_features,
-                    key="dashboard_dist_feature"
-                )
-            
-            if selected_feature and selected_feature in feature_data:
-                fd = feature_data[selected_feature]
-                df = fd['df']
-                value_col = fd['value_col']
-                
-                try:
-                    values = pd.to_numeric(df[value_col], errors='coerce').dropna().astype(float)
-                    
-                    if len(values) > 10:
-                        # 安全地过滤极端值
-                        q1 = float(values.quantile(0.01))
-                        q99 = float(values.quantile(0.99))
-                        values_filtered = values[(values >= q1) & (values <= q99)]
-                        
-                        if len(values_filtered) > 3000:
-                            values_filtered = values_filtered.sample(3000, random_state=42)
-                        
-                        fig_dist = go.Figure()
-                        fig_dist.add_trace(go.Histogram(
-                            x=values_filtered,
-                            nbinsx=40,
-                            marker_color='#9b59b6',
-                            opacity=0.7
-                        ))
-                        
-                        fig_dist.update_layout(
-                            margin=dict(t=20, b=40, l=50, r=20),
-                            height=250,
-                            xaxis_title=selected_feature,
-                            yaxis_title="Count" if lang == 'en' else "计数",
-                            showlegend=False
-                        )
-                        st.plotly_chart(fig_dist, use_container_width=True)
-                        
-                        st.caption(
-                            f"Median: {values.median():.2f} | IQR: {float(values.quantile(0.25)):.2f}-{float(values.quantile(0.75)):.2f} | N: {len(values):,}"
-                        )
-                    else:
-                        st.info("Not enough data points" if lang == 'en' else "数据点不足")
-                except Exception as e:
-                    st.warning(f"Cannot plot distribution for {selected_feature}: {str(e)[:50]}" if lang == 'en' else f"无法绘制 {selected_feature} 的分布")
-        else:
-            st.info("No continuous features available" if lang == 'en' else "无连续型特征")
-    
-    chart_row2 = st.columns(2)
-    
-    # ===== 图表3：首24小时趋势（按模块选择） =====
-    with chart_row2[0]:
-        st.markdown("#### 📈 " + ("First 24h Trends" if lang == 'en' else "首24小时趋势"))
-        
-        # 找所有有时间和数值的连续型特征
-        temporal_features = {}
-        for name, fd in feature_data.items():
-            if fd['time_col'] and fd['value_col'] and name not in NON_CONTINUOUS:
-                mod = fd['module']
-                if mod not in temporal_features:
-                    temporal_features[mod] = []
-                temporal_features[mod].append(name)
-        
-        if temporal_features:
-            # 按模块分组可选特征
-            trend_options = []
-            for mod_name in sorted(temporal_features.keys()):
-                if mod_name in CONCEPT_GROUP_NAMES:
-                    en_name, zh_name = CONCEPT_GROUP_NAMES[mod_name]
-                    label = zh_name if lang == 'zh' else en_name
-                else:
-                    label = mod_name.replace("_", " ").title()
-                for f in temporal_features[mod_name]:
-                    trend_options.append(f"{label[:8]}: {f}")
-            
-            if trend_options:
-                # 默认选2-3个
-                default_sel = trend_options[:min(3, len(trend_options))]
-                
-                selected_trends = st.multiselect(
-                    "Select features (max 5)" if lang == 'en' else "选择特征（最多5个）",
-                    options=trend_options,
-                    default=default_sel,
-                    max_selections=5,
-                    key="dashboard_trend_select"
-                )
-                
-                if selected_trends:
-                    feature_names = [s.split(': ')[-1] for s in selected_trends]
-                    
-                    fig_trend = make_subplots(rows=len(feature_names), cols=1, 
-                                              shared_xaxes=True, vertical_spacing=0.08,
-                                              subplot_titles=feature_names)
-                    
-                    colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6']
-                    
-                    for idx, feat_name in enumerate(feature_names, 1):
-                        if feat_name not in feature_data:
-                            continue
-                        
-                        fd = feature_data[feat_name]
-                        df = fd['df']
-                        value_col = fd['value_col']
-                        time_col = fd['time_col']
-                        
-                        try:
-                            plot_df = df[[time_col, value_col]].copy()
-                            plot_df['_time'] = pd.to_numeric(plot_df[time_col], errors='coerce')
-                            plot_df['_value'] = pd.to_numeric(plot_df[value_col], errors='coerce')
-                            plot_df = plot_df.dropna()
-                            plot_df = plot_df[(plot_df['_time'] >= 0) & (plot_df['_time'] <= 24)]
-                            
-                            if len(plot_df) > 10:
-                                plot_df['hour_bin'] = (plot_df['_time'] // 2) * 2
-                                agg = plot_df.groupby('hour_bin')['_value'].median().reset_index()
-                                agg.columns = ['hour', 'median']
-                                
-                                # IQR
-                                q25_vals = plot_df.groupby('hour_bin')['_value'].quantile(0.25).values
-                                q75_vals = plot_df.groupby('hour_bin')['_value'].quantile(0.75).values
-                                
-                                if len(agg) == len(q25_vals) and len(agg) > 1:
-                                    # IQR区域
-                                    fig_trend.add_trace(go.Scatter(
-                                        x=list(agg['hour']) + list(agg['hour'][::-1]),
-                                        y=list(q75_vals) + list(q25_vals[::-1]),
-                                        fill='toself',
-                                        fillcolor='rgba(100,100,100,0.2)',
-                                        line=dict(color='rgba(255,255,255,0)'),
-                                        showlegend=False,
-                                        hoverinfo='skip'
-                                    ), row=idx, col=1)
-                                
-                                # 中位数线
-                                fig_trend.add_trace(go.Scatter(
-                                    x=agg['hour'],
-                                    y=agg['median'],
-                                    mode='lines+markers',
-                                    line=dict(color=colors[(idx-1) % len(colors)], width=2),
-                                    marker=dict(size=4),
-                                    showlegend=False
-                                ), row=idx, col=1)
-                        except:
-                            pass
-                    
-                    fig_trend.update_layout(
-                        margin=dict(t=40, b=40, l=50, r=20),
-                        height=max(300, 70 * len(feature_names) + 60),
-                    )
-                    fig_trend.update_xaxes(title_text="Hours" if lang == 'en' else "小时", row=len(feature_names), col=1)
-                    
-                    st.plotly_chart(fig_trend, use_container_width=True)
-                else:
-                    st.info("Select at least one feature" if lang == 'en' else "请选择至少一个特征")
-        else:
-            st.info("No temporal features found" if lang == 'en' else "未找到时序特征")
-    
-    # ===== 图表4：数据有效性热力图（全部特征，显示数值） =====
-    with chart_row2[1]:
-        st.markdown("#### 🗺️ " + ("Data Validity by Time" if lang == 'en' else "数据有效性"))
-        st.caption("% patients with valid values" if lang == 'en' else "有有效值的患者比例 (%)")
-        
-        time_bins = [(0, 6), (6, 12), (12, 24), (24, 48), (48, 72)]
-        time_labels = ['0-6h', '6-12h', '12-24h', '24-48h', '48-72h']
-        
-        # 选择有时间和值的特征，每个模块都取
-        features_for_matrix = []
-        for mod_name, features in modules_with_data.items():
-            mod_feats = [f for f in features 
-                        if feature_data[f]['time_col'] and feature_data[f]['value_col'] 
-                        and 'stay_id' in feature_data[f]['df'].columns]
-            # 每个模块最多取3个
-            features_for_matrix.extend(mod_feats[:3])
-        
-        if features_for_matrix and n_patients > 0:
-            matrix_data = []
-            
-            for name in features_for_matrix:
-                fd = feature_data[name]
-                df = fd['df']
-                time_col = fd['time_col']
-                value_col = fd['value_col']
-                
-                try:
-                    df_work = df[['stay_id', time_col, value_col]].copy()
-                    df_work['_time'] = pd.to_numeric(df_work[time_col], errors='coerce')
-                    df_work['_value'] = pd.to_numeric(df_work[value_col], errors='coerce')
-                    
-                    # 只保留有效值
-                    df_valid = df_work[df_work['_value'].notna() & df_work['_time'].notna()]
-                    
-                    row_data = {'feature': name}
-                    
-                    for (t_start, t_end), label in zip(time_bins, time_labels):
-                        mask = (df_valid['_time'] >= t_start) & (df_valid['_time'] < t_end)
-                        patients_with_valid = df_valid[mask]['stay_id'].nunique()
-                        pct = patients_with_valid / n_patients * 100
-                        row_data[label] = pct
-                    
-                    matrix_data.append(row_data)
-                except:
-                    continue
-            
-            if matrix_data:
-                matrix_df = pd.DataFrame(matrix_data)
-                matrix_df = matrix_df.set_index('feature')
-                matrix_df = matrix_df.reindex(columns=time_labels)
-                
-                # 创建带有数字标注的热力图
-                z_values = matrix_df.values
-                text_values = [[f"{v:.0f}" for v in row] for row in z_values]
-                
-                fig_matrix = go.Figure(data=go.Heatmap(
-                    z=z_values,
-                    x=matrix_df.columns.tolist(),
-                    y=matrix_df.index.tolist(),
-                    colorscale='RdYlGn',
-                    hovertemplate='%{y}<br>%{x}: %{z:.1f}%<extra></extra>',
-                    showscale=True,
-                    colorbar=dict(title='%', ticksuffix='%'),
-                    text=text_values,
-                    texttemplate="%{text}%",
-                    textfont={"size": 10}
-                ))
-                fig_matrix.update_layout(
-                    margin=dict(t=20, b=40, l=100, r=20),
-                    height=max(300, 25 * len(matrix_data) + 80),
-                    xaxis_title="Time Window" if lang == 'en' else "时间窗口",
-                    yaxis=dict(autorange='reversed')
-                )
-                st.plotly_chart(fig_matrix, use_container_width=True)
-            else:
-                st.info("No valid data for matrix" if lang == 'en' else "无可用数据")
-        else:
-            st.info("No temporal features found" if lang == 'en' else "未找到时序特征")
-    
-    # ========== 底部：特征汇总表格 ==========
-    st.markdown("---")
-    st.markdown("### 📋 " + ("Feature Summary Table" if lang == 'en' else "特征汇总表"))
-    
-    summary_rows = []
-    for name, fd in feature_data.items():
-        df = fd['df']
-        value_col = fd['value_col']
-        mod = fd['module']
-        
-        # 模块标签 (元组: en, zh)
-        if mod in CONCEPT_GROUP_NAMES:
-            en_name, zh_name = CONCEPT_GROUP_NAMES[mod]
-            mod_label = zh_name if lang == 'zh' else en_name
-        else:
-            mod_label = mod.replace("_", " ").title()
-        
-        n_records = len(df)
-        n_patients_feat = len(fd['patients']) if fd['patients'] else 0
-        
-        # 统计有效值
-        if value_col:
-            try:
-                values = pd.to_numeric(df[value_col], errors='coerce').astype(float)
-                n_valid = int(values.notna().sum())
-                valid_pct = n_valid / n_records * 100 if n_records > 0 else 0
-                
-                valid_values = values.dropna()
-                if len(valid_values) > 0:
-                    mean_val = float(valid_values.mean())
-                    std_val = float(valid_values.std())
-                    min_val = float(valid_values.min())
-                    max_val = float(valid_values.max())
-                    stats_str = f"{mean_val:.2f} ± {std_val:.2f}"
-                    range_str = f"{min_val:.2f} - {max_val:.2f}"
-                else:
-                    stats_str = "-"
-                    range_str = "-"
-            except:
-                n_valid = 0
-                valid_pct = 0
-                stats_str = "-"
-                range_str = "-"
-        else:
-            n_valid = 0
-            valid_pct = 0
-            stats_str = "-"
-            range_str = "-"
-        
-        summary_rows.append({
-            "Module" if lang == 'en' else "模块": mod_label,
-            "Feature" if lang == 'en' else "特征": name,
-            "Records" if lang == 'en' else "记录数": n_records,
-            "Patients" if lang == 'en' else "患者数": n_patients_feat,
-            "Valid %" if lang == 'en' else "有效率%": f"{valid_pct:.1f}%",
-            "Mean ± SD" if lang == 'en' else "均值±标准差": stats_str,
-            "Range" if lang == 'en' else "范围": range_str
-        })
-    
-    if summary_rows:
-        summary_df = pd.DataFrame(summary_rows)
-        # 按模块和特征名排序
-        mod_col = "Module" if lang == 'en' else "模块"
-        summary_df = summary_df.sort_values([mod_col, "Feature" if lang == 'en' else "特征"])
-        
-        st.dataframe(
-            summary_df,
-            use_container_width=True,
-            hide_index=True,
-            height=min(400, 35 * len(summary_rows) + 40)
-        )
-
 def render_cohort_comparison_page():
     """渲染队列对比可视化页面 - 基于侧边栏筛选的患者进行分组对比。"""
     lang = st.session_state.get('language', 'en')
@@ -6593,10 +5843,6 @@ def render_convert_dialog():
     source_info = f"📁 Source directory: `{source_path}`" if lang == 'en' else f"📁 源目录: `{source_path}`"
     st.info(source_info)
     
-    # 检测数据库类型
-    path_lower = str(source_path).lower()
-    is_hirid = 'hirid' in path_lower
-    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -6614,46 +5860,20 @@ def render_convert_dialog():
         overwrite_label = "Overwrite existing Parquet files" if lang == 'en' else "覆盖已存在的Parquet文件"
         overwrite = st.checkbox(overwrite_label, value=False)
     
-    # HiRID: 检测 tar.gz 文件
-    tar_files = []
-    if source_path and Path(source_path).exists():
-        tar_files = list(Path(source_path).rglob('*.tar.gz'))
-    
-    if is_hirid and tar_files:
-        hirid_note = f"📦 **HiRID detected**: Found {len(tar_files)} tar.gz archives that need to be extracted first." if lang == 'en' else f"📦 **检测到HiRID**: 发现 {len(tar_files)} 个 tar.gz 压缩包需要先解压。"
-        st.warning(hirid_note)
-        
-        with st.expander("📁 Archive list" if lang == 'en' else "📁 压缩包列表", expanded=True):
-            for tf in tar_files:
-                size_mb = tf.stat().st_size / (1024 * 1024)
-                st.caption(f"• {tf.name} ({size_mb:.1f} MB)")
-    
     # 扫描可转换文件
-    csv_count = 0
     if source_path and Path(source_path).exists():
         csv_files = list(Path(source_path).rglob('*.csv')) + list(Path(source_path).rglob('*.csv.gz'))
-        # 排除一些特殊目录
-        excluded_dirs = {'cache', 'demo', '__pycache__', '.git', 'imputed_stage', 'merged_stage'}
-        csv_files = [f for f in csv_files if not any(d in str(f).lower() for d in excluded_dirs)]
-        csv_count = len(csv_files)
-        
-        found_msg = f"**Found {csv_count} CSV files to convert**" if lang == 'en' else f"**发现 {csv_count} 个CSV文件可转换**"
+        found_msg = f"**Found {len(csv_files)} CSV files to convert**" if lang == 'en' else f"**发现 {len(csv_files)} 个CSV文件可转换**"
         st.markdown(found_msg)
         
-        if csv_count > 0:
-            view_label = "View file list" if lang == 'en' else "查看文件列表"
-            with st.expander(view_label, expanded=False):
-                for f in csv_files[:20]:
-                    size_mb = f.stat().st_size / (1024 * 1024)
-                    st.caption(f"• {f.name} ({size_mb:.1f} MB)")
-                if len(csv_files) > 20:
-                    more_msg = f"... and {len(csv_files) - 20} more files" if lang == 'en' else f"... 及其他 {len(csv_files) - 20} 个文件"
-                    st.caption(more_msg)
-    
-    # 如果没有 CSV 但有 tar.gz (HiRID)，提示需要解压
-    if csv_count == 0 and is_hirid and tar_files:
-        extract_note = "⚠️ No CSV files found. Click 'Start Conversion' to extract archives and convert data." if lang == 'en' else "⚠️ 未找到CSV文件。点击「开始转换」将自动解压压缩包并转换数据。"
-        st.info(extract_note)
+        view_label = "View file list" if lang == 'en' else "查看文件列表"
+        with st.expander(view_label, expanded=False):
+            for f in csv_files[:20]:
+                size_mb = f.stat().st_size / (1024 * 1024)
+                st.caption(f"• {f.name} ({size_mb:.1f} MB)")
+            if len(csv_files) > 20:
+                more_msg = f"... and {len(csv_files) - 20} more files" if lang == 'en' else f"... 及其他 {len(csv_files) - 20} 个文件"
+                st.caption(more_msg)
     
     col1, col2, col3 = st.columns([1, 1, 1])
     
@@ -6664,8 +5884,19 @@ def render_convert_dialog():
                 err_msg = "❌ Please set a valid output directory" if lang == 'en' else "❌ 请设置有效的输出目录"
                 st.error(err_msg)
             else:
-                # 使用专门的转换函数
-                convert_data_with_progress_v2(source_path, target_path, overwrite)
+                spinner_msg = "Converting..." if lang == 'en' else "正在转换..."
+                with st.spinner(spinner_msg):
+                    success, failed = convert_csv_to_parquet(source_path, target_path, overwrite)
+                    if success > 0:
+                        success_msg = f"✅ Successfully converted {success} files" if lang == 'en' else f"✅ 成功转换 {success} 个文件"
+                        st.success(success_msg)
+                        st.session_state.path_validated = True
+                        st.session_state.data_path = target_path
+                    if failed > 0:
+                        fail_msg = f"⚠️ {failed} files failed to convert" if lang == 'en' else f"⚠️ {failed} 个文件转换失败"
+                        st.warning(fail_msg)
+                st.session_state.show_convert_dialog = False
+                st.rerun()
     
     with col2:
         cancel_label = "❌ Cancel" if lang == 'en' else "❌ 取消"
@@ -6684,242 +5915,13 @@ def render_convert_dialog():
             st.rerun()
 
 
-def convert_data_with_progress_v2(source_path: str, target_path: str, overwrite: bool = False):
-    """带进度条的数据转换功能（新版本，支持HiRID tar.gz解压）。
-    
-    不会自动跳转，让用户看到转换结果。
-    """
-    import gc
-    from pathlib import Path
-    
-    lang = st.session_state.get('language', 'en')
-    
-    # 检测数据库类型
-    path_lower = str(source_path).lower()
-    database = None
-    if 'mimic' in path_lower or 'miiv' in path_lower:
-        database = 'miiv'
-    elif 'eicu' in path_lower:
-        database = 'eicu'
-    elif 'aumc' in path_lower:
-        database = 'aumc'
-    elif 'hirid' in path_lower:
-        database = 'hirid'
-    
-    if not database:
-        st.error("❌ Unable to detect database type from path. Please ensure the path contains one of: mimic, miiv, eicu, aumc, hirid" if lang == 'en' else "❌ 无法从路径检测数据库类型。请确保路径包含以下之一: mimic, miiv, eicu, aumc, hirid")
-        return
-    
-    try:
-        from pyricu.data_converter import DataConverter
-        
-        converter = DataConverter(target_path, database=database, verbose=True)
-        
-        # === Step 1: HiRID - 解压 tar.gz 文件 ===
-        if database == 'hirid':
-            hirid_path = Path(source_path)
-            tar_files = list(hirid_path.rglob('*.tar.gz'))
-            if tar_files:
-                extract_msg = "📦 Step 1/2: Extracting HiRID archives..." if lang == 'en' else "📦 步骤 1/2: 正在解压 HiRID 压缩包..."
-                st.info(extract_msg)
-                
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                try:
-                    status_text.markdown("🔄 Extracting and converting archives to Parquet format..." if lang == 'en' else "🔄 正在解压并转换为 Parquet 格式...")
-                    extracted = converter._extract_hirid_archives()
-                    progress_bar.progress(100)
-                    
-                    if extracted:
-                        ex_msg = f"✅ Extracted: {', '.join(extracted)}" if lang == 'en' else f"✅ 已解压: {', '.join(extracted)}"
-                        st.success(ex_msg)
-                    else:
-                        st.info("ℹ️ Archives already extracted or no archives to extract" if lang == 'en' else "ℹ️ 压缩包已解压或无需解压")
-                except Exception as e:
-                    st.error(f"❌ Archive extraction failed: {e}" if lang == 'en' else f"❌ 解压失败: {e}")
-                    import traceback
-                    with st.expander("Error details" if lang == 'en' else "错误详情"):
-                        st.code(traceback.format_exc())
-                    return
-        
-        # === Step 2: 转换 CSV 文件 ===
-        csv_step = "📄 Step 2/2: Converting CSV files..." if database == 'hirid' else "📄 Converting CSV files..."
-        csv_step_zh = "📄 步骤 2/2: 正在转换 CSV 文件..." if database == 'hirid' else "📄 正在转换 CSV 文件..."
-        st.info(csv_step if lang == 'en' else csv_step_zh)
-        
-        # 重新获取 CSV 文件列表（解压后可能有新文件）
-        csv_files = converter._get_csv_files()
-        total_files = len(csv_files)
-        
-        if total_files == 0:
-            # 检查 HiRID 是否已经有 parquet shards
-            if database == 'hirid':
-                hirid_path = Path(target_path)
-                obs_dir = hirid_path / 'observations'
-                pharma_dir = hirid_path / 'pharma'
-                
-                has_obs = obs_dir.is_dir() and list(obs_dir.glob('[0-9]*.parquet'))
-                has_pharma = pharma_dir.is_dir() and list(pharma_dir.glob('[0-9]*.parquet'))
-                
-                if has_obs and has_pharma:
-                    st.success("✅ HiRID data is ready! Parquet shards already available." if lang == 'en' else "✅ HiRID 数据已就绪！Parquet 分片已可用。")
-                    st.session_state.path_validated = True
-                    st.session_state.data_path = target_path
-                    
-                    # 显示完成按钮
-                    if st.button("🏠 Return to Main Page" if lang == 'en' else "🏠 返回主页", type="primary"):
-                        st.session_state.show_convert_dialog = False
-                        st.rerun()
-                    return
-            
-            st.error("❌ No CSV files found to convert. Please check if the data directory is correct." if lang == 'en' else "❌ 未找到需要转换的 CSV 文件。请检查数据目录是否正确。")
-            return
-        
-        st.markdown(f"📊 Found **{total_files}** CSV files to convert" if lang == 'en' else f"📊 发现 **{total_files}** 个 CSV 文件需要转换")
-        
-        # 创建进度条
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        details_container = st.container()
-        
-        converted = 0
-        skipped = 0
-        failed = 0
-        failed_files = []
-        
-        for idx, csv_file in enumerate(csv_files):
-            file_name = csv_file.name
-            file_size_mb = csv_file.stat().st_size / (1024 * 1024)
-            
-            status_text.markdown(f"**Processing**: `{file_name}` ({file_size_mb:.1f} MB) [{idx+1}/{total_files}]" if lang == 'en' else f"**正在处理**: `{file_name}` ({file_size_mb:.1f} MB) [{idx+1}/{total_files}]")
-            
-            needs_conversion, reason = converter._is_conversion_needed(csv_file)
-            
-            if not needs_conversion and not overwrite:
-                skipped += 1
-                with details_container:
-                    st.caption(f"⏭️ Skipped: {file_name} ({reason})" if lang == 'en' else f"⏭️ 跳过: {file_name} ({reason})")
-            else:
-                try:
-                    converter._convert_file(csv_file)
-                    converted += 1
-                    with details_container:
-                        st.caption(f"✅ Done: {file_name}" if lang == 'en' else f"✅ 完成: {file_name}")
-                except Exception as e:
-                    failed += 1
-                    failed_files.append((file_name, str(e)))
-                    with details_container:
-                        st.caption(f"❌ Failed: {file_name} - {str(e)[:50]}" if lang == 'en' else f"❌ 失败: {file_name} - {str(e)[:50]}")
-            
-            gc.collect()
-            progress_bar.progress((idx + 1) / total_files)
-        
-        progress_bar.progress(1.0)
-        status_text.empty()
-        
-        # === 显示结果汇总 ===
-        st.markdown("---")
-        st.markdown("### 📊 Conversion Summary" if lang == 'en' else "### 📊 转换汇总")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("✅ Converted" if lang == 'en' else "✅ 已转换", converted)
-        with col2:
-            st.metric("⏭️ Skipped" if lang == 'en' else "⏭️ 跳过", skipped)
-        with col3:
-            st.metric("❌ Failed" if lang == 'en' else "❌ 失败", failed)
-        
-        if failed > 0:
-            st.error(f"⚠️ {failed} files failed to convert:" if lang == 'en' else f"⚠️ {failed} 个文件转换失败:")
-            with st.expander("Failed files" if lang == 'en' else "失败文件列表"):
-                for fname, err in failed_files[:10]:
-                    st.caption(f"• {fname}: {err}")
-                if len(failed_files) > 10:
-                    st.caption(f"... and {len(failed_files) - 10} more" if lang == 'en' else f"... 及其他 {len(failed_files) - 10} 个")
-        
-        if converted > 0 or skipped > 0:
-            st.success("✅ Conversion completed!" if lang == 'en' else "✅ 转换完成！")
-            st.session_state.path_validated = True
-            st.session_state.data_path = target_path
-        
-        # 显示返回按钮
-        if st.button("🏠 Return to Main Page" if lang == 'en' else "🏠 返回主页", type="primary"):
-            st.session_state.show_convert_dialog = False
-            st.rerun()
-            
-    except Exception as e:
-        st.error(f"❌ Conversion error: {e}" if lang == 'en' else f"❌ 转换出错: {e}")
-        import traceback
-        with st.expander("Error details" if lang == 'en' else "错误详情"):
-            st.code(traceback.format_exc())
-
-
 def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
-    """将目录下的CSV文件转换为Parquet格式。
-    
-    Uses DataConverter for memory-efficient streaming conversion.
-    """
-    import gc
-    from pyricu.data_converter import DataConverter
+    """将目录下的CSV文件转换为Parquet格式。"""
+    import time
     
     source_path = Path(source_dir)
     target_path = Path(target_dir)
     
-    # Determine database type from path
-    database = None
-    path_lower = str(source_path).lower()
-    if 'mimic' in path_lower or 'miiv' in path_lower:
-        database = 'miiv'
-    elif 'eicu' in path_lower:
-        database = 'eicu'
-    elif 'aumc' in path_lower:
-        database = 'aumc'
-    elif 'hirid' in path_lower:
-        database = 'hirid'
-    
-    # Use DataConverter if database is detected, otherwise fallback to simple conversion
-    if database:
-        try:
-            converter = DataConverter(target_path, database=database, verbose=True)
-            
-            csv_files = list(source_path.rglob('*.csv')) + list(source_path.rglob('*.csv.gz'))
-            
-            success = 0
-            failed = 0
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for idx, csv_file in enumerate(csv_files):
-                try:
-                    # Skip files that don't need conversion
-                    needs_conversion, reason = converter._is_conversion_needed(csv_file)
-                    
-                    if not needs_conversion and not overwrite:
-                        status_text.caption(f"⏭️ 跳过: {csv_file.name} ({reason})")
-                    else:
-                        status_text.markdown(f"**转换中**: `{csv_file.name}` ({idx+1}/{len(csv_files)})")
-                        converter._convert_file(csv_file)
-                        success += 1
-                        
-                except Exception as e:
-                    failed += 1
-                    status_text.caption(f"❌ 失败: {csv_file.name} - {str(e)[:50]}")
-                
-                # Force GC after each file
-                gc.collect()
-                progress_bar.progress((idx + 1) / len(csv_files))
-            
-            progress_bar.progress(1.0)
-            status_text.empty()
-            
-            return success, failed
-            
-        except Exception as e:
-            st.warning(f"DataConverter failed, using simple conversion: {e}")
-    
-    # Fallback: simple conversion for non-standard databases (with streaming for large files)
     csv_files = list(source_path.rglob('*.csv')) + list(source_path.rglob('*.csv.gz'))
     
     success = 0
@@ -6945,50 +5947,15 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
             
             status_text.markdown(f"**转换中**: `{csv_file.name}` ({idx+1}/{len(csv_files)})")
             
-            # Use chunked reading for very large files (>500MB)
-            file_size = csv_file.stat().st_size
-            if file_size > 500 * 1024 * 1024:
-                # Streaming conversion for large files
-                import pyarrow as pa
-                import pyarrow.parquet as pq
-                
-                writer = None
-                total_rows = 0
-                chunk_size = 1_000_000  # 1M rows per chunk for faster conversion
-                
-                compression = 'gzip' if csv_file.name.endswith('.gz') else None
-                chunk_iter = pd.read_csv(csv_file, chunksize=chunk_size, compression=compression, low_memory=True)
-                
-                try:
-                    for chunk in chunk_iter:
-                        table = pa.Table.from_pandas(chunk, preserve_index=False)
-                        if writer is None:
-                            writer = pq.ParquetWriter(parquet_file, table.schema, compression='snappy')
-                        writer.write_table(table)
-                        total_rows += len(chunk)
-                        del chunk, table
-                    
-                    if writer:
-                        writer.close()
-                finally:
-                    if hasattr(chunk_iter, 'close'):
-                        chunk_iter.close()
-                    gc.collect()
-            else:
-                # Direct conversion for small files
-                compression = 'gzip' if csv_file.name.endswith('.gz') else None
-                df = pd.read_csv(csv_file, compression=compression, low_memory=True)
-                df.to_parquet(parquet_file, index=False)
-                del df
-                gc.collect()
-            
+            # 读取CSV并转换
+            df = pd.read_csv(csv_file)
+            df.to_parquet(parquet_file, index=False)
             success += 1
             
         except Exception as e:
             failed += 1
             status_text.caption(f"❌ 失败: {csv_file.name} - {str(e)[:50]}")
         
-        gc.collect()
         progress_bar.progress((idx + 1) / len(csv_files))
     
     progress_bar.progress(1.0)
@@ -7050,281 +6017,8 @@ def _generate_cohort_prefix() -> str:
     return "_".join(parts)
 
 
-def get_all_patient_ids(data_path: str, database: str) -> tuple:
-    """获取数据库中所有患者ID。
-    
-    Returns:
-        (patient_ids_list, id_column_name)
-    """
-    # ID列映射
-    id_col_map = {
-        'miiv': 'stay_id', 
-        'eicu': 'patientunitstayid', 
-        'aumc': 'admissionid', 
-        'hirid': 'patientid'
-    }
-    id_col = id_col_map.get(database, 'stay_id')
-    
-    data_path = Path(data_path)
-    
-    # 根据数据库类型定义不同的患者表文件搜索顺序
-    db_patient_files = {
-        'miiv': ['icustays.parquet', 'admissions.parquet', 'patients.parquet'],
-        'eicu': ['patient.parquet'],
-        'aumc': ['admissions.parquet', 'admissions/0.parquet'],  # AUMC可能是分片目录
-        'hirid': ['general.parquet', 'general/0.parquet'],  # HiRID也可能是分片
-    }
-    
-    search_files = db_patient_files.get(database, ['icustays.parquet', 'patient.parquet', 'admissions.parquet'])
-    
-    # 先搜索单文件
-    for f in search_files:
-        fp = data_path / f
-        if fp.exists():
-            try:
-                df = pd.read_parquet(fp, columns=[id_col])
-                if id_col in df.columns:
-                    return df[id_col].unique().tolist(), id_col
-            except Exception:
-                continue
-    
-    # 搜索分片目录（如 admissions/0.parquet, admissions/1.parquet）
-    shard_dirs = {
-        'miiv': 'icustays',
-        'eicu': 'patient', 
-        'aumc': 'admissions',
-        'hirid': 'general'
-    }
-    shard_dir_name = shard_dirs.get(database, 'icustays')
-    shard_dir = data_path / shard_dir_name
-    
-    if shard_dir.exists() and shard_dir.is_dir():
-        shard_files = sorted(shard_dir.glob('*.parquet'))
-        if shard_files:
-            try:
-                # 只读第一个分片获取全部ID可能不够，需要读取所有
-                all_ids = []
-                for sf in shard_files:
-                    df = pd.read_parquet(sf, columns=[id_col])
-                    if id_col in df.columns:
-                        all_ids.extend(df[id_col].unique().tolist())
-                if all_ids:
-                    return list(set(all_ids)), id_col
-            except Exception:
-                pass
-    
-    # 备选：搜索所有parquet文件查找ID列
-    try:
-        for pf in data_path.rglob('*.parquet'):
-            try:
-                # 读取schema检查是否包含id_col
-                df = pd.read_parquet(pf, columns=[id_col])
-                if id_col in df.columns and len(df) > 0:
-                    # 找到了，但这可能不是完整的患者表，继续搜索更大的
-                    return df[id_col].unique().tolist(), id_col
-            except Exception:
-                continue
-    except Exception:
-        pass
-    
-    return [], id_col
-
-
-def streaming_export_batch(
-    concepts: list,
-    patient_ids: list,
-    id_col: str,
-    data_path: str,
-    database: str,
-    export_dir: Path,
-    export_format: str,
-    batch_idx: int,
-    progress_callback=None
-) -> dict:
-    """流式导出单个批次的数据。
-    
-    加载指定患者的数据，按模块分组导出，然后返回统计信息。
-    数据在导出后立即释放内存。
-    
-    Returns:
-        dict: {group_name: rows_exported}
-    """
-    from pyricu import load_concepts
-    import gc
-    
-    # 加载这批患者的数据
-    patient_ids_filter = {id_col: patient_ids}
-    
-    # 🔧 逐个加载概念，跳过不支持的概念（如eICU的etco2）
-    data = {}
-    failed_concepts = []
-    
-    for concept in concepts:
-        try:
-            load_kwargs = {
-                'data_path': data_path,
-                'database': database,
-                'concepts': [concept],  # 单个概念
-                'verbose': False,
-                'merge': False,
-                'patient_ids': patient_ids_filter,
-                'parallel_workers': 1,
-                'parallel_backend': 'thread',
-            }
-            result = load_concepts(**load_kwargs)
-            
-            # 处理返回结果
-            if isinstance(result, dict):
-                for cname, df in result.items():
-                    if hasattr(df, 'to_pandas'):
-                        df = df.to_pandas()
-                    elif hasattr(df, 'dataframe'):
-                        df = df.dataframe()
-                    elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
-                        df = df.data
-                    
-                    if isinstance(df, pd.DataFrame) and len(df) > 0:
-                        data[cname] = df
-                    elif isinstance(df, pd.Series):
-                        data[cname] = df.to_frame().reset_index()
-            elif isinstance(result, pd.DataFrame) and len(result) > 0:
-                data[concept] = result
-        except Exception as e:
-            # 记录失败但继续处理其他概念
-            failed_concepts.append((concept, str(e)))
-            continue
-    
-    if not data:
-        if failed_concepts:
-            return {'error': f"All concepts failed: {failed_concepts[0][1]}", 'failed': failed_concepts}
-        return {'rows': 0}
-    
-    # 按模块分组
-    concept_to_group = {}
-    group_priority = list(CONCEPT_GROUPS_INTERNAL.keys())
-    for group_key in group_priority:
-        concepts_in_group = CONCEPT_GROUPS_INTERNAL[group_key]
-        for c in concepts_in_group:
-            if c not in concept_to_group:
-                concept_to_group[c] = group_key
-    
-    grouped_data = {}
-    for concept_name, df in data.items():
-        if not isinstance(df, pd.DataFrame) or len(df) == 0:
-            continue
-        group_key = concept_to_group.get(concept_name, 'other')
-        if group_key not in grouped_data:
-            grouped_data[group_key] = {}
-        grouped_data[group_key][concept_name] = df
-    
-    # 导出每个分组（追加模式）
-    stats = {}
-    id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
-    time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'itemtime']
-    unified_time_col = 'charttime'
-    
-    for group_name, concept_dfs in grouped_data.items():
-        # 合并同组概念为宽表
-        merged_df = None
-        detected_id_col = None
-        
-        for cname, cdf in concept_dfs.items():
-            cdf = cdf.copy()
-            
-            # 🔧 先删除元数据列，避免合并时重复
-            metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type', 'label', 'itemid']
-            cols_to_drop = [c for c in cdf.columns if c in metadata_cols]
-            if cols_to_drop:
-                cdf = cdf.drop(columns=cols_to_drop)
-            
-            # 统一时间列
-            if unified_time_col not in cdf.columns:
-                for tc in time_candidates:
-                    if tc in cdf.columns:
-                        cdf = cdf.rename(columns={tc: unified_time_col})
-                        break
-            
-            # 删除多余时间列
-            other_time = [t for t in time_candidates if t in cdf.columns and t != unified_time_col]
-            if other_time:
-                cdf = cdf.drop(columns=other_time)
-            
-            # 检测ID列
-            if detected_id_col is None:
-                for idc in id_candidates:
-                    if idc in cdf.columns:
-                        detected_id_col = idc
-                        break
-            
-            # 重命名值列
-            val_cols = [c for c in cdf.columns if c not in id_candidates and c != unified_time_col]
-            if len(val_cols) == 1 and val_cols[0] != cname:
-                cdf = cdf.rename(columns={val_cols[0]: cname})
-            elif len(val_cols) > 1:
-                # 多个值列，添加概念名前缀避免冲突
-                rename_map = {c: f"{cname}_{c}" for c in val_cols if c != cname}
-                cdf = cdf.rename(columns=rename_map)
-            
-            # 合并
-            if merged_df is None:
-                merged_df = cdf
-            else:
-                merge_cols = [c for c in [detected_id_col, unified_time_col] if c in cdf.columns and c in merged_df.columns]
-                if merge_cols:
-                    # 🔧 处理可能的重复列：删除cdf中已存在于merged_df的非合并列
-                    existing_cols = set(merged_df.columns) - set(merge_cols)
-                    new_cols = set(cdf.columns) - set(merge_cols)
-                    duplicate_cols = existing_cols & new_cols
-                    if duplicate_cols:
-                        cdf = cdf.drop(columns=list(duplicate_cols))
-                    merged_df = pd.merge(merged_df, cdf, on=merge_cols, how='outer')
-        
-        if merged_df is None or len(merged_df) == 0:
-            continue
-        
-        # 🔧 清理可能产生的 _x, _y 后缀列
-        cols_to_drop = [c for c in merged_df.columns if c.endswith('_x') or c.endswith('_y')]
-        if cols_to_drop:
-            merged_df = merged_df.drop(columns=cols_to_drop)
-        
-        # 导出文件（追加模式）
-        file_path = export_dir / f"{group_name}.{export_format}"
-        
-        if export_format == 'parquet':
-            # Parquet 追加需要特殊处理
-            if file_path.exists():
-                existing = pd.read_parquet(file_path)
-                merged_df = pd.concat([existing, merged_df], ignore_index=True)
-            merged_df.to_parquet(file_path, index=False)
-        elif export_format == 'csv':
-            # CSV 可以直接追加
-            mode = 'a' if file_path.exists() else 'w'
-            header = not file_path.exists()
-            merged_df.to_csv(file_path, mode=mode, header=header, index=False)
-        else:  # excel - 不支持追加，累积后最后写
-            if file_path.exists():
-                existing = pd.read_excel(file_path)
-                merged_df = pd.concat([existing, merged_df], ignore_index=True)
-            merged_df.to_excel(file_path, index=False)
-        
-        stats[group_name] = stats.get(group_name, 0) + len(merged_df)
-    
-    # 释放内存
-    del data
-    del grouped_data
-    gc.collect()
-    
-    return stats
-
-
 def execute_sidebar_export():
-    """执行侧边栏触发的数据导出。
-    
-    采用按特征分批导出策略：
-    - 每次只加载一个特征，处理完立即写入磁盘并释放内存
-    - 这样即使是超大数据集（如HiRID 7.7亿行）也能在低内存机器上完成
-    - 自动根据系统内存决定模式，用户无需手动配置
-    """
+    """执行侧边栏触发的数据导出（直接导出到本地目录，带进度条）。"""
     from datetime import datetime
     
     lang = st.session_state.get('language', 'en')
@@ -7343,23 +6037,9 @@ def execute_sidebar_export():
         st.error(err_msg)
         return
     
-    # 初始化取消状态
-    if 'export_cancelled' not in st.session_state:
-        st.session_state.export_cancelled = False
-    st.session_state.export_cancelled = False
-    
     try:
         export_title = "📤 Export Progress" if lang == 'en' else "📤 导出进度"
         st.markdown(f"### {export_title}")
-        
-        # 🚀 添加取消按钮
-        cancel_col, status_col = st.columns([1, 4])
-        with cancel_col:
-            cancel_btn = "❌ Cancel" if lang == 'en' else "❌ 取消"
-            if st.button(cancel_btn, type="secondary", key="cancel_export"):
-                st.session_state.export_cancelled = True
-                st.warning("⚠️ Export cancelled by user" if lang == 'en' else "⚠️ 用户取消导出")
-                return
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
@@ -7381,11 +6061,13 @@ def execute_sidebar_export():
             params = st.session_state.get('mock_params', {'n_patients': 10, 'hours': 72})
             all_mock_data, patient_ids = generate_mock_data(**params)
             
+            
             # 🔧 根据用户选择的 concepts 过滤数据
             data = {}
             for concept in selected_concepts:
                 if concept in all_mock_data:
                     data[concept] = all_mock_data[concept]
+            
             
             # 显示加载情况
             loaded_count = len(data)
@@ -7396,61 +6078,103 @@ def execute_sidebar_export():
             
             progress_bar.progress(0.3)
         else:
-            # ========== 按特征分批导出（内存友好模式）==========
-            # 每次只加载一个特征，处理完立即释放内存
-            # 这是唯一能处理HiRID等超大数据集的方式
+            # 加载真实数据并导出（批量并行加载）
             from pyricu import load_concepts
-            import gc
+            import os
             
+            # 批量并行加载所有特征
+            batch_msg = f"**Loading {total_concepts} features (batch mode)...**" if lang == 'en' else f"**批量加载 {total_concepts} 个特征...**"
+            status_text.markdown(batch_msg)
+            
+            # 🚀 性能优化：参照 extract_baseline_features.py 的配置
+            patient_limit = st.session_state.get('patient_limit', 0)  # 导出默认不限制
+            
+            # 获取患者ID过滤器
+            patient_ids_filter = None
+            id_col = 'stay_id'
+            if patient_limit and patient_limit > 0:
+                try:
+                    data_path = Path(st.session_state.data_path)
+                    database = st.session_state.get('database', 'miiv')
+                    id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid'}
+                    id_col = id_col_map.get(database, 'stay_id')
+                    
+                    for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:
+                        fp = data_path / f
+                        if fp.exists():
+                            icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
+                            if id_col in icustays_df.columns:
+                                all_ids = icustays_df[id_col].unique().tolist()
+                                sample_ids = all_ids[:patient_limit] if len(all_ids) > patient_limit else all_ids
+                                patient_ids_filter = {id_col: sample_ids}
+                                break
+                except Exception:
+                    pass
+            
+            # 🚀 智能并行配置：根据系统资源和患者数量动态调整
+            num_patients = len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
+            parallel_workers, parallel_backend = get_optimal_parallel_config(num_patients, task_type='export')
+            
+            # 显示系统资源信息（调试用）
             resources = get_system_resources()
-            database = st.session_state.get('database', 'miiv')
-            data_path = st.session_state.data_path
+            perf_msg = f"🚀 System: {resources['cpu_count']} cores, {resources['total_memory_gb']}GB RAM → Using {parallel_workers} workers ({parallel_backend})" if lang == 'en' else f"🚀 系统: {resources['cpu_count']} 核心, {resources['total_memory_gb']}GB 内存 → 使用 {parallel_workers} 并行 ({parallel_backend})"
+            st.info(perf_msg)
             
-            # 获取所有患者数量（用于显示）
-            all_patient_ids, id_col = get_all_patient_ids(data_path, database)
-            total_patients = len(all_patient_ids)
-            
-            if total_patients == 0:
-                err_msg = "❌ No patients found in database" if lang == 'en' else "❌ 数据库中未找到患者"
-                st.error(err_msg)
-                return
-            
-            # 显示导出信息
-            info_msg = f"🚀 Exporting {total_concepts} features for {total_patients:,} patients ({resources['available_memory_gb']:.1f}GB available)" if lang == 'en' else f"🚀 导出 {total_concepts} 个特征，共 {total_patients:,} 患者（可用内存 {resources['available_memory_gb']:.1f}GB）"
-            st.info(info_msg)
-            
-            # 按特征分批加载和导出
-            data = {}
-            failed_concepts = []
-            
-            for idx, concept in enumerate(selected_concepts):
-                # 检查取消状态
-                if st.session_state.get('export_cancelled', False):
-                    st.warning("⚠️ Export cancelled" if lang == 'en' else "⚠️ 导出已取消")
+            try:
+                # 📝 批量加载所有概念（触发宽表批量加载优化）
+                data = {}
+                failed_concepts = []
+                
+                # 🚀 优化：先过滤掉当前数据库不支持的概念，避免批量加载失败
+                from pyricu.concept import load_dictionary
+                cd = load_dictionary(include_sofa2=True)  # 🔧 FIX: 包含 SOFA2 概念字典
+                database = st.session_state.get('database', 'eicu')
+                valid_concepts = []
+                unsupported_concepts = []
+                for c in selected_concepts:
+                    concept_def = cd.get(c)
+                    if concept_def:
+                        # 🔧 FIX 2025-01-23: SOFA 等回调概念没有直接的 sources，但有 sub_concepts
+                        # 这些概念是有效的，因为它们会递归加载子概念
+                        has_sources = concept_def.sources.get(database) if hasattr(concept_def, 'sources') else False
+                        has_sub_concepts = bool(concept_def.sub_concepts) if hasattr(concept_def, 'sub_concepts') else False
+                        has_callback = bool(concept_def.callback) if hasattr(concept_def, 'callback') else False
+                        
+                        if has_sources or has_sub_concepts or has_callback:
+                            valid_concepts.append(c)
+                        else:
+                            unsupported_concepts.append(c)
+                    else:
+                        unsupported_concepts.append(c)
+                
+                if unsupported_concepts:
+                    st.warning(f"⚠️ 跳过 {len(unsupported_concepts)} 个不支持的概念: {', '.join(unsupported_concepts)}")
+                
+                if not valid_concepts:
+                    st.error("❌ 所选概念在当前数据库中都不可用")
                     return
                 
-                # 更新进度
-                progress = (idx + 0.5) / total_concepts
-                progress_bar.progress(progress)
-                feature_msg = f"**Loading feature {idx+1}/{total_concepts}**: `{concept}`" if lang == 'en' else f"**加载特征 {idx+1}/{total_concepts}**: `{concept}`"
-                status_text.markdown(feature_msg)
+                load_kwargs = {
+                    'data_path': st.session_state.data_path,
+                    'database': database,
+                    'concepts': valid_concepts,  # 🚀 只传入有效概念
+                    'verbose': False,
+                    'merge': False,  # 返回 dict，每个概念单独的DataFrame
+                    'concept_workers': 1,
+                    # 不传 parallel_workers，避免触发分批加载路径
+                }
+                if patient_ids_filter:
+                    load_kwargs['patient_ids'] = patient_ids_filter
+                
+                progress_bar.progress(0.2)
                 
                 try:
-                    load_kwargs = {
-                        'data_path': data_path,
-                        'database': database,
-                        'concepts': [concept],  # 单个概念
-                        'verbose': False,
-                        'merge': False,
-                        'parallel_workers': 1,  # 单线程避免内存峰值
-                        'parallel_backend': 'thread',
-                    }
-                    
                     result = load_concepts(**load_kwargs)
                     
-                    # 处理返回结果
+                    # 处理返回结果（dict of DataFrames）
                     if isinstance(result, dict):
                         for cname, df in result.items():
+                            # 🔧 处理各种返回类型
                             if hasattr(df, 'to_pandas'):
                                 df = df.to_pandas()
                             elif hasattr(df, 'dataframe'):
@@ -7462,27 +6186,60 @@ def execute_sidebar_export():
                                 data[cname] = df
                             elif isinstance(df, pd.Series):
                                 data[cname] = df.to_frame().reset_index()
-                    elif isinstance(result, pd.DataFrame) and len(result) > 0:
-                        data[concept] = result
-                        
-                except Exception as e:
-                    # 记录失败但继续处理其他概念
-                    failed_concepts.append((concept, str(e)))
-                    continue
+                    elif isinstance(result, pd.DataFrame):
+                        # 如果返回单个DataFrame（merged模式），拆分成各列
+                        for concept in selected_concepts:
+                            if concept in result.columns:
+                                data[concept] = result
+                                break  # merged模式只需要一个
                     
-                # 🔧 每加载几个特征后触发GC，避免内存累积
-                if (idx + 1) % 5 == 0:
-                    gc.collect()
-            
-            progress_bar.progress(0.8)
-            
-            if failed_concepts:
-                failed_names = [c for c, e in failed_concepts[:5]]
-                skip_msg = f"⚠️ Skipped {len(failed_concepts)} unavailable: {', '.join(failed_names)}" if lang == 'en' else f"⚠️ 跳过 {len(failed_concepts)} 个不可用: {', '.join(failed_names)}"
-                st.warning(skip_msg)
-            
-            loaded_msg = f"✅ Loaded {len(data)}/{total_concepts} features" if lang == 'en' else f"✅ 已加载 {len(data)}/{total_concepts} 个特征"
-            status_text.markdown(loaded_msg)
+                    # 检查哪些概念没有加载成功
+                    failed_concepts = [c for c in selected_concepts if c not in data]
+                    
+                except Exception as batch_e:
+                    # 批量加载失败，回退到逐个加载
+                    st.warning(f"⚠️ 批量加载失败，回退到逐个加载: {batch_e}")
+                    for i, concept in enumerate(selected_concepts):
+                        try:
+                            single_kwargs = {
+                                'data_path': st.session_state.data_path,
+                                'database': st.session_state.get('database'),
+                                'concepts': [concept],
+                                'verbose': False,
+                                'merge': False,
+                                'concept_workers': 1,
+                            }
+                            if patient_ids_filter:
+                                single_kwargs['patient_ids'] = patient_ids_filter
+                            
+                            result = load_concepts(**single_kwargs)
+                            
+                            if isinstance(result, dict):
+                                for cname, df in result.items():
+                                    if hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                                        df = df.data
+                                    if isinstance(df, pd.DataFrame) and len(df) > 0:
+                                        data[cname] = df
+                            elif isinstance(result, pd.DataFrame) and len(result) > 0:
+                                data[concept] = result
+                            
+                            progress_bar.progress(0.1 + 0.4 * (i + 1) / total_concepts)
+                            
+                        except Exception:
+                            failed_concepts.append(concept)
+                            continue
+                
+                progress_bar.progress(0.5)
+                if failed_concepts:
+                    skip_msg = f"⚠️ Skipped {len(failed_concepts)} unavailable: {', '.join(failed_concepts[:5])}" if lang == 'en' else f"⚠️ 跳过 {len(failed_concepts)} 个不可用: {', '.join(failed_concepts[:5])}"
+                    st.warning(skip_msg)
+                loaded_msg = f"✅ Loaded {len(data)}/{total_concepts} features" if lang == 'en' else f"✅ 已加载 {len(data)}/{total_concepts} 个特征"
+                status_text.markdown(loaded_msg)
+                
+            except Exception as e:
+                warn_msg = f"⚠️ Batch loading failed: {e}" if lang == 'en' else f"⚠️ 批量加载失败: {e}"
+                st.warning(warn_msg)
+                data = {}
         
         # 按模块分组导出（将同一分组的特征合并为宽表）
         merge_msg = "**Merging and exporting by module...**" if lang == 'en' else "**正在按模块合并导出...**"
@@ -7534,7 +6291,7 @@ def execute_sidebar_export():
             id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
             time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'itemtime']
             
-            # 🔧 先统一所有 DataFrame 的时间列名称和类型
+            # 🔧 先统一所有 DataFrame 的时间列名称
             # 不同概念可能使用不同的时间列名（charttime, starttime等）
             # 注意：PyRICU 的时间是相对于 ICU 入院的小时数，不是 datetime
             unified_time_col = 'charttime'  # 统一使用 charttime 作为时间列名
@@ -7559,21 +6316,8 @@ def execute_sidebar_export():
                                 cdf = cdf.drop(columns=other_time_cols)
                             break
                 
-                # 🔧 统一时间列类型为 float64（小时数）
-                # 确保所有 DataFrame 的时间列类型一致，避免 merge 时类型冲突
-                if unified_time_col in cdf.columns:
-                    # 如果是 datetime 类型，尝试转换为小时数（相对于最小时间）
-                    if pd.api.types.is_datetime64_any_dtype(cdf[unified_time_col]):
-                        try:
-                            min_time = cdf[unified_time_col].min()
-                            cdf[unified_time_col] = (cdf[unified_time_col] - min_time).dt.total_seconds() / 3600
-                        except:
-                            pass
-                    # 确保是数值类型
-                    try:
-                        cdf[unified_time_col] = pd.to_numeric(cdf[unified_time_col], errors='coerce')
-                    except:
-                        pass
+                # 🔧 不再强制转换时间列类型，保持原始的小时数格式
+                # PyRICU 的时间是相对于 ICU 入院的小时数（0, 1, 2, 3...）
                 
                 normalized_concept_dfs[cname] = cdf
             concept_dfs = normalized_concept_dfs
@@ -7647,10 +6391,6 @@ def execute_sidebar_export():
                     else:
                         # 外连接合并
                         merged_df = pd.merge(merged_df, df, on=merge_cols, how='outer')
-                        # 🔧 清理合并产生的重复列（_x, _y 后缀）
-                        dup_cols = [c for c in merged_df.columns if c.endswith('_x') or c.endswith('_y')]
-                        if dup_cols:
-                            merged_df = merged_df.drop(columns=dup_cols)
             
             if merged_df is None or len(merged_df) == 0:
                 continue
@@ -8123,11 +6863,10 @@ def main():
         st.markdown('<div class="sub-header">本地 ICU 数据分析与可视化平台</div>', unsafe_allow_html=True)
     
     # 主页面标签（数据导出已移至左侧边栏）
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         get_text('home'),
         get_text('timeseries'), 
         get_text('patient_view'),
-        get_text('cohort_dashboard'),
         get_text('data_quality'),
         get_text('cohort_compare'),
     ])
@@ -8142,12 +6881,9 @@ def main():
         render_patient_page()
     
     with tab4:
-        render_cohort_dashboard_page()
-    
-    with tab5:
         render_quality_page()
     
-    with tab6:
+    with tab5:
         render_cohort_comparison_page()
     
     # 底部状态栏

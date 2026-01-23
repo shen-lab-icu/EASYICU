@@ -144,7 +144,8 @@ WINDOW_CONCEPTS = {
 
 # 点事件概念（不应展开为连续时间序列）
 POINT_EVENT_CONCEPTS = {
-    "abx", "samp", "cort", "dobu60", "susp_inf", "sep3", "avpu"
+    "abx", "samp", "cort", "dobu60", "susp_inf", "sep3", "avpu",
+    "rrt",  # Renal replacement therapy: uses set_val(TRUE), point events from chartevents + procedureevents
 }
 
 # 时长概念（已编码持续时间，不需要展开）
@@ -564,10 +565,13 @@ def merge_concepts_ricu_style(
         # 检测和重命名时间列
         # 🔧 FIX: 添加 eICU 的时间列（包括 intakeoutputoffset）和 death 的 deathtime
         # 🔧 FIX: 添加 start 列（区间格式数据的开始时间）
+        # 🔧 FIX: 添加 measuredat_minutes（AUMC DuckDB聚合后返回的时间列）
+        # 🔧 FIX 2025-01-30: measuredat_minutes 应该在 measuredat 之前，因为 DuckDB 聚合后返回的是 measuredat_minutes
         time_candidates = [time_col, "charttime", "time", "starttime", "start", "index_var", 
                           "datetime", "givenat",  # HiRID time columns
                           "nursingchartoffset", "labresultoffset", "observationoffset",
-                          "measuredat", "respchartoffset", "intakeoutputoffset",
+                          "measuredat_minutes", "measuredat",  # AUMC time columns: measuredat_minutes first!
+                          "respchartoffset", "intakeoutputoffset",
                           "infusionoffset", "drugstartoffset", "deathtime",
                           "unitdischargeoffset", "dateofdeath"]
         found_time = None
