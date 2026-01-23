@@ -887,3 +887,317 @@ def create_survival_comparison(
         'survived_count': len(survived_ids),
         'deceased_count': len(deceased_ids),
     }
+
+
+# ============================================================
+# 多数据库特征分布对比类
+# ============================================================
+
+class MultiDatabaseDistribution:
+    """
+    多数据库特征分布对比可视化器
+    
+    生成类似论文中的多变量密度分布对比图，展示不同ICU数据库间的特征分布差异。
+    """
+    
+    # 数据库颜色配置
+    DB_COLORS = {
+        'aumc': '#1f77b4',      # 蓝色 - Amsterdam
+        'eicu': '#ff7f0e',      # 橙色 - eICU
+        'miiv': '#2ca02c',      # 绿色 - MIMIC
+        'hirid': '#d62728',     # 红色 - HiRID
+    }
+    
+    DB_LABELS = {
+        'aumc': 'Amsterdam',
+        'eicu': 'eICU',
+        'miiv': 'MIMIC-IV',
+        'hirid': 'HiRID',
+    }
+    
+    # 特征配置（名称、单位、合理范围）
+    FEATURE_CONFIG = {
+        # 生命体征
+        'hr': {'name': 'Heart Rate', 'unit': '/min', 'range': (30, 200)},
+        'sbp': {'name': 'Systolic BP', 'unit': 'mmHg', 'range': (40, 220)},
+        'dbp': {'name': 'Diastolic BP', 'unit': 'mmHg', 'range': (20, 140)},
+        'map': {'name': 'Mean Arterial Pressure', 'unit': 'mmHg', 'range': (30, 160)},
+        'resp': {'name': 'Respiratory Rate', 'unit': '/min', 'range': (5, 50)},
+        'temp': {'name': 'Temperature', 'unit': '°C', 'range': (34, 42)},
+        'o2sat': {'name': 'SpO2', 'unit': '%', 'range': (70, 100)},
+        # 实验室
+        'glu': {'name': 'Glucose', 'unit': 'mg/dL', 'range': (40, 500)},
+        'na': {'name': 'Sodium', 'unit': 'mmol/L', 'range': (120, 160)},
+        'k': {'name': 'Potassium', 'unit': 'mmol/L', 'range': (2.5, 7.0)},
+        'crea': {'name': 'Creatinine', 'unit': 'mg/dL', 'range': (0.2, 15)},
+        'bili': {'name': 'Bilirubin', 'unit': 'mg/dL', 'range': (0, 30)},
+        'lact': {'name': 'Lactate', 'unit': 'mmol/L', 'range': (0, 15)},
+        'hgb': {'name': 'Hemoglobin', 'unit': 'g/dL', 'range': (5, 18)},
+        'plt': {'name': 'Platelets', 'unit': '×10⁹/L', 'range': (0, 600)},
+        'wbc': {'name': 'WBC', 'unit': '×10⁹/L', 'range': (0, 50)},
+        # 血气
+        'ph': {'name': 'pH', 'unit': '', 'range': (6.8, 7.8)},
+        'po2': {'name': 'PaO2', 'unit': 'mmHg', 'range': (30, 400)},
+        'pco2': {'name': 'PaCO2', 'unit': 'mmHg', 'range': (15, 100)},
+        'fio2': {'name': 'FiO2', 'unit': '%', 'range': (21, 100)},
+        # 其他
+        'gcs': {'name': 'GCS', 'unit': '', 'range': (3, 15)},
+        'urine': {'name': 'Urine Output', 'unit': 'mL/h', 'range': (0, 500)},
+    }
+    
+    def __init__(self, data_root: str = '/home/zhuhb/icudb', language: str = 'en'):
+        self.data_root = Path(data_root)
+        self.language = language
+        self._data_cache: Dict[str, pd.DataFrame] = {}
+    
+    def _get_db_path(self, db: str) -> Path:
+        """获取数据库路径"""
+        db_paths = {
+            'miiv': 'mimiciv/3.1',
+            'eicu': 'eicu/2.0.1',
+            'aumc': 'aumc/1.0.2',
+            'hirid': 'hirid/1.1.1',
+        }
+        return self.data_root / db_paths.get(db, db)
+    
+    def load_feature_data(
+        self,
+        concepts: List[str],
+        databases: List[str],
+        max_patients: int = 500,
+        sample_size: int = 5000,
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        加载多数据库特征数据
+        
+        Returns:
+            {database: DataFrame with columns [concept, value]}
+        """
+        from pyricu import load_concepts
+        
+        result = {}
+        
+        for db in databases:
+            db_path = self._get_db_path(db)
+            if not db_path.exists():
+                continue
+            
+            all_data = []
+            for concept in concepts:
+                try:
+                    df = load_concepts(
+                        concepts=[concept],
+                        database=db,
+                        data_path=str(db_path),
+                        max_patients=max_patients,
+                        verbose=False,
+                    )
+                    
+                    if df is not None and not df.empty and concept in df.columns:
+                        values = df[concept].dropna()
+                        if len(values) > sample_size:
+                            values = values.sample(n=sample_size, random_state=42)
+                        
+                        if len(values) > 0:
+                            all_data.append(pd.DataFrame({
+                                'concept': concept,
+                                'value': values.values
+                            }))
+                except Exception:
+                    continue
+            
+            if all_data:
+                result[db] = pd.concat(all_data, ignore_index=True)
+        
+        return result
+    
+    def _compute_kde(
+        self, 
+        values: np.ndarray, 
+        x_range: Tuple[float, float],
+        n_points: int = 200
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """计算核密度估计"""
+        from scipy import stats
+        
+        if len(values) < 10:
+            return np.array([]), np.array([])
+        
+        # 移除异常值
+        q1, q99 = np.percentile(values, [1, 99])
+        values = values[(values >= q1) & (values <= q99)]
+        
+        if len(values) < 10:
+            return np.array([]), np.array([])
+        
+        try:
+            kde = stats.gaussian_kde(values, bw_method='scott')
+            x = np.linspace(x_range[0], x_range[1], n_points)
+            y = kde(x)
+            return x, y
+        except Exception:
+            return np.array([]), np.array([])
+    
+    def create_distribution_grid(
+        self,
+        data: Dict[str, pd.DataFrame],
+        concepts: List[str],
+        cols: int = 5,
+    ) -> 'go.Figure':
+        """
+        创建多特征分布网格图
+        
+        Args:
+            data: {database: DataFrame} 数据字典
+            concepts: 特征列表
+            cols: 列数
+        
+        Returns:
+            Plotly Figure
+        """
+        if not HAS_PLOTLY:
+            raise ImportError("需要安装Plotly")
+        
+        n_features = len(concepts)
+        rows = (n_features + cols - 1) // cols
+        
+        # 获取特征标题
+        titles = [self.FEATURE_CONFIG.get(c, {}).get('name', c) for c in concepts]
+        
+        fig = make_subplots(
+            rows=rows,
+            cols=cols,
+            subplot_titles=titles,
+            vertical_spacing=0.08,
+            horizontal_spacing=0.05,
+        )
+        
+        for idx, concept in enumerate(concepts):
+            row = idx // cols + 1
+            col = idx % cols + 1
+            config = self.FEATURE_CONFIG.get(concept, {'range': (0, 100), 'unit': ''})
+            x_range = config.get('range', (0, 100))
+            
+            for db, df in data.items():
+                concept_data = df[df['concept'] == concept]['value'].values
+                if len(concept_data) < 10:
+                    continue
+                
+                x, y = self._compute_kde(concept_data, x_range)
+                if len(x) == 0:
+                    continue
+                
+                # 转换颜色为RGBA
+                color = self.DB_COLORS.get(db, '#888888')
+                r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=x,
+                        y=y,
+                        mode='lines',
+                        name=self.DB_LABELS.get(db, db),
+                        line=dict(color=color, width=2),
+                        fill='tozeroy',
+                        fillcolor=f'rgba({r},{g},{b},0.25)',
+                        showlegend=(idx == 0),
+                        legendgroup=db,
+                    ),
+                    row=row,
+                    col=col,
+                )
+            
+            # 设置轴标签
+            fig.update_xaxes(
+                title_text=config.get('unit', ''),
+                title_font_size=9,
+                row=row,
+                col=col,
+            )
+            fig.update_yaxes(
+                title_text='Density' if col == 1 else '',
+                title_font_size=9,
+                row=row,
+                col=col,
+            )
+        
+        fig.update_layout(
+            height=240 * rows,
+            title_text="Multi-Database Feature Distribution Comparison",
+            title_x=0.5,
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5,
+            ),
+            margin=dict(t=80, b=30, l=40, r=20),
+        )
+        
+        # 更新子图标题字体
+        for annotation in fig.layout.annotations:
+            annotation.font.size = 10
+        
+        return fig
+    
+    def create_single_feature_comparison(
+        self,
+        data: Dict[str, pd.DataFrame],
+        concept: str,
+    ) -> Tuple['go.Figure', pd.DataFrame]:
+        """创建单特征详细对比"""
+        if not HAS_PLOTLY:
+            raise ImportError("需要安装Plotly")
+        
+        config = self.FEATURE_CONFIG.get(concept, {'range': (0, 100), 'unit': '', 'name': concept})
+        x_range = config.get('range', (0, 100))
+        
+        fig = go.Figure()
+        stats_data = []
+        
+        for db, df in data.items():
+            concept_data = df[df['concept'] == concept]['value'].values
+            if len(concept_data) < 10:
+                continue
+            
+            # 统计信息
+            stats_data.append({
+                'Database': self.DB_LABELS.get(db, db),
+                'N': len(concept_data),
+                'Mean': np.mean(concept_data),
+                'Std': np.std(concept_data),
+                'Median': np.median(concept_data),
+                'Q25': np.percentile(concept_data, 25),
+                'Q75': np.percentile(concept_data, 75),
+            })
+            
+            x, y = self._compute_kde(concept_data, x_range)
+            if len(x) == 0:
+                continue
+            
+            color = self.DB_COLORS.get(db, '#888888')
+            r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=y,
+                    mode='lines',
+                    name=self.DB_LABELS.get(db, db),
+                    line=dict(color=color, width=2.5),
+                    fill='tozeroy',
+                    fillcolor=f'rgba({r},{g},{b},0.2)',
+                )
+            )
+        
+        fig.update_layout(
+            title=config.get('name', concept),
+            xaxis_title=config.get('unit', ''),
+            yaxis_title='Density',
+            height=400,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+        )
+        
+        return fig, pd.DataFrame(stats_data)
