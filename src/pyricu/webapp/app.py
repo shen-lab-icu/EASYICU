@@ -664,6 +664,27 @@ CONCEPT_GROUP_NAMES = {
     'outcome': ('🎯 Outcome', '🎯 结局'),
 }
 
+# 用于时序分析页面的显示名称映射（英文版本）
+CONCEPT_GROUPS_DISPLAY = {
+    'sofa2_score': '⭐ SOFA-2 Scores',
+    'sofa1_score': '📊 SOFA-1 Scores',
+    'sepsis3_sofa2': '🦠 Sepsis-3 (SOFA-2)',
+    'sepsis3_sofa1': '🦠 Sepsis-3 (SOFA-1)',
+    'vitals': '❤️ Vital Signs',
+    'respiratory': '🫁 Respiratory',
+    'blood_gas': '🩸 Blood Gas',
+    'chemistry': '🧪 Chemistry',
+    'hematology': '🔬 Hematology',
+    'vasopressors': '💉 Vasopressors',
+    'medications': '💊 Medications',
+    'renal': '🚰 Renal',
+    'neurological': '🧠 Neurological',
+    'circulatory': '🫀 Circulatory',
+    'demographics': '👤 Demographics',
+    'other_scores': '📈 Other Scores',
+    'outcome': '🎯 Outcome',
+}
+
 def get_concept_groups():
     """根据当前语言返回带正确显示名称的特征分组。"""
     lang = st.session_state.get('language', 'en')
@@ -5642,215 +5663,348 @@ def render_quality_page():
 
 
 def render_cohort_comparison_page():
-    """渲染队列对比可视化页面 - 基于侧边栏筛选的患者进行分组对比。"""
+    """渲染队列对比可视化页面 - 包含多个子标签页"""
     lang = st.session_state.get('language', 'en')
     
-    page_title = "📊 Cohort Comparison" if lang == 'en' else "📊 队列对比分析"
+    page_title = "📊 Cohort Analysis" if lang == 'en' else "📊 队列分析"
     st.markdown(f"## {page_title}")
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
-    # 检查是否有数据路径
-    data_path = st.session_state.get('data_path')
-    database = st.session_state.get('database', 'miiv')
-    
-    if not data_path or not Path(data_path).exists():
-        if lang == 'en':
-            st.warning("👈 Please configure data source in sidebar first (Step 1)")
-        else:
-            st.warning("👈 请先在侧边栏配置数据源（步骤1）")
-        return
-    
-    # 检查是否已经加载了数据
-    loaded_concepts = st.session_state.get('loaded_concepts', [])
-    patient_ids = st.session_state.get('patient_ids', [])
-    all_patient_count = st.session_state.get('all_patient_count', 0)
-    
-    # 优先使用特征数据中的患者ID（更准确）
-    if 'concept_results' in st.session_state and st.session_state.concept_results:
-        # 从加载的数据中提取实际患者ID
-        actual_patient_ids = set()
-        for concept_name, df in st.session_state.concept_results.items():
-            if df is not None and 'stay_id' in df.columns:
-                actual_patient_ids.update(df['stay_id'].unique())
-        if actual_patient_ids:
-            patient_ids = list(actual_patient_ids)
-            all_patient_count = len(patient_ids)
-    
-    if not patient_ids or all_patient_count == 0:
-        if lang == 'en':
-            st.info("""
-            **📋 How to use Cohort Comparison:**
-            
-            1. Go to sidebar **Step 1** to configure data source
-            2. Enable **Step 2: Cohort Selection** to filter patients  
-            3. Select features in **Step 3** and click **Load Data**
-            4. Return here to compare patient subgroups
-            
-            The comparison will be based on patients you loaded in the Data Viewer tab.
-            """)
-        else:
-            st.info("""
-            **📋 队列对比使用说明：**
-            
-            1. 在侧边栏**步骤1**配置数据源
-            2. 启用**步骤2：队列筛选**来筛选患者
-            3. 在**步骤3**选择特征并点击**加载数据**
-            4. 返回此页面进行分组对比
-            
-            对比将基于您在数据查看器中加载的患者进行。
-            """)
-        return
-    
-    # 显示当前数据状态
+    # 子标签页
     if lang == 'en':
-        st.success(f"✅ Working with **{all_patient_count:,}** patients from your loaded data")
+        sub_tabs = st.tabs([
+            "👥 Group Comparison",
+            "📈 Multi-DB Distribution", 
+            "🎯 Cohort Dashboard"
+        ])
     else:
-        st.success(f"✅ 基于已加载的 **{all_patient_count:,}** 名患者进行对比分析")
+        sub_tabs = st.tabs([
+            "👥 分组对比",
+            "📈 多数据库分布",
+            "🎯 队列仪表板"
+        ])
     
-    # 显示当前筛选条件（如果有）
-    cohort_enabled = st.session_state.get('cohort_enabled', False)
-    if cohort_enabled:
-        cf = st.session_state.get('cohort_filter', {})
-        filter_parts = []
-        if cf.get('age_min') is not None or cf.get('age_max') is not None:
-            age_str = f"Age: {cf.get('age_min', 0)}-{cf.get('age_max', '∞')}" if lang == 'en' else f"年龄: {cf.get('age_min', 0)}-{cf.get('age_max', '∞')}"
-            filter_parts.append(age_str)
-        if cf.get('first_icu_stay') is not None:
-            icu_str = f"First ICU: {'Yes' if cf['first_icu_stay'] else 'No'}" if lang == 'en' else f"首次入ICU: {'是' if cf['first_icu_stay'] else '否'}"
-            filter_parts.append(icu_str)
-        if cf.get('los_min') is not None:
-            los_str = f"LOS ≥ {cf['los_min']}h" if lang == 'en' else f"住院≥{cf['los_min']}h"
-            filter_parts.append(los_str)
-        if filter_parts:
-            filter_info = " | ".join(filter_parts)
-            if lang == 'en':
-                st.caption(f"📋 Current filters: {filter_info}")
-            else:
-                st.caption(f"📋 当前筛选条件: {filter_info}")
+    with sub_tabs[0]:
+        render_group_comparison_subtab(lang)
+    
+    with sub_tabs[1]:
+        render_multidb_distribution_subtab(lang)
+    
+    with sub_tabs[2]:
+        render_cohort_dashboard_subtab(lang)
+
+
+def render_group_comparison_subtab(lang: str):
+    """分组对比子标签页 - 带独立数据加载配置"""
+    
+    st.markdown("### 👥 " + ("Group Comparison Analysis" if lang == 'en' else "分组对比分析"))
+    
+    # ========== 数据配置区域 ==========
+    with st.expander("⚙️ " + ("Data Configuration" if lang == 'en' else "数据配置"), expanded=True):
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            data_root = st.text_input(
+                "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
+                value=os.environ.get('RICU_DATA_PATH', '/home/zhuhb/icudb'),
+                key="grp_data_root",
+                help="Root directory containing database folders (mimiciv, eicu, aumc, hirid)" if lang == 'en' else "包含数据库文件夹的根目录"
+            )
+        
+        with col2:
+            db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID'}
+            selected_db = st.selectbox(
+                "🏥 " + ("Database" if lang == 'en' else "数据库"),
+                options=list(db_options.keys()),
+                format_func=lambda x: db_options[x],
+                key="grp_db_select"
+            )
+        
+        with col3:
+            max_patients = st.number_input(
+                "👥 " + ("Max Patients" if lang == 'en' else "最大患者数"),
+                min_value=100,
+                max_value=10000,
+                value=1000,
+                step=100,
+                key="grp_max_patients"
+            )
+        
+        # 数据库路径映射
+        db_path_map = {
+            'miiv': 'mimiciv/3.1',
+            'eicu': 'eicu/2.0.1', 
+            'aumc': 'aumc/1.0.2',
+            'hirid': 'hirid/1.1.1',
+        }
+        full_data_path = os.path.join(data_root, db_path_map.get(selected_db, ''))
+        
+        # 路径状态提示
+        if os.path.exists(full_data_path):
+            st.success(f"✅ " + (f"Path valid: `{full_data_path}`" if lang == 'en' else f"路径有效: `{full_data_path}`"))
+        else:
+            st.warning(f"⚠️ " + (f"Path not found: `{full_data_path}`" if lang == 'en' else f"路径不存在: `{full_data_path}`"))
+        
+        # 加载按钮
+        load_btn = st.button(
+            "🚀 " + ("Load Patient Demographics" if lang == 'en' else "加载患者人口统计学数据"),
+            type="primary",
+            key="grp_load_btn"
+        )
+        
+        if load_btn:
+            try:
+                from pyricu.patient_filter import PatientFilter
+                
+                with st.spinner("Loading demographics..." if lang == 'en' else "正在加载人口统计学数据..."):
+                    pf = PatientFilter(database=selected_db, data_path=full_data_path)
+                    demographics_df = pf._load_demographics()
+                    
+                    # 限制患者数
+                    if len(demographics_df) > max_patients:
+                        demographics_df = demographics_df.head(max_patients)
+                    
+                    st.session_state['grp_demographics'] = demographics_df
+                    st.session_state['grp_loaded_db'] = selected_db
+                    st.session_state['grp_loaded_path'] = full_data_path
+                    
+                st.success(f"✅ Loaded {len(demographics_df):,} patients" if lang == 'en' else f"✅ 已加载 {len(demographics_df):,} 名患者")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+    
+    st.markdown("---")
+    
+    # ========== 分组对比区域 ==========
+    if 'grp_demographics' not in st.session_state:
+        st.info("👆 " + ("Configure data source and click 'Load' to start" if lang == 'en' else "配置数据源并点击'加载'开始"))
+        return
+    
+    demographics_df = st.session_state['grp_demographics']
+    database = st.session_state.get('grp_loaded_db', 'miiv')
+    data_path = st.session_state.get('grp_loaded_path', '')
+    
+    # 显示数据概览
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Patients" if lang == 'en' else "患者总数", f"{len(demographics_df):,}")
+    with col2:
+        avg_age = demographics_df['age'].mean() if 'age' in demographics_df.columns else 0
+        st.metric("Mean Age" if lang == 'en' else "平均年龄", f"{avg_age:.1f}")
+    with col3:
+        male_pct = (demographics_df['gender'] == 'M').mean() * 100 if 'gender' in demographics_df.columns else 0
+        st.metric("Male %" if lang == 'en' else "男性占比", f"{male_pct:.1f}%")
+    with col4:
+        mortality = (1 - demographics_df['survived'].mean()) * 100 if 'survived' in demographics_df.columns else 0
+        st.metric("Mortality" if lang == 'en' else "死亡率", f"{mortality:.1f}%")
     
     st.markdown("---")
     
     # 对比模式选择
-    compare_mode_label = "Select Comparison Mode" if lang == 'en' else "选择对比模式"
+    st.markdown("#### " + ("🔀 Select Comparison Mode" if lang == 'en' else "🔀 选择对比模式"))
+    
     compare_options = {
-        'survival': ('💀 Survived vs Deceased' if lang == 'en' else '💀 存活 vs 死亡'),
-        'age': ('👴 Age Groups' if lang == 'en' else '👴 年龄分组'),
-        'gender': ('👫 Male vs Female' if lang == 'en' else '👫 男性 vs 女性'),
-        'los': ('🏥 Short vs Long Stay' if lang == 'en' else '🏥 短住院 vs 长住院'),
+        'survival': ('💀 Survived vs Deceased', '💀 存活 vs 死亡'),
+        'age': ('👴 Age Groups', '👴 年龄分组'),
+        'gender': ('👫 Male vs Female', '👫 男性 vs 女性'),
+        'los': ('🏥 Short vs Long Stay', '🏥 短住院 vs 长住院'),
     }
     
     compare_mode = st.radio(
-        compare_mode_label,
+        "Comparison Mode" if lang == 'en' else "对比模式",
         options=list(compare_options.keys()),
-        format_func=lambda x: compare_options[x],
-        horizontal=True
+        format_func=lambda x: compare_options[x][0] if lang == 'en' else compare_options[x][1],
+        horizontal=True,
+        key="group_comp_mode"
     )
+    
+    # 根据模式显示额外配置
+    if compare_mode == 'age':
+        age_threshold = st.slider(
+            "Age Threshold" if lang == 'en' else "年龄阈值",
+            min_value=30, max_value=90, value=65, step=5,
+            key="group_comp_age_threshold"
+        )
+    elif compare_mode == 'los' and 'los_hours' in demographics_df.columns:
+        median_los = demographics_df['los_hours'].median()
+        los_threshold = st.slider(
+            "LOS Threshold (hours)" if lang == 'en' else "住院时长阈值（小时）",
+            min_value=24,
+            max_value=int(min(500, demographics_df['los_hours'].quantile(0.95))),
+            value=int(median_los),
+            step=12,
+            key="group_comp_los_threshold"
+        )
     
     st.markdown("---")
     
+    # ========== 特征模块选择 ==========
+    st.markdown("#### " + ("📊 Select Feature Modules" if lang == 'en' else "📊 选择特征模块"))
+    
+    # 定义所有可用的特征模块
+    FEATURE_MODULES = {
+        'demographic': {
+            'name_en': '👤 Demographics',
+            'name_zh': '👤 人口统计学',
+            'features': [
+                ('age', 'Age (years)', '年龄 (岁)', 'continuous'),
+                ('gender', 'Male', '男性', 'binary', 'M'),
+                ('los_days', 'ICU LOS (days)', 'ICU住院时长 (天)', 'continuous'),
+                ('first_icu_stay', 'First ICU Stay', '首次ICU入住', 'binary', True),
+            ],
+            'default': True
+        },
+        'outcome': {
+            'name_en': '📈 Outcomes',
+            'name_zh': '📈 结局指标',
+            'features': [
+                ('mortality', 'ICU Mortality', 'ICU死亡率', 'binary_survival'),
+            ],
+            'default': True
+        },
+        'vital': {
+            'name_en': '💓 Vital Signs',
+            'name_zh': '💓 生命体征',
+            'features': [
+                ('hr', 'Heart Rate (bpm)', '心率 (bpm)', 'continuous'),
+                ('sbp', 'Systolic BP (mmHg)', '收缩压 (mmHg)', 'continuous'),
+                ('dbp', 'Diastolic BP (mmHg)', '舒张压 (mmHg)', 'continuous'),
+                ('map', 'Mean Arterial Pressure (mmHg)', '平均动脉压 (mmHg)', 'continuous'),
+                ('resp', 'Respiratory Rate', '呼吸频率', 'continuous'),
+                ('temp', 'Temperature (°C)', '体温 (°C)', 'continuous'),
+                ('o2sat', 'SpO2 (%)', '血氧饱和度 (%)', 'continuous'),
+            ],
+            'default': True
+        },
+        'lab': {
+            'name_en': '🧪 Laboratory',
+            'name_zh': '🧪 实验室检查',
+            'features': [
+                ('glu', 'Glucose (mg/dL)', '血糖 (mg/dL)', 'continuous'),
+                ('na', 'Sodium (mEq/L)', '钠 (mEq/L)', 'continuous'),
+                ('k', 'Potassium (mEq/L)', '钾 (mEq/L)', 'continuous'),
+                ('crea', 'Creatinine (mg/dL)', '肌酐 (mg/dL)', 'continuous'),
+                ('bili', 'Bilirubin (mg/dL)', '胆红素 (mg/dL)', 'continuous'),
+                ('lact', 'Lactate (mmol/L)', '乳酸 (mmol/L)', 'continuous'),
+            ],
+            'default': False
+        },
+        'hematology': {
+            'name_en': '🩸 Hematology',
+            'name_zh': '🩸 血液学',
+            'features': [
+                ('hgb', 'Hemoglobin (g/dL)', '血红蛋白 (g/dL)', 'continuous'),
+                ('plt', 'Platelets (K/uL)', '血小板 (K/uL)', 'continuous'),
+                ('wbc', 'WBC (K/uL)', '白细胞 (K/uL)', 'continuous'),
+            ],
+            'default': False
+        },
+        'blood_gas': {
+            'name_en': '🩸 Blood Gas',
+            'name_zh': '🩸 血气分析',
+            'features': [
+                ('ph', 'pH', 'pH值', 'continuous'),
+                ('po2', 'PaO2 (mmHg)', 'PaO2 (mmHg)', 'continuous'),
+                ('pco2', 'PaCO2 (mmHg)', 'PaCO2 (mmHg)', 'continuous'),
+                ('fio2', 'FiO2 (%)', 'FiO2 (%)', 'continuous'),
+            ],
+            'default': False
+        },
+        'sofa': {
+            'name_en': '🏥 SOFA Scores',
+            'name_zh': '🏥 SOFA评分',
+            'features': [
+                ('sofa', 'SOFA Score', 'SOFA评分', 'continuous'),
+                ('sofa_resp', 'SOFA Respiratory', 'SOFA呼吸', 'continuous'),
+                ('sofa_coag', 'SOFA Coagulation', 'SOFA凝血', 'continuous'),
+                ('sofa_liver', 'SOFA Liver', 'SOFA肝脏', 'continuous'),
+                ('sofa_cardio', 'SOFA Cardiovascular', 'SOFA心血管', 'continuous'),
+                ('sofa_cns', 'SOFA CNS', 'SOFA神经', 'continuous'),
+                ('sofa_renal', 'SOFA Renal', 'SOFA肾脏', 'continuous'),
+            ],
+            'default': False
+        },
+    }
+    
+    # 模块多选
+    default_modules = [k for k, v in FEATURE_MODULES.items() if v.get('default', False)]
+    selected_modules = st.multiselect(
+        "Select feature modules" if lang == 'en' else "选择特征模块",
+        options=list(FEATURE_MODULES.keys()),
+        default=default_modules,
+        format_func=lambda x: FEATURE_MODULES[x]['name_en'] if lang == 'en' else FEATURE_MODULES[x]['name_zh'],
+        key="grp_feature_modules"
+    )
+    
+    # 显示将要加载的特征
+    if selected_modules:
+        concepts_to_load = []
+        for mod in selected_modules:
+            if mod not in ['demographic', 'outcome']:  # 这些从 demographics 表获取
+                for feat in FEATURE_MODULES[mod]['features']:
+                    concepts_to_load.append(feat[0])
+        
+        if concepts_to_load:
+            with st.expander("🔬 " + (f"Features to load: {len(concepts_to_load)}" if lang == 'en' else f"待加载特征: {len(concepts_to_load)}个"), expanded=False):
+                st.caption(", ".join(concepts_to_load))
+    
+    st.markdown("---")
+    
+    # 执行分组
     try:
-        from pyricu.cohort_visualization import CohortVisualizer
-        from pyricu.patient_filter import PatientFilter
-        
-        viz = CohortVisualizer(database=database, data_path=data_path, language=lang)
-        
-        # 获取人口统计学数据用于分组
-        pf = PatientFilter(database=database, data_path=data_path)
-        demographics_df = pf._load_demographics()
-        
-        # 只保留当前加载的患者
-        base_df = demographics_df[demographics_df['patient_id'].isin(patient_ids)]
-        
-        if len(base_df) == 0:
-            if lang == 'en':
-                st.warning("No demographic data available for loaded patients.")
-            else:
-                st.warning("无法获取已加载患者的人口统计学数据。")
-            return
-        
-        group1_ids = []
-        group2_ids = []
-        group1_name = ""
-        group2_name = ""
+        base_df = demographics_df
+        group1_ids, group2_ids = [], []
+        group1_name, group2_name = "", ""
         show_mortality = True
         
         if compare_mode == 'survival':
-            # 存活 vs 死亡
             if 'survived' not in base_df.columns:
-                if lang == 'en':
-                    st.warning("Survival data not available in demographics.")
-                else:
-                    st.warning("人口统计学数据中没有存活状态信息。")
+                st.warning("Survival data not available" if lang == 'en' else "无存活状态数据")
                 return
             
             survived_df = base_df[base_df['survived'] == 1]
             deceased_df = base_df[base_df['survived'] == 0]
-            
             group1_ids = survived_df['patient_id'].tolist()
             group2_ids = deceased_df['patient_id'].tolist()
             group1_name = 'Survived' if lang == 'en' else '存活'
             group2_name = 'Deceased' if lang == 'en' else '死亡'
-            show_mortality = False  # 分组本身就是按存活分的
+            show_mortality = False
             
         elif compare_mode == 'age':
-            # 年龄分组
-            age_threshold = st.slider(
-                "Age Threshold" if lang == 'en' else "年龄阈值",
-                min_value=30, max_value=90, value=65, step=5
-            )
-            
-            young_df = base_df[base_df['age'] < age_threshold]
-            old_df = base_df[base_df['age'] >= age_threshold]
-            
+            threshold = st.session_state.get('group_comp_age_threshold', 65)
+            young_df = base_df[base_df['age'] < threshold]
+            old_df = base_df[base_df['age'] >= threshold]
             group1_ids = young_df['patient_id'].tolist()
             group2_ids = old_df['patient_id'].tolist()
-            group1_name = f'Age < {age_threshold}' if lang == 'en' else f'年龄 < {age_threshold}'
-            group2_name = f'Age ≥ {age_threshold}' if lang == 'en' else f'年龄 ≥ {age_threshold}'
+            group1_name = f'Age < {threshold}' if lang == 'en' else f'年龄 < {threshold}'
+            group2_name = f'Age ≥ {threshold}' if lang == 'en' else f'年龄 ≥ {threshold}'
             
         elif compare_mode == 'gender':
-            # 性别分组
             if 'gender' not in base_df.columns:
-                if lang == 'en':
-                    st.warning("Gender data not available in demographics.")
-                else:
-                    st.warning("人口统计学数据中没有性别信息。")
+                st.warning("Gender data not available" if lang == 'en' else "无性别数据")
                 return
-            
             male_df = base_df[base_df['gender'] == 'M']
             female_df = base_df[base_df['gender'] == 'F']
-            
             group1_ids = male_df['patient_id'].tolist()
             group2_ids = female_df['patient_id'].tolist()
             group1_name = 'Male' if lang == 'en' else '男性'
             group2_name = 'Female' if lang == 'en' else '女性'
             
         elif compare_mode == 'los':
-            # 住院时长分组
             if 'los_hours' not in base_df.columns:
-                if lang == 'en':
-                    st.warning("Length of stay data not available in demographics.")
-                else:
-                    st.warning("人口统计学数据中没有住院时长信息。")
+                st.warning("Length of stay data not available" if lang == 'en' else "无住院时长数据")
                 return
-            
-            # 使用中位数作为阈值
-            median_los = base_df['los_hours'].median()
-            los_threshold = st.slider(
-                "LOS Threshold (hours)" if lang == 'en' else "住院时长阈值（小时）",
-                min_value=24, max_value=int(min(500, base_df['los_hours'].quantile(0.95))),
-                value=int(median_los), step=12
-            )
-            
-            short_df = base_df[base_df['los_hours'] < los_threshold]
-            long_df = base_df[base_df['los_hours'] >= los_threshold]
-            
+            threshold = st.session_state.get('group_comp_los_threshold', int(base_df['los_hours'].median()))
+            short_df = base_df[base_df['los_hours'] < threshold]
+            long_df = base_df[base_df['los_hours'] >= threshold]
             group1_ids = short_df['patient_id'].tolist()
             group2_ids = long_df['patient_id'].tolist()
-            group1_name = f'LOS < {los_threshold}h' if lang == 'en' else f'住院 < {los_threshold}h'
-            group2_name = f'LOS ≥ {los_threshold}h' if lang == 'en' else f'住院 ≥ {los_threshold}h'
+            group1_name = f'LOS < {threshold}h' if lang == 'en' else f'住院 < {threshold}h'
+            group2_name = f'LOS ≥ {threshold}h' if lang == 'en' else f'住院 ≥ {threshold}h'
         
-        # 显示分组统计
-        st.markdown("---")
+        # 分组统计概览
+        st.markdown("#### " + ("📊 Group Overview" if lang == 'en' else "📊 分组概览"))
+        
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric(group1_name, f"{len(group1_ids):,}")
@@ -5859,65 +6013,862 @@ def render_cohort_comparison_page():
         with col3:
             total = len(group1_ids) + len(group2_ids)
             pct1 = len(group1_ids) / total * 100 if total > 0 else 0
-            ratio_label = "Ratio" if lang == 'en' else "比例"
-            st.metric(ratio_label, f"{pct1:.1f}% / {100-pct1:.1f}%")
+            st.metric("Ratio" if lang == 'en' else "比例", f"{pct1:.1f}% / {100-pct1:.1f}%")
         
         if len(group1_ids) == 0 or len(group2_ids) == 0:
-            if lang == 'en':
-                st.warning("One of the groups has no patients. Please adjust the criteria.")
-            else:
-                st.warning("其中一个分组没有患者，请调整分组条件。")
+            st.warning("One group is empty, please adjust criteria" if lang == 'en' else "其中一个分组为空，请调整条件")
             return
         
-        # 创建对比可视化
         st.markdown("---")
-        viz_title = "📊 Demographics Comparison" if lang == 'en' else "📊 人口统计学对比"
-        st.markdown(f"### {viz_title}")
         
-        fig = viz.compare_demographics(
-            group1_ids=group1_ids,
-            group2_ids=group2_ids,
-            group1_name=group1_name,
-            group2_name=group2_name,
-            show_mortality=show_mortality
+        # ========== 基线特征对比表 (Table One) ==========
+        st.markdown("#### " + ("📋 Baseline Characteristics Comparison" if lang == 'en' else "📋 基线特征对比表"))
+        
+        from scipy import stats
+        
+        # 获取两组数据
+        group1_df = base_df[base_df['patient_id'].isin(group1_ids)].copy()
+        group2_df = base_df[base_df['patient_id'].isin(group2_ids)].copy()
+        
+        # ========== 加载额外特征数据 ==========
+        # 确定需要加载的概念
+        concepts_to_load = []
+        for mod in selected_modules:
+            if mod not in ['demographic', 'outcome']:  # 这些从 demographics 表获取
+                for feat in FEATURE_MODULES[mod]['features']:
+                    concepts_to_load.append(feat[0])
+        
+        # 检查是否有需要加载的特征且尚未加载
+        feature_data = st.session_state.get('grp_feature_data', {})
+        
+        # 合并两组患者ID
+        all_patient_ids = list(set(group1_ids + group2_ids))
+        
+        if concepts_to_load:
+            # 检查是否有新的概念需要加载
+            missing_concepts = [c for c in concepts_to_load if c not in feature_data]
+            
+            if missing_concepts:
+                st.info(f"🔬 " + (f"{len(missing_concepts)} features need to be loaded: " if lang == 'en' else f"需要加载 {len(missing_concepts)} 个特征: ") + ", ".join(missing_concepts[:5]) + ("..." if len(missing_concepts) > 5 else ""))
+                
+                load_features_btn = st.button(
+                    "🚀 " + (f"Load {len(missing_concepts)} Features" if lang == 'en' else f"加载 {len(missing_concepts)} 个特征"),
+                    type="primary",
+                    key="grp_load_features"
+                )
+                
+                if load_features_btn:
+                    try:
+                        from pyricu import load_concepts
+                        
+                        with st.spinner(f"Loading {len(missing_concepts)} features for {len(all_patient_ids)} patients..." if lang == 'en' else f"正在加载 {len(missing_concepts)} 个特征..."):
+                            progress_bar = st.progress(0)
+                            loaded_count = 0
+                            
+                            for i, concept in enumerate(missing_concepts):
+                                try:
+                                    df_concept = load_concepts(
+                                        concepts=[concept],
+                                        database=database,
+                                        data_path=data_path,
+                                        patient_ids=all_patient_ids,
+                                        verbose=False
+                                    )
+                                    if df_concept is not None and len(df_concept) > 0:
+                                        # 确定ID列
+                                        id_col = None
+                                        for col in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'hadm_id']:
+                                            if col in df_concept.columns:
+                                                id_col = col
+                                                break
+                                        if id_col is None:
+                                            id_col = df_concept.columns[0]
+                                        
+                                        # 取每个患者的平均值
+                                        if concept in df_concept.columns:
+                                            agg_df = df_concept.groupby(id_col)[concept].mean().reset_index()
+                                            agg_df.columns = ['patient_id', concept]
+                                            # 确保 patient_id 类型一致
+                                            agg_df['patient_id'] = agg_df['patient_id'].astype(int)
+                                            feature_data[concept] = agg_df
+                                            loaded_count += 1
+                                except Exception as e:
+                                    pass  # 静默跳过加载失败的特征
+                                
+                                progress_bar.progress((i + 1) / len(missing_concepts))
+                            
+                            progress_bar.empty()
+                            st.session_state['grp_feature_data'] = feature_data
+                            st.success(f"✅ " + (f"Loaded {loaded_count}/{len(missing_concepts)} features" if lang == 'en' else f"已加载 {loaded_count}/{len(missing_concepts)} 个特征"))
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error loading features: {e}")
+        
+        # 合并已加载的特征数据到分组 DataFrame
+        # 确保 patient_id 类型一致
+        group1_df['patient_id'] = group1_df['patient_id'].astype(int)
+        group2_df['patient_id'] = group2_df['patient_id'].astype(int)
+        
+        for concept, feat_df in feature_data.items():
+            if concept not in group1_df.columns and concept in concepts_to_load:
+                try:
+                    feat_df_copy = feat_df.copy()
+                    feat_df_copy['patient_id'] = feat_df_copy['patient_id'].astype(int)
+                    group1_df = group1_df.merge(feat_df_copy, on='patient_id', how='left')
+                    group2_df = group2_df.merge(feat_df_copy, on='patient_id', how='left')
+                except Exception:
+                    pass
+        
+        def format_continuous(series, name):
+            """格式化连续变量: mean ± std (median [IQR])"""
+            valid = series.dropna()
+            if len(valid) == 0:
+                return '-'
+            mean, std = valid.mean(), valid.std()
+            median = valid.median()
+            q25, q75 = valid.quantile(0.25), valid.quantile(0.75)
+            return f"{mean:.1f} ± {std:.1f}\n({median:.1f} [{q25:.1f}-{q75:.1f}])"
+        
+        def format_categorical(series, category, total):
+            """格式化分类变量: n (%)"""
+            n = (series == category).sum()
+            pct = n / total * 100 if total > 0 else 0
+            return f"{n:,} ({pct:.1f}%)"
+        
+        def calc_pvalue_continuous(s1, s2):
+            """连续变量 p 值 (Mann-Whitney U)"""
+            v1, v2 = s1.dropna(), s2.dropna()
+            if len(v1) < 2 or len(v2) < 2:
+                return '-'
+            try:
+                stat, p = stats.mannwhitneyu(v1, v2, alternative='two-sided')
+                return f"{p:.3f}" if p >= 0.001 else "<0.001"
+            except:
+                return '-'
+        
+        def calc_pvalue_categorical(s1, s2, categories):
+            """分类变量 p 值 (Chi-square)"""
+            try:
+                obs1 = [int((s1 == c).sum()) for c in categories]
+                obs2 = [int((s2 == c).sum()) for c in categories]
+                # 去除全0的类别
+                valid_idx = [i for i in range(len(categories)) if obs1[i] + obs2[i] > 0]
+                if len(valid_idx) < 2:
+                    return '-'
+                table = [[obs1[i], obs2[i]] for i in valid_idx]
+                chi2, p, dof, expected = stats.chi2_contingency(table)
+                return f"{p:.3f}" if p >= 0.001 else "<0.001"
+            except:
+                return '-'
+        
+        # 构建表格数据 - 根据选中的模块动态生成
+        table_data = []
+        
+        # 样本量 (总是显示)
+        table_data.append({
+            'Module': '',
+            'Characteristic': 'N' if lang == 'en' else '样本量',
+            group1_name: f"{len(group1_df):,}",
+            group2_name: f"{len(group2_df):,}",
+            'p-value': ''
+        })
+        
+        # 遍历选中的模块
+        for mod_key in selected_modules:
+            mod_info = FEATURE_MODULES[mod_key]
+            mod_name = mod_info['name_en'] if lang == 'en' else mod_info['name_zh']
+            is_first_in_module = True
+            
+            for feat_info in mod_info['features']:
+                feat_key = feat_info[0]
+                feat_name_en = feat_info[1]
+                feat_name_zh = feat_info[2]
+                feat_type = feat_info[3]
+                
+                feat_display = feat_name_en if lang == 'en' else feat_name_zh
+                module_display = mod_name if is_first_in_module else ''
+                is_first_in_module = False
+                
+                # 处理不同类型的特征
+                if mod_key == 'demographic':
+                    if feat_key == 'age' and 'age' in group1_df.columns:
+                        table_data.append({
+                            'Module': module_display,
+                            'Characteristic': feat_display,
+                            group1_name: format_continuous(group1_df['age'], 'age'),
+                            group2_name: format_continuous(group2_df['age'], 'age'),
+                            'p-value': calc_pvalue_continuous(group1_df['age'], group2_df['age'])
+                        })
+                    elif feat_key == 'gender' and 'gender' in group1_df.columns:
+                        table_data.append({
+                            'Module': module_display,
+                            'Characteristic': feat_display,
+                            group1_name: format_categorical(group1_df['gender'], 'M', len(group1_df)),
+                            group2_name: format_categorical(group2_df['gender'], 'M', len(group2_df)),
+                            'p-value': calc_pvalue_categorical(group1_df['gender'], group2_df['gender'], ['M', 'F'])
+                        })
+                    elif feat_key == 'los_days' and 'los_hours' in group1_df.columns:
+                        g1_los = group1_df['los_hours'] / 24
+                        g2_los = group2_df['los_hours'] / 24
+                        table_data.append({
+                            'Module': module_display,
+                            'Characteristic': feat_display,
+                            group1_name: format_continuous(g1_los, 'los'),
+                            group2_name: format_continuous(g2_los, 'los'),
+                            'p-value': calc_pvalue_continuous(g1_los, g2_los)
+                        })
+                    elif feat_key == 'first_icu_stay' and 'first_icu_stay' in group1_df.columns:
+                        table_data.append({
+                            'Module': module_display,
+                            'Characteristic': feat_display,
+                            group1_name: format_categorical(group1_df['first_icu_stay'], True, len(group1_df)),
+                            group2_name: format_categorical(group2_df['first_icu_stay'], True, len(group2_df)),
+                            'p-value': calc_pvalue_categorical(group1_df['first_icu_stay'], group2_df['first_icu_stay'], [True, False])
+                        })
+                
+                elif mod_key == 'outcome':
+                    if feat_key == 'mortality' and 'survived' in group1_df.columns and show_mortality:
+                        mort1 = (1 - group1_df['survived'].mean()) * 100
+                        mort2 = (1 - group2_df['survived'].mean()) * 100
+                        table_data.append({
+                            'Module': module_display,
+                            'Characteristic': feat_display,
+                            group1_name: f"{int((group1_df['survived']==0).sum()):,} ({mort1:.1f}%)",
+                            group2_name: f"{int((group2_df['survived']==0).sum()):,} ({mort2:.1f}%)",
+                            'p-value': calc_pvalue_categorical(group1_df['survived'], group2_df['survived'], [0, 1])
+                        })
+                
+                else:
+                    # 从加载的特征数据获取
+                    # 首先尝试从 group_df 的列获取
+                    if feat_key in group1_df.columns:
+                        table_data.append({
+                            'Module': module_display,
+                            'Characteristic': feat_display,
+                            group1_name: format_continuous(group1_df[feat_key], feat_key),
+                            group2_name: format_continuous(group2_df[feat_key], feat_key),
+                            'p-value': calc_pvalue_continuous(group1_df[feat_key], group2_df[feat_key])
+                        })
+                    # 如果没在 group_df 中，尝试直接从 feature_data 获取
+                    elif feat_key in feature_data:
+                        feat_df = feature_data[feat_key]
+                        # 按组筛选
+                        g1_ids_set = set(group1_df['patient_id'].astype(int).tolist())
+                        g2_ids_set = set(group2_df['patient_id'].astype(int).tolist())
+                        g1_vals = feat_df[feat_df['patient_id'].astype(int).isin(g1_ids_set)][feat_key]
+                        g2_vals = feat_df[feat_df['patient_id'].astype(int).isin(g2_ids_set)][feat_key]
+                        
+                        if len(g1_vals) > 0 or len(g2_vals) > 0:
+                            table_data.append({
+                                'Module': module_display,
+                                'Characteristic': feat_display,
+                                group1_name: format_continuous(g1_vals, feat_key) if len(g1_vals) > 0 else 'N/A',
+                                group2_name: format_continuous(g2_vals, feat_key) if len(g2_vals) > 0 else 'N/A',
+                                'p-value': calc_pvalue_continuous(g1_vals, g2_vals) if len(g1_vals) > 0 and len(g2_vals) > 0 else '-'
+                            })
+                        else:
+                            table_data.append({
+                                'Module': module_display,
+                                'Characteristic': feat_display,
+                                group1_name: 'No data',
+                                group2_name: 'No data',
+                                'p-value': '-'
+                            })
+                    elif feat_key in concepts_to_load:
+                        # 特征需要加载但尚未加载
+                        table_data.append({
+                            'Module': module_display,
+                            'Characteristic': feat_display,
+                            group1_name: '⏳ 待加载',
+                            group2_name: '⏳ 待加载',
+                            'p-value': '-'
+                        })
+        
+        # 显示表格
+        result_df = pd.DataFrame(table_data)
+        
+        # 使用 Streamlit 表格并应用样式
+        st.dataframe(
+            result_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'Module': st.column_config.TextColumn('Module' if lang == 'en' else '模块', width='small'),
+                'Characteristic': st.column_config.TextColumn('Characteristic' if lang == 'en' else '特征', width='medium'),
+                group1_name: st.column_config.TextColumn(group1_name, width='medium'),
+                group2_name: st.column_config.TextColumn(group2_name, width='medium'),
+                'p-value': st.column_config.TextColumn('p-value', width='small'),
+            }
         )
-        st.plotly_chart(fig, width="stretch")
         
-        # 统计表格 (TableOne风格)
-        summary_title = "📋 Baseline Characteristics (TableOne)" if lang == 'en' else "📋 基线特征对比 (TableOne)"
-        st.markdown(f"### {summary_title}")
-        summary_df = viz.create_summary_table(
-            group1_ids=group1_ids,
-            group2_ids=group2_ids,
-            group1_name=group1_name,
-            group2_name=group2_name,
-            show_pvalue=True
-        )
-        st.dataframe(summary_df, width="stretch", hide_index=True)
-        
-        # 添加统计说明
-        if lang == 'en':
-            stats_note = "**Statistical Methods:** Mann-Whitney U test for continuous variables, Chi-square test for categorical variables."
-        else:
-            stats_note = "**统计方法：** 连续变量使用Mann-Whitney U检验，分类变量使用卡方检验。"
+        # 统计方法说明
+        st.markdown("---")
+        stats_note = """**Statistical Methods:**
+- Continuous variables: Mean ± SD (Median [IQR]), Mann-Whitney U test
+- Categorical variables: n (%), Chi-square test
+- p < 0.05 considered statistically significant""" if lang == 'en' else """**统计方法说明：**
+- 连续变量：Mean ± SD (Median [IQR])，Mann-Whitney U 检验
+- 分类变量：n (%)，卡方检验
+- p < 0.05 认为具有统计学显著性"""
         st.caption(stats_note)
         
-    except ImportError as e:
-        if lang == 'en':
-            st.error(f"Required modules not available: {e}")
-        else:
-            st.error(f"缺少必要模块: {e}")
+        # 下载按钮
+        csv = result_df.to_csv(index=False)
+        st.download_button(
+            label="📥 " + ("Download Table (CSV)" if lang == 'en' else "下载表格 (CSV)"),
+            data=csv,
+            file_name=f"baseline_comparison_{group1_name}_vs_{group2_name}.csv",
+            mime="text/csv"
+        )
+        
     except Exception as e:
-        if lang == 'en':
-            st.error(f"Error in cohort comparison: {e}")
+        st.error(f"Error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
+def render_multidb_distribution_subtab(lang: str):
+    """多数据库特征分布对比子标签页"""
+    import plotly.graph_objects as go
+    
+    st.markdown("### 📈 " + ("Multi-Database Feature Distribution" if lang == 'en' else "多数据库特征分布对比"))
+    
+    # 配置区域
+    col1, col2, col3 = st.columns([2, 2, 1])
+    
+    with col1:
+        data_root = st.text_input(
+            "🗂️ " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
+            value=os.environ.get('RICU_DATA_PATH', '/home/zhuhb/icudb'),
+            key="multidb_data_root"
+        )
+    
+    with col2:
+        # 数据库选择
+        db_options = ['miiv', 'eicu', 'aumc', 'hirid']
+        db_labels = {'miiv': 'MIMIC-IV 🟢', 'eicu': 'eICU 🟠', 'aumc': 'Amsterdam 🔵', 'hirid': 'HiRID 🔴'}
+        selected_dbs = st.multiselect(
+            "🏥 " + ("Databases" if lang == 'en' else "数据库"),
+            options=db_options,
+            default=['miiv', 'eicu'],
+            format_func=lambda x: db_labels.get(x, x),
+            key="multidb_selected"
+        )
+    
+    with col3:
+        max_patients = st.number_input(
+            "👥 " + ("Max Patients" if lang == 'en' else "最大患者数"),
+            min_value=100,
+            max_value=2000,
+            value=500,
+            step=100,
+            key="multidb_max_patients"
+        )
+    
+    # 特征选择
+    feature_groups = {
+        "Vital Signs": ['hr', 'sbp', 'dbp', 'map', 'resp', 'temp', 'o2sat'],
+        "Laboratory": ['glu', 'na', 'k', 'crea', 'bili', 'lact'],
+        "Hematology": ['hgb', 'plt', 'wbc'],
+        "Blood Gas": ['ph', 'po2', 'pco2', 'fio2'],
+    }
+    
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        selected_group = st.selectbox(
+            "📋 " + ("Feature Group" if lang == 'en' else "特征分组"),
+            options=list(feature_groups.keys()),
+            key="multidb_group"
+        )
+    
+    with col2:
+        available_features = feature_groups.get(selected_group, [])
+        selected_features = st.multiselect(
+            "🔬 " + ("Select Features" if lang == 'en' else "选择特征"),
+            options=available_features,
+            default=available_features[:4],
+            key="multidb_features"
+        )
+    
+    # 加载按钮
+    load_btn = st.button(
+        "🚀 " + ("Load & Generate" if lang == 'en' else "加载并生成"),
+        type="primary",
+        key="multidb_load"
+    )
+    
+    st.markdown("---")
+    
+    if load_btn and selected_dbs and selected_features:
+        try:
+            from pyricu.cohort_visualization import MultiDatabaseDistribution
+            
+            with st.spinner("Loading data from databases..." if lang == 'en' else "正在从数据库加载数据..."):
+                mdd = MultiDatabaseDistribution(data_root=data_root, language=lang)
+                data = mdd.load_feature_data(
+                    concepts=selected_features,
+                    databases=selected_dbs,
+                    max_patients=max_patients,
+                )
+                st.session_state['multidb_data'] = data
+                st.session_state['multidb_concepts'] = selected_features
+        except Exception as e:
+            st.error(f"Error loading data: {e}")
+            return
+    
+    # 显示结果
+    if 'multidb_data' in st.session_state and st.session_state.get('multidb_data'):
+        data = st.session_state['multidb_data']
+        concepts = st.session_state.get('multidb_concepts', selected_features)
+        
+        # 数据量统计
+        stat_cols = st.columns(len(data))
+        db_colors = {'miiv': '🟢', 'eicu': '🟠', 'aumc': '🔵', 'hirid': '🔴'}
+        for i, (db, df) in enumerate(data.items()):
+            with stat_cols[i]:
+                st.metric(
+                    label=f"{db_colors.get(db, '')} {db.upper()}",
+                    value=f"{len(df):,}",
+                    delta="records"
+                )
+        
+        # 生成分布图
+        try:
+            from pyricu.cohort_visualization import MultiDatabaseDistribution
+            mdd = MultiDatabaseDistribution(data_root=data_root, language=lang)
+            
+            # 网格图
+            n_cols = min(4, len(concepts))
+            fig = mdd.create_distribution_grid(data, concepts, cols=n_cols)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # 单特征详细对比
+            st.markdown("---")
+            st.markdown("#### " + ("Detailed Single Feature View" if lang == 'en' else "单特征详细视图"))
+            
+            selected_single = st.selectbox(
+                "Select feature" if lang == 'en' else "选择特征",
+                options=concepts,
+                key="multidb_single_feature"
+            )
+            
+            if selected_single:
+                fig_single, stats_df = mdd.create_single_feature_comparison(data, selected_single)
+                
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.plotly_chart(fig_single, use_container_width=True)
+                with col2:
+                    st.markdown("**Statistics**" if lang == 'en' else "**统计信息**")
+                    st.dataframe(
+                        stats_df.style.format({
+                            'Mean': '{:.2f}',
+                            'Std': '{:.2f}',
+                            'Median': '{:.2f}',
+                            'Q25': '{:.2f}',
+                            'Q75': '{:.2f}',
+                        }),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+        except Exception as e:
+            st.error(f"Error generating chart: {e}")
+    else:
+        # 占位提示
+        st.info(
+            "👆 Select databases and features, then click 'Load & Generate'" 
+            if lang == 'en' else 
+            "👆 选择数据库和特征，然后点击'加载并生成'"
+        )
+
+
+def render_cohort_dashboard_subtab(lang: str):
+    """队列仪表板子标签页 - 使用ECharts实现精美可视化"""
+    try:
+        from streamlit_echarts import st_echarts
+    except ImportError:
+        st.error("❌ Please install streamlit-echarts: `pip install streamlit-echarts`")
+        st.code("pip install streamlit-echarts")
+        return
+    
+    st.markdown("### 🎯 " + ("Cohort Dashboard" if lang == 'en' else "队列仪表板"))
+    
+    # ========== 数据配置区域 ==========
+    with st.expander("⚙️ " + ("Data Configuration" if lang == 'en' else "数据配置"), expanded=True):
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            data_root = st.text_input(
+                "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
+                value=os.environ.get('RICU_DATA_PATH', '/home/zhuhb/icudb'),
+                key="dash_data_root",
+                help="Root directory containing database folders" if lang == 'en' else "包含数据库文件夹的根目录"
+            )
+        
+        with col2:
+            db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID'}
+            selected_db = st.selectbox(
+                "🏥 " + ("Database" if lang == 'en' else "数据库"),
+                options=list(db_options.keys()),
+                format_func=lambda x: db_options[x],
+                key="dash_db_select"
+            )
+        
+        with col3:
+            max_patients = st.number_input(
+                "👥 " + ("Max Patients" if lang == 'en' else "最大患者数"),
+                min_value=100,
+                max_value=10000,
+                value=1000,
+                step=100,
+                key="dash_max_patients"
+            )
+        
+        # 数据库路径映射
+        db_path_map = {
+            'miiv': 'mimiciv/3.1',
+            'eicu': 'eicu/2.0.1', 
+            'aumc': 'aumc/1.0.2',
+            'hirid': 'hirid/1.1.1',
+        }
+        full_data_path = os.path.join(data_root, db_path_map.get(selected_db, ''))
+        
+        # 路径状态
+        if os.path.exists(full_data_path):
+            st.success(f"✅ Path valid: `{full_data_path}`" if lang == 'en' else f"✅ 路径有效: `{full_data_path}`")
         else:
-            st.error(f"队列对比出错: {e}")
+            st.warning(f"⚠️ Path not found: `{full_data_path}`" if lang == 'en' else f"⚠️ 路径不存在: `{full_data_path}`")
+        
+        load_btn = st.button(
+            "🚀 " + ("Load Dashboard Data" if lang == 'en' else "加载仪表板数据"),
+            type="primary",
+            key="dash_load_btn"
+        )
+        
+        if load_btn:
+            try:
+                from pyricu.patient_filter import PatientFilter
+                
+                with st.spinner("Loading demographics..." if lang == 'en' else "正在加载..."):
+                    pf = PatientFilter(database=selected_db, data_path=full_data_path)
+                    demographics_df = pf._load_demographics()
+                    
+                    if len(demographics_df) > max_patients:
+                        demographics_df = demographics_df.head(max_patients)
+                    
+                    st.session_state['dash_demographics'] = demographics_df
+                    st.session_state['dash_loaded_db'] = selected_db
+                    st.session_state['dash_loaded_path'] = full_data_path
+                    
+                st.success(f"✅ Loaded {len(demographics_df):,} patients" if lang == 'en' else f"✅ 已加载 {len(demographics_df):,} 名患者")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+    
+    st.markdown("---")
+    
+    # ========== 仪表板内容 ==========
+    if 'dash_demographics' not in st.session_state:
+        st.info("👆 " + ("Configure data source and click 'Load' to view dashboard" if lang == 'en' else "配置数据源并点击'加载'查看仪表板"))
+        return
+    
+    df = st.session_state['dash_demographics']
+    database = st.session_state.get('dash_loaded_db', 'miiv')
+    
+    try:
+        
+        # ========== 顶部指标卡片 ==========
+        st.markdown("#### " + ("📊 Key Metrics" if lang == 'en' else "📊 关键指标"))
+        
+        metric_cols = st.columns(6)
+        
+        with metric_cols[0]:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                        padding: 20px; border-radius: 12px; text-align: center; color: white;">
+                <div style="font-size: 2rem; font-weight: bold;">{len(df):,}</div>
+                <div style="font-size: 0.9rem;">{"Total Patients" if lang == 'en' else "患者总数"}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with metric_cols[1]:
+            avg_age = df['age'].mean() if 'age' in df.columns else 0
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+                        padding: 20px; border-radius: 12px; text-align: center; color: white;">
+                <div style="font-size: 2rem; font-weight: bold;">{avg_age:.1f}</div>
+                <div style="font-size: 0.9rem;">{"Mean Age" if lang == 'en' else "平均年龄"}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with metric_cols[2]:
+            male_pct = (df['gender'] == 'M').mean() * 100 if 'gender' in df.columns else 0
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                        padding: 20px; border-radius: 12px; text-align: center; color: white;">
+                <div style="font-size: 2rem; font-weight: bold;">{male_pct:.1f}%</div>
+                <div style="font-size: 0.9rem;">{"Male %" if lang == 'en' else "男性占比"}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with metric_cols[3]:
+            median_los = df['los_hours'].median() / 24 if 'los_hours' in df.columns else 0
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+                        padding: 20px; border-radius: 12px; text-align: center; color: white;">
+                <div style="font-size: 2rem; font-weight: bold;">{median_los:.1f}</div>
+                <div style="font-size: 0.9rem;">{"Median LOS (days)" if lang == 'en' else "中位住院(天)"}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with metric_cols[4]:
+            mortality = (1 - df['survived'].mean()) * 100 if 'survived' in df.columns else 0
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                        padding: 20px; border-radius: 12px; text-align: center; color: white;">
+                <div style="font-size: 2rem; font-weight: bold;">{mortality:.1f}%</div>
+                <div style="font-size: 0.9rem;">{"Mortality" if lang == 'en' else "死亡率"}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with metric_cols[5]:
+            first_icu_pct = df['first_icu_stay'].mean() * 100 if 'first_icu_stay' in df.columns else 0
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+                        padding: 20px; border-radius: 12px; text-align: center; color: white;">
+                <div style="font-size: 2rem; font-weight: bold;">{first_icu_pct:.1f}%</div>
+                <div style="font-size: 0.9rem;">{"First ICU Stay" if lang == 'en' else "首次ICU"}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # ========== 图表行1: 年龄分布和性别饼图 (ECharts) ==========
+        chart_col1, chart_col2 = st.columns(2)
+        
+        with chart_col1:
+            st.markdown("##### " + ("Age Distribution" if lang == 'en' else "年龄分布"))
+            if 'age' in df.columns:
+                # 计算年龄分布直方图数据
+                age_bins = list(range(0, 101, 10))
+                hist, bin_edges = np.histogram(df['age'].dropna(), bins=age_bins)
+                x_data = [f"{age_bins[i]}-{age_bins[i+1]}" for i in range(len(age_bins)-1)]
+                
+                age_option = {
+                    "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+                    "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
+                    "xAxis": {
+                        "type": "category",
+                        "data": x_data,
+                        "axisLabel": {"rotate": 45}
+                    },
+                    "yAxis": {"type": "value", "name": "Count" if lang == 'en' else "人数"},
+                    "series": [{
+                        "name": "Patients" if lang == 'en' else "患者",
+                        "type": "bar",
+                        "data": hist.tolist(),
+                        "itemStyle": {
+                            "color": {
+                                "type": "linear",
+                                "x": 0, "y": 0, "x2": 0, "y2": 1,
+                                "colorStops": [
+                                    {"offset": 0, "color": "#667eea"},
+                                    {"offset": 1, "color": "#764ba2"}
+                                ]
+                            },
+                            "borderRadius": [5, 5, 0, 0]
+                        },
+                        "emphasis": {"itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.3)"}}
+                    }]
+                }
+                st_echarts(options=age_option, height="320px")
+        
+        with chart_col2:
+            st.markdown("##### " + ("Gender & Survival" if lang == 'en' else "性别与存活"))
+            if 'gender' in df.columns and 'survived' in df.columns:
+                male_count = int((df['gender'] == 'M').sum())
+                female_count = int((df['gender'] == 'F').sum())
+                survived_count = int(df['survived'].sum())
+                deceased_count = int(len(df) - survived_count)
+                
+                pie_option = {
+                    "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"},
+                    "legend": {"orient": "horizontal", "bottom": "0%"},
+                    "series": [
+                        {
+                            "name": "Gender" if lang == 'en' else "性别",
+                            "type": "pie",
+                            "radius": ["20%", "45%"],
+                            "center": ["25%", "45%"],
+                            "roseType": "radius",
+                            "label": {"show": True, "formatter": "{b}\n{d}%"},
+                            "data": [
+                                {"value": male_count, "name": "Male" if lang == 'en' else "男性", "itemStyle": {"color": "#4facfe"}},
+                                {"value": female_count, "name": "Female" if lang == 'en' else "女性", "itemStyle": {"color": "#fa709a"}}
+                            ]
+                        },
+                        {
+                            "name": "Survival" if lang == 'en' else "存活",
+                            "type": "pie",
+                            "radius": ["20%", "45%"],
+                            "center": ["75%", "45%"],
+                            "roseType": "radius",
+                            "label": {"show": True, "formatter": "{b}\n{d}%"},
+                            "data": [
+                                {"value": survived_count, "name": "Survived" if lang == 'en' else "存活", "itemStyle": {"color": "#38ef7d"}},
+                                {"value": deceased_count, "name": "Deceased" if lang == 'en' else "死亡", "itemStyle": {"color": "#f5576c"}}
+                            ]
+                        }
+                    ]
+                }
+                st_echarts(options=pie_option, height="320px")
+        
+        # ========== 图表行2: 住院时长和入院时间 ==========
+        chart_col3, chart_col4 = st.columns(2)
+        
+        with chart_col3:
+            st.markdown("##### " + ("Length of Stay Distribution" if lang == 'en' else "住院时长分布"))
+            if 'los_hours' in df.columns:
+                los_days = (df['los_hours'] / 24).dropna()
+                los_cap = np.percentile(los_days, 95)
+                los_capped = los_days[los_days <= los_cap]
+                
+                # 计算直方图
+                los_bins = np.linspace(0, los_cap, 21)
+                hist, bin_edges = np.histogram(los_capped, bins=los_bins)
+                x_data = [f"{bin_edges[i]:.0f}-{bin_edges[i+1]:.0f}" for i in range(len(bin_edges)-1)]
+                median_los = los_days.median()
+                
+                los_option = {
+                    "tooltip": {"trigger": "axis"},
+                    "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
+                    "xAxis": {
+                        "type": "category",
+                        "data": x_data,
+                        "axisLabel": {"rotate": 45},
+                        "name": "Days" if lang == 'en' else "天"
+                    },
+                    "yAxis": {"type": "value", "name": "Count" if lang == 'en' else "人数"},
+                    "series": [
+                        {
+                            "name": "Patients" if lang == 'en' else "患者",
+                            "type": "bar",
+                            "data": hist.tolist(),
+                            "itemStyle": {
+                                "color": {
+                                    "type": "linear",
+                                    "x": 0, "y": 0, "x2": 0, "y2": 1,
+                                    "colorStops": [
+                                        {"offset": 0, "color": "#11998e"},
+                                        {"offset": 1, "color": "#38ef7d"}
+                                    ]
+                                },
+                                "borderRadius": [5, 5, 0, 0]
+                            }
+                        },
+                        {
+                            "name": f"Median: {median_los:.1f}d",
+                            "type": "line",
+                            "markLine": {
+                                "data": [{"xAxis": int(median_los / (los_cap / 20))}],
+                                "lineStyle": {"color": "#f5576c", "type": "dashed", "width": 2},
+                                "label": {"formatter": f"Median: {median_los:.1f}d", "position": "end"}
+                            }
+                        }
+                    ]
+                }
+                st_echarts(options=los_option, height="320px")
+        
+        with chart_col4:
+            st.markdown("##### " + ("Mortality by Age Group" if lang == 'en' else "各年龄段死亡率"))
+            if 'age' in df.columns and 'survived' in df.columns:
+                # 按年龄分组计算死亡率
+                df_age = df.copy()
+                age_bins = [0, 30, 40, 50, 60, 70, 80, 90, 120]
+                age_labels = ['<30', '30-39', '40-49', '50-59', '60-69', '70-79', '80-89', '≥90']
+                df_age['age_group'] = pd.cut(df_age['age'], bins=age_bins, labels=age_labels, right=False)
+                
+                age_stats = df_age.groupby('age_group', observed=True).agg(
+                    total=('survived', 'count'),
+                    deaths=('survived', lambda x: (x == 0).sum())
+                ).reset_index()
+                age_stats['mortality'] = (age_stats['deaths'] / age_stats['total'] * 100).round(1)
+                
+                x_data = age_stats['age_group'].astype(str).tolist()
+                mortality_data = age_stats['mortality'].tolist()
+                total_data = age_stats['total'].tolist()
+                
+                # 组合柱状图+折线图
+                mortality_option = {
+                    "tooltip": {
+                        "trigger": "axis",
+                        "axisPointer": {"type": "cross"},
+                        "formatter": "{b}<br/>" + ("Patients" if lang == 'en' else "患者") + ": {c0}<br/>" + ("Mortality" if lang == 'en' else "死亡率") + ": {c1}%"
+                    },
+                    "legend": {"data": [("Patients" if lang == 'en' else "患者数"), ("Mortality %" if lang == 'en' else "死亡率 %")], "bottom": 0},
+                    "grid": {"left": "3%", "right": "4%", "bottom": "15%", "containLabel": True},
+                    "xAxis": {
+                        "type": "category",
+                        "data": x_data,
+                        "axisLabel": {"rotate": 30}
+                    },
+                    "yAxis": [
+                        {"type": "value", "name": "N" if lang == 'en' else "人数", "position": "left"},
+                        {"type": "value", "name": "%", "position": "right", "max": 100}
+                    ],
+                    "series": [
+                        {
+                            "name": "Patients" if lang == 'en' else "患者数",
+                            "type": "bar",
+                            "data": total_data,
+                            "itemStyle": {
+                                "color": {
+                                    "type": "linear",
+                                    "x": 0, "y": 0, "x2": 0, "y2": 1,
+                                    "colorStops": [
+                                        {"offset": 0, "color": "#667eea"},
+                                        {"offset": 1, "color": "#764ba2"}
+                                    ]
+                                },
+                                "borderRadius": [5, 5, 0, 0]
+                            }
+                        },
+                        {
+                            "name": "Mortality %" if lang == 'en' else "死亡率 %",
+                            "type": "line",
+                            "yAxisIndex": 1,
+                            "data": mortality_data,
+                            "smooth": True,
+                            "symbol": "circle",
+                            "symbolSize": 10,
+                            "lineStyle": {"width": 3, "color": "#f5576c"},
+                            "itemStyle": {"color": "#f5576c"},
+                            "areaStyle": {
+                                "color": {
+                                    "type": "linear",
+                                    "x": 0, "y": 0, "x2": 0, "y2": 1,
+                                    "colorStops": [
+                                        {"offset": 0, "color": "rgba(245, 87, 108, 0.3)"},
+                                        {"offset": 1, "color": "rgba(245, 87, 108, 0.05)"}
+                                    ]
+                                }
+                            }
+                        }
+                    ]
+                }
+                st_echarts(options=mortality_option, height="320px")
+            else:
+                st.info("Age or survival data not available" if lang == 'en' else "无年龄或存活数据")
+        
+    except Exception as e:
+        st.error(f"Error: {e}")
         import traceback
         st.code(traceback.format_exc())
 
 
 def render_convert_dialog():
     """Render CSV to Parquet conversion dialog."""
+
     lang = st.session_state.get('language', 'en')
     source_path = st.session_state.get('convert_source_path', '')
     
