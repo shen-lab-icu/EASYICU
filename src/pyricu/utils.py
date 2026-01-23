@@ -1003,3 +1003,44 @@ def distinct(df: pd.DataFrame, subset: Optional[List[str]] = None,
         2  2  2
     """
     return df.drop_duplicates(subset=subset, keep=keep).reset_index(drop=True)
+
+
+def compute_patient_ids_hash(patient_ids: Optional[Union[Dict, List, frozenset, Tuple]]) -> Optional[int]:
+    """统一计算 patient_ids 的 hash 值，确保不同表示形式得到相同的 hash。
+    
+    关键：将所有形式统一为 (sorted values) 的 hash，因为：
+    1. API 层可能传入 list，内部转换为 dict
+    2. 回调函数的 ctx.patient_ids 可能是转换后的 dict
+    
+    这确保：
+    - [30000153, 30000213] → hash((30000153, 30000213))
+    - {'stay_id': [30000153, 30000213]} → hash((30000153, 30000213))
+    
+    Args:
+        patient_ids: 患者 ID，可以是 list, dict, tuple, frozenset 或 None
+        
+    Returns:
+        hash 值，None 如果输入为 None
+    """
+    if patient_ids is None:
+        return None
+    
+    # 提取实际的 ID 值
+    if isinstance(patient_ids, dict):
+        # dict 形式：{'stay_id': [1, 2, 3]} → 提取值
+        all_ids = []
+        for v in patient_ids.values():
+            if isinstance(v, (list, tuple)):
+                all_ids.extend(v)
+            else:
+                all_ids.append(v)
+        values = tuple(sorted(all_ids))
+    elif isinstance(patient_ids, (list, tuple)):
+        values = tuple(sorted(patient_ids))
+    elif isinstance(patient_ids, frozenset):
+        values = tuple(sorted(patient_ids))
+    else:
+        # 单个值
+        values = (patient_ids,)
+    
+    return hash(values)

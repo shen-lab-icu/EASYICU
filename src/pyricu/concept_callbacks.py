@@ -44,9 +44,9 @@ from .sofa2 import sofa2_score as sofa2_score_fn
 from .sepsis import sep3 as sep3_detector, susp_inf as susp_inf_detector
 from .sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector
 from .table import ICUTable, WinTbl
+from .utils import coalesce, compute_patient_ids_hash as _compute_patient_ids_hash  # 🔧 统一的 patient_ids hash 函数
 
 logger = logging.getLogger(__name__)
-from .utils import coalesce
 from .unit_conversion import convert_vaso_rate
 
 def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str) -> pd.DataFrame:
@@ -1620,14 +1620,22 @@ def _callback_sofa_component(
         # our forward-fill logic would keep vasopressors active forever.  Fetch the
         # optional dependency lazily via the resolver so we can preserve the
         # original merge behavior when the indicator is available.
-        # 🚀 优化：使用 get_raw_concept 缓存 vaso_ind
+        # 🚀 优化：优先使用 _raw_concept_cache 中已预缓存的 vaso_ind
         tables = dict(tables)
         if ctx.concept_name in {"sofa_cardio", "sofa2_cardio"} and "vaso_ind" not in tables:
             try:
-                # 优先尝试从缓存获取
                 vaso_tbl = None
-                if hasattr(ctx.resolver, 'get_raw_concept'):
-                    vaso_tbl = ctx.resolver.get_raw_concept("vaso_ind", ctx.data_source, ctx.patient_ids)
+                # 优先从 _raw_concept_cache 获取
+                if hasattr(ctx.resolver, '_raw_concept_cache') and hasattr(ctx.resolver, '_cache_lock'):
+                    # 🔧 使用统一的 hash 函数
+                    patient_ids_hash = _compute_patient_ids_hash(ctx.patient_ids)
+                    
+                    cache_key = ("vaso_ind", patient_ids_hash)
+                    with ctx.resolver._cache_lock:
+                        if cache_key in ctx.resolver._raw_concept_cache:
+                            vaso_tbl = ctx.resolver._raw_concept_cache[cache_key]
+                            if hasattr(vaso_tbl, 'copy'):
+                                vaso_tbl = vaso_tbl.copy()
                 
                 # 如果缓存未命中，则加载
                 if vaso_tbl is None:
@@ -1639,7 +1647,7 @@ def _callback_sofa_component(
                         patient_ids=ctx.patient_ids,
                         interval=None,
                         align_to_admission=True,
-                        ricu_compatible=False,  # Return ICUTable, not DataFrame
+                        ricu_compatible=False,
                     )
                     if isinstance(loaded, dict):
                         vaso_tbl = loaded.get("vaso_ind")
@@ -1650,16 +1658,12 @@ def _callback_sofa_component(
                 if isinstance(vaso_tbl, ICUTable) and not vaso_tbl.data.empty:
                     tables["vaso_ind"] = vaso_tbl
                 elif isinstance(vaso_tbl, pd.DataFrame) and not vaso_tbl.empty:
-                    # Convert DataFrame to ICUTable
-                    # Detect id and index columns
                     id_cols = [c for c in vaso_tbl.columns if c in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid']]
                     time_cols = [c for c in vaso_tbl.columns if 'time' in c.lower() and c not in id_cols]
                     index_col = time_cols[0] if time_cols else None
                     value_col = 'vaso_ind' if 'vaso_ind' in vaso_tbl.columns else None
                     tables["vaso_ind"] = _as_icutbl(vaso_tbl, id_columns=id_cols, index_column=index_col, value_column=value_col)
             except Exception as e:
-                # Missing indicator should not break SOFA computation; simply skip
-                # zeroing when it is unavailable.
                 logger.debug(f"sofa_cardio: vaso_ind load exception: {e}")
                 pass
         # CRITICAL: For single concept (sofa_single type), ricu_code's collect_dots returns the data directly

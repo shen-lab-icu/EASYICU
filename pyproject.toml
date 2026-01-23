@@ -38,8 +38,7 @@ webapp = [
   "plotly>=5.15",
   "kaleido>=0.2.1",
   "openpyxl>=3.1",
-  "psutil>=5.9",
-  "scipy>=1.10"
+  "psutil>=5.9"
 ]
 all = [
   "pyricu[dev,viz,webapp]"

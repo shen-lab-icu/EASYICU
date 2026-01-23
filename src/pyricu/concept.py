@@ -350,6 +350,11 @@ class ConceptDictionary:
             merged_payload.update(raw_dict)
         return cls.from_payload(merged_payload)
 
+
+# 从 utils 导入统一的 hash 函数，避免循环导入
+from .utils import compute_patient_ids_hash as _compute_patient_ids_hash
+
+
 class ConceptResolver:
     """Resolve concept definitions into concrete tabular data."""
 
@@ -424,19 +429,8 @@ class ConceptResolver:
         
         这个方法用于回调函数中需要获取原始时间的场景。
         """
-        # 处理不同类型的 patient_ids
-        if patient_ids is None:
-            patient_ids_hash = None
-        elif isinstance(patient_ids, dict):
-            # 将 dict 转换为可哈希的形式
-            patient_ids_hash = hash(frozenset(
-                (k, tuple(v) if isinstance(v, (list, tuple)) else v) 
-                for k, v in patient_ids.items()
-            ))
-        elif isinstance(patient_ids, (list, tuple)):
-            patient_ids_hash = hash(tuple(sorted(patient_ids)))
-        else:
-            patient_ids_hash = hash(patient_ids)
+        # 🔧 使用统一的 hash 函数
+        patient_ids_hash = _compute_patient_ids_hash(patient_ids)
         
         cache_key = (concept_name, patient_ids_hash)
         
@@ -3711,6 +3705,20 @@ class ConceptResolver:
         # instead of always using the concept's default interval (which may be '1min')
         effective_interval = interval if interval is not None else definition.interval
         
+        # 🚀 优化：预缓存子概念的原始数据到 _raw_concept_cache
+        # 这样回调函数中通过 get_raw_concept 可以直接命中缓存，避免重复加载
+        # 特别适用于 vaso_ind, vent_ind 等需要原始时间数据的回调
+        if effective_interval is not None:
+            # 🔧 使用统一的 hash 函数
+            patient_ids_hash = _compute_patient_ids_hash(patient_ids)
+            
+            # 将已加载的子概念数据缓存为原始数据
+            with self._cache_lock:
+                for sub_name, sub_table in sub_tables.items():
+                    cache_key = (sub_name, patient_ids_hash)
+                    if cache_key not in self._raw_concept_cache:
+                        self._raw_concept_cache[cache_key] = sub_table
+        
         ctx = ConceptCallbackContext(
             concept_name=concept_name,
             target=definition.target,
@@ -4826,7 +4834,8 @@ class ConceptResolver:
         _skip_concept_cache: bool = False,  # 🔧 跳过概念缓存
     ) -> ICUTable:
         # 🚀 优化：增强概念数据缓存（避免重复加载相同概念，如urine、vaso_ind、pafi）
-        patient_ids_hash = hash(frozenset(patient_ids)) if patient_ids else None
+        # 🔧 使用统一的 hash 函数，确保 list 和 dict 形式得到相同的 hash
+        patient_ids_hash = _compute_patient_ids_hash(patient_ids)
         agg_value = aggregators.get(concept_name, "auto")
         if agg_value in (None, "auto"):
             definition = self.dictionary.get(concept_name)
@@ -4860,7 +4869,31 @@ class ConceptResolver:
                     cached = self._concept_data_cache[concept_cache_key]
                     return cached.copy() if hasattr(cached, 'copy') else cached
                 
-                # 🔧 FIX: 移除旧的简单缓存和概念缓存回退逻辑
+                # �🚀🚀 关键优化：如果原始数据已存在于 _raw_concept_cache，
+                # 直接从缓存中获取并应用当前的 interval/aggregate，避免重复读取数据库！
+                # 这解决了 dopa_dur 在 vaso_ind、sofa_cardio、dopa60 中被重复加载的问题
+                raw_cache_key = (concept_name, patient_ids_hash)
+                is_simple_aggregator = agg_value in (None, False, "auto") or isinstance(agg_value, str)
+                if raw_cache_key in self._raw_concept_cache and is_simple_aggregator:
+                    raw_cached = self._raw_concept_cache[raw_cache_key]
+                    if hasattr(raw_cached, 'copy'):
+                        raw_cached = raw_cached.copy()
+                    if verbose and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug("🚀 从原始缓存重建概念 '%s' (interval=%s, agg=%s)", concept_name, interval, agg_value)
+                    
+                    # 应用聚合（如果需要）
+                    if agg_value not in (None, False, "auto"):
+                        result = self._apply_aggregation_to_icutable(
+                            raw_cached, concept_name, interval, agg_value
+                        )
+                    else:
+                        result = raw_cached
+                    
+                    # 缓存处理后的结果
+                    self._concept_data_cache[concept_cache_key] = result
+                    return result.copy() if hasattr(result, 'copy') else result
+                
+                # �🔧 FIX: 移除旧的简单缓存和概念缓存回退逻辑
                 # 这些旧缓存不区分聚合方式，导致错误的缓存命中
                 # 例如：safi 内部用 min 聚合加载 o2sat，缓存后
                 # 独立加载 o2sat（应该用默认聚合）会错误地命中这个缓存
@@ -4996,12 +5029,75 @@ class ConceptResolver:
                 # 🔧 FIX: 只存入 _concept_data_cache（包含完整的聚合信息）
                 # 移除对 _concept_cache 的写入，避免不同聚合方式的缓存冲突
                 self._concept_data_cache[concept_cache_key] = result
+                
+                # 🚀 同时存入 _raw_concept_cache，供回调函数使用
+                # 回调函数通常需要不同 interval 的数据，所以用统一的 key
+                raw_cache_key = (concept_name, patient_ids_hash)
+                if raw_cache_key not in self._raw_concept_cache:
+                    self._raw_concept_cache[raw_cache_key] = result
+                
                 self._get_inflight().discard(concept_name)
         else:
             # 仅清除 inflight 标记
             with self._cache_lock:
                 self._get_inflight().discard(concept_name)
         return result
+
+    def _apply_aggregation_to_icutable(
+        self,
+        table: ICUTable,
+        concept_name: str,
+        interval: Optional[pd.Timedelta],
+        aggregator: object,
+    ) -> ICUTable:
+        """从原始 ICUTable 应用聚合，返回新的 ICUTable。
+        
+        这个方法用于从 _raw_concept_cache 重建处理后的数据，
+        避免重复读取数据库。
+        
+        Args:
+            table: 原始 ICUTable
+            concept_name: 概念名称
+            interval: 时间间隔
+            aggregator: 聚合方式
+            
+        Returns:
+            处理后的 ICUTable
+        """
+        frame = table.data.copy()
+        id_columns = list(table.id_columns)
+        index_column = table.index_column
+        unit_column = table.unit_column
+        value_column = table.value_column
+        
+        # 如果不需要聚合，直接返回副本
+        # "auto" 也表示不聚合（让后续流程决定）
+        if aggregator in (None, False, "auto"):
+            return ICUTable(
+                data=frame,
+                id_columns=id_columns,
+                index_column=index_column,
+                value_column=value_column,
+                unit_column=unit_column,
+            )
+        
+        # 应用聚合
+        aggregated_frame = self._apply_aggregation(
+            frame,
+            concept_name if concept_name in frame.columns else (value_column or concept_name),
+            id_columns,
+            index_column,
+            unit_column,
+            aggregator,
+        )
+        
+        return ICUTable(
+            data=aggregated_frame,
+            id_columns=id_columns,
+            index_column=index_column,
+            value_column=value_column if value_column in aggregated_frame.columns else concept_name,
+            unit_column=unit_column if unit_column and unit_column in aggregated_frame.columns else None,
+        )
 
     def _apply_aggregation(
         self,

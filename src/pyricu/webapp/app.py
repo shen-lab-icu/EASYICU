@@ -765,7 +765,7 @@ def _render_category_table(concepts, lang='en'):
         if lang == 'en':
             st.dataframe(
                 df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     'Abbr': st.column_config.TextColumn('Abbr', width='small'),
@@ -777,7 +777,7 @@ def _render_category_table(concepts, lang='en'):
         else:
             st.dataframe(
                 df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     '缩写': st.column_config.TextColumn('缩写', width='small'),
@@ -1083,10 +1083,11 @@ def init_session_state():
         st.session_state.path_validated = False
     if 'language' not in st.session_state:
         st.session_state.language = 'en'  # 默认英文
-    # 🚀 性能优化：患者数量限制（默认0表示全量加载）
-    # 全量 MIIV 约 5万患者/4000万行，加载需 ~50s；1000患者约3s
+    # 🚀 性能优化：患者数量限制
+    # 全量 MIIV 约 5万患者/4000万行，加载需 ~50s；100患者约2s
+    # 🔧 FIX 2025-01-23: 默认100患者，避免意外全量加载导致长时间等待
     if 'patient_limit' not in st.session_state:
-        st.session_state.patient_limit = 0  # 默认全量加载
+        st.session_state.patient_limit = 100  # 默认100患者，快速测试
     if 'available_patient_ids' not in st.session_state:
         st.session_state.available_patient_ids = None
 
@@ -2561,18 +2562,19 @@ def render_sidebar():
         # 🚀 患者数量限制（性能优化选项）
         limit_label = "Patient Limit" if st.session_state.language == 'en' else "患者数量限制"
         limit_help = "Limit number of patients to speed up loading. 0 = no limit (full data, may be slow)" if st.session_state.language == 'en' else "限制加载的患者数量以加速。0 = 不限制（全量数据，可能较慢）"
-        patient_limit_options = [0, 1000, 5000, 10000, 20000, 50000]
+        patient_limit_options = [100, 1000, 5000, 10000, 20000, 50000, 0]
         patient_limit_labels = {
-            0: "All patients (slower)" if st.session_state.language == 'en' else "全部患者（较慢）",
+            100: "100 (quick test)" if st.session_state.language == 'en' else "100（快速测试）",
             1000: "1,000",
             5000: "5,000", 
             10000: "10,000",
             20000: "20,000",
-            50000: "50,000"
+            50000: "50,000",
+            0: "All patients (slower)" if st.session_state.language == 'en' else "全部患者（较慢）"
         }
-        current_limit = st.session_state.get('patient_limit', 0)
+        current_limit = st.session_state.get('patient_limit', 100)  # 默认100
         if current_limit not in patient_limit_options:
-            current_limit = 0
+            current_limit = 100  # 🔧 FIX: 默认100而不是0
         patient_limit = st.selectbox(
             limit_label,
             options=patient_limit_options,
@@ -3213,7 +3215,7 @@ def render_data_overview():
             })
     
     if concept_stats:
-        st.dataframe(pd.DataFrame(concept_stats), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(concept_stats), width="stretch", hide_index=True)
 
 
 def render_home():
@@ -3858,7 +3860,7 @@ def render_home_extract_mode(lang):
         
         if concept_stats:
             stats_df = pd.DataFrame(concept_stats)
-            st.dataframe(stats_df, hide_index=True, use_container_width=True)
+            st.dataframe(stats_df, hide_index=True, width="stretch")
         
         # 快捷操作
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
@@ -3972,7 +3974,7 @@ def _render_home_dict_table(concepts, lang):
     
     if rows:
         df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True, height=300)
+        st.dataframe(df, width="stretch", hide_index=True, height=300)
 
 
 def render_timeseries_page():
@@ -4017,25 +4019,75 @@ def render_timeseries_page():
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
     if analysis_mode == mode_single:
-        # 顶部控制面板
-        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+        # 顶部控制面板 - 🔧 FIX: 添加模块筛选，方便用户在100+特征中找到想要的
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
         
         with col1:
+            # 🔧 FIX: 先选择模块，再选择特征
+            module_label = "📂 Select Module" if lang == 'en' else "📂 选择模块"
+            all_modules_opt = "All Modules" if lang == 'en' else "全部模块"
+            
+            # 获取模块列表
+            module_options = [all_modules_opt]
+            for grp_key in CONCEPT_GROUPS_INTERNAL:
+                grp_concepts = CONCEPT_GROUPS_INTERNAL[grp_key]
+                # 检查该模块是否有已加载的概念
+                if any(c in available_concepts for c in grp_concepts):
+                    display_name = CONCEPT_GROUPS_DISPLAY.get(grp_key, grp_key)
+                    module_options.append(display_name)
+            
+            selected_module = st.selectbox(
+                module_label,
+                options=module_options,
+                key="ts_module"
+            )
+        
+        with col2:
+            # 根据选择的模块过滤概念
+            if selected_module == all_modules_opt:
+                filtered_concepts = available_concepts
+            else:
+                # 找到对应的 group_key
+                selected_grp_key = None
+                for grp_key, display in CONCEPT_GROUPS_DISPLAY.items():
+                    if display == selected_module:
+                        selected_grp_key = grp_key
+                        break
+                if selected_grp_key:
+                    grp_concepts = CONCEPT_GROUPS_INTERNAL.get(selected_grp_key, [])
+                    filtered_concepts = [c for c in available_concepts if c in grp_concepts]
+                else:
+                    filtered_concepts = available_concepts
+            
             concept_label = "📋 Select Concept" if lang == 'en' else "📋 选择 Concept"
             concept_help = "Select data type to visualize" if lang == 'en' else "选择要可视化的数据类型"
             selected_concept = st.selectbox(
                 concept_label,
-                options=available_concepts,
+                options=filtered_concepts if filtered_concepts else available_concepts,
                 key="ts_concept",
                 help=concept_help
             )
         
-        with col2:
+        with col3:
             if st.session_state.patient_ids:
                 patient_label = "👤 Select Patient" if lang == 'en' else "👤 选择患者"
+                # 🔧 FIX: 支持用户输入搜索患者ID
+                patient_search = st.text_input(
+                    "🔍 Search Patient ID" if lang == 'en' else "🔍 搜索患者ID",
+                    key="ts_patient_search",
+                    placeholder="Type to filter..." if lang == 'en' else "输入ID过滤..."
+                )
+                
+                # 过滤患者列表
+                all_patients = st.session_state.patient_ids[:500]  # 限制前500个
+                if patient_search:
+                    filtered_patients = [p for p in all_patients if str(patient_search) in str(p)]
+                else:
+                    filtered_patients = all_patients[:100]
+                
                 patient_id = st.selectbox(
                     patient_label,
-                    options=st.session_state.patient_ids[:100],
+                    options=filtered_patients if filtered_patients else all_patients[:100],
                     key="ts_patient"
                 )
             else:
@@ -4043,7 +4095,7 @@ def render_timeseries_page():
                 no_patient_msg = "No patients found" if lang == 'en' else "未找到患者"
                 st.warning(no_patient_msg)
         
-        with col3:
+        with col4:
             chart_label = "📊 Chart Type" if lang == 'en' else "📊 图表类型"
             line_opt = "Line Chart" if lang == 'en' else "折线图"
             scatter_opt = "Scatter Plot" if lang == 'en' else "散点图"
@@ -4054,7 +4106,7 @@ def render_timeseries_page():
                 key="ts_chart_type"
             )
         
-        with col4:
+        with col5:
             show_stats_label = "Show Statistics" if lang == 'en' else "显示统计"
             show_stats = st.checkbox(show_stats_label, value=True, key="ts_show_stats")
         
@@ -4144,7 +4196,7 @@ def render_timeseries_page():
                                 marker=dict(size=6)
                             )
                             
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width="stretch")
                         else:
                             # 🔧 只有数值没有时间列（静态数据/单点数据）
                             st.info("ℹ️ Static value (No time series data)" if lang == 'en' else "ℹ️ 静态数值（无时间序列数据）")
@@ -4152,7 +4204,7 @@ def render_timeseries_page():
                                 val = patient_df[value_col].iloc[0]
                                 st.metric(label=value_col.upper(), value=f"{val}")
                             else:
-                                st.dataframe(patient_df[[value_col]], use_container_width=True)
+                                st.dataframe(patient_df[[value_col]], width="stretch")
 
                         # 显示统计信息
                         if show_stats:
@@ -4182,7 +4234,7 @@ def render_timeseries_page():
                     else:
                         warn_msg = "Data missing numeric value columns" if lang == 'en' else "数据中缺少数值列"
                         st.warning(warn_msg)
-                        st.dataframe(patient_df.head(20), use_container_width=True)
+                        st.dataframe(patient_df.head(20), width="stretch")
                         
                 except Exception as e:
                     err_msg = f"Chart rendering failed: {e}" if lang == 'en' else f"图表渲染失败: {e}"
@@ -4199,7 +4251,7 @@ def render_timeseries_page():
         # 数据表格预览
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
         preview_label = "📋 Data Table Preview" if lang == 'en' else "📋 数据表格预览"
-        with st.expander(preview_label, expanded=False):
+        with st.expander(preview_label, expanded=True):  # 🔧 FIX: 默认展开
             if selected_concept in st.session_state.loaded_concepts:
                 df = st.session_state.loaded_concepts[selected_concept]
                 if isinstance(df, pd.DataFrame):
@@ -4207,23 +4259,56 @@ def render_timeseries_page():
                         id_col = st.session_state.id_col
                         if id_col in df.columns:
                             df = df[df[id_col] == patient_id]
-                    st.dataframe(df.head(50), use_container_width=True, hide_index=True)
+                    st.dataframe(df.head(50), width="stretch", hide_index=True)  # 🔧 FIX: use width instead of use_container_width
                 else:
                     format_msg = "Data format does not support preview" if lang == 'en' else "数据格式不支持预览"
                     st.info(format_msg)
     
     else:  # 多患者比较模式
-        col1, col2, col3 = st.columns([1, 2, 1])
+        col1, col2, col3, col4 = st.columns([1, 1, 2, 1])
         
         with col1:
-            concept_label = "📋 Select Concept" if lang == 'en' else "📋 选择 Concept"
-            selected_concept = st.selectbox(
-                concept_label,
-                options=available_concepts,
-                key="ts_concept_multi"
+            # 🔧 FIX: 先选择模块，再选择特征
+            module_label = "📂 Select Module" if lang == 'en' else "📂 选择模块"
+            all_modules_opt = "All Modules" if lang == 'en' else "全部模块"
+            
+            module_options = [all_modules_opt]
+            for grp_key in CONCEPT_GROUPS_INTERNAL:
+                grp_concepts = CONCEPT_GROUPS_INTERNAL[grp_key]
+                if any(c in available_concepts for c in grp_concepts):
+                    display_name = CONCEPT_GROUPS_DISPLAY.get(grp_key, grp_key)
+                    module_options.append(display_name)
+            
+            selected_module_multi = st.selectbox(
+                module_label,
+                options=module_options,
+                key="ts_module_multi"
             )
         
         with col2:
+            # 根据选择的模块过滤概念
+            if selected_module_multi == all_modules_opt:
+                filtered_concepts_multi = available_concepts
+            else:
+                selected_grp_key = None
+                for grp_key, display in CONCEPT_GROUPS_DISPLAY.items():
+                    if display == selected_module_multi:
+                        selected_grp_key = grp_key
+                        break
+                if selected_grp_key:
+                    grp_concepts = CONCEPT_GROUPS_INTERNAL.get(selected_grp_key, [])
+                    filtered_concepts_multi = [c for c in available_concepts if c in grp_concepts]
+                else:
+                    filtered_concepts_multi = available_concepts
+            
+            concept_label = "📋 Select Concept" if lang == 'en' else "📋 选择 Concept"
+            selected_concept = st.selectbox(
+                concept_label,
+                options=filtered_concepts_multi if filtered_concepts_multi else available_concepts,
+                key="ts_concept_multi"
+            )
+        
+        with col3:
             if st.session_state.patient_ids:
                 compare_label = "👥 Select patients to compare (max 5)" if lang == 'en' else "👥 选择要比较的患者 (最多5个)"
                 compare_patients = st.multiselect(
@@ -4236,7 +4321,7 @@ def render_timeseries_page():
             else:
                 compare_patients = []
         
-        with col3:
+        with col4:
             normalize = st.checkbox("归一化比较", value=False, key="ts_normalize",
                                    help="将数值归一化到0-1范围便于比较")
         
@@ -4319,13 +4404,13 @@ def render_timeseries_page():
                         height=450,
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                     
                     # 比较统计表
                     if comparison_stats:
                         compare_stats_title = "#### 📊 Comparison Statistics" if lang == 'en' else "#### 📊 比较统计"
                         st.markdown(compare_stats_title)
-                        st.dataframe(pd.DataFrame(comparison_stats), use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(comparison_stats), width="stretch", hide_index=True)
                 else:
                     format_warn = "Data format not supported for multi-patient comparison" if lang == 'en' else "数据格式不支持多患者比较"
                     st.warning(format_warn)
@@ -4536,7 +4621,7 @@ def render_patient_page():
                         margin=dict(l=50, r=30, t=60, b=50),
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
                 else:
                     no_vitals = "ℹ️ No vital signs data available" if lang == 'en' else "ℹ️ 无可用的生命体征数据"
                     st.info(no_vitals)
@@ -4585,7 +4670,7 @@ def render_patient_page():
                                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
                                 )
                                 
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, width="stretch")
                 
                 # ============ SOFA-1 vs SOFA-2 对比图表 ============
                 has_sofa1 = 'sofa' in st.session_state.loaded_concepts
@@ -4659,7 +4744,7 @@ def render_patient_page():
                                 hovermode='x unified'
                             )
                             
-                            st.plotly_chart(fig_total, use_container_width=True)
+                            st.plotly_chart(fig_total, width="stretch")
                             
                             # 2. 子器官评分对比（6个子图）
                             organ_compare = "**Organ-specific Score Comparison**" if lang == 'en' else "**各器官评分对比**"
@@ -4761,7 +4846,7 @@ def render_patient_page():
                                 for i in range(1, 7):
                                     fig_organs.update_yaxes(range=[0, 4.5], row=(i-1)//3+1, col=(i-1)%3+1)
                                 
-                                st.plotly_chart(fig_organs, use_container_width=True)
+                                st.plotly_chart(fig_organs, width="stretch")
                             else:
                                 no_organ_msg = "ℹ️ Organ-specific scores not available in current data. Load individual organ concepts (e.g., sofa_resp, sofa2_resp) to see detailed comparison." if lang == 'en' else "ℹ️ 当前数据中无法获取器官子评分。请加载单独的器官概念（如 sofa_resp, sofa2_resp）以查看详细对比。"
                                 st.info(no_organ_msg)
@@ -4798,7 +4883,7 @@ def render_patient_page():
                             })
                             
                             diff_df = pd.DataFrame(diff_data)
-                            st.dataframe(diff_df, use_container_width=True, hide_index=True)
+                            st.dataframe(diff_df, width="stretch", hide_index=True)
                     else:
                         no_compare = "ℹ️ Need both SOFA-1 and SOFA-2 data for comparison" if lang == 'en' else "ℹ️ 需要同时有 SOFA-1 和 SOFA-2 数据才能对比"
                         st.info(no_compare)
@@ -5215,7 +5300,7 @@ def render_patient_page():
                 if len(patient_df) > 0:
                     records_label = "records" if lang == 'en' else "条记录"
                     with st.expander(f"{concept} ({len(patient_df)} {records_label})", expanded=False):
-                        st.dataframe(patient_df, use_container_width=True)
+                        st.dataframe(patient_df, width="stretch")
 
 
 def render_quality_page():
@@ -5367,7 +5452,7 @@ def render_quality_page():
         quality_df = pd.DataFrame(quality_data)
         st.dataframe(
             quality_df, 
-            use_container_width=True, 
+            width="stretch", 
             hide_index=True,
         )
     
@@ -5452,7 +5537,7 @@ def render_quality_page():
                         yaxis_title="",
                         margin=dict(l=100, r=30, t=50, b=50),
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
         except Exception as e:
             err_msg = f"Chart rendering failed: {e}" if lang == 'en' else f"图表渲染失败: {e}"
             st.warning(err_msg)
@@ -5495,7 +5580,7 @@ def render_quality_page():
                                 showlegend=False,
                             )
                             fig.update_traces(marker_color='#1f77b4')
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width="stretch")
                             
                             # 统计摘要
                             summary_label = "**Statistical Summary:**" if lang == 'en' else "**统计摘要:**"
@@ -5544,7 +5629,7 @@ def render_quality_page():
             coverage_df = pd.DataFrame(time_coverage)
             st.dataframe(
                 coverage_df, 
-                use_container_width=True, 
+                width="stretch", 
                 hide_index=True,
                 column_config={
                     "Concept": st.column_config.TextColumn("📋 Concept"),
@@ -5796,7 +5881,7 @@ def render_cohort_comparison_page():
             group2_name=group2_name,
             show_mortality=show_mortality
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
         # 统计表格 (TableOne风格)
         summary_title = "📋 Baseline Characteristics (TableOne)" if lang == 'en' else "📋 基线特征对比 (TableOne)"
@@ -5808,7 +5893,7 @@ def render_cohort_comparison_page():
             group2_name=group2_name,
             show_pvalue=True
         )
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        st.dataframe(summary_df, width="stretch", hide_index=True)
         
         # 添加统计说明
         if lang == 'en':
@@ -6083,7 +6168,10 @@ def execute_sidebar_export():
             import os
             
             # 批量并行加载所有特征
-            batch_msg = f"**Loading {total_concepts} features (batch mode)...**" if lang == 'en' else f"**批量加载 {total_concepts} 个特征...**"
+            patient_limit_display = st.session_state.get('patient_limit', 100)
+            patient_info = f"({patient_limit_display} patients)" if patient_limit_display else "(all patients)"
+            patient_info_cn = f"（{patient_limit_display}患者）" if patient_limit_display else "（全部患者）"
+            batch_msg = f"**Loading {total_concepts} features {patient_info}...**" if lang == 'en' else f"**批量加载 {total_concepts} 个特征 {patient_info_cn}...**"
             status_text.markdown(batch_msg)
             
             # 🚀 性能优化：参照 extract_baseline_features.py 的配置
@@ -6147,8 +6235,9 @@ def execute_sidebar_export():
                     else:
                         unsupported_concepts.append(c)
                 
-                if unsupported_concepts:
-                    st.warning(f"⚠️ 跳过 {len(unsupported_concepts)} 个不支持的概念: {', '.join(unsupported_concepts)}")
+                # 🔧 FIX: unsupported_concepts 警告移到 failed_concepts 处统一显示，避免重复
+                # 这里只记录，不立即显示
+                pass  # unsupported_concepts will be merged with failed_concepts later
                 
                 if not valid_concepts:
                     st.error("❌ 所选概念在当前数据库中都不可用")
@@ -6230,8 +6319,12 @@ def execute_sidebar_export():
                             continue
                 
                 progress_bar.progress(0.5)
-                if failed_concepts:
-                    skip_msg = f"⚠️ Skipped {len(failed_concepts)} unavailable: {', '.join(failed_concepts[:5])}" if lang == 'en' else f"⚠️ 跳过 {len(failed_concepts)} 个不可用: {', '.join(failed_concepts[:5])}"
+                # 🔧 FIX: 合并 unsupported 和 failed 概念，只显示一次警告
+                all_skipped = list(set(unsupported_concepts + failed_concepts))
+                if all_skipped:
+                    skip_list = ', '.join(all_skipped[:5])
+                    more_text = f'... +{len(all_skipped)-5}' if len(all_skipped) > 5 else ''
+                    skip_msg = f"⚠️ Skipped {len(all_skipped)} unavailable: {skip_list}{more_text}" if lang == 'en' else f"⚠️ 跳过 {len(all_skipped)} 个不可用: {skip_list}{more_text}"
                     st.warning(skip_msg)
                 loaded_msg = f"✅ Loaded {len(data)}/{total_concepts} features" if lang == 'en' else f"✅ 已加载 {len(data)}/{total_concepts} 个特征"
                 status_text.markdown(loaded_msg)
@@ -6244,6 +6337,11 @@ def execute_sidebar_export():
         # 按模块分组导出（将同一分组的特征合并为宽表）
         merge_msg = "**Merging and exporting by module...**" if lang == 'en' else "**正在按模块合并导出...**"
         status_text.markdown(merge_msg)
+        
+        # 🚀 记录导出开始时间和各模块耗时
+        import time as time_module
+        export_start_time = time_module.time()
+        module_times = {}
         
         # 反向映射：concept -> group_key（英文key用于文件名）
         concept_to_group = {}
@@ -6283,7 +6381,12 @@ def execute_sidebar_export():
         # 导出合并后的分组数据（宽表格式）
         total_groups = len(grouped_data)
         for idx, (group_name, concept_dfs) in enumerate(grouped_data.items()):
-            export_group_msg = f"**Exporting**: `{group_name}` ({idx+1}/{total_groups})" if lang == 'en' else f"**正在导出**: `{group_name}` ({idx+1}/{total_groups})"
+            module_start_time = time_module.time()
+            
+            # 🚀 显示详细进度：模块名 + 包含的特征列表
+            concept_list = list(concept_dfs.keys())
+            concepts_str = ', '.join(concept_list[:5]) + (f'... +{len(concept_list)-5}' if len(concept_list) > 5 else '')
+            export_group_msg = f"**Exporting**: `{group_name}` ({idx+1}/{total_groups})\n\n📋 Features: {concepts_str}" if lang == 'en' else f"**正在导出**: `{group_name}` ({idx+1}/{total_groups})\n\n📋 特征: {concepts_str}"
             status_text.markdown(export_group_msg)
             
             # 将同一分组的所有 concept 合并为宽表
@@ -6389,6 +6492,24 @@ def execute_sidebar_export():
                     if merged_df is None:
                         merged_df = df
                     else:
+                        # 🔧 FIX: 合并前确保 merge_cols 的类型一致
+                        for col in merge_cols:
+                            if col in merged_df.columns and col in df.columns:
+                                # 统一转换为相同类型
+                                merged_dtype = merged_df[col].dtype
+                                df_dtype = df[col].dtype
+                                if merged_dtype != df_dtype:
+                                    # 优先使用 float64 (数值类型)
+                                    if pd.api.types.is_numeric_dtype(merged_dtype) or pd.api.types.is_numeric_dtype(df_dtype):
+                                        try:
+                                            merged_df[col] = pd.to_numeric(merged_df[col], errors='coerce')
+                                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                                        except Exception:
+                                            pass
+                                    else:
+                                        # 都转为 object 类型
+                                        merged_df[col] = merged_df[col].astype(str)
+                                        df[col] = df[col].astype(str)
                         # 外连接合并
                         merged_df = pd.merge(merged_df, df, on=merge_cols, how='outer')
             
@@ -6430,6 +6551,10 @@ def execute_sidebar_export():
             
             exported_files.append(str(file_path))
             
+            # 🚀 记录模块耗时
+            module_elapsed = time_module.time() - module_start_time
+            module_times[group_name] = module_elapsed
+            
             # 更新导出进度（从50%到100%）
             if use_mock:
                 progress_bar.progress(0.3 + 0.7 * (idx + 1) / total_groups)
@@ -6443,8 +6568,28 @@ def execute_sidebar_export():
         if exported_files:
             st.session_state.export_completed = True
             st.session_state.last_export_dir = str(export_dir)  # 保存实际导出目录
+            
+            # 🚀 计算总耗时并显示时间统计
+            total_elapsed = time_module.time() - export_start_time
             success_msg = f"✅ Successfully exported {len(exported_files)} files to `{export_dir}`" if lang == 'en' else f"✅ 成功导出 {len(exported_files)} 个文件到 `{export_dir}`"
             st.success(success_msg)
+            
+            # 显示时间统计
+            time_stats_title = "⏱️ Export Time Statistics" if lang == 'en' else "⏱️ 导出耗时统计"
+            with st.expander(time_stats_title, expanded=False):
+                for mod_name, mod_time in module_times.items():
+                    if mod_time >= 60:
+                        time_str = f"{mod_time/60:.1f} min"
+                    else:
+                        time_str = f"{mod_time:.1f} s"
+                    st.text(f"  • {mod_name}: {time_str}")
+                
+                if total_elapsed >= 60:
+                    total_str = f"{total_elapsed/60:.1f} min"
+                else:
+                    total_str = f"{total_elapsed:.1f} s"
+                total_msg = f"**Total: {total_str}**" if lang == 'en' else f"**总计: {total_str}**"
+                st.markdown(total_msg)
             
             # 显示导出的文件列表
             view_files_label = "📁 View Exported Files" if lang == 'en' else "📁 查看导出文件"
@@ -6737,7 +6882,7 @@ def render_export_page():
             select_preview_label = "Select Preview" if lang == 'en' else "选择预览"
             preview_concept = st.selectbox(select_preview_label, concepts_to_export)
             if preview_concept in preview_data:
-                st.dataframe(preview_data[preview_concept].head(20), use_container_width=True, hide_index=True)
+                st.dataframe(preview_data[preview_concept].head(20), width="stretch", hide_index=True)
     
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
