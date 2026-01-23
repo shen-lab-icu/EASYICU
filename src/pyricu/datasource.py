@@ -78,6 +78,40 @@ EICU_NURSECHARTING_IDS = {
     'O2 Admin Device',
 }
 
+# 🚀 VALUE-TO-ITEMID 映射表：用于优化 sub_var: value 类型的概念加载
+# 当概念定义使用 sub_var: value 时，需要扫描全表来匹配 value
+# 但如果我们知道哪些 itemid 包含目标 value，就可以使用 bucket 优化
+# 结构: {db_name: {table_name: {value_col: {value: [itemids]}}}}
+# 例如: ett_gcs (miiv) 使用 value='No Response-ETT'，对应 itemid=223900
+VALUE_TO_ITEMID_MAPPING = {
+    'miiv': {
+        'chartevents': {
+            'value': {
+                # ett_gcs: 用于识别气管插管状态
+                # value='No Response-ETT' 只出现在 itemid=223900 (GCS - Verbal Response)
+                'No Response-ETT': {223900},
+                '1.0 ET/Trach': {223900},  # 同样是插管状态
+            }
+        }
+    },
+    'mimic': {
+        'chartevents': {
+            'value': {
+                'No Response-ETT': {223900},
+                '1.0 ET/Trach': {223900},
+            }
+        }
+    },
+    'mimic_demo': {
+        'chartevents': {
+            'value': {
+                'No Response-ETT': {223900},
+                '1.0 ET/Trach': {223900},
+            }
+        }
+    },
+}
+
 # 🚀 HiRID observations 优化：只加载概念字典中定义的 198 个 variableids
 # 原始表 7.77 亿行（~72GB内存），过滤后大幅减少
 # 这些 variableids 来自 concept-dict.json 和 sofa2-dict.json 中 HiRID observations 源
@@ -361,11 +395,71 @@ class ICUDataSource:
 
             frame = frame_filtered.copy()
         else:
-            # 🚀 优化2：使用最小列集 + 传入的额外列（如 value_var）
-            # 只对在 MINIMAL_COLUMNS_MAP 中定义的表应用列优化
-            # 对于其他表（如 AUMC numericitems），加载所有列以确保包含必要的 ID/时间/值列
+            # 🚀 优化2：列选择策略
+            # - 对于宽表（vitalperiodic等）：只加载 ID列 + 时间列 + 传入的 value_var
+            # - 对于长表（chartevents等）：使用 MINIMAL_COLUMNS_MAP 预定义列集
             from .load_concepts import MINIMAL_COLUMNS_MAP, USE_MINIMAL_COLUMNS
-            if USE_MINIMAL_COLUMNS and table_name in MINIMAL_COLUMNS_MAP:
+            
+            # 🎯 宽表列表：这些表的值直接存储在列名中（如 heartrate, temperature）
+            # 不使用 itemid 过滤，应该只加载概念所需的值列
+            WIDE_TABLES = {'vitalperiodic', 'vitalaperiodic'}
+            
+            # 🚀 宽表预加载优化：第一次加载时预加载所有常用value列
+            # 这样后续概念可以直接从缓存取，避免重复读取parquet
+            WIDE_TABLE_VALUE_COLUMNS = {
+                'vitalperiodic': ['heartrate', 'systemicsystolic', 'systemicdiastolic', 
+                                  'systemicmean', 'respiration', 'sao2', 'temperature'],
+                'vitalaperiodic': ['noninvasivesystolic', 'noninvasivediastolic', 'noninvasivemean'],
+            }
+            
+            # 🚀 宽表优化：识别value列用于NULL过滤
+            # 宽表的value列就是传入的columns中除了ID列和时间列以外的列
+            wide_table_value_columns = None  # 用于DuckDB WHERE value IS NOT NULL优化
+            
+            if table_name in WIDE_TABLES and columns is not None:
+                # 对于宽表，使用动态列选择：ID列 + 时间列 + 传入的值列
+                table_cfg = self.config.get_table(table_name)
+                base_cols = set()
+                id_and_time_cols = set()  # 记录ID列和时间列
+                
+                # 添加 ID 列（优先使用表配置，否则使用 icustay 级别的 ID）
+                if table_cfg.defaults.id_var:
+                    base_cols.add(table_cfg.defaults.id_var)
+                    id_and_time_cols.add(table_cfg.defaults.id_var)
+                else:
+                    # 从数据库 id_cfg 获取 icustay 级别 ID
+                    # eICU: patientunitstayid, MIIV: stay_id, AUMC: admissionid
+                    icustay_cfg = self.config.id_configs.get('icustay')
+                    if icustay_cfg:
+                        base_cols.add(icustay_cfg.id)
+                        id_and_time_cols.add(icustay_cfg.id)
+                    else:
+                        # 回退到默认 ID
+                        default_id = self.config.get_default_id()
+                        if default_id:
+                            base_cols.add(default_id)
+                            id_and_time_cols.add(default_id)
+                    
+                # 添加时间列
+                if table_cfg.defaults.index_var:
+                    base_cols.add(table_cfg.defaults.index_var)
+                    id_and_time_cols.add(table_cfg.defaults.index_var)
+                    
+                # 合并传入的值列（如 heartrate）
+                for col in columns:
+                    base_cols.add(col)
+                
+                # 🚀 提取value列（用于NULL过滤）= 传入的columns - ID列 - 时间列
+                value_cols = [c for c in columns if c not in id_and_time_cols]
+                if value_cols:
+                    wide_table_value_columns = value_cols
+                    
+                columns = list(base_cols)
+                if DEBUG_MODE:
+                    logger.debug(f"🎯 宽表动态列选择: {table_name} -> {columns}")
+                    logger.debug(f"🎯 宽表value列(用于NULL过滤): {wide_table_value_columns}")
+                    
+            elif USE_MINIMAL_COLUMNS and table_name in MINIMAL_COLUMNS_MAP:
                 base_columns = list(MINIMAL_COLUMNS_MAP[table_name])
                 if columns is not None:
                     # 合并最小列集和传入的额外列（去重）
@@ -416,6 +510,30 @@ class ICUDataSource:
                             logger.info(f"🎯 概念特定过滤器: {spec.column} IN {len(ids)} 个 ID")
                         continue  # 继续处理，找 patient_id 过滤器
                     
+                    # 🚀 VALUE-TO-ITEMID 映射优化：处理 sub_var: value 类型的概念
+                    # 例如 ett_gcs 使用 value='No Response-ETT'，我们将其转换为 itemid=223900
+                    # 这样可以使用 bucket 优化，而不是扫描全表
+                    if spec.op == FilterOp.IN and spec.column == 'value':
+                        db_name = self.config.name
+                        value_mapping = VALUE_TO_ITEMID_MAPPING.get(db_name, {}).get(table_name, {}).get('value', {})
+                        if value_mapping:
+                            # 收集所有匹配的 itemid
+                            mapped_itemids = set()
+                            filter_values = spec.value
+                            if isinstance(filter_values, str):
+                                filter_values = [filter_values]
+                            for val in filter_values:
+                                if val in value_mapping:
+                                    mapped_itemids.update(value_mapping[val])
+                            
+                            if mapped_itemids:
+                                # 使用 itemid 进行 bucket 过滤（快 50x）
+                                concept_itemid_filter = ('itemid', mapped_itemids)
+                                logger.debug(f"🔄 VALUE-TO-ITEMID映射: value IN {filter_values} -> itemid IN {mapped_itemids}")
+                                # 注意：仍需在内存中应用 value 过滤（因为 itemid 可能包含多种 value）
+                                # 这个过滤会在后面的 filters 循环中应用
+                                continue
+                    
                     if spec.op == FilterOp.IN and spec.column in id_columns:
                         patient_ids_filter = spec
                         
@@ -458,7 +576,8 @@ class ICUDataSource:
             frame = self._load_raw_frame(
                 table_name, columns, 
                 patient_ids_filter=patient_ids_filter,
-                concept_itemid_filter=concept_itemid_filter
+                concept_itemid_filter=concept_itemid_filter,
+                wide_table_value_columns=wide_table_value_columns  # 🚀 传递宽表value列用于NULL过滤
             )
 
             # 应用过滤器，但跳过已经被 patient_ids_filter 处理的过滤器
@@ -516,8 +635,9 @@ class ICUDataSource:
                 if column in frame.columns and pd.api.types.is_numeric_dtype(frame[column]):
                     # 将毫秒转换为整数分钟: floor(ms / 60000) - 匹配 R ricu 的 as.integer()
                     # 🔧 PERFORMANCE FIX: Use numpy floor instead of slow apply+lambda
+                    # 🔧 FIX: Handle pd.NA values properly by converting to numpy float array first
                     import numpy as np
-                    values = frame[column].values / 60000.0
+                    values = np.array(frame[column], dtype=float) / 60000.0
                     frame[column] = np.where(np.isnan(values), np.nan, np.floor(values))
         
         for column in time_like_cols:
@@ -632,17 +752,19 @@ class ICUDataSource:
                             if verbose:
                                 logger.debug(f"[{table_name}] 检测到 {len(multi_stay_hadms)} 个 hadm_id 有多个 stay_id，执行 rolling join (使用 outtime)")
                             
-                            # 规范化时间列
-                            frame[time_col] = pd.to_datetime(frame[time_col], errors='coerce', utc=True)
-                            if frame[time_col].dt.tz is not None:
-                                frame[time_col] = frame[time_col].dt.tz_localize(None)
+                            # 规范化时间列 - 统一为 datetime64[ns] 以兼容 merge_asof
+                            def _normalize_datetime_ns(series: pd.Series) -> pd.Series:
+                                """规范化datetime为ns精度，去时区"""
+                                dt = pd.to_datetime(series, errors='coerce', utc=True)
+                                if dt.dt.tz is not None:
+                                    dt = dt.dt.tz_localize(None)
+                                # 🔧 FIX: 统一转换为 datetime64[ns] 确保 merge_asof 兼容
+                                return dt.astype('datetime64[ns]')
+                            
+                            frame[time_col] = _normalize_datetime_ns(frame[time_col])
                             if 'intime' in frame.columns:
-                                frame['intime'] = pd.to_datetime(frame['intime'], errors='coerce', utc=True)
-                                if frame['intime'].dt.tz is not None:
-                                    frame['intime'] = frame['intime'].dt.tz_localize(None)
-                            frame['outtime'] = pd.to_datetime(frame['outtime'], errors='coerce', utc=True)
-                            if frame['outtime'].dt.tz is not None:
-                                frame['outtime'] = frame['outtime'].dt.tz_localize(None)
+                                frame['intime'] = _normalize_datetime_ns(frame['intime'])
+                            frame['outtime'] = _normalize_datetime_ns(frame['outtime'])
                             
                             # 分离需要 rolling join 的数据和不需要的数据
                             single_stay_mask = ~frame['hadm_id'].isin(multi_stay_hadms)
@@ -823,6 +945,7 @@ class ICUDataSource:
         columns: Optional[Iterable[str]],
         patient_ids_filter: Optional[FilterSpec] = None,
         concept_itemid_filter: Optional[Tuple[str, set]] = None,  # 🚀 概念特定 itemid 过滤器
+        wide_table_value_columns: Optional[List[str]] = None,  # 🚀 宽表value列用于NULL过滤
     ) -> pd.DataFrame:
         # 🔍 调试日志：显示请求的列（仅在DEBUG级别显示）
         if columns:
@@ -835,6 +958,7 @@ class ICUDataSource:
         # 之前排除 inputevents 是因为担心 subject_id→stay_id 映射问题
         # 但实际上 inputevents 表有 stay_id 列，可以直接过滤
         # 🔧 HiRID observations: 由于概念特定的 itemid 过滤，不同概念有不同数据，禁用缓存
+        # 🔧 FIX: 分桶目录(numericitems_bucket等)也需要禁用缓存或包含itemid在key中
         skip_cache_tables = ['microbiologyevents', 'admissions', 'observations']  # 添加 observations
         enable_caching = self.enable_cache and table_name not in skip_cache_tables
         
@@ -852,7 +976,14 @@ class ICUDataSource:
             # 包含列名和操作符，确保唯一性
             filter_key = (patient_ids_filter.column, patient_ids_filter.op, val)
 
-        cache_key = (table_name, tuple(sorted(columns)) if columns else None, filter_key)
+        # 🔧 FIX: 分桶读取时，concept_itemid_filter 也需要加入缓存key
+        # 否则不同概念（不同itemid）会错误共享缓存
+        itemid_filter_key = None
+        if concept_itemid_filter:
+            col, ids = concept_itemid_filter
+            itemid_filter_key = (col, tuple(sorted(ids)))
+
+        cache_key = (table_name, tuple(sorted(columns)) if columns else None, filter_key, itemid_filter_key)
         
         # 检查缓存
         cached_frame = None
@@ -879,48 +1010,54 @@ class ICUDataSource:
         if loader is None and dataset_cfg is not None:
             frame = self._read_dataset(table_name, dataset_cfg, columns, patient_ids_filter)
         elif loader is None:
-            # 修复：检查是否为多文件配置，如果是，使用目录路径
-            table_cfg = self.config.get_table(table_name)
-            if len(table_cfg.files) > 1:
-                # 多文件配置：使用目录路径以启用多文件读取
-                base_path = self.base_path or Path.cwd()
-                if table_cfg.files:
-                    # HiRID特殊处理：配置中的CSV路径与实际parquet目录不同
-                    # observation_tables/csv/ -> observations/
-                    # pharma_records/csv/ -> pharma/
-                    if self.config.name == 'hirid':
-                        hirid_table_dir_mapping = {
-                            'observations': 'observations',
-                            'pharma': 'pharma',
-                        }
-                        if table_name in hirid_table_dir_mapping:
-                            mapped_dir = base_path / hirid_table_dir_mapping[table_name]
-                            if mapped_dir.is_dir():
-                                parquet_files = list(mapped_dir.glob("*.parquet")) + list(mapped_dir.glob("*.pq"))
-                                if parquet_files:
-                                    loader = mapped_dir
-                    
-                    # 如果HiRID映射未找到，使用默认逻辑
-                    if loader is None:
-                        # 获取目录路径（从第一个文件路径中提取）
-                        first_file = table_cfg.files[0]
-                        # 处理字符串或字典格式
-                        if isinstance(first_file, dict):
-                            first_path = Path(first_file.get('path', first_file.get('name', '')))
-                        else:
-                            first_path = Path(first_file)
-                        
-                        multi_file_dir = base_path / first_path.parent
-                        if multi_file_dir.is_dir():
-                            loader = multi_file_dir
-                        else:
-                            # 回退到单个文件解析
-                            loader = self._resolve_loader_from_disk(table_name)
-                else:
-                    # 回退到单个文件解析
-                    loader = self._resolve_loader_from_disk(table_name)
+            # 🚀 优先检查分桶目录（无论是单文件还是多文件配置）
+            # 分桶目录性能远优于普通目录或单个parquet
+            bucket_loader = self._resolve_bucket_directory(table_name)
+            if bucket_loader is not None:
+                loader = bucket_loader
             else:
-                loader = self._resolve_loader_from_disk(table_name)
+                # 修复：检查是否为多文件配置，如果是，使用目录路径
+                table_cfg = self.config.get_table(table_name)
+                if len(table_cfg.files) > 1:
+                    # 多文件配置：使用目录路径以启用多文件读取
+                    base_path = self.base_path or Path.cwd()
+                    if table_cfg.files:
+                        # HiRID特殊处理：配置中的CSV路径与实际parquet目录不同
+                        # observation_tables/csv/ -> observations/
+                        # pharma_records/csv/ -> pharma/
+                        if self.config.name == 'hirid':
+                            hirid_table_dir_mapping = {
+                                'observations': 'observations',
+                                'pharma': 'pharma',
+                            }
+                            if table_name in hirid_table_dir_mapping:
+                                mapped_dir = base_path / hirid_table_dir_mapping[table_name]
+                                if mapped_dir.is_dir():
+                                    parquet_files = list(mapped_dir.glob("*.parquet")) + list(mapped_dir.glob("*.pq"))
+                                    if parquet_files:
+                                        loader = mapped_dir
+                        
+                        # 如果HiRID映射未找到，使用默认逻辑
+                        if loader is None:
+                            # 获取目录路径（从第一个文件路径中提取）
+                            first_file = table_cfg.files[0]
+                            # 处理字符串或字典格式
+                            if isinstance(first_file, dict):
+                                first_path = Path(first_file.get('path', first_file.get('name', '')))
+                            else:
+                                first_path = Path(first_file)
+                            
+                            multi_file_dir = base_path / first_path.parent
+                            if multi_file_dir.is_dir():
+                                loader = multi_file_dir
+                            else:
+                                # 回退到单个文件解析
+                                loader = self._resolve_loader_from_disk(table_name)
+                    else:
+                        # 回退到单个文件解析
+                        loader = self._resolve_loader_from_disk(table_name)
+                else:
+                    loader = self._resolve_loader_from_disk(table_name)
             
             # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
             if loader is None:
@@ -958,7 +1095,8 @@ class ICUDataSource:
                 Path(loader), columns, 
                 patient_ids_filter=patient_ids_filter, 
                 table_name=table_name,
-                concept_itemid_filter=concept_itemid_filter  # 🚀 传递概念特定过滤器
+                concept_itemid_filter=concept_itemid_filter,  # 🚀 传递概念特定过滤器
+                wide_table_value_columns=wide_table_value_columns  # 🚀 传递宽表value列用于NULL过滤
             )
 
         if columns is not None:
@@ -985,9 +1123,62 @@ class ICUDataSource:
         # 未过滤且未缓存时返回切片
         return frame[:] if self.enable_cache else frame
 
+    def _resolve_bucket_directory(self, table_name: str) -> Optional[Path]:
+        """
+        🚀 优先检查分桶目录（性能最优）
+        
+        分桶目录使用 bucket_id=* 子目录结构，通过 hash(itemid) % num_buckets 实现
+        读取时只需扫描相关桶，跳过 99% 无关数据
+        
+        检查位置：
+        - base_path / {table_name}_bucket
+        - base_path / icu / {table_name}_bucket  (MIIV)
+        - base_path / hosp / {table_name}_bucket  (MIIV)
+        
+        Returns:
+            分桶目录路径（如果存在且有效），否则 None
+        """
+        if not self.base_path:
+            return None
+        
+        # 可能的表名变体
+        name_variants = [table_name, table_name.lower()]
+        
+        # 可能的分桶目录位置
+        for name in name_variants:
+            possible_bucket_dirs = [
+                self.base_path / f"{name}_bucket",  # 直接在 base_path 下
+                self.base_path / "icu" / f"{name}_bucket",  # MIIV icu 子目录
+                self.base_path / "hosp" / f"{name}_bucket",  # MIIV hosp 子目录
+            ]
+            for bucket_dir in possible_bucket_dirs:
+                if bucket_dir.is_dir():
+                    # 检查是否有 bucket_id=* 子目录（分桶格式标识）
+                    bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
+                    if bucket_subdirs:
+                        logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
+                        return bucket_dir
+        
+        return None
+
     def _resolve_loader_from_disk(self, table_name: str) -> Optional[Callable[[], pd.DataFrame] | Path]:
         if not self.base_path:
             return None
+        
+        # 🚀 优先级最高：检查分桶目录（性能最优）
+        # 分桶目录命名规则：{table_name}_bucket
+        # 必须在检查配置文件之前，因为分桶目录是性能优化的关键
+        possible_bucket_dirs = [
+            self.base_path / f"{table_name}_bucket",  # 直接在 base_path 下
+            self.base_path / "icu" / f"{table_name}_bucket",  # MIIV icu 子目录
+            self.base_path / "hosp" / f"{table_name}_bucket",  # MIIV hosp 子目录
+        ]
+        for bucket_dir in possible_bucket_dirs:
+            if bucket_dir.is_dir():
+                bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
+                if bucket_subdirs:
+                    logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
+                    return bucket_dir
         
         table_cfg = self.config.get_table(table_name)
         explicit = table_cfg.first_file()
@@ -1059,6 +1250,22 @@ class ICUDataSource:
         
         # Only support Parquet format - try different name variations
         for name in [file_base_name, file_base_name.lower(), table_name, table_name.lower()]:
+            # 🚀 优先检查 bucket 目录（分桶格式，性能最优）
+            # 必须在检查 .parquet 文件之前，因为分桶目录可能与表同名
+            # 检查多个可能的位置：base_path 和子目录（如 icu/, hosp/）
+            possible_bucket_dirs = [
+                self.base_path / f"{name}_bucket",  # 直接在 base_path 下
+                self.base_path / "icu" / f"{name}_bucket",  # MIIV icu 子目录
+                self.base_path / "hosp" / f"{name}_bucket",  # MIIV hosp 子目录
+            ]
+            for bucket_dir in possible_bucket_dirs:
+                if bucket_dir.is_dir():
+                    # 检查是否有 bucket_id=* 子目录
+                    bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
+                    if bucket_subdirs:
+                        logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
+                        return bucket_dir
+            
             # Try .parquet extension
             parquet_candidate = self.base_path / f"{name}.parquet"
             if parquet_candidate.exists():
@@ -1071,6 +1278,7 @@ class ICUDataSource:
         # Check subdirectory for partitioned parquet data (common in hirid observations)
         if self.base_path is not None:
             for name in [table_name, table_name.lower()]:
+                # 检查普通分区目录
                 subdir = self.base_path / name
                 if subdir.is_dir():
                     # Look for Parquet files
@@ -1094,7 +1302,8 @@ class ICUDataSource:
         self, path: Path, columns: Optional[Iterable[str]], 
         patient_ids_filter: Optional[FilterSpec] = None, 
         table_name: Optional[str] = None,
-        concept_itemid_filter: Optional[Tuple[str, set]] = None  # 🚀 概念特定 itemid 过滤器
+        concept_itemid_filter: Optional[Tuple[str, set]] = None,  # 🚀 概念特定 itemid 过滤器
+        wide_table_value_columns: Optional[List[str]] = None  # 🚀 宽表value列用于NULL过滤
     ) -> pd.DataFrame:
         # 🚀 大表 itemid 预过滤配置
         # 检测是否为需要 itemid 过滤的大表
@@ -1141,7 +1350,12 @@ class ICUDataSource:
                     use_duckdb = len(values) <= 100
             
             if use_duckdb:
-                return self._read_partitioned_data_duckdb(path, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
+                return self._read_partitioned_data_duckdb(
+                    path, columns, patient_ids_filter, 
+                    itemid_filter_config=itemid_filter_config, 
+                    table_name=table_name,
+                    wide_table_value_columns=wide_table_value_columns  # 🚀 传递宽表value列用于NULL过滤
+                )
             else:
                 return self._read_partitioned_data_optimized(path, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
         
@@ -1182,13 +1396,41 @@ class ICUDataSource:
             f"Unsupported file format '{path.suffix}' for {path.name}. Only Parquet format is supported."
         )
     
-    def _read_partitioned_data_duckdb(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None) -> pd.DataFrame:
+    def _compute_target_buckets(self, itemids: set, num_buckets: int, duckdb_module) -> set:
+        """使用 DuckDB hash 计算 itemid 对应的目标桶 ID
+        
+        必须使用 DuckDB 的 hash() 函数，因为分桶时使用的是 DuckDB hash。
+        Python 的 hash() 函数与 DuckDB 不一致！
+        
+        Args:
+            itemids: itemid 集合
+            num_buckets: 总桶数
+            duckdb_module: 已导入的 duckdb 模块
+            
+        Returns:
+            目标桶 ID 集合
+        """
+        conn = duckdb_module.connect()
+        itemid_list = list(itemids)
+        conn.execute("CREATE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
+        result = conn.execute(f"SELECT DISTINCT hash(itemid) % {num_buckets} FROM items").fetchall()
+        conn.close()
+        return {row[0] for row in result}
+    
+    def _read_partitioned_data_duckdb(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None, table_name: Optional[str] = None, wide_table_value_columns: Optional[List[str]] = None) -> pd.DataFrame:
         """使用 DuckDB 读取分区数据（高性能版本）
         
         DuckDB 对单患者/小批量患者查询特别高效，比 PyArrow 快 5-6 倍。
+        支持两种目录结构：
+        - 普通分区: directory/*.parquet
+        - 分桶格式: directory/bucket_id=*/*.parquet (AUMC numericitems_bucket)
         
         Args:
             itemid_filter_config: 可选的 (列名, itemid集合) 元组，用于大表预过滤
+            table_name: 表名，用于确定预排序键
+            wide_table_value_columns: 🚀 宽表value列列表，用于NULL过滤优化
+                                      对于vitalperiodic等宽表，传入如['heartrate']
+                                      会生成WHERE heartrate IS NOT NULL条件
         """
         try:
             import duckdb
@@ -1196,8 +1438,49 @@ class ICUDataSource:
             # DuckDB 未安装，回退到 PyArrow
             return self._read_partitioned_data_optimized(directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
         
-        # 构建 SQL 查询
-        glob_pattern = str(directory / "*.parquet")
+        # 🚀 检测目录结构：分桶格式 vs 普通分区
+        bucket_subdirs = list(directory.glob("bucket_id=*"))
+        if bucket_subdirs:
+            # 🔧 CRITICAL: 使用最大 bucket_id + 1 作为桶数
+            # 不能用 len(bucket_subdirs)，因为某些桶可能是空的（没有目录）
+            # 例如 HiRID 有 100 个桶但只有 81 个非空桶
+            max_bucket_id = max(int(d.name.split("=")[1]) for d in bucket_subdirs)
+            num_buckets = max_bucket_id + 1
+            
+            # 🚀 关键优化：如果有 itemid 过滤条件，计算目标桶，只扫描这些桶
+            if itemid_filter_config:
+                filter_col, filter_ids = itemid_filter_config
+                # 只有数值型 itemid 才能使用 hash 分桶
+                numeric_ids = {int(x) for x in filter_ids if isinstance(x, (int, float)) and not isinstance(x, bool)}
+                if numeric_ids:
+                    # 使用 DuckDB hash 计算目标桶（与分桶转换时一致）
+                    target_buckets = self._compute_target_buckets(numeric_ids, num_buckets, duckdb)
+                    # 构建只包含目标桶的文件列表
+                    target_files = []
+                    for bucket_id in target_buckets:
+                        bucket_dir = directory / f"bucket_id={bucket_id}"
+                        if bucket_dir.exists():
+                            target_files.extend(bucket_dir.glob("*.parquet"))
+                    if target_files:
+                        # 使用精确的文件列表而非全扫描
+                        file_list_str = ", ".join(f"'{f}'" for f in target_files)
+                        glob_pattern = f"[{file_list_str}]"
+                        logger.debug(f"🪣 分桶精准读取: {len(target_buckets)}/{num_buckets} 个桶, {len(target_files)} 个文件")
+                    else:
+                        # 目标桶不存在，可能是空数据
+                        logger.warning(f"⚠️ 目标桶不存在: bucket_id in {target_buckets}")
+                        glob_pattern = str(directory / "**/*.parquet")
+                else:
+                    # 字符串型 ID，无法使用 hash 分桶优化
+                    glob_pattern = str(directory / "**/*.parquet")
+                    logger.debug(f"🪣 使用分桶模式读取(全扫描): {directory.name}")
+            else:
+                # 没有 itemid 过滤，全扫描
+                glob_pattern = str(directory / "**/*.parquet")
+                logger.debug(f"🪣 使用分桶模式读取(无过滤): {directory.name}")
+        else:
+            # 普通分区: directory/*.parquet
+            glob_pattern = str(directory / "*.parquet")
         
         # 列选择
         if columns:
@@ -1245,14 +1528,59 @@ class ICUDataSource:
             if DEBUG_MODE:
                 logger.info(f"🚀 大表优化: {filter_col} 过滤 {len(filter_ids)} 个 ID")
         
+        # 🚀 宽表NULL过滤优化：跳过value列为NULL的行
+        # 这对于eICU vitalperiodic等宽表非常重要
+        # 例如：加载hr概念时，heartrate为NULL的行没有意义，可以跳过
+        # 这将145M行→12M行，大幅减少数据传输和pandas处理开销
+        if wide_table_value_columns:
+            for val_col in wide_table_value_columns:
+                where_conditions.append(f"{val_col} IS NOT NULL")
+            if DEBUG_MODE:
+                logger.info(f"🚀 宽表NULL过滤: {wide_table_value_columns} IS NOT NULL")
+        
         # 构建 WHERE 子句
         where_clause = ""
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
+        # 🔧 DuckDB 预排序优化：针对超大表在查询时直接排序
+        # pandas sort_values 在 1.46 亿行上需要 25 秒，而 DuckDB ORDER BY 只需 1.9 秒
+        # 宽表 (vitalperiodic, vitalaperiodic) 必须预排序，否则后续 sort_values 非常慢
+        order_by_clause = ""
+        PRESORT_TABLES = {'vitalperiodic', 'vitalaperiodic'}  # 需要预排序的宽表
+        if table_name and table_name.lower() in PRESORT_TABLES:
+            # 获取表配置以确定排序键
+            try:
+                table_cfg = self.config.get_table(table_name)
+                sort_keys = []
+                
+                # 获取 ID 列
+                if table_cfg.defaults.id_var:
+                    sort_keys.append(table_cfg.defaults.id_var)
+                else:
+                    icustay_cfg = self.config.id_configs.get('icustay')
+                    if icustay_cfg:
+                        sort_keys.append(icustay_cfg.id)
+                
+                # 获取时间列
+                if table_cfg.defaults.index_var:
+                    sort_keys.append(table_cfg.defaults.index_var)
+                
+                if sort_keys:
+                    order_by_clause = f" ORDER BY {', '.join(sort_keys)}"
+                    logger.debug(f"🚀 宽表预排序: {table_name} ORDER BY {sort_keys}")
+            except Exception as e:
+                logger.debug(f"无法获取表配置进行预排序: {e}")
+        
         # 🔧 CRITICAL FIX: 使用 union_by_name=true 处理不同分区的 schema 差异
         # HiRID observations 的不同分区有不同的列类型（如 stringvalue）
-        query = f"SELECT {select_cols} FROM read_parquet('{glob_pattern}', union_by_name=true) {where_clause}"
+        # 注意：glob_pattern 可能是单引号包裹的路径，也可能是列表语法 [...]
+        if glob_pattern.startswith("["):
+            # 列表语法：多个文件
+            query = f"SELECT {select_cols} FROM read_parquet({glob_pattern}, union_by_name=true) {where_clause}{order_by_clause}"
+        else:
+            # 路径/glob 语法
+            query = f"SELECT {select_cols} FROM read_parquet('{glob_pattern}', union_by_name=true) {where_clause}{order_by_clause}"
         
         try:
             con = duckdb.connect()
@@ -1261,6 +1589,9 @@ class ICUDataSource:
             # 例如：UTC 15:37 会被转换成 Asia/Shanghai 23:37 (+8 小时)
             # 设置时区为 UTC 可以保持原始 UTC 时间不变
             con.execute("SET timezone='UTC'")
+            # 🔧 禁用DuckDB进度条，避免终端输出开销
+            con.execute("SET enable_progress_bar = false")
+            con.execute("SET enable_progress_bar_print = false")
             df = con.execute(query).fetchdf()
             con.close()
             return df
@@ -1642,3 +1973,389 @@ def _coerce_datetime(series: pd.Series) -> pd.Series:
     except Exception:
         # 极端情况：返回原值
         return series
+
+
+def load_bucketed_table_aggregated(
+    data_source: "ICUDataSource",
+    table_name: str,
+    value_column: str,
+    itemids: List[int],
+    interval_minutes: float = 60.0,
+    patient_ids: Optional[List] = None,
+    agg_func: str = 'median',  # 'median', 'mean', 'max', 'min', 'first', 'sum'
+    id_col: Optional[str] = None,
+    time_col: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
+    
+    针对AUMC numericitems、HiRID observations等分桶表优化。
+    直接在DuckDB中完成小时聚合，避免加载3700万行到Python再降采样。
+    
+    关键优化：
+    - 只扫描目标桶（而非全部100个桶）
+    - 在DuckDB中完成时间聚合（37M → 2.5M行）
+    - 显著降低内存使用（<500MB vs 5GB+）
+    
+    Args:
+        data_source: ICU数据源
+        table_name: 原始表名（如'numericitems'），会自动查找对应的分桶目录
+        value_column: 值列名（如'value'）
+        itemids: 要提取的itemid列表
+        interval_minutes: 时间聚合间隔（分钟），默认60分钟
+        patient_ids: 可选的患者ID过滤
+        agg_func: 聚合函数，默认'median'（与R ricu一致）
+        id_col: ID列名（可选，默认根据数据库推断）
+        time_col: 时间列名（可选，默认根据数据库推断）
+        
+    Returns:
+        聚合后的DataFrame
+    """
+    import duckdb
+    
+    # 确定数据库类型
+    db_name = data_source.config.name if hasattr(data_source.config, 'name') else 'unknown'
+    
+    # 🔧 直接查找分桶目录（不依赖_resolve_loader_from_disk）
+    base_path = data_source.base_path
+    bucket_table_name = f"{table_name}_bucket"
+    
+    possible_bucket_dirs = [
+        base_path / bucket_table_name,
+        base_path / "icu" / bucket_table_name,
+        base_path / "hosp" / bucket_table_name,
+    ]
+    
+    bucket_dir = None
+    for dir_path in possible_bucket_dirs:
+        if dir_path.is_dir():
+            bucket_subdirs = list(dir_path.glob("bucket_id=*"))
+            if bucket_subdirs:
+                bucket_dir = dir_path
+                break
+    
+    if bucket_dir is None:
+        raise ValueError(f"Cannot find bucketed directory for {table_name} (tried: {[str(p) for p in possible_bucket_dirs]})")
+    
+    # 确定ID列和时间列
+    if id_col is None:
+        if db_name == 'aumc':
+            id_col = 'admissionid'
+        elif db_name == 'hirid':
+            id_col = 'patientid'
+        else:
+            id_col = 'stay_id'
+    
+    if time_col is None:
+        if db_name == 'aumc':
+            time_col = 'measuredat'  # AUMC使用measuredat（毫秒时间戳）
+        elif db_name == 'hirid':
+            time_col = 'datetime'
+        else:
+            time_col = 'charttime'
+    
+    # 确定itemid列名
+    if db_name == 'aumc':
+        itemid_col = 'itemid'
+    elif db_name == 'hirid':
+        itemid_col = 'variableid'
+    else:
+        itemid_col = 'itemid'
+    
+    # 计算目标桶
+    conn = duckdb.connect()
+    conn.execute("SET timezone='UTC'")
+    # 🔧 禁用DuckDB进度条，避免16秒的终端输出开销
+    conn.execute("SET enable_progress_bar = false")
+    conn.execute("SET enable_progress_bar_print = false")
+    
+    # 获取桶数
+    bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
+    if not bucket_subdirs:
+        conn.close()
+        return pd.DataFrame()
+    
+    num_buckets = max(int(d.name.split('=')[1]) for d in bucket_subdirs) + 1
+    
+    # 计算目标桶ID
+    itemid_list = list(itemids)
+    conn.execute("CREATE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
+    result = conn.execute(f"SELECT DISTINCT hash(itemid) % {num_buckets} FROM items").fetchall()
+    target_buckets = [row[0] for row in result]
+    
+    # 构建文件列表
+    target_files = []
+    for bucket_id in target_buckets:
+        bucket_subdir = bucket_dir / f"bucket_id={bucket_id}"
+        if bucket_subdir.exists():
+            target_files.extend(bucket_subdir.glob("*.parquet"))
+    
+    if not target_files:
+        conn.close()
+        return pd.DataFrame()
+    
+    file_list_str = ", ".join(f"'{f}'" for f in target_files)
+    glob_pattern = f"[{file_list_str}]"
+    
+    # 构建WHERE条件
+    where_conditions = []
+    
+    # itemid过滤
+    ids_str = ", ".join(str(x) for x in itemids)
+    where_conditions.append(f"{itemid_col} IN ({ids_str})")
+    
+    # 患者过滤
+    if patient_ids:
+        patient_str = ", ".join(str(x) for x in patient_ids)
+        where_conditions.append(f"{id_col} IN ({patient_str})")
+    
+    where_clause = "WHERE " + " AND ".join(where_conditions)
+    
+    # 聚合函数映射
+    agg_map = {
+        'median': 'MEDIAN',
+        'mean': 'AVG',
+        'max': 'MAX',
+        'min': 'MIN',
+        'first': 'FIRST',
+        'sum': 'SUM',
+    }
+    duckdb_agg = agg_map.get(agg_func, 'MEDIAN')
+    
+    # 构建时间聚合表达式
+    # AUMC: measuredat是毫秒时间戳，需要转换后再聚合
+    if db_name == 'aumc':
+        # AUMC measuredat是Unix毫秒时间戳，转换为分钟后再取整
+        time_round_expr = f"FLOOR(({time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
+        # 输出时间列为分钟偏移量（相对于admittedat）
+        output_time_expr = f"{time_round_expr} as measuredat_minutes"
+        # 标准查询
+        query = f"""
+        SELECT 
+            {id_col},
+            {output_time_expr},
+            {itemid_col},
+            {duckdb_agg}({value_column}) as {value_column}
+        FROM read_parquet({glob_pattern}, union_by_name=true)
+        {where_clause}
+        GROUP BY {id_col}, {time_round_expr}, {itemid_col}
+        ORDER BY {id_col}, 2, {itemid_col}
+        """
+    elif db_name == 'hirid':
+        # 🚀 HiRID 优化: 在 DuckDB 中直接完成时间转换（datetime → 相对入院小时数）
+        # 这样避免了 Python 中的 merge + 时间计算开销（从 20s 优化到 0.6s）
+        general_path = data_source.base_path / 'general.parquet'
+        
+        # HiRID: 使用 general 表的 admissiontime 计算相对小时数
+        time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {interval_minutes / 60}) * {interval_minutes / 60}"
+        output_time_expr = f"{time_round_expr} as charttime"
+        
+        # 🔧 修复: 为 HiRID 的 JOIN 查询添加表别名前缀
+        # 因为使用了 JOIN，列名需要明确来自哪个表
+        hirid_where_clause = where_clause.replace(f'{itemid_col}', f'o.{itemid_col}')
+        hirid_where_clause = hirid_where_clause.replace(f'{id_col} IN', f'o.{id_col} IN')
+        
+        query = f"""
+        WITH adm AS (
+            SELECT patientid, CAST(admissiontime AS TIMESTAMP) as admissiontime 
+            FROM read_parquet('{general_path}')
+        )
+        SELECT 
+            o.{id_col},
+            {output_time_expr},
+            o.{itemid_col},
+            {duckdb_agg}(o.{value_column}) as {value_column}
+        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        JOIN adm a ON o.{id_col} = a.patientid
+        {hirid_where_clause}
+        GROUP BY o.{id_col}, {time_round_expr}, o.{itemid_col}
+        ORDER BY o.{id_col}, 2, o.{itemid_col}
+        """
+    else:
+        time_round_expr = f"FLOOR({time_col} / {interval_minutes}) * {interval_minutes}"
+        output_time_expr = f"{time_round_expr} as charttime"
+        # 标准查询
+        query = f"""
+        SELECT 
+            {id_col},
+            {output_time_expr},
+            {itemid_col},
+            {duckdb_agg}({value_column}) as {value_column}
+        FROM read_parquet({glob_pattern}, union_by_name=true)
+        {where_clause}
+        GROUP BY {id_col}, {time_round_expr}, {itemid_col}
+        ORDER BY {id_col}, 2, {itemid_col}
+        """
+    
+    try:
+        df = conn.execute(query).fetchdf()
+        logger.info(f"🚀 分桶表DuckDB聚合完成: {table_name} itemids={len(itemids)} -> {len(df):,} 行")
+        return df
+    except Exception as e:
+        logger.warning(f"DuckDB聚合失败: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def load_wide_table_aggregated(
+    data_source: "ICUDataSource",
+    table_name: str,
+    value_columns: List[str],
+    interval_hours: float = 1.0,
+    patient_ids: Optional[List] = None,
+    agg_func: str = 'first',  # 'first', 'mean', 'max', 'min'
+) -> pd.DataFrame:
+    """
+    🚀 高性能宽表批量加载：在DuckDB中完成聚合和去重
+    
+    针对eICU vitalperiodic等宽表优化，一次加载多个概念列，
+    直接在DuckDB中完成小时聚合，避免pandas后处理开销。
+    
+    Args:
+        data_source: ICU数据源
+        table_name: 表名（如'vitalperiodic'）
+        value_columns: 需要加载的值列列表（如['heartrate', 'respiration']）
+        interval_hours: 时间聚合间隔（小时）
+        patient_ids: 可选的患者ID过滤
+        agg_func: 聚合函数（'first', 'mean', 'max', 'min'）
+        
+    Returns:
+        聚合后的DataFrame，包含id列、时间列和所有值列
+        
+    Example:
+        >>> df = load_wide_table_aggregated(
+        ...     data_source, 'vitalperiodic', 
+        ...     ['heartrate', 'respiration', 'sao2'], 
+        ...     interval_hours=1.0
+        ... )
+        >>> # 返回: patientunitstayid | charttime | heartrate | respiration | sao2
+    """
+    import duckdb
+    
+    # 获取表配置
+    table_cfg = data_source.config.get_table(table_name)
+    
+    # 确定ID列和时间列
+    id_col = table_cfg.defaults.id_var
+    if not id_col:
+        icustay_cfg = data_source.config.id_configs.get('icustay')
+        id_col = icustay_cfg.id if icustay_cfg else 'patientunitstayid'
+    
+    time_col = table_cfg.defaults.index_var or 'observationoffset'
+    
+    # 确定数据目录
+    table_path = data_source._resolve_loader_from_disk(table_name)
+    if table_path is None:
+        raise ValueError(f"Cannot find data for table {table_name}")
+    
+    # table_path 返回 Path 对象
+    directory = table_path if isinstance(table_path, Path) else Path(table_path)
+    
+    # 构建glob pattern
+    if directory.is_dir():
+        glob_pattern = str(directory / "*.parquet")
+    else:
+        glob_pattern = str(directory)
+    
+    # 构建DuckDB聚合函数映射
+    agg_map = {
+        'first': 'FIRST',
+        'mean': 'AVG',
+        'max': 'MAX', 
+        'min': 'MIN',
+    }
+    duckdb_agg = agg_map.get(agg_func, 'FIRST')
+    
+    # 构建CTE：每个值列单独聚合（处理NULL）
+    cte_parts = []
+    for i, val_col in enumerate(value_columns):
+        cte_name = f"agg_{i}"
+        cte_sql = f"""
+        {cte_name} AS (
+            SELECT 
+                {id_col},
+                FLOOR({time_col} / {interval_hours * 60.0}) as charttime,
+                {duckdb_agg}({val_col}) as {val_col}
+            FROM raw_data
+            WHERE {val_col} IS NOT NULL
+            GROUP BY {id_col}, FLOOR({time_col} / {interval_hours * 60.0})
+        )"""
+        cte_parts.append(cte_sql)
+    
+    # 构建WHERE条件
+    where_conditions = []
+    if patient_ids:
+        ids_str = ", ".join(str(x) for x in patient_ids)
+        where_conditions.append(f"{id_col} IN ({ids_str})")
+    
+    where_clause = ""
+    if where_conditions:
+        where_clause = "WHERE " + " AND ".join(where_conditions)
+    
+    # 构建最终合并查询（FULL OUTER JOIN所有CTE）
+    if len(value_columns) == 1:
+        # 单列简单处理
+        query = f"""
+        WITH raw_data AS (
+            SELECT {id_col}, {time_col}, {value_columns[0]}
+            FROM read_parquet('{glob_pattern}', union_by_name=true)
+            {where_clause}
+        ),
+        {cte_parts[0]}
+        SELECT {id_col}, charttime, {value_columns[0]}
+        FROM agg_0
+        ORDER BY {id_col}, charttime
+        """
+    else:
+        # 多列合并
+        # 使用COALESCE逐步合并所有CTE
+        join_parts = []
+        coalesce_id = f"COALESCE(agg_0.{id_col}"
+        coalesce_time = "COALESCE(agg_0.charttime"
+        
+        for i in range(1, len(value_columns)):
+            coalesce_id += f", agg_{i}.{id_col}"
+            coalesce_time += f", agg_{i}.charttime"
+        
+        coalesce_id += f") as {id_col}"
+        coalesce_time += ") as charttime"
+        
+        # 构建JOIN链
+        join_sql = "agg_0"
+        for i in range(1, len(value_columns)):
+            prev_id = ", ".join(f"agg_{j}.{id_col}" for j in range(i))
+            prev_time = ", ".join(f"agg_{j}.charttime" for j in range(i))
+            join_sql += f"""
+            FULL OUTER JOIN agg_{i} 
+                ON COALESCE({prev_id}) = agg_{i}.{id_col} 
+                AND COALESCE({prev_time}) = agg_{i}.charttime"""
+        
+        select_cols = [coalesce_id, coalesce_time]
+        select_cols += [f"agg_{i}.{col}" for i, col in enumerate(value_columns)]
+        
+        query = f"""
+        WITH raw_data AS (
+            SELECT {id_col}, {time_col}, {', '.join(value_columns)}
+            FROM read_parquet('{glob_pattern}', union_by_name=true)
+            {where_clause}
+        ),
+        {','.join(cte_parts)}
+        SELECT {', '.join(select_cols)}
+        FROM {join_sql}
+        ORDER BY 1, 2
+        """
+    
+    # 执行查询
+    conn = duckdb.connect()
+    conn.execute("SET timezone='UTC'")
+    # 🔧 禁用DuckDB进度条，避免终端输出开销
+    conn.execute("SET enable_progress_bar = false")
+    conn.execute("SET enable_progress_bar_print = false")
+    
+    try:
+        df = conn.execute(query).fetchdf()
+        logger.info(f"🚀 宽表批量加载完成: {table_name} {value_columns} -> {len(df):,} 行")
+        return df
+    finally:
+        conn.close()

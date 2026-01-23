@@ -1,9 +1,17 @@
 """
 pyricu 极简 API - 一行代码完成数据提取
 
-这个模块提供了最简单的接口，无需了解内部细节。
+.. deprecated::
+    此模块已被废弃。请直接使用 `pyricu.api` 中的函数:
+    
+    - `pyricu.load_vitals` 代替 `pyricu.easy.load_vitals`
+    - `pyricu.load_labs` 代替 `pyricu.easy.load_labs`  
+    - `pyricu.load_sofa` 代替 `pyricu.easy.load_sofa_score`
+    - `pyricu.load_sepsis3` 代替 `pyricu.easy.load_sepsis`
+    
+    新API不需要指定 data_path，可以自动检测数据路径。
 
-Examples:
+Examples (已废弃的用法):
     >>> from pyricu.easy import load_vitals, load_labs, load_sofa_score, load_sepsis
     >>> 
     >>> # 加载生命体征（自动处理所有细节）
@@ -19,12 +27,29 @@ Examples:
     >>> 
     >>> # 加载 Sepsis-3 诊断
     >>> sepsis = load_sepsis('/path/to/mimic', patient_ids=[10001, 10002])
+
+推荐的新用法:
+    >>> from pyricu import load_vitals, load_labs, load_sofa, load_sepsis3
+    >>> 
+    >>> # 自动检测数据路径
+    >>> vitals = load_vitals(patient_ids=[10001, 10002, 10003])
+    >>> sofa = load_sofa(patient_ids=[10001, 10002])
 """
 
 from __future__ import annotations
+import warnings
 from pathlib import Path
 from typing import List, Optional, Union
 import pandas as pd
+
+# 导入时发出废弃警告
+warnings.warn(
+    "pyricu.easy module is deprecated. "
+    "Use pyricu.load_vitals, pyricu.load_labs, pyricu.load_sofa instead. "
+    "The new API auto-detects data_path and doesn't require it as a mandatory argument.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 from .api import load_concepts
 

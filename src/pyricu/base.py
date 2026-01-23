@@ -363,6 +363,20 @@ class BaseICULoader:
                 logger.warning(f"⚠️  缓存注册失败: {e}")
             # 不影响主要功能，继续运行
 
+    def clear_cache(self):
+        """Clear all caches to free memory
+        
+        This is useful when processing data in batches to ensure each batch
+        uses fresh data and doesn't accumulate memory from previous batches.
+        """
+        if hasattr(self, 'concept_resolver') and self.concept_resolver:
+            self.concept_resolver.clear_table_cache(keep_concept_cache=False)
+        
+        # Also try to clear datasource cache if it has one
+        if hasattr(self, 'datasource') and self.datasource:
+            if hasattr(self.datasource, '_cache'):
+                self.datasource._cache.clear()
+
     def _create_resolver_clone(self) -> ConceptResolver:
         """Create a fresh ConceptResolver sharing the same dictionary."""
         return ConceptResolver(dictionary=self.concept_dict)
@@ -647,9 +661,10 @@ class BaseICULoader:
                 # Do not fail loading if this adjustment fails
                 pass
         finally:
-            # 只有在不需要保留缓存时才清除
-            if not should_preserve_cache:
-                resolver_obj.clear_table_cache()
+            # 🚀 优化：只清除表缓存，保留概念数据缓存以加速批量加载
+            # 表缓存可能很大（原始数据），但概念缓存较小（聚合后的数据）
+            # 这允许在连续的 load_concepts 调用之间共享概念缓存（如 sofa 和 sofa2 共享 fio2, plt 等）
+            resolver_obj.clear_table_cache(keep_concept_cache=True)
 
         if isinstance(result, dict):
             if not merge:

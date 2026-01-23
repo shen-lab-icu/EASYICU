@@ -82,6 +82,12 @@ try:
         load_concepts_filtered,
         get_cohort_comparison,
         get_cohort_stats,
+        # 工具函数 - 供 webapp 和外部使用
+        DATABASE_ID_CONFIG,
+        get_id_col_for_database,
+        get_patient_table_for_database,
+        get_all_patient_ids,
+        get_smart_parallel_config,
     )
     # 将新API作为主要的load_concepts
     load_concepts = _load_concepts_api
@@ -104,19 +110,20 @@ except ImportError:
 # ICUQuickLoader等已被重构为BaseICULoader和统一的api.load_concepts
 _HAS_QUICKSTART = False
 
-# 从 load_concepts 模块导入（保留向后兼容）
-# 注意：这会覆盖上面的load_concepts，所以我们在最后重新设置
+# 从 load_concepts 模块导入（保留向后兼容，但标记为废弃）
+# 注意：旧的 load_concepts.load_concepts 已废弃，推荐使用 api.load_concepts
 try:
     from .load_concepts import ConceptLoader
+    # 旧API仅作为 _load_concepts_old 保留，不导出
     from .load_concepts import load_concepts as _load_concepts_old
     _HAS_LOAD_CONCEPTS = True
 except ImportError:
     _HAS_LOAD_CONCEPTS = False
 
-# 确保新API优先
+# 确保新API优先 - api.load_concepts 是推荐的唯一入口
 if _HAS_API:
     load_concepts = _load_concepts_api  # 使用新API
-    # load_concept已经从api.py导入，是load_concepts的别名
+    # load_concept 从 api.py 导入，是 load_concepts 的别名
 
 # 增强API - 缓存和时间对齐功能已合并到api.py
 # load_concept_cached, align_to_icu_admission, load_sofa_with_score 从api导入
@@ -1183,6 +1190,31 @@ try:
     ])
 except ImportError:
     _HAS_DATA_CONVERTER = False
+
+# 分桶转换器 - 16GB内存优化
+try:
+    from .bucket_converter import (
+        BucketConfig,
+        ConversionResult as BucketConversionResult,
+        convert_to_buckets,
+        read_from_buckets,
+        convert_aumc_numericitems,
+        convert_aumc_listitems,
+        verify_query_plan,
+        _duckdb_hash_batch,
+    )
+    _HAS_BUCKET_CONVERTER = True
+    __all__.extend([
+        'BucketConfig', 
+        'BucketConversionResult',
+        'convert_to_buckets',
+        'read_from_buckets',
+        'convert_aumc_numericitems',
+        'convert_aumc_listitems',
+        'verify_query_plan',
+    ])
+except ImportError:
+    _HAS_BUCKET_CONVERTER = False
 
 # 模块初始化时自动执行缓存清理（如果启用）
 try:

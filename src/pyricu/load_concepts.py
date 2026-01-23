@@ -395,9 +395,10 @@ class ConceptLoader:
             # 如果请求的概念中包含 SOFA-2 相关概念，自动加载 sofa2-dict
             sofa2_concepts = {'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 
                               'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
-                              'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria',
+                              'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria', 'rrt',
                               'adv_resp', 'ecmo', 'ecmo_indication', 'sedated_gcs',
-                              'mech_circ_support', 'other_vaso', 'delirium_tx'}
+                              'mech_circ_support', 'other_vaso', 'delirium_tx',
+                              'motor_response', 'delirium_positive'}
             include_sofa2 = any(c in sofa2_concepts for c in concepts)
             
             concept_dict = load_dictionary(self._src_name, include_sofa2=include_sofa2)
@@ -1757,7 +1758,22 @@ def load_concepts(
         >>> # 加载多个概念并合并
         >>> vitals = load_concepts(['hr', 'sbp', 'dbp'], 'mimic', 
         ...                        interval=timedelta(hours=1))
+    
+    .. deprecated::
+        此函数已被废弃，请使用 `pyricu.api.load_concepts` 代替。
+        该函数仅保留用于向后兼容。
     """
+    import warnings
+    warnings.warn(
+        "load_concepts from pyricu.load_concepts is deprecated. "
+        "Use pyricu.load_concepts (from api module) instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     data_path = kwargs.pop('data_path', None)
     loader = ConceptLoader(src, data_path=data_path)
     return loader.load_concepts(concepts, **kwargs)
+
+
+# 向后兼容别名 - 已废弃，请使用 pyricu.api.load_concept
+load_concept = load_concepts

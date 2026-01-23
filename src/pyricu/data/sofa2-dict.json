@@ -83,7 +83,6 @@
     "concepts": [
       "crea",
       "rrt",
-      "rrt_criteria",
       "uo_6h",
       "uo_12h",
       "uo_24h",
@@ -91,11 +90,10 @@
       "ph",
       "bicarb"
     ],
-    "description": "SOFA-2 renal component with duration-based UO (6h/12h/24h windows for accurate temporal scoring)",
+    "description": "SOFA-2 renal component with duration-based UO (6h/12h/24h windows for accurate temporal scoring). RRT criteria calculated internally from potassium/ph/bicarb.",
     "category": "outcome",
     "aggregate": [
       "max",
-      null,
       null,
       "min",
       "min",
@@ -544,7 +542,7 @@
       "hirid": [
         {
           "table": "pharma",
-          "sub_var": "pharmacode",
+          "sub_var": "pharmaid",
           "ids": [
             112,
             113
