@@ -70,7 +70,7 @@ def _is_port_in_use(port: int) -> bool:
 
 def run_app(
     host: str = 'localhost',
-    port: int = 8501,
+    port: int = 8502,
     debug: bool = False,
     daemon: bool = False,
     background: bool = False,
@@ -190,7 +190,7 @@ def stop_app():
             print("⚠️ 未找到运行中的服务")
 
 
-def status_app(port: int = 8501):
+def status_app(port: int = 8502):
     """查看 PyRICU Web 应用状态。"""
     if _is_port_in_use(port):
         healthy = _health_check(port)

@@ -12,6 +12,13 @@ import os
 # 🚀 性能优化：禁用自动缓存清除，保持表缓存在多次加载间复用
 os.environ['PYRICU_AUTO_CLEAR_CACHE'] = 'False'
 
+# 尝试导入美化组件
+try:
+    from streamlit_extras.metric_cards import style_metric_cards
+    HAS_EXTRAS = True
+except ImportError:
+    HAS_EXTRAS = False
+
 # 页面配置
 st.set_page_config(
     page_title="PyRICU Data Explorer",
@@ -33,10 +40,57 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 自定义 CSS - 同时兼容深色和浅色主题
+# 🎨 现代化 CSS 样式系统
 st.markdown("""
 <style>
-    /* 减少页面顶部留白 */
+    /* ============ 全局主题变量 ============ */
+    :root {
+        /* 主色调 */
+        --primary-color: #667eea;
+        --primary-dark: #5a67d8;
+        --secondary-color: #764ba2;
+        --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --gradient-success: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        --gradient-info: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+        --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        --gradient-danger: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        
+        /* 功能色 */
+        --success-color: #10b981;
+        --warning-color: #f59e0b;
+        --danger-color: #ef4444;
+        --info-color: #06b6d4;
+        
+        /* 阴影 */
+        --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.08);
+        --shadow-hover: 0 8px 30px rgba(0, 0, 0, 0.12);
+        --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.06);
+        --shadow-glow: 0 4px 15px rgba(102, 126, 234, 0.35);
+        
+        /* 圆角 */
+        --radius-sm: 8px;
+        --radius-md: 12px;
+        --radius-lg: 16px;
+        --radius-xl: 20px;
+        
+        /* 动画 */
+        --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        --transition-fast: all 0.15s ease;
+        
+        /* 浅色主题 */
+        --card-bg-light: #ffffff;
+        --text-primary-light: #1e1e1e;
+        --text-secondary-light: #64748b;
+        --border-light: rgba(102, 126, 234, 0.1);
+        
+        /* 深色主题 */
+        --card-bg-dark: rgba(30, 35, 45, 0.95);
+        --text-primary-dark: #e0e0e0;
+        --text-secondary-dark: #94a3b8;
+        --border-dark: rgba(102, 126, 234, 0.2);
+    }
+    
+    /* ============ 页面头部 ============ */
     .block-container {
         padding-top: 0.5rem !important;
         margin-top: 0 !important;
@@ -47,57 +101,105 @@ st.markdown("""
         visibility: hidden !important;
     }
     
-    /* 顶部 Tabs 标签样式 - 更大更显眼 */
+    /* ============ 现代化标签页 ============ */
     div[data-baseweb="tab-list"] {
-        gap: 8px !important;
+        gap: 10px !important;
         margin-top: 0 !important;
-        padding-top: 0 !important;
-        background: linear-gradient(180deg, rgba(31,119,180,0.05), transparent) !important;
-        padding: 8px !important;
-        border-radius: 12px !important;
+        padding: 12px !important;
+        background: linear-gradient(180deg, rgba(102,126,234,0.05), transparent) !important;
+        border-radius: var(--radius-lg) !important;
+        border: 1px solid rgba(102, 126, 234, 0.08);
     }
+    
     div[data-baseweb="tab-list"] button {
-        font-size: 1.3rem !important;
+        font-size: 1.15rem !important;
         font-weight: 600 !important;
-        padding: 14px 24px !important;
-        border-radius: 10px !important;
-        transition: all 0.3s ease !important;
+        padding: 12px 24px !important;
+        border-radius: var(--radius-md) !important;
+        transition: var(--transition-smooth) !important;
+        border: 1px solid transparent !important;
+        background: transparent !important;
     }
+    
     div[data-baseweb="tab-list"] button:hover {
-        background: rgba(31,119,180,0.15) !important;
+        background: rgba(102, 126, 234, 0.1) !important;
+        border-color: rgba(102, 126, 234, 0.2) !important;
     }
+    
     div[data-baseweb="tab-list"] button[aria-selected="true"] {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        background: var(--gradient-primary) !important;
         color: white !important;
-        box-shadow: 0 4px 15px rgba(102,126,234,0.4) !important;
+        box-shadow: var(--shadow-glow) !important;
+        border-color: transparent !important;
     }
+    
     div[data-baseweb="tab-list"] button p {
-        font-size: 1.3rem !important;
+        font-size: 1.15rem !important;
         font-weight: 600 !important;
     }
     
-    /* 主题色彩 - 更现代的配色 */
-    :root {
-        --primary-color: #667eea;
-        --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        --success-color: #10b981;
-        --success-gradient: linear-gradient(135deg, #10b981 0%, #059669 100%);
-        --warning-color: #f59e0b;
-        --danger-color: #ef4444;
-        --info-color: #06b6d4;
-        --card-bg-light: #ffffff;
-        --card-bg-dark: rgba(30, 35, 45, 0.95);
-        --text-primary-light: #1e1e1e;
-        --text-primary-dark: #e0e0e0;
-        --text-secondary-light: #555;
-        --text-secondary-dark: #aaa;
+    /* ============ Metric 卡片美化 ============ */
+    div[data-testid="stMetric"] {
+        background: linear-gradient(145deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
+        border: 1px solid var(--border-light);
+        border-radius: var(--radius-lg);
+        padding: 1.2rem 1.5rem;
+        box-shadow: var(--shadow-card);
+        transition: var(--transition-smooth);
+        position: relative;
+        overflow: hidden;
     }
     
-    /* 主标题 - 现代渐变 */
+    div[data-testid="stMetric"]::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 4px;
+        height: 100%;
+        background: var(--gradient-primary);
+        border-radius: 4px 0 0 4px;
+    }
+    
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-4px);
+        box-shadow: var(--shadow-hover);
+        border-color: rgba(102, 126, 234, 0.25);
+    }
+    
+    div[data-testid="stMetric"] label {
+        font-weight: 600 !important;
+        color: var(--text-secondary-light) !important;
+        font-size: 0.85rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        font-size: 1.75rem !important;
+        font-weight: 700 !important;
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    /* 深色模式 Metric */
+    @media (prefers-color-scheme: dark) {
+        div[data-testid="stMetric"] {
+            background: linear-gradient(145deg, rgba(30,35,45,0.98), rgba(40,45,55,0.95));
+            border-color: var(--border-dark);
+        }
+        div[data-testid="stMetric"] label {
+            color: var(--text-secondary-dark) !important;
+        }
+    }
+    
+    /* ============ 主标题样式 ============ */
     .main-header {
         font-size: 2.2rem;
         font-weight: 800;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: var(--gradient-primary);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -107,235 +209,208 @@ st.markdown("""
         letter-spacing: -0.5px;
     }
     
-    /* 副标题 - 自适应主题 */
     .sub-header {
-        font-size: 1.2rem;
-        color: #666;
+        font-size: 1.1rem;
+        color: var(--text-secondary-light);
         margin-bottom: 1.5rem;
         text-align: center;
         font-weight: 400;
     }
+    
     @media (prefers-color-scheme: dark) {
-        .sub-header { color: #aaa; }
+        .sub-header { color: var(--text-secondary-dark); }
     }
     
-    /* 卡片样式 - 自适应主题 + 现代设计 */
-    .metric-card {
-        background: linear-gradient(145deg, #ffffff, #f5f7fa);
-        border-radius: 16px;
+    /* ============ 功能卡片 ============ */
+    .metric-card, .feature-card {
+        background: linear-gradient(145deg, #ffffff, #f8f9ff);
+        border-radius: var(--radius-lg);
         padding: 1.4rem;
         margin: 0.5rem 0;
-        box-shadow: 0 4px 15px rgba(102,126,234,0.1);
-        border: 1px solid rgba(102,126,234,0.1);
-        transition: all 0.3s ease;
-        color: #1e1e1e;
-    }
-    @media (prefers-color-scheme: dark) {
-        .metric-card {
-            background: linear-gradient(145deg, rgba(40,45,60,0.95), rgba(30,35,50,0.95));
-            border: 1px solid rgba(102,126,234,0.2);
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            color: #e0e0e0;
-        }
-    }
-    [data-testid="stAppViewContainer"][data-theme="dark"] .metric-card {
-        background: linear-gradient(145deg, rgba(40,45,60,0.95), rgba(30,35,50,0.95));
-        border: 1px solid rgba(102,126,234,0.2);
-        color: #e0e0e0;
-    }
-    .metric-card:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 8px 25px rgba(102,126,234,0.2);
-        border-color: rgba(102,126,234,0.3);
+        box-shadow: var(--shadow-card);
+        border: 1px solid var(--border-light);
+        transition: var(--transition-smooth);
+        color: var(--text-primary-light);
     }
     
-    /* 功能卡片 - 自适应主题 + 现代设计 */
-    .feature-card {
-        background: linear-gradient(145deg, #ffffff, #f8f9ff);
-        border-radius: 16px;
-        padding: 1.5rem;
-        border: 1px solid rgba(102,126,234,0.15);
-        margin: 0.5rem 0;
-        color: #333;
-        transition: all 0.3s ease;
+    .metric-card:hover, .feature-card:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--shadow-hover);
+        border-color: rgba(102, 126, 234, 0.3);
     }
+    
     @media (prefers-color-scheme: dark) {
-        .feature-card {
+        .metric-card, .feature-card {
             background: linear-gradient(145deg, rgba(40,45,60,0.95), rgba(30,35,50,0.95));
-            border: 1px solid rgba(102,126,234,0.2);
-            color: #e0e0e0;
+            border-color: var(--border-dark);
+            color: var(--text-primary-dark);
         }
     }
-    [data-testid="stAppViewContainer"][data-theme="dark"] .feature-card {
-        background: linear-gradient(145deg, rgba(40,45,60,0.95), rgba(30,35,50,0.95));
-        border: 1px solid rgba(102,126,234,0.2);
-        color: #e0e0e0;
-    }
-    .feature-card:hover {
-        border-color: #667eea;
-        box-shadow: 0 8px 25px rgba(102,126,234,0.25);
-        transform: translateY(-2px);
-    }
+    
     .feature-card h4 {
-        background: linear-gradient(135deg, #667eea, #764ba2);
+        background: var(--gradient-primary);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
         margin-bottom: 0.8rem;
         font-weight: 600;
     }
-    .feature-card ol, .feature-card li {
-        color: inherit;
-    }
-    .feature-card p {
-        color: #666;
-    }
-    @media (prefers-color-scheme: dark) {
-        .feature-card p { color: #aaa; }
+    
+    /* ============ 按钮样式 ============ */
+    .stButton > button[kind="primary"] {
+        background: var(--gradient-primary) !important;
+        border: none !important;
+        border-radius: var(--radius-md) !important;
+        padding: 0.75rem 2rem !important;
+        font-weight: 600 !important;
+        box-shadow: var(--shadow-glow) !important;
+        transition: var(--transition-smooth) !important;
     }
     
-    /* 移除旧的 Tab 样式，已在上方定义 */
+    .stButton > button[kind="primary"]:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.45) !important;
+    }
     
-    /* 成功/警告框 - 自适应主题 */
+    /* 侧边栏按钮 */
+    [data-testid="stSidebar"] .stButton button {
+        background: var(--gradient-primary) !important;
+        color: white !important;
+        border: none !important;
+        font-weight: 600 !important;
+        border-radius: var(--radius-md) !important;
+    }
+    
+    [data-testid="stSidebar"] .stButton button:hover {
+        box-shadow: var(--shadow-glow) !important;
+        transform: translateY(-1px) !important;
+    }
+    
+    /* ============ 状态提示框 ============ */
     .success-box {
-        background: rgba(40, 167, 69, 0.15);
-        border-left: 4px solid #28a745;
-        border-radius: 0 8px 8px 0;
+        background: rgba(16, 185, 129, 0.12);
+        border-left: 4px solid var(--success-color);
+        border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
         padding: 12px 16px;
         margin: 10px 0;
-        color: #155724;
-    }
-    @media (prefers-color-scheme: dark) {
-        .success-box { color: #a3d9a5; }
-    }
-    .warning-box {
-        background: rgba(255, 193, 7, 0.15);
-        border-left: 4px solid #ffc107;
-        border-radius: 0 8px 8px 0;
-        padding: 12px 16px;
-        margin: 10px 0;
-        color: #856404;
-    }
-    @media (prefers-color-scheme: dark) {
-        .warning-box { color: #ffe69c; }
-    }
-    .info-box {
-        background: rgba(23, 162, 184, 0.15);
-        border-left: 4px solid #17a2b8;
-        border-radius: 0 8px 8px 0;
-        padding: 12px 16px;
-        margin: 10px 0;
-        color: #0c5460;
-    }
-    @media (prefers-color-scheme: dark) {
-        .info-box { color: #8dd3e0; }
+        color: #065f46;
     }
     
-    /* 分隔线 */
+    .warning-box {
+        background: rgba(245, 158, 11, 0.12);
+        border-left: 4px solid var(--warning-color);
+        border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+        padding: 12px 16px;
+        margin: 10px 0;
+        color: #92400e;
+    }
+    
+    .info-box {
+        background: rgba(6, 182, 212, 0.12);
+        border-left: 4px solid var(--info-color);
+        border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+        padding: 12px 16px;
+        margin: 10px 0;
+        color: #0e7490;
+    }
+    
+    @media (prefers-color-scheme: dark) {
+        .success-box { color: #6ee7b7; background: rgba(16, 185, 129, 0.15); }
+        .warning-box { color: #fcd34d; background: rgba(245, 158, 11, 0.15); }
+        .info-box { color: #67e8f9; background: rgba(6, 182, 212, 0.15); }
+    }
+    
+    /* ============ 分隔线 ============ */
     .divider {
         height: 2px;
-        background: linear-gradient(90deg, transparent, #1f77b4, transparent);
+        background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.3), transparent);
+        margin: 1.5rem 0;
+        border: none;
+    }
+    
+    hr {
+        border: none;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.2), transparent);
         margin: 1.5rem 0;
     }
     
-    /* 统计数字 */
+    /* ============ 统计数字 ============ */
     .stat-number {
         font-size: 2.5rem;
         font-weight: 700;
-        color: #1f77b4;
-    }
-    @media (prefers-color-scheme: dark) {
-        .stat-number { color: #4fc3f7; }
-    }
-    .stat-label {
-        font-size: 0.9rem;
-        color: #666;
-        text-transform: uppercase;
-    }
-    @media (prefers-color-scheme: dark) {
-        .stat-label { color: #aaa; }
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
     }
     
-    /* 患者信息卡片 - 自适应主题 */
+    .stat-label {
+        font-size: 0.9rem;
+        color: var(--text-secondary-light);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    @media (prefers-color-scheme: dark) {
+        .stat-label { color: var(--text-secondary-dark); }
+    }
+    
+    /* ============ 患者信息卡片 ============ */
     .patient-card {
         background: #f8f9fa;
-        border-radius: 12px;
+        border-radius: var(--radius-md);
         padding: 1.5rem;
-        border: 2px solid #e0e0e0;
+        border: 2px solid #e2e8f0;
         margin-bottom: 1rem;
-        color: #333;
+        color: var(--text-primary-light);
+        transition: var(--transition-smooth);
     }
+    
+    .patient-card:hover {
+        border-color: rgba(102, 126, 234, 0.3);
+        box-shadow: var(--shadow-soft);
+    }
+    
     @media (prefers-color-scheme: dark) {
         .patient-card {
             background: rgba(30, 40, 50, 0.9);
-            border: 2px solid rgba(255,255,255,0.15);
-            color: #e0e0e0;
+            border-color: rgba(255,255,255,0.15);
+            color: var(--text-primary-dark);
         }
     }
-    .patient-card.critical {
-        border-color: #dc3545;
-        background: rgba(220, 53, 69, 0.1);
-    }
-    .patient-card.warning {
-        border-color: #ffc107;
-        background: rgba(255, 193, 7, 0.1);
-    }
-    .patient-card.stable {
-        border-color: #28a745;
-        background: rgba(40, 167, 69, 0.1);
-    }
     
-    /* 图表容器 */
-    .chart-container {
-        background: rgba(30, 40, 50, 0.8);
-        border-radius: 10px;
-        padding: 1rem;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        margin: 0.5rem 0;
-    }
+    .patient-card.critical { border-color: var(--danger-color); background: rgba(239, 68, 68, 0.08); }
+    .patient-card.warning { border-color: var(--warning-color); background: rgba(245, 158, 11, 0.08); }
+    .patient-card.stable { border-color: var(--success-color); background: rgba(16, 185, 129, 0.08); }
     
-    /* 侧边栏样式 - 移除背景覆盖 */
-    [data-testid="stSidebar"] .stButton button {
-        background: linear-gradient(135deg, #1f77b4, #2980b9);
-        color: white;
-        border: none;
-        font-weight: 600;
-    }
-    [data-testid="stSidebar"] .stButton button:hover {
-        background: linear-gradient(135deg, #2980b9, #1f77b4);
-    }
-    
-    /* 进度条 */
-    .progress-bar {
-        height: 8px;
-        background: #e9ecef;
-        border-radius: 4px;
-        overflow: hidden;
-    }
-    .progress-bar-fill {
-        height: 100%;
-        background: linear-gradient(90deg, #1f77b4, #2ca02c);
-        border-radius: 4px;
-        transition: width 0.3s;
-    }
-    
-    /* 数据表格优化 */
-    .dataframe {
-        border-radius: 8px !important;
-        overflow: hidden;
-    }
-    
-    /* 加宽侧边栏 */
+    /* ============ 侧边栏美化 ============ */
     [data-testid="stSidebar"] {
         min-width: 450px !important;
         max-width: 550px !important;
     }
+    
     [data-testid="stSidebar"] > div:first-child {
         min-width: 450px !important;
         max-width: 550px !important;
     }
     
-    /* SOFA2 亮点徽章 */
+    /* 侧边栏头部装饰 */
+    .sidebar-header {
+        background: var(--gradient-primary);
+        border-radius: var(--radius-md);
+        padding: 1rem 1.5rem;
+        text-align: center;
+        margin-bottom: 1.5rem;
+        color: white;
+    }
+    
+    .sidebar-header h3 {
+        margin: 0;
+        font-weight: 700;
+    }
+    
+    /* ============ SOFA2 特殊标识 ============ */
     .sofa2-badge {
         background: linear-gradient(135deg, #ff6b6b, #ffa500);
         color: white;
@@ -345,35 +420,84 @@ st.markdown("""
         font-weight: 600;
         display: inline-block;
         margin-left: 8px;
+        box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
     }
     
-    /* 新功能高亮卡片 - 白底黑字，更清晰 */
+    /* ============ 数据表格优化 ============ */
+    .dataframe {
+        border-radius: var(--radius-sm) !important;
+        overflow: hidden;
+    }
+    
+    /* ============ 进度条美化 ============ */
+    .progress-bar {
+        height: 8px;
+        background: #e2e8f0;
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    
+    .progress-bar-fill {
+        height: 100%;
+        background: var(--gradient-primary);
+        border-radius: 4px;
+        transition: width 0.3s ease;
+    }
+    
+    /* ============ 高亮卡片 ============ */
     .highlight-card {
-        background: #ffffff;
-        border: 2px solid #1f77b4;
-        border-radius: 12px;
+        background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
+        border: 2px solid #0ea5e9;
+        border-radius: var(--radius-md);
         padding: 1.2rem;
         margin: 1rem 0;
-        color: #333;
+        color: #0c4a6e;
     }
-    .highlight-card h4 {
-        color: #1f77b4;
-        margin-bottom: 0.8rem;
-    }
-    .highlight-card p, .highlight-card li {
-        color: #555;
-    }
-    .highlight-card b {
-        color: #1f77b4;
-    }
+    
+    .highlight-card h4 { color: #0369a1; margin-bottom: 0.8rem; }
+    .highlight-card p, .highlight-card li { color: #0e7490; }
+    .highlight-card b { color: #0284c7; }
+    
     @media (prefers-color-scheme: dark) {
         .highlight-card {
-            background: #1e2a3a;
-            color: #e0e0e0;
+            background: linear-gradient(135deg, #0c4a6e, #164e63);
+            border-color: #06b6d4;
+            color: #e0f2fe;
         }
-        .highlight-card p, .highlight-card li {
-            color: #bbb;
+        .highlight-card h4 { color: #67e8f9; }
+        .highlight-card p, .highlight-card li { color: #a5f3fc; }
+        .highlight-card b { color: #22d3ee; }
+    }
+    
+    /* ============ 动画效果 ============ */
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
         }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    .animate-fade-in {
+        animation: fadeInUp 0.4s ease-out;
+    }
+    
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+    
+    .animate-pulse {
+        animation: pulse 2s infinite;
+    }
+    
+    /* ============ Tooltip 美化 ============ */
+    [data-baseweb="tooltip"] {
+        border-radius: var(--radius-sm) !important;
+        box-shadow: var(--shadow-soft) !important;
     }
 </style>
 """, unsafe_allow_html=True)

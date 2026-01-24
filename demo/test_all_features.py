@@ -214,7 +214,7 @@ def test_webapp_endpoints():
     
     import requests
     
-    base_url = "http://localhost:8501"
+    base_url = "http://localhost:8502"
     
     try:
         # 健康检查
