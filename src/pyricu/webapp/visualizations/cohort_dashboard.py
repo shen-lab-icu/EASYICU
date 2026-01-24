@@ -20,6 +20,14 @@ from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
+# 尝试导入美化组件
+try:
+    from streamlit_extras.colored_header import colored_header
+    from streamlit_extras.metric_cards import style_metric_cards
+    HAS_EXTRAS = True
+except ImportError:
+    HAS_EXTRAS = False
+
 # 页面配置
 st.set_page_config(
     page_title="ICU Cohort Dashboard",
@@ -27,6 +35,216 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# 🎨 现代化 CSS 样式
+st.markdown("""
+<style>
+    /* ===== 全局主题变量 ===== */
+    :root {
+        --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --gradient-success: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        --gradient-info: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+        --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        --gradient-danger: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.08);
+        --shadow-hover: 0 8px 30px rgba(0, 0, 0, 0.12);
+        --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.06);
+        --border-radius: 16px;
+        --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    /* ===== 页面头部样式 ===== */
+    .block-container {
+        padding-top: 1rem !important;
+    }
+    
+    /* ===== 现代化 Metric 卡片 ===== */
+    div[data-testid="stMetric"] {
+        background: linear-gradient(145deg, rgba(255,255,255,0.95), rgba(248,250,252,0.9));
+        border: 1px solid rgba(102, 126, 234, 0.1);
+        border-radius: var(--border-radius);
+        padding: 1.2rem 1.5rem;
+        box-shadow: var(--shadow-card);
+        transition: var(--transition-smooth);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    div[data-testid="stMetric"]::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 4px;
+        height: 100%;
+        background: var(--gradient-primary);
+        border-radius: 4px 0 0 4px;
+    }
+    
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-4px);
+        box-shadow: var(--shadow-hover);
+    }
+    
+    div[data-testid="stMetric"] label {
+        font-weight: 600 !important;
+        color: #64748b !important;
+        font-size: 0.85rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        font-size: 1.8rem !important;
+        font-weight: 700 !important;
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    /* 深色模式适配 */
+    @media (prefers-color-scheme: dark) {
+        div[data-testid="stMetric"] {
+            background: linear-gradient(145deg, rgba(30,35,45,0.95), rgba(40,45,55,0.9));
+            border-color: rgba(102, 126, 234, 0.2);
+        }
+        div[data-testid="stMetric"] label {
+            color: #94a3b8 !important;
+        }
+    }
+    
+    /* ===== 标签页美化 ===== */
+    div[data-baseweb="tab-list"] {
+        gap: 12px !important;
+        background: linear-gradient(180deg, rgba(102,126,234,0.03), transparent);
+        padding: 12px;
+        border-radius: var(--border-radius);
+        border: 1px solid rgba(102, 126, 234, 0.08);
+    }
+    
+    div[data-baseweb="tab-list"] button {
+        border-radius: 12px !important;
+        font-weight: 600 !important;
+        padding: 12px 24px !important;
+        transition: var(--transition-smooth) !important;
+        border: 1px solid transparent !important;
+    }
+    
+    div[data-baseweb="tab-list"] button:hover {
+        background: rgba(102, 126, 234, 0.08) !important;
+        border-color: rgba(102, 126, 234, 0.15) !important;
+    }
+    
+    div[data-baseweb="tab-list"] button[aria-selected="true"] {
+        background: var(--gradient-primary) !important;
+        color: white !important;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.35) !important;
+    }
+    
+    /* ===== 侧边栏美化 ===== */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+    }
+    
+    section[data-testid="stSidebar"] .stSelectbox label,
+    section[data-testid="stSidebar"] .stNumberInput label {
+        color: #e2e8f0 !important;
+        font-weight: 500;
+    }
+    
+    /* ===== 按钮样式 ===== */
+    .stButton > button[kind="primary"] {
+        background: var(--gradient-primary) !important;
+        border: none !important;
+        border-radius: 12px !important;
+        padding: 0.75rem 2rem !important;
+        font-weight: 600 !important;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.35) !important;
+        transition: var(--transition-smooth) !important;
+    }
+    
+    .stButton > button[kind="primary"]:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.45) !important;
+    }
+    
+    /* ===== 数据展示区域 ===== */
+    .element-container:has(.stPlotlyChart) {
+        background: linear-gradient(145deg, rgba(255,255,255,0.5), rgba(248,250,252,0.3));
+        border-radius: var(--border-radius);
+        padding: 1rem;
+        box-shadow: var(--shadow-soft);
+        margin-bottom: 1rem;
+    }
+    
+    /* ===== 信息卡片 ===== */
+    .dashboard-info-card {
+        background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+        border-radius: var(--border-radius);
+        padding: 1.5rem 2rem;
+        border-left: 4px solid #0ea5e9;
+        margin: 1rem 0;
+    }
+    
+    /* ===== 标题样式 ===== */
+    .gradient-title {
+        font-size: 2.5rem;
+        font-weight: 800;
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 0.5rem;
+    }
+    
+    .subtitle {
+        color: #64748b;
+        font-size: 1.1rem;
+        margin-bottom: 1.5rem;
+    }
+    
+    /* ===== 分割线美化 ===== */
+    hr {
+        border: none;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.3), transparent);
+        margin: 1.5rem 0;
+    }
+    
+    /* ===== 特色功能卡片 ===== */
+    .feature-card {
+        background: white;
+        border-radius: var(--border-radius);
+        padding: 1.5rem;
+        box-shadow: var(--shadow-card);
+        transition: var(--transition-smooth);
+        border: 1px solid rgba(0,0,0,0.05);
+    }
+    
+    .feature-card:hover {
+        transform: translateY(-4px);
+        box-shadow: var(--shadow-hover);
+    }
+    
+    .feature-icon {
+        font-size: 2.5rem;
+        margin-bottom: 0.75rem;
+    }
+    
+    .feature-title {
+        font-weight: 700;
+        color: #1e293b;
+        margin-bottom: 0.5rem;
+    }
+    
+    .feature-desc {
+        color: #64748b;
+        font-size: 0.9rem;
+        line-height: 1.5;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # 数据库配置
 DB_COLORS = {
@@ -43,11 +261,16 @@ DB_LABELS = {
     'hirid': 'HiRID',
 }
 
-# 颜色方案
+# 🎨 现代颜色方案
 COLORS = {
     'primary': '#667eea',
+    'primary_dark': '#5a67d8',
     'secondary': '#764ba2',
+    'secondary_dark': '#6b21a8',
     'success': '#10b981',
+    'success_dark': '#059669',
+    'accent': '#06b6d4',  # 青色
+    'accent_dark': '#0891b2',
     'warning': '#f59e0b',
     'danger': '#ef4444',
     'info': '#06b6d4',
@@ -678,34 +901,91 @@ def main():
     st.markdown('<h1 class="main-header">🏥 ICU Cohort Dashboard</h1>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Multi-dimensional visualization of ICU patient cohorts</p>', unsafe_allow_html=True)
     
-    # 侧边栏
+    # 🎨 美化侧边栏
     with st.sidebar:
-        st.markdown("## ⚙️ Configuration")
+        # 侧边栏标题
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            padding: 1rem;
+            text-align: center;
+            margin-bottom: 1.5rem;
+        ">
+            <div style="font-size: 1.5rem; margin-bottom: 0.3rem;">⚙️</div>
+            <div style="color: white; font-weight: 700; font-size: 1.1rem;">Configuration</div>
+        </div>
+        """, unsafe_allow_html=True)
         
         data_path = st.text_input(
             "📁 ICU Data Root Path",
             value=os.environ.get('RICU_DATA_PATH', '/home/zhuhb/icudb'),
+            help="Path to the ICU database files",
         )
         
         st.divider()
         
+        # 数据库选择卡片
+        st.markdown("""
+        <div style="font-weight: 600; margin-bottom: 0.5rem; color: #e2e8f0;">
+            🏥 Select Database
+        </div>
+        """, unsafe_allow_html=True)
+        
         database = st.selectbox(
-            "🏥 Select Database",
+            "Database",
             options=['miiv', 'eicu', 'aumc', 'hirid'],
             format_func=lambda x: DB_LABELS.get(x, x),
+            label_visibility="collapsed",
         )
         
+        # 显示选中数据库的颜色标识
+        db_color = DB_COLORS.get(database, '#667eea')
+        st.markdown(f"""
+        <div style="
+            background: {db_color}20;
+            border-left: 4px solid {db_color};
+            border-radius: 8px;
+            padding: 0.75rem;
+            margin: 0.5rem 0 1rem 0;
+        ">
+            <div style="color: {db_color}; font-weight: 600;">✓ {DB_LABELS.get(database, database)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
         max_patients = st.slider(
-            "Max Patients",
+            "👥 Max Patients",
             min_value=100,
             max_value=5000,
             value=500,
             step=100,
+            help="Limit the number of patients to load for faster processing",
         )
         
         st.divider()
         
-        load_button = st.button("🚀 Load Cohort Data", type="primary", use_container_width=True)
+        # 美化的加载按钮
+        load_button = st.button(
+            "🚀 Load Cohort Data", 
+            type="primary", 
+            use_container_width=True,
+            help="Click to load patient data from the selected database",
+        )
+        
+        # 侧边栏底部信息
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("""
+        <div style="
+            text-align: center;
+            padding: 1rem;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            font-size: 0.75rem;
+            color: #94a3b8;
+        ">
+            <div>💡 Tip: Start with fewer patients for faster loading</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # 主区域
     if load_button or 'cohort_data' in st.session_state:
@@ -718,20 +998,29 @@ def main():
             data = st.session_state.cohort_data
             db = st.session_state.get('current_db', database)
             
-            # 顶部指标卡片
+            # 🎨 美化的顶部指标卡片区域
+            st.markdown("""
+            <div style="
+                background: linear-gradient(135deg, rgba(102,126,234,0.08), rgba(118,75,162,0.05));
+                border-radius: 16px;
+                padding: 1.5rem;
+                margin-bottom: 1.5rem;
+            ">
+            """, unsafe_allow_html=True)
+            
             metrics = create_summary_metrics(data, db)
             
             cols = st.columns(6)
             metric_items = [
-                ("👥 Patients", metrics['total_patients'], None, "{:,}"),
-                ("📅 Avg Age", metrics['avg_age'], "years", "{:.1f}"),
-                ("👨 Male %", metrics['male_pct'], "%", "{:.1f}"),
-                ("🏥 Avg LOS", metrics['avg_los'], "days", "{:.1f}"),
-                ("💀 Mortality", metrics['mortality_rate'], "%", "{:.1f}"),
-                ("📊 Avg SOFA", metrics['avg_sofa'], "", "{:.1f}"),
+                ("👥 Patients", metrics['total_patients'], None, "{:,}", "#667eea"),
+                ("📅 Avg Age", metrics['avg_age'], "years", "{:.1f}", "#764ba2"),
+                ("👨 Male %", metrics['male_pct'], "%", "{:.1f}", "#06b6d4"),
+                ("🏥 Avg LOS", metrics['avg_los'], "days", "{:.1f}", "#10b981"),
+                ("💀 Mortality", metrics['mortality_rate'], "%", "{:.1f}", "#ef4444"),
+                ("📊 Avg SOFA", metrics['avg_sofa'], "", "{:.1f}", "#f59e0b"),
             ]
             
-            for i, (label, value, unit, fmt) in enumerate(metric_items):
+            for i, (label, value, unit, fmt, color) in enumerate(metric_items):
                 with cols[i]:
                     if value is not None:
                         display_val = fmt.format(value)
@@ -741,9 +1030,23 @@ def main():
                         display_val = "N/A"
                     st.metric(label, display_val)
             
+            st.markdown("</div>", unsafe_allow_html=True)
+            
+            # 如果安装了 streamlit-extras，应用额外的卡片样式
+            if HAS_EXTRAS:
+                try:
+                    style_metric_cards(
+                        background_color="rgba(255,255,255,0.02)",
+                        border_left_color="#667eea",
+                        border_color="rgba(102,126,234,0.1)",
+                        box_shadow="0 4px 12px rgba(0,0,0,0.05)",
+                    )
+                except:
+                    pass
+            
             st.divider()
             
-            # 标签页
+            # 🎨 美化的标签页
             tab1, tab2, tab3, tab4 = st.tabs([
                 "👥 Population Overview", 
                 "🩺 Clinical Analysis",
@@ -820,26 +1123,104 @@ def main():
         else:
             st.info("👈 Click 'Load Cohort Data' in the sidebar to start")
     else:
-        # 初始状态显示说明
+        # 🎨 现代化欢迎页面
         st.markdown("""
-        ### 🎯 Dashboard Features
+        <div style="text-align: center; padding: 2rem 0;">
+            <h1 class="gradient-title">🏥 ICU Cohort Dashboard</h1>
+            <p class="subtitle">Comprehensive Multi-Database ICU Patient Analytics Platform</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        This dashboard provides comprehensive visualization of ICU patient cohorts:
+        # 功能卡片网格
+        st.markdown("### ✨ Dashboard Features")
         
-        1. **👥 Population Overview** - Demographics distribution including age, gender, LOS, and mortality
-        2. **🩺 Clinical Analysis** - Diagnosis patterns and SOFA score distributions  
-        3. **📊 Complexity Heatmap** - Age vs LOS matrix showing caseload complexity
-        4. **📈 Patient Timeline** - Individual patient vital signs over time
+        col1, col2, col3, col4 = st.columns(4)
         
-        ### 🏥 Supported Databases
+        with col1:
+            st.markdown("""
+            <div class="feature-card">
+                <div class="feature-icon">👥</div>
+                <div class="feature-title">Population Overview</div>
+                <div class="feature-desc">Demographics distribution including age, gender, LOS, and mortality rates</div>
+            </div>
+            """, unsafe_allow_html=True)
         
-        - **MIMIC-IV** - Beth Israel Deaconess Medical Center (Boston)
-        - **eICU-CRD** - Multi-center US ICU database
-        - **Amsterdam UMC** - Dutch academic medical center
-        - **HiRID** - Bern University Hospital (Switzerland)
+        with col2:
+            st.markdown("""
+            <div class="feature-card">
+                <div class="feature-icon">🩺</div>
+                <div class="feature-title">Clinical Analysis</div>
+                <div class="feature-desc">Diagnosis patterns and SOFA score distributions visualization</div>
+            </div>
+            """, unsafe_allow_html=True)
         
-        👈 **Select a database and click 'Load Cohort Data' to begin**
-        """)
+        with col3:
+            st.markdown("""
+            <div class="feature-card">
+                <div class="feature-icon">📊</div>
+                <div class="feature-title">Complexity Heatmap</div>
+                <div class="feature-desc">Age vs LOS matrix showing patient caseload complexity</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown("""
+            <div class="feature-card">
+                <div class="feature-icon">📈</div>
+                <div class="feature-title">Patient Timeline</div>
+                <div class="feature-desc">Individual patient vital signs visualization over time</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # 支持的数据库
+        st.markdown("### 🏥 Supported Databases")
+        
+        db_col1, db_col2, db_col3, db_col4 = st.columns(4)
+        
+        db_info = [
+            ("🇺🇸", "MIMIC-IV", "Beth Israel Deaconess Medical Center, Boston", "#2ca02c"),
+            ("🇺🇸", "eICU-CRD", "Multi-center US ICU collaborative database", "#ff7f0e"),
+            ("🇳🇱", "Amsterdam UMC", "Dutch academic medical center", "#1f77b4"),
+            ("🇨🇭", "HiRID", "Bern University Hospital, Switzerland", "#d62728"),
+        ]
+        
+        for col, (flag, name, desc, color) in zip([db_col1, db_col2, db_col3, db_col4], db_info):
+            with col:
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, {color}15, {color}08);
+                    border-radius: 12px;
+                    padding: 1.2rem;
+                    border-left: 4px solid {color};
+                    height: 120px;
+                ">
+                    <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">{flag}</div>
+                    <div style="font-weight: 700; color: {color}; margin-bottom: 0.3rem;">{name}</div>
+                    <div style="font-size: 0.8rem; color: #64748b;">{desc}</div>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # 开始使用提示
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #667eea15, #764ba215);
+            border-radius: 16px;
+            padding: 1.5rem 2rem;
+            text-align: center;
+            border: 1px dashed #667eea40;
+        ">
+            <div style="font-size: 1.2rem; font-weight: 600; color: #667eea; margin-bottom: 0.5rem;">
+                👈 Ready to Explore?
+            </div>
+            <div style="color: #64748b;">
+                Select a database from the sidebar and click <strong>'Load Cohort Data'</strong> to begin your analysis
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

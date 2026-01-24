@@ -89,8 +89,8 @@ def main():
     parser.add_argument(
         '--port',
         type=int,
-        default=8501,
-        help='Web 应用端口 (默认: 8501)'
+        default=8502,
+        help='Web 应用端口 (默认: 8502)'
     )
     parser.add_argument(
         '--host',
