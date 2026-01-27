@@ -160,7 +160,7 @@ class DuckDBConverter:
             # Create DuckDB connection with memory limit
             con = duckdb.connect(':memory:')
             con.execute(f"SET memory_limit = '{self.memory_limit_gb}GB'")
-            con.execute("SET threads = 2")  # Limit parallelism for memory safety
+            con.execute("SET threads = 8")  # More threads for faster conversion
             con.execute("SET preserve_insertion_order = true")
             
             # Read CSV and write to Parquet in one streaming operation
