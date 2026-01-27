@@ -1002,17 +1002,46 @@ def convert_data_with_progress(data_path: str, database: str):
     warn_msg = "⚠️ **Note**: Converting large datasets may take a long time (30min~2hrs), please be patient." if lang == 'en' else "⚠️ **注意**：转换大型数据集可能需要较长时间（30分钟~2小时），请耐心等待。"
     st.warning(warn_msg)
     
-    info_msg = "💡 Using DuckDB for memory-efficient conversion. Target: 12GB RAM." if lang == 'en' else "💡 使用 DuckDB 进行内存安全转换，目标内存：12GB 以内。"
+    info_msg = "💡 Using DuckDB for memory-efficient conversion. Large tables will be bucket-partitioned automatically." if lang == 'en' else "💡 使用 DuckDB 进行内存安全转换，大表将自动进行分桶优化。"
     st.info(info_msg)
     
+    # 定义需要分桶转换的大表
+    BUCKET_TABLES = {
+        'miiv': {
+            'chartevents': ('itemid', 100),
+            'labevents': ('itemid', 100),
+            'inputevents': ('itemid', 50),
+        },
+        'eicu': {
+            'nursecharting': ('nursingchartcelltypevalname', 30),  # 按字符串hash
+            'lab': ('labname', 50),
+        },
+        'aumc': {
+            'numericitems': ('itemid', 100),
+            'listitems': ('itemid', 50),
+        },
+        'hirid': {
+            'observations': ('variableid', 100),
+            'pharma': ('pharmaid', 50),
+        },
+        'mimic': {
+            'chartevents': ('itemid', 100),
+            'labevents': ('itemid', 100),
+        },
+        'sic': {
+            'data_float_h': ('dataid', 50),
+            'laboratory': ('laboratoryid', 50),
+        },
+    }
+    
     try:
-        # Use DuckDB-based converter for memory safety (target 12GB, max 16GB)
         from pyricu.duckdb_converter import DuckDBConverter
+        from pyricu.bucket_converter import convert_to_buckets, BucketConfig
         import gc
         
         converter = DuckDBConverter(
             data_path=data_path, 
-            memory_limit_gb=6.0,  # Conservative limit for safety
+            memory_limit_gb=6.0,
             verbose=True
         )
         
@@ -1025,7 +1054,19 @@ def convert_data_with_progress(data_path: str, database: str):
             st.error(err_msg)
             return
         
-        detect_msg = f"📊 Detected **{total_files}** CSV files to convert" if lang == 'en' else f"📊 共检测到 **{total_files}** 个 CSV 文件需要转换"
+        # 分类文件：大表用分桶，小表用普通转换
+        bucket_tables_config = BUCKET_TABLES.get(database, {})
+        bucket_files = []
+        normal_files = []
+        
+        for csv_file in csv_files:
+            stem = csv_file.stem.lower().replace('.csv', '')
+            if stem in bucket_tables_config:
+                bucket_files.append((csv_file, bucket_tables_config[stem]))
+            else:
+                normal_files.append(csv_file)
+        
+        detect_msg = f"📊 Detected **{len(normal_files)}** normal + **{len(bucket_files)}** large tables" if lang == 'en' else f"📊 共检测到 **{len(normal_files)}** 个普通表 + **{len(bucket_files)}** 个大表"
         st.markdown(detect_msg)
         
         # 创建进度条
@@ -1036,47 +1077,85 @@ def convert_data_with_progress(data_path: str, database: str):
         converted = 0
         skipped = 0
         failed = 0
+        total = len(normal_files) + len(bucket_files)
+        current = 0
         
-        for idx, csv_file in enumerate(csv_files):
+        # 1. 先转换普通表
+        for csv_file in normal_files:
+            current += 1
             file_name = csv_file.name
             file_size_mb = csv_file.stat().st_size / (1024 * 1024)
             
-            # 更新状态
-            processing_msg = f"**Processing**: `{file_name}` ({file_size_mb:.1f} MB) [{idx+1}/{total_files}]" if lang == 'en' else f"**正在处理**: `{file_name}` ({file_size_mb:.1f} MB) [{idx+1}/{total_files}]"
+            processing_msg = f"**Processing**: `{file_name}` ({file_size_mb:.1f} MB) [{current}/{total}]" if lang == 'en' else f"**正在处理**: `{file_name}` ({file_size_mb:.1f} MB) [{current}/{total}]"
             status_text.markdown(processing_msg)
             
-            # 检查是否需要转换
             parquet_path = converter._get_parquet_path(csv_file)
             if parquet_path.exists():
                 skipped += 1
                 with details_container:
-                    skip_msg = f"⏭️ Skipped: {file_name} (parquet exists)" if lang == 'en' else f"⏭️ 跳过: {file_name} (已存在parquet)"
-                    st.caption(skip_msg)
+                    st.caption(f"⏭️ {file_name} (exists)")
             else:
                 try:
-                    # 使用 DuckDB 转换
                     result = converter.convert_file(csv_file)
                     if result['status'] == 'success':
                         converted += 1
                         with details_container:
-                            done_msg = f"✅ Done: {file_name} ({result['row_count']:,} rows)" if lang == 'en' else f"✅ 完成: {file_name} ({result['row_count']:,} 行)"
-                            st.caption(done_msg)
+                            st.caption(f"✅ {file_name}: {result['row_count']:,} rows")
                     else:
                         failed += 1
                         with details_container:
-                            fail_msg = f"❌ Failed: {file_name} - {result.get('error', 'unknown')[:50]}" if lang == 'en' else f"❌ 失败: {file_name} - {result.get('error', 'unknown')[:50]}"
-                            st.caption(fail_msg)
+                            st.caption(f"❌ {file_name}: {result.get('error', 'unknown')[:40]}")
                 except Exception as e:
                     failed += 1
                     with details_container:
-                        fail_msg = f"❌ Failed: {file_name} - {str(e)[:50]}" if lang == 'en' else f"❌ 失败: {file_name} - {str(e)[:50]}"
-                        st.caption(fail_msg)
+                        st.caption(f"❌ {file_name}: {str(e)[:40]}")
             
-            # 更新进度
-            progress = (idx + 1) / total_files
-            progress_bar.progress(progress)
+            progress_bar.progress(current / total)
+            gc.collect()
+        
+        # 2. 分桶转换大表
+        for csv_file, (partition_col, num_buckets) in bucket_files:
+            current += 1
+            file_name = csv_file.name
+            file_size_mb = csv_file.stat().st_size / (1024 * 1024)
+            stem = csv_file.stem.lower().replace('.csv', '')
             
-            # Memory cleanup between files
+            processing_msg = f"**Bucketing**: `{file_name}` ({file_size_mb:.1f} MB) → {num_buckets} buckets [{current}/{total}]" if lang == 'en' else f"**分桶转换**: `{file_name}` ({file_size_mb:.1f} MB) → {num_buckets} 个桶 [{current}/{total}]"
+            status_text.markdown(processing_msg)
+            
+            # 检查分桶目录是否已存在
+            bucket_dir = csv_file.parent / f"{stem}_bucket"
+            if bucket_dir.exists() and list(bucket_dir.glob('*.parquet')):
+                skipped += 1
+                with details_container:
+                    st.caption(f"⏭️ {file_name} (bucket exists)")
+            else:
+                try:
+                    config = BucketConfig(
+                        num_buckets=num_buckets,
+                        partition_col=partition_col,
+                        memory_limit='4GB'
+                    )
+                    result = convert_to_buckets(
+                        source_path=csv_file,
+                        output_dir=bucket_dir,
+                        config=config,
+                        overwrite=True
+                    )
+                    if result.success:
+                        converted += 1
+                        with details_container:
+                            st.caption(f"✅ {file_name} → {result.num_buckets} buckets, {result.total_rows:,} rows")
+                    else:
+                        failed += 1
+                        with details_container:
+                            st.caption(f"❌ {file_name}: {result.error[:40] if result.error else 'unknown'}")
+                except Exception as e:
+                    failed += 1
+                    with details_container:
+                        st.caption(f"❌ {file_name}: {str(e)[:40]}")
+            
+            progress_bar.progress(current / total)
             gc.collect()
         
         # 转换完成
@@ -1107,8 +1186,8 @@ def convert_data_with_progress(data_path: str, database: str):
             partial_msg = "Some files failed to convert, but you can still try loading the converted data." if lang == 'en' else "部分文件转换失败，但您仍可以尝试加载已转换的数据。"
             st.warning(partial_msg)
             
-    except ImportError:
-        import_err = "Data converter module not installed. Please ensure the full pyricu package is installed." if lang == 'en' else "数据转换模块未安装。请确保已安装完整的 pyricu 包。"
+    except ImportError as e:
+        import_err = f"Data converter module not installed: {e}" if lang == 'en' else f"数据转换模块未安装: {e}"
         st.error(import_err)
     except Exception as e:
         conv_err = f"Conversion error: {str(e)}" if lang == 'en' else f"转换过程出错: {str(e)}"
