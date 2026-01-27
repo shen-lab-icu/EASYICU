@@ -1542,8 +1542,19 @@ def validate_database_path(data_path: str, database: str) -> dict:
         except ValueError:
             pass
     
-    # 合并所有找到的表（单文件和分片目录）
-    all_found = parquet_names | parquet_dirs
+    # 检查分桶目录（如 chartevents_bucket/bucket_id=*/data.parquet）
+    bucket_dirs = set()
+    for subdir in path.iterdir():
+        if subdir.is_dir() and subdir.name.endswith('_bucket'):
+            # 检查是否有 parquet 文件
+            bucket_parquets = list(subdir.rglob('*.parquet'))
+            if bucket_parquets:
+                # 去掉 _bucket 后缀得到表名
+                table_name = subdir.name[:-7]  # remove '_bucket'
+                bucket_dirs.add(table_name.lower())
+    
+    # 合并所有找到的表（单文件、分片目录、分桶目录）
+    all_found = parquet_names | parquet_dirs | bucket_dirs
     
     # 检查各类别的表
     db_tables = required_parquet_tables.get(database, {})
@@ -1565,7 +1576,8 @@ def validate_database_path(data_path: str, database: str) -> dict:
     
     # 如果全部找到
     if len(missing_tables) == 0:
-        msg = f'✅ {db_name}: All {total_required} required tables found ({len(parquet_files)} Parquet files)' if lang == 'en' else f'✅ {db_name}: 所有 {total_required} 个必需表已找到 ({len(parquet_files)} 个 Parquet 文件)'
+        bucket_info = f", {len(bucket_dirs)} bucketed" if bucket_dirs else ""
+        msg = f'✅ {db_name}: All {total_required} required tables found ({len(parquet_files)} Parquet files{bucket_info})' if lang == 'en' else f'✅ {db_name}: 所有 {total_required} 个必需表已找到 ({len(parquet_files)} 个 Parquet 文件{bucket_info})'
         return {
             'valid': True,
             'message': msg
@@ -7186,14 +7198,49 @@ def render_convert_dialog():
 
 
 def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
-    """将目录下的CSV文件转换为Parquet格式。使用DuckDB内存安全转换。"""
+    """将目录下的CSV文件转换为Parquet格式。
+    
+    大表自动使用分桶转换，普通表使用 DuckDB 直接转换。
+    """
     import gc
     
-    # 使用 DuckDB 转换器，内存安全
+    # 获取数据库类型
+    database = st.session_state.get('database', 'miiv')
+    
+    # 定义需要分桶转换的大表
+    BUCKET_TABLES = {
+        'miiv': {
+            'chartevents': ('itemid', 100),
+            'labevents': ('itemid', 100),
+            'inputevents': ('itemid', 50),
+        },
+        'eicu': {
+            'nursecharting': ('nursingchartcelltypevalname', 30),
+            'lab': ('labname', 50),
+        },
+        'aumc': {
+            'numericitems': ('itemid', 100),
+            'listitems': ('itemid', 50),
+        },
+        'hirid': {
+            'observations': ('variableid', 100),
+            'pharma': ('pharmaid', 50),
+        },
+        'mimic': {
+            'chartevents': ('itemid', 100),
+            'labevents': ('itemid', 100),
+        },
+        'sic': {
+            'data_float_h': ('dataid', 50),
+            'laboratory': ('laboratoryid', 50),
+        },
+    }
+    
     try:
         from pyricu.duckdb_converter import DuckDBConverter
-    except ImportError:
-        st.error("DuckDB converter not available. Please reinstall pyricu.")
+        from pyricu.bucket_converter import convert_to_buckets, BucketConfig
+    except ImportError as e:
+        st.error(f"Converter not available: {e}")
         return 0, 0
     
     source_path = Path(source_dir)
@@ -7201,54 +7248,118 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     
     csv_files = list(source_path.rglob('*.csv')) + list(source_path.rglob('*.csv.gz'))
     
+    # 分类文件：大表用分桶，小表用普通转换
+    bucket_tables_config = BUCKET_TABLES.get(database, {})
+    bucket_files = []
+    normal_files = []
+    
+    for csv_file in csv_files:
+        stem = csv_file.stem.lower().replace('.csv', '')
+        if stem in bucket_tables_config:
+            bucket_files.append((csv_file, bucket_tables_config[stem]))
+        else:
+            normal_files.append(csv_file)
+    
     success = 0
     failed = 0
+    total = len(normal_files) + len(bucket_files)
+    current = 0
     
     progress_bar = st.progress(0)
     status_text = st.empty()
+    details = st.container()
     
-    # 创建 DuckDB 转换器，内存限制 6GB
+    # 创建 DuckDB 转换器
     converter = DuckDBConverter(
         data_path=str(source_path),
         memory_limit_gb=6.0,
         verbose=False
     )
     
-    for idx, csv_file in enumerate(csv_files):
+    # 1. 转换普通表
+    for csv_file in normal_files:
+        current += 1
         try:
-            # 计算相对路径以保持目录结构
             rel_path = csv_file.relative_to(source_path)
             parquet_name = rel_path.stem.replace('.csv', '') + '.parquet'
             parquet_file = target_path / rel_path.parent / parquet_name
             
-            # 检查是否需要转换
             if parquet_file.exists() and not overwrite:
-                status_text.caption(f"⏭️ 跳过: {csv_file.name} (已存在)")
+                with details:
+                    st.caption(f"⏭️ {csv_file.name} (exists)")
+                progress_bar.progress(current / total)
                 continue
             
-            # 创建目标目录
             parquet_file.parent.mkdir(parents=True, exist_ok=True)
             
             file_size_mb = csv_file.stat().st_size / (1024 * 1024)
-            status_text.markdown(f"**转换中**: `{csv_file.name}` ({file_size_mb:.1f}MB) [{idx+1}/{len(csv_files)}]")
+            status_text.markdown(f"**Converting**: `{csv_file.name}` ({file_size_mb:.1f}MB) [{current}/{total}]")
             
-            # 使用 DuckDB 转换（内存安全）
             result = converter.convert_file(csv_file)
             
             if result['status'] == 'success':
                 success += 1
+                with details:
+                    st.caption(f"✅ {csv_file.name}: {result['row_count']:,} rows")
             else:
                 failed += 1
-                status_text.caption(f"❌ 失败: {csv_file.name} - {result.get('error', 'unknown')[:50]}")
+                with details:
+                    st.caption(f"❌ {csv_file.name}: {result.get('error', 'unknown')[:40]}")
             
-            # 内存清理
             gc.collect()
             
         except Exception as e:
             failed += 1
-            status_text.caption(f"❌ 失败: {csv_file.name} - {str(e)[:50]}")
+            with details:
+                st.caption(f"❌ {csv_file.name}: {str(e)[:40]}")
         
-        progress_bar.progress((idx + 1) / len(csv_files))
+        progress_bar.progress(current / total)
+    
+    # 2. 分桶转换大表
+    for csv_file, (partition_col, num_buckets) in bucket_files:
+        current += 1
+        stem = csv_file.stem.lower().replace('.csv', '')
+        bucket_dir = target_path / f"{stem}_bucket"
+        
+        try:
+            if bucket_dir.exists() and list(bucket_dir.glob('*.parquet')) and not overwrite:
+                with details:
+                    st.caption(f"⏭️ {csv_file.name} (bucket exists)")
+                progress_bar.progress(current / total)
+                continue
+            
+            file_size_mb = csv_file.stat().st_size / (1024 * 1024)
+            status_text.markdown(f"**Bucketing**: `{csv_file.name}` ({file_size_mb:.1f}MB) → {num_buckets} buckets [{current}/{total}]")
+            
+            config = BucketConfig(
+                num_buckets=num_buckets,
+                partition_col=partition_col,
+                memory_limit='4GB'
+            )
+            result = convert_to_buckets(
+                source_path=csv_file,
+                output_dir=bucket_dir,
+                config=config,
+                overwrite=overwrite
+            )
+            
+            if result.success:
+                success += 1
+                with details:
+                    st.caption(f"✅ {csv_file.name} → {result.num_buckets} buckets, {result.total_rows:,} rows")
+            else:
+                failed += 1
+                with details:
+                    st.caption(f"❌ {csv_file.name}: {result.error[:40] if result.error else 'unknown'}")
+            
+            gc.collect()
+            
+        except Exception as e:
+            failed += 1
+            with details:
+                st.caption(f"❌ {csv_file.name}: {str(e)[:40]}")
+        
+        progress_bar.progress(current / total)
     
     progress_bar.progress(1.0)
     status_text.empty()
