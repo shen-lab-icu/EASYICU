@@ -3952,7 +3952,7 @@
     },
     "tables": {
       "admissions": {
-        "files": "ADMISSIONS.parquet",
+        "files": "admissions.parquet",
         "defaults": {
           "id_var": "subject_id",
           "val_var": "admission_type",
@@ -4050,7 +4050,7 @@
         }
       },
       "callout": {
-        "files": "CALLOUT.parquet",
+        "files": "callout.parquet",
         "defaults": {
           "index_var": "outcometime",
           "val_var": "callout_outcome",
@@ -4170,7 +4170,7 @@
         }
       },
       "caregivers": {
-        "files": "CAREGIVERS.parquet",
+        "files": "caregivers.parquet",
         "defaults": {
           "id_var": "cgid",
           "val_var": "label"
@@ -4196,8 +4196,9 @@
         }
       },
       "chartevents": {
-        "files": "CHARTEVENTS.parquet",
+        "files": "chartevents.parquet",
         "defaults": {
+          "id_var": "icustay_id",
           "index_var": "charttime",
           "val_var": "valuenum",
           "unit_var": "valueuom",
@@ -4294,7 +4295,7 @@
         }
       },
       "cptevents": {
-        "files": "CPTEVENTS.parquet",
+        "files": "cptevents.parquet",
         "defaults": {
           "index_var": "chartdate",
           "val_var": "cpt_cd",
@@ -4354,7 +4355,7 @@
         }
       },
       "d_cpt": {
-        "files": "D_CPT.parquet",
+        "files": "d_cpt.parquet",
         "defaults": {
           "id_var": "subsectionrange",
           "val_var": "subsectionheader"
@@ -4400,7 +4401,7 @@
         }
       },
       "d_icd_diagnoses": {
-        "files": "D_ICD_DIAGNOSES.parquet",
+        "files": "d_icd_diagnoses.parquet",
         "defaults": {
           "id_var": "icd9_code",
           "val_var": "short_title"
@@ -4426,7 +4427,7 @@
         }
       },
       "d_icd_procedures": {
-        "files": "D_ICD_PROCEDURES.parquet",
+        "files": "d_icd_procedures.parquet",
         "defaults": {
           "id_var": "icd9_code",
           "val_var": "short_title"
@@ -4452,7 +4453,7 @@
         }
       },
       "d_items": {
-        "files": "D_ITEMS.parquet",
+        "files": "d_items.parquet",
         "defaults": {
           "id_var": "itemid",
           "val_var": "label"
@@ -4502,7 +4503,7 @@
         }
       },
       "d_labitems": {
-        "files": "D_LABITEMS.parquet",
+        "files": "d_labitems.parquet",
         "defaults": {
           "id_var": "itemid",
           "val_var": "label"
@@ -4536,7 +4537,7 @@
         }
       },
       "datetimeevents": {
-        "files": "DATETIMEEVENTS.parquet",
+        "files": "datetimeevents.parquet",
         "defaults": {
           "index_var": "charttime",
           "val_var": "itemid",
@@ -4544,7 +4545,8 @@
             "charttime",
             "storetime",
             "value"
-          ]
+          ],
+          "id_var": "icustay_id"
         },
         "num_rows": 4485937,
         "cols": {
@@ -4610,7 +4612,7 @@
         }
       },
       "diagnoses_icd": {
-        "files": "DIAGNOSES_ICD.parquet",
+        "files": "diagnoses_icd.parquet",
         "defaults": {
           "val_var": "icd9_code"
         },
@@ -4639,7 +4641,7 @@
         }
       },
       "drgcodes": {
-        "files": "DRGCODES.parquet",
+        "files": "drgcodes.parquet",
         "defaults": {
           "val_var": "drg_code"
         },
@@ -4680,14 +4682,15 @@
         }
       },
       "icustays": {
-        "files": "ICUSTAYS.parquet",
+        "files": "icustays.parquet",
         "defaults": {
           "index_var": "intime",
           "val_var": "last_careunit",
           "time_vars": [
             "intime",
             "outtime"
-          ]
+          ],
+          "id_var": "icustay_id"
         },
         "num_rows": 61532,
         "cols": {
@@ -4744,7 +4747,7 @@
         }
       },
       "inputevents_cv": {
-        "files": "INPUTEVENTS_CV.parquet",
+        "files": "inputevents_cv.parquet",
         "defaults": {
           "index_var": "charttime",
           "val_var": "rate",
@@ -4752,7 +4755,8 @@
           "time_vars": [
             "charttime",
             "storetime"
-          ]
+          ],
+          "id_var": "icustay_id"
         },
         "num_rows": 17527935,
         "cols": {
@@ -4849,7 +4853,7 @@
         }
       },
       "inputevents_mv": {
-        "files": "INPUTEVENTS_MV.parquet",
+        "files": "inputevents_mv.parquet",
         "defaults": {
           "index_var": "starttime",
           "val_var": "rate",
@@ -4859,7 +4863,8 @@
             "endtime",
             "storetime",
             "comments_date"
-          ]
+          ],
+          "id_var": "icustay_id"
         },
         "num_rows": 3618991,
         "cols": {
@@ -4994,8 +4999,9 @@
         }
       },
       "labevents": {
-        "files": "LABEVENTS.parquet",
+        "files": "labevents.parquet",
         "defaults": {
+          "id_var": "hadm_id",
           "index_var": "charttime",
           "val_var": "valuenum",
           "unit_var": "valueuom",
@@ -5043,14 +5049,15 @@
         }
       },
       "microbiologyevents": {
-        "files": "MICROBIOLOGYEVENTS.parquet",
+        "files": "microbiologyevents.parquet",
         "defaults": {
           "index_var": "chartdate",
           "val_var": "isolate_num",
           "time_vars": [
             "chartdate",
             "charttime"
-          ]
+          ],
+          "id_var": "hadm_id"
         },
         "num_rows": 631726,
         "cols": {
@@ -5123,7 +5130,7 @@
         }
       },
       "noteevents": {
-        "files": "NOTEEVENTS.parquet",
+        "files": "noteevents.parquet",
         "defaults": {
           "index_var": "chartdate",
           "val_var": "text",
@@ -5185,7 +5192,7 @@
         }
       },
       "outputevents": {
-        "files": "OUTPUTEVENTS.parquet",
+        "files": "outputevents.parquet",
         "defaults": {
           "index_var": "charttime",
           "val_var": "value",
@@ -5193,7 +5200,8 @@
           "time_vars": [
             "charttime",
             "storetime"
-          ]
+          ],
+          "id_var": "icustay_id"
         },
         "num_rows": 4349218,
         "cols": {
@@ -5254,7 +5262,7 @@
         }
       },
       "patients": {
-        "files": "PATIENTS.parquet",
+        "files": "patients.parquet",
         "defaults": {
           "val_var": "expire_flag",
           "time_vars": [
@@ -5262,7 +5270,8 @@
             "dod",
             "dod_hosp",
             "dod_ssn"
-          ]
+          ],
+          "id_var": "subject_id"
         },
         "num_rows": 46520,
         "cols": {
@@ -5305,7 +5314,7 @@
         }
       },
       "prescriptions": {
-        "files": "PRESCRIPTIONS.parquet",
+        "files": "prescriptions.parquet",
         "defaults": {
           "index_var": "startdate",
           "val_var": "dose_val_rx",
@@ -5313,7 +5322,8 @@
           "time_vars": [
             "startdate",
             "enddate"
-          ]
+          ],
+          "id_var": "hadm_id"
         },
         "num_rows": 4156450,
         "cols": {
@@ -5398,7 +5408,7 @@
         }
       },
       "procedureevents_mv": {
-        "files": "PROCEDUREEVENTS_MV.parquet",
+        "files": "procedureevents_mv.parquet",
         "defaults": {
           "index_var": "starttime",
           "val_var": "value",
@@ -5408,7 +5418,8 @@
             "endtime",
             "storetime",
             "comments_date"
-          ]
+          ],
+          "id_var": "icustay_id"
         },
         "num_rows": 258066,
         "cols": {
@@ -5519,7 +5530,7 @@
         }
       },
       "procedures_icd": {
-        "files": "PROCEDURES_ICD.parquet",
+        "files": "procedures_icd.parquet",
         "defaults": {
           "val_var": "icd9_code"
         },
@@ -5548,7 +5559,7 @@
         }
       },
       "services": {
-        "files": "SERVICES.parquet",
+        "files": "services.parquet",
         "defaults": {
           "index_var": "transfertime",
           "val_var": "curr_service",
@@ -5584,7 +5595,7 @@
         }
       },
       "transfers": {
-        "files": "TRANSFERS.parquet",
+        "files": "transfers.parquet",
         "defaults": {
           "index_var": "intime",
           "val_var": "curr_careunit",
@@ -10591,6 +10602,7 @@
       "cases": {
         "files": "cases.parquet",
         "defaults": {
+          "id_var": "CaseID",
           "index_var": "ICUOffset",
           "time_vars": [
             "ICUOffset",
@@ -10762,6 +10774,7 @@
       "data_float_h": {
         "files": "data_float_h.parquet",
         "defaults": {
+          "id_var": "CaseID",
           "index_var": "Offset",
           "val_var": "Val",
           "time_vars": "Offset"
@@ -10860,6 +10873,7 @@
       "laboratory": {
         "files": "laboratory.parquet",
         "defaults": {
+          "id_var": "CaseID",
           "index_var": "Offset",
           "val_var": "LaboratoryValue",
           "time_vars": "Offset"
@@ -10895,6 +10909,7 @@
       "medication": {
         "files": "medication.parquet",
         "defaults": {
+          "id_var": "CaseID",
           "index_var": "Offset",
           "val_var": "Amount",
           "time_vars": [

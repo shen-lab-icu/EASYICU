@@ -106,6 +106,39 @@ try:
 except ImportError:
     _HAS_PATIENT_FILTER = False
 
+# 导入 KDIGO AKI 模块
+try:
+    from .kdigo_aki import (
+        kdigo_creatinine,
+        kdigo_uo,
+        kdigo_stages,
+        load_kdigo_aki,
+        get_aki_incidence,
+        summarize_aki,
+    )
+    _HAS_KDIGO_AKI = True
+except ImportError as e:
+    print(f"Warning: Failed to import kdigo_aki module: {e}")
+    _HAS_KDIGO_AKI = False
+
+# 导入 Circulatory Failure 模块 (circEWS定义)
+try:
+    from .circ_failure import (
+        circ_failure_event,
+        calculate_circ_failure_status,
+        load_circ_failure,
+        summarize_circ_failure,
+        get_circ_failure_incidence,
+        validate_circ_failure_data,
+        LACTATE_THRESHOLD,
+        MAP_THRESHOLD,
+        NOREPI_EPI_LEVEL2_THRESHOLD,
+    )
+    _HAS_CIRC_FAILURE = True
+except ImportError as e:
+    print(f"Warning: Failed to import circ_failure module: {e}")
+    _HAS_CIRC_FAILURE = False
+
 # 快速启动 API - 已移除 (现在使用统一API)
 # ICUQuickLoader等已被重构为BaseICULoader和统一的api.load_concepts
 _HAS_QUICKSTART = False
@@ -1200,6 +1233,18 @@ try:
         read_from_buckets,
         convert_aumc_numericitems,
         convert_aumc_listitems,
+        convert_hirid_observations,
+        convert_hirid_pharma,
+        convert_miiv_chartevents,
+        convert_miiv_labevents,
+        convert_miiv_inputevents,
+        convert_eicu_nursecharting,
+        convert_eicu_lab,
+        convert_mimic3_chartevents,
+        convert_mimic3_labevents,
+        convert_sic_data_float_h,
+        convert_sic_laboratory,
+        convert_sic_medication,
         verify_query_plan,
         _duckdb_hash_batch,
     )
@@ -1211,6 +1256,18 @@ try:
         'read_from_buckets',
         'convert_aumc_numericitems',
         'convert_aumc_listitems',
+        'convert_hirid_observations',
+        'convert_hirid_pharma',
+        'convert_miiv_chartevents',
+        'convert_miiv_labevents',
+        'convert_miiv_inputevents',
+        'convert_eicu_nursecharting',
+        'convert_eicu_lab',
+        'convert_mimic3_chartevents',
+        'convert_mimic3_labevents',
+        'convert_sic_data_float_h',
+        'convert_sic_laboratory',
+        'convert_sic_medication',
         'verify_query_plan',
     ])
 except ImportError:

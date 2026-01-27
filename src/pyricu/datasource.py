@@ -461,6 +461,15 @@ class ICUDataSource:
                     
             elif USE_MINIMAL_COLUMNS and table_name in MINIMAL_COLUMNS_MAP:
                 base_columns = list(MINIMAL_COLUMNS_MAP[table_name])
+                
+                # 🔧 FIX 2026-01-26: MIMIC-III 使用 icustay_id 而非 stay_id
+                # 将 stay_id 替换为 icustay_id（对于 MIMIC-III）
+                db_name = self.config.name if hasattr(self, 'config') and hasattr(self.config, 'name') else ''
+                if db_name == 'mimic' and 'stay_id' in base_columns:
+                    base_columns = [c if c != 'stay_id' else 'icustay_id' for c in base_columns]
+                    if DEBUG_MODE:
+                        logger.debug(f"🔄 MIMIC-III 列映射: stay_id -> icustay_id")
+                
                 if columns is not None:
                     # 合并最小列集和传入的额外列（去重）
                     extra_cols = [c for c in columns if c not in base_columns]
@@ -493,11 +502,14 @@ class ICUDataSource:
                     id_columns = ['subject_id', 'icustay_id', 'hadm_id', 'stay_id',  # MIMIC
                                  'admissionid', 'patientid',  # AUMC
                                  'patientunitstayid',  # eICU
-                                 'patientid']  # HiRID
+                                 'patientid',  # HiRID
+                                 'CaseID', 'caseid']  # 🔧 FIX 2026-01-26: 添加 SICdb CaseID
                     
                     # 🚀 检测 sub_var/ids 过滤器（用于 HiRID observations 等大表）
                     # 这些过滤器应该在 DuckDB 层应用，而不是内存中应用
-                    sub_var_columns = ['variableid', 'itemid', 'nursingchartcelltypevalname']
+                    # 🔧 FIX 2026-01-26: 添加 SICdb DataID, LaboratoryID, DrugID
+                    sub_var_columns = ['variableid', 'itemid', 'nursingchartcelltypevalname',
+                                       'DataID', 'LaboratoryID', 'DrugID']
                     if spec.op == FilterOp.IN and spec.column in sub_var_columns:
                         # 提取概念特定的 itemid 过滤器
                         ids = spec.value
@@ -537,16 +549,21 @@ class ICUDataSource:
                     if spec.op == FilterOp.IN and spec.column in id_columns:
                         patient_ids_filter = spec
                         
-                        # 特殊处理：如果表是 hospital table 且过滤器是 stay_id
-                        if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo'] and spec.column == 'stay_id':
+                        # 特殊处理：如果表是 hospital table 且过滤器是 stay_id 或 icustay_id
+                        # 🔧 FIX 2026-01-26: 添加 mimic (MIMIC-III) 支持，使用 icustay_id
+                        is_mimic_db = self.config.name in ['miiv', 'mimic_demo', 'mimic']
+                        is_id_filter = spec.column in ['stay_id', 'icustay_id']
+                        if table_name in hospital_tables and is_mimic_db and is_id_filter:
                             try:
                                 if verbose:
-                                    logger.info(f"🔄 [{table_name}] 将 stay_id 过滤器转换为 hadm_id 以优化读取...")
+                                    logger.info(f"🔄 [{table_name}] 将 {spec.column} 过滤器转换为 hadm_id 以优化读取...")
                                 
                                 # 加载 icustays 获取映射
+                                # MIMIC-III 使用 icustay_id，MIMIC-IV 使用 stay_id
+                                id_col = 'icustay_id' if self.config.name == 'mimic' else 'stay_id'
                                 icustays_map = self.load_table(
                                     'icustays', 
-                                    columns=['stay_id', 'hadm_id'], 
+                                    columns=[id_col, 'hadm_id'], 
                                     filters=[spec],
                                     verbose=False
                                 )
@@ -592,7 +609,8 @@ class ICUDataSource:
                         if spec.column != patient_ids_filter.column and spec.op == FilterOp.IN:
                             # 检查是否是同类型的 ID 过滤器（都是 patient ID 类型）
                             id_columns_set = {'subject_id', 'icustay_id', 'hadm_id', 'stay_id',
-                                             'admissionid', 'patientid', 'patientunitstayid'}
+                                             'admissionid', 'patientid', 'patientunitstayid',
+                                             'CaseID', 'caseid'}  # 🔧 FIX 2026-01-26: 添加 SICdb CaseID
                             if spec.column in id_columns_set and patient_ids_filter.column in id_columns_set:
                                 # 这个过滤器已经被转换处理了，跳过
                                 continue
@@ -646,34 +664,38 @@ class ICUDataSource:
             if column in frame.columns:
                 frame[column] = _coerce_datetime(frame[column])
 
-        # 自动补全 stay_id：某些表（如 prescriptions, labevents）只有 hadm_id，需要 JOIN icustays
-        # 这对于使用这些表的概念（如 delirium_tx）至关重要
-        if ('stay_id' not in frame.columns or frame['stay_id'].isna().all()) and 'hadm_id' in frame.columns:
-            # ⚠️ 问题：对于 hospital tables (如 labevents), 原表没有 stay_id，需要通过 hadm_id join icustays 补全
+        # 🔧 FIX 2026-01-26: 支持 MIMIC-III 的 icustay_id
+        # MIMIC-III 的 id 列是 icustay_id，需要补全
+        target_id_col = 'icustay_id' if self.config.name == 'mimic' else 'stay_id'
+        has_target_id = target_id_col in frame.columns and not frame[target_id_col].isna().all()
+        
+        if not has_target_id and 'hadm_id' in frame.columns:
+            # ⚠️ 问题：对于 hospital tables (如 labevents), 原表没有 stay_id/icustay_id，需要通过 hadm_id join icustays 补全
             # 但 join 会引入该 hadm_id 的所有 stay_id (同一住院可能多次ICU入住)
             # 解决方案：在函数开始时已保存 original_stay_ids，join 后再过滤
             hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy']
-            if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo']:
+            is_mimic_db = self.config.name in ['miiv', 'mimic_demo', 'mimic']
+            if table_name in hospital_tables and is_mimic_db:
                 try:
-                    # 🔍 提取当前的患者ID过滤器（stay_id 或 subject_id）
+                    # 🔍 提取当前的患者ID过滤器（stay_id/icustay_id 或 subject_id）
                     # 这样 icustays 只加载我们需要的患者，避免 join 时产生额外的匹配
                     icustays_filters = []
                     if filters:
                         for spec in filters:
-                            # stay_id 或 subject_id 过滤器都可以用于过滤 icustays
-                            if spec.column in ['stay_id', 'subject_id'] and spec.op == FilterOp.IN:
+                            # stay_id/icustay_id 或 subject_id 过滤器都可以用于过滤 icustays
+                            if spec.column in ['stay_id', 'icustay_id', 'subject_id'] and spec.op == FilterOp.IN:
                                 icustays_filters.append(spec)
                                 if verbose:
                                     logger.debug(f"[{table_name}] 提取患者ID过滤器: {spec.column} IN ({len(spec.value)} 个值)")
                                 # 不要 break，可能有多个过滤器
                     
-                    # 加载 icustays 映射（需要 hadm_id, stay_id, subject_id）
+                    # 加载 icustays 映射（需要 hadm_id, stay_id/icustay_id, subject_id）
                     # 如果有患者ID过滤器，传递给 icustays 以避免加载全表
                     if verbose:
                         logger.debug(f"[{table_name}] 加载 icustays，filters={len(icustays_filters)}个")
                     icustays_map = self.load_table(
                         'icustays', 
-                        columns=['hadm_id', 'stay_id', 'subject_id', 'intime', 'outtime'],  # 需要 intime 和 outtime 用于 rolling join
+                        columns=['hadm_id', target_id_col, 'subject_id', 'intime', 'outtime'],  # 需要 intime 和 outtime 用于 rolling join
                         filters=icustays_filters if icustays_filters else None,
                         verbose=False
                     )
@@ -689,7 +711,7 @@ class ICUDataSource:
                         # 加载这些 hadm_ids 对应的所有 stays（可能比请求的更多）
                         all_stays_for_hadms = self.load_table(
                             'icustays',
-                            columns=['hadm_id', 'stay_id', 'subject_id', 'intime', 'outtime'],
+                            columns=['hadm_id', target_id_col, 'subject_id', 'intime', 'outtime'],
                             filters=[FilterSpec(column='hadm_id', op=FilterOp.IN, value=requested_hadm_ids)],
                             verbose=False
                         )
@@ -705,21 +727,22 @@ class ICUDataSource:
                     # 保存原始行数用于日志
                     before_rows = len(frame)
                     
-                    # JOIN 补全 stay_id（包含 intime 和 outtime 用于 rolling join）
+                    # JOIN 补全 stay_id/icustay_id（包含 intime 和 outtime 用于 rolling join）
                     # 注意：同一 hadm_id 可能对应多个 stay_id（多次 ICU 入住）
                     frame = frame.merge(
-                        icustays_df[['hadm_id', 'stay_id', 'intime', 'outtime']],
+                        icustays_df[['hadm_id', target_id_col, 'intime', 'outtime']],
                         on='hadm_id',
                         how='inner',  # 只保留有 ICU 住院的记录
                         suffixes=('', '_icu')
                     )
                     
                     # 清理可能的重复列
-                    if 'stay_id_icu' in frame.columns:
-                        # 如果原来有 stay_id 列但是全 NaN，用新的替换
-                        if 'stay_id' not in frame.columns or frame['stay_id'].isna().all():
-                            frame['stay_id'] = frame['stay_id_icu']
-                        frame = frame.drop(columns=['stay_id_icu'], errors='ignore')
+                    icu_col_name = f'{target_id_col}_icu'
+                    if icu_col_name in frame.columns:
+                        # 如果原来有 id 列但是全 NaN，用新的替换
+                        if target_id_col not in frame.columns or frame[target_id_col].isna().all():
+                            frame[target_id_col] = frame[icu_col_name]
+                        frame = frame.drop(columns=[icu_col_name], errors='ignore')
                     
                     after_join_rows = len(frame)
                     
@@ -743,14 +766,14 @@ class ICUDataSource:
                             time_col = cand
                             break
                     
-                    if time_col and 'stay_id' in frame.columns and 'outtime' in frame.columns:
-                        # 检查是否有同一 hadm_id 下的多个 stay_id
-                        stays_per_hadm = frame.groupby('hadm_id')['stay_id'].nunique()
+                    if time_col and target_id_col in frame.columns and 'outtime' in frame.columns:
+                        # 检查是否有同一 hadm_id 下的多个 stay_id/icustay_id
+                        stays_per_hadm = frame.groupby('hadm_id')[target_id_col].nunique()
                         multi_stay_hadms = stays_per_hadm[stays_per_hadm > 1].index.tolist()
                         
                         if multi_stay_hadms:
                             if verbose:
-                                logger.debug(f"[{table_name}] 检测到 {len(multi_stay_hadms)} 个 hadm_id 有多个 stay_id，执行 rolling join (使用 outtime)")
+                                logger.debug(f"[{table_name}] 检测到 {len(multi_stay_hadms)} 个 hadm_id 有多个 {target_id_col}，执行 rolling join (使用 outtime)")
                             
                             # 规范化时间列 - 统一为 datetime64[ns] 以兼容 merge_asof
                             def _normalize_datetime_ns(series: pd.Series) -> pd.Series:
@@ -774,11 +797,11 @@ class ICUDataSource:
                             # 🔥 使用 pd.merge_asof 实现真正的 rolling join
                             # 首先，获取唯一的数据记录（去除 join 导致的重复）
                             data_cols = [c for c in multi_stay_data.columns 
-                                        if c not in ['stay_id', 'intime', 'outtime']]
+                                        if c not in [target_id_col, 'intime', 'outtime']]
                             unique_data = multi_stay_data[data_cols].drop_duplicates()
                             
                             # 获取每个 hadm_id 的 stay 信息，按 outtime 排序
-                            stay_cols = ['hadm_id', 'stay_id', 'outtime']
+                            stay_cols = ['hadm_id', target_id_col, 'outtime']
                             if 'intime' in multi_stay_data.columns:
                                 stay_cols.append('intime')
                             stay_info = multi_stay_data[stay_cols].drop_duplicates()
@@ -801,7 +824,7 @@ class ICUDataSource:
                                 if hadm_stays.empty:
                                     continue
                                 hadm_stays = hadm_stays.sort_values('outtime')
-                                stays_list = hadm_stays['stay_id'].tolist()
+                                stays_list = hadm_stays[target_id_col].tolist()
                                 outtimes_list = hadm_stays['outtime'].tolist()
                                 
                                 # 🔧 FIX: 过滤掉时间列为空的行，避免 merge_asof 报错
@@ -816,7 +839,7 @@ class ICUDataSource:
                                 # 🔥 关键修正：使用 outtime 而不是 intime 做 rolling join
                                 # direction='forward' 等价于 roll = -Inf（向未来滚动）
                                 # 找 outtime >= charttime 的最近 stay
-                                merge_cols = ['stay_id', 'outtime']
+                                merge_cols = [target_id_col, 'outtime']
                                 if 'intime' in hadm_stays.columns:
                                     merge_cols.append('intime')
                                 merged = pd.merge_asof(
@@ -832,11 +855,11 @@ class ICUDataSource:
                                 # 如果 charttime > 最后一个 outtime，分配给最后一个 stay
                                 last_stay = stays_list[-1]
                                 last_outtime = outtimes_list[-1]
-                                merged.loc[merged['stay_id'].isna(), 'stay_id'] = last_stay
+                                merged.loc[merged[target_id_col].isna(), target_id_col] = last_stay
                                 merged.loc[merged['outtime'].isna(), 'outtime'] = last_outtime
                                 
-                                # 确保 stay_id 是整数
-                                merged['stay_id'] = merged['stay_id'].astype(int)
+                                # 确保 id 是整数
+                                merged[target_id_col] = merged[target_id_col].astype(int)
                                 
                                 result_frames.append(merged)
                             
@@ -852,48 +875,49 @@ class ICUDataSource:
                     
                     after_rows = len(frame)
                     
-                    # ✅ 关键修复：join 后必须再次应用原始 stay_id 过滤
+                    # ✅ 关键修复：join 后必须再次应用原始 stay_id/icustay_id 过滤
                     # 因为 join 可能产生了额外的 stay_ids (同一 subject 或 hadm_id 的多个 ICU stays)
                     # 
                     # 三种情况：
-                    # 1. 如果原始过滤器是 stay_id，使用保存的 original_stay_ids
+                    # 1. 如果原始过滤器是 stay_id/icustay_id，使用保存的 original_stay_ids
                     # 2. 如果原始过滤器是 subject_id，从 FilterSpec.metadata 中提取原始 stay_id
                     # 3. 从 icustays_filters 中查找
                     target_stay_ids = original_stay_ids
                     
                     if not target_stay_ids and icustays_filters:
                         for spec in icustays_filters:
-                            if spec.column == 'stay_id' and spec.op == FilterOp.IN:
+                            if spec.column in ['stay_id', 'icustay_id'] and spec.op == FilterOp.IN:
                                 target_stay_ids = set(spec.value)
                                 if verbose:
-                                    logger.debug(f"[{table_name}] 从 stay_id 过滤器获取: {len(target_stay_ids)} stays")
+                                    logger.debug(f"[{table_name}] 从 {spec.column} 过滤器获取: {len(target_stay_ids)} stays")
                                 break
                             elif spec.column == 'subject_id' and spec.op == FilterOp.IN:
                                 # 从 metadata 中提取原始 stay_ids
                                 if spec.metadata and 'original_stay_ids' in spec.metadata:
                                     target_stay_ids = set(spec.metadata['original_stay_ids'])
                                     if verbose:
-                                        logger.debug(f"[{table_name}] 从 subject_id 过滤器的 metadata 获取原始 stay_id: {len(target_stay_ids)} stays")
+                                        logger.debug(f"[{table_name}] 从 subject_id 过滤器的 metadata 获取原始 {target_id_col}: {len(target_stay_ids)} stays")
                                     break
                     
                     if target_stay_ids:
                         before_filter = len(frame)
-                        if 'stay_id' in frame.columns:
-                            frame = frame[frame['stay_id'].isin(target_stay_ids)]
+                        if target_id_col in frame.columns:
+                            frame = frame[frame[target_id_col].isin(target_stay_ids)]
                             if verbose:
                                 logger.debug(
-                                    f"[{table_name}] 应用 stay_id 过滤: {before_filter}行 → {len(frame)}行 "
-                                    f"(保留 {len(target_stay_ids)} 个目标 stay_id)"
+                                    f"[{table_name}] 应用 {target_id_col} 过滤: {before_filter}行 → {len(frame)}行 "
+                                    f"(保留 {len(target_stay_ids)} 个目标 {target_id_col})"
                                 )
                         else:
                             if verbose:
-                                logger.warning(f"[{table_name}] join 后仍无 stay_id 列，无法应用过滤")
+                                logger.warning(f"[{table_name}] join 后仍无 {target_id_col} 列，无法应用过滤")
                     
                     # 记录补全操作
                     if verbose and before_rows != after_rows:
                         logger.info(
-                            "表 %s: 通过 hadm_id 补全 stay_id (%d → %d 行)",
+                            "表 %s: 通过 hadm_id 补全 %s (%d → %d 行)",
                             table_name,
+                            target_id_col,
                             before_rows,
                             after_rows
                         )
@@ -903,13 +927,14 @@ class ICUDataSource:
                     if 'stay_id' in frame.columns:
                         id_columns = ['stay_id']
                         if verbose:
-                            logger.debug(f"[{table_name}] 补全 stay_id 后更新 id_columns: subject_id → stay_id")
+                            logger.debug(f"[{table_name}] 补全 {target_id_col} 后更新 id_columns: subject_id → {target_id_col}")
                         
                 except Exception as e:
                     # 如果补全失败，记录警告但不中断流程
                     logger.warning(
-                        "⚠️  表 %s: 无法补全 stay_id: %s",
+                        "⚠️  表 %s: 无法补全 %s: %s",
                         table_name,
+                        target_id_col,
                         str(e)
                     )
 

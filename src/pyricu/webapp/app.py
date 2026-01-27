@@ -754,6 +754,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'sepsis3_sofa1': ['sep3_sofa1', 'susp_inf', 'infection_icd', 'samp'],
     'vitals': ['hr', 'map', 'sbp', 'dbp', 'temp', 'etco2', 'spo2', 'resp'],
     'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication'],
+    'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc'],
@@ -775,6 +776,7 @@ CONCEPT_GROUP_NAMES = {
     'sepsis3_sofa1': ('🦠 Sepsis-3 Diagnosis (SOFA-1)', '🦠 Sepsis-3 诊断 (基于SOFA-1)'),
     'vitals': ('❤️ Vital Signs', '❤️ 生命体征'),
     'respiratory': ('🫁 Respiratory Support', '🫁 呼吸支持'),
+    'ventilator': ('🌬️ Ventilator Parameters', '🌬️ 呼吸机参数'),
     'blood_gas': ('🩸 Blood Gas Analysis', '🩸 血气分析'),
     'chemistry': ('🧪 Lab - Chemistry', '🧪 实验室-生化'),
     'hematology': ('🔬 Lab - Hematology', '🔬 实验室-血液学'),
@@ -796,6 +798,7 @@ CONCEPT_GROUPS_DISPLAY = {
     'sepsis3_sofa1': '🦠 Sepsis-3 (SOFA-1)',
     'vitals': '❤️ Vital Signs',
     'respiratory': '🫁 Respiratory',
+    'ventilator': '🌬️ Ventilator',
     'blood_gas': '🩸 Blood Gas',
     'chemistry': '🧪 Chemistry',
     'hematology': '🔬 Hematology',
@@ -1402,6 +1405,16 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'clinical': ['observations'],
             'medication': ['pharma_records'],
         },
+        'mimic': {  # MIMIC-III
+            'core': ['icustays', 'patients', 'admissions'],
+            'clinical': ['chartevents', 'labevents', 'outputevents'],
+            'medication': ['prescriptions', 'inputevents_cv', 'inputevents_mv'],
+        },
+        'sic': {  # SICdb
+            'core': ['cases'],
+            'clinical': ['data_float_h', 'laboratory'],
+            'medication': ['medication'],
+        },
     }
     
     # 各数据库需要的核心表（CSV/GZ格式 - 原始文件）
@@ -1410,11 +1423,14 @@ def validate_database_path(data_path: str, database: str) -> dict:
         'eicu': ['patient.csv', 'vitalPeriodic.csv', 'lab.csv'],
         'aumc': ['admissions.csv', 'numericitems.csv', 'drugitems.csv'],
         'hirid': ['general_table.csv', 'pharma_records.csv'],
+        'mimic': ['icustays.csv', 'chartevents.csv', 'labevents.csv', 'prescriptions.csv'],
+        'sic': ['cases.csv', 'data_float_h.csv', 'laboratory.csv', 'medication.csv'],
     }
     
     db_name = {
         'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD',
-        'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID'
+        'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID',
+        'mimic': 'MIMIC-III', 'sic': 'SICdb'
     }.get(database, database.upper())
     
     # 检查Parquet文件和分片目录
@@ -2326,11 +2342,12 @@ def render_sidebar():
             db_label = "Select Database" if st.session_state.language == 'en' else "选择数据库"
             database = st.selectbox(
                 db_label,
-                options=['miiv', 'eicu', 'aumc', 'hirid'],
+                options=['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic'],
                 index=0,
                 format_func=lambda x: {
                     'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD', 
-                    'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID'
+                    'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID',
+                    'mimic': 'MIMIC-III', 'sic': 'SICdb'
                 }.get(x, x)
             )
             st.session_state.database = database
@@ -3121,7 +3138,7 @@ def load_data_for_preview(max_patients: int = 50):
         try:
             data_path = Path(st.session_state.data_path)
             database = st.session_state.get('database', 'miiv')
-            id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid'}
+            id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid', 'mimic': 'icustay_id', 'sic': 'CaseID'}
             id_col = id_col_map.get(database, 'stay_id')
             
             for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:
@@ -5836,7 +5853,7 @@ def render_group_comparison_subtab(lang: str):
             )
         
         with col2:
-            db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID'}
+            db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
             selected_db = st.selectbox(
                 "🏥 " + ("Database" if lang == 'en' else "数据库"),
                 options=list(db_options.keys()),
@@ -6469,8 +6486,8 @@ def render_multidb_distribution_subtab(lang: str):
     
     with col2:
         # 数据库选择
-        db_options = ['miiv', 'eicu', 'aumc', 'hirid']
-        db_labels = {'miiv': 'MIMIC-IV 🟢', 'eicu': 'eICU 🟠', 'aumc': 'Amsterdam 🔵', 'hirid': 'HiRID 🔴'}
+        db_options = ['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic']
+        db_labels = {'miiv': 'MIMIC-IV 🟢', 'eicu': 'eICU 🟠', 'aumc': 'Amsterdam 🔵', 'hirid': 'HiRID 🔴', 'mimic': 'MIMIC-III 🟣', 'sic': 'SICdb ⚫'}
         selected_dbs = st.multiselect(
             "🏥 " + ("Databases" if lang == 'en' else "数据库"),
             options=db_options,
@@ -6547,7 +6564,7 @@ def render_multidb_distribution_subtab(lang: str):
         
         # 数据量统计
         stat_cols = st.columns(len(data))
-        db_colors = {'miiv': '🟢', 'eicu': '🟠', 'aumc': '🔵', 'hirid': '🔴'}
+        db_colors = {'miiv': '🟢', 'eicu': '🟠', 'aumc': '🔵', 'hirid': '🔴', 'mimic': '🟣', 'sic': '⚫'}
         for i, (db, df) in enumerate(data.items()):
             with stat_cols[i]:
                 st.metric(
@@ -6630,7 +6647,7 @@ def render_cohort_dashboard_subtab(lang: str):
             )
         
         with col2:
-            db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID'}
+            db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
             selected_db = st.selectbox(
                 "🏥 " + ("Database" if lang == 'en' else "数据库"),
                 options=list(db_options.keys()),
@@ -7259,7 +7276,7 @@ def execute_sidebar_export():
                 try:
                     data_path = Path(st.session_state.data_path)
                     database = st.session_state.get('database', 'miiv')
-                    id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid'}
+                    id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid', 'mimic': 'icustay_id', 'sic': 'CaseID'}
                     id_col = id_col_map.get(database, 'stay_id')
                     
                     for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:

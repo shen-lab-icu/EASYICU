@@ -655,23 +655,110 @@ def _assert_shared_schema(
         if index_column is None:
             index_column = idx
     
-    # Check if ID conversion is needed
-    needs_conversion = not all(ids == id_columns for ids in id_column_sets.values())
+    # Normalize ID columns for case-insensitive comparison (SICdb uses CaseID vs caseid)
+    def normalize_id_cols(ids):
+        if not ids:
+            return []
+        return [col.lower() for col in ids]
     
-    converted_tables = dict(tables)  # Copy for potential modifications
+    # Check if ID conversion is needed (case-insensitive)
+    ref_normalized = normalize_id_cols(id_columns)
+    needs_conversion = not all(normalize_id_cols(ids) == ref_normalized for ids in id_column_sets.values())
+    
+    converted_tables = dict(tables)  # Initialize copy for potential modifications
+    
+    # If difference is only case, normalize all tables to use the same case
+    if needs_conversion:
+        # Check if the difference is only case
+        all_normalized = set()
+        for ids in id_column_sets.values():
+            all_normalized.update(normalize_id_cols(ids))
+        
+        # If all normalized IDs are the same, it's just a case issue
+        if len(all_normalized) == 1 or (len(all_normalized) == 0 and len(id_column_sets) == 0):
+            # Standardize to the first table's ID column case
+            target_id_col = id_columns[0] if id_columns else None
+            if target_id_col:
+                for name, table in list(tables.items()):
+                    table_ids = _get_id_columns(table)
+                    if table_ids and table_ids[0].lower() == target_id_col.lower() and table_ids[0] != target_id_col:
+                        # Rename the column to match the target case
+                        data = table.data if hasattr(table, 'data') else table.df
+                        if table_ids[0] in data.columns:
+                            data = data.rename(columns={table_ids[0]: target_id_col})
+                            converted_tables[name] = ICUTable(
+                                data=data,
+                                id_columns=[target_id_col],
+                                index_column=table.index_column,
+                                value_column=table.value_column,
+                                unit_column=table.unit_column,
+                            )
+                # Update id_columns to the normalized form
+                id_columns = [target_id_col]
+                needs_conversion = False  # Case normalized, no real conversion needed
     
     if needs_conversion and convert_ids and ctx is not None:
-        # Try to convert all tables to the common target ID (prefer stay_id for ICU data)
+        # Try to convert all tables to the common target ID (prefer stay_id/icustay_id for ICU data)
         # This replicates R ricu's automatic ID conversion in collect_dots()
-        target_id_col = id_columns[0] if id_columns else 'stay_id'
         
         # Determine all ID types present
         all_id_types = set()
         for ids in id_column_sets.values():
             all_id_types.update(ids)
         
-        # Handle hadm_id ↔ stay_id conversion
-        if 'hadm_id' in all_id_types and 'stay_id' in all_id_types:
+        # Determine target ID column based on database and available types
+        # MIMIC-III uses icustay_id, MIMIC-IV uses stay_id
+        if 'icustay_id' in all_id_types:
+            target_id_col = 'icustay_id'
+        elif 'stay_id' in all_id_types:
+            target_id_col = 'stay_id'
+        else:
+            target_id_col = id_columns[0] if id_columns else 'stay_id'
+        
+        # Handle hadm_id ↔ icustay_id conversion (MIMIC-III)
+        if 'hadm_id' in all_id_types and 'icustay_id' in all_id_types:
+            # Prefer icustay_id as target (ICU-level granularity)
+            target_id_col = 'icustay_id'
+            mapping = _load_id_mapping_table(ctx, 'hadm_id', 'icustay_id')
+            
+            if mapping is not None:
+                if os.environ.get('DEBUG'):
+                    logger.debug(f"ID映射表加载成功: hadm_id → icustay_id, {len(mapping)} 行")
+                
+                # Convert tables with hadm_id to icustay_id
+                tables_to_remove = []
+                for name, table in list(tables.items()):
+                    if 'hadm_id' in table.id_columns and 'icustay_id' not in table.id_columns:
+                        if os.environ.get('DEBUG'):
+                            logger.debug(f"转换表 '{name}': hadm_id → icustay_id")
+                        converted_data = _convert_id_column(
+                            table.data.copy(),
+                            'hadm_id',
+                            'icustay_id',
+                            mapping
+                        )
+                        
+                        if converted_data.empty:
+                            tables_to_remove.append(name)
+                            continue
+                        
+                        converted_tables[name] = ICUTable(
+                            data=converted_data,
+                            id_columns=['icustay_id'],
+                            index_column=table.index_column,
+                            value_column=table.value_column,
+                            unit_column=table.unit_column,
+                        )
+                
+                for name in tables_to_remove:
+                    if name in tables:
+                        del tables[name]
+                    if name in converted_tables:
+                        del converted_tables[name]
+                id_columns = ['icustay_id']
+        
+        # Handle hadm_id ↔ stay_id conversion (MIMIC-IV)
+        elif 'hadm_id' in all_id_types and 'stay_id' in all_id_types:
             # Prefer stay_id as target (ICU-level granularity)
             target_id_col = 'stay_id'
             mapping = _load_id_mapping_table(ctx, 'hadm_id', 'stay_id')
@@ -1007,7 +1094,9 @@ def _ensure_time_column_type(
         working = _ensure_copy(working)
         aligned_series = working[index_column]
         if pd.api.types.is_datetime64_any_dtype(aligned_series):
-            if list(id_columns or []):
+            # Filter id_columns to only those actually present in the DataFrame
+            actual_id_cols = [col for col in (id_columns or []) if col in working.columns]
+            if actual_id_cols:
                 def _relative_hours(group: pd.Series) -> pd.Series:
                     valid = group.dropna()
                     if valid.empty:
@@ -1016,7 +1105,7 @@ def _ensure_time_column_type(
                     delta = group - base
                     return delta.dt.total_seconds() / 3600.0
 
-                working[index_column] = working.groupby(list(id_columns or []))[index_column].transform(
+                working[index_column] = working.groupby(actual_id_cols)[index_column].transform(
                     _relative_hours
                 )
             else:
@@ -1440,6 +1529,193 @@ def _callback_blood_cell_ratio(
     result = data[output_cols].dropna(subset=[value_column]).copy()
     
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
+
+# ============================================================================
+# MIMIC-III-specific callbacks
+# ============================================================================
+
+def _callback_mimic_age(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """MIMIC-III age callback: convert dob to age in years at ICU admission.
+    
+    R ricu logic for mimic_age (transform_fun wrapper):
+      mimic_age <- function(x) {
+        x <- as.double(x, units = "days") / -365
+        ifelse(x > 90, 90, x)
+      }
+    
+    In MIMIC-III, age is calculated from date of birth (dob) to admittime.
+    MIMIC-III patients >= 89 years old at admission have shifted dob to obfuscate age.
+    These patients get age = 90 (capped).
+    """
+    if not tables or len(tables) == 0:
+        return _empty_icutbl(ctx)
+    
+    input_table = list(tables.values())[0]
+    data = input_table.df.copy()
+    
+    if data.empty:
+        return _empty_icutbl(ctx)
+    
+    id_columns = input_table.id_columns
+    
+    # MIMIC-III patients table has dob, admissions has admittime
+    # The age is typically already pre-calculated as anchor_age in newer versions
+    # or needs to be computed from dob - admittime
+    
+    # Check if 'age' column already exists (some MIMIC-III setups have it)
+    if 'age' in data.columns:
+        data['age'] = pd.to_numeric(data['age'], errors='coerce')
+        # Cap at 90
+        data.loc[data['age'] > 90, 'age'] = 90
+    elif 'anchor_age' in data.columns:
+        # MIMIC-IV style anchor_age
+        data['age'] = pd.to_numeric(data['anchor_age'], errors='coerce')
+        data.loc[data['age'] > 90, 'age'] = 90
+    elif 'dob' in data.columns and 'admittime' in data.columns:
+        # Calculate age from dob and admittime
+        dob = pd.to_datetime(data['dob'], errors='coerce')
+        admittime = pd.to_datetime(data['admittime'], errors='coerce')
+        # Age in days then convert to years
+        age_days = (admittime - dob).dt.days
+        age_years = age_days / 365.25
+        # If age > 90, cap at 90 (MIMIC de-identification)
+        age_years = np.where(age_years > 90, 90, age_years)
+        data['age'] = age_years
+    else:
+        # Cannot calculate age
+        return _empty_icutbl(ctx)
+    
+    # Remove missing ages
+    data = data.dropna(subset=['age'])
+    
+    output_cols = list(id_columns) + ['age']
+    result = data[[c for c in output_cols if c in data.columns]].copy()
+    
+    return _as_icutbl(result, id_columns=id_columns, index_column=None, value_column='age')
+
+def _callback_mimic_abx_presc(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """MIMIC-III antibiotic prescription callback.
+    
+    R ricu logic:
+      mimic_abx_presc <- function(x, val_var, ...) {
+        idx <- index_var(x)
+        x <- x[, c(idx, val_var) := list(get(idx) + mins(720L), TRUE)]
+        x
+      }
+    
+    This callback:
+    1. Shifts the time index forward by 720 minutes (12 hours)
+    2. Sets the value to TRUE (antibiotic was prescribed)
+    """
+    if not tables or len(tables) == 0:
+        return _empty_icutbl(ctx)
+    
+    input_table = list(tables.values())[0]
+    data = input_table.df.copy()
+    
+    if data.empty:
+        return _empty_icutbl(ctx)
+    
+    id_columns = input_table.id_columns
+    index_column = input_table.index_column or ctx.index_column
+    
+    # Shift time forward by 720 minutes (12 hours)
+    if index_column and index_column in data.columns:
+        # Assuming time is in minutes (or convert if needed)
+        data[index_column] = pd.to_numeric(data[index_column], errors='coerce') + 720
+    
+    # Set value to TRUE
+    data['abx'] = True
+    
+    output_cols = list(id_columns) + ([index_column] if index_column and index_column in data.columns else []) + ['abx']
+    result = data[[c for c in output_cols if c in data.columns]].copy()
+    
+    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column='abx')
+
+def _callback_mimic_kg_rate(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """MIMIC-III weight-normalized rate callback.
+    
+    R ricu logic:
+      mimic_kg_rate <- function(x, val_var, unit_var, env, ...) {
+        x <- add_weight(x, env, "weight")
+        x <- x[, c(val_var, unit_var) := list(
+          get(val_var) / get("weight"), sub("mcgmin", "mcg/kg/min", get(unit_var))
+        )]
+        x
+      }
+    
+    This callback:
+    1. Adds patient weight to the data
+    2. Divides the rate value by weight
+    3. Updates the unit from mcgmin to mcg/kg/min
+    """
+    if not tables or len(tables) == 0:
+        return _empty_icutbl(ctx)
+    
+    input_table = list(tables.values())[0]
+    data = input_table.df.copy()
+    
+    if data.empty:
+        return _empty_icutbl(ctx)
+    
+    id_columns = input_table.id_columns
+    index_column = input_table.index_column or ctx.index_column
+    value_column = input_table.value_column or ctx.concept_name
+    unit_column = input_table.unit_column
+    
+    # Determine the primary ID column for MIMIC-III
+    id_col = 'icustay_id' if 'icustay_id' in id_columns else (id_columns[0] if id_columns else 'stay_id')
+    
+    # Try to load weight data and join
+    try:
+        weight_df = _load_concept_for_callback(ctx, 'weight')
+        if weight_df is not None and not weight_df.empty:
+            # Get weight ID column
+            weight_id_col = 'icustay_id' if 'icustay_id' in weight_df.columns else (
+                'stay_id' if 'stay_id' in weight_df.columns else id_col
+            )
+            
+            # Get first (or median) weight per patient
+            weight_agg = weight_df.groupby(weight_id_col)['weight'].first().reset_index()
+            
+            # Merge weight into data
+            if id_col in data.columns:
+                data = data.merge(weight_agg, left_on=id_col, right_on=weight_id_col, how='left')
+                
+                # Divide rate by weight
+                if 'weight' in data.columns and value_column in data.columns:
+                    data[value_column] = pd.to_numeric(data[value_column], errors='coerce')
+                    data['weight'] = pd.to_numeric(data['weight'], errors='coerce')
+                    data[value_column] = data[value_column] / data['weight']
+                    
+                    # Update unit if present
+                    if unit_column and unit_column in data.columns:
+                        data[unit_column] = data[unit_column].str.replace('mcgmin', 'mcg/kg/min', regex=False)
+                    
+                    # Drop weight column
+                    data = data.drop(columns=['weight'], errors='ignore')
+    except Exception:
+        # If weight loading fails, return data without weight normalization
+        pass
+    
+    # Build output columns
+    output_cols = list(id_columns) + ([index_column] if index_column and index_column in data.columns else []) + [value_column]
+    if unit_column and unit_column in data.columns:
+        output_cols.append(unit_column)
+    output_cols = [c for c in output_cols if c in data.columns]
+    result = data[output_cols].dropna(subset=[value_column]).copy()
+    
+    return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column=value_column)
+
 
 def _callback_bmi(
     tables: Dict[str, ICUTable],
@@ -5802,6 +6078,118 @@ def _callback_miiv_icu_patients_filter(
     except Exception:
         return next(iter(tables.values()))
 
+def _callback_driving_pressure(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Calculate driving pressure (Plateau Pressure - PEEP).
+    
+    Driving pressure is a key ventilator parameter associated with mortality
+    in ARDS patients. It represents the pressure applied to expand the lungs
+    beyond PEEP.
+    
+    Args:
+        tables: Dictionary containing 'plateau_pres' and 'peep' tables
+        ctx: Callback context with database and other information
+        
+    Returns:
+        ICUTable with driving_pres column (cmH2O)
+        
+    References:
+        Amato et al., NEJM 2015 - Driving Pressure and Survival in ARDS
+    """
+    from pyricu.callbacks import driving_pressure
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Get the input tables
+    plateau_tbl = tables.get('plateau_pres')
+    peep_tbl = tables.get('peep')
+    
+    if plateau_tbl is None or peep_tbl is None:
+        # Return empty table
+        return ICUTable(
+            data=pd.DataFrame(columns=['stay_id', 'charttime', 'driving_pres']),
+            id_columns=['stay_id'],
+            index_column='charttime',
+            value_column='driving_pres'
+        )
+    
+    # Convert to pandas DataFrame
+    if hasattr(plateau_tbl, 'to_dataframe'):
+        plateau_df = plateau_tbl.to_dataframe()
+    elif hasattr(plateau_tbl, 'data'):
+        plateau_df = plateau_tbl.data
+    else:
+        plateau_df = plateau_tbl
+    
+    if hasattr(peep_tbl, 'to_dataframe'):
+        peep_df = peep_tbl.to_dataframe()
+    elif hasattr(peep_tbl, 'data'):
+        peep_df = peep_tbl.data
+    else:
+        peep_df = peep_tbl
+    
+    # Ensure DataFrames (not ICUTable)
+    if hasattr(plateau_df, 'data'):
+        plateau_df = plateau_df.data
+    if hasattr(peep_df, 'data'):
+        peep_df = peep_df.data
+    
+    # Debug: check columns
+    logger.debug(f"driving_pres callback: plateau_df columns={plateau_df.columns.tolist()}, shape={plateau_df.shape}")
+    logger.debug(f"driving_pres callback: peep_df columns={peep_df.columns.tolist()}, shape={peep_df.shape}")
+    
+    if plateau_df.empty or peep_df.empty:
+        return ICUTable(
+            data=pd.DataFrame(columns=['stay_id', 'charttime', 'driving_pres']),
+            id_columns=['stay_id'],
+            index_column='charttime',
+            value_column='driving_pres'
+        )
+    
+    # Get database name
+    database = None
+    if hasattr(ctx, 'data_source') and ctx.data_source and hasattr(ctx.data_source, 'config'):
+        database = getattr(ctx.data_source.config, 'name', None)
+    
+    # Call the driving_pressure function
+    result = driving_pressure(
+        plateau_pres=plateau_df,
+        peep=peep_df,
+        match_win=pd.Timedelta(hours=1),
+        database=database
+    )
+    
+    if result.empty:
+        return ICUTable(
+            data=pd.DataFrame(columns=['stay_id', 'charttime', 'driving_pres']),
+            id_columns=['stay_id'],
+            index_column='charttime',
+            value_column='driving_pres'
+        )
+    
+    # Detect ID and time columns
+    id_col = 'stay_id'
+    for col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']:
+        if col in result.columns:
+            id_col = col
+            break
+    
+    time_col = 'charttime'
+    for col in ['charttime', 'measuredat_minutes', 'observationoffset', 'datetime']:
+        if col in result.columns:
+            time_col = col
+            break
+    
+    return ICUTable(
+        data=result,
+        id_columns=[id_col],
+        index_column=time_col,
+        value_column='driving_pres'
+    )
+
+
 def _callback_simple_passthrough(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -5893,9 +6281,16 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "blood_cell_ratio": _callback_blood_cell_ratio,
     "transform_fun(aumc_rass)": _callback_aumc_rass,  # Handle transform_fun wrapper
     "miiv_icu_patients_filter": _callback_miiv_icu_patients_filter,  # Filter MIMIC-IV patients to ICU only
+    # MIMIC-III-specific callbacks
+    "mimic_age": _callback_mimic_age,
+    "transform_fun(mimic_age)": _callback_mimic_age,  # Handle transform_fun wrapper
+    "mimic_abx_presc": _callback_mimic_abx_presc,
+    "mimic_kg_rate": _callback_mimic_kg_rate,
     # Simple passthrough callbacks for concepts that just load from source
     "tco2": lambda tables, ctx: _callback_simple_passthrough(tables, ctx, "tco2"),
     "ca": lambda tables, ctx: _callback_simple_passthrough(tables, ctx, "ca"),
+    # Ventilator parameters
+    "driving_pressure": _callback_driving_pressure,
 }
 
 def register_callback(name: str, func: CallbackFn) -> None:

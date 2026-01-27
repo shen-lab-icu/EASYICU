@@ -1537,7 +1537,8 @@ def _urine_window_avg(
         DataFrame with averaged urine output (mL/kg/h)
     """
     # Determine ID and time columns
-    id_cols = [col for col in urine.columns if col.endswith('_id') or col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']]
+    # 🔧 FIX 2025-01-31: Include CaseID (uppercase) for SICdb support
+    id_cols = [col for col in urine.columns if col.endswith('_id') or col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']]
     
     # 不同数据库使用不同的时间列名
     if 'charttime' in urine.columns:
@@ -1561,7 +1562,7 @@ def _urine_window_avg(
     
     # 如果没有找到ID列，尝试常见的ID列名
     if not id_cols:
-        for potential_id in ['admissionid', 'stay_id', 'patientunitstayid', 'patientid', 'icustay_id']:
+        for potential_id in ['admissionid', 'stay_id', 'patientunitstayid', 'patientid', 'icustay_id', 'CaseID']:
             if potential_id in urine.columns:
                 id_cols = [potential_id]
                 break
@@ -2657,5 +2658,131 @@ def sep3(
     
     # Keep only first sep3 event per patient
     result = result.groupby(id_cols, as_index=False).first()
+    
+    return result
+
+def driving_pressure(
+    plateau_pres: pd.DataFrame,
+    peep: pd.DataFrame,
+    match_win: pd.Timedelta = pd.Timedelta(hours=1),
+    database: str = None,
+) -> pd.DataFrame:
+    """Calculate driving pressure (Plateau Pressure - PEEP).
+    
+    Driving pressure is a key ventilator parameter associated with mortality
+    in ARDS patients. It represents the pressure applied to expand the lungs
+    beyond PEEP.
+    
+    Args:
+        plateau_pres: DataFrame with plateau pressure measurements (cmH2O)
+        peep: DataFrame with PEEP measurements (cmH2O)
+        match_win: Time window for matching plateau and PEEP (default: 1 hour)
+        database: Database name (optional)
+        
+    Returns:
+        DataFrame with driving_pres column (cmH2O)
+        
+    References:
+        Amato et al., NEJM 2015 - Driving Pressure and Survival in ARDS
+    """
+    # Identify ID and time columns
+    id_cols = [col for col in plateau_pres.columns if 'id' in col.lower() and col in peep.columns]
+    time_cols = [col for col in plateau_pres.columns if 'time' in col.lower() or col in ['charttime', 'measuredat', 'measuredat_minutes', 'observationoffset', 'datetime']]
+    time_cols = [col for col in time_cols if col in peep.columns]
+    
+    if not time_cols:
+        raise ValueError("No time column found in input DataFrames")
+    
+    time_col = time_cols[0]
+    
+    # Identify value columns - prefer columns with expected names
+    # For plateau_pres, look for columns containing 'plateau' or 'pres'
+    plat_val_candidates = [col for col in plateau_pres.columns if col not in id_cols + time_cols]
+    plat_val_col = None
+    for candidate in plat_val_candidates:
+        if 'plateau' in candidate.lower() or 'pres' in candidate.lower():
+            plat_val_col = candidate
+            break
+    if plat_val_col is None:
+        plat_val_col = plat_val_candidates[0] if plat_val_candidates else 'plateau_pres'
+    
+    # For peep, look for columns containing 'peep'
+    peep_val_candidates = [col for col in peep.columns if col not in id_cols + time_cols]
+    peep_val_col = None
+    for candidate in peep_val_candidates:
+        if 'peep' in candidate.lower():
+            peep_val_col = candidate
+            break
+    if peep_val_col is None:
+        peep_val_col = peep_val_candidates[0] if peep_val_candidates else 'peep'
+    
+    # Only keep necessary columns and rename value columns
+    keep_cols_plat = id_cols + [time_col, plat_val_col]
+    plateau = plateau_pres[keep_cols_plat].rename(columns={plat_val_col: 'plateau_pres'})
+    
+    keep_cols_peep = id_cols + [time_col, peep_val_col]
+    peep_df = peep[keep_cols_peep].rename(columns={peep_val_col: 'peep'})
+    
+    # If ID cols is empty, try common patterns
+    if not id_cols:
+        for col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']:
+            if col in plateau.columns and col in peep_df.columns:
+                id_cols = [col]
+                break
+    
+    if not id_cols:
+        raise ValueError("No ID column found in input DataFrames")
+    
+    # Merge on nearest time within window
+    results = []
+    
+    for pid in plateau[id_cols[0]].unique():
+        plat_pt = plateau[plateau[id_cols[0]] == pid].copy()
+        peep_pt = peep_df[peep_df[id_cols[0]] == pid].copy()
+        
+        if plat_pt.empty or peep_pt.empty:
+            continue
+        
+        # Sort by time
+        plat_pt = plat_pt.sort_values(time_col)
+        peep_pt = peep_pt.sort_values(time_col)
+        
+        # Use merge_asof to find closest PEEP for each plateau
+        if pd.api.types.is_datetime64_any_dtype(plat_pt[time_col]):
+            merged = pd.merge_asof(
+                plat_pt, peep_pt[id_cols + [time_col, 'peep']],
+                on=time_col, by=id_cols,
+                tolerance=match_win,
+                direction='nearest'
+            )
+        else:
+            # Numeric time (minutes or seconds)
+            max_diff = match_win.total_seconds() / 60  # assume minutes
+            merged = pd.merge_asof(
+                plat_pt, peep_pt[id_cols + [time_col, 'peep']],
+                on=time_col, by=id_cols,
+                tolerance=max_diff,
+                direction='nearest'
+            )
+        
+        results.append(merged)
+    
+    if not results:
+        return pd.DataFrame(columns=['driving_pres'])
+    
+    result = pd.concat(results, ignore_index=True)
+    
+    # Reset index to avoid duplicate label issues
+    result = result.reset_index(drop=True)
+    
+    # Calculate driving pressure - use .values to avoid index alignment issues
+    result['driving_pres'] = result['plateau_pres'].values - result['peep'].values
+    
+    # Keep only valid values
+    result = result[result['driving_pres'].notna() & (result['driving_pres'] > 0)]
+    
+    # Select output columns
+    output_cols = id_cols + [time_col, 'driving_pres']
+    result = result[output_cols]
     
     return result

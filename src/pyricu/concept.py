@@ -58,7 +58,7 @@ def _default_id_columns_for_db(db_name: Optional[str]) -> List[str]:
         "eicu_demo": ["patientunitstayid"],
         "aumc": ["admissionid"],
         "hirid": ["patientid"],
-        "sic": ["caseid"],
+        "sic": ["CaseID"],  # 🔧 FIX 2025-01-31: Use CaseID (uppercase) to match actual SICdb data
         "miiv": ["stay_id"],
         "mimic_demo": ["stay_id"],
     }
@@ -1740,21 +1740,32 @@ class ConceptResolver:
                     # 加载 icustays 表以获取 subject_id -> stay_id 的映射
                     icustay_filters = []
                     if patient_ids:
-                        # patient_ids 可能是 dict 或 list
+                        # 🔧 FIX 2026-01-26: patient_ids 可能是 dict 格式（如 {'icustay_id': [...]}）
+                        # 需要支持 MIMIC-III icustay_id 和 MIMIC-IV stay_id
                         if isinstance(patient_ids, dict):
-                            stay_ids = patient_ids.get('stay_id', [])
+                            stay_ids = patient_ids.get('stay_id', []) or patient_ids.get('icustay_id', [])
                         else:
                             stay_ids = patient_ids
                         if stay_ids:
+                            # 确定正确的 ID 列名（支持 MIMIC-III icustay_id 和 MIMIC-IV stay_id）
+                            db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                            id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
                             icustay_filters.append(
-                                FilterSpec(column='stay_id', op=FilterOp.IN, value=stay_ids)
+                                FilterSpec(column=id_col, op=FilterOp.IN, value=stay_ids)
                             )
                     
                     icustays = data_source.load_table('icustays', filters=icustay_filters if icustay_filters else None, verbose=False)
+                    # 🔧 FIX 2026-01-26: 支持 MIMIC-III icustay_id 列名
+                    db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                    stay_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
                     if hasattr(icustays, 'data'):
-                        icu_df = icustays.data[['subject_id', 'stay_id']].drop_duplicates()
+                        icu_df = icustays.data[['subject_id', stay_col]].drop_duplicates()
                     else:
-                        icu_df = icustays[['subject_id', 'stay_id']].drop_duplicates()
+                        icu_df = icustays[['subject_id', stay_col]].drop_duplicates()
+                    
+                    # 🔧 FIX: 将 icustay_id 重命名为 stay_id 以便后续处理统一
+                    if stay_col == 'icustay_id' and 'icustay_id' in icu_df.columns:
+                        icu_df = icu_df.rename(columns={'icustay_id': 'stay_id'})
                     
                     # 与 patients 表做内连接
                     frame = frame.merge(icu_df, on='subject_id', how='inner')
@@ -1795,14 +1806,31 @@ class ConceptResolver:
                     # 保存expanded_patient_ids到当前作用域,避免后续locals()检查失效
                     current_expanded_patient_ids = None
                     
-                    # 🔥 关键修复: 使用原始 stay_id 而不是 subject_id
+                    # 🔥 关键修复: 使用原始 stay_id/icustay_id 而不是 subject_id
                     # 这样避免加载同一患者的所有ICU入住记录
                     if patient_ids:
-                        # patient_ids 本身就是 stay_id 列表
-                        icustay_filters.append(
-                            FilterSpec(column='stay_id', op=FilterOp.IN, value=patient_ids)
-                        )
-                        if DEBUG_MODE: print(f"   🎯 [icustays] 使用原始 stay_id 过滤: {len(patient_ids)} 个, IDs={patient_ids}")
+                        # 🔧 FIX 2026-01-26: patient_ids 可能是 dict 格式（如 {'icustay_id': [...]}）
+                        # 需要提取列表形式的值，并确定正确的列名
+                        if isinstance(patient_ids, dict):
+                            # 确定正确的 ID 列名（支持 MIMIC-III icustay_id 和 MIMIC-IV stay_id）
+                            id_col = 'stay_id'  # 默认 MIMIC-IV
+                            id_vals = None
+                            for key in ['stay_id', 'icustay_id', 'subject_id']:
+                                if key in patient_ids and patient_ids[key]:
+                                    id_col = key
+                                    id_vals = patient_ids[key]
+                                    break
+                            if id_vals:
+                                icustay_filters.append(
+                                    FilterSpec(column=id_col, op=FilterOp.IN, value=id_vals)
+                                )
+                                if DEBUG_MODE: print(f"   🎯 [icustays] 使用 {id_col} 过滤: {len(id_vals)} 个, IDs={id_vals[:5]}...")
+                        else:
+                            # 原有逻辑: patient_ids 是列表
+                            icustay_filters.append(
+                                FilterSpec(column='stay_id', op=FilterOp.IN, value=patient_ids)
+                            )
+                            if DEBUG_MODE: print(f"   🎯 [icustays] 使用原始 stay_id 过滤: {len(patient_ids)} 个, IDs={patient_ids}")
                     
                     icustays = data_source.load_table('icustays', filters=icustay_filters if icustay_filters else None, verbose=verbose)
                     if hasattr(icustays, 'data'):
@@ -5091,11 +5119,23 @@ class ConceptResolver:
             aggregator,
         )
         
+        # 🔧 FIX 2025-01-31: Handle empty tables gracefully
+        # When the original table is empty (e.g., dopa_dur for HiRID), 
+        # don't try to use concept_name as value_column if it doesn't exist
+        final_value_column = value_column
+        if value_column and value_column in aggregated_frame.columns:
+            final_value_column = value_column
+        elif concept_name in aggregated_frame.columns:
+            final_value_column = concept_name
+        else:
+            # For empty tables, keep value_column as None
+            final_value_column = None
+        
         return ICUTable(
             data=aggregated_frame,
             id_columns=id_columns,
             index_column=index_column,
-            value_column=value_column if value_column in aggregated_frame.columns else concept_name,
+            value_column=final_value_column,
             unit_column=unit_column if unit_column and unit_column in aggregated_frame.columns else None,
         )
 
@@ -5488,6 +5528,10 @@ class ConceptResolver:
                 default_id_col = 'admissionid'
             elif db_name == 'hirid':
                 default_id_col = 'patientid'
+            elif db_name == 'sic':
+                default_id_col = 'CaseID'  # SICdb uses CaseID (uppercase)
+            elif db_name == 'mimic':
+                default_id_col = 'icustay_id'  # MIMIC-III uses icustay_id
             # 也可以从 id_configs 获取
             if hasattr(data_source.config, 'id_configs') and 'icustay' in data_source.config.id_configs:
                 default_id_col = data_source.config.id_configs['icustay'].id
@@ -5526,7 +5570,8 @@ class ConceptResolver:
                 continue
             # 检测ID列 - 使用数据库特定的优先级
             # 🔧 FIX 2025-01-31: 优先检测数据库特定的ID列
-            id_candidates = [default_id_col, 'stay_id', 'subject_id', 'patientunitstayid', 'admissionid', 'patientid']
+            # 🔧 FIX 2026-01-26: 添加 CaseID, caseid, icustay_id 支持 MIMIC-III 和 SICdb
+            id_candidates = [default_id_col, 'CaseID', 'caseid', 'icustay_id', 'stay_id', 'subject_id', 'patientunitstayid', 'admissionid', 'patientid']
             for cand in id_candidates:
                 if cand in df.columns:
                     id_col = cand
@@ -5534,8 +5579,10 @@ class ConceptResolver:
             # 检测时间列 - FIX: 优先使用 charttime 以保持输出一致性
             # 所有数据库的输出都应该使用统一的 'charttime' 列名
             # 🔧 FIX 2025-01-30: measuredat_minutes 应该在 measuredat 之前，因为 DuckDB 聚合后返回的是 measuredat_minutes
+            # 🔧 FIX 2026-01-26: 添加 Offset 支持 SICdb
             for cand in ['charttime', 'datetime', 'givenat', 'time', 'starttime', 'start', 'index_var',
                          'measuredat_minutes', 'measuredat',  # AUMC: measuredat_minutes first!
+                         'Offset', 'offset',  # SICdb: Offset (uppercase)
                          'nursingchartoffset', 'labresultoffset', 'observationoffset',
                          'respchartoffset', 'intakeoutputoffset', 'infusionoffset']:
                 if cand in df.columns:
@@ -6824,6 +6871,187 @@ def _apply_callback(
         series = series.astype(str).str[:2]
         series = pd.to_numeric(series, errors='coerce')
         frame[concept_name] = series
+        return frame
+
+    # Handle MIMIC-III mimic_age callback
+    # R ricu logic: x <- as.double(x, units = "days") / -365; ifelse(x > 90, 90, x)
+    if expr == "transform_fun(mimic_age)" or expr == "mimic_age":
+        # In MIMIC-III, anchor_age or age is already in years
+        # Just cap at 90 for de-identification
+        if concept_name in frame.columns:
+            frame = frame.copy()
+            frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
+            frame.loc[frame[concept_name] > 90, concept_name] = 90
+        return frame
+
+    # Handle MIMIC-III mimic_abx_presc callback
+    # R ricu logic: x[, c(idx, val_var) := list(get(idx) + mins(720L), TRUE)]
+    if expr == "mimic_abx_presc":
+        frame = frame.copy()
+        index_col = source.index_var
+        if not index_col:
+            for candidate in ["charttime", "starttime", "startdate"]:
+                if candidate in frame.columns:
+                    index_col = candidate
+                    break
+        # Shift time forward by 720 minutes (12 hours)
+        if index_col and index_col in frame.columns:
+            frame[index_col] = pd.to_numeric(frame[index_col], errors='coerce') + 720
+        # Set value to TRUE
+        frame[concept_name] = True
+        return frame
+
+    # Handle MIMIC-III mimic_kg_rate callback
+    # R ricu logic: add_weight + divide by weight + update unit
+    if expr == "mimic_kg_rate":
+        val_var = source.value_var or concept_name
+        unit_var = source.unit_var or unit_column
+        
+        # Try to add weight and divide
+        if 'weight' not in frame.columns and resolver is not None and data_source is not None:
+            try:
+                id_cols = [c for c in frame.columns if c.lower().endswith('id') and c != 'itemid']
+                if id_cols:
+                    unique_ids = frame[id_cols[0]].unique().tolist()
+                    weight_table = resolver._load_single_concept(
+                        'weight',
+                        data_source,
+                        aggregator=False,
+                        patient_ids={id_cols[0]: unique_ids},
+                        verbose=False,
+                        _bypass_callback=True,
+                    )
+                    if weight_table is not None and not weight_table.data.empty:
+                        weight_df = weight_table.data
+                        if 'weight' in weight_df.columns:
+                            weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
+                            merge_cols = [c for c in id_cols if c in weight_df.columns]
+                            if merge_cols:
+                                frame = frame.merge(
+                                    weight_df[merge_cols + ['weight']].drop_duplicates(),
+                                    on=merge_cols,
+                                    how='left'
+                                )
+            except Exception:
+                pass
+        
+        # Divide rate by weight
+        if 'weight' in frame.columns and val_var in frame.columns:
+            frame = frame.copy()
+            frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
+            frame['weight'] = pd.to_numeric(frame['weight'], errors='coerce')
+            mask = frame['weight'] > 0
+            frame.loc[mask, val_var] = frame.loc[mask, val_var] / frame.loc[mask, 'weight']
+            # Update unit
+            if unit_var and unit_var in frame.columns:
+                frame[unit_var] = frame[unit_var].str.replace('mcgmin', 'mcg/kg/min', regex=False)
+            frame = frame.drop(columns=['weight'], errors='ignore')
+        return frame
+
+    # Handle SICdb sic_dur callback
+    # R ricu logic: calc_dur(x, val_var, index_var(x), stop_var, grp_var)
+    if expr == "sic_dur":
+        val_var = source.value_var or concept_name
+        index_var = source.index_var
+        stop_var = source.params.get("stop_var") if source.params else None
+        grp_var = source.params.get("grp_var") if source.params else None
+        
+        if not stop_var:
+            for candidate in ["OffsetDrugEnd", "stop", "endtime"]:
+                if candidate in frame.columns:
+                    stop_var = candidate
+                    break
+        
+        if not index_var:
+            for candidate in ["OffsetDrugStart", "start", "charttime"]:
+                if candidate in frame.columns:
+                    index_var = candidate
+                    break
+        
+        if stop_var and stop_var in frame.columns and index_var and index_var in frame.columns:
+            frame = frame.copy()
+            # Determine ID columns
+            id_cols = [c for c in frame.columns if c.lower().endswith('id') and c not in ['itemid', 'drugid']]
+            
+            # Group by ID (and optionally grp_var)
+            group_cols = id_cols
+            if grp_var and grp_var in frame.columns:
+                group_cols = id_cols + [grp_var]
+            
+            if group_cols:
+                # Calculate duration = max(stop) - min(start) per group
+                agg_df = frame.groupby(group_cols).agg({
+                    index_var: 'min',
+                    stop_var: 'max'
+                }).reset_index()
+                
+                # Duration = stop - start
+                agg_df[val_var] = pd.to_numeric(agg_df[stop_var], errors='coerce') - pd.to_numeric(agg_df[index_var], errors='coerce')
+                
+                # Keep only required columns
+                result_cols = group_cols + [index_var, val_var]
+                frame = agg_df[[c for c in result_cols if c in agg_df.columns]]
+        
+        return frame
+
+    # Handle SICdb sic_rate_kg callback
+    # R ricu logic: add_weight + multiply by 10^6 / weight + expand
+    if expr == "sic_rate_kg":
+        val_var = source.value_var or concept_name
+        stop_var = source.params.get("stop_var") if source.params else None
+        
+        if not stop_var:
+            for candidate in ["OffsetDrugEnd", "stop", "endtime"]:
+                if candidate in frame.columns:
+                    stop_var = candidate
+                    break
+        
+        # Try to add weight
+        if 'weight' not in frame.columns and resolver is not None and data_source is not None:
+            try:
+                id_cols = [c for c in frame.columns if c.lower().endswith('id') and c not in ['itemid', 'drugid']]
+                if id_cols:
+                    unique_ids = frame[id_cols[0]].unique().tolist()
+                    weight_table = resolver._load_single_concept(
+                        'weight',
+                        data_source,
+                        aggregator=False,
+                        patient_ids={id_cols[0]: unique_ids},
+                        verbose=False,
+                        _bypass_callback=True,
+                    )
+                    if weight_table is not None and not weight_table.data.empty:
+                        weight_df = weight_table.data
+                        if 'weight' in weight_df.columns:
+                            weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
+                            # Get first weight per patient
+                            weight_id_col = id_cols[0] if id_cols[0] in weight_df.columns else (
+                                'CaseID' if 'CaseID' in weight_df.columns else None
+                            )
+                            if weight_id_col:
+                                weight_agg = weight_df.groupby(weight_id_col)['weight'].first().reset_index()
+                                frame = frame.merge(weight_agg, on=weight_id_col, how='left')
+            except Exception:
+                pass
+        
+        # Convert rate: multiply by 10^6 / weight (mg -> mcg/kg)
+        if 'weight' in frame.columns and val_var in frame.columns:
+            frame = frame.copy()
+            frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
+            frame['weight'] = pd.to_numeric(frame['weight'], errors='coerce')
+            mask = frame['weight'] > 0
+            frame.loc[mask, val_var] = frame.loc[mask, val_var] * 1e6 / frame.loc[mask, 'weight']
+            frame = frame.drop(columns=['weight'], errors='ignore')
+        
+        # Expand time range if stop_var exists
+        # (Simplified - full expand would require hourly expansion)
+        index_var = source.index_var
+        if not index_var:
+            for candidate in ["OffsetDrugStart", "start", "charttime"]:
+                if candidate in frame.columns:
+                    index_var = candidate
+                    break
+        
         return frame
 
     if expr.strip() == "distribute_amount":

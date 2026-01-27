@@ -62,6 +62,7 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
         'eicu_demo': ('patient', 'patientunitstayid'),
         'aumc': ('admissions', 'admissionid'),
         'hirid': ('general', 'patientid'),
+        'sic': ('cases', 'CaseID'),  # SICdb uses cases table with CaseID
     }
     
     table_name, id_col = id_table_map.get(db_name, ('icustays', 'stay_id'))
@@ -373,6 +374,10 @@ def load_concepts(
             patient_ids = {'admissionid': patient_ids}
         elif database_name in ['hirid']:
             patient_ids = {'patientid': patient_ids}
+        elif database_name == 'sic':
+            patient_ids = {'CaseID': patient_ids}  # SICdb uses CaseID
+        elif database_name == 'mimic':
+            patient_ids = {'icustay_id': patient_ids}  # MIMIC-III uses icustay_id
         else:
             patient_ids = {'stay_id': patient_ids}
 
@@ -1984,6 +1989,7 @@ DATABASE_ID_CONFIG = {
     'eicu_demo': {'table': 'patient', 'id_col': 'patientunitstayid'},
     'aumc': {'table': 'admissions', 'id_col': 'admissionid'},
     'hirid': {'table': 'general', 'id_col': 'patientid'},
+    'sic': {'table': 'cases', 'id_col': 'CaseID'},  # SICdb uses cases table with CaseID
 }
 
 
