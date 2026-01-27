@@ -33,9 +33,10 @@ class BucketConfig:
     """分桶配置"""
     num_buckets: int = 100  # 桶数量
     partition_col: str = 'itemid'  # 分桶列
-    row_group_size: int = 100_000  # Row Group大小
+    row_group_size: int = 500_000  # Row Group大小，增大以提升写入速度
     compression: str = 'snappy'  # 压缩算法
-    memory_limit: str = '4GB'  # DuckDB内存限制，减少到4GB以适应更多系统
+    memory_limit: str = '8GB'  # DuckDB内存限制，提高以加速转换
+    threads: int = 8  # 并行线程数
     temp_directory: Optional[str] = None  # 临时文件目录，建议SSD
 
 
@@ -141,11 +142,13 @@ def convert_to_buckets(
         log(f"内存限制: {config.memory_limit}, 临时目录: {config.temp_directory or '默认'}")
         
         conn = duckdb.connect()
-        # 限制线程数以减少内存峰值（每个线程都需要缓冲区）
-        conn.execute("SET threads=4")
+        # 并行线程数：更多线程加速转换
+        conn.execute(f"SET threads={config.threads}")
         # 内存限制：防止OOM
         conn.execute(f"SET memory_limit='{config.memory_limit}'")
         # 启用外部排序：允许使用磁盘进行大数据排序
+        conn.execute("SET preserve_insertion_order=false")
+        # 启用并行写入
         conn.execute("SET preserve_insertion_order=false")
         
         # 设置临时目录：建议在高速SSD上，处理80GB排序的磁盘溢出

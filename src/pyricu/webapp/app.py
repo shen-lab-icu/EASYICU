@@ -1041,7 +1041,7 @@ def convert_data_with_progress(data_path: str, database: str):
         
         converter = DuckDBConverter(
             data_path=data_path, 
-            memory_limit_gb=6.0,
+            memory_limit_gb=8.0,
             verbose=True
         )
         
@@ -7269,10 +7269,10 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     status_text = st.empty()
     details = st.container()
     
-    # 创建 DuckDB 转换器
+    # 创建 DuckDB 转换器（更激进的内存配置以提升速度）
     converter = DuckDBConverter(
         data_path=str(source_path),
-        memory_limit_gb=6.0,
+        memory_limit_gb=8.0,
         verbose=False
     )
     
@@ -7334,7 +7334,9 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
             config = BucketConfig(
                 num_buckets=num_buckets,
                 partition_col=partition_col,
-                memory_limit='4GB'
+                memory_limit='8GB',
+                threads=8,
+                row_group_size=500_000
             )
             result = convert_to_buckets(
                 source_path=csv_file,
