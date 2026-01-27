@@ -10,11 +10,13 @@ PyRICU 是一个专为重症监护室 (ICU) 数据分析设计的 Python 工具�
 
 ## ✨ 核心特性
 
-### 🎯 统一的多数据库支持
-- **MIMIC-IV** - MIT 重症监护数据库 (推荐)
+### 🎯 统一的多数据库支持 (6 个数据库)
+- **MIMIC-IV** - MIT 重症监护数据库 v3.1 (推荐)
+- **MIMIC-III** - MIT 重症监护数据库 v1.4 🆕
 - **eICU-CRD** - Philips eICU 协作研究数据库
 - **AmsterdamUMCdb** - 阿姆斯特丹大学医学中心数据库
 - **HiRID** - 高分辨率 ICU 数据库
+- **SICdb** - Salzburg ICU 数据库 🆕
 
 ### 🌐 交互式 Web 应用
 - **可视化数据浏览器** - 无需编程即可探索 ICU 数据
@@ -37,6 +39,8 @@ PyRICU 是一个专为重症监护室 (ICU) 数据分析设计的 Python 工具�
 - **Parquet 原生支持** - 列式存储，极速加载
 - **并行处理** - 自动检测硬件资源，优化并行配置
 - **增量计算** - 仅处理需要的时间窗口和患者
+- **DuckDB 内存安全转换** 🆕 - 12GB 内存即可转换任意大小数据
+- **分桶存储优化** - 大表按变量 ID 分桶，查询速度提升 10-50 倍
 
 ---
 
@@ -115,7 +119,10 @@ A: 在 Anaconda Prompt 窗口按 `Ctrl + C`，或直接关闭窗口。
 A: 打开 Anaconda Prompt，输入 `pyricu-webapp`。
 
 **Q: 转换数据需要多久？**  
-A: MIMIC-IV 约 30-60 分钟（取决于电脑配置），转换完成后下次加载只需几秒。
+A: MIMIC-IV 约 10-30 分钟（使用 DuckDB 优化），转换完成后下次加载只需几秒。
+
+**Q: 需要多少内存？**  
+A: **12GB 即可**！新版使用 DuckDB 内存安全转换，实测峰值仅 300MB（之前需要 18GB+）。
 
 **Q: 需要编程基础吗？**  
 A: 使用 Web 应用**不需要**编程基础。如果需要定制分析，可以学习 Python API（见下文）。
@@ -156,33 +163,35 @@ A: 使用 Web 应用**不需要**编程基础。如果需要定制分析，可�
 
 **解决方案**:
 
-1. **启动时使用低内存模式**
+1. **使用 DuckDB 转换（推荐，默认启用）** 🆕
+   - 新版本默认使用 DuckDB 内存安全转换
+   - 转换 3 亿行数据仅需 **300MB 内存**
+   - 无需任何配置，开箱即用
+
+2. **启动时使用低内存模式**
    ```bash
    pyricu-webapp --low-memory
    ```
 
-2. **减少并行处理数**
+3. **减少并行处理数**
    ```bash
    pyricu-webapp --workers 1
    ```
 
-3. **只处理少量患者（用于测试）**
+4. **只处理少量患者（用于测试）**
    - 在 Web 界面的「患者数量限制」中设置为 100-500
 
-4. **转换大表时的建议**
-   - 关闭其他程序（浏览器、Office 等）
-   - 确保有 8GB+ 可用内存
-   - 如果仍然卡死，尝试命令行单表转换：
+5. **命令行单表转换（极低内存）**
    ```python
-   from pyricu import DataConverter
-   conv = DataConverter('/path/to/data', chunk_size=100000)  # 更小的块
-   conv.convert_file('chartevents.csv')  # 单独转换一个表
+   from pyricu import DuckDBConverter
+   conv = DuckDBConverter('/path/to/data', memory_limit_gb=4)
+   conv.convert_all()  # 内存峰值 < 500MB
    ```
 
-5. **推荐配置**
+6. **推荐配置**
    | 配置 | 最低要求 | 推荐配置 |
    |-----|---------|---------|
-   | 内存 | 8GB | 16GB+ |
+   | 内存 | **8GB** ✅ | 16GB+ |
    | 硬盘 | 50GB 可用 | 100GB+ SSD |
    | CPU | 4 核 | 8 核+ |
 
