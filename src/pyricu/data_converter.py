@@ -110,9 +110,9 @@ class DataConverter:
     """
     
     # Default chunk size for reading large CSV files (rows)
-    # 1M rows per chunk for high-performance conversion
-    # Typical usage: ~3-5GB memory for large files
-    DEFAULT_CHUNK_SIZE = 1_000_000
+    # 100K rows per chunk for memory efficiency (100M -> 1M was too large)
+    # Typical usage: ~500MB-1GB memory per chunk
+    DEFAULT_CHUNK_SIZE = 100_000
     
     # Status file name to track conversion progress
     STATUS_FILE = ".pyricu_conversion_status.json"
@@ -121,7 +121,7 @@ class DataConverter:
     ENCODINGS = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
     
     # Memory threshold for buffer flush (in rows per partition)
-    PARTITION_BUFFER_THRESHOLD = 2_000_000
+    PARTITION_BUFFER_THRESHOLD = 500_000
     
     def __init__(
         self,
@@ -736,11 +736,11 @@ class DataConverter:
         
         return pd.read_csv(csv_path, **read_args)
     
-    # Threshold for sharding large files (1GB compressed)
-    # Only very large tables like chartevents need sharding
-    SHARD_THRESHOLD_MB = 1000
-    # Number of rows per shard - 25M rows to match ~200-250MB parquet files
-    ROWS_PER_SHARD = 25_000_000  # 25M rows per shard
+    # Threshold for sharding large files (50MB compressed for memory safety)
+    # Reduced from 1GB to prevent OOM on typical systems
+    SHARD_THRESHOLD_MB = 50
+    # Number of rows per shard - 5M rows to match ~50-100MB parquet files
+    ROWS_PER_SHARD = 5_000_000  # 5M rows per shard (reduced from 25M)
     
     # Known problematic columns that have mixed types
     # These columns often contain mixed numeric/string/bytes data
@@ -970,12 +970,13 @@ class DataConverter:
                     writer.write_table(table)
                     total_rows += len(chunk)
                     
-                    if self.verbose and (i + 1) % 50 == 0:
+                    if self.verbose and (i + 1) % 20 == 0:
                         logger.info(f"  Written {total_rows:,} rows...")
                     
+                    # Aggressive memory cleanup for Windows
                     del chunk, table
-                    # GC less frequently for better performance
-                    if (i + 1) % 100 == 0:
+                    # GC every 10 chunks for memory safety
+                    if (i + 1) % 10 == 0:
                         gc.collect()
                 
                 if writer is not None:
@@ -1188,7 +1189,7 @@ class DataConverter:
                 chunk_rows = len(chunk)
                 total_rows += chunk_rows
                 
-                if self.verbose and (chunk_num + 1) % 50 == 0:
+                if self.verbose and (chunk_num + 1) % 10 == 0:
                     logger.info(f"  Read {total_rows:,} rows...")
                 
                 # Fix mixed-type columns before conversion
@@ -1217,10 +1218,9 @@ class DataConverter:
                         write_to_partition(part_num, part_chunk)
                         del part_chunk
                 
-                # Clear chunk reference and collect garbage more frequently on large files
+                # Aggressive memory cleanup - every chunk for safety
                 del chunk
-                if (chunk_num + 1) % 20 == 0:
-                    gc.collect()
+                gc.collect()
             
             # Close all writers
             close_all_writers()
@@ -1455,9 +1455,8 @@ class DataConverter:
                     start_new_shard()
                     gc.collect()  # GC after closing each shard
                 
-                # Periodic garbage collection - more frequent (every 500K rows)
-                if total_rows % 500_000 == 0:
-                    gc.collect()
+                # Aggressive GC every chunk for memory safety
+                gc.collect()
         
         finally:
             # Clean up iterator to release file handles and memory
