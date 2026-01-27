@@ -2124,10 +2124,14 @@ def render_visualization_mode():
     
     # 数据目录选择
     # 优先使用 last_export_dir（导出后记录的实际路径），其次是 export_path
+    import platform
     if st.session_state.get('last_export_dir'):
         default_path = st.session_state.get('last_export_dir')
     else:
-        default_path = st.session_state.get('export_path', os.path.expanduser('~/pyricu_export/miiv'))
+        if platform.system() == 'Windows':
+            default_path = st.session_state.get('export_path', r'D:\pyicu_export\miiv')
+        else:
+            default_path = st.session_state.get('export_path', os.path.expanduser('~/pyricu_export/miiv'))
     
     data_dir = st.text_input(
         get_text('data_dir'),
@@ -2457,7 +2461,27 @@ def render_sidebar():
             )
             st.session_state.database = database
             
-            default_path = "/home/1_publicData/icu_databases/mimiciv/3.1/" if database == 'miiv' else ""
+            # 根据操作系统和数据库设置默认路径
+            import platform
+            if platform.system() == 'Windows':
+                default_paths = {
+                    'miiv': r'D:\mimic-iv-3.1',
+                    'eicu': r'D:\eicu-crd-2.0',
+                    'aumc': r'D:\amsterdamumcdb-1.0.2',
+                    'hirid': r'D:\hirid-1.1.1',
+                    'mimic': r'D:\mimic-iii-1.4',
+                    'sic': r'D:\sicdb-1.0.6',
+                }
+            else:
+                default_paths = {
+                    'miiv': '/home/zhuhb/icudb/mimiciv/3.1',
+                    'eicu': '/home/zhuhb/icudb/eicu/2.0.1',
+                    'aumc': '/home/zhuhb/icudb/aumc/1.0.2',
+                    'hirid': '/home/zhuhb/icudb/hirid/1.1.1',
+                    'mimic': '/home/zhuhb/icudb/mimiciii/1.4',
+                    'sic': '/home/zhuhb/icudb/sicdb/1.0.6',
+                }
+            default_path = default_paths.get(database, '')
             path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
             data_path = st.text_input(
                 path_label,
@@ -2504,15 +2528,8 @@ def render_sidebar():
                     st.session_state.show_convert_dialog = True
                     st.session_state.convert_source_path = data_path
                     st.rerun()
-                csv_hint = "💡 Or click below to use raw CSV (slower)" if st.session_state.language == 'en' else "💡 或点击下方使用原始CSV（较慢）"
-                st.caption(csv_hint)
-                use_csv_btn = "📂 Use Raw CSV Data" if st.session_state.language == 'en' else "📂 使用原始CSV数据"
-                if st.button(use_csv_btn, width="stretch", key="use_csv"):
-                    st.session_state.data_path = data_path
-                    st.session_state.path_validated = True
-                    csv_ok_msg = "✅ Will use CSV format (slower loading)" if st.session_state.language == 'en' else "✅ 将使用CSV格式（加载较慢）"
-                    st.success(csv_ok_msg)
-                    st.rerun()
+                convert_hint = "💡 Converting to Parquet enables faster data loading" if st.session_state.language == 'en' else "💡 转换为Parquet格式可大幅加速数据加载"
+                st.caption(convert_hint)
             elif data_path and Path(data_path).exists():
                 validate_hint = "💡 Click the button above to validate data format" if st.session_state.language == 'en' else "💡 点击上方按钮验证数据格式"
                 st.caption(validate_hint)
@@ -2781,7 +2798,11 @@ def render_sidebar():
         st.markdown(f"### 💾 {step4_title}")
         
         # 导出路径配置 - 实时根据数据库显示子目录
-        base_export_path = os.path.expanduser('~/pyricu_export')
+        import platform
+        if platform.system() == 'Windows':
+            base_export_path = r'D:\pyicu_export'
+        else:
+            base_export_path = os.path.expanduser('~/pyricu_export')
         db_name = st.session_state.get('database', 'mock')
         default_export_path = str(Path(base_export_path) / db_name)
         
@@ -7157,7 +7178,7 @@ def render_convert_dialog():
                 more_msg = f"... and {len(csv_files) - 20} more files" if lang == 'en' else f"... 及其他 {len(csv_files) - 20} 个文件"
                 st.caption(more_msg)
     
-    col1, col2, col3 = st.columns([1, 1, 1])
+    col1, col2 = st.columns([1, 1])
     
     with col1:
         start_label = "🚀 Start Conversion" if lang == 'en' else "🚀 开始转换"
@@ -7184,16 +7205,6 @@ def render_convert_dialog():
         cancel_label = "❌ Cancel" if lang == 'en' else "❌ 取消"
         if st.button(cancel_label, width="stretch"):
             st.session_state.show_convert_dialog = False
-            st.rerun()
-    
-    with col3:
-        use_csv_label = "📂 Use Original CSV" if lang == 'en' else "📂 使用原始CSV"
-        if st.button(use_csv_label, width="stretch"):
-            st.session_state.data_path = source_path
-            st.session_state.path_validated = True
-            st.session_state.show_convert_dialog = False
-            csv_info = "Will use CSV format (slower loading)" if lang == 'en' else "将使用CSV格式（加载较慢）"
-            st.info(csv_info)
             st.rerun()
 
 
@@ -7239,6 +7250,7 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     try:
         from pyricu.duckdb_converter import DuckDBConverter
         from pyricu.bucket_converter import convert_to_buckets, BucketConfig
+        import time
     except ImportError as e:
         st.error(f"Converter not available: {e}")
         return 0, 0
@@ -7253,8 +7265,12 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     bucket_files = []
     normal_files = []
     
+    # 计算总大小用于预估时间
+    total_size_mb = 0
     for csv_file in csv_files:
         stem = csv_file.stem.lower().replace('.csv', '')
+        file_size = csv_file.stat().st_size / (1024 * 1024)
+        total_size_mb += file_size
         if stem in bucket_tables_config:
             bucket_files.append((csv_file, bucket_tables_config[stem]))
         else:
@@ -7264,10 +7280,30 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     failed = 0
     total = len(normal_files) + len(bucket_files)
     current = 0
+    processed_size_mb = 0
     
     progress_bar = st.progress(0)
     status_text = st.empty()
+    eta_text = st.empty()
     details = st.container()
+    
+    # 转换速度跟踪
+    start_time = time.time()
+    
+    def update_eta(processed_mb: float, elapsed_seconds: float):
+        """更新预估剩余时间"""
+        if elapsed_seconds > 0 and processed_mb > 0:
+            speed_mb_per_sec = processed_mb / elapsed_seconds
+            remaining_mb = total_size_mb - processed_mb
+            if speed_mb_per_sec > 0:
+                eta_seconds = remaining_mb / speed_mb_per_sec
+                if eta_seconds < 60:
+                    eta_str = f"{eta_seconds:.0f}s"
+                elif eta_seconds < 3600:
+                    eta_str = f"{eta_seconds/60:.1f}min"
+                else:
+                    eta_str = f"{eta_seconds/3600:.1f}h"
+                eta_text.markdown(f"⏱️ **Speed**: {speed_mb_per_sec:.1f} MB/s | **ETA**: {eta_str} | **Total**: {total_size_mb:.0f} MB")
     
     # 创建 DuckDB 转换器（更激进的内存配置以提升速度）
     converter = DuckDBConverter(
@@ -7279,6 +7315,7 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     # 1. 转换普通表
     for csv_file in normal_files:
         current += 1
+        file_size_mb = csv_file.stat().st_size / (1024 * 1024)
         try:
             rel_path = csv_file.relative_to(source_path)
             parquet_name = rel_path.stem.replace('.csv', '') + '.parquet'
@@ -7287,15 +7324,18 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
             if parquet_file.exists() and not overwrite:
                 with details:
                     st.caption(f"⏭️ {csv_file.name} (exists)")
+                processed_size_mb += file_size_mb
                 progress_bar.progress(current / total)
+                update_eta(processed_size_mb, time.time() - start_time)
                 continue
             
             parquet_file.parent.mkdir(parents=True, exist_ok=True)
             
-            file_size_mb = csv_file.stat().st_size / (1024 * 1024)
             status_text.markdown(f"**Converting**: `{csv_file.name}` ({file_size_mb:.1f}MB) [{current}/{total}]")
             
             result = converter.convert_file(csv_file)
+            
+            processed_size_mb += file_size_mb
             
             if result['status'] == 'success':
                 success += 1
@@ -7307,9 +7347,11 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
                     st.caption(f"❌ {csv_file.name}: {result.get('error', 'unknown')[:40]}")
             
             gc.collect()
+            update_eta(processed_size_mb, time.time() - start_time)
             
         except Exception as e:
             failed += 1
+            processed_size_mb += file_size_mb
             with details:
                 st.caption(f"❌ {csv_file.name}: {str(e)[:40]}")
         
@@ -7320,15 +7362,17 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
         current += 1
         stem = csv_file.stem.lower().replace('.csv', '')
         bucket_dir = target_path / f"{stem}_bucket"
+        file_size_mb = csv_file.stat().st_size / (1024 * 1024)
         
         try:
             if bucket_dir.exists() and list(bucket_dir.glob('*.parquet')) and not overwrite:
                 with details:
                     st.caption(f"⏭️ {csv_file.name} (bucket exists)")
+                processed_size_mb += file_size_mb
                 progress_bar.progress(current / total)
+                update_eta(processed_size_mb, time.time() - start_time)
                 continue
             
-            file_size_mb = csv_file.stat().st_size / (1024 * 1024)
             status_text.markdown(f"**Bucketing**: `{csv_file.name}` ({file_size_mb:.1f}MB) → {num_buckets} buckets [{current}/{total}]")
             
             config = BucketConfig(
@@ -7345,6 +7389,8 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
                 overwrite=overwrite
             )
             
+            processed_size_mb += file_size_mb
+            
             if result.success:
                 success += 1
                 with details:
@@ -7355,16 +7401,28 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
                     st.caption(f"❌ {csv_file.name}: {result.error[:40] if result.error else 'unknown'}")
             
             gc.collect()
+            update_eta(processed_size_mb, time.time() - start_time)
             
         except Exception as e:
             failed += 1
+            processed_size_mb += file_size_mb
             with details:
                 st.caption(f"❌ {csv_file.name}: {str(e)[:40]}")
         
         progress_bar.progress(current / total)
     
+    # 完成后显示总耗时
+    total_time = time.time() - start_time
+    if total_time < 60:
+        time_str = f"{total_time:.1f}s"
+    elif total_time < 3600:
+        time_str = f"{total_time/60:.1f}min"
+    else:
+        time_str = f"{total_time/3600:.1f}h"
+    
     progress_bar.progress(1.0)
     status_text.empty()
+    eta_text.markdown(f"✅ **Completed** in {time_str} | **Avg Speed**: {total_size_mb/total_time:.1f} MB/s")
     
     return success, failed
 
