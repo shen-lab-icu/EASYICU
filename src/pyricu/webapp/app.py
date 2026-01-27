@@ -7212,11 +7212,17 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     """将目录下的CSV文件转换为Parquet格式。
     
     大表自动使用分桶转换，普通表使用 DuckDB 直接转换。
+    HiRID 特殊处理：已经是 parquet 格式，只需分桶转换。
     """
     import gc
+    import time
     
     # 获取数据库类型
     database = st.session_state.get('database', 'miiv')
+    
+    # HiRID 特殊处理：数据已经是 parquet 格式，只需分桶
+    if database == 'hirid':
+        return _convert_hirid_data(source_dir, target_dir, overwrite)
     
     # 定义需要分桶转换的大表
     BUCKET_TABLES = {
@@ -7426,6 +7432,91 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     progress_bar.progress(1.0)
     status_text.empty()
     eta_text.markdown(f"✅ **Completed** in {time_str} | **Avg Speed**: {total_size_mb/total_time:.1f} MB/s")
+    
+    return success, failed
+
+
+def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
+    """HiRID 专用转换：数据已经是 parquet 格式，只需分桶转换。"""
+    import time
+    
+    try:
+        from pyricu.bucket_converter import (
+            convert_hirid_observations, 
+            convert_hirid_pharma,
+            convert_parquet_directory_to_buckets
+        )
+    except ImportError as e:
+        st.error(f"Converter not available: {e}")
+        return 0, 0
+    
+    source_path = Path(source_dir)
+    
+    st.info("🔄 HiRID uses pre-built parquet files. Converting to bucketed format for optimal performance...")
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    details = st.container()
+    
+    success = 0
+    failed = 0
+    start_time = time.time()
+    
+    # 检查 observations 目录
+    obs_dir = source_path / 'observations'
+    obs_bucket_dir = source_path / 'observations_bucket'
+    
+    # 检查 pharma 目录
+    pharma_dir = source_path / 'pharma'
+    if not pharma_dir.exists():
+        pharma_dir = source_path / 'pharma_records'  # 官方目录名
+    pharma_bucket_dir = source_path / 'pharma_bucket'
+    
+    tasks = []
+    if obs_dir.exists():
+        tasks.append(('observations', obs_dir, obs_bucket_dir, 'variableid', 100))
+    if pharma_dir.exists():
+        tasks.append(('pharma', pharma_dir, pharma_bucket_dir, 'pharmaid', 50))
+    
+    total = len(tasks)
+    
+    for idx, (name, src_dir, bucket_dir, partition_col, num_buckets) in enumerate(tasks):
+        status_text.markdown(f"**Bucketing**: `{name}` → {num_buckets} buckets [{idx+1}/{total}]")
+        
+        try:
+            if bucket_dir.exists() and list(bucket_dir.rglob('*.parquet')) and not overwrite:
+                with details:
+                    st.caption(f"⏭️ {name} (bucket exists)")
+                progress_bar.progress((idx + 1) / total)
+                continue
+            
+            result = convert_parquet_directory_to_buckets(
+                source_dir=src_dir,
+                output_dir=bucket_dir,
+                partition_col=partition_col,
+                num_buckets=num_buckets,
+                overwrite=overwrite
+            )
+            
+            if result.success:
+                success += 1
+                with details:
+                    st.caption(f"✅ {name} → {result.num_buckets} buckets, {result.total_rows:,} rows")
+            else:
+                failed += 1
+                with details:
+                    st.caption(f"❌ {name}: {result.error[:60] if result.error else 'unknown'}")
+        except Exception as e:
+            failed += 1
+            with details:
+                st.caption(f"❌ {name}: {str(e)[:60]}")
+        
+        progress_bar.progress((idx + 1) / total)
+    
+    total_time = time.time() - start_time
+    progress_bar.progress(1.0)
+    status_text.empty()
+    st.success(f"✅ HiRID conversion completed in {total_time:.1f}s")
     
     return success, failed
 
