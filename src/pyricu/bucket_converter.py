@@ -1022,6 +1022,252 @@ def convert_hirid_pharma(
     )
 
 
+def convert_mimic3_chartevents(
+    data_path: str = '/home/zhuhb/icudb/mimiciii/1.4',
+    num_buckets: int = 100,
+    overwrite: bool = False,
+    progress_callback: Optional[Callable[[str], None]] = None
+) -> ConversionResult:
+    """
+    将 MIMIC-III chartevents 转换为按 itemid 分桶格式
+    
+    MIMIC-III 的 chartevents 表结构与 MIMIC-IV 类似，约3.3亿行
+    
+    Args:
+        data_path: MIMIC-III 数据目录
+        num_buckets: 桶数量（默认 100）
+        overwrite: 是否覆盖已存在的目录
+        progress_callback: 进度回调函数
+    """
+    data_path = Path(data_path)
+    
+    # 优先检查已有分桶目录
+    bucket_dir = data_path / 'chartevents_bucket'
+    if bucket_dir.exists() and not overwrite:
+        return ConversionResult(
+            success=True, num_buckets=num_buckets, total_rows=0,
+            total_size_bytes=0, elapsed_seconds=0,
+            error=f"分桶目录已存在: {bucket_dir}"
+        )
+    
+    # 查找源文件
+    source = None
+    for name in ['chartevents.csv.gz', 'chartevents.csv', 'chartevents.parquet']:
+        p = data_path / name
+        if p.exists():
+            source = p
+            break
+    
+    if not source:
+        return ConversionResult(
+            success=False, num_buckets=0, total_rows=0,
+            total_size_bytes=0, elapsed_seconds=0,
+            error=f"chartevents 不存在于 {data_path}"
+        )
+    
+    config = BucketConfig(
+        num_buckets=num_buckets,
+        partition_col='itemid',
+        row_group_size=100_000
+    )
+    
+    return convert_to_buckets(source, bucket_dir, config, progress_callback=progress_callback, overwrite=overwrite)
+
+
+def convert_mimic3_labevents(
+    data_path: str = '/home/zhuhb/icudb/mimiciii/1.4',
+    num_buckets: int = 100,
+    overwrite: bool = False,
+    progress_callback: Optional[Callable[[str], None]] = None
+) -> ConversionResult:
+    """
+    将 MIMIC-III labevents 转换为按 itemid 分桶格式
+    
+    Args:
+        data_path: MIMIC-III 数据目录
+        num_buckets: 桶数量（默认 100）
+        overwrite: 是否覆盖已存在的目录
+        progress_callback: 进度回调函数
+    """
+    data_path = Path(data_path)
+    
+    bucket_dir = data_path / 'labevents_bucket'
+    if bucket_dir.exists() and not overwrite:
+        return ConversionResult(
+            success=True, num_buckets=num_buckets, total_rows=0,
+            total_size_bytes=0, elapsed_seconds=0,
+            error=f"分桶目录已存在: {bucket_dir}"
+        )
+    
+    source = None
+    for name in ['labevents.csv.gz', 'labevents.csv', 'labevents.parquet']:
+        p = data_path / name
+        if p.exists():
+            source = p
+            break
+    
+    if not source:
+        return ConversionResult(
+            success=False, num_buckets=0, total_rows=0,
+            total_size_bytes=0, elapsed_seconds=0,
+            error=f"labevents 不存在于 {data_path}"
+        )
+    
+    config = BucketConfig(
+        num_buckets=num_buckets,
+        partition_col='itemid',
+        row_group_size=100_000
+    )
+    
+    return convert_to_buckets(source, bucket_dir, config, progress_callback=progress_callback, overwrite=overwrite)
+
+
+def convert_sic_data_float_h(
+    data_path: str = '/home/zhuhb/icudb/sicdb/1.0.6',
+    num_buckets: int = 50,
+    overwrite: bool = False,
+    progress_callback: Optional[Callable[[str], None]] = None
+) -> ConversionResult:
+    """
+    将 SICdb data_float_h 转换为按 DataID 分桶格式
+    
+    data_float_h 是 SICdb 的主要生命体征表（约3.1GB）
+    
+    Args:
+        data_path: SICdb 数据目录
+        num_buckets: 桶数量（默认 50）
+        overwrite: 是否覆盖已存在的目录
+        progress_callback: 进度回调函数
+    """
+    data_path = Path(data_path)
+    
+    bucket_dir = data_path / 'data_float_h_bucket'
+    if bucket_dir.exists() and not overwrite:
+        return ConversionResult(
+            success=True, num_buckets=num_buckets, total_rows=0,
+            total_size_bytes=0, elapsed_seconds=0,
+            error=f"分桶目录已存在: {bucket_dir}"
+        )
+    
+    source = None
+    for name in ['data_float_h.csv.gz', 'data_float_h.csv', 'data_float_h.parquet']:
+        p = data_path / name
+        if p.exists():
+            source = p
+            break
+    
+    if not source:
+        return ConversionResult(
+            success=False, num_buckets=0, total_rows=0,
+            total_size_bytes=0, elapsed_seconds=0,
+            error=f"data_float_h 不存在于 {data_path}"
+        )
+    
+    config = BucketConfig(
+        num_buckets=num_buckets,
+        partition_col='DataID',  # SICdb 使用大写列名
+        row_group_size=100_000
+    )
+    
+    return convert_to_buckets(source, bucket_dir, config, progress_callback=progress_callback, overwrite=overwrite)
+
+
+def convert_sic_laboratory(
+    data_path: str = '/home/zhuhb/icudb/sicdb/1.0.6',
+    num_buckets: int = 50,
+    overwrite: bool = False,
+    progress_callback: Optional[Callable[[str], None]] = None
+) -> ConversionResult:
+    """
+    将 SICdb laboratory 转换为按 LaboratoryID 分桶格式
+    
+    Args:
+        data_path: SICdb 数据目录
+        num_buckets: 桶数量（默认 50）
+        overwrite: 是否覆盖已存在的目录
+        progress_callback: 进度回调函数
+    """
+    data_path = Path(data_path)
+    
+    bucket_dir = data_path / 'laboratory_bucket'
+    if bucket_dir.exists() and not overwrite:
+        return ConversionResult(
+            success=True, num_buckets=num_buckets, total_rows=0,
+            total_size_bytes=0, elapsed_seconds=0,
+            error=f"分桶目录已存在: {bucket_dir}"
+        )
+    
+    source = None
+    for name in ['laboratory.csv.gz', 'laboratory.csv', 'laboratory.parquet']:
+        p = data_path / name
+        if p.exists():
+            source = p
+            break
+    
+    if not source:
+        return ConversionResult(
+            success=False, num_buckets=0, total_rows=0,
+            total_size_bytes=0, elapsed_seconds=0,
+            error=f"laboratory 不存在于 {data_path}"
+        )
+    
+    config = BucketConfig(
+        num_buckets=num_buckets,
+        partition_col='LaboratoryID',  # SICdb 使用大写列名
+        row_group_size=100_000
+    )
+    
+    return convert_to_buckets(source, bucket_dir, config, progress_callback=progress_callback, overwrite=overwrite)
+
+
+def convert_sic_medication(
+    data_path: str = '/home/zhuhb/icudb/sicdb/1.0.6',
+    num_buckets: int = 50,
+    overwrite: bool = False,
+    progress_callback: Optional[Callable[[str], None]] = None
+) -> ConversionResult:
+    """
+    将 SICdb medication 转换为按 DrugID 分桶格式
+    
+    Args:
+        data_path: SICdb 数据目录
+        num_buckets: 桶数量（默认 50）
+        overwrite: 是否覆盖已存在的目录
+        progress_callback: 进度回调函数
+    """
+    data_path = Path(data_path)
+    
+    bucket_dir = data_path / 'medication_bucket'
+    if bucket_dir.exists() and not overwrite:
+        return ConversionResult(
+            success=True, num_buckets=num_buckets, total_rows=0,
+            total_size_bytes=0, elapsed_seconds=0,
+            error=f"分桶目录已存在: {bucket_dir}"
+        )
+    
+    source = None
+    for name in ['medication.csv.gz', 'medication.csv', 'medication.parquet']:
+        p = data_path / name
+        if p.exists():
+            source = p
+            break
+    
+    if not source:
+        return ConversionResult(
+            success=False, num_buckets=0, total_rows=0,
+            total_size_bytes=0, elapsed_seconds=0,
+            error=f"medication 不存在于 {data_path}"
+        )
+    
+    config = BucketConfig(
+        num_buckets=num_buckets,
+        partition_col='DrugID',  # SICdb 使用大写列名
+        row_group_size=100_000
+    )
+    
+    return convert_to_buckets(source, bucket_dir, config, progress_callback=progress_callback, overwrite=overwrite)
+
+
 def verify_query_plan(
     bucket_dir: Path,
     itemids: Set[int],

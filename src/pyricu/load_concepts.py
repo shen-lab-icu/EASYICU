@@ -52,10 +52,17 @@ MINIMAL_COLUMNS_MAP = {
     # 包含value列以支持字符串型数据（如药物名称等）
     'chartevents': ['stay_id', 'charttime', 'itemid', 'value', 'valuenum', 'valueuom'],
     
+    # 🔧 FIX 2026-01-26: MIMIC-III 使用 icustay_id 而非 stay_id
+    # 系统会自动根据数据库类型选择正确的列（见 datasource.py 中的列检测逻辑）
+    'chartevents_mimic': ['icustay_id', 'charttime', 'itemid', 'value', 'valuenum', 'valueuom'],
+    
     # MIMIC-IV labevents: 只需要6列而非全部16列  
     # 注意: labevents没有stay_id，需要subject_id+hadm_id后续关联
     # 包含valueuom用于单位转换回调（如CRP的mg/dL转mg/L）
     'labevents': ['subject_id', 'hadm_id', 'charttime', 'itemid', 'valuenum', 'valueuom'],
+    
+    # 🔧 FIX 2026-01-26: MIMIC-III labevents 使用 icustay_id（可能为空）
+    'labevents_mimic': ['subject_id', 'hadm_id', 'icustay_id', 'charttime', 'itemid', 'valuenum', 'valueuom'],
     
     # MIMIC-IV inputevents: 输入事件的核心列
     # 包含hadm_id用于某些需要住院级别聚合的概念（如abx）

@@ -3225,35 +3225,30 @@
   "etco2": {
     "unit": [
       "mmHg",
-      "mm Hg"
+      "kPa",
+      "%"
     ],
-    "min": 10,
-    "max": 60,
-    "description": "endtidal CO2",
+    "min": 0,
+    "max": 100,
+    "description": "End-tidal CO2",
     "omopid": 4353940,
-    "category": "vitals",
+    "category": "ventilator",
     "sources": {
       "aumc": [
         {
           "ids": [
             6707,
-            8884,
-            8885,
-            9658,
-            12805,
-            12356
+            8885
           ],
           "table": "numericitems",
-          "sub_var": "itemid",
-          "callback": "convert_unit(binary_op(`*`, 7.6), 'mmHg', 'None|Geen')"
+          "sub_var": "itemid"
         }
       ],
       "hirid": [
         {
           "ids": [
             2200,
-            8290,
-            30010009
+            8290
           ],
           "table": "observations",
           "sub_var": "variableid",
@@ -3262,29 +3257,29 @@
       ],
       "miiv": [
         {
-          "ids": 228640,
+          "ids": [
+            228640
+          ],
           "table": "chartevents",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "index_var": "charttime"
         }
       ],
       "mimic": [
         {
           "ids": [
-            1817,
-            228640
+            228640,
+            1817
           ],
           "table": "chartevents",
           "sub_var": "itemid"
         }
       ],
-      "mimic_demo": [
+      "sic": [
         {
-          "ids": [
-            1817,
-            228640
-          ],
-          "table": "chartevents",
-          "sub_var": "itemid"
+          "ids": 716,
+          "table": "data_float_h",
+          "sub_var": "DataID"
         }
       ]
     }
@@ -4951,6 +4946,30 @@
             225794
           ],
           "table": "procedureevents",
+          "sub_var": "itemid",
+          "dur_var": "endtime",
+          "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            225792,
+            225794
+          ],
+          "table": "procedureevents_mv",
+          "sub_var": "itemid",
+          "dur_var": "endtime",
+          "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            225792,
+            225794
+          ],
+          "table": "procedureevents_mv",
           "sub_var": "itemid",
           "dur_var": "endtime",
           "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')"
@@ -8891,6 +8910,734 @@
           ],
           "table": "laboratory",
           "sub_var": "LaboratoryID"
+        }
+      ]
+    }
+  },
+  "kdigo_aki": {
+    "class_name": "rec_cncpt",
+    "description": "KDIGO Acute Kidney Injury staging (0-3) based on creatinine and urine output",
+    "category": "renal",
+    "concepts": [
+      "crea",
+      "urine",
+      "weight",
+      "rrt"
+    ],
+    "callback": "kdigo_aki",
+    "target": "ts_tbl"
+  },
+  "kdigo_creat": {
+    "class_name": "rec_cncpt",
+    "description": "KDIGO AKI creatinine-based staging with baseline values",
+    "category": "renal",
+    "concepts": [
+      "crea"
+    ],
+    "callback": "kdigo_creatinine",
+    "target": "ts_tbl"
+  },
+  "kdigo_uo": {
+    "class_name": "rec_cncpt",
+    "description": "KDIGO AKI urine output-based staging (mL/kg/h rates)",
+    "category": "renal",
+    "concepts": [
+      "urine",
+      "weight"
+    ],
+    "callback": "kdigo_uo",
+    "target": "ts_tbl"
+  },
+  "peep": {
+    "unit": [
+      "cmH2O",
+      "mbar"
+    ],
+    "min": 0,
+    "max": 40,
+    "description": "Positive End Expiratory Pressure",
+    "omopid": 4353936,
+    "category": "ventilator",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            6694,
+            12284,
+            8862,
+            8879
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "ids": [
+            "PEEP",
+            "PEEP/CPAP"
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            2600,
+            2610
+          ],
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            220339,
+            224700
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            220339,
+            224700,
+            535,
+            543
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 2278,
+          "table": "data_float_h",
+          "sub_var": "DataID"
+        }
+      ]
+    }
+  },
+  "tidal_vol": {
+    "unit": [
+      "ml",
+      "mL"
+    ],
+    "min": 0,
+    "max": 2000,
+    "description": "Expiratory tidal volume (measured)",
+    "omopid": 4314820,
+    "category": "ventilator",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            12275,
+            12277
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "ids": [
+            "Exhaled TV (machine)",
+            "Exhaled TV (patient)",
+            "Exhaled Vt",
+            "Tidal Volume Observed (VT)"
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            2410
+          ],
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            224685,
+            224686,
+            224684
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            224685,
+            224686,
+            224684,
+            681,
+            682
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            717,
+            718
+          ],
+          "table": "data_float_h",
+          "sub_var": "DataID"
+        }
+      ]
+    }
+  },
+  "tidal_vol_set": {
+    "unit": [
+      "ml",
+      "mL"
+    ],
+    "min": 0,
+    "max": 2000,
+    "description": "Tidal volume setting",
+    "omopid": 4314820,
+    "category": "ventilator",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            8851,
+            12291
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "ids": [
+            "Tidal Volume (set)",
+            "Set Vt (Servo,LTV)",
+            "Adult Con Setting Set Vt"
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            2400
+          ],
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            224684
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            224684,
+            683
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ]
+    }
+  },
+  "pip": {
+    "unit": [
+      "cmH2O",
+      "mbar"
+    ],
+    "min": 0,
+    "max": 100,
+    "description": "Peak Inspiratory Pressure",
+    "omopid": 4200979,
+    "category": "ventilator",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            12281,
+            8852,
+            8877
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "ids": [
+            "Peak Insp. Pressure"
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            3110
+          ],
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            224695
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            224695,
+            506,
+            535
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 715,
+          "table": "data_float_h",
+          "sub_var": "DataID"
+        }
+      ]
+    }
+  },
+  "plateau_pres": {
+    "unit": [
+      "cmH2O",
+      "mbar"
+    ],
+    "min": 0,
+    "max": 100,
+    "description": "Plateau Pressure",
+    "omopid": 4128731,
+    "category": "ventilator",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            12280,
+            8878
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "ids": [
+            "Plateau Pressure"
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            3200
+          ],
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            224696
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            224696,
+            543
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ]
+    }
+  },
+  "mean_airway_pres": {
+    "unit": [
+      "cmH2O",
+      "mbar"
+    ],
+    "min": 0,
+    "max": 60,
+    "description": "Mean Airway Pressure",
+    "omopid": 4098176,
+    "category": "ventilator",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            12278
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "ids": [
+            "Mean Airway Pressure"
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            3000
+          ],
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            224697
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            224697,
+            444
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 712,
+          "table": "data_float_h",
+          "sub_var": "DataID"
+        }
+      ]
+    }
+  },
+  "minute_vol": {
+    "unit": [
+      "L/min",
+      "l/min"
+    ],
+    "min": 0,
+    "max": 50,
+    "description": "Minute Ventilation (exhaled)",
+    "omopid": 4230154,
+    "category": "ventilator",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            12273
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "ids": [
+            "Exhaled MV",
+            "Measured Ve",
+            "Adult Con Pt/Vent MinuteVentil"
+          ]
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            224687
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            224688,
+            224690,
+            445
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 713,
+          "table": "data_float_h",
+          "sub_var": "DataID"
+        }
+      ]
+    }
+  },
+  "vent_rate": {
+    "unit": [
+      "/min",
+      "insp/min"
+    ],
+    "min": 0,
+    "max": 60,
+    "description": "Ventilator respiratory rate setting",
+    "omopid": 4313591,
+    "category": "ventilator",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            12283,
+            8850
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "ids": [
+            "Vent Rate",
+            "Adult Con Setting Set RR"
+          ]
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            320
+          ],
+          "table": "observations",
+          "sub_var": "variableid",
+          "class_name": "hrd_itm"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            224688,
+            224689,
+            224690,
+            224422
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            224422,
+            619
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 719,
+          "table": "data_float_h",
+          "sub_var": "DataID"
+        }
+      ]
+    }
+  },
+  "compliance": {
+    "unit": [
+      "mL/cmH2O",
+      "ml/mbar"
+    ],
+    "min": 0,
+    "max": 200,
+    "description": "Respiratory system compliance",
+    "omopid": 4164837,
+    "category": "ventilator",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            6710
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "ids": [
+            "Compliance"
+          ]
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            229661
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            131,
+            132
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 3120,
+          "table": "data_float_h",
+          "sub_var": "DataID"
+        }
+      ]
+    }
+  },
+  "driving_pres": {
+    "description": "Driving pressure (Plateau - PEEP)",
+    "category": "ventilator",
+    "concepts": [
+      "plateau_pres",
+      "peep"
+    ],
+    "callback": "driving_pressure",
+    "class_name": "rec_cncpt",
+    "target": "ts_tbl"
+  },
+  "ps": {
+    "unit": [
+      "cmH2O",
+      "mbar"
+    ],
+    "min": 0,
+    "max": 40,
+    "description": "Pressure Support above PEEP",
+    "omopid": 4353937,
+    "category": "ventilator",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            12286,
+            12285
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "ids": [
+            "Pressure Support",
+            "PS above PEEP"
+          ]
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            224701
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "index_var": "charttime"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            224701,
+            502
+          ],
+          "table": "chartevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 2284,
+          "table": "data_float_h",
+          "sub_var": "DataID"
         }
       ]
     }

@@ -156,11 +156,16 @@ class BaseICULoader:
                 # AUMC 特征文件: admissions.csv/parquet, numericitems/
                 # MIIV 特征文件: admissions.csv/parquet, chartevents/
                 # eICU 特征文件: patient.csv, vitalPeriodic.csv
+                # MIMIC-III 特征文件: icustays.parquet, chartevents_bucket/
+                # SICdb 特征文件: cases.parquet, data_float_h_bucket/
                 marker_files = {
                     'aumc': ['admissions.csv', 'admissions.parquet', 'numericitems'],
                     'miiv': ['admissions.csv', 'admissions.parquet', 'chartevents'],
                     'eicu': ['patient.csv', 'patient.csv.gz', 'vitalPeriodic.csv'],
                     'hirid': ['general.csv', 'observations'],
+                    'mimic': ['icustays.parquet', 'chartevents_bucket', 'labevents_bucket'],  # MIMIC-III
+                    'mimic_demo': ['icustays.parquet', 'chartevents'],  # MIMIC-III demo
+                    'sic': ['cases.parquet', 'data_float_h_bucket', 'laboratory_bucket'],  # SICdb
                 }
                 
                 db_markers = marker_files.get(database, [])
@@ -176,6 +181,8 @@ class BaseICULoader:
                 # MIIV 特殊处理：通常在 mimiciv/3.1/ 子目录
                 # eICU 特殊处理：通常在 eicu/2.0.1/ 子目录
                 # HiRID 特殊处理：通常在 hirid/1.1.1/ 子目录
+                # MIMIC-III 特殊处理：通常在 mimiciii/1.4/ 子目录
+                # SICdb 特殊处理：通常在 sicdb/1.0.6/ 子目录
                 # 先尝试精确版本匹配，再尝试通用目录
                 possible_subpaths = [
                     user_path / database,  # /base/aumc
@@ -186,6 +193,12 @@ class BaseICULoader:
                     user_path / database / '1.1.1',  # /base/hirid/1.1.1 (HiRID)
                     # 支持 mimiciv 命名变体
                     user_path / 'mimiciv' / '3.1',
+                    # MIMIC-III 支持
+                    user_path / 'mimiciii' / '1.4',
+                    user_path / 'mimic' / '1.4',
+                    # SICdb 支持
+                    user_path / 'sicdb' / '1.0.6',
+                    user_path / 'sic' / '1.0.6',
                 ]
                 
                 # 如果没找到，尝试动态搜索子目录
@@ -205,12 +218,36 @@ class BaseICULoader:
             return user_path
 
         # Check environment variables
+        # 1. 首先检查数据库专用的环境变量（如 MIMIC_PATH）
         env_var = f'{database.upper()}_PATH'
         path = os.getenv(env_var)
         if path:
             if self.verbose:
                 logger.info(f"Using path from {env_var}: {path}")
             return Path(path)
+        
+        # 2. 检查 RICU_DATA_PATH 通用环境变量（需要与数据库目录映射）
+        ricu_data_path = os.getenv('RICU_DATA_PATH')
+        if ricu_data_path:
+            base_path = Path(ricu_data_path)
+            # 数据库名称到目录名的映射
+            db_dir_mapping = {
+                'mimic': ['mimiciii/1.4', 'mimic/1.4', 'mimiciii'],
+                'mimic_demo': ['mimic_demo', 'mimiciii_demo'],
+                'miiv': ['mimiciv/3.1', 'miiv/3.1', 'mimiciv'],
+                'eicu': ['eicu/2.0.1', 'eicu/2.0', 'eicu'],
+                'eicu_demo': ['eicu_demo'],
+                'aumc': ['aumc/1.0.2', 'aumc'],
+                'hirid': ['hirid/1.1.1', 'hirid'],
+                'sic': ['sicdb/1.0.6', 'sic/1.0.6', 'sicdb', 'sic'],
+            }
+            
+            for subdir in db_dir_mapping.get(database, [database]):
+                candidate = base_path / subdir
+                if candidate.is_dir():
+                    if self.verbose:
+                        logger.info(f"Using path from RICU_DATA_PATH: {candidate}")
+                    return candidate
 
         # Check production data paths from project_config
         try:
