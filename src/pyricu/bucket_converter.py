@@ -33,11 +33,12 @@ class BucketConfig:
     """分桶配置"""
     num_buckets: int = 100  # 桶数量
     partition_col: str = 'itemid'  # 分桶列
-    row_group_size: int = 500_000  # Row Group大小，增大以提升写入速度
-    compression: str = 'snappy'  # 压缩算法
-    memory_limit: str = '8GB'  # DuckDB内存限制，提高以加速转换
-    threads: int = 8  # 并行线程数
+    row_group_size: int = 1_000_000  # Row Group大小，1M行最优平衡
+    compression: str = 'zstd'  # zstd压缩率更高，速度接近snappy
+    memory_limit: str = '12GB'  # 充分利用内存
+    threads: int = 0  # 0=自动检测CPU核心数
     temp_directory: Optional[str] = None  # 临时文件目录，建议SSD
+    skip_sorting: bool = True  # 跳过排序，大幅加速
 
 
 @dataclass 
@@ -142,14 +143,17 @@ def convert_to_buckets(
         log(f"内存限制: {config.memory_limit}, 临时目录: {config.temp_directory or '默认'}")
         
         conn = duckdb.connect()
-        # 并行线程数：更多线程加速转换
-        conn.execute(f"SET threads={config.threads}")
+        # 并行线程数：0=自动检测CPU核心数
+        if config.threads > 0:
+            conn.execute(f"SET threads={config.threads}")
         # 内存限制：防止OOM
         conn.execute(f"SET memory_limit='{config.memory_limit}'")
-        # 启用外部排序：允许使用磁盘进行大数据排序
+        # 禁用保序以启用并行写入
         conn.execute("SET preserve_insertion_order=false")
-        # 启用并行写入
-        conn.execute("SET preserve_insertion_order=false")
+        # 启用进度条
+        conn.execute("SET enable_progress_bar=true")
+        # 启用并行 Parquet 写入
+        conn.execute("SET experimental_parallel_csv=true")
         
         # 设置临时目录：建议在高速SSD上，处理80GB排序的磁盘溢出
         if config.temp_directory:
@@ -179,24 +183,38 @@ def convert_to_buckets(
             )
         
         # 使用 DuckDB COPY + PARTITION_BY 实现高效分桶
-        # 关键: ORDER BY itemid 确保每个桶内数据排序，利于谓词下推
-        # DuckDB 默认开启 write_statistics，Row Group统计信息用于谓词下推
-        log("执行分桶转换 (排序 + 分桶)...")
-        
-        sql = f"""
-            COPY (
-                SELECT *,
-                       hash({config.partition_col}) % {config.num_buckets} as bucket_id
-                FROM {read_expr}
-                ORDER BY {config.partition_col}
-            )
-            TO '{output_dir}'
-            (FORMAT PARQUET,
-             PARTITION_BY (bucket_id),
-             COMPRESSION {config.compression.upper()},
-             ROW_GROUP_SIZE {config.row_group_size},
-             OVERWRITE_OR_IGNORE)
-        """
+        # 注意：排序是最耗时的操作，可选择跳过
+        if config.skip_sorting:
+            log("执行分桶转换 (无排序，最快模式)...")
+            sql = f"""
+                COPY (
+                    SELECT *,
+                           hash({config.partition_col}) % {config.num_buckets} as bucket_id
+                    FROM {read_expr}
+                )
+                TO '{output_dir}'
+                (FORMAT PARQUET,
+                 PARTITION_BY (bucket_id),
+                 COMPRESSION {config.compression.upper()},
+                 ROW_GROUP_SIZE {config.row_group_size},
+                 OVERWRITE_OR_IGNORE)
+            """
+        else:
+            log("执行分桶转换 (排序 + 分桶)...")
+            sql = f"""
+                COPY (
+                    SELECT *,
+                           hash({config.partition_col}) % {config.num_buckets} as bucket_id
+                    FROM {read_expr}
+                    ORDER BY {config.partition_col}
+                )
+                TO '{output_dir}'
+                (FORMAT PARQUET,
+                 PARTITION_BY (bucket_id),
+                 COMPRESSION {config.compression.upper()},
+                 ROW_GROUP_SIZE {config.row_group_size},
+                 OVERWRITE_OR_IGNORE)
+            """
         
         conn.execute(sql)
         
