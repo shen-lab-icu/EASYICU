@@ -21,8 +21,6 @@ from __future__ import annotations
 
 import os
 import gc
-import gzip
-import shutil
 import logging
 import tempfile
 from pathlib import Path
@@ -127,35 +125,13 @@ class DuckDBConverter:
         return csv_path.parent / f"{stem}.parquet"
     
     def _decompress_gz_if_needed(self, csv_path: Path) -> Path:
-        """Decompress .csv.gz file to temp directory if needed.
+        """Check if decompression is needed.
         
-        DuckDB can read .gz files directly, but for very large files
-        it's more memory-efficient to decompress first.
+        DuckDB can read .gz files directly with read_csv's compression='gzip' option.
+        We no longer need to decompress to temp files, which saves memory and disk space.
         """
-        if not str(csv_path).lower().endswith('.csv.gz'):
-            return csv_path
-        
-        # For files > 500MB compressed, decompress to temp
-        file_size_mb = csv_path.stat().st_size / (1024 * 1024)
-        if file_size_mb < 500:
-            # DuckDB can handle smaller .gz files directly
-            return csv_path
-        
-        # Decompress to temp directory
-        stem = csv_path.stem  # removes .gz
-        if stem.endswith('.csv'):
-            stem = stem[:-4]
-        
-        temp_csv = self.temp_dir / f"{stem}_temp.csv"
-        
-        if self.verbose:
-            logger.info(f"  Decompressing {csv_path.name} to temp ({file_size_mb:.0f}MB compressed)...")
-        
-        with gzip.open(csv_path, 'rb') as f_in:
-            with open(temp_csv, 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out, length=16 * 1024 * 1024)  # 16MB buffer
-        
-        return temp_csv
+        # DuckDB handles .gz files directly - no decompression needed!
+        return csv_path
     
     def convert_file(self, csv_path: Path) -> Dict[str, Any]:
         """Convert a single CSV file to Parquet using DuckDB.
@@ -197,7 +173,11 @@ class DuckDBConverter:
             escaped_path = str(source_path).replace("'", "''")
             escaped_output = str(parquet_path).replace("'", "''")
             
-            # Read CSV with auto-detection
+            # Read CSV with auto-detection (DuckDB handles .gz automatically)
+            # Detect if file is gzipped
+            is_gzipped = str(source_path).lower().endswith('.gz')
+            compression_opt = ", compression='gzip'" if is_gzipped else ""
+            
             con.execute(f"""
                 COPY (
                     SELECT * FROM read_csv('{escaped_path}', 
@@ -206,6 +186,7 @@ class DuckDBConverter:
                         sample_size=10000,
                         ignore_errors=true,
                         all_varchar=false
+                        {compression_opt}
                     )
                 ) TO '{escaped_output}' (FORMAT PARQUET, COMPRESSION 'snappy')
             """)
