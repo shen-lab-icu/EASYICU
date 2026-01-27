@@ -7107,8 +7107,15 @@ def render_convert_dialog():
 
 
 def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
-    """将目录下的CSV文件转换为Parquet格式。"""
-    import time
+    """将目录下的CSV文件转换为Parquet格式。使用DuckDB内存安全转换。"""
+    import gc
+    
+    # 使用 DuckDB 转换器，内存安全
+    try:
+        from pyricu.duckdb_converter import DuckDBConverter
+    except ImportError:
+        st.error("DuckDB converter not available. Please reinstall pyricu.")
+        return 0, 0
     
     source_path = Path(source_dir)
     target_path = Path(target_dir)
@@ -7120,6 +7127,13 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     
     progress_bar = st.progress(0)
     status_text = st.empty()
+    
+    # 创建 DuckDB 转换器，内存限制 6GB
+    converter = DuckDBConverter(
+        data_path=str(source_path),
+        memory_limit_gb=6.0,
+        verbose=False
+    )
     
     for idx, csv_file in enumerate(csv_files):
         try:
@@ -7136,12 +7150,20 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
             # 创建目标目录
             parquet_file.parent.mkdir(parents=True, exist_ok=True)
             
-            status_text.markdown(f"**转换中**: `{csv_file.name}` ({idx+1}/{len(csv_files)})")
+            file_size_mb = csv_file.stat().st_size / (1024 * 1024)
+            status_text.markdown(f"**转换中**: `{csv_file.name}` ({file_size_mb:.1f}MB) [{idx+1}/{len(csv_files)}]")
             
-            # 读取CSV并转换
-            df = pd.read_csv(csv_file)
-            df.to_parquet(parquet_file, index=False)
-            success += 1
+            # 使用 DuckDB 转换（内存安全）
+            result = converter.convert_file(csv_file)
+            
+            if result['status'] == 'success':
+                success += 1
+            else:
+                failed += 1
+                status_text.caption(f"❌ 失败: {csv_file.name} - {result.get('error', 'unknown')[:50]}")
+            
+            # 内存清理
+            gc.collect()
             
         except Exception as e:
             failed += 1
