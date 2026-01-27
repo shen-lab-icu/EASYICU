@@ -1041,7 +1041,7 @@ def convert_data_with_progress(data_path: str, database: str):
         
         converter = DuckDBConverter(
             data_path=data_path, 
-            memory_limit_gb=8.0,
+            memory_limit_gb=12.0,
             verbose=True
         )
         
@@ -7305,10 +7305,10 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
                     eta_str = f"{eta_seconds/3600:.1f}h"
                 eta_text.markdown(f"⏱️ **Speed**: {speed_mb_per_sec:.1f} MB/s | **ETA**: {eta_str} | **Total**: {total_size_mb:.0f} MB")
     
-    # 创建 DuckDB 转换器（更激进的内存配置以提升速度）
+    # 创建 DuckDB 转换器（优化配置）
     converter = DuckDBConverter(
         data_path=str(source_path),
-        memory_limit_gb=8.0,
+        memory_limit_gb=12.0,
         verbose=False
     )
     
@@ -7375,12 +7375,15 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
             
             status_text.markdown(f"**Bucketing**: `{csv_file.name}` ({file_size_mb:.1f}MB) → {num_buckets} buckets [{current}/{total}]")
             
+            # 使用优化配置：跳过排序可加速2-3倍
             config = BucketConfig(
                 num_buckets=num_buckets,
                 partition_col=partition_col,
-                memory_limit='8GB',
-                threads=8,
-                row_group_size=500_000
+                memory_limit='12GB',
+                threads=0,  # 自动检测CPU核心数
+                row_group_size=1_000_000,
+                compression='zstd',
+                skip_sorting=True  # 跳过排序，大幅加速
             )
             result = convert_to_buckets(
                 source_path=csv_file,
