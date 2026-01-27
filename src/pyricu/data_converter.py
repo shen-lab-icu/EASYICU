@@ -101,18 +101,18 @@ class DataConverter:
     
     Features:
     - Automatic detection of CSV/CSV.GZ files
-    - Parallel conversion for multiple files
+    - Memory-efficient DuckDB-based conversion (primary method)
+    - Fallback to pandas for problematic files
     - Integrity verification (row count, checksum)
     - Progress tracking and resumable conversion
-    - Handles large files with chunked reading
     - ID-based partitioning matching ricu's logic
-    - Memory-efficient streaming for ultra-large tables
+    - Memory limit: designed for 12GB RAM systems
     """
     
     # Default chunk size for reading large CSV files (rows)
-    # 100K rows per chunk for memory efficiency (100M -> 1M was too large)
-    # Typical usage: ~500MB-1GB memory per chunk
-    DEFAULT_CHUNK_SIZE = 100_000
+    # 50K rows per chunk for memory efficiency
+    # Typical usage: ~200-400MB memory per chunk
+    DEFAULT_CHUNK_SIZE = 50_000
     
     # Status file name to track conversion progress
     STATUS_FILE = ".pyricu_conversion_status.json"

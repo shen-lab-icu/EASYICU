@@ -1224,6 +1224,20 @@ try:
 except ImportError:
     _HAS_DATA_CONVERTER = False
 
+# DuckDB 内存安全转换器 - 12GB 内存目标
+try:
+    from .duckdb_converter import (
+        DuckDBConverter,
+        convert_with_duckdb,
+    )
+    _HAS_DUCKDB_CONVERTER = True
+    __all__.extend([
+        "DuckDBConverter",
+        "convert_with_duckdb",
+    ])
+except ImportError:
+    _HAS_DUCKDB_CONVERTER = False
+
 # 分桶转换器 - 16GB内存优化
 try:
     from .bucket_converter import (
