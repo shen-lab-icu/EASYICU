@@ -1291,14 +1291,26 @@ class ICUDataSource:
                         logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
                         return bucket_dir
             
-            # Try .parquet extension
-            parquet_candidate = self.base_path / f"{name}.parquet"
-            if parquet_candidate.exists():
-                return parquet_candidate
-            # Try .pq extension (short form)
-            pq_candidate = self.base_path / f"{name}.pq"
-            if pq_candidate.exists():
-                return pq_candidate
+            # Try .parquet extension - 检查多个可能的位置
+            # MIMIC-IV 的表可能在 icu/ 或 hosp/ 子目录下
+            possible_parquet_paths = [
+                self.base_path / f"{name}.parquet",  # 直接在 base_path 下
+                self.base_path / "icu" / f"{name}.parquet",  # MIIV icu 子目录
+                self.base_path / "hosp" / f"{name}.parquet",  # MIIV hosp 子目录
+            ]
+            for parquet_candidate in possible_parquet_paths:
+                if parquet_candidate.exists():
+                    return parquet_candidate
+            
+            # Try .pq extension (short form) - 同样检查子目录
+            possible_pq_paths = [
+                self.base_path / f"{name}.pq",
+                self.base_path / "icu" / f"{name}.pq",
+                self.base_path / "hosp" / f"{name}.pq",
+            ]
+            for pq_candidate in possible_pq_paths:
+                if pq_candidate.exists():
+                    return pq_candidate
         
         # Check subdirectory for partitioned parquet data (common in hirid observations)
         if self.base_path is not None:

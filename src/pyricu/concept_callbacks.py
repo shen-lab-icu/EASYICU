@@ -3846,6 +3846,14 @@ def _callback_supp_o2(
         else fio2_df.set_index(index_column)[fio2_col]
     )
 
+    # 🔧 FIX: 在 reindex 前需要处理原始 Series 中的重复索引
+    # 当同一时间点有多个值时，取最后一个（或第一个），避免 reindex 时报错
+    # "cannot assemble with duplicate keys"
+    if vent_series.index.duplicated().any():
+        vent_series = vent_series[~vent_series.index.duplicated(keep='last')]
+    if fio2_series.index.duplicated().any():
+        fio2_series = fio2_series[~fio2_series.index.duplicated(keep='last')]
+
     shared_index = vent_series.index.union(fio2_series.index)
     vent_aligned = vent_series.reindex(shared_index, fill_value=False).astype(bool, copy=False)
     fio2_aligned = pd.to_numeric(fio2_series.reindex(shared_index, fill_value=21.0), errors="coerce").fillna(21.0)
