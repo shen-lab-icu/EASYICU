@@ -1002,16 +1002,22 @@ def convert_data_with_progress(data_path: str, database: str):
     warn_msg = "⚠️ **Note**: Converting large datasets may take a long time (30min~2hrs), please be patient." if lang == 'en' else "⚠️ **注意**：转换大型数据集可能需要较长时间（30分钟~2小时），请耐心等待。"
     st.warning(warn_msg)
     
-    info_msg = "💡 Do not close the page during conversion. After completion, data will be stored in Parquet format for faster loading." if lang == 'en' else "💡 转换过程中请勿关闭页面。转换完成后，数据将以 Parquet 格式存储，后续加载速度将大幅提升。"
+    info_msg = "💡 Using DuckDB for memory-efficient conversion. Target: 12GB RAM." if lang == 'en' else "💡 使用 DuckDB 进行内存安全转换，目标内存：12GB 以内。"
     st.info(info_msg)
     
     try:
-        from pyricu.data_converter import DataConverter
+        # Use DuckDB-based converter for memory safety (target 12GB, max 16GB)
+        from pyricu.duckdb_converter import DuckDBConverter
+        import gc
         
-        converter = DataConverter(data_path, database=database, verbose=True)
+        converter = DuckDBConverter(
+            data_path=data_path, 
+            memory_limit_gb=6.0,  # Conservative limit for safety
+            verbose=True
+        )
         
         # 获取需要转换的文件列表
-        csv_files = converter._get_csv_files()
+        csv_files = converter._find_csv_files()
         total_files = len(csv_files)
         
         if total_files == 0:
@@ -1040,21 +1046,26 @@ def convert_data_with_progress(data_path: str, database: str):
             status_text.markdown(processing_msg)
             
             # 检查是否需要转换
-            needs_conversion, reason = converter._is_conversion_needed(csv_file)
-            
-            if not needs_conversion:
+            parquet_path = converter._get_parquet_path(csv_file)
+            if parquet_path.exists():
                 skipped += 1
                 with details_container:
-                    skip_msg = f"⏭️ Skipped: {file_name} ({reason})" if lang == 'en' else f"⏭️ 跳过: {file_name} ({reason})"
+                    skip_msg = f"⏭️ Skipped: {file_name} (parquet exists)" if lang == 'en' else f"⏭️ 跳过: {file_name} (已存在parquet)"
                     st.caption(skip_msg)
             else:
                 try:
-                    # 执行转换 - 使用正确的方法名
-                    converter._convert_file(csv_file)
-                    converted += 1
-                    with details_container:
-                        done_msg = f"✅ Done: {file_name}" if lang == 'en' else f"✅ 完成: {file_name}"
-                        st.caption(done_msg)
+                    # 使用 DuckDB 转换
+                    result = converter.convert_file(csv_file)
+                    if result['status'] == 'success':
+                        converted += 1
+                        with details_container:
+                            done_msg = f"✅ Done: {file_name} ({result['row_count']:,} rows)" if lang == 'en' else f"✅ 完成: {file_name} ({result['row_count']:,} 行)"
+                            st.caption(done_msg)
+                    else:
+                        failed += 1
+                        with details_container:
+                            fail_msg = f"❌ Failed: {file_name} - {result.get('error', 'unknown')[:50]}" if lang == 'en' else f"❌ 失败: {file_name} - {result.get('error', 'unknown')[:50]}"
+                            st.caption(fail_msg)
                 except Exception as e:
                     failed += 1
                     with details_container:
@@ -1064,6 +1075,9 @@ def convert_data_with_progress(data_path: str, database: str):
             # 更新进度
             progress = (idx + 1) / total_files
             progress_bar.progress(progress)
+            
+            # Memory cleanup between files
+            gc.collect()
         
         # 转换完成
         progress_bar.progress(1.0)
