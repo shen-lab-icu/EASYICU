@@ -162,7 +162,6 @@ class DuckDBConverter:
             con.execute(f"SET memory_limit = '{self.memory_limit_gb}GB'")
             # 不设置线程数，让DuckDB自动检测CPU核心数
             con.execute("SET preserve_insertion_order = false")  # 允许并行写入
-            con.execute("SET experimental_parallel_csv = true")  # 并行CSV读取
             
             # Read CSV and write to Parquet in one streaming operation
             # DuckDB handles this efficiently without loading entire file

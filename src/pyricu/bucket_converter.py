@@ -152,8 +152,6 @@ def convert_to_buckets(
         conn.execute("SET preserve_insertion_order=false")
         # 启用进度条
         conn.execute("SET enable_progress_bar=true")
-        # 启用并行 Parquet 写入
-        conn.execute("SET experimental_parallel_csv=true")
         
         # 设置临时目录：建议在高速SSD上，处理80GB排序的磁盘溢出
         if config.temp_directory:
