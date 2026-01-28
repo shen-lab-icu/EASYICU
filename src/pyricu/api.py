@@ -167,6 +167,8 @@ def _get_smart_workers(num_concepts: int, num_patients: Optional[int] = None) ->
     """
     智能计算最佳并行配置
     
+    使用 parallel_config 模块根据系统资源自动调整。
+    
     Args:
         num_concepts: 要加载的概念数量
         num_patients: 患者数量（如果已知）
@@ -178,14 +180,16 @@ def _get_smart_workers(num_concepts: int, num_patients: Optional[int] = None) ->
     if os.getenv('PYRICU_NO_AUTO_PARALLEL'):
         return 1, None
     
-    cpu_count = os.cpu_count() or 4
+    # 使用统一的并行配置模块
+    from .parallel_config import get_global_config
+    config = get_global_config()
     
-    # 🚀 策略1: 多概念时启用概念级并行
-    # 概念级并行开销较低，通常能提升30-50%性能
+    # 🚀 策略1: 基于系统资源的概念级并行
+    # 使用 parallel_config 计算的最大工作线程数
     if num_concepts >= 3:
-        concept_workers = min(num_concepts, max(2, cpu_count // 2))
+        concept_workers = min(num_concepts, config.max_workers)
     elif num_concepts == 2:
-        concept_workers = 2
+        concept_workers = min(2, config.max_workers)
     else:
         concept_workers = 1
     
@@ -193,8 +197,8 @@ def _get_smart_workers(num_concepts: int, num_patients: Optional[int] = None) ->
     # 患者数 > 5000 时，分批处理更高效
     parallel_workers = None  # 默认不分批
     if num_patients is not None and num_patients > 5000:
-        # 大规模数据：启用分批 + 线程池
-        parallel_workers = min(4, cpu_count // 2)
+        # 基于系统资源的分批并行
+        parallel_workers = min(config.max_workers, 4)
     
     return concept_workers, parallel_workers
 

@@ -686,7 +686,7 @@ class ConceptResolver:
         interval: Optional[pd.Timedelta] = None,  # Default 1 hour interval
         align_to_admission: bool = True,  # Align time to ICU admission as anchor
         ricu_compatible: bool = True,  # 默认启用ricu.R兼容格式
-        concept_workers: int = 1,
+        concept_workers: int = -1,  # 🔧 -1 表示自动检测
         _batch_loading: bool = False,  # 🔧 批量加载模式标志，减少诊断输出
         _skip_concept_cache: bool = False,  # 🔧 跳过概念缓存，用于回调内部加载
         **kwargs,  # Additional parameters for callbacks (e.g., win_length, worst_val_fun)
@@ -742,8 +742,27 @@ class ConceptResolver:
             if name not in self.dictionary:
                 raise KeyError(f"Concept '{name}' not present in dictionary")
 
-        # 🚀 智能并行策略：分析概念使用的表，对同一表的概念串行加载以共享缓存
-        # 这对HiRID等大表场景特别重要，避免重复读取7.7亿行的observations表
+        # 🚀 智能并行策略：根据系统资源自动配置并行度
+        # -1 表示自动检测，0 表示禁用并行，>0 表示指定的并行数
+        if concept_workers == -1:
+            # 自动检测系统资源
+            try:
+                from .parallel_config import get_global_config
+                parallel_config = get_global_config()
+                # 对于多概念加载，使用自动检测的并行数
+                if total > 1:
+                    concept_workers = parallel_config.max_workers
+                    if verbose and not _batch_loading:
+                        logger.info(
+                            f"🔧 自动并行配置: {parallel_config.performance_tier} "
+                            f"(内存: {parallel_config.total_memory_gb:.1f}GB, "
+                            f"workers: {concept_workers})"
+                        )
+                else:
+                    concept_workers = 1
+            except Exception:
+                concept_workers = 1  # 回退到单线程
+        
         effective_workers = concept_workers
         
         # 分析每个概念使用的主表和value_var

@@ -1199,51 +1199,60 @@ def convert_data_with_progress(data_path: str, database: str):
 def get_system_resources():
     """检测系统硬件资源。
     
+    使用统一的 parallel_config 模块，确保代码端和 Web 端配置一致。
+    
     Returns:
         dict: 包含 cpu_count, memory_gb, recommended_workers, recommended_backend
     """
-    import os
-    import psutil
-    
-    # CPU 核心数
-    cpu_count = os.cpu_count() or 4
-    
-    # 可用内存 (GB)
     try:
-        mem_info = psutil.virtual_memory()
-        total_memory_gb = mem_info.total / (1024 ** 3)
-        available_memory_gb = mem_info.available / (1024 ** 3)
-    except:
-        total_memory_gb = 8  # 默认假设 8GB
-        available_memory_gb = 4
-    
-    # 根据硬件资源计算推荐的并行配置
-    # 规则：
-    # - 每个 worker 大约需要 2GB 内存用于处理 ICU 数据
-    # - 不超过 CPU 核心数的 75%（保留系统响应能力）
-    # - 最大不超过 64 个 workers（避免过度并行的开销）
-    
-    max_workers_by_memory = int(available_memory_gb / 2)  # 每 worker 约 2GB
-    max_workers_by_cpu = int(cpu_count * 0.75)  # 使用 75% 的 CPU
-    
-    recommended_workers = min(max_workers_by_memory, max_workers_by_cpu, 64)
-    recommended_workers = max(recommended_workers, 1)  # 至少 1 个
-    
-    # 根据配置选择后端
-    # - 高核心数(>16)且内存充足(>32GB): 使用 loky 进程池获得更好的 GIL 规避
-    # - 中等配置: 使用 thread 线程池，开销更小
-    if cpu_count >= 16 and total_memory_gb >= 32:
-        recommended_backend = "loky"
-    else:
-        recommended_backend = "thread"
-    
-    return {
-        'cpu_count': cpu_count,
-        'total_memory_gb': round(total_memory_gb, 1),
-        'available_memory_gb': round(available_memory_gb, 1),
-        'recommended_workers': recommended_workers,
-        'recommended_backend': recommended_backend,
-    }
+        from ..parallel_config import get_global_config
+        config = get_global_config()
+        
+        # 根据配置选择后端
+        if config.cpu_count >= 16 and config.total_memory_gb >= 32:
+            recommended_backend = "loky"
+        else:
+            recommended_backend = "thread"
+        
+        return {
+            'cpu_count': config.cpu_count,
+            'total_memory_gb': round(config.total_memory_gb, 1),
+            'available_memory_gb': round(config.available_memory_gb, 1),
+            'recommended_workers': config.max_workers,
+            'recommended_backend': recommended_backend,
+            'performance_tier': config.performance_tier,
+            'buckets_per_batch': config.buckets_per_batch,
+        }
+    except ImportError:
+        # Fallback: 直接检测（兼容旧版本）
+        import os
+        try:
+            import psutil
+            mem_info = psutil.virtual_memory()
+            total_memory_gb = mem_info.total / (1024 ** 3)
+            available_memory_gb = mem_info.available / (1024 ** 3)
+        except:
+            total_memory_gb = 8
+            available_memory_gb = 4
+        
+        cpu_count = os.cpu_count() or 4
+        max_workers_by_memory = int(available_memory_gb / 2)
+        max_workers_by_cpu = int(cpu_count * 0.75)
+        recommended_workers = min(max_workers_by_memory, max_workers_by_cpu, 64)
+        recommended_workers = max(recommended_workers, 1)
+        
+        if cpu_count >= 16 and total_memory_gb >= 32:
+            recommended_backend = "loky"
+        else:
+            recommended_backend = "thread"
+        
+        return {
+            'cpu_count': cpu_count,
+            'total_memory_gb': round(total_memory_gb, 1),
+            'available_memory_gb': round(available_memory_gb, 1),
+            'recommended_workers': recommended_workers,
+            'recommended_backend': recommended_backend,
+        }
 
 
 def get_optimal_parallel_config(num_patients: int = None, task_type: str = 'load'):
@@ -1801,6 +1810,18 @@ def generate_mock_data(n_patients=10, hours=72):
             spo2_records.append({'stay_id': pid, 'time': t, 'spo2': max(80, min(100, spo2_val))})
     data['spo2'] = pd.DataFrame(spo2_records)
     
+    # EtCO2 (End-Tidal CO2)
+    etco2_records = []
+    for pid in patient_ids:
+        base_etco2 = np.random.uniform(35, 42)
+        for t in time_points:
+            etco2_val = base_etco2 + np.random.normal(0, 3)
+            etco2_records.append({'stay_id': pid, 'time': t, 'etco2': max(20, min(60, etco2_val))})
+    data['etco2'] = pd.DataFrame(etco2_records)
+    
+    # O2Sat (Oxygen Saturation - alias for spo2)
+    data['o2sat'] = data['spo2'].rename(columns={'spo2': 'o2sat'}).copy()
+    
     # SOFA
     sofa_records = []
     for pid in patient_ids:
@@ -1846,6 +1867,15 @@ def generate_mock_data(n_patients=10, hours=72):
             bili_val = base_bili + np.random.normal(0, 0.3)
             bili_records.append({'stay_id': pid, 'time': t, 'bili': max(0.1, bili_val)})
     data['bili'] = pd.DataFrame(bili_records)
+    
+    # 血糖 (Glucose)
+    glu_records = []
+    for pid in patient_ids:
+        base_glu = np.random.uniform(80, 120)
+        for t in time_points[::4]:  # 每4小时采样
+            glu_val = base_glu + np.random.normal(0, 15)
+            glu_records.append({'stay_id': pid, 'time': t, 'glu': max(40, min(400, glu_val))})
+    data['glu'] = pd.DataFrame(glu_records)
     
     # 乳酸
     lac_records = []
@@ -2200,15 +2230,347 @@ def generate_mock_data(n_patients=10, hours=72):
     # ============ 呼吸机参数 ============
     peep_records = []
     tidal_vol_records = []
+    tidal_vol_set_records = []
     pip_records = []
+    plateau_pres_records = []
+    mean_airway_pres_records = []
+    minute_vol_records = []
+    vent_rate_records = []
+    compliance_records = []
+    driving_pres_records = []
+    ps_records = []
+    
     for pid in patient_ids:
         for t in time_points[::2]:
-            peep_records.append({'stay_id': pid, 'time': t, 'peep': np.random.uniform(5, 15)})
-            tidal_vol_records.append({'stay_id': pid, 'time': t, 'tidal_vol': np.random.uniform(350, 550)})
-            pip_records.append({'stay_id': pid, 'time': t, 'pip': np.random.uniform(15, 35)})
+            peep = np.random.uniform(5, 15)
+            tidal_vol = np.random.uniform(350, 550)
+            tidal_vol_set = np.random.uniform(400, 600)
+            pip = np.random.uniform(15, 35)
+            plateau = np.random.uniform(18, 30)
+            mean_airway = np.random.uniform(10, 20)
+            minute_vol = np.random.uniform(6, 12)
+            rate = np.random.uniform(12, 20)
+            compliance = tidal_vol / max(1, plateau - peep)
+            driving = plateau - peep
+            ps = np.random.uniform(5, 15)
+            
+            peep_records.append({'stay_id': pid, 'time': t, 'peep': peep})
+            tidal_vol_records.append({'stay_id': pid, 'time': t, 'tidal_vol': tidal_vol})
+            tidal_vol_set_records.append({'stay_id': pid, 'time': t, 'tidal_vol_set': tidal_vol_set})
+            pip_records.append({'stay_id': pid, 'time': t, 'pip': pip})
+            plateau_pres_records.append({'stay_id': pid, 'time': t, 'plateau_pres': plateau})
+            mean_airway_pres_records.append({'stay_id': pid, 'time': t, 'mean_airway_pres': mean_airway})
+            minute_vol_records.append({'stay_id': pid, 'time': t, 'minute_vol': minute_vol})
+            vent_rate_records.append({'stay_id': pid, 'time': t, 'vent_rate': rate})
+            compliance_records.append({'stay_id': pid, 'time': t, 'compliance': compliance})
+            driving_pres_records.append({'stay_id': pid, 'time': t, 'driving_pres': driving})
+            ps_records.append({'stay_id': pid, 'time': t, 'ps': ps})
+    
     data['peep'] = pd.DataFrame(peep_records)
     data['tidal_vol'] = pd.DataFrame(tidal_vol_records)
+    data['tidal_vol_set'] = pd.DataFrame(tidal_vol_set_records)
     data['pip'] = pd.DataFrame(pip_records)
+    data['plateau_pres'] = pd.DataFrame(plateau_pres_records)
+    data['mean_airway_pres'] = pd.DataFrame(mean_airway_pres_records)
+    data['minute_vol'] = pd.DataFrame(minute_vol_records)
+    data['vent_rate'] = pd.DataFrame(vent_rate_records)
+    data['compliance'] = pd.DataFrame(compliance_records)
+    data['driving_pres'] = pd.DataFrame(driving_pres_records)
+    data['ps'] = pd.DataFrame(ps_records)
+    
+    # ============ 补充更多实验室检查 ============
+    alp_records = []
+    bun_records = []
+    alt_records = []
+    ast_records = []
+    ca_records = []
+    mg_records = []
+    cl_records = []
+    ck_records = []
+    ckmb_records = []
+    tri_records = []
+    tnt_records = []
+    crp_records = []
+    bicar_records = []
+    bili_dir_records = []
+    alb_records = []
+    be_records = []
+    cai_records = []
+    tco2_records = []
+    
+    for pid in patient_ids:
+        for t in time_points[::12]:
+            alp_records.append({'stay_id': pid, 'time': t, 'alp': np.random.uniform(40, 120)})
+            bun_records.append({'stay_id': pid, 'time': t, 'bun': np.random.uniform(10, 40)})
+            alt_records.append({'stay_id': pid, 'time': t, 'alt': np.random.uniform(10, 60)})
+            ast_records.append({'stay_id': pid, 'time': t, 'ast': np.random.uniform(10, 60)})
+            ca_records.append({'stay_id': pid, 'time': t, 'ca': np.random.uniform(8.5, 10.5)})
+            mg_records.append({'stay_id': pid, 'time': t, 'mg': np.random.uniform(1.5, 2.5)})
+            cl_records.append({'stay_id': pid, 'time': t, 'cl': np.random.uniform(95, 110)})
+            ck_records.append({'stay_id': pid, 'time': t, 'ck': np.random.uniform(50, 300)})
+            ckmb_records.append({'stay_id': pid, 'time': t, 'ckmb': np.random.uniform(0, 10)})
+            tri_records.append({'stay_id': pid, 'time': t, 'tri': np.random.uniform(0, 0.5)})
+            tnt_records.append({'stay_id': pid, 'time': t, 'tnt': np.random.uniform(0, 0.5)})
+            crp_records.append({'stay_id': pid, 'time': t, 'crp': np.random.uniform(5, 100)})
+            bicar_records.append({'stay_id': pid, 'time': t, 'bicar': np.random.uniform(22, 28)})
+            bili_dir_records.append({'stay_id': pid, 'time': t, 'bili_dir': np.random.uniform(0.1, 0.5)})
+            alb_records.append({'stay_id': pid, 'time': t, 'alb': np.random.uniform(3.0, 4.5)})
+            be_records.append({'stay_id': pid, 'time': t, 'be': np.random.uniform(-3, 3)})
+            cai_records.append({'stay_id': pid, 'time': t, 'cai': np.random.uniform(1.1, 1.3)})
+            tco2_records.append({'stay_id': pid, 'time': t, 'tco2': np.random.uniform(23, 29)})
+    
+    data['alp'] = pd.DataFrame(alp_records)
+    data['bun'] = pd.DataFrame(bun_records)
+    data['alt'] = pd.DataFrame(alt_records)
+    data['ast'] = pd.DataFrame(ast_records)
+    data['ca'] = pd.DataFrame(ca_records)
+    data['mg'] = pd.DataFrame(mg_records)
+    data['cl'] = pd.DataFrame(cl_records)
+    data['ck'] = pd.DataFrame(ck_records)
+    data['ckmb'] = pd.DataFrame(ckmb_records)
+    data['tri'] = pd.DataFrame(tri_records)
+    data['tnt'] = pd.DataFrame(tnt_records)
+    data['crp'] = pd.DataFrame(crp_records)
+    data['bicar'] = pd.DataFrame(bicar_records)
+    data['bili_dir'] = pd.DataFrame(bili_dir_records)
+    data['alb'] = pd.DataFrame(alb_records)
+    data['be'] = pd.DataFrame(be_records)
+    data['cai'] = pd.DataFrame(cai_records)
+    data['tco2'] = pd.DataFrame(tco2_records)
+    data['bicarb'] = data['bicar'].copy()  # Alias
+    data['potassium'] = data['k'].rename(columns={'k': 'potassium'}).copy() if 'k' in data else pd.DataFrame()
+    
+    # ============ 血液学扩展 ============
+    hct_records = []
+    rbc_records = []
+    rdw_records = []
+    mcv_records = []
+    mch_records = []
+    mchc_records = []
+    neut_records = []
+    lymph_records = []
+    eos_records = []
+    basos_records = []
+    bnd_records = []
+    inr_pt_records = []
+    ptt_records = []
+    pt_records = []
+    fgn_records = []
+    esr_records = []
+    hba1c_records = []
+    
+    for pid in patient_ids:
+        for t in time_points[::12]:
+            hct_records.append({'stay_id': pid, 'time': t, 'hct': np.random.uniform(30, 45)})
+            rbc_records.append({'stay_id': pid, 'time': t, 'rbc': np.random.uniform(3.5, 5.5)})
+            rdw_records.append({'stay_id': pid, 'time': t, 'rdw': np.random.uniform(11, 15)})
+            mcv_records.append({'stay_id': pid, 'time': t, 'mcv': np.random.uniform(80, 100)})
+            mch_records.append({'stay_id': pid, 'time': t, 'mch': np.random.uniform(27, 32)})
+            mchc_records.append({'stay_id': pid, 'time': t, 'mchc': np.random.uniform(32, 36)})
+            neut_records.append({'stay_id': pid, 'time': t, 'neut': np.random.uniform(40, 75)})
+            lymph_records.append({'stay_id': pid, 'time': t, 'lymph': np.random.uniform(20, 40)})
+            eos_records.append({'stay_id': pid, 'time': t, 'eos': np.random.uniform(1, 5)})
+            basos_records.append({'stay_id': pid, 'time': t, 'basos': np.random.uniform(0, 2)})
+            bnd_records.append({'stay_id': pid, 'time': t, 'bnd': np.random.uniform(0, 10)})
+            inr_pt_records.append({'stay_id': pid, 'time': t, 'inr_pt': np.random.uniform(0.9, 1.3)})
+            ptt_records.append({'stay_id': pid, 'time': t, 'ptt': np.random.uniform(25, 35)})
+            pt_records.append({'stay_id': pid, 'time': t, 'pt': np.random.uniform(11, 14)})
+            fgn_records.append({'stay_id': pid, 'time': t, 'fgn': np.random.uniform(200, 400)})
+            esr_records.append({'stay_id': pid, 'time': t, 'esr': np.random.uniform(5, 25)})
+            hba1c_records.append({'stay_id': pid, 'time': t, 'hba1c': np.random.uniform(5.0, 7.0)})
+    
+    data['hct'] = pd.DataFrame(hct_records)
+    data['rbc'] = pd.DataFrame(rbc_records)
+    data['rdw'] = pd.DataFrame(rdw_records)
+    data['mcv'] = pd.DataFrame(mcv_records)
+    data['mch'] = pd.DataFrame(mch_records)
+    data['mchc'] = pd.DataFrame(mchc_records)
+    data['neut'] = pd.DataFrame(neut_records)
+    data['lymph'] = pd.DataFrame(lymph_records)
+    data['eos'] = pd.DataFrame(eos_records)
+    data['basos'] = pd.DataFrame(basos_records)
+    data['bnd'] = pd.DataFrame(bnd_records)
+    data['inr_pt'] = pd.DataFrame(inr_pt_records)
+    data['ptt'] = pd.DataFrame(ptt_records)
+    data['pt'] = pd.DataFrame(pt_records)
+    data['fgn'] = pd.DataFrame(fgn_records)
+    data['esr'] = pd.DataFrame(esr_records)
+    data['hba1c'] = pd.DataFrame(hba1c_records)
+    
+    # ============ 更多药物 ============
+    dopa_rate_records = []
+    dopa_dur_records = []
+    dopa60_records = []
+    epi_dur_records = []
+    epi_rate_records = []
+    epi60_records = []
+    norepi_dur_records = []
+    norepi60_records = []
+    adh_rate_records = []
+    phn_rate_records = []
+    dobu_rate_records = []
+    dobu_dur_records = []
+    dobu60_records = []
+    ins_records = []
+    dex_records = []
+    
+    for pid in patient_ids:
+        for t in time_points[::3]:
+            if np.random.random() < 0.3:
+                dopa_rate_records.append({'stay_id': pid, 'time': t, 'dopa_rate': np.random.uniform(2, 10)})
+                epi_rate_records.append({'stay_id': pid, 'time': t, 'epi_rate': np.random.uniform(0.01, 0.1)})
+                dobu_rate_records.append({'stay_id': pid, 'time': t, 'dobu_rate': np.random.uniform(2, 10)})
+                adh_rate_records.append({'stay_id': pid, 'time': t, 'adh_rate': np.random.uniform(0.01, 0.04)})
+                phn_rate_records.append({'stay_id': pid, 'time': t, 'phn_rate': np.random.uniform(0.1, 0.5)})
+        
+        dopa_dur_records.append({'stay_id': pid, 'dopa_dur': np.random.uniform(0, 48)})
+        epi_dur_records.append({'stay_id': pid, 'epi_dur': np.random.uniform(0, 24)})
+        norepi_dur_records.append({'stay_id': pid, 'norepi_dur': np.random.uniform(0, 72)})
+        dobu_dur_records.append({'stay_id': pid, 'dobu_dur': np.random.uniform(0, 36)})
+        dopa60_records.append({'stay_id': pid, 'dopa60': 1 if np.random.random() < 0.4 else 0})
+        epi60_records.append({'stay_id': pid, 'epi60': 1 if np.random.random() < 0.3 else 0})
+        norepi60_records.append({'stay_id': pid, 'norepi60': 1 if np.random.random() < 0.5 else 0})
+        dobu60_records.append({'stay_id': pid, 'dobu60': 1 if np.random.random() < 0.3 else 0})
+        ins_records.append({'stay_id': pid, 'ins': np.random.uniform(0, 10)})
+        dex_records.append({'stay_id': pid, 'dex': np.random.uniform(0, 1.5)})
+    
+    data['dopa_rate'] = pd.DataFrame(dopa_rate_records) if dopa_rate_records else pd.DataFrame(columns=['stay_id', 'time', 'dopa_rate'])
+    data['dopa_dur'] = pd.DataFrame(dopa_dur_records)
+    data['dopa60'] = pd.DataFrame(dopa60_records)
+    data['epi_rate'] = pd.DataFrame(epi_rate_records) if epi_rate_records else pd.DataFrame(columns=['stay_id', 'time', 'epi_rate'])
+    data['epi_dur'] = pd.DataFrame(epi_dur_records)
+    data['epi60'] = pd.DataFrame(epi60_records)
+    data['norepi_dur'] = pd.DataFrame(norepi_dur_records)
+    data['norepi60'] = pd.DataFrame(norepi60_records)
+    data['adh_rate'] = pd.DataFrame(adh_rate_records) if adh_rate_records else pd.DataFrame(columns=['stay_id', 'time', 'adh_rate'])
+    data['phn_rate'] = pd.DataFrame(phn_rate_records) if phn_rate_records else pd.DataFrame(columns=['stay_id', 'time', 'phn_rate'])
+    data['dobu_rate'] = pd.DataFrame(dobu_rate_records) if dobu_rate_records else pd.DataFrame(columns=['stay_id', 'time', 'dobu_rate'])
+    data['dobu_dur'] = pd.DataFrame(dobu_dur_records)
+    data['dobu60'] = pd.DataFrame(dobu60_records)
+    data['ins'] = pd.DataFrame(ins_records)
+    data['dex'] = pd.DataFrame(dex_records)
+    data['norepi_equiv'] = data['norepi_rate'].copy() if 'norepi_rate' in data else pd.DataFrame()
+    
+    # vaso_ind (血管活性药物指示)
+    vaso_ind_records = []
+    for pid in patient_ids:
+        vaso_ind_records.append({'stay_id': pid, 'vaso_ind': 1 if np.random.random() < 0.6 else 0})
+    data['vaso_ind'] = pd.DataFrame(vaso_ind_records)
+    
+    # ============ 神经和其他支持 ============
+    rass_records = []
+    avpu_records = []
+    egcs_records = []
+    mgcs_records = []
+    vgcs_records = []
+    tgcs_records = []
+    sedated_gcs_records = []
+    
+    for pid in patient_ids:
+        for t in time_points[::6]:
+            rass_records.append({'stay_id': pid, 'time': t, 'rass': np.random.choice([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4], p=[0.05, 0.1, 0.15, 0.2, 0.15, 0.2, 0.05, 0.05, 0.03, 0.02])})
+            egcs_records.append({'stay_id': pid, 'time': t, 'egcs': np.random.choice([1, 2, 3, 4], p=[0.1, 0.2, 0.3, 0.4])})
+            mgcs_records.append({'stay_id': pid, 'time': t, 'mgcs': np.random.choice([1, 2, 3, 4, 5, 6], p=[0.05, 0.1, 0.15, 0.2, 0.25, 0.25])})
+            vgcs_records.append({'stay_id': pid, 'time': t, 'vgcs': np.random.choice([1, 2, 3, 4, 5], p=[0.1, 0.15, 0.2, 0.25, 0.3])})
+            avpu_records.append({'stay_id': pid, 'time': t, 'avpu': np.random.choice(['A', 'V', 'P', 'U'], p=[0.6, 0.2, 0.1, 0.1])})
+        tgcs_records.append({'stay_id': pid, 'tgcs': np.random.choice([15, 14, 13, 12, 10, 8, 6], p=[0.5, 0.2, 0.1, 0.08, 0.07, 0.03, 0.02])})
+        sedated_gcs_records.append({'stay_id': pid, 'sedated_gcs': np.random.choice([15, 14, 13], p=[0.7, 0.2, 0.1])})
+    
+    data['rass'] = pd.DataFrame(rass_records)
+    data['avpu'] = pd.DataFrame(avpu_records)
+    data['egcs'] = pd.DataFrame(egcs_records)
+    data['mgcs'] = pd.DataFrame(mgcs_records)
+    data['vgcs'] = pd.DataFrame(vgcs_records)
+    data['tgcs'] = pd.DataFrame(tgcs_records)
+    data['sedated_gcs'] = pd.DataFrame(sedated_gcs_records)
+    
+    # ============ 其他指标（使用高效循环而非列表推导式）============
+    # 静态指标（每患者一个值）
+    static_records = {
+        'rrt': [], 'ecmo': [], 'height': [], 'bmi': [], 'sex': [], 'adm': [], 
+        'los_hosp': [], 'vent_start': [], 'vent_end': [], 'cort': []
+    }
+    
+    for pid in patient_ids:
+        static_records['rrt'].append({'stay_id': pid, 'rrt': 1 if np.random.random() < 0.15 else 0})
+        static_records['ecmo'].append({'stay_id': pid, 'ecmo': 1 if np.random.random() < 0.05 else 0})
+        static_records['height'].append({'stay_id': pid, 'height': np.random.uniform(150, 190)})
+        static_records['bmi'].append({'stay_id': pid, 'bmi': np.random.uniform(18, 35)})
+        static_records['sex'].append({'stay_id': pid, 'sex': np.random.choice(['M', 'F'])})
+        static_records['adm'].append({'stay_id': pid, 'adm': np.random.choice(['Medical', 'Surgical', 'Emergency'], p=[0.4, 0.3, 0.3])})
+        static_records['los_hosp'].append({'stay_id': pid, 'los_hosp': np.random.uniform(3, 30)})
+        static_records['vent_start'].append({'stay_id': pid, 'vent_start': np.random.choice(time_points[:min(24, len(time_points))])})
+        static_records['vent_end'].append({'stay_id': pid, 'vent_end': np.random.choice(time_points[-min(24, len(time_points)):])})
+        static_records['cort'].append({'stay_id': pid, 'cort': 1 if np.random.random() < 0.3 else 0})
+    
+    for key, records in static_records.items():
+        data[key] = pd.DataFrame(records)
+    
+    data['rrt_criteria'] = data['rrt'].copy()
+    data['ecmo_indication'] = data['ecmo'].copy()
+    data['mech_circ_support'] = data['ecmo'].copy()
+    
+    # 时间序列指标（使用高效循环）
+    mews_records = []
+    news_records = []
+    hbco_records = []
+    methb_records = []
+    k_records = []
+    na_records = []
+    phos_records = []
+    hgb_records = []
+    safi_records = []
+    
+    for pid in patient_ids:
+        for t in time_points[::6]:
+            mews_records.append({'stay_id': pid, 'time': t, 'mews': np.random.choice([0, 1, 2, 3, 4, 5], p=[0.3, 0.25, 0.2, 0.15, 0.07, 0.03])})
+            news_records.append({'stay_id': pid, 'time': t, 'news': np.random.choice([0, 1, 2, 3, 4, 5, 6, 7], p=[0.25, 0.2, 0.18, 0.15, 0.1, 0.07, 0.03, 0.02])})
+        
+        for t in time_points[::12]:
+            if 'k' not in data:
+                k_records.append({'stay_id': pid, 'time': t, 'k': np.random.uniform(3.5, 5.0)})
+            if 'na' not in data:
+                na_records.append({'stay_id': pid, 'time': t, 'na': np.random.uniform(135, 145)})
+            if 'phos' not in data:
+                phos_records.append({'stay_id': pid, 'time': t, 'phos': np.random.uniform(2.5, 4.5)})
+            if 'hgb' not in data:
+                hgb_records.append({'stay_id': pid, 'time': t, 'hgb': np.random.uniform(10, 15)})
+            hbco_records.append({'stay_id': pid, 'time': t, 'hbco': np.random.uniform(0, 5)})
+            methb_records.append({'stay_id': pid, 'time': t, 'methb': np.random.uniform(0, 2)})
+        
+        for t in time_points[::4]:
+            safi_records.append({'stay_id': pid, 'time': t, 'safi': np.random.uniform(200, 450)})
+    
+    data['mews'] = pd.DataFrame(mews_records)
+    data['news'] = pd.DataFrame(news_records)
+    data['hbco'] = pd.DataFrame(hbco_records)
+    data['methb'] = pd.DataFrame(methb_records)
+    data['safi'] = pd.DataFrame(safi_records)
+    
+    if k_records:
+        data['k'] = pd.DataFrame(k_records)
+    if na_records:
+        data['na'] = pd.DataFrame(na_records)
+    if phos_records:
+        data['phos'] = pd.DataFrame(phos_records)
+    if hgb_records:
+        data['hgb'] = pd.DataFrame(hgb_records)
+    
+    # 数据复制和别名
+    data['mech_vent'] = data['vent_ind'].copy() if 'vent_ind' in data else pd.DataFrame()
+    if 'fio2' in data and not data['fio2'].empty:
+        data['supp_o2'] = data['fio2'].copy()
+        data['supp_o2']['supp_o2'] = (data['supp_o2']['fio2'] > 21).astype(int)
+        data['supp_o2'] = data['supp_o2'][['stay_id', 'time', 'supp_o2']]
+    else:
+        data['supp_o2'] = pd.DataFrame()
+    
+    data['spo2'] = data['o2sat'].rename(columns={'o2sat': 'spo2'}).copy() if 'o2sat' in data else data.get('spo2', pd.DataFrame())
+    data['sao2'] = data['o2sat'].rename(columns={'o2sat': 'sao2'}).copy() if 'o2sat' in data else pd.DataFrame()
+    data['ett_gcs'] = data['gcs'].copy() if 'gcs' in data else pd.DataFrame()
+    data['urine24'] = data['urine'].groupby('stay_id')['urine'].sum().reset_index().rename(columns={'urine': 'urine24'}) if 'urine' in data and not data['urine'].empty else pd.DataFrame()
+    data['sepsis_sofa2'] = data['sep3_sofa2'].copy() if 'sep3_sofa2' in data else pd.DataFrame()
+    data['sep3'] = data['sep3_sofa1'].copy() if 'sep3_sofa1' in data else pd.DataFrame()
     
     return data, patient_ids
 
@@ -2221,10 +2583,43 @@ def render_visualization_mode():
     
     # 数据目录选择 - 支持选择已导出的文件夹
     import platform
-    if platform.system() == 'Windows':
-        base_export_path = r'D:\pyicu_export'
-    else:
-        base_export_path = os.path.expanduser('~/pyricu_export')
+    
+    # 允许用户自定义基础搜索路径
+    if 'viz_base_path' not in st.session_state:
+        if platform.system() == 'Windows':
+            st.session_state.viz_base_path = r'D:\pyicu_export'
+        else:
+            st.session_state.viz_base_path = os.path.expanduser('~/pyricu_export')
+    
+    # 基础路径配置
+    base_path_label = "Base search directory" if st.session_state.language == 'en' else "基础搜索目录"
+    base_path_help = "Directory containing exported data folders" if st.session_state.language == 'en' else "包含已导出数据文件夹的目录"
+    
+    with st.expander("⚙️ " + ("Path Settings" if st.session_state.language == 'en' else "路径设置"), expanded=True):
+        new_base_path = st.text_input(
+            base_path_label,
+            value=st.session_state.viz_base_path,
+            key="viz_base_path_input",
+            help=base_path_help
+        )
+        
+        col_update, col_reset = st.columns(2)
+        with col_update:
+            update_btn = "🔄 Update & Scan" if st.session_state.language == 'en' else "🔄 更新并扫描"
+            if st.button(update_btn, use_container_width=True):
+                st.session_state.viz_base_path = new_base_path
+                st.rerun()
+        
+        with col_reset:
+            reset_btn = "↩️ Reset Default" if st.session_state.language == 'en' else "↩️ 重置默认"
+            if st.button(reset_btn, use_container_width=True):
+                if platform.system() == 'Windows':
+                    st.session_state.viz_base_path = r'D:\pyicu_export'
+                else:
+                    st.session_state.viz_base_path = os.path.expanduser('~/pyricu_export')
+                st.rerun()
+    
+    base_export_path = st.session_state.viz_base_path
     
     # 扫描已有的导出文件夹
     available_folders = []
@@ -2233,8 +2628,17 @@ def render_visualization_mode():
             [d.name for d in Path(base_export_path).iterdir() if d.is_dir()],
             reverse=True  # 最新的在前
         )
+    else:
+        path_not_exist_msg = f"⚠️ Base path does not exist: {base_export_path}" if st.session_state.language == 'en' else f"⚠️ 基础路径不存在: {base_export_path}"
+        st.warning(path_not_exist_msg)
     
     # 文件夹筛选器
+    selected_folder_path = None  # 🔧 在外部初始化，确保作用域正确
+    
+    # 初始化已确认的路径（存储在session_state中）
+    if 'viz_confirmed_path' not in st.session_state:
+        st.session_state.viz_confirmed_path = None
+    
     if available_folders:
         filter_label = "Filter by database" if st.session_state.language == 'en' else "按数据库筛选"
         db_prefixes = ['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic', 'mock', 'all']
@@ -2262,32 +2666,65 @@ def render_visualization_mode():
                 key="viz_folder_select",
                 help="Folders are sorted by timestamp (newest first)" if st.session_state.language == 'en' else "文件夹按时间戳排序（最新在前）"
             )
-            default_path = str(Path(base_export_path) / selected_folder) if selected_folder else ''
+            
+            # 🔧 构建完整路径
+            if selected_folder:
+                selected_folder_path = str(Path(base_export_path) / selected_folder)
+                # 显示当前选择的路径
+                current_path_msg = f"📂 Selected: `{selected_folder_path}`" if st.session_state.language == 'en' else f"📂 已选择: `{selected_folder_path}`"
+                st.info(current_path_msg)
+                
+                # 🔧 添加确认按钮
+                confirm_label = "✅ Confirm and Use This Folder" if st.session_state.language == 'en' else "✅ 确认使用此文件夹"
+                if st.button(confirm_label, key="confirm_filter_path", type="primary", use_container_width=True):
+                    st.session_state.viz_confirmed_path = selected_folder_path
+                    st.rerun()
         else:
-            default_path = ''
             no_folder_msg = "No folders match the filter" if st.session_state.language == 'en' else "没有符合筛选条件的文件夹"
             st.info(no_folder_msg)
+    
+    # 🔧 确定最终使用的 data_dir
+    if st.session_state.viz_confirmed_path:
+        # 使用已确认的路径
+        data_dir = st.session_state.viz_confirmed_path
+        manual_expanded = False
+    elif st.session_state.get('last_export_dir'):
+        data_dir = st.session_state.get('last_export_dir')
+        manual_expanded = False  # 🔧 改为默认折叠
     else:
-        # 如果没有已有文件夹，使用 last_export_dir 或默认路径
-        if st.session_state.get('last_export_dir'):
-            default_path = st.session_state.get('last_export_dir')
-        else:
-            default_path = st.session_state.get('export_path', str(Path(base_export_path) / 'miiv'))
+        data_dir = st.session_state.get('export_path', str(Path(base_export_path) / 'miiv'))
+        manual_expanded = False  # 🔧 改为默认折叠
     
     # 仍然提供手动输入选项
     manual_label = "Or enter path manually" if st.session_state.language == 'en' else "或手动输入路径"
-    with st.expander(manual_label, expanded=not available_folders):
-        data_dir = st.text_input(
+    with st.expander(manual_label, expanded=manual_expanded):
+        manual_note = "💡 Use this to specify a custom path" if st.session_state.language == 'en' else "💡 使用此选项指定自定义路径"
+        st.caption(manual_note)
+        
+        manual_data_dir = st.text_input(
             get_text('data_dir'),
-            value=default_path,
-            placeholder="Select exported data directory" if st.session_state.language == 'en' else "选择已导出数据的目录",
-            key="viz_data_dir",
+            value="" if not manual_expanded else data_dir,  # 🔧 Filter模式时清空，避免混淆
+            placeholder="Enter full path to exported data directory" if st.session_state.language == 'en' else "输入导出数据目录的完整路径",
+            key="viz_data_dir_manual",
             help="Directory containing exported CSV/Parquet/Excel files" if st.session_state.language == 'en' else "包含已导出的 CSV/Parquet/Excel 文件的目录"
         )
+        
+        # 🔧 添加手动路径确认按钮
+        if manual_data_dir and manual_data_dir.strip():
+            manual_confirm_label = "✅ Confirm and Use Manual Path" if st.session_state.language == 'en' else "✅ 确认使用手动路径"
+            if st.button(manual_confirm_label, key="confirm_manual_path", type="primary", use_container_width=True):
+                st.session_state.viz_confirmed_path = manual_data_dir.strip()
+                st.rerun()
     
-    # 如果使用了文件夹选择器，确保 data_dir 是正确的值
-    if available_folders and 'viz_data_dir' not in st.session_state:
-        data_dir = default_path
+    # 🔧 显示最终确认的路径
+    if st.session_state.viz_confirmed_path:
+        final_path_msg = f"🎯 Active path: `{st.session_state.viz_confirmed_path}`" if st.session_state.language == 'en' else f"🎯 当前激活路径: `{st.session_state.viz_confirmed_path}`"
+        st.success(final_path_msg)
+        data_dir = st.session_state.viz_confirmed_path
+    else:
+        hint_msg = "⚠️ Please select a folder and click Confirm button" if st.session_state.language == 'en' else "⚠️ 请选择文件夹并点击确认按钮"
+        st.warning(hint_msg)
+        data_dir = None  # 未确认时不设置路径
     
     # 添加路径检查按钮
     check_btn = "🔍 Check Path" if st.session_state.language == 'en' else "🔍 检查路径"
@@ -2916,13 +3353,26 @@ def render_sidebar():
         cat_help = "Multi-select, click × to remove" if st.session_state.language == 'en' else "可多选，点击 × 删除"
         cat_placeholder = "Click to select..." if st.session_state.language == 'en' else "点击选择..."
         
-        current_selection = st.multiselect(
-            cat_label,
-            options=list(concept_groups.keys()),
-            default=valid_defaults,
-            help=cat_help,
-            placeholder=cat_placeholder
-        )
+        # 添加 ALL 按钮
+        col_select, col_all = st.columns([4, 1])
+        with col_all:
+            all_label = "ALL" if st.session_state.language == 'en' else "全选"
+            if st.button(all_label, key="select_all_groups", use_container_width=True):
+                st.session_state.selected_groups = list(concept_groups.keys())
+                # 自动选中所有概念
+                for grp in concept_groups.keys():
+                    for concept in concept_groups.get(grp, []):
+                        st.session_state.concept_checkboxes[concept] = True
+                st.rerun()
+        
+        with col_select:
+            current_selection = st.multiselect(
+                cat_label,
+                options=list(concept_groups.keys()),
+                default=valid_defaults,
+                help=cat_help,
+                placeholder=cat_placeholder
+            )
         
         # 检测变化并更新
         if current_selection != st.session_state.selected_groups:
@@ -2987,8 +3437,8 @@ def render_sidebar():
         else:
             base_export_path = os.path.expanduser('~/pyricu_export')
         db_name = st.session_state.get('database', 'mock')
-        # 生成带时间戳的默认目录名
-        timestamp_suffix = datetime.now().strftime('%Y%m%d_%H%M')
+        # 生成带时间戳的默认目录名（只保留年月日）
+        timestamp_suffix = datetime.now().strftime('%Y%m%d')
         default_export_path = str(Path(base_export_path) / f"{db_name}_{timestamp_suffix}")
         
         export_path = st.text_input(
@@ -8062,10 +8512,159 @@ def execute_sidebar_export():
             num_patients = len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
             parallel_workers, parallel_backend = get_optimal_parallel_config(num_patients, task_type='export')
             
-            # 显示系统资源信息（调试用）
+            # 显示系统资源信息（包含性能层级）
             resources = get_system_resources()
-            perf_msg = f"🚀 System: {resources['cpu_count']} cores, {resources['total_memory_gb']}GB RAM → Using {parallel_workers} workers ({parallel_backend})" if lang == 'en' else f"🚀 系统: {resources['cpu_count']} 核心, {resources['total_memory_gb']}GB 内存 → 使用 {parallel_workers} 并行 ({parallel_backend})"
+            perf_tier = resources.get('performance_tier', 'unknown')
+            # 🔧 使用 parallel_config 的 recommended_workers，确保显示与实际一致
+            actual_workers = resources.get('recommended_workers', parallel_workers)
+            tier_emoji = {
+                'high-performance': '🚀',
+                'server': '💻',
+                'workstation': '🖥️',
+                'standard': '💻',
+                'limited': '⚠️'
+            }.get(perf_tier, '💻')
+            
+            if lang == 'en':
+                perf_msg = f"{tier_emoji} System: {resources['cpu_count']} cores, {resources['total_memory_gb']}GB RAM ({perf_tier}) → Using {actual_workers} workers ({parallel_backend})"
+            else:
+                tier_cn = {
+                    'high-performance': '高性能服务器',
+                    'server': '服务器',
+                    'workstation': '工作站',
+                    'standard': '标准配置',
+                    'limited': '内存受限'
+                }.get(perf_tier, perf_tier)
+                perf_msg = f"{tier_emoji} 系统: {resources['cpu_count']} 核心, {resources['total_memory_gb']}GB 内存 ({tier_cn}) → 使用 {actual_workers} 并行 ({parallel_backend})"
             st.info(perf_msg)
+            
+            # ============================================================
+            # 🔧 步骤1：在加载前检测已存在的模块文件
+            # ============================================================
+            
+            # 构建 concept -> group_key 的映射
+            concept_to_group_pre = {}
+            for group_key in CONCEPT_GROUPS_INTERNAL.keys():
+                for c in CONCEPT_GROUPS_INTERNAL[group_key]:
+                    if c not in concept_to_group_pre:
+                        concept_to_group_pre[c] = group_key
+            
+            # 找出用户选择的每个模块
+            selected_modules = {}  # group_key -> [concepts]
+            for c in selected_concepts:
+                group_key = concept_to_group_pre.get(c, 'other')
+                if group_key not in selected_modules:
+                    selected_modules[group_key] = []
+                selected_modules[group_key].append(c)
+            
+            # 检测哪些模块的文件已存在
+            existing_modules = {}  # group_key -> file_path
+            for group_key, group_concepts in selected_modules.items():
+                # 生成预计的文件名
+                if len(group_concepts) <= 5:
+                    concepts_suffix = '_'.join(group_concepts)
+                else:
+                    concepts_suffix = '_'.join(group_concepts[:4]) + f'_etc{len(group_concepts)}'
+                
+                cohort_prefix = _generate_cohort_prefix()
+                if cohort_prefix:
+                    safe_filename = f"{cohort_prefix}_{group_key}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
+                else:
+                    safe_filename = f"{group_key}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
+                if len(safe_filename) > 150:
+                    safe_filename = safe_filename[:150]
+                
+                # 检查文件是否存在
+                for ext in ['.parquet', '.csv', '.xlsx']:
+                    file_path = export_dir / f"{safe_filename}{ext}"
+                    if file_path.exists():
+                        existing_modules[group_key] = file_path
+                        break
+            
+            # ============================================================
+            # 🔧 步骤2：如果有已存在的模块，一次性展示让用户选择
+            # ============================================================
+            if existing_modules:
+                # 检查用户是否已做出所有决定
+                skipped_modules = st.session_state.get('_skipped_modules', set())
+                overwrite_modules = st.session_state.get('_overwrite_modules', set())
+                
+                # 找出尚未决定的模块
+                pending_modules = [m for m in existing_modules.keys() 
+                                   if m not in skipped_modules and m not in overwrite_modules]
+                
+                if pending_modules:
+                    # 显示所有冲突模块，让用户一次性选择
+                    conflict_title = "⚠️ Existing Files Detected" if lang == 'en' else "⚠️ 检测到已存在的文件"
+                    st.warning(conflict_title)
+                    
+                    for group_key in pending_modules:
+                        file_path = existing_modules[group_key]
+                        col_name, col_overwrite, col_skip = st.columns([3, 1, 1])
+                        
+                        with col_name:
+                            st.markdown(f"📁 **{group_key}**: `{file_path.name}`")
+                        with col_overwrite:
+                            overwrite_btn = "🔄 Overwrite" if lang == 'en' else "🔄 覆盖"
+                            if st.button(overwrite_btn, key=f"pre_overwrite_{group_key}"):
+                                overwrite_modules.add(group_key)
+                                st.session_state['_overwrite_modules'] = overwrite_modules
+                                st.rerun()
+                        with col_skip:
+                            skip_btn = "⏭️ Skip" if lang == 'en' else "⏭️ 跳过"
+                            if st.button(skip_btn, key=f"pre_skip_{group_key}"):
+                                skipped_modules.add(group_key)
+                                st.session_state['_skipped_modules'] = skipped_modules
+                                st.rerun()
+                    
+                    # 添加快捷操作按钮
+                    st.markdown("---")
+                    col_all_overwrite, col_all_skip = st.columns(2)
+                    with col_all_overwrite:
+                        all_overwrite_btn = "🔄 Overwrite All" if lang == 'en' else "🔄 全部覆盖"
+                        if st.button(all_overwrite_btn, key="pre_overwrite_all"):
+                            for m in pending_modules:
+                                overwrite_modules.add(m)
+                            st.session_state['_overwrite_modules'] = overwrite_modules
+                            st.rerun()
+                    with col_all_skip:
+                        all_skip_btn = "⏭️ Skip All Existing" if lang == 'en' else "⏭️ 跳过所有已存在"
+                        if st.button(all_skip_btn, key="pre_skip_all"):
+                            for m in pending_modules:
+                                skipped_modules.add(m)
+                            st.session_state['_skipped_modules'] = skipped_modules
+                            st.rerun()
+                    
+                    await_msg = "Please choose how to handle existing files before continuing..." if lang == 'en' else "请先选择如何处理已存在的文件..."
+                    status_text.markdown(await_msg)
+                    return  # 暂停导出，等待用户决定
+            
+            # ============================================================
+            # 🔧 步骤3：根据用户选择，确定要加载的概念
+            # ============================================================
+            skipped_modules = st.session_state.get('_skipped_modules', set())
+            concepts_to_skip = set()
+            
+            for group_key in skipped_modules:
+                if group_key in selected_modules:
+                    for c in selected_modules[group_key]:
+                        concepts_to_skip.add(c)
+            
+            # 过滤掉将跳过的概念
+            concepts_to_load = [c for c in selected_concepts if c not in concepts_to_skip]
+            
+            if not concepts_to_load:
+                if concepts_to_skip:
+                    skip_msg = f"⏭️ All selected modules already exist, nothing to export" if lang == 'en' else "⏭️ 所有选中的模块都已存在，无需导出"
+                    st.info(skip_msg)
+                return
+            
+            # 显示实际要加载的概念
+            if concepts_to_skip:
+                skip_count = len(concepts_to_skip)
+                load_count = len(concepts_to_load)
+                skip_info = f"⏭️ Skipping {skip_count} concepts (files exist), loading {load_count} concepts" if lang == 'en' else f"⏭️ 跳过 {skip_count} 个概念（文件已存在），加载 {load_count} 个概念"
+                st.info(skip_info)
             
             try:
                 # 📝 批量加载所有概念（触发宽表批量加载优化）
@@ -8078,7 +8677,8 @@ def execute_sidebar_export():
                 database = st.session_state.get('database', 'eicu')
                 valid_concepts = []
                 unsupported_concepts = []
-                for c in selected_concepts:
+                # 🔧 使用 concepts_to_load 而不是 selected_concepts（跳过已存在模块的概念）
+                for c in concepts_to_load:
                     concept_def = cd.get(c)
                     if concept_def:
                         # 🔧 FIX 2025-01-23: SOFA 等回调概念没有直接的 sources，但有 sub_concepts
@@ -8102,13 +8702,16 @@ def execute_sidebar_export():
                     st.error("❌ 所选概念在当前数据库中都不可用")
                     return
                 
+                # 🚀 智能并行：根据概念数量和系统资源动态调整 concept_workers
+                smart_concept_workers = min(len(valid_concepts), actual_workers) if len(valid_concepts) > 1 else 1
+                
                 load_kwargs = {
                     'data_path': st.session_state.data_path,
                     'database': database,
                     'concepts': valid_concepts,  # 🚀 只传入有效概念
                     'verbose': False,
                     'merge': False,  # 返回 dict，每个概念单独的DataFrame
-                    'concept_workers': 1,
+                    'concept_workers': smart_concept_workers,  # 🚀 智能并行
                     # 不传 parallel_workers，避免触发分批加载路径
                 }
                 if patient_ids_filter:
@@ -8119,7 +8722,7 @@ def execute_sidebar_export():
                 try:
                     result = load_concepts(**load_kwargs)
                     
-                    # 处理返回结果（dict of DataFrames）
+                    # 处理返回结果（dict of DataFrames 或 单个 DataFrame）
                     if isinstance(result, dict):
                         for cname, df in result.items():
                             # 🔧 处理各种返回类型
@@ -8130,16 +8733,26 @@ def execute_sidebar_export():
                             elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
                                 df = df.data
                             
+                            # 🔧 ICUTable 可能返回 DataFrame 或 Series
                             if isinstance(df, pd.DataFrame) and len(df) > 0:
                                 data[cname] = df
                             elif isinstance(df, pd.Series):
+                                # Series 转为 DataFrame
                                 data[cname] = df.to_frame().reset_index()
-                    elif isinstance(result, pd.DataFrame):
-                        # 如果返回单个DataFrame（merged模式），拆分成各列
+                    elif isinstance(result, pd.DataFrame) and len(result) > 0:
+                        # 🔧 返回的是单个 DataFrame（可能来自单个概念）
+                        # 检查是否包含请求的概念列
+                        loaded_concepts = []
                         for concept in selected_concepts:
                             if concept in result.columns:
-                                data[concept] = result
-                                break  # merged模式只需要一个
+                                loaded_concepts.append(concept)
+                        
+                        if loaded_concepts:
+                            # 将整个 DataFrame 保存，以第一个概念命名
+                            data[loaded_concepts[0]] = result
+                        elif len(valid_concepts) == 1:
+                            # 单个概念请求，直接使用该概念名
+                            data[valid_concepts[0]] = result
                     
                     # 检查哪些概念没有加载成功
                     failed_concepts = [c for c in selected_concepts if c not in data]
@@ -8239,6 +8852,10 @@ def execute_sidebar_export():
         
         # 导出合并后的分组数据（宽表格式）
         total_groups = len(grouped_data)
+        
+        # 🔧 检查是否有已存在的文件需要覆盖
+        skipped_modules = st.session_state.get('_skipped_modules', set())
+        
         for idx, (group_name, concept_dfs) in enumerate(grouped_data.items()):
             module_start_time = time_module.time()
             
@@ -8295,7 +8912,9 @@ def execute_sidebar_export():
                     id_col = col
                     merge_cols.append(col)
                     break
-            for col in time_candidates:
+            # 🔧 由于时间列已统一为 charttime，优先检测 charttime
+            time_candidates_ordered = ['charttime', 'time', 'starttime', 'endtime', 'itemtime']
+            for col in time_candidates_ordered:
                 if col in first_df.columns:
                     time_col = col
                     merge_cols.append(col)
@@ -8310,26 +8929,37 @@ def execute_sidebar_export():
                     all_dfs.append(cdf)
                 merged_df = pd.concat(all_dfs, ignore_index=True)
             else:
-                # 使用 merge 创建宽表
-                merged_df = None
+                # � 定义时间和ID相关列（用于类型统一）
+                time_related_cols = {'charttime', 'time', 'starttime', 'endtime', 'itemtime'}
+                id_related_cols = {'stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID'}
+                
+                # 🚀 优化：使用 concat + pivot 替代迭代式 merge，避免数据膨胀
+                all_concept_dfs = []
+                
                 for concept_name, df in concept_dfs.items():
                     # 🔧 确保当前 df 包含所有 merge_cols
-                    # 如果缺少某列，跳过合并该概念（改为追加）
                     missing_cols = [c for c in merge_cols if c not in df.columns]
                     if missing_cols:
-                        # 该概念缺少合并列，作为独立数据追加
-                        if merged_df is None:
-                            merged_df = df.copy()
-                            # 重命名值列
-                            value_cols = [c for c in df.columns if c not in merge_cols]
-                            if len(value_cols) == 1:
-                                merged_df = merged_df.rename(columns={value_cols[0]: concept_name})
-                        else:
-                            # 作为独立行追加
-                            df_copy = df.copy()
-                            df_copy['_concept'] = concept_name
-                            merged_df = pd.concat([merged_df, df_copy], ignore_index=True)
+                        # 该概念缺少合并列，跳过
                         continue
+                    
+                    # 复制一份避免修改原始数据
+                    df = df.copy()
+                    
+                    # 🔧 在添加到列表前统一类型，避免后续 merge 类型冲突
+                    for col in merge_cols:
+                        if col in df.columns:
+                            col_dtype = df[col].dtype
+                            if col in time_related_cols:
+                                # 时间列统一转为 float64
+                                if col_dtype == 'object' or not pd.api.types.is_numeric_dtype(col_dtype):
+                                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                            elif col in id_related_cols:
+                                # ID列统一转为 Int64
+                                if col_dtype == 'object':
+                                    df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+                                elif pd.api.types.is_numeric_dtype(col_dtype):
+                                    df[col] = df[col].astype('Int64')
                     
                     # 只保留合并键和当前 concept 的值列
                     # 🔧 删除非核心列（如 valueuom 等元数据列）
@@ -8343,34 +8973,72 @@ def execute_sidebar_export():
                     # 如果只有一个值列，用 concept 名重命名
                     if len(value_cols) == 1:
                         df = df.rename(columns={value_cols[0]: concept_name})
+                        all_concept_dfs.append(df[merge_cols + [concept_name]])
                     elif len(value_cols) > 1:
                         # 多个值列，添加前缀
                         rename_map = {c: f"{concept_name}_{c}" for c in value_cols if c != concept_name}
                         df = df.rename(columns=rename_map)
+                        keep_cols = merge_cols + [c for c in df.columns if c not in merge_cols]
+                        all_concept_dfs.append(df[keep_cols])
+                
+                # 🚀 智能合并策略：根据DataFrame特性选择最优方法
+                if len(all_concept_dfs) == 0:
+                    merged_df = None
+                elif len(all_concept_dfs) == 1:
+                    merged_df = all_concept_dfs[0]
+                else:
+                    #  性能优化：检测行数相近的DataFrame，使用concat+pivot避免outer join
+                    row_counts = [len(df) for df in all_concept_dfs]
+                    avg_rows = sum(row_counts) / len(row_counts)
+                    max_deviation = max(abs(count - avg_rows) / (avg_rows + 1) for count in row_counts)
                     
-                    if merged_df is None:
-                        merged_df = df
+                    # 如果行数差异<20%，说明时间点基本对齐，使用快速concat
+                    if max_deviation < 0.2 and len(all_concept_dfs) > 5:
+                        # 🔥 快速路径：concat + pivot（避免多次outer join）
+                        # 为每个DataFrame添加概念标识列
+                        for i, df in enumerate(all_concept_dfs):
+                            value_col = [c for c in df.columns if c not in merge_cols][0]
+                            df['_concept'] = value_col
+                            df['_value'] = df[value_col]
+                            df.drop(columns=[value_col], inplace=True)
+                        
+                        # Concat所有数据
+                        stacked = pd.concat(all_concept_dfs, ignore_index=True)
+                        
+                        # Pivot成宽表
+                        merged_df = stacked.pivot_table(
+                            index=merge_cols,
+                            columns='_concept',
+                            values='_value',
+                            aggfunc='first'  # 取第一个非空值
+                        ).reset_index()
                     else:
-                        # 🔧 FIX: 合并前确保 merge_cols 的类型一致
-                        for col in merge_cols:
-                            if col in merged_df.columns and col in df.columns:
-                                # 统一转换为相同类型
-                                merged_dtype = merged_df[col].dtype
-                                df_dtype = df[col].dtype
-                                if merged_dtype != df_dtype:
-                                    # 优先使用 float64 (数值类型)
-                                    if pd.api.types.is_numeric_dtype(merged_dtype) or pd.api.types.is_numeric_dtype(df_dtype):
-                                        try:
-                                            merged_df[col] = pd.to_numeric(merged_df[col], errors='coerce')
-                                            df[col] = pd.to_numeric(df[col], errors='coerce')
-                                        except Exception:
-                                            pass
-                                    else:
-                                        # 都转为 object 类型
-                                        merged_df[col] = merged_df[col].astype(str)
-                                        df[col] = df[col].astype(str)
-                        # 外连接合并
-                        merged_df = pd.merge(merged_df, df, on=merge_cols, how='outer')
+                        # 🔧 标准路径：reduce + merge（但限制最大概念数避免过慢）
+                        if len(all_concept_dfs) > 10:
+                            # 超过10个概念，分批merge再合并
+                            batch_size = 5
+                            batches = []
+                            for i in range(0, len(all_concept_dfs), batch_size):
+                                batch = all_concept_dfs[i:i+batch_size]
+                                from functools import reduce
+                                batch_merged = reduce(
+                                    lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                                    batch
+                                )
+                                batches.append(batch_merged)
+                            
+                            # 最后合并各批次
+                            merged_df = reduce(
+                                lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                                batches
+                            )
+                        else:
+                            # 概念数<=10，直接reduce
+                            from functools import reduce
+                            merged_df = reduce(
+                                lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                                all_concept_dfs
+                            )
             
             if merged_df is None or len(merged_df) == 0:
                 continue
@@ -8395,17 +9063,64 @@ def execute_sidebar_export():
             if len(safe_filename) > 150:
                 safe_filename = safe_filename[:150]
             
+            # 确定文件路径
             if export_format == 'csv':
                 file_path = export_dir / f"{safe_filename}.csv"
-                merged_df.to_csv(file_path, index=False)
             elif export_format == 'parquet':
                 file_path = export_dir / f"{safe_filename}.parquet"
-                merged_df.to_parquet(file_path, index=False)
             elif export_format == 'excel':
                 file_path = export_dir / f"{safe_filename}.xlsx"
-                merged_df.to_excel(file_path, index=False)
             else:
                 file_path = export_dir / f"{safe_filename}.parquet"
+            
+            # 🔧 检查文件是否已存在
+            if file_path.exists():
+                # 检查用户是否已选择跳过此模块
+                if group_name in skipped_modules:
+                    skip_msg = f"⏭️ Skipped (file exists): `{group_name}`" if lang == 'en' else f"⏭️ 已跳过（文件已存在）: `{group_name}`"
+                    st.info(skip_msg)
+                    continue
+                
+                # 检查用户是否已选择覆盖此模块
+                overwrite_modules = st.session_state.get('_overwrite_modules', set())
+                if group_name in overwrite_modules:
+                    # 用户已确认覆盖，继续导出
+                    pass
+                else:
+                    # 显示覆盖确认
+                    with st.container():
+                        exist_msg = f"⚠️ File exists: `{file_path.name}`" if lang == 'en' else f"⚠️ 文件已存在: `{file_path.name}`"
+                        st.warning(exist_msg)
+                        
+                        col_overwrite, col_skip = st.columns(2)
+                        with col_overwrite:
+                            overwrite_btn = f"🔄 Overwrite" if lang == 'en' else "🔄 覆盖"
+                            if st.button(overwrite_btn, key=f"overwrite_{group_name}"):
+                                # 记录覆盖的模块
+                                overwrite_modules.add(group_name)
+                                st.session_state['_overwrite_modules'] = overwrite_modules
+                                st.rerun()
+                        with col_skip:
+                            skip_btn = f"⏭️ Skip" if lang == 'en' else "⏭️ 跳过"
+                            if st.button(skip_btn, key=f"skip_{group_name}"):
+                                # 记录跳过的模块
+                                skipped_modules.add(group_name)
+                                st.session_state['_skipped_modules'] = skipped_modules
+                                st.rerun()
+                        
+                        # 如果用户还没做选择，暂停导出流程
+                        await_msg = "Waiting for your decision..." if lang == 'en' else "等待您的选择..."
+                        status_text.markdown(await_msg)
+                        return  # 暂停导出，等待用户决定
+            
+            # 写入文件
+            if export_format == 'csv':
+                merged_df.to_csv(file_path, index=False)
+            elif export_format == 'parquet':
+                merged_df.to_parquet(file_path, index=False)
+            elif export_format == 'excel':
+                merged_df.to_excel(file_path, index=False)
+            else:
                 merged_df.to_parquet(file_path, index=False)
             
             exported_files.append(str(file_path))
@@ -8423,6 +9138,12 @@ def execute_sidebar_export():
         # 完成
         progress_bar.progress(1.0)
         status_text.empty()
+        
+        # 🔧 清理临时状态
+        if '_skipped_modules' in st.session_state:
+            del st.session_state['_skipped_modules']
+        if '_overwrite_modules' in st.session_state:
+            del st.session_state['_overwrite_modules']
         
         if exported_files:
             st.session_state.export_completed = True
