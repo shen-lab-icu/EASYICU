@@ -2113,6 +2113,95 @@ def generate_mock_data(n_patients=10, hours=72):
         abx_records.append({'stay_id': pid, 'abx': 1 if np.random.random() < 0.7 else 0})
     data['abx'] = pd.DataFrame(abx_records)
     
+    # ============ KDIGO AKI 急性肾损伤数据 ============
+    aki_records = []
+    for pid in patient_ids:
+        meta = patient_sepsis_meta[pid]
+        baseline_crea = np.random.uniform(0.6, 1.2)
+        
+        for t in time_points[::4]:  # 每4小时
+            # 基线肌酐附近波动
+            crea = baseline_crea * (1 + np.random.normal(0, 0.1))
+            
+            # Sepsis 患者在发病后可能发生 AKI
+            if meta['is_septic'] and t >= meta['onset']:
+                # 30% 概率发生 AKI
+                if np.random.random() < 0.3:
+                    crea = baseline_crea * np.random.uniform(1.5, 3.0)
+            
+            # 计算 AKI 分期
+            ratio = crea / baseline_crea
+            if ratio >= 3.0 or crea >= 4.0:
+                aki_stage = 3
+            elif ratio >= 2.0:
+                aki_stage = 2
+            elif ratio >= 1.5 or crea >= baseline_crea + 0.3:
+                aki_stage = 1
+            else:
+                aki_stage = 0
+            
+            aki_records.append({
+                'stay_id': pid, 'time': t,
+                'crea': round(crea, 2),
+                'creat_low_past_7day': round(baseline_crea, 2),
+                'aki_stage': aki_stage,
+                'aki': 1 if aki_stage > 0 else 0
+            })
+    data['aki'] = pd.DataFrame(aki_records)
+    data['aki_stage'] = data['aki'][['stay_id', 'time', 'aki_stage']].copy()
+    
+    # ============ 循环衰竭 (circEWS) 数据 ============
+    circ_failure_records = []
+    for pid in patient_ids:
+        meta = patient_sepsis_meta[pid]
+        
+        for t in time_points:
+            # 基线乳酸和MAP
+            base_lact = np.random.uniform(0.8, 1.5)
+            base_map = np.random.uniform(75, 95)
+            
+            lact = base_lact + np.random.normal(0, 0.3)
+            map_val = base_map + np.random.normal(0, 5)
+            
+            # Sepsis 患者发病后可能发生循环衰竭
+            if meta['is_septic'] and t >= meta['onset']:
+                if np.random.random() < 0.4:
+                    lact = np.random.uniform(2.5, 8.0)
+                    map_val = np.random.uniform(50, 70)
+            
+            # 计算循环衰竭事件等级
+            lactate_elevated = lact >= 2.0
+            map_low = map_val <= 65
+            
+            if lactate_elevated and map_low:
+                circ_event = np.random.choice([1, 2, 3], p=[0.4, 0.35, 0.25])
+            elif lactate_elevated:
+                circ_event = 1 if np.random.random() < 0.3 else 0
+            else:
+                circ_event = 0
+            
+            circ_failure_records.append({
+                'stay_id': pid, 'time': t,
+                'lact': round(lact, 2),
+                'map': round(map_val, 1),
+                'circ_event': circ_event,
+                'circ_failure': 1 if circ_event > 0 else 0
+            })
+    data['circ_failure'] = pd.DataFrame(circ_failure_records)
+    
+    # ============ 呼吸机参数 ============
+    peep_records = []
+    tidal_vol_records = []
+    pip_records = []
+    for pid in patient_ids:
+        for t in time_points[::2]:
+            peep_records.append({'stay_id': pid, 'time': t, 'peep': np.random.uniform(5, 15)})
+            tidal_vol_records.append({'stay_id': pid, 'time': t, 'tidal_vol': np.random.uniform(350, 550)})
+            pip_records.append({'stay_id': pid, 'time': t, 'pip': np.random.uniform(15, 35)})
+    data['peep'] = pd.DataFrame(peep_records)
+    data['tidal_vol'] = pd.DataFrame(tidal_vol_records)
+    data['pip'] = pd.DataFrame(pip_records)
+    
     return data, patient_ids
 
 
