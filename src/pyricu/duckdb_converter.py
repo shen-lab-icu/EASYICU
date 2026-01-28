@@ -97,6 +97,15 @@ class DuckDBConverter:
         else:
             return 'unknown'
     
+    # HiRID 参考文件和非数据表（不需要转换）
+    HIRID_SKIP_FILES = {
+        'hirid_variable_reference_preprocessed',
+        'hirid_variable_reference',
+        'hirid_outcome_imputation_parameters',
+        'general_table',
+        'apache_patient_result',
+    }
+    
     def _find_csv_files(self) -> List[Path]:
         """Find all CSV and CSV.GZ files in the data directory."""
         csv_files = []
@@ -111,7 +120,24 @@ class DuckDBConverter:
                 for ext in ['*.csv', '*.csv.gz', '*.CSV', '*.CSV.GZ']:
                     csv_files.extend(subpath.glob(ext))
         
-        return sorted(csv_files)
+        # 过滤掉不需要转换的文件（如 HiRID 参考文件）
+        filtered_files = []
+        for f in csv_files:
+            # 获取文件名（去掉所有扩展名）
+            stem = f.stem
+            if stem.endswith('.csv'):
+                stem = stem[:-4]
+            stem_lower = stem.lower()
+            
+            # 跳过 HiRID 参考文件
+            if self.db_type == 'hirid' and stem_lower in self.HIRID_SKIP_FILES:
+                if self.verbose:
+                    logger.info(f"  ⏭️ Skipping reference file: {f.name}")
+                continue
+            
+            filtered_files.append(f)
+        
+        return sorted(filtered_files)
     
     def _get_parquet_path(self, csv_path: Path) -> Path:
         """Get the output parquet path for a CSV file."""
@@ -178,20 +204,24 @@ class DuckDBConverter:
             is_gzipped = str(source_path).lower().endswith('.gz')
             compression_opt = ", compression='gzip'" if is_gzipped else ""
             
+            # AUMC 使用 latin-1 编码（含有特殊字符如 °C）
+            encoding_opt = ", encoding='latin-1'" if self.db_type == 'aumc' else ""
+            
             # 优化参数：
             # - ZSTD压缩比snappy高30%，速度接近
             # - ROW_GROUP_SIZE=1000000 减少写入次数
-            # - sample_size=-1 扫描全部以精确推断类型（对小文件快）
+            # - sample_size=100000 平衡速度和类型推断准确性（避免扫描80GB文件）
             con.execute(f"""
                 COPY (
                     SELECT * FROM read_csv('{escaped_path}', 
                         auto_detect=true, 
                         header=true,
-                        sample_size=-1,
+                        sample_size=100000,
                         ignore_errors=true,
                         null_padding=true,
                         all_varchar=false
                         {compression_opt}
+                        {encoding_opt}
                     )
                 ) TO '{escaped_output}' (
                     FORMAT PARQUET, 
