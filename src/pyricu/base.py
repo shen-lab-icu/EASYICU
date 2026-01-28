@@ -111,7 +111,7 @@ class BaseICULoader:
                     'eicu': ['patient.parquet', 'patient.csv', 'patient.csv.gz', 'vitalPeriodic.parquet'],
                     'aumc': ['numericitems', 'admissions.parquet'],
                     'miiv': ['chartevents', 'icustays.parquet'],
-                    'hirid': ['general.parquet', 'observations'],
+                    'hirid': ['general_table.csv', 'general_table.parquet', 'observations'],  # 🔧 FIX: 正确的表名
                 }
                 for db_name, markers in marker_files.items():
                     if any((path / m).exists() for m in markers):

@@ -107,7 +107,7 @@ PATIENT_ID_SOURCES: Dict[str, tuple[str, str]] = {
     "miiv": ("icustays.parquet", "stay_id"),
     "eicu": ("patient.parquet", "patientunitstayid"),
     "aumc": ("admissions.parquet", "admissionid"),
-    "hirid": ("general.parquet", "patientid"),
+    "hirid": ("general_table.csv", "patientid"),  # 🔧 FIX: 使用正确的表名
 }
 
 @dataclass
