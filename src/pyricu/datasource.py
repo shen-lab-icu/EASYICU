@@ -274,6 +274,7 @@ class ICUDataSource:
         self.enable_cache = enable_cache
         self._table_cache: dict = {}  # 缓存已加载的原始表数据
         self._preloaded_tables: dict = {}  # 🚀 预加载的完整表（用于多患者批处理）
+        self._bucket_dir_logged: set = set()  # 🔧 已打印日志的分桶目录（避免重复日志）
         self.format_priority = format_priority or self.get_format_priority()
         self._lock = RLock()
 
@@ -1181,7 +1182,11 @@ class ICUDataSource:
                     # 检查是否有 bucket_id=* 子目录（分桶格式标识）
                     bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
                     if bucket_subdirs:
-                        logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
+                        # 🔧 避免重复日志：只在首次发现时打印info
+                        bucket_key = str(bucket_dir)
+                        if bucket_key not in self._bucket_dir_logged:
+                            self._bucket_dir_logged.add(bucket_key)
+                            logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
                         return bucket_dir
         
         return None
@@ -1202,7 +1207,11 @@ class ICUDataSource:
             if bucket_dir.is_dir():
                 bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
                 if bucket_subdirs:
-                    logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
+                    # 🔧 避免重复日志：只在首次发现时打印info
+                    bucket_key = str(bucket_dir)
+                    if bucket_key not in self._bucket_dir_logged:
+                        self._bucket_dir_logged.add(bucket_key)
+                        logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
                     return bucket_dir
         
         table_cfg = self.config.get_table(table_name)
@@ -1288,7 +1297,11 @@ class ICUDataSource:
                     # 检查是否有 bucket_id=* 子目录
                     bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
                     if bucket_subdirs:
-                        logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
+                        # 🔧 避免重复日志：只在首次发现时打印info
+                        bucket_key = str(bucket_dir)
+                        if bucket_key not in self._bucket_dir_logged:
+                            self._bucket_dir_logged.add(bucket_key)
+                            logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
                         return bucket_dir
             
             # Try .parquet extension - 检查多个可能的位置

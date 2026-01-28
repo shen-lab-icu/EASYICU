@@ -143,6 +143,20 @@ except ImportError as e:
 # ICUQuickLoader等已被重构为BaseICULoader和统一的api.load_concepts
 _HAS_QUICKSTART = False
 
+# 导入并行配置模块（用于高级用户自定义配置）
+try:
+    from .parallel_config import (
+        ParallelConfig,
+        get_parallel_config,
+        get_global_config,
+        get_recommended_batch_size,
+        reset_global_config,
+    )
+    _HAS_PARALLEL_CONFIG = True
+except ImportError as e:
+    print(f"Warning: Failed to import parallel_config module: {e}")
+    _HAS_PARALLEL_CONFIG = False
+
 # 从 load_concepts 模块导入（保留向后兼容，但标记为废弃）
 # 注意：旧的 load_concepts.load_concepts 已废弃，推荐使用 api.load_concepts
 try:
