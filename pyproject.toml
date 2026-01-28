@@ -36,11 +36,13 @@ viz = [
 ]
 webapp = [
   "streamlit>=1.28",
+  "streamlit-echarts>=0.4.0",
   "plotly>=5.15",
   "kaleido>=0.2.1",
   "openpyxl>=3.1",
   "psutil>=5.9",
-  "duckdb>=0.9.0"
+  "duckdb>=0.9.0",
+  "scipy>=1.10"
 ]
 all = [
   "pyricu[dev,viz,webapp]"

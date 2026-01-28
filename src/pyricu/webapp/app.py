@@ -1326,9 +1326,9 @@ def init_session_state():
         st.session_state.language = 'en'  # 默认英文
     # 🚀 性能优化：患者数量限制
     # 全量 MIIV 约 5万患者/4000万行，加载需 ~50s；100患者约2s
-    # 🔧 FIX 2025-01-23: 默认100患者，避免意外全量加载导致长时间等待
+    # 🔧 FIX 2025-01-28: 默认全量加载（0=不限制），满足大多数用户需求
     if 'patient_limit' not in st.session_state:
-        st.session_state.patient_limit = 100  # 默认100患者，快速测试
+        st.session_state.patient_limit = 0  # 默认全量加载
     if 'available_patient_ids' not in st.session_state:
         st.session_state.available_patient_ids = None
 
@@ -1530,6 +1530,10 @@ def validate_database_path(data_path: str, database: str) -> dict:
     parquet_files = list(path.rglob('*.parquet'))
     parquet_names = set(f.name.lower().replace('.parquet', '') for f in parquet_files)
     
+    # 对于某些数据库（如 HiRID），某些核心表可能是 CSV 格式
+    csv_files = list(path.glob('*.csv'))
+    csv_names = set(f.name.lower().replace('.csv', '') for f in csv_files)
+    
     # 检查分片目录（如 chartevents/1.parquet）
     parquet_dirs = set()
     for pf in parquet_files:
@@ -1553,8 +1557,12 @@ def validate_database_path(data_path: str, database: str) -> dict:
                 table_name = subdir.name[:-7]  # remove '_bucket'
                 bucket_dirs.add(table_name.lower())
     
-    # 合并所有找到的表（单文件、分片目录、分桶目录）
-    all_found = parquet_names | parquet_dirs | bucket_dirs
+    # 合并所有找到的表（单文件、分片目录、分桶目录、CSV文件）
+    all_found = parquet_names | parquet_dirs | bucket_dirs | csv_names
+    
+    # HiRID 特殊处理：pharma_bucket → pharma_records
+    if database == 'hirid' and 'pharma' in all_found:
+        all_found.add('pharma_records')
     
     # 检查各类别的表
     db_tables = required_parquet_tables.get(database, {})
@@ -2211,24 +2219,75 @@ def render_visualization_mode():
     hint_text = "Load data from exported files for interactive analysis" if st.session_state.language == 'en' else "从已导出的数据加载并进行交互式分析"
     st.caption(hint_text)
     
-    # 数据目录选择
-    # 优先使用 last_export_dir（导出后记录的实际路径），其次是 export_path
+    # 数据目录选择 - 支持选择已导出的文件夹
     import platform
-    if st.session_state.get('last_export_dir'):
-        default_path = st.session_state.get('last_export_dir')
+    if platform.system() == 'Windows':
+        base_export_path = r'D:\pyicu_export'
     else:
-        if platform.system() == 'Windows':
-            default_path = st.session_state.get('export_path', r'D:\pyicu_export\miiv')
-        else:
-            default_path = st.session_state.get('export_path', os.path.expanduser('~/pyricu_export/miiv'))
+        base_export_path = os.path.expanduser('~/pyricu_export')
     
-    data_dir = st.text_input(
-        get_text('data_dir'),
-        value=default_path,
-        placeholder="Select exported data directory" if st.session_state.language == 'en' else "选择已导出数据的目录",
-        key="viz_data_dir",
-        help="Directory containing exported CSV/Parquet/Excel files" if st.session_state.language == 'en' else "包含已导出的 CSV/Parquet/Excel 文件的目录"
-    )
+    # 扫描已有的导出文件夹
+    available_folders = []
+    if Path(base_export_path).exists():
+        available_folders = sorted(
+            [d.name for d in Path(base_export_path).iterdir() if d.is_dir()],
+            reverse=True  # 最新的在前
+        )
+    
+    # 文件夹筛选器
+    if available_folders:
+        filter_label = "Filter by database" if st.session_state.language == 'en' else "按数据库筛选"
+        db_prefixes = ['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic', 'mock', 'all']
+        db_options = ['All'] + [p for p in db_prefixes if any(f.startswith(p) for f in available_folders)]
+        db_filter = st.selectbox(
+            filter_label,
+            options=db_options,
+            index=0,
+            key="viz_db_filter"
+        )
+        
+        # 过滤文件夹列表
+        if db_filter != 'All':
+            filtered_folders = [f for f in available_folders if f.startswith(db_filter)]
+        else:
+            filtered_folders = available_folders
+        
+        # 文件夹选择器
+        if filtered_folders:
+            folder_label = "Select exported folder" if st.session_state.language == 'en' else "选择导出文件夹"
+            selected_folder = st.selectbox(
+                folder_label,
+                options=filtered_folders,
+                index=0,
+                key="viz_folder_select",
+                help="Folders are sorted by timestamp (newest first)" if st.session_state.language == 'en' else "文件夹按时间戳排序（最新在前）"
+            )
+            default_path = str(Path(base_export_path) / selected_folder) if selected_folder else ''
+        else:
+            default_path = ''
+            no_folder_msg = "No folders match the filter" if st.session_state.language == 'en' else "没有符合筛选条件的文件夹"
+            st.info(no_folder_msg)
+    else:
+        # 如果没有已有文件夹，使用 last_export_dir 或默认路径
+        if st.session_state.get('last_export_dir'):
+            default_path = st.session_state.get('last_export_dir')
+        else:
+            default_path = st.session_state.get('export_path', str(Path(base_export_path) / 'miiv'))
+    
+    # 仍然提供手动输入选项
+    manual_label = "Or enter path manually" if st.session_state.language == 'en' else "或手动输入路径"
+    with st.expander(manual_label, expanded=not available_folders):
+        data_dir = st.text_input(
+            get_text('data_dir'),
+            value=default_path,
+            placeholder="Select exported data directory" if st.session_state.language == 'en' else "选择已导出数据的目录",
+            key="viz_data_dir",
+            help="Directory containing exported CSV/Parquet/Excel files" if st.session_state.language == 'en' else "包含已导出的 CSV/Parquet/Excel 文件的目录"
+        )
+    
+    # 如果使用了文件夹选择器，确保 data_dir 是正确的值
+    if available_folders and 'viz_data_dir' not in st.session_state:
+        data_dir = default_path
     
     # 添加路径检查按钮
     check_btn = "🔍 Check Path" if st.session_state.language == 'en' else "🔍 检查路径"
@@ -2531,17 +2590,41 @@ def render_sidebar():
             # 模拟数据参数
             n_patients_label = "Number of Patients" if st.session_state.language == 'en' else "患者数量"
             hours_label = "Data Duration (hours)" if st.session_state.language == 'en' else "数据时长(小时)"
-            n_patients = st.slider(n_patients_label, 5, 50, 10)
+            n_patients = st.slider(n_patients_label, 50, 500, 100)
             hours = st.slider(hours_label, 24, 168, 72)
             st.session_state.mock_params = {'n_patients': n_patients, 'hours': hours}
             
         else:
             # 真实数据模式
+            # 🔧 自动检测数据库：根据路径中的关键词自动选择
+            def detect_database_from_path(path: str) -> str:
+                """根据路径自动检测数据库类型"""
+                if not path:
+                    return st.session_state.get('database', 'miiv')
+                path_lower = path.lower()
+                if 'hirid' in path_lower:
+                    return 'hirid'
+                elif 'eicu' in path_lower:
+                    return 'eicu'
+                elif 'aumc' in path_lower or 'amsterdam' in path_lower:
+                    return 'aumc'
+                elif 'mimiciii' in path_lower or 'mimic-iii' in path_lower or 'mimic_iii' in path_lower or 'mimic3' in path_lower:
+                    return 'mimic'
+                elif 'mimiciv' in path_lower or 'mimic-iv' in path_lower or 'mimic_iv' in path_lower or 'mimic4' in path_lower:
+                    return 'miiv'
+                elif 'sic' in path_lower:
+                    return 'sic'
+                return st.session_state.get('database', 'miiv')
+            
+            db_options = ['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic']
+            detected_db = detect_database_from_path(st.session_state.get('data_path', ''))
+            default_idx = db_options.index(detected_db) if detected_db in db_options else 0
+            
             db_label = "Select Database" if st.session_state.language == 'en' else "选择数据库"
             database = st.selectbox(
                 db_label,
-                options=['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic'],
-                index=0,
+                options=db_options,
+                index=default_idx,
                 format_func=lambda x: {
                     'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD', 
                     'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID',
@@ -2575,8 +2658,18 @@ def render_sidebar():
             data_path = st.text_input(
                 path_label,
                 value=st.session_state.data_path or default_path,
-                placeholder=f"/path/to/{database}"
+                placeholder=f"/path/to/{database}",
+                on_change=lambda: None  # 触发 rerun 以检测新数据库
             )
+            
+            # 🔧 当路径变化时自动检测并更新数据库
+            if data_path and data_path != st.session_state.get('_last_data_path', ''):
+                detected_db = detect_database_from_path(data_path)
+                if detected_db != database:
+                    st.session_state.database = detected_db
+                    st.session_state._last_data_path = data_path
+                    st.rerun()
+                st.session_state._last_data_path = data_path
             
             # 验证按钮
             validate_btn = "🔍 Validate Data Path" if st.session_state.language == 'en' else "🔍 验证数据路径"
@@ -2886,14 +2979,17 @@ def render_sidebar():
         step4_title = "Step 4: Export Data" if st.session_state.language == 'en' else "步骤4: 导出数据"
         st.markdown(f"### 💾 {step4_title}")
         
-        # 导出路径配置 - 实时根据数据库显示子目录
+        # 导出路径配置 - 实时根据数据库显示子目录，添加时间戳后缀
         import platform
+        from datetime import datetime
         if platform.system() == 'Windows':
             base_export_path = r'D:\pyicu_export'
         else:
             base_export_path = os.path.expanduser('~/pyricu_export')
         db_name = st.session_state.get('database', 'mock')
-        default_export_path = str(Path(base_export_path) / db_name)
+        # 生成带时间戳的默认目录名
+        timestamp_suffix = datetime.now().strftime('%Y%m%d_%H%M')
+        default_export_path = str(Path(base_export_path) / f"{db_name}_{timestamp_suffix}")
         
         export_path = st.text_input(
             "Export Path" if st.session_state.language == 'en' else "导出路径",
@@ -2949,9 +3045,9 @@ def render_sidebar():
             50000: "50,000",
             0: "All patients (slower)" if st.session_state.language == 'en' else "全部患者（较慢）"
         }
-        current_limit = st.session_state.get('patient_limit', 100)  # 默认100
+        current_limit = st.session_state.get('patient_limit', 0)  # 默认全量
         if current_limit not in patient_limit_options:
-            current_limit = 100  # 🔧 FIX: 默认100而不是0
+            current_limit = 0  # 🔧 FIX: 默认全量加载
         patient_limit = st.selectbox(
             limit_label,
             options=patient_limit_options,
@@ -3568,10 +3664,10 @@ def render_data_overview():
     for i, (icon, title, desc) in enumerate(features):
         with cols[i]:
             st.markdown(f'''
-            <div class="feature-card" style="text-align:center;min-height:120px">
+            <div class="feature-card" style="text-align:center;min-height:140px;display:flex;flex-direction:column;justify-content:center;padding:16px">
                 <div style="font-size:2rem">{icon}</div>
-                <div style="font-weight:600;color:#4fc3f7">{title}</div>
-                <div style="font-size:0.85rem;color:#aaa">{desc}</div>
+                <div style="font-weight:600;color:#4fc3f7;margin:8px 0 4px 0">{title}</div>
+                <div style="font-size:0.85rem;color:#aaa;line-height:1.4">{desc}</div>
             </div>
             ''', unsafe_allow_html=True)
     
@@ -3764,10 +3860,10 @@ def render_home_viz_mode(lang):
     for i, (icon, title, desc) in enumerate(features):
         with cols[i]:
             st.markdown(f'''
-            <div class="feature-card" style="text-align:center;min-height:100px">
+            <div class="feature-card" style="text-align:center;min-height:140px;display:flex;flex-direction:column;justify-content:center;padding:16px">
                 <div style="font-size:2rem">{icon}</div>
-                <div style="font-weight:600;color:#4fc3f7">{title}</div>
-                <div style="font-size:0.85rem;color:#aaa">{desc}</div>
+                <div style="font-weight:600;color:#4fc3f7;margin:8px 0 4px 0">{title}</div>
+                <div style="font-size:0.85rem;color:#aaa;line-height:1.4">{desc}</div>
             </div>
             ''', unsafe_allow_html=True)
 
@@ -4209,10 +4305,10 @@ def render_home_extract_mode(lang):
         for i, (icon, title, desc) in enumerate(features):
             with cols[i]:
                 st.markdown(f'''
-                <div class="feature-card" style="text-align:center;min-height:120px">
+                <div class="feature-card" style="text-align:center;min-height:140px;display:flex;flex-direction:column;justify-content:center;padding:16px">
                     <div style="font-size:2rem">{icon}</div>
-                    <div style="font-weight:600;color:#4fc3f7">{title}</div>
-                    <div style="font-size:0.85rem;color:#aaa">{desc}</div>
+                    <div style="font-weight:600;color:#4fc3f7;margin:8px 0 4px 0">{title}</div>
+                    <div style="font-size:0.85rem;color:#aaa;line-height:1.4">{desc}</div>
                 </div>
                 ''', unsafe_allow_html=True)
         
@@ -4573,7 +4669,7 @@ def render_timeseries_page():
                                 marker=dict(size=6)
                             )
                             
-                            st.plotly_chart(fig, width="stretch")
+                            st.plotly_chart(fig, use_container_width=True)
                         else:
                             # 🔧 只有数值没有时间列（静态数据/单点数据）
                             st.info("ℹ️ Static value (No time series data)" if lang == 'en' else "ℹ️ 静态数值（无时间序列数据）")
@@ -4699,8 +4795,10 @@ def render_timeseries_page():
                 compare_patients = []
         
         with col4:
-            normalize = st.checkbox("归一化比较", value=False, key="ts_normalize",
-                                   help="将数值归一化到0-1范围便于比较")
+            normalize_label = "Normalize" if lang == 'en' else "归一化比较"
+            normalize_help = "Normalize values to 0-1 range for comparison" if lang == 'en' else "将数值归一化到0-1范围便于比较"
+            normalize = st.checkbox(normalize_label, value=False, key="ts_normalize",
+                                   help=normalize_help)
         
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
         
@@ -4754,34 +4852,49 @@ def render_timeseries_page():
                                 if y_max > y_min:
                                     y_values = (y_values - y_min) / (y_max - y_min)
                             
+                            patient_label = f"Patient {pid}" if lang == 'en' else f"患者 {pid}"
                             fig.add_trace(go.Scatter(
                                 x=patient_df[time_col],
                                 y=y_values,
                                 mode='lines+markers',
-                                name=f"患者 {pid}",
+                                name=patient_label,
                                 line=dict(color=colors[i % len(colors)], width=2),
                                 marker=dict(size=4)
                             ))
                             
-                            comparison_stats.append({
-                                '患者': pid,
-                                '平均值': f"{patient_df[value_col].mean():.2f}",
-                                '最大值': f"{patient_df[value_col].max():.2f}",
-                                '最小值': f"{patient_df[value_col].min():.2f}",
-                                '记录数': len(patient_df)
-                            })
+                            # Build stats with language-aware column names
+                            if lang == 'en':
+                                comparison_stats.append({
+                                    'Patient': pid,
+                                    'Mean': f"{patient_df[value_col].mean():.2f}",
+                                    'Max': f"{patient_df[value_col].max():.2f}",
+                                    'Min': f"{patient_df[value_col].min():.2f}",
+                                    'Records': len(patient_df)
+                                })
+                            else:
+                                comparison_stats.append({
+                                    '患者': pid,
+                                    '平均值': f"{patient_df[value_col].mean():.2f}",
+                                    '最大值': f"{patient_df[value_col].max():.2f}",
+                                    '最小值': f"{patient_df[value_col].min():.2f}",
+                                    '记录数': len(patient_df)
+                                })
                     
+                    # Language-aware chart labels
+                    chart_title = f"📊 {selected_concept.upper()} Multi-Patient Comparison" if lang == 'en' else f"📊 {selected_concept.upper()} 多患者比较"
+                    x_axis_label = "Time (hours)" if lang == 'en' else "时间 (小时)"
+                    y_suffix = " (Normalized)" if lang == 'en' else " (归一化)"
                     fig.update_layout(
                         template="plotly_white",
-                        title=f"📊 {selected_concept.upper()} 多患者比较",
-                        xaxis_title="时间 (小时)",
-                        yaxis_title=f"{value_col}" + (" (归一化)" if normalize else ""),
+                        title=chart_title,
+                        xaxis_title=x_axis_label,
+                        yaxis_title=f"{value_col}" + (y_suffix if normalize else ""),
                         hovermode="x unified",
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
                         height=450,
                     )
                     
-                    st.plotly_chart(fig, width="stretch")
+                    st.plotly_chart(fig, use_container_width=True)
                     
                     # 比较统计表
                     if comparison_stats:
@@ -4998,7 +5111,7 @@ def render_patient_page():
                         margin=dict(l=50, r=30, t=60, b=50),
                     )
                     
-                    st.plotly_chart(fig, width="stretch")
+                    st.plotly_chart(fig, use_container_width=True)
                 else:
                     no_vitals = "ℹ️ No vital signs data available" if lang == 'en' else "ℹ️ 无可用的生命体征数据"
                     st.info(no_vitals)
@@ -5047,7 +5160,7 @@ def render_patient_page():
                                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
                                 )
                                 
-                                st.plotly_chart(fig, width="stretch")
+                                st.plotly_chart(fig, use_container_width=True)
                 
                 # ============ SOFA-1 vs SOFA-2 对比图表 ============
                 has_sofa1 = 'sofa' in st.session_state.loaded_concepts
@@ -5121,7 +5234,7 @@ def render_patient_page():
                                 hovermode='x unified'
                             )
                             
-                            st.plotly_chart(fig_total, width="stretch")
+                            st.plotly_chart(fig_total, use_container_width=True)
                             
                             # 2. 子器官评分对比（6个子图）
                             organ_compare = "**Organ-specific Score Comparison**" if lang == 'en' else "**各器官评分对比**"
@@ -5223,7 +5336,7 @@ def render_patient_page():
                                 for i in range(1, 7):
                                     fig_organs.update_yaxes(range=[0, 4.5], row=(i-1)//3+1, col=(i-1)%3+1)
                                 
-                                st.plotly_chart(fig_organs, width="stretch")
+                                st.plotly_chart(fig_organs, use_container_width=True)
                             else:
                                 no_organ_msg = "ℹ️ Organ-specific scores not available in current data. Load individual organ concepts (e.g., sofa_resp, sofa2_resp) to see detailed comparison." if lang == 'en' else "ℹ️ 当前数据中无法获取器官子评分。请加载单独的器官概念（如 sofa_resp, sofa2_resp）以查看详细对比。"
                                 st.info(no_organ_msg)
@@ -5914,7 +6027,7 @@ def render_quality_page():
                         yaxis_title="",
                         margin=dict(l=100, r=30, t=50, b=50),
                     )
-                    st.plotly_chart(fig, width="stretch")
+                    st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
             err_msg = f"Chart rendering failed: {e}" if lang == 'en' else f"图表渲染失败: {e}"
             st.warning(err_msg)
@@ -5957,7 +6070,7 @@ def render_quality_page():
                                 showlegend=False,
                             )
                             fig.update_traces(marker_color='#1f77b4')
-                            st.plotly_chart(fig, width="stretch")
+                            st.plotly_chart(fig, use_container_width=True)
                             
                             # 统计摘要
                             summary_label = "**Statistical Summary:**" if lang == 'en' else "**统计摘要:**"
@@ -5977,45 +6090,59 @@ def render_quality_page():
         time_coverage = []
         for concept, df in st.session_state.loaded_concepts.items():
             if isinstance(df, pd.DataFrame) and 'time' in df.columns:
-                min_time = df['time'].min()
-                max_time = df['time'].max()
-                time_span = max_time - min_time
-                
-                # 计算平均采样间隔
-                if st.session_state.id_col in df.columns:
-                    avg_interval = df.groupby(st.session_state.id_col)['time'].apply(
-                        lambda x: x.diff().mean() if len(x) > 1 else 0
-                    ).mean()
-                else:
-                    avg_interval = 0
-                
-                start_label = "Start Time" if lang == 'en' else "起始时间"
-                end_label = "End Time" if lang == 'en' else "结束时间"
-                span_label = "Time Span" if lang == 'en' else "时间跨度"
-                interval_label = "Avg Interval" if lang == 'en' else "平均间隔"
-                
-                time_coverage.append({
-                    'Concept': concept,
-                    start_label: f"{min_time:.1f}h",
-                    end_label: f"{max_time:.1f}h",
-                    span_label: f"{time_span:.1f}h",
-                    interval_label: f"{avg_interval:.2f}h" if avg_interval > 0 else "-",
-                })
+                try:
+                    min_time = df['time'].min()
+                    max_time = df['time'].max()
+                    time_span = max_time - min_time
+                    
+                    # 计算平均采样间隔
+                    if st.session_state.id_col in df.columns:
+                        avg_interval = df.groupby(st.session_state.id_col)['time'].apply(
+                            lambda x: x.diff().mean() if len(x) > 1 else 0
+                        ).mean()
+                    else:
+                        avg_interval = 0
+                    
+                    # Use fixed column names for DataFrame consistency
+                    time_coverage.append({
+                        'Concept': concept,
+                        'Start': f"{min_time:.1f}h",
+                        'End': f"{max_time:.1f}h",
+                        'Span': f"{time_span:.1f}h",
+                        'Interval': f"{avg_interval:.2f}h" if avg_interval > 0 else "-",
+                    })
+                except Exception:
+                    # Skip concepts with invalid time data
+                    pass
         
         if time_coverage:
             coverage_df = pd.DataFrame(time_coverage)
+            # Fixed column config with language-aware display names
+            if lang == 'en':
+                col_config = {
+                    "Concept": st.column_config.TextColumn("📋 Concept"),
+                    "Start": st.column_config.TextColumn("⏰ Start Time"),
+                    "End": st.column_config.TextColumn("⏰ End Time"),
+                    "Span": st.column_config.TextColumn("📏 Time Span"),
+                    "Interval": st.column_config.TextColumn("⏱️ Avg Interval"),
+                }
+            else:
+                col_config = {
+                    "Concept": st.column_config.TextColumn("📋 概念"),
+                    "Start": st.column_config.TextColumn("⏰ 起始时间"),
+                    "End": st.column_config.TextColumn("⏰ 结束时间"),
+                    "Span": st.column_config.TextColumn("📏 时间跨度"),
+                    "Interval": st.column_config.TextColumn("⏱️ 平均间隔"),
+                }
             st.dataframe(
                 coverage_df, 
-                width="stretch", 
+                use_container_width=True, 
                 hide_index=True,
-                column_config={
-                    "Concept": st.column_config.TextColumn("📋 Concept"),
-                    "起始时间": st.column_config.TextColumn("⏰ 起始"),
-                    "结束时间": st.column_config.TextColumn("⏰ 结束"),
-                    "时间跨度": st.column_config.TextColumn("📏 跨度"),
-                    "平均间隔": st.column_config.TextColumn("⏱️ 间隔"),
-                }
+                column_config=col_config
             )
+        else:
+            no_data_msg = "No time-series data available for coverage analysis" if lang == 'en' else "无可用于时间覆盖分析的时序数据"
+            st.info(no_data_msg)
 
 
 def render_cohort_comparison_page():
@@ -7279,16 +7406,24 @@ def render_convert_dialog():
                 spinner_msg = "Converting..." if lang == 'en' else "正在转换..."
                 with st.spinner(spinner_msg):
                     success, failed = convert_csv_to_parquet(source_path, target_path, overwrite)
-                    if success > 0:
-                        success_msg = f"✅ Successfully converted {success} files" if lang == 'en' else f"✅ 成功转换 {success} 个文件"
-                        st.success(success_msg)
-                        st.session_state.path_validated = True
-                        st.session_state.data_path = target_path
-                    if failed > 0:
-                        fail_msg = f"⚠️ {failed} files failed to convert" if lang == 'en' else f"⚠️ {failed} 个文件转换失败"
-                        st.warning(fail_msg)
-                st.session_state.show_convert_dialog = False
-                st.rerun()
+                
+                # 只有在有成功转换或无失败时才关闭对话框
+                if success > 0:
+                    success_msg = f"✅ Successfully converted {success} files" if lang == 'en' else f"✅ 成功转换 {success} 个文件"
+                    st.success(success_msg)
+                    st.session_state.path_validated = True
+                    st.session_state.data_path = target_path
+                    st.session_state.show_convert_dialog = False
+                    st.rerun()
+                elif failed > 0:
+                    # 有失败但无成功，保持对话框打开让用户查看错误
+                    fail_msg = f"⚠️ {failed} files failed to convert. Please check the error messages above." if lang == 'en' else f"⚠️ {failed} 个文件转换失败，请查看上方错误信息。"
+                    st.warning(fail_msg)
+                    # 不关闭对话框，让用户看到错误信息
+                else:
+                    # success=0, failed=0 - 可能是 HiRID 错误情况
+                    no_files_msg = "⚠️ No files were converted. Please check your data path." if lang == 'en' else "⚠️ 没有文件被转换，请检查数据路径。"
+                    st.warning(no_files_msg)
     
     with col2:
         cancel_label = "❌ Cancel" if lang == 'en' else "❌ 取消"
@@ -7526,8 +7661,15 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
 
 
 def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
-    """HiRID 专用转换：数据已经是 parquet 格式，只需分桶转换。"""
+    """HiRID 专用转换：数据已经是 parquet 格式，只需分桶转换。
+    
+    HiRID 目录结构可能是:
+    1. 已解压: observations/, pharma/ 或 pharma_records/
+    2. 原始下载: raw_stage/observation_tables_parquet.tar.gz
+    """
     import time
+    
+    lang = st.session_state.get('language', 'en')
     
     try:
         from pyricu.bucket_converter import (
@@ -7541,7 +7683,146 @@ def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = Fals
     
     source_path = Path(source_dir)
     
-    st.info("🔄 HiRID uses pre-built parquet files. Converting to bucketed format for optimal performance...")
+    # 检查 observations 目录 - 支持多种可能的位置
+    obs_dir = None
+    pharma_dir = None
+    
+    # 可能的 observations 目录位置
+    # HiRID 解压后可能的目录结构：
+    # 1. observations/ 或 observation_tables/ (直接包含 parquet)
+    # 2. observations/parquet/ 或 observation_tables/parquet/ (parquet 在子目录)
+    obs_candidates = [
+        source_path / 'observations',
+        source_path / 'observations' / 'parquet',
+        source_path / 'observation_tables',
+        source_path / 'observation_tables' / 'parquet',
+    ]
+    for cand in obs_candidates:
+        if cand.exists() and cand.is_dir():
+            # 检查是否有 parquet 文件（直接或在子目录）
+            if list(cand.glob('*.parquet')):
+                obs_dir = cand
+                break
+    
+    # 可能的 pharma 目录位置
+    pharma_candidates = [
+        source_path / 'pharma',
+        source_path / 'pharma' / 'parquet',
+        source_path / 'pharma_records',
+        source_path / 'pharma_records' / 'parquet',
+    ]
+    for cand in pharma_candidates:
+        if cand.exists() and cand.is_dir():
+            if list(cand.glob('*.parquet')):
+                pharma_dir = cand
+                break
+    
+    # 检查是否需要解压
+    raw_stage = source_path / 'raw_stage'
+    if raw_stage.exists():
+        obs_tar = raw_stage / 'observation_tables_parquet.tar.gz'
+        pharma_tar = raw_stage / 'pharma_records_parquet.tar.gz'
+        
+        # 如果找到压缩文件且还没有解压的目录，自动解压
+        if (obs_tar.exists() or pharma_tar.exists()) and not obs_dir:
+            import tarfile
+            
+            info_msg = "🔄 Detected compressed HiRID data. Auto-extracting tar.gz files..." if lang == 'en' else "🔄 检测到压缩的 HiRID 数据，自动解压中..."
+            st.info(info_msg)
+            
+            extraction_success = True
+            
+            # 解压 observations
+            if obs_tar.exists() and not obs_dir:
+                try:
+                    spinner_msg = f"Extracting {obs_tar.name}... (this may take 5-10 minutes)" if lang == 'en' else f"正在解压 {obs_tar.name}... (可能需要 5-10 分钟)"
+                    with st.spinner(spinner_msg):
+                        with tarfile.open(obs_tar, 'r:gz') as tar:
+                            tar.extractall(path=source_path)
+                    
+                    success_msg = f"✅ Extracted {obs_tar.name}" if lang == 'en' else f"✅ 已解压 {obs_tar.name}"
+                    st.success(success_msg)
+                    
+                    # 重新检查目录
+                    for cand in obs_candidates:
+                        if cand.exists() and cand.is_dir():
+                            if list(cand.glob('*.parquet')) or list(cand.rglob('*.parquet')):
+                                obs_dir = cand
+                                break
+                except Exception as e:
+                    error_msg = f"❌ Failed to extract {obs_tar.name}: {e}" if lang == 'en' else f"❌ 解压 {obs_tar.name} 失败: {e}"
+                    st.error(error_msg)
+                    extraction_success = False
+            
+            # 解压 pharma
+            if pharma_tar.exists() and not pharma_dir:
+                try:
+                    spinner_msg = f"Extracting {pharma_tar.name}..." if lang == 'en' else f"正在解压 {pharma_tar.name}..."
+                    with st.spinner(spinner_msg):
+                        with tarfile.open(pharma_tar, 'r:gz') as tar:
+                            tar.extractall(path=source_path)
+                    
+                    success_msg = f"✅ Extracted {pharma_tar.name}" if lang == 'en' else f"✅ 已解压 {pharma_tar.name}"
+                    st.success(success_msg)
+                    
+                    # 重新检查目录
+                    for cand in pharma_candidates:
+                        if cand.exists() and cand.is_dir():
+                            if list(cand.glob('*.parquet')) or list(cand.rglob('*.parquet')):
+                                pharma_dir = cand
+                                break
+                except Exception as e:
+                    error_msg = f"❌ Failed to extract {pharma_tar.name}: {e}" if lang == 'en' else f"❌ 解压 {pharma_tar.name} 失败: {e}"
+                    st.error(error_msg)
+                    extraction_success = False
+            
+            if not extraction_success:
+                manual_msg = "You can try manual extraction:" if lang == 'en' else "您可以尝试手动解压："
+                st.error(f"❌ {manual_msg}")
+                st.code(f"cd {raw_stage}\ntar -xzf observation_tables_parquet.tar.gz\ntar -xzf pharma_records_parquet.tar.gz")
+                return 0, 1
+    
+    # 检查是否找到了数据目录
+    if not obs_dir and not pharma_dir:
+        if lang == 'en':
+            st.error(f"""
+            ❌ **HiRID data directories not found!**
+            
+            Expected directory structure:
+            ```
+            {source_dir}/
+            ├── observations/       ← Parquet files
+            │   ├── part-0.parquet
+            │   └── ...
+            └── pharma_records/     ← Parquet files
+                ├── part-0.parquet
+                └── ...
+            ```
+            
+            Please check your data path or extract the data first.
+            """)
+        else:
+            st.error(f"""
+            ❌ **未找到 HiRID 数据目录！**
+            
+            预期目录结构：
+            ```
+            {source_dir}/
+            ├── observations/       ← Parquet 文件
+            │   ├── part-0.parquet
+            │   └── ...
+            └── pharma_records/     ← Parquet 文件
+                ├── part-0.parquet
+                └── ...
+            ```
+            
+            请检查数据路径或先解压数据。
+            """)
+        return 0, 1
+    
+    # 开始转换
+    info_msg = "🔄 HiRID uses pre-built parquet files. Converting to bucketed format..." if lang == 'en' else "🔄 HiRID 使用预构建的 parquet 文件，正在转换为分桶格式..."
+    st.info(info_msg)
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -7551,31 +7832,27 @@ def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = Fals
     failed = 0
     start_time = time.time()
     
-    # 检查 observations 目录
-    obs_dir = source_path / 'observations'
     obs_bucket_dir = source_path / 'observations_bucket'
-    
-    # 检查 pharma 目录
-    pharma_dir = source_path / 'pharma'
-    if not pharma_dir.exists():
-        pharma_dir = source_path / 'pharma_records'  # 官方目录名
     pharma_bucket_dir = source_path / 'pharma_bucket'
     
     tasks = []
-    if obs_dir.exists():
+    if obs_dir:
         tasks.append(('observations', obs_dir, obs_bucket_dir, 'variableid', 100))
-    if pharma_dir.exists():
+    if pharma_dir:
         tasks.append(('pharma', pharma_dir, pharma_bucket_dir, 'pharmaid', 50))
     
     total = len(tasks)
     
     for idx, (name, src_dir, bucket_dir, partition_col, num_buckets) in enumerate(tasks):
-        status_text.markdown(f"**Bucketing**: `{name}` → {num_buckets} buckets [{idx+1}/{total}]")
+        status_msg = f"**Bucketing**: `{name}` → {num_buckets} buckets [{idx+1}/{total}]" if lang == 'en' else f"**分桶中**: `{name}` → {num_buckets} 个桶 [{idx+1}/{total}]"
+        status_text.markdown(status_msg)
         
         try:
             if bucket_dir.exists() and list(bucket_dir.rglob('*.parquet')) and not overwrite:
                 with details:
-                    st.caption(f"⏭️ {name} (bucket exists)")
+                    skip_msg = f"⏭️ {name} (bucket exists, skipped)" if lang == 'en' else f"⏭️ {name} (分桶已存在，跳过)"
+                    st.caption(skip_msg)
+                success += 1  # 已存在也算成功
                 progress_bar.progress((idx + 1) / total)
                 continue
             
@@ -7605,7 +7882,28 @@ def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = Fals
     total_time = time.time() - start_time
     progress_bar.progress(1.0)
     status_text.empty()
-    st.success(f"✅ HiRID conversion completed in {total_time:.1f}s")
+    
+    # 自动解压 reference_data.tar.gz（包含 general_table.csv）
+    reference_tar = source_path / 'reference_data.tar.gz'
+    if reference_tar.exists():
+        general_table = source_path / 'general_table.csv'
+        if not general_table.exists():
+            try:
+                import tarfile
+                info_msg = "🔄 Extracting reference_data.tar.gz (general_table.csv)..." if lang == 'en' else "🔄 正在解压 reference_data.tar.gz (general_table.csv)..."
+                with st.spinner(info_msg):
+                    with tarfile.open(reference_tar, 'r:gz') as tar:
+                        tar.extractall(path=source_path)
+                
+                extract_msg = "✅ Extracted reference data files" if lang == 'en' else "✅ 已解压参考数据文件"
+                st.success(extract_msg)
+            except Exception as e:
+                warn_msg = f"⚠️ Failed to extract reference_data.tar.gz: {e}" if lang == 'en' else f"⚠️ 解压 reference_data.tar.gz 失败: {e}"
+                st.warning(warn_msg)
+    
+    if success > 0:
+        success_msg = f"✅ HiRID conversion completed in {total_time:.1f}s ({success} tables)" if lang == 'en' else f"✅ HiRID 转换完成，耗时 {total_time:.1f}秒 ({success} 个表)"
+        st.success(success_msg)
     
     return success, failed
 

@@ -98,7 +98,11 @@ def _load_ids_for_database(database: str, data_path: Path, limit: int) -> List[i
     if database == "aumc":
         return _load_unique_ids(data_path / "admissions.parquet", "admissionid", limit)
     if database == "hirid":
-        return _load_unique_ids(data_path / "general.parquet", "patientid", limit)
+        # 🔧 FIX: HiRID general_table 可能是 CSV 或 Parquet 格式
+        general_path = data_path / "general_table.parquet"
+        if not general_path.exists():
+            general_path = data_path / "general_table.csv"
+        return _load_unique_ids(general_path, "patientid", limit)
     return []
 
 # ============================================================================
