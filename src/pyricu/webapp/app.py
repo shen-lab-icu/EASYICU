@@ -848,6 +848,109 @@ CONCEPT_GROUPS = {
     "结局 (outcome)": ['death', 'los_icu', 'los_hosp'],
 }
 
+# 🆕 特殊概念定义：这些概念不在 concept-dict.json 中，需要通过专用模块加载
+# 格式: 概念名 -> (加载函数模块, 函数名, 输出列名列表)
+SPECIAL_CONCEPTS = {
+    # KDIGO AKI 相关概念 - 通过 kdigo_aki.py 加载
+    'aki': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['aki']),
+    'aki_stage': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['aki_stage']),
+    'aki_stage_creat': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['aki_stage_creat']),
+    'aki_stage_uo': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['aki_stage_uo']),
+    'aki_stage_rrt': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['aki_stage_rrt']),
+    # 循环衰竭相关概念 - 通过 circ_failure.py 加载
+    'circ_failure': ('pyricu.circ_failure', 'load_circ_failure', ['circ_failure']),
+    'circ_event': ('pyricu.circ_failure', 'load_circ_failure', ['circ_event']),
+}
+
+# 特殊概念的分组（同一模块的概念可以一起加载）
+SPECIAL_CONCEPT_GROUPS = {
+    'kdigo_aki': ['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt'],
+    'circ_failure': ['circ_failure', 'circ_event'],
+}
+
+
+def load_special_concepts(
+    concepts: list,
+    database: str,
+    data_path: str,
+    patient_ids: dict = None,
+    max_patients: int = None,
+    verbose: bool = False
+) -> dict:
+    """
+    加载不在 concept-dict.json 中的特殊概念。
+    
+    这些概念需要通过专用模块（如 kdigo_aki.py, circ_failure.py）加载。
+    
+    Args:
+        concepts: 要加载的概念列表
+        database: 数据库名称 ('miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic')
+        data_path: 数据路径
+        patient_ids: 患者ID过滤器 dict
+        max_patients: 最大患者数
+        verbose: 是否显示详细信息
+        
+    Returns:
+        dict: {concept_name: DataFrame} 格式的结果
+    """
+    results = {}
+    
+    # 按特殊概念分组进行加载，避免重复调用
+    loaded_groups = set()
+    
+    for concept in concepts:
+        if concept not in SPECIAL_CONCEPTS:
+            continue
+            
+        # 检查这个概念属于哪个分组
+        for group_name, group_concepts in SPECIAL_CONCEPT_GROUPS.items():
+            if concept in group_concepts and group_name not in loaded_groups:
+                # 加载这个分组的数据
+                try:
+                    module_name, func_name, _ = SPECIAL_CONCEPTS[concept]
+                    
+                    # 动态导入模块
+                    import importlib
+                    module = importlib.import_module(module_name)
+                    load_func = getattr(module, func_name)
+                    
+                    # 准备加载参数
+                    load_kwargs = {
+                        'database': database,
+                        'data_path': data_path,
+                        'verbose': verbose,
+                    }
+                    if max_patients:
+                        load_kwargs['max_patients'] = max_patients
+                    if patient_ids:
+                        # 提取患者ID列表
+                        id_col = list(patient_ids.keys())[0] if patient_ids else None
+                        if id_col:
+                            load_kwargs['patient_ids'] = patient_ids[id_col]
+                    
+                    # 调用加载函数
+                    df = load_func(**load_kwargs)
+                    
+                    if isinstance(df, pd.DataFrame) and not df.empty:
+                        # 为这个分组中的每个概念创建结果
+                        for gc in group_concepts:
+                            if gc in concepts:
+                                _, _, output_cols = SPECIAL_CONCEPTS[gc]
+                                # 检查 DataFrame 中是否有对应的列
+                                available_cols = [c for c in output_cols if c in df.columns]
+                                if available_cols:
+                                    results[gc] = df
+                    
+                    loaded_groups.add(group_name)
+                    
+                except Exception as e:
+                    if verbose:
+                        print(f"Failed to load special concept {concept}: {e}")
+                    continue
+                break
+    
+    return results
+
 
 def render_data_dictionary():
     """Render data dictionary (aligned with sidebar groups)."""
@@ -2088,8 +2191,8 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
             if meta['is_septic'] and t >= meta['onset']:
                 lac_val += 3.0 # 乳酸升高
                 
-            lac_records.append({'stay_id': pid, 'time': t, 'lac': max(0.5, lac_val)})
-    data['lac'] = pd.DataFrame(lac_records)
+            lac_records.append({'stay_id': pid, 'time': t, 'lact': max(0.5, lac_val)})  # 🔧 改为 lact（标准名称）
+    data['lact'] = pd.DataFrame(lac_records)  # 🔧 改为 lact（与 CONCEPT_GROUPS_INTERNAL 一致）
     
     # 血小板
     plt_records = []
@@ -2230,10 +2333,8 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['infection_icd'] = sep3_with_context[['stay_id', 'time', 'infection_icd']] if len(sep3_with_context) > 0 else pd.DataFrame(columns=['stay_id', 'time', 'infection_icd'])
     data['samp'] = sep3_final[sep3_final['samp'] == 1][['stay_id', 'time', 'samp']] if (sep3_final['samp'] == 1).any() else pd.DataFrame(columns=['stay_id', 'time', 'samp'])
     
-    # 补充组合概念
-    data['sep3_sofa2_susp_inf'] = data['sep3_sofa2'].copy() if 'sep3_sofa2' in data else pd.DataFrame(columns=['stay_id', 'time', 'sep3_sofa2_susp_inf'])
-    data['sep3_sofa2_samp'] = data['samp'].copy() if 'samp' in data else pd.DataFrame(columns=['stay_id', 'time', 'sep3_sofa2_samp'])
-    data['sep3_sofa2_infection_icd'] = data['infection_icd'].copy() if 'infection_icd' in data else pd.DataFrame(columns=['stay_id', 'time', 'sep3_sofa2_infection_icd'])
+    # 🔧 删除组合概念别名（与 CONCEPT_GROUPS_INTERNAL 保持一致）
+    # 删除: sep3_sofa2_susp_inf, sep3_sofa2_samp, sep3_sofa2_infection_icd
     
     # Sepsis-3 (SOFA-1) 同理
     sofa1_source = data['sofa'][['stay_id', 'time', 'sofa']]
@@ -2292,8 +2393,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['ph'] = pd.DataFrame(ph_records)
     data['pco2'] = pd.DataFrame(pco2_records)
     data['po2'] = pd.DataFrame(po2_records)
-    # lact 已经作为 lac 存在，添加别名
-    data['lact'] = data['lac'].rename(columns={'lac': 'lact'}).copy() if 'lac' in data else pd.DataFrame()
+    # 🔧 lact 已在上方直接生成（不再需要从 lac 创建别名）
     
     # 呼吸系统：pafi, fio2, vent_ind
     pafi_records = []
@@ -2616,8 +2716,8 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['be'] = pd.DataFrame(be_records)
     data['cai'] = pd.DataFrame(cai_records)
     data['tco2'] = pd.DataFrame(tco2_records)
-    data['bicarb'] = data['bicar'].copy()  # Alias
-    data['potassium'] = data['k'].rename(columns={'k': 'potassium'}).copy() if 'k' in data else pd.DataFrame()
+    # 🔧 删除别名概念（与 CONCEPT_GROUPS_INTERNAL 保持一致）
+    # 删除: bicarb (bicar的别名), potassium (k的别名)
     
     # ============ 血液学扩展 ============
     hct_records = []
@@ -2922,9 +3022,8 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                         'urine24': recent_urine['urine'].sum()
                     })
     data['urine24'] = pd.DataFrame(urine24_records) if urine24_records else pd.DataFrame(columns=['stay_id', 'time', 'urine24'])
-    # 🔧 已删除 urine_charttime（2025-02-06）：这是一个错误复制的特征，应该直接使用 urine
-    data['sepsis_sofa2'] = data['sep3_sofa2'].copy() if 'sep3_sofa2' in data and not data['sep3_sofa2'].empty else pd.DataFrame(columns=['stay_id', 'time', 'sepsis_sofa2'])
-    data['sep3'] = data['sep3_sofa1'].copy() if 'sep3_sofa1' in data and not data['sep3_sofa1'].empty else pd.DataFrame(columns=['stay_id', 'time', 'sep3'])
+    # 🔧 已删除冗余别名概念（2025-02-06）：与 CONCEPT_GROUPS_INTERNAL 保持一致
+    # 删除: sepsis_sofa2 (sep3_sofa2的别名), sep3 (sep3_sofa1的别名)
     
     return data, patient_ids
 
@@ -2995,8 +3094,12 @@ def render_quick_visualization_page():
             import platform
             
             # 🔧 默认路径：优先使用用户在数据提取器中保存的路径
-            if st.session_state.get('last_export_dir'):
-                # 优先使用最后一次导出的完整目录
+            # 🔧 FIX: 使用 last_export_full_dir（包含cohort子目录）而非 last_export_dir
+            if st.session_state.get('last_export_full_dir'):
+                # 优先使用最后一次导出的完整目录（含cohort子目录）
+                default_base_path = st.session_state['last_export_full_dir']
+            elif st.session_state.get('last_export_dir'):
+                # 其次使用导出根目录
                 default_base_path = st.session_state['last_export_dir']
             elif st.session_state.get('export_path'):
                 # 其次使用数据提取器中设置的导出路径
@@ -3042,11 +3145,16 @@ def render_quick_visualization_page():
                 path_label = "Export Directory Path" if lang == 'en' else "导出数据目录路径"
                 path_help = "Enter root export folder or specific database folder" if lang == 'en' else "输入导出根目录或具体数据库文件夹"
                 
+                # 🔧 FIX: 优先使用刚导出的路径，避免widget key冲突
+                default_export_path = st.session_state.get('last_export_dir') or st.session_state.get('viz_export_path') or default_base_path
+                
+                # 🔧 FIX: 使用动态版本号key，确保导出后刷新显示
+                path_version = st.session_state.get('_viz_export_path_version', 0)
                 export_path = st.text_input(
                     path_label,
-                    value=st.session_state.get('viz_export_path', default_base_path),
+                    value=default_export_path,
                     help=path_help,
-                    key="viz_export_path_input"
+                    key=f"viz_export_path_input_v{path_version}"
                 )
             st.session_state.viz_export_path = export_path
             
@@ -3141,32 +3249,55 @@ def render_quick_visualization_page():
                     # 文件选择
                     select_label = "Select Tables to Load" if lang == 'en' else "选择要加载的表格"
                     
-                    # 初始化默认选中 - 确保默认值存在于当前选项中
-                    if 'viz_selected_files' not in st.session_state:
-                        st.session_state.viz_selected_files = file_names[:5] if len(file_names) > 5 else file_names
+                    # 🔧 FIX: 使用带版本号的 key 来强制刷新 multiselect
+                    # 每次点击 All/Clear 按钮，版本号递增，multiselect 会重新创建
+                    if '_viz_select_version_v2' not in st.session_state:
+                        st.session_state._viz_select_version_v2 = 0
+                    
+                    # 🔧 保存当前文件列表到 session_state，让回调能访问
+                    st.session_state._current_filenames_v2 = file_names.copy()
+                    
+                    # 初始化默认选中 - 默认全选
+                    ms_key = f"viz_file_multiselect_v{st.session_state._viz_select_version_v2}"
+                    if ms_key not in st.session_state:
+                        # 新版本的 key，需要初始化默认值
+                        default_selection = file_names.copy()  # 默认全选
                     else:
-                        # 过滤掉当前目录不存在的文件（防止切换目录后报错）
-                        valid_files = [f for f in st.session_state.viz_selected_files if f in file_names]
-                        if valid_files:
-                            st.session_state.viz_selected_files = valid_files
-                        else:
-                            # 如果全部无效，重新设置默认值
-                            st.session_state.viz_selected_files = file_names[:5] if len(file_names) > 5 else file_names
+                        # 已存在的 key，过滤掉无效文件
+                        existing = st.session_state.get(ms_key, [])
+                        default_selection = [f for f in existing if f in file_names] or file_names.copy()
                     
-                    col_select, col_all = st.columns([4, 1])
+                    # 🔧 FIX: 回调函数 - 全选
+                    def select_all_v2():
+                        version = st.session_state._viz_select_version_v2 + 1
+                        st.session_state._viz_select_version_v2 = version
+                        # 设置下一个版本的 multiselect key 的默认值
+                        new_key = f"viz_file_multiselect_v{version}"
+                        st.session_state[new_key] = st.session_state._current_filenames_v2.copy()
+                    
+                    # 🔧 FIX: 回调函数 - 清空
+                    def clear_all_v2():
+                        version = st.session_state._viz_select_version_v2 + 1
+                        st.session_state._viz_select_version_v2 = version
+                        new_key = f"viz_file_multiselect_v{version}"
+                        st.session_state[new_key] = []
+                    
+                    col_all, col_clear = st.columns(2)
                     with col_all:
-                        all_label = "ALL" if lang == 'en' else "全选"
-                        if st.button(all_label, key="viz_select_all", use_container_width=True):
-                            st.session_state.viz_selected_files = file_names
-                            st.rerun()
+                        all_label = "✅ ALL" if lang == 'en' else "✅ 全选"
+                        st.button(all_label, key="viz_select_all_v2", use_container_width=True, 
+                                 on_click=select_all_v2, type="primary")
+                    with col_clear:
+                        clear_label = "❌ Clear" if lang == 'en' else "❌ 清空"
+                        st.button(clear_label, key="viz_clear_all_v2", use_container_width=True,
+                                 on_click=clear_all_v2)
                     
-                    with col_select:
-                        selected_files = st.multiselect(
-                            select_label,
-                            options=file_names,
-                            default=st.session_state.viz_selected_files,
-                            key="viz_file_multiselect"
-                        )
+                    selected_files = st.multiselect(
+                        select_label,
+                        options=file_names,
+                        default=default_selection,
+                        key=ms_key
+                    )
                     
                     # 患者数量限制
                     patient_limit_label = "Max Patients to Load" if lang == 'en' else "最大加载患者数"
@@ -3471,55 +3602,53 @@ def render_visualization_mode_legacy():
             select_label = "Select Tables to Load" if st.session_state.language == 'en' else "选择要加载的表格"
             select_help = "Select tables to load for visualization (max 3 recommended)" if st.session_state.language == 'en' else "选择要加载到可视化的表格（建议不超过3个以保证流畅性）"
             
-            # 🔧 先初始化默认值（在按钮和multiselect之前）
-            if 'viz_selected_files' not in st.session_state:
-                st.session_state.viz_selected_files = file_names[:3] if len(file_names) <= 5 else file_names[:2]
+            # 🔧 FIX: 使用带版本号的 key 来强制刷新 multiselect（与 Export Directory 模式统一）
+            if '_viz_select_version_filter' not in st.session_state:
+                st.session_state._viz_select_version_filter = 0
             
-            # 🔧 确保 session_state 中的文件在当前可用文件列表中
-            valid_selected = [f for f in st.session_state.viz_selected_files if f in file_names]
-            if len(valid_selected) != len(st.session_state.viz_selected_files):
-                st.session_state.viz_selected_files = valid_selected if valid_selected else (file_names[:3] if len(file_names) <= 5 else file_names[:2])
+            # 保存当前文件列表到 session_state
+            st.session_state._current_filenames_filter = file_names.copy()
             
-            # 🔧 修复：使用唯一的动态key，每次按钮点击后强制重新创建multiselect
-            # 问题：Streamlit 的 multiselect 会缓存用户选择，导致 default 不生效
-            # 解决：使用 _viz_select_version 作为key的一部分，每次按钮点击递增版本号
+            # 确定 multiselect 的 key 和默认值
+            ms_key_filter = f"viz_files_select_filter_v{st.session_state._viz_select_version_filter}"
+            if ms_key_filter not in st.session_state:
+                default_selection_filter = file_names.copy()  # 默认全选
+            else:
+                existing = st.session_state.get(ms_key_filter, [])
+                default_selection_filter = [f for f in existing if f in file_names] or file_names.copy()
             
-            if '_viz_select_version' not in st.session_state:
-                st.session_state._viz_select_version = 0
+            # 🔧 FIX: 回调函数 - 全选
+            def select_all_filter():
+                version = st.session_state._viz_select_version_filter + 1
+                st.session_state._viz_select_version_filter = version
+                new_key = f"viz_files_select_filter_v{version}"
+                st.session_state[new_key] = st.session_state._current_filenames_filter.copy()
+            
+            # 🔧 FIX: 回调函数 - 清空
+            def clear_all_filter():
+                version = st.session_state._viz_select_version_filter + 1
+                st.session_state._viz_select_version_filter = version
+                new_key = f"viz_files_select_filter_v{version}"
+                st.session_state[new_key] = []
             
             # 添加 ALL / Clear 按钮
             col_all, col_clear = st.columns(2)
             with col_all:
                 all_label = "✅ ALL" if st.session_state.language == 'en' else "✅ 全选"
-                if st.button(all_label, key="select_all_tables", use_container_width=True):
-                    # 选择所有表
-                    st.session_state.viz_selected_files = file_names.copy()
-                    st.session_state._viz_select_version += 1  # 递增版本号强制重新创建multiselect
-                    st.rerun()
+                st.button(all_label, key="select_all_tables_filter", use_container_width=True, 
+                         on_click=select_all_filter, type="primary")
             with col_clear:
                 clear_label = "❌ Clear" if st.session_state.language == 'en' else "❌ 清空"
-                if st.button(clear_label, key="clear_all_tables", use_container_width=True):
-                    # 清空选择
-                    st.session_state.viz_selected_files = []
-                    st.session_state._viz_select_version += 1  # 递增版本号强制重新创建multiselect
-                    st.rerun()
+                st.button(clear_label, key="clear_all_tables_filter", use_container_width=True,
+                         on_click=clear_all_filter)
             
-            # 确保 session_state 中的文件在当前可用列表中
-            valid_selected = [f for f in st.session_state.viz_selected_files if f in file_names]
-            if len(valid_selected) != len(st.session_state.viz_selected_files):
-                st.session_state.viz_selected_files = valid_selected
-            
-            # 🔧 使用带版本号的 key，每次按钮点击后版本号递增，强制 multiselect 重新创建
-            multiselect_key = f"viz_files_select_v{st.session_state._viz_select_version}"
             selected_files = st.multiselect(
                 select_label,
                 options=file_names,
-                default=st.session_state.viz_selected_files,
+                default=default_selection_filter,
                 help=select_help,
-                key=multiselect_key,
+                key=ms_key_filter,
             )
-            # 同步用户选择回 session_state
-            st.session_state.viz_selected_files = selected_files
             
             if selected_files:
                 selected_msg = f"{len(selected_files)} tables selected" if st.session_state.language == 'en' else f"已选 {len(selected_files)} 个表格"
@@ -4381,6 +4510,7 @@ def render_sidebar():
             if st.button(export_btn, type="primary", width="stretch"):
                 st.session_state.trigger_export = True
                 st.session_state.export_completed = False
+                st.session_state['_exporting_in_progress'] = True  # 🆕 标记导出正在进行
                 st.rerun()
         else:
             st.button(export_btn, type="primary", width="stretch", disabled=True)
@@ -4908,7 +5038,7 @@ def render_data_overview():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        db_display = "🎭 DEMO" if st.session_state.use_mock_data else st.session_state.database.upper()
+        db_display = "🎭 DEMO" if st.session_state.get('use_mock_data', False) else st.session_state.get('database', 'N/A').upper()
         db_label = "Database" if lang == 'en' else "数据库"
         st.markdown(f'''
         <div class="metric-card">
@@ -4985,7 +5115,7 @@ def render_data_overview():
             <div class="feature-card" style="text-align:center;min-height:160px;display:flex;flex-direction:column;justify-content:center;padding:20px">
                 <div style="font-size:2.5rem">{icon}</div>
                 <div style="font-weight:600;color:#4fc3f7;margin:10px 0 6px 0;font-size:1.1rem">{title}</div>
-                <div style="font-size:0.95rem;color:#aaa;line-height:1.5">{desc}</div>
+                <div style="font-size:0.95rem;color:#333;line-height:1.5">{desc}</div>
             </div>
             ''', unsafe_allow_html=True)
     
@@ -5093,15 +5223,15 @@ def render_home_viz_mode(lang):
             st.markdown('''
             <div class="highlight-card">
                 <h4>👈 Please specify the data directory in the left sidebar</h4>
-                <p style="color:#ccc; margin-bottom:12px">
+                <p style="color:#333; margin-bottom:12px">
                     Quick Visualization mode loads data from previously exported files:
                 </p>
-                <ul style="color:#bbb; font-size:0.9rem;">
+                <ul style="color:#444; font-size:0.9rem;">
                     <li>Enter the path to the directory containing exported data files</li>
                     <li>Supported formats: <b>CSV, Parquet, Excel</b></li>
                     <li>If you haven't exported data yet, switch to "Data Extraction" mode first</li>
                 </ul>
-                <p style="color:#ffa500; margin-top:12px;">
+                <p style="color:#b45309; margin-top:12px;">
                     <b>💡 Tip:</b> Default path is <code>~/pyricu_export/miiv</code>
                 </p>
             </div>
@@ -5110,15 +5240,15 @@ def render_home_viz_mode(lang):
             st.markdown('''
             <div class="highlight-card">
                 <h4>👈 请在左侧边栏指定数据目录</h4>
-                <p style="color:#ccc; margin-bottom:12px">
+                <p style="color:#333; margin-bottom:12px">
                     快速可视化模式从已导出的文件加载数据：
                 </p>
-                <ul style="color:#bbb; font-size:0.9rem;">
+                <ul style="color:#444; font-size:0.9rem;">
                     <li>输入包含已导出数据文件的目录路径</li>
                     <li>支持的格式：<b>CSV、Parquet、Excel</b></li>
                     <li>如果您还没有导出过数据，请先切换到「数据提取导出」模式</li>
                 </ul>
-                <p style="color:#ffa500; margin-top:12px;">
+                <p style="color:#b45309; margin-top:12px;">
                     <b>💡 提示：</b> 默认路径是 <code>~/pyricu_export/miiv</code>
                 </p>
             </div>
@@ -5131,10 +5261,10 @@ def render_home_viz_mode(lang):
             st.markdown('''
             <div class="highlight-card">
                 <h4>👈 Click "Load Data" in the left sidebar</h4>
-                <p style="color:#ccc; margin-bottom:12px">
+                <p style="color:#333; margin-bottom:12px">
                     Data files found! You can now:
                 </p>
-                <ul style="color:#bbb; font-size:0.9rem;">
+                <ul style="color:#444; font-size:0.9rem;">
                     <li>Select specific tables to load (recommended ≤ 3 for best performance)</li>
                     <li>Click <b>"Load Data"</b> button to load into memory</li>
                     <li>After loading, use the tabs above to explore and visualize</li>
@@ -5145,10 +5275,10 @@ def render_home_viz_mode(lang):
             st.markdown('''
             <div class="highlight-card">
                 <h4>👈 在左侧边栏点击「加载数据」</h4>
-                <p style="color:#ccc; margin-bottom:12px">
+                <p style="color:#333; margin-bottom:12px">
                     已发现数据文件！您现在可以：
                 </p>
-                <ul style="color:#bbb; font-size:0.9rem;">
+                <ul style="color:#444; font-size:0.9rem;">
                     <li>选择要加载的表格（建议不超过3个以保证流畅性）</li>
                     <li>点击 <b>「加载数据」</b> 按钮将数据加载到内存</li>
                     <li>加载完成后，使用上方的标签页进行探索和可视化</li>
@@ -5183,7 +5313,7 @@ def render_home_viz_mode(lang):
             <div class="feature-card" style="text-align:center;min-height:160px;display:flex;flex-direction:column;justify-content:center;padding:20px">
                 <div style="font-size:2.5rem">{icon}</div>
                 <div style="font-weight:600;color:#4fc3f7;margin:10px 0 6px 0;font-size:1.1rem">{title}</div>
-                <div style="font-size:0.95rem;color:#aaa;line-height:1.5">{desc}</div>
+                <div style="font-size:0.95rem;color:#333;line-height:1.5">{desc}</div>
             </div>
             ''', unsafe_allow_html=True)
 
@@ -5191,44 +5321,40 @@ def render_home_viz_mode(lang):
 def render_home_extract_mode(lang):
     """渲染数据提取导出模式的首页教程。"""
     
-    # ============ 固定导航栏 - 使用sticky定位 ============
-    nav_labels = [
-        ("📋 " + ("Progress" if lang == 'en' else "进度"), "progress"),
-        ("📍 " + ("Guide" if lang == 'en' else "引导"), "guide"),
-        ("📖 " + ("Dictionary" if lang == 'en' else "数据字典"), "dictionary"),
-    ]
-    
-    # 使用sticky定位的导航栏，更现代的渐变色
-    nav_links = " ".join([f'<a href="#{anchor}" style="color:white;text-decoration:none;padding:10px 24px;background:rgba(255,255,255,0.2);border-radius:25px;font-size:1rem;font-weight:600;margin:0 8px;transition:all 0.3s;backdrop-filter:blur(10px);" onmouseover="this.style.background=\'rgba(255,255,255,0.35)\'" onmouseout="this.style.background=\'rgba(255,255,255,0.2)\'">{label}</a>' for label, anchor in nav_labels])
-    st.markdown(f'''
-    <div style="
-        position: sticky;
-        top: 0;
-        z-index: 999;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 14px 24px;
-        border-radius: 12px;
-        margin-bottom: 24px;
-        text-align: center;
-        box-shadow: 0 4px 20px rgba(102,126,234,0.4);
-    ">{nav_links}</div>
-    ''', unsafe_allow_html=True)
-    
     # 计算当前步骤完成状态（4个步骤）
     # Step 1: Demo模式需要点击Confirm按钮，Real Data模式需要有效路径
-    if st.session_state.use_mock_data:
+    if st.session_state.get('use_mock_data', False):
         step1_done = st.session_state.get('step1_confirmed', False)
     else:
         step1_done = st.session_state.data_path and Path(st.session_state.data_path).exists()
     step2_done = st.session_state.get('step2_confirmed', False)
     step3_done = len(st.session_state.get('selected_concepts', [])) > 0
-    step4_done = st.session_state.get('export_completed', False) or len(st.session_state.loaded_concepts) > 0
+    # Step 4 只在真正导出完成后才算完成
+    step4_done = st.session_state.get('export_completed', False)
     
     # ============ 进度指示器 ============
     # 添加锚点和大标题
     st.markdown('<div id="progress"></div>', unsafe_allow_html=True)
     progress_title = "📋 Progress" if lang == 'en' else "📋 进度"
-    st.markdown(f'<h2 style="background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;border-bottom:3px solid #667eea;padding-bottom:10px;margin-top:10px;font-size:1.6rem;">{progress_title}</h2>', unsafe_allow_html=True)
+    st.markdown(f'<h2 style="background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;border-bottom:3px solid #667eea;padding-bottom:10px;margin-top:10px;font-size:1.8rem;">{progress_title}</h2>', unsafe_allow_html=True)
+    
+    # 🆕 添加说明文字
+    if lang == 'en':
+        progress_desc = """
+        <div style="font-size: 1.15rem; color: #333; margin-bottom: 20px; line-height: 1.6;">
+            👈 <b>Simply click through the left sidebar</b> to complete the 4 steps below. 
+            You'll easily define your ICU cohort, select features, and extract data!
+        </div>
+        """
+    else:
+        progress_desc = """
+        <div style="font-size: 1.15rem; color: #333; margin-bottom: 20px; line-height: 1.6;">
+            👈 <b>只需通过左侧边栏点击</b>，完成下面的4个步骤，
+            即可轻松完成ICU数据的队列定义、特征选择和数据提取！
+        </div>
+        """
+    st.markdown(progress_desc, unsafe_allow_html=True)
+    
     col1, col2, col3, col4 = st.columns(4)
     
     # 状态文本
@@ -5303,273 +5429,345 @@ def render_home_extract_mode(lang):
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
     # ============ 动态引导内容 ============
-    # 添加引导锚点和大标题
+    # 添加引导锚点和动态标题（根据当前步骤变化）
     st.markdown('<div id="guide"></div>', unsafe_allow_html=True)
-    guide_title = "📍 Guide" if lang == 'en' else "📍 引导"
-    st.markdown(f'<h2 style="background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;border-bottom:3px solid #667eea;padding-bottom:10px;margin-top:10px;font-size:1.6rem;">{guide_title}</h2>', unsafe_allow_html=True)
+    
+    # 🆕 动态Guide标题，根据Progress自动转换
+    if not step1_done:
+        guide_step = "Data Source" if lang == 'en' else "数据源配置"
+    elif not step2_done:
+        guide_step = "Cohort Selection" if lang == 'en' else "队列筛选"
+    elif not step3_done:
+        guide_step = "Select Features" if lang == 'en' else "特征选择"
+    elif not step4_done:
+        guide_step = "Export Data" if lang == 'en' else "数据导出"
+    else:
+        guide_step = "Complete" if lang == 'en' else "完成"
+    
+    guide_title = f"📍 Guide: {guide_step}" if lang == 'en' else f"📍 引导: {guide_step}"
+    st.markdown(f'<h2 style="background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;border-bottom:3px solid #667eea;padding-bottom:10px;margin-top:10px;font-size:1.8rem;">{guide_title}</h2>', unsafe_allow_html=True)
     
     if not step1_done:
         # 步骤1引导：配置数据源
-        task_hint = "👉 Configure Data Source" if lang == 'en' else "👉 配置数据源"
-        st.markdown(f"**{task_hint}**")
-        
         if lang == 'en':
             st.markdown('''
-            <div class="highlight-card">
-                <h4>👈 Please configure data source in the left sidebar</h4>
-                <p><b>🎭 Demo Mode</b> - No data needed, auto-generates simulated ICU data for learning</p>
-                <p><b>📊 Real Data</b> - Supports MIMIC-IV, eICU, AUMC, HiRID (local processing, secure)</p>
-            </div>
-            ''', unsafe_allow_html=True)
-        else:
-            st.markdown('''
-            <div class="highlight-card">
-                <h4>👈 请在左侧边栏完成数据源配置</h4>
-                <p><b>🎭 演示模式</b> - 无需数据，自动生成模拟ICU数据，适合学习体验</p>
-                <p><b>📊 真实数据</b> - 支持MIMIC-IV、eICU、AUMC、HiRID（本地处理，安全可靠）</p>
-            </div>
-            ''', unsafe_allow_html=True)
-        
-        # 快速开始按钮
-        quick_start_title = "⚡ Quick Start" if lang == 'en' else "⚡ 快速开始"
-        st.markdown(f"### {quick_start_title}")
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            demo_btn = "🎭 Enable Demo Mode" if lang == 'en' else "🎭 一键启用演示模式"
-            if st.button(demo_btn, type="primary", width="stretch", key="quick_demo"):
-                st.session_state.use_mock_data = True
-                st.session_state.database = 'mock'
-                success_msg = "✅ Demo mode enabled! Please continue to select features." if lang == 'en' else "✅ 演示模式已启用！请继续选择特征。"
-                st.success(success_msg)
-                st.rerun()
-        
-    elif not step2_done:
-        # 步骤2引导：选择特征
-        task_hint = "👉 Select Analysis Features" if lang == 'en' else "👉 选择分析特征"
-        st.markdown(f"**{task_hint}**")
-        
-        # 显示当前数据源状态
-        if st.session_state.use_mock_data:
-            source_info = "🎭 **Demo Mode**" if lang == 'en' else "🎭 **演示模式**"
-        else:
-            source_info = f"📊 **Real Data** - `{st.session_state.data_path}`" if lang == 'en' else f"📊 **真实数据** - `{st.session_state.data_path}`"
-        source_label = "**Current Data Source**" if lang == 'en' else "**当前数据源**"
-        st.markdown(f"{source_label}: {source_info}")
-        
-        if lang == 'en':
-            st.markdown('''
-            <div class="highlight-card">
-                <h4>👈 Please select features to analyze in the left sidebar</h4>
-                <p style="color:#ccc; margin-bottom:12px">
-                    PyRICU provides 130+ ICU features, organized by category. You can:
-                </p>
-                <ul style="color:#bbb; font-size:0.9rem;">
-                    <li><b>Select by group</b>: Expand a group, select entire group or individual features</li>
-                    <li><b>Use presets</b>: Click "SOFA-2 Features" or "Common Features" for quick selection</li>
-                    <li><b>Custom combination</b>: Combine freely based on research needs</li>
-                </ul>
-            </div>
-            ''', unsafe_allow_html=True)
-        else:
-            st.markdown('''
-            <div class="highlight-card">
-                <h4>👈 请在左侧边栏选择要分析的特征</h4>
-                <p style="color:#ccc; margin-bottom:12px">
-                    PyRICU 提供 130+ ICU 特征，已按类别分组。您可以：
-                </p>
-                <ul style="color:#bbb; font-size:0.9rem;">
-                    <li><b>按分组选择</b>：展开某个分组，选择整组或单个特征</li>
-                    <li><b>使用预设</b>：点击「SOFA-2特征」或「常用特征」快速选择</li>
-                    <li><b>自定义组合</b>：根据研究需求自由组合</li>
-                </ul>
-            </div>
-            ''', unsafe_allow_html=True)
-        
-        # ⭐ SOFA-2 亮点介绍
-        sofa_title = "🌟 Recommended Feature" if lang == 'en' else "🌟 推荐特色功能"
-        st.markdown(f"### {sofa_title}")
-        if lang == 'en':
-            st.markdown('''
-            <div class="feature-card" style="border-left:4px solid #ffa500">
-                <h4>SOFA-2 Scoring System (October 2025 JAMA New Standard)</h4>
-                <p style="color:#ccc; margin-bottom:12px">
-                    PyRICU is the <b>first open-source ICU data analysis toolkit implementing SOFA-2</b>.
-                    Based on the latest consensus published in JAMA Network Open in October 2025.
-                </p>
-                <div style="display:flex; gap:20px; flex-wrap:wrap;">
-                    <div style="flex:1; min-width:200px;">
-                        <b style="color:#ffa500">📊 SOFA-2 Key Improvements:</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>Respiratory: Added ECMO, HFNC, NIV support recognition</li>
-                            <li>Cardiovascular: Integrated norepinephrine + epinephrine dosing</li>
-                            <li>Renal: Added RRT automatic 4-point rule</li>
-                            <li>Neurological: Added delirium treatment recognition</li>
-                        </ul>
-                    </div>
-                    <div style="flex:1; min-width:200px;">
-                        <b style="color:#ffa500">💡 Quick Start:</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>Click "🔥 SOFA-2 Features" preset on the left</li>
-                            <li>Auto-selects all SOFA-2 related features</li>
-                            <li>Features marked with ⭐ are SOFA-2 exclusive</li>
-                        </ul>
-                    </div>
+            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
+                <h3 style="color: #667eea; margin-bottom: 15px;">👈 Configure Data Source in the Left Sidebar</h3>
+                <p style="margin-bottom: 15px;">Choose one of the following modes to get started:</p>
+                <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
+                    <h4 style="color: #10b981;">🎭 Demo Mode (Recommended for First-time Users)</h4>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li>No real data required - system generates realistic simulated ICU data</li>
+                        <li>Perfect for learning how PyRICU works</li>
+                        <li>Adjust patient count (50-500) and data duration (24-168 hours)</li>
+                        <li>Click <b>"✅ Confirm Data Source"</b> when ready</li>
+                    </ul>
+                </div>
+                <div style="background: rgba(59, 130, 246, 0.1); padding: 15px; border-radius: 10px;">
+                    <h4 style="color: #3b82f6;">📊 Real Data Mode (For Research)</h4>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li>Supports MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb</li>
+                        <li>Enter your local database path</li>
+                        <li>Click "Validate Path" to verify data format</li>
+                        <li>All processing is done locally - your data stays secure 🔒</li>
+                    </ul>
                 </div>
             </div>
             ''', unsafe_allow_html=True)
         else:
             st.markdown('''
-            <div class="feature-card" style="border-left:4px solid #ffa500">
-                <h4>SOFA-2 评分系统（2025年10月 JAMA 新标准）</h4>
-                <p style="color:#ccc; margin-bottom:12px">
-                    PyRICU 是<b>首个实现 SOFA-2 评分</b>的开源 ICU 数据分析工具包。
-                    基于 2025 年 JAMA Network Open 发布的最新共识进行了重大更新。
-                </p>
-                <div style="display:flex; gap:20px; flex-wrap:wrap;">
-                    <div style="flex:1; min-width:200px;">
-                        <b style="color:#ffa500">📊 SOFA-2 主要改进：</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>呼吸评分：新增 ECMO、HFNC、NIV 支持识别</li>
-                            <li>心血管评分：整合去甲肾+肾上腺素剂量</li>
-                            <li>肾脏评分：新增 RRT 自动4分规则</li>
-                            <li>神经评分：新增谵妄治疗识别</li>
-                        </ul>
-                    </div>
-                    <div style="flex:1; min-width:200px;">
-                        <b style="color:#ffa500">💡 快速体验：</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>点击左侧「🔥 SOFA-2 特征」预设</li>
-                            <li>自动选择所有 SOFA-2 相关特征</li>
-                            <li>标有 ⭐ 的是 SOFA-2 专属特征</li>
-                        </ul>
-                    </div>
+            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
+                <h3 style="color: #667eea; margin-bottom: 15px;">👈 在左侧边栏配置数据源</h3>
+                <p style="margin-bottom: 15px;">选择以下任一模式开始使用：</p>
+                <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
+                    <h4 style="color: #10b981;">🎭 演示模式（推荐新用户使用）</h4>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li>无需真实数据 - 系统会生成逼真的模拟ICU数据</li>
+                        <li>非常适合学习PyRICU的工作方式</li>
+                        <li>可调整患者数量（50-500）和数据时长（24-168小时）</li>
+                        <li>设置完成后点击 <b>"✅ 确认数据源配置"</b></li>
+                    </ul>
+                </div>
+                <div style="background: rgba(59, 130, 246, 0.1); padding: 15px; border-radius: 10px;">
+                    <h4 style="color: #3b82f6;">📊 真实数据模式（用于科研）</h4>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li>支持 MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb</li>
+                        <li>输入您本地的数据库路径</li>
+                        <li>点击"验证路径"确认数据格式</li>
+                        <li>所有处理都在本地完成 - 您的数据安全无忧 🔒</li>
+                    </ul>
+                </div>
+            </div>
+            ''', unsafe_allow_html=True)
+        
+    elif not step2_done:
+        # 步骤2引导：队列筛选
+        if lang == 'en':
+            st.markdown('''
+            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
+                <h3 style="color: #667eea; margin-bottom: 15px;">👈 Configure Cohort Selection in the Left Sidebar</h3>
+                <p style="margin-bottom: 15px;">Define your study cohort by filtering patients:</p>
+                <div style="background: rgba(99, 102, 241, 0.1); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
+                    <h4 style="color: #6366f1;">🔧 Available Filters</h4>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li><b>Age Range</b> - Filter patients by age (e.g., 18-65 years)</li>
+                        <li><b>Gender</b> - Select Male, Female, or Any</li>
+                        <li><b>Survival Status</b> - Include survivors, non-survivors, or all</li>
+                        <li><b>ICU Stay Duration</b> - Minimum length of stay in hours</li>
+                    </ul>
+                </div>
+                <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px;">
+                    <h4 style="color: #10b981;">💡 Tips</h4>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li>Enable "Cohort Filtering" toggle to activate filters</li>
+                        <li>You can skip this step by clicking <b>"✅ Confirm (No Filtering)"</b></li>
+                        <li>Filters will be applied when generating/loading data</li>
+                    </ul>
+                </div>
+            </div>
+            ''', unsafe_allow_html=True)
+        else:
+            st.markdown('''
+            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
+                <h3 style="color: #667eea; margin-bottom: 15px;">👈 在左侧边栏配置队列筛选</h3>
+                <p style="margin-bottom: 15px;">通过筛选患者来定义您的研究队列：</p>
+                <div style="background: rgba(99, 102, 241, 0.1); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
+                    <h4 style="color: #6366f1;">🔧 可用的筛选条件</h4>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li><b>年龄范围</b> - 按年龄筛选患者（如 18-65 岁）</li>
+                        <li><b>性别</b> - 选择男性、女性或不限</li>
+                        <li><b>存活状态</b> - 包含存活者、死亡者或全部</li>
+                        <li><b>ICU住院时长</b> - 最短住院时长（小时）</li>
+                    </ul>
+                </div>
+                <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px;">
+                    <h4 style="color: #10b981;">💡 提示</h4>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li>启用"队列筛选"开关来激活筛选功能</li>
+                        <li>可以点击 <b>"✅ 确认（不筛选）"</b> 跳过此步骤</li>
+                        <li>筛选条件将在生成/加载数据时应用</li>
+                    </ul>
                 </div>
             </div>
             ''', unsafe_allow_html=True)
         
     elif not step3_done:
-        # 步骤3引导：导出或预览
-        task_hint = "👉 Export Data or Load Preview" if lang == 'en' else "👉 导出数据或加载预览"
-        st.markdown(f"**{task_hint}**")
-        
-        # 显示当前选择摘要
-        selected = st.session_state.get('selected_concepts', [])
-        if st.session_state.use_mock_data:
-            source_info = "🎭 Demo Mode" if lang == 'en' else "🎭 演示模式"
-        else:
-            source_info = f"📊 {st.session_state.data_path}"
-        
-        source_label = "Data Source" if lang == 'en' else "数据源"
-        feat_label = "Selected Features" if lang == 'en' else "已选特征"
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown(f'''
-            <div class="metric-card">
-                <div class="stat-label">{source_label}</div>
-                <div style="font-weight:600">{source_info}</div>
-            </div>
-            ''', unsafe_allow_html=True)
-        with col2:
-            st.markdown(f'''
-            <div class="metric-card">
-                <div class="stat-label">{feat_label}</div>
-                <div class="stat-number">{len(selected)}</div>
-            </div>
-            ''', unsafe_allow_html=True)
-        
+        # 步骤3引导：选择特征
         if lang == 'en':
             st.markdown('''
-            <div class="highlight-card">
-                <h4>👈 Please select next action in the left sidebar</h4>
-                <p style="color:#ccc; margin-bottom:12px">
-                    You have completed data source and feature configuration. Now you can:
-                </p>
-                <div style="display:flex; gap:20px; flex-wrap:wrap;">
-                    <div style="flex:1; min-width:250px;">
-                        <b style="color:#28a745">📥 Direct Export (Recommended for low-memory devices)</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>Select export format (CSV/Parquet/Excel)</li>
-                            <li>Click "Export Data" to save directly to disk</li>
-                            <li>Uses no memory, suitable for large datasets</li>
-                        </ul>
+            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
+                <h3 style="color: #0369a1; margin-bottom: 15px;">👈 Select Features in the Left Sidebar</h3>
+                <p style="margin-bottom: 15px;">PyRICU provides <b>150+ comprehensive ICU clinical features</b>, covering:</p>
+                <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
+                    <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
+                        <b style="color: #1d4ed8;">📊 Vital Signs</b>
+                        <p style="color: #1e40af; margin-top: 5px; font-size: 0.95rem;">Heart rate, blood pressure, temperature, SpO2, respiratory rate</p>
                     </div>
-                    <div style="flex:1; min-width:250px;">
-                        <b style="color:#4fc3f7">🔍 Load Preview Data</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>Load small amount of data to memory</li>
-                            <li>Use interactive visualization analysis</li>
-                            <li>Suitable for data exploration and quality checks</li>
-                        </ul>
+                    <div style="flex: 1; min-width: 200px; background: rgba(16, 185, 129, 0.15); padding: 12px; border-radius: 8px;">
+                        <b style="color: #047857;">🧪 Laboratory Tests</b>
+                        <p style="color: #065f46; margin-top: 5px; font-size: 0.95rem;">Blood chemistry, hematology, coagulation, blood gas analysis</p>
                     </div>
+                    <div style="flex: 1; min-width: 200px; background: rgba(251, 191, 36, 0.15); padding: 12px; border-radius: 8px;">
+                        <b style="color: #b45309;">💊 Medications</b>
+                        <p style="color: #92400e; margin-top: 5px; font-size: 0.95rem;">Vasopressors, sedatives, antibiotics, fluid therapy</p>
+                    </div>
+                    <div style="flex: 1; min-width: 200px; background: rgba(139, 92, 246, 0.15); padding: 12px; border-radius: 8px;">
+                        <b style="color: #6d28d9;">🏥 Clinical Scores</b>
+                        <p style="color: #5b21b6; margin-top: 5px; font-size: 0.95rem;">SOFA, GCS, urine output, organ failure indicators</p>
+                    </div>
+                </div>
+                <div style="background: rgba(251, 191, 36, 0.2); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
+                    <h4 style="color: #b45309;">🔥 Quick Selection Methods</h4>
+                    <ul style="margin-left: 20px; margin-top: 10px; color: #78350f;">
+                        <li><b>By Category</b> - Expand a group and select entire group or individual features</li>
+                        <li><b>Custom</b> - Mix and match based on your research needs</li>
+                    </ul>
+                </div>
+                <div style="background: rgba(139, 92, 246, 0.2); padding: 15px; border-radius: 10px;">
+                    <h4 style="color: #6d28d9;">📖 Need Help Choosing?</h4>
+                    <p style="margin-top: 10px; color: #5b21b6;">
+                        👇 Check the <b>Data Dictionary</b> below for detailed descriptions of each feature!
+                    </p>
                 </div>
             </div>
             ''', unsafe_allow_html=True)
         else:
             st.markdown('''
-            <div class="highlight-card">
-                <h4>👈 请在左侧边栏选择下一步操作</h4>
-                <p style="color:#ccc; margin-bottom:12px">
-                    您已完成数据源和特征配置，现在可以：
-                </p>
-                <div style="display:flex; gap:20px; flex-wrap:wrap;">
-                    <div style="flex:1; min-width:250px;">
-                        <b style="color:#28a745">📥 直接导出（推荐低内存设备）</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>选择导出格式（CSV/Parquet/Excel）</li>
-                            <li>点击「导出数据」直接保存到磁盘</li>
-                            <li>不占用内存，适合大数据集</li>
-                        </ul>
+            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
+                <h3 style="color: #0369a1; margin-bottom: 15px;">👈 在左侧边栏选择特征</h3>
+                <p style="margin-bottom: 15px;">PyRICU 提供 <b>150+ 全面的 ICU 临床特征</b>，涵盖：</p>
+                <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
+                    <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
+                        <b style="color: #1d4ed8;">📊 生命体征</b>
+                        <p style="color: #1e40af; margin-top: 5px; font-size: 0.95rem;">心率、血压、体温、血氧饱和度、呼吸频率</p>
                     </div>
-                    <div style="flex:1; min-width:250px;">
-                        <b style="color:#4fc3f7">🔍 加载预览数据</b>
-                        <ul style="color:#bbb; font-size:0.9rem; margin-top:6px;">
-                            <li>加载少量数据到内存</li>
-                            <li>使用交互式可视化分析</li>
-                            <li>适合数据探索和质量检查</li>
-                        </ul>
+                    <div style="flex: 1; min-width: 200px; background: rgba(16, 185, 129, 0.15); padding: 12px; border-radius: 8px;">
+                        <b style="color: #047857;">🧪 实验室检验</b>
+                        <p style="color: #065f46; margin-top: 5px; font-size: 0.95rem;">血生化、血常规、凝血功能、血气分析</p>
                     </div>
+                    <div style="flex: 1; min-width: 200px; background: rgba(251, 191, 36, 0.15); padding: 12px; border-radius: 8px;">
+                        <b style="color: #b45309;">💊 药物治疗</b>
+                        <p style="color: #92400e; margin-top: 5px; font-size: 0.95rem;">血管活性药、镇静药、抗生素、液体治疗</p>
+                    </div>
+                    <div style="flex: 1; min-width: 200px; background: rgba(139, 92, 246, 0.15); padding: 12px; border-radius: 8px;">
+                        <b style="color: #6d28d9;">🏥 临床评分</b>
+                        <p style="color: #5b21b6; margin-top: 5px; font-size: 0.95rem;">SOFA 评分、GCS 评分、尿量、器官衰竭指标</p>
+                    </div>
+                </div>
+                <div style="background: rgba(251, 191, 36, 0.2); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
+                    <h4 style="color: #b45309;">🔥 快速选择方法</h4>
+                    <ul style="margin-left: 20px; margin-top: 10px; color: #78350f;">
+                        <li><b>按类别</b> - 展开某个分组，选择整组或单个特征</li>
+                        <li><b>自定义</b> - 根据研究需求自由组合</li>
+                    </ul>
+                </div>
+                <div style="background: rgba(139, 92, 246, 0.2); padding: 15px; border-radius: 10px;">
+                    <h4 style="color: #6d28d9;">📖 不知道该选什么？</h4>
+                    <p style="margin-top: 10px; color: #5b21b6;">
+                        👇 查看下方的 <b>数据字典</b>，了解每个特征的详细描述！
+                    </p>
                 </div>
             </div>
             ''', unsafe_allow_html=True)
         
-        # 快速操作
-        quick_action_title = "⚡ Quick Actions" if lang == 'en' else "⚡ 快速操作"
-        st.markdown(f"### {quick_action_title}")
-        col1, col2, col3 = st.columns(3)
+    elif not step4_done:
+        # Step 4 Guide: Export Data
+        # 🆕 检查是否正在导出或刚完成导出
+        exporting_in_progress = st.session_state.get('_exporting_in_progress', False)
         
-        with col1:
-            if st.session_state.use_mock_data:
-                gen_btn = "🔍 Generate Mock Data & Preview" if lang == 'en' else "🔍 生成模拟数据并预览"
-                if st.button(gen_btn, type="primary", width="stretch"):
-                    spin_msg = "Generating..." if lang == 'en' else "生成中..."
-                    with st.spinner(spin_msg):
-                        # 🔧 使用 get_mock_params_with_cohort 获取完整参数（包含 cohort_filter）
-                        params = get_mock_params_with_cohort()
-                        data, patient_ids = generate_mock_data(**params)
-                        st.session_state.loaded_concepts = data
-                        st.session_state.patient_ids = patient_ids
-                        st.session_state.id_col = 'stay_id'
-                        success_msg = "✅ Mock data generated!" if lang == 'en' else "✅ 模拟数据已生成！"
-                        st.success(success_msg)
-                    st.rerun()
+        if exporting_in_progress:
+            # 🆕 导出正在进行中，显示进度标题
+            if lang == 'en':
+                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #ff9800; background: linear-gradient(135deg, #fff8e1 0%, #ffffff 100%);">
+<h3 style="color: #ff9800; margin-bottom: 10px;">⏳ Export in Progress...</h3>
+<p style="color: #555; margin: 0; font-size: 1.1rem;">Please wait while your data is being exported. Progress details will appear below.</p>
+</div>''', unsafe_allow_html=True)
             else:
-                load_btn = "🔍 Load Preview Data" if lang == 'en' else "🔍 加载预览数据"
-                if st.button(load_btn, type="secondary", width="stretch"):
-                    load_data_for_preview()
-                    st.rerun()
+                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #ff9800; background: linear-gradient(135deg, #fff8e1 0%, #ffffff 100%);">
+<h3 style="color: #ff9800; margin-bottom: 10px;">⏳ 导出进行中...</h3>
+<p style="color: #555; margin: 0; font-size: 1.1rem;">请稍候，数据正在导出中。进度详情将显示在下方。</p>
+</div>''', unsafe_allow_html=True)
+        else:
+            # 显示导出教程
+            if lang == 'en':
+                export_guide_html = '''<div class="highlight-card" style="border-left: 4px solid #28a745;">
+<h3 style="color: #28a745; margin-bottom: 15px;">📥 How to Export Data</h3>
+<div style="display: flex; gap: 25px; flex-wrap: wrap;">
+<div style="flex: 1; min-width: 280px;">
+<ol style="color: #1a1a1a; font-size: 1.1rem; line-height: 1.8;">
+<li>Go to <b>"Data Export"</b> tab above</li>
+<li>Select export format (CSV/Parquet/Excel)</li>
+<li>Choose save location</li>
+<li>Click <b>"Export Data"</b> button</li>
+</ol>
+<p style="color: #28a745; margin-top: 10px; font-size: 1rem;">✅ Best for large datasets - saves directly to disk without loading to memory</p>
+</div>
+</div>
+</div>'''
+                st.markdown(export_guide_html, unsafe_allow_html=True)
+            else:
+                export_guide_html = '''<div class="highlight-card" style="border-left: 4px solid #28a745;">
+<h3 style="color: #28a745; margin-bottom: 15px;">📥 如何导出数据</h3>
+<div style="display: flex; gap: 25px; flex-wrap: wrap;">
+<div style="flex: 1; min-width: 280px;">
+<ol style="color: #1a1a1a; font-size: 1.1rem; line-height: 1.8;">
+<li>点击上方 <b>"数据导出"</b> 标签页</li>
+<li>选择导出格式（CSV/Parquet/Excel）</li>
+<li>选择保存位置</li>
+<li>点击 <b>"导出数据"</b> 按钮</li>
+</ol>
+<p style="color: #28a745; margin-top: 10px; font-size: 1rem;">✅ 适合大数据集 - 直接保存到磁盘，不占用内存</p>
+</div>
+<div style="flex: 1; min-width: 280px;">
+<ol style="color: #1a1a1a; font-size: 1.1rem; line-height: 1.8;">
+<li>点击上方 <b>"数据导出"</b> 标签页</li>
+<li>选择导出格式（CSV/Parquet/Excel）</li>
+<li>选择保存位置</li>
+<li>点击 <b>"导出数据"</b> 按钮</li>
+</ol>
+<p style="color: #28a745; margin-top: 10px; font-size: 1rem;">✅ 适合大数据集 - 直接保存到磁盘，不占用内存</p>
+</div>
+</div>
+</div>'''
+                st.markdown(export_guide_html, unsafe_allow_html=True)
+            
+            # 显示当前选择摘要
+            selected = st.session_state.get('selected_concepts', [])
+            if st.session_state.get('use_mock_data', False):
+                source_info = "🎭 Demo Mode" if lang == 'en' else "🎭 演示模式"
+            else:
+                source_info = f"📊 {st.session_state.get('data_path', '')}"
+            
+            source_label = "Data Source" if lang == 'en' else "数据源"
+            feat_label = "Selected Features" if lang == 'en' else "已选特征"
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f'''
+                <div class="metric-card">
+                    <div class="stat-label">{source_label}</div>
+                    <div style="font-weight:600">{source_info}</div>
+                </div>
+                ''', unsafe_allow_html=True)
+            with col2:
+                st.markdown(f'''
+                <div class="metric-card">
+                    <div class="stat-label">{feat_label}</div>
+                    <div class="stat-number">{len(selected)}</div>
+                </div>
+                ''', unsafe_allow_html=True)
         
-        with col2:
-            hint_msg = "_Or switch to 'Data Export' tab for full export_" if lang == 'en' else "_或切换到「数据导出」标签页进行完整导出_"
-            st.markdown(hint_msg)
+        # 🆕 导出进度区域（无论是否正在导出都创建，导出时内容会填充进来）
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        export_section = st.container()
+        st.session_state['_export_progress_container'] = export_section
     
     else:
-        # 所有步骤完成 - 显示数据摘要和导航
-        ready_title = "🎉 Ready!" if lang == 'en' else "🎉 准备就绪！"
-        ready_desc = "Data loaded, you can start exploring and analyzing." if lang == 'en' else "数据已加载，您可以开始探索分析了。"
-        st.success(f"**{ready_title}** {ready_desc}")
+        # 所有步骤完成 - Guide: Complete
         
-        # 状态概览
+        # 🆕 首先检查是否有刚完成的导出结果要显示
+        export_result = st.session_state.get('_export_success_result')
+        if export_result:
+            # 显示导出成功消息
+            exported_files = export_result['files']
+            export_dir = export_result['export_dir']
+            total_elapsed = export_result['total_time']
+            module_times = export_result.get('module_times', {})
+            
+            success_msg = f"✅ Successfully exported {len(exported_files)} files to `{export_dir}`" if lang == 'en' else f"✅ 成功导出 {len(exported_files)} 个文件到 `{export_dir}`"
+            st.success(success_msg)
+            
+            # 显示时间统计
+            time_stats_title = "⏱️ Export Time Statistics" if lang == 'en' else "⏱️ 导出耗时统计"
+            with st.expander(time_stats_title, expanded=False):
+                for mod_name, mod_time in module_times.items():
+                    if mod_time >= 60:
+                        time_str = f"{mod_time/60:.1f} min"
+                    else:
+                        time_str = f"{mod_time:.1f} s"
+                    st.text(f"  • {mod_name}: {time_str}")
+                
+                if total_elapsed >= 60:
+                    total_str = f"{total_elapsed/60:.1f} min"
+                else:
+                    total_str = f"{total_elapsed:.1f} s"
+                total_msg = f"**Total: {total_str}**" if lang == 'en' else f"**总计: {total_str}**"
+                st.markdown(total_msg)
+            
+            # 显示导出的文件列表
+            view_files_label = "📁 View Exported Files" if lang == 'en' else "📁 查看导出文件"
+            with st.expander(view_files_label, expanded=True):
+                for f in exported_files[:10]:
+                    st.caption(f"• {Path(f).name}")
+                if len(exported_files) > 10:
+                    more_msg = f"... and {len(exported_files) - 10} more files" if lang == 'en' else f"... 及其他 {len(exported_files) - 10} 个文件"
+                    st.caption(more_msg)
+            
+            st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+            # 清除导出结果，避免重复显示
+            del st.session_state['_export_success_result']
+        
+        # 显示状态概览卡片
         col1, col2, col3, col4 = st.columns(4)
         
         db_label = "Database" if lang == 'en' else "数据库"
@@ -5579,7 +5777,7 @@ def render_home_extract_mode(lang):
         ready_status = "✅ Ready" if lang == 'en' else "✅ 就绪"
         
         with col1:
-            db_display = "🎭 DEMO" if st.session_state.use_mock_data else st.session_state.database.upper()
+            db_display = "🎭 DEMO" if st.session_state.get('use_mock_data', False) else st.session_state.get('database', 'N/A').upper()
             st.markdown(f'''
             <div class="metric-card">
                 <div class="stat-label">{db_label}</div>
@@ -5588,7 +5786,10 @@ def render_home_extract_mode(lang):
             ''', unsafe_allow_html=True)
         
         with col2:
-            n_concepts = len(st.session_state.loaded_concepts)
+            # 显示已选择的特征数（selected_concepts），而非已加载的（loaded_concepts 可能为空）
+            n_concepts = len(st.session_state.get('selected_concepts', []))
+            if n_concepts == 0:
+                n_concepts = len(st.session_state.loaded_concepts)
             st.markdown(f'''
             <div class="metric-card">
                 <div class="stat-label">{feat_label}</div>
@@ -5597,17 +5798,37 @@ def render_home_extract_mode(lang):
             ''', unsafe_allow_html=True)
         
         with col3:
-            # 优先从已加载数据中计算实际患者数
+            # 显示患者数：优先使用导出时记录的实际数量（cohort filter 后的真实数量）
             n_patients = 0
-            if st.session_state.loaded_concepts:
+            id_col = st.session_state.get('id_col', 'stay_id')
+            
+            # 🔧 DEBUG: 打印各个来源的值
+            print(f"[DEBUG Guide] _exported_patient_count: {st.session_state.get('_exported_patient_count')}")
+            print(f"[DEBUG Guide] patient_ids len: {len(st.session_state.patient_ids) if st.session_state.patient_ids else 0}")
+            print(f"[DEBUG Guide] mock_params: {st.session_state.get('mock_params')}")
+            
+            # 最高优先级：导出时记录的实际患者数（filter 后的真实数量）
+            if st.session_state.get('_exported_patient_count'):
+                n_patients = st.session_state['_exported_patient_count']
+            
+            # 其次：从已加载数据中计算唯一患者数
+            if n_patients == 0 and st.session_state.loaded_concepts:
                 all_ids = set()
-                id_col = st.session_state.get('id_col', 'stay_id')
                 for df in st.session_state.loaded_concepts.values():
                     if isinstance(df, pd.DataFrame) and id_col in df.columns:
                         all_ids.update(df[id_col].unique())
-                n_patients = len(all_ids) if all_ids else len(st.session_state.patient_ids)
-            else:
+                if all_ids:
+                    n_patients = len(all_ids)
+            
+            # 然后：使用 patient_ids 列表
+            if n_patients == 0 and st.session_state.patient_ids:
                 n_patients = len(st.session_state.patient_ids)
+            
+            # 最后：用 mock_params（仅用于显示预期值）
+            if n_patients == 0:
+                mock_params = st.session_state.get('mock_params', {})
+                if mock_params.get('n_patients'):
+                    n_patients = mock_params['n_patients']
             
             st.markdown(f'''
             <div class="metric-card">
@@ -5624,118 +5845,77 @@ def render_home_extract_mode(lang):
             </div>
             ''', unsafe_allow_html=True)
         
-        # 快捷导航
+        # 🆕 What's Next? 两个选项
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-        start_title = "### 🚀 Start Analysis" if lang == 'en' else "### 🚀 开始分析"
-        st.markdown(start_title)
-        start_desc = "Click a card below to learn about the feature, then go to 'Quick Visualization' tab:" if lang == 'en' else "点击下方卡片了解功能，然后前往「快速可视化」标签页："
-        st.markdown(start_desc)
+        next_step_title = "🔄 What's Next?" if lang == 'en' else "🔄 下一步？"
+        st.markdown(f"### {next_step_title}")
         
-        if lang == 'en':
-            features = [
-                ("📋", "Data Tables", "Browse data by module, merge features into wide tables", "sub_data_table"),
-                ("📈", "Time Series", "Interactive time series visualization with single/multi-patient comparison", "sub_timeseries"),
-                ("🏥", "Patient View", "Multi-dimensional patient dashboard for comprehensive status overview", "sub_patient_view"),
-                ("📊", "Data Quality", "Missing rate analysis and data distribution statistics", "sub_data_quality"),
-            ]
-        else:
-            features = [
-                ("📋", "数据大表", "按模块浏览数据，合并特征为宽表", "sub_data_table"),
-                ("📈", "时序分析", "交互式时间序列可视化，支持单患者/多患者比较", "sub_timeseries"),
-                ("🏥", "患者视图", "单患者多维度仪表盘，全景了解患者状态", "sub_patient_view"),
-                ("📊", "数据质量", "缺失率分析与数据分布统计", "sub_data_quality"),
-            ]
+        col_opt1, col_opt2 = st.columns(2)
         
-        cols = st.columns(4)
-        for i, (icon, title, desc, sub_page_key) in enumerate(features):
-            with cols[i]:
-                # 🔧 使用按钮实现点击跳转提示（2025-02-06）
-                btn_key = f"tutorial_btn_{sub_page_key}"
-                if st.button(
-                    f"{icon}\n\n**{title}**",
-                    key=btn_key,
-                    use_container_width=True,
-                    help=desc
-                ):
-                    # 设置跳转目标，并显示提示
-                    st.session_state['tutorial_target_subtab'] = sub_page_key
-                    st.session_state['show_tutorial_hint'] = True
-                    st.rerun()
-                
-                # 显示描述文本
-                st.caption(desc)
-        
-        # 🔧 显示跳转提示（如果用户刚点击了卡片）
-        if st.session_state.get('show_tutorial_hint', False):
-            target_tab = st.session_state.get('tutorial_target_subtab', '')
-            target_names = {
-                'sub_data_table': '📋 ' + ("Data Tables" if lang == 'en' else "数据大表"),
-                'sub_timeseries': '📈 ' + ("Time Series" if lang == 'en' else "时序分析"),
-                'sub_patient_view': '🏥 ' + ("Patient View" if lang == 'en' else "患者视图"),
-                'sub_data_quality': '📊 ' + ("Data Quality" if lang == 'en' else "数据质量"),
-            }
-            target_name = target_names.get(target_tab, target_tab)
-            
+        with col_opt1:
+            # Option A: Quick Visualization
             if lang == 'en':
-                hint_msg = f"""
-                ℹ️ **Navigation Hint**: Please click the **"Quick Visualization"** tab above, 
-                then select **{target_name}** subtab to use this feature.
-                """
+                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #0277bd;">
+<h4 style="color: #0277bd; margin-bottom: 12px;">📈 Option A: Quick Visualization</h4>
+<p style="color: #1a1a1a; margin-bottom: 15px;">Explore your data with interactive visualizations:</p>
+<ul style="color: #2a2a2a; margin: 10px 0 0 15px; font-size: 0.95rem; line-height: 1.8;">
+<li><b>Data Tables Explorer</b> — Browse and explore loaded data by module, view complete data tables with sorting and filtering</li>
+<li><b>Time Series Analysis</b> — Visualize clinical trends over time with multi-feature overlay, interactive zoom, and customizable aggregation</li>
+<li><b>Patient Overview</b> — Comprehensive single-patient dashboard showing all clinical trajectories and key events</li>
+<li><b>Data Quality Assessment</b> — Analyze missing rates, temporal coverage, and data completeness across all features</li>
+</ul>
+</div>''', unsafe_allow_html=True)
             else:
-                hint_msg = f"""
-                ℹ️ **导航提示**：请点击上方的 **「快速可视化」** 标签页，
-                然后选择 **{target_name}** 子页面使用此功能。
-                """
-            st.info(hint_msg)
-            # 清除提示标记（用户看到后）
-            st.session_state['show_tutorial_hint'] = False
-        
-        # 数据摘要
-        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-        summary_title = "### 📋 Data Summary" if lang == 'en' else "### 📋 数据摘要"
-        st.markdown(summary_title)
-        
-        records_col = "Records" if lang == 'en' else "记录数"
-        patients_col = "Patients" if lang == 'en' else "患者数"
-        
-        concept_stats = []
-        for name, df in st.session_state.loaded_concepts.items():
-            if isinstance(df, pd.DataFrame):
-                n_records = len(df)
-                n_pts = df[st.session_state.id_col].nunique() if st.session_state.id_col in df.columns else 0
-                concept_stats.append({
-                    'Concept': name,
-                    records_col: f"{n_records:,}",
-                    patients_col: n_pts,
-                })
-        
-        if concept_stats:
-            stats_df = pd.DataFrame(concept_stats)
-            st.dataframe(stats_df, hide_index=True, width="stretch")
-        
-        # 快捷操作
-        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            regen_label = "🔄 Regenerate Data" if lang == 'en' else "🔄 重新生成数据"
-            regen_spinner = "Regenerating..." if lang == 'en' else "重新生成中..."
-            if st.button(regen_label, width="stretch", key="regen_home"):
-                with st.spinner(regen_spinner):
-                    # 🔧 使用 get_mock_params_with_cohort 获取完整参数（包含最新的 cohort_filter）
-                    params = get_mock_params_with_cohort()
-                    data, patient_ids = generate_mock_data(**params)
-                    st.session_state.loaded_concepts = data
-                    st.session_state.patient_ids = patient_ids
+                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #0277bd;">
+<h4 style="color: #0277bd; margin-bottom: 12px;">📈 选项 A：快速可视化</h4>
+<p style="color: #1a1a1a; margin-bottom: 15px;">通过交互式可视化探索数据：</p>
+<ul style="color: #2a2a2a; margin: 10px 0 0 15px; font-size: 0.95rem; line-height: 1.8;">
+<li><b>数据表浏览器</b> — 按模块浏览和探索已加载数据，查看完整数据表并支持排序筛选</li>
+<li><b>时序分析</b> — 可视化临床指标随时间的变化趋势，支持多特征叠加、交互缩放和自定义聚合</li>
+<li><b>患者概览</b> — 综合单患者仪表盘，展示所有临床轨迹和关键事件</li>
+<li><b>数据质量评估</b> — 分析所有特征的缺失率、时间覆盖度和数据完整性</li>
+</ul>
+</div>''', unsafe_allow_html=True)
+            
+            # Option A 按钮
+            viz_label = "📈 Go to Visualization" if lang == 'en' else "📈 前往可视化"
+            if st.button(viz_label, use_container_width=True, key="goto_viz_home", type="primary"):
+                st.session_state['_scroll_to_tab'] = 'viz'
                 st.rerun()
         
-        with col2:
-            clear_label = "🗑️ Clear Data" if lang == 'en' else "🗑️ 清空数据"
-            if st.button(clear_label, width="stretch", key="clear_home"):
-                st.session_state.loaded_concepts = {}
-                st.session_state.patient_ids = []
-                st.session_state.export_completed = False
+        with col_opt2:
+            # Option B: Cohort Analysis
+            if lang == 'en':
+                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #6d28d9;">
+<h4 style="color: #6d28d9; margin-bottom: 12px;">🔬 Option B: Cohort Analysis</h4>
+<p style="color: #1a1a1a; margin-bottom: 15px;">Perform statistical analysis on your cohort:</p>
+<ul style="color: #2a2a2a; margin: 10px 0 0 15px; font-size: 0.95rem; line-height: 1.8;">
+<li><b>Group Comparison Analysis</b> — Compare subgroups with statistical tests</li>
+<li><b>Multi-Database Feature Distribution</b> — Compare feature distributions across different ICU databases</li>
+<li><b>Cohort Dashboard</b> — Interactive overview of cohort demographics, outcomes, and key clinical characteristics</li>
+</ul>
+</div>''', unsafe_allow_html=True)
+            else:
+                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #6d28d9;">
+<h4 style="color: #6d28d9; margin-bottom: 12px;">🔬 选项 B：队列分析</h4>
+<p style="color: #1a1a1a; margin-bottom: 15px;">对队列进行统计分析：</p>
+<ul style="color: #2a2a2a; margin: 10px 0 0 15px; font-size: 0.95rem; line-height: 1.8;">
+<li><b>组间比较分析</b> — 使用统计检验（t检验、卡方检验、Mann-Whitney U）比较亚组并生成 Table 1</li>
+<li><b>多数据库特征分布</b> — 比较不同ICU数据库（MIMIC、eICU等）间的特征分布差异</li>
+<li><b>队列仪表盘</b> — 队列人口统计学、结局和关键临床特征的交互式概览</li>
+</ul>
+</div>''', unsafe_allow_html=True)
+            
+            # Option B 按钮
+            cohort_label = "🔬 Go to Cohort Analysis" if lang == 'en' else "🔬 前往队列分析"
+            if st.button(cohort_label, use_container_width=True, key="goto_cohort_home", type="primary"):
+                st.session_state['_scroll_to_tab'] = 'cohort'
                 st.rerun()
+        
+        # 🆕 在 Guide: Complete 下方创建导出进度区域
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        export_section = st.container()
+        st.session_state['_export_progress_container'] = export_section
     
     # ============ 数据字典展示 ============
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
@@ -5743,6 +5923,29 @@ def render_home_extract_mode(lang):
     st.markdown('<div id="dictionary"></div>', unsafe_allow_html=True)
     dict_header = "📖 Data Dictionary" if lang == 'en' else "📖 数据字典"
     st.markdown(f'<h2 style="background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;border-bottom:3px solid #667eea;padding-bottom:10px;margin-top:10px;font-size:1.6rem;">{dict_header}</h2>', unsafe_allow_html=True)
+    
+    # 添加数据字典说明
+    if lang == 'en':
+        st.markdown('''
+        <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
+            <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
+                📚 <b>Reference Guide</b>: This dictionary contains all 150+ ICU clinical features available in PyRICU. 
+                Each feature includes its code name, full description, and measurement unit. 
+                Use this to understand what data you're extracting and make informed selections.
+            </p>
+        </div>
+        ''', unsafe_allow_html=True)
+    else:
+        st.markdown('''
+        <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
+            <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
+                📚 <b>参考指南</b>：本字典包含 PyRICU 提供的全部 150+ ICU 临床特征。
+                每个特征包括代码名称、完整描述和测量单位。
+                使用此字典了解您正在提取的数据，做出明智的选择。
+            </p>
+        </div>
+        ''', unsafe_allow_html=True)
+    
     render_home_data_dictionary(lang)
     
     # 页脚信息
@@ -5772,7 +5975,7 @@ def render_home_data_dictionary(lang):
     dict_title = "📖 Complete Data Dictionary" if lang == 'en' else "📖 完整数据字典"
     
     with st.expander(dict_title, expanded=True):
-        dict_intro = "PyRICU provides 130+ ICU clinical features, organized by category. Click each category to view detailed descriptions." if lang == 'en' else "PyRICU 提供 130+ ICU 临床特征，按类别组织。点击各类别查看详细说明。"
+        dict_intro = "PyRICU provides 150+ ICU clinical features, organized by category. Click each category to view detailed descriptions." if lang == 'en' else "PyRICU 提供 150+ ICU 临床特征，按类别组织。点击各类别查看详细说明。"
         st.caption(dict_intro)
         
         # 获取分组
@@ -7272,9 +7475,10 @@ def render_data_table_subtab():
         return
     
     selected_module = st.selectbox(
-        "",  # 标题已在上方显示
+        "Select Module",
         options=module_options,
-        key="data_table_module_select"
+        key="data_table_module_select",
+        label_visibility="collapsed"
     )
     
     if selected_module:
@@ -7292,7 +7496,7 @@ def render_data_table_subtab():
         st.markdown(f"### 👁️ {view_mode_label}")
         view_modes = ["Merge All (Wide Table)", "Single Feature"] if lang == 'en' else ["合并全部（宽表）", "单个特征"]
         
-        view_mode = st.radio("", view_modes, horizontal=True, key="data_table_view_mode", index=0)
+        view_mode = st.radio("View Mode", view_modes, horizontal=True, key="data_table_view_mode", index=0, label_visibility="collapsed")
         
         if view_mode == view_modes[1]:
             # 单个特征模式 (现在是第二个选项)
@@ -7566,8 +7770,26 @@ def render_quality_page():
     ]
 
     # 事件型时间序列：只统计事件发生的时间点（避免全量0导致0%缺失）
+    # 🔧 包含所有布尔事件型概念：sepsis相关、感染相关、RRT、循环衰竭等
     event_time_series = [
-        'circ_failure', 'circ_event'
+        # 循环衰竭
+        'circ_failure', 'circ_event',
+        # Sepsis-3 诊断
+        'sep3_sofa2', 'sep3_sofa1', 'sep3', 'sepsis_sofa2',
+        # 感染相关
+        'susp_inf', 'infection_icd', 'samp',
+        # 肾替代治疗
+        'rrt', 'rrt_criteria',
+        # AKI标志
+        'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
+        # 机械通气
+        'mech_vent', 'vent_ind', 'vent_start', 'vent_end',
+        # ECMO
+        'ecmo', 'ecmo_indication',
+        # 药物事件
+        'abx', 'cort',
+        # 血管活性药物指示
+        'vaso_ind',
     ]
     
     # 🔧 完整时间网格大小：优先使用模拟数据的时长参数，否则默认72小时
@@ -7699,7 +7921,15 @@ def render_quality_page():
                     
                     # 对于事件型数据，只统计非零记录
                     if concept in event_time_series and main_col and main_col in df.columns:
-                        event_count = (df[main_col].fillna(0) > 0).sum()
+                        col_data = df[main_col]
+                        # 检查数据类型，只对数值类型进行 > 0 比较
+                        if pd.api.types.is_numeric_dtype(col_data):
+                            event_count = (col_data.fillna(0) > 0).sum()
+                        elif pd.api.types.is_bool_dtype(col_data):
+                            event_count = col_data.fillna(False).sum()
+                        else:
+                            # 字符串或其他类型，统计非空非零记录
+                            event_count = col_data.notna().sum()
                         records_per_patient = event_count / n_patients if n_patients > 0 else 0
                     
                     # 缺失率 = 1 - (每患者记录数 / 时间网格大小)
@@ -7811,9 +8041,27 @@ def render_quality_page():
                 'death', 'los_icu', 'los_hosp', 'age', 'weight', 'height', 'sex', 'bmi'
             ]
 
-            # 事件型时间序列：只统计事件发生的时间点
+            # 事件型时间序列：只统计事件发生的时间点（避免全量0导致0%缺失）
+            # 🔧 包含所有布尔事件型概念：sepsis相关、感染相关、RRT、循环衰竭等
             event_time_series = [
-                'circ_failure', 'circ_event'
+                # 循环衰竭
+                'circ_failure', 'circ_event',
+                # Sepsis-3 诊断
+                'sep3_sofa2', 'sep3_sofa1', 'sep3', 'sepsis_sofa2',
+                # 感染相关
+                'susp_inf', 'infection_icd', 'samp',
+                # 肾替代治疗
+                'rrt', 'rrt_criteria',
+                # AKI标志
+                'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
+                # 机械通气
+                'mech_vent', 'vent_ind', 'vent_start', 'vent_end',
+                # ECMO
+                'ecmo', 'ecmo_indication',
+                # 药物事件
+                'abx', 'cort',
+                # 血管活性药物指示
+                'vaso_ind',
             ]
             
             # 🔧 完整时间网格大小：优先使用模拟数据的时长参数，否则默认72小时
@@ -8249,7 +8497,7 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
     np.random.seed(42)
     
     # 🔧 扩展特征列表，涵盖更多临床指标
-    # 模拟4个不同的数据库，每个有不同的分布特征
+    # 🔧 FIX: 模拟6个数据库（添加 MIMIC-III 和 SICdb）
     databases = {
         'miiv': {
             # Vital Signs
@@ -8286,6 +8534,24 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
             'bili': (1.4, 1.1), 'lact': (2.0, 1.4),
             'hgb': (11.2, 2.0), 'plt': (210, 75), 'wbc': (11.5, 4.5),
             'ph': (7.39, 0.07), 'po2': (92, 19), 'pco2': (39, 7), 'fio2': (42, 19),
+        },
+        # 🆕 MIMIC-III
+        'mimic': {
+            'hr': (82, 16), 'sbp': (122, 21), 'dbp': (71, 13), 'map': (86, 16),
+            'temp': (37.1, 0.5), 'resp': (19, 4), 'spo2': (95, 3),
+            'glu': (145, 55), 'na': (139, 5), 'k': (4.1, 0.6), 'crea': (1.3, 0.9),
+            'bili': (1.6, 1.3), 'lact': (2.3, 1.6),
+            'hgb': (10.8, 2.1), 'plt': (190, 85), 'wbc': (12.5, 5.5),
+            'ph': (7.37, 0.08), 'po2': (88, 21), 'pco2': (41, 9), 'fio2': (48, 22),
+        },
+        # 🆕 SICdb
+        'sic': {
+            'hr': (77, 13), 'sbp': (116, 19), 'dbp': (67, 11), 'map': (82, 13),
+            'temp': (37.3, 0.4), 'resp': (17, 3), 'spo2': (97, 2),
+            'glu': (132, 46), 'na': (141, 4), 'k': (4.2, 0.5), 'crea': (1.05, 0.65),
+            'bili': (1.3, 1.0), 'lact': (1.9, 1.3),
+            'hgb': (11.3, 1.9), 'plt': (215, 72), 'wbc': (11.2, 4.2),
+            'ph': (7.40, 0.06), 'po2': (93, 18), 'pco2': (38, 6), 'fio2': (41, 18),
         },
     }
     
@@ -9147,6 +9413,13 @@ def render_group_comparison_subtab(lang: str):
         export_df = result_df.copy()
         if 'Module' in export_df.columns:
             export_df['Module'] = export_df['Module'].apply(strip_emoji)
+        # 🔧 FIX: 替换特殊字符防止乱码（± → +/-, 其他Unicode符号）
+        for col in export_df.columns:
+            if export_df[col].dtype == 'object':
+                export_df[col] = export_df[col].astype(str).str.replace('±', '+/-', regex=False)
+                export_df[col] = export_df[col].str.replace('≥', '>=', regex=False)
+                export_df[col] = export_df[col].str.replace('≤', '<=', regex=False)
+                export_df[col] = export_df[col].str.replace('μ', 'u', regex=False)
         csv = export_df.to_csv(index=False, encoding='utf-8-sig')  # 使用 BOM 编码以支持中文
         st.download_button(
             label="📥 " + ("Download Table (CSV)" if lang == 'en' else "下载表格 (CSV)"),
@@ -9165,7 +9438,11 @@ def render_multidb_distribution_subtab(lang: str):
     """多数据库特征分布对比子标签页"""
     import plotly.graph_objects as go
     
-    st.markdown("### 📈 " + ("Multi-Database Feature Distribution" if lang == 'en' else "多数据库特征分布对比"))
+    # 🔧 FIX: 使用容器包装标题，确保与下方内容分隔，增加足够的间距
+    st.markdown("""<div style="margin-bottom: 40px;">
+        <h3 style="margin: 0 0 15px 0; padding: 0;">📈 """ + ("Multi-Database Feature Distribution Comparison" if lang == 'en' else "多数据库特征分布对比") + """</h3>
+        <hr style="margin: 0 0 30px 0; border: none; border-top: 2px solid #e0e0e0;">
+    </div>""", unsafe_allow_html=True)
     
     # 获取入口模式
     entry_mode = st.session_state.get('entry_mode', 'none')
@@ -10331,6 +10608,10 @@ def execute_sidebar_export():
     """执行侧边栏触发的数据导出（直接导出到本地目录，带进度条）。
     
     🔧 进度显示在主内容区的专用容器中。
+    🔧 支持三种模式：
+        1. 模拟数据模式 (use_mock_data=True)
+        2. 真实数据模式 (有有效的 data_path)
+        3. 可视化导入模式 (有 loaded_concepts 但无有效 data_path) - 直接导出已加载的数据
     """
     from datetime import datetime
     
@@ -10338,7 +10619,17 @@ def execute_sidebar_export():
     export_path = st.session_state.get('export_path', '')
     export_format = st.session_state.get('export_format', 'Parquet').lower()
     selected_concepts = st.session_state.get('selected_concepts', [])
-    use_mock = st.session_state.use_mock_data
+    use_mock = st.session_state.get('use_mock_data', False)
+    
+    # 🔧 FIX: 检测是否是从可视化模式导入数据的场景
+    loaded_concepts = st.session_state.get('loaded_concepts', {})
+    data_path_str = st.session_state.get('data_path', '')
+    has_valid_data_path = data_path_str and Path(data_path_str).exists()
+    has_loaded_data = len(loaded_concepts) > 0
+    
+    # 判断数据来源模式
+    # 如果有已加载的数据但没有有效的数据路径，说明是从文件导入的
+    is_viz_import_mode = has_loaded_data and not has_valid_data_path and not use_mock
     
     if not export_path or not Path(export_path).exists():
         err_msg = "❌ Please set a valid export path first" if lang == 'en' else "❌ 请先设置有效的导出路径"
@@ -10428,59 +10719,78 @@ def execute_sidebar_export():
             skipped_modules = st.session_state.get('_skipped_modules', set())
             overwrite_modules = st.session_state.get('_overwrite_modules', set())
             
+            # 🔧 DEBUG: 打印状态以便调试
+            print(f"[DEBUG] existing_modules: {list(existing_modules.keys())}")
+            print(f"[DEBUG] skipped_modules: {skipped_modules}")
+            print(f"[DEBUG] overwrite_modules: {overwrite_modules}")
+            
             # 找出尚未决定的模块
             pending_modules = [m for m in existing_modules.keys() 
                                if m not in skipped_modules and m not in overwrite_modules]
             
+            print(f"[DEBUG] pending_modules: {pending_modules}")
+            
             if pending_modules:
-                # 显示所有冲突模块，让用户一次性选择
+                # 🔧 FIX: 显示冲突时清除 _exporting_in_progress，避免显示 "Export in Progress"
+                st.session_state['_exporting_in_progress'] = False
+                
+                # 显示所有冲突模块
                 conflict_title = "⚠️ Existing Files Detected" if lang == 'en' else "⚠️ 检测到已存在的文件"
                 st.warning(conflict_title)
                 
+                # 🔧 简化：只显示文件列表
+                file_list_html = "<ul style='margin: 10px 0; padding-left: 20px;'>"
                 for group_key in pending_modules:
                     file_path = existing_modules[group_key]
-                    col_name, col_overwrite, col_skip = st.columns([3, 1, 1])
-                    
-                    with col_name:
-                        st.markdown(f"📁 **{group_key}**: `{file_path.name}`")
-                    with col_overwrite:
-                        overwrite_btn = "🔄 Overwrite" if lang == 'en' else "🔄 覆盖"
-                        if st.button(overwrite_btn, key=f"file_overwrite_{group_key}"):
-                            if '_overwrite_modules' not in st.session_state:
-                                st.session_state['_overwrite_modules'] = set()
-                            st.session_state['_overwrite_modules'].add(group_key)
-                            st.rerun()
-                    with col_skip:
-                        skip_btn = "⏭️ Skip" if lang == 'en' else "⏭️ 跳过"
-                        if st.button(skip_btn, key=f"file_skip_{group_key}"):
-                            if '_skipped_modules' not in st.session_state:
-                                st.session_state['_skipped_modules'] = set()
-                            st.session_state['_skipped_modules'].add(group_key)
-                            st.rerun()
+                    file_list_html += f"<li style='margin: 5px 0;'><b>{group_key}</b>: <code>{file_path.name}</code></li>"
+                file_list_html += "</ul>"
+                st.markdown(file_list_html, unsafe_allow_html=True)
                 
-                # 添加快捷操作按钮
+                # 🔧 使用醒目的大按钮
                 st.markdown("---")
+                st.markdown("<p style='font-size: 1.1rem; font-weight: bold; margin-bottom: 15px;'>How do you want to handle these files?</p>" if lang == 'en' else "<p style='font-size: 1.1rem; font-weight: bold; margin-bottom: 15px;'>请选择如何处理这些文件：</p>", unsafe_allow_html=True)
+                
+                # 🔧 FIX: 使用 on_click 回调而不是 if st.button，避免页面跳转
+                def on_overwrite_all():
+                    """覆盖全部的回调函数"""
+                    # 将所有 existing_modules 添加到 overwrite 列表
+                    all_modules = set(st.session_state.get('_existing_modules_list', []))
+                    st.session_state['_overwrite_modules'] = all_modules
+                    st.session_state['_exporting_in_progress'] = True
+                    # 🔧 FIX: 设置 trigger_export 并让它rerun来继续执行
+                    st.session_state.trigger_export = True
+                
+                def on_skip_all():
+                    """跳过全部的回调函数"""
+                    all_modules = set(st.session_state.get('_existing_modules_list', []))
+                    st.session_state['_skipped_modules'] = all_modules
+                    st.session_state['_exporting_in_progress'] = True
+                    # 🔧 FIX: 设置 trigger_export 并让它rerun来继续执行
+                    st.session_state.trigger_export = True
+                
+                # 🔧 保存 pending_modules 到 session_state 让回调能访问
+                st.session_state['_existing_modules_list'] = list(existing_modules.keys())
+                
                 col_all_overwrite, col_all_skip = st.columns(2)
                 with col_all_overwrite:
-                    all_overwrite_btn = "🔄 Overwrite All" if lang == 'en' else "🔄 全部覆盖"
-                    if st.button(all_overwrite_btn, key="file_overwrite_all"):
-                        if '_overwrite_modules' not in st.session_state:
-                            st.session_state['_overwrite_modules'] = set()
-                        for m in pending_modules:
-                            st.session_state['_overwrite_modules'].add(m)
-                        st.rerun()
+                    all_overwrite_btn = "🔄 OVERWRITE ALL" if lang == 'en' else "🔄 全部覆盖"
+                    st.markdown("<style>.stButton button[kind='primary'] { font-size: 1.2rem !important; padding: 15px !important; }</style>", unsafe_allow_html=True)
+                    st.button(all_overwrite_btn, key="file_overwrite_all", type="primary", 
+                             use_container_width=True, on_click=on_overwrite_all)
                 with col_all_skip:
-                    all_skip_btn = "⏭️ Skip All Existing" if lang == 'en' else "⏭️ 跳过所有已存在"
-                    if st.button(all_skip_btn, key="file_skip_all"):
-                        if '_skipped_modules' not in st.session_state:
-                            st.session_state['_skipped_modules'] = set()
-                        for m in pending_modules:
-                            st.session_state['_skipped_modules'].add(m)
-                        st.rerun()
+                    all_skip_btn = "⏭️ SKIP ALL" if lang == 'en' else "⏭️ 全部跳过"
+                    st.button(all_skip_btn, key="file_skip_all", use_container_width=True,
+                             on_click=on_skip_all)
                 
-                await_msg = "Please choose how to handle existing files before continuing..." if lang == 'en' else "请先选择如何处理已存在的文件..."
-                status_text.markdown(await_msg)
-                return  # 暂停导出，等待用户决定
+                # 🔧 FIX: 重新检查用户是否已做出决定（回调可能已更新 session_state）
+                overwrite_modules = st.session_state.get('_overwrite_modules', set())
+                skipped_modules = st.session_state.get('_skipped_modules', set())
+                pending_modules = [m for m in existing_modules.keys() 
+                                   if m not in skipped_modules and m not in overwrite_modules]
+                
+                if pending_modules:
+                    # 用户尚未做出决定，暂停导出
+                    return
         
         # 根据用户选择，确定要跳过的模块
         skipped_modules = st.session_state.get('_skipped_modules', set())
@@ -10519,6 +10829,9 @@ def execute_sidebar_export():
             params = get_mock_params_with_cohort()
             all_mock_data, patient_ids = generate_mock_data(**params)
             
+            # 保存患者ID列表（用于其他功能）
+            st.session_state.patient_ids = patient_ids
+            
             # 🔧 根据要导出的 concepts 过滤数据（排除跳过的）
             data = {}
             for concept in concepts_to_export:
@@ -10538,6 +10851,14 @@ def execute_sidebar_export():
             from pyricu import load_concepts
             import os
             
+            # 🔧 FIX: 检查 data_path 是否有效（可视化模式导入数据后可能无效）
+            data_path_str = st.session_state.get('data_path', '')
+            if not data_path_str or not Path(data_path_str).exists():
+                err_msg = "❌ Data path is not set or invalid. Please go back to Tutorial tab and configure a valid database path first." if lang == 'en' else "❌ 数据路径未设置或无效。请返回Tutorial标签页先配置有效的数据库路径。"
+                st.error(err_msg)
+                st.session_state['_exporting_in_progress'] = False
+                return
+            
             # 批量并行加载所有特征
             patient_limit_display = st.session_state.get('patient_limit', 100)
             patient_info = f"({patient_limit_display} patients)" if patient_limit_display else "(all patients)"
@@ -10553,7 +10874,7 @@ def execute_sidebar_export():
             id_col = 'stay_id'
             if patient_limit and patient_limit > 0:
                 try:
-                    data_path = Path(st.session_state.data_path)
+                    data_path = Path(data_path_str)
                     database = st.session_state.get('database', 'miiv')
                     id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid', 'mimic': 'icustay_id', 'sic': 'CaseID'}
                     id_col = id_col_map.get(database, 'stay_id')
@@ -10611,8 +10932,15 @@ def execute_sidebar_export():
                 database = st.session_state.get('database', 'eicu')
                 valid_concepts = []
                 unsupported_concepts = []
+                special_concepts_to_load = []  # 🆕 特殊概念（AKI, circ_failure等）
+                
                 # 🔧 使用 concepts_to_export 而不是 selected_concepts（跳过已存在模块的概念）
                 for c in concepts_to_export:
+                    # 🆕 先检查是否是特殊概念
+                    if c in SPECIAL_CONCEPTS:
+                        special_concepts_to_load.append(c)
+                        continue
+                    
                     concept_def = cd.get(c)
                     if concept_def:
                         # 🔧 FIX 2025-01-23: SOFA 等回调概念没有直接的 sources，但有 sub_concepts
@@ -10632,7 +10960,7 @@ def execute_sidebar_export():
                 # 这里只记录，不立即显示
                 pass  # unsupported_concepts will be merged with failed_concepts later
                 
-                if not valid_concepts:
+                if not valid_concepts and not special_concepts_to_load:
                     st.error("❌ 所选概念在当前数据库中都不可用")
                     return
                 
@@ -10715,6 +11043,37 @@ def execute_sidebar_export():
                             continue
                 
                 progress_bar.progress(0.5)
+                
+                # 🆕 加载特殊概念（AKI, circ_failure等）
+                if special_concepts_to_load:
+                    special_msg = f"**Loading special concepts (AKI, CircFailure)...**" if lang == 'en' else f"**正在加载特殊概念 (AKI, 循环衰竭)...**"
+                    status_text.markdown(special_msg)
+                    
+                    try:
+                        special_data = load_special_concepts(
+                            concepts=special_concepts_to_load,
+                            database=database,
+                            data_path=st.session_state.data_path,
+                            patient_ids=patient_ids_filter,
+                            max_patients=patient_limit if patient_limit and patient_limit > 0 else None,
+                            verbose=False
+                        )
+                        
+                        # 合并特殊概念数据
+                        for cname, df in special_data.items():
+                            if isinstance(df, pd.DataFrame) and not df.empty:
+                                data[cname] = df
+                        
+                        # 记录未成功加载的特殊概念
+                        failed_special = [c for c in special_concepts_to_load if c not in data]
+                        failed_concepts.extend(failed_special)
+                        
+                    except Exception as special_e:
+                        st.warning(f"⚠️ Failed to load special concepts: {special_e}" if lang == 'en' else f"⚠️ 加载特殊概念失败: {special_e}")
+                        failed_concepts.extend(special_concepts_to_load)
+                    
+                    progress_bar.progress(0.55)
+                
                 # 🔧 FIX: 合并 unsupported 和 failed 概念，只显示一次警告
                 all_skipped = list(set(unsupported_concepts + failed_concepts))
                 if all_skipped:
@@ -10777,6 +11136,9 @@ def execute_sidebar_export():
         
         # 导出合并后的分组数据（宽表格式）
         total_groups = len(grouped_data)
+        
+        # 🆕 收集所有导出数据中的唯一患者ID
+        all_exported_patient_ids = set()
         
         # 🔧 检查是否有已存在的文件需要覆盖
         skipped_modules = st.session_state.get('_skipped_modules', set())
@@ -11171,9 +11533,16 @@ def execute_sidebar_export():
                     continue
                 # 如果不在 skipped_modules 中，说明用户选择了覆盖，直接继续导出
             
+            # 🆕 收集这个模块中的患者ID
+            if merged_df is not None and len(merged_df) > 0:
+                for id_candidate in ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']:
+                    if id_candidate in merged_df.columns:
+                        all_exported_patient_ids.update(merged_df[id_candidate].dropna().unique())
+                        break
+            
             # 写入文件
             if export_format == 'csv':
-                merged_df.to_csv(file_path, index=False)
+                merged_df.to_csv(file_path, index=False, encoding='utf-8-sig')  # 🔧 FIX: 使用 BOM 编码防止中文乱码
             elif export_format == 'parquet':
                 merged_df.to_parquet(file_path, index=False)
             elif export_format == 'excel':
@@ -11208,43 +11577,41 @@ def execute_sidebar_export():
         
         if exported_files:
             st.session_state.export_completed = True
+            st.session_state['_exporting_in_progress'] = False  # 清除导出进行中标记
             st.session_state.last_export_dir = str(export_dir)  # 保存实际导出目录
+            st.session_state.last_export_full_dir = str(export_dir)  # 保存完整路径（含cohort子目录）
+            st.session_state.viz_export_path = str(export_dir)  # 更新viz_export_path
+            # 🔧 FIX: 更新快速可视化的确认路径，这样切换到可视化页面时会自动填充
+            st.session_state.viz_confirmed_path = str(export_dir)
+            # 🔧 FIX: 强制重置 text_input 的版本号，确保显示新路径
+            if '_viz_export_path_version' not in st.session_state:
+                st.session_state._viz_export_path_version = 0
+            st.session_state._viz_export_path_version += 1
             
-            # 🚀 计算总耗时并显示时间统计
+            # 🆕 保存实际导出的患者数量（从数据中统计，是 cohort filter 后的真实数量）
+            actual_patient_count = len(all_exported_patient_ids)
+            st.session_state['_exported_patient_count'] = actual_patient_count
+            
+            # 🔧 DEBUG: 打印实际收集到的患者数量
+            print(f"[DEBUG] Exported patient count: {actual_patient_count}, IDs sample: {list(all_exported_patient_ids)[:5]}")
+            
+            # 🆕 保存导出结果到 session state，rerun 后在 Guide: Complete 中显示
             total_elapsed = time_module.time() - export_start_time
-            success_msg = f"✅ Successfully exported {len(exported_files)} files to `{export_dir}`" if lang == 'en' else f"✅ 成功导出 {len(exported_files)} 个文件到 `{export_dir}`"
-            st.success(success_msg)
-            
-            # 显示时间统计
-            time_stats_title = "⏱️ Export Time Statistics" if lang == 'en' else "⏱️ 导出耗时统计"
-            with st.expander(time_stats_title, expanded=False):
-                for mod_name, mod_time in module_times.items():
-                    if mod_time >= 60:
-                        time_str = f"{mod_time/60:.1f} min"
-                    else:
-                        time_str = f"{mod_time:.1f} s"
-                    st.text(f"  • {mod_name}: {time_str}")
-                
-                if total_elapsed >= 60:
-                    total_str = f"{total_elapsed/60:.1f} min"
-                else:
-                    total_str = f"{total_elapsed:.1f} s"
-                total_msg = f"**Total: {total_str}**" if lang == 'en' else f"**总计: {total_str}**"
-                st.markdown(total_msg)
-            
-            # 显示导出的文件列表
-            view_files_label = "📁 View Exported Files" if lang == 'en' else "📁 查看导出文件"
-            with st.expander(view_files_label, expanded=True):
-                for f in exported_files[:10]:
-                    st.caption(f"• {Path(f).name}")
-                if len(exported_files) > 10:
-                    more_msg = f"... and {len(exported_files) - 10} more files" if lang == 'en' else f"... 及其他 {len(exported_files) - 10} 个文件"
-                    st.caption(more_msg)
+            st.session_state['_export_success_result'] = {
+                'files': exported_files,
+                'export_dir': str(export_dir),
+                'total_time': total_elapsed,
+                'module_times': module_times.copy(),
+                'patient_count': actual_patient_count,  # 🆕 保存实际患者数
+            }
+            st.rerun()  # 🆕 立即刷新页面，让 Step 4 变为 DONE
         else:
+            st.session_state['_exporting_in_progress'] = False  # 🆕 清除导出进行中标记
             no_data_msg = "⚠️ No data was exported" if lang == 'en' else "⚠️ 没有数据被导出"
             st.warning(no_data_msg)
                 
     except Exception as e:
+        st.session_state['_exporting_in_progress'] = False  # 🆕 清除导出进行中标记
         fail_msg = f"❌ Export failed: {e}" if lang == 'en' else f"❌ 导出失败: {e}"
         st.error(fail_msg)
 
@@ -11287,7 +11654,7 @@ def render_export_page():
                    if isinstance(df, pd.DataFrame) and len(df) > 0]
         if df_list:
             all_data = pd.concat(df_list, ignore_index=True)
-            csv_all = all_data.to_csv(index=False)
+            csv_all = all_data.to_csv(index=False, encoding='utf-8-sig')  # 🔧 FIX: 添加 BOM 编码防止中文乱码
             all_csv_label = "📄 All CSV" if lang == 'en' else "📄 全部CSV"
             all_csv_help = "Export all data as CSV" if lang == 'en' else "一键导出所有数据为CSV"
             st.download_button(
@@ -11318,7 +11685,7 @@ def render_export_page():
                     [df.assign(concept=name) for name, df in patient_data.items()],
                     ignore_index=True
                 )
-                patient_csv = patient_combined.to_csv(index=False)
+                patient_csv = patient_combined.to_csv(index=False, encoding='utf-8-sig')  # 🔧 FIX: BOM编码
                 st.download_button(
                     label=f"👤 患者{patient_id}",
                     data=patient_csv,
@@ -11345,7 +11712,7 @@ def render_export_page():
                 [df.assign(concept=name) for name, df in vitals_data.items()],
                 ignore_index=True
             )
-            vitals_csv = vitals_combined.to_csv(index=False)
+            vitals_csv = vitals_combined.to_csv(index=False, encoding='utf-8-sig')  # 🔧 FIX: BOM编码
             vitals_label = "💓 Vitals" if lang == 'en' else "💓 生命体征"
             vitals_help = "Export all vital signs data" if lang == 'en' else "导出所有生命体征数据"
             st.download_button(
@@ -11370,7 +11737,7 @@ def render_export_page():
                 [df.assign(concept=name) for name, df in labs_data.items()],
                 ignore_index=True
             )
-            labs_csv = labs_combined.to_csv(index=False)
+            labs_csv = labs_combined.to_csv(index=False, encoding='utf-8-sig')  # 🔧 FIX: BOM编码
             labs_label = "🧪 Labs" if lang == 'en' else "🧪 实验室"
             labs_help = "Export all laboratory data" if lang == 'en' else "导出所有实验室数据"
             st.download_button(
@@ -11551,7 +11918,7 @@ def render_export_page():
                                 [df.assign(concept=name) for name, df in preview_data.items()],
                                 ignore_index=True
                             )
-                            csv = combined.to_csv(index=include_index)
+                            csv = combined.to_csv(index=include_index, encoding='utf-8-sig')  # 🔧 FIX: BOM编码防止中文乱码
                             dl_csv = "⬇️ Download CSV" if lang == 'en' else "⬇️ 下载 CSV"
                             st.download_button(
                                 label=dl_csv,
@@ -11565,7 +11932,7 @@ def render_export_page():
                             zip_buffer = io.BytesIO()
                             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                                 for name, df in preview_data.items():
-                                    csv_data = df.to_csv(index=include_index)
+                                    csv_data = df.to_csv(index=include_index, encoding='utf-8-sig')  # 🔧 FIX: BOM编码
                                     zf.writestr(f"{name}.csv", csv_data)
                             
                             dl_zip = "⬇️ Download ZIP (Multiple CSVs)" if lang == 'en' else "⬇️ 下载 ZIP (多个CSV)"
@@ -11644,14 +12011,9 @@ def main():
     if st.session_state.get('show_convert_dialog', False):
         render_convert_dialog()
     
-    # 🔧 创建导出进度区域的占位符（在标签页之前，避免页面跳转）
-    export_progress_container = st.container()
-    
-    # 🔧 处理侧边栏触发的导出（在占位符中显示）
-    if st.session_state.get('trigger_export', False):
-        st.session_state.trigger_export = False
-        with export_progress_container:
-            execute_sidebar_export()
+    # 🔧 导出进度区域：优先使用 Guide: Complete 中创建的容器，否则创建备用容器
+    # （实际导出在渲染 Home 页面后执行，确保 container 已创建）
+    default_export_container = st.container()
     
     # ============ 顶部标题（放在导航栏上方） ============
     lang = st.session_state.get('language', 'en')
@@ -11684,6 +12046,146 @@ def main():
     
     with tab3:
         render_cohort_comparison_page()
+    
+    # 🔧 处理侧边栏触发的导出（在标签页渲染后执行，确保 Guide: Complete 中的 container 已创建）
+    if st.session_state.get('trigger_export', False):
+        st.session_state.trigger_export = False
+        # 🔧 FIX: 添加 try-except 防止白屏崩溃
+        try:
+            # 🔧 FIX: 检查是否有已加载的可视化数据，如果没有选择概念则显示警告但不阻止导出
+            if len(st.session_state.get('loaded_concepts', {})) > 0:
+                if not st.session_state.get('selected_concepts'):
+                    lang = st.session_state.get('language', 'en')
+                    loaded_concepts = list(st.session_state.loaded_concepts.keys())
+                    warn_msg = f"⚠️ No concepts selected. Please select features in sidebar first." if lang == 'en' else f"⚠️ 未选择特征，请先在侧边栏选择要导出的特征。"
+                    st.warning(warn_msg)
+                    st.session_state['_exporting_in_progress'] = False
+                    # 🔧 FIX: 不再 return，让用户看到警告但不继续执行导出
+                    pass  # 仅显示警告，下面会因为 selected_concepts 为空而跳过导出
+                else:
+                    # 🔧 FIX: 有选择的概念，执行导出
+                    pass
+            
+            # 🔧 FIX: 使用 JavaScript 切换到 Tutorial 标签页（第1个标签）以显示导出进度
+            js_switch_to_tutorial = '''
+            <script>
+                (function() {
+                    // 滚动到页面顶部
+                    var mainContainer = window.parent.document.querySelector('section.main');
+                    if (mainContainer) mainContainer.scrollTop = 0;
+                    window.parent.document.documentElement.scrollTop = 0;
+                    window.parent.document.body.scrollTop = 0;
+                    
+                    // 点击第一个标签页 (Tutorial)
+                    setTimeout(function() {
+                        var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+                        if (tabs && tabs.length >= 1) {
+                            tabs[0].click();
+                        }
+                    }, 100);
+                })();
+            </script>
+            '''
+            st.components.v1.html(js_switch_to_tutorial, height=0)
+            
+            # 🔧 只有在有选择的概念时才执行导出
+            if st.session_state.get('selected_concepts'):
+                # 优先使用 Guide: Complete 中创建的容器
+                export_container = st.session_state.get('_export_progress_container', default_export_container)
+                with export_container:
+                    execute_sidebar_export()
+        except Exception as e:
+            import traceback
+            lang = st.session_state.get('language', 'en')
+            # 🔧 FIX: 打印详细错误堆栈便于调试
+            error_detail = traceback.format_exc()
+            print(f"[ERROR] Export failed with exception:\n{error_detail}")
+            st.session_state['_exporting_in_progress'] = False
+            if lang == 'en':
+                st.error(f"❌ Export failed: {e}")
+            else:
+                st.error(f"❌ 导出失败: {e}")
+            st.session_state['_exporting_in_progress'] = False
+    
+    # 🆕 处理页面跳转请求 - 在渲染完成后执行 JavaScript
+    scroll_to_tab = st.session_state.pop('_scroll_to_tab', None)
+    scroll_to_top = st.session_state.pop('_scroll_to_top', None)
+    
+    if scroll_to_tab == 'viz':
+        # 跳转到 Quick Visualization 标签页（第2个标签，索引1）并滚动到顶部
+        js_code = '''
+        <script>
+            (function() {
+                // 滚动到页面顶部
+                var mainContainer = window.parent.document.querySelector('section.main');
+                if (mainContainer) mainContainer.scrollTop = 0;
+                window.parent.document.documentElement.scrollTop = 0;
+                window.parent.document.body.scrollTop = 0;
+                
+                // 点击第二个标签页
+                setTimeout(function() {
+                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+                    if (tabs && tabs.length >= 2) {
+                        tabs[1].click();
+                        // 再次滚动确保在顶部
+                        setTimeout(function() {
+                            var mainContainer = window.parent.document.querySelector('section.main');
+                            if (mainContainer) mainContainer.scrollTop = 0;
+                            window.parent.document.documentElement.scrollTop = 0;
+                        }, 100);
+                    }
+                }, 200);
+            })();
+        </script>
+        '''
+        st.components.v1.html(js_code, height=0)
+    elif scroll_to_tab == 'cohort':
+        # 跳转到 Cohort Analysis 标签页（第3个标签，索引2）并滚动到顶部
+        js_code = '''
+        <script>
+            (function() {
+                var mainContainer = window.parent.document.querySelector('section.main');
+                if (mainContainer) mainContainer.scrollTop = 0;
+                window.parent.document.documentElement.scrollTop = 0;
+                window.parent.document.body.scrollTop = 0;
+                
+                setTimeout(function() {
+                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+                    if (tabs && tabs.length >= 3) {
+                        tabs[2].click();
+                        setTimeout(function() {
+                            var mainContainer = window.parent.document.querySelector('section.main');
+                            if (mainContainer) mainContainer.scrollTop = 0;
+                            window.parent.document.documentElement.scrollTop = 0;
+                        }, 100);
+                    }
+                }, 200);
+            })();
+        </script>
+        '''
+        st.components.v1.html(js_code, height=0)
+    elif scroll_to_top:
+        # 滚动到页面最顶部
+        js_code = '''
+        <script>
+            (function() {
+                // 尝试多种滚动方式确保生效
+                var mainContainer = window.parent.document.querySelector('section.main');
+                if (mainContainer) mainContainer.scrollTop = 0;
+                window.parent.document.documentElement.scrollTop = 0;
+                window.parent.document.body.scrollTop = 0;
+                
+                // 延迟再次滚动以确保页面完全加载后也在顶部
+                setTimeout(function() {
+                    var mainContainer = window.parent.document.querySelector('section.main');
+                    if (mainContainer) mainContainer.scrollTop = 0;
+                    window.parent.document.documentElement.scrollTop = 0;
+                    window.parent.document.body.scrollTop = 0;
+                }, 100);
+            })();
+        </script>
+        '''
+        st.components.v1.html(js_code, height=0)
     
     # 底部状态栏
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)

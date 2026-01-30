@@ -1125,15 +1125,17 @@ class MultiDatabaseDistribution:
             height=240 * rows,
             title_text="Multi-Database Feature Distribution Comparison",
             title_x=0.5,
+            title_y=0.98,  # 🔧 FIX: 将标题位置上移
+            title_font_size=16,
             showlegend=True,
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
-                y=1.02,
+                y=1.06,  # 🔧 FIX: 将图例位置上移，与标题保持距离
                 xanchor="center",
                 x=0.5,
             ),
-            margin=dict(t=80, b=30, l=40, r=20),
+            margin=dict(t=120, b=30, l=40, r=20),  # 🔧 FIX: 增加顶部margin给标题和图例更多空间
         )
         
         # 更新子图标题字体
