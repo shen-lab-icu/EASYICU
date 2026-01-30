@@ -631,8 +631,14 @@ def main():
                 st.markdown("#### Sample Sizes by Database")
                 st.dataframe(pivot_n.style.format('{:,.0f}'), use_container_width=True)
                 
-                # 导出
-                csv = stats_df.to_csv(index=False)
+                # 🔧 FIX: 导出时使用 utf-8-sig 编码并替换特殊字符
+                export_stats = stats_df.copy()
+                for col in export_stats.columns:
+                    if export_stats[col].dtype == 'object':
+                        export_stats[col] = export_stats[col].astype(str).str.replace('±', '+/-', regex=False)
+                        export_stats[col] = export_stats[col].str.replace('≥', '>=', regex=False)
+                        export_stats[col] = export_stats[col].str.replace('≤', '<=', regex=False)
+                csv = export_stats.to_csv(index=False, encoding='utf-8-sig')
                 st.download_button(
                     "📥 Download Full Statistics (CSV)",
                     csv,
