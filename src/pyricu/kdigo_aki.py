@@ -30,7 +30,7 @@ Author: PyRICU Team
 Date: 2026-01-26
 """
 
-from typing import Optional, Dict, Any, List, Union, Tuple
+from typing import Optional, Dict, Any, List
 import pandas as pd
 import numpy as np
 import logging
@@ -235,7 +235,7 @@ def kdigo_uo(
     time_col = _detect_time_col(urine_df, time_col)
     
     if id_col is None or time_col is None:
-        raise ValueError(f"Could not detect ID or time columns")
+        raise ValueError("Could not detect ID or time columns")
     
     # Calculate UO rates using simplified windowed average
     result = _calculate_uo_rates_simple(
@@ -331,7 +331,7 @@ def _calculate_uo_rates_simple(
                 break
     
     # Detect weight column in weight_df
-    weight_time_col = _detect_time_col(weight_df)
+    _detect_time_col(weight_df)
     weight_id_col = _detect_id_col(weight_df)
     
     if weight_col not in weight.columns:

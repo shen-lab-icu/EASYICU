@@ -21,7 +21,6 @@ from .utils import (
     get_concept_color,
     prepare_timeseries_data,
     create_time_axis_label,
-    detect_id_col,
     PYRICU_COLORS,
 )
 
@@ -350,7 +349,7 @@ def plot_medications_gantt(
             ),
             hovertemplate=f'{get_concept_label(med)}<br>' +
                          'Time: %{x:.1f}h<br>' +
-                         f'Rate: %{{customdata:.3f}}<extra></extra>',
+                         'Rate: %{customdata:.3f}<extra></extra>',
             customdata=df[med],
         ))
     

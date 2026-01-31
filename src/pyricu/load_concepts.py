@@ -2,7 +2,7 @@
 完整的概念加载系统
 实现 R ricu 的 load_concepts 功能
 """
-from typing import List, Optional, Union, Dict, Any, Callable, Iterable, Sequence, Mapping
+from typing import List, Optional, Union, Dict, Any, Iterable, Sequence, Mapping
 import logging
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,8 +13,7 @@ from .concept import Concept, load_dictionary
 from .config import DataSourceConfig, TableConfig, load_src_cfg
 from .datasource import ICUDataSource
 from .table import load_table
-from .ts_utils import change_interval, aggregate_data
-from .callback_utils import combine_callbacks
+from .ts_utils import change_interval
 
 # DataSource 别名用于向后兼容
 DataSource = ICUDataSource
@@ -919,10 +918,8 @@ class ConceptLoader:
             
             if weight_data is not None and not weight_data.empty:
                 # 确保只返回id和weight列
-                weight_cols = [id_col, 'weight'] if 'weight' in weight_data.columns else [id_col]
                 if 'value' in weight_data.columns and 'weight' not in weight_data.columns:
                     weight_data = weight_data.rename(columns={'value': 'weight'})
-                    weight_cols = [id_col, 'weight']
                 
                 # 取每个患者的中位数体重
                 if 'weight' in weight_data.columns:
@@ -1719,7 +1716,7 @@ class ConceptLoader:
                         # 没有有效的患者ID，回退到普通加载
                         try:
                             df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
-                        except:
+                        except Exception:
                             df = load_table(self._src_name, table_name, path=self.data_path)
                         df = self._ensure_id_column(df, id_type)
                         if patient_ids is not None:
@@ -1728,7 +1725,7 @@ class ConceptLoader:
                     # 没有 data_source 或 patient_ids，使用原有逻辑
                     try:
                         df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
-                    except:
+                    except Exception:
                         df = load_table(self._src_name, table_name, path=self.data_path)
                     
                     df = self._ensure_id_column(df, id_type)

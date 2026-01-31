@@ -4,7 +4,7 @@ Functions for CLI interaction, progress reporting, and formatted output.
 """
 
 import sys
-from typing import Any, Callable, List, Optional
+from typing import Optional
 from contextlib import contextmanager
 
 # ============================================================================

@@ -6,14 +6,13 @@ corresponding to R ricu's data environment system.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Union
 from pathlib import Path
 import weakref
 
 import pandas as pd
 
 from .config import SrcConfig
-from .file_utils import ensure_dirs_exist
 
 class SrcEnv:
     """Source environment for lazy loading tables (R ricu src_env).

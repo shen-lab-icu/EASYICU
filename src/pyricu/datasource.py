@@ -11,7 +11,7 @@ from threading import RLock
 
 import pandas as pd
 
-from .config import DataSourceConfig, DataSourceRegistry, DatasetOptions, TableConfig
+from .config import DataSourceConfig, DataSourceRegistry, DatasetOptions
 from .table import ICUTable
 
 # 全局调试开关 - 设置为 False 可以减少输出
@@ -407,11 +407,6 @@ class ICUDataSource:
             
             # 🚀 宽表预加载优化：第一次加载时预加载所有常用value列
             # 这样后续概念可以直接从缓存取，避免重复读取parquet
-            WIDE_TABLE_VALUE_COLUMNS = {
-                'vitalperiodic': ['heartrate', 'systemicsystolic', 'systemicdiastolic', 
-                                  'systemicmean', 'respiration', 'sao2', 'temperature'],
-                'vitalaperiodic': ['noninvasivesystolic', 'noninvasivediastolic', 'noninvasivemean'],
-            }
             
             # 🚀 宽表优化：识别value列用于NULL过滤
             # 宽表的value列就是传入的columns中除了ID列和时间列以外的列
@@ -469,7 +464,7 @@ class ICUDataSource:
                 if db_name == 'mimic' and 'stay_id' in base_columns:
                     base_columns = [c if c != 'stay_id' else 'icustay_id' for c in base_columns]
                     if DEBUG_MODE:
-                        logger.debug(f"🔄 MIMIC-III 列映射: stay_id -> icustay_id")
+                        logger.debug("🔄 MIMIC-III 列映射: stay_id -> icustay_id")
                 
                 if columns is not None:
                     # 合并最小列集和传入的额外列（去重）
@@ -941,7 +936,7 @@ class ICUDataSource:
 
         if verbose and logger.isEnabledFor(logging.INFO):
             id_label = id_columns[0] if id_columns else defaults.id_var or "N/A"
-            unique_count = (
+            (
                 frame[id_label].nunique()
                 if id_label in frame.columns
                 else "N/A"
@@ -1410,7 +1405,7 @@ class ICUDataSource:
                 return self._read_partitioned_data_optimized(path, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
         
         suffix = path.suffix.lower()
-        suffixes = [s.lower() for s in path.suffixes]
+        [s.lower() for s in path.suffixes]
         
         # Preferred: Parquet format
         if suffix in {".parquet", ".pq"}:
@@ -1428,7 +1423,7 @@ class ICUDataSource:
                         columns=list(columns) if columns else None,
                         filters=[[(patient_ids_filter.column, 'in', target_ids)]]
                     ).to_pandas()
-                except (ImportError, Exception) as e:
+                except (ImportError, Exception):
                     # 如果PyArrow过滤失败，回退到pandas后过滤
                     df = pd.read_parquet(path, columns=list(columns) if columns else None, engine='pyarrow')
                     if patient_ids_filter.column in df.columns:
@@ -1711,7 +1706,6 @@ class ICUDataSource:
 
             # 批量读取，启用多线程（优化大规模提取）
             # 🚀 优化：为90000+患者提取增加线程池
-            import os
             thread_count = 32  # 最优配置：32线程
             
             if columns:
@@ -1826,7 +1820,6 @@ class ICUDataSource:
                         columns=list(columns) if columns else None,
                     )
                     if arrow_filters is not None:
-                        import pyarrow.compute as pc  # type: ignore
                         table = table.filter(arrow_filters)
                     df = table.to_pandas()
                     dfs.append(df)
@@ -2367,7 +2360,6 @@ def load_wide_table_aggregated(
     else:
         # 多列合并
         # 使用COALESCE逐步合并所有CTE
-        join_parts = []
         coalesce_id = f"COALESCE(agg_0.{id_col}"
         coalesce_time = "COALESCE(agg_0.charttime"
         

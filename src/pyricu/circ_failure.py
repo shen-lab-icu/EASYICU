@@ -24,9 +24,7 @@ Drug Levels:
 """
 
 import pandas as pd
-import numpy as np
-from typing import Optional, List, Dict, Any, Union
-import warnings
+from typing import Optional, List, Dict, Any
 
 
 # ============================================================================
@@ -445,7 +443,7 @@ def load_circ_failure(
     
     if verbose:
         event_counts = result['circ_event'].value_counts().sort_index()
-        print(f"\nCirculatory failure event distribution:")
+        print("\nCirculatory failure event distribution:")
         for event, count in event_counts.items():
             pct = 100 * count / len(result)
             print(f"  Event {event}: {count:,} ({pct:.1f}%)")

@@ -6,7 +6,6 @@ reducing code duplication across callback functions.
 
 from typing import List, Optional, Union
 import pandas as pd
-import numpy as np
 
 # Known ID column names by database
 KNOWN_ID_COLUMNS = {

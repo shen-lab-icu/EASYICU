@@ -17,7 +17,7 @@ References:
 
 from __future__ import annotations
 
-from typing import Callable, List, Literal, Optional
+from typing import Callable, Literal
 
 import numpy as np
 import pandas as pd
@@ -27,11 +27,7 @@ from .sepsis import (
     delta_cummin,
     delta_min,
     delta_start,
-    susp_inf,
-    _process_abx,
-    _process_samp,
-    _si_and,
-    _si_or
+    susp_inf
 )
 
 def sep3_sofa2(
@@ -88,7 +84,7 @@ def sep3_sofa2(
     """
     # Filter SI events
     if 'susp_inf' in susp_inf_df.columns:
-        si_events = susp_inf_df[susp_inf_df['susp_inf'] == True].copy()
+        si_events = susp_inf_df[susp_inf_df['susp_inf'].fillna(False)].copy()
     else:
         # If no susp_inf column, assume all rows are SI events
         si_events = susp_inf_df.copy()

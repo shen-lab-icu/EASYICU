@@ -16,10 +16,8 @@ except ImportError:
     HAS_PLOTLY = False
 
 from .utils import (
-    get_concept_label,
     prepare_timeseries_data,
     create_time_axis_label,
-    PYRICU_COLORS,
 )
 
 
@@ -382,7 +380,7 @@ def plot_sepsis_timeline(
         sep_df = prepare_timeseries_data(sepsis_data, patient_id)
         
         if 'sep3' in sep_df.columns:
-            sep_events = sep_df[sep_df['sep3'] == True]
+            sep_events = sep_df[sep_df['sep3'].fillna(False)]
         else:
             sep_events = sep_df
         

@@ -17,7 +17,6 @@ except ImportError:
     DataEnv = None
     def get_src_env(name):
         return None
-from .resources import load_data_sources
 
 def src_name(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv, DataEnv]) -> str:
     """Get data source name (R ricu src_name).

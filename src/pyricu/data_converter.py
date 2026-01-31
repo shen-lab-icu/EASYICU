@@ -18,16 +18,17 @@ Usage:
 from __future__ import annotations
 
 import os
-import gzip
 import tarfile
 import logging
-import hashlib
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    import pyarrow
 
 logger = logging.getLogger(__name__)
 
@@ -653,7 +654,7 @@ class DataConverter:
                 else:
                     pd.read_csv(csv_path, encoding='latin1', nrows=100)
                 return 'latin1'
-            except:
+            except Exception:
                 pass  # Fall through to normal detection
         
         # Quick byte-level check for non-gzipped files
@@ -682,7 +683,7 @@ class DataConverter:
                     try:
                         pd.read_csv(csv_path, encoding=encoding, nrows=1000)
                         return encoding
-                    except:
+                    except Exception:
                         continue
                 except (UnicodeDecodeError, LookupError):
                     continue
@@ -982,7 +983,7 @@ class DataConverter:
                 if writer is not None:
                     writer.close()
                     
-            except Exception as e:
+            except Exception:
                 if writer is not None:
                     writer.close()
                 raise
@@ -1071,7 +1072,7 @@ class DataConverter:
         if partition_config and use_id_partitioning:
             # Use ID-based partitioning (ricu style) - opens many writers, uses more memory
             if self.verbose:
-                logger.info(f"  Using ID-based partitioning (may use more memory)")
+                logger.info("  Using ID-based partitioning (may use more memory)")
             result = self._convert_with_id_partitioning(
                 csv_path, shard_dir, partition_config, result
             )
@@ -1203,7 +1204,7 @@ class DataConverter:
                     for part_num in range(1, n_partitions + 1):
                         try:
                             get_partition_path(part_num).unlink()
-                        except:
+                        except Exception:
                             pass
                     return self._convert_with_row_partitioning(csv_path, shard_dir, result)
                 
@@ -1236,7 +1237,7 @@ class DataConverter:
             if self.verbose:
                 logger.info(f"  ✅ Converted {result['file']}: {total_rows:,} rows in {n_partitions} partitions")
             
-        except Exception as e:
+        except Exception:
             # Make sure to close writers on error
             close_all_writers()
             raise
@@ -1250,7 +1251,7 @@ class DataConverter:
         
         return result
     
-    def _normalize_schema(self, table: 'pa.Table', reference_schema: 'pa.Schema') -> 'pa.Table':
+    def _normalize_schema(self, table: "pyarrow.Table", reference_schema: "pyarrow.Schema") -> "pyarrow.Table":
         """
         Normalize a PyArrow table to match a reference schema.
         
@@ -1279,7 +1280,7 @@ class DataConverter:
                     # Reference was null but we now have real type - use string
                     try:
                         new_columns.append(col.cast(pa.string(), safe=False))
-                    except:
+                    except Exception:
                         new_columns.append(col)
                 else:
                     # Try to cast to reference type
@@ -1290,7 +1291,7 @@ class DataConverter:
                         if pa.types.is_string(ref_type) or pa.types.is_large_string(ref_type):
                             try:
                                 new_columns.append(col.cast(pa.string(), safe=False))
-                            except:
+                            except Exception:
                                 # Last resort: convert via Python
                                 arr = col.to_pylist()
                                 str_arr = [str(x) if x is not None else None for x in arr]
@@ -1299,14 +1300,14 @@ class DataConverter:
                             # For numeric types that fail, try string
                             try:
                                 new_columns.append(col.cast(pa.string(), safe=False))
-                            except:
+                            except Exception:
                                 new_columns.append(col)
             else:
                 new_columns.append(col)
         
         return pa.Table.from_arrays(new_columns, schema=reference_schema)
     
-    def _infer_stable_schema(self, csv_path: Path, sample_chunks: int = 3) -> 'pa.Schema':
+    def _infer_stable_schema(self, csv_path: Path, sample_chunks: int = 3) -> "pyarrow.Schema":
         """
         Infer a stable schema by reading multiple chunks and merging types.
         
@@ -1642,7 +1643,7 @@ class DataConverter:
             return False
         
         if self.verbose:
-            logger.info(f"✅ Successfully converted all files")
+            logger.info("✅ Successfully converted all files")
         
         return True
     

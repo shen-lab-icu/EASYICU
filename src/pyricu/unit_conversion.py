@@ -2,10 +2,9 @@
 单位转换系统
 实现医学常用单位之间的转换 (完全复刻 R ricu callback-itm.R 的 convert_unit 功能)
 """
-from typing import Optional, Union, Callable, List
+from typing import Optional, Union
 import pandas as pd
 import numpy as np
-import re
 
 class UnitConverter:
     """医学单位转换器 - 完整实现 R ricu 的单位转换功能"""

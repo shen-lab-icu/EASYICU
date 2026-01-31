@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Union
 from pathlib import Path
 
-from .concept import ConceptDictionary, ConceptDefinition
+from .concept import ConceptDefinition
 from .resources import load_dictionary
 
 def add_concept(
@@ -73,7 +73,7 @@ def concept_availability(
                 # Check if concept is available for this source
                 concept_def = dictionary[concept_name]
                 available = any(
-                    src_name in source.name for source in concept_def.sources
+                    src in source.name for source in concept_def.sources
                     if hasattr(source, 'name')
                 )
                 result[concept_name] = available

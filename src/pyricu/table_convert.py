@@ -8,8 +8,8 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Union
 import pandas as pd
 
-from .table import IdTbl, TsTbl, WinTbl, ICUTable, as_id_tbl, as_ts_tbl, as_win_tbl
-from .config import TableConfig, TableDefaults, IdentifierConfig, DataSourceConfig
+from .table import IdTbl, TsTbl, WinTbl, as_id_tbl, as_ts_tbl, as_win_tbl
+from .config import TableConfig, IdentifierConfig, DataSourceConfig
 
 def reclass_tbl(x: Union[pd.DataFrame, IdTbl, TsTbl, WinTbl], 
                 to: Optional[str] = None) -> Union[pd.DataFrame, IdTbl, TsTbl, WinTbl]:
@@ -98,7 +98,7 @@ def as_col_cfg(x: Any) -> Dict[str, Any]:
         }
     
     if isinstance(x, (IdTbl, TsTbl, WinTbl)):
-        from .table_meta import id_vars, index_var, dur_var, time_vars
+        from .table_meta import id_vars, index_var, dur_var
         cfg = {}
         id_cols = id_vars(x)
         if id_cols:

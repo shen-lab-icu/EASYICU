@@ -3,11 +3,10 @@
 提供统一主题设置、图表保存等通用功能。
 """
 
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Union, Any
 from pathlib import Path
 
 import pandas as pd
-import numpy as np
 
 try:
     import plotly.graph_objects as go

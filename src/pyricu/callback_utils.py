@@ -185,7 +185,7 @@ def apply_map(mapping: Dict[Any, Any], var: str = 'val_col') -> Callable:
                 # For pure numeric mappings, ensure float type
                 try:
                     data[col_name] = pd.to_numeric(data[col_name], errors='coerce').astype(float)
-                except:
+                except Exception:
                     # Keep as is if conversion fails
                     pass
         return data
@@ -295,9 +295,7 @@ def fahr_to_cels(temp: Union[float, pd.Series]) -> Union[float, pd.Series]:
     """Convert Fahrenheit to Celsius."""
     return (temp - 32) * 5 / 9
 
-def silent_as_numeric(x: pd.Series) -> pd.Series:
-    """Convert to numeric, suppressing warnings."""
-    return pd.to_numeric(x, errors='coerce')
+# 注意: silent_as_numeric 的完整版本在第2489行定义（支持多种输入类型）
 
 def force_type(target_type: str) -> Callable:
     """Create a function that forces type conversion.
@@ -645,70 +643,6 @@ def fwd_concept(concept_name: str) -> Callable:
         return data_dict[concept_name]
     
     return _fwd_callback
-
-def ts_to_win_tbl(
-    duration_col: str = 'duration',
-    start_col: str = 'start',
-    end_col: str = 'end',
-) -> Callable:
-    """Convert time series table to window table (R ricu ts_to_win_tbl).
-    
-    Creates a callback that adds duration/window columns to a time series,
-    converting it to a windowed format suitable for interval-based queries.
-    
-    Args:
-        duration_col: Name of duration column to create
-        start_col: Name of start time column
-        end_col: Name of end time column
-        
-    Returns:
-        Callback function
-        
-    Examples:
-        >>> # Convert drug administration to windows
-        >>> cb = ts_to_win_tbl(duration_col='drug_duration')
-        >>> result = cb(drug_data, index_col='time')
-    """
-    def _ts_to_win_callback(
-        data: pd.DataFrame,
-        index_col: str = 'time',
-        **kwargs
-    ) -> pd.DataFrame:
-        """Add window columns to time series data.
-        
-        Args:
-            data: Input time series DataFrame
-            index_col: Time index column name
-            **kwargs: Additional arguments
-            
-        Returns:
-            DataFrame with added window columns
-        """
-        data = data.copy()
-        
-        # If duration_col already exists, use it to compute end
-        if duration_col in data.columns:
-            if pd.api.types.is_timedelta64_dtype(data[duration_col]):
-                data[end_col] = data[index_col] + data[duration_col]
-            else:
-                # Assume duration is already in same units as time
-                data[end_col] = data[duration_col]
-        else:
-            # Create duration from start/end if they exist
-            if start_col in data.columns and end_col in data.columns:
-                data[duration_col] = data[end_col] - data[start_col]
-            elif start_col in data.columns:
-                data[duration_col] = data[index_col] - data[start_col]
-            elif end_col in data.columns:
-                data[duration_col] = data[end_col] - data[index_col]
-        
-        # Ensure start column exists
-        if start_col not in data.columns and index_col in data.columns:
-            data[start_col] = data[index_col]
-        
-        return data
-    
-    return _ts_to_win_callback
 
 def locf(max_gap: Optional[pd.Timedelta] = None) -> Callable:
     """Last observation carried forward (R ricu locf).
@@ -1816,57 +1750,7 @@ def mimic_rate_cv(
     # Call expand_intervals
     return expand_intervals(data, keep_vars=keep_vars, grp_var=grp_var)
 
-def hirid_vent(
-    data: pd.DataFrame,
-    index_var: str = 'datetime',
-    id_cols: Optional[list] = None,
-    **kwargs
-) -> pd.DataFrame:
-    """HiRID ventilation callback (R ricu hirid_vent).
-    
-    Creates duration windows for ventilation events using padded_capped_diff.
-    Duration is calculated based on time differences, capped at 12 hours.
-    
-    Args:
-        data: Input DataFrame with ventilation events
-        index_var: Time index column
-        id_cols: ID columns for grouping
-        **kwargs: Additional arguments
-        
-    Returns:
-        DataFrame with 'dur_var' column for event durations
-    """
-    if id_cols is None:
-        id_cols = [col for col in data.columns if 'id' in col.lower()]
-    
-    if not id_cols:
-        raise ValueError("Cannot determine ID columns")
-    
-    data = data.copy()
-    
-    # Sort by ID and time
-    data = data.sort_values(id_cols + [index_var])
-    
-    # Calculate durations within each ID group
-    def calc_duration(group):
-        """Calculate padded and capped time differences."""
-        if len(group) == 0:
-            return group
-        
-        # Calculate time differences (convert to hours)
-        time_diffs = group[index_var].diff()
-        
-        # Replace first diff (NaN) with 4 hours (padding)
-        # Cap all diffs at 12 hours
-        durations = time_diffs.fillna(pd.Timedelta(hours=4))
-        durations = durations.clip(upper=pd.Timedelta(hours=12))
-        
-        group['dur_var'] = durations
-        return group
-    
-    data = data.groupby(id_cols, group_keys=False).apply(calc_duration, include_groups=True)
-    
-    return data
+# 注意: hirid_vent 的完整版本在第4104行定义（支持展开到小时级别）
 
 def grp_amount_to_rate(
     grp_var: str,
@@ -2027,50 +1911,8 @@ def ts_to_win_tbl(win_dur: pd.Timedelta) -> Callable:
     
     return callback
 
-def fwd_concept(concept_name: str) -> Callable:
-    """Create callback that forwards to another concept (R ricu fwd_concept).
-    
-    Loads a different concept and uses its result. Useful for hierarchical
-    concept definitions.
-    
-    Args:
-        concept_name: Name of concept to load
-        
-    Returns:
-        Callback function
-        
-    Examples:
-        >>> # Use GCS total instead of recomputing
-        >>> gcs_callback = fwd_concept('gcs')
-    """
-    def callback(data: pd.DataFrame, src: str = None, **kwargs) -> pd.DataFrame:
-        from .api import load_concept
-        
-        if src is None:
-            raise ValueError("Source must be specified for fwd_concept")
-        
-        # Load the referenced concept
-        concept_data = load_concept(
-            concept_name,
-            src,
-            aggregate=False,
-            verbose=False,
-            **kwargs
-        )
-        
-        # Rename data column to 'val_var'
-        if concept_data is not None and len(concept_data) > 0:
-            # Find data column (non-ID, non-time)
-            data_cols = [col for col in concept_data.columns 
-                        if col not in ['id', 'datetime', 'time'] and 
-                        'id' not in col.lower()]
-            
-            if data_cols:
-                concept_data = concept_data.rename(columns={data_cols[0]: 'val_var'})
-        
-        return concept_data
-    
-    return callback
+# 注意: fwd_concept 已在第607行定义，此处删除重复定义
+# 实际的 fwd_concept 处理逻辑在 concept.py 的 _load_fwd_concept 方法中
 
 def dex_to_10(id_list: list, factor_list: list) -> Callable:
     """Create callback to convert dexmedetomidine concentrations (R ricu dex_to_10).
@@ -2189,29 +2031,7 @@ def mimv_rate(
     
     return data
 
-def grp_amount_to_rate(
-    grp_var: str,
-    unit_val: Union[str, dict],
-    filt_fun: Optional[Callable] = None
-) -> Callable:
-    """Create callback for converting drug amounts to rates (R ricu grp_amount_to_rate).
-    
-    DEPRECATED: Use grp_mount_to_rate instead for consistency with R ricu naming.
-    Kept for backwards compatibility.
-    """
-    import warnings
-    warnings.warn(
-        "grp_amount_to_rate is deprecated, use grp_mount_to_rate instead",
-        DeprecationWarning
-    )
-    
-    return grp_mount_to_rate(
-        min_dur=pd.Timedelta(minutes=1),
-        extra_dur=pd.Timedelta(minutes=0),
-        unit_val=unit_val,
-        grp_var=grp_var,
-        filt_fun=filt_fun
-    )
+# 注意: grp_amount_to_rate 已在第1807行定义，此处删除重复的 deprecated wrapper
 
 def grp_mount_to_rate(
     min_dur: pd.Timedelta,
@@ -3716,7 +3536,7 @@ def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
                     # Convert back to minutes for _align_time_to_admission
                     if index_col in df.columns:
                         df[index_col] = df[index_col] * 60.0
-                except Exception as e:
+                except Exception:
                     # If expand fails, restore original times and continue
                     df[index_col] = start_min
                     df[stop_col] = stop_min
@@ -3730,7 +3550,7 @@ def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
                         id_cols=id_cols,
                         keep_vars=keep_vars,
                     )
-                except Exception as e:
+                except Exception:
                     pass
                 pass
 

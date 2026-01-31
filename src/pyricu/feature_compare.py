@@ -62,11 +62,8 @@ from .runtime_defaults import resolve_loader_defaults
 from .modules_config import (
     FeatureModule,
     MODULES,
-    MODULES_BY_NAME,
-    ALL_CONCEPTS,
     SOFA_COMPONENT_DEPENDENCIES,
     SUPPORTED_DATABASES,
-    DATABASE_ID_COLUMNS,
     ID_CANDIDATES,
     TIME_CANDIDATES,
 )
@@ -381,7 +378,7 @@ class RicuPyricuComparator:
                             series = self._normalize_concept_frame(concept_frame, module, name)
                             if series is not None:
                                 frames[name] = series
-        except Exception as exc:
+        except Exception:
             # 批量加载失败是正常的（某些模块的概念无法批量合并），静默回退到单个加载
             # print(f"   ⚠️  批量加载模块 {module.name} 失败，回退到单个加载: {exc}")
             # 回退到原来的单个加载逻辑

@@ -12,7 +12,7 @@ import hashlib
 from dataclasses import dataclass, field, replace, asdict
 from pathlib import Path
 from threading import RLock, local as thread_local
-from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional, Union
+from typing import Dict, FrozenSet, Iterable, List, Mapping, MutableMapping, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -468,7 +468,7 @@ class ConceptResolver:
         return self._thread_local.inflight
 
     def _should_fill_gaps(self, concept_name: str, definition: ConceptDefinition) -> bool:
-        category = (definition.category or "").lower() if definition.category else ""
+        (definition.category or "").lower() if definition.category else ""
         concept = concept_name.lower()
 
         raw_class = getattr(definition, "class_name", None)
@@ -571,7 +571,7 @@ class ConceptResolver:
             >>> # 结果: {'stay_id': [99000004], 'subject_id': [99000005]}
         """
         if verbose and DEBUG_MODE:
-            _debug(f'  🔍 _expand_patient_ids 被调用')
+            _debug('  🔍 _expand_patient_ids 被调用')
             _debug(f'     patient_ids: {patient_ids}')
             _debug(f'     target_id_var: {target_id_var}')
         
@@ -803,7 +803,7 @@ class ConceptResolver:
                         
                         # 获取所有需要的value_var列
                         value_columns = [val_var for _, val_var in concepts_info]
-                        concept_to_value_var = {name: val_var for name, val_var in concepts_info}
+                        {name: val_var for name, val_var in concepts_info}
                         
                         # 计算interval_hours
                         interval_hours = 1.0
@@ -844,7 +844,7 @@ class ConceptResolver:
                             id_col = icustay_cfg.id if icustay_cfg else 'patientunitstayid'
                         
                         # 🚀 创建概念名称到value_var的映射，用于重命名列
-                        concept_to_value_var = {concept_name: val_var for concept_name, val_var in concepts_info}
+                        {concept_name: val_var for concept_name, val_var in concepts_info}
                         
                         # 重命名列：value_var -> concept_name
                         rename_map = {val_var: concept_name for concept_name, val_var in concepts_info}
@@ -993,7 +993,7 @@ class ConceptResolver:
             # 🚀 如果有宽表批量加载的合并结果，直接使用（避免重复合并）
             if wide_table_merged_df is not None and not ricu_compatible:
                 if verbose:
-                    logger.info(f"🚀 使用宽表批量加载的合并结果，跳过合并步骤")
+                    logger.info("🚀 使用宽表批量加载的合并结果，跳过合并步骤")
                 return wide_table_merged_df
 
             # 如果是ricu_compatible模式，使用增强的ricu风格合并
@@ -1001,7 +1001,7 @@ class ConceptResolver:
                 # 🚀 宽表优化：如果有批量加载的合并结果，直接用它
                 if wide_table_merged_df is not None:
                     if verbose:
-                        logger.info(f"🚀 使用宽表批量加载的合并结果 (ricu格式)")
+                        logger.info("🚀 使用宽表批量加载的合并结果 (ricu格式)")
                     # 只需要排序，不需要重新合并
                     merged = wide_table_merged_df.sort_values(
                         [wide_table_merged_df.columns[0], 'charttime']
@@ -1454,7 +1454,6 @@ class ConceptResolver:
                         # 创建ICUTable对象
                         id_col = 'admissionid' if db_name == 'aumc' else 'patientid'
                         time_col = 'measuredat_minutes' if db_name == 'aumc' else 'charttime'
-                        itemid_col = 'itemid' if db_name == 'aumc' else 'variableid'
                         
                         table = ICUTable(
                             data=frame,
@@ -1661,7 +1660,7 @@ class ConceptResolver:
                                                 print(f"   ⚠️  聚合失败: {e}")
                                                 print(f"       group_cols={group_cols}")
                                                 print(f"       agg_dict={agg_dict}")
-                                                print(f"       frame列类型:")
+                                                print("       frame列类型:")
                                                 for col, dtype in frame.dtypes.items():
                                                     print(f"         {col}: {dtype}")
                                             raise
@@ -1985,7 +1984,7 @@ class ConceptResolver:
                             if 'outtime' in tmp.columns:
                                 print(f"      🏥 [ICU窗口] tmp包含outtime: {tmp['outtime'].notna().sum()}个有效值")
                             else:
-                                print(f"      🏥 [ICU窗口] ❌ tmp不包含outtime列!")
+                                print("      🏥 [ICU窗口] ❌ tmp不包含outtime列!")
 
                         # Use ICU outtime for filtering (ricu.R behavior)
                         # Data points after ICU discharge should be excluded
@@ -2069,7 +2068,7 @@ class ConceptResolver:
             
             # MIMIC-IV特殊处理：admissions表只有subject_id和hadm_id，需要映射到stay_id
             if source.table == 'admissions' and 'subject_id' in frame.columns and 'stay_id' not in frame.columns:
-                if DEBUG_MODE: print(f"   ➡️  进入 MIMIC-IV admissions特殊处理")
+                if DEBUG_MODE: print("   ➡️  进入 MIMIC-IV admissions特殊处理")
                 try:
                     # 加载icustays获取subject_id→hadm_id→stay_id映射
                     icustay_filters = []
@@ -2207,7 +2206,7 @@ class ConceptResolver:
                         
                         if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
                             id_columns = ['stay_id']
-                            if DEBUG_MODE: print(f"   🔄 MIMIC-IV特殊处理: admissions ID列从 subject_id → stay_id")
+                            if DEBUG_MODE: print("   🔄 MIMIC-IV特殊处理: admissions ID列从 subject_id → stay_id")
                 except Exception as ex:
                     print(f"⚠️  Warning: Failed to map admissions to icu stays: {ex}")
                     if verbose:
@@ -2710,7 +2709,6 @@ class ConceptResolver:
 
             for source in sources:
                 if hasattr(source, 'table'):
-                    import os
                     if hasattr(data_source, 'base_path') and data_source.base_path is not None:
                         table_file = data_source.base_path / f"{source.table}.parquet"
                         csv_file = data_source.base_path / f"{source.table}.csv"
@@ -2856,7 +2854,7 @@ class ConceptResolver:
                                     if 'time' in key.lower() or key == 'charttime':
                                         try:
                                             cleaned_combined[key] = pd.to_datetime(cleaned_combined[key], errors='coerce')
-                                        except:
+                                        except Exception:
                                             pass
                                     # 如果有混合类型，转换为字符串进行排序
                                     else:
@@ -2883,7 +2881,6 @@ class ConceptResolver:
         # CRITICAL FIX: Avoid double aggregation issue
         # Strategy: Only use change_interval's aggregation (on relative time after floor)
         # Do NOT use _apply_aggregation before time alignment
-        should_aggregate_in_change_interval = agg_value is not False
         
         # 🔧 FIX: 确保 index_column 实际存在于 combined 中
         # 对于 id_tbl 类型的概念（如 los_icu），可能从表配置继承了 index_column，但数据中不包含该列
@@ -3389,7 +3386,7 @@ class ConceptResolver:
                 # 更新primary_id为stay_id
                 primary_id = 'stay_id'
                 # 已经有intime了，后面不需要再加载
-            except Exception as e:
+            except Exception:
                 return data
         
         # 若时间列已是numeric（相对小时），仍尝试按ICU窗口裁剪范围
@@ -3420,10 +3417,9 @@ class ConceptResolver:
                     data = data.merge(icu_df[[primary_id] + [c for c in ['intime', 'outtime'] if c in icu_df.columns]], on=primary_id, how='left')
 
                 # 计算ICU窗口长度（小时）
-                icu_len_hours = None
                 if 'outtime' in data.columns and data['outtime'].notna().any():
                     icu_len = (pd.to_datetime(data['outtime']) - pd.to_datetime(data['intime']))
-                    icu_len_hours = icu_len.dt.total_seconds() / 3600.0
+                    icu_len.dt.total_seconds() / 3600.0
 
                 # 修复：R ricu保留所有数据，包括：
                 # 1. 入ICU前的数据（负时间）
@@ -3546,7 +3542,7 @@ class ConceptResolver:
                 drop_cols.append('outtime')
             data = data.drop(columns=drop_cols)
             
-        except Exception as e:
+        except Exception:
             # If alignment fails, return original data silently
             pass
         
@@ -5479,7 +5475,7 @@ class ConceptResolver:
 
         # 识别时间列和ID列 - 包含所有可能的时间列名称
         time_cols = [col for col in frame.columns if any(time_key in col.lower() for time_key in ['charttime', 'time', 'timestamp', 'measuredat', 'observationoffset', 'labresultoffset'])]
-        id_cols = [col for col in frame.columns if any(id_key in col.lower() for id_key in ['id', 'stay_id', 'subject_id', 'patient'])]
+        [col for col in frame.columns if any(id_key in col.lower() for id_key in ['id', 'stay_id', 'subject_id', 'patient'])]
 
         # 选择ricu.R需要的列
         result_cols = []
@@ -5726,7 +5722,7 @@ def _apply_callback(
             # 简单判断: discharge_status == 'dead' 则 death = True
             df[concept_name] = df[val_col].astype(str).str.lower() == 'dead'
             # 只返回死亡的患者
-            df = df[df[concept_name] == True].copy()
+            df = df[df[concept_name].fillna(False)].copy()
         
         return df
 
@@ -7295,7 +7291,7 @@ def _apply_callback(
         
         if resolver is None:
             if DEBUG_CALLBACK:
-                print(f"    [SKIP] resolver is None")
+                print("    [SKIP] resolver is None")
             # Cannot convert without resolver to load WBC, return as-is
             if concept_name in frame.columns:
                 frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
@@ -7311,7 +7307,7 @@ def _apply_callback(
         
         if id_col is None:
             if DEBUG_CALLBACK:
-                print(f"    [SKIP] id_col is None")
+                print("    [SKIP] id_col is None")
             if concept_name in frame.columns:
                 frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
             return frame
@@ -7322,7 +7318,7 @@ def _apply_callback(
         frame_patient_ids = frame[id_col].unique().tolist()
         if len(frame_patient_ids) == 0:
             if DEBUG_CALLBACK:
-                print(f"    [SKIP] no patients")
+                print("    [SKIP] no patients")
             if concept_name in frame.columns:
                 frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
             return frame
@@ -7338,13 +7334,13 @@ def _apply_callback(
             # This way, the internal wbc load won't affect subsequent wbc loads
             if data_source is None:
                 if DEBUG_CALLBACK:
-                    print(f"    [SKIP] data_source is None")
+                    print("    [SKIP] data_source is None")
                 if concept_name in frame.columns:
                     frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
                 return frame
             
             if DEBUG_CALLBACK:
-                print(f"    加载 WBC (跳过缓存)...")
+                print("    加载 WBC (跳过缓存)...")
             
             wbc_result = resolver.load_concepts(
                 ['wbc'],
@@ -7357,7 +7353,7 @@ def _apply_callback(
             
             if 'wbc' not in wbc_result or wbc_result['wbc'].data.empty:
                 if DEBUG_CALLBACK:
-                    print(f"    [SKIP] WBC 为空或不存在")
+                    print("    [SKIP] WBC 为空或不存在")
                 if concept_name in frame.columns:
                     frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
                 return frame
@@ -7436,7 +7432,7 @@ def _apply_callback(
                         # frame is much larger, likely in minutes vs hours
                         need_frame_to_hours = True
                         if DEBUG_CALLBACK:
-                            print(f"    [TIME FIX] 基于比率检测时间单位不匹配:")
+                            print("    [TIME FIX] 基于比率检测时间单位不匹配:")
                             print(f"      ratio = {ratio:.2f}")
                     elif ratio < 0.2 and ratio > 0:
                         # wbc is much larger
@@ -7444,17 +7440,17 @@ def _apply_callback(
                 
                 if need_frame_to_hours:
                     if DEBUG_CALLBACK:
-                        print(f"    [TIME FIX] 检测到时间单位不匹配:")
+                        print("    [TIME FIX] 检测到时间单位不匹配:")
                         print(f"      frame max time: {frame_time_max} (分钟)")
                         print(f"      wbc max time: {wbc_time_max} (小时)")
-                        print(f"      -> 将 frame 时间从分钟转换为小时")
+                        print("      -> 将 frame 时间从分钟转换为小时")
                     frame_work[index_col] = frame_work[index_col] / 60.0
                 elif need_wbc_to_hours:
                     if DEBUG_CALLBACK:
-                        print(f"    [TIME FIX] 检测到时间单位不匹配（反向）:")
+                        print("    [TIME FIX] 检测到时间单位不匹配（反向）:")
                         print(f"      frame max time: {frame_time_max}")
                         print(f"      wbc max time: {wbc_time_max}")
-                        print(f"      -> 将 wbc 时间从分钟转换为小时")
+                        print("      -> 将 wbc 时间从分钟转换为小时")
                     wbc_work[index_col] = wbc_work[index_col] / 60.0
                 
                 # Ensure matching dtypes for index column
@@ -7514,7 +7510,7 @@ def _apply_callback(
                     frame_merged = frame_merged.drop(columns=['wbc'])
                 else:
                     if DEBUG_CALLBACK:
-                        print(f"    [WARNING] 'wbc' not in frame_merged.columns!")
+                        print("    [WARNING] 'wbc' not in frame_merged.columns!")
                 
                 # CRITICAL: Convert time back to original format (minutes) for AUMC
                 # The subsequent processing will apply the minutes->hours conversion again
@@ -7522,14 +7518,14 @@ def _apply_callback(
                     # We converted frame from minutes to hours, now convert back
                     frame_merged[index_col] = frame_merged[index_col] * 60.0
                     if DEBUG_CALLBACK:
-                        print(f"    [TIME RESTORE] 将时间从小时转换回分钟")
+                        print("    [TIME RESTORE] 将时间从小时转换回分钟")
                 
                 if DEBUG_CALLBACK:
                     print(f"    返回 frame_merged, shape={frame_merged.shape}")
                 return frame_merged
             else:
                 if DEBUG_CALLBACK:
-                    print(f"    [FALLBACK] index_col 不在两个 frame 中, 使用平均 WBC")
+                    print("    [FALLBACK] index_col 不在两个 frame 中, 使用平均 WBC")
                 # No index column, use simple merge on ID (average WBC per patient)
                 wbc_grouped = wbc_df.groupby(id_col)['wbc'].mean().reset_index()
                 frame = frame.merge(wbc_grouped, on=id_col, how='left')

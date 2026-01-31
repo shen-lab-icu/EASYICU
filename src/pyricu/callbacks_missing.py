@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Optional
 import pandas as pd
-import numpy as np
 
 
 def rrt_criteria(

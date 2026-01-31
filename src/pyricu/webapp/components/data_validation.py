@@ -10,7 +10,7 @@
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 
 
 # 各数据库需要的核心表（Parquet格式）
@@ -186,7 +186,7 @@ def validate_database_path(data_path: str, database: str, lang: str = 'en') -> D
     for pf in parquet_files:
         try:
             if pf.parent != path:
-                rel = pf.parent.relative_to(path)
+                pf.parent.relative_to(path)
                 # 如果是 xxx/1.parquet 格式，记录 xxx
                 if pf.stem.isdigit():
                     parquet_dirs.add(pf.parent.name.lower())

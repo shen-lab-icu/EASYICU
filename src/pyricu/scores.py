@@ -10,7 +10,7 @@ References:
     R ricu: https://github.com/eth-mds/ricu
 """
 
-from typing import Optional, Literal, Callable
+from typing import Callable
 import pandas as pd
 import numpy as np
 

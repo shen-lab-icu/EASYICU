@@ -19,8 +19,6 @@ except ImportError:
 from .utils import (
     get_concept_label,
     get_concept_color,
-    PYRICU_COLORS,
-    CONCEPT_LABELS,
 )
 
 

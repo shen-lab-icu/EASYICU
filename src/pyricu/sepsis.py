@@ -456,7 +456,7 @@ def sep3(
     """
     # Filter SI events where susp_inf == TRUE
     if 'susp_inf' in susp_inf.columns:
-        si_events = susp_inf[susp_inf['susp_inf'] == True].copy()
+        si_events = susp_inf[susp_inf['susp_inf'].fillna(False)].copy()
     else:
         si_events = susp_inf.copy()
     
@@ -525,7 +525,6 @@ def sep3(
         return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])
     
     # Filter by time window: _si_lwr <= _sofa_time <= _si_upr
-    time_col_sofa = f'{index_col}_sofa' if f'{index_col}_sofa' in merged.columns else '_sofa_time'
     in_window = (merged['_sofa_time'] >= merged['_si_lwr']) & (merged['_sofa_time'] <= merged['_si_upr'])
     merged = merged[in_window]
     

@@ -6,7 +6,6 @@
 from typing import Optional, Union, List, Dict, Any
 
 import pandas as pd
-import numpy as np
 
 try:
     import plotly.graph_objects as go
@@ -18,10 +17,7 @@ except ImportError:
 from .utils import (
     get_concept_label,
     get_concept_color,
-    prepare_timeseries_data,
     create_time_axis_label,
-    PYRICU_COLORS,
-    CONCEPT_LABELS,
 )
 
 from .timeseries import plot_vitals_panel, plot_medications_gantt, plot_lab_heatmap

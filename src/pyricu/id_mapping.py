@@ -5,15 +5,14 @@ Provides functions for mapping between different ID systems and getting ID origi
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 import pandas as pd
-from functools import lru_cache
 
 from .table import IdTbl, as_id_tbl
 from .src_utils import src_name
-from .table_meta import id_var_opts
 from .config import DataSourceConfig
 from .datasource import ICUDataSource
+from .assertions import assert_that, is_string
 
 # Cache for ID maps
 _id_map_cache: Dict[str, pd.DataFrame] = {}
@@ -105,7 +104,6 @@ def id_map_helper(
         DataFrame with ID mapping
     """
     from .data_env import get_src_env, as_src_env
-    from .table_meta import id_var_opts
     from .config import DataSourceConfig
     
     # Get source environment
@@ -231,8 +229,6 @@ def id_orig_helper(
         IdTbl with ID and origin times
     """
     from .data_env import get_src_env, as_src_env
-    from .table_meta import id_var_opts
-    from .config import DataSourceConfig
     from .table_convert import as_id_cfg
     
     assert_that(is_string(id))
@@ -308,7 +304,7 @@ def id_windows(
     else:
         src_env = as_src_env(x)
     
-    src = src_name(src_env)
+    src_name(src_env)
     
     # Check cache (would need to implement)
     res = id_win_helper(src_env)
@@ -336,7 +332,6 @@ def id_win_helper(
     """
     from .data_env import get_src_env, as_src_env
     from .table_convert import as_id_cfg
-    from .config import DataSourceConfig
     
     # Get source environment
     if isinstance(x, str):
