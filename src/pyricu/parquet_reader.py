@@ -3,10 +3,9 @@
 比 fst 更快,支持更多优化功能
 """
 from pathlib import Path
-from typing import Optional, List, Union, Tuple, Any
+from typing import Optional, List, Union, Tuple
 import logging
 import pandas as pd
-import pyarrow as pa
 import pyarrow.parquet as pq
 from concurrent.futures import ThreadPoolExecutor, as_completed
 

@@ -6,7 +6,6 @@ Provides functions for creating new concepts and items.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Union
-import pandas as pd
 
 from .concept import ConceptDefinition, ConceptSource
 from .assertions import assert_that, is_string

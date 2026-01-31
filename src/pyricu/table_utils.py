@@ -4,7 +4,6 @@
 """
 from typing import List, Optional, Union, Callable, Dict, Any
 import pandas as pd
-import numpy as np
 from datetime import timedelta
 
 def rename_cols(
@@ -472,7 +471,7 @@ def change_id(
                 break
         
         if src_id is None:
-            raise ValueError(f"Cannot detect source ID column in DataFrame")
+            raise ValueError("Cannot detect source ID column in DataFrame")
     
     # 检查是升级还是降级
     # 简单逻辑：如果 src_id 到 target_id 是多对一，则为降级；一对多则为升级

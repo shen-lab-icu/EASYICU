@@ -22,7 +22,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional, Set, List, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import time
 
 logger = logging.getLogger(__name__)
@@ -172,7 +172,7 @@ def convert_to_buckets(
             log(f"源文件类型: CSV{'（gzip压缩）' if source_name.endswith('.gz') else ''}")
         elif source_name.endswith('.parquet'):
             read_expr = f"read_parquet('{source_path}')"
-            log(f"源文件类型: Parquet")
+            log("源文件类型: Parquet")
         else:
             return ConversionResult(
                 success=False, num_buckets=0, total_rows=0,
@@ -1400,7 +1400,7 @@ if __name__ == '__main__':
         )
         
         if result.success:
-            print(f"\n✅ 转换成功!")
+            print("\n✅ 转换成功!")
             print(f"   输出目录: {result.output_dir}")
             print(f"   总行数: {result.total_rows:,}")
             print(f"   分桶数: {result.num_buckets}")

@@ -7,7 +7,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 import logging
 
 from .project_config import AUTO_CLEAR_CACHE, CACHE_DIR

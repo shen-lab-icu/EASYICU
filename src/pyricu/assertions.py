@@ -409,7 +409,7 @@ def all_equal(x: Any, y: Any) -> bool:
             return np.array_equal(x, y, equal_nan=True)
         else:
             return x == y
-    except:
+    except Exception:
         return False
 
 def same_length(x: Any, y: Any) -> bool:
@@ -451,7 +451,7 @@ def is_interval(x: Any, length: Optional[int] = None) -> bool:
             # 直接比较标量 timedelta
             td = pd.Timedelta(x) if not isinstance(x, pd.Timedelta) else x
             return td >= pd.Timedelta(0)
-        except:
+        except Exception:
             return False
     else:
         if length is not None and len(x) != length:
@@ -462,7 +462,7 @@ def is_interval(x: Any, length: Optional[int] = None) -> bool:
                 return (x >= pd.Timedelta(0)).all()
             else:
                 return all(x >= pd.Timedelta(0))
-        except:
+        except Exception:
             return False
 
 def obeys_interval(x: Union[pd.Series, np.ndarray], 
@@ -497,7 +497,7 @@ def obeys_interval(x: Union[pd.Series, np.ndarray],
         
         remainders = x_ns % interval_ns
         return all(remainders < tolerance_ns)
-    except:
+    except Exception:
         return False
 
 def same_unit(x: Union[pd.Timedelta, pd.Series], 
@@ -525,7 +525,7 @@ def same_time(x: Union[pd.Timedelta, pd.Series],
             return diff < tolerance
         else:
             return all(diff < tolerance)
-    except:
+    except Exception:
         return False
 
 def has_interval(df: pd.DataFrame, interval: pd.Timedelta, 
@@ -591,7 +591,7 @@ def all_fun(x: Any, fun: Callable, *args, na_rm: bool = False, **kwargs) -> bool
             if na_rm:
                 x = [item for item in x if not pd.isna(item)]
             return all(fun(item, *args, **kwargs) for item in x)
-    except:
+    except Exception:
         return False
 
 def all_null(x: Any) -> bool:
@@ -608,7 +608,7 @@ def evals_to_fun(x: Any) -> bool:
             # 尝试将字符串作为函数名
             import builtins
             return hasattr(builtins, x) and callable(getattr(builtins, x))
-        except:
+        except Exception:
             return False
     
     return False

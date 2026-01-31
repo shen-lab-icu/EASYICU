@@ -7,8 +7,7 @@ interval alignment, windowing, and time-based transformations.
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any, Optional, Union, List, Iterable, Dict, Sequence
-import logging
+from typing import Any, Optional, Union, List, Sequence
 
 import pandas as pd
 import numpy as np
@@ -1376,7 +1375,7 @@ def _slide_vectorized(
             # Filter for full_window if needed
             if full_window:
                 group_start = group[index_col].min()
-                group_end = group[index_col].max()
+                group[index_col].max()
                 mask = (result_group[index_col] - window_size >= group_start)
                 result_group = result_group[mask]
         else:
@@ -1413,7 +1412,7 @@ def _slide_vectorized(
             # Filter for full_window if needed
             if full_window:
                 group_start = group_indexed.index.min()
-                group_end = group_indexed.index.max()
+                group_indexed.index.max()
                 mask = (result_group[index_col] - window_size >= group_start)
                 result_group = result_group[mask]
         
@@ -2411,7 +2410,6 @@ def create_intervals(
     return result.reset_index(drop=True)
 
 # Re-export for compatibility with ICUTable interface
-from .table import ICUTable  # noqa: E402
 
 def fill_gaps_table(
     table: ICUTable,

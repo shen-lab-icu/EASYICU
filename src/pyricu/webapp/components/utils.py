@@ -20,7 +20,7 @@ def get_system_resources() -> Dict:
         mem = psutil.virtual_memory()
         total_memory_gb = round(mem.total / (1024**3), 1)
         available_memory_gb = round(mem.available / (1024**3), 1)
-    except:
+    except Exception:
         total_memory_gb = 16
         available_memory_gb = 8
     

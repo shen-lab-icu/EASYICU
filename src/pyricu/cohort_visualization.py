@@ -245,7 +245,7 @@ class CohortVisualizer:
                     mode='lines',
                     fill='tozeroy',
                     line=dict(color=self.DEFAULT_COLORS[0], width=2),
-                    fillcolor=f'rgba(99, 110, 250, 0.3)',
+                    fillcolor='rgba(99, 110, 250, 0.3)',
                 ),
                 row=row, col=col
             )
@@ -256,7 +256,7 @@ class CohortVisualizer:
                     mode='lines',
                     fill='tozeroy',
                     line=dict(color=self.DEFAULT_COLORS[1], width=2),
-                    fillcolor=f'rgba(239, 85, 59, 0.3)',
+                    fillcolor='rgba(239, 85, 59, 0.3)',
                 ),
                 row=row, col=col
             )
@@ -334,7 +334,7 @@ class CohortVisualizer:
                         mode='lines',
                         fill='tozeroy',
                         line=dict(color=self.DEFAULT_COLORS[0], width=2),
-                        fillcolor=f'rgba(99, 110, 250, 0.3)',
+                        fillcolor='rgba(99, 110, 250, 0.3)',
                         showlegend=False,
                     ),
                     row=row, col=col
@@ -346,7 +346,7 @@ class CohortVisualizer:
                         mode='lines',
                         fill='tozeroy',
                         line=dict(color=self.DEFAULT_COLORS[1], width=2),
-                        fillcolor=f'rgba(239, 85, 59, 0.3)',
+                        fillcolor='rgba(239, 85, 59, 0.3)',
                         showlegend=False,
                     ),
                     row=row, col=col
@@ -556,7 +556,7 @@ class CohortVisualizer:
                 x=list(agg1[time_column]) + list(agg1[time_column][::-1]),
                 y=list(agg1['mean'] + agg1['ci']) + list((agg1['mean'] - agg1['ci'])[::-1]),
                 fill='toself',
-                fillcolor=f'rgba(99, 110, 250, 0.2)',
+                fillcolor='rgba(99, 110, 250, 0.2)',
                 line=dict(color='rgba(255,255,255,0)'),
                 name=f'{group1_name} 95% CI',
                 showlegend=False
@@ -575,7 +575,7 @@ class CohortVisualizer:
                 x=list(agg2[time_column]) + list(agg2[time_column][::-1]),
                 y=list(agg2['mean'] + agg2['ci']) + list((agg2['mean'] - agg2['ci'])[::-1]),
                 fill='toself',
-                fillcolor=f'rgba(239, 85, 59, 0.2)',
+                fillcolor='rgba(239, 85, 59, 0.2)',
                 line=dict(color='rgba(255,255,255,0)'),
                 name=f'{group2_name} 95% CI',
                 showlegend=False

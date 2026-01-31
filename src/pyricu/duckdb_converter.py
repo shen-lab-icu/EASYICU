@@ -19,7 +19,6 @@ Usage:
 
 from __future__ import annotations
 
-import os
 import gc
 import logging
 import tempfile
@@ -73,7 +72,7 @@ class DuckDBConverter:
         self.db_type = self._detect_database_type()
         
         if self.verbose:
-            logger.info(f"DuckDBConverter initialized:")
+            logger.info("DuckDBConverter initialized:")
             logger.info(f"  Data path: {self.data_path}")
             logger.info(f"  Database type: {self.db_type}")
             logger.info(f"  Memory limit: {self.memory_limit_gb}GB")
@@ -254,7 +253,7 @@ class DuckDBConverter:
             if temp_csv_path and temp_csv_path.exists():
                 try:
                     temp_csv_path.unlink()
-                except:
+                except Exception:
                     pass
             
             # Force garbage collection

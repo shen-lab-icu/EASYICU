@@ -7,10 +7,9 @@ from __future__ import annotations
 
 from typing import Any, Optional, Union
 import pandas as pd
-import numpy as np
 
-from .table import IdTbl, TsTbl, WinTbl, ICUTable
-from .ts_utils import has_gaps, interval
+from .table import IdTbl, TsTbl, WinTbl
+from .ts_utils import has_gaps
 
 def unmerge(tbl: Union[IdTbl, TsTbl, WinTbl, pd.DataFrame]) -> pd.DataFrame:
     """Unmerge table (R ricu unmerge).

@@ -8,10 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Iterable, Iterator, List, Optional, Union, Dict, Callable
-from copy import deepcopy
 
 import pandas as pd
-import numpy as np
 
 @dataclass
 class ICUTable:

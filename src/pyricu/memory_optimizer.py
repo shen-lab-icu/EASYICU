@@ -8,9 +8,8 @@ specifically designed for systems with limited memory (16GB).
 import gc
 import os
 import psutil
-from typing import Iterator, List, Optional, Dict, Any, Union, Callable
+from typing import List, Optional, Dict, Any, Callable
 import pandas as pd
-import numpy as np
 from dataclasses import dataclass
 import warnings
 
@@ -81,7 +80,7 @@ class MemoryMonitor:
             # Clear pandas cache if available
             try:
                 pd.reset_option('display.max_rows')
-            except:
+            except Exception:
                 pass
 
             # Force garbage collection again
@@ -249,7 +248,6 @@ class MemoryOptimizedCallbacks:
                                    chunk_by_patient: bool = True) -> pd.DataFrame:
         """Memory-efficient SOFA score calculation for 16GB systems."""
 
-        from .ts_utils import fill_gaps, slide
 
         if self.monitor:
             self.monitor.log_memory_usage("SOFA score start")
@@ -385,7 +383,7 @@ def optimize_for_16gb():
     # Configure pandas for memory efficiency
     pd.set_option('mode.chained_assignment', 'warn')
 
-    print(f"Optimized for 16GB RAM:")
+    print("Optimized for 16GB RAM:")
     print(f"   Chunk size: {config.chunk_size}")
     print(f"   Max workers: {config.max_workers}")
     print(f"   Cache limit: {config.cache_limit // (1024**2)}MB")

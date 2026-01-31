@@ -657,7 +657,7 @@ class BaseICULoader:
         verbose_flag = params.pop("verbose", self.verbose)
         
         # 🚀 优化：当加载多个相关概念时保留缓存（如SOFA的多个子概念）
-        should_preserve_cache = preserve_cache or len(concepts) > 1
+        preserve_cache or len(concepts) > 1
         
         resolver_obj: ConceptResolver
         if resolver is not None:
@@ -774,7 +774,7 @@ class BaseICULoader:
                     all_patient_ids.extend(batch)
 
             # ❌ 临时禁用预加载
-            logger.info(f"⚡ 多进程模式，预加载功能暂时禁用")
+            logger.info("⚡ 多进程模式，预加载功能暂时禁用")
             # preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
             # logger.info(f"📦 多进程模式预加载大表: {', '.join(preload_tables)}")
             # self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)

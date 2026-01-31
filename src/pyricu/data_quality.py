@@ -373,7 +373,7 @@ def print_quality_summary(report: Dict[str, Any]) -> None:
     # Basic info
     if 'basic_info' in report:
         info = report['basic_info']
-        print(f"\nBasic Information:")
+        print("\nBasic Information:")
         print(f"  Rows: {info['n_rows']:,}")
         print(f"  Columns: {info['n_columns']}")
         if info['n_patients']:
@@ -382,14 +382,14 @@ def print_quality_summary(report: Dict[str, Any]) -> None:
     
     # Missing data
     if 'missing_data' in report and report['missing_data']:
-        print(f"\nMissing Data (Top 5):")
+        print("\nMissing Data (Top 5):")
         for item in report['missing_data'][:5]:
             print(f"  {item['variable']}: {item['pct_missing']:.1f}% missing")
     
     # Duplicates
     if 'duplicates' in report:
         dup = report['duplicates']
-        print(f"\nDuplicates:")
+        print("\nDuplicates:")
         print(f"  {dup['n_duplicate_rows']} duplicate rows ({dup['pct_duplicates']:.1f}%)")
     
     # Range validation
@@ -397,7 +397,7 @@ def print_quality_summary(report: Dict[str, Any]) -> None:
         out_of_range = [v for v in report['range_validation'] 
                        if v.get('n_out_of_range', 0) > 0]
         if out_of_range:
-            print(f"\nOut-of-Range Values:")
+            print("\nOut-of-Range Values:")
             for item in out_of_range[:5]:
                 print(f"  {item['variable']}: {item['n_out_of_range']} values "
                      f"({item['pct_out_of_range']:.1f}%)")
@@ -406,7 +406,7 @@ def print_quality_summary(report: Dict[str, Any]) -> None:
     if 'time_consistency' in report:
         tc = report['time_consistency']
         if tc.get('n_time_issues', 0) > 0:
-            print(f"\nTime Consistency Issues:")
+            print("\nTime Consistency Issues:")
             print(f"  {tc['n_time_issues']} patients with time issues")
     
     print("=" * 60)

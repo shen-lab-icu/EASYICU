@@ -7,7 +7,6 @@ for loading data from ICU data sources.
 from __future__ import annotations
 
 from typing import Any, Callable, Iterable, List, Mapping, Optional, Union
-from pathlib import Path
 
 import pandas as pd
 
@@ -15,8 +14,7 @@ from .table import IdTbl, TsTbl, WinTbl, as_id_tbl, as_ts_tbl, as_win_tbl, id_va
 from .datasource import ICUDataSource, FilterSpec, FilterOp
 from .config import DataSourceConfig
 from .src_utils import src_name
-from .ts_utils import change_interval, hours, mins, minutes
-from .table_meta import id_var_opts, default_vars, time_vars
+from .ts_utils import change_interval
 
 def load_src(
     x: Union[str, ICUDataSource, Any],
@@ -194,9 +192,8 @@ def load_difftime(
         config = registry.get(src)
         if not config:
             raise ValueError(f"Data source '{src}' not found")
-        data_source = ICUDataSource(config)
+        ICUDataSource(config)
     elif isinstance(x, ICUDataSource):
-        data_source = x
         config = x.config
     else:
         raise TypeError(f"Cannot determine data source from {type(x)}")
@@ -228,7 +225,6 @@ def load_difftime(
         # Get origin times
         try:
             from .data_env import get_src_env
-            from .data_utils import id_origin
             src_env = get_src_env(src_name(config))
             if src_env:
                 # Try to get origin from data source configuration

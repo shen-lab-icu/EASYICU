@@ -10,8 +10,7 @@ import logging
 from pathlib import Path
 from typing import Optional, Union
 
-from .config import DataSourceRegistry
-from .attach import attach_src, is_attached
+from .attach import attach_src
 from .download import download_src, download_demo
 from .import_data import import_src
 from .resources import load_data_sources

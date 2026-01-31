@@ -5,10 +5,10 @@ Provides functions for executing callbacks during concept loading.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Optional, Union
 import pandas as pd
 
-from .table import IdTbl, TsTbl, WinTbl, ICUTable
+from .table import IdTbl, TsTbl, WinTbl
 from .assertions import assert_that, is_string
 
 def do_callback(

@@ -13,10 +13,9 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from typing import List, Dict, Optional, Tuple
+from typing import Dict
 import os
 from pathlib import Path
-from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -371,7 +370,7 @@ def load_cohort_data(data_path: str, database: str, max_patients: int = 1000) ->
                 diag_table = loader.datasource.load_table('diagnosis', verbose=False)
                 if diag_table is not None:
                     result['diagnoses'] = diag_table.data.head(max_patients * 10)
-        except Exception as e:
+        except Exception:
             pass
             
         # 3. 加载生命体征概览
@@ -385,7 +384,7 @@ def load_cohort_data(data_path: str, database: str, max_patients: int = 1000) ->
             )
             if vitals is not None and not vitals.empty:
                 result['vitals'] = vitals
-        except Exception as e:
+        except Exception:
             pass
             
         # 4. 加载SOFA评分
@@ -399,7 +398,7 @@ def load_cohort_data(data_path: str, database: str, max_patients: int = 1000) ->
             )
             if sofa is not None and not sofa.empty:
                 result['outcomes'] = sofa
-        except Exception as e:
+        except Exception:
             pass
             
     except Exception as e:
@@ -1041,7 +1040,7 @@ def main():
                         border_color="rgba(102,126,234,0.1)",
                         box_shadow="0 4px 12px rgba(0,0,0,0.05)",
                     )
-                except:
+                except Exception:
                     pass
             
             st.divider()

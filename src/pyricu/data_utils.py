@@ -6,7 +6,7 @@ merging, and ID system conversions.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Iterable, List, Mapping, Optional, Sequence
 
 import pandas as pd
 
@@ -607,14 +607,14 @@ def sort_table(
 # Additional utilities from R ricu
 # ============================================================================
 
-def id_origin(
+def id_origin_infer(
     data: pd.DataFrame,
     id_var: str = "icustay_id",
     origin_name: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Get ID origin times (R ricu id_origin).
+    """Get ID origin times with column inference (R ricu id_origin variant).
     
-    Returns admission/origin timestamps for each ID.
+    Similar to id_origin() but infers origin column from data metadata.
     
     Args:
         data: Input DataFrame
@@ -625,7 +625,7 @@ def id_origin(
         DataFrame with ID and origin times
         
     Examples:
-        >>> origins = id_origin(admissions, id_var='icustay_id')
+        >>> origins = id_origin_infer(admissions, id_var='icustay_id')
     """
     if not hasattr(data, '_metadata') or 'origin_col' not in getattr(data, '_metadata', {}):
         # Try to infer origin column (typically 'intime', 'admittime', etc.)
@@ -650,15 +650,16 @@ def id_origin(
     
     return result
 
-def id_windows(
+def id_windows_simple(
     data: pd.DataFrame,
     id_var: str = "icustay_id",
     start_var: str = "start",
     end_var: str = "end",
 ) -> pd.DataFrame:
-    """Get ID windows (R ricu id_windows).
+    """Get ID windows from existing columns (R ricu id_windows variant).
     
-    Returns time windows for each ID.
+    Returns time windows for each ID using existing start/end columns.
+    Different from id_windows() which creates windows based on interval.
     
     Args:
         data: Input DataFrame
@@ -670,7 +671,7 @@ def id_windows(
         DataFrame with id, start, and end columns
         
     Examples:
-        >>> windows = id_windows(admissions, 'icustay_id', 'intime', 'outtime')
+        >>> windows = id_windows_simple(admissions, 'icustay_id', 'intime', 'outtime')
     """
     if start_var not in data.columns or end_var not in data.columns:
         raise ValueError(f"Columns '{start_var}' and '{end_var}' must exist")

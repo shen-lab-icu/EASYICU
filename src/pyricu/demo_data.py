@@ -461,7 +461,7 @@ def save_demo_data(output_dir: str, num_patients: int = 100) -> Dict[str, str]:
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
     
-    print(f"\n✅ Demo data generated successfully!")
+    print("\n✅ Demo data generated successfully!")
     print(f"   Location: {output_path}")
     print(f"   Patients: {num_patients}")
     print(f"   Concepts: {len(saved_files)}")

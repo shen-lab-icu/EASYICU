@@ -87,7 +87,7 @@ def run_app(
     check_dependencies()
     
     app_path = Path(__file__).parent / 'app.py'
-    config_dir = Path(__file__).parent / '.streamlit'
+    Path(__file__).parent / '.streamlit'
     
     # 构建命令
     cmd = [
@@ -120,7 +120,7 @@ def run_app(
             f.write(str(process.pid))
         
         print(f"✅ 后台启动成功 (PID: {process.pid})")
-        print(f"   日志文件: /tmp/pyricu_webapp.log")
+        print("   日志文件: /tmp/pyricu_webapp.log")
         return
     
     # 守护模式

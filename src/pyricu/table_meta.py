@@ -6,10 +6,10 @@ data columns, and time-related metadata.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Union
+from typing import Any, Union
 import pandas as pd
 
-from .table import IdTbl, TsTbl, WinTbl, ICUTable, id_vars, index_var, dur_var, meta_vars, data_vars
+from .table import IdTbl, TsTbl, WinTbl, ICUTable, id_vars, index_var, dur_var, data_vars
 from .assertions import assert_that, is_string
 
 def id_var(x: Union[IdTbl, TsTbl, WinTbl, ICUTable]) -> str:

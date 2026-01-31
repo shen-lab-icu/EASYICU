@@ -6,8 +6,7 @@ and data directory handling.
 
 import os
 import json
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union, Generator
+from typing import Any, Callable, List, Optional, Union, Generator
 import platform
 
 # ============================================================================
