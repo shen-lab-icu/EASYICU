@@ -1930,6 +1930,37 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     
     np.random.seed(42)
     time_points = np.arange(0, hours, 1)
+    
+    # 🔧 FIX (2026-02-03): 添加患者级随机采样时间生成函数
+    def get_random_sample_times(pid, base_interval, jitter=0.3, min_samples=3):
+        """为每个患者生成随机采样时间点
+        
+        Args:
+            pid: 患者ID，用作随机种子的一部分
+            base_interval: 基础采样间隔（小时）
+            jitter: 间隔的随机抖动比例 (0-1)
+            min_samples: 最少采样次数
+        
+        Returns:
+            该患者的随机采样时间点列表
+        """
+        rng = np.random.RandomState(pid * 17 + 31)  # 每个患者有独立的随机状态
+        sample_times = [0]  # 从0开始
+        current_time = 0
+        
+        while current_time < hours - base_interval:
+            # 在基础间隔上添加随机抖动
+            interval = base_interval * (1 + rng.uniform(-jitter, jitter))
+            interval = max(1, interval)  # 至少1小时间隔
+            current_time += interval
+            if current_time < hours:
+                sample_times.append(int(current_time))
+        
+        # 确保至少有最少采样次数
+        if len(sample_times) < min_samples:
+            sample_times = list(np.linspace(0, hours-1, min_samples, dtype=int))
+        
+        return sample_times
 
     # 1. 预先生成患者元数据（用于后续过滤）
     patient_meta = {}
@@ -2017,15 +2048,17 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     # 为了兼容后续代码，创建 patient_sepsis_meta
     patient_sepsis_meta = {pid: patient_meta[pid] for pid in patient_ids}
     
-    # 心率（模拟10%缺失率）
+    # 心率（使用患者级随机采样，模拟10%缺失率）
     hr_records = []
     for pid in patient_ids:
         base_hr = np.random.uniform(70, 90)
         # 如果 septic, 心率在发病后升高
         meta = patient_sepsis_meta[pid]
         
-        for t in time_points:
-            # 10%概率缺失
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间，而非固定间隔
+        sample_times = get_random_sample_times(pid, base_interval=1, jitter=0.3)
+        for t in sample_times:
+            # 10%概率缺失（在随机采样基础上再添加随机缺失）
             if np.random.random() < 0.9:
                 hr = base_hr + np.sin(t / 6) * 10 + np.random.normal(0, 5)
                 if meta['is_septic'] and t >= meta['onset']:
@@ -2034,13 +2067,15 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 hr_records.append({'stay_id': pid, 'time': t, 'hr': max(40, min(150, hr))})
     data['hr'] = pd.DataFrame(hr_records)
     
-    # MAP（模拟10%缺失率）
+# MAP（使用患者级随机采样，模拟10%缺失率）
     map_records = []
     for pid in patient_ids:
         base_map = np.random.uniform(65, 85)
         meta = patient_sepsis_meta[pid]
         
-        for t in time_points:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=1, jitter=0.3)
+        for t in sample_times:
             if np.random.random() < 0.9:
                 map_val = base_map + np.cos(t / 8) * 8 + np.random.normal(0, 4)
                 if meta['is_septic'] and t >= meta['onset']:
@@ -2048,14 +2083,16 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                     
                 map_records.append({'stay_id': pid, 'time': t, 'map': max(40, min(120, map_val))})
     data['map'] = pd.DataFrame(map_records)
-    
-    # SBP（模拟10%缺失率）
+
+    # SBP（使用患者级随机采样，模拟10%缺失率）
     sbp_records = []
     for pid in patient_ids:
         base_sbp = np.random.uniform(110, 140)
         meta = patient_sepsis_meta[pid]
         
-        for t in time_points:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=1, jitter=0.3)
+        for t in sample_times:
             if np.random.random() < 0.9:
                 sbp_val = base_sbp + np.sin(t / 5) * 15 + np.random.normal(0, 8)
                 if meta['is_septic'] and t >= meta['onset']:
@@ -2064,13 +2101,15 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 sbp_records.append({'stay_id': pid, 'time': t, 'sbp': max(70, min(200, sbp_val))})
     data['sbp'] = pd.DataFrame(sbp_records)
     
-    # 体温
+    # 体温（使用患者级随机采样，约每4小时）
     temp_records = []
     for pid in patient_ids:
         base_temp = np.random.uniform(36.5, 37.5)
         meta = patient_sepsis_meta[pid]
         
-        for t in time_points[::4]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=4, jitter=0.4)
+        for t in sample_times:
             temp_val = base_temp + np.random.normal(0, 0.3)
             # 随机发热
             if np.random.random() < 0.1:
@@ -2082,13 +2121,15 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
             temp_records.append({'stay_id': pid, 'time': t, 'temp': max(35, min(41, temp_val))})
     data['temp'] = pd.DataFrame(temp_records)
     
-    # 呼吸（模拟15%缺失率）
+    # 呼吸（使用患者级随机采样，模拟15%缺失率）
     resp_records = []
     for pid in patient_ids:
         base_resp = np.random.uniform(14, 18)
         meta = patient_sepsis_meta[pid]
         
-        for t in time_points:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=1, jitter=0.3)
+        for t in sample_times:
             # 15%概率缺失
             if np.random.random() < 0.85:
                 resp_val = base_resp + np.random.normal(0, 2)
@@ -2098,10 +2139,12 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 resp_records.append({'stay_id': pid, 'time': t, 'resp': max(8, min(40, resp_val))})
     data['resp'] = pd.DataFrame(resp_records)
     
-    # SpO2（模拟10%缺失率）
+    # SpO2（使用患者级随机采样，模拟10%缺失率）
     spo2_records = []
     for pid in patient_ids:
-        for t in time_points:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=1, jitter=0.3)
+        for t in sample_times:
             if np.random.random() < 0.9:
                 spo2_val = 97 + np.random.normal(0, 2)
                 if np.random.random() < 0.05:
@@ -2125,12 +2168,14 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['o2sat'] = data['spo2'].rename(columns={'spo2': 'o2sat'}).copy() if not data['spo2'].empty else pd.DataFrame(columns=['stay_id', 'time', 'o2sat'])
     data['sao2'] = data['spo2'].rename(columns={'spo2': 'sao2'}).copy() if not data['spo2'].empty else pd.DataFrame(columns=['stay_id', 'time', 'sao2'])
     
-    # SOFA
+    # SOFA（使用患者级随机采样，约每6小时）
     sofa_records = []
     for pid in patient_ids:
         meta = patient_sepsis_meta[pid]
         
-        for t in time_points[::6]: # 模拟每6小时评分
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=6, jitter=0.3)
+        for t in sample_times:
             # 基础分布
             probs = [0.6, 0.3, 0.1, 0.0, 0.0] 
             
@@ -2153,40 +2198,48 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
             })
     data['sofa'] = pd.DataFrame(sofa_records)
     
-    # 肌酐
+    # 肌酐（使用患者级随机采样，约每8小时）
     crea_records = []
     for pid in patient_ids:
         base_crea = np.random.uniform(0.8, 1.2)
-        for t in time_points[::8]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=8, jitter=0.3)
+        for t in sample_times:
             crea_val = base_crea + np.random.normal(0, 0.2)
             crea_records.append({'stay_id': pid, 'time': t, 'crea': max(0.3, crea_val)})
     data['crea'] = pd.DataFrame(crea_records)
     
-    # 胆红素
+    # 胆红素（使用患者级随机采样，约每12小时）
     bili_records = []
     for pid in patient_ids:
         base_bili = np.random.uniform(0.5, 1.5)
-        for t in time_points[::12]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=12, jitter=0.3)
+        for t in sample_times:
             bili_val = base_bili + np.random.normal(0, 0.3)
             bili_records.append({'stay_id': pid, 'time': t, 'bili': max(0.1, bili_val)})
     data['bili'] = pd.DataFrame(bili_records)
     
-    # 血糖 (Glucose)
+    # 血糖 (Glucose，使用患者级随机采样，约每4小时)
     glu_records = []
     for pid in patient_ids:
         base_glu = np.random.uniform(80, 120)
-        for t in time_points[::4]:  # 每4小时采样
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=4, jitter=0.3)
+        for t in sample_times:
             glu_val = base_glu + np.random.normal(0, 15)
             glu_records.append({'stay_id': pid, 'time': t, 'glu': max(40, min(400, glu_val))})
     data['glu'] = pd.DataFrame(glu_records)
     
-    # 乳酸
+    # 乳酸（使用患者级随机采样，约每6小时）
     lac_records = []
     for pid in patient_ids:
         base_lac = np.random.uniform(1.0, 2.0)
         meta = patient_sepsis_meta[pid]
         
-        for t in time_points[::6]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=6, jitter=0.3)
+        for t in sample_times:
             lac_val = base_lac + np.random.normal(0, 0.5)
             if meta['is_septic'] and t >= meta['onset']:
                 lac_val += 3.0 # 乳酸升高
@@ -2194,31 +2247,37 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
             lac_records.append({'stay_id': pid, 'time': t, 'lact': max(0.5, lac_val)})  # 🔧 改为 lact（标准名称）
     data['lact'] = pd.DataFrame(lac_records)  # 🔧 改为 lact（与 CONCEPT_GROUPS_INTERNAL 一致）
     
-    # 血小板
+    # 血小板（使用患者级随机采样，约每12小时）
     plt_records = []
     for pid in patient_ids:
         base_plt = np.random.uniform(150, 300)
-        for t in time_points[::12]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=12, jitter=0.3)
+        for t in sample_times:
             plt_val = base_plt + np.random.normal(0, 30)
             plt_records.append({'stay_id': pid, 'time': t, 'plt': max(10, plt_val)})
     data['plt'] = pd.DataFrame(plt_records)
     
-    # 去甲肾上腺素
+    # 去甲肾上腺素（使用患者级随机采样）
     norepi_records = []
     for pid in patient_ids:
-        for t in time_points:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=1, jitter=0.3)
+        for t in sample_times:
             if 12 <= t <= 48 and np.random.random() < 0.6:
                 rate = np.random.uniform(0.05, 0.3)
                 norepi_records.append({'stay_id': pid, 'time': t, 'norepi_rate': rate})
     data['norepi_rate'] = pd.DataFrame(norepi_records) if norepi_records else pd.DataFrame(
         columns=['stay_id', 'time', 'norepi_rate'])
     
-    # SOFA-2 评分 (2025新标准)
+    # SOFA-2 评分 (2025新标准，使用患者级随机采样，约每6小时)
     sofa2_records = []
     for pid in patient_ids:
         meta = patient_sepsis_meta[pid]
         
-        for t in time_points[::6]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=6, jitter=0.3)
+        for t in sample_times:
             # 基础分布
             probs = [0.55, 0.3, 0.1, 0.05, 0.0]
             if meta['is_septic'] and t >= meta['onset']:
@@ -2369,16 +2428,18 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 dbp_records.append({'stay_id': pid, 'time': t, 'dbp': max(40, min(110, dbp_val))})
     data['dbp'] = pd.DataFrame(dbp_records)
     
-    # GCS (格拉斯哥昏迷评分)
+    # GCS (格拉斯哥昏迷评分，使用患者级随机采样，约每4小时)
     gcs_records = []
     for pid in patient_ids:
         base_gcs = np.random.choice([15, 14, 13, 12, 10, 8], p=[0.5, 0.2, 0.1, 0.08, 0.07, 0.05])
-        for t in time_points[::4]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=4, jitter=0.4)
+        for t in sample_times:
             gcs_val = base_gcs + np.random.choice([-1, 0, 0, 0, 1], p=[0.1, 0.3, 0.3, 0.2, 0.1])
             gcs_records.append({'stay_id': pid, 'time': t, 'gcs': max(3, min(15, gcs_val))})
     data['gcs'] = pd.DataFrame(gcs_records)
     
-    # 血气分析：pH, pco2, po2, lact
+    # 血气分析：pH, pco2, po2, lact（使用患者级随机采样，约每6小时）
     ph_records = []
     pco2_records = []
     po2_records = []
@@ -2386,7 +2447,9 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
         base_ph = np.random.uniform(7.35, 7.45)
         base_pco2 = np.random.uniform(35, 45)
         base_po2 = np.random.uniform(80, 100)
-        for t in time_points[::6]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=6, jitter=0.4)
+        for t in sample_times:
             ph_records.append({'stay_id': pid, 'time': t, 'ph': base_ph + np.random.normal(0, 0.03)})
             pco2_records.append({'stay_id': pid, 'time': t, 'pco2': base_pco2 + np.random.normal(0, 3)})
             po2_records.append({'stay_id': pid, 'time': t, 'po2': max(60, base_po2 + np.random.normal(0, 10))})
@@ -2395,13 +2458,15 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['po2'] = pd.DataFrame(po2_records)
     # 🔧 lact 已在上方直接生成（不再需要从 lac 创建别名）
     
-    # 呼吸系统：pafi, fio2, vent_ind
+    # 呼吸系统：pafi, fio2, vent_ind（使用患者级随机采样，约每4小时）
     pafi_records = []
     fio2_records = []
     vent_ind_records = []
     for pid in patient_ids:
         base_fio2 = np.random.choice([0.21, 0.3, 0.4, 0.5], p=[0.4, 0.3, 0.2, 0.1])
-        for t in time_points[::4]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=4, jitter=0.4)
+        for t in sample_times:
             fio2_val = base_fio2 + np.random.uniform(-0.05, 0.05)
             fio2_val = max(0.21, min(1.0, fio2_val))
             po2_val = 80 + np.random.normal(0, 15)
@@ -2414,21 +2479,25 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['fio2'] = pd.DataFrame(fio2_records)
     data['vent_ind'] = pd.DataFrame(vent_ind_records)
     
-    # 尿量（模拟30%缺失率）
+    # 尿量（使用患者级随机采样，模拟30%缺失率）
     urine_records = []
     for pid in patient_ids:
-        for t in time_points:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=1, jitter=0.3)
+        for t in sample_times:
             # 30%概率无记录（缺失）
             if np.random.random() < 0.7:
                 urine_val = np.random.uniform(30, 100)
                 urine_records.append({'stay_id': pid, 'time': t, 'urine': urine_val})
     data['urine'] = pd.DataFrame(urine_records) if urine_records else pd.DataFrame(columns=['stay_id', 'time', 'urine'])
     
-    # WBC (白细胞)
+    # WBC (白细胞，使用患者级随机采样，约每12小时)
     wbc_records = []
     for pid in patient_ids:
         base_wbc = np.random.uniform(6, 12)
-        for t in time_points[::12]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=12, jitter=0.4)
+        for t in sample_times:
             wbc_val = base_wbc + np.random.normal(0, 2)
             wbc_records.append({'stay_id': pid, 'time': t, 'wbc': max(1, wbc_val)})
     data['wbc'] = pd.DataFrame(wbc_records)
@@ -2474,11 +2543,13 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['bmi'] = pd.DataFrame(bmi_records)
     data['adm'] = pd.DataFrame(adm_records)
     
-    # 其他评分
+    # 其他评分（使用患者级随机采样，约每6小时）
     qsofa_records = []
     sirs_records = []
     for pid in patient_ids:
-        for t in time_points[::6]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=6, jitter=0.4)
+        for t in sample_times:
             qsofa_records.append({'stay_id': pid, 'time': t, 'qsofa': np.random.choice([0, 1, 2, 3], p=[0.4, 0.3, 0.2, 0.1])})
             sirs_records.append({'stay_id': pid, 'time': t, 'sirs': np.random.choice([0, 1, 2, 3, 4], p=[0.2, 0.25, 0.25, 0.2, 0.1])})
     data['qsofa'] = pd.DataFrame(qsofa_records)
@@ -2490,7 +2561,8 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
         abx_records.append({'stay_id': pid, 'abx': 1 if np.random.random() < 0.7 else 0})
     data['abx'] = pd.DataFrame(abx_records)
     
-    # 药物：皮质类固醇 (corticosteroids)
+    # 🔧 FIX (2026-02-03): 药物：皮质类固醇 (corticosteroids) - 只记录发生的事件（NaN/1格式）
+    # 只有发生时才记录1，没有发生时不生成记录（而不是生成0）
     cort_records = []
     for pid in patient_ids:
         if np.random.random() < 0.25:  # 25%患者使用皮质类固醇
@@ -2498,13 +2570,15 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
             cort_records.append({'stay_id': pid, 'time': start_time, 'cort': 1})
     data['cort'] = pd.DataFrame(cort_records) if cort_records else pd.DataFrame(columns=['stay_id', 'time', 'cort'])
     
-    # ============ KDIGO AKI 急性肾损伤数据 ============
+    # ============ KDIGO AKI 急性肾损伤数据（使用患者级随机采样，约每4小时） ============
     aki_records = []
     for pid in patient_ids:
         meta = patient_sepsis_meta[pid]
         baseline_crea = np.random.uniform(0.6, 1.2)
         
-        for t in time_points[::4]:  # 每4小时
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=4, jitter=0.4)
+        for t in sample_times:
             # 基线肌酐附近波动
             crea = baseline_crea * (1 + np.random.normal(0, 0.1))
             
@@ -2592,7 +2666,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     # 🔧 添加circ_event作为独立特征
     data['circ_event'] = data['circ_failure'][['stay_id', 'time', 'circ_event']].copy()
     
-    # ============ 呼吸机参数 ============
+    # ============ 呼吸机参数（使用患者级随机采样） ============
     peep_records = []
     tidal_vol_records = []
     tidal_vol_set_records = []
@@ -2611,7 +2685,9 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
         if has_vent:
             # 呼吸机开始时间随机在6-24小时之间
             vent_start = np.random.choice(range(6, min(24, hours)))
-            for t in time_points[::2]:
+            # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+            sample_times = get_random_sample_times(pid, base_interval=2, jitter=0.4)
+            for t in sample_times:
                 if t >= vent_start:
                     # 再有20%概率该时间点缺失记录（设备故障/记录缺失）
                     if np.random.random() < 0.8:
@@ -2657,7 +2733,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['driving_pres'] = pd.DataFrame(driving_pres_records) if driving_pres_records else pd.DataFrame(columns=['stay_id', 'time', 'driving_pres'])
     data['ps'] = pd.DataFrame(ps_records) if ps_records else pd.DataFrame(columns=['stay_id', 'time', 'ps'])
     
-    # ============ 补充更多实验室检查 ============
+    # ============ 补充更多实验室检查（使用患者级随机采样，约每12小时） ============
     alp_records = []
     bun_records = []
     alt_records = []
@@ -2678,7 +2754,9 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     tco2_records = []
     
     for pid in patient_ids:
-        for t in time_points[::12]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=12, jitter=0.4)
+        for t in sample_times:
             alp_records.append({'stay_id': pid, 'time': t, 'alp': np.random.uniform(40, 120)})
             bun_records.append({'stay_id': pid, 'time': t, 'bun': np.random.uniform(10, 40)})
             alt_records.append({'stay_id': pid, 'time': t, 'alt': np.random.uniform(10, 60)})
@@ -2719,7 +2797,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     # 🔧 删除别名概念（与 CONCEPT_GROUPS_INTERNAL 保持一致）
     # 删除: bicarb (bicar的别名), potassium (k的别名)
     
-    # ============ 血液学扩展 ============
+    # ============ 血液学扩展（使用患者级随机采样，约每12小时） ============
     hct_records = []
     rbc_records = []
     rdw_records = []
@@ -2739,7 +2817,9 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     hba1c_records = []
     
     for pid in patient_ids:
-        for t in time_points[::12]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=12, jitter=0.4)
+        for t in sample_times:
             hct_records.append({'stay_id': pid, 'time': t, 'hct': np.random.uniform(30, 45)})
             rbc_records.append({'stay_id': pid, 'time': t, 'rbc': np.random.uniform(3.5, 5.5)})
             rdw_records.append({'stay_id': pid, 'time': t, 'rdw': np.random.uniform(11, 15)})
@@ -2795,7 +2875,9 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     dex_records = []
     
     for pid in patient_ids:
-        for t in time_points[::3]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=3, jitter=0.4)
+        for t in sample_times:
             if np.random.random() < 0.3:
                 dopa_rate_records.append({'stay_id': pid, 'time': t, 'dopa_rate': np.random.uniform(2, 10)})
                 epi_rate_records.append({'stay_id': pid, 'time': t, 'epi_rate': np.random.uniform(0.01, 0.1)})
@@ -2839,7 +2921,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
         vaso_ind_records.append({'stay_id': pid, 'vaso_ind': 1 if np.random.random() < 0.6 else 0})
     data['vaso_ind'] = pd.DataFrame(vaso_ind_records)
     
-    # ============ 神经和其他支持 ============
+    # ============ 神经和其他支持（使用患者级随机采样） ============
     rass_records = []
     avpu_records = []
     egcs_records = []
@@ -2849,7 +2931,9 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     sedated_gcs_records = []
     
     for pid in patient_ids:
-        for t in time_points[::6]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times = get_random_sample_times(pid, base_interval=6, jitter=0.4)
+        for t in sample_times:
             rass_records.append({'stay_id': pid, 'time': t, 'rass': np.random.choice([-5, -4, -3, -2, -1, 0, 1, 2, 3, 4], p=[0.05, 0.1, 0.15, 0.2, 0.15, 0.2, 0.05, 0.05, 0.03, 0.02])})
             egcs_records.append({'stay_id': pid, 'time': t, 'egcs': np.random.choice([1, 2, 3, 4], p=[0.1, 0.2, 0.3, 0.4])})
             mgcs_records.append({'stay_id': pid, 'time': t, 'mgcs': np.random.choice([1, 2, 3, 4, 5, 6], p=[0.05, 0.1, 0.15, 0.2, 0.25, 0.25])})
@@ -2896,25 +2980,45 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     for pid in patient_ids:
         # 保留静态版本用于其他用途（但不覆盖时间序列版本）
         static_records['rrt'].append({'stay_id': pid, 'rrt_static': 1 if pid in rrt_patient_ids else 0})
-        static_records['ecmo'].append({'stay_id': pid, 'ecmo': 1 if np.random.random() < 0.05 else 0})
+        # 🔧 FIX (2026-02-03): ecmo只记录发生的事件（NaN/1格式）
+        # 只有5%患者使用ECMO，只在发生时记录1
+        if np.random.random() < 0.05:
+            static_records['ecmo'].append({'stay_id': pid, 'ecmo': 1})
         # 🔧 注意：height, bmi, sex, adm, los_hosp 已在前面使用 patient_sepsis_meta 正确生成
         # 这里只生成那些前面没有生成的静态字段
         static_records['vent_start'].append({'stay_id': pid, 'vent_start': np.random.choice(time_points[:min(24, len(time_points))])})
         static_records['vent_end'].append({'stay_id': pid, 'vent_end': np.random.choice(time_points[-min(24, len(time_points)):])})
-        static_records['cort'].append({'stay_id': pid, 'cort': 1 if np.random.random() < 0.3 else 0})
+        # 🔧 FIX (2026-02-03): cort只记录发生的事件（NaN/1格式）
+        if np.random.random() < 0.3:
+            static_records['cort'].append({'stay_id': pid, 'cort': 1})
     
     # 只为非RRT且未在前面生成的静态指标创建DataFrame
     # 🔧 跳过已正确生成的: rrt(时间序列), sex, age, death, los_icu, los_hosp, weight, height, bmi, adm
     already_generated = {'rrt', 'sex', 'age', 'death', 'los_icu', 'los_hosp', 'weight', 'height', 'bmi', 'adm'}
     for key, records in static_records.items():
         if key not in already_generated:
-            data[key] = pd.DataFrame(records)
+            # 🔧 FIX: 如果记录为空，创建带正确列名的空DataFrame
+            if records:
+                data[key] = pd.DataFrame(records)
+            else:
+                # 根据key确定列名
+                if key == 'ecmo':
+                    data[key] = pd.DataFrame(columns=['stay_id', 'ecmo'])
+                elif key == 'cort':
+                    data[key] = pd.DataFrame(columns=['stay_id', 'cort'])
+                else:
+                    data[key] = pd.DataFrame(records)
     
-    # ecmo相关别名
-    data['ecmo_indication'] = data['ecmo'].copy()
-    data['mech_circ_support'] = data['ecmo'].copy()
+    # 🔧 FIX (2026-02-03): ecmo相关别名 - 保持NaN/1格式
+    data['ecmo_indication'] = data['ecmo'].copy() if 'ecmo' in data and not data['ecmo'].empty else pd.DataFrame(columns=['stay_id', 'ecmo_indication'])
+    data['mech_circ_support'] = data['ecmo'].copy() if 'ecmo' in data and not data['ecmo'].empty else pd.DataFrame(columns=['stay_id', 'mech_circ_support'])
+    # 修正列名
+    if not data['ecmo_indication'].empty:
+        data['ecmo_indication'] = data['ecmo_indication'].rename(columns={'ecmo': 'ecmo_indication'})
+    if not data['mech_circ_support'].empty:
+        data['mech_circ_support'] = data['mech_circ_support'].rename(columns={'ecmo': 'mech_circ_support'})
     
-    # 时间序列指标（使用高效循环）
+    # 时间序列指标（使用患者级随机采样）
     mews_records = []
     news_records = []
     hbco_records = []
@@ -2926,11 +3030,16 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     safi_records = []
     
     for pid in patient_ids:
-        for t in time_points[::6]:
+        # 🔧 FIX (2026-02-03): 使用患者级随机采样时间
+        sample_times_6h = get_random_sample_times(pid, base_interval=6, jitter=0.4)
+        sample_times_12h = get_random_sample_times(pid, base_interval=12, jitter=0.4)
+        sample_times_4h = get_random_sample_times(pid, base_interval=4, jitter=0.4)
+        
+        for t in sample_times_6h:
             mews_records.append({'stay_id': pid, 'time': t, 'mews': np.random.choice([0, 1, 2, 3, 4, 5], p=[0.3, 0.25, 0.2, 0.15, 0.07, 0.03])})
             news_records.append({'stay_id': pid, 'time': t, 'news': np.random.choice([0, 1, 2, 3, 4, 5, 6, 7], p=[0.25, 0.2, 0.18, 0.15, 0.1, 0.07, 0.03, 0.02])})
         
-        for t in time_points[::12]:
+        for t in sample_times_12h:
             if 'k' not in data:
                 k_records.append({'stay_id': pid, 'time': t, 'k': np.random.uniform(3.5, 5.0)})
             if 'na' not in data:
@@ -2942,7 +3051,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
             hbco_records.append({'stay_id': pid, 'time': t, 'hbco': np.random.uniform(0, 5)})
             methb_records.append({'stay_id': pid, 'time': t, 'methb': np.random.uniform(0, 2)})
         
-        for t in time_points[::4]:
+        for t in sample_times_4h:
             safi_records.append({'stay_id': pid, 'time': t, 'safi': np.random.uniform(200, 450)})
     
     data['mews'] = pd.DataFrame(mews_records)
@@ -3988,6 +4097,59 @@ def render_sidebar():
         sidebar_title = "📤 Data Extraction" if st.session_state.language == 'en' else "📤 数据提取导出"
         st.markdown(f"### {sidebar_title}")
         
+        # 🔧 DEBUG: 显示 export_completed 状态
+        st.caption(f"[DEBUG] export_completed = {st.session_state.get('export_completed', False)}")
+        
+        # 🔧 FIX (2026-02-03): 导出完成后显示"重新提取"按钮，而非Step 1-4
+        if st.session_state.get('export_completed', False):
+            # 显示导出成功信息
+            success_msg = "✅ Export Completed!" if st.session_state.language == 'en' else "✅ 导出完成！"
+            export_dir = st.session_state.get('last_export_dir', '')
+            st.success(success_msg)
+            if export_dir:
+                path_msg = f"📂 {export_dir}"
+                st.info(path_msg)
+            
+            # 显示导出统计
+            result = st.session_state.get('_export_success_result', {})
+            if result:
+                n_files = len(result.get('files', []))
+                n_patients = result.get('patient_count', 0)
+                stats_label = f"📊 {n_files} files, {n_patients} patients" if st.session_state.language == 'en' else f"📊 {n_files} 个文件, {n_patients} 个患者"
+                st.caption(stats_label)
+            
+            st.markdown("---")
+            
+            # 重新提取按钮
+            restart_label = "🔄 Start New Extraction" if st.session_state.language == 'en' else "🔄 重新提取"
+            restart_help = "Reset all settings and start a new extraction" if st.session_state.language == 'en' else "重置所有设置并开始新的数据提取"
+            if st.button(restart_label, type="primary", use_container_width=True, key="restart_extraction", help=restart_help):
+                # 重置所有导出相关状态
+                st.session_state.export_completed = False
+                st.session_state.trigger_export = False
+                st.session_state.step1_confirmed = False
+                st.session_state.step2_confirmed = False
+                st.session_state.selected_concepts = []
+                st.session_state.concept_checkboxes = {}
+                st.session_state.selected_groups = []
+                st.session_state.loaded_concepts = {}
+                # 清理导出结果
+                if '_export_success_result' in st.session_state:
+                    del st.session_state['_export_success_result']
+                if '_skipped_modules' in st.session_state:
+                    del st.session_state['_skipped_modules']
+                if '_overwrite_modules' in st.session_state:
+                    del st.session_state['_overwrite_modules']
+                st.rerun()
+            
+            # 返回首页按钮
+            home_label = "🏠 Back to Home" if st.session_state.language == 'en' else "🏠 返回首页"
+            if st.button(home_label, use_container_width=True, key="back_to_home_after_export"):
+                st.session_state.active_page = 'home_extract'
+                st.rerun()
+            
+            return  # 不显示后续Step内容
+        
         # ============ 步骤1: 数据源选择 ============
         # 🆕 根据entry_mode决定显示内容，不再允许切换
         
@@ -4152,6 +4314,19 @@ def render_sidebar():
         # ============ 步骤2: 队列筛选（新增） ============
         step2_cohort_title = "Step 2: Cohort Selection" if st.session_state.language == 'en' else "步骤2: 队列筛选"
         st.markdown(f"### 👥 {step2_cohort_title}")
+        
+        # 🔧 FIX (2026-02-03): 检查步骤依赖 - Step1必须先完成
+        use_mock = st.session_state.get('use_mock_data', False)
+        if use_mock:
+            step1_complete = st.session_state.get('step1_confirmed', False)
+        else:
+            step1_complete = st.session_state.data_path and Path(st.session_state.data_path).exists()
+        
+        if not step1_complete:
+            # 提示用户先完成Step1
+            step_dep_msg = "⚠️ Please complete Step 1 first" if st.session_state.language == 'en' else "⚠️ 请先完成步骤1"
+            st.warning(step_dep_msg)
+            return  # 不渲染后续内容
         
         # 初始化队列筛选的 session state
         if 'cohort_filter' not in st.session_state:
@@ -4332,6 +4507,14 @@ def render_sidebar():
         step3_title = "Step 3: Select Features" if st.session_state.language == 'en' else "步骤3: 选择特征"
         st.markdown(f"### 🔧 {step3_title}")
         
+        # 🔧 FIX (2026-02-03): 检查步骤依赖 - Step2必须先完成
+        step2_complete = st.session_state.get('step2_confirmed', False)
+        if not step2_complete:
+            # 提示用户先完成Step2
+            step_dep_msg = "⚠️ Please complete Step 2 first" if st.session_state.language == 'en' else "⚠️ 请先完成步骤2"
+            st.warning(step_dep_msg)
+            # 继续显示后续内容但提示用户
+        
         # 初始化 session state
         if 'concept_checkboxes' not in st.session_state:
             st.session_state.concept_checkboxes = {}
@@ -4423,6 +4606,14 @@ def render_sidebar():
         step4_title = "Step 4: Export Data" if st.session_state.language == 'en' else "步骤4: 导出数据"
         st.markdown(f"### 💾 {step4_title}")
         
+        # 🔧 FIX (2026-02-03): 检查步骤依赖 - Step3必须先完成（有选中的概念）
+        step3_complete = len(st.session_state.get('selected_concepts', [])) > 0
+        if not step3_complete:
+            # 提示用户先完成Step3
+            step_dep_msg = "⚠️ Please complete Step 3 first (select at least one feature)" if st.session_state.language == 'en' else "⚠️ 请先完成步骤3（选择至少一个特征）"
+            st.warning(step_dep_msg)
+            # 继续显示后续内容但提示用户
+        
         # 导出路径配置 - 实时根据数据库显示子目录，添加时间戳后缀
         import platform
         from datetime import datetime
@@ -4503,7 +4694,14 @@ def render_sidebar():
         
         # 导出按钮
         use_mock = st.session_state.get('use_mock_data', False)
-        can_export = (use_mock or (st.session_state.data_path and Path(st.session_state.data_path).exists())) and selected_concepts and export_path and Path(export_path).exists()
+        has_loaded_data = len(st.session_state.get('loaded_concepts', {})) > 0  # 🔧 FIX: 检查是否有已加载的数据
+        can_export = (use_mock or has_loaded_data or (st.session_state.data_path and Path(st.session_state.data_path).exists())) and selected_concepts and export_path and Path(export_path).exists()
+        
+        # 🔧 FIX (2026-02-03): 如果有已加载数据但没有选择特征，自动使用已加载数据的keys
+        if has_loaded_data and not selected_concepts:
+            selected_concepts = list(st.session_state.loaded_concepts.keys())
+            st.session_state.selected_concepts = selected_concepts
+            can_export = export_path and Path(export_path).exists()
         
         export_btn = "📥 Export Data" if st.session_state.language == 'en' else "📥 导出数据"
         if can_export:
@@ -4674,6 +4872,20 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
         st.session_state.patient_ids = preview_patient_ids
         st.session_state.all_patient_count = all_patient_count
         st.session_state.id_col = id_col_found
+        
+        # 🔧 FIX (2026-02-03): 设置 selected_concepts 以便侧边栏的导出按钮可用
+        st.session_state.selected_concepts = list(filtered_data.keys())
+        
+        # 🔧 FIX (2026-02-03): Load Data后重置导出触发状态，避免白屏
+        # 注意：不应该重置 export_completed，因为 Quick Visualization 的 Load Data
+        # 是独立于侧边栏数据提取器的功能，不应该影响导出完成状态
+        st.session_state.trigger_export = False
+        st.session_state['_exporting_in_progress'] = False
+        # 清理跳过/覆盖模块状态（这些是导出过程中的临时状态，可以安全清理）
+        if '_skipped_modules' in st.session_state:
+            del st.session_state['_skipped_modules']
+        if '_overwrite_modules' in st.session_state:
+            del st.session_state['_overwrite_modules']
         
         load_elapsed = time.time() - load_start
         
@@ -7784,12 +7996,21 @@ def render_quality_page():
         'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
         # 机械通气
         'mech_vent', 'vent_ind', 'vent_start', 'vent_end',
-        # ECMO
-        'ecmo', 'ecmo_indication',
+        # ECMO 和机械循环支持
+        'ecmo', 'ecmo_indication', 'mech_circ_support',
         # 药物事件
         'abx', 'cort',
         # 血管活性药物指示
         'vaso_ind',
+    ]
+    
+    # 🔧 FIX (2026-02-03): 静态布尔事件（每患者最多1条，只有发生时才记录）
+    # 缺失率 = 1 - (有记录的患者数 / 总患者数)
+    static_boolean_events = [
+        'ecmo', 'ecmo_indication', 'mech_circ_support',  # ECMO/机械循环支持
+        'cort',  # 皮质类固醇
+        'abx',   # 抗生素（静态版本）
+        'vaso_ind',  # 血管活性药物指示
     ]
     
     # 🔧 完整时间网格大小：优先使用模拟数据的时长参数，否则默认72小时
@@ -7899,6 +8120,9 @@ def render_quality_page():
             main_col = concept if concept in df.columns else (value_cols[0] if value_cols else None)
             time_col = _detect_time_col(df)
             
+            # 🔧 FIX (2026-02-03): 判断是否为静态布尔事件
+            is_static_boolean = concept in static_boolean_events
+            
             # 计算缺失率
             if is_demographic:
                 # 人口统计学静态概念：缺失率 = NA值比例（这些确实只需要1条/患者）
@@ -7910,12 +8134,28 @@ def render_quality_page():
                         missing_rate = df[value_cols].isna().mean().mean() * 100
                 else:
                     missing_rate = 0
+            elif is_static_boolean:
+                # 🔧 FIX (2026-02-03): 静态布尔事件：只有发生时才记录
+                # 缺失率 = 1 - (有记录的患者数 / 总患者数)
+                # 例如：5%患者使用ECMO → 缺失率 = 95%
+                patients_with_event = n_patients  # 有记录的患者数
+                # 总患者数从session获取
+                total_patients = total_patients_in_session
+                if total_patients > 0:
+                    missing_rate = (1 - patients_with_event / total_patients) * 100
+                else:
+                    missing_rate = 0
             else:
-                # 🔧 修复缺失率计算（2026-01-29 v5）
-                # 核心思想：直接使用 (实际记录数/患者) / 时间网格 来计算
-                # 这样每个概念的缺失率取决于其实际的采样频率
+                # 🔧 FIX (2026-02-03): 修复从宽表导入时的缺失率计算
+                # 核心问题：宽表可能有完整的时间网格（72行/患者），但值列有大量NaN
+                # 解决方案：优先检查值列的NaN比例
                 
                 if n_patients > 0:
+                    # 🔧 先检查值列的NaN比例（对于从宽表导入的数据更准确）
+                    na_rate_in_column = None
+                    if main_col and main_col in df.columns:
+                        na_rate_in_column = df[main_col].isna().mean() * 100
+                    
                     # 计算每患者平均记录数
                     records_per_patient = n_records / n_patients
                     
@@ -7932,10 +8172,15 @@ def render_quality_page():
                             event_count = col_data.notna().sum()
                         records_per_patient = event_count / n_patients if n_patients > 0 else 0
                     
-                    # 缺失率 = 1 - (每患者记录数 / 时间网格大小)
-                    # 例如：每患者9条记录，时间网格72 → 缺失率 = 1 - 9/72 = 87.5%
-                    coverage = records_per_patient / time_grid_size
-                    missing_rate = max(0, min(100, (1 - coverage) * 100))
+                    # 🔧 FIX: 如果值列NaN比例较高（>5%），优先使用NaN比例作为缺失率
+                    # 这对从宽表导入的数据更准确
+                    if na_rate_in_column is not None and na_rate_in_column > 5:
+                        missing_rate = na_rate_in_column
+                    else:
+                        # 缺失率 = 1 - (每患者记录数 / 时间网格大小)
+                        # 例如：每患者9条记录，时间网格72 → 缺失率 = 1 - 9/72 = 87.5%
+                        coverage = records_per_patient / time_grid_size
+                        missing_rate = max(0, min(100, (1 - coverage) * 100))
                 else:
                     # 无患者数或计算失败
                     missing_rate = 100
@@ -10621,15 +10866,22 @@ def execute_sidebar_export():
     selected_concepts = st.session_state.get('selected_concepts', [])
     use_mock = st.session_state.get('use_mock_data', False)
     
-    # 🔧 FIX: 检测是否是从可视化模式导入数据的场景
+    # 🔧 FIX (2026-02-03): 检测是否是从可视化模式导入数据的场景
     loaded_concepts = st.session_state.get('loaded_concepts', {})
     data_path_str = st.session_state.get('data_path', '')
     has_valid_data_path = data_path_str and Path(data_path_str).exists()
     has_loaded_data = len(loaded_concepts) > 0
     
     # 判断数据来源模式
-    # 如果有已加载的数据但没有有效的数据路径，说明是从文件导入的
-    is_viz_import_mode = has_loaded_data and not has_valid_data_path and not use_mock
+    # 🔧 FIX: 如果已经有加载的数据，直接使用它（最高优先级）
+    is_viz_import_mode = has_loaded_data
+    
+    # 🔧 FIX (2026-02-03): 在可视化导入模式下，如果 selected_concepts 为空，
+    # 使用 loaded_concepts 的 keys 作为要导出的概念
+    if is_viz_import_mode and not selected_concepts:
+        selected_concepts = list(loaded_concepts.keys())
+        st.session_state.selected_concepts = selected_concepts
+        print(f"[DEBUG] Auto-set selected_concepts from loaded_concepts: {len(selected_concepts)} concepts")
     
     if not export_path or not Path(export_path).exists():
         err_msg = "❌ Please set a valid export path first" if lang == 'en' else "❌ 请先设置有效的导出路径"
@@ -10690,31 +10942,28 @@ def execute_sidebar_export():
             selected_modules[group_key].append(c)
         
         # 检测哪些模块的文件已存在
+        # 🔧 FIX (2026-02-03): 使用模块前缀匹配，而不是精确文件名匹配
         existing_modules = {}  # group_key -> file_path
+        cohort_prefix = _generate_cohort_prefix()
+        
         for group_key, group_concepts in selected_modules.items():
-            # 生成预计的文件名
-            if len(group_concepts) <= 5:
-                concepts_suffix = '_'.join(group_concepts)
-            else:
-                concepts_suffix = '_'.join(group_concepts[:4]) + f'_etc{len(group_concepts)}'
-            
-            cohort_prefix = _generate_cohort_prefix()
+            # 🔧 按模块名前缀查找已存在的文件
             if cohort_prefix:
-                safe_filename = f"{cohort_prefix}_{group_key}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
+                search_prefix = f"{cohort_prefix}_{group_key}_"
             else:
-                safe_filename = f"{group_key}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
-            if len(safe_filename) > 150:
-                safe_filename = safe_filename[:150]
+                search_prefix = f"{group_key}_"
             
-            # 检查文件是否存在
+            # 检查是否有匹配该模块的文件存在
             for ext in ['.parquet', '.csv', '.xlsx']:
-                file_path = export_dir / f"{safe_filename}{ext}"
-                if file_path.exists():
-                    existing_modules[group_key] = file_path
+                matching_files = list(export_dir.glob(f"{search_prefix}*{ext}"))
+                if matching_files:
+                    # 找到匹配的文件
+                    existing_modules[group_key] = matching_files[0]
                     break
         
         # 如果有已存在的模块，显示让用户选择
-        if existing_modules:
+        # 🔧 FIX (2026-02-03): 在 viz_import_mode 下自动覆盖，跳过对话框
+        if existing_modules and not is_viz_import_mode:
             # 检查用户是否已做出所有决定
             skipped_modules = st.session_state.get('_skipped_modules', set())
             overwrite_modules = st.session_state.get('_overwrite_modules', set())
@@ -11154,18 +11403,13 @@ def execute_sidebar_export():
             
             module_start_time = time_module.time()
             
-            # 🚀 显示详细进度：模块名 + 包含的特征列表 + 取消按钮
+            # 🚀 显示详细进度：模块名 + 包含的特征列表
             concept_list = list(concept_dfs.keys())
             concepts_str = ', '.join(concept_list[:5]) + (f'... +{len(concept_list)-5}' if len(concept_list) > 5 else '')
             export_group_msg = f"**Exporting**: `{group_name}` ({idx+1}/{total_groups})\n\n📋 Features: {concepts_str}" if lang == 'en' else f"**正在导出**: `{group_name}` ({idx+1}/{total_groups})\n\n📋 特征: {concepts_str}"
             
-            # 🔧 使用单个 container 同时显示进度和取消按钮
-            with cancel_placeholder.container():
-                st.markdown(export_group_msg)
-                cancel_btn_text = "🛑 Cancel Export" if lang == 'en' else "🛑 取消导出"
-                if st.button(cancel_btn_text, key=f"cancel_export_{group_name}"):
-                    st.session_state._export_cancelled = True
-                    st.rerun()
+            # 🔧 FIX (2026-02-03): 简化进度显示，移除循环内按钮避免 key 冲突导致白屏
+            cancel_placeholder.markdown(export_group_msg)
             
             # 将同一分组的所有 concept 合并为宽表
             # 找到共同的 ID 列和时间列
@@ -11494,7 +11738,7 @@ def execute_sidebar_export():
                     continue
             
             # 生成文件名：[筛选条件前缀_]模块名_特征1_特征2_...
-            concept_names = list(concept_dfs.keys())
+            concept_names = sorted(list(concept_dfs.keys()))  # 🔧 FIX: 排序确保文件名一致
             # 限制特征名长度，避免文件名过长
             if len(concept_names) <= 5:
                 concepts_suffix = '_'.join(concept_names)
@@ -11523,9 +11767,25 @@ def execute_sidebar_export():
             else:
                 file_path = export_dir / f"{safe_filename}.parquet"
             
+            # 🔧 FIX (2026-02-03): 覆盖模式时，先删除该模块的所有旧文件
+            overwrite_modules = st.session_state.get('_overwrite_modules', set())
+            if group_name in overwrite_modules or is_viz_import_mode:
+                # 删除匹配该模块的所有旧文件
+                for ext in ['.parquet', '.csv', '.xlsx']:
+                    if cohort_prefix:
+                        pattern = f"{cohort_prefix}_{group_name}_*{ext}"
+                    else:
+                        pattern = f"{group_name}_*{ext}"
+                    old_files = list(export_dir.glob(pattern))
+                    for old_file in old_files:
+                        try:
+                            old_file.unlink()
+                        except Exception:
+                            pass
+            
             # 🔧 检查文件是否需要跳过（基于预检测阶段的用户选择）
             # 注意：模拟数据模式不检查已存在文件（直接覆盖）
-            if not use_mock and file_path.exists():
+            if not use_mock and not is_viz_import_mode and file_path.exists():
                 # 检查用户是否已选择跳过此模块
                 if group_name in skipped_modules:
                     skip_msg = f"⏭️ Skipped (file exists): `{group_name}`" if lang == 'en' else f"⏭️ 已跳过（文件已存在）: `{group_name}`"
@@ -11577,6 +11837,7 @@ def execute_sidebar_export():
         
         if exported_files:
             st.session_state.export_completed = True
+            st.session_state.trigger_export = False  # 🔧 FIX (2026-02-03): 导出完成后重置触发状态
             st.session_state['_exporting_in_progress'] = False  # 清除导出进行中标记
             st.session_state.last_export_dir = str(export_dir)  # 保存实际导出目录
             st.session_state.last_export_full_dir = str(export_dir)  # 保存完整路径（含cohort子目录）
@@ -12088,12 +12349,25 @@ def main():
             '''
             st.components.v1.html(js_switch_to_tutorial, height=0)
             
+            # 🔧 FIX (2026-02-03): 如果有 loaded_concepts 但没有 selected_concepts，
+            # 自动使用 loaded_concepts 的 keys
+            if not st.session_state.get('selected_concepts'):
+                loaded_concepts = st.session_state.get('loaded_concepts', {})
+                if loaded_concepts:
+                    st.session_state.selected_concepts = list(loaded_concepts.keys())
+                    print(f"[DEBUG] main(): Auto-set selected_concepts from loaded_concepts: {len(st.session_state.selected_concepts)} concepts")
+            
             # 🔧 只有在有选择的概念时才执行导出
             if st.session_state.get('selected_concepts'):
                 # 优先使用 Guide: Complete 中创建的容器
                 export_container = st.session_state.get('_export_progress_container', default_export_container)
                 with export_container:
                     execute_sidebar_export()
+            else:
+                # 没有可导出的数据
+                lang = st.session_state.get('language', 'en')
+                st.warning("⚠️ No data to export. Please load data first." if lang == 'en' else "⚠️ 没有可导出的数据，请先加载数据。")
+                st.session_state['_exporting_in_progress'] = False
         except Exception as e:
             import traceback
             lang = st.session_state.get('language', 'en')
