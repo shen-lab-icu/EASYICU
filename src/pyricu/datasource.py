@@ -1080,6 +1080,29 @@ class ICUDataSource:
                 else:
                     loader = self._resolve_loader_from_disk(table_name)
             
+            # 🚀 MIMIC-III chartevents CSV fallback
+            # When bucket directory is not available (due to memory constraints during conversion),
+            # fall back to reading directly from CSV.gz with proper VALUE type handling
+            if loader is None and self.config.name == 'mimic' and table_name == 'chartevents':
+                csv_path = self._resolve_mimic3_chartevents_csv()
+                if csv_path is not None and concept_itemid_filter is not None:
+                    # Use CSV fallback only when we have itemid filter (for performance)
+                    logger.info(f"🔄 MIMIC-III chartevents: 分桶目录不存在，使用 CSV 回退模式")
+                    frame = self._read_mimic3_csv_fallback(
+                        csv_path=csv_path,
+                        columns=columns,
+                        itemid_filter=concept_itemid_filter,
+                        patient_ids_filter=patient_ids_filter,
+                    )
+                    
+                    if not frame.empty:
+                        # Cache and return
+                        if enable_caching:
+                            with self._lock:
+                                self._table_cache[cache_key] = frame
+                        return frame
+                    # If CSV fallback returns empty, continue to normal error handling
+            
             # 如果解析失败，返回空 DataFrame（兼容性处理，避免阻断整个流程）
             if loader is None:
                 # 对于miiv数据源，如果表在配置中定义了但文件不存在，返回空DataFrame
@@ -1462,6 +1485,151 @@ class ICUDataSource:
         conn.close()
         return {row[0] for row in result}
     
+    def _read_mimic3_csv_fallback(
+        self,
+        csv_path: Path,
+        columns: Optional[Iterable[str]],
+        itemid_filter: Optional[Tuple[str, set]],
+        patient_ids_filter: Optional[FilterSpec] = None,
+    ) -> pd.DataFrame:
+        """🚀 MIMIC-III chartevents CSV fallback: read directly from CSV.gz with correct VALUE type
+        
+        When chartevents_bucket directory doesn't exist (due to memory constraints during conversion),
+        this method reads directly from the original CSV.gz file using DuckDB with proper type hints.
+        
+        The key issue is that DuckDB's read_csv_auto incorrectly detects the VALUE column as DOUBLE
+        when early rows have numeric values, causing text values like "4 Spontaneously" (GCS scores)
+        to become NaN. We use types={'VALUE': 'VARCHAR'} to preserve these text values.
+        
+        Args:
+            csv_path: Path to CHARTEVENTS.csv.gz
+            columns: Columns to select (will be uppercased for MIMIC-III)
+            itemid_filter: (column_name, set_of_itemids) for filtering
+            patient_ids_filter: Optional patient ID filter
+            
+        Returns:
+            DataFrame with the requested data
+        """
+        try:
+            import duckdb
+        except ImportError:
+            logger.warning("DuckDB not installed, cannot use MIMIC-III CSV fallback")
+            return pd.DataFrame()
+        
+        logger.info(f"📄 MIMIC-III CSV 回退模式: 从 {csv_path.name} 读取 (VALUE 列保持为字符串)")
+        
+        # Build column selection - MIMIC-III uses UPPERCASE column names in CSV
+        if columns:
+            # Map common column names to MIMIC-III uppercase
+            col_mapping = {
+                'icustay_id': 'ICUSTAY_ID',
+                'subject_id': 'SUBJECT_ID', 
+                'hadm_id': 'HADM_ID',
+                'charttime': 'CHARTTIME',
+                'itemid': 'ITEMID',
+                'value': 'VALUE',
+                'valuenum': 'VALUENUM',
+                'valueuom': 'VALUEUOM',
+            }
+            upper_cols = []
+            for c in columns:
+                upper_cols.append(col_mapping.get(c.lower(), c.upper()))
+            columns_sql = ", ".join(upper_cols)
+        else:
+            columns_sql = "*"
+        
+        # Build WHERE conditions
+        where_conditions = []
+        
+        # ITEMID filter (critical for performance - filters 330M rows to small subset)
+        if itemid_filter:
+            filter_col, filter_ids = itemid_filter
+            # MIMIC-III uses uppercase ITEMID
+            filter_col_upper = filter_col.upper()
+            itemids_list = ", ".join(str(int(x)) for x in filter_ids)
+            where_conditions.append(f"{filter_col_upper} IN ({itemids_list})")
+            logger.debug(f"🎯 CSV 过滤: {filter_col_upper} IN ({len(filter_ids)} 个 ID)")
+        
+        # Patient ID filter
+        if patient_ids_filter and patient_ids_filter.value:
+            id_col = patient_ids_filter.column.upper()  # MIMIC-III uses uppercase
+            values = patient_ids_filter.value
+            if isinstance(values, (list, tuple, set)):
+                value_list = list(values)
+            elif isinstance(values, pd.Series):
+                value_list = values.tolist()
+            else:
+                value_list = [values]
+            
+            if value_list:
+                if len(value_list) == 1:
+                    where_conditions.append(f"{id_col} = {value_list[0]}")
+                else:
+                    values_str = ", ".join(map(str, value_list))
+                    where_conditions.append(f"{id_col} IN ({values_str})")
+        
+        # Build WHERE clause
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        # 🔑 CRITICAL: Use types={'VALUE': 'VARCHAR'} to preserve GCS text values
+        # Without this, values like "4 Spontaneously" become NaN because DuckDB
+        # incorrectly detects VALUE as DOUBLE from early numeric rows
+        # NOTE: Do NOT use sample_size=-1 as it causes full file scan for type detection
+        query = f"""
+            SELECT {columns_sql}
+            FROM read_csv_auto(
+                '{csv_path}',
+                ignore_errors=true,
+                null_padding=true,
+                types={{'VALUE': 'VARCHAR'}}
+            )
+            {where_clause}
+        """
+        
+        try:
+            con = duckdb.connect()
+            con.execute("SET timezone='UTC'")
+            con.execute("SET enable_progress_bar = false")
+            con.execute("SET enable_progress_bar_print = false")
+            df = con.execute(query).fetchdf()
+            con.close()
+            
+            # Normalize column names to lowercase (MIMIC-III CSV uses uppercase)
+            df.columns = [c.lower() for c in df.columns]
+            
+            logger.info(f"✅ CSV 回退成功: 加载 {len(df)} 行")
+            return df
+            
+        except Exception as e:
+            logger.error(f"❌ MIMIC-III CSV 回退失败: {e}")
+            return pd.DataFrame()
+    
+    def _resolve_mimic3_chartevents_csv(self) -> Optional[Path]:
+        """Find MIMIC-III CHARTEVENTS.csv.gz file
+        
+        Returns:
+            Path to CSV file if found, None otherwise
+        """
+        if not self.base_path:
+            return None
+        
+        # Try different possible file names (MIMIC-III uses uppercase)
+        possible_names = [
+            'CHARTEVENTS.csv.gz',
+            'chartevents.csv.gz', 
+            'CHARTEVENTS.csv',
+            'chartevents.csv',
+        ]
+        
+        for name in possible_names:
+            csv_path = self.base_path / name
+            if csv_path.exists():
+                return csv_path
+        
+        return None
+
     def _read_partitioned_data_duckdb(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None, table_name: Optional[str] = None, wide_table_value_columns: Optional[List[str]] = None) -> pd.DataFrame:
         """使用 DuckDB 读取分区数据（高性能版本）
         
@@ -2254,7 +2422,7 @@ def load_wide_table_aggregated(
     value_columns: List[str],
     interval_hours: float = 1.0,
     patient_ids: Optional[List] = None,
-    agg_func: str = 'first',  # 'first', 'mean', 'max', 'min'
+    agg_func: str = 'median',  # 'median' (default, matches R ricu), 'first', 'mean', 'max', 'min'
 ) -> pd.DataFrame:
     """
     🚀 高性能宽表批量加载：在DuckDB中完成聚合和去重
@@ -2308,14 +2476,15 @@ def load_wide_table_aggregated(
     else:
         glob_pattern = str(directory)
     
-    # 构建DuckDB聚合函数映射
+    # 构建DuckDB聚合函数映射 (median为R ricu默认)
     agg_map = {
+        'median': 'MEDIAN',  # R ricu default
         'first': 'FIRST',
         'mean': 'AVG',
         'max': 'MAX', 
         'min': 'MIN',
     }
-    duckdb_agg = agg_map.get(agg_func, 'FIRST')
+    duckdb_agg = agg_map.get(agg_func, 'MEDIAN')
     
     # 构建CTE：每个值列单独聚合（处理NULL）
     cte_parts = []

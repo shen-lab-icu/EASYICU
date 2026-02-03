@@ -1,22 +1,27 @@
 # PyRICU
 
-> 🏥 Python ICU 数据处理工具包 - 基于 R 语言 ricu 包理念设计
+> 🏥 Python ICU 数据处理工具包
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.2.0-green.svg)](https://github.com/shen-lab-icu/pyricu)
+[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/shen-lab-icu/pyricu)
 
-PyRICU 是一个专为重症监护室 (ICU) 数据分析设计的 Python 工具包，支持多个主流 ICU 数据库。它提供统一的 API 来加载、处理和分析 ICU 临床数据，让研究人员专注于数据科学而非数据工程。
+PyRICU 是一个专为重症监护室 (ICU) 数据分析设计的 Python 工具包，支持多个主流 ICU 数据库。它提供统一的 API 来加载、处理和分析 ICU 临床数据。
 
 ## ✨ 核心特性
 
 ### 🎯 统一的多数据库支持 (6 个数据库)
-- **MIMIC-IV** - MIT 重症监护数据库 v3.1 (推荐)
-- **MIMIC-III** - MIT 重症监护数据库 v1.4 🆕
-- **eICU-CRD** - Philips eICU 协作研究数据库
-- **AmsterdamUMCdb** - 阿姆斯特丹大学医学中心数据库
-- **HiRID** - 高分辨率 ICU 数据库
-- **SICdb** - Salzburg ICU 数据库 🆕
+
+| 数据库 | 版本 | 主键列 | 分桶优化表 | 状态 |
+|--------|------|--------|-----------|------|
+| **MIMIC-IV** | v3.1 | `stay_id` | chartevents, labevents, inputevents | ✅ 100% |
+| **MIMIC-III** | v1.4 | `icustay_id` | chartevents, labevents | ✅ 100% |
+| **eICU-CRD** | v2.0 | `patientunitstayid` | nursecharting, lab | ✅ 100% |
+| **AmsterdamUMCdb** | v1.0.2 | `admissionid` | numericitems, listitems | ✅ 100% |
+| **HiRID** | v1.1.1 | `patientid` | observations, pharma | ✅ 100% |
+| **SICdb** | v1.0.6 | `CaseID` | data_float_h, laboratory | ✅ 100% |
+
+> ⚠️ **注意**：不同数据库使用不同的患者 ID 列名，使用 `patient_ids` 参数时请确认对应数据库的主键列。
 
 ### 🌐 交互式 Web 应用
 - **可视化数据浏览器** - 无需编程即可探索 ICU 数据
@@ -24,15 +29,36 @@ PyRICU 是一个专为重症监护室 (ICU) 数据分析设计的 Python 工具�
 - **批量特征导出** - 支持 Parquet、CSV、Excel 格式
 - **中英文双语界面** - 根据需要切换语言
 
-### 📊 丰富的临床评分系统
+### 📊 包含更丰富的临床评分系统
 | 评分 | 描述 |
 |------|------|
 | **SOFA** | 器官衰竭序贯评估 |
-| **SOFA-2 (2025)** | 最新版本，支持 RRT、ECMO、机械循环支持 |
+| **SOFA-2** | 最新版本，纳入RRT、ECMO、机械循环支持 |
 | **Sepsis-3** | 脓毒症诊断标准 |
 | **qSOFA** | 快速 SOFA 评分 |
 | **SIRS** | 全身炎症反应综合征 |
-| **MEWS/NEWS** | 早期预警评分 |
+
+### 📋 特征分类 (145+ 概念)
+
+| 分类 | 概念数 | 示例 |
+|------|--------|------|
+| ⭐ SOFA-2 评分 | 7 | sofa2, sofa2_resp, sofa2_coag... |
+| 📊 SOFA-1 评分 | 7 | sofa, sofa_resp, sofa_coag... |
+| 🦠 脓毒症相关 | 6 | sep3, sep3_sofa2, susp_inf, qsofa... |
+| ❤️ 生命体征 | 7 | hr, sbp, dbp, map, temp, resp, spo2 |
+| 🫁 呼吸支持 | 14 | fio2, pafi, safi, mech_vent, vent_ind... |
+| 🌬️ 呼吸机参数 | 12 | peep, tidal_vol, pip, plateau_pres... |
+| 🩸 血气分析 | 9 | po2, pco2, ph, lact, o2sat... |
+| 🧪 生化检验 | 21 | bili, crea, glu, alb, bun... |
+| 🔬 血液学 | 20 | hgb, plt, wbc, hct, inr_pt... |
+| 💉 血管活性药物 | 17 | norepi_rate, dopa_rate, epi_rate... |
+| 💊 其他药物 | 4 | abx, ins, dex, cort |
+| 🚰 肾脏/尿量 | 15 | urine, urine24, crea, rrt... |
+| 🧠 神经系统 | 11 | gcs, egcs, mgcs, vgcs, rass, avpu... |
+| 🫀 循环支持 | 3 | ecmo, iabp, mech_circ_support |
+| 👤 人口统计学 | 6 | age, sex, weight, height, bmi, adm |
+| 📈 其他评分 | 4 | sirs, news, mews, apache_ii |
+| 🎯 结局指标 | 3 | death, los_icu, los_hosp |
 
 ### ⚡ 高性能优化
 - **智能缓存** - 自动缓存已加载的表，避免重复 I/O
@@ -44,28 +70,25 @@ PyRICU 是一个专为重症监护室 (ICU) 数据分析设计的 Python 工具�
 
 ---
 
-## 🪟 Windows 用户快速指南 (临床医生推荐)
+## 快速开始指南
 
-如果您是第一次接触 Python，建议按照以下步骤操作（总耗时约 15-20 分钟）：
+如果您是第一次接触 Python，建议按照以下步骤操作：
 
-### 第一步：安装 Anaconda (Python 环境)
+### 第一步：安装 Anaconda
 
 1. **下载 Anaconda**  
    访问 [Anaconda 官网](https://www.anaconda.com/download) 下载 Windows 版本（推荐 Python 3.11）  
-   国内镜像：[清华大学镜像站](https://mirrors.tuna.tsinghua.edu.cn/anaconda/archive/)（选择最新的 `Anaconda3-*-Windows-x86_64.exe`）
    
    > 💡 **轻量替代方案**: 如果 C 盘空间紧张，可使用 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)（仅 ~70MB，而 Anaconda 需要 ~3GB）
 
-2. **安装 Anaconda (避免 C 盘爆满)**  
+2. **安装 Anaconda**  
    - 双击下载的 `.exe` 文件
    - ⚠️ **重要：更改安装路径** - 点击 "Browse" 将安装目录改为 `D:\Anaconda3` 或其他非 C 盘路径
-   - 勾选 "Add Anaconda to my PATH environment variable"（添加到环境变量）
+   - 勾选 "Add Anaconda to my PATH environment variable"
    - 点击 "Next" 直到完成
-   
-   > 💾 **空间需求**: Anaconda ~3GB, Miniconda ~400MB, PyRICU ~200MB
 
 3. **验证安装**  
-   打开 **Anaconda Prompt**（开始菜单搜索 "Anaconda Prompt"），输入：
+   打开 **Anaconda Prompt**，输入：
    ```bash
    python --version
    ```
@@ -95,22 +118,87 @@ pip install -e ".[all]"
 pyricu-webapp
 ```
 
-浏览器会自动打开 `http://localhost:8501`，显示 PyRICU 界面。
+会有以下显示：
+You can now view your Streamlit app in your browser.
+
+URL: http://localhost:8504
+
+使用浏览器打开网址 `http://localhost:8504`，显示 PyRICU 界面。
 
 ### 第四步：准备数据
 
 1. **下载 ICU 数据库**（需要先申请权限）
    - MIMIC-IV: https://physionet.org/content/mimiciv/
    - eICU: https://physionet.org/content/eicu-crd/
+   - AmsterdamUMCdb: https://amsterdammedicaldatascience.nl/
+   - HiRID: https://hirid.intensivecare.ai/
+   - SICdb: https://physionet.org/content/sicdb/
 
-2. **解压数据到本地**（例如 `D:\mimic-iv\`）
+2. **解压数据到本地目录**（如 `D:\icu_data\mimiciv`）
 
-3. **在 Web 界面中转换数据**
-   - 左侧边栏选择数据库类型（如 MIMIC-IV）
-   - 输入数据路径（如 `D:\mimic-iv\`）
-   - 点击 "🔄 转换为 Parquet" 按钮
+### 第五步：数据转换
 
-### 💡 常见问题
+1. **Web 界面转换（推荐）**
+   - 点击左侧 **⚙️ 管理** 按钮进入数据管理模式
+   - 输入数据目录路径（如 `D:\icu_data\mimiciv`）
+   - 点击 **转换** 按钮，系统自动：
+     - 将 CSV/CSV.GZ 转换为 Parquet 格式
+     - 对大表（chartevents、labevents 等）进行分桶优化
+   - 转换完成后刷新页面
+
+2. **命令行转换（高级）**
+   ```python
+   from pyricu import DuckDBConverter
+   conv = DuckDBConverter('/path/to/data', memory_limit_gb=8)
+   conv.convert_all()  # 内存安全转换，峰值约 300MB
+   ```
+
+> 💡 **分桶优化说明**：MIMIC-IV chartevents（3亿行）等大表会自动按 itemid 分为 100 个桶，查询速度提升 10-50 倍。
+
+### 第六步：队列选择 (Cohort Selection)
+
+1. 在 Web 界面左侧选择 **🎯 队列**
+2. 设置筛选条件：
+   - **患者数量限制** - 设为 0 表示全部患者
+   - **ICU 住院时长** - 如 ≥24 小时
+   - **年龄范围** - 如 18-90 岁
+   - **排除条件** - 如排除二次入院
+3. 点击 **应用筛选** 查看符合条件的患者数
+
+### 第七步：特征选择 (Select Features)
+
+1. 在 Web 界面左侧选择 **📊 特征**
+2. 按类别勾选需要的特征：
+   - **生命体征** (hr, sbp, dbp, map, temp, resp, spo2)
+   - **实验室检查** (bili, crea, glu, plt, wbc...)
+   - **评分系统** (sofa, sofa2, qsofa, sirs, sep3...)
+   - **血管活性药物** (norepi_rate, dopa_rate...)
+3. 设置时间参数：
+   - **时间间隔** - 如 1 小时
+   - **聚合方式** - mean / median / first / last
+
+### 第八步：批量导出
+
+1. 在 Web 界面选择 **📤 导出**
+2. 选择导出格式：
+   - **Parquet** - 推荐，文件小、加载快
+   - **CSV** - 通用格式，可用 Excel 打开
+   - **Excel** - 直接用 Excel 打开，但文件较大
+3. 点击 **开始导出**，文件保存到指定目录
+
+### 第九步：可视化分析
+
+1. **快速可视化 (Quick Visualization)**
+   - 选择患者 ID 和特征
+   - 查看时间序列图、分布直方图
+   - 支持多特征叠加对比
+
+2. **队列分析 (Cohort Analysis)**
+   - 查看队列人口统计学特征
+   - 生成特征相关性热图
+   - 导出分析报告
+
+### 💡 新手常见问题
 
 **Q: 如何关闭应用？**  
 A: 在 Anaconda Prompt 窗口按 `Ctrl + C`，或直接关闭窗口。
@@ -119,42 +207,15 @@ A: 在 Anaconda Prompt 窗口按 `Ctrl + C`，或直接关闭窗口。
 A: 打开 Anaconda Prompt，输入 `pyricu-webapp`。
 
 **Q: 转换数据需要多久？**  
-A: MIMIC-IV 约 10-30 分钟（使用 DuckDB 优化），转换完成后下次加载只需几秒。
+A: MIMIC-IV 约 10-30 分钟，转换完成后下次加载只需几秒。
 
 **Q: 需要多少内存？**  
-A: **12GB 即可**！新版使用 DuckDB 内存安全转换，实测峰值仅 300MB（之前需要 18GB+）。
+A: **8GB 最低，12GB 推荐**。
 
 **Q: 需要编程基础吗？**  
 A: 使用 Web 应用**不需要**编程基础。如果需要定制分析，可以学习 Python API（见下文）。
 
 ### ⚠️ 常见问题排查
-
-<details>
-<summary><b>❌ C 盘空间不足 / 磁盘爆满</b></summary>
-
-**原因**: Anaconda 默认安装在 C 盘，占用 3-5GB
-
-**解决方案**:
-
-1. **使用 Miniconda 替代 Anaconda**（推荐）
-   - 下载 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)（仅 70MB）
-   - 安装时选择 D 盘：`D:\Miniconda3`
-   - 安装完成后运行：`pip install "pyricu[all] @ git+https://github.com/shen-lab-icu/pyricu.git"`
-
-2. **迁移已安装的 Anaconda**
-   ```bash
-   # 在 Anaconda Prompt 中
-   conda config --add pkgs_dirs D:\conda_pkgs
-   conda config --add envs_dirs D:\conda_envs
-   ```
-
-3. **清理缓存释放空间**
-   ```bash
-   conda clean --all -y
-   pip cache purge
-   ```
-
-</details>
 
 <details>
 <summary><b>❌ 电脑卡死 / 内存不足</b></summary>
@@ -222,25 +283,7 @@ A: 使用 Web 应用**不需要**编程基础。如果需要定制分析，可�
 
 ---
 
-## 🚀 快速开始 (开发者 / 高级用户)
-
-### 安装
-
-```bash
-# 基础安装
-pip install git+https://github.com/shen-lab-icu/pyricu.git
-
-# 包含 Web 应用
-pip install "pyricu[webapp] @ git+https://github.com/shen-lab-icu/pyricu.git"
-
-# 安装全部功能
-pip install "pyricu[all] @ git+https://github.com/shen-lab-icu/pyricu.git"
-
-# 或从源码安装
-git clone https://github.com/shen-lab-icu/pyricu.git
-cd pyricu
-pip install -e ".[all]"
-```
+## 🚀 更进一步 (开发者 / 高级用户)
 
 ### 依赖包说明
 
@@ -252,79 +295,6 @@ pip install -e ".[all]"
 | `pip install -e .[webapp]` | Web应用：streamlit, plotly, openpyxl, psutil |
 | `pip install -e .[all]` | **全部功能** |
 
----
-
-## 📦 数据准备 (首次使用必读)
-
-PyRICU 使用 Parquet 格式存储数据，以获得最佳性能。如果您的原始数据是 CSV 格式，需要先进行转换。
-
-### 转换方式
-
-#### 方式一：使用 Web 应用 (推荐)
-
-```bash
-pyricu-webapp
-```
-
-在侧边栏：
-1. 选择数据库类型 (如 MIMIC-IV)
-2. 输入数据路径
-3. 点击「🔄 转换为 Parquet」按钮
-
-#### 方式二：使用 Python API
-
-```python
-from pyricu import DataConverter
-
-# 创建转换器
-converter = DataConverter(
-    database='miiv',
-    csv_path='/path/to/mimic-iv/csv',
-    parquet_path='/path/to/mimic-iv/parquet'
-)
-
-# 转换所有表
-converter.convert_all(parallel=True, n_jobs=4)
-```
-
-#### 方式三：使用命令行
-
-```bash
-pyricu-convert --database miiv --input /path/to/csv --output /path/to/parquet
-```
-
-### ⏱️ 转换时间估算
-
-| 数据库 | 表数量 | 预估时间 | 内存需求 |
-|-------|-------|---------|---------|
-| MIMIC-IV | 30+ | 30-60 分钟 | 16GB+ |
-| eICU-CRD | 20+ | 20-40 分钟 | 8GB+ |
-| AmsterdamUMCdb | 15+ | 15-30 分钟 | 8GB+ |
-| HiRID | 10+ | 10-20 分钟 | 8GB+ |
-
-> ⚠️ **注意**: 大表 (如 chartevents、labevents) 会自动分片存储，以便支持更快的并行加载。
-
----
-
-## 🌐 Web 应用 (推荐新手使用)
-
-无需编写代码，通过图形界面探索 ICU 数据：
-
-```bash
-# 启动 Web 应用
-pyricu-webapp
-
-# 或
-python -m pyricu.webapp
-```
-
-### Web 应用功能
-
-1. **📂 数据路径配置** - 支持自动检测数据格式
-2. **🔄 CSV → Parquet 转换** - 一键转换，加速后续加载
-3. **🔧 特征选择** - 200+ 临床概念分类浏览
-4. **📊 数据可视化** - 患者时间序列、SOFA 趋势图
-5. **📤 批量导出** - Parquet/CSV/Excel 格式
 
 ---
 
@@ -405,57 +375,6 @@ demo = load_demographics(
 )
 ```
 
----
-
-## 📋 支持的临床概念 (200+)
-
-### 生命体征
-`hr` 心率 | `sbp/dbp/map` 血压 | `temp` 体温 | `resp` 呼吸 | `spo2` 血氧
-
-### 实验室检查
-`crea` 肌酐 | `bili` 胆红素 | `plt` 血小板 | `wbc` 白细胞 | `lactate` 乳酸 | `pafi` P/F比值
-
-### 血气分析
-`po2/pco2` 氧分压/二氧化碳分压 | `ph` 酸碱度 | `be` 碱剩余
-
-### 血管活性药物
-`norepi` 去甲肾上腺素 | `epi` 肾上腺素 | `dopa` 多巴胺 | `dobu` 多巴酚丁胺 | `vaso` 血管升压素
-
-### 输入输出
-`urine` 尿量 | `urine24` 24h尿量 | `fluid_in/out` 液体出入量
-
-### 呼吸支持
-`vent_ind` 机械通气 | `fio2` 吸氧浓度 | `peep` 呼气末正压 | `ecmo` ECMO
-
-### 临床评分
-`sofa/sofa2` SOFA评分 | `sep3` Sepsis-3 | `qsofa` qSOFA | `gcs` 格拉斯哥评分
-
-> 💡 **查看完整概念列表**：`from pyricu import list_available_concepts; print(list_available_concepts())`
-
----
-
-## 🔬 SOFA-2 (2025) 更新说明
-
-SOFA-2 是 2025 年发布的器官衰竭评分更新版本：
-
-| 系统 | SOFA-2 改进 |
-|------|-------------|
-| **呼吸** | P/F 阈值更新 (≤300/225/150/75)，需高级呼吸支持 |
-| **凝血** | 血小板阈值放宽 (≤150/100/80/50) |
-| **肝脏** | 1分阈值从 1.9 放宽至 ≤3.0 mg/dL |
-| **心血管** | 联合 NE+Epi 剂量，支持机械循环支持检测 |
-| **肾脏** | 支持 RRT 标准检测 (K+≥6.0 或 pH≤7.20) |
-| **中枢神经** | 支持镇静前 GCS，谵妄治疗检测 |
-
----
-
-## 📁 数据格式
-
-### 支持的格式
-- **Parquet** (推荐) - 列式存储，最佳性能
-- **CSV/CSV.GZ** - 原始格式，自动检测并提示转换
-- **FST** - R 语言兼容格式
-
 ### 数据转换
 
 Web 应用会自动检测数据格式。如果检测到 CSV 文件，会提示一键转换：
@@ -507,23 +426,12 @@ ruff check src/ tests/
 如果在研究中使用 PyRICU，请引用：
 
 ```bibtex
-@software{pyricu2024,
+@software{pyricu2026,
   title = {PyRICU: Python Toolkit for ICU Data Analysis},
-  author = {ICU Analytics Team},
-  year = {2024},
+  author = {Shen Lab ICU Analytics Team},
+  year = {2026},
   url = {https://github.com/shen-lab-icu/pyricu},
-  version = {0.2.0}
-}
-```
-
-同时请引用原始 ricu 包：
-
-```bibtex
-@article{ricu2021,
-  title={ricu: R Interface to Intensive Care Unit Datasets},
-  author={Bennett, Nicolas and Moor, Michael and others},
-  journal={Journal of Open Source Software},
-  year={2021}
+  version = {0.3.0}
 }
 ```
 
@@ -541,17 +449,7 @@ ruff check src/ tests/
 
 </details>
 
-<details>
-<summary><b>Q: SOFA-2 和 SOFA 有什么区别？</b></summary>
 
-SOFA-2 是 2025 年更新版本，主要改进包括：
-- 呼吸：P/F 阈值更新，强制要求高级呼吸支持
-- 凝血：血小板阈值放宽
-- 心血管：支持联合血管活性药剂量
-- 肾脏：支持 RRT 标准检测
-- 中枢神经：支持镇静前 GCS
-
-</details>
 
 <details>
 <summary><b>Q: 可以用于临床实践吗？</b></summary>
@@ -559,13 +457,6 @@ SOFA-2 是 2025 年更新版本，主要改进包括：
 ⚠️ **PyRICU 仅供研究使用**。虽然我们努力确保准确性，但未经过临床验证，不应用于实际患者护理决策。
 
 </details>
-
----
-
-## 📞 联系方式
-
-- **项目主页**: https://github.com/shen-lab-icu/pyricu
-- **问题反馈**: https://github.com/shen-lab-icu/pyricu/issues
 
 ---
 

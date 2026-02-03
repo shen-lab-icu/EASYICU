@@ -2788,7 +2788,6 @@
   "egcs": {
     "min": 1,
     "max": 4,
-    "aggregate": "min",
     "description": "GCS eye",
     "omopid": 4084277,
     "category": "neurological",
@@ -5129,7 +5128,6 @@
   "mgcs": {
     "min": 1,
     "max": 6,
-    "aggregate": "min",
     "description": "GCS motor",
     "omopid": 4083352,
     "category": "neurological",
@@ -8227,7 +8225,6 @@
   "vgcs": {
     "min": 1,
     "max": 5,
-    "aggregate": "min",
     "description": "GCS verbal",
     "omopid": 4084912,
     "category": "neurological",

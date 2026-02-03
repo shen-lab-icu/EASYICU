@@ -639,7 +639,6 @@ CONCEPT_DICTIONARY = {
     'sep3': ('Sepsis-3 Diagnosis (Default)', 'Sepsis-3诊断 (默认)', 'boolean'),
     'sep3_sofa1': ('Sepsis-3 (SOFA-1 based)', 'Sepsis-3诊断 (基于传统SOFA)', 'boolean'),
     'sep3_sofa2': ('Sepsis-3 (SOFA-2 based)', 'Sepsis-3诊断 (基于SOFA-2, 2025新标准)', 'boolean'),
-    'sepsis_sofa2': ('Sepsis (SOFA-2 based)', 'Sepsis诊断 (基于SOFA-2)', 'boolean'),
     'susp_inf': ('Suspected Infection', '疑似感染', 'boolean'),
     'infection_icd': ('ICD Infection Diagnosis', 'ICD感染诊断 (Angus标准)', 'boolean'),
     
@@ -649,6 +648,20 @@ CONCEPT_DICTIONARY = {
     'vent_end': ('Ventilation End Time', '通气结束时间', 'datetime'),
     'ecmo': ('ECMO in Use', 'ECMO使用中', 'boolean'),
     'ecmo_indication': ('ECMO Indication', 'ECMO适应症 (呼吸/心血管)', ''),
+    'adv_resp': ('Advanced Respiratory Support', '高级呼吸支持 (IMV/NIV/HFNC)', 'boolean'),
+    
+    # 呼吸机参数 (Ventilator Parameters)
+    'peep': ('Positive End-Expiratory Pressure', '呼气末正压', 'cmH2O'),
+    'tidal_vol': ('Tidal Volume (Observed)', '潮气量（实测）', 'mL'),
+    'tidal_vol_set': ('Tidal Volume (Set)', '潮气量（设定）', 'mL'),
+    'pip': ('Peak Inspiratory Pressure', '吸气峰压', 'cmH2O'),
+    'plateau_pres': ('Plateau Pressure', '平台压', 'cmH2O'),
+    'mean_airway_pres': ('Mean Airway Pressure', '平均气道压', 'cmH2O'),
+    'minute_vol': ('Minute Ventilation', '分钟通气量', 'L/min'),
+    'vent_rate': ('Ventilator Respiratory Rate', '呼吸机频率', '/min'),
+    'compliance': ('Static Compliance', '静态肺顺应性', 'mL/cmH2O'),
+    'driving_pres': ('Driving Pressure', '驱动压', 'cmH2O'),
+    'ps': ('Pressure Support', '压力支持', 'cmH2O'),
     
     # 血液学 (扩展)
     'basos': ('Basophils', '嗜碱性粒细胞', '%'),
@@ -661,8 +674,6 @@ CONCEPT_DICTIONARY = {
     
     # 生化 (扩展)
     'tri': ('Troponin I', '肌钙蛋白I', 'ng/mL'),
-    'bicarb': ('Bicarbonate (alias)', '碳酸氢根 (别名)', 'mEq/L'),
-    'potassium': ('Potassium (alias)', '钾 (别名)', 'mEq/L'),
     
     # 药物 (扩展)
     'dopa_rate': ('Dopamine Rate', '多巴胺速率', 'mcg/kg/min'),
@@ -672,15 +683,36 @@ CONCEPT_DICTIONARY = {
     'epi60': ('Epinephrine >60min', '肾上腺素>60分钟', 'boolean'),
     'phn_rate': ('Phenylephrine Rate', '去氧肾上腺素速率', 'mcg/kg/min'),
     
-    # 肾脏
+    # 肾脏与尿量率
     'rrt': ('Renal Replacement Therapy', '肾脏替代治疗', 'boolean'),
     'rrt_criteria': ('RRT Criteria Met', '满足RRT标准', 'boolean'),
+    'uo_6h': ('6h Urine Output Rate', '6小时尿量率', 'mL/kg/h'),
+    'uo_12h': ('12h Urine Output Rate', '12小时尿量率', 'mL/kg/h'),
+    'uo_24h': ('24h Urine Output Rate', '24小时尿量率', 'mL/kg/h'),
+    
+    # KDIGO AKI (急性肾损伤)
+    'aki': ('Acute Kidney Injury', '急性肾损伤', 'boolean'),
+    'aki_stage': ('AKI Stage (KDIGO)', 'AKI分期（KDIGO标准）', '0-3'),
+    'aki_stage_creat': ('AKI Stage (Creatinine)', 'AKI分期（肌酐）', '0-3'),
+    'aki_stage_uo': ('AKI Stage (Urine Output)', 'AKI分期（尿量）', '0-3'),
+    'aki_stage_rrt': ('AKI Stage (RRT)', 'AKI分期（RRT）', '0-3'),
+    'kdigo_aki': ('KDIGO AKI Stage', 'KDIGO急性肾损伤分期', '0-3'),
+    'kdigo_creat': ('KDIGO Creatinine Stage', 'KDIGO肌酐分期', '0-3'),
+    'kdigo_uo': ('KDIGO Urine Output Stage', 'KDIGO尿量分期', '0-3'),
     
     # 神经 (扩展)
     'sedated_gcs': ('GCS Before Sedation', '镇静前GCS', ''),
     
     # 心血管 (扩展)
     'mech_circ_support': ('Mechanical Circulatory Support', '机械循环支持 (IABP/LVAD/Impella)', 'boolean'),
+    'other_vaso': ('Other Vasopressors', '其他血管活性药物', 'boolean'),
+    'circ_failure': ('Circulatory Failure', '循环衰竭', 'boolean'),
+    'circ_event': ('Circulatory Failure Event Level', '循环衰竭事件等级', '0-3'),
+    
+    # 神经系统 SOFA-2 扩展
+    'motor_response': ('GCS Motor Response', 'GCS运动反应', '1-6'),
+    'delirium_positive': ('Delirium Positive (CAM-ICU)', '谵妄阳性（CAM-ICU）', 'boolean'),
+    'delirium_tx': ('Delirium Treatment', '谵妄治疗', 'boolean'),
     
     # 人口统计 (扩展)
     'adm': ('Admission Type', '入院类型', ''),
@@ -753,27 +785,27 @@ CONCEPT_GROUPS_INTERNAL = {
     'sofa1_score': ['sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal'],
     'sepsis3_sofa2': ['sep3_sofa2'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
-    'sepsis_shared': ['susp_inf', 'infection_icd', 'samp'],  # 🆕 Sepsis 共享概念
+    'sepsis_shared': ['sep3', 'susp_inf', 'infection_icd', 'samp'],  # 包含sep3默认诊断
     'vitals': ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp'],  # 🔧 etco2 移到 ventilator
-    'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication'],
+    'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp'],
     'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc'],
-    'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind'],
+    'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
     'medications': ['abx', 'cort', 'dex', 'ins'],
-    'renal': ['urine', 'urine24', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt'],  # 🔧 添加完整AKI特征
-    'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs'],
+    'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt', 'kdigo_aki', 'kdigo_creat', 'kdigo_uo'],  # 包含KDIGO AKI完整特征
+    'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event'],  # 🔧 添加循环衰竭特征
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news'],
     'outcome': ['death', 'los_icu', 'los_hosp'],
 }
 
-# 双语显示名称映射（优化：更清晰的命名区分评分vs诊断）
+# 双语显示名称映射（优化：更清晰的命名区分评分vs诊断，包含准确特征数量）
 CONCEPT_GROUP_NAMES = {
-    'sofa2_score': ('⭐ SOFA-2 Scores (2025 New - 7 items)', '⭐ SOFA-2 评分 (2025新标准 - 7项)'),
-    'sofa1_score': ('📊 SOFA-1 Scores (Traditional - 7 items)', '📊 SOFA-1 评分 (传统 - 7项)'),
+    'sofa2_score': ('⭐ SOFA-2 Scores', '⭐ SOFA-2 评分'),
+    'sofa1_score': ('📊 SOFA-1 Scores', '📊 SOFA-1 评分'),
     'sepsis3_sofa2': ('🦠 Sepsis-3 (SOFA-2 based)', '🦠 Sepsis-3 (基于SOFA-2)'),
     'sepsis3_sofa1': ('🦠 Sepsis-3 (SOFA-1 based)', '🦠 Sepsis-3 (基于SOFA-1)'),
     'sepsis_shared': ('🦠 Sepsis Shared Concepts', '🦠 Sepsis 共享概念'),
@@ -832,15 +864,15 @@ CONCEPT_GROUPS = {
     "⭐ Sepsis-3 诊断 (基于SOFA-2)": ['sep3_sofa2', 'susp_inf', 'infection_icd', 'samp'],
     "Sepsis-3 诊断 (基于SOFA-1)": ['sep3_sofa1', 'susp_inf', 'infection_icd', 'samp'],
     "生命体征 (vitals)": ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp'],
-    "呼吸支持 (respiratory)": ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication'],
+    "呼吸支持 (respiratory)": ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp'],
     "呼吸机参数 (ventilator)": ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps'],
     "血气分析 (blood gas)": ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
     "实验室-生化 (chemistry)": ['alb', 'alp', 'alt', 'ast', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri'],
     "实验室-血液学 (hematology)": ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc'],
-    "血管活性药物 (vasopressors)": ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind'],
+    "血管活性药物 (vasopressors)": ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
     "其他药物 (medications)": ['abx', 'cort', 'dex', 'ins'],
-    "肾脏与尿量 (renal)": ['urine', 'urine24', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt'],
-    "神经系统 (neurological)": ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs'],
+    "肾脏与尿量 (renal)": ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt', 'kdigo_aki', 'kdigo_creat', 'kdigo_uo'],
+    "神经系统 (neurological)": ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx'],
     "循环支持 (circulatory)": ['mech_circ_support', 'circ_failure', 'circ_event'],
     "人口统计 (demographics)": ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
     "SOFA-1 评分 (传统)": ['sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal'],
@@ -3131,6 +3163,161 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                         'urine24': recent_urine['urine'].sum()
                     })
     data['urine24'] = pd.DataFrame(urine24_records) if urine24_records else pd.DataFrame(columns=['stay_id', 'time', 'urine24'])
+    
+    # === 🆕 新增 12 个缺失的概念（2026-02-03）===
+    
+    # 1. uo_6h, uo_12h, uo_24h: 6/12/24小时尿量率 (mL/kg/h)
+    uo_6h_records = []
+    uo_12h_records = []
+    uo_24h_records = []
+    if 'urine' in data and not data['urine'].empty and 'weight' in data and not data['weight'].empty:
+        weight_dict = data['weight'].set_index('stay_id')['weight'].to_dict()
+        for pid in patient_ids:
+            if pid not in weight_dict:
+                continue
+            weight = weight_dict[pid]
+            pid_urine = data['urine'][data['urine']['stay_id'] == pid]
+            
+            for t in time_points[::3]:  # 每3小时采样一次
+                # 6小时尿量率
+                recent_6h = pid_urine[(pid_urine['time'] >= max(0, t-6)) & (pid_urine['time'] <= t)]
+                if len(recent_6h) > 0:
+                    uo_6h = recent_6h['urine'].sum() / weight / 6.0
+                    uo_6h_records.append({'stay_id': pid, 'time': t, 'uo_6h': uo_6h})
+                
+                # 12小时尿量率
+                recent_12h = pid_urine[(pid_urine['time'] >= max(0, t-12)) & (pid_urine['time'] <= t)]
+                if len(recent_12h) > 0:
+                    uo_12h = recent_12h['urine'].sum() / weight / 12.0
+                    uo_12h_records.append({'stay_id': pid, 'time': t, 'uo_12h': uo_12h})
+                
+                # 24小时尿量率
+                recent_24h = pid_urine[(pid_urine['time'] >= max(0, t-24)) & (pid_urine['time'] <= t)]
+                if len(recent_24h) > 0:
+                    uo_24h = recent_24h['urine'].sum() / weight / 24.0
+                    uo_24h_records.append({'stay_id': pid, 'time': t, 'uo_24h': uo_24h})
+    
+    data['uo_6h'] = pd.DataFrame(uo_6h_records) if uo_6h_records else pd.DataFrame(columns=['stay_id', 'time', 'uo_6h'])
+    data['uo_12h'] = pd.DataFrame(uo_12h_records) if uo_12h_records else pd.DataFrame(columns=['stay_id', 'time', 'uo_12h'])
+    data['uo_24h'] = pd.DataFrame(uo_24h_records) if uo_24h_records else pd.DataFrame(columns=['stay_id', 'time', 'uo_24h'])
+    
+    # 2. kdigo_aki, kdigo_creat, kdigo_uo: KDIGO AKI分期
+    kdigo_creat_records = []
+    kdigo_uo_records = []
+    kdigo_aki_records = []
+    
+    if 'aki_stage_creat' in data and not data['aki_stage_creat'].empty:
+        data['kdigo_creat'] = data['aki_stage_creat'].copy()
+        data['kdigo_creat'] = data['kdigo_creat'].rename(columns={'aki_stage_creat': 'kdigo_creat'})
+    else:
+        data['kdigo_creat'] = pd.DataFrame(columns=['stay_id', 'time', 'kdigo_creat'])
+    
+    if 'aki_stage_uo' in data and not data['aki_stage_uo'].empty:
+        data['kdigo_uo'] = data['aki_stage_uo'].copy()
+        data['kdigo_uo'] = data['kdigo_uo'].rename(columns={'aki_stage_uo': 'kdigo_uo'})
+    else:
+        data['kdigo_uo'] = pd.DataFrame(columns=['stay_id', 'time', 'kdigo_uo'])
+    
+    if 'aki_stage' in data and not data['aki_stage'].empty:
+        data['kdigo_aki'] = data['aki_stage'].copy()
+        data['kdigo_aki'] = data['kdigo_aki'].rename(columns={'aki_stage': 'kdigo_aki'})
+    else:
+        data['kdigo_aki'] = pd.DataFrame(columns=['stay_id', 'time', 'kdigo_aki'])
+    
+    # 3. motor_response: GCS运动反应分项（从gcs中提取）
+    motor_response_records = []
+    if 'gcs' in data and not data['gcs'].empty:
+        for pid in patient_ids:
+            pid_gcs = data['gcs'][data['gcs']['stay_id'] == pid]
+            for _, row in pid_gcs.iterrows():
+                # motor response 通常是 GCS 中的一部分 (1-6分)
+                # 这里简化为 GCS/3 取整（模拟）
+                motor_score = max(1, min(6, int(row['gcs'] / 3)))
+                motor_response_records.append({
+                    'stay_id': pid,
+                    'time': row['time'],
+                    'motor_response': motor_score
+                })
+    data['motor_response'] = pd.DataFrame(motor_response_records) if motor_response_records else pd.DataFrame(columns=['stay_id', 'time', 'motor_response'])
+    
+    # 4. delirium_positive: 谵妄阳性（基于RASS和GCS评估）
+    delirium_positive_records = []
+    if 'rass' in data and not data['rass'].empty:
+        for pid in patient_ids:
+            pid_rass = data['rass'][data['rass']['stay_id'] == pid]
+            for _, row in pid_rass.iterrows():
+                # 谵妄通常出现在 RASS > 0 且 < 4，或波动性意识状态
+                # 这里简化为 RASS 在 1-3 时约30%几率阳性
+                is_delirium = 1 if (1 <= row['rass'] <= 3 and np.random.random() < 0.3) else 0
+                delirium_positive_records.append({
+                    'stay_id': pid,
+                    'time': row['time'],
+                    'delirium_positive': is_delirium
+                })
+    data['delirium_positive'] = pd.DataFrame(delirium_positive_records) if delirium_positive_records else pd.DataFrame(columns=['stay_id', 'time', 'delirium_positive'])
+    
+    # 5. delirium_tx: 谵妄治疗（通常使用抗精神病药物）
+    delirium_tx_records = []
+    if 'delirium_positive' in data and not data['delirium_positive'].empty:
+        # 假设约50%的谵妄阳性患者会接受治疗
+        delirium_pts = data['delirium_positive'][data['delirium_positive']['delirium_positive'] == 1]['stay_id'].unique()
+        for pid in delirium_pts:
+            if np.random.random() < 0.5:  # 50%接受治疗
+                treatment_start = np.random.uniform(12, 60)
+                delirium_tx_records.append({
+                    'stay_id': pid,
+                    'time': treatment_start,
+                    'delirium_tx': 1
+                })
+    data['delirium_tx'] = pd.DataFrame(delirium_tx_records) if delirium_tx_records else pd.DataFrame(columns=['stay_id', 'time', 'delirium_tx'])
+    
+    # 6. adv_resp: 高级呼吸支持（机械通气 + PEEP > 5）
+    adv_resp_records = []
+    if 'vent_ind' in data and not data['vent_ind'].empty and 'peep' in data and not data['peep'].empty:
+        # 合并 vent_ind 和 peep
+        vent_peep = pd.merge(
+            data['vent_ind'],
+            data['peep'],
+            on=['stay_id', 'time'],
+            how='inner'
+        )
+        for _, row in vent_peep.iterrows():
+            # 高级呼吸支持 = 机械通气 + PEEP > 5
+            is_adv = 1 if (row['vent_ind'] == 1 and row['peep'] > 5) else 0
+            adv_resp_records.append({
+                'stay_id': row['stay_id'],
+                'time': row['time'],
+                'adv_resp': is_adv
+            })
+    data['adv_resp'] = pd.DataFrame(adv_resp_records) if adv_resp_records else pd.DataFrame(columns=['stay_id', 'time', 'adv_resp'])
+    
+    # 7. other_vaso: 其他血管活性药物（不包括常见的norepi/epi/dopa/dobu）
+    # 示例：血管加压素(vasopressin)、去甲肾上腺素(phenylephrine)等
+    other_vaso_records = []
+    if 'phn_rate' in data and not data['phn_rate'].empty:
+        data['other_vaso'] = data['phn_rate'].copy()
+        data['other_vaso'] = data['other_vaso'].rename(columns={'phn_rate': 'other_vaso'})
+        data['other_vaso']['other_vaso'] = (data['other_vaso']['other_vaso'] > 0).astype(int)
+    else:
+        # 生成少量记录（约10%患者）
+        for pid in patient_ids:
+            if np.random.random() < 0.1:
+                start_time = np.random.uniform(6, 48)
+                for t in range(int(start_time), min(72, int(start_time + 24)), 4):
+                    other_vaso_records.append({
+                        'stay_id': pid,
+                        'time': float(t),
+                        'other_vaso': 1
+                    })
+        data['other_vaso'] = pd.DataFrame(other_vaso_records) if other_vaso_records else pd.DataFrame(columns=['stay_id', 'time', 'other_vaso'])
+    
+    # 8. sep3: Sepsis-3 诊断（sep3_sofa1 的别名）
+    if 'sep3_sofa1' in data and not data['sep3_sofa1'].empty:
+        data['sep3'] = data['sep3_sofa1'].copy()
+        data['sep3'] = data['sep3'].rename(columns={'sep3_sofa1': 'sep3'})
+    else:
+        data['sep3'] = pd.DataFrame(columns=['stay_id', 'time', 'sep3'])
+    
     # 🔧 已删除冗余别名概念（2025-02-06）：与 CONCEPT_GROUPS_INTERNAL 保持一致
     # 删除: sepsis_sofa2 (sep3_sofa2的别名), sep3 (sep3_sofa1的别名)
     
@@ -4096,9 +4283,6 @@ def render_sidebar():
         
         sidebar_title = "📤 Data Extraction" if st.session_state.language == 'en' else "📤 数据提取导出"
         st.markdown(f"### {sidebar_title}")
-        
-        # 🔧 DEBUG: 显示 export_completed 状态
-        st.caption(f"[DEBUG] export_completed = {st.session_state.get('export_completed', False)}")
         
         # 🔧 FIX (2026-02-03): 导出完成后显示"重新提取"按钮，而非Step 1-4
         if st.session_state.get('export_completed', False):
@@ -5769,7 +5953,7 @@ def render_home_extract_mode(lang):
             st.markdown('''
             <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
                 <h3 style="color: #0369a1; margin-bottom: 15px;">👈 Select Features in the Left Sidebar</h3>
-                <p style="margin-bottom: 15px;">PyRICU provides <b>150+ comprehensive ICU clinical features</b>, covering:</p>
+                <p style="margin-bottom: 15px;">PyRICU provides <b>166 comprehensive ICU clinical features</b> across 19 categories, covering:</p>
                 <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
                     <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
                         <b style="color: #1d4ed8;">📊 Vital Signs</b>
@@ -5807,7 +5991,7 @@ def render_home_extract_mode(lang):
             st.markdown('''
             <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
                 <h3 style="color: #0369a1; margin-bottom: 15px;">👈 在左侧边栏选择特征</h3>
-                <p style="margin-bottom: 15px;">PyRICU 提供 <b>150+ 全面的 ICU 临床特征</b>，涵盖：</p>
+                <p style="margin-bottom: 15px;">PyRICU 提供 <b>166 个 ICU 临床特征</b>（19 个类别），涵盖：</p>
                 <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
                     <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
                         <b style="color: #1d4ed8;">📊 生命体征</b>
@@ -6141,7 +6325,7 @@ def render_home_extract_mode(lang):
         st.markdown('''
         <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
             <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
-                📚 <b>Reference Guide</b>: This dictionary contains all 150+ ICU clinical features available in PyRICU. 
+                📚 <b>Reference Guide</b>: This dictionary contains all 166 ICU clinical features available in PyRICU, organized into 19 categories. 
                 Each feature includes its code name, full description, and measurement unit. 
                 Use this to understand what data you're extracting and make informed selections.
             </p>
@@ -6151,7 +6335,7 @@ def render_home_extract_mode(lang):
         st.markdown('''
         <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
             <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
-                📚 <b>参考指南</b>：本字典包含 PyRICU 提供的全部 150+ ICU 临床特征。
+                📚 <b>参考指南</b>：本字典包含 PyRICU 提供的全部 166 个 ICU 临床特征，分为 19 个类别。
                 每个特征包括代码名称、完整描述和测量单位。
                 使用此字典了解您正在提取的数据，做出明智的选择。
             </p>
@@ -6187,30 +6371,19 @@ def render_home_data_dictionary(lang):
     dict_title = "📖 Complete Data Dictionary" if lang == 'en' else "📖 完整数据字典"
     
     with st.expander(dict_title, expanded=True):
-        dict_intro = "PyRICU provides 150+ ICU clinical features, organized by category. Click each category to view detailed descriptions." if lang == 'en' else "PyRICU 提供 150+ ICU 临床特征，按类别组织。点击各类别查看详细说明。"
-        st.caption(dict_intro)
+
         
         # 获取分组
         concept_groups = get_concept_groups()
         
-        # 使用 tabs 展示各分类
-        group_names = list(concept_groups.keys())
-        tabs = st.tabs(group_names[:8])  # 前8个分类
+        # 所有分类统一用 expander 展示（不再分开前8个和更多类别）
+        categories_title = "📂 Categories" if lang == 'en' else "📂 类别"
+        st.markdown(f"#### {categories_title}")
         
-        for i, tab in enumerate(tabs):
-            with tab:
-                group_name = group_names[i]
-                concepts = concept_groups[group_name]
-                _render_home_dict_table(concepts, lang)
-        
-        # 其余分类用expander
-        if len(group_names) > 8:
-            more_title = "📂 More Categories" if lang == 'en' else "📂 更多类别"
-            st.markdown(f"#### {more_title}")
-            for group_name in group_names[8:]:
-                feat_text = "features" if lang == 'en' else "个特征"
-                with st.expander(f"{group_name} ({len(concept_groups[group_name])} {feat_text})"):
-                    _render_home_dict_table(concept_groups[group_name], lang)
+        for group_name in concept_groups.keys():
+            feat_text = "features" if lang == 'en' else "个特征"
+            with st.expander(f"{group_name} ({len(concept_groups[group_name])} {feat_text})"):
+                _render_home_dict_table(concept_groups[group_name], lang)
 
 
 def _render_home_dict_table(concepts, lang):
@@ -12496,49 +12669,55 @@ def main():
                 st.markdown("""
                 ### 🚀 Quick Start
                 
-                **1. Load Data**
-                - Check "Demo Mode" in sidebar for quick exploration
-                - Or upload real Parquet/CSV files
+                **📤 Data Extraction Mode**
+                - **Step 1**: Select database & data path
+                - **Step 2**: Filter cohort (age, LOS, etc.)
+                - **Step 3**: Choose feature groups
+                - **Step 4**: Export to CSV/Parquet/Excel
                 
-                **2. Browse & Analyze**
-                - 📈 **Time Series**: View metric trends, multi-patient comparison
-                - 🏥 **Patient View**: Comprehensive single patient data
-                - 📊 **Data Quality**: Assess data completeness
+                **📊 Quick Visualization Mode**
+                - Browse exported data folders
+                - 📈 **Time Series**: Multi-patient trends
+                - 🏥 **Patient View**: Single patient details
+                - 📊 **Data Quality**: Completeness report
                 
-                **3. Export Data**
-                - ⚡ Quick Export: One-click export common data
-                - 🎛️ Custom: Select format and filter conditions
+                **🔬 Cohort Analysis Mode**
+                - Compare patient subgroups
+                - Statistical analysis & hypothesis testing
                 
                 ---
                 
                 💡 **Tips**: 
-                - Homepage has "Quick Experience" button
-                - Patient view supports quick navigation
-                - Multi-patient comparison can normalize data
+                - Use sidebar tabs to extract features
+                - Supports MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb
+                - You can choose Demo Mode to explore PyRICU with simulated ICU data (no real data required)
                 """)
             else:
                 st.markdown("""
                 ### 🚀 快速上手
                 
-                **1. 加载数据**
-                - 侧边栏勾选「使用模拟数据」快速体验
-                - 或上传真实 Parquet/CSV 文件
+                **📤 数据提取模式**
+                - **步骤1**: 选择数据库和数据路径
+                - **步骤2**: 筛选队列（年龄、住院时长等）
+                - **步骤3**: 选择特征组
+                - **步骤4**: 导出为 CSV/Parquet/Excel
                 
-                **2. 浏览分析**
-                - 📈 **时序分析**: 查看指标趋势，支持多患者比较
-                - 🏥 **患者视图**: 综合查看单个患者数据
-                - 📊 **数据质量**: 评估数据完整性
+                **📊 快速可视化模式**
+                - 浏览已导出的数据文件夹
+                - 📈 **时序分析**: 多患者趋势对比
+                - 🏥 **患者视图**: 单患者详情
+                - 📊 **数据质量**: 完整性报告
                 
-                **3. 导出数据**
-                - ⚡ 快速导出: 一键导出常用数据
-                - 🎛️ 自定义: 选择格式和筛选条件
+                **🔬 队列分析模式**
+                - 比较患者亚组
+                - 统计分析与假设检验
                 
                 ---
                 
                 💡 **提示**: 
-                - 首页有「一键体验」按钮
-                - 患者视图支持快速导航
-                - 多患者比较可归一化数据
+                - 使用侧边栏标签提取特征
+                - 支持 MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb
+                - 可选择演示模式，使用模拟ICU数据快速体验PyRICU（无需真实数据）
                 """)
 
 

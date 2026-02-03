@@ -1610,7 +1610,10 @@ def _callback_mimic_age(
         ifelse(x > 90, 90, x)
       }
     
-    In MIMIC-III, age is calculated from date of birth (dob) to admittime.
+    In MIMIC-III, age is calculated from date of birth (dob) to ICU admission (intime).
+    R ricu's change_id mechanism converts dob to (intime - dob) time difference.
+    Then mimic_age converts days to years and caps at 90.
+    
     MIMIC-III patients >= 89 years old at admission have shifted dob to obfuscate age.
     These patients get age = 90 (capped).
     """
@@ -1625,29 +1628,72 @@ def _callback_mimic_age(
     
     id_columns = input_table.id_columns
     
-    # MIMIC-III patients table has dob, admissions has admittime
-    # The age is typically already pre-calculated as anchor_age in newer versions
-    # or needs to be computed from dob - admittime
+    # Determine database and stay-level ID column
+    db_name = getattr(ctx, 'db_name', 'mimic')
+    stay_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
     
     # Check if 'age' column already exists (some MIMIC-III setups have it)
     if 'age' in data.columns:
         data['age'] = pd.to_numeric(data['age'], errors='coerce')
-        # Cap at 90
+        # Cap at 90 (R ricu: ifelse(x > 90, 90, x))
         data.loc[data['age'] > 90, 'age'] = 90
     elif 'anchor_age' in data.columns:
         # MIMIC-IV style anchor_age
         data['age'] = pd.to_numeric(data['anchor_age'], errors='coerce')
         data.loc[data['age'] > 90, 'age'] = 90
-    elif 'dob' in data.columns and 'admittime' in data.columns:
-        # Calculate age from dob and admittime
-        dob = pd.to_datetime(data['dob'], errors='coerce')
-        admittime = pd.to_datetime(data['admittime'], errors='coerce')
-        # Age in days then convert to years
-        age_days = (admittime - dob).dt.days
-        age_years = age_days / 365.25
-        # If age > 90, cap at 90 (MIMIC de-identification)
-        age_years = np.where(age_years > 90, 90, age_years)
-        data['age'] = age_years
+    elif 'dob' in data.columns:
+        # MIMIC-III: Calculate age from dob and intime
+        # Need to load icustays to get intime for each patient
+        data_source = getattr(ctx, 'data_source', None)
+        
+        if data_source is None:
+            # Cannot calculate age without data source
+            return _empty_icutbl(ctx)
+        
+        try:
+            # Load icustays to get intime
+            icustays = data_source.load_table(
+                'icustays', 
+                columns=['subject_id', stay_id_col, 'intime'],
+                verbose=False
+            )
+            if hasattr(icustays, 'data'):
+                icustays = icustays.data
+            
+            # Merge patients with icustays to get intime
+            data = data.merge(icustays, on='subject_id', how='inner')
+            
+            # Parse datetime columns
+            dob = pd.to_datetime(data['dob'], errors='coerce')
+            intime = pd.to_datetime(data['intime'], errors='coerce')
+            
+            # R ricu formula: as.double(x, units = "days") / -365
+            # The negative is because R ricu passes (intime - dob) but in negative form
+            # Actually in R, the dob column is directly used and change_id calculates
+            # intime - dob as a difftime. So age = (intime - dob).days / 365
+            age_days = (intime - dob).dt.days
+            age_years = age_days / 365.0  # R ricu uses 365, not 365.25
+            
+            # Cap at 90 (R ricu: ifelse(x > 90, 90, x))
+            age_years = np.where(age_years > 90, 90, age_years)
+            data['age'] = age_years
+            
+            # Update id_columns to include stay-level ID
+            if stay_id_col in data.columns:
+                id_columns = [stay_id_col]
+            
+        except Exception as e:
+            # If loading icustays fails, try with admittime if available
+            if 'admittime' in data.columns:
+                dob = pd.to_datetime(data['dob'], errors='coerce')
+                admittime = pd.to_datetime(data['admittime'], errors='coerce')
+                age_days = (admittime - dob).dt.days
+                age_years = age_days / 365.0
+                age_years = np.where(age_years > 90, 90, age_years)
+                data['age'] = age_years
+            else:
+                # Cannot calculate age
+                return _empty_icutbl(ctx)
     else:
         # Cannot calculate age
         return _empty_icutbl(ctx)
@@ -4502,19 +4548,37 @@ def _callback_urine24(
         
         filled_df['urine24'] = urine24_values
         
-        # Add ID columns
+        # Add ID columns - CRITICAL: preserve id columns from original group
         for col in id_cols:
             if col in group.columns:
                 filled_df[col] = group[col].iloc[0]
+            elif col in df.columns:
+                # Fallback: get from outer df if not in group
+                filled_df[col] = df[col].iloc[0]
         
         return filled_df
     
     # Process each patient using groupby.apply
     if id_cols:
         df = df.sort_values(id_cols + [time_col]).reset_index(drop=True)
-        result_df = df.groupby(id_cols, sort=False, group_keys=False).apply(
-            process_patient, include_groups=False
-        ).reset_index(drop=True)
+        # Use include_groups=False to avoid duplicate columns, but restore them manually
+        result_dfs = []
+        for keys, group in df.groupby(id_cols, sort=False):
+            patient_result = process_patient(group)
+            # Ensure ID columns are present
+            if isinstance(keys, tuple):
+                for i, col in enumerate(id_cols):
+                    if col not in patient_result.columns:
+                        patient_result[col] = keys[i]
+            else:
+                if id_cols[0] not in patient_result.columns:
+                    patient_result[id_cols[0]] = keys
+            result_dfs.append(patient_result)
+        
+        if result_dfs:
+            result_df = pd.concat(result_dfs, ignore_index=True)
+        else:
+            result_df = pd.DataFrame(columns=id_cols + [time_col, 'urine24'])
     else:
         result_df = process_patient(df)
     
@@ -6242,6 +6306,226 @@ def _callback_driving_pressure(
     )
 
 
+def _callback_kdigo_aki(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Calculate KDIGO AKI staging based on creatinine and urine output.
+    
+    KDIGO stages:
+    - Stage 0: No AKI
+    - Stage 1: Creatinine >=0.3 mg/dL increase in 48h OR >=1.5x baseline, or UO <0.5 mL/kg/h for 6-12h
+    - Stage 2: Creatinine >=2x baseline, or UO <0.5 mL/kg/h for >=12h  
+    - Stage 3: Creatinine >=3x baseline OR >=4.0 mg/dL OR RRT, or UO <0.3 mL/kg/h for >=24h or anuria
+    
+    Args:
+        tables: Dictionary containing 'crea', 'urine', 'weight', and optionally 'rrt' tables
+        ctx: Callback context
+        
+    Returns:
+        ICUTable with aki_stage column (0-3)
+    """
+    from pyricu.kdigo_aki import kdigo_stages
+    
+    # Extract DataFrames from tables
+    crea_tbl = tables.get('crea')
+    urine_tbl = tables.get('urine')
+    weight_tbl = tables.get('weight')
+    rrt_tbl = tables.get('rrt')
+    
+    # Convert to DataFrames
+    def to_df(tbl):
+        if tbl is None:
+            return None
+        if hasattr(tbl, 'to_dataframe'):
+            return tbl.to_dataframe()
+        if hasattr(tbl, 'data'):
+            return tbl.data
+        return tbl
+    
+    crea_df = to_df(crea_tbl)
+    urine_df = to_df(urine_tbl)
+    weight_df = to_df(weight_tbl)
+    rrt_df = to_df(rrt_tbl)
+    
+    if crea_df is None or crea_df.empty:
+        return ICUTable(
+            data=pd.DataFrame(columns=['stay_id', 'charttime', 'aki_stage', 'aki']),
+            id_columns=['stay_id'],
+            index_column='charttime',
+            value_column='aki_stage'
+        )
+    
+    # Detect ID and time columns
+    id_col = 'stay_id'
+    for col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']:
+        if col in crea_df.columns:
+            id_col = col
+            break
+    
+    time_col = 'charttime'
+    for col in ['charttime', 'measuredat_minutes', 'observationoffset', 'datetime']:
+        if col in crea_df.columns:
+            time_col = col
+            break
+    
+    # Calculate KDIGO stages
+    result = kdigo_stages(
+        crea_df=crea_df,
+        urine_df=urine_df,
+        weight_df=weight_df,
+        rrt_df=rrt_df,
+        id_col=id_col,
+        time_col=time_col,
+    )
+    
+    if result.empty:
+        return ICUTable(
+            data=pd.DataFrame(columns=[id_col, time_col, 'aki_stage', 'aki']),
+            id_columns=[id_col],
+            index_column=time_col,
+            value_column='aki_stage'
+        )
+    
+    return ICUTable(
+        data=result,
+        id_columns=[id_col],
+        index_column=time_col,
+        value_column='aki_stage'
+    )
+
+
+def _callback_kdigo_creatinine(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Calculate KDIGO AKI creatinine-based staging.
+    
+    Args:
+        tables: Dictionary containing 'crea' table
+        ctx: Callback context
+        
+    Returns:
+        ICUTable with aki_stage_creat column (0-3)
+    """
+    from pyricu.kdigo_aki import kdigo_creatinine
+    
+    crea_tbl = tables.get('crea')
+    if crea_tbl is None:
+        return ICUTable(
+            data=pd.DataFrame(columns=['stay_id', 'charttime', 'aki_stage_creat']),
+            id_columns=['stay_id'],
+            index_column='charttime',
+            value_column='aki_stage_creat'
+        )
+    
+    if hasattr(crea_tbl, 'to_dataframe'):
+        crea_df = crea_tbl.to_dataframe()
+    elif hasattr(crea_tbl, 'data'):
+        crea_df = crea_tbl.data
+    else:
+        crea_df = crea_tbl
+    
+    if crea_df.empty:
+        return ICUTable(
+            data=pd.DataFrame(columns=['stay_id', 'charttime', 'aki_stage_creat']),
+            id_columns=['stay_id'],
+            index_column='charttime',
+            value_column='aki_stage_creat'
+        )
+    
+    # Detect ID and time columns
+    id_col = 'stay_id'
+    for col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']:
+        if col in crea_df.columns:
+            id_col = col
+            break
+    
+    time_col = 'charttime'
+    for col in ['charttime', 'measuredat_minutes', 'observationoffset', 'datetime']:
+        if col in crea_df.columns:
+            time_col = col
+            break
+    
+    result = kdigo_creatinine(crea_df, id_col=id_col, time_col=time_col)
+    
+    return ICUTable(
+        data=result,
+        id_columns=[id_col],
+        index_column=time_col,
+        value_column='aki_stage_creat'
+    )
+
+
+def _callback_kdigo_uo(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Calculate KDIGO AKI urine output-based staging.
+    
+    Args:
+        tables: Dictionary containing 'urine' and 'weight' tables
+        ctx: Callback context
+        
+    Returns:
+        ICUTable with aki_stage_uo column (0-3)
+    """
+    from pyricu.kdigo_aki import kdigo_uo
+    
+    urine_tbl = tables.get('urine')
+    weight_tbl = tables.get('weight')
+    
+    if urine_tbl is None:
+        return ICUTable(
+            data=pd.DataFrame(columns=['stay_id', 'charttime', 'aki_stage_uo']),
+            id_columns=['stay_id'],
+            index_column='charttime',
+            value_column='aki_stage_uo'
+        )
+    
+    def to_df(tbl):
+        if tbl is None:
+            return None
+        if hasattr(tbl, 'to_dataframe'):
+            return tbl.to_dataframe()
+        if hasattr(tbl, 'data'):
+            return tbl.data
+        return tbl
+    
+    urine_df = to_df(urine_tbl)
+    weight_df = to_df(weight_tbl)
+    
+    if urine_df is None or urine_df.empty:
+        return ICUTable(
+            data=pd.DataFrame(columns=['stay_id', 'charttime', 'aki_stage_uo']),
+            id_columns=['stay_id'],
+            index_column='charttime',
+            value_column='aki_stage_uo'
+        )
+    
+    # Detect ID and time columns
+    id_col = 'stay_id'
+    for col in ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']:
+        if col in urine_df.columns:
+            id_col = col
+            break
+    
+    time_col = 'charttime'
+    for col in ['charttime', 'measuredat_minutes', 'observationoffset', 'datetime']:
+        if col in urine_df.columns:
+            time_col = col
+            break
+    
+    result = kdigo_uo(urine_df, weight_df, id_col=id_col, time_col=time_col)
+    
+    return ICUTable(
+        data=result,
+        id_columns=[id_col],
+        index_column=time_col,
+        value_column='aki_stage_uo'
+    )
+
+
 def _callback_simple_passthrough(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -6343,6 +6627,10 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "ca": lambda tables, ctx: _callback_simple_passthrough(tables, ctx, "ca"),
     # Ventilator parameters
     "driving_pressure": _callback_driving_pressure,
+    # KDIGO AKI callbacks (loaded from kdigo_aki module)
+    "kdigo_aki": _callback_kdigo_aki,
+    "kdigo_creatinine": _callback_kdigo_creatinine,
+    "kdigo_uo": _callback_kdigo_uo,
 }
 
 def register_callback(name: str, func: CallbackFn) -> None:

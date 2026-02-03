@@ -39,6 +39,7 @@ class BucketConfig:
     threads: int = 0  # 0=自动检测CPU核心数
     temp_directory: Optional[str] = None  # 临时文件目录，建议SSD
     skip_sorting: bool = True  # 跳过排序，大幅加速
+    column_types: Optional[dict] = None  # 强制指定列类型，如 {'VALUE': 'VARCHAR'}
 
 
 @dataclass 
@@ -165,10 +166,18 @@ def convert_to_buckets(
         # - ignore_errors=true: 跳过无法解析的行
         # - all_varchar=false: 保持自动类型推断（需要itemid为整数）
         # - sample_size=-1: 扫描全部数据以确定schema
+        # - types={...}: 强制指定某些列的类型（如 VALUE 为 VARCHAR 避免被误识别为 DOUBLE）
         source_name = source_path.name.lower()
         if source_name.endswith('.csv.gz') or source_name.endswith('.csv'):
             # DuckDB 自动处理 .gz 压缩
-            read_expr = f"read_csv_auto('{source_path}', sample_size=-1, ignore_errors=true, null_padding=true)"
+            # 构建 types 参数
+            types_arg = ""
+            if config.column_types:
+                # 转换为 DuckDB 格式: types={'VALUE': 'VARCHAR'}
+                types_str = ", ".join(f"'{k}': '{v}'" for k, v in config.column_types.items())
+                types_arg = f", types={{{types_str}}}"
+                log(f"强制列类型: {config.column_types}")
+            read_expr = f"read_csv_auto('{source_path}', sample_size=-1, ignore_errors=true, null_padding=true{types_arg})"
             log(f"源文件类型: CSV{'（gzip压缩）' if source_name.endswith('.gz') else ''}")
         elif source_name.endswith('.parquet'):
             read_expr = f"read_parquet('{source_path}')"
@@ -1055,6 +1064,11 @@ def convert_mimic3_chartevents(
     
     MIMIC-III 的 chartevents 表结构与 MIMIC-IV 类似，约3.3亿行
     
+    🔧 重要: VALUE 列必须强制为 VARCHAR 类型！
+    DuckDB 的自动类型检测会将 VALUE 列识别为 DOUBLE（因为大多数值是数字），
+    但像 GCS 分数这样的概念，VALUE 列包含文本如 "4 Spontaneously"，
+    如果被解析为 DOUBLE 会变成 NaN。
+    
     Args:
         data_path: MIMIC-III 数据目录
         num_buckets: 桶数量（默认 100）
@@ -1074,7 +1088,7 @@ def convert_mimic3_chartevents(
     
     # 查找源文件
     source = None
-    for name in ['chartevents.csv.gz', 'chartevents.csv', 'chartevents.parquet']:
+    for name in ['CHARTEVENTS.csv.gz', 'chartevents.csv.gz', 'chartevents.csv', 'chartevents.parquet']:
         p = data_path / name
         if p.exists():
             source = p
@@ -1087,10 +1101,13 @@ def convert_mimic3_chartevents(
             error=f"chartevents 不存在于 {data_path}"
         )
     
+    # 🔧 关键修复: 强制 VALUE 列为 VARCHAR
+    # 这样 "4 Spontaneously" 这样的文本值就不会变成 NaN
     config = BucketConfig(
         num_buckets=num_buckets,
         partition_col='itemid',
-        row_group_size=100_000
+        row_group_size=100_000,
+        column_types={'VALUE': 'VARCHAR'}  # 修复 GCS 等概念的 VALUE 列数据丢失
     )
     
     return convert_to_buckets(source, bucket_dir, config, progress_callback=progress_callback, overwrite=overwrite)
