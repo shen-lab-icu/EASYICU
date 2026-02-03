@@ -826,14 +826,14 @@ class ConceptResolver:
                         if verbose:
                             logger.info(f"🚀 宽表批量加载: {shared_table} ({len(value_columns)} 列)")
                         
-                        # 一次性加载所有列
+                        # 一次性加载所有列 (使用median与R ricu保持一致)
                         batch_df = load_wide_table_aggregated(
                             data_source,
                             shared_table,
                             value_columns,
                             interval_hours=interval_hours,
                             patient_ids=patient_ids_list,
-                            agg_func='first'
+                            agg_func='median'
                         )
                         
                         # 确定ID列和时间列
@@ -1727,7 +1727,12 @@ class ConceptResolver:
                     # labevents/admissions等需要subject_id→stay_id映射，不应缓存原始subject_id级别数据
                     # 🚀 重要：使用DuckDB聚合路径时跳过缓存！因为DuckDB已经高效加载数据，
                     # 再加载一次只为缓存会导致严重性能问题（16秒 → 0.3秒的差距）
-                    if patient_filter_in_filters and not skip_cache_for_special_tables and not use_duckdb_aggregation:
+                    # 🔧 FIX 2026-02-02: MIMIC-III chartevents 使用 CSV 回退模式时跳过缓存
+                    # 因为 CSV 回退需要 itemid filter，重新加载不带 filter 会失败
+                    db_name_for_cache = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                    skip_cache_for_mimic3_chartevents = (db_name_for_cache == 'mimic' and source.table == 'chartevents')
+                    
+                    if patient_filter_in_filters and not skip_cache_for_special_tables and not use_duckdb_aggregation and not skip_cache_for_mimic3_chartevents:
                         # 🔧 FIX: 缓存只应用了患者过滤器的表（不包含 sub_var/itemid 过滤）
                         # 这样其他概念可以正确地从缓存中过滤出它们需要的 itemid
                         # 注意：需要确保加载的表包含所有可能需要的列（使用 value_var 参数）
@@ -2022,10 +2027,17 @@ class ConceptResolver:
                                 if datetime_cols:
                                     for col in datetime_cols:
                                         # Convert to relative hours (from intime)
+                                        # 🔧 FIX: Match R ricu's round_to(difftime(x, y, units = "mins")) logic:
+                                        # 1. First floor to integer minutes (dt_round_min)
+                                        # 2. Then floor to integer hours when aggregating
+                                        # This ensures times slightly before intime go to hour -1, not 0
                                         relative_td = tmp[col] - tmp['intime']
-                                        tmp[col] = relative_td.dt.total_seconds() / 3600.0
+                                        # Step 1: floor to integer minutes (matching R's floor(difftime(..., units="mins")))
+                                        relative_mins = np.floor(relative_td.dt.total_seconds() / 60.0)
+                                        # Step 2: convert to hours (will be floored during aggregation)
+                                        tmp[col] = relative_mins / 60.0
                                     if DEBUG_MODE:
-                                        print(f"      🕐 [时间转换] {datetime_cols} 从 datetime → 相对小时数")
+                                        print(f"      🕐 [时间转换] {datetime_cols} 从 datetime → 相对小时数 (floor to mins first)")
                             
                             # 将过滤后的数据作为新frame，仅保留必要列
                             frame = tmp.drop(columns=['intime', 'outtime'])
@@ -3356,36 +3368,74 @@ class ConceptResolver:
         if primary_id not in data.columns:
             return data
         
-        # 特殊处理：如果primary_id不是stay_id，需要先join icustays获取stay_id
+        # 🔧 FIX: 确定数据库特定的 stay-level ID 列名
+        # MIMIC-III 使用 icustay_id，MIMIC-IV 使用 stay_id
+        db_stay_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+        
+        # 特殊处理：如果primary_id不是stay_id/icustay_id，需要先join icustays获取
         # 这对于labevents（使用subject_id）很重要
-        if primary_id != 'stay_id' and 'stay_id' not in data.columns:
+        if primary_id != db_stay_id_col and db_stay_id_col not in data.columns:
             try:
                 # Use cached icustays table if available
-                cache_key = f"{primary_id}_stay_id_intime"
-                if self._icustays_cache is None or cache_key not in self._icustays_cache.columns:
-                    icustays_temp = data_source.load_table('icustays', columns=[primary_id, 'stay_id', 'intime'], verbose=False)
-                if hasattr(icustays_temp, 'data'):
-                    icustays_temp_df = icustays_temp.data
-                else:
-                    icustays_temp_df = icustays_temp
+                cache_key = f"{primary_id}_{db_stay_id_col}_intime_{db_name}"
                 
-                # 确保intime是tz-naive datetime
-                if pd.api.types.is_datetime64_any_dtype(icustays_temp_df['intime']):
-                    if hasattr(icustays_temp_df['intime'].dt, 'tz') and icustays_temp_df['intime'].dt.tz is not None:
-                        icustays_temp_df['intime'] = icustays_temp_df['intime'].dt.tz_localize(None)
+                # 确定要加载的列
+                cols_to_load = [primary_id, 'intime']
+                if primary_id != db_stay_id_col:
+                    cols_to_load.append(db_stay_id_col)
+                
+                if self._icustays_cache is None or cache_key not in str(self._icustays_cache.columns.tolist()):
+                    icustays_temp = data_source.load_table('icustays', columns=cols_to_load, verbose=False)
+                    if hasattr(icustays_temp, 'data'):
+                        icustays_temp_df = icustays_temp.data
+                    else:
+                        icustays_temp_df = icustays_temp
+                    
+                    # 确保intime是tz-naive datetime
+                    if pd.api.types.is_datetime64_any_dtype(icustays_temp_df['intime']):
+                        if hasattr(icustays_temp_df['intime'].dt, 'tz') and icustays_temp_df['intime'].dt.tz is not None:
+                            icustays_temp_df['intime'] = icustays_temp_df['intime'].dt.tz_localize(None)
                     
                     # Cache the table
                     self._icustays_cache = icustays_temp_df
                 else:
                     icustays_temp_df = self._icustays_cache
                 
-                # Join获取stay_id和intime
-                data = data.merge(icustays_temp_df[[primary_id, 'stay_id', 'intime']], 
-                                 on=primary_id, how='left')
+                # Join获取stay_id/icustay_id和intime
+                merge_cols = [c for c in [primary_id, db_stay_id_col, 'intime'] if c in icustays_temp_df.columns]
+                merge_cols = list(set(merge_cols))  # 去重
+                data = data.merge(icustays_temp_df[merge_cols], on=primary_id, how='left')
                 
-                # 更新primary_id为stay_id
-                primary_id = 'stay_id'
+                # 更新primary_id为数据库特定的stay_id列
+                if db_stay_id_col in data.columns:
+                    primary_id = db_stay_id_col
                 # 已经有intime了，后面不需要再加载
+            except Exception:
+                return data
+        
+        # 🔧 FIX: 如果 primary_id 就是 icustay_id（MIMIC-III chartevents），
+        # 仍然需要加载 intime 进行时间转换
+        if primary_id == db_stay_id_col and 'intime' not in data.columns:
+            try:
+                # 加载 icustays 获取 intime
+                if self._icustays_cache is not None and 'intime' in self._icustays_cache.columns and primary_id in self._icustays_cache.columns:
+                    icustays_temp_df = self._icustays_cache
+                else:
+                    icustays_temp = data_source.load_table('icustays', columns=[primary_id, 'intime', 'outtime', 'los'], verbose=False)
+                    if hasattr(icustays_temp, 'data'):
+                        icustays_temp_df = icustays_temp.data
+                    else:
+                        icustays_temp_df = icustays_temp
+                    
+                    # 确保intime是tz-naive datetime
+                    if pd.api.types.is_datetime64_any_dtype(icustays_temp_df['intime']):
+                        if hasattr(icustays_temp_df['intime'].dt, 'tz') and icustays_temp_df['intime'].dt.tz is not None:
+                            icustays_temp_df['intime'] = icustays_temp_df['intime'].dt.tz_localize(None)
+                    
+                    self._icustays_cache = icustays_temp_df
+                
+                # 只合并 intime 列
+                data = data.merge(icustays_temp_df[[primary_id, 'intime']], on=primary_id, how='left')
             except Exception:
                 return data
         
@@ -3512,9 +3562,17 @@ class ConceptResolver:
             # 例如：实验室检验、生命体征等可能在入ICU前或转出后记录
             
             # Calculate hours since admission (不进行任何时间窗口过滤)
+            # 🔧 CRITICAL FIX: 使用 R ricu 的时间转换逻辑：
+            # R ricu 使用 round_to(difftime(x, y, units = "mins"))
+            # round_to() 对于 to=1 使用 floor()
+            # 即: floor((charttime - intime).total_seconds() / 60) / 60
+            # 这与直接 total_seconds() / 3600 的结果不同，特别是对于负时间
+            # 例如: -12秒 → floor(-12/60)/60 = floor(-0.2)/60 = -1/60 = -0.0167 小时
+            #       -12秒 → -12/3600 = -0.003 小时 (WRONG)
             time_diff = data[index_column] - data['intime']
-            # Convert to hours (as float, matching ricu's behavior)
-            hours = time_diff.dt.total_seconds() / 3600.0
+            # 🔧 R ricu compatible: floor to minutes first, then convert to hours
+            minutes = np.floor(time_diff.dt.total_seconds() / 60.0)
+            hours = minutes / 60.0
             
             data[index_column] = hours
             
@@ -3530,9 +3588,10 @@ class ConceptResolver:
                 # Remove timezone if present
                 if hasattr(data[time_col].dt, 'tz') and data[time_col].dt.tz is not None:
                     data[time_col] = data[time_col].dt.tz_localize(None)
-                # Convert to hours since admission
+                # Convert to hours since admission (R ricu compatible: floor to minutes first)
                 time_diff_col = data[time_col] - data['intime']
-                data[time_col] = time_diff_col.dt.total_seconds() / 3600.0
+                minutes_col = np.floor(time_diff_col.dt.total_seconds() / 60.0)
+                data[time_col] = minutes_col / 60.0
             
             # 注意：不过滤负时间（入ICU前）或超过outtime的数据，匹配 R ricu 行为
             
@@ -6889,14 +6948,100 @@ def _apply_callback(
         return frame
 
     # Handle MIMIC-III mimic_age callback
-    # R ricu logic: x <- as.double(x, units = "days") / -365; ifelse(x > 90, 90, x)
+    # R ricu logic:
+    #   1. change_id mechanism converts dob column to (intime - dob) time difference
+    #   2. mimic_age: x <- as.double(x, units = "days") / -365; ifelse(x > 90, 90, x)
+    # PyRICU: need to manually join patients with icustays to get intime and calculate age
     if expr == "transform_fun(mimic_age)" or expr == "mimic_age":
-        # In MIMIC-III, anchor_age or age is already in years
-        # Just cap at 90 for de-identification
-        if concept_name in frame.columns:
-            frame = frame.copy()
+        frame = frame.copy()
+        val_col = source.value_var if source else 'dob'
+        
+        # Check if we have dob (birth date) that needs to be converted
+        # Note: At this point, dob may have been renamed to concept_name (e.g., 'age')
+        # So we check for either 'dob' column or concept_name column that was originally 'dob'
+        has_dob = 'dob' in frame.columns
+        dob_renamed_to_concept = (val_col == 'dob' and concept_name in frame.columns and 'dob' not in frame.columns)
+        
+        if has_dob or dob_renamed_to_concept:
+            # Determine actual column name containing DOB data
+            actual_dob_col = 'dob' if has_dob else concept_name
+            # Need to load icustays to get intime for each patient
+            if data_source is not None:
+                try:
+                    # For MIMIC-III: 
+                    # frame's 'stay_id' column contains 'icustay_id' values (already joined/replaced)
+                    # We need to merge with icustays on icustay_id to get intime
+                    
+                    db_name = data_source.config.name if hasattr(data_source, 'config') else 'mimic'
+                    
+                    # Load icustays with intime
+                    icustays = data_source.load_table(
+                        'icustays',
+                        columns=['icustay_id', 'intime'],
+                        verbose=False
+                    )
+                    if hasattr(icustays, 'data'):
+                        icustays = icustays.data
+                    
+                    # Determine the ID column in frame
+                    # In MIMIC-III, frame's 'stay_id' contains icustay_id values
+                    if 'stay_id' in frame.columns:
+                        # Rename for consistent merge
+                        frame = frame.rename(columns={'stay_id': 'icustay_id'})
+                        merge_col = 'icustay_id'
+                    elif 'icustay_id' in frame.columns:
+                        merge_col = 'icustay_id'
+                    else:
+                        merge_col = None
+                    
+                    if merge_col is not None and merge_col in icustays.columns:
+                        # Merge to get intime
+                        frame = frame.merge(icustays[['icustay_id', 'intime']], on=merge_col, how='left')
+                        
+                        if len(frame) == 0:
+                            print(f"⚠️ [mimic_age] MERGE PRODUCED 0 ROWS!")
+                            return frame
+                        
+                        # Calculate age using actual_dob_col
+                        dob = pd.to_datetime(frame[actual_dob_col], errors='coerce')
+                        intime = pd.to_datetime(frame['intime'], errors='coerce')
+                        
+                        # R ricu: as.double(x, units = "days") / -365
+                        # Use total_seconds() for more precise day calculation (matching R)
+                        time_diff = intime - dob
+                        age_days = time_diff.dt.total_seconds() / (24 * 60 * 60)
+                        age_years = age_days / 365.0
+                        # Cap at 90 (R ricu: ifelse(x > 90, 90, x))
+                        age_years = np.where(age_years > 90, 90, age_years)
+                        frame[concept_name] = age_years
+                        
+                        # Use icustay_id as the final stay_id
+                        if 'icustay_id' in frame.columns:
+                            frame = frame.rename(columns={'icustay_id': 'stay_id'})
+                        
+                        # Clean up temporary columns
+                        for col in ['intime', actual_dob_col, 'subject_id']:
+                            if col in frame.columns and col != concept_name and col != 'stay_id':
+                                frame = frame.drop(columns=[col])
+                    
+                except Exception as e:
+                    # If loading fails, try simpler approach
+                    import traceback
+                    print(f"⚠️ mimic_age callback failed: {e}")
+                    traceback.print_exc()
+                    if concept_name in frame.columns:
+                        frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
+                        frame.loc[frame[concept_name] > 90, concept_name] = 90
+            else:
+                # No data_source - just cap at 90 if age already exists
+                if concept_name in frame.columns:
+                    frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
+                    frame.loc[frame[concept_name] > 90, concept_name] = 90
+        elif concept_name in frame.columns:
+            # Age already calculated - just cap at 90
             frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
             frame.loc[frame[concept_name] > 90, concept_name] = 90
+        
         return frame
 
     # Handle MIMIC-III mimic_abx_presc callback
