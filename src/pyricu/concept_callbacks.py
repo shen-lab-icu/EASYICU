@@ -3466,10 +3466,14 @@ def _match_fio2(
             # 如果原始时间列是numeric类型，需要临时转换为datetime进行merge_asof
             # 然后在merge后转换回numeric类型
             o2_time_backup = None
-            # 🔧 FIX: 经过 downsampling 后，所有数据库的时间都已转换为小时
-            # AUMC 原始数据是毫秒 -> datasource.py 转换为分钟 -> downsampling 转换为小时
-            # 所以这里统一使用小时单位，不需要数据库特定处理
-            numeric_unit = 'h'  # 所有数据库在 downsampling 后都使用小时
+            # 🔧 FIX: 根据数据库选择正确的时间单位
+            # - AUMC: 原始数据是毫秒 -> datasource.py 转换为分钟 -> downsampling 转换为小时
+            # - SIC: 原始数据是秒，未经 downsampling 处理
+            # - 其他数据库: 通常是小时
+            if database == 'sic':
+                numeric_unit = 's'  # SIC 使用秒为单位
+            else:
+                numeric_unit = 'h'  # 其他数据库在 downsampling 后使用小时
             if o2_time_is_numeric:
                 o2_time_backup = o2_df[index_column]
                 # 对于numeric类型，需要转换为datetime进行merge_asof
@@ -4649,9 +4653,18 @@ def _callback_vaso_ind(
     base_time = pd.Timestamp("2000-01-01")
     time_series = merged[time_col]
     time_is_numeric = pd.api.types.is_numeric_dtype(time_series)
+    
+    # 🔧 FIX 2025-01: Database-specific time units for vaso_ind
+    # SIC uses seconds for relative time, other databases use hours
+    ds_name = ''
+    if ctx is not None:
+        ds_cfg = getattr(getattr(ctx, 'data_source', None), 'config', None)
+        ds_name = getattr(ds_cfg, 'name', '') if ds_cfg is not None else ''
+    numeric_unit = 's' if ds_name == 'sic' else 'h'
+    
     if time_is_numeric:
         numeric_time = pd.to_numeric(time_series, errors="coerce")
-        merged["__start_dt"] = base_time + pd.to_timedelta(numeric_time, unit="h")
+        merged["__start_dt"] = base_time + pd.to_timedelta(numeric_time, unit=numeric_unit)
     else:
         merged["__start_dt"] = pd.to_datetime(time_series, errors="coerce")
 
@@ -5102,9 +5115,12 @@ def _callback_vaso60(
         ds_cfg = getattr(getattr(ctx, 'data_source', None), 'config', None)
         ds_name = getattr(ds_cfg, 'name', '') if ds_cfg is not None else ''
     
-    # 🔧 FIX: All databases use HOURS for relative time (not minutes)
-    # The dobu_rate/dobu_dur data shows start=26,27,28... which are hours
-    numeric_unit = 'h'
+    # 🔧 FIX 2025-01: Database-specific time units
+    # SIC uses seconds for relative time, other databases use hours
+    if ds_name == 'sic':
+        numeric_unit = 's'  # SIC uses seconds
+    else:
+        numeric_unit = 'h'  # MIIV, AUMC, HIRID, EICU, MIMIC use hours
 
     rate_time_is_numeric = pd.api.types.is_numeric_dtype(rate_df[rate_index_col])
     dur_time_is_numeric = pd.api.types.is_numeric_dtype(dur_df[dur_index_col])
@@ -5854,6 +5870,29 @@ def _callback_rrt_criteria(
                 df = calc_uo_24h(urine_df, weight_df, interval=ctx.interval)
                 tables["uo_24h"] = _as_icutbl(df, id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="uo_24h")
     
+    # 🔧 FIX: 如果所有依赖都加载失败，返回空表而不是报错
+    if not tables:
+        # 使用数据库特定的默认 ID 列
+        default_id_col = 'stay_id'
+        if ctx and hasattr(ctx, 'data_source') and ctx.data_source:
+            db_name = getattr(ctx.data_source.config, 'name', '')
+            if db_name == 'eicu':
+                default_id_col = 'patientunitstayid'
+            elif db_name == 'aumc':
+                default_id_col = 'admissionid'
+            elif db_name == 'hirid':
+                default_id_col = 'patientid'
+            elif db_name in ['sic', 'sicdb']:
+                default_id_col = 'CaseID'
+            elif db_name == 'mimic':
+                default_id_col = 'icustay_id'
+        return _as_icutbl(
+            pd.DataFrame(columns=[default_id_col, 'charttime', 'rrt_criteria']),
+            id_columns=[default_id_col],
+            index_column='charttime',
+            value_column='rrt_criteria'
+        )
+    
     # Merge all tables
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     
@@ -6293,7 +6332,7 @@ def _callback_driving_pressure(
             break
     
     time_col = 'charttime'
-    for col in ['charttime', 'measuredat_minutes', 'observationoffset', 'datetime']:
+    for col in ['charttime', 'measuredat', 'measuredat_minutes', 'observationoffset', 'datetime', 'registeredat']:
         if col in result.columns:
             time_col = col
             break
@@ -6364,7 +6403,7 @@ def _callback_kdigo_aki(
             break
     
     time_col = 'charttime'
-    for col in ['charttime', 'measuredat_minutes', 'observationoffset', 'datetime']:
+    for col in ['charttime', 'measuredat', 'measuredat_minutes', 'observationoffset', 'datetime', 'registeredat']:
         if col in crea_df.columns:
             time_col = col
             break
@@ -6442,7 +6481,7 @@ def _callback_kdigo_creatinine(
             break
     
     time_col = 'charttime'
-    for col in ['charttime', 'measuredat_minutes', 'observationoffset', 'datetime']:
+    for col in ['charttime', 'measuredat', 'measuredat_minutes', 'observationoffset', 'datetime', 'registeredat', 'Offset', 'offset']:
         if col in crea_df.columns:
             time_col = col
             break
@@ -6511,7 +6550,7 @@ def _callback_kdigo_uo(
             break
     
     time_col = 'charttime'
-    for col in ['charttime', 'measuredat_minutes', 'observationoffset', 'datetime']:
+    for col in ['charttime', 'measuredat', 'measuredat_minutes', 'observationoffset', 'datetime', 'registeredat', 'intakeoutputoffset', 'intakeoutputentryoffset', 'Offset', 'offset']:
         if col in urine_df.columns:
             time_col = col
             break

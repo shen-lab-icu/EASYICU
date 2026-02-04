@@ -1143,13 +1143,34 @@ class ICUDataSource:
                 wide_table_value_columns=wide_table_value_columns  # 🚀 传递宽表value列用于NULL过滤
             )
 
+        # 🔧 FIX 2026-02-07: MIMIC-III 专用列名小写化
+        # MIMIC-III 的 CSV/parquet 文件使用大写列名（SUBJECT_ID, CHARTTIME 等）
+        # 但 ricu 字典配置期望小写列名（subject_id, charttime 等）
+        # 注意：SICdb 使用混合大小写列名（CaseID, Val），不能被小写化！
+        db_name = getattr(self.config, 'name', '') if hasattr(self, 'config') else ''
+        should_lowercase = db_name in ('mimic', 'mimic_demo')
+        
+        if should_lowercase and hasattr(frame, 'columns'):
+            frame.columns = [c.lower() if isinstance(c, str) else c for c in frame.columns]
+
         if columns is not None:
-            missing = set(columns) - set(frame.columns)
-            if missing:
-                raise KeyError(
-                    f"Columns {sorted(missing)} not found in table '{table_name}'"
-                )
-            frame = frame[list(columns)]
+            if should_lowercase:
+                # MIMIC-III: 列名匹配时也转为小写
+                columns_lower = [c.lower() if isinstance(c, str) else c for c in columns]
+                missing = set(columns_lower) - set(frame.columns)
+                if missing:
+                    raise KeyError(
+                        f"Columns {sorted(missing)} not found in table '{table_name}'"
+                    )
+                frame = frame[list(columns_lower)]
+            else:
+                # 其他数据库: 保持原始列名
+                missing = set(columns) - set(frame.columns)
+                if missing:
+                    raise KeyError(
+                        f"Columns {sorted(missing)} not found in table '{table_name}'"
+                    )
+                frame = frame[list(columns)]
         
         # 🚀 OPTIMIZATION: 缓存完整表(未经patient过滤)以实现跨概念共享
         # patient过滤在从缓存读取时应用(见上面cached_frame分支)

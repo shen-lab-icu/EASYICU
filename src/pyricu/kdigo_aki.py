@@ -722,7 +722,9 @@ def _detect_time_col(df: pd.DataFrame, hint: Optional[str] = None) -> Optional[s
     time_candidates = [
         'charttime', 'measuredat', 'measuredat_minutes',
         'observationoffset', 'labresultoffset', 'datetime',
-        'nursingchartoffset', 'OffsetOfDataFloat', 'Offset'
+        'nursingchartoffset', 'OffsetOfDataFloat', 'Offset',
+        'intakeoutputoffset', 'intakeoutputentryoffset',  # eICU urine
+        'registeredat',  # AUMC
     ]
     
     for col in time_candidates:

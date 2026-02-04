@@ -1535,13 +1535,19 @@ def _urine_window_avg(
         time_col = 'charttime'
     elif 'measuredat' in urine.columns:
         time_col = 'measuredat'
+    elif 'measuredat_minutes' in urine.columns:
+        time_col = 'measuredat_minutes'  # DuckDB aggregation output
     elif 'nursingchartoffset' in urine.columns:
         time_col = 'nursingchartoffset'
     elif 'observationoffset' in urine.columns:
         time_col = 'observationoffset'
+    elif 'intakeoutputoffset' in urine.columns:
+        time_col = 'intakeoutputoffset'  # eICU urine
+    elif 'registeredat' in urine.columns:
+        time_col = 'registeredat'  # AUMC
     else:
         # 尝试找到任何时间相关的列
-        time_like_cols = [col for col in urine.columns if 'time' in col.lower() or 'offset' in col.lower()]
+        time_like_cols = [col for col in urine.columns if 'time' in col.lower() or 'offset' in col.lower() or 'minute' in col.lower()]
         if time_like_cols:
             time_col = time_like_cols[0]
         else:

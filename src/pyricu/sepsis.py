@@ -454,9 +454,14 @@ def sep3(
     Returns:
         DataFrame with Sepsis-3 events
     """
-    # Filter SI events where susp_inf == TRUE
+    # Filter SI events where susp_inf == TRUE (or 1.0 for numeric columns)
     if 'susp_inf' in susp_inf.columns:
-        si_events = susp_inf[susp_inf['susp_inf'].fillna(False)].copy()
+        # Handle both boolean and numeric (1.0/0.0) susp_inf columns
+        susp_inf_col = susp_inf['susp_inf'].fillna(0)
+        if pd.api.types.is_numeric_dtype(susp_inf_col):
+            si_events = susp_inf[susp_inf_col > 0].copy()
+        else:
+            si_events = susp_inf[susp_inf_col.astype(bool)].copy()
     else:
         si_events = susp_inf.copy()
     
