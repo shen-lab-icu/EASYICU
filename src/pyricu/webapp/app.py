@@ -1,4 +1,4 @@
-"""PyRICU Streamlit 主应用。
+"""EasyICU Streamlit 主应用。
 
 本地 ICU 数据分析和可视化平台。
 """
@@ -22,7 +22,7 @@ except ImportError:
 
 # 页面配置
 st.set_page_config(
-    page_title="PyRICU Data Explorer",
+    page_title="EasyICU Data Explorer",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -810,7 +810,7 @@ CONCEPT_GROUP_NAMES = {
     'sepsis3_sofa1': ('🦠 Sepsis-3 (SOFA-1 based)', '🦠 Sepsis-3 (基于SOFA-1)'),
     'sepsis_shared': ('🦠 Sepsis Shared Concepts', '🦠 Sepsis 共享概念'),
     'vitals': ('❤️ Vital Signs', '❤️ 生命体征'),
-    'respiratory': ('🫁 Respiratory Support', '🫁 呼吸支持'),
+    'respiratory': ('💨 Respiratory Support', '💨 呼吸支持'),
     'ventilator': ('🌬️ Ventilator Parameters', '🌬️ 呼吸机参数'),
     'blood_gas': ('🩸 Blood Gas Analysis', '🩸 血气分析'),
     'chemistry': ('🧪 Lab - Chemistry', '🧪 实验室-生化'),
@@ -819,7 +819,7 @@ CONCEPT_GROUP_NAMES = {
     'medications': ('💊 Other Medications', '💊 其他药物'),
     'renal': ('🚰 Renal & Urine Output', '🚰 肾脏与尿量'),
     'neurological': ('🧠 Neurological', '🧠 神经系统'),
-    'circulatory': ('🫀 Circulatory Support', '🫀 循环支持'),
+    'circulatory': ('❤️‍🩹 Circulatory Support', '❤️‍🩹 循环支持'),
     'demographics': ('👤 Demographics', '👤 人口统计'),
     'other_scores': ('📈 Other Scores', '📈 其他评分'),
     'outcome': ('🎯 Outcome', '🎯 结局'),
@@ -833,7 +833,7 @@ CONCEPT_GROUPS_DISPLAY = {
     'sepsis3_sofa1': '🦠 Sepsis-3 (SOFA-1)',
     'sepsis_shared': '🦠 Sepsis Shared',
     'vitals': '❤️ Vital Signs',
-    'respiratory': '🫁 Respiratory',
+    'respiratory': '💨 Respiratory',
     'ventilator': '🌬️ Ventilator',
     'blood_gas': '🩸 Blood Gas',
     'chemistry': '🧪 Chemistry',
@@ -842,7 +842,7 @@ CONCEPT_GROUPS_DISPLAY = {
     'medications': '💊 Medications',
     'renal': '🚰 Renal',
     'neurological': '🧠 Neurological',
-    'circulatory': '🫀 Circulatory',
+    'circulatory': '❤️‍🩹 Circulatory',
     'demographics': '👤 Demographics',
     'other_scores': '📈 Other Scores',
     'outcome': '🎯 Outcome',
@@ -857,6 +857,65 @@ def get_concept_groups():
         display_name = en_name if lang == 'en' else zh_name
         result[display_name] = concepts
     return result
+
+
+# 🔧 展开概念前缀映射：将子列名映射回父概念名
+# 这些概念在加载时会展开成多个子列（如 kdigo_aki -> kdigo_aki_aki, kdigo_aki_aki_stage 等）
+EXPANDED_CONCEPT_PREFIXES = {
+    'kdigo_aki_': 'kdigo_aki',      # kdigo_aki_aki, kdigo_aki_aki_stage, ...
+    'kdigo_creat_': 'kdigo_creat',  # kdigo_creat_crea, kdigo_creat_aki_stage_creat, ...
+    'kdigo_uo_': 'kdigo_uo',        # kdigo_uo_aki_stage_uo, kdigo_uo_uo_rt_*, ...
+}
+
+
+def map_column_to_concept(col_name: str) -> str:
+    """将列名映射回概念名。
+    
+    对于展开的子列（如 kdigo_aki_aki），返回父概念名（kdigo_aki）。
+    对于普通列名，直接返回原名。
+    
+    Args:
+        col_name: 列名
+        
+    Returns:
+        概念名
+    """
+    for prefix, parent_concept in EXPANDED_CONCEPT_PREFIXES.items():
+        if col_name.startswith(prefix):
+            return parent_concept
+    return col_name
+
+
+def count_unique_concepts(column_names: list) -> int:
+    """统计唯一概念数量（将展开的子列合并回父概念）。
+    
+    Args:
+        column_names: 列名列表
+        
+    Returns:
+        唯一概念数量
+    """
+    concepts = set()
+    for col in column_names:
+        concept = map_column_to_concept(col)
+        concepts.add(concept)
+    return len(concepts)
+
+
+def get_unique_concepts(column_names: list) -> set:
+    """获取唯一概念集合（将展开的子列合并回父概念）。
+    
+    Args:
+        column_names: 列名列表
+        
+    Returns:
+        唯一概念集合
+    """
+    concepts = set()
+    for col in column_names:
+        concept = map_column_to_concept(col)
+        concepts.add(concept)
+    return concepts
 
 # 保持向后兼容的CONCEPT_GROUPS（默认中文）
 CONCEPT_GROUPS = {
@@ -1471,7 +1530,7 @@ def init_session_state():
     if 'export_format' not in st.session_state:
         st.session_state.export_format = 'Parquet'  # 默认Parquet
     if 'export_path' not in st.session_state:
-        st.session_state.export_path = os.path.expanduser('~/pyricu_export')
+        st.session_state.export_path = os.path.expanduser('~/easyicu_export')
     if 'path_validated' not in st.session_state:
         st.session_state.path_validated = False
     if 'language' not in st.session_state:
@@ -1514,7 +1573,7 @@ def get_mock_params_with_cohort():
 # ============ 国际化文本 ============
 TEXTS = {
     'en': {
-        'app_title': '🏥 PyRICU Data Explorer',
+        'app_title': '🏥 EasyICU Data Explorer',
         'app_subtitle': 'Local ICU Data Analytics Platform',
         'select_mode': '🎯 Select Mode',
         'mode_extract': '💾 Data Extraction (New Data)',
@@ -1576,7 +1635,7 @@ TEXTS = {
         'view_desc': 'View Feature Descriptions',
     },
     'zh': {
-        'app_title': '🏥 PyRICU 数据探索器',
+        'app_title': '🏥 EasyICU 数据探索器',
         'app_subtitle': '本地 ICU 数据分析与可视化平台',
         'select_mode': '🎯 选择操作模式',
         'mode_extract': '💾 数据提取导出（新数据）',
@@ -3401,9 +3460,9 @@ def render_quick_visualization_page():
                 # 其次使用数据提取器中设置的导出路径
                 default_base_path = st.session_state['export_path']
             elif platform.system() == 'Windows':
-                default_base_path = r'D:\pyicu_export'
+                default_base_path = r'D:\easyicu_export'
             else:
-                default_base_path = os.path.expanduser('~/pyricu_export')
+                default_base_path = os.path.expanduser('~/easyicu_export')
             
             # 🔧 数据库选择 - 根据入口模式提供不同选项
             db_select_label = "📊 Database" if lang == 'en' else "📊 数据库"
@@ -3462,6 +3521,22 @@ def render_quick_visualization_page():
                     key="viz_export_db_select",
                     help="Filter by database or auto-detect" if lang == 'en' else "按数据库筛选或自动检测"
                 )
+            
+            # 🔧 FIX (2026-02-04): Auto Detect 模式下自动使用根目录以显示所有数据库
+            if selected_db == '(Auto Detect)':
+                # 检测当前路径是否是子目录（包含数据库名称前缀）
+                export_path_obj = Path(export_path)
+                db_prefixes = ['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic', 'mock']
+                current_dir_name = export_path_obj.name.lower()
+                
+                # 如果当前目录名以数据库前缀开头，说明用户在子目录中，应回退到父目录
+                for prefix in db_prefixes:
+                    if current_dir_name.startswith(prefix):
+                        parent_dir = str(export_path_obj.parent)
+                        if Path(parent_dir).exists():
+                            export_path = parent_dir
+                            st.info(f"🔍 Auto Detect: searching in `{parent_dir}`" if lang == 'en' else f"🔍 自动检测：在 `{parent_dir}` 中搜索所有数据库")
+                        break
             
             # 🔧 智能目录搜索：根据路径和数据库选择，动态查找可用目录
             def find_export_directories(base_path: str, db_filter: str) -> list:
@@ -3588,12 +3663,21 @@ def render_quick_visualization_page():
                         st.button(clear_label, key="viz_clear_all_v2", use_container_width=True,
                                  on_click=clear_all_v2)
                     
-                    selected_files = st.multiselect(
-                        select_label,
-                        options=file_names,
-                        default=default_selection,
-                        key=ms_key
-                    )
+                    # 🔧 FIX (2026-02-04): 避免 default 和 session_state 冲突
+                    # 如果 key 已经在 session_state 中，不传 default 参数
+                    if ms_key in st.session_state:
+                        selected_files = st.multiselect(
+                            select_label,
+                            options=file_names,
+                            key=ms_key
+                        )
+                    else:
+                        selected_files = st.multiselect(
+                            select_label,
+                            options=file_names,
+                            default=default_selection,
+                            key=ms_key
+                        )
                     
                     # 患者数量限制
                     patient_limit_label = "Max Patients to Load" if lang == 'en' else "最大加载患者数"
@@ -3669,20 +3753,6 @@ def render_quick_visualization_page():
     # 显示已加载数据状态
     if data_loaded:
         st.markdown("---")
-        status_cols = st.columns(3)
-        with status_cols[0]:
-            feat_count = len(st.session_state.loaded_concepts)
-            feat_label = "Features" if lang == 'en' else "特征"
-            st.metric(feat_label, feat_count)
-        with status_cols[1]:
-            pat_count = len(st.session_state.patient_ids) if st.session_state.patient_ids else 0
-            pat_label = "Patients" if lang == 'en' else "患者"
-            st.metric(pat_label, pat_count)
-        with status_cols[2]:
-            status_label = "Status" if lang == 'en' else "状态"
-            st.metric(status_label, "✅ Ready" if lang == 'en' else "✅ 就绪")
-        
-        st.markdown("---")
         
         # ============ 下方：四个子模块 Tabs ============
         sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
@@ -3725,9 +3795,9 @@ def render_visualization_mode_legacy():
     # 允许用户自定义基础搜索路径
     if 'viz_base_path' not in st.session_state:
         if platform.system() == 'Windows':
-            st.session_state.viz_base_path = r'D:\pyicu_export'
+            st.session_state.viz_base_path = r'D:\easyicu_export'
         else:
-            st.session_state.viz_base_path = os.path.expanduser('~/pyricu_export')
+            st.session_state.viz_base_path = os.path.expanduser('~/easyicu_export')
     
     # 基础路径配置
     base_path_label = "Base search directory" if st.session_state.language == 'en' else "基础搜索目录"
@@ -3752,9 +3822,9 @@ def render_visualization_mode_legacy():
             reset_btn = "↩️ Reset Default" if st.session_state.language == 'en' else "↩️ 重置默认"
             if st.button(reset_btn, width='stretch'):
                 if platform.system() == 'Windows':
-                    st.session_state.viz_base_path = r'D:\pyicu_export'
+                    st.session_state.viz_base_path = r'D:\easyicu_export'
                 else:
-                    st.session_state.viz_base_path = os.path.expanduser('~/pyricu_export')
+                    st.session_state.viz_base_path = os.path.expanduser('~/easyicu_export')
                 st.rerun()
     
     base_export_path = st.session_state.viz_base_path
@@ -3938,13 +4008,22 @@ def render_visualization_mode_legacy():
                 st.button(clear_label, key="clear_all_tables_filter", use_container_width=True,
                          on_click=clear_all_filter)
             
-            selected_files = st.multiselect(
-                select_label,
-                options=file_names,
-                default=default_selection_filter,
-                help=select_help,
-                key=ms_key_filter,
-            )
+            # 🔧 FIX (2026-02-04): 避免 default 和 session_state 冲突
+            if ms_key_filter in st.session_state:
+                selected_files = st.multiselect(
+                    select_label,
+                    options=file_names,
+                    help=select_help,
+                    key=ms_key_filter,
+                )
+            else:
+                selected_files = st.multiselect(
+                    select_label,
+                    options=file_names,
+                    default=default_selection_filter,
+                    help=select_help,
+                    key=ms_key_filter,
+                )
             
             if selected_files:
                 selected_msg = f"{len(selected_files)} tables selected" if st.session_state.language == 'en' else f"已选 {len(selected_files)} 个表格"
@@ -3989,7 +4068,9 @@ def render_visualization_mode_legacy():
                 # 显示加载状态
                 is_loaded = len(st.session_state.loaded_concepts) > 0
                 if is_loaded:
-                    loaded_msg = f"📊 {len(st.session_state.loaded_concepts)} features, {len(st.session_state.patient_ids)} patients loaded" if st.session_state.language == 'en' else f"📊 已加载 {len(st.session_state.loaded_concepts)} 个特征，{len(st.session_state.patient_ids)} 个患者"
+                    # 🔧 FIX (2026-02-04): 统计唯一概念数
+                    concept_count = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
+                    loaded_msg = f"📊 {concept_count} concepts, {len(st.session_state.patient_ids)} patients loaded" if st.session_state.language == 'en' else f"📊 已加载 {concept_count} 个概念，{len(st.session_state.patient_ids)} 个患者"
                     st.info(loaded_msg)
                 
                 if st.button(get_text('load_data'), type="primary", width="stretch"):
@@ -4023,7 +4104,9 @@ def render_visualization_mode_legacy():
     # 显示已加载数据的状态
     if len(st.session_state.loaded_concepts) > 0:
         st.markdown(f"### {get_text('loaded_data')}")
-        feat_msg = f"✅ {len(st.session_state.loaded_concepts)} features" if st.session_state.language == 'en' else f"✅ {len(st.session_state.loaded_concepts)} 个特征"
+        # 🔧 FIX (2026-02-04): 统计唯一概念数
+        concept_count = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
+        feat_msg = f"✅ {concept_count} concepts" if st.session_state.language == 'en' else f"✅ {concept_count} 个概念"
         pat_msg = f"✅ {len(st.session_state.patient_ids)} patients" if st.session_state.language == 'en' else f"✅ {len(st.session_state.patient_ids)} 个患者"
         st.success(feat_msg)
         st.success(pat_msg)
@@ -4055,10 +4138,10 @@ def render_entry_page():
     
     # 主标题
     if lang == 'en':
-        st.markdown('<div class="main-header">🏥 PyRICU Data Explorer</div>', unsafe_allow_html=True)
+        st.markdown('<div class="main-header">🏥 EasyICU Data Explorer</div>', unsafe_allow_html=True)
         st.markdown('<div class="sub-header">Local ICU Data Analytics Platform</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div class="main-header">🏥 PyRICU 数据探索器</div>', unsafe_allow_html=True)
+        st.markdown('<div class="main-header">🏥 EasyICU 数据探索器</div>', unsafe_allow_html=True)
         st.markdown('<div class="sub-header">本地 ICU 数据分析与可视化平台</div>', unsafe_allow_html=True)
     
     st.markdown("<br><br>", unsafe_allow_html=True)
@@ -4128,9 +4211,9 @@ def render_entry_page():
     with col1:
         # Demo模式卡片 - 使用纯文本格式，加大字体
         if lang == 'en':
-            demo_label = "🎭\n\nDemo Mode\n\nExplore PyRICU with simulated ICU data.\nNo real data required.\n\n✨ Quick Start"
+            demo_label = "🎭\n\nDemo Mode\n\nExplore EasyICU with simulated ICU data.\nNo real data required.\n\n✨ Quick Start"
         else:
-            demo_label = "🎭\n\n演示模式\n\n使用模拟ICU数据体验PyRICU功能。\n无需真实数据。\n\n✨ 快速开始"
+            demo_label = "🎭\n\n演示模式\n\n使用模拟ICU数据体验EasyICU功能。\n无需真实数据。\n\n✨ 快速开始"
         
         demo_clicked = st.button(
             demo_label,
@@ -4802,9 +4885,9 @@ def render_sidebar():
         import platform
         from datetime import datetime
         if platform.system() == 'Windows':
-            base_export_path = r'D:\pyicu_export'
+            base_export_path = r'D:\easyicu_export'
         else:
-            base_export_path = os.path.expanduser('~/pyricu_export')
+            base_export_path = os.path.expanduser('~/easyicu_export')
         db_name = st.session_state.get('database', 'mock')
         # 生成带时间戳的默认目录名（只保留年月日）
         timestamp_suffix = datetime.now().strftime('%Y%m%d')
@@ -5060,6 +5143,9 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
         # 🔧 FIX (2026-02-03): 设置 selected_concepts 以便侧边栏的导出按钮可用
         st.session_state.selected_concepts = list(filtered_data.keys())
         
+        # 🔧 FIX (2026-02-04): 统计唯一概念数量（将展开的子列合并回父概念）
+        unique_concept_count = count_unique_concepts(list(filtered_data.keys()))
+        
         # 🔧 FIX (2026-02-03): Load Data后重置导出触发状态，避免白屏
         # 注意：不应该重置 export_completed，因为 Quick Visualization 的 Load Data
         # 是独立于侧边栏数据提取器的功能，不应该影响导出完成状态
@@ -5076,11 +5162,11 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
         # 显示提示信息
         lang = st.session_state.get('language', 'en')
         if lang == 'en':
-            st.success(f"✅ Loaded {len(filtered_data)} features, {len(preview_patient_ids)}/{all_patient_count} patients ({load_elapsed:.1f}s)")
+            st.success(f"✅ Loaded {unique_concept_count} concepts ({len(filtered_data)} columns), {len(preview_patient_ids)}/{all_patient_count} patients ({load_elapsed:.1f}s)")
             if is_limited:
                 st.info(f"💡 For better performance, preview is limited to {max_patients} patients. Full data has been exported to disk.")
         else:
-            st.success(f"✅ 已加载 {len(filtered_data)} 个特征，{len(preview_patient_ids)}/{all_patient_count} 个患者 ({load_elapsed:.1f}秒)")
+            st.success(f"✅ 已加载 {unique_concept_count} 个概念（{len(filtered_data)} 列），{len(preview_patient_ids)}/{all_patient_count} 个患者 ({load_elapsed:.1f}秒)")
             if is_limited:
                 st.info(f"💡 为保证流畅性，可视化预览仅加载前 {max_patients} 个患者。完整数据已导出到磁盘，可使用Python/R进行完整分析。")
         
@@ -5173,6 +5259,7 @@ def load_data():
                 # 🔧 逐个加载概念，跳过不可用的（某些概念在特定数据库中没有数据源配置）
                 data = {}
                 failed_concepts = []
+                empty_concepts = []  # 🆕 跟踪返回空结果的概念
                 
                 for i, concept in enumerate(concepts_list):
                     try:
@@ -5206,10 +5293,15 @@ def load_data():
                                     data[cname] = df
                                 elif isinstance(df, pd.Series):
                                     data[cname] = df.to_frame().reset_index()
+                                else:
+                                    # 空结果（可能是数据源未配置或测试患者没有该数据）
+                                    empty_concepts.append(cname)
                         elif isinstance(result, pd.DataFrame):
                             # 单概念加载返回 DataFrame
                             if len(result) > 0:
                                 data[concept] = result
+                            else:
+                                empty_concepts.append(concept)
                     except Exception:
                         failed_concepts.append(concept)
                         continue  # 跳过失败的概念，继续加载其他的
@@ -5217,6 +5309,11 @@ def load_data():
                 if failed_concepts:
                     skip_msg = f"⚠️ Skipped {len(failed_concepts)} unavailable: {', '.join(failed_concepts[:5])}" if lang == 'en' else f"⚠️ 跳过 {len(failed_concepts)} 个不可用: {', '.join(failed_concepts[:5])}"
                     st.warning(skip_msg)
+                
+                # 🆕 显示空结果概念提示
+                if empty_concepts:
+                    empty_msg = f"ℹ️ {len(empty_concepts)} concepts returned empty (not configured or no data): {', '.join(empty_concepts[:8])}" if lang == 'en' else f"ℹ️ {len(empty_concepts)} 个概念返回空结果（未配置或无数据）: {', '.join(empty_concepts[:8])}"
+                    st.info(empty_msg)
                     
             except Exception as batch_err:
                 # 加载完全失败
@@ -5402,13 +5499,16 @@ def load_data_for_preview(max_patients: int = 50):
         
         load_elapsed = time.time() - load_start
         
+        # 🔧 FIX (2026-02-04): 统计唯一概念数
+        unique_concept_count = count_unique_concepts(list(filtered_data.keys()))
+        
         lang = st.session_state.get('language', 'en')
         if lang == 'en':
-            st.success(f"✅ Preview data loaded: {len(filtered_data)} features, {len(preview_patient_ids)}/{all_patient_count} patients ({load_elapsed:.1f}s)")
+            st.success(f"✅ Preview data loaded: {unique_concept_count} concepts ({len(filtered_data)} columns), {len(preview_patient_ids)}/{all_patient_count} patients ({load_elapsed:.1f}s)")
             if all_patient_count > max_patients:
                 st.info(f"💡 For better performance, visualization is limited to {max_patients} patients. Export data first for full analysis with Python/R.")
         else:
-            st.success(f"✅ 预览数据已加载：{len(filtered_data)} 个特征，{len(preview_patient_ids)}/{all_patient_count} 个患者 ({load_elapsed:.1f}秒)")
+            st.success(f"✅ 预览数据已加载：{unique_concept_count} 个概念（{len(filtered_data)} 列），{len(preview_patient_ids)}/{all_patient_count} 个患者 ({load_elapsed:.1f}秒)")
             if all_patient_count > max_patients:
                 st.info(f"💡 为保证流畅性，可视化仅加载前 {max_patients} 个患者。建议先导出数据，再用Python/R工具进行完整分析。")
         
@@ -5444,8 +5544,9 @@ def render_data_overview():
         ''', unsafe_allow_html=True)
     
     with col2:
-        n_concepts = len(st.session_state.loaded_concepts)
-        feat_label = "Features" if lang == 'en' else "已加载特征"
+        # 🔧 FIX (2026-02-04): 统计唯一概念数
+        n_concepts = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
+        feat_label = "Concepts" if lang == 'en' else "已加载概念"
         st.markdown(f'''
         <div class="metric-card">
             <div class="stat-label">{feat_label}</div>
@@ -5628,7 +5729,7 @@ def render_home_viz_mode(lang):
                     <li>If you haven't exported data yet, switch to "Data Extraction" mode first</li>
                 </ul>
                 <p style="color:#b45309; margin-top:12px;">
-                    <b>💡 Tip:</b> Default path is <code>~/pyricu_export/miiv</code>
+                    <b>💡 Tip:</b> Default path is <code>~/easyicu_export/miiv</code>
                 </p>
             </div>
             ''', unsafe_allow_html=True)
@@ -5645,7 +5746,7 @@ def render_home_viz_mode(lang):
                     <li>如果您还没有导出过数据，请先切换到「数据提取导出」模式</li>
                 </ul>
                 <p style="color:#b45309; margin-top:12px;">
-                    <b>💡 提示：</b> 默认路径是 <code>~/pyricu_export/miiv</code>
+                    <b>💡 提示：</b> 默认路径是 <code>~/easyicu_export/miiv</code>
                 </p>
             </div>
             ''', unsafe_allow_html=True)
@@ -5854,7 +5955,7 @@ def render_home_extract_mode(lang):
                     <h4 style="color: #10b981;">🎭 Demo Mode (Recommended for First-time Users)</h4>
                     <ul style="margin-left: 20px; margin-top: 10px;">
                         <li>No real data required - system generates realistic simulated ICU data</li>
-                        <li>Perfect for learning how PyRICU works</li>
+                        <li>Perfect for learning how EasyICU works</li>
                         <li>Adjust patient count (50-500) and data duration (24-168 hours)</li>
                         <li>Click <b>"✅ Confirm Data Source"</b> when ready</li>
                     </ul>
@@ -5879,7 +5980,7 @@ def render_home_extract_mode(lang):
                     <h4 style="color: #10b981;">🎭 演示模式（推荐新用户使用）</h4>
                     <ul style="margin-left: 20px; margin-top: 10px;">
                         <li>无需真实数据 - 系统会生成逼真的模拟ICU数据</li>
-                        <li>非常适合学习PyRICU的工作方式</li>
+                        <li>非常适合学习EasyICU的工作方式</li>
                         <li>可调整患者数量（50-500）和数据时长（24-168小时）</li>
                         <li>设置完成后点击 <b>"✅ 确认数据源配置"</b></li>
                     </ul>
@@ -5953,7 +6054,7 @@ def render_home_extract_mode(lang):
             st.markdown('''
             <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
                 <h3 style="color: #0369a1; margin-bottom: 15px;">👈 Select Features in the Left Sidebar</h3>
-                <p style="margin-bottom: 15px;">PyRICU provides <b>166 comprehensive ICU clinical features</b> across 19 categories, covering:</p>
+                <p style="margin-bottom: 15px;">EasyICU provides <b>166 comprehensive ICU clinical features</b> across 19 categories, covering:</p>
                 <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
                     <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
                         <b style="color: #1d4ed8;">📊 Vital Signs</b>
@@ -5991,7 +6092,7 @@ def render_home_extract_mode(lang):
             st.markdown('''
             <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
                 <h3 style="color: #0369a1; margin-bottom: 15px;">👈 在左侧边栏选择特征</h3>
-                <p style="margin-bottom: 15px;">PyRICU 提供 <b>166 个 ICU 临床特征</b>（19 个类别），涵盖：</p>
+                <p style="margin-bottom: 15px;">EasyICU 提供 <b>166 个 ICU 临床特征</b>（19 个类别），涵盖：</p>
                 <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
                     <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
                         <b style="color: #1d4ed8;">📊 生命体征</b>
@@ -6129,8 +6230,10 @@ def render_home_extract_mode(lang):
             export_dir = export_result['export_dir']
             total_elapsed = export_result['total_time']
             module_times = export_result.get('module_times', {})
+            # 🔧 FIX (2026-02-04): 使用保存的概念数
+            concept_count = export_result.get('concept_count', len(exported_files))
             
-            success_msg = f"✅ Successfully exported {len(exported_files)} files to `{export_dir}`" if lang == 'en' else f"✅ 成功导出 {len(exported_files)} 个文件到 `{export_dir}`"
+            success_msg = f"✅ Successfully exported {concept_count} concepts ({len(exported_files)} files) to `{export_dir}`" if lang == 'en' else f"✅ 成功导出 {concept_count} 个概念（{len(exported_files)} 个文件）到 `{export_dir}`"
             st.success(success_msg)
             
             # 显示时间统计
@@ -6160,6 +6263,9 @@ def render_home_extract_mode(lang):
                     st.caption(more_msg)
             
             st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+            # 🔧 FIX (2026-02-04): 在删除前保存概念数和患者数，供后面的卡片使用
+            st.session_state['_last_export_concept_count'] = export_result.get('concept_count', len(exported_files))
+            st.session_state['_last_export_patient_count'] = export_result.get('patient_count', 0)
             # 清除导出结果，避免重复显示
             del st.session_state['_export_success_result']
         
@@ -6167,7 +6273,7 @@ def render_home_extract_mode(lang):
         col1, col2, col3, col4 = st.columns(4)
         
         db_label = "Database" if lang == 'en' else "数据库"
-        feat_label = "Loaded Features" if lang == 'en' else "已加载特征"
+        feat_label = "Loaded Concepts" if lang == 'en' else "已加载概念"
         patient_label = "Patients" if lang == 'en' else "患者数量"
         status_label = "Status" if lang == 'en' else "数据状态"
         ready_status = "✅ Ready" if lang == 'en' else "✅ 就绪"
@@ -6182,10 +6288,23 @@ def render_home_extract_mode(lang):
             ''', unsafe_allow_html=True)
         
         with col2:
-            # 显示已选择的特征数（selected_concepts），而非已加载的（loaded_concepts 可能为空）
-            n_concepts = len(st.session_state.get('selected_concepts', []))
-            if n_concepts == 0:
-                n_concepts = len(st.session_state.loaded_concepts)
+            # 🔧 FIX (2026-02-04): 优先使用导出结果中的概念数，其次使用已加载/选中的概念数
+            export_result = st.session_state.get('_export_success_result')
+            if export_result and 'concept_count' in export_result:
+                # 使用导出时统计的实际概念数
+                n_concepts = export_result['concept_count']
+            elif '_last_export_concept_count' in st.session_state:
+                # 使用上次导出保存的概念数
+                n_concepts = st.session_state['_last_export_concept_count']
+            elif st.session_state.loaded_concepts:
+                # 使用已加载的概念数
+                n_concepts = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
+            elif st.session_state.get('selected_concepts'):
+                # DEMO模式：使用选中的概念数
+                n_concepts = count_unique_concepts(st.session_state.selected_concepts)
+            else:
+                # 没有数据时显示 0
+                n_concepts = 0
             st.markdown(f'''
             <div class="metric-card">
                 <div class="stat-label">{feat_label}</div>
@@ -6325,7 +6444,7 @@ def render_home_extract_mode(lang):
         st.markdown('''
         <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
             <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
-                📚 <b>Reference Guide</b>: This dictionary contains all 166 ICU clinical features available in PyRICU, organized into 19 categories. 
+                📚 <b>Reference Guide</b>: This dictionary contains all 166 ICU clinical features available in EasyICU, organized into 19 categories. 
                 Each feature includes its code name, full description, and measurement unit. 
                 Use this to understand what data you're extracting and make informed selections.
             </p>
@@ -6335,7 +6454,7 @@ def render_home_extract_mode(lang):
         st.markdown('''
         <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
             <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
-                📚 <b>参考指南</b>：本字典包含 PyRICU 提供的全部 166 个 ICU 临床特征，分为 19 个类别。
+                📚 <b>参考指南</b>：本字典包含 EasyICU 提供的全部 166 个 ICU 临床特征，分为 19 个类别。
                 每个特征包括代码名称、完整描述和测量单位。
                 使用此字典了解您正在提取的数据，做出明智的选择。
             </p>
@@ -6349,7 +6468,7 @@ def render_home_extract_mode(lang):
     if lang == 'en':
         st.markdown('''
         <div style="text-align:center;color:#aaa;font-size:0.85rem">
-            <p>🏥 PyRICU - Python Re-Implementation of RICU | 
+            <p>🏥 EasyICU - ICU Data Analysis Toolkit | 
             📦 <a href="https://github.com/your-repo/pyricu" style="color:#4fc3f7">GitHub</a> | 
             📖 <a href="#" style="color:#4fc3f7">Docs</a></p>
             <p>All data processing is done locally, no data is uploaded to any server 🔒</p>
@@ -6358,7 +6477,7 @@ def render_home_extract_mode(lang):
     else:
         st.markdown('''
         <div style="text-align:center;color:#aaa;font-size:0.85rem">
-            <p>🏥 PyRICU - Python Re-Implementation of RICU | 
+            <p>🏥 EasyICU - ICU 数据分析工具包 | 
             📦 <a href="https://github.com/your-repo/pyricu" style="color:#4fc3f7">GitHub</a> | 
             📖 <a href="#" style="color:#4fc3f7">文档</a></p>
             <p>所有数据处理均在本地完成，不会上传到任何服务器 🔒</p>
@@ -7663,7 +7782,7 @@ def render_patient_page():
                         if k in resp_support and isinstance(v, pd.DataFrame) and k not in bg_data}  # 避免重复
             
             if resp_data:
-                resp_title = "### 🫁 Respiratory Support" if lang == 'en' else "### 🫁 呼吸支持"
+                resp_title = "### 💨 Respiratory Support" if lang == 'en' else "### 💨 呼吸支持"
                 st.markdown(resp_title)
                 cols = st.columns(min(4, len(resp_data)))
                 for i, (concept, df) in enumerate(resp_data.items()):
@@ -9634,7 +9753,7 @@ def render_group_comparison_subtab(lang: str):
             mean, std = valid.mean(), valid.std()
             median = valid.median()
             q25, q75 = valid.quantile(0.25), valid.quantile(0.75)
-            return f"{mean:.1f} ± {std:.1f}\n({median:.1f} [{q25:.1f}-{q75:.1f}])"
+            return f"{mean:.1f} ± {std:.1f} ({median:.1f} [{q25:.1f}-{q75:.1f}])"
         
         def format_categorical(series, category, total):
             """格式化分类变量: n (%)"""
@@ -9827,21 +9946,24 @@ def render_group_comparison_subtab(lang: str):
 - p < 0.05 认为具有统计学显著性"""
         st.caption(stats_note)
         
-        # 下载按钮 - 导出时去除emoji防止乱码
+        # 🔧 FIX (2026-02-04): 简化导出逻辑，使用 UTF-8 BOM 编码确保 Excel 正确显示
+        # 无需手动替换特殊字符，utf-8-sig 编码可以正确处理
         export_df = result_df.copy()
-        if 'Module' in export_df.columns:
-            export_df['Module'] = export_df['Module'].apply(strip_emoji)
-        # 🔧 FIX: 替换特殊字符防止乱码（± → +/-, 其他Unicode符号）
+        
+        # 只清理 emoji（这些可能导致问题）
         for col in export_df.columns:
             if export_df[col].dtype == 'object':
-                export_df[col] = export_df[col].astype(str).str.replace('±', '+/-', regex=False)
-                export_df[col] = export_df[col].str.replace('≥', '>=', regex=False)
-                export_df[col] = export_df[col].str.replace('≤', '<=', regex=False)
-                export_df[col] = export_df[col].str.replace('μ', 'u', regex=False)
-        csv = export_df.to_csv(index=False, encoding='utf-8-sig')  # 使用 BOM 编码以支持中文
+                export_df[col] = export_df[col].apply(lambda x: strip_emoji(str(x)) if pd.notna(x) else x)
+        
+        # 使用 BytesIO 确保编码正确传递
+        import io
+        buffer = io.BytesIO()
+        export_df.to_csv(buffer, index=False, encoding='utf-8-sig')
+        csv_bytes = buffer.getvalue()
+        
         st.download_button(
             label="📥 " + ("Download Table (CSV)" if lang == 'en' else "下载表格 (CSV)"),
-            data=csv,
+            data=csv_bytes,
             file_name=f"baseline_comparison_{group1_name}_vs_{group2_name}.csv",
             mime="text/csv"
         )
@@ -11285,7 +11407,7 @@ def execute_sidebar_export():
             patient_limit_display = st.session_state.get('patient_limit', 100)
             patient_info = f"({patient_limit_display} patients)" if patient_limit_display else "(all patients)"
             patient_info_cn = f"（{patient_limit_display}患者）" if patient_limit_display else "（全部患者）"
-            batch_msg = f"**Loading {total_concepts} features {patient_info}...**" if lang == 'en' else f"**批量加载 {total_concepts} 个特征 {patient_info_cn}...**"
+            batch_msg = f"**Loading concepts {patient_info}...**" if lang == 'en' else f"**正在加载概念 {patient_info_cn}...**"
             status_text.markdown(batch_msg)
             
             # 🚀 性能优化：参照 extract_baseline_features.py 的配置
@@ -11347,6 +11469,7 @@ def execute_sidebar_export():
                 # 📝 批量加载所有概念（触发宽表批量加载优化）
                 data = {}
                 failed_concepts = []
+                empty_concepts = []  # 🆕 跟踪返回空结果的概念
                 
                 # 🚀 优化：先过滤掉当前数据库不支持的概念，避免批量加载失败
                 from pyricu.concept import load_dictionary
@@ -11421,6 +11544,9 @@ def execute_sidebar_export():
                                 data[cname] = df
                             elif isinstance(df, pd.Series):
                                 data[cname] = df.to_frame().reset_index()
+                            else:
+                                # 🆕 空结果（未配置或无数据）
+                                empty_concepts.append(cname)
                     elif isinstance(result, pd.DataFrame):
                         # 如果返回单个DataFrame（merged模式），拆分成各列
                         for concept in selected_concepts:
@@ -11428,8 +11554,10 @@ def execute_sidebar_export():
                                 data[concept] = result
                                 break  # merged模式只需要一个
                     
-                    # 检查哪些概念没有加载成功
-                    failed_concepts = [c for c in selected_concepts if c not in data]
+                    # 检查哪些概念没有加载成功（🆕 区分失败和空结果）
+                    for c in valid_concepts:
+                        if c not in data and c not in empty_concepts:
+                            empty_concepts.append(c)
                     
                 except Exception as batch_e:
                     # 批量加载失败，回退到逐个加载
@@ -11503,7 +11631,16 @@ def execute_sidebar_export():
                     more_text = f'... +{len(all_skipped)-5}' if len(all_skipped) > 5 else ''
                     skip_msg = f"⚠️ Skipped {len(all_skipped)} unavailable: {skip_list}{more_text}" if lang == 'en' else f"⚠️ 跳过 {len(all_skipped)} 个不可用: {skip_list}{more_text}"
                     st.warning(skip_msg)
-                loaded_msg = f"✅ Loaded {len(data)}/{total_concepts} features" if lang == 'en' else f"✅ 已加载 {len(data)}/{total_concepts} 个特征"
+                
+                # 🆕 显示空结果概念提示
+                if empty_concepts:
+                    empty_list = ', '.join(empty_concepts[:8])
+                    more_text = f'... +{len(empty_concepts)-8}' if len(empty_concepts) > 8 else ''
+                    empty_msg = f"ℹ️ {len(empty_concepts)} concepts returned empty (not configured or no data): {empty_list}{more_text}" if lang == 'en' else f"ℹ️ {len(empty_concepts)} 个概念返回空结果（未配置或无数据）: {empty_list}{more_text}"
+                    st.info(empty_msg)
+                
+                # 🔧 FIX (2026-02-04): 只显示实际加载的数量，不显示 /total_concepts
+                loaded_msg = f"✅ Loaded {len(data)} concepts" if lang == 'en' else f"✅ 已加载 {len(data)} 个概念"
                 status_text.markdown(loaded_msg)
                 
             except Exception as e:
@@ -12026,8 +12163,12 @@ def execute_sidebar_export():
             actual_patient_count = len(all_exported_patient_ids)
             st.session_state['_exported_patient_count'] = actual_patient_count
             
-            # 🔧 DEBUG: 打印实际收集到的患者数量
-            print(f"[DEBUG] Exported patient count: {actual_patient_count}, IDs sample: {list(all_exported_patient_ids)[:5]}")
+            # 🔧 FIX (2026-02-04): 统计实际导出的概念数量（使用统一的计数方法）
+            # 从 data 字典中获取所有概念名，使用 count_unique_concepts 统计
+            exported_concept_count = count_unique_concepts(list(data.keys()))
+            
+            # 🔧 DEBUG: 打印实际收集到的患者数量和概念数量
+            print(f"[DEBUG] Exported patient count: {actual_patient_count}, concept count: {exported_concept_count}")
             
             # 🆕 保存导出结果到 session state，rerun 后在 Guide: Complete 中显示
             total_elapsed = time_module.time() - export_start_time
@@ -12037,6 +12178,7 @@ def execute_sidebar_export():
                 'total_time': total_elapsed,
                 'module_times': module_times.copy(),
                 'patient_count': actual_patient_count,  # 🆕 保存实际患者数
+                'concept_count': exported_concept_count,  # 🆕 保存实际概念数
             }
             st.rerun()  # 🆕 立即刷新页面，让 Step 4 变为 DONE
         else:
@@ -12094,7 +12236,7 @@ def render_export_page():
             st.download_button(
                 label=all_csv_label,
                 data=csv_all,
-                file_name=f"pyricu_all_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                file_name=f"easyicu_all_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
                 width="stretch",
                 help=all_csv_help
@@ -12344,7 +12486,7 @@ def render_export_page():
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") if add_timestamp else ""
                 
                 try:
-                    filename_base = f"pyricu_export_{timestamp}" if timestamp else "pyricu_export"
+                    filename_base = f"easyicu_export_{timestamp}" if timestamp else "easyicu_export"
                     
                     if export_format == 'CSV':
                         if merge_mode == merge_single:
@@ -12459,10 +12601,10 @@ def main():
         mode_indicator = ""
     
     if lang == 'en':
-        st.markdown(f'<div class="main-header">🏥 PyRICU Data Explorer{mode_indicator}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="main-header">🏥 EasyICU Data Explorer{mode_indicator}</div>', unsafe_allow_html=True)
         st.markdown('<div class="sub-header">Local ICU Data Analytics Platform</div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="main-header">🏥 PyRICU 数据探索器{mode_indicator}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="main-header">🏥 EasyICU 数据探索器{mode_indicator}</div>', unsafe_allow_html=True)
         st.markdown('<div class="sub-header">本地 ICU 数据分析与可视化平台</div>', unsafe_allow_html=True)
     
     # 主页面标签：Tutorial, Quick Visualization, Cohort Analysis
@@ -12646,7 +12788,8 @@ def main():
         else:
             data_status = "✅ 数据已加载" if len(st.session_state.loaded_concepts) > 0 else "⏳ 未加载数据"
             patients_label = "患者"
-        n_concepts = len(st.session_state.loaded_concepts)
+        # 🔧 FIX (2026-02-04): 统计唯一概念数
+        n_concepts = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
         n_patients = len(st.session_state.patient_ids) if st.session_state.patient_ids else 0
         st.markdown(
             f"<small style='color:#888'>{data_status} | 📋 {n_concepts} Concepts | 👥 {n_patients} {patients_label}</small>",
@@ -12690,7 +12833,7 @@ def main():
                 💡 **Tips**: 
                 - Use sidebar tabs to extract features
                 - Supports MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb
-                - You can choose Demo Mode to explore PyRICU with simulated ICU data (no real data required)
+                - You can choose Demo Mode to explore EasyICU with simulated ICU data (no real data required)
                 """)
             else:
                 st.markdown("""
@@ -12717,7 +12860,7 @@ def main():
                 💡 **提示**: 
                 - 使用侧边栏标签提取特征
                 - 支持 MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb
-                - 可选择演示模式，使用模拟ICU数据快速体验PyRICU（无需真实数据）
+                - 可选择演示模式，使用模拟ICU数据快速体验EasyICU（无需真实数据）
                 """)
 
 

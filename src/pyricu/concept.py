@@ -1113,24 +1113,23 @@ class ConceptResolver:
         config = data_source.config
         sources = definition.for_data_source(config)
         if not sources:
-            # For optional sub-concepts (e.g., mech_vent in eICU), return empty table
-            # instead of raising error - let callback handle missing concepts
-            if kwargs.get('_allow_missing_concept', False):
-                # Return empty ICUTable with database-appropriate default ID columns
-                db_name = config.name if hasattr(config, 'name') else 'unknown'
-                default_id_cols = _default_id_columns_for_db(db_name)
-                
-                empty_df = pd.DataFrame(columns=default_id_cols)
-                return ICUTable(
-                    data=empty_df,
-                    id_columns=default_id_cols,
-                    index_column=None,
-                    value_column=None,
-                )
+            # 🔧 FIX: 当数据源未配置时，返回空表而不是报错
+            # 这样用户可以继续提取其他概念，并在结果中看到哪些概念没有数据
+            db_name = config.name if hasattr(config, 'name') else 'unknown'
+            default_id_cols = _default_id_columns_for_db(db_name)
             
-            raise KeyError(
-                f"No source configuration for concept '{concept_name}' "
-                f"in data source '{config.name}'"
+            # 记录友好的警告信息
+            logger.info(
+                f"⚠️  概念 '{concept_name}' 在数据库 '{db_name}' 中未配置数据源，返回空结果。"
+                f"（这是正常的，该特征在此数据库中可能不可用）"
+            )
+            
+            empty_df = pd.DataFrame(columns=default_id_cols + ['charttime', concept_name])
+            return ICUTable(
+                data=empty_df,
+                id_columns=default_id_cols,
+                index_column='charttime',
+                value_column=concept_name,
             )
 
         frames: List[pd.DataFrame] = []
@@ -5895,7 +5894,23 @@ def _apply_callback(
 
     # Handle comp_na() without arguments - check if value is not NA
     if re.fullmatch(r"transform_fun\(comp_na\(\)\)", expr):
-        series = frame[concept_name]
+        # 🔧 FIX: 确定要检查的列 - 优先使用 source.value_var，否则用 concept_name
+        # MIMIC-III 的列名是大写的，需要智能匹配
+        val_col = source.value_var if source.value_var else concept_name
+        if val_col not in frame.columns:
+            # 尝试大写/小写匹配
+            col_map = {c.lower(): c for c in frame.columns}
+            if val_col.lower() in col_map:
+                val_col = col_map[val_col.lower()]
+            elif concept_name.lower() in col_map:
+                val_col = col_map[concept_name.lower()]
+            else:
+                # 最后尝试用原始列名
+                for col in frame.columns:
+                    if 'itemid' in col.lower() or 'org' in col.lower():
+                        val_col = col
+                        break
+        series = frame[val_col]
         # Convert to boolean: True if not NA, False if NA
         frame.loc[:, concept_name] = series.notna().astype(float)
         return frame

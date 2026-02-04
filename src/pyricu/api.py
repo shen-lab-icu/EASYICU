@@ -746,7 +746,7 @@ def load_labs(
         ...                   database='miiv', data_path='/data/miiv',
         ...                   interval='12h')
     """
-    lab_concepts = ['wbc', 'plt', 'crea', 'bili', 'lac', 'ph']
+    lab_concepts = ['wbc', 'plt', 'crea', 'bili', 'lact', 'ph']
 
     if verbose:
         print("🔬 加载实验室检查...")
@@ -780,12 +780,12 @@ def list_available_concepts(source: Optional[str] = None) -> List[str]:
     dict_obj = load_dictionary()
     
     if source is None:
-        # 返回所有概念
-        return list(dict_obj.concepts.keys())
+        # 返回所有概念 (使用 _concepts 属性)
+        return list(dict_obj._concepts.keys())
     
     # 返回特定数据源支持的概念
     supported = []
-    for name, concept in dict_obj.concepts.items():
+    for name, concept in dict_obj._concepts.items():
         if hasattr(concept, 'sources') and source in concept.sources:
             supported.append(name)
     
@@ -853,8 +853,10 @@ def _validate_concepts(concepts: List[str], verbose: bool = False) -> List[str]:
     """
     try:
         dict_obj = load_dictionary()
-        available_concepts = [c for c in concepts if c in dict_obj.concepts]
-        missing_concepts = [c for c in concepts if c not in dict_obj.concepts]
+        # 使用 _concepts 属性 (ConceptDictionary 内部存储)
+        all_concepts = set(dict_obj._concepts.keys())
+        available_concepts = [c for c in concepts if c in all_concepts]
+        missing_concepts = [c for c in concepts if c not in all_concepts]
 
         if verbose and missing_concepts:
             print(f"  ⚠️  以下概念在字典中不存在，将被跳过: {missing_concepts}")
@@ -1309,16 +1311,52 @@ def load_blood_gas(
             print("  ❌ 没有可用的概念")
         return pd.DataFrame()
 
-    return load_concepts(
-        concepts=available_concepts,
-        patient_ids=patient_ids,
-        database=database,
-        data_path=data_path,
-        interval=interval,
-        win_length=win_length,
-        merge=True,
-        verbose=verbose
-    )
+    # 逐个尝试加载，跳过无法加载的概念（某些概念可能在特定数据库中没有配置）
+    results = []
+    loaded_concepts = []
+    for concept in available_concepts:
+        try:
+            df = load_concepts(
+                concepts=[concept],
+                patient_ids=patient_ids,
+                database=database,
+                data_path=data_path,
+                interval=interval,
+                win_length=win_length,
+                merge=True,
+                verbose=False
+            )
+            if df is not None and not df.empty:
+                results.append(df)
+                loaded_concepts.append(concept)
+        except Exception:
+            pass  # 跳过无法加载的概念
+    
+    if not results:
+        if verbose:
+            print("  ❌ 没有成功加载的概念")
+        return pd.DataFrame()
+    
+    if verbose:
+        print(f"  ✅ 成功加载 {len(loaded_concepts)} 个概念: {loaded_concepts}")
+    
+    # 合并结果
+    if len(results) == 1:
+        return results[0]
+    
+    # 多个结果需要合并
+    merged = results[0]
+    for df in results[1:]:
+        # 找到共同的 ID 和时间列进行合并
+        id_cols = [c for c in merged.columns if 'id' in c.lower() or c in ['stay_id', 'subject_id', 'patientunitstayid', 'admissionid', 'patientid']]
+        time_cols = [c for c in merged.columns if 'time' in c.lower() or c == 'charttime']
+        merge_cols = list(set(id_cols + time_cols) & set(df.columns))
+        if merge_cols:
+            merged = pd.merge(merged, df, on=merge_cols, how='outer')
+        else:
+            merged = pd.concat([merged, df], ignore_index=True)
+    
+    return merged
 
 def load_hematology(
     patient_ids: Optional[Union[List, Dict]] = None,
@@ -1410,16 +1448,52 @@ def load_medications(
             print("  ❌ 没有可用的概念")
         return pd.DataFrame()
 
-    return load_concepts(
-        concepts=available_concepts,
-        patient_ids=patient_ids,
-        database=database,
-        data_path=data_path,
-        interval=interval,
-        win_length=win_length,
-        merge=True,
-        verbose=verbose
-    )
+    # 逐个尝试加载，跳过无法加载的概念（某些概念可能在特定数据库中没有配置）
+    results = []
+    loaded_concepts = []
+    for concept in available_concepts:
+        try:
+            df = load_concepts(
+                concepts=[concept],
+                patient_ids=patient_ids,
+                database=database,
+                data_path=data_path,
+                interval=interval,
+                win_length=win_length,
+                merge=True,
+                verbose=False
+            )
+            if df is not None and not df.empty:
+                results.append(df)
+                loaded_concepts.append(concept)
+        except Exception:
+            pass  # 跳过无法加载的概念
+    
+    if not results:
+        if verbose:
+            print("  ❌ 没有成功加载的概念")
+        return pd.DataFrame()
+    
+    if verbose:
+        print(f"  ✅ 成功加载 {len(loaded_concepts)} 个概念: {loaded_concepts}")
+    
+    # 合并结果
+    if len(results) == 1:
+        return results[0]
+    
+    # 多个结果需要合并
+    merged = results[0]
+    for df in results[1:]:
+        # 找到共同的 ID 和时间列进行合并
+        id_cols = [c for c in merged.columns if 'id' in c.lower() or c in ['stay_id', 'subject_id', 'patientunitstayid', 'admissionid', 'patientid']]
+        time_cols = [c for c in merged.columns if 'time' in c.lower() or c == 'charttime']
+        merge_cols = list(set(id_cols + time_cols) & set(df.columns))
+        if merge_cols:
+            merged = pd.merge(merged, df, on=merge_cols, how='outer')
+        else:
+            merged = pd.concat([merged, df], ignore_index=True)
+    
+    return merged
 
 # 为了兼容性，也导出原始的类和函数
 __all__ = [
