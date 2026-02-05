@@ -173,8 +173,19 @@ def auto_clear_cache_if_enabled():
 
 def clear_pyricu_cache():
     """手动清除pyricu缓存的便捷函数"""
+    # 1. 清除 CacheManager 管理的缓存（磁盘 + 注册的内存缓存）
     cache_manager = get_cache_manager()
-    return cache_manager.clear_all_cache()
+    result = cache_manager.clear_all_cache()
+    
+    # 2. 清除全局加载器（重要：否则患者ID可能被缓存）
+    try:
+        from .api import clear_global_loader
+        clear_global_loader()
+        logger.info("✅ 已清除全局加载器")
+    except ImportError:
+        pass
+    
+    return result
 
 def get_cache_status():
     """获取缓存状态的便捷函数"""

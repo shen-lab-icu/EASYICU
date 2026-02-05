@@ -3082,10 +3082,13 @@ def eicu_dex_med(
     work = work.loc[mask].copy()
     duration_minutes = duration_minutes.loc[mask]
 
-    # rate = value / duration_minutes * 5
+    # rate = value / duration_minutes * 5 (ml/min)
+    # 🔧 FIX 2025-02-03: 转换为 ml/hr 以匹配概念定义 (unit: "ml/hr")
+    # R ricu 输出的是 ml/min，但概念定义是 ml/hr
     duration_minutes = duration_minutes.where(duration_minutes > 0, 1.0)
-    work[val_var] = work[val_var] / duration_minutes * 5.0
-    work["unit_var"] = "ml/min"
+    rate_ml_min = work[val_var] / duration_minutes * 5.0
+    work[val_var] = rate_ml_min * 60.0  # 转换为 ml/hr
+    work["unit_var"] = "ml/hr"
     
     # 保存duration（小时，与charttime单位一致，用于后续expand）
     work[dur_var] = duration_minutes / 60.0

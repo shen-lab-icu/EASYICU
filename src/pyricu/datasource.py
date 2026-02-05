@@ -288,6 +288,10 @@ class ICUDataSource:
             self._table_cache.clear()
             self._preloaded_tables.clear()
     
+    def clear(self) -> None:
+        """Alias for clear_cache, used by CacheManager."""
+        self.clear_cache()
+    
     def preload_tables(self, table_names: List[str], patient_ids: Optional[List[int]] = None) -> None:
         """
         🚀 预加载大表到内存，避免重复I/O
@@ -362,14 +366,18 @@ class ICUDataSource:
         # ✅ 关键修复：提前保存原始 stay_id 过滤器值
         # 因为后续对于 hospital tables (labevents等) 会将 stay_id 转换成 subject_id/hadm_id
         # 但转换后无法恢复原始 stay_id，导致 join 后引入额外患者
-        hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy']
+        # 🔧 FIX 2026-02-07: 添加 services 表（用于 adm 概念），只有 hadm_id 无 stay_id
+        # 🔧 FIX 2026-02-07: 添加 mimic (MIMIC-III) 支持，使用 icustay_id
+        hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services']
         original_stay_ids = None
-        if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo']:
+        if table_name in hospital_tables and self.config.name in ['miiv', 'mimic_demo', 'mimic']:
             if filters:
                 for spec in filters:
-                    if spec.column == 'stay_id' and spec.op == FilterOp.IN:
+                    # 🔧 FIX: MIMIC-III 使用 icustay_id
+                    id_col_to_check = 'icustay_id' if self.config.name == 'mimic' else 'stay_id'
+                    if spec.column == id_col_to_check and spec.op == FilterOp.IN:
                         original_stay_ids = set(spec.value)  # 保存原始目标 stay_ids
-                        print(f"💾 [{table_name}] 保存原始 stay_id 过滤器: {len(original_stay_ids)} 个患者")
+                        print(f"💾 [{table_name}] 保存原始 {id_col_to_check} 过滤器: {len(original_stay_ids)} 个患者")
                         break
 
         # 🚀 优化1：优先使用预加载的表
@@ -489,7 +497,8 @@ class ICUDataSource:
             
             # 🚀 优化：对于缺少 stay_id 的表（如 labevents），如果过滤条件是 stay_id，
             # 需要先查 icustays 转换成 hadm_id 或 subject_id，以便在读取 parquet 时就能过滤
-            hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy']
+            # 🔧 FIX 2026-02-07: 添加 services 表（用于 adm 概念）
+            hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services']
             mapped_filter = None
             
             if filters:
@@ -669,7 +678,8 @@ class ICUDataSource:
             # ⚠️ 问题：对于 hospital tables (如 labevents), 原表没有 stay_id/icustay_id，需要通过 hadm_id join icustays 补全
             # 但 join 会引入该 hadm_id 的所有 stay_id (同一住院可能多次ICU入住)
             # 解决方案：在函数开始时已保存 original_stay_ids，join 后再过滤
-            hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy']
+            # 🔧 FIX 2026-02-07: 添加 services 表（用于 adm 概念）
+            hospital_tables = ['prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services']
             is_mimic_db = self.config.name in ['miiv', 'mimic_demo', 'mimic']
             if table_name in hospital_tables and is_mimic_db:
                 try:

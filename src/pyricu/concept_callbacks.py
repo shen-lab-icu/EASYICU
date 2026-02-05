@@ -1567,12 +1567,22 @@ def _callback_blood_cell_ratio(
 ) -> ICUTable:
     """Calculate blood cell ratios (e.g., lymphocytes, neutrophils as percentage).
     
-    This callback handles cell count ratios, typically percentage calculations.
+    R ricu logic:
+      blood_cell_ratio <- function(x, val_var, unit_var, env, ...) {
+        x <- add_concept(x, env, "wbc")
+        x <- x[, c(val_var, "wbc", unit_var) := list(
+          100 * get(val_var) / get("wbc"), NULL, "%"
+        )]
+        x
+      }
+    
+    This callback:
+    1. Loads WBC (white blood cell count) concept
+    2. Calculates percentage: 100 * cell_count / wbc
     """
     if not tables or len(tables) == 0:
         return _empty_icutbl(ctx)
     
-    # This is typically a simple passthrough that may involve unit conversion
     input_table = list(tables.values())[0]
     data = input_table.df.copy()
     
@@ -1583,10 +1593,95 @@ def _callback_blood_cell_ratio(
     index_column = input_table.index_column or ctx.index_column
     value_column = input_table.value_column or ctx.concept_name
     
-    # The data is usually already in the correct format
-    # Just ensure it's numeric
+    # Ensure numeric
     if value_column in data.columns:
         data[value_column] = pd.to_numeric(data[value_column], errors='coerce')
+    
+    # Try to load WBC concept for ratio calculation
+    try:
+        # Get patient IDs from current data
+        patient_ids = None
+        if id_columns and id_columns[0] in data.columns:
+            patient_ids = data[id_columns[0]].unique().tolist()
+        
+        # Load WBC concept
+        from pyricu.api import load_concepts
+        wbc_df = load_concepts(
+            ['wbc'],
+            database=ctx.database if hasattr(ctx, 'database') else None,
+            patient_ids={id_columns[0]: patient_ids} if patient_ids and id_columns else None,
+            verbose=False
+        )
+        
+        if wbc_df is not None and not wbc_df.empty and 'wbc' in wbc_df.columns:
+            # Find matching time columns in both dataframes
+            # WBC from load_concepts uses 'charttime', but source data may use 'measuredat'
+            time_col_candidates = ['charttime', 'measuredat', 'measuredat_minutes', 'datetime', 'observationoffset']
+            
+            data_time_col = None
+            wbc_time_col = None
+            for col in time_col_candidates:
+                if col in data.columns and data_time_col is None:
+                    data_time_col = col
+                if col in wbc_df.columns and wbc_time_col is None:
+                    wbc_time_col = col
+            
+            # Also check the declared index_column
+            if index_column and index_column in data.columns:
+                data_time_col = index_column
+            
+            if data_time_col and wbc_time_col:
+                # Normalize time columns to numeric for merge_asof
+                data_sorted = data.copy()
+                wbc_sorted = wbc_df.copy()
+                
+                # Convert to numeric if needed
+                data_sorted['_time_numeric'] = pd.to_numeric(data_sorted[data_time_col], errors='coerce')
+                wbc_sorted['_time_numeric'] = pd.to_numeric(wbc_sorted[wbc_time_col], errors='coerce')
+                
+                # Drop rows with invalid times
+                data_sorted = data_sorted.dropna(subset=['_time_numeric'])
+                wbc_sorted = wbc_sorted.dropna(subset=['_time_numeric'])
+                
+                if not data_sorted.empty and not wbc_sorted.empty:
+                    # Sort by patient ID and time
+                    id_col = id_columns[0]
+                    data_sorted = data_sorted.sort_values([id_col, '_time_numeric'])
+                    wbc_sorted = wbc_sorted.sort_values([id_col, '_time_numeric'])
+                    
+                    # Use merge_asof to match WBC within 24 hours (1440 minutes)
+                    merged = pd.merge_asof(
+                        data_sorted,
+                        wbc_sorted[[id_col, '_time_numeric', 'wbc']].rename(columns={'_time_numeric': '_wbc_time'}),
+                        by=id_col,
+                        left_on='_time_numeric',
+                        right_on='_wbc_time',
+                        direction='nearest',
+                        tolerance=1440  # 24 hours in minutes
+                    )
+                    
+                    # Calculate ratio: 100 * cell_count / wbc
+                    if 'wbc' in merged.columns:
+                        valid_wbc = merged['wbc'].notna() & (merged['wbc'] > 0)
+                        merged.loc[valid_wbc, value_column] = 100 * merged.loc[valid_wbc, value_column] / merged.loc[valid_wbc, 'wbc']
+                        merged = merged.drop(columns=['wbc', '_time_numeric', '_wbc_time'], errors='ignore')
+                        data = merged
+            else:
+                # Fallback: merge only on patient ID (use latest WBC per patient)
+                id_col = id_columns[0]
+                wbc_latest = wbc_df.sort_values(wbc_time_col if wbc_time_col else id_col).groupby(id_col).last().reset_index()[[id_col, 'wbc']]
+                merged = pd.merge(data, wbc_latest, on=id_col, how='left')
+                
+                if 'wbc' in merged.columns:
+                    valid_wbc = merged['wbc'].notna() & (merged['wbc'] > 0)
+                    merged.loc[valid_wbc, value_column] = 100 * merged.loc[valid_wbc, value_column] / merged.loc[valid_wbc, 'wbc']
+                    merged = merged.drop(columns=['wbc'], errors='ignore')
+                    data = merged
+                    
+    except Exception as e:
+        # If WBC loading fails, just pass through the data as-is
+        import logging
+        logging.debug(f"blood_cell_ratio: WBC loading failed: {e}, using passthrough")
     
     output_cols = list(id_columns) + ([index_column] if index_column else []) + [value_column]
     output_cols = [c for c in output_cols if c in data.columns]
