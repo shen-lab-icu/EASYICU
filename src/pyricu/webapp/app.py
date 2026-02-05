@@ -4476,10 +4476,10 @@ def render_sidebar():
         expand_col1, expand_col2 = st.columns([3, 1])
         with expand_col2:
             if st.session_state.sidebar_expanded:
-                expand_label = "🔙" if st.session_state.language == 'en' else "🔙"
+                expand_label = "⬅️" if st.session_state.language == 'en' else "⬅️"
                 expand_help = "Collapse sidebar" if st.session_state.language == 'en' else "收起侧边栏"
             else:
-                expand_label = "⬛" if st.session_state.language == 'en' else "⬛"
+                expand_label = "⤢" if st.session_state.language == 'en' else "⤢"
                 expand_help = "Expand to full width" if st.session_state.language == 'en' else "展开到全屏"
             
             if st.button(expand_label, key="toggle_sidebar_expand", help=expand_help):
