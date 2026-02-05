@@ -41,6 +41,19 @@ logger = logging.getLogger(__name__)
 # 全局加载器实例，用于复用初始化开销
 _global_loader = None
 _loader_config = None
+
+def clear_global_loader():
+    """清除全局加载器，强制下一次调用重新创建"""
+    global _global_loader, _loader_config
+    if _global_loader is not None:
+        # 清理加载器内部缓存
+        if hasattr(_global_loader, 'concept_resolver'):
+            _global_loader.concept_resolver.clear()
+        if hasattr(_global_loader, 'data_source'):
+            _global_loader.data_source.clear()
+    _global_loader = None
+    _loader_config = None
+
 import numpy as np
 
 def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: bool = False) -> List:
@@ -70,10 +83,12 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
         # 只加载ID列，限制行数
         id_table = loader.datasource.load_table(table_name, columns=[id_col], verbose=False)
         all_ids = id_table.data[id_col].dropna().unique()
+        # 🔧 按ID排序后再采样，确保与 RICU 金标准生成脚本一致
+        all_ids = sorted(all_ids)
         sampled_ids = list(all_ids[:max_patients])
         
         if verbose:
-            print(f"🎯 max_patients={max_patients}: 从 {table_name}.{id_col} 采样 {len(sampled_ids)} 个患者")
+            print(f"🎯 max_patients={max_patients}: 从 {table_name}.{id_col} 采样 {len(sampled_ids)} 个患者 (已排序)")
         
         return sampled_ids
     except Exception as e:

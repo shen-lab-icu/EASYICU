@@ -519,11 +519,11 @@ CONCEPT_DICTIONARY = {
     'pafi': ('PaO2/FiO2 Ratio', '氧合指数', 'mmHg'),
     'safi': ('SpO2/FiO2 Ratio', '脉氧/吸氧比', ''),
     'supp_o2': ('Supplemental Oxygen', '辅助吸氧', 'boolean'),
-    'vent_ind': ('Mechanical Ventilation Indicator', '机械通气指示', 'boolean'),
+    'vent_ind': ('Ventilation Duration Windows', '机械通气时间窗', 'boolean'),
     'o2sat': ('Oxygen Saturation (SpO2)', '血氧饱和度', '%'),
     'sao2': ('Arterial Oxygen Saturation', '动脉血氧饱和度', '%'),
     'mech_vent': ('Mechanical Ventilation', '机械通气', 'boolean'),
-    'ett_gcs': ('Endotracheal Tube + GCS', '气管插管GCS', ''),
+    'ett_gcs': ('Intubation/Tracheostomy Status', '气管插管/切开状态', 'boolean'),
     'fio2': ('Fraction of Inspired Oxygen', '吸入氧浓度', '%'),
     
     # 血气分析
@@ -578,7 +578,7 @@ CONCEPT_DICTIONARY = {
     'abx': ('Antibiotics', '抗生素使用', 'boolean'),
     'adh_rate': ('Vasopressin Rate', '血管加压素速率', 'units/min'),
     'cort': ('Corticosteroids', '糖皮质激素', 'boolean'),
-    'dex': ('Dexmedetomidine', '右美托咪定', 'mcg/kg/hr'),
+    'dex': ('Dextrose (D10)', '葡萄糖（10%）', 'mL/hr'),
     'dobu_dur': ('Dobutamine Duration', '多巴酚丁胺持续时间', 'hours'),
     'dobu_rate': ('Dobutamine Rate', '多巴酚丁胺速率', 'mcg/kg/min'),
     'dobu60': ('Dobutamine >60min', '多巴酚丁胺>60分钟', 'boolean'),
@@ -642,7 +642,7 @@ CONCEPT_DICTIONARY = {
     'susp_inf': ('Suspected Infection', '疑似感染', 'boolean'),
     'infection_icd': ('ICD Infection Diagnosis', 'ICD感染诊断 (Angus标准)', 'boolean'),
     
-    # 呼吸支持 (扩展)
+    # 呼吸系统 (扩展)
     'spo2': ('Peripheral Oxygen Saturation', '脉搏血氧饱和度', '%'),
     'vent_start': ('Ventilation Start Time', '通气开始时间', 'datetime'),
     'vent_end': ('Ventilation End Time', '通气结束时间', 'datetime'),
@@ -686,19 +686,22 @@ CONCEPT_DICTIONARY = {
     # 肾脏与尿量率
     'rrt': ('Renal Replacement Therapy', '肾脏替代治疗', 'boolean'),
     'rrt_criteria': ('RRT Criteria Met', '满足RRT标准', 'boolean'),
-    'uo_6h': ('6h Urine Output Rate', '6小时尿量率', 'mL/kg/h'),
-    'uo_12h': ('12h Urine Output Rate', '12小时尿量率', 'mL/kg/h'),
-    'uo_24h': ('24h Urine Output Rate', '24小时尿量率', 'mL/kg/h'),
+    'uo_6h': ('Average Urine Output Rate (past 6h)', '过去6小时平均尿量率', 'mL/kg/h'),
+    'uo_12h': ('Average Urine Output Rate (past 12h)', '过去12小时平均尿量率', 'mL/kg/h'),
+    'uo_24h': ('Average Urine Output Rate (past 24h)', '过去24小时平均尿量率', 'mL/kg/h'),
     
-    # KDIGO AKI (急性肾损伤)
+    # KDIGO AKI (急性肾损伤) - 🔧 2026-02-04: 移除重复的 kdigo_aki/kdigo_creat/kdigo_uo
     'aki': ('Acute Kidney Injury', '急性肾损伤', 'boolean'),
     'aki_stage': ('AKI Stage (KDIGO)', 'AKI分期（KDIGO标准）', '0-3'),
     'aki_stage_creat': ('AKI Stage (Creatinine)', 'AKI分期（肌酐）', '0-3'),
     'aki_stage_uo': ('AKI Stage (Urine Output)', 'AKI分期（尿量）', '0-3'),
     'aki_stage_rrt': ('AKI Stage (RRT)', 'AKI分期（RRT）', '0-3'),
-    'kdigo_aki': ('KDIGO AKI Stage', 'KDIGO急性肾损伤分期', '0-3'),
-    'kdigo_creat': ('KDIGO Creatinine Stage', 'KDIGO肌酐分期', '0-3'),
-    'kdigo_uo': ('KDIGO Urine Output Stage', 'KDIGO尿量分期', '0-3'),
+    # 🔧 2026-02-12: 添加规范化后的 KDIGO 扩展列
+    'creat_low_past_48hr': ('Lowest Creatinine in Past 48h', '过去48小时内最低肌酐', 'mg/dL'),
+    'creat_low_past_7day': ('Baseline Creatinine (7-day lowest)', '基线肌酐（7天内最低值）', 'mg/dL'),
+    'uo_rt_6hr': ('Urine Output Rate (6h rolling window)', '尿量率（6小时滚动窗口）', 'mL/kg/h'),
+    'uo_rt_12hr': ('Urine Output Rate (12h rolling window)', '尿量率（12小时滚动窗口）', 'mL/kg/h'),
+    'uo_rt_24hr': ('Urine Output Rate (24h rolling window)', '尿量率（24小时滚动窗口）', 'mL/kg/h'),
     
     # 神经 (扩展)
     'sedated_gcs': ('GCS Before Sedation', '镇静前GCS', ''),
@@ -724,19 +727,19 @@ CONCEPT_DICTIONARY = {
 # 特征详细描述（英文和中文）
 CONCEPT_DESCRIPTIONS = {
     # SOFA-2
-    'sofa2': ('Total SOFA-2 score (2025 new standard), sum of 6 organ systems', 'SOFA-2总分（2025年新标准），6个器官系统评分之和'),
-    'sofa2_resp': ('Respiratory component: PaO2/FiO2 or SpO2/FiO2 ratio with ventilation status', '呼吸系统评分：基于氧合指数和通气状态'),
-    'sofa2_coag': ('Coagulation component: platelet count', '凝血系统评分：基于血小板计数'),
-    'sofa2_liver': ('Liver component: bilirubin level', '肝脏评分：基于胆红素水平'),
-    'sofa2_cardio': ('Cardiovascular component: MAP and vasopressor requirements', '心血管评分：基于平均动脉压和血管活性药物'),
-    'sofa2_cns': ('Neurological component: GCS score', '神经系统评分：基于格拉斯哥昏迷评分'),
-    'sofa2_renal': ('Renal component: creatinine and urine output', '肾脏评分：基于肌酐和尿量'),
+    'sofa2': ('Total SOFA-2 score (2025 new standard), sum of 6 organ systems (0-24)', 'SOFA-2总分（2025年新标准），6个器官系统评分之和（0-24分）'),
+    'sofa2_resp': ('Respiratory: PaO2/FiO2 (or SpO2/FiO2 if unavailable), scores 3-4 require advanced respiratory support (IMV/NIV/HFNC) or ECMO', '呼吸系统：基于氧合指数，3-4分需要高级呼吸支持（IMV/NIV/HFNC）或ECMO'),
+    'sofa2_coag': ('Coagulation: platelet count with updated thresholds (≤50→4, ≤80→3, ≤100→2, ≤150→1)', '凝血系统：基于血小板计数，使用更新的阈值（≤50→4分，≤80→3分，≤100→2分，≤150→1分）'),
+    'sofa2_liver': ('Liver: bilirubin with relaxed 1-point threshold (>1.2 mg/dL instead of >1.9)', '肝脏：基于胆红素，1分阈值放宽（>1.2 mg/dL，原为>1.9）'),
+    'sofa2_cardio': ('Cardiovascular: combined NE+Epi dose, other vasopressors/inotropes, or mechanical circulatory support (IABP/LVAD/Impella)', '心血管：基于去甲肾+肾上腺素联合剂量、其他血管活性药物或机械循环支持'),
+    'sofa2_cns': ('Neurological: GCS score, with delirium (CAM-ICU+ or treatment) adding 1 point if GCS=15', '神经系统：基于GCS评分，若GCS=15但有谵妄（CAM-ICU阳性或接受治疗）则加1分'),
+    'sofa2_renal': ('Renal: creatinine and urine output (6h/12h/24h windows), score 4 for RRT or meeting RRT criteria', '肾脏：基于肌酐和尿量（6h/12h/24h窗口），接受RRT或满足RRT标准则为4分'),
     
     # Sepsis
-    'sep3_sofa2': ('Sepsis-3 diagnosis based on SOFA-2 (≥2 point increase + suspected infection)', '基于SOFA-2的Sepsis-3诊断（SOFA≥2分上升+疑似感染）'),
-    'sep3_sofa1': ('Sepsis-3 diagnosis based on traditional SOFA-1', '基于传统SOFA-1的Sepsis-3诊断'),
-    'susp_inf': ('Suspected infection based on antibiotic + culture criteria', '基于抗生素+培养标准的疑似感染'),
-    'infection_icd': ('Infection diagnosis based on Angus ICD criteria', '基于Angus ICD标准的感染诊断'),
+    'sep3_sofa2': ('Sepsis-3 diagnosis: suspected infection + SOFA-2 ≥2 point increase from baseline', '基于SOFA-2的Sepsis-3诊断：疑似感染 + SOFA-2较基线升高≥2分'),
+    'sep3_sofa1': ('Sepsis-3 diagnosis: suspected infection + traditional SOFA ≥2 point increase', '基于传统SOFA的Sepsis-3诊断：疑似感染 + SOFA较基线升高≥2分'),
+    'susp_inf': ('Suspected infection: antibiotics started within 72h of culture OR culture within 24h of antibiotics', '疑似感染：培养后72小时内开始抗生素 或 抗生素后24小时内进行培养'),
+    'infection_icd': ('Infection diagnosis based on Angus ICD criteria (explicit infection codes)', '基于Angus ICD标准的感染诊断（显性感染编码）'),
     
     # Vitals
     'hr': ('Heart rate in beats per minute', '每分钟心跳次数'),
@@ -747,35 +750,52 @@ CONCEPT_DESCRIPTIONS = {
     'resp': ('Respiratory rate (breaths per minute)', '呼吸频率（每分钟呼吸次数）'),
     
     # Respiratory
-    'pafi': ('PaO2/FiO2 ratio - key oxygenation index', '氧合指数，反映肺部气体交换功能'),
-    'safi': ('SpO2/FiO2 ratio - non-invasive oxygenation estimate', '脉氧/吸氧比，非侵入性氧合评估'),
+    'pafi': ('PaO2/FiO2 ratio - key oxygenation index for ARDS/SOFA scoring', '氧合指数 - ARDS/SOFA评分的关键指标'),
+    'safi': ('SpO2/FiO2 ratio - non-invasive alternative to PaFi (used when SpO2<98%)', '脉氧/吸氧比 - PaFi的非侵入性替代（当SpO2<98%时使用）'),
     'fio2': ('Fraction of inspired oxygen (21-100%)', '吸入氧浓度（21-100%）'),
-    'vent_ind': ('Indicates if patient is on mechanical ventilation', '患者是否接受机械通气'),
+    'vent_ind': ('Mechanical ventilation indicator (boolean)', '机械通气指示（布尔值）'),
+    'ecmo_indication': ("ECMO indication type: 'respiratory' (for lung failure, auto-scores 4 in SOFA-2 resp) or 'cardiovascular' (for heart failure, scores in SOFA-2 cardio as mech_circ_support)", "ECMO适应症类型：'respiratory'（肺衰竭，SOFA-2呼吸评分自动为4分）或'cardiovascular'（心衰，计入SOFA-2心血管的机械循环支持）"),
+    'adv_resp': ('Advanced respiratory support indicator: IMV (invasive mechanical ventilation), NIV (non-invasive ventilation), HFNC (high-flow nasal cannula), CPAP, or BiPAP - required for SOFA-2 respiratory scores 3-4', '高级呼吸支持指示：IMV（有创机械通气）、NIV（无创通气）、HFNC（经鼻高流量）、CPAP或BiPAP - SOFA-2呼吸评分3-4分的必要条件'),
     
     # Blood gas
-    'lact': ('Lactate - marker of tissue hypoperfusion', '乳酸 - 组织低灌注标志物'),
+    'lact': ('Lactate - marker of tissue hypoperfusion and shock', '乳酸 - 组织低灌注和休克的标志物'),
     'ph': ('Blood acidity/alkalinity (normal 7.35-7.45)', '血液酸碱度（正常7.35-7.45）'),
-    'pco2': ('Partial pressure of CO2 in blood', '血液中二氧化碳分压'),
-    'po2': ('Partial pressure of O2 in blood', '血液中氧分压'),
+    'pco2': ('Partial pressure of CO2 in arterial blood', '动脉血中二氧化碳分压'),
+    'po2': ('Partial pressure of O2 in arterial blood', '动脉血中氧分压'),
     
     # Labs
-    'crea': ('Creatinine - kidney function marker', '肌酐 - 肾功能标志物'),
-    'bili': ('Total bilirubin - liver function marker', '总胆红素 - 肝功能标志物'),
-    'plt': ('Platelet count - coagulation marker', '血小板计数 - 凝血功能标志物'),
+    'crea': ('Serum creatinine - kidney function marker, key for SOFA renal scoring', '血清肌酐 - 肾功能标志物，SOFA肾脏评分关键指标'),
+    'bili': ('Total bilirubin - liver function marker, key for SOFA liver scoring', '总胆红素 - 肝功能标志物，SOFA肝脏评分关键指标'),
+    'plt': ('Platelet count - coagulation marker, key for SOFA coagulation scoring', '血小板计数 - 凝血功能标志物，SOFA凝血评分关键指标'),
     'wbc': ('White blood cell count - infection/inflammation marker', '白细胞计数 - 感染/炎症标志物'),
     
     # Vasopressors
-    'norepi_rate': ('Norepinephrine infusion rate (weight-adjusted)', '去甲肾上腺素输注速率（体重校正）'),
-    'norepi_equiv': ('Norepinephrine equivalent dose (standardized vasopressor dose)', '去甲肾上腺素当量（标准化血管活性药物剂量）'),
-    'vaso_ind': ('Indicates any vasopressor use', '是否使用任何血管活性药物'),
+    'norepi_rate': ('Norepinephrine infusion rate in μg/kg/min (weight-adjusted)', '去甲肾上腺素输注速率（μg/kg/min，体重校正）'),
+    'norepi_equiv': ('Norepinephrine equivalent dose - standardized vasopressor potency', '去甲肾上腺素当量 - 标准化血管活性药物效价'),
+    'vaso_ind': ('Any vasopressor use indicator (boolean)', '任何血管活性药物使用指示（布尔值）'),
+    'other_vaso': ('Other vasopressors/inotropes: vasopressin, phenylephrine, milrinone (combined with dobutamine in SOFA-2 cardio scoring as "has_other_vaso")', '其他血管活性药物：血管加压素、去氧肾上腺素、米力农（在SOFA-2心血管评分中与多巴酚丁胺合并为"has_other_vaso"）'),
     
     # Neurological
-    'gcs': ('Glasgow Coma Scale total score (3-15)', '格拉斯哥昏迷评分总分（3-15分）'),
+    'gcs': ('Glasgow Coma Scale total score (3-15), key for SOFA CNS scoring', '格拉斯哥昏迷评分总分（3-15分），SOFA神经评分关键指标'),
     
     # Outcomes
     'death': ('In-hospital mortality (0=survived, 1=died)', '院内死亡（0=存活，1=死亡）'),
     'los_icu': ('ICU length of stay in days', 'ICU住院时长（天）'),
     'los_hosp': ('Hospital length of stay in days', '总住院时长（天）'),
+    
+    # AKI
+    'aki': ('Acute Kidney Injury (KDIGO Stage ≥1)', '急性肾损伤（KDIGO分期≥1）'),
+    'aki_stage': ('KDIGO AKI stage (0-3): max of creatinine and urine output criteria', 'KDIGO AKI分期（0-3）：肌酐和尿量标准的最大值'),
+    'aki_stage_creat': ('AKI stage based on creatinine: ≥1.5x baseline or ≥0.3 mg/dL increase in 48h', '基于肌酐的AKI分期：较基线升高≥1.5倍 或 48h内升高≥0.3 mg/dL'),
+    'aki_stage_uo': ('AKI stage based on urine output: <0.5 mL/kg/h for 6h (Stage 1), 12h (Stage 2), or <0.3 for 24h (Stage 3)', '基于尿量的AKI分期：<0.5 mL/kg/h持续6h(1期)、12h(2期) 或 <0.3持续24h(3期)'),
+    
+    # Circulatory failure
+    'circ_failure': ('Circulatory failure (circEWS definition): lactate ≥2 mmol/L with hypotension/vasopressors', '循环衰竭（circEWS定义）：乳酸≥2 mmol/L伴低血压或血管活性药物'),
+    'circ_event': ('Circulatory failure event level (0-3): based on lactate, MAP, and vasopressor tier', '循环衰竭事件等级（0-3）：基于乳酸、MAP和血管活性药物等级'),
+    
+    # Other scores
+    'qsofa': ('Quick SOFA (0-3): RR≥22 + altered mental status + SBP≤100', '快速SOFA（0-3分）：呼吸频率≥22 + 意识改变 + 收缩压≤100'),
+    'sirs': ('SIRS criteria (0-4): temp + HR + RR/PaCO2 + WBC/bands', 'SIRS标准（0-4分）：体温 + 心率 + 呼吸/PaCO2 + 白细胞/杆状核'),
 }
 
 # 全局特征分组定义 - 供侧边栏和数据字典共用
@@ -794,7 +814,10 @@ CONCEPT_GROUPS_INTERNAL = {
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc'],
     'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
     'medications': ['abx', 'cort', 'dex', 'ins'],
-    'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt', 'kdigo_aki', 'kdigo_creat', 'kdigo_uo'],  # 包含KDIGO AKI完整特征
+    # 🔧 2026-02-04: 移除重复的 kdigo_aki/kdigo_creat/kdigo_uo，只保留 aki_* 规范名
+    'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
+              # 规范化后的列名（从 kdigo_* 展开列规范化而来）
+              'creat_low_past_48hr', 'creat_low_past_7day', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr'],
     'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event'],  # 🔧 添加循环衰竭特征
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
@@ -810,7 +833,7 @@ CONCEPT_GROUP_NAMES = {
     'sepsis3_sofa1': ('🦠 Sepsis-3 (SOFA-1 based)', '🦠 Sepsis-3 (基于SOFA-1)'),
     'sepsis_shared': ('🦠 Sepsis Shared Concepts', '🦠 Sepsis 共享概念'),
     'vitals': ('❤️ Vital Signs', '❤️ 生命体征'),
-    'respiratory': ('💨 Respiratory Support', '💨 呼吸支持'),
+    'respiratory': ('💨 Respiratory System', '💨 呼吸系统'),
     'ventilator': ('🌬️ Ventilator Parameters', '🌬️ 呼吸机参数'),
     'blood_gas': ('🩸 Blood Gas Analysis', '🩸 血气分析'),
     'chemistry': ('🧪 Lab - Chemistry', '🧪 实验室-生化'),
@@ -819,7 +842,7 @@ CONCEPT_GROUP_NAMES = {
     'medications': ('💊 Other Medications', '💊 其他药物'),
     'renal': ('🚰 Renal & Urine Output', '🚰 肾脏与尿量'),
     'neurological': ('🧠 Neurological', '🧠 神经系统'),
-    'circulatory': ('❤️‍🩹 Circulatory Support', '❤️‍🩹 循环支持'),
+    'circulatory': ('❤️‍🩹 Circulatory System', '❤️‍🩹 循环系统'),
     'demographics': ('👤 Demographics', '👤 人口统计'),
     'other_scores': ('📈 Other Scores', '📈 其他评分'),
     'outcome': ('🎯 Outcome', '🎯 结局'),
@@ -859,51 +882,87 @@ def get_concept_groups():
     return result
 
 
-# 🔧 展开概念前缀映射：将子列名映射回父概念名
-# 这些概念在加载时会展开成多个子列（如 kdigo_aki -> kdigo_aki_aki, kdigo_aki_aki_stage 等）
-EXPANDED_CONCEPT_PREFIXES = {
-    'kdigo_aki_': 'kdigo_aki',      # kdigo_aki_aki, kdigo_aki_aki_stage, ...
-    'kdigo_creat_': 'kdigo_creat',  # kdigo_creat_crea, kdigo_creat_aki_stage_creat, ...
-    'kdigo_uo_': 'kdigo_uo',        # kdigo_uo_aki_stage_uo, kdigo_uo_uo_rt_*, ...
+# 🔧 列名规范化映射：将重复的展开列名统一为简短的规范名称
+# 这些列来自 kdigo_aki, kdigo_creat, kdigo_uo 等复合概念的展开
+# 规范化后每个唯一的数据列只保留一份，避免重复
+COLUMN_NORMALIZATION_MAP = {
+    # kdigo_aki_ 前缀的列 -> 规范名
+    'kdigo_aki_aki': 'aki',
+    'kdigo_aki_aki_stage': 'aki_stage',
+    'kdigo_aki_aki_stage_creat': 'aki_stage_creat',
+    'kdigo_aki_aki_stage_uo': 'aki_stage_uo',
+    'kdigo_aki_crea': 'crea',  # 注意：crea 在 chemistry 模块也有，需要区分
+    'kdigo_aki_creat_low_past_48hr': 'creat_low_past_48hr',
+    'kdigo_aki_creat_low_past_7day': 'creat_low_past_7day',
+    'kdigo_aki_rrt': 'rrt',
+    'kdigo_aki_uo_rt_6hr': 'uo_rt_6hr',
+    'kdigo_aki_uo_rt_12hr': 'uo_rt_12hr',
+    'kdigo_aki_uo_rt_24hr': 'uo_rt_24hr',
+    # kdigo_creat_ 前缀的列 -> 规范名（与 kdigo_aki_ 重复）
+    'kdigo_creat_aki_stage_creat': 'aki_stage_creat',
+    'kdigo_creat_crea': 'crea',
+    'kdigo_creat_creat_low_past_48hr': 'creat_low_past_48hr',
+    'kdigo_creat_creat_low_past_7day': 'creat_low_past_7day',
+    # kdigo_uo_ 前缀的列 -> 规范名（与 kdigo_aki_ 重复）
+    'kdigo_uo_aki_stage_uo': 'aki_stage_uo',
+    'kdigo_uo_uo_rt_6hr': 'uo_rt_6hr',
+    'kdigo_uo_uo_rt_12hr': 'uo_rt_12hr',
+    'kdigo_uo_uo_rt_24hr': 'uo_rt_24hr',
 }
 
+# 🔧 反向映射：规范名 -> 所有原始列名（用于查找数据）
+NORMALIZED_TO_ORIGINAL_MAP = {}
+for orig, norm in COLUMN_NORMALIZATION_MAP.items():
+    if norm not in NORMALIZED_TO_ORIGINAL_MAP:
+        NORMALIZED_TO_ORIGINAL_MAP[norm] = []
+    NORMALIZED_TO_ORIGINAL_MAP[norm].append(orig)
 
-def map_column_to_concept(col_name: str) -> str:
-    """将列名映射回概念名。
+
+def normalize_column_name(col_name: str) -> str:
+    """将列名规范化为统一的简短名称。
     
-    对于展开的子列（如 kdigo_aki_aki），返回父概念名（kdigo_aki）。
+    对于重复的展开列（如 kdigo_aki_aki, kdigo_creat_crea），返回规范名（如 aki, crea）。
     对于普通列名，直接返回原名。
     
     Args:
-        col_name: 列名
+        col_name: 原始列名
         
     Returns:
-        概念名
+        规范化后的列名
     """
-    for prefix, parent_concept in EXPANDED_CONCEPT_PREFIXES.items():
-        if col_name.startswith(prefix):
-            return parent_concept
-    return col_name
+    return COLUMN_NORMALIZATION_MAP.get(col_name, col_name)
 
 
-def count_unique_concepts(column_names: list) -> int:
-    """统计唯一概念数量（将展开的子列合并回父概念）。
+def count_unique_columns(column_names: list) -> int:
+    """统计唯一列数量（规范化后去重）。
+    
+    每个唯一的数据列算作一个 concept。
     
     Args:
         column_names: 列名列表
         
     Returns:
-        唯一概念数量
+        唯一列数量
     """
-    concepts = set()
+    normalized = set()
     for col in column_names:
-        concept = map_column_to_concept(col)
-        concepts.add(concept)
-    return len(concepts)
+        normalized.add(normalize_column_name(col))
+    return len(normalized)
+
+
+# 🔧 保持向后兼容：旧函数名指向新实现
+def map_column_to_concept(col_name: str) -> str:
+    """将列名映射到概念名（向后兼容，现在使用规范化）。"""
+    return normalize_column_name(col_name)
+
+
+def count_unique_concepts(column_names: list) -> int:
+    """统计唯一概念数量（向后兼容，现在使用规范化）。"""
+    return count_unique_columns(column_names)
 
 
 def get_unique_concepts(column_names: list) -> set:
-    """获取唯一概念集合（将展开的子列合并回父概念）。
+    """获取唯一概念集合（规范化后去重）。
     
     Args:
         column_names: 列名列表
@@ -913,7 +972,7 @@ def get_unique_concepts(column_names: list) -> set:
     """
     concepts = set()
     for col in column_names:
-        concept = map_column_to_concept(col)
+        concept = normalize_column_name(col)
         concepts.add(concept)
     return concepts
 
@@ -930,7 +989,8 @@ CONCEPT_GROUPS = {
     "实验室-血液学 (hematology)": ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc'],
     "血管活性药物 (vasopressors)": ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
     "其他药物 (medications)": ['abx', 'cort', 'dex', 'ins'],
-    "肾脏与尿量 (renal)": ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt', 'kdigo_aki', 'kdigo_creat', 'kdigo_uo'],
+    # 🔧 2026-02-04: 移除重复的 kdigo_* 概念
+    "肾脏与尿量 (renal)": ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt'],
     "神经系统 (neurological)": ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx'],
     "循环支持 (circulatory)": ['mech_circ_support', 'circ_failure', 'circ_event'],
     "人口统计 (demographics)": ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
@@ -2716,6 +2776,57 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
         aki_rrt_records.append({'stay_id': row['stay_id'], 'time': row['time'], 'aki_stage_rrt': rrt_stage})
     data['aki_stage_rrt'] = pd.DataFrame(aki_rrt_records)
     
+    # ============ 新增 KDIGO 相关特征 (2026-02-04) ============
+    # creat_low_past_48hr: 过去48小时内最低肌酐（通常与 creat_low_past_7day 相似或稍高）
+    creat_48hr_records = []
+    for _, row in data['aki'].iterrows():
+        # 48hr内的最低肌酐通常略高于7天内的最低值
+        baseline = row['creat_low_past_7day']
+        creat_48hr = round(baseline * np.random.uniform(1.0, 1.15), 2)
+        creat_48hr_records.append({'stay_id': row['stay_id'], 'time': row['time'], 'creat_low_past_48hr': creat_48hr})
+    data['creat_low_past_48hr'] = pd.DataFrame(creat_48hr_records)
+    # 提取 creat_low_past_7day 作为独立特征
+    data['creat_low_past_7day'] = data['aki'][['stay_id', 'time', 'creat_low_past_7day']].copy()
+    
+    # 尿量率（mL/kg/h）：基于患者体重的尿量产出率
+    # 正常值: 0.5-1.5 mL/kg/h，AKI时 <0.5 mL/kg/h（Stage 1）, <0.3（Stage 2/3）
+    uo_rate_records = []
+    for pid in patient_ids:
+        meta = patient_sepsis_meta[pid]
+        patient_weight = data['weight'][data['weight']['stay_id'] == pid]['weight'].iloc[0] if len(data['weight'][data['weight']['stay_id'] == pid]) > 0 else 70
+        
+        # 使用与AKI相同的时间点
+        patient_aki = data['aki'][data['aki']['stay_id'] == pid]
+        for _, row in patient_aki.iterrows():
+            t = row['time']
+            aki_stage = row['aki_stage']
+            
+            # 根据AKI分期生成尿量率
+            if aki_stage == 0:
+                base_uo_rate = np.random.uniform(0.6, 1.5)  # 正常
+            elif aki_stage == 1:
+                base_uo_rate = np.random.uniform(0.3, 0.5)  # Stage 1: <0.5
+            elif aki_stage == 2:
+                base_uo_rate = np.random.uniform(0.15, 0.35)  # Stage 2: <0.3
+            else:
+                base_uo_rate = np.random.uniform(0.0, 0.2)  # Stage 3: <0.3或无尿
+            
+            # 6hr, 12hr, 24hr 窗口的尿量率（略有变化）
+            uo_6hr = round(base_uo_rate * np.random.uniform(0.9, 1.1), 3)
+            uo_12hr = round(base_uo_rate * np.random.uniform(0.85, 1.05), 3)
+            uo_24hr = round(base_uo_rate * np.random.uniform(0.8, 1.0), 3)  # 24hr窗口通常更平滑
+            
+            uo_rate_records.append({
+                'stay_id': pid, 'time': t,
+                'uo_rt_6hr': uo_6hr,
+                'uo_rt_12hr': uo_12hr,
+                'uo_rt_24hr': uo_24hr
+            })
+    uo_rate_df = pd.DataFrame(uo_rate_records)
+    data['uo_rt_6hr'] = uo_rate_df[['stay_id', 'time', 'uo_rt_6hr']].copy()
+    data['uo_rt_12hr'] = uo_rate_df[['stay_id', 'time', 'uo_rt_12hr']].copy()
+    data['uo_rt_24hr'] = uo_rate_df[['stay_id', 'time', 'uo_rt_24hr']].copy()
+    
     # ============ 循环衰竭 (circEWS) 数据 ============
     circ_failure_records = []
     for pid in patient_ids:
@@ -3100,14 +3211,8 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 else:
                     data[key] = pd.DataFrame(records)
     
-    # 🔧 FIX (2026-02-03): ecmo相关别名 - 保持NaN/1格式
-    data['ecmo_indication'] = data['ecmo'].copy() if 'ecmo' in data and not data['ecmo'].empty else pd.DataFrame(columns=['stay_id', 'ecmo_indication'])
-    data['mech_circ_support'] = data['ecmo'].copy() if 'ecmo' in data and not data['ecmo'].empty else pd.DataFrame(columns=['stay_id', 'mech_circ_support'])
-    # 修正列名
-    if not data['ecmo_indication'].empty:
-        data['ecmo_indication'] = data['ecmo_indication'].rename(columns={'ecmo': 'ecmo_indication'})
-    if not data['mech_circ_support'].empty:
-        data['mech_circ_support'] = data['mech_circ_support'].rename(columns={'ecmo': 'mech_circ_support'})
+    # 🔧 注意: ecmo, ecmo_indication, mech_circ_support 在后面的代码中单独生成
+    # （约第3298-3320行），此处不再复制，避免生成顺序问题
     
     # 时间序列指标（使用患者级随机采样）
     mews_records = []
@@ -3191,6 +3296,17 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['ecmo'] = pd.DataFrame(ecmo_records) if ecmo_records else pd.DataFrame(columns=['stay_id', 'time', 'ecmo'])
     data['ecmo_indication'] = pd.DataFrame(ecmo_indication_records) if ecmo_indication_records else pd.DataFrame(columns=['stay_id', 'time', 'ecmo_indication'])
     
+    # 🔧 FIX (2026-02-04): mech_circ_support - 机械循环支持（IABP/LVAD/Impella/VA-ECMO）
+    # 真实数据中非常罕见，约2-3%的ICU患者使用（比ECMO稍多，因为包括IABP等）
+    # 这里在ecmo生成之后更新mech_circ_support，确保反映正确的缺失率
+    mech_circ_records = []
+    for pid in patient_ids:
+        # 2.5%概率使用机械循环支持（包括ECMO + IABP + LVAD等）
+        if np.random.random() < 0.025:
+            mcs_start = np.random.uniform(12, 48)
+            mech_circ_records.append({'stay_id': pid, 'time': mcs_start, 'mech_circ_support': 1})
+    data['mech_circ_support'] = pd.DataFrame(mech_circ_records) if mech_circ_records else pd.DataFrame(columns=['stay_id', 'time', 'mech_circ_support'])
+    
     if 'fio2' in data and not data['fio2'].empty:
         data['supp_o2'] = data['fio2'].copy()
         data['supp_o2']['supp_o2'] = (data['supp_o2']['fio2'] > 21).astype(int)
@@ -3260,28 +3376,8 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['uo_12h'] = pd.DataFrame(uo_12h_records) if uo_12h_records else pd.DataFrame(columns=['stay_id', 'time', 'uo_12h'])
     data['uo_24h'] = pd.DataFrame(uo_24h_records) if uo_24h_records else pd.DataFrame(columns=['stay_id', 'time', 'uo_24h'])
     
-    # 2. kdigo_aki, kdigo_creat, kdigo_uo: KDIGO AKI分期
-    kdigo_creat_records = []
-    kdigo_uo_records = []
-    kdigo_aki_records = []
-    
-    if 'aki_stage_creat' in data and not data['aki_stage_creat'].empty:
-        data['kdigo_creat'] = data['aki_stage_creat'].copy()
-        data['kdigo_creat'] = data['kdigo_creat'].rename(columns={'aki_stage_creat': 'kdigo_creat'})
-    else:
-        data['kdigo_creat'] = pd.DataFrame(columns=['stay_id', 'time', 'kdigo_creat'])
-    
-    if 'aki_stage_uo' in data and not data['aki_stage_uo'].empty:
-        data['kdigo_uo'] = data['aki_stage_uo'].copy()
-        data['kdigo_uo'] = data['kdigo_uo'].rename(columns={'aki_stage_uo': 'kdigo_uo'})
-    else:
-        data['kdigo_uo'] = pd.DataFrame(columns=['stay_id', 'time', 'kdigo_uo'])
-    
-    if 'aki_stage' in data and not data['aki_stage'].empty:
-        data['kdigo_aki'] = data['aki_stage'].copy()
-        data['kdigo_aki'] = data['kdigo_aki'].rename(columns={'aki_stage': 'kdigo_aki'})
-    else:
-        data['kdigo_aki'] = pd.DataFrame(columns=['stay_id', 'time', 'kdigo_aki'])
+    # 🔧 2026-02-04: 移除了重复的 kdigo_creat/kdigo_uo/kdigo_aki 创建代码
+    # 这些概念与 aki_stage_creat/aki_stage_uo/aki_stage 完全重复，只保留后者
     
     # 3. motor_response: GCS运动反应分项（从gcs中提取）
     motor_response_records = []
@@ -3522,8 +3618,22 @@ def render_quick_visualization_page():
                     help="Filter by database or auto-detect" if lang == 'en' else "按数据库筛选或自动检测"
                 )
             
-            # 🔧 FIX (2026-02-04): Auto Detect 模式下自动使用根目录以显示所有数据库
-            if selected_db == '(Auto Detect)':
+            # 🔧 FIX (2026-02-04): 先检测输入目录下是否有子文件夹来决定模式
+            def has_subdirectories(base_path: str) -> bool:
+                """检测目录下是否有子文件夹"""
+                base = Path(base_path)
+                if not base.exists():
+                    return False
+                for item in base.iterdir():
+                    if item.is_dir():
+                        return True
+                return False
+            
+            # 判断是否为精确查找模式（目录下没有子文件夹）
+            is_exact_match_mode = Path(export_path).exists() and not has_subdirectories(export_path)
+            
+            # 🔧 FIX (2026-02-04): 只有在非精确查找模式下，Auto Detect 才回退到父目录
+            if not is_exact_match_mode and selected_db == '(Auto Detect)':
                 # 检测当前路径是否是子目录（包含数据库名称前缀）
                 export_path_obj = Path(export_path)
                 db_prefixes = ['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic', 'mock']
@@ -3543,6 +3653,7 @@ def render_quick_visualization_page():
                 """智能搜索导出数据目录"""
                 result = []
                 base = Path(base_path)
+                
                 
                 if not base.exists():
                     return result
@@ -3579,8 +3690,12 @@ def render_quick_visualization_page():
             # 查找可用目录
             available_dirs = find_export_directories(export_path, selected_db)
             
-            # 如果找到多个目录，提供选择
-            if len(available_dirs) > 1:
+            # 🔧 根据模式决定是否显示选择框
+            if is_exact_match_mode:
+                # 精确查找模式：目录下没有子文件夹，直接使用当前目录
+                actual_path = export_path
+                # 不显示 Select Export Folder 选择框
+            elif len(available_dirs) > 1:
                 dir_options = [d[0] for d in available_dirs]
                 dir_labels = {d[0]: f"{d[0]} ({d[1]} files)" for d in available_dirs}
                 
@@ -5078,6 +5193,7 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
         
         # 从每个宽表中提取特征列
         # 注意：每个文件可能有不同的时间列，需要单独检测
+        # 🔧 2026-02-12: 添加列名规范化和去重逻辑
         for file_name, df in raw_data.items():
             if isinstance(df, pd.DataFrame):
                 # 为当前文件找时间列（每个文件单独检测）
@@ -5093,6 +5209,13 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
                 
                 # 为每个特征创建单独的DataFrame
                 for feat_col in feature_cols:
+                    # 🔧 规范化列名（去重）
+                    normalized_col = normalize_column_name(feat_col)
+                    
+                    # 如果规范化后的列名已存在，跳过（保留第一个遇到的）
+                    if normalized_col in data:
+                        continue
+                    
                     # 保留ID列、该文件的时间列和该特征列
                     keep_cols = []
                     if id_col_found in df.columns:
@@ -5102,9 +5225,10 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
                     keep_cols.append(feat_col)
                     
                     feat_df = df[keep_cols].copy()
-                    # 重命名特征列为标准名
-                    feat_df = feat_df.rename(columns={feat_col: feat_col})
-                    data[feat_col] = feat_df
+                    # 🔧 重命名特征列为规范化后的名称
+                    if feat_col != normalized_col:
+                        feat_df = feat_df.rename(columns={feat_col: normalized_col})
+                    data[normalized_col] = feat_df
         
         # 获取患者列表
         patient_ids = set()
@@ -5143,8 +5267,9 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
         # 🔧 FIX (2026-02-03): 设置 selected_concepts 以便侧边栏的导出按钮可用
         st.session_state.selected_concepts = list(filtered_data.keys())
         
-        # 🔧 FIX (2026-02-04): 统计唯一概念数量（将展开的子列合并回父概念）
-        unique_concept_count = count_unique_concepts(list(filtered_data.keys()))
+        # 🔧 FIX (2026-02-12): 规范化后每列就是一个概念，直接统计列数
+        # 由于在加载时已经去重，这里直接使用 len(filtered_data)
+        unique_concept_count = len(filtered_data)
         
         # 🔧 FIX (2026-02-03): Load Data后重置导出触发状态，避免白屏
         # 注意：不应该重置 export_completed，因为 Quick Visualization 的 Load Data
@@ -5160,13 +5285,14 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
         load_elapsed = time.time() - load_start
         
         # 显示提示信息
+        # 🔧 FIX (2026-02-12): 规范化后 concepts = columns (已去重)
         lang = st.session_state.get('language', 'en')
         if lang == 'en':
-            st.success(f"✅ Loaded {unique_concept_count} concepts ({len(filtered_data)} columns), {len(preview_patient_ids)}/{all_patient_count} patients ({load_elapsed:.1f}s)")
+            st.success(f"✅ Loaded {unique_concept_count} concepts, {len(preview_patient_ids)}/{all_patient_count} patients ({load_elapsed:.1f}s)")
             if is_limited:
                 st.info(f"💡 For better performance, preview is limited to {max_patients} patients. Full data has been exported to disk.")
         else:
-            st.success(f"✅ 已加载 {unique_concept_count} 个概念（{len(filtered_data)} 列），{len(preview_patient_ids)}/{all_patient_count} 个患者 ({load_elapsed:.1f}秒)")
+            st.success(f"✅ 已加载 {unique_concept_count} 个概念，{len(preview_patient_ids)}/{all_patient_count} 个患者 ({load_elapsed:.1f}秒)")
             if is_limited:
                 st.info(f"💡 为保证流畅性，可视化预览仅加载前 {max_patients} 个患者。完整数据已导出到磁盘，可使用Python/R进行完整分析。")
         
@@ -6054,7 +6180,7 @@ def render_home_extract_mode(lang):
             st.markdown('''
             <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
                 <h3 style="color: #0369a1; margin-bottom: 15px;">👈 Select Features in the Left Sidebar</h3>
-                <p style="margin-bottom: 15px;">EasyICU provides <b>166 comprehensive ICU clinical features</b> across 19 categories, covering:</p>
+                <p style="margin-bottom: 15px;">EasyICU provides <b>168 comprehensive ICU clinical features</b> across 19 categories, covering:</p>
                 <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
                     <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
                         <b style="color: #1d4ed8;">📊 Vital Signs</b>
@@ -6092,7 +6218,7 @@ def render_home_extract_mode(lang):
             st.markdown('''
             <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
                 <h3 style="color: #0369a1; margin-bottom: 15px;">👈 在左侧边栏选择特征</h3>
-                <p style="margin-bottom: 15px;">EasyICU 提供 <b>166 个 ICU 临床特征</b>（19 个类别），涵盖：</p>
+                <p style="margin-bottom: 15px;">EasyICU 提供 <b>168 个 ICU 临床特征</b>（19 个类别），涵盖：</p>
                 <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
                     <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
                         <b style="color: #1d4ed8;">📊 生命体征</b>
@@ -6262,6 +6388,25 @@ def render_home_extract_mode(lang):
                     more_msg = f"... and {len(exported_files) - 10} more files" if lang == 'en' else f"... 及其他 {len(exported_files) - 10} 个文件"
                     st.caption(more_msg)
             
+            # 🆕 显示被选择但未能提取的特征（这是正常情况，不是错误）
+            unavailable_concepts = export_result.get('unavailable_concepts', [])
+            if unavailable_concepts:
+                # 🔧 显示所有不可用的特征，使用换行分隔
+                concepts_formatted = '<br>'.join([', '.join(unavailable_concepts[i:i+8]) for i in range(0, len(unavailable_concepts), 8)])
+                if lang == 'en':
+                    unavailable_msg = f"""<div class="info-box" style="margin-top: 15px;">
+<p style="margin-bottom: 10px;"><b>{len(unavailable_concepts)} selected features</b> were not extracted because they are not available in this database:</p>
+<p style="color: #64748b; font-size: 0.95rem; line-height: 1.8;">{concepts_formatted}</p>
+<p style="margin-top: 10px; font-size: 0.9rem; color: #6b7280;">💡 <i>This is normal — not all features are available across all ICU databases.</i></p>
+</div>"""
+                else:
+                    unavailable_msg = f"""<div class="info-box" style="margin-top: 15px;">
+<p style="margin-bottom: 10px;"><b>{len(unavailable_concepts)} 个已选特征</b>未能提取，因为它们在当前数据库中不可用：</p>
+<p style="color: #64748b; font-size: 0.95rem; line-height: 1.8;">{concepts_formatted}</p>
+<p style="margin-top: 10px; font-size: 0.9rem; color: #6b7280;">💡 <i>这是正常现象——并非所有特征都在所有ICU数据库中可用。</i></p>
+</div>"""
+                st.markdown(unavailable_msg, unsafe_allow_html=True)
+            
             st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
             # 🔧 FIX (2026-02-04): 在删除前保存概念数和患者数，供后面的卡片使用
             st.session_state['_last_export_concept_count'] = export_result.get('concept_count', len(exported_files))
@@ -6288,7 +6433,8 @@ def render_home_extract_mode(lang):
             ''', unsafe_allow_html=True)
         
         with col2:
-            # 🔧 FIX (2026-02-04): 优先使用导出结果中的概念数，其次使用已加载/选中的概念数
+            # 🔧 FIX (2026-02-12): 由于列名已在 load_from_exported() 中规范化并去重，
+            # 直接使用 len() 统计，每列就是一个 concept
             export_result = st.session_state.get('_export_success_result')
             if export_result and 'concept_count' in export_result:
                 # 使用导出时统计的实际概念数
@@ -6297,11 +6443,11 @@ def render_home_extract_mode(lang):
                 # 使用上次导出保存的概念数
                 n_concepts = st.session_state['_last_export_concept_count']
             elif st.session_state.loaded_concepts:
-                # 使用已加载的概念数
-                n_concepts = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
+                # 🔧 使用已加载的概念数（已规范化去重）
+                n_concepts = len(st.session_state.loaded_concepts)
             elif st.session_state.get('selected_concepts'):
                 # DEMO模式：使用选中的概念数
-                n_concepts = count_unique_concepts(st.session_state.selected_concepts)
+                n_concepts = len(st.session_state.selected_concepts)
             else:
                 # 没有数据时显示 0
                 n_concepts = 0
@@ -6444,9 +6590,10 @@ def render_home_extract_mode(lang):
         st.markdown('''
         <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
             <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
-                📚 <b>Reference Guide</b>: This dictionary contains all 166 ICU clinical features available in EasyICU, organized into 19 categories. 
+                📚 <b>Reference Guide</b>: This dictionary contains all 168 ICU clinical features available in EasyICU, organized into 19 categories. 
                 Each feature includes its code name, full description, and measurement unit. 
                 Use this to understand what data you're extracting and make informed selections.
+                Note that some features may not be available in all ICU databases.
             </p>
         </div>
         ''', unsafe_allow_html=True)
@@ -6454,7 +6601,7 @@ def render_home_extract_mode(lang):
         st.markdown('''
         <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
             <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
-                📚 <b>参考指南</b>：本字典包含 EasyICU 提供的全部 166 个 ICU 临床特征，分为 19 个类别。
+                📚 <b>参考指南</b>：本字典包含 EasyICU 提供的全部 168 个 ICU 临床特征，分为 19 个类别。
                 每个特征包括代码名称、完整描述和测量单位。
                 使用此字典了解您正在提取的数据，做出明智的选择。
             </p>
@@ -6792,9 +6939,28 @@ def render_timeseries_page():
                                 with stat_cols[i]:
                                     st.metric(f"{icon} {label}", value)
                     else:
-                        warn_msg = "Data missing numeric value columns" if lang == 'en' else "数据中缺少数值列"
+                        # 🔧 FIX: 检测是否有布尔列（包括pandas boolean和numpy bool）
+                        bool_cols = []
+                        for col in patient_df.columns:
+                            dtype_str = str(patient_df[col].dtype).lower()
+                            if 'bool' in dtype_str:
+                                bool_cols.append(col)
+                        
+                        if bool_cols:
+                            if lang == 'en':
+                                warn_msg = f"⚠️ **{selected_concept.upper()}** is a Boolean (True/False) feature. Time Series Analysis requires numeric values and cannot display boolean data as a chart."
+                            else:
+                                warn_msg = f"⚠️ **{selected_concept.upper()}** 是布尔类型（True/False）特征。时序分析需要数值型数据，无法将布尔数据显示为图表。"
+                        else:
+                            warn_msg = f"⚠️ **{selected_concept.upper()}** is a Boolean (True/False) feature. Time Series Analysis requires numeric values and cannot display boolean data as a chart." if lang == 'en' else f"⚠️ **{selected_concept.upper()}** 是布尔类型（True/False）特征。时序分析需要数值型数据，无法将布尔数据显示为图表。"
                         st.warning(warn_msg)
-                        st.dataframe(patient_df.head(20), width="stretch")
+                        # 🔧 显示数据表格预览，将布尔列转换为字符串
+                        display_patient_df = patient_df.head(20).copy()
+                        for col in display_patient_df.columns:
+                            dtype_str = str(display_patient_df[col].dtype).lower()
+                            if 'bool' in dtype_str:
+                                display_patient_df[col] = display_patient_df[col].astype(str)
+                        st.dataframe(display_patient_df, use_container_width=True)
                         
                 except Exception as e:
                     err_msg = f"Chart rendering failed: {e}" if lang == 'en' else f"图表渲染失败: {e}"
@@ -6989,7 +7155,20 @@ def render_timeseries_page():
                         st.markdown(compare_stats_title)
                         st.dataframe(pd.DataFrame(comparison_stats), width="stretch", hide_index=True)
                 else:
-                    format_warn = "Data format not supported for multi-patient comparison" if lang == 'en' else "数据格式不支持多患者比较"
+                    # 🔧 FIX: 检测是否有布尔列（包括pandas boolean和numpy bool）
+                    bool_cols = []
+                    for col in df.columns:
+                        dtype_str = str(df[col].dtype).lower()
+                        if 'bool' in dtype_str:
+                            bool_cols.append(col)
+                    
+                    if bool_cols:
+                        if lang == 'en':
+                            format_warn = f"⚠️ **{selected_concept.upper()}** is a Boolean (True/False) feature. Time Series Analysis requires numeric values and cannot display boolean data as a chart."
+                        else:
+                            format_warn = f"⚠️ **{selected_concept.upper()}** 是布尔类型（True/False）特征。时序分析需要数值型数据，无法将布尔数据显示为图表。"
+                    else:
+                        format_warn = f"⚠️ **{selected_concept.upper()}** 是布尔类型（True/False）特征。时序分析需要数值型数据，无法将布尔数据显示为图表。"
                     st.warning(format_warn)
                     
             except Exception as e:
@@ -7909,8 +8088,8 @@ def render_data_table_subtab():
     # 按模块分组已加载的概念
     concept_groups = get_concept_groups()
     
-    # 🔧 使用内部分组定义来构建映射，避免重复
-    # 反向映射：concept -> group (只保留第一个匹配)
+    # 🔧 FIX (2026-02-12): 使用内部分组定义来构建映射
+    # 由于列名已在 load_from_exported() 中规范化，这里直接使用列名查找分组
     concept_to_group = {}
     for group_key, concepts in CONCEPT_GROUPS_INTERNAL.items():
         # 获取显示名称
@@ -7921,31 +8100,20 @@ def render_data_table_subtab():
             if c not in concept_to_group:
                 concept_to_group[c] = group_display
     
-    # 将已加载的概念按模块分组（去重处理）
+    # 🔧 FIX (2026-02-12): 列名已在 load_from_exported() 中规范化并去重
+    # 每个列就是一个唯一的 concept，直接分组即可
     loaded_by_module = {}
-    uncategorized = []
-    seen_concepts = set()  # 🔧 跟踪已分类的概念，避免重复
     
-    for concept_name in st.session_state.loaded_concepts.keys():
-        # 🔧 跳过已分类的概念（避免重复）
-        if concept_name in seen_concepts:
-            continue
-        seen_concepts.add(concept_name)
-        
-        group = concept_to_group.get(concept_name)
+    for column_name in st.session_state.loaded_concepts.keys():
+        # 使用列名查找分组（列名已经是规范化后的）
+        group = concept_to_group.get(column_name)
         if group:
             if group not in loaded_by_module:
                 loaded_by_module[group] = []
-            loaded_by_module[group].append(concept_name)
-        else:
-            uncategorized.append(concept_name)
+            loaded_by_module[group].append(column_name)
     
-    if uncategorized:
-        other_label = "Other / Uncategorized" if lang == 'en' else "其他 / 未分类"
-        loaded_by_module[other_label] = uncategorized
-    
-    # 🔧 计算真实的唯一特征数
-    unique_feature_count = len(seen_concepts)
+    # 🔧 FIX (2026-02-12): Features = Concepts = 列数（已去重）
+    unique_feature_count = len(st.session_state.loaded_concepts)
     
     # 显示模块统计
     stats_cols = st.columns(4)
@@ -8067,6 +8235,17 @@ def render_data_table_subtab():
                     
                     # 显示数据（限制行数以防卡顿）
                     display_df = df.head(max_rows) if len(df) > max_rows else df
+                    # 🔧 FIX: 将布尔列转换为字符串"True"/"False"显示，而非复选框图标
+                    display_df = display_df.copy()
+                    converted_cols = []
+                    for col in display_df.columns:
+                        dtype_str = str(display_df[col].dtype).lower()
+                        if 'bool' in dtype_str:
+                            display_df[col] = display_df[col].astype(str)
+                            converted_cols.append(col)
+                    # 调试：显示转换信息
+                    if converted_cols:
+                        st.caption(f"🔧 DEBUG: 已将布尔列 {converted_cols} 转换为字符串显示")
                     st.dataframe(display_df, use_container_width=True, height=500)
                     
                     if len(df) > max_rows:
@@ -8116,7 +8295,13 @@ def render_data_table_subtab():
                 st.warning(no_data_msg)
             elif len(dfs_to_merge) == 1:
                 merged_df = dfs_to_merge[0]
-                st.dataframe(merged_df.head(1000), use_container_width=True, height=500)
+                display_merged = merged_df.head(1000).copy()
+                # 🔧 FIX: 将布尔列转换为字符串"True"/"False"显示
+                for col in display_merged.columns:
+                    dtype_str = str(display_merged[col].dtype).lower()
+                    if 'bool' in dtype_str:
+                        display_merged[col] = display_merged[col].astype(str)
+                st.dataframe(display_merged, use_container_width=True, height=500)
             else:
                 # 使用 reduce merge
                 from functools import reduce
@@ -8216,7 +8401,12 @@ def render_data_table_subtab():
                         
                         # 显示数据
                         max_rows = 1000
-                        display_df = merged_df.head(max_rows) if len(merged_df) > max_rows else merged_df
+                        display_df = merged_df.head(max_rows).copy() if len(merged_df) > max_rows else merged_df.copy()
+                        # 🔧 FIX: 将布尔列转换为字符串"True"/"False"显示
+                        for col in display_df.columns:
+                            dtype_str = str(display_df[col].dtype).lower()
+                            if 'bool' in dtype_str:
+                                display_df[col] = display_df[col].astype(str)
                         st.dataframe(display_df, use_container_width=True, height=500)
                         
                         if len(merged_df) > max_rows:
@@ -8296,13 +8486,14 @@ def render_quality_page():
         'vaso_ind',
     ]
     
-    # 🔧 FIX (2026-02-03): 静态布尔事件（每患者最多1条，只有发生时才记录）
+    # 🔧 FIX (2026-02-04): 静态布尔事件（每患者最多1条，只有发生时才记录）
     # 缺失率 = 1 - (有记录的患者数 / 总患者数)
+    # 🔧 mech_circ_support 是非常罕见的治疗（约2-3%患者），缺失率应该约97-98%
     static_boolean_events = [
-        'ecmo', 'ecmo_indication', 'mech_circ_support',  # ECMO/机械循环支持
-        'cort',  # 皮质类固醇
-        'abx',   # 抗生素（静态版本）
-        'vaso_ind',  # 血管活性药物指示
+        'ecmo', 'ecmo_indication', 'mech_circ_support',  # ECMO/机械循环支持（罕见，约2-3%）
+        'cort',  # 皮质类固醇（约25-30%）
+        'abx',   # 抗生素（静态版本，约70%）
+        'vaso_ind',  # 血管活性药物指示（约50-60%）
     ]
     
     # 🔧 完整时间网格大小：优先使用模拟数据的时长参数，否则默认72小时
@@ -8387,13 +8578,34 @@ def render_quality_page():
         return float(missing_rate)
     
     # 获取总患者数（用于计算患者覆盖率）
-    total_patients_in_session = st.session_state.get('patient_limit', 50)
+    # 🔧 FIX (2026-02-04): 改进总患者数获取逻辑
+    # 对于静态布尔事件，需要从非静态布尔事件的概念中获取总患者数
+    # 否则会导致 n_patients == total_patients，缺失率错误地显示为 0%
+    
+    # 首先尝试从 mock_params 获取（Demo Mode 最准确）
+    mock_params = st.session_state.get('mock_params', {})
+    total_patients_in_session = mock_params.get('n_patients', 0)
+    
+    # 如果 mock_params 没有，尝试从 patient_limit 获取
     if total_patients_in_session == 0:
-        # 尝试从任意一个概念获取患者数
+        total_patients_in_session = st.session_state.get('patient_limit', 0)
+    
+    # 如果仍然为 0，从数据中获取最大的患者数
+    if total_patients_in_session == 0:
+        # 尝试从非静态布尔事件的概念中获取最大患者数
+        max_patients_found = 0
         for concept, df in st.session_state.loaded_concepts.items():
             if isinstance(df, pd.DataFrame) and len(df) > 0 and st.session_state.id_col in df.columns:
-                total_patients_in_session = df[st.session_state.id_col].nunique()
-                break
+                concept_patients = df[st.session_state.id_col].nunique()
+                # 优先使用非静态布尔事件的概念患者数
+                if concept not in static_boolean_events:
+                    max_patients_found = max(max_patients_found, concept_patients)
+        
+        if max_patients_found > 0:
+            total_patients_in_session = max_patients_found
+        else:
+            # 如果所有概念都是静态布尔事件，默认使用 50
+            total_patients_in_session = 50
     
     for concept, df in st.session_state.loaded_concepts.items():
         if isinstance(df, pd.DataFrame) and len(df) > 0:
@@ -8601,6 +8813,16 @@ def render_quality_page():
                 'vaso_ind',
             ]
             
+            # 🔧 FIX (2026-02-04): 静态布尔事件（每患者最多1条，只有发生时才记录）
+            # 缺失率 = 1 - (有记录的患者数 / 总患者数)
+            # mech_circ_support 是非常罕见的治疗（约2-3%患者），缺失率应该约97-98%
+            static_boolean_events_chart = [
+                'ecmo', 'ecmo_indication', 'mech_circ_support',  # ECMO/机械循环支持（罕见，约2-3%）
+                'cort',  # 皮质类固醇（约25-30%）
+                'abx',   # 抗生素（静态版本，约70%）
+                'vaso_ind',  # 血管活性药物指示（约50-60%）
+            ]
+            
             # 🔧 完整时间网格大小：优先使用模拟数据的时长参数，否则默认72小时
             mock_params = st.session_state.get('mock_params', {})
             time_grid_size = mock_params.get('hours', 72) if mock_params else 72
@@ -8677,13 +8899,28 @@ def render_quality_page():
                 
                 return float(missing_rates.clip(lower=0).mean() * 100)
             
-            # 获取总患者数
-            total_patients_chart = st.session_state.get('patient_limit', 50)
+            # 🔧 FIX (2026-02-04): 改进总患者数获取逻辑（图表部分）
+            # 首先尝试从 mock_params 获取（Demo Mode 最准确）
+            mock_params = st.session_state.get('mock_params', {})
+            total_patients_chart = mock_params.get('n_patients', 0)
+            
+            # 如果 mock_params 没有，尝试从 patient_limit 获取
             if total_patients_chart == 0:
+                total_patients_chart = st.session_state.get('patient_limit', 0)
+            
+            # 如果仍然为 0，从数据中获取最大的患者数
+            if total_patients_chart == 0:
+                max_patients_found = 0
                 for concept, df in st.session_state.loaded_concepts.items():
                     if isinstance(df, pd.DataFrame) and len(df) > 0 and st.session_state.id_col in df.columns:
-                        total_patients_chart = df[st.session_state.id_col].nunique()
-                        break
+                        concept_patients = df[st.session_state.id_col].nunique()
+                        if concept not in static_boolean_events_chart:
+                            max_patients_found = max(max_patients_found, concept_patients)
+                
+                if max_patients_found > 0:
+                    total_patients_chart = max_patients_found
+                else:
+                    total_patients_chart = 50
             
             for concept, df in st.session_state.loaded_concepts.items():
                 if isinstance(df, pd.DataFrame) and len(df) > 0:
@@ -8698,6 +8935,8 @@ def render_quality_page():
                         
                         # 只有人口统计学数据才是静态
                         is_demographic = concept in demographic_static
+                        # 🔧 FIX (2026-02-04): 静态布尔事件需要特殊处理
+                        is_static_boolean_chart = concept in static_boolean_events_chart
                         
                         main_col = concept if concept in df.columns else value_cols[0]
 
@@ -8707,6 +8946,16 @@ def render_quality_page():
                             if main_col in df.columns:
                                 final_missing_rate = df[main_col].isna().mean() * 100
                             else:
+                                final_missing_rate = df[value_cols].isna().mean().mean() * 100
+                        elif is_static_boolean_chart:
+                            # 🔧 FIX (2026-02-04): 静态布尔事件：缺失率 = 1 - (有记录的患者数 / 总患者数)
+                            # 例如：2.5%患者使用机械循环支持 → 缺失率 = 97.5%
+                            patients_with_event = n_patients  # 有记录的患者数
+                            total_patients = total_patients_chart
+                            if total_patients > 0:
+                                final_missing_rate = (1 - patients_with_event / total_patients) * 100
+                            else:
+                                final_missing_rate = 0
                                 final_missing_rate = df[value_cols].isna().mean().mean() * 100
                         else:
                             # 🔧 简化的缺失率计算：1 - (每患者记录数 / 时间网格)
@@ -12163,12 +12412,46 @@ def execute_sidebar_export():
             actual_patient_count = len(all_exported_patient_ids)
             st.session_state['_exported_patient_count'] = actual_patient_count
             
-            # 🔧 FIX (2026-02-04): 统计实际导出的概念数量（使用统一的计数方法）
-            # 从 data 字典中获取所有概念名，使用 count_unique_concepts 统计
-            exported_concept_count = count_unique_concepts(list(data.keys()))
+            # 🔧 FIX (2026-02-12): 统计实际导出的概念数量
+            # 遍历导出的 parquet 文件，收集所有列名，然后规范化去重
+            # 这与 load_from_exported() 的统计方式完全一致
+            all_exported_columns = set()
+            id_cols_set = {'stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid'}
+            time_cols_set = {'time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'index'}
+            meta_cols_set = {'_concept'}
+            exclude_cols_set = id_cols_set | time_cols_set | meta_cols_set
+            
+            for file_path in exported_files:
+                try:
+                    if file_path.endswith('.parquet'):
+                        temp_df = pd.read_parquet(file_path)
+                    elif file_path.endswith('.csv'):
+                        # 只读取列名，不读取全部数据
+                        temp_df = pd.read_csv(file_path, nrows=0)
+                    else:
+                        continue
+                    for col in temp_df.columns:
+                        if col not in exclude_cols_set:
+                            # 规范化列名
+                            norm_col = normalize_column_name(col)
+                            all_exported_columns.add(norm_col)
+                except Exception:
+                    pass  # 忽略读取错误的文件
+            
+            exported_concept_count = len(all_exported_columns)
             
             # 🔧 DEBUG: 打印实际收集到的患者数量和概念数量
             print(f"[DEBUG] Exported patient count: {actual_patient_count}, concept count: {exported_concept_count}")
+            
+            # 🆕 计算被选择但未能提取的概念列表
+            # 这不是错误，只是一些概念在当前数据库中不可用
+            selected_but_not_exported = []
+            selected_concepts_set = set(selected_concepts) if selected_concepts else set()
+            for c in selected_concepts_set:
+                # 如果概念不在成功导出的列中，则添加到未提取列表
+                norm_c = normalize_column_name(c)
+                if norm_c not in all_exported_columns:
+                    selected_but_not_exported.append(c)
             
             # 🆕 保存导出结果到 session state，rerun 后在 Guide: Complete 中显示
             total_elapsed = time_module.time() - export_start_time
@@ -12179,6 +12462,7 @@ def execute_sidebar_export():
                 'module_times': module_times.copy(),
                 'patient_count': actual_patient_count,  # 🆕 保存实际患者数
                 'concept_count': exported_concept_count,  # 🆕 保存实际概念数
+                'unavailable_concepts': selected_but_not_exported,  # 🆕 被选择但未能提取的概念
             }
             st.rerun()  # 🆕 立即刷新页面，让 Step 4 变为 DONE
         else:

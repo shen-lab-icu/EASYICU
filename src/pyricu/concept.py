@@ -419,6 +419,10 @@ class ConceptResolver:
             if hasattr(self._thread_local, 'inflight'):
                 self._thread_local.inflight.clear()
 
+    def clear(self) -> None:
+        """Alias for clear_table_cache, used by CacheManager."""
+        self.clear_table_cache(keep_concept_cache=False)
+
     def get_raw_concept(
         self,
         concept_name: str,
@@ -598,6 +602,10 @@ class ConceptResolver:
                 # HiRID使用patientid
                 patient_ids = {'patientid': list(patient_ids)}
                 _debug(f'  转换为: {patient_ids}')
+            elif db_name in ['mimic']:
+                # 🔧 FIX 2026-02-08: MIMIC-III 使用 icustay_id（不是 stay_id）
+                patient_ids = {'icustay_id': list(patient_ids)}
+                _debug(f'  转换为: {patient_ids}')
             else:
                 # MIMIC-IV等使用stay_id
                 patient_ids = {'stay_id': list(patient_ids)}
@@ -610,13 +618,18 @@ class ConceptResolver:
             return patient_ids
         
         # 需要进行 ID 转换
-        # 支持的转换：stay_id <-> subject_id
-        if target_id_var == 'subject_id' and 'stay_id' in patient_ids:
-            # 需要从 stay_id 获取 subject_id
-            source_var = 'stay_id'
-            source_values = patient_ids['stay_id']
-        elif target_id_var == 'stay_id' and 'subject_id' in patient_ids:
-            # 需要从 subject_id 获取 stay_id
+        # 支持的转换：stay_id <-> subject_id 或 icustay_id <-> subject_id
+        db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+        
+        # 🔧 FIX 2026-02-08: MIMIC-III 使用 icustay_id
+        stay_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+        
+        if target_id_var == 'subject_id' and stay_id_col in patient_ids:
+            # 需要从 stay_id/icustay_id 获取 subject_id
+            source_var = stay_id_col
+            source_values = patient_ids[stay_id_col]
+        elif target_id_var == stay_id_col and 'subject_id' in patient_ids:
+            # 需要从 subject_id 获取 stay_id/icustay_id
             source_var = 'subject_id'
             source_values = patient_ids['subject_id']
         else:
@@ -636,7 +649,10 @@ class ConceptResolver:
                     return patient_ids
                 
                 from .datasource import FilterSpec, FilterOp
-                # 加载 icustays 表（只需要 stay_id 和 subject_id）
+                # 🔧 FIX 2026-02-08: MIMIC-III 使用 icustay_id
+                stay_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                
+                # 加载 icustays 表（只需要 stay_id/icustay_id 和 subject_id）
                 filters = [
                     FilterSpec(
                         column=source_var,
@@ -646,14 +662,14 @@ class ConceptResolver:
                 ]
                 icustays_table = data_source.load_table(
                     'icustays', 
-                    columns=['stay_id', 'subject_id'],
+                    columns=[stay_id_col, 'subject_id'],
                     filters=filters,
                     verbose=False
                 )
                 if hasattr(icustays_table, 'data'):
-                    self._id_mapping_cache = icustays_table.data[['stay_id', 'subject_id']].drop_duplicates()
+                    self._id_mapping_cache = icustays_table.data[[stay_id_col, 'subject_id']].drop_duplicates()
                 else:
-                    self._id_mapping_cache = icustays_table[['stay_id', 'subject_id']].drop_duplicates()
+                    self._id_mapping_cache = icustays_table[[stay_id_col, 'subject_id']].drop_duplicates()
                     
                 if verbose:
                     if DEBUG_MODE: print(f"   🔗 加载 ID 映射表: {len(self._id_mapping_cache)} 条记录")
@@ -767,12 +783,17 @@ class ConceptResolver:
         
         # 分析每个概念使用的主表和value_var
         table_to_concepts = {}  # {table_name: [(concept_name, value_var), ...]}
+        # 🔧 FIX: 跟踪有多个数据源的概念，这些概念不应使用宽表批量加载
+        multi_source_concepts = set()
         src_name = data_source.config.name if hasattr(data_source, 'config') else 'miiv'
         for name in names:
             concept = self.dictionary.get(name)
             if concept and hasattr(concept, 'sources') and concept.sources:
                 src_list = concept.sources.get(src_name, [])
                 if src_list:
+                    # 🔧 FIX: 检查是否有多个数据源（如eICU的map有vitalperiodic和vitalaperiodic）
+                    if isinstance(src_list, list) and len(src_list) > 1:
+                        multi_source_concepts.add(name)
                     # 获取第一个source的表名和value_var
                     first_src = src_list[0] if isinstance(src_list, list) else src_list
                     table_name = getattr(first_src, 'table', None)
@@ -788,7 +809,9 @@ class ConceptResolver:
         wide_table_batch_results = {}  # {concept_name: DataFrame}
         wide_table_merged_df = None  # 🚀 保存批量加载的合并结果，避免重复合并
         
-        if len(table_to_concepts) == 1:
+        # 🔧 FIX: 只有当没有多数据源概念时才使用批量加载
+        # 因为批量加载只处理一个表，不支持多表合并（如eICU的map需要合并vitalperiodic和vitalaperiodic）
+        if len(table_to_concepts) == 1 and not multi_source_concepts:
             shared_table = list(table_to_concepts.keys())[0]
             concepts_info = table_to_concepts[shared_table]
             
@@ -1187,12 +1210,25 @@ class ConceptResolver:
             # 对于 MIMIC-IV hosp 表（如 microbiologyevents），使用 subject_id
             # 对于 eICU 表，使用 patientunitstayid
             effective_id_var = defaults.id_var
+            db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+            
             if patient_ids:
-                if not effective_id_var:
+                # 🔧 FIX 2026-02-08: 始终检查特殊表，覆盖 defaults.id_var
+                # MIMIC-III/MIMIC-IV 的 hospital tables (labevents等) 需要使用 subject_id 过滤
+                # 因为这些表没有 stay_id/icustay_id 列，需要通过 hadm_id join icustays
+                
+                if source.table == 'labevents' and db_name in ['mimic', 'miiv', 'mimic_demo']:
+                    # 🔧 MIMIC-III/IV labevents 需要使用 subject_id 过滤
+                    # datasource 会通过 hadm_id join icustays 补全 icustay_id/stay_id
+                    effective_id_var = 'subject_id'
+                elif source.table == 'services' and db_name in ['mimic', 'miiv', 'mimic_demo']:
+                    # services 表使用 stay_id/icustay_id，datasource 会自动转换为 hadm_id
+                    effective_id_var = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                elif source.table in ['microbiologyevents', 'd_labitems', 'prescriptions'] and db_name in ['mimic', 'miiv', 'mimic_demo']:
+                    # 其他 hosp 表使用 subject_id
+                    effective_id_var = 'subject_id'
+                elif not effective_id_var:
                     # 如果没有配置 id_var，尝试检测常见的ID列
-                    # 先检查数据库类型
-                    db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                    
                     if db_name in ['eicu', 'eicu_demo']:
                         # eICU使用patientunitstayid
                         effective_id_var = 'patientunitstayid'
@@ -1204,9 +1240,6 @@ class ConceptResolver:
                         effective_id_var = 'patientid'
                     elif source.table in ['patients', 'admissions']:
                         # MIMIC-IV patients/admissions 表使用 subject_id
-                        effective_id_var = 'subject_id'
-                    elif source.table in ['microbiologyevents', 'd_labitems', 'prescriptions']:
-                        # MIMIC-IV hosp表使用subject_id（labevents除外，它同时支持stay_id和subject_id）
                         effective_id_var = 'subject_id'
                     elif source.table in ['inputevents', 'chartevents', 'outputevents', 'procedureevents']:
                         # MIMIC-IV icu表使用stay_id
@@ -1231,21 +1264,24 @@ class ConceptResolver:
                         # DEBUG
                         if id_values:
                             # ✅ 关键修复：对于 hospital tables（如 labevents），如果使用 subject_id 过滤
-                            # 需要在 metadata 中保存原始的 stay_id，供 datasource 在 join 后精确过滤
+                            # 需要在 metadata 中保存原始的 stay_id/icustay_id，供 datasource 在 join 后精确过滤
                             metadata = None
                             db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                             hospital_tables = ['labevents', 'prescriptions', 'microbiologyevents', 'emar', 'pharmacy']
                             
-                            if (db_name in ['miiv', 'mimic_demo'] and 
+                            # 🔧 FIX 2026-02-08: 同时支持 MIMIC-III 和 MIMIC-IV
+                            # MIMIC-IV 使用 stay_id，MIMIC-III 使用 icustay_id
+                            if (db_name in ['miiv', 'mimic_demo', 'mimic'] and 
                                 source.table in hospital_tables and 
-                                effective_id_var == 'subject_id' and 
-                                'stay_id' in expanded_patient_ids):
-                                # 保存原始 stay_id 到 metadata
-                                original_stay_ids = expanded_patient_ids.get('stay_id')
-                                if original_stay_ids:
-                                    metadata = {'original_stay_ids': original_stay_ids}
-                                    if DEBUG_MODE:
-                                        print(f"   💾 在 subject_id 过滤器中附加原始 stay_id: {len(original_stay_ids)} 个")
+                                effective_id_var == 'subject_id'):
+                                # 确定目标 ID 列名
+                                target_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                                if target_id_col in expanded_patient_ids:
+                                    original_stay_ids = expanded_patient_ids.get(target_id_col)
+                                    if original_stay_ids:
+                                        metadata = {'original_stay_ids': original_stay_ids}
+                                        if DEBUG_MODE:
+                                            print(f"   💾 在 subject_id 过滤器中附加原始 {target_id_col}: {len(original_stay_ids)} 个")
                             
                             filters.append(
                                 FilterSpec(
@@ -1626,7 +1662,15 @@ class ConceptResolver:
                                     
                                     # 聚合：根据数据类型选择聚合函数
                                     # 对于输出类数据（尿量等）使用sum，其他使用median (R ricu默认)
-                                    agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'median'
+                                    # 🔧 FIX 2026-02: 当callback是aggregate_fun('sum')时，使用sum聚合
+                                    agg_func = 'median'  # 默认
+                                    if 'urine' in value_col.lower() or 'output' in value_col.lower():
+                                        agg_func = 'sum'
+                                    elif hasattr(source, 'callback') and source.callback:
+                                        import re as re_module
+                                        agg_match = re_module.search(r"aggregate_fun\(['\"]([^'\"]+)['\"]", source.callback)
+                                        if agg_match:
+                                            agg_func = agg_match.group(1)  # e.g., 'sum'
                                     group_cols = id_cols + [time_col + '_rounded']
                                     
                                     # 保留所有列，不只是value_col
@@ -1671,7 +1715,15 @@ class ConceptResolver:
                                     # datetime时间：使用resample
                                     if id_cols:
                                         resampled_groups = []
-                                        agg_func = 'sum' if 'urine' in value_col.lower() or 'output' in value_col.lower() else 'median'
+                                        # 🔧 FIX 2026-02: 当callback是aggregate_fun('sum')时，使用sum聚合
+                                        agg_func = 'median'  # 默认
+                                        if 'urine' in value_col.lower() or 'output' in value_col.lower():
+                                            agg_func = 'sum'
+                                        elif hasattr(source, 'callback') and source.callback:
+                                            import re as re_module
+                                            agg_match = re_module.search(r"aggregate_fun\(['\"]([^'\"]+)['\"]", source.callback)
+                                            if agg_match:
+                                                agg_func = agg_match.group(1)  # e.g., 'sum'
                                         
                                         for group_id, group_df in frame.groupby(id_cols):
                                             group_df = group_df.set_index(time_col)
@@ -1819,14 +1871,21 @@ class ConceptResolver:
                 print(f"       - frame列: {list(frame.columns)}")
                 print(f"       - frame前3行:\\n{frame.head(3)}")
             if DEBUG_MODE:
-                if DEBUG_MODE: print(f"   🔍 调试 {source.table}: 'subject_id' in frame={('subject_id' in frame.columns)}, 'stay_id' in frame={('stay_id' in frame.columns)}, defaults.id_var={defaults.id_var}")
-            if source.table in ['labevents', 'microbiologyevents', 'inputevents'] and 'subject_id' in frame.columns and 'stay_id' not in frame.columns:
-                if DEBUG_MODE: print(f"   ➡️  进入 MIMIC-IV 特殊处理: {source.table}")
+                if DEBUG_MODE: print(f"   🔍 调试 {source.table}: 'subject_id' in frame={('subject_id' in frame.columns)}, 'stay_id' in frame={('stay_id' in frame.columns)}, 'icustay_id' in frame={('icustay_id' in frame.columns)}, defaults.id_var={defaults.id_var}")
+            
+            # 🔧 FIX 2026-02-08: 同时支持 MIMIC-III (icustay_id) 和 MIMIC-IV (stay_id)
+            has_stay_id = 'stay_id' in frame.columns or 'icustay_id' in frame.columns
+            if source.table in ['labevents', 'microbiologyevents', 'inputevents'] and 'subject_id' in frame.columns and not has_stay_id:
+                # 确定目标 ID 列名
+                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                target_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                if DEBUG_MODE: print(f"   ➡️  进入 MIMIC 特殊处理: {source.table} (db={db_name}, target_id={target_id_col})")
                 try:
                     # 仅加载相关stay的icustays，并携带intime/outtime用于窗口过滤
                     icustay_filters = []
                     # 保存expanded_patient_ids到当前作用域,避免后续locals()检查失效
-                    current_expanded_patient_ids = None
+                    # 🔧 FIX 2026-02-08: 初始化为空字典而非 None，确保后面可以正确填充
+                    current_expanded_patient_ids = {}
                     
                     # 🔥 关键修复: 使用原始 stay_id/icustay_id 而不是 subject_id
                     # 这样避免加载同一患者的所有ICU入住记录
@@ -1846,24 +1905,31 @@ class ConceptResolver:
                                 icustay_filters.append(
                                     FilterSpec(column=id_col, op=FilterOp.IN, value=id_vals)
                                 )
+                                # 🔧 FIX 2026-02-08: 保存 patient_ids 到 current_expanded_patient_ids 用于后续过滤
+                                current_expanded_patient_ids = patient_ids.copy()
                                 if DEBUG_MODE: print(f"   🎯 [icustays] 使用 {id_col} 过滤: {len(id_vals)} 个, IDs={id_vals[:5]}...")
                         else:
-                            # 原有逻辑: patient_ids 是列表
+                            # 原有逻辑: patient_ids 是列表，使用目标 ID 列名
                             icustay_filters.append(
-                                FilterSpec(column='stay_id', op=FilterOp.IN, value=patient_ids)
+                                FilterSpec(column=target_id_col, op=FilterOp.IN, value=patient_ids)
                             )
-                            if DEBUG_MODE: print(f"   🎯 [icustays] 使用原始 stay_id 过滤: {len(patient_ids)} 个, IDs={patient_ids}")
+                            # 🔧 FIX 2026-02-08: 保存 patient_ids 到 current_expanded_patient_ids 用于后续过滤
+                            current_expanded_patient_ids = {target_id_col: patient_ids}
+                            if DEBUG_MODE: print(f"   🎯 [icustays] 使用原始 {target_id_col} 过滤: {len(patient_ids)} 个, IDs={patient_ids}")
                     
                     icustays = data_source.load_table('icustays', filters=icustay_filters if icustay_filters else None, verbose=verbose)
                     if hasattr(icustays, 'data'):
                         # 包含hadm_id以便匹配同一住院的数据
-                        cols = ['subject_id', 'stay_id', 'hadm_id', 'intime', 'outtime']
+                        # 🔧 FIX: 同时支持 stay_id 和 icustay_id
+                        cols = ['subject_id', 'stay_id', 'icustay_id', 'hadm_id', 'intime', 'outtime']
                         icu_df = icustays.data[[c for c in cols if c in icustays.data.columns]].drop_duplicates()
                     else:
-                        cols = ['subject_id', 'stay_id', 'hadm_id', 'intime', 'outtime']
+                        cols = ['subject_id', 'stay_id', 'icustay_id', 'hadm_id', 'intime', 'outtime']
                         icu_df = icustays[[c for c in cols if c in icustays.columns]].drop_duplicates()
                     
-                    if DEBUG_MODE: print(f"   ✅ [icustays] 加载后: {len(icu_df)} stays, stay_id={sorted(icu_df['stay_id'].unique())[:10]}")
+                    # 确定实际的 stay ID 列名
+                    actual_stay_col = target_id_col if target_id_col in icu_df.columns else ('stay_id' if 'stay_id' in icu_df.columns else 'icustay_id')
+                    if DEBUG_MODE: print(f"   ✅ [icustays] 加载后: {len(icu_df)} stays, {actual_stay_col}={sorted(icu_df[actual_stay_col].unique())[:10]}")
                     
                     # 🔥 CRITICAL FIX: 为了实现 rolling join，需要加载同一 hadm_id 下的所有 stays
                     # 这样才能正确判断数据点属于哪个 stay
@@ -1918,26 +1984,39 @@ class ConceptResolver:
                             tmp = frame.merge(icu_df, on='subject_id', how='inner')
                         
                         # CRITICAL FIX: 实现 ricu 的 rolling join 逻辑
-                        # 当同一个 hadm_id/subject_id 有多个 stay_id 时，数据会被复制到所有匹配的 stay_id
-                        # 需要根据时间将数据只保留在正确的 stay_id 下
-                        # ricu 使用 roll = -Inf (向前滚动)：数据分配给时间之后最近的 stay_id
-                        target_stay_ids = set(patient_ids) if patient_ids else None
+                        # 当同一个 hadm_id/subject_id 有多个 stay_id/icustay_id 时，数据会被复制到所有匹配的 stay
+                        # 需要根据时间将数据只保留在正确的 stay 下
+                        # ricu 使用 roll = -Inf (向前滚动)：数据分配给时间之后最近的 stay
+                        # 🔧 FIX 2026-02-08: patient_ids 可能是 dict（如 {'icustay_id': [...]}），需要提取实际的 ID 值
+                        target_stay_ids = None
+                        if patient_ids:
+                            if isinstance(patient_ids, dict):
+                                # 从 dict 中提取实际的 ID 值
+                                for key in ['stay_id', 'icustay_id', 'subject_id']:
+                                    if key in patient_ids and patient_ids[key]:
+                                        target_stay_ids = set(patient_ids[key])
+                                        break
+                            else:
+                                target_stay_ids = set(patient_ids)
                         
-                        if time_col is not None and 'stay_id' in tmp.columns and 'intime' in tmp.columns and len(tmp) > 0:
+                        # 确定合并后的 stay ID 列名
+                        merged_stay_col = actual_stay_col if actual_stay_col in tmp.columns else ('stay_id' if 'stay_id' in tmp.columns else 'icustay_id' if 'icustay_id' in tmp.columns else None)
+                        
+                        if time_col is not None and merged_stay_col and merged_stay_col in tmp.columns and 'intime' in tmp.columns and len(tmp) > 0:
                             # 获取所有唯一的 stay_id 及其 intime，按 intime 排序
-                            stay_info = tmp[['stay_id', 'intime']].drop_duplicates().sort_values('intime')
+                            stay_info = tmp[[merged_stay_col, 'intime']].drop_duplicates().sort_values('intime')
                             
                             if len(stay_info) > 1:
                                 # 有多个 stay_id，需要实现 rolling join
-                                stays_list = stay_info['stay_id'].tolist()
+                                stays_list = stay_info[merged_stay_col].tolist()
                                 intimes_list = stay_info['intime'].tolist()
                                 
                                 if DEBUG_MODE:
-                                    print(f"      🔄 [Rolling Join] 检测到多个 stay_id: {stays_list}")
+                                    print(f"      🔄 [Rolling Join] 检测到多个 {merged_stay_col}: {stays_list}")
                                     print(f"      🔄 [Rolling Join] 对应 intime: {intimes_list}")
-                                    print(f"      🔄 [Rolling Join] 目标 stay_id: {target_stay_ids}")
+                                    print(f"      🔄 [Rolling Join] 目标 {merged_stay_col}: {target_stay_ids}")
                                 
-                                # 为每个 stay_id 计算其有效时间范围
+                                # 为每个 stay 计算其有效时间范围
                                 # stay_i 的有效范围是: [prev_stay_outtime, next_stay_intime)
                                 # 但使用 roll = -Inf 意味着：data_time < next_stay_intime
                                 
@@ -1948,7 +2027,7 @@ class ConceptResolver:
                                         continue
                                     
                                     # 过滤属于当前 stay_id 的行
-                                    stay_mask = tmp['stay_id'] == stay_id
+                                    stay_mask = tmp[merged_stay_col] == stay_id
                                     
                                     if i < len(stays_list) - 1:
                                         # 不是最后一个 stay，数据时间必须小于下一个 stay 的 intime
@@ -1956,26 +2035,26 @@ class ConceptResolver:
                                         time_mask = tmp[time_col] < next_intime
                                         stay_data = tmp[stay_mask & time_mask].copy()
                                         if DEBUG_MODE:
-                                            print(f"      🔄 [Rolling Join] stay_id={stay_id}: time < {next_intime}, 保留 {len(stay_data)} 行")
+                                            print(f"      🔄 [Rolling Join] {merged_stay_col}={stay_id}: time < {next_intime}, 保留 {len(stay_data)} 行")
                                     else:
                                         # 最后一个 stay，没有时间上限
                                         stay_data = tmp[stay_mask].copy()
                                         if DEBUG_MODE:
-                                            print(f"      🔄 [Rolling Join] stay_id={stay_id}: 最后一个stay, 保留 {len(stay_data)} 行")
+                                            print(f"      🔄 [Rolling Join] {merged_stay_col}={stay_id}: 最后一个stay, 保留 {len(stay_data)} 行")
                                     
                                     result_frames.append(stay_data)
                                 
                                 if result_frames:
                                     tmp = pd.concat(result_frames, ignore_index=True)
                                     if DEBUG_MODE:
-                                        print(f"      🔄 [Rolling Join] 多 stay_id 时间过滤完成: {len(tmp)} 行")
+                                        print(f"      🔄 [Rolling Join] 多 {merged_stay_col} 时间过滤完成: {len(tmp)} 行")
                         
-                        # 确保只保留用户请求的 stay_id（防止遗漏过滤）
-                        if target_stay_ids and 'stay_id' in tmp.columns:
+                        # 确保只保留用户请求的 stay_id/icustay_id（防止遗漏过滤）
+                        if target_stay_ids and merged_stay_col and merged_stay_col in tmp.columns:
                             before_filter = len(tmp)
-                            tmp = tmp[tmp['stay_id'].isin(target_stay_ids)]
+                            tmp = tmp[tmp[merged_stay_col].isin(target_stay_ids)]
                             if DEBUG_MODE and len(tmp) != before_filter:
-                                print(f"      🎯 [最终过滤] 只保留目标 stay_id: {before_filter} → {len(tmp)} 行")
+                                print(f"      🎯 [最终过滤] 只保留目标 {merged_stay_col}: {before_filter} → {len(tmp)} 行")
 
                         # CRITICAL FIX: Use ICU outtime as upper bound
                         # ricu.R uses ICU discharge (outtime) as the time window, NOT hospital discharge
@@ -2039,37 +2118,43 @@ class ConceptResolver:
                                         print(f"      🕐 [时间转换] {datetime_cols} 从 datetime → 相对小时数 (floor to mins first)")
                             
                             # 将过滤后的数据作为新frame，仅保留必要列
-                            frame = tmp.drop(columns=['intime', 'outtime'])
-                            if DEBUG_MODE: print(f"   ✅ [{concept_name}] MIMIC-IV {source.table}: 合并+过滤后 {len(frame)} 行")
+                            drop_cols = [c for c in ['intime', 'outtime'] if c in tmp.columns]
+                            frame = tmp.drop(columns=drop_cols)
+                            if DEBUG_MODE: print(f"   ✅ [{concept_name}] MIMIC {source.table}: 合并+过滤后 {len(frame)} 行")
                         else:
                             # tmp为空的原因可能是：1) 没有匹配的住院数据，2) 时间过滤后为空
                             # 这是正常的数据过滤行为（例如实验室结果在ICU出院后采集，或在miiv中是ICU入院前的数据）
                             if DEBUG_MODE:
                                 reason = "ricu.R-style时间过滤" if before_filter > 0 else "ICU住院匹配"
-                                print(f"   ⚠️  [{concept_name}] MIMIC-IV {source.table}: {reason}后为空 (原始{len(frame)}行 → 匹配{before_filter}行 → 过滤后0行)")
+                                print(f"   ⚠️  [{concept_name}] MIMIC {source.table}: {reason}后为空 (原始{len(frame)}行 → 匹配{before_filter}行 → 过滤后0行)")
                             frame = pd.DataFrame(columns=frame.columns)
                             
-                        # 🔗 关键修复：如果用户提供了特定的 stay_id，在映射后再次过滤
-                        # 确保只返回用户指定的 stay_id 的数据
-                        if 'stay_id' in frame.columns and patient_ids:
+                        # 🔗 关键修复：如果用户提供了特定的 stay_id/icustay_id，在映射后再次过滤
+                        # 确保只返回用户指定的 stay 的数据
+                        final_stay_col = merged_stay_col if merged_stay_col and merged_stay_col in frame.columns else None
+                        if final_stay_col and patient_ids:
                             # 使用之前保存的current_expanded_patient_ids
-                            if current_expanded_patient_ids and isinstance(current_expanded_patient_ids, dict) and 'stay_id' in current_expanded_patient_ids:
-                                specified_stay_ids = current_expanded_patient_ids['stay_id']
+                            if current_expanded_patient_ids and isinstance(current_expanded_patient_ids, dict):
+                                # 尝试获取 stay_id 或 icustay_id
+                                specified_stay_ids = current_expanded_patient_ids.get(final_stay_col) or current_expanded_patient_ids.get('stay_id') or current_expanded_patient_ids.get('icustay_id')
                                 if specified_stay_ids:
                                     before_stay_filter = len(frame)
-                                    frame = frame[frame['stay_id'].isin(specified_stay_ids)].copy()
+                                    frame = frame[frame[final_stay_col].isin(specified_stay_ids)].copy()
                                     if DEBUG_MODE and before_stay_filter > len(frame):
-                                        print(f"      🔍 [{concept_name}] stay_id过滤: {before_stay_filter}行 → {len(frame)}行 (保留{len(specified_stay_ids)}个stay_id)")
+                                        print(f"      🔍 [{concept_name}] {final_stay_col}过滤: {before_stay_filter}行 → {len(frame)}行 (保留{len(specified_stay_ids)}个{final_stay_col})")
                         
-                        if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
-                                id_columns = ['stay_id']
-                                if DEBUG_MODE: print(f"   🔄 MIMIC-IV特殊处理: {source.table} ID列从 subject_id → stay_id (行数: {len(frame)})")
+                        if defaults.id_var == 'subject_id' and final_stay_col and final_stay_col in frame.columns:
+                                id_columns = [final_stay_col]
+                                if DEBUG_MODE: print(f"   🔄 MIMIC特殊处理: {source.table} ID列从 subject_id → {final_stay_col} (行数: {len(frame)})")
                     else:
-                        # 没有明确时间列，退化为subject级合并（可能产生冗余），但仍补充stay_id
-                        frame = frame.merge(icu_df[['subject_id', 'stay_id']], on='subject_id', how='inner')
-                        if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
-                            id_columns = ['stay_id']
-                            if DEBUG_MODE: print(f"   🔄 MIMIC-IV特殊处理(无时间列): {source.table} ID列从 subject_id → stay_id (行数: {len(frame)})")
+                        # 没有明确时间列，退化为subject级合并（可能产生冗余），但仍补充stay_id/icustay_id
+                        merge_cols = ['subject_id']
+                        if actual_stay_col in icu_df.columns:
+                            merge_cols.append(actual_stay_col)
+                            frame = frame.merge(icu_df[merge_cols], on='subject_id', how='inner')
+                            if defaults.id_var == 'subject_id':
+                                id_columns = [actual_stay_col]
+                                if DEBUG_MODE: print(f"   🔄 MIMIC特殊处理(无时间列): {source.table} ID列从 subject_id → {actual_stay_col} (行数: {len(frame)})")
                 except Exception as ex:
                     print(f"⚠️  Warning: Failed to time-map labevents to icu stays: {ex}")
                     if verbose:
@@ -2225,7 +2310,18 @@ class ConceptResolver:
                         traceback.print_exc()
 
             # 如果配置中没有ID列，尝试从数据中自动检测
-            if not table.id_columns:
+            # 🔧 FIX 2026-02-05: 对于 MIMIC-III，始终优先使用 icustay_id（如果存在）
+            db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+            
+            # 检查是否需要覆盖表配置的 id_columns
+            should_detect_id = not table.id_columns
+            
+            # 🔧 MIMIC-III 特殊处理：labevents 配置了 hadm_id，但实际需要用 icustay_id
+            if db_name == 'mimic' and 'icustay_id' in frame.columns:
+                # 如果数据中有 icustay_id，强制使用它
+                should_detect_id = True
+            
+            if should_detect_id:
                 # 检查数据中是否有常见的ID列
                 # 🔧 修复: 根据数据库类型优先选择合适的ID列
                 db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
@@ -2237,6 +2333,9 @@ class ConceptResolver:
                     common_id_cols = ['patientunitstayid', 'patientid']
                 elif db_name in ['hirid']:
                     common_id_cols = ['patientid']
+                elif db_name == 'mimic':
+                    # 🔧 FIX 2026-02-05: MIMIC-III 使用 icustay_id（不是 stay_id）
+                    common_id_cols = ['icustay_id', 'hadm_id', 'subject_id']
                 else:
                     # MIMIC-IV 等
                     common_id_cols = ['stay_id', 'icustay_id', 'hadm_id', 'subject_id']
@@ -2255,11 +2354,14 @@ class ConceptResolver:
             source_index_column = source.index_var or table.index_column
             source_unit_column = source.unit_var or table.unit_column
             
-            # 更新全局 index_column 和 unit_column（用于后续的时间对齐等操作）
-            # 但确保每个源处理时使用自己的配置
-            if not index_column:
+            # 🔧 FIX 2025-02: 只有当frame有数据时才更新全局的index_column
+            # 问题：多源概念中，第一个源（DuckDB聚合）可能返回0行但设置了index_column='measuredat_minutes'
+            # 第二个源（callback）返回有效数据，时间列是'measuredat'
+            # 如果总是用第一个源的index_column，合并后数据会因为该列全是NaN而被丢弃
+            # 解决：只有当源返回非空数据时，才更新全局index_column
+            if not index_column and len(frame) > 0:
                 index_column = source_index_column
-            if not unit_column:
+            if not unit_column and len(frame) > 0:
                 unit_column = source_unit_column
 
             time_columns = list(
@@ -2486,19 +2588,38 @@ class ConceptResolver:
                     'iu/hr': 'units/hr',
                 }
                 
-                # 🔧 CRITICAL: 对于 AUMC 数据库，放宽单位匹配
-                # AUMC 使用荷兰语单位（如 IE 代表国际单位）
-                # 并且某些概念（如 ins）使用 dose 列但概念定义期望 units/hr
-                # 为保持与 R ricu 一致，对 AUMC 禁用严格单位过滤
+                # 🔧 CRITICAL: 与 R ricu 保持一致，只报告单位警告，不过滤数据
+                # R ricu 的 report_set_unit() 函数只打印警告消息:
+                #   "not all units are in [expected]: actual_units"
+                # 它不会删除数据，只是记录警告信息
+                # 
+                # 之前的实现对非 AUMC 数据库应用严格单位过滤，但这会导致:
+                # - MIMIC-III resp 概念丢失 itemid 618/619 数据（使用 BPM 单位而非 insp/min）
+                # - 其他单位变体的数据丢失
+                # 
+                # 为与 R ricu 完全一致，现在对所有数据库都只报告警告，不过滤
                 db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                skip_unit_filter = db_name == 'aumc'
                 
-                if skip_unit_filter:
-                    # AUMC: 跳过严格单位过滤，但仍记录调试信息
+                # 🔧 只报告警告，不过滤数据（与 R ricu 一致）
+                unique_units = frame[source_unit_column].unique()
+                unique_units_str = {str(u).strip().lower() for u in unique_units if pd.notna(u)}
+                mismatched = unique_units_str - allowed_units
+                if mismatched and (DEBUG_MODE or len(frame) > 0):
+                    # 只在调试模式或有数据时记录
                     if DEBUG_MODE:
-                        series = frame[source_unit_column].astype(str).str.strip()
-                        print(f"   ⚠️ AUMC: 跳过单位过滤 (原单位: {series.unique()[:5]}, 期望: {definition.units})")
-                else:
+                        print(f"   ⚠️ 单位警告 (允许{definition.units}): 发现不匹配单位 {mismatched}")
+                    # 发出Python警告供日志记录
+                    import warnings
+                    warnings.warn(
+                        f"概念 '{concept_name}': 不是所有单位都在允许列表中 {definition.units}, "
+                        f"发现: {mismatched}",
+                        UserWarning
+                    )
+                
+                # 🔧 以下是被禁用的严格过滤逻辑（保留作为参考）
+                skip_unit_filter = True  # 与 R ricu 一致，不过滤数据
+                
+                if not skip_unit_filter:
                     # 非 AUMC 数据库：应用严格单位过滤
                     # 🚀 快速路径：先检查唯一值，如果所有唯一值都在允许列表中，跳过昂贵的字符串操作
                     unique_units = frame[source_unit_column].unique()
@@ -2813,6 +2934,52 @@ class ConceptResolver:
                 
                 index_column = 'charttime'  # Update index_column for subsequent processing
         
+        # 🔧 CRITICAL FIX 2026-02-05: AUMC 多源时间列统一
+        # 当 DuckDB 聚合路径返回 measuredat_minutes，原始加载路径返回 measuredat 时，
+        # 需要统一成一个时间列 (charttime)，否则 change_interval 会丢失数据
+        elif db_name == 'aumc':
+            aumc_time_cols = ['measuredat_minutes', 'measuredat', 'givenat', 'start', 'starttime']
+            time_cols_in_data = [col for col in combined.columns if col in aumc_time_cols]
+            
+            if len(time_cols_in_data) > 1:
+                if DEBUG_MODE:
+                    print(f"   🔧 [AUMC] 检测到多个时间列: {time_cols_in_data}, 需要统一")
+                
+                # 按有效数据量排序
+                def count_valid_aumc(col):
+                    return combined[col].notna().sum() if col in combined.columns else 0
+                
+                time_cols_in_data = sorted(time_cols_in_data, key=count_valid_aumc, reverse=True)
+                
+                # 统一时间列为 'charttime'
+                # 1. 首先将所有时间列转换为相同单位（分钟）
+                # measuredat_minutes 已经是分钟
+                # measuredat 的单位需要检测：如果 max > 10000，可能是毫秒
+                for col in time_cols_in_data:
+                    if col == 'measuredat' and col in combined.columns:
+                        # 检测是否是毫秒（AUMC 原始时间是毫秒）
+                        max_val = combined[col].abs().max()
+                        if pd.notna(max_val) and max_val > 100000:  # 大于 100000 表示是毫秒
+                            combined[col] = combined[col] / 60000.0  # 毫秒转分钟
+                            if DEBUG_MODE:
+                                print(f"   🔧 [AUMC] {col} 从毫秒转换为分钟")
+                
+                # 2. 合并所有时间列到 charttime
+                combined['charttime'] = combined[time_cols_in_data[0]]
+                for col in time_cols_in_data[1:]:
+                    if col in combined.columns:
+                        combined['charttime'] = combined['charttime'].fillna(combined[col])
+                        combined = combined.drop(columns=[col])
+                
+                # 删除第一个时间列（如果不同于 charttime）
+                if time_cols_in_data[0] != 'charttime' and time_cols_in_data[0] in combined.columns:
+                    combined = combined.drop(columns=[time_cols_in_data[0]])
+                
+                index_column = 'charttime'
+                
+                if DEBUG_MODE:
+                    print(f"   🔧 [AUMC] 时间列统一完成, charttime 有效值: {combined['charttime'].notna().sum()}/{len(combined)}")
+        
         sort_keys = [col for col in id_columns if col]
         if index_column:
             sort_keys.append(index_column)
@@ -2962,6 +3129,18 @@ class ConceptResolver:
                 agg_method = agg_value if agg_value not in (None, "auto") else None
                 if agg_method in (None, "auto"):
                     agg_method = None
+                
+                # 🔧 FIX 2025-02: When callback is aggregate_fun('sum', ...), use 'sum' aggregation
+                # in change_interval to preserve the sum semantics
+                if agg_method is None and sources:
+                    for src in sources:
+                        if src.callback:
+                            import re as re_module
+                            agg_match = re_module.search(r"aggregate_fun\(['\"](\w+)['\"]", src.callback)
+                            if agg_match:
+                                agg_method = agg_match.group(1)  # e.g., 'sum'
+                                break
+                
                 # Default aggregation based on value type (matches R ricu)
                 if agg_method is None:
                     # Check value column type
@@ -3007,11 +3186,33 @@ class ConceptResolver:
             is_point_event = concept_name in POINT_EVENT_CONCEPTS
             is_duration_concept = concept_name in DURATION_CONCEPTS or concept_name.endswith('_dur')
             
-            should_expand = (has_endtime or has_stoptime or has_stop or has_duration or has_dur_var) and not is_point_event and not is_duration_concept
+            # 🔧 FIX 2026-02-07: Skip expand for callbacks that already call expand internally
+            # mimic_rate_cv/mimic_rate_mv, expand_intervals, etc. already handle time expansion
+            # Re-expanding would cause issues (e.g., NaN endtime from inputevents_cv merge with inputevents_mv)
+            callbacks_that_expand = [
+                'mimic_rate_cv', 'mimic_rate_mv', 'expand_intervals',
+                'hirid_rate', 'hirid_rate_kg', 'hirid_duration',
+                'eicu_rate', 'eicu_rate_kg',
+                'aumc_rate', 'aumc_rate_kg', 'aumc_rate_units', 'aumc_dur',
+                'sic_rate_kg', 'sic_dur',
+            ]
+            callback_already_expanded = False
+            if sources:
+                for src in sources:
+                    cb = getattr(src, 'callback', None)
+                    if cb:
+                        for expand_cb in callbacks_that_expand:
+                            if expand_cb in cb:
+                                callback_already_expanded = True
+                                break
+                    if callback_already_expanded:
+                        break
+            
+            should_expand = (has_endtime or has_stoptime or has_stop or has_duration or has_dur_var) and not is_point_event and not is_duration_concept and not callback_already_expanded
             
             # DEBUG
             if DEBUG_MODE and (has_dur_var or has_endtime or has_stoptime):
-                print(f"   🔍 DEBUG: should_expand={should_expand}, has_dur_var={has_dur_var}, has_endtime={has_endtime}, is_point_event={is_point_event}")
+                print(f"   🔍 DEBUG: should_expand={should_expand}, has_dur_var={has_dur_var}, has_endtime={has_endtime}, is_point_event={is_point_event}, callback_already_expanded={callback_already_expanded}")
             if should_expand:
                 from .ts_utils import expand
                 
@@ -4239,6 +4440,10 @@ class ConceptResolver:
     ) -> ICUTable:
         """Load LOS (Length of Stay) concept.
         
+        RICU behavior: los_hosp uses win_type='hadm' to calculate hospital LOS,
+        but returns results keyed by stay_id (ICU level), not hadm_id.
+        This requires joining admissions table with icustays table.
+        
         Args:
             concept_name: Name of the concept (e.g., 'los_hosp', 'los_icu')
             source: Concept source configuration
@@ -4247,7 +4452,7 @@ class ConceptResolver:
             target_type: Concept target type ('id_tbl' for static values, None for time series)
         
         Returns:
-            ICUTable with LOS data
+            ICUTable with LOS data keyed by the primary ID (stay_id for MIIV)
         """
         win_type = source.params.get("win_type")
         if not win_type:
@@ -4257,6 +4462,24 @@ class ConceptResolver:
         # 🔧 FIX: 允许 end 为空（HiRID 需要从 observations 合成 end 时间）
         if id_cfg is None or not id_cfg.table or not id_cfg.start:
             raise ValueError(f"Identifier configuration for '{win_type}' is incomplete.")
+        
+        # 🔧 2026-02-04 FIX: 确定目标 ID 类型（RICU 默认使用 icustay 级别）
+        # 获取数据库的主 ID 配置（通常是 icustay）
+        primary_id_type = None
+        primary_id_cfg = None
+        for id_type, cfg in data_source.config.id_configs.items():
+            if id_type == 'icustay' or (cfg.position and cfg.position == 3):
+                primary_id_type = id_type
+                primary_id_cfg = cfg
+                break
+        
+        # 如果没有 icustay，使用 win_type 本身
+        if primary_id_cfg is None:
+            primary_id_type = win_type
+            primary_id_cfg = id_cfg
+        
+        # 决定是否需要 ID 映射
+        need_id_mapping = (win_type != primary_id_type and primary_id_cfg is not None)
 
         # 🔧 FIX: 如果 id_cfg 没有 end，使用占位符名称（将在后续合成）
         end_col_name = id_cfg.end if id_cfg.end else '_synthesized_end'
@@ -4387,7 +4610,44 @@ class ConceptResolver:
         # 🚀 性能优化：对于 id_tbl 目标的概念（如 los_hosp），不生成时间网格
         # 直接返回每个患者一行数据，而不是按小时展开
         if target_type == 'id_tbl':
-            # 静态值：每个患者只有一行
+            # 🔧 2026-02-04 FIX: 如果需要 ID 映射，将 hadm_id 映射到 stay_id
+            if need_id_mapping and primary_id_cfg is not None:
+                # 加载 ICU stays 表来获取 hadm_id -> stay_id 映射
+                icu_table = data_source.load_table(primary_id_cfg.table)
+                icu_df = icu_table.data.copy()
+                
+                # 确保两个表有共同的连接键（通常是 hadm_id 或 subject_id）
+                # 对于 MIIV: admissions.hadm_id -> icustays.hadm_id -> icustays.stay_id
+                join_col = id_cfg.id  # hadm_id
+                
+                if join_col in icu_df.columns and primary_id_cfg.id in icu_df.columns:
+                    # 合并：frame[hadm_id, los_hosp] + icu_df[hadm_id, stay_id]
+                    result_df = frame[[id_cfg.id, concept_name]].merge(
+                        icu_df[[join_col, primary_id_cfg.id]].drop_duplicates(),
+                        on=join_col,
+                        how='inner'
+                    )
+                    # 每个 stay_id 只保留一行（如果一个 hadm 有多个 ICU stays，取第一个）
+                    result_df = result_df.drop_duplicates(subset=[primary_id_cfg.id])
+                    result_df = result_df[[primary_id_cfg.id, concept_name]]
+                    
+                    # 应用患者过滤
+                    if patient_ids is not None:
+                        if isinstance(patient_ids, dict):
+                            candidates = patient_ids.get(primary_id_cfg.id) or list(patient_ids.values())[0] if patient_ids else []
+                        else:
+                            candidates = list(patient_ids)
+                        if candidates:
+                            result_df = result_df[result_df[primary_id_cfg.id].isin(set(candidates))]
+                    
+                    return ICUTable(
+                        data=result_df,
+                        id_columns=[primary_id_cfg.id],
+                        index_column=None,
+                        value_column=concept_name,
+                    )
+            
+            # 静态值：每个患者只有一行（无需映射的情况）
             result_df = frame[[id_cfg.id, concept_name]].copy()
             return ICUTable(
                 data=result_df,
@@ -6871,16 +7131,29 @@ def _apply_callback(
 
     # Handle aumc_rate callback - combine unit_var and rate_var into unit/rate format
     # R: x <- x[, c(unit_var) := do_call(.SD, paste, sep = "/"), .SDcols = c(unit_var, rate_var)]
+    # 🔧 FIX 2025-02-03: Also normalize rate units (min -> hr conversion)
     if expr == "aumc_rate":
         rate_var = getattr(source, 'rate_var', None)
         if not rate_var and source.params:
             rate_var = source.params.get("rate_var")
         unit_var = source.unit_var or unit_column
+        val_var = source.value_var or concept_name
         
-        if rate_var and unit_var and rate_var in frame.columns and unit_var in frame.columns:
+        if rate_var and rate_var in frame.columns:
             frame = frame.copy()
+            # Normalize rate units: 'min' means per-minute, need to multiply by 60 to get per-hour
+            # R ricu does this in aumc_rate_kg with hr_to_min, but aumc_rate needs it too for dex
+            rate_lower = frame[rate_var].astype(str).str.lower().str.strip()
+            
+            # If rate_var is 'min' (per minute), multiply value by 60 to get per hour
+            mask_min = rate_lower.isin({'min', 'minute', 'minutes', 'm'})
+            if mask_min.any() and val_var in frame.columns:
+                frame.loc[mask_min, val_var] = frame.loc[mask_min, val_var] * 60.0
+                frame.loc[mask_min, rate_var] = 'uur'  # Now it's per hour
+            
             # Combine unit and rate into "unit/rate" format
-            frame[unit_var] = frame[unit_var].astype(str) + "/" + frame[rate_var].astype(str)
+            if unit_var and unit_var in frame.columns:
+                frame[unit_var] = frame[unit_var].astype(str) + "/" + frame[rate_var].astype(str)
         return frame
 
     match = re.fullmatch(r"aumc_rate_units\(\s*([0-9eE+\-\.]+)\s*\)", expr)
@@ -7442,7 +7715,7 @@ def _apply_callback(
     # R ricu logic: 100 * value / wbc
     # Used for lymphocytes, neutrophils, etc.
     if expr.strip() == "blood_cell_ratio":
-        DEBUG_CALLBACK = False  # Toggle for debugging
+        DEBUG_CALLBACK = False  # Toggle for debugging (set to True for trace)
         if DEBUG_CALLBACK:
             print(f"  [CALLBACK DEBUG] {concept_name} blood_cell_ratio 开始")
             print(f"    frame.shape = {frame.shape}, columns = {list(frame.columns)}")
@@ -7459,8 +7732,9 @@ def _apply_callback(
         
         # Determine ID column based on database
         # AUMC uses 'admissionid', MIMIC uses 'stay_id', eICU uses 'patientunitstayid'
+        # HiRID uses 'patientid', SICdb uses 'CaseID'
         id_col = None
-        for possible_id in ['admissionid', 'stay_id', 'patientunitstayid', 'subject_id', 'icustay_id']:
+        for possible_id in ['admissionid', 'stay_id', 'patientunitstayid', 'subject_id', 'icustay_id', 'patientid', 'CaseID']:
             if possible_id in frame.columns:
                 id_col = possible_id
                 break

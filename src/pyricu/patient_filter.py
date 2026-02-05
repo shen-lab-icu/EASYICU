@@ -121,15 +121,20 @@ class PatientFilter:
         if self.data_path is None:
             raise ValueError("data_path未设置")
         
-        if self.database in ['miiv', 'mimic']:
+        if self.database == 'miiv':
             # MIMIC-IV: 需要合并 patients + icustays + admissions
             self._demographics = self._load_miiv_demographics()
+        elif self.database == 'mimic':
+            # MIMIC-III: 使用 icustay_id 而非 stay_id
+            self._demographics = self._load_mimic3_demographics()
         elif self.database == 'eicu':
             self._demographics = self._load_eicu_demographics()
         elif self.database == 'aumc':
             self._demographics = self._load_aumc_demographics()
         elif self.database == 'hirid':
             self._demographics = self._load_hirid_demographics()
+        elif self.database == 'sic':
+            self._demographics = self._load_sic_demographics()
         else:
             raise ValueError(f"不支持的数据库: {self.database}")
         
@@ -297,6 +302,97 @@ class PatientFilter:
         general['patient_id'] = general['patientid']
         
         return general
+    
+    def _load_mimic3_demographics(self) -> pd.DataFrame:
+        """加载MIMIC-III人口统计学数据"""
+        # 加载基础表
+        icustays = self._read_table('icustays')
+        patients = self._read_table('patients')
+        admissions = self._read_table('admissions')
+        
+        # 合并 - MIMIC-III 使用 icustay_id
+        df = icustays.merge(patients, on='subject_id', how='left')
+        df = df.merge(admissions, on=['subject_id', 'hadm_id'], how='left')
+        
+        # 计算年龄（入ICU时的年龄）
+        if 'dob' in df.columns and 'intime' in df.columns:
+            df['dob'] = pd.to_datetime(df['dob'])
+            df['intime'] = pd.to_datetime(df['intime'])
+            df['age'] = (df['intime'] - df['dob']).dt.days / 365.25
+            # MIMIC-III 对 >89 岁的患者做了脱敏，显示为 ~300岁
+            df.loc[df['age'] > 90, 'age'] = 90
+        
+        # 计算ICU住院时长（小时）
+        if 'los' in df.columns:
+            df['los_hours'] = df['los'] * 24  # los是天数
+        elif 'intime' in df.columns and 'outtime' in df.columns:
+            df['intime'] = pd.to_datetime(df['intime'])
+            df['outtime'] = pd.to_datetime(df['outtime'])
+            df['los_hours'] = (df['outtime'] - df['intime']).dt.total_seconds() / 3600
+        
+        # 判断是否首次入ICU
+        if 'intime' in df.columns:
+            df = df.sort_values(['subject_id', 'intime'])
+            df['icu_order'] = df.groupby('subject_id').cumcount() + 1
+            df['first_icu_stay'] = df['icu_order'] == 1
+        
+        # 性别标准化
+        if 'gender' in df.columns:
+            df['gender'] = df['gender'].str.upper().str[0]  # 'M' or 'F'
+        
+        # 存活状态
+        if 'hospital_expire_flag' in df.columns:
+            df['survived'] = df['hospital_expire_flag'] == 0
+        elif 'deathtime' in df.columns:
+            df['survived'] = df['deathtime'].isna()
+        
+        # ID列标准化 - MIMIC-III 使用 icustay_id
+        df['patient_id'] = df['icustay_id']
+        
+        return df
+    
+    def _load_sic_demographics(self) -> pd.DataFrame:
+        """加载SICdb人口统计学数据"""
+        # SICdb 使用 cases 表
+        cases = self._read_table('cases')
+        
+        # 年龄 - SICdb 的 age 是直接的年龄值
+        if 'Age' in cases.columns:
+            cases['age'] = cases['Age']
+        elif 'age' in cases.columns:
+            pass  # 已经有age列
+        
+        # 住院时长 - OffsetOfDeath 或 ICUOffset 表示 ICU 停留时间（分钟）
+        if 'OffsetOfDeath' in cases.columns and 'TimeOfStay' in cases.columns:
+            # TimeOfStay 是 ICU 停留时间（分钟）
+            cases['los_hours'] = cases['TimeOfStay'] / 60
+        elif 'TimeOfStay' in cases.columns:
+            cases['los_hours'] = cases['TimeOfStay'] / 60
+        
+        # 首次入ICU（SICdb 通常每个 CaseID 是独立的 ICU 入院）
+        cases['first_icu_stay'] = True
+        
+        # 性别
+        if 'Sex' in cases.columns:
+            cases['gender'] = cases['Sex'].map({0: 'F', 1: 'M', 'Female': 'F', 'Male': 'M', 'F': 'F', 'M': 'M'})
+        elif 'sex' in cases.columns:
+            cases['gender'] = cases['sex'].map({0: 'F', 1: 'M', 'Female': 'F', 'Male': 'M', 'F': 'F', 'M': 'M'})
+        
+        # 存活状态 - OffsetOfDeath 如果不为空表示死亡
+        if 'OffsetOfDeath' in cases.columns:
+            cases['survived'] = cases['OffsetOfDeath'].isna()
+        elif 'offsetofdeath' in cases.columns:
+            cases['survived'] = cases['offsetofdeath'].isna()
+        else:
+            cases['survived'] = True  # 默认存活
+        
+        # ID列标准化 - SICdb 使用 CaseID
+        if 'CaseID' in cases.columns:
+            cases['patient_id'] = cases['CaseID']
+        elif 'caseid' in cases.columns:
+            cases['patient_id'] = cases['caseid']
+        
+        return cases
     
     def _read_table(self, table_name: str) -> pd.DataFrame:
         """读取数据表"""
