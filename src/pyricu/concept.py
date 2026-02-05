@@ -2183,10 +2183,21 @@ class ConceptResolver:
                             )
                     
                     icustays = data_source.load_table('icustays', filters=icustay_filters if icustay_filters else None, verbose=verbose)
+                    
+                    # 🔧 FIX 2026-02: 支持 MIMIC-III (icustay_id) 和 MIMIC-IV (stay_id)
+                    db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                    target_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                    icu_cols = ['subject_id', 'hadm_id', target_id_col, 'intime']
+                    icu_cols = [c for c in icu_cols if c in (icustays.data.columns if hasattr(icustays, 'data') else icustays.columns)]
+                    
                     if hasattr(icustays, 'data'):
-                        icu_df = icustays.data[['subject_id', 'hadm_id', 'stay_id', 'intime']].drop_duplicates()
+                        icu_df = icustays.data[icu_cols].drop_duplicates()
                     else:
-                        icu_df = icustays[['subject_id', 'hadm_id', 'stay_id', 'intime']].drop_duplicates()
+                        icu_df = icustays[icu_cols].drop_duplicates()
+                    
+                    # 重命名为统一的 stay_id 以便后续代码使用
+                    if target_id_col != 'stay_id' and target_id_col in icu_df.columns:
+                        icu_df = icu_df.rename(columns={target_id_col: 'stay_id'})
                     
                     # 🔧 FIX: 实现 ricu 的 rolling join 逻辑用于 death 概念
                     # 当同一个 hadm_id 有多个 ICU stay 时，death 应该分配给最近的 stay
@@ -2300,7 +2311,12 @@ class ConceptResolver:
                             if DEBUG_MODE and before_stay_filter > len(frame):
                                 print(f"      🔍 [{concept_name}] stay_id过滤: {before_stay_filter}行 → {len(frame)}行")
                         
-                        if defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
+                        # 🔧 FIX 2026-02: MIMIC-III 需要将 stay_id 重命名回 icustay_id
+                        if target_id_col == 'icustay_id' and 'stay_id' in frame.columns:
+                            frame = frame.rename(columns={'stay_id': 'icustay_id'})
+                            id_columns = ['icustay_id']
+                            if DEBUG_MODE: print("   🔄 MIMIC-III特殊处理: admissions ID列从 subject_id → icustay_id")
+                        elif defaults.id_var == 'subject_id' and 'stay_id' in frame.columns:
                             id_columns = ['stay_id']
                             if DEBUG_MODE: print("   🔄 MIMIC-IV特殊处理: admissions ID列从 subject_id → stay_id")
                 except Exception as ex:
@@ -2980,6 +2996,102 @@ class ConceptResolver:
                 if DEBUG_MODE:
                     print(f"   🔧 [AUMC] 时间列统一完成, charttime 有效值: {combined['charttime'].notna().sum()}/{len(combined)}")
         
+        # 🔧 CRITICAL FIX 2026-02-09: MIMIC-III 多源时间列统一
+        # MIMIC-III 的 inputevents_cv 使用 charttime，inputevents_mv 使用 starttime
+        # 当两个源合并时，需要将 starttime 统一到 charttime
+        # 
+        # 🔧 2026-02-10 扩展修复：处理类型不一致问题
+        # 问题：CV 源的 charttime 是 datetime 格式，MV 源经过 distribute_amount callback 后
+        #      starttime 变成了 float（相对小时数），合并后 fillna 无法正确处理
+        # 解决：检测并统一时间列类型，将 datetime 转换为相对小时数（与 callback 输出一致）
+        elif db_name in ['mimic', 'mimic_demo']:
+            mimic_time_cols = ['charttime', 'starttime', 'storetime', 'admittime']
+            time_cols_in_data = [col for col in combined.columns if col in mimic_time_cols]
+            
+            if len(time_cols_in_data) > 1:
+                if DEBUG_MODE:
+                    print(f"   🔧 [MIMIC-III] 检测到多个时间列: {time_cols_in_data}, 需要统一")
+                
+                # 🔧 检测时间列类型不一致的问题
+                # 如果一个列是 float（callback 返回的相对时间），另一个是 datetime（原始时间）
+                # 需要将 datetime 也转换为相对时间
+                col_types = {}
+                for col in time_cols_in_data:
+                    if col in combined.columns:
+                        col_dtype = combined[col].dtype
+                        if pd.api.types.is_numeric_dtype(col_dtype):
+                            col_types[col] = 'numeric'
+                        elif pd.api.types.is_datetime64_any_dtype(col_dtype):
+                            col_types[col] = 'datetime'
+                        else:
+                            col_types[col] = 'other'
+                
+                # 如果存在类型不一致，需要统一为 numeric（相对时间）
+                has_numeric = 'numeric' in col_types.values()
+                has_datetime = 'datetime' in col_types.values()
+                
+                if has_numeric and has_datetime:
+                    if DEBUG_MODE:
+                        print(f"   🔧 [MIMIC-III] 时间列类型不一致: {col_types}, 需要转换 datetime → numeric")
+                    
+                    # 获取 icustays 表的 intime 用于计算相对时间
+                    try:
+                        icustays_table = data_source.load_table('icustays', columns=['icustay_id', 'intime'], verbose=False)
+                        icustays_df = icustays_table.data if hasattr(icustays_table, 'data') else icustays_table
+                        
+                        if 'intime' in icustays_df.columns:
+                            # 确保 intime 是 datetime 类型
+                            icustays_df['intime'] = pd.to_datetime(icustays_df['intime'], errors='coerce')
+                            if icustays_df['intime'].dt.tz is not None:
+                                icustays_df['intime'] = icustays_df['intime'].dt.tz_localize(None)
+                            
+                            # 合并 intime
+                            if 'icustay_id' in combined.columns:
+                                combined = combined.merge(
+                                    icustays_df[['icustay_id', 'intime']].drop_duplicates(),
+                                    on='icustay_id', how='left'
+                                )
+                                
+                                # 转换所有 datetime 时间列为相对小时数
+                                for col, ctype in col_types.items():
+                                    if ctype == 'datetime' and col in combined.columns:
+                                        combined[col] = pd.to_datetime(combined[col], errors='coerce')
+                                        if combined[col].dt.tz is not None:
+                                            combined[col] = combined[col].dt.tz_localize(None)
+                                        # 计算相对小时数
+                                        combined[col] = (combined[col] - combined['intime']).dt.total_seconds() / 3600.0
+                                        if DEBUG_MODE:
+                                            print(f"   🔧 [MIMIC-III] 已将 {col} 从 datetime 转换为相对小时数")
+                                
+                                # 删除临时的 intime 列
+                                if 'intime' in combined.columns:
+                                    combined = combined.drop(columns=['intime'])
+                    except Exception as e:
+                        if DEBUG_MODE:
+                            print(f"   ⚠️ [MIMIC-III] datetime→numeric 转换失败: {e}")
+                
+                # 优先使用 charttime，如果不存在则创建
+                if 'charttime' not in combined.columns:
+                    # 按有效数据量排序，找到最佳时间列
+                    def count_valid_mimic(col):
+                        return combined[col].notna().sum() if col in combined.columns else 0
+                    
+                    time_cols_in_data = sorted(time_cols_in_data, key=count_valid_mimic, reverse=True)
+                    # 将第一个（最有数据的）时间列重命名为 charttime
+                    combined = combined.rename(columns={time_cols_in_data[0]: 'charttime'})
+                    time_cols_in_data = time_cols_in_data[1:]
+                
+                # 合并其他时间列到 charttime（使用第一个非NaN值）
+                for col in time_cols_in_data:
+                    if col in combined.columns and col != 'charttime':
+                        combined['charttime'] = combined['charttime'].fillna(combined[col])
+                        combined = combined.drop(columns=[col])
+                
+                index_column = 'charttime'
+                
+                if DEBUG_MODE:
+                    print(f"   🔧 [MIMIC-III] 时间列统一完成, charttime 有效值: {combined['charttime'].notna().sum()}/{len(combined)}")
+        
         sort_keys = [col for col in id_columns if col]
         if index_column:
             sort_keys.append(index_column)
@@ -3195,6 +3307,9 @@ class ConceptResolver:
                 'eicu_rate', 'eicu_rate_kg',
                 'aumc_rate', 'aumc_rate_kg', 'aumc_rate_units', 'aumc_dur',
                 'sic_rate_kg', 'sic_dur',
+                # 🔧 FIX 2026-02-05: distribute_amount 内部已经处理时间展开，不需要再次 expand
+                # MIMIC-III ins 概念使用 inputevents_mv 的 distribute_amount callback
+                'distribute_amount',
             ]
             callback_already_expanded = False
             if sources:
@@ -4890,11 +5005,20 @@ class ConceptResolver:
                 dur_var=concept_name + "_dur",
             )
 
+        # 🔧 FIX: 当没有 ts_to_win_tbl 时，如果有 comp_na 比较，应该返回布尔值而不是原始值
+        # 这修复了 HiRID ett_gcs 返回 'invasive' 而不是 True/False 的问题
         cols = list(base_table.id_columns)
         if base_table.index_column:
             cols.append(base_table.index_column)
-        cols.append(value_col)
-        result = data[cols].rename(columns={value_col: concept_name})
+        
+        if comp_match:
+            # 有 comp_na 比较，返回布尔值结果
+            result = data[cols].copy()
+            result[concept_name] = mask.values
+        else:
+            # 没有比较，返回原始值
+            cols.append(value_col)
+            result = data[cols].rename(columns={value_col: concept_name})
 
         return ICUTable(
             data=result.reset_index(drop=True),
@@ -5376,6 +5500,43 @@ class ConceptResolver:
                         )
                         if verbose:
                             logger.info("   ✅ 扩展完成: %d 行", len(expanded_df))
+            
+            # 🔧 FIX 2026-02: 对于 target='id_tbl' 的概念（如 height, weight），
+            # 需要聚合到每个患者只有一行。R ricu 使用 median 作为数值类型的默认聚合。
+            # 参考：ricu/R/tbl-utils.R aggregate.id_tbl 和 ricu/R/concept-load.R load_concepts.num_cncpt
+            definition = self.dictionary.get(concept_name)
+            if definition and getattr(definition, 'target', None) == 'id_tbl':
+                from .table import ICUTable as ICUTableClass
+                if isinstance(result, ICUTableClass) and not result.data.empty:
+                    df = result.data
+                    id_cols = list(result.id_columns)
+                    value_col = result.value_column or concept_name
+                    
+                    if value_col in df.columns and id_cols:
+                        # R ricu aggregate.id_tbl: numeric -> median, logical -> any, character -> first
+                        col_dtype = df[value_col].dtype
+                        if pd.api.types.is_bool_dtype(col_dtype):
+                            agg_func = 'any'
+                        elif pd.api.types.is_numeric_dtype(col_dtype):
+                            agg_func = 'median'
+                        else:
+                            agg_func = 'first'
+                        
+                        # 聚合到每个患者一行
+                        agg_df = df.groupby(id_cols, as_index=False).agg({value_col: agg_func})
+                        
+                        if verbose:
+                            logger.info("   📊 聚合 id_tbl 概念 '%s': %d 行 -> %d 行 (agg=%s)", 
+                                       concept_name, len(df), len(agg_df), agg_func)
+                        
+                        result = ICUTableClass(
+                            data=agg_df,
+                            id_columns=id_cols,
+                            index_column=None,  # id_tbl 没有时间列
+                            value_column=value_col,
+                            unit_column=None,
+                            time_columns=[],
+                        )
                         
         except Exception:
             with self._cache_lock:
@@ -6716,8 +6877,13 @@ def _apply_callback(
     # Handle mimic_dur_inmv callback (for infusion durations)
     if expr.strip() == "mimic_dur_inmv":
         from .callback_utils import mimic_dur_inmv
-        # Call the callback with appropriate parameters
-        id_cols = [col for col in frame.columns if 'id' in col.lower()]
+        # 🔧 FIX 2025-02-10: Only use the PRIMARY patient ID column, not all "id" columns
+        primary_id_candidates = ['icustay_id', 'stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+        id_cols = None
+        for cand in primary_id_candidates:
+            if cand in frame.columns:
+                id_cols = [cand]
+                break
         # stop_var and grp_var are stored in params dict
         stop_var = source.params.get('stop_var', None) if source.params else None
         grp_var = source.params.get('grp_var', None) if source.params else None
@@ -6759,8 +6925,14 @@ def _apply_callback(
     # Handle mimic_dur_incv callback (for CareVue durations)
     if expr.strip() == "mimic_dur_incv":
         from .callback_utils import mimic_dur_incv
-        # Call the callback with appropriate parameters
-        id_cols = [col for col in frame.columns if 'id' in col.lower()]
+        # 🔧 FIX 2025-02-10: Only use the PRIMARY patient ID column, not all "id" columns
+        # R ricu's calc_dur uses id_vars(x) which returns only the patient ID (e.g., icustay_id)
+        primary_id_candidates = ['icustay_id', 'stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+        id_cols = None
+        for cand in primary_id_candidates:
+            if cand in frame.columns:
+                id_cols = [cand]
+                break
         # grp_var is stored in params dict
         grp_var = source.params.get('grp_var', None) if source.params else None
         # Use unit_column from parent context or source.unit_var
@@ -6778,8 +6950,13 @@ def _apply_callback(
     # Handle mimic_rate_cv callback (for CareVue infusion rates)
     if expr.strip() == "mimic_rate_cv":
         from .callback_utils import mimic_rate_cv
-        # Call the callback with appropriate parameters
-        id_cols = [col for col in frame.columns if 'id' in col.lower()]
+        # 🔧 FIX 2025-02-10: Only use the PRIMARY patient ID column, not all "id" columns
+        primary_id_candidates = ['icustay_id', 'stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+        id_cols = None
+        for cand in primary_id_candidates:
+            if cand in frame.columns:
+                id_cols = [cand]
+                break
         # grp_var is stored in params dict
         grp_var = source.params.get('grp_var', None) if source.params else None
         unit_col = source.unit_var if hasattr(source, 'unit_var') else None
@@ -7533,6 +7710,14 @@ def _apply_callback(
         admission_times = None
         if data_source is not None:
             try:
+                # 🔧 FIX 2026-02-09: 正确检测 ID 列
+                # MIMIC-III 使用 icustay_id，需要明确指定
+                db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                if db_name in ['mimic', 'mimic_demo']:
+                    id_cols_for_icustays = ['icustay_id']
+                else:
+                    id_cols_for_icustays = ['stay_id', 'icustay_id', 'hadm_id', 'admissionid', 'patientid', 'patientunitstayid']
+                
                 # Load icustays to get admission times
                 icustays_result = data_source.load_table('icustays')
                 # Handle ICUTable or DataFrame result
@@ -7544,7 +7729,7 @@ def _apply_callback(
                 if icustays is not None and len(icustays) > 0:
                     # Find ID column
                     id_col = None
-                    for col in id_cols:
+                    for col in id_cols_for_icustays:
                         if col in icustays.columns:
                             id_col = col
                             break

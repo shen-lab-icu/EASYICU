@@ -146,6 +146,7 @@ WINDOW_CONCEPTS = {
 POINT_EVENT_CONCEPTS = {
     "abx", "samp", "cort", "dobu60", "susp_inf", "sep3", "avpu",
     "rrt",  # Renal replacement therapy: uses set_val(TRUE), point events from chartevents + procedureevents
+    "vent_end", "vent_start",  # Ventilation events: uses set_val(TRUE), point events
 }
 
 # 时长概念（已编码持续时间，不需要展开）

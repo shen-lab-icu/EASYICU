@@ -27,17 +27,40 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+# 初始化侧边栏展开状态
+if 'sidebar_expanded' not in st.session_state:
+    st.session_state.sidebar_expanded = False
 
-# 侧边栏宽度调整（加宽以提高可见性）
-st.markdown("""
+# 侧边栏宽度设置 - 根据展开状态动态调整
+sidebar_width = "100vw" if st.session_state.sidebar_expanded else "450px"
+sidebar_min_width = "100vw" if st.session_state.sidebar_expanded else "380px"
+main_display = "none" if st.session_state.sidebar_expanded else "block"
+
+st.markdown(f"""
 <style>
-    [data-testid="stSidebar"] {
-        min-width: 380px;
-        max-width: 420px;
-    }
-    [data-testid="stSidebar"] > div:first-child {
-        width: 380px;
-    }
+    [data-testid="stSidebar"] {{
+        min-width: {sidebar_min_width};
+        max-width: {sidebar_width};
+        width: {sidebar_width} !important;
+        transition: all 0.3s ease;
+    }}
+    [data-testid="stSidebar"] > div {{
+        width: 100% !important;
+    }}
+    /* 隐藏侧边栏折叠按钮 */
+    [data-testid="collapsedControl"] {{
+        display: none !important;
+    }}
+    button[kind="headerNoPadding"] {{
+        display: none !important;
+    }}
+    [data-testid="stSidebarCollapseButton"] {{
+        display: none !important;
+    }}
+    /* 展开时隐藏右侧主内容 */
+    [data-testid="stMain"] {{
+        display: {main_display} !important;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -388,12 +411,12 @@ st.markdown("""
     /* ============ 侧边栏美化 ============ */
     [data-testid="stSidebar"] {
         min-width: 450px !important;
-        max-width: 550px !important;
+        max-width: 55000px !important;
     }
     
     [data-testid="stSidebar"] > div:first-child {
         min-width: 450px !important;
-        max-width: 550px !important;
+        max-width: 55000px !important;
     }
     
     /* 侧边栏头部装饰 */
@@ -869,6 +892,30 @@ CONCEPT_GROUPS_DISPLAY = {
     'demographics': '👤 Demographics',
     'other_scores': '📈 Other Scores',
     'outcome': '🎯 Outcome',
+}
+
+# 🔧 ADD (2026-02-05): 支持时序分析的模块（排除静态数据模块）
+# 静态数据模块（demographics, outcome）的值不是连续变化的，不适合时序分析
+TIME_SERIES_COMPATIBLE_MODULES = {
+    'sofa2_score',      # SOFA评分随时间变化
+    'sofa1_score',
+    'sepsis3_sofa2',    # Sepsis状态随时间变化
+    'sepsis3_sofa1',
+    'sepsis_shared',
+    'vitals',           # 生命体征（心率、血压等）
+    'respiratory',      # 呼吸系统
+    'ventilator',       # 呼吸机参数
+    'blood_gas',        # 血气分析
+    'chemistry',        # 生化检验
+    'hematology',       # 血液学
+    'vasopressors',     # 血管活性药物
+    'medications',      # 药物
+    'renal',            # 肾脏与尿量
+    'neurological',     # 神经系统（GCS等）
+    'circulatory',      # 循环系统
+    'other_scores',     # 其他评分
+    # 排除: 'demographics' - 静态数据（年龄、性别、身高、体重等）
+    # 排除: 'outcome' - 静态数据（死亡、住院时长等）
 }
 
 def get_concept_groups():
@@ -4425,7 +4472,21 @@ def render_sidebar():
     entry_mode = st.session_state.get('entry_mode', 'none')
     
     with st.sidebar:
-        # 🔙 返回入口页面按钮（始终显示，除非在入口页）
+        # � 展开/收起按钮
+        expand_col1, expand_col2 = st.columns([3, 1])
+        with expand_col2:
+            if st.session_state.sidebar_expanded:
+                expand_label = "🔙" if st.session_state.language == 'en' else "🔙"
+                expand_help = "Collapse sidebar" if st.session_state.language == 'en' else "收起侧边栏"
+            else:
+                expand_label = "⬛" if st.session_state.language == 'en' else "⬛"
+                expand_help = "Expand to full width" if st.session_state.language == 'en' else "展开到全屏"
+            
+            if st.button(expand_label, key="toggle_sidebar_expand", help=expand_help):
+                st.session_state.sidebar_expanded = not st.session_state.sidebar_expanded
+                st.rerun()
+        
+        # �🔙 返回入口页面按钮（始终显示，除非在入口页）
         if entry_mode != 'none':
             back_label = "🔙 Back to Mode Selection" if st.session_state.language == 'en' else "🔙 返回模式选择"
             if st.button(back_label, key="back_to_entry", use_container_width=True):
@@ -4742,26 +4803,34 @@ def render_sidebar():
                 age_col1, age_col2 = st.columns(2)
                 with age_col1:
                     age_min_label = "Min Age" if st.session_state.language == 'en' else "最小年龄"
-                    age_min = st.number_input(
-                        age_min_label, min_value=0, max_value=120, 
-                        value=18 if st.session_state.cohort_filter['age_min'] is None else int(st.session_state.cohort_filter['age_min']),
-                        key="cohort_age_min"
-                    )
-                    if age_min > 0:
-                        st.session_state.cohort_filter['age_min'] = age_min
-                    else:
+                    # 🔧 ADD (2026-02-05): 添加"不限制"选项
+                    no_limit_min_label = "No Limit" if st.session_state.language == 'en' else "不限制"
+                    age_min_no_limit = st.checkbox(no_limit_min_label, value=st.session_state.cohort_filter['age_min'] is None, key="cohort_age_min_no_limit")
+                    if age_min_no_limit:
                         st.session_state.cohort_filter['age_min'] = None
+                        st.caption("✓ " + ("No minimum age limit" if st.session_state.language == 'en' else "无最小年龄限制"))
+                    else:
+                        age_min = st.number_input(
+                            age_min_label, min_value=0, max_value=120, 
+                            value=18 if st.session_state.cohort_filter['age_min'] is None else int(st.session_state.cohort_filter['age_min']),
+                            key="cohort_age_min"
+                        )
+                        st.session_state.cohort_filter['age_min'] = age_min if age_min > 0 else None
                 with age_col2:
                     age_max_label = "Max Age" if st.session_state.language == 'en' else "最大年龄"
-                    age_max = st.number_input(
-                        age_max_label, min_value=0, max_value=120, 
-                        value=100 if st.session_state.cohort_filter['age_max'] is None else int(st.session_state.cohort_filter['age_max']),
-                        key="cohort_age_max"
-                    )
-                    if age_max < 120:
-                        st.session_state.cohort_filter['age_max'] = age_max
-                    else:
+                    # 🔧 ADD (2026-02-05): 添加"不限制"选项
+                    no_limit_max_label = "No Limit" if st.session_state.language == 'en' else "不限制"
+                    age_max_no_limit = st.checkbox(no_limit_max_label, value=st.session_state.cohort_filter['age_max'] is None, key="cohort_age_max_no_limit")
+                    if age_max_no_limit:
                         st.session_state.cohort_filter['age_max'] = None
+                        st.caption("✓ " + ("No maximum age limit" if st.session_state.language == 'en' else "无最大年龄限制"))
+                    else:
+                        age_max = st.number_input(
+                            age_max_label, min_value=0, max_value=120, 
+                            value=100 if st.session_state.cohort_filter['age_max'] is None else int(st.session_state.cohort_filter['age_max']),
+                            key="cohort_age_max"
+                        )
+                        st.session_state.cohort_filter['age_max'] = age_max if age_max < 120 else None
             
             # 首次入ICU筛选
             first_icu_label = "🏥 First ICU Stay Only" if st.session_state.language == 'en' else "🏥 仅首次入ICU"
@@ -4847,6 +4916,9 @@ def render_sidebar():
                 filter_summary.append(f"Age: {age_range}" if st.session_state.language == 'en' else f"年龄: {age_range}")
             if cf['first_icu_stay'] is not None:
                 filter_summary.append(f"First ICU: {'Yes' if cf['first_icu_stay'] else 'No'}" if st.session_state.language == 'en' else f"首次入ICU: {'是' if cf['first_icu_stay'] else '否'}")
+            # 🔧 ADD (2026-02-05): 显示 Min ICU Stay 筛选条件
+            if cf.get('los_min') is not None:
+                filter_summary.append(f"Min ICU Stay: {cf['los_min']}h" if st.session_state.language == 'en' else f"最短住院: {cf['los_min']}小时")
             if cf['gender'] is not None:
                 filter_summary.append(f"Gender: {cf['gender']}" if st.session_state.language == 'en' else f"性别: {'男' if cf['gender']=='M' else '女'}")
             if cf['survived'] is not None:
@@ -4889,13 +4961,13 @@ def render_sidebar():
         step3_title = "Step 3: Select Features" if st.session_state.language == 'en' else "步骤3: 选择特征"
         st.markdown(f"### 🔧 {step3_title}")
         
-        # 🔧 FIX (2026-02-03): 检查步骤依赖 - Step2必须先完成
+        # 🔧 FIX (2026-02-05): 检查步骤依赖 - Step2必须先确认，否则不显示特征选择
         step2_complete = st.session_state.get('step2_confirmed', False)
         if not step2_complete:
-            # 提示用户先完成Step2
-            step_dep_msg = "⚠️ Please complete Step 2 first" if st.session_state.language == 'en' else "⚠️ 请先完成步骤2"
+            # 提示用户先完成Step2，不显示后续内容
+            step_dep_msg = "⚠️ Please complete Step 2 first (click Confirm Cohort Selection button)" if st.session_state.language == 'en' else "⚠️ 请先完成步骤2（点击确认队列筛选按钮）"
             st.warning(step_dep_msg)
-            # 继续显示后续内容但提示用户
+            return  # 不再显示Step 3的内容
         
         # 初始化 session state
         if 'concept_checkboxes' not in st.session_state:
@@ -4982,19 +5054,37 @@ def render_sidebar():
         
         st.session_state.selected_concepts = selected_concepts
         
+        # 🔧 ADD (2026-02-05): 确认选择按钮 - 只有点击后才能进入Step 4
+        if len(selected_concepts) > 0:
+            step3_confirm_label = "✅ Confirm Selection" if st.session_state.language == 'en' else "✅ 确认选择"
+            if st.button(step3_confirm_label, type="primary", use_container_width=True, key="step3_confirm_selection"):
+                st.session_state.step3_confirmed = True
+                step3_done_msg = "✅ Step 3 completed! Proceed to Step 4: Export Data" if st.session_state.language == 'en' else "✅ 步骤3已完成！请继续步骤4: 导出数据"
+                st.success(step3_done_msg)
+                st.rerun()
+            
+            # 显示已确认状态
+            if st.session_state.get('step3_confirmed', False):
+                step3_confirmed_msg = "✅ Selection confirmed" if st.session_state.language == 'en' else "✅ 已确认选择"
+                st.info(step3_confirmed_msg)
+        else:
+            # 如果没有选中任何概念，重置确认状态
+            st.session_state.step3_confirmed = False
+        
         st.markdown("---")
         
         # ============ 步骤4: 直接导出 ============
         step4_title = "Step 4: Export Data" if st.session_state.language == 'en' else "步骤4: 导出数据"
         st.markdown(f"### 💾 {step4_title}")
         
-        # 🔧 FIX (2026-02-03): 检查步骤依赖 - Step3必须先完成（有选中的概念）
-        step3_complete = len(st.session_state.get('selected_concepts', [])) > 0
+        # 🔧 FIX (2026-02-05): 检查步骤依赖 - Step3必须先确认（点击确认选择按钮）
+        step3_complete = st.session_state.get('step3_confirmed', False) and len(st.session_state.get('selected_concepts', [])) > 0
         if not step3_complete:
-            # 提示用户先完成Step3
-            step_dep_msg = "⚠️ Please complete Step 3 first (select at least one feature)" if st.session_state.language == 'en' else "⚠️ 请先完成步骤3（选择至少一个特征）"
+            # 提示用户先完成Step3并点击确认按钮
+            step_dep_msg = "⚠️ Please complete Step 3 first (select features and click Confirm Selection)" if st.session_state.language == 'en' else "⚠️ 请先完成步骤3（选择特征并点击确认选择）"
             st.warning(step_dep_msg)
-            # 继续显示后续内容但提示用户
+            # 不再继续显示Step4的内容
+            return
         
         # 导出路径配置 - 实时根据数据库显示子目录，添加时间戳后缀
         import platform
@@ -5951,7 +6041,8 @@ def render_home_extract_mode(lang):
     else:
         step1_done = st.session_state.data_path and Path(st.session_state.data_path).exists()
     step2_done = st.session_state.get('step2_confirmed', False)
-    step3_done = len(st.session_state.get('selected_concepts', [])) > 0
+    # 🔧 FIX (2026-02-05): Step 3 必须点击确认按钮后才算完成
+    step3_done = st.session_state.get('step3_confirmed', False) and len(st.session_state.get('selected_concepts', [])) > 0
     # Step 4 只在真正导出完成后才算完成
     step4_done = st.session_state.get('export_completed', False)
     
@@ -6734,9 +6825,12 @@ def render_timeseries_page():
             module_label = "📂 Select Module" if lang == 'en' else "📂 选择模块"
             all_modules_opt = "All Modules" if lang == 'en' else "全部模块"
             
-            # 获取模块列表
+            # 获取模块列表 - 🔧 FIX (2026-02-05): 只显示支持时序分析的模块
             module_options = [all_modules_opt]
             for grp_key in CONCEPT_GROUPS_INTERNAL:
+                # 跳过不支持时序分析的模块（demographics, outcome）
+                if grp_key not in TIME_SERIES_COMPATIBLE_MODULES:
+                    continue
                 grp_concepts = CONCEPT_GROUPS_INTERNAL[grp_key]
                 # 检查该模块是否有已加载的概念
                 if any(c in available_concepts for c in grp_concepts):
@@ -6998,8 +7092,12 @@ def render_timeseries_page():
             module_label = "📂 Select Module" if lang == 'en' else "📂 选择模块"
             all_modules_opt = "All Modules" if lang == 'en' else "全部模块"
             
+            # 🔧 FIX (2026-02-05): 只显示支持时序分析的模块（排除静态数据模块）
             module_options = [all_modules_opt]
             for grp_key in CONCEPT_GROUPS_INTERNAL:
+                # 跳过不支持时序分析的模块（demographics, outcome）
+                if grp_key not in TIME_SERIES_COMPATIBLE_MODULES:
+                    continue
                 grp_concepts = CONCEPT_GROUPS_INTERNAL[grp_key]
                 if any(c in available_concepts for c in grp_concepts):
                     display_name = CONCEPT_GROUPS_DISPLAY.get(grp_key, grp_key)
@@ -7168,7 +7266,7 @@ def render_timeseries_page():
                         else:
                             format_warn = f"⚠️ **{selected_concept.upper()}** 是布尔类型（True/False）特征。时序分析需要数值型数据，无法将布尔数据显示为图表。"
                     else:
-                        format_warn = f"⚠️ **{selected_concept.upper()}** 是布尔类型（True/False）特征。时序分析需要数值型数据，无法将布尔数据显示为图表。"
+                        format_warn = f"⚠️ **{selected_concept.upper()}** is a Boolean (True/False) feature. Time Series Analysis requires numeric values and cannot display boolean data as a chart." if lang == 'en' else f"⚠️ **{selected_concept.upper()}** 是布尔类型（True/False）特征。时序分析需要数值型数据，无法将布尔数据显示为图表。"
                     st.warning(format_warn)
                     
             except Exception as e:
