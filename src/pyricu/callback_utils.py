@@ -474,12 +474,20 @@ def distribute_amount(
         
         expanded_rows = []
         
-        # 检测 ID 列
+        # 检测 ID 列 - 优先使用标准的患者 ID 列
+        # 🔧 FIX 2026-02-09: 使用优先级顺序查找 ID 列
+        standard_id_cols = ['icustay_id', 'stay_id', 'admissionid', 'patientid', 'patientunitstayid', 'hadm_id', 'subject_id']
         id_col = None
-        for col in id_cols:
+        for col in standard_id_cols:
             if col in data.columns:
                 id_col = col
                 break
+        # 如果没有找到标准 ID 列，使用原来的逻辑
+        if id_col is None:
+            for col in id_cols:
+                if col in data.columns:
+                    id_col = col
+                    break
         
         # 获取每个患者的 intime 用于计算相对时间
         intime_map = {}
@@ -1098,36 +1106,51 @@ def calc_dur(
         return data
     
     # Infer ID columns if not provided
+    # 🔧 FIX 2025-02-10: R ricu's calc_dur uses id_vars(x) which returns only the PRIMARY patient ID column
+    # (e.g., icustay_id), NOT all columns containing "id" in their name.
+    # Using all "id" columns causes over-grouping and wrong results.
     if id_cols is None:
-        id_cols = [col for col in data.columns if 'id' in col.lower()]
+        # Try to find the primary patient ID column in priority order
+        primary_id_candidates = ['icustay_id', 'stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+        id_cols = []
+        for cand in primary_id_candidates:
+            if cand in data.columns:
+                id_cols = [cand]
+                break
+        # If no standard ID found, fall back to first column with 'id' (but NOT grp_var or technical IDs)
+        if not id_cols:
+            technical_ids = {'row_id', 'subject_id', 'hadm_id', 'itemid', 'cgid', 'orderid', 'linkorderid'}
+            for col in data.columns:
+                if 'id' in col.lower() and col.lower() not in technical_ids and col != grp_var:
+                    id_cols = [col]
+                    break
+    
+    # 🔧 FIX: Exclude grp_var from id_cols to avoid duplication
+    if grp_var and grp_var in id_cols:
+        id_cols = [col for col in id_cols if col != grp_var]
     
     # Infer index variable (time column) - use min_var as the index output
     index_var = min_var
     
-    # Build grouping columns
+    # Build grouping columns - ensure no duplicates
     group_cols = list(id_cols)
-    if grp_var and grp_var in data.columns:
+    if grp_var and grp_var in data.columns and grp_var not in group_cols:
         group_cols.append(grp_var)
+    # Remove any duplicates while preserving order
+    group_cols = list(dict.fromkeys(group_cols))
     
     # Collect all time columns to preserve them
     time_cols_to_keep = [col for col in data.columns if 'time' in col.lower()]
     
-    # Build aggregation dict
-    # Exclude group_cols from aggregation to avoid duplicates
-    agg_dict = {
-        min_var: 'min',
-        max_var: 'max'
-    }
-    # Add time columns for aggregation (keep first value), but exclude group_cols
-    for col in time_cols_to_keep:
-        if col not in agg_dict and col != min_var and col != max_var and col not in group_cols:
-            agg_dict[col] = 'first'
-    
-    # Add unit column if specified, but exclude if it's in group_cols
-    if unit_col and unit_col in data.columns and unit_col not in group_cols:
-        agg_dict[unit_col] = 'first'
-    
     # Group and aggregate
+    # 🔧 FIX: R ricu calc_dur creates two separate columns:
+    #   - index_var = min(min_var)
+    #   - val_var = max(max_var)
+    # Then computes: val_var = val_var - index_var (duration)
+    # 
+    # When min_var == max_var (e.g., CareVue), we need to handle this specially
+    # because pandas agg() with same key would only keep one result.
+    
     if group_cols:
         data = data.copy()
         
@@ -1136,124 +1159,78 @@ def calc_dur(
         max_is_numeric = pd.api.types.is_numeric_dtype(data[max_var])
         
         if not min_is_numeric:
-            # Try to convert to datetime if not already numeric
             data[min_var] = pd.to_datetime(data[min_var], errors='coerce')
-        if not max_is_numeric:
+        if not max_is_numeric and max_var != min_var:
             data[max_var] = pd.to_datetime(data[max_var], errors='coerce')
         
-        # Drop rows where min_var or max_var is NaN/NaT
-        data = data.dropna(subset=[min_var, max_var])
+        # Drop rows where min_var is NaN/NaT
+        data = data.dropna(subset=[min_var])
         
         if data.empty:
-            # Return empty result with correct structure
-            result = pd.DataFrame(columns=group_cols + [index_var, val_col])
+            result = pd.DataFrame(columns=list(id_cols) + [index_var, val_col])
             if unit_col and unit_col in data.columns:
                 result[unit_col] = []
             return result
         
-        # Remove duplicate columns before groupby (keep first occurrence)
-        # This prevents "cannot insert X, already exists" errors
+        # Remove duplicate columns
         data = data.loc[:, ~data.columns.duplicated(keep='first')]
         
-        # Select only the columns we need for groupby and aggregation
-        # This avoids pandas trying to insert duplicate columns
-        # First, ensure we have a clean DataFrame with unique column names
-        if isinstance(data.columns, pd.MultiIndex):
-            # Flatten MultiIndex columns
-            data.columns = ['_'.join(col).strip('_') if isinstance(col, tuple) else str(col) 
-                           for col in data.columns.values]
-            # Remove any duplicates that might remain
-            data = data.loc[:, ~data.columns.duplicated(keep='first')]
+        # 🔧 FIX: Select only needed columns for groupby to avoid conflicts
+        cols_needed = list(group_cols) + [min_var]
+        if max_var != min_var and max_var in data.columns:
+            cols_needed.append(max_var)
+        if unit_col and unit_col in data.columns:
+            cols_needed.append(unit_col)
+        cols_needed = list(dict.fromkeys(cols_needed))  # Remove duplicates
+        data_subset = data[cols_needed].copy()
         
-        cols_to_use = list(group_cols) + [min_var, max_var]
-        if unit_col and unit_col in data.columns and unit_col not in cols_to_use:
-            cols_to_use.append(unit_col)
-        # Add time columns that are not already included
-        for col in time_cols_to_keep:
-            if col not in cols_to_use and col != min_var and col != max_var:
-                cols_to_use.append(col)
+        # 🔧 FIX: Handle MultiIndex columns
+        if isinstance(data_subset.columns, pd.MultiIndex):
+            data_subset.columns = ['_'.join(map(str, col)).strip('_') for col in data_subset.columns.values]
         
-        # Only use columns that actually exist and are unique
-        cols_to_use = [col for col in cols_to_use if col in data.columns]
-        # Remove duplicates while preserving order
-        cols_to_use = list(dict.fromkeys(cols_to_use))
-        data_subset = data[cols_to_use].copy()
-        
-        # Ensure group_cols are all valid 1D columns
-        valid_group_cols = [col for col in group_cols if col in data_subset.columns]
-        if len(valid_group_cols) != len(group_cols):
-            # Some group cols are missing, use only valid ones
-            group_cols = valid_group_cols
-        
-        # Build aggregation dict for subset (exclude group_cols from aggregation)
-        agg_dict_subset = {
-            min_var: 'min',
-            max_var: 'max'
+        # 🔧 FIX: Use named aggregation with unique names that won't conflict with group_cols
+        agg_funcs = {
+            '_calc_dur_min_time': (min_var, 'min'),
+            '_calc_dur_max_time': (max_var if max_var in data_subset.columns else min_var, 'max'),
         }
-        for col in time_cols_to_keep:
-            if col in data_subset.columns and col not in agg_dict_subset and col != min_var and col != max_var and col not in group_cols:
-                agg_dict_subset[col] = 'first'
+        
+        # Add unit column if specified (but NOT if it's a group column)
         if unit_col and unit_col in data_subset.columns and unit_col not in group_cols:
-            agg_dict_subset[unit_col] = 'first'
+            agg_funcs['_calc_dur_unit'] = (unit_col, 'first')
         
-        # Groupby without as_index, then manually reset index
-        # This gives us more control over handling duplicate columns
+        # Perform groupby with named aggregation
         grouped = data_subset.groupby(group_cols, dropna=False)
-        result = grouped.agg(agg_dict_subset)
+        agg_result = grouped.agg(**agg_funcs)
         
-        # Reset index manually, using level numbers to avoid name conflicts
-        if isinstance(result.index, pd.MultiIndex):
-            # Get index values and convert to DataFrame columns
-            index_df = pd.DataFrame(
-                {result.index.names[i]: result.index.get_level_values(i) 
-                 for i in range(len(result.index.names))},
-                index=result.index
-            )
-            # Check which index columns are already in result.columns
-            cols_to_add = []
-            for col in index_df.columns:
-                if col not in result.columns:
-                    cols_to_add.append(col)
-            
-            # Add only new columns
-            if cols_to_add:
-                result = pd.concat([index_df[cols_to_add], result], axis=1)
-            
-            # Remove index
-            result = result.reset_index(drop=True)
-        else:
-            # Single index
-            if result.index.name:
-                if result.index.name not in result.columns:
-                    result[result.index.name] = result.index.values
-            result = result.reset_index(drop=True)
+        # 🔧 DEBUG: Print columns info
+        import sys
+        print(f"DEBUG calc_dur: agg_result.columns={list(agg_result.columns)}, index.names={agg_result.index.names}", file=sys.stderr)
+        
+        # 🔧 FIX: Check for column conflicts before reset_index
+        # If any index level name exists as a column, drop that column first
+        for level_name in agg_result.index.names:
+            if level_name is not None and level_name in agg_result.columns:
+                print(f"DEBUG: Dropping conflicting column {level_name}", file=sys.stderr)
+                agg_result = agg_result.drop(columns=[level_name])
+        
+        result = agg_result.reset_index()
         
         # 🔧 FIX: R ricu's duration calculation uses floor(end_hours) - floor(start_hours)
-        # This is because R ricu applies round_to (floor) to all time columns before calc_dur
-        # 
-        # R ricu flow:
-        # 1. load_mihi: dt_round_min <- function(x, y) round_to(difftime(x, y, units = "mins"))
-        #    This floors all time columns to integer minutes relative to origin
-        # 2. change_interval: re_time floors minutes to hours
-        # 3. calc_dur: computes max(end) - min(start) on already-floored hours
-        #
-        # So effectively: duration = floor(max_end_hours) - floor(min_start_hours)
-        
-        # Calculate duration: floor(max_end) - floor(min_start) in hours
-        # After aggregation, max_var contains max(endtime), min_var contains min(starttime)
+        # Now we have: _calc_dur_min_time = min(start), _calc_dur_max_time = max(end)
+        # Compute: val_col = floor(_calc_dur_max_time) - floor(_calc_dur_min_time)
         import numpy as np
         
-        # Check if times are already in numeric hours (converted earlier) or datetime
-        if pd.api.types.is_numeric_dtype(result[min_var]) and pd.api.types.is_numeric_dtype(result[max_var]):
+        # Check if times are already in numeric hours or datetime
+        min_time_col = result['_calc_dur_min_time']
+        max_time_col = result['_calc_dur_max_time']
+        
+        if pd.api.types.is_numeric_dtype(min_time_col) and pd.api.types.is_numeric_dtype(max_time_col):
             # Times are already in relative hours - use floor(end_h) - floor(start_h)
-            min_hours = result[min_var].astype(float)
-            max_hours = result[max_var].astype(float)
+            min_hours = min_time_col.astype(float)
+            max_hours = max_time_col.astype(float)
             result[val_col] = np.floor(max_hours) - np.floor(min_hours)
         else:
             # Times are datetime - need to compute relative hours using intime
-            # R ricu formula: floor(end_hours) - floor(start_hours) where hours are relative to intime
-            
-            # Find ID column
             id_col = None
             for col in id_cols if id_cols else []:
                 if col in result.columns:
@@ -1261,52 +1238,44 @@ def calc_dur(
                     break
             
             if admission_times is not None and id_col is not None and 'intime' in admission_times.columns:
-                # Merge intime into result
                 intime_df = admission_times[[id_col, 'intime']].drop_duplicates()
                 intime_df['intime'] = pd.to_datetime(intime_df['intime'], errors='coerce')
-                result_with_intime = result.merge(intime_df, on=id_col, how='left')
+                result = result.merge(intime_df, on=id_col, how='left')
                 
-                # Convert datetime to relative hours
-                result[min_var] = pd.to_datetime(result[min_var], errors='coerce')
-                result[max_var] = pd.to_datetime(result[max_var], errors='coerce')
+                result['_calc_dur_min_time'] = pd.to_datetime(result['_calc_dur_min_time'], errors='coerce')
+                result['_calc_dur_max_time'] = pd.to_datetime(result['_calc_dur_max_time'], errors='coerce')
                 
-                min_hours = (result_with_intime[min_var] - result_with_intime['intime']).dt.total_seconds() / 3600.0
-                max_hours = (result_with_intime[max_var] - result_with_intime['intime']).dt.total_seconds() / 3600.0
+                min_hours = (result['_calc_dur_min_time'] - result['intime']).dt.total_seconds() / 3600.0
+                max_hours = (result['_calc_dur_max_time'] - result['intime']).dt.total_seconds() / 3600.0
                 
-                # Use floor(end_h) - floor(start_h) formula
                 result[val_col] = np.floor(max_hours) - np.floor(min_hours)
+                result = result.drop(columns=['intime'], errors='ignore')
             else:
                 # Fallback: no intime available, use floor(duration)
-                duration_td = result[max_var] - result[min_var]
+                duration_td = result['_calc_dur_max_time'] - result['_calc_dur_min_time']
                 
                 if pd.api.types.is_timedelta64_dtype(duration_td):
                     duration_hours = duration_td.dt.total_seconds() / 3600.0
                 else:
-                    # duration_td might be object dtype containing timedeltas
                     duration_hours = duration_td.apply(
                         lambda x: x.total_seconds() / 3600.0 if hasattr(x, 'total_seconds') else float(x)
                     )
                 
-                # Without intime, we can only floor the duration directly
-                # This is less accurate than floor(end_h) - floor(start_h)
                 result[val_col] = np.floor(duration_hours)
         
-        # Rename min_var to index_var (for consistency with time column naming)
-        # The index_var should be the start time (min_var)
-        # Note: min_var already contains the aggregated min(starttime), which becomes the index_var
-        if min_var != index_var and min_var in result.columns:
-            result = result.rename(columns={min_var: index_var})
+        # Rename _calc_dur_min_time to index_var (start time)
+        result = result.rename(columns={'_calc_dur_min_time': index_var})
+        
+        # Handle unit column
+        if '_calc_dur_unit' in result.columns:
+            result = result.rename(columns={'_calc_dur_unit': unit_col})
         
         # 🔧 FIX: R ricu calc_dur only returns: id_vars + index_var (start time) + val_var (duration)
         # It does NOT keep endtime/max_var column!
-        # Keeping endtime causes _load_single_concept to mistakenly expand duration concepts
-        # as if they were window concepts (win_tbl).
         keep_cols = list(id_cols) + [index_var, val_col]
         if unit_col and unit_col in result.columns:
             keep_cols.append(unit_col)
-        # Remove duplicates while preserving order
         keep_cols = list(dict.fromkeys(keep_cols))
-        # Only keep columns that actually exist
         result = result[[col for col in keep_cols if col in result.columns]]
     else:
         # No grouping, just compute overall min/max
