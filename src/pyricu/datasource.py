@@ -97,8 +97,8 @@ VALUE_TO_ITEMID_MAPPING = {
     'mimic': {
         'chartevents': {
             'value': {
-                'No Response-ETT': {223900},
-                '1.0 ET/Trach': {223900},
+                'No Response-ETT': {223900, 723},
+                '1.0 ET/Trach': {223900, 723},
             }
         }
     },
@@ -2227,6 +2227,8 @@ def load_bucketed_table_aggregated(
     agg_func: str = 'median',  # 'median', 'mean', 'max', 'min', 'first', 'sum'
     id_col: Optional[str] = None,
     time_col: Optional[str] = None,
+    value_min: Optional[float] = None,
+    value_max: Optional[float] = None,
 ) -> pd.DataFrame:
     """
     🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
@@ -2350,6 +2352,15 @@ def load_bucketed_table_aggregated(
     if patient_ids:
         patient_str = ", ".join(str(x) for x in patient_ids)
         where_conditions.append(f"{id_col} IN ({patient_str})")
+    
+    # 🔧 FIX 2026-02: 在DuckDB层过滤原始值范围（匹配R ricu的行为）
+    # R ricu: clamp_var() 先将超范围值设为NA → 再按小时聚合（NA不参与median）
+    # PyRICU: 必须在聚合前过滤，否则per-itemid-per-hour的median可能超范围
+    # 导致某些小时全部被丢弃（即使该小时有其他itemid的合法值）
+    if value_min is not None:
+        where_conditions.append(f"{value_column} >= {value_min}")
+    if value_max is not None:
+        where_conditions.append(f"{value_column} <= {value_max}")
     
     where_clause = "WHERE " + " AND ".join(where_conditions)
     

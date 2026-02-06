@@ -381,9 +381,22 @@ def expand(
     is_numeric_time = pd.api.types.is_numeric_dtype(data[start_var])
     
     if is_numeric_time:
-        # Numeric time (hours since admission) - use numeric expansion
-        # Convert step_size from Timedelta to hours
-        step_hours = step_size.total_seconds() / 3600.0
+        # Numeric time - detect if it's in hours or minutes
+        # eICU's infusionoffset is in MINUTES (values typically 100-10000)
+        # MIIV's charttime aligned is in HOURS (values typically 0-168)
+        # We use the step_size unit to determine the data unit
+        
+        # 🔧 CRITICAL FIX 2025-02-12: Match step_size to data unit
+        # If step_size is in minutes (e.g., 1 min), and data appears to be in minutes
+        # (values > 24), use minutes. Otherwise use hours.
+        is_minute_data = start_var.lower() == 'infusionoffset'
+        
+        if is_minute_data:
+            # Data is in MINUTES, step_size should be in MINUTES
+            step_val = step_size.total_seconds() / 60.0
+        else:
+            # Data is in HOURS, step_size should be in HOURS
+            step_val = step_size.total_seconds() / 3600.0
         
         # Determine end column
         if end_var not in data.columns:
@@ -442,7 +455,7 @@ def expand(
         # where start + n*step <= end and start + (n+1)*step > end
         # So n = floor((end - start) / step), and count = n + 1
         diff = end_values - start_values
-        counts = np.floor(diff / step_hours).astype(int) + 1
+        counts = np.floor(diff / step_val).astype(int) + 1
         counts = np.maximum(counts, 1)  # 🔧 FIX: R seq() always returns at least 1 value when start <= end
         
         # Filter out rows with 0 counts
@@ -468,7 +481,7 @@ def expand(
         
         # Calculate new times: start + offset * step (using original start, not floored)
         # The values will be floored later by change_interval
-        expanded_df[start_var] = start_expanded + offsets * step_hours
+        expanded_df[start_var] = start_expanded + offsets * step_val
         
         # Select columns - remove duplicates while preserving order
         result_cols = [start_var]

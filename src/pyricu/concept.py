@@ -472,57 +472,16 @@ class ConceptResolver:
         return self._thread_local.inflight
 
     def _should_fill_gaps(self, concept_name: str, definition: ConceptDefinition) -> bool:
-        (definition.category or "").lower() if definition.category else ""
-        concept = concept_name.lower()
-
-        raw_class = getattr(definition, "class_name", None)
-        class_names: List[str] = []
-        if isinstance(raw_class, str):
-            class_names = [raw_class.lower()]
-        elif isinstance(raw_class, Iterable):
-            class_names = [str(item).lower() for item in raw_class if item]
-        else:
-            class_names = []
-
-        # Never fill gaps for logical/boolean concepts (abx, samp, etc.)
-        # These are event indicators that should remain sparse
-        if "lgl_cncpt" in class_names:
-            return False
+        """Determine if fill_gaps should be applied.
         
-        # 🔧 CRITICAL FIX 2024-12: Do NOT fill gaps for medication rate concepts
-        # These concepts (norepi_rate, dobu_rate, etc.) have interval data (start/end times)
-        # and are already correctly expanded by expand() in _apply_aggregation.
-        # Global fill_gaps with ffill would incorrectly fill across DISCONTINUOUS time segments.
-        # Example: Patient with norepi from hour 8-150 and hour 980-982 would have
-        # hours 151-979 incorrectly filled with the value from hour 150.
-        # This caused pyricu coverage (90%) >> ricu coverage (36%) for norepi_rate.
-        # Solution: disable global fill_gaps; ricu handles this per-segment in expand().
-        if concept.endswith('_rate') or concept.endswith('_equiv'):
-            return False  # Changed from True to False
-        
-        # 🔧 CRITICAL FIX: Do NOT fill gaps for vent_ind
-        # R ricu's vent_ind callback only returns time points where ventilation is active.
-        # It does NOT fill gaps between ventilation windows.
-        # The expand() function in sofa_resp handles vent_ind expansion, not fill_gaps.
-        # Filling gaps would create NaN rows for non-ventilated time points,
-        # which causes row inflation (67 → 157 rows for patient 30009597).
-        if concept == 'vent_ind':
-            return False
-        
-        # 🔧 CRITICAL FIX 2024-12: Do NOT fill gaps for urine
-        # R ricu's fill_gaps for urine only fills the FIRST continuous segment (~50 hours),
-        # then only keeps original data points for later segments.
-        # Simple fill_gaps fills the entire range (min_time to max_time), which is wrong.
-        # The urine24 callback handles the proper ricu-style segmented fill logic.
-        # ONLY fill for urine24 if needed (but the callback does its own fill)
-        if concept == 'urine':
-            return False
-        
-        # urine24 doesn't need fill_gaps either - callback handles it
-        if concept == 'urine24':
-            return False
-        
-        # All other concepts: no fill_gaps by default
+        🔧 CRITICAL FIX 2025-02-14: R ricu's load_concepts does NOT call fill_gaps!
+        fill_gaps is only called in specific callbacks (e.g., combine_callbacks, sofa).
+        This function should almost always return False for normal concept loading.
+        """
+        # 🔧 R ricu behavior: fill_gaps is NOT part of load_concepts.
+        # PyRICU was incorrectly applying fill_gaps during load, causing row inflation.
+        # Example: crea had 157 rows in R ricu but 2150 rows in PyRICU (filled to hourly grid).
+        # Solution: Always return False for normal load_concepts.
         return False
     
     def _get_fill_method(self, concept_name: str, definition: ConceptDefinition) -> str:
@@ -1021,6 +980,70 @@ class ConceptResolver:
 
             # 如果是ricu_compatible模式，使用增强的ricu风格合并
             if ricu_compatible:
+                # 🔧 FIX 2025-02-13: For single win_tbl target concepts, return original format
+                # R ricu returns win_tbl format directly without merging/aggregation
+                if len(names) == 1:
+                    concept_name = names[0]
+                    definition = self.dictionary.get(concept_name)
+                    if definition and getattr(definition, 'target', 'ts_tbl') == 'win_tbl':
+                        if concept_name in tables:
+                            table = tables[concept_name]
+                            # Handle different table types: ICUTable, WinTbl, DataFrame
+                            df = None
+                            if hasattr(table, 'data'):
+                                df = table.data.copy()
+                            elif isinstance(table, pd.DataFrame):
+                                df = table.copy()
+                            
+                            if df is not None and not df.empty:
+                                # Ensure value column is named after concept
+                                if concept_name not in df.columns:
+                                    for cand in ['value', 'valuenum', 'rate']:
+                                        if cand in df.columns:
+                                            df = df.rename(columns={cand: concept_name})
+                                            break
+                                # Determine ID column for this database
+                                db_name = data_source.config.name if data_source and hasattr(data_source, 'config') else 'miiv'
+                                id_col_map = {
+                                    'miiv': 'stay_id', 'eicu': 'patientunitstayid',
+                                    'aumc': 'admissionid', 'hirid': 'patientid',
+                                    'mimic': 'icustay_id', 'sic': 'CaseID'
+                                }
+                                target_id_col = id_col_map.get(db_name, 'stay_id')
+                                # Ensure we have the correct columns: id_col, starttime, dur_var, concept
+                                result_cols = []
+                                # Find ID column
+                                for cand in [target_id_col, 'stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']:
+                                    if cand in df.columns:
+                                        result_cols.append(cand)
+                                        break
+                                # 🔧 FIX 2025-02-13: Keep original time column name (R ricu preserves it)
+                                # e.g., eICU uses 'nursingchartoffset', AUMC uses 'measuredat', HiRID uses 'datetime'
+                                time_col = None
+                                # Prioritize original table time columns over generic names
+                                for cand in ['nursingchartoffset', 'nursingchartentryoffset', 'observationoffset',
+                                             'charttime', 'measuredat', 'datetime', 'givenat', 'starttime', 'start']:
+                                    if cand in df.columns:
+                                        time_col = cand
+                                        break
+                                if time_col:
+                                    # Do NOT rename - keep the original column name
+                                    result_cols.append(time_col)
+                                # Add dur_var if present
+                                if 'dur_var' in df.columns:
+                                    result_cols.append('dur_var')
+                                elif 'dex_dur' in df.columns:
+                                    df = df.rename(columns={'dex_dur': 'dur_var'})
+                                    result_cols.append('dur_var')
+                                # Add concept value column
+                                if concept_name in df.columns:
+                                    result_cols.append(concept_name)
+                                # Select and order columns
+                                df = df[[c for c in result_cols if c in df.columns]]
+                                if verbose:
+                                    logger.info(f"🔧 win_tbl 概念 '{concept_name}' 直接返回原始格式: {len(df)} 行, 列={df.columns.tolist()}")
+                                return df
+                
                 # 🚀 宽表优化：如果有批量加载的合并结果，直接用它
                 if wide_table_merged_df is not None:
                     if verbose:
@@ -1065,13 +1088,13 @@ class ConceptResolver:
             verbose = False  # 批量加载时抑制verbose输出
         definition = self.dictionary[concept_name]
         
-        # 🔧 FIX: 对于 rec_cncpt 概念（如 tgcs），检查是否有数据库特定的直接 source 定义
-        # 如果有，应该使用直接定义而不是递归加载子概念
-        # 例如：eICU 的 tgcs 应该从 nursecharting 表的 'GCS Total' 直接读取
-        # 而不是通过 egcs + mgcs + vgcs 计算（因为 eICU 没有单独的 GCS 组件数据）
+        # 🔧 FIX 2025-02-14: vent_ind 是特殊的 rec_cncpt - 它有 callback 且需要正确的 win_tbl 格式
+        # 其他有 callback 的概念（如 gcs, sofa_*）可能有直接的数据源，应该优先使用直接加载
         use_recursive = False
         has_direct_source = False  # 标记是否有直接的表 source
-        if definition.sub_concepts:
+        # 只有 vent_ind 必须使用 callback（R ricu 的行为）
+        must_use_callback = definition.callback is not None and concept_name == 'vent_ind'
+        if definition.sub_concepts and not must_use_callback:
             # 检查当前数据源是否有直接的表定义
             db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
             
@@ -1109,8 +1132,27 @@ class ConceptResolver:
         if definition.callback and not skip_callback:
             # Try to execute the callback if it's registered
             try:
-                # Create empty tables dict - callback will load dependencies if needed
+                # 🔧 FIX 2025-02-14: Load sub-concepts for callbacks that need them
                 tables = {}
+                if definition.sub_concepts:
+                    for sub_name in definition.sub_concepts:
+                        try:
+                            sub_result = self._load_single_concept(
+                                sub_name, 
+                                data_source, 
+                                aggregator=aggregator,
+                                patient_ids=patient_ids,
+                                verbose=False,
+                                interval=interval,
+                                align_to_admission=align_to_admission,
+                                _bypass_callback=True,  # Prevent infinite recursion
+                            )
+                            if sub_result is not None:
+                                tables[sub_name] = sub_result
+                        except Exception as e:
+                            if DEBUG_MODE:
+                                print(f"   DEBUG: Failed to load sub-concept {sub_name}: {e}")
+                            continue
                 
                 callback_context = ConceptCallbackContext(
                     concept_name=concept_name,
@@ -1484,6 +1526,11 @@ class ConceptResolver:
                             interval_minutes=interval_minutes,
                             patient_ids=patient_ids_list,  # 🔧 修复: 传入患者ID过滤
                             agg_func='median',
+                            # 🔧 FIX 2026-02: 传入 min/max 到 DuckDB 查询层
+                            # R ricu 先过滤原始值再聚合; DuckDB聚合先于min/max过滤
+                            # 不在DuckDB层过滤会导致per-itemid-per-hour中位数超范围,丢失整小时数据
+                            value_min=definition.minimum,
+                            value_max=definition.maximum,
                         )
                         
                         # 创建ICUTable对象
@@ -1963,7 +2010,7 @@ class ConceptResolver:
                                     time_col = cand
                                     break
                         else:
-                            for cand in ['charttime', 'storetime', 'specimen_time']:
+                            for cand in ['charttime', 'storetime', 'specimen_time', 'startdate']:
                                 if cand in frame.columns:
                                     time_col = cand
                                     break
@@ -2098,7 +2145,7 @@ class ConceptResolver:
                                 # Convert all datetime time columns to relative hours
                                 datetime_cols = []
                                 for col in tmp.columns:
-                                    if col in ['starttime', 'endtime', 'charttime', 'storetime'] and col != 'intime':
+                                    if col in ['starttime', 'endtime', 'charttime', 'storetime', 'startdate', 'enddate'] and col != 'intime':
                                         if pd.api.types.is_datetime64_any_dtype(tmp[col]):
                                             datetime_cols.append(col)
                                 
@@ -2393,9 +2440,12 @@ class ConceptResolver:
             # if (dur_is_end) {
             #   res <- res[, c(dur_var) := get(dur_var) - get(index_var)]
             # }
+            # 🔧 CRITICAL FIX 2025-02-14: R ricu uses 'dur_var' as the column name, not 'concept_name_dur'
+            # And the value is in MINUTES for MIIV (not timedelta or hours)
             if source.dur_var and source.dur_var in frame.columns:
                 if source_index_column and source_index_column in frame.columns:
-                    duration_col = concept_name + '_dur'
+                    # R ricu always uses 'dur_var' as the output column name
+                    duration_col = 'dur_var'
                     dur_is_end = False  # 是否需要计算 duration = endtime - starttime
                     
                     # Case 1: datetime 类型的 endtime
@@ -2405,8 +2455,8 @@ class ConceptResolver:
                         if not pd.api.types.is_datetime64_any_dtype(frame[source_index_column]):
                             frame[source_index_column] = pd.to_datetime(frame[source_index_column], errors='coerce')
                         
-                        # 计算 duration (timedelta)
-                        frame[duration_col] = frame[source.dur_var] - frame[source_index_column]
+                        # 计算 duration (timedelta) 然后转为分钟（匹配 R ricu）
+                        frame[duration_col] = (frame[source.dur_var] - frame[source_index_column]).dt.total_seconds() / 60
                     
                     # Case 2: 数值类型的 endtime (如 AUMC 的毫秒时间)
                     # 检测：如果 dur_var 是数值且通常大于 index_var，说明是 endtime
@@ -2426,21 +2476,15 @@ class ConceptResolver:
                                 if ratio > 0.8:  # 80% 以上的值满足 dur_var > index_var
                                     dur_is_end = True
                                     # 计算 duration = endtime - starttime (数值)
-                                    # 结果单位与 start/stop 相同：
-                                    # - AUMC: 分钟（datasource.py 已将 ms 转为分钟）
-                                    # - eICU: 分钟（offset 列本身就是分钟）
+                                    # 🔧 FIX 2025-02-14: R ricu keeps duration in MINUTES, NOT hours
+                                    # AUMC: 分钟（datasource.py 已将 ms 转为分钟）
+                                    # eICU: 分钟（offset 列本身就是分钟）
                                     frame[duration_col] = frame[source.dur_var] - frame[source_index_column]
-                                    
-                                    # 🔧 FIX: 将 duration 从分钟转换为小时
-                                    # 这与 _align_time_to_admission 对 start/stop 的转换保持一致
-                                    db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                                    if db_name in ['eicu', 'eicu_demo', 'aumc']:
-                                        frame[duration_col] = frame[duration_col] / 60.0
-                                        if DEBUG_MODE:
-                                            print(f"   🔧 {db_name}: 将 {duration_col} 从分钟转换为小时")
+                                    # NO conversion to hours - R ricu uses minutes
                                     
                                     if DEBUG_MODE:
-                                        print(f"   🔧 AUMC dur_is_end=True: {source.dur_var}={dur_vals.head(3).tolist()}, "
+                                        db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                                        print(f"   🔧 {db_name} dur_is_end=True: {source.dur_var}={dur_vals.head(3).tolist()}, "
                                               f"{source_index_column}={idx_vals.head(3).tolist()}")
                     
                     if dur_is_end and DEBUG_MODE:
@@ -2764,13 +2808,13 @@ class ConceptResolver:
             # 对于索引列，检查是否在数据中有任何时间列
             if source_index_column:
                 # 检查是否有source_index_column，或者有类似的时间列
-                time_aliases = {"starttime", "endtime", "charttime", "storetime"}
+                time_aliases = {"starttime", "endtime", "charttime", "storetime", "startdate", "enddate"}
                 time_cols = []
                 for col in frame.columns:
                     if not isinstance(col, str):
                         continue
                     lowered = col.lower()
-                    if "time" in lowered or lowered in time_aliases:
+                    if "time" in lowered or "date" in lowered or lowered in time_aliases:
                         time_cols.append(col)
                 if source_index_column not in frame.columns and not time_cols:
                     missing.add(source_index_column)
@@ -2820,7 +2864,12 @@ class ConceptResolver:
             if source_unit_column and source_unit_column not in ordered_cols:
                 ordered_cols.append(source_unit_column)
             
-            # 添加 duration 列（如果存在）
+            # 🔧 FIX 2025-02-14: R ricu uses 'dur_var' as the duration column name
+            # Add 'dur_var' before concept_name + '_dur' for win_tbl concepts
+            if 'dur_var' in frame.columns and 'dur_var' not in ordered_cols:
+                ordered_cols.append('dur_var')
+            
+            # Legacy: 添加 duration 列（如果存在）
             duration_col_name = concept_name + '_dur'
             if duration_col_name in frame.columns and duration_col_name not in ordered_cols:
                 ordered_cols.append(duration_col_name)
@@ -2829,8 +2878,7 @@ class ConceptResolver:
             # mech_vent 等窗口概念需要 endtime 来进行时间展开
             # prescriptions 表使用 stoptime 作为结束时间
             # 如果有 dur_var="endtime" 的定义，endtime 列必须保留
-            # 🔧 FIX: dur_var 列由 grp_mount_to_rate 回调生成，需要保留用于后续展开
-            for endtime_candidate in ['endtime', 'end_time', 'stop', 'stoptime', 'dur_var']:
+            for endtime_candidate in ['endtime', 'end_time', 'stop', 'stoptime']:
                 if endtime_candidate in frame.columns and endtime_candidate not in ordered_cols:
                     ordered_cols.append(endtime_candidate)
                     # 不要 break，保留所有存在的结束时间列
@@ -3005,7 +3053,7 @@ class ConceptResolver:
         #      starttime 变成了 float（相对小时数），合并后 fillna 无法正确处理
         # 解决：检测并统一时间列类型，将 datetime 转换为相对小时数（与 callback 输出一致）
         elif db_name in ['mimic', 'mimic_demo']:
-            mimic_time_cols = ['charttime', 'starttime', 'storetime', 'admittime']
+            mimic_time_cols = ['charttime', 'starttime', 'storetime', 'admittime', 'startdate', 'enddate']
             time_cols_in_data = [col for col in combined.columns if col in mimic_time_cols]
             
             if len(time_cols_in_data) > 1:
@@ -3191,8 +3239,19 @@ class ConceptResolver:
         # Only set unit_column if it actually exists in the combined data
         final_unit_column = unit_column if unit_column and unit_column in combined.columns else None
         
+        # 🔧 FIX 2025-02-13: Skip change_interval for win_tbl target concepts
+        # R ricu returns win_tbl format directly without time aggregation
+        is_win_tbl_target = getattr(definition, 'target', 'ts_tbl') == 'win_tbl'
+        
+        # 🔧 FIX 2026-02: Skip change_interval for id_tbl target concepts (height, weight, etc.)
+        # R ricu's load_id doesn't aggregate by time — it only does per-patient aggregation
+        # (aggregate.id_tbl groups by meta_vars=id_cols, numeric→median)
+        # If we apply change_interval first, we get median-of-means instead of median-of-all-values
+        is_id_tbl_target = getattr(definition, 'target', 'ts_tbl') == 'id_tbl'
+        
         # Apply interval alignment and aggregation if interval is specified
-        if interval is not None and index_column and index_column in combined.columns:
+        # BUT skip for win_tbl/id_tbl target concepts
+        if interval is not None and index_column and index_column in combined.columns and not is_win_tbl_target and not is_id_tbl_target:
             # DEBUG
             from .ts_utils import change_interval
             
@@ -3323,11 +3382,15 @@ class ConceptResolver:
                     if callback_already_expanded:
                         break
             
-            should_expand = (has_endtime or has_stoptime or has_stop or has_duration or has_dur_var) and not is_point_event and not is_duration_concept and not callback_already_expanded
+            # 🔧 FIX 2025-02-12: Do NOT expand concepts with target="win_tbl"
+            # R ricu returns win_tbl format (starttime + dur_var) without expanding to time series
+            is_win_tbl_target = getattr(definition, 'target', 'ts_tbl') == 'win_tbl'
+            
+            should_expand = (has_endtime or has_stoptime or has_stop or has_duration or has_dur_var) and not is_point_event and not is_duration_concept and not callback_already_expanded and not is_win_tbl_target
             
             # DEBUG
             if DEBUG_MODE and (has_dur_var or has_endtime or has_stoptime):
-                print(f"   🔍 DEBUG: should_expand={should_expand}, has_dur_var={has_dur_var}, has_endtime={has_endtime}, is_point_event={is_point_event}, callback_already_expanded={callback_already_expanded}")
+                print(f"   🔍 DEBUG: should_expand={should_expand}, has_dur_var={has_dur_var}, has_endtime={has_endtime}, is_point_event={is_point_event}, callback_already_expanded={callback_already_expanded}, is_win_tbl_target={is_win_tbl_target}")
             if should_expand:
                 from .ts_utils import expand
                 
@@ -3551,6 +3614,23 @@ class ConceptResolver:
         if concept_name == "infusionoffset" and index_column and index_column in combined.columns:
             combined[concept_name] = combined[index_column]
             combined = combined.drop(columns=["drugrate"], errors="ignore")
+        
+        # 🔧 FIX 2025-02-14: For win_tbl target concepts that have dur_var column,
+        # return WinTbl instead of ICUTable so that fwd_concept can properly
+        # detect the WinTbl and preserve dur_var for concepts like ett_gcs
+        if is_win_tbl_target and 'dur_var' in combined.columns and index_column:
+            from .table import WinTbl
+            # 🔧 FIX: Ensure dur_var is numeric (can become object after pd.concat with NaN)
+            combined['dur_var'] = pd.to_numeric(combined['dur_var'], errors='coerce')
+            # Drop rows where dur_var is NaN (these came from sources without duration info)
+            combined = combined.dropna(subset=['dur_var'])
+            return WinTbl(
+                data=combined,
+                id_vars=id_columns,
+                index_var=index_column,
+                dur_var='dur_var',
+            )
+        
         try:
             return ICUTable(
                 data=combined,
@@ -4424,8 +4504,13 @@ class ConceptResolver:
             # For sofa_single type, the time points should already be correct,
             # but we still apply change_interval to match ricu_code's behavior
             # Skip if result is still WinTbl (not expanded)
+            # 🔧 FIX 2026-02: 对于 target='id_tbl' 的概念（如 height, weight），
+            # 跳过 change_interval。R ricu 中 load_id 不按时间聚合，
+            # 只在 aggregate.id_tbl 中按患者 ID 取中位数。
+            # 如果先按时间聚合再按患者聚合，会得到 median-of-medians 而非 median-of-all。
+            is_id_tbl_target = definition and getattr(definition, 'target', 'ts_tbl') == 'id_tbl'
             has_time_column = getattr(result, 'index_column', None)
-            if agg_method and has_time_column and has_time_column in result.data.columns and not result.data.empty and not isinstance(result, WinTbl):
+            if agg_method and has_time_column and has_time_column in result.data.columns and not result.data.empty and not isinstance(result, WinTbl) and not is_id_tbl_target:
                 try:
                     fill_missing = self._should_fill_gaps(concept_name, definition)
                     fill_method = self._get_fill_method(concept_name, definition)
@@ -4911,7 +4996,7 @@ class ConceptResolver:
             raise ValueError("fwd_concept callback is missing concept name.")
 
         base_name = match.group(1)
-        # 🔧 FIX: 禁用 ricu_compatible 模式，确保返回 dict[str, ICUTable]
+        # 🔧 FIX 2025-02-13: Disable fill_gaps for fwd_concept base concepts
         base_tables = self.load_concepts(
             [base_name],
             data_source,
@@ -4932,7 +5017,28 @@ class ConceptResolver:
             )
 
         data = base_table.data.copy()
-        value_col = base_table.value_column or base_name
+        # 🔧 FIX 2025-02-14: Handle WinTbl which doesn't have value_column attribute
+        # WinTbl uses the last non-id, non-index, non-dur column as value column
+        if hasattr(base_table, 'value_column') and base_table.value_column:
+            value_col = base_table.value_column
+        else:
+            # For WinTbl, find the value column by exclusion
+            # It's typically the concept name or the last column that's not id/index/dur_var
+            if isinstance(base_table, WinTbl):
+                id_cols = set(base_table.id_vars or [])
+                idx_col = base_table.index_var
+                dur_col = base_table.dur_var
+                excluded = id_cols | {idx_col, dur_col}
+                potential_value_cols = [c for c in data.columns if c not in excluded]
+                # Prefer base_name if it exists
+                if base_name in potential_value_cols:
+                    value_col = base_name
+                elif potential_value_cols:
+                    value_col = potential_value_cols[-1]  # Last non-excluded column
+                else:
+                    value_col = base_name
+            else:
+                value_col = base_name
 
         comp_match = re.search(r"comp_na\(`(.+?)`,\s*(.+?)\)", callback, flags=re.DOTALL)
         if comp_match:
@@ -4953,8 +5059,11 @@ class ConceptResolver:
             mask = pd.Series(True, index=data.index)
 
         if "ts_to_win_tbl" in callback:
+            # 🔧 FIX 2025-02-14: Handle WinTbl which uses index_var instead of index_column
+            base_idx_col = (base_table.index_var if isinstance(base_table, WinTbl) 
+                           else base_table.index_column)
             # 如果 base_table 为空或没有 index_column，返回空的 WinTbl
-            if base_table.index_column is None or base_table.data.empty:
+            if base_idx_col is None or base_table.data.empty:
                 # 使用 base_table 的 ID 列（优先），否则使用数据库特定的默认值
                 # WinTbl 已在模块顶部导入，不需要重复导入
                 
@@ -4966,7 +5075,7 @@ class ConceptResolver:
                     id_cols = list(base_table.id_vars) if base_table.id_vars else default_id_cols
                 else:
                     id_cols = list(base_table.id_columns) if base_table.id_columns else default_id_cols
-                idx_col = base_table.index_column if base_table.index_column else 'charttime'  # 默认时间列
+                idx_col = base_idx_col if base_idx_col else 'charttime'  # 默认时间列
                 # 创建空 DataFrame 并设置正确的 dtype
                 empty_win_df = pd.DataFrame(columns=id_cols + [idx_col, concept_name + "_dur", concept_name])
                 # 设置 index 列为 datetime 类型（即使为空）
@@ -4986,44 +5095,81 @@ class ConceptResolver:
                 # 备用：简单匹配
                 dur_match = re.search(r"ts_to_win_tbl\((.+?)\)", callback, flags=re.DOTALL)
             duration = self._parse_interval_expression(dur_match.group(1).strip() if dur_match else "mins(60)")
-            # 将 timedelta 转换为小时（float）
+            # 🔧 FIX 2025-02-13: Keep duration in minutes to match R ricu (not convert to hours)
+            # R ricu's ts_to_win_tbl uses mins(360L) which means 360 minutes, not 6 hours
             if isinstance(duration, pd.Timedelta):
-                duration_hours = duration.total_seconds() / 3600.0
+                duration_mins = duration.total_seconds() / 60.0  # Convert to minutes, not hours
             else:
-                duration_hours = float(duration)
+                duration_mins = float(duration)
             
             # FIX: 为所有行创建 WinTbl，True 行有窗口持续时间，False 行持续时间为 0
             # 这样在 downsampling 时，True 的窗口会扩展，False 的只保留原始时间点
-            win_df = data[list(base_table.id_columns) + [base_table.index_column]].copy()
-            # True 行使用完整窗口持续时间，False 行使用 0（只表示该时间点存在）
-            win_df["duration"] = np.where(mask.values, duration_hours, 0.0)
+            # 🔧 FIX 2025-02-14: Handle WinTbl which uses id_vars/index_var instead of id_columns/index_column
+            base_id_cols = list(base_table.id_vars) if isinstance(base_table, WinTbl) else list(base_table.id_columns)
+            base_idx_col = base_table.index_var if isinstance(base_table, WinTbl) else base_table.index_column
+            win_df = data[base_id_cols + [base_idx_col]].copy()
+            # True 行使用完整窗口持续时间（分钟），False 行使用 0（只表示该时间点存在）
+            # 🔧 FIX 2025-02-13: Use 'dur_var' as column name to match R ricu output format
+            win_df["dur_var"] = np.where(mask.values, duration_mins, 0.0)
             win_df[concept_name] = mask.values
             return WinTbl(
-                data=win_df.rename(columns={"duration": concept_name + "_dur"}),
-                id_vars=list(base_table.id_columns),
-                index_var=base_table.index_column,
-                dur_var=concept_name + "_dur",
+                data=win_df,  # No rename needed since we use 'dur_var' directly
+                id_vars=base_id_cols,
+                index_var=base_idx_col,
+                dur_var="dur_var",  # Use 'dur_var' to match R ricu
             )
 
-        # 🔧 FIX: 当没有 ts_to_win_tbl 时，如果有 comp_na 比较，应该返回布尔值而不是原始值
-        # 这修复了 HiRID ett_gcs 返回 'invasive' 而不是 True/False 的问题
-        cols = list(base_table.id_columns)
-        if base_table.index_column:
-            cols.append(base_table.index_column)
+        # 🔧 FIX 2025-02-13: 当 base_table 是 WinTbl 时，保留 dur_var 列
+        # 这修复了 HiRID ett_gcs 返回的结果缺少 dur_var 的问题
+        is_win_tbl_source = isinstance(base_table, WinTbl)
+        
+        # 🔧 FIX 2025-02-14: Use id_vars/index_var for WinTbl
+        if is_win_tbl_source:
+            cols = list(base_table.id_vars)
+            idx_col = base_table.index_var
+        else:
+            cols = list(base_table.id_columns) if hasattr(base_table, 'id_columns') else []
+            idx_col = base_table.index_column if hasattr(base_table, 'index_column') else None
+        
+        if idx_col:
+            cols.append(idx_col)
+        
+        # 如果是 WinTbl，需要保留 dur_var 列
+        dur_col = None
+        if is_win_tbl_source and hasattr(base_table, 'dur_var') and base_table.dur_var:
+            dur_col = base_table.dur_var
+            if dur_col in data.columns and dur_col not in cols:
+                cols.append(dur_col)
         
         if comp_match:
-            # 有 comp_na 比较，返回布尔值结果
+            # 有 comp_na 比较
+            # 🔧 FIX 2025-02-14: 返回所有行，设置布尔值，而不是过滤
+            # R ricu 的 comp_na 函数返回 !is.na(x) & op(x, y)，即返回布尔值不是过滤
+            # ett_gcs 应该返回所有 mech_vent 行，每行有 True/False 表示是否 invasive
             result = data[cols].copy()
-            result[concept_name] = mask.values
+            result[concept_name] = mask  # 布尔值列：True=满足条件，False=不满足
         else:
             # 没有比较，返回原始值
             cols.append(value_col)
             result = data[cols].rename(columns={value_col: concept_name})
 
+        # 如果源是 WinTbl，返回 WinTbl 格式
+        # 🔧 FIX 2025-02-14: Use id_vars for WinTbl
+        if is_win_tbl_source and dur_col:
+            base_id_cols = list(base_table.id_vars) if isinstance(base_table, WinTbl) else list(base_table.id_columns)
+            return WinTbl(
+                data=result.reset_index(drop=True),
+                id_vars=base_id_cols,
+                index_var=idx_col,
+                dur_var=dur_col,
+            )
+        
+        # 🔧 FIX 2025-02-14: Use id_vars for WinTbl  
+        base_id_cols = list(base_table.id_vars) if isinstance(base_table, WinTbl) else list(base_table.id_columns)
         return ICUTable(
             data=result.reset_index(drop=True),
-            id_columns=list(base_table.id_columns),
-            index_column=base_table.index_column,
+            id_columns=base_id_cols,
+            index_column=idx_col,
             value_column=concept_name,
         )
 
@@ -5446,8 +5592,13 @@ class ConceptResolver:
             # CRITICAL: Expand WinTbl to time series if interval is specified
             # This must happen after loading but before caching, so all concepts
             # (including those without sub_concepts) get expanded
+            # 🔧 FIX 2025-02-13: Do NOT expand WinTbl for concepts with target='win_tbl'
+            # These concepts should return the original WinTbl format (starttime + dur_var)
             from .table import WinTbl
-            if isinstance(result, WinTbl) and interval is not None and not result.data.empty:
+            definition = self.dictionary.get(concept_name)
+            is_win_tbl_target = definition and getattr(definition, 'target', 'ts_tbl') == 'win_tbl'
+            
+            if isinstance(result, WinTbl) and interval is not None and not result.data.empty and not is_win_tbl_target:
                 idx_col = result.index_var
                 dur_col = result.dur_var
                 id_cols = result.id_vars
@@ -6216,51 +6367,71 @@ def _apply_callback(
         Map eICU admitdxpath to admission type (med/surg/other).
         
         The admitdxpath contains hierarchical diagnosis path like:
-        "admission diagnosis|Cardiovascular|Ventricular disorders|VT - Loss of pulse/VF"
+        "admission diagnosis|All Diagnosis|Operative|Diagnosis|Cardiovascular|..."
+        "admission diagnosis|All Diagnosis|Non-operative|Diagnosis|Genitourinary|..."
         
-        Rules from R ricu:
-        - 'surg' if path contains 'surgery', 'surgical', 'operative'
-        - 'med' if path contains 'medical' or specific medical categories
-        - 'other' for everything else
+        Rules from R ricu (callback-itm.R eicu_adx):
+        1. Split path by "|"
+        2. Keep only rows where parts[1] == "All Diagnosis"
+        3. If parts[4] in ["Genitourinary", "Transplant"] -> "other"
+        4. Else if parts[2] == "Operative" -> "surg"
+        5. Else -> "med"
         """
         frame = frame.copy()
         
         # Get the diagnosis path column
-        val_col = source.value_var or concept_name
-        if val_col not in frame.columns:
-            # Try common column names
+        # 🔧 FIX: 回调在重命名后调用，所以 value_var (admitdxpath) 已变为 concept_name (adm)
+        # 优先使用 concept_name，然后再尝试 source.value_var
+        val_col = None
+        # 1. 优先使用 concept_name（重命名后的列名）
+        if concept_name in frame.columns:
+            val_col = concept_name
+        # 2. 如果 concept_name 不存在，尝试 source.value_var
+        elif source.value_var and source.value_var in frame.columns:
+            val_col = source.value_var
+        # 3. 最后尝试常见列名
+        else:
             for col in ['admitdxpath', 'diagnosispath', 'diagnosis']:
                 if col in frame.columns:
                     val_col = col
                     break
         
-        if val_col not in frame.columns:
-            # No diagnosis column found, set all to 'other'
-            frame[concept_name] = 'other'
+        if val_col is None:
+            # No diagnosis column found, return empty
+            frame[concept_name] = pd.Series(dtype='object')
             return frame
         
         def classify_adm_type(path):
             if pd.isna(path):
-                return 'other'
-            path_lower = str(path).lower()
+                return None  # Will be filtered out
             
-            # Check for surgical keywords
-            surgical_keywords = ['surgery', 'surgical', 'operative', 'transplant', 'trauma']
-            for kw in surgical_keywords:
-                if kw in path_lower:
-                    return 'surg'
+            parts = str(path).split('|')
             
-            # Check for medical keywords
-            medical_keywords = ['medical', 'cardiovascular', 'respiratory', 'neurological', 
-                               'renal', 'gastrointestinal', 'infectious', 'metabolic',
-                               'hematological', 'sepsis', 'pneumonia', 'ards']
-            for kw in medical_keywords:
-                if kw in path_lower:
-                    return 'med'
+            # Require at least 3 segments (0, 1, 2) and check parts[1] == "All Diagnosis"
+            if len(parts) < 3:
+                return None
             
-            return 'other'
+            if parts[1].strip() != "All Diagnosis":
+                return None
+            
+            # Check parts[4] for Genitourinary or Transplant (if exists)
+            if len(parts) > 4:
+                seg4 = parts[4].strip()
+                if seg4 in ["Genitourinary", "Transplant"]:
+                    return 'other'
+            
+            # Check parts[2] for Operative
+            seg2 = parts[2].strip()
+            if seg2 == "Operative":
+                return 'surg'
+            
+            # Default to med (Non-operative)
+            return 'med'
         
         frame[concept_name] = frame[val_col].apply(classify_adm_type)
+        
+        # Filter out None values (rows that didn't match "All Diagnosis" criteria)
+        frame = frame[frame[concept_name].notna()].copy()
         
         # Drop the original diagnosis path column if it's different from concept_name
         if val_col != concept_name and val_col in frame.columns:
@@ -6639,6 +6810,13 @@ def _apply_callback(
                 itemids = _parse_r_value(id_arg)    # e.g., list(7255L, 7256L, c(8940L, 9571L)) -> [7255, 7256, [8940, 9571]]
                 factors = _parse_r_value(factor_arg)  # e.g., c(2, 3, 4) -> [2, 3, 4]
                 
+                # 🔧 FIX: Ensure itemids and factors are always lists (handle single-value case)
+                # e.g., dex_to_10(30017L, c(0.5)) → itemids=30017 (int), factors=[0.5]
+                if not isinstance(itemids, (list, tuple)):
+                    itemids = [itemids]
+                if not isinstance(factors, (list, tuple)):
+                    factors = [factors]
+                
                 # Flatten itemids if needed for simple structure, or handle nested mapping
                 # Nested structure means: itemids[i] can be a list, all items in that list get factors[i]
                 
@@ -6766,7 +6944,7 @@ def _apply_callback(
                 
                 result = callback_fn(
                     frame,
-                    val_col=val_col if val_col in frame.columns else 'value',
+                    val_col=val_col if val_col in frame.columns else (concept_name if concept_name in frame.columns else 'value'),
                     unit_col=unit_col if unit_col and unit_col in frame.columns else 'unit',
                     index_var=index_var,
                     id_cols=id_cols
@@ -7194,6 +7372,7 @@ def _apply_callback(
             dur_var='dur_var',
             padding_hours=4.0,
             max_gap_hours=12.0,
+            expand_to_hourly=False,  # Return win_tbl format, not expanded ts_tbl
         )
 
     # Handle hirid_urine callback - convert cumulative urine to incremental

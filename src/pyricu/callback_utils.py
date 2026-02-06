@@ -1481,14 +1481,33 @@ def create_intervals(
     
     # Convert overhang, max_len, and interval to appropriate units for numeric time
     if is_numeric_time:
-        # Assume numeric time is in HOURS (expand_intervals converts eICU minutes to hours first)
-        overhang_hours = overhang.total_seconds() / 3600.0  # 1 hour
-        max_len_hours = max_len.total_seconds() / 3600.0    # 6 hours
-        interval_hours = interval.total_seconds() / 3600.0  # 1 hour
+        # 🔧 FIX: Don't assume time is in hours - detect actual unit
+        # For eICU infusionoffset, time is in MINUTES
+        # We use total_seconds() / 60 to get minutes
+        # This works because the caller (expand_intervals) passes Timedelta
+        # with appropriate resolution (minutes for eICU, hours for others)
         
-        # R ricu logic:
+        # Check if this looks like minute-based data (eICU)
+        is_minute_based = index_var.lower() == 'infusionoffset'
+        
+        if is_minute_based:
+            # Convert to minutes
+            overhang_val = overhang.total_seconds() / 60.0
+            max_len_val = max_len.total_seconds() / 60.0
+            interval_val = interval.total_seconds() / 60.0
+        else:
+            # Assume hours (for MIIV and others)
+            overhang_val = overhang.total_seconds() / 3600.0
+            max_len_val = max_len.total_seconds() / 3600.0
+            interval_val = interval.total_seconds() / 3600.0
+        
+        # R ricu logic (matching ricu 0.6.3 behavior):
+        # NOTE: R ricu 0.6.3's trunc_time has a bug - it doesn't assign the result!
+        # So max_len truncation is NOT applied in practice.
+        # We match this behavior to produce identical results to gold standard.
+        # 
         # 1. diff = next_time - start (or overhang for last record)
-        # 2. diff = trunc(diff, 0, max_len)
+        # 2. diff = trunc(diff, 0, max_len)  # In ricu 0.6.3: max_len NOT applied due to bug
         # 3. diff = diff - interval
         # 4. endtime = start + diff
         
@@ -1499,13 +1518,16 @@ def create_intervals(
                 next_times = group[index_var].shift(-1)
                 diff = next_times - group[index_var]
                 # For last row, use overhang
-                diff = diff.fillna(overhang_hours)
+                diff = diff.fillna(overhang_val)
                 
                 # Step 2: Truncate to [0, max_len]
-                diff = diff.clip(lower=0, upper=max_len_hours)
+                # NOTE: In ricu 0.6.3, trunc_time has a bug - max_len is NOT applied
+                # We match this bug to produce identical results to gold standard
+                # diff = diff.clip(lower=0, upper=max_len_val)  # Disabled to match ricu bug
+                diff = diff.clip(lower=0)  # Only apply lower bound
                 
                 # Step 3: Subtract interval
-                diff = diff - interval_hours
+                diff = diff - interval_val
                 
                 # Ensure diff is not negative
                 diff = diff.clip(lower=0)
@@ -1518,9 +1540,10 @@ def create_intervals(
         else:
             next_times = data[index_var].shift(-1)
             diff = next_times - data[index_var]
-            diff = diff.fillna(overhang_hours)
-            diff = diff.clip(lower=0, upper=max_len_hours)
-            diff = diff - interval_hours
+            diff = diff.fillna(overhang_val)
+            # NOTE: max_len NOT applied - matching ricu 0.6.3 bug
+            diff = diff.clip(lower=0)
+            diff = diff - interval_val
             diff = diff.clip(lower=0)
             data[end_var] = data[index_var] + diff
     else:
@@ -1534,7 +1557,8 @@ def create_intervals(
                 next_times = group[index_var].shift(-1)
                 diff = next_times - group[index_var]
                 diff = diff.fillna(overhang)
-                diff = diff.clip(lower=pd.Timedelta(0), upper=max_len)
+                # NOTE: max_len NOT applied - matching ricu 0.6.3 bug
+                diff = diff.clip(lower=pd.Timedelta(0))
                 diff = diff - interval
                 diff = diff.clip(lower=pd.Timedelta(0))
                 group[end_var] = group[index_var] + diff
@@ -1545,7 +1569,8 @@ def create_intervals(
             next_times = data[index_var].shift(-1)
             diff = next_times - data[index_var]
             diff = diff.fillna(overhang)
-            diff = diff.clip(lower=pd.Timedelta(0), upper=max_len)
+            # NOTE: max_len NOT applied - matching ricu 0.6.3 bug
+            diff = diff.clip(lower=pd.Timedelta(0))
             diff = diff - interval
             diff = diff.clip(lower=pd.Timedelta(0))
             data[end_var] = data[index_var] + diff
@@ -1557,6 +1582,7 @@ def expand_intervals(
     data: pd.DataFrame,
     keep_vars: Optional[list] = None,
     grp_var: Optional[str] = None,
+    id_cols: Optional[list] = None,
     **kwargs
 ) -> pd.DataFrame:
     """Expand CareVue intervals into time series (R ricu expand_intervals).
@@ -1568,12 +1594,16 @@ def expand_intervals(
     - expand only keeps id_vars in output, NOT grp_var
     - When multiple infusions have overlapping times, expand produces duplicate rows
     - These duplicates are aggregated later by aggregate() using median for numeric values
+    - CRITICAL: R ricu expands at MINUTE resolution first, then aggregates to hours
+      This ensures continuous hourly output even when measurements are sparse
     
     Args:
         data: Input DataFrame
         keep_vars: Variables to keep in expansion
         grp_var: Optional grouping variable (e.g., infusionid) - used for interval creation
                 but NOT kept in output
+        id_cols: Explicit list of ID columns to use for grouping. If None, auto-detect.
+                 Pass this to avoid false-positive ID column detection (e.g. row_id, itemid).
         **kwargs: Additional arguments
         
     Returns:
@@ -1582,9 +1612,15 @@ def expand_intervals(
     from .ts_utils import expand
     import numpy as np
     
-    # Infer ID columns - EXCLUDE grp_var from id_cols
-    # R ricu's id_vars() returns only the patient-level ID, not infusion-level IDs
-    id_cols = [col for col in data.columns if 'id' in col.lower()]
+    if id_cols is None:
+        # 🔧 FIX: 只使用标准患者/住院 ID 列进行分组
+        # 不再用 endswith('id') 模式匹配，避免误匹配 row_id, itemid, cgid, orderid 等
+        standard_id_cols = [
+            'patientunitstayid', 'stay_id', 'icustay_id', 'hadm_id',
+            'admissionid', 'patientid', 'CaseID', 'subject_id'
+        ]
+        id_cols = [col for col in standard_id_cols if col in data.columns]
+    
     if grp_var and grp_var in id_cols:
         id_cols = [c for c in id_cols if c != grp_var]
     
@@ -1610,15 +1646,89 @@ def expand_intervals(
     
     # 🔧 CRITICAL FIX: Detect eICU minute-based data
     # eICU uses infusionoffset in MINUTES since admission
-    # R ricu uses hours() for overhang/max_len but converts to minutes internally
-    # We need to convert minute data to hours for proper expansion, then back to minutes
+    # R ricu expands at MINUTE resolution first, then aggregates to hours
+    # This ensures continuous hourly output
     is_eicu_minutes = index_var.lower() == 'infusionoffset' and pd.api.types.is_numeric_dtype(data[index_var])
     
     if is_eicu_minutes:
-        # Convert minutes to hours for proper interval creation and expansion
+        # 🔧 NEW APPROACH: Keep data in MINUTES, expand at 1-minute intervals
+        # Then aggregate to hourly resolution
         data = data.copy()
-        data[index_var] = data[index_var] / 60.0  # Minutes to hours
+        
+        # Create intervals at minute resolution
+        # overhang=60 minutes (1 hour), max_len=360 minutes (6 hours)
+        data = create_intervals(
+            data,
+            by_cols=by_cols,
+            overhang=pd.Timedelta(minutes=60),
+            max_len=pd.Timedelta(minutes=360),
+            end_var='endtime',
+            interval=pd.Timedelta(minutes=1)  # 1-minute interval
+        )
+        
+        # Prepare keep_vars - EXCLUDE grp_var to match R behavior
+        if keep_vars is None:
+            keep_vars = []
+        elif isinstance(keep_vars, str):
+            keep_vars = [keep_vars]
+        
+        keep_vars = list(id_cols) + list(keep_vars)
+        keep_vars = [v for v in keep_vars if v in data.columns and v != index_var]
+        
+        # Expand at 1-minute resolution
+        expanded = expand(
+            data,
+            start_var=index_var,
+            end_var='endtime',
+            step_size=pd.Timedelta(minutes=1),  # Minute resolution
+            id_cols=id_cols,
+            keep_vars=keep_vars
+        )
+        
+        if len(expanded) > 0:
+            # Convert minutes to floor hours
+            expanded = expanded.copy()
+            expanded['_hour'] = np.floor(expanded[index_var] / 60.0).astype(int)
+            
+            # Aggregate to hourly resolution using median (R ricu default)
+            group_cols = list(id_cols) + ['_hour']
+            val_cols = [c for c in expanded.columns if c not in group_cols and c != index_var]
+            
+            # Build aggregation dict
+            agg_dict = {}
+            for col in val_cols:
+                if pd.api.types.is_numeric_dtype(expanded[col]):
+                    agg_dict[col] = 'median'
+                else:
+                    agg_dict[col] = 'first'
+            
+            if agg_dict:
+                expanded = expanded.groupby(group_cols, as_index=False).agg(agg_dict)
+            else:
+                expanded = expanded.drop_duplicates(subset=group_cols, keep='last')
+            
+            # Convert hours back to minutes for output
+            expanded[index_var] = expanded['_hour'] * 60
+            expanded = expanded.drop(columns=['_hour'])
+        
+        # Aggregate duplicates
+        if len(expanded) > 0:
+            group_cols = list(id_cols) + [index_var]
+            if expanded.duplicated(subset=group_cols).any():
+                val_cols = [c for c in expanded.columns if c not in group_cols]
+                if val_cols:
+                    agg_dict = {}
+                    for col in val_cols:
+                        if pd.api.types.is_numeric_dtype(expanded[col]):
+                            agg_dict[col] = 'median'
+                        else:
+                            agg_dict[col] = 'first'
+                    if agg_dict:
+                        expanded = expanded.groupby(group_cols, as_index=False).agg(agg_dict)
+        
+        return expanded
     
+    # Non-eICU path: original logic for datetime-based data
     # Create intervals (overhang=1 hour, max_len=6 hours)
     data = create_intervals(
         data,
@@ -1650,22 +1760,6 @@ def expand_intervals(
         id_cols=id_cols,
         keep_vars=keep_vars
     )
-    
-    if is_eicu_minutes and len(expanded) > 0:
-        # 🔧 CRITICAL: Round time to floor hour and deduplicate
-        # R ricu uses re_time(floor) to round times to integer hours
-        # Then keeps only unique hour values per patient
-        expanded = expanded.copy()
-        
-        # Floor to integer hours
-        expanded[index_var] = np.floor(expanded[index_var])
-        
-        # Deduplicate by patient and hour, keeping last value (LOCF style)
-        dedup_cols = list(id_cols) + [index_var]
-        expanded = expanded.drop_duplicates(subset=dedup_cols, keep='last')
-        
-        # Convert hours back to minutes for output (integer hours * 60)
-        expanded[index_var] = (expanded[index_var] * 60).astype(int)
     
     # 🔧 CRITICAL FIX: Aggregate duplicate (patient, time) combinations
     # When multiple infusions overlap in time, expand produces multiple rows
@@ -1716,8 +1810,8 @@ def mimic_rate_cv(
     if unit_col and unit_col in data.columns:
         keep_vars.append(unit_col)
     
-    # Call expand_intervals
-    return expand_intervals(data, keep_vars=keep_vars, grp_var=grp_var)
+    # Call expand_intervals — pass id_cols to avoid false-positive detection
+    return expand_intervals(data, keep_vars=keep_vars, grp_var=grp_var, id_cols=id_cols)
 
 # 注意: hirid_vent 的完整版本在第4104行定义（支持展开到小时级别）
 
@@ -2928,10 +3022,27 @@ def eicu_rate_units_callback(ml_to_mcg: float, mcg_to_units: float) -> Callable:
             return frame
 
         work = frame.copy()
-        if val_var not in work.columns:
-            work[val_var] = pd.to_numeric(work.iloc[:, 0], errors="coerce")
+        
+        # 🔧 FIX: 回调可能在列重命名后调用，val_var 可能已被重命名为 concept_name
+        # 优先使用 concept_name（重命名后的列），然后是 val_var
+        actual_val_var = None
+        if concept_name in work.columns:
+            actual_val_var = concept_name
+        elif val_var in work.columns:
+            actual_val_var = val_var
         else:
-            work[val_var] = pd.to_numeric(work[val_var], errors="coerce")
+            # 尝试其他常见列名
+            for col in ['drugrate', 'rate', 'value']:
+                if col in work.columns:
+                    actual_val_var = col
+                    break
+        
+        if actual_val_var is None:
+            # 如果都找不到，返回空 DataFrame
+            return pd.DataFrame(columns=frame.columns)
+        
+        # 使用找到的值列，并创建统一的列名用于后续处理
+        work[val_var] = pd.to_numeric(work[actual_val_var], errors="coerce")
 
         if sub_var and sub_var in work.columns:
             work["unit_var"] = eicu_extract_unit(work[sub_var])
@@ -4039,10 +4150,10 @@ def hirid_vent(
     
     Implements R ricu's hirid_vent:
     1. Calculate time differences between consecutive records per patient
-    2. Pad the last difference with padding_hours
-    3. Cap differences > max_gap_hours to padding_hours
-    4. Store as dur_var for window table processing
-    5. Expand windows to hourly time series (like R ricu's expand())
+    2. Pad the last difference with padding (in data's time unit)
+    3. Cap differences > max_gap to padding
+    4. Store as dur_var for window table processing (in MINUTES per R ricu)
+    5. Round datetime to integer hours (per R ricu)
     
     Args:
         frame: DataFrame with ventilation records
@@ -4050,12 +4161,12 @@ def hirid_vent(
         val_col: Name of the value column
         index_col: Name of the time/index column
         dur_var: Name of the duration column to create
-        padding_hours: Duration to use for last record and capped gaps
-        max_gap_hours: Maximum allowed gap between records
+        padding_hours: Duration to use for last record and capped gaps (in hours)
+        max_gap_hours: Maximum allowed gap between records (in hours)
         expand_to_hourly: If True, expand windows to hourly time series
         
     Returns:
-        DataFrame with hourly expanded ventilation indicator
+        DataFrame with window table format (dur_var in minutes, datetime as integer hours)
     """
     if frame.empty:
         return frame
@@ -4070,8 +4181,8 @@ def hirid_vent(
             break
     
     if id_col is None:
-        # No ID column, add default duration
-        df[dur_var] = padding_hours
+        # No ID column, add default duration (in minutes)
+        df[dur_var] = padding_hours * 60
         return df
     
     # Detect time column
@@ -4083,54 +4194,61 @@ def hirid_vent(
                 break
     
     if not actual_index_col or actual_index_col not in df.columns:
-        # No time column, add default duration
-        df[dur_var] = padding_hours
+        # No time column, add default duration (in minutes)
+        df[dur_var] = padding_hours * 60
         return df
     
     # Sort by patient and time
     df = df.sort_values([id_col, actual_index_col])
     
+    # R ricu uses the data's time unit (which is hours for HiRID after conversion)
+    # padding and max_gap are in hours, dur_var output is in MINUTES
+    padding_minutes = padding_hours * 60  # 4 hours = 240 minutes
+    max_gap_minutes = max_gap_hours * 60  # 12 hours = 720 minutes
+    
     # Calculate padded_capped_diff per patient
-    def padded_capped_diff(time_series: pd.Series) -> pd.Series:
+    # R: padded_diff <- function(x, final) c(diff(x), final)
+    # R: padded_capped_diff <- function(x, final, max) { res <- padded_diff(x, final); res[res > max] <- final; res }
+    def padded_capped_diff_minutes(time_series: pd.Series) -> pd.Series:
         """
-        Calculate time diffs, pad last with padding_hours, cap at max_gap_hours.
-        
-        R: padded_diff <- function(x, final) c(diff(x), final)
-        R: padded_capped_diff <- function(x, final, max) { res <- padded_diff(x, final); res[res > max] <- final; res }
+        Calculate time diffs in MINUTES, pad last with padding_minutes, cap at max_gap_minutes.
         """
         if len(time_series) == 0:
             return pd.Series(dtype=float)
         
         if len(time_series) == 1:
-            return pd.Series([padding_hours], index=time_series.index)
+            return pd.Series([padding_minutes], index=time_series.index)
         
-        # Get values and convert to hours if needed
+        # Get values - should already be float hours (after HiRID time conversion)
         time_vals = time_series.values
         
-        # Handle datetime/timedelta types
+        # Handle datetime/timedelta types (shouldn't happen after conversion, but just in case)
         if np.issubdtype(time_vals.dtype, np.datetime64):
-            # Convert to hours relative to first value
-            time_vals = (time_vals - time_vals[0]).astype('timedelta64[h]').astype(float)
+            time_vals = (time_vals - time_vals[0]).astype('timedelta64[m]').astype(float)
         elif np.issubdtype(time_vals.dtype, np.timedelta64):
-            # Already timedelta, convert to hours
-            time_vals = time_vals.astype('timedelta64[h]').astype(float)
+            time_vals = time_vals.astype('timedelta64[m]').astype(float)
         else:
-            # Assume already numeric (hours)
-            time_vals = np.asarray(time_vals, dtype=float)
+            # Already numeric (hours) - convert to minutes
+            time_vals = np.asarray(time_vals, dtype=float) * 60
         
-        # Calculate diff
+        # Calculate diff (in minutes)
         diff_vals = np.diff(time_vals)
         
-        # Pad with final value
-        padded = np.append(diff_vals, padding_hours)
+        # Pad with final value (in minutes)
+        padded = np.append(diff_vals, padding_minutes)
         
-        # Cap values > max_gap_hours
-        padded[padded > max_gap_hours] = padding_hours
+        # Cap values > max_gap_minutes
+        padded[padded > max_gap_minutes] = padding_minutes
         
         return pd.Series(padded, index=time_series.index)
     
     # Apply per patient
-    df[dur_var] = df.groupby(id_col)[actual_index_col].transform(padded_capped_diff)
+    df[dur_var] = df.groupby(id_col)[actual_index_col].transform(padded_capped_diff_minutes)
+    
+    # Round datetime to integer hours (R ricu behavior)
+    if actual_index_col in df.columns and not np.issubdtype(df[actual_index_col].dtype, np.datetime64):
+        # If float hours, floor to integer
+        df[actual_index_col] = np.floor(df[actual_index_col]).astype(int)
     
     # Expand to hourly time series (like R ricu's expand())
     if expand_to_hourly:

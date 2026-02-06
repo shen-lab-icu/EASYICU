@@ -138,8 +138,8 @@ WINDOW_CONCEPTS = {
     "mech_vent", "vent_ind", "supp_o2",
     "norepi_rate", "epi_rate", "dobu_rate", "adh_rate",
     "dopa_rate", "phn_rate", "vaso_ind",
-    "dex",  # dex 在 aumc/eicu 有 dur_var，需要展开
-    "ett_gcs",     # FIX: ett_gcs 使用 ts_to_win_tbl 展开窗口
+    # 注意: "dex" 不应该在这里！它的 target: "win_tbl" 意味着返回原始格式，不展开
+    # "ett_gcs" 也不应该展开，它使用 ts_to_win_tbl 回调返回窗口格式
 }
 
 # 点事件概念（不应展开为连续时间序列）
@@ -152,6 +152,14 @@ POINT_EVENT_CONCEPTS = {
 # 时长概念（已编码持续时间，不需要展开）
 DURATION_CONCEPTS = {
     "norepi_dur", "epi_dur", "dobu_dur", "dopa_dur"
+}
+
+# 🔧 FIX 2025-02-13: win_tbl 目标概念（返回事件级别数据，不进行时间聚合）
+# 这些概念的 target: "win_tbl"，应该返回 starttime + dur_var 格式，不取整时间
+WIN_TBL_CONCEPTS = {
+    "dex",      # Dextrose: target="win_tbl" in concept-dict.json
+    "ett_gcs",  # ETT GCS: uses ts_to_win_tbl callback
+    "mech_vent",  # Mechanical ventilation: returns event-level data
 }
 
 
@@ -597,8 +605,10 @@ def merge_concepts_ricu_style(
         # 🔧 FIX: 窗口概念不取整时间，保留原始值给 expand_interval_rows 处理
         # R ricu 的 expand() 使用原始浮点时间来计算 seq()
         # 取整将在 expand_interval_rows 内部进行
+        # 🔧 FIX 2025-02-13: 同时跳过 WIN_TBL_CONCEPTS，它们保留原始事件时间不取整
         is_window_concept = name in WINDOW_CONCEPTS or name.endswith("_rate")
-        if "time" in df_copy.columns and not is_window_concept:
+        is_win_tbl_concept = name in WIN_TBL_CONCEPTS
+        if "time" in df_copy.columns and not is_window_concept and not is_win_tbl_concept:
             df_copy["time"] = round_to_interval(df_copy["time"], interval_hours)
         
         # 🔧 NOTE: Duration 概念的值（如 dobu_dur）已经在 calc_dur 中使用 floor(end_h) - floor(start_h) 计算

@@ -5149,8 +5149,7 @@ def render_sidebar():
             5000: "5,000", 
             10000: "10,000",
             20000: "20,000",
-            50000: "50,000",
-            0: "All patients (slower)" if st.session_state.language == 'en' else "全部患者（较慢）"
+            0: "All patients" if st.session_state.language == 'en' else "全部患者"
         }
         current_limit = st.session_state.get('patient_limit', 0)  # 默认全量
         if current_limit not in patient_limit_options:
@@ -6450,7 +6449,7 @@ def render_home_extract_mode(lang):
             # 🔧 FIX (2026-02-04): 使用保存的概念数
             concept_count = export_result.get('concept_count', len(exported_files))
             
-            success_msg = f"✅ Successfully exported {concept_count} concepts ({len(exported_files)} files) to `{export_dir}`" if lang == 'en' else f"✅ 成功导出 {concept_count} 个概念（{len(exported_files)} 个文件）到 `{export_dir}`"
+            success_msg = f"✅ Successfully exported {len(exported_files)} files to `{export_dir}`" if lang == 'en' else f"✅ 成功导出 {concept_count} 个概念（{len(exported_files)} 个文件）到 `{export_dir}`"
             st.success(success_msg)
             
             # 显示时间统计
@@ -6473,11 +6472,19 @@ def render_home_extract_mode(lang):
             # 显示导出的文件列表
             view_files_label = "📁 View Exported Files" if lang == 'en' else "📁 查看导出文件"
             with st.expander(view_files_label, expanded=True):
-                for f in exported_files[:10]:
-                    st.caption(f"• {Path(f).name}")
-                if len(exported_files) > 10:
-                    more_msg = f"... and {len(exported_files) - 10} more files" if lang == 'en' else f"... 及其他 {len(exported_files) - 10} 个文件"
-                    st.caption(more_msg)
+                # 使用多列布局显示文件列表
+                files_to_show = exported_files[:12]  # 最多显示12个
+                num_cols = 3  # 每行3个文件
+                for i in range(0, len(files_to_show), num_cols):
+                    cols = st.columns(num_cols)
+                    for j, col in enumerate(cols):
+                        idx = i + j
+                        if idx < len(files_to_show):
+                            with col:
+                                st.markdown(f"<p style='color: #1e1e1e; font-size: 0.9rem; margin: 2px 0;'>• {Path(files_to_show[idx]).name}</p>", unsafe_allow_html=True)
+                if len(exported_files) > 12:
+                    more_msg = f"... and {len(exported_files) - 12} more files" if lang == 'en' else f"... 及其他 {len(exported_files) - 12} 个文件"
+                    st.markdown(f"<p style='color: #1e1e1e; font-size: 0.9rem; margin: 2px 0;'>{more_msg}</p>", unsafe_allow_html=True)
             
             # 🆕 显示被选择但未能提取的特征（这是正常情况，不是错误）
             unavailable_concepts = export_result.get('unavailable_concepts', [])
@@ -11584,16 +11591,13 @@ def execute_sidebar_export():
             selected_modules[group_key].append(c)
         
         # 检测哪些模块的文件已存在
-        # 🔧 FIX (2026-02-03): 使用模块前缀匹配，而不是精确文件名匹配
+        # 🔧 FIX (2026-02-05): 使用模块名开头匹配，cohort条件在后缀
         existing_modules = {}  # group_key -> file_path
-        cohort_prefix = _generate_cohort_prefix()
+        cohort_suffix = _generate_cohort_prefix()
         
         for group_key, group_concepts in selected_modules.items():
-            # 🔧 按模块名前缀查找已存在的文件
-            if cohort_prefix:
-                search_prefix = f"{cohort_prefix}_{group_key}_"
-            else:
-                search_prefix = f"{group_key}_"
+            # 🔧 按模块名开头查找已存在的文件
+            search_prefix = f"{group_key}_"
             
             # 检查是否有匹配该模块的文件存在
             for ext in ['.parquet', '.csv', '.xlsx']:
@@ -12394,7 +12398,7 @@ def execute_sidebar_export():
                 else:
                     continue
             
-            # 生成文件名：[筛选条件前缀_]模块名_特征1_特征2_...
+            # 生成文件名：模块名_特征1_特征2_...[_筛选条件后缀]
             concept_names = sorted(list(concept_dfs.keys()))  # 🔧 FIX: 排序确保文件名一致
             # 限制特征名长度，避免文件名过长
             if len(concept_names) <= 5:
@@ -12402,12 +12406,12 @@ def execute_sidebar_export():
             else:
                 concepts_suffix = '_'.join(concept_names[:4]) + f'_etc{len(concept_names)}'
             
-            # 🚀 添加队列筛选条件前缀
-            cohort_prefix = _generate_cohort_prefix()
+            # 🚀 添加队列筛选条件后缀
+            cohort_suffix = _generate_cohort_prefix()
             
             # 清理文件名中的特殊字符
-            if cohort_prefix:
-                safe_filename = f"{cohort_prefix}_{group_name}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
+            if cohort_suffix:
+                safe_filename = f"{group_name}_{concepts_suffix}_{cohort_suffix}".replace('/', '_').replace('\\', '_')
             else:
                 safe_filename = f"{group_name}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
             # 限制文件名总长度
@@ -12424,15 +12428,12 @@ def execute_sidebar_export():
             else:
                 file_path = export_dir / f"{safe_filename}.parquet"
             
-            # 🔧 FIX (2026-02-03): 覆盖模式时，先删除该模块的所有旧文件
+            # 🔧 FIX (2026-02-05): 覆盖模式时，先删除该模块的所有旧文件
             overwrite_modules = st.session_state.get('_overwrite_modules', set())
             if group_name in overwrite_modules or is_viz_import_mode:
-                # 删除匹配该模块的所有旧文件
+                # 删除匹配该模块的所有旧文件（模块名开头）
                 for ext in ['.parquet', '.csv', '.xlsx']:
-                    if cohort_prefix:
-                        pattern = f"{cohort_prefix}_{group_name}_*{ext}"
-                    else:
-                        pattern = f"{group_name}_*{ext}"
+                    pattern = f"{group_name}_*{ext}"
                     old_files = list(export_dir.glob(pattern))
                     for old_file in old_files:
                         try:
