@@ -2359,14 +2359,17 @@ def _callback_sofa_resp(
 ) -> ICUTable:
     """Calculate respiratory SOFA component with vent_ind expansion.
     
-    Replicates R ricu's sofa_resp logic:
-    - Expand vent_ind (win_tbl) to time series with aggregate="any"
-    - Merge with pafi
-    - Adjust pafi values: if pafi < 200 and NOT on ventilation, set pafi = 200
-    - Calculate score
-    """
-    from .ts_utils import expand
+    Replicates R ricu's sofa_resp logic exactly:
+      dat <- merge(dat[[pafi_var]], expand(dat[[vent_var]], aggregate = "any"), all = TRUE)
+      dat <- dat[is_true(get(pafi_var) < 200) & !is_true(get(vent_var)), c(pafi_var) := 200]
+      dat <- dat[, c("sofa_resp") := score_calc(get(pafi_var))]
     
+    Key points:
+    1. expand() only expands vent_ind windows to hourly points WITHIN the window
+    2. merge(all=TRUE) is a full outer join
+    3. Adjust: pafi < 200 and NOT ventilated → set pafi = 200
+    4. score_calc uses is_true() so NA pafi → score 0
+    """
     pafi_tbl = tables.get("pafi")
     vent_tbl = tables.get("vent_ind")
     
@@ -2375,394 +2378,116 @@ def _callback_sofa_resp(
     if vent_tbl is None:
         raise ValueError("sofa_resp requires 'vent_ind' concept")
     
-    id_columns, index_column, _ = _assert_shared_schema({"pafi": pafi_tbl})
-    
-    # Get value column names for both tables (handle both ICUTable and WinTbl)
-    pafi_col = pafi_tbl.value_column if hasattr(pafi_tbl, 'value_column') else "pafi"
-    vent_col = vent_tbl.value_column if hasattr(vent_tbl, 'value_column') else "vent_ind"
-    if pafi_col is None:
-        pafi_col = "pafi"
-    if vent_col is None:
-        vent_col = "vent_ind"
-    
-    # Expand vent_ind (win_tbl) to time series with aggregate="any"
-    # This replicates: expand(dat[[vent_var]], aggregate = "any")
-    # 关键：需要确保vent_expanded的时间列名与pafi一致（使用pafi的index_column）
-    if isinstance(vent_tbl, WinTbl):
-        # Expand window table to time series
-        # WinTbl has start (index_var) and duration (dur_var)
-        vent_df = vent_tbl.data.copy()
-        # Handle WinTbl vs ICUTable
-        vent_start_col = vent_tbl.index_var if vent_tbl.index_var else vent_tbl.index_column
-        dur_col = vent_tbl.dur_var
-        
-        # Get ID columns - handle both id_vars (TsTbl/WinTbl) and id_columns (ICUTable)
-        vent_id_cols = vent_tbl.id_vars if hasattr(vent_tbl, 'id_vars') else vent_tbl.id_columns
-        
-        # 使用pafi的index_column作为目标时间列名，确保一致
-        target_time_col = index_column  # pafi的时间列名
-        
-        if vent_start_col and dur_col:
-            from .ts_utils import expand
-            # Expand intervals to time series. Handle both numeric hours (already
-            # aligned to ICU admission) and absolute datetimes.
-            vent_df = vent_df.copy()
-            if dur_col not in vent_df.columns:
-                raise ValueError(
-                    f"Duration column '{dur_col}' not found in vent_ind data. "
-                    f"Available columns: {list(vent_df.columns)}"
-                )
-
-            # Determine time semantics
-            start_series = vent_df[vent_start_col]
-            duration_series = vent_df[dur_col]
-
-            # Treat as numeric hours when start is non-datetime and convertible to numbers
-            start_is_numeric = (
-                not pd.api.types.is_datetime64_any_dtype(start_series)
-                and not pd.api.types.is_timedelta64_dtype(start_series)
-                and pd.to_numeric(start_series, errors="coerce").notna().any()
-            )
-
-            # Use the same step size as the data source interval (like R ricu's time_step(x))
-            step_size = ctx.interval or pd.Timedelta(hours=1)  # Default to 1 hour like R ricu
-            if not isinstance(step_size, pd.Timedelta):
-                step_size = pd.Timedelta(step_size)
-
-            # Handle both ICUTable and WinTbl
-            if hasattr(vent_tbl, 'value_column'):
-                value_col = vent_tbl.value_column or "vent_ind"
-            else:
-                value_col = "vent_ind"
-
-            if start_is_numeric:
-                # Numeric hours since ICU admission. Expand without converting to
-                # epoch-based datetimes to avoid 1969/1970 artifacts.
-                start_vals = pd.to_numeric(start_series, errors="coerce")
-                if pd.api.types.is_timedelta64_dtype(duration_series):
-                    dur_hours = duration_series.dt.total_seconds() / 3600.0
-                else:
-                    dur_td = pd.to_timedelta(duration_series, errors="coerce")
-                    if dur_td.notna().any():
-                        dur_hours = dur_td.dt.total_seconds() / 3600.0
-                    else:
-                        dur_hours = pd.to_numeric(duration_series, errors="coerce")
-
-                end_vals = start_vals + dur_hours.fillna(0)
-                step_hours = max(step_size.total_seconds() / 3600.0, 1e-6)
-
-                expanded_rows = []
-                id_cols = [col for col in vent_id_cols if col in vent_df.columns]
-
-                # 完全复制R ricu的expand逻辑
-                # R ricu的expand为每个interval生成时间序列，然后aggregate处理重叠
-                for idx, row in vent_df.iterrows():
-                    start_val = start_vals.iloc[idx]
-                    end_val = end_vals.iloc[idx]
-                    if pd.isna(start_val) or pd.isna(end_val):
-                        continue
-                    if end_val < start_val:
-                        end_val = start_val
-
-                    # 生成这个间隔的时间序列
-                    times = np.arange(start_val, end_val + step_hours, step_hours)
-                    base = {col: row[col] for col in id_cols}
-                    base[value_col] = bool(row.get(value_col, True))
-                    for t in times:
-                        new_row = dict(base)
-                        new_row[target_time_col] = float(t)
-                        expanded_rows.append(new_row)
-
-                if expanded_rows:
-                    vent_expanded_df = pd.DataFrame(expanded_rows)
-                else:
-                    vent_expanded_df = pd.DataFrame(columns=id_cols + [target_time_col, value_col])
-            else:
-                # Datetime semantics: fall back to expand() with date_range logic
-                end_col = "_end_time"
-                # 只有在不是numeric类型时才转换为datetime
-                if pd.api.types.is_numeric_dtype(vent_df[vent_start_col]):
-                    # 如果是numeric（小时），直接加duration
-                    vent_df[end_col] = vent_df[vent_start_col] + vent_df[dur_col]
-                else:
-                    vent_df[end_col] = pd.to_datetime(vent_df[vent_start_col], errors="coerce") + pd.to_timedelta(vent_df[dur_col])
-
-                vent_expanded_df = expand(
-                    vent_df,
-                    start_var=vent_start_col,
-                    end_var=end_col,
-                    step_size=step_size,
-                    id_cols=vent_id_cols,
-                    keep_vars=[value_col]
-                )
-
-                if vent_expanded_df.empty:
-                    vent_expanded_df = pd.DataFrame(columns=vent_id_cols + [target_time_col, value_col])
-                else:
-                    if vent_start_col != target_time_col and vent_start_col in vent_expanded_df.columns:
-                        vent_expanded_df = vent_expanded_df.rename(columns={vent_start_col: target_time_col})
-
-            # Aggregate overlapping intervals with boolean OR ("any")
-            key_cols = vent_id_cols + [target_time_col]
-            if value_col in vent_expanded_df.columns and not vent_expanded_df.empty:
-                vent_expanded_df[value_col] = vent_expanded_df[value_col].where(vent_expanded_df[value_col].notna(), False).astype(bool)
-                vent_expanded_df = vent_expanded_df.groupby(key_cols, as_index=False)[value_col].any()
-            elif vent_expanded_df.empty:
-                vent_expanded_df = pd.DataFrame(columns=key_cols + [value_col])
-
-            vent_expanded = ICUTable(
-                data=vent_expanded_df,
-                id_columns=vent_id_cols,
-                index_column=target_time_col,
-                value_column=value_col
-            )
-        else:
-            vent_expanded = vent_tbl
-            # 如果无法展开，至少确保时间列名一致
-            if hasattr(vent_expanded, 'data') and vent_expanded.index_column != index_column:
-                vent_expanded.data = vent_expanded.data.rename(columns={vent_expanded.index_column: index_column})
-                vent_expanded.index_column = index_column
-    else:
-        vent_expanded = vent_tbl
-        # 如果vent_ind不是WinTbl，也需要确保时间列名一致
-        if hasattr(vent_expanded, 'data') and hasattr(vent_expanded, 'index_column'):
-            if vent_expanded.index_column != index_column and vent_expanded.index_column in vent_expanded.data.columns:
-                vent_expanded.data = vent_expanded.data.rename(columns={vent_expanded.index_column: index_column})
-                vent_expanded.index_column = index_column
-    
-    # Merge pafi with expanded vent_ind
+    # Get pafi data - this provides the base timeline
     pafi_df = pafi_tbl.data.copy()
-    vent_df = vent_expanded.data.copy()
+    pafi_index = pafi_tbl.index_column or "charttime"
     
-    # Reset index if MultiIndex to avoid merge issues
-    if isinstance(pafi_df.index, pd.MultiIndex):
-        pafi_df = pafi_df.reset_index()
-    if isinstance(vent_df.index, pd.MultiIndex):
-        vent_df = vent_df.reset_index()
+    # Detect ID columns
+    id_columns = pafi_tbl.id_columns if hasattr(pafi_tbl, 'id_columns') and pafi_tbl.id_columns else []
+    if not id_columns:
+        id_columns = [c for c in pafi_df.columns if c in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']]
     
-    # Flatten MultiIndex columns if any
-    if isinstance(pafi_df.columns, pd.MultiIndex):
-        # Flatten MultiIndex columns properly
-        new_cols = []
+    # Find pafi value column
+    pafi_col = 'pafi'
+    if 'pafi' not in pafi_df.columns:
         for col in pafi_df.columns:
-            if isinstance(col, tuple):
-                # Join tuple elements, skipping empty strings
-                parts = [str(c) for c in col if c and str(c).strip()]
-                new_col = '_'.join(parts) if parts else 'unknown'
-                new_cols.append(new_col)
-            else:
-                new_cols.append(str(col))
-        pafi_df.columns = new_cols
-        # Ensure value column exists
-        if pafi_col not in pafi_df.columns:
-            # Try to find a column that might be the value
+            if col not in id_columns and col != pafi_index and 'pafi' in col.lower():
+                pafi_df = pafi_df.rename(columns={col: 'pafi'})
+                break
+        else:
+            # Fallback: use first non-id, non-index column
             for col in pafi_df.columns:
-                if 'pafi' in col.lower() or col in ['min', 'max']:
-                    pafi_df = pafi_df.rename(columns={col: pafi_col})
+                if col not in id_columns and col != pafi_index:
+                    pafi_df = pafi_df.rename(columns={col: 'pafi'})
                     break
     
-    if isinstance(vent_df.columns, pd.MultiIndex):
-        new_cols = []
-        for col in vent_df.columns:
-            if isinstance(col, tuple):
-                parts = [str(c) for c in col if c and str(c).strip()]
-                new_col = '_'.join(parts) if parts else 'unknown'
-                new_cols.append(new_col)
-            else:
-                new_cols.append(str(col))
-        vent_df.columns = new_cols
+    # Ensure numeric pafi
+    pafi_df['pafi'] = pd.to_numeric(pafi_df['pafi'], errors='coerce')
     
-    # Ensure key columns exist in both dataframes
-    
-    # Get actual ID columns from dataframes (they might be in index)
-    actual_id_cols = []
-    for col in id_columns:
-        if col in pafi_df.columns:
-            actual_id_cols.append(col)
-        elif hasattr(pafi_df.index, 'names') and col in pafi_df.index.names:
-            # Column is in index, need to reset it
-            if not isinstance(pafi_df.index, pd.MultiIndex):
-                pafi_df = pafi_df.reset_index()
-            actual_id_cols.append(col)
-    
-    # Build key columns list
-    key_cols = list(actual_id_cols)
-    if index_column and index_column in pafi_df.columns:
-        key_cols.append(index_column)
-    
-    # Ensure we have at least one key column
-    if not key_cols:
-        # Try to infer from column names - 扩展支持更多数据库的ID列
-        for col in ['stay_id', 'icustay_id', 'admissionid', 'patientunitstayid', 'subject_id']:
-            if col in pafi_df.columns and col in vent_df.columns:
-                key_cols = [col]
-                break
-        if not key_cols:
-            # Debug: print available columns
-            pafi_cols = list(pafi_df.columns)
-            vent_cols = list(vent_df.columns)
-            common_cols = set(pafi_cols) & set(vent_cols)
-            raise ValueError(
-                f"无法确定合并键列：pafi_df和vent_df都没有共同的ID列。\n"
-                f"pafi_df列: {pafi_cols}\n"
-                f"vent_df列: {vent_cols}\n"
-                f"共同列: {list(common_cols)}\n"
-                f"id_columns: {id_columns}, index_column: {index_column}"
-            )
-    
-    # 统一ID列名 - 不同概念可能使用不同的ID列名（stay_id vs admissionid等）
-    # 如果vent_df和pafi_df的ID列名不一致，重命名为统一的列名
-    
-    # 找到pafi_df和vent_df各自的ID列
-    pafi_id_col = None
-    vent_id_col = None
-    
-    for col in ['admissionid', 'stay_id', 'icustay_id', 'patientunitstayid']:
-        if col in pafi_df.columns:
-            pafi_id_col = col
-            break
-    
-    for col in ['admissionid', 'stay_id', 'icustay_id', 'patientunitstayid']:
-        if col in vent_df.columns:
-            vent_id_col = col
-            break
-    
-    # 如果ID列名不一致，统一重命名为pafi的ID列名
-    if pafi_id_col and vent_id_col and pafi_id_col != vent_id_col:
-        vent_df = vent_df.rename(columns={vent_id_col: pafi_id_col})
-        # 更新key_cols
-        if vent_id_col in key_cols:
-            key_cols = [pafi_id_col if c == vent_id_col else c for c in key_cols]
-    
-    # Ensure all key columns exist in both dataframes
-    missing_in_pafi = [col for col in key_cols if col not in pafi_df.columns]
-    missing_in_vent = [col for col in key_cols if col not in vent_df.columns]
-    if missing_in_pafi:
-        raise ValueError(f"Key columns missing in pafi_df: {missing_in_pafi}. Available columns: {list(pafi_df.columns)}")
-    if missing_in_vent:
-        raise ValueError(f"Key columns missing in vent_df: {missing_in_vent}. Available columns: {list(vent_df.columns)}")
-    
-    # 确保时间列类型一致（合并前统一）
-    # 如果时间已经是数字类型（小时数），保持数字类型；否则统一为datetime
-    if index_column and index_column in pafi_df.columns and index_column in vent_df.columns:
-        pafi_time_is_numeric = pd.api.types.is_numeric_dtype(pafi_df[index_column])
-        vent_time_is_numeric = pd.api.types.is_numeric_dtype(vent_df[index_column])
+    # Expand vent_ind WinTbl to hourly points WITHIN windows only
+    # (same pattern as _callback_supp_o2)
+    if isinstance(vent_tbl, WinTbl):
+        vent_df = vent_tbl.data.copy()
+        vent_id_cols = vent_tbl.id_vars if hasattr(vent_tbl, 'id_vars') else id_columns
+        start_col = vent_tbl.index_var if hasattr(vent_tbl, 'index_var') else "starttime"
+        dur_col = vent_tbl.dur_var if hasattr(vent_tbl, 'dur_var') else "dur_var"
         
-        if pafi_time_is_numeric and vent_time_is_numeric:
-            # 都是数字类型，保持
-            pass
-        elif not pafi_time_is_numeric and not vent_time_is_numeric:
-            # 都是datetime类型，统一格式
-            def normalize_datetime(series):
-                """标准化datetime列：移除时区，统一为datetime64[ns]"""
-                # 如果已经是numeric，说明类型判断有误，直接返回
-                if pd.api.types.is_numeric_dtype(series):
-                    return series
-                if pd.api.types.is_datetime64_any_dtype(series):
-                    if hasattr(series.dtype, 'tz') and series.dtype.tz is not None:
-                        series = series.dt.tz_localize(None)
-                    return series.astype('datetime64[ns]')
-                else:
-                    return pd.to_datetime(series, errors='coerce').astype('datetime64[ns]')
+        # Expand each window to hourly points
+        expanded_rows = []
+        for _, row in vent_df.iterrows():
+            start_val = row[start_col]
+            dur_val = row[dur_col] if dur_col in vent_df.columns else 0
             
-            pafi_df[index_column] = normalize_datetime(pafi_df[index_column])
-            vent_df[index_column] = normalize_datetime(vent_df[index_column])
-        else:
-            # 类型不一致，尝试统一为numeric类型
-            # 如果一个是数字一个是datetime，转换datetime为numeric（小时数）
-            pafi_is_numeric = pd.api.types.is_numeric_dtype(pafi_df[index_column])
-            vent_is_numeric = pd.api.types.is_numeric_dtype(vent_df[index_column])
-            
-            if pafi_is_numeric and not vent_is_numeric:
-                # pafi是numeric，vent是datetime，转换vent为numeric
-                # 需要vent的入院时间，从数据源获取
-                # 取vent_df的id列，查询入院时间
-                if ctx and ctx.data_source:
-                    vent_df[index_column] = ctx.resolver._align_time_to_admission(
-                        vent_df,
-                        ctx.data_source,
-                        vent_tbl.id_columns if hasattr(vent_tbl, 'id_columns') else vent_tbl.id_vars,
-                        index_column
-                    )[index_column]
-                else:
-                    raise ValueError(
-                        "无法自动转换：pafi的时间列是numeric但vent是datetime，且没有数据源上下文。"
-                    )
-            elif vent_is_numeric and not pafi_is_numeric:
-                # vent是numeric，pafi是datetime，转换pafi为numeric
-                if ctx and ctx.data_source:
-                    pafi_df[index_column] = ctx.resolver._align_time_to_admission(
-                        pafi_df,
-                        ctx.data_source,
-                        pafi_tbl.id_columns if hasattr(pafi_tbl, 'id_columns') else pafi_tbl.id_vars,
-                        index_column
-                    )[index_column]
-                else:
-                    raise ValueError(
-                        "无法自动转换：vent的时间列是numeric但pafi是datetime，且没有数据源上下文。"
-                    )
+            # Calculate end time (dur_var is in minutes)
+            if pd.notna(dur_val) and dur_val > 0:
+                end_val = start_val + dur_val / 60  # Convert minutes to hours
             else:
-                # 两者都不是我们期望的类型
-                raise ValueError(
-                    f"时间列类型不一致且无法自动转换: "
-                    f"pafi[{index_column}]={pafi_df[index_column].dtype}, "
-                    f"vent[{index_column}]={vent_df[index_column].dtype}"
-                )
+                end_val = start_val
+            
+            # Generate hourly points within the window
+            start_hour = int(np.floor(start_val))
+            end_hour = int(np.floor(end_val))
+            
+            for hour in range(start_hour, end_hour + 1):
+                new_row = {col: row[col] for col in vent_id_cols if col in row.index}
+                new_row[pafi_index] = float(hour)  # Use pafi's index name
+                new_row['vent_ind'] = True
+                expanded_rows.append(new_row)
+        
+        if expanded_rows:
+            vent_df = pd.DataFrame(expanded_rows)
+            # Aggregate by id + time (any=True for overlapping windows)
+            group_cols = list(vent_id_cols) + [pafi_index]
+            vent_df = vent_df.groupby([c for c in group_cols if c in vent_df.columns], as_index=False).agg({'vent_ind': 'any'})
+        else:
+            vent_df = pd.DataFrame(columns=list(vent_id_cols) + [pafi_index, 'vent_ind'])
+    else:
+        vent_df = vent_tbl.data.copy()
+        vent_index = vent_tbl.index_column if hasattr(vent_tbl, 'index_column') and vent_tbl.index_column else pafi_index
+        # Rename vent index to match pafi
+        if vent_index != pafi_index and vent_index in vent_df.columns:
+            vent_df = vent_df.rename(columns={vent_index: pafi_index})
+        # Find vent_ind column
+        if 'vent_ind' not in vent_df.columns:
+            for col in vent_df.columns:
+                if col not in id_columns and col != pafi_index:
+                    vent_df = vent_df.rename(columns={col: 'vent_ind'})
+                    break
     
-    # Merge with outer join (all = TRUE in R)
-    merged = pafi_df.merge(
-        vent_df[key_cols + [vent_col]],
-        on=key_cols,
-        how="outer"
-    )
+    # Merge with full outer join (R: merge(..., all=TRUE))
+    merge_cols = [c for c in id_columns if c in vent_df.columns and c in pafi_df.columns] + [pafi_index]
+    merge_cols = [c for c in merge_cols if c in vent_df.columns and c in pafi_df.columns]
     
-    # R's behavior for sofa_resp
-    # R uses expand() on vent_ind which fills the full time range,
-    # but pafi is NOT forward-filled infinitely. Instead:
-    # 1. vent_ind is expanded to full time range (already done above)
-    # 2. pafi is merged (with gaps)
-    # 3. When pafi is NaN and vent_ind is also NaN/False, sofa_resp = NaN (not 0)
-    # 4. When pafi < 200 and NOT on ventilation, pafi is adjusted to 200
-    # 5. Score is calculated, and NaN pafi results in NaN score
+    if merge_cols:
+        result = pd.merge(pafi_df, vent_df, on=merge_cols, how='outer')
+    else:
+        result = pd.merge(pafi_df, vent_df, on=[pafi_index], how='outer')
     
-    # The key insight: R's fill_gaps() is called on the RESULT of sofa_resp callback,
-    # not on the input data. So we should not fill gaps here.
-    # Instead, just handle the merge and calculate score, leaving NaN as NaN.
+    # Fill NaN vent_ind with False (not ventilated)
+    result['vent_ind'] = result['vent_ind'].fillna(False).astype(bool)
     
-    # 移除错误的PaFi调整逻辑
-    # 原逻辑错误地调整了PaFi值：if pafi < 200 and NOT on ventilation, set pafi = 200
-    # 但根据SOFA临床指南，PaFi评分应基于实际值，不应因通气状态而调整
-    # R ricu可能没有这个调整，或调整条件不同（如仅针对无创通气）
-    #
-    # SOFA呼吸评分标准：
-    # - PaFi < 100: 4分
-    # - PaFi < 200: 3分
-    # - PaFi < 300: 2分
-    # - PaFi < 400: 1分
-    # - PaFi >= 400: 0分
-    #
-    # 注意：某些临床变体可能对无通气患者的PaFi有特殊处理，
-    # 但基于我们的数据分析，R ricu似乎没有这个调整
-
-    # 不再调整PaFi值，直接基于实际PaFi计算SOFA评分
+    # R ricu adjustment: if pafi < 200 and NOT ventilated, set pafi = 200
+    # This limits score to max 2 for non-ventilated patients
+    # R: dat[is_true(get(pafi_var) < 200) & !is_true(get(vent_var)), c(pafi_var) := 200]
+    adj_mask = (result['pafi'] < 200) & (~result['vent_ind'])
+    # is_true(pafi < 200) returns False for NA, so NA pafi is not adjusted
+    adj_mask = adj_mask.fillna(False)
+    result.loc[adj_mask, 'pafi'] = 200.0
     
-    # Calculate score using sofa_resp function
-    # Pass None for vent_ind since we're not doing PaFi adjustment anymore
-    vent_series = merged[vent_col] if vent_col in merged.columns else None
-    score = sofa_resp(
-        pd.to_numeric(merged[pafi_col], errors="coerce"),
-        vent_series
-    )
-
-    merged[ctx.concept_name] = score
-    cols = key_cols + [ctx.concept_name]
+    # R ricu score_calc using is_true() — NA pafi → all is_true checks FALSE → score 0
+    pafi_vals = result['pafi']
+    score = pd.Series(0, index=result.index, dtype="Int64")
+    score = score.where(~(pafi_vals < 400).fillna(False), 1)
+    score = score.where(~(pafi_vals < 300).fillna(False), 2)
+    score = score.where(~(pafi_vals < 200).fillna(False), 3)
+    score = score.where(~(pafi_vals < 100).fillna(False), 4)
+    result['sofa_resp'] = score
     
-    return _as_icutbl(
-        merged[cols].reset_index(drop=True),
-        id_columns=id_columns,
-        index_column=index_column,
-        value_column=ctx.concept_name
-    )
+    # Select output columns
+    output_cols = [c for c in id_columns if c in result.columns] + [pafi_index, 'sofa_resp']
+    result = result[output_cols].reset_index(drop=True)
+    
+    return _as_icutbl(result, id_columns=id_columns, index_column=pafi_index, value_column="sofa_resp")
 
 def _callback_sofa_score(
     tables: Dict[str, ICUTable],
@@ -3962,112 +3687,118 @@ def _callback_supp_o2(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    """
+    R ricu logic:
+    res <- merge(res[[fio2_var]], expand(res[[vent_var]], aggregate = "any"), all = TRUE)
+    res <- res[, c("supp_o2", vent_var, fio2_var) := list(
+      is_true(get(vent_var) | get(fio2_var) > 21), NULL, NULL
+    )]
+    
+    Key points:
+    1. expand() only expands vent_ind windows to hourly points WITHIN the window
+    2. merge(all=TRUE) is a full outer join
+    3. is_true() only keeps TRUE values
+    """
     vent_tbl = tables["vent_ind"]
     fio2_tbl = tables["fio2"]
-
-    # When vent_ind arrives as a WinTbl we need a dense hourly indicator to align with FiO2.
-    if isinstance(vent_tbl, WinTbl):
-        desired_index = fio2_tbl.index_column or vent_tbl.index_column or "charttime"
-        vent_col = vent_tbl.value_column or "vent_ind"
-        vent_tbl = _expand_win_table_to_interval(
-            vent_tbl,
-            interval=ctx.interval,
-            value_column=vent_col,
-            target_index=desired_index,
-            fill_value=True,
-        )
-
-    id_columns, index_column, _ = _assert_shared_schema({"vent_ind": vent_tbl, "fio2": fio2_tbl})
-    vent_df = vent_tbl.data.copy()
+    
+    # Get fio2 data - this provides the base timeline
     fio2_df = fio2_tbl.data.copy()
-
-    # vent_ind is often a WinTbl indexed by starttime while fio2 uses charttime.
-    # Align the index column names so we can merge on a common timeline.
-    vent_index = vent_tbl.index_column
-    fio2_index = fio2_tbl.index_column
-
-    # Prefer the fio2 index (charttime) for the merged timeline.
-    if fio2_index is None and "charttime" in fio2_df.columns:
-        fio2_index = "charttime"
-    if vent_index is None and "charttime" in vent_df.columns:
-        vent_index = "charttime"
-    if vent_index is None and "starttime" in vent_df.columns:
-        vent_index = "starttime"
-
-    # If we still don't have an index from either table, fail fast.
-    merged_index = fio2_index or vent_index
-    if merged_index is None:
-        raise ValueError("supp_o2 requires at least one time column")
-
-    # Ensure both tables expose the merged index column so downstream merge succeeds.
-    if merged_index not in vent_df.columns and vent_index in vent_df.columns:
-        vent_df = vent_df.rename(columns={vent_index: merged_index})
-    if merged_index not in fio2_df.columns and fio2_index in fio2_df.columns:
-        fio2_df = fio2_df.rename(columns={fio2_index: merged_index})
-
-    index_column = merged_index
-    key_cols = (id_columns or []) + [index_column]
-
-    if index_column not in vent_df.columns:
-        # When vent_ind comes as WinTbl without explicit timestamp, approximate using starttime column
-        possible_cols = ["starttime", "charttime", "time"]
-        for candidate in possible_cols:
-            if candidate in vent_df.columns:
-                vent_df = vent_df.rename(columns={candidate: index_column})
+    fio2_index = fio2_tbl.index_column or "charttime"
+    
+    # Detect ID columns
+    id_columns = fio2_tbl.id_columns if hasattr(fio2_tbl, 'id_columns') and fio2_tbl.id_columns else []
+    if not id_columns:
+        id_columns = [c for c in fio2_df.columns if c in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']]
+    
+    # Expand vent_ind WinTbl to hourly points WITHIN windows only
+    if isinstance(vent_tbl, WinTbl):
+        vent_df = vent_tbl.data.copy()
+        vent_id_cols = vent_tbl.id_vars if hasattr(vent_tbl, 'id_vars') else id_columns
+        start_col = vent_tbl.index_var if hasattr(vent_tbl, 'index_var') else "starttime"
+        dur_col = vent_tbl.dur_var if hasattr(vent_tbl, 'dur_var') else "dur_var"
+        
+        # Expand each window to hourly points
+        expanded_rows = []
+        for _, row in vent_df.iterrows():
+            start_val = row[start_col]
+            dur_val = row[dur_col] if dur_col in vent_df.columns else 0
+            
+            # Calculate end time (dur_var is in minutes)
+            if pd.notna(dur_val) and dur_val > 0:
+                end_val = start_val + dur_val / 60  # Convert minutes to hours
+            else:
+                end_val = start_val
+            
+            # Generate hourly points within the window
+            start_hour = int(np.floor(start_val))
+            end_hour = int(np.floor(end_val))
+            
+            for hour in range(start_hour, end_hour + 1):
+                new_row = {col: row[col] for col in vent_id_cols if col in row.index}
+                new_row[fio2_index] = float(hour)  # Use fio2's index name
+                new_row['vent_ind'] = True
+                expanded_rows.append(new_row)
+        
+        if expanded_rows:
+            vent_df = pd.DataFrame(expanded_rows)
+            # Aggregate by id + time (any=True)
+            group_cols = list(vent_id_cols) + [fio2_index]
+            vent_df = vent_df.groupby([c for c in group_cols if c in vent_df.columns], as_index=False).agg({'vent_ind': 'any'})
+        else:
+            vent_df = pd.DataFrame(columns=list(vent_id_cols) + [fio2_index, 'vent_ind'])
+    else:
+        vent_df = vent_tbl.data.copy()
+        vent_index = vent_tbl.index_column if hasattr(vent_tbl, 'index_column') and vent_tbl.index_column else fio2_index
+        # Rename vent index to match fio2
+        if vent_index != fio2_index and vent_index in vent_df.columns:
+            vent_df = vent_df.rename(columns={vent_index: fio2_index})
+        # Find vent_ind column
+        vent_col = 'vent_ind'
+        if 'vent_ind' not in vent_df.columns:
+            for col in vent_df.columns:
+                if col not in id_columns and col != fio2_index:
+                    vent_col = col
+                    vent_df = vent_df.rename(columns={col: 'vent_ind'})
+                    break
+    
+    # Prepare fio2 - find value column
+    fio2_col = 'fio2'
+    if 'fio2' not in fio2_df.columns:
+        for col in fio2_df.columns:
+            if col not in id_columns and col != fio2_index:
+                fio2_col = col
+                fio2_df = fio2_df.rename(columns={col: 'fio2'})
                 break
-    if index_column not in fio2_df.columns:
-        possible_cols = ["charttime", "starttime", "time"]
-        for candidate in possible_cols:
-            if candidate in fio2_df.columns:
-                fio2_df = fio2_df.rename(columns={candidate: index_column})
-                break
-
-    if index_column not in vent_df.columns or index_column not in fio2_df.columns:
-        raise ValueError("supp_o2 requires vent_ind and fio2 tables to provide a shared time column")
-
-    vent_col = vent_tbl.value_column or "vent_ind"
-    fio2_col = fio2_tbl.value_column or "fio2"
-
-    fio2_df[fio2_col] = pd.to_numeric(fio2_df[fio2_col], errors="coerce")
-
-    # Align both tables on a shared MultiIndex and compute boolean result via numpy.
-    id_components = key_cols.copy()
-    if not id_components:
-        id_components = [index_column]
-
-    vent_series = (
-        vent_df.set_index(id_components)[vent_col]
-        if key_cols
-        else vent_df.set_index(index_column)[vent_col]
-    )
-    fio2_series = (
-        fio2_df.set_index(id_components)[fio2_col]
-        if key_cols
-        else fio2_df.set_index(index_column)[fio2_col]
-    )
-
-    # 🔧 FIX: 在 reindex 前需要处理原始 Series 中的重复索引
-    # 当同一时间点有多个值时，取最后一个（或第一个），避免 reindex 时报错
-    # "cannot assemble with duplicate keys"
-    if vent_series.index.duplicated().any():
-        vent_series = vent_series[~vent_series.index.duplicated(keep='last')]
-    if fio2_series.index.duplicated().any():
-        fio2_series = fio2_series[~fio2_series.index.duplicated(keep='last')]
-
-    shared_index = vent_series.index.union(fio2_series.index)
-    vent_aligned = vent_series.reindex(shared_index, fill_value=False).astype(bool, copy=False)
-    fio2_aligned = pd.to_numeric(fio2_series.reindex(shared_index, fill_value=21.0), errors="coerce").fillna(21.0)
-
-    supp_mask = np.logical_or(vent_aligned.to_numpy(), fio2_aligned.to_numpy() > 21.0)
-    result = shared_index.to_frame(index=False)
-    result["supp_o2"] = supp_mask
-
-    if key_cols:
-        cols = key_cols + ["supp_o2"]
-        return _as_icutbl(result[cols], id_columns=id_columns, index_column=index_column, value_column="supp_o2")
-
-    cols = [index_column, "supp_o2"]
-    return _as_icutbl(result[cols], id_columns=id_columns, index_column=index_column, value_column="supp_o2")
+    
+    # Ensure numeric fio2
+    fio2_df['fio2'] = pd.to_numeric(fio2_df['fio2'], errors='coerce')
+    
+    # Merge with full outer join (R: merge(..., all=TRUE))
+    merge_cols = [c for c in id_columns if c in vent_df.columns and c in fio2_df.columns] + [fio2_index]
+    merge_cols = [c for c in merge_cols if c in vent_df.columns and c in fio2_df.columns]
+    
+    if merge_cols:
+        result = pd.merge(fio2_df, vent_df, on=merge_cols, how='outer')
+    else:
+        result = pd.merge(fio2_df, vent_df, on=[fio2_index], how='outer')
+    
+    # Fill NaN values
+    result['vent_ind'] = result['vent_ind'].fillna(False)
+    result['fio2'] = result['fio2'].fillna(21.0)
+    
+    # Calculate supp_o2: is_true(vent_ind | fio2 > 21)
+    supp_mask = result['vent_ind'].astype(bool) | (result['fio2'] > 21.0)
+    
+    # R ricu's is_true() only keeps TRUE values
+    result = result[supp_mask].copy()
+    result['supp_o2'] = True
+    
+    # Select output columns
+    output_cols = [c for c in id_columns if c in result.columns] + [fio2_index, 'supp_o2']
+    result = result[output_cols].drop_duplicates()
+    
+    return _as_icutbl(result, id_columns=id_columns, index_column=fio2_index, value_column="supp_o2")
 
 def _callback_supp_o2_aumc(
     tables: Dict[str, ICUTable],
@@ -4248,6 +3979,112 @@ def _callback_vent_ind(
         expanded = expanded.groupby(group_cols, as_index=False)["vent_ind"].any()
         expanded = expanded.reset_index(drop=True)
         return _as_icutbl(expanded, id_columns=id_columns, index_column=time_column, value_column="vent_ind")
+
+    def _windows_from_mech_as_wintbl(mech: ICUTable | WinTbl) -> Optional[WinTbl]:
+        """Return win_tbl format for mech_vent data (matching R ricu behavior).
+        
+        R ricu's vent_ind callback with mech_vent:
+        1. vent_ind = !is.na(mech_vent)
+        2. change_interval(res, final_int)
+        3. return res (preserves win_tbl format with starttime + dur_var)
+        """
+        df = mech.data.copy()
+        if df.empty:
+            return None
+
+        # 🔧 FIX 2025-02-14: WinTbl doesn't have value_column attribute
+        value_col = "mech_vent"
+        if hasattr(mech, 'value_column') and mech.value_column:
+            value_col = mech.value_column
+        if value_col in df.columns:
+            df["vent_flag"] = pd.Series(df[value_col]).fillna(False)
+            if df["vent_flag"].dtype == bool:
+                vent_mask = df["vent_flag"]
+            else:
+                vent_mask = ~df["vent_flag"].isin([False, 0, "0", "false", "False", "none", None])
+        else:
+            vent_mask = pd.Series(True, index=df.index)
+
+        df = df[vent_mask]
+        if df.empty:
+            return None
+
+        # 获取时间列和持续时间列
+        # 🔧 FIX 2025-02-14: WinTbl uses index_var, ICUTable uses index_column
+        if isinstance(mech, WinTbl):
+            idx_col = mech.index_var
+        elif hasattr(mech, 'index_column') and mech.index_column:
+            idx_col = mech.index_column
+        else:
+            idx_col = None
+        if idx_col is None or idx_col not in df.columns:
+            for candidate in ["charttime", "starttime", "time"]:
+                if candidate in df.columns:
+                    idx_col = candidate
+                    break
+        if idx_col not in df.columns:
+            return None
+
+        # 获取 dur_var 列
+        dur_col = None
+        if isinstance(mech, WinTbl) and mech.dur_var and mech.dur_var in df.columns:
+            dur_col = mech.dur_var
+        else:
+            # 🔧 FIX 2025-02-14: Check for 'dur_var' column first (R ricu naming convention)
+            for candidate in ["dur_var", "mech_vent_dur", "duration", "dur", "endtime", "end_time", "stop", "end"]:
+                if candidate in df.columns:
+                    dur_col = candidate
+                    break
+
+        # 🔧 FIX: 转换时间为相对小时数
+        time_values = df[idx_col]
+        if pd.api.types.is_datetime64_any_dtype(time_values):
+            # 需要转换为相对小时数
+            time_hours = _relative_hours(df, idx_col)
+        elif pd.api.types.is_timedelta64_dtype(time_values):
+            time_hours = time_values.dt.total_seconds() / 3600.0
+        else:
+            time_hours = pd.to_numeric(time_values, errors="coerce")
+
+        # 🔧 FIX 2025-02-14: dur_var is already in MINUTES from concept loading
+        # No conversion needed - use the value directly
+        if dur_col is not None:
+            dur_values = df[dur_col]
+            if pd.api.types.is_timedelta64_dtype(dur_values):
+                dur_minutes = dur_values.dt.total_seconds() / 60.0
+            else:
+                # dur_var is already in minutes (from concept.py fix)
+                dur_minutes = pd.to_numeric(dur_values, errors="coerce")
+        else:
+            # 默认持续时间为 match_win（以分钟计）
+            dur_minutes = match_win.total_seconds() / 60.0
+
+        # 🔧 创建 win_tbl 格式输出
+        result_df = pd.DataFrame()
+        for col in id_columns:
+            if col in df.columns:
+                result_df[col] = df[col].values
+        result_df["starttime"] = time_hours.values
+        result_df["dur_var"] = dur_minutes if isinstance(dur_minutes, (int, float)) else dur_minutes.values
+        result_df["vent_ind"] = True
+        
+        # 按时间聚合 (change_interval 行为)
+        # 取整到小时
+        result_df["starttime"] = (result_df["starttime"] // 1).astype(int)
+        
+        # 按 ID 和 starttime 分组，取 max dur_var
+        group_cols = list(id_columns) + ["starttime"]
+        result_df = result_df.groupby(group_cols, as_index=False).agg({
+            "dur_var": "max",
+            "vent_ind": "any"
+        }).reset_index(drop=True)
+
+        return WinTbl(
+            data=result_df,
+            id_vars=list(id_columns),
+            index_var="starttime",
+            dur_var="dur_var"
+        )
 
     def _windows_from_mech(mech: ICUTable | WinTbl) -> Optional[ICUTable]:
         df = mech.data.copy()
@@ -4466,17 +4303,27 @@ def _callback_vent_ind(
         return result
 
     # 🔥 R ricu vent_ind 逻辑:
-    # 如果 mech_vent 有数据 → 只使用 mech_vent，忽略 vent_start/vent_end
-    # 否则 → 使用 vent_start + vent_end 匹配
+    # 如果 mech_vent 有数据 → 只使用 mech_vent，返回 win_tbl 格式
+    # 否则 → 使用 vent_start + vent_end 匹配，返回 win_tbl 格式
+    # 
+    # 🔧 CRITICAL FIX 2025-02-14: R ricu returns win_tbl format, NOT expanded ts_tbl!
+    # Gold standard: stay_id, starttime, dur_var, vent_ind
+    # PyRICU was: stay_id, charttime, vent_ind (expanded hourly)
     # 
     # 参考 R 代码:
     #   if (has_rows(res[[3L]])) {  # mech_vent
-    #     assert_that(nrow(res[[1L]]) == 0L, nrow(res[[2L]]) == 0L)  # vent_start/end should be empty
     #     res <- res[[3L]][, c("vent_ind", "mech_vent") := ...]
-    #     return(res)
+    #     res <- change_interval(res, final_int, by_ref = TRUE)
+    #     return(res)  # Returns win_tbl format (mech_vent is already win_tbl)
     #   }
-    #   # else: use vent_start/vent_end
     
+    # 🔧 PRIORITY: Try win_tbl format first (matches R ricu behavior)
+    if mech_tbl is not None and not mech_tbl.data.empty:
+        wintbl_result = _windows_from_mech_as_wintbl(mech_tbl)
+        if wintbl_result is not None and not wintbl_result.data.empty:
+            return wintbl_result
+    
+    # Fallback to expanded format if win_tbl not available
     mech_result = None
     if mech_tbl is not None and not mech_tbl.data.empty:
         mech_result = _normalize_result(_windows_from_mech(mech_tbl))
