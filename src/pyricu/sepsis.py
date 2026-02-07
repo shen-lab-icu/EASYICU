@@ -258,6 +258,25 @@ def _si_and(
     if abx.empty or samp.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
     
+    # Deduplicate columns (MIMIC-III samp can have duplicate 'charttime'
+    # from aux_time parameter) and strip to needed columns only.
+    # Use positional indexing to handle duplicate column names correctly.
+    def _dedup_cols(df, keep_set):
+        """Keep only first occurrence of each wanted column, using iloc."""
+        seen = set()
+        keep_idx = []
+        for i, col in enumerate(df.columns):
+            if col in keep_set and col not in seen:
+                keep_idx.append(i)
+                seen.add(col)
+        return df.iloc[:, keep_idx].copy()
+    
+    abx_needed = set(id_cols + [index_col, 'abx', 'susp_inf']) & set(abx.columns)
+    abx = _dedup_cols(abx, abx_needed)
+    
+    samp_needed = set(id_cols + [index_col, 'samp', 'org_itemid']) & set(samp.columns)
+    samp = _dedup_cols(samp, samp_needed)
+    
     # Determine time type
     time_is_numeric = pd.api.types.is_numeric_dtype(abx[index_col])
     
@@ -369,6 +388,21 @@ def _si_or(
     - Keep rows where abx OR samp is TRUE
     """
     merge_cols = id_cols + [index_col]
+    
+    # Deduplicate columns (same as _si_and for MIMIC-III compatibility)
+    def _dedup_cols(df, keep_set):
+        seen = set()
+        keep_idx = []
+        for i, col in enumerate(df.columns):
+            if col in keep_set and col not in seen:
+                keep_idx.append(i)
+                seen.add(col)
+        return df.iloc[:, keep_idx].copy()
+    
+    if not abx.empty and abx.columns.duplicated().any():
+        abx = _dedup_cols(abx, set(merge_cols + ['abx', 'susp_inf']) & set(abx.columns))
+    if not samp.empty and samp.columns.duplicated().any():
+        samp = _dedup_cols(samp, set(merge_cols + ['samp', 'org_itemid']) & set(samp.columns))
     
     # Handle empty DataFrames
     abx_empty = abx.empty or not all(c in abx.columns for c in merge_cols)

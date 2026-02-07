@@ -2154,10 +2154,10 @@
       ],
       "hirid": [
         {
-          "table": "general",
-          "val_var": "discharge_status",
+          "table": "observations",
+          "sub_var": "variableid",
           "callback": "hirid_death",
-          "class_name": "col_itm",
+          "class_name": "hrd_itm",
           "ids": [
             110,
             200
@@ -3248,7 +3248,8 @@
             12805
           ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "callback": "convert_unit(binary_op(`*`, 7.6), 'mmHg', 'None|Geen')"
         }
       ],
       "hirid": [
@@ -8650,6 +8651,31 @@
           "ids": [],
           "callback": "transform_fun(set_val(TRUE))"
         }
+      ],
+      "mimic": [
+        {
+          "table": "procedureevents_mv",
+          "sub_var": "itemid",
+          "ids": [225441, 225802, 225803, 225809],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [227290],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 227290=CRRT mode"
+        }
+      ],
+      "sic": [
+        {
+          "table": "data_float_h",
+          "sub_var": "DataID",
+          "ids": [723, 730, 731, 732, 2022],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "723=CRRT Bloodflow, 730=CRRT DialysateFlow, 731=CRRT SubstitutePrae, 732=CRRT SubstitutePost, 2022=CRRT Withdrawal"
+        }
       ]
     }
   },
@@ -9173,6 +9199,14 @@
           ],
           "table": "chartevents",
           "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [717],
+          "table": "data_float_h",
+          "sub_var": "DataID",
+          "_comment": "717=TV (insp), unit=ml"
         }
       ]
     }

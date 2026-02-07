@@ -213,6 +213,28 @@
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "3845=Respiratory mode, 15001552=Mechanical ventilation indicator"
         }
+      ],
+      "mimic": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [
+            223848,
+            223849,
+            220339,
+            224700,
+            225949
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 223848=Ventilator Type, 223849=Ventilator Mode, 220339=PEEP set, 224700=Total PEEP Level, 225949=NIV Mask"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [505, 506, 686],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "CV: 505=PEEP, 506=PEEP Set, 686=Total PEEP Level"
+        }
       ]
     }
   },
@@ -374,6 +396,20 @@
           "sub_var": "variableid",
           "class_name": "hrd_itm"
         }
+      ],
+      "mimic": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [223901],
+          "_comment": "223901=GCS - Motor Response (MetaVision)"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [454],
+          "_comment": "454=Motor Response (CareVue)"
+        }
       ]
     }
   },
@@ -427,7 +463,29 @@
           "_comment": "CAM-ICU score: POSITIEF=1767 (positive delirium), NEGATIEF=15910"
         }
       ],
-      "hirid": []
+      "hirid": [],
+      "mimic": [
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [228332],
+          "val_var": "value",
+          "regex": "^Positive$",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "228332=Delirium assessment: Positive (MetaVision)"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [228300],
+          "val_var": "value",
+          "regex": "^Yes$|Positive|Acute",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "228300=CAM-ICU MS Change (MetaVision)"
+        }
+      ]
     }
   },
   "mech_circ_support": {
@@ -549,6 +607,31 @@
           ],
           "callback": "transform_fun(set_val(TRUE))"
         }
+      ],
+      "mimic": [
+        {
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "ids": [221749, 222315, 221986],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 221749=Phenylephrine, 222315=Vasopressin, 221986=Milrinone"
+        },
+        {
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "ids": [30051, 30125],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "CV: 30051=Vasopressin, 30125=Milrinone"
+        }
+      ],
+      "sic": [
+        {
+          "table": "medication",
+          "sub_var": "DrugID",
+          "ids": [1550],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "1550=Vasopressin"
+        }
       ]
     }
   },
@@ -600,6 +683,24 @@
           "ids": [239],
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "239=Haloperidol"
+        }
+      ],
+      "mimic": [
+        {
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "ids": [221824],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "221824=Haloperidol (Haldol) (MetaVision)"
+        }
+      ],
+      "sic": [
+        {
+          "table": "medication",
+          "sub_var": "DrugID",
+          "ids": [1527],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "1527=Haloperidol"
         }
       ]
     }
@@ -667,7 +768,32 @@
           "_comment": "CRRT indicators: 8805=CVVH Onttrokken (98K), 7666=Arteriele druk (83K), 7667=Pre Filter PBE (83K), 7668=Veneuze druk (83K), 10736=Bloed-flow (79K), 12444=Bloedflow ingesteld (70K), 6684=Vloeistofvolume ingesteld (68K)"
         }
       ],
-      "hirid": []
+      "hirid": [],
+      "mimic": [
+        {
+          "table": "procedureevents_mv",
+          "sub_var": "itemid",
+          "ids": [225441, 225802, 225803, 225809],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF"
+        },
+        {
+          "table": "chartevents",
+          "sub_var": "itemid",
+          "ids": [227290],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "MV: 227290=CRRT mode"
+        }
+      ],
+      "sic": [
+        {
+          "table": "data_float_h",
+          "sub_var": "DataID",
+          "ids": [723, 730, 731, 732, 2022],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "723=CRRT Bloodflow, 730=CRRT DialysateFlow, 731=CRRT SubstitutePrae, 732=CRRT SubstitutePost, 2022=CRRT Withdrawal"
+        }
+      ]
     }
   },
   "rrt_criteria": {

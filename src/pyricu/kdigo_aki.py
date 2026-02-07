@@ -540,6 +540,7 @@ def kdigo_stages(
         result['aki_stage_uo'] = 0
     
     # Handle RRT - automatic Stage 3
+    result['aki_stage_rrt'] = 0  # Default: no RRT
     if rrt_df is not None and not rrt_df.empty:
         rrt_col = _detect_value_col(rrt_df, 'rrt')
         if rrt_col:
@@ -553,10 +554,13 @@ def kdigo_stages(
             result.loc[rrt_mask, 'aki_stage_creat'] = np.maximum(
                 result.loc[rrt_mask, 'aki_stage_creat'].fillna(0), 3
             )
+            # aki_stage_rrt: 3 if RRT active, 0 otherwise
+            result.loc[rrt_mask, 'aki_stage_rrt'] = 3
     
     # Calculate combined AKI stage
     result['aki_stage_creat'] = result['aki_stage_creat'].fillna(0).astype(int)
     result['aki_stage_uo'] = result['aki_stage_uo'].fillna(0).astype(int)
+    result['aki_stage_rrt'] = result['aki_stage_rrt'].fillna(0).astype(int)
     result['aki_stage'] = np.maximum(result['aki_stage_creat'], result['aki_stage_uo'])
     
     # Boolean AKI indicator

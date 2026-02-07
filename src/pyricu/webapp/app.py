@@ -453,6 +453,92 @@ st.markdown("""
         overflow: hidden;
     }
     
+    /* 表格字体颜色改为黑色 */
+    [data-testid="stDataFrame"] {
+        color: #000000 !important;
+    }
+    
+    [data-testid="stDataFrame"] table {
+        color: #000000 !important;
+    }
+    
+    [data-testid="stDataFrame"] th,
+    [data-testid="stDataFrame"] td {
+        color: #000000 !important;
+    }
+    
+    /* 列标题特别强制 */
+    [data-testid="stDataFrame"] thead th,
+    [data-testid="stDataFrame"] thead td,
+    [data-testid="stDataFrame"] .col_heading {
+        color: #000000 !important;
+        font-weight: 600 !important;
+    }
+    
+    .stDataFrame {
+        color: #000000 !important;
+    }
+    
+    .stDataFrame table,
+    .stDataFrame th,
+    .stDataFrame td,
+    .stDataFrame tbody,
+    .stDataFrame thead {
+        color: #000000 !important;
+    }
+    
+    /* 列标题 */
+    .stDataFrame thead th,
+    .stDataFrame thead td,
+    .stDataFrame .col_heading,
+    .stDataFrame th.col_heading {
+        color: #000000 !important;
+        font-weight: 600 !important;
+    }
+    
+    /* DataFrame内部文本元素 */
+    div[data-testid="stDataFrame"] * {
+        color: #000000 !important;
+    }
+    
+    /* Streamlit dataframe column headers */
+    div[data-testid="stDataFrame"] div[role="columnheader"],
+    div[data-testid="stDataFrame"] div[data-testid="stDataFrameResizable"] div[role="columnheader"] {
+        color: #000000 !important;
+        font-weight: 600 !important;
+    }
+    
+    /* Glide data grid headers (Streamlit uses this) */
+    .dvn-scroller div[class*="header"],
+    .glide-header,
+    [class*="headerCell"] {
+        color: #000000 !important;
+        font-weight: 600 !important;
+    }
+    
+    /* 深色模式下保持良好的对比度 */
+    @media (prefers-color-scheme: dark) {
+        [data-testid="stDataFrame"],
+        [data-testid="stDataFrame"] table,
+        [data-testid="stDataFrame"] th,
+        [data-testid="stDataFrame"] td {
+            color: #e0e0e0 !important;
+        }
+        
+        .stDataFrame,
+        .stDataFrame table,
+        .stDataFrame th,
+        .stDataFrame td,
+        .stDataFrame tbody,
+        .stDataFrame thead {
+            color: #e0e0e0 !important;
+        }
+        
+        div[data-testid="stDataFrame"] * {
+            color: #e0e0e0 !important;
+        }
+    }
+    
     /* ============ 进度条美化 ============ */
     .progress-bar {
         height: 8px;
@@ -1055,6 +1141,15 @@ SPECIAL_CONCEPTS = {
     'aki_stage_creat': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['aki_stage_creat']),
     'aki_stage_uo': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['aki_stage_uo']),
     'aki_stage_rrt': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['aki_stage_rrt']),
+    # KDIGO AKI 输出列 - 也通过 kdigo_aki.py 加载
+    'uo_rt_6hr': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['uo_rt_6hr']),
+    'uo_rt_12hr': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['uo_rt_12hr']),
+    'uo_rt_24hr': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['uo_rt_24hr']),
+    'creat_low_past_48hr': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['creat_low_past_48hr']),
+    'creat_low_past_7day': ('pyricu.kdigo_aki', 'load_kdigo_aki', ['creat_low_past_7day']),
+    # Sepsis-3 诊断 - 通过专用函数加载
+    'sep3_sofa1': ('pyricu.webapp.app', '_load_sep3_diagnosis', ['sep3_sofa1']),
+    'sep3_sofa2': ('pyricu.webapp.app', '_load_sep3_diagnosis', ['sep3_sofa2']),
     # 循环衰竭相关概念 - 通过 circ_failure.py 加载
     'circ_failure': ('pyricu.circ_failure', 'load_circ_failure', ['circ_failure']),
     'circ_event': ('pyricu.circ_failure', 'load_circ_failure', ['circ_event']),
@@ -1062,8 +1157,102 @@ SPECIAL_CONCEPTS = {
 
 # 特殊概念的分组（同一模块的概念可以一起加载）
 SPECIAL_CONCEPT_GROUPS = {
-    'kdigo_aki': ['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt'],
+    'kdigo_aki': ['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
+                  'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr', 'creat_low_past_48hr', 'creat_low_past_7day'],
+    'sepsis3': ['sep3_sofa1', 'sep3_sofa2'],
     'circ_failure': ['circ_failure', 'circ_event'],
+}
+
+
+def _load_sep3_diagnosis(
+    database: str,
+    data_path: str = None,
+    patient_ids: list = None,
+    max_patients: int = None,
+    verbose: bool = False,
+    **kwargs,
+) -> pd.DataFrame:
+    """
+    计算 Sepsis-3 诊断 (sep3_sofa1 和 sep3_sofa2)。
+    
+    sep3_sofa1 = suspected infection + SOFA-1 ≥ 2
+    sep3_sofa2 = suspected infection + SOFA-2 ≥ 2
+    
+    Returns:
+        DataFrame with columns: [id_col, charttime, sep3_sofa1, sep3_sofa2]
+    """
+    from pyricu.api import load_concepts
+    
+    load_kwargs = {
+        'data_path': data_path,
+        'database': database,
+        'verbose': verbose,
+        'merge': True,
+    }
+    if max_patients:
+        load_kwargs['max_patients'] = max_patients
+    if patient_ids:
+        load_kwargs['patient_ids'] = patient_ids
+    
+    # Load susp_inf + sofa + sofa2
+    try:
+        merged = load_concepts(concepts=['susp_inf', 'sofa', 'sofa2'], **load_kwargs)
+    except Exception:
+        try:
+            merged = load_concepts(concepts=['susp_inf', 'sofa'], **load_kwargs)
+        except Exception:
+            return pd.DataFrame()
+    
+    if not isinstance(merged, pd.DataFrame) or merged.empty:
+        return pd.DataFrame()
+    
+    # Detect ID and time columns
+    id_col = None
+    for c in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']:
+        if c in merged.columns:
+            id_col = c
+            break
+    time_col = None
+    for c in ['charttime', 'time', 'starttime', 'datetime']:
+        if c in merged.columns:
+            time_col = c
+            break
+    
+    if id_col is None or time_col is None:
+        return pd.DataFrame()
+    
+    result_cols = [id_col, time_col]
+    
+    # sep3_sofa1: susp_inf == 1 AND sofa >= 2
+    if 'susp_inf' in merged.columns and 'sofa' in merged.columns:
+        susp = merged['susp_inf'].fillna(0).astype(bool)
+        sofa_ok = merged['sofa'].fillna(0) >= 2
+        merged['sep3_sofa1'] = (susp & sofa_ok).astype(int)
+        result_cols.append('sep3_sofa1')
+    
+    # sep3_sofa2: susp_inf == 1 AND sofa2 >= 2
+    if 'susp_inf' in merged.columns and 'sofa2' in merged.columns:
+        susp = merged['susp_inf'].fillna(0).astype(bool)
+        sofa2_ok = merged['sofa2'].fillna(0) >= 2
+        merged['sep3_sofa2'] = (susp & sofa2_ok).astype(int)
+        result_cols.append('sep3_sofa2')
+    
+    if len(result_cols) <= 2:
+        return pd.DataFrame()
+    
+    # Only keep rows where susp_inf is present (infection window)
+    if 'susp_inf' in merged.columns:
+        mask = merged['susp_inf'].fillna(0).astype(bool)
+        result = merged.loc[mask, result_cols].copy()
+    else:
+        result = merged[result_cols].copy()
+    
+    return result
+
+
+# 本地特殊加载函数注册表（不需要通过 importlib 动态导入）
+_LOCAL_SPECIAL_LOADERS = {
+    '_load_sep3_diagnosis': _load_sep3_diagnosis,
 }
 
 
@@ -1107,10 +1296,14 @@ def load_special_concepts(
                 try:
                     module_name, func_name, _ = SPECIAL_CONCEPTS[concept]
                     
-                    # 动态导入模块
-                    import importlib
-                    module = importlib.import_module(module_name)
-                    load_func = getattr(module, func_name)
+                    # 🔧 先检查本地加载函数注册表
+                    if func_name in _LOCAL_SPECIAL_LOADERS:
+                        load_func = _LOCAL_SPECIAL_LOADERS[func_name]
+                    else:
+                        # 动态导入模块
+                        import importlib
+                        module = importlib.import_module(module_name)
+                        load_func = getattr(module, func_name)
                     
                     # 准备加载参数
                     load_kwargs = {
@@ -6994,7 +7187,7 @@ def render_timeseries_page():
                                 hovermode="x unified",
                                 xaxis_title=time_label,
                                 yaxis_title=value_col.upper(),
-                                font=dict(size=12),
+                                font=dict(size=14, color='black'),
                                 title_font_size=16,
                                 showlegend=False,
                                 margin=dict(l=50, r=30, t=50, b=50),
@@ -7003,6 +7196,8 @@ def render_timeseries_page():
                                 line=dict(width=2, color='#1f77b4'),
                                 marker=dict(size=6)
                             )
+                            fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                            fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                             
                             st.plotly_chart(fig, use_container_width=True)
                         else:
@@ -7250,7 +7445,10 @@ def render_timeseries_page():
                         hovermode="x unified",
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
                         height=450,
+                        font=dict(size=14, color='black'),
                     )
+                    fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                    fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                     
                     st.plotly_chart(fig, use_container_width=True)
                     
@@ -7480,7 +7678,10 @@ def render_patient_page():
                         title_text=vitals_title,
                         title_font_size=16,
                         margin=dict(l=50, r=30, t=60, b=50),
+                        font=dict(size=14, color='black'),
                     )
+                    fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                    fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                     
                     st.plotly_chart(fig, use_container_width=True)
                 else:
@@ -7528,8 +7729,11 @@ def render_patient_page():
                                     height=350,
                                     xaxis_title=time_label,
                                     yaxis_title=score_label,
-                                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5)
+                                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+                                    font=dict(size=14, color='black'),
                                 )
+                                fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                                fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                                 
                                 st.plotly_chart(fig, use_container_width=True)
                 
@@ -7602,8 +7806,11 @@ def render_patient_page():
                                 xaxis_title=time_label,
                                 yaxis_title=score_label,
                                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
-                                hovermode='x unified'
+                                hovermode='x unified',
+                                font=dict(size=14, color='black'),
                             )
+                            fig_total.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                            fig_total.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                             
                             st.plotly_chart(fig_total, use_container_width=True)
                             
@@ -7700,12 +7907,15 @@ def render_patient_page():
                                     height=500,
                                     template="plotly_white",
                                     legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="center", x=0.5),
-                                    hovermode='x unified'
+                                    hovermode='x unified',
+                                    font=dict(size=14, color='black'),
                                 )
                                 
                                 # 更新 y 轴范围 (0-4)
                                 for i in range(1, 7):
-                                    fig_organs.update_yaxes(range=[0, 4.5], row=(i-1)//3+1, col=(i-1)%3+1)
+                                    fig_organs.update_yaxes(range=[0, 4.5], row=(i-1)//3+1, col=(i-1)%3+1,
+                                                           tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                                fig_organs.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                                 
                                 st.plotly_chart(fig_organs, use_container_width=True)
                             else:
@@ -8797,37 +9007,15 @@ def render_quality_page():
             total_records += n_records
             total_missing += n_records * (missing_rate / 100)
             
-            # 质量等级
-            if lang == 'en':
-                if missing_rate < 5:
-                    quality = "🟢 Excellent"
-                elif missing_rate < 15:
-                    quality = "🟡 Good"
-                elif missing_rate < 30:
-                    quality = "🟠 Fair"
-                else:
-                    quality = "🔴 Poor"
-            else:
-                if missing_rate < 5:
-                    quality = "🟢 优秀"
-                elif missing_rate < 15:
-                    quality = "🟡 良好"
-                elif missing_rate < 30:
-                    quality = "🟠 一般"
-                else:
-                    quality = "🔴 较差"
-            
             records_col = "Records" if lang == 'en' else "记录数"
             patients_col = "Patients" if lang == 'en' else "患者数"
             missing_col = "Missing %" if lang == 'en' else "缺失率"
-            quality_col = "Quality" if lang == 'en' else "质量"
             
             quality_data.append({
                 'Concept': concept,
                 records_col: f"{n_records:,}",
                 patients_col: n_patients,
                 missing_col: f"{missing_rate:.1f}%",
-                quality_col: quality,
             })
     
     # 总体统计卡片（移除Quality Score）
@@ -8885,6 +9073,21 @@ def render_quality_page():
     tab1, tab2 = st.tabs([tab1_label, tab2_label])
     
     with tab1:
+        # 排序方式选择
+        sort_label = "Sort by" if lang == 'en' else "排序方式"
+        sort_options = {
+            'asc': '📈 Missing Rate (Low → High)' if lang == 'en' else '📈 缺失率 (从低到高)',
+            'desc': '📉 Missing Rate (High → Low)' if lang == 'en' else '📉 缺失率 (从高到低)',
+            'alpha': '🔤 Alphabetical (A → Z)' if lang == 'en' else '🔤 首字母排序 (A → Z)',
+        }
+        sort_order = st.radio(
+            sort_label,
+            options=list(sort_options.keys()),
+            format_func=lambda x: sort_options[x],
+            horizontal=True,
+            key='missing_chart_sort_order',
+        )
+        
         # 缺失率条形图
         try:
             import plotly.express as px
@@ -9091,7 +9294,13 @@ def render_quality_page():
             if missing_data:
                 missing_df = pd.DataFrame(missing_data)
                 missing_rate_col = "Missing Rate (%)" if lang == 'en' else "空值比例 (%)"
-                missing_df = missing_df.sort_values(missing_rate_col, ascending=True)
+                
+                if sort_order == 'desc':
+                    missing_df = missing_df.sort_values(missing_rate_col, ascending=False)
+                elif sort_order == 'alpha':
+                    missing_df = missing_df.sort_values('Concept', ascending=True)
+                else:  # 'asc'
+                    missing_df = missing_df.sort_values(missing_rate_col, ascending=True)
                 
                 # 检查是否全是0
                 if missing_df[missing_rate_col].sum() == 0:
@@ -9121,7 +9330,10 @@ def render_quality_page():
                         showlegend=False,
                         yaxis_title="",
                         margin=dict(l=100, r=30, t=50, b=50),
+                        font=dict(size=14, color='black'),
                     )
+                    fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                    fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                     st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
             err_msg = f"Chart rendering failed: {e}" if lang == 'en' else f"图表渲染失败: {e}"
@@ -9163,8 +9375,11 @@ def render_quality_page():
                                 template="plotly_white",
                                 height=400,
                                 showlegend=False,
+                                font=dict(size=14, color='black'),
                             )
                             fig.update_traces(marker_color='#1f77b4')
+                            fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                            fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                             st.plotly_chart(fig, use_container_width=True)
                             
                             # 统计摘要
@@ -9401,6 +9616,9 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
             'hgb': (11, 2), 'plt': (200, 80), 'wbc': (12, 5),
             # Blood Gas
             'ph': (7.38, 0.08), 'po2': (90, 20), 'pco2': (40, 8), 'fio2': (45, 20),
+            # SOFA-2
+            'sofa2': (5.2, 3.8), 'sofa2_resp': (1.2, 1.1), 'sofa2_coag': (0.8, 0.9),
+            'sofa2_liver': (0.6, 0.8), 'sofa2_cardio': (1.0, 1.2), 'sofa2_cns': (0.8, 1.0), 'sofa2_renal': (0.8, 1.0),
         },
         'eicu': {
             'hr': (85, 18), 'sbp': (125, 25), 'dbp': (72, 14), 'map': (88, 18),
@@ -9409,6 +9627,9 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
             'bili': (1.8, 1.5), 'lact': (2.5, 1.8),
             'hgb': (10.5, 2.2), 'plt': (180, 90), 'wbc': (13, 6),
             'ph': (7.36, 0.09), 'po2': (85, 22), 'pco2': (42, 10), 'fio2': (50, 25),
+            # SOFA-2
+            'sofa2': (6.0, 4.2), 'sofa2_resp': (1.4, 1.2), 'sofa2_coag': (0.9, 1.0),
+            'sofa2_liver': (0.7, 0.9), 'sofa2_cardio': (1.2, 1.3), 'sofa2_cns': (0.9, 1.1), 'sofa2_renal': (0.9, 1.1),
         },
         'aumc': {
             'hr': (75, 12), 'sbp': (115, 18), 'dbp': (65, 10), 'map': (80, 12),
@@ -9417,6 +9638,9 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
             'bili': (1.2, 1.0), 'lact': (1.8, 1.2),
             'hgb': (11.5, 1.8), 'plt': (220, 70), 'wbc': (11, 4),
             'ph': (7.40, 0.06), 'po2': (95, 18), 'pco2': (38, 6), 'fio2': (40, 18),
+            # SOFA-2
+            'sofa2': (4.5, 3.5), 'sofa2_resp': (1.0, 1.0), 'sofa2_coag': (0.7, 0.8),
+            'sofa2_liver': (0.5, 0.7), 'sofa2_cardio': (0.9, 1.1), 'sofa2_cns': (0.7, 0.9), 'sofa2_renal': (0.7, 0.9),
         },
         'hirid': {
             'hr': (78, 14), 'sbp': (118, 22), 'dbp': (68, 11), 'map': (83, 14),
@@ -9425,6 +9649,9 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
             'bili': (1.4, 1.1), 'lact': (2.0, 1.4),
             'hgb': (11.2, 2.0), 'plt': (210, 75), 'wbc': (11.5, 4.5),
             'ph': (7.39, 0.07), 'po2': (92, 19), 'pco2': (39, 7), 'fio2': (42, 19),
+            # SOFA-2
+            'sofa2': (4.8, 3.6), 'sofa2_resp': (1.1, 1.0), 'sofa2_coag': (0.7, 0.9),
+            'sofa2_liver': (0.5, 0.7), 'sofa2_cardio': (1.0, 1.1), 'sofa2_cns': (0.7, 0.9), 'sofa2_renal': (0.8, 1.0),
         },
         # 🆕 MIMIC-III
         'mimic': {
@@ -9434,6 +9661,9 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
             'bili': (1.6, 1.3), 'lact': (2.3, 1.6),
             'hgb': (10.8, 2.1), 'plt': (190, 85), 'wbc': (12.5, 5.5),
             'ph': (7.37, 0.08), 'po2': (88, 21), 'pco2': (41, 9), 'fio2': (48, 22),
+            # SOFA-2
+            'sofa2': (5.5, 4.0), 'sofa2_resp': (1.3, 1.1), 'sofa2_coag': (0.8, 0.9),
+            'sofa2_liver': (0.6, 0.8), 'sofa2_cardio': (1.1, 1.2), 'sofa2_cns': (0.8, 1.0), 'sofa2_renal': (0.9, 1.0),
         },
         # 🆕 SICdb
         'sic': {
@@ -9443,6 +9673,9 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
             'bili': (1.3, 1.0), 'lact': (1.9, 1.3),
             'hgb': (11.3, 1.9), 'plt': (215, 72), 'wbc': (11.2, 4.2),
             'ph': (7.40, 0.06), 'po2': (93, 18), 'pco2': (38, 6), 'fio2': (41, 18),
+            # SOFA-2
+            'sofa2': (4.2, 3.3), 'sofa2_resp': (1.0, 1.0), 'sofa2_coag': (0.6, 0.8),
+            'sofa2_liver': (0.5, 0.7), 'sofa2_cardio': (0.8, 1.0), 'sofa2_cns': (0.6, 0.8), 'sofa2_renal': (0.7, 0.9),
         },
     }
     
@@ -9454,6 +9687,11 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
         rows = []
         for feat, (mean, std) in features.items():
             values = np.random.normal(mean, std, n_records_per_feat)
+            # Clip SOFA scores to valid ranges
+            if feat == 'sofa2':
+                values = np.clip(np.round(values), 0, 24).astype(int)
+            elif feat.startswith('sofa2_'):
+                values = np.clip(np.round(values), 0, 4).astype(int)
             patient_ids = np.random.randint(1000, 9999, n_records_per_feat)
             for pid, val in zip(patient_ids, values):
                 rows.append({
@@ -10382,6 +10620,7 @@ def render_multidb_distribution_subtab(lang: str):
                         'glu', 'na', 'k', 'crea', 'bili', 'lact',  # Labs
                         'hgb', 'plt', 'wbc',  # Hematology
                         'ph', 'po2', 'pco2', 'fio2',  # Blood Gas
+                        'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',  # SOFA-2
                     ]
                     st.session_state['multidb_is_demo'] = True
                     st.rerun()
@@ -10436,6 +10675,7 @@ def render_multidb_distribution_subtab(lang: str):
             "Laboratory": ['glu', 'na', 'k', 'crea', 'bili', 'lact'],
             "Hematology": ['hgb', 'plt', 'wbc'],
             "Blood Gas": ['ph', 'po2', 'pco2', 'fio2'],
+            "SOFA-2 Scores": ['sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal'],
         }
         
         col1, col2 = st.columns([1, 3])
@@ -10489,7 +10729,7 @@ def render_multidb_distribution_subtab(lang: str):
         
         # 数据量统计
         stat_cols = st.columns(len(data))
-        db_colors = {'miiv': '🟢', 'eicu': '🟠', 'aumc': '�', 'hirid': '🔴', 'mimic': '🟣', 'sic': '⚫'}
+        db_colors = {'miiv': '🟢', 'eicu': '🟠', 'aumc': '🔵', 'hirid': '🔴', 'mimic': '🟣', 'sic': '⚫'}
         for i, (db, df) in enumerate(data.items()):
             with stat_cols[i]:
                 st.metric(
@@ -10765,7 +11005,9 @@ def render_cohort_dashboard_subtab(lang: str):
                     labels={'age': "Age" if lang == 'en' else "年龄", 'count': "Count" if lang == 'en' else "人数"},
                     template="plotly_white"
                 )
-                fig.update_layout(bargap=0.1, margin=dict(l=20, r=20, t=20, b=20), height=320)
+                fig.update_layout(bargap=0.1, margin=dict(l=20, r=20, t=20, b=20), height=320, font=dict(size=14, color='black'))
+                fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                 st.plotly_chart(fig, use_container_width=True, key="dash_age_dist")
             else:
                 st.warning("No 'age' column found" if lang == 'en' else "未找到'age'列")
@@ -10797,7 +11039,8 @@ def render_cohort_dashboard_subtab(lang: str):
                 
                 fig.update_traces(hole=.4, hoverinfo="label+percent+name")
                 fig.update_layout(margin=dict(l=20, r=20, t=30, b=20), height=320, showlegend=True,
-                                 legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                                 legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+                                 font=dict(size=14, color='black'))
                 st.plotly_chart(fig, use_container_width=True, key="dash_pie_charts")
             else:
                 st.warning("Data mismatch for pie charts" if lang == 'en' else "饼图数据缺失")
@@ -10830,7 +11073,9 @@ def render_cohort_dashboard_subtab(lang: str):
                              annotation_text=f"Median: {median_los:.1f}d", 
                              annotation_position="top right")
                 
-                fig.update_layout(bargap=0.1, margin=dict(l=20, r=20, t=20, b=20), height=320)
+                fig.update_layout(bargap=0.1, margin=dict(l=20, r=20, t=20, b=20), height=320, font=dict(size=14, color='black'))
+                fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                 st.plotly_chart(fig, use_container_width=True, key="dash_los_chart")
             else:
                 st.warning("No 'los_hours' column" if lang == 'en' else "未找到'los_hours'列")
@@ -10871,11 +11116,15 @@ def render_cohort_dashboard_subtab(lang: str):
                     template="plotly_white",
                     margin=dict(l=20, r=20, t=20, b=40),
                     height=320,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    font=dict(size=14, color='black'),
                 )
                 
-                fig.update_yaxes(title_text="Count" if lang == 'en' else "人数", secondary_y=False)
-                fig.update_yaxes(title_text="Mortality %" if lang == 'en' else "死亡率 %", secondary_y=True, range=[0, 100])
+                fig.update_yaxes(title_text="Count" if lang == 'en' else "人数", secondary_y=False,
+                                tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                fig.update_yaxes(title_text="Mortality %" if lang == 'en' else "死亡率 %", secondary_y=True, range=[0, 100],
+                                tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                 
                 st.plotly_chart(fig, use_container_width=True, key="dash_mortality_chart")
             else:
