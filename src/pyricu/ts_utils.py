@@ -1349,12 +1349,23 @@ def _slide_vectorized(
             # For numeric time (hours), convert to timedelta for rolling
             # print(f"🚀 Numeric time - converting to timedelta for vectorized rolling", flush=True)
             
-            # Convert numeric hours to timedelta
+            # Convert numeric time to timedelta
+            # 🔧 FIX 2026-02-06: Auto-detect time unit (SICdb uses seconds, others use hours)
+            # If max value > 8760 (1 year in hours), assume seconds
             group_with_td = group.copy()
-            group_with_td['__temp_time__'] = pd.to_timedelta(group[index_col], unit='h')
+            time_vals = group[index_col].dropna()
+            max_val = time_vals.abs().max() if len(time_vals) > 0 else 0
+            if max_val > 8760:  # > 1 year in hours → must be seconds or minutes
+                if max_val > 525600:  # > 1 year in minutes → must be seconds
+                    time_unit = 's'
+                else:
+                    time_unit = 'min'
+            else:
+                time_unit = 'h'
+            group_with_td['__temp_time__'] = pd.to_timedelta(group[index_col], unit=time_unit)
             group_indexed = group_with_td.set_index('__temp_time__')
             
-            # Convert window size to timedelta
+            # Convert window size to timedelta (window_size is always in hours)
             window_td = pd.Timedelta(hours=window_size)
             
             # Apply rolling aggregation

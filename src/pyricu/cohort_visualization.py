@@ -405,7 +405,10 @@ class CohortVisualizer:
                 xanchor="right",
                 x=1
             ),
+            font=dict(size=14, color='black'),
         )
+        fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+        fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
         
         return fig
     
@@ -480,7 +483,10 @@ class CohortVisualizer:
             title=f"{feature_name} {self._tr('distribution')}{self._tr('comparison')}",
             yaxis_title=feature_name,
             showlegend=True,
+            font=dict(size=14, color='black'),
         )
+        fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+        fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
         
         return fig
     
@@ -586,7 +592,10 @@ class CohortVisualizer:
             xaxis_title=f"{self._tr('time')} ({self._tr('hours')})",
             yaxis_title=value_column,
             showlegend=True,
+            font=dict(size=14, color='black'),
         )
+        fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+        fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
         
         return fig
     
@@ -773,7 +782,10 @@ class CohortVisualizer:
             title=f"{feature} {self._tr('distribution')}{self._tr('comparison')}",
             yaxis_title=feature,
             showlegend=True,
+            font=dict(size=14, color='black'),
         )
+        fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+        fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
         
         return fig
 
@@ -904,8 +916,10 @@ class MultiDatabaseDistribution:
     DB_COLORS = {
         'aumc': '#1f77b4',      # 蓝色 - Amsterdam
         'eicu': '#ff7f0e',      # 橙色 - eICU
-        'miiv': '#2ca02c',      # 绿色 - MIMIC
+        'miiv': '#2ca02c',      # 绿色 - MIMIC-IV
         'hirid': '#d62728',     # 红色 - HiRID
+        'mimic': '#9467bd',     # 紫色 - MIMIC-III
+        'sic': '#8c564b',      # 棕色 - SICdb
     }
     
     DB_LABELS = {
@@ -913,6 +927,8 @@ class MultiDatabaseDistribution:
         'eicu': 'eICU',
         'miiv': 'MIMIC-IV',
         'hirid': 'HiRID',
+        'mimic': 'MIMIC-III',
+        'sic': 'SICdb',
     }
     
     # 特征配置（名称、单位、合理范围）
@@ -943,6 +959,16 @@ class MultiDatabaseDistribution:
         # 其他
         'gcs': {'name': 'GCS', 'unit': '', 'range': (3, 15)},
         'urine': {'name': 'Urine Output', 'unit': 'mL/h', 'range': (0, 500)},
+        # SOFA-2 评分
+        'sofa2': {'name': 'SOFA-2 Total', 'unit': 'points', 'range': (0, 24)},
+        'sofa2_resp': {'name': 'SOFA-2 Respiratory', 'unit': 'points', 'range': (0, 4)},
+        'sofa2_coag': {'name': 'SOFA-2 Coagulation', 'unit': 'points', 'range': (0, 4)},
+        'sofa2_liver': {'name': 'SOFA-2 Liver', 'unit': 'points', 'range': (0, 4)},
+        'sofa2_cardio': {'name': 'SOFA-2 Cardiovascular', 'unit': 'points', 'range': (0, 4)},
+        'sofa2_cns': {'name': 'SOFA-2 Neurological', 'unit': 'points', 'range': (0, 4)},
+        'sofa2_renal': {'name': 'SOFA-2 Renal', 'unit': 'points', 'range': (0, 4)},
+        # SOFA (original)
+        'sofa': {'name': 'SOFA Total', 'unit': 'points', 'range': (0, 24)},
     }
     
     def __init__(self, data_root: str = '/home/zhuhb/icudb', language: str = 'en'):
@@ -1110,13 +1136,17 @@ class MultiDatabaseDistribution:
             # 设置轴标签
             fig.update_xaxes(
                 title_text=config.get('unit', ''),
-                title_font_size=9,
+                title_font_size=14,
+                tickfont=dict(size=12, color='black'),
+                title_font=dict(size=14, color='black'),
                 row=row,
                 col=col,
             )
             fig.update_yaxes(
                 title_text='Density' if col == 1 else '',
-                title_font_size=9,
+                title_font_size=14,
+                tickfont=dict(size=12, color='black'),
+                title_font=dict(size=14, color='black'),
                 row=row,
                 col=col,
             )
@@ -1131,16 +1161,20 @@ class MultiDatabaseDistribution:
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
-                y=1.06,  # 🔧 FIX: 将图例位置上移，与标题保持距离
-                xanchor="center",
-                x=0.5,
+                y=1.06,
+                xanchor="left",
+                x=0,
+                font=dict(size=16, color='black'),
             ),
             margin=dict(t=120, b=30, l=40, r=20),  # 🔧 FIX: 增加顶部margin给标题和图例更多空间
+            font=dict(size=14, color='black'),
         )
         
         # 更新子图标题字体
         for annotation in fig.layout.annotations:
             annotation.font.size = 10
+        fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=14, color='black'))
+        fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=14, color='black'))
         
         return fig
     
@@ -1199,7 +1233,10 @@ class MultiDatabaseDistribution:
             xaxis_title=config.get('unit', ''),
             yaxis_title='Density',
             height=400,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=16, color='black')),
+            font=dict(size=14, color='black'),
         )
+        fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+        fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
         
         return fig, pd.DataFrame(stats_data)

@@ -56,12 +56,20 @@ def clear_global_loader():
 
 import numpy as np
 
-def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: bool = False) -> List:
+def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: bool = False,
+                        sample_strategy: str = 'sorted') -> List:
     """
     从数据库中采样患者ID（用于 max_patients 参数）
     
-    根据数据库类型，从对应的住院/ICU表中获取前N个患者ID。
-    这样可以在读取大表时就应用过滤，显著提升性能。
+    根据数据库类型，从对应的住院/ICU表中获取患者ID。
+    
+    Args:
+        loader: BaseICULoader 实例
+        max_patients: 最大患者数量
+        verbose: 是否输出调试信息
+        sample_strategy: 采样策略
+            - 'sorted': 按ID排序取前N个（默认，与RICU金标准一致）
+            - 'random': 随机采样N个（更具代表性，适用于探索性分析）
     """
     db_name = loader.database
     
@@ -83,12 +91,20 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
         # 只加载ID列，限制行数
         id_table = loader.datasource.load_table(table_name, columns=[id_col], verbose=False)
         all_ids = id_table.data[id_col].dropna().unique()
-        # 🔧 按ID排序后再采样，确保与 RICU 金标准生成脚本一致
-        all_ids = sorted(all_ids)
-        sampled_ids = list(all_ids[:max_patients])
+        
+        if sample_strategy == 'random' and len(all_ids) > max_patients:
+            import numpy as np
+            rng = np.random.default_rng(seed=42)  # 固定种子保证可复现
+            sampled_ids = sorted(rng.choice(all_ids, size=max_patients, replace=False).tolist())
+            strategy_label = "随机采样"
+        else:
+            # 🔧 按ID排序后再采样，确保与 RICU 金标准生成脚本一致
+            all_ids = sorted(all_ids)
+            sampled_ids = list(all_ids[:max_patients])
+            strategy_label = "已排序"
         
         if verbose:
-            print(f"🎯 max_patients={max_patients}: 从 {table_name}.{id_col} 采样 {len(sampled_ids)} 个患者 (已排序)")
+            print(f"🎯 max_patients={max_patients}: 从 {table_name}.{id_col} 采样 {len(sampled_ids)} 个患者 ({strategy_label})")
         
         return sampled_ids
     except Exception as e:
@@ -243,6 +259,7 @@ def load_concepts(
     parallel_backend: str = 'auto',
     max_patients: Optional[int] = None,  # 限制加载的患者数量（自动采样）
     limit: Optional[int] = None,  # max_patients 的别名（兼容 extract_sofa_data.py）
+    sample_strategy: str = 'sorted',  # 🆕 采样策略: 'sorted'=按ID排序前N个, 'random'=随机采样
     batch_size: Optional[int] = None,  # 🆕 分批处理大小（默认30000，适合12GB内存）
     memory_efficient: bool = False,  # 🆕 内存优化模式（压缩数据类型）
     **kwargs,
@@ -381,7 +398,8 @@ def load_concepts(
 
     # 🚀 max_patients 支持：自动从数据库采样患者ID
     if effective_max_patients is not None and patient_ids is None:
-        patient_ids = _sample_patient_ids(loader, effective_max_patients, verbose)
+        patient_ids = _sample_patient_ids(loader, effective_max_patients, verbose,
+                                          sample_strategy=sample_strategy)
 
     # 规范化患者ID
     if patient_ids is not None and not isinstance(patient_ids, dict):
