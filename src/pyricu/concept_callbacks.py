@@ -4409,6 +4409,18 @@ def _callback_urine24(
     is_numeric_time = pd.api.types.is_numeric_dtype(df[time_col])
     interval_hours = interval.total_seconds() / 3600.0
     
+    # Detect numeric time unit: SIC uses seconds (3600s/hr), others use hours (1.0/hr)
+    # Use per-patient diffs to avoid inter-patient zero-diffs contaminating the median
+    numeric_time_step = interval_hours  # default: 1 hour step
+    if is_numeric_time and len(df) > 1 and id_cols:
+        _per_pt_diffs = df.sort_values([id_cols[0], time_col]).groupby(id_cols[0])[time_col].diff().dropna()
+        _pos_diffs = _per_pt_diffs[_per_pt_diffs > 0]
+        if len(_pos_diffs) > 0:
+            median_diff = _pos_diffs.median()
+            # If median positive per-patient diff >= 60, time is in seconds (e.g., SIC: 3600)
+            if median_diff >= 60:
+                numeric_time_step = median_diff  # e.g., 3600 for SIC
+    
     # Constants for ricu algorithm
     min_steps = 12  # min_win = 12 hours
     step_factor = 24.0  # step_factor = 24
@@ -4452,7 +4464,7 @@ def _callback_urine24(
         if is_numeric_time:
             # Use duration as the absolute end time (matching ricu's bug)
             ricu_end_time = duration  # NOT start_time + duration
-            time_grid = np.arange(start_time, ricu_end_time + interval_hours, interval_hours)
+            time_grid = np.arange(start_time, ricu_end_time + numeric_time_step, numeric_time_step)
         else:
             ricu_end_time = pd.Timedelta(hours=duration) if isinstance(duration, (int, float)) else duration
             time_grid = pd.date_range(start=start_time, end=start_time + ricu_end_time, freq=interval)
@@ -4472,7 +4484,12 @@ def _callback_urine24(
         urine_vals = filled_df[urine_col].values
         
         if is_numeric_time:
-            window_size = int(24.0 / interval_hours)
+            if numeric_time_step >= 60:
+                # Time in seconds (e.g., SIC: step=3600s → 24h = 24 steps)
+                window_size = max(1, int(24.0 * 3600.0 / numeric_time_step))
+            else:
+                # Time in hours (e.g., MIIV: step=1.0h → 24h = 24 steps)
+                window_size = int(24.0 / interval_hours)
         else:
             window_size = int(pd.Timedelta(hours=24) / interval)
         

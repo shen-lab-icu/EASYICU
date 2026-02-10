@@ -420,6 +420,9 @@ class ConceptResolver:
             if not keep_concept_cache:
                 self._concept_data_cache.clear()  # 🚀 清除概念数据缓存
                 self._raw_concept_cache.clear()   # 🆕 清除原始数据缓存
+            # 清除 rgx_itm DISTINCT 缓存
+            if hasattr(self, '_rgx_distinct_cache'):
+                self._rgx_distinct_cache.clear()
             # 清除当前线程的inflight集合
             if hasattr(self._thread_local, 'inflight'):
                 self._thread_local.inflight.clear()
@@ -1242,10 +1245,71 @@ class ConceptResolver:
             table_cfg = data_source.config.get_table(source.table)
             defaults = table_cfg.defaults
             
+            # 🚀 rgx_itm 预匹配优化：对于有 regex 但没有 ids 的概念（rgx_itm 类型），
+            # 在加载全表之前，先用 DuckDB DISTINCT 查询 sub_var 唯一值做正则预匹配。
+            # 如果无匹配则直接跳过（节省数秒），有匹配则转化为精确 ids 过滤器利用谓词下推。
+            _rgx_pre_matched_ids = None  # 保存预匹配结果，供后续 regex 过滤使用
+            if (getattr(source, 'regex', None) and source.sub_var and 
+                source.ids is None and hasattr(data_source, '_resolve_loader_from_disk')):
+                try:
+                    import re as _re_module
+                    # 使用实例级缓存：同一表的 DISTINCT 值只查询一次
+                    _distinct_cache_key = (source.table, source.sub_var)
+                    if not hasattr(self, '_rgx_distinct_cache'):
+                        self._rgx_distinct_cache = {}
+                    
+                    if _distinct_cache_key in self._rgx_distinct_cache:
+                        _all_vals = self._rgx_distinct_cache[_distinct_cache_key]
+                    else:
+                        _table_path = data_source._resolve_loader_from_disk(source.table)
+                        if _table_path is not None and isinstance(_table_path, Path):
+                            import duckdb as _ddb
+                            _con = _ddb.connect()
+                            if _table_path.is_dir():
+                                _glob = str(_table_path / '**' / '*.parquet')
+                            else:
+                                _glob = str(_table_path)
+                            _sub_var_col = source.sub_var
+                            _distinct_vals = _con.execute(
+                                f"SELECT DISTINCT \"{_sub_var_col}\" FROM read_parquet('{_glob}', hive_partitioning=true) WHERE \"{_sub_var_col}\" IS NOT NULL"
+                            ).fetchdf()
+                            _con.close()
+                            _all_vals = _distinct_vals[_sub_var_col].astype(str).tolist() if len(_distinct_vals) > 0 else []
+                        else:
+                            _all_vals = None  # 无法解析路径，跳过优化
+                        self._rgx_distinct_cache[_distinct_cache_key] = _all_vals
+                    
+                    if _all_vals is not None:
+                        if len(_all_vals) == 0:
+                            frame = pd.DataFrame()
+                            continue
+                        _pattern = _re_module.compile(source.regex, _re_module.IGNORECASE)
+                        _matched_vals = [v for v in _all_vals if _pattern.search(v)]
+                        
+                        if _matched_vals:
+                            _rgx_pre_matched_ids = _matched_vals
+                            if verbose or DEBUG_MODE:
+                                print(f"   🔍 rgx_itm 预匹配: {len(_all_vals)} 个唯一值中匹配到 {len(_matched_vals)} 个")
+                        else:
+                            if verbose or DEBUG_MODE:
+                                print(f"   ⏭️  rgx_itm 预匹配: {len(_all_vals)} 个唯一值中无匹配 (regex='{source.regex}')，跳过")
+                            frame = pd.DataFrame()
+                            continue
+                except Exception as _rgx_err:
+                    if DEBUG_MODE:
+                        print(f"   ⚠️  rgx_itm 预匹配失败 ({_rgx_err})，回退到全表加载")
+            
             # Build filters for sub_var (only for ids, NOT regex)
             # Regex filtering is handled later after table loading (see line ~1428)
             filters = []
-            if source.ids is not None:
+            # 如果 rgx_itm 预匹配成功，使用匹配到的值作为精确 IN 过滤器
+            if _rgx_pre_matched_ids is not None:
+                filters.append(FilterSpec(
+                    column=source.sub_var,
+                    op=FilterOp.IN,
+                    value=_rgx_pre_matched_ids,
+                ))
+            elif source.ids is not None:
                 filters.append(FilterSpec(
                     column=source.sub_var,
                     op=FilterOp.IN,
@@ -1823,7 +1887,22 @@ class ConceptResolver:
                     db_name_for_cache = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                     skip_cache_for_mimic3_chartevents = (db_name_for_cache == 'mimic' and source.table == 'chartevents')
                     
-                    if patient_filter_in_filters and not skip_cache_for_special_tables and not use_duckdb_aggregation and not skip_cache_for_mimic3_chartevents:
+                    # 🚀 FIX 2026-02-09: 跳过分桶表的缓存重载！
+                    # 原问题：对于分桶表(如AUMC numericitems_bucket)，缓存逻辑会重新加载
+                    # 整张表（不带itemid过滤），这意味着读取所有100个桶 → 约2GB内存
+                    # 分桶表的单概念加载已经很快（只读1-2个桶），每个概念独立读取
+                    # 比缓存整张表更高效且内存友好
+                    skip_cache_for_bucket_table = False
+                    try:
+                        bucket_dir = data_source._resolve_bucket_directory(source.table)
+                        if bucket_dir is not None:
+                            skip_cache_for_bucket_table = True
+                            if DEBUG_MODE and verbose:
+                                print(f"   ⏭️  跳过分桶表缓存: {source.table} (分桶读取已足够快)")
+                    except Exception:
+                        pass
+                    
+                    if patient_filter_in_filters and not skip_cache_for_special_tables and not use_duckdb_aggregation and not skip_cache_for_mimic3_chartevents and not skip_cache_for_bucket_table:
                         # 🔧 FIX: 缓存只应用了患者过滤器的表（不包含 sub_var/itemid 过滤）
                         # 这样其他概念可以正确地从缓存中过滤出它们需要的 itemid
                         # 注意：需要确保加载的表包含所有可能需要的列（使用 value_var 参数）
@@ -4978,49 +5057,52 @@ class ConceptResolver:
         # R ricu 在 id_win_helper.hirid_env 中使用 max(datetime) from observations
         if ds_name == "hirid" and "patientid" in frame.columns:
             try:
-                import pyarrow.parquet as pq
-                import pyarrow as pa
                 from pathlib import Path
+                import duckdb
                 
                 # 获取目标患者
                 target_patients = frame['patientid'].unique().tolist()
                 
-                # 使用 PyArrow 直接读取并过滤 observations 表（高效）
-                # 🔧 FIX: 使用 base_path 而不是 data_dir
+                # 🚀 优化(2026-02-09): 使用 DuckDB 直接聚合，替代 PyArrow 逐文件扫描
+                # 原方案：PyArrow 读250个parquet分片 → 12GB内存, 39s
+                # 新方案：DuckDB SELECT MAX(datetime) GROUP BY patientid → ~100MB内存, <2s
                 if hasattr(data_source, 'base_path') and data_source.base_path is not None:
-                    obs_path = Path(data_source.base_path) / 'observations'
-                else:
-                    obs_path = None
+                    base_path = Path(data_source.base_path)
+                    # 优先使用 observations_bucket（分桶目录）
+                    bucket_path = base_path / 'observations_bucket'
+                    obs_path = base_path / 'observations'
                     
-                if obs_path and obs_path.is_dir():
-                    parquet_files = sorted(obs_path.glob('*.parquet'))
-                    if parquet_files:
-                        tables = []
-                        for f in parquet_files:
-                            # 使用过滤器直接在读取时过滤患者
-                            t = pq.read_table(
-                                f, 
-                                columns=['patientid', 'datetime'],
-                                filters=[('patientid', 'in', target_patients)]
-                            )
-                            if t.num_rows > 0:
-                                tables.append(t)
-                        
-                        if tables:
-                            combined = pa.concat_tables(tables)
-                            obs_df = combined.to_pandas()
+                    glob_pattern = None
+                    if bucket_path.is_dir():
+                        glob_pattern = str(bucket_path / '**' / '*.parquet')
+                    elif obs_path.is_dir():
+                        glob_pattern = str(obs_path / '*.parquet')
+                    
+                    if glob_pattern:
+                        con = duckdb.connect()
+                        try:
+                            # 将患者ID列表注册为 DuckDB 表以支持 IN 过滤
+                            pid_df = pd.DataFrame({'patientid': target_patients})
+                            con.register('target_pids', pid_df)
                             
-                            # 获取每个患者的最后观察时间
-                            max_datetime = obs_df.groupby('patientid')['datetime'].max().reset_index()
-                            max_datetime.columns = ['patientid', 'end_time']
+                            result = con.execute(f"""
+                                SELECT o.patientid, MAX(o.datetime) as end_time
+                                FROM read_parquet('{glob_pattern}', hive_partitioning=true) o
+                                INNER JOIN target_pids t ON o.patientid = t.patientid
+                                GROUP BY o.patientid
+                            """).fetchdf()
                             
-                            # 与 frame 合并（保持原始索引）
-                            merged = frame[['patientid']].reset_index().merge(
-                                max_datetime, on='patientid', how='left'
-                            ).set_index('index')
+                            if len(result) > 0:
+                                # 与 frame 合并（保持原始索引）
+                                merged = frame[['patientid']].reset_index().merge(
+                                    result, on='patientid', how='left'
+                                ).set_index('index')
+                                
+                                if 'end_time' in merged.columns:
+                                    return merged['end_time']
+                        finally:
+                            con.close()
                             
-                            if 'end_time' in merged.columns:
-                                return merged['end_time']
             except Exception as e:
                 logger.warning(f"Failed to synthesize HiRID end time: {e}")
         

@@ -907,6 +907,22 @@ CONCEPT_DESCRIPTIONS = {
     'sirs': ('SIRS criteria (0-4): temp + HR + RR/PaCO2 + WBC/bands', 'SIRS标准（0-4分）：体温 + 心率 + 呼吸/PaCO2 + 白细胞/杆状核'),
 }
 
+# 🔧 FIX (2026-02-09): 随机患者采样，避免 eICU 等多中心数据库的采样偏差
+# 使用固定种子保证可复现
+def _sample_patient_ids_random(all_ids: list, n: int, seed: int = 42) -> list:
+    """从患者ID列表中随机采样n个，使用固定种子保证可复现。
+    
+    修复 eICU 等多中心数据库的采样偏差问题：
+    - 旧方法：all_ids[:n] 按ID排序取前N个 → 可能全部来自同一家医院
+    - 新方法：随机采样 → 覆盖多家医院，确保各种特征（GCS、血管活性药等）有数据
+    """
+    import random
+    if len(all_ids) <= n:
+        return all_ids
+    rng = random.Random(seed)
+    return sorted(rng.sample(all_ids, n))
+
+
 # 全局特征分组定义 - 供侧边栏和数据字典共用
 # 使用英文key，并提供双语显示名称
 CONCEPT_GROUPS_INTERNAL = {
@@ -1354,30 +1370,78 @@ def render_data_dictionary():
     caption = "Feature abbreviations, English names, Chinese meanings, and units (aligned with module categories)" if lang == 'en' else "每个特征的缩写、英文名称、中文含义及单位（与左侧模块分类一致）"
     st.caption(caption)
     
+    # 🔍 搜索框
+    search_placeholder = "Search by code, name or description... (e.g. hr, heart rate, lactate)" if lang == 'en' else "按代码、名称或描述搜索... (如 hr、heart rate、心率)"
+    search_query = st.text_input(
+        "🔍 Search" if lang == 'en' else "🔍 搜索",
+        placeholder=search_placeholder,
+        key="dict_page_search_input",
+    )
+    
     # 获取双语分组
     concept_groups = get_concept_groups()
     
-    # 使用 tabs 或 expanders 来展示
-    all_label = "All" if lang == 'en' else "全部"
-    select_label = "Select Category" if lang == 'en' else "选择类别查看"
-    
-    selected_category = st.selectbox(
-        select_label,
-        options=[all_label] + list(concept_groups.keys()),
-        index=0,
-        key="dict_category_select"
-    )
-    
-    if selected_category == all_label:
-        # 显示所有类别
+    # 如果有搜索词，展示搜索结果
+    if search_query and search_query.strip():
+        query = search_query.strip().lower()
+        matched_rows = []
         for cat_name, concepts in concept_groups.items():
-            feat_label = "features" if lang == 'en' else "个特征"
-            with st.expander(f"📁 {cat_name} ({len(concepts)} {feat_label})", expanded=False):
-                _render_category_table(concepts, lang)
+            for concept in concepts:
+                if concept in CONCEPT_DICTIONARY:
+                    eng_name, chn_name, unit = CONCEPT_DICTIONARY[concept]
+                    eng_desc, chn_desc = CONCEPT_DESCRIPTIONS.get(concept, ('', ''))
+                    if lang == 'en':
+                        searchable = f"{concept} {eng_name} {eng_desc}".lower()
+                    else:
+                        searchable = f"{concept} {eng_name} {chn_name} {eng_desc} {chn_desc}".lower()
+                    if query in searchable:
+                        if lang == 'en':
+                            matched_rows.append({
+                                'Code': concept,
+                                'Full Name': eng_name,
+                                'Category': cat_name,
+                                'Description': eng_desc if eng_desc else eng_name,
+                                'Unit': unit if unit else '-'
+                            })
+                        else:
+                            matched_rows.append({
+                                '代码': concept,
+                                '全称': eng_name,
+                                '类别': cat_name,
+                                '说明': chn_desc if chn_desc else chn_name,
+                                '单位': unit if unit else '-'
+                            })
+        
+        if matched_rows:
+            n = len(matched_rows)
+            result_text = f"Found **{n}** matching feature(s)" if lang == 'en' else f"找到 **{n}** 个匹配特征"
+            st.success(result_text)
+            st.dataframe(pd.DataFrame(matched_rows), width="stretch", hide_index=True, height=min(400, 50 + 35 * n))
+        else:
+            no_result = "No matching features found." if lang == 'en' else "未找到匹配的特征。"
+            st.warning(no_result)
     else:
-        # 只显示选中的类别
-        st.markdown(f"#### {selected_category}")
-        _render_category_table(concept_groups[selected_category], lang)
+        # 无搜索词时，使用分类选择器
+        all_label = "All" if lang == 'en' else "全部"
+        select_label = "Select Category" if lang == 'en' else "选择类别查看"
+        
+        selected_category = st.selectbox(
+            select_label,
+            options=[all_label] + list(concept_groups.keys()),
+            index=0,
+            key="dict_category_select"
+        )
+        
+        if selected_category == all_label:
+            # 显示所有类别
+            for cat_name, concepts in concept_groups.items():
+                feat_label = "features" if lang == 'en' else "个特征"
+                with st.expander(f"📁 {cat_name} ({len(concepts)} {feat_label})", expanded=False):
+                    _render_category_table(concepts, lang)
+        else:
+            # 只显示选中的类别
+            st.markdown(f"#### {selected_category}")
+            _render_category_table(concept_groups[selected_category], lang)
 
 
 def _render_category_table(concepts, lang='en'):
@@ -1784,15 +1848,16 @@ def get_optimal_parallel_config(num_patients: int = None, task_type: str = 'load
         else:
             workers = 1  # 少量患者不需要并行
     elif task_type == 'export':
-        # 导出任务可以使用更多资源
-        workers = base_workers
+        # 🔧 FIX(2026-02-09): 导出任务也限制并行，避免 DuckDB 连接竞争和死锁
+        # 之前使用 base_workers (64) 导致 SIC/MIMIC-III 加载卡住
+        workers = min(base_workers, 4)
     else:
         workers = min(base_workers, 8)
     
     # Streamlit webapp 环境下，线程通常更安全
-    # 只有在明确高配置环境下才使用进程池
-    if backend == "loky" and task_type != 'export':
-        backend = "thread"  # webapp 中优先使用线程
+    # 🔧 FIX(2026-02-09): 所有任务都使用线程，避免 loky 多进程死锁
+    if backend == "loky":
+        backend = "thread"  # webapp 中统一使用线程
     
     return workers, backend
 
@@ -1868,6 +1933,644 @@ def get_mock_params_with_cohort():
             params['cohort_filter'] = cohort_filter
     
     return params
+
+
+# ============ 辅助函数：真正的 Cohort 筛选（读取 Parquet 元数据过滤患者） ============
+
+def apply_cohort_filter(data_path, database, candidate_ids=None):
+    """
+    Apply cohort filters from st.session_state to real patient data.
+    
+    Reads ICU metadata tables (icustays, patients, admissions) and filters
+    patient IDs based on the active cohort criteria (age, first_icu_stay,
+    los_min, gender, survived).
+    
+    Args:
+        data_path: Path to the database directory (e.g. /home/zhuhb/icudb/mimiciv/3.1)
+        database: Database name ('miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic')
+        candidate_ids: Optional pre-filtered list of IDs to further filter
+    
+    Returns:
+        dict with keys: id_col, filtered_ids, total_before, total_after, filter_details
+        or None if cohort filtering is disabled / no active filter
+    """
+    # Check if filtering is enabled
+    if not st.session_state.get('cohort_enabled', False):
+        return None
+    
+    cf = st.session_state.get('cohort_filter', {})
+    if not cf:
+        return None
+    
+    # Check if any filter is actually active
+    has_active = (
+        cf.get('age_min') is not None or
+        cf.get('age_max') is not None or
+        cf.get('first_icu_stay') is not None or
+        cf.get('los_min') is not None or
+        cf.get('gender') is not None or
+        cf.get('survived') is not None
+    )
+    if not has_active:
+        return None
+    
+    data_path = Path(data_path)
+    
+    # Database-specific configuration
+    DB_META = {
+        'miiv': {
+            'id_col': 'stay_id', 'subject_col': 'subject_id',
+            'icu_table': 'icustays.parquet', 'patient_table': 'patients.parquet',
+            'admission_table': 'admissions.parquet',
+        },
+        'eicu': {
+            'id_col': 'patientunitstayid', 'subject_col': 'uniquepid',
+            'icu_table': 'patient.parquet', 'patient_table': None,
+            'admission_table': None,
+        },
+        'aumc': {
+            'id_col': 'admissionid', 'subject_col': 'patientid',
+            'icu_table': 'admissions.parquet', 'patient_table': None,
+            'admission_table': None,
+        },
+        'hirid': {
+            'id_col': 'patientid', 'subject_col': 'patientid',
+            'icu_table': 'general.parquet', 'patient_table': None,
+            'admission_table': None,
+            'icu_table_fallback': 'general_table.csv',  # fallback if parquet missing
+        },
+        'mimic': {
+            'id_col': 'icustay_id', 'subject_col': 'subject_id',
+            'icu_table': 'icustays.parquet', 'patient_table': 'patients.parquet',
+            'admission_table': 'admissions.parquet',
+        },
+        'sic': {
+            'id_col': 'CaseID', 'subject_col': 'PatientID',
+            'icu_table': 'cases.parquet', 'patient_table': None,
+            'admission_table': None,
+        },
+    }
+    
+    meta = DB_META.get(database)
+    if not meta:
+        print(f"[COHORT] Unknown database: {database}")
+        return None
+    
+    id_col = meta['id_col']
+    subject_col = meta['subject_col']
+    
+    # Load ICU stays table
+    icu_path = data_path / meta['icu_table']
+    if not icu_path.exists():
+        # Try fallback path (e.g., HiRID general_table.csv)
+        fallback = meta.get('icu_table_fallback')
+        if fallback:
+            icu_path = data_path / fallback
+        if not icu_path.exists():
+            print(f"[COHORT] ICU table not found: {icu_path}")
+            return None
+    
+    if str(icu_path).endswith('.csv') or str(icu_path).endswith('.csv.gz'):
+        icu_df = pd.read_csv(icu_path)
+    else:
+        icu_df = pd.read_parquet(icu_path)
+    
+    # Normalize column names to lowercase for comparison (except for SICdb)
+    if database != 'sic':
+        icu_df.columns = [c.lower() for c in icu_df.columns]
+        id_col_lower = id_col.lower()
+        subject_col_lower = subject_col.lower()
+    else:
+        id_col_lower = id_col
+        subject_col_lower = subject_col
+    
+    # Load optional tables
+    patient_df = None
+    admission_df = None
+    if meta.get('patient_table'):
+        pt_path = data_path / meta['patient_table']
+        if pt_path.exists():
+            patient_df = pd.read_parquet(pt_path)
+            if database != 'sic':
+                patient_df.columns = [c.lower() for c in patient_df.columns]
+    if meta.get('admission_table'):
+        adm_path = data_path / meta['admission_table']
+        if adm_path.exists():
+            admission_df = pd.read_parquet(adm_path)
+            if database != 'sic':
+                admission_df.columns = [c.lower() for c in admission_df.columns]
+    
+    # Start with all IDs
+    if candidate_ids is not None:
+        mask = icu_df[id_col_lower].isin(candidate_ids)
+        icu_df = icu_df[mask].copy()
+    
+    total_before = len(icu_df)
+    keep_mask = pd.Series(True, index=icu_df.index)
+    filter_details = []  # list of (label_en, label_cn, excluded_count)
+    
+    # ---------- Age Filter ----------
+    if cf.get('age_min') is not None or cf.get('age_max') is not None:
+        age_series = _get_age_series(icu_df, database, patient_df, admission_df,
+                                     id_col_lower, subject_col_lower)
+        if age_series is not None:
+            before_count = keep_mask.sum()
+            if cf.get('age_min') is not None:
+                keep_mask &= (age_series >= cf['age_min'])
+            if cf.get('age_max') is not None:
+                keep_mask &= (age_series <= cf['age_max'])
+            excluded = int(before_count - keep_mask.sum())
+            age_range = f"{cf.get('age_min', 0)}-{cf.get('age_max', '∞')}"
+            filter_details.append((f"Age {age_range}", f"年龄 {age_range}", excluded))
+    
+    # ---------- First ICU Stay Filter ----------
+    if cf.get('first_icu_stay') is not None:
+        first_mask = _get_first_icu_mask(icu_df, database, id_col_lower, subject_col_lower)
+        if first_mask is not None:
+            before_count = keep_mask.sum()
+            if cf['first_icu_stay']:
+                keep_mask &= first_mask
+            else:
+                keep_mask &= ~first_mask
+            excluded = int(before_count - keep_mask.sum())
+            en_label = "First ICU stay only" if cf['first_icu_stay'] else "Non-first ICU stay only"
+            cn_label = "仅首次ICU入住" if cf['first_icu_stay'] else "仅非首次ICU入住"
+            filter_details.append((en_label, cn_label, excluded))
+    
+    # ---------- Min LOS Filter ----------
+    if cf.get('los_min') is not None:
+        los_series = _get_los_hours_series(icu_df, database)
+        if los_series is not None:
+            before_count = keep_mask.sum()
+            keep_mask &= (los_series >= cf['los_min'])
+            excluded = int(before_count - keep_mask.sum())
+            filter_details.append((f"LOS ≥ {cf['los_min']}h", f"住院时长 ≥ {cf['los_min']}h", excluded))
+    
+    # ---------- Gender Filter ----------
+    if cf.get('gender') is not None:
+        sex_series = _get_sex_series(icu_df, database, patient_df,
+                                     id_col_lower, subject_col_lower)
+        if sex_series is not None:
+            before_count = keep_mask.sum()
+            keep_mask &= (sex_series == cf['gender'])
+            excluded = int(before_count - keep_mask.sum())
+            gender_en = "Male" if cf['gender'] == 'M' else "Female"
+            gender_cn = "男性" if cf['gender'] == 'M' else "女性"
+            filter_details.append((f"{gender_en} only", f"仅{gender_cn}", excluded))
+    
+    # ---------- Survival Filter ----------
+    if cf.get('survived') is not None:
+        death_series = _get_death_series(icu_df, database, patient_df, admission_df,
+                                         id_col_lower, subject_col_lower)
+        if death_series is not None:
+            before_count = keep_mask.sum()
+            if cf['survived']:
+                keep_mask &= ~death_series  # survived = not dead
+            else:
+                keep_mask &= death_series   # deceased = dead
+            excluded = int(before_count - keep_mask.sum())
+            en_label = "Survived only" if cf['survived'] else "Deceased only"
+            cn_label = "仅存活" if cf['survived'] else "仅死亡"
+            filter_details.append((en_label, cn_label, excluded))
+    
+    filtered_ids = icu_df.loc[keep_mask, id_col_lower].unique().tolist()
+    total_after = len(filtered_ids)
+    
+    pct = total_after / total_before * 100 if total_before > 0 else 0
+    print(f"[COHORT] {database}: {total_before} → {total_after} patients ({pct:.1f}% retained)")
+    
+    return {
+        'id_col': id_col,    # original case (e.g. CaseID)
+        'filtered_ids': filtered_ids,
+        'total_before': total_before,
+        'total_after': total_after,
+        'filter_details': filter_details,
+    }
+
+
+def _get_age_series(icu_df, database, patient_df, admission_df, id_col, subject_col):
+    """Return a Series of ages aligned with icu_df index."""
+    try:
+        if database == 'miiv':
+            # MIIV: anchor_age in patients + anchor_year; admittime in admissions
+            if patient_df is not None and admission_df is not None:
+                merged = icu_df[[id_col, 'hadm_id']].merge(
+                    admission_df[['hadm_id', 'admittime']], on='hadm_id', how='left'
+                )
+                merged = merged.merge(
+                    patient_df[['subject_id', 'anchor_age', 'anchor_year']],
+                    left_on=icu_df[subject_col].values, right_on='subject_id', how='left'
+                )
+                admittime = pd.to_datetime(merged['admittime'])
+                age = merged['anchor_age'] + (admittime.dt.year - merged['anchor_year'])
+                return age.reindex(icu_df.index)
+            return None
+        
+        elif database == 'eicu':
+            # eICU: age column directly in patient table (ICU table)
+            if 'age' in icu_df.columns:
+                age = icu_df['age'].copy()
+                # eICU stores "> 89" as string
+                age = pd.to_numeric(age, errors='coerce')
+                return age
+            return None
+        
+        elif database == 'aumc':
+            # AUMC: agegroup column (e.g. "18-39", "40-49", ...)
+            if 'agegroup' in icu_df.columns:
+                def parse_aumc_age(ag):
+                    if pd.isna(ag):
+                        return None
+                    s = str(ag)
+                    if '-' in s:
+                        parts = s.split('-')
+                        try:
+                            return (int(parts[0]) + int(parts[1])) / 2
+                        except ValueError:
+                            return None
+                    if s.startswith('80'):
+                        return 85
+                    try:
+                        return float(s)
+                    except ValueError:
+                        return None
+                return icu_df['agegroup'].map(parse_aumc_age)
+            return None
+        
+        elif database == 'hirid':
+            # HiRID: age column directly in general_table
+            if 'age' in icu_df.columns:
+                return pd.to_numeric(icu_df['age'], errors='coerce')
+            return None
+        
+        elif database == 'mimic':
+            # MIMIC-III: dob in patients, intime in icustays → age = intime.year - dob.year
+            if patient_df is not None and 'dob' in patient_df.columns:
+                merged = icu_df.merge(
+                    patient_df[['subject_id', 'dob']], on='subject_id', how='left'
+                )
+                intime = pd.to_datetime(merged['intime'])
+                dob = pd.to_datetime(merged['dob'])
+                age = (intime - dob).dt.days / 365.25
+                age = age.clip(upper=90)
+                return age.reindex(icu_df.index)
+            return None
+        
+        elif database == 'sic':
+            # SICdb: AgeOnAdmission column
+            age_col = None
+            for c in icu_df.columns:
+                if c.lower() == 'ageonadmission':
+                    age_col = c
+                    break
+            if age_col:
+                return pd.to_numeric(icu_df[age_col], errors='coerce')  # already in years
+            return None
+        
+        return None
+    except Exception as e:
+        print(f"[COHORT] _get_age_series error ({database}): {e}")
+        return None
+
+
+def _get_first_icu_mask(icu_df, database, id_col, subject_col):
+    """Return a boolean Series: True where the row is the patient's first ICU stay."""
+    try:
+        if database == 'miiv':
+            # Earliest intime per subject_id
+            if 'intime' in icu_df.columns:
+                intime = pd.to_datetime(icu_df['intime'])
+                first_intime = intime.groupby(icu_df[subject_col]).transform('min')
+                return intime == first_intime
+            return None
+        
+        elif database == 'eicu':
+            # unitvisitnumber == 1
+            if 'unitvisitnumber' in icu_df.columns:
+                return icu_df['unitvisitnumber'] == 1
+            return None
+        
+        elif database == 'aumc':
+            # admissioncount == 1
+            if 'admissioncount' in icu_df.columns:
+                return icu_df['admissioncount'] == 1
+            return None
+        
+        elif database == 'hirid':
+            # HiRID: each patient has exactly one entry — all True
+            return pd.Series(True, index=icu_df.index)
+        
+        elif database == 'mimic':
+            # MIMIC-III: earliest intime per subject_id
+            if 'intime' in icu_df.columns:
+                intime = pd.to_datetime(icu_df['intime'])
+                first_intime = intime.groupby(icu_df[subject_col]).transform('min')
+                return intime == first_intime
+            return None
+        
+        elif database == 'sic':
+            # SICdb: OffsetAfterFirstAdmission == 0
+            offset_col = None
+            for c in icu_df.columns:
+                if c.lower() == 'offsetafterfirstadmission':
+                    offset_col = c
+                    break
+            if offset_col:
+                return icu_df[offset_col] == 0
+            return None
+        
+        return None
+    except Exception as e:
+        print(f"[COHORT] _get_first_icu_mask error ({database}): {e}")
+        return None
+
+
+def _get_los_hours_series(icu_df, database):
+    """Return a Series of Length of Stay in hours."""
+    try:
+        if database == 'miiv':
+            if 'los' in icu_df.columns:
+                return pd.to_numeric(icu_df['los'], errors='coerce') * 24  # stored in days
+            elif 'intime' in icu_df.columns and 'outtime' in icu_df.columns:
+                dt = pd.to_datetime(icu_df['outtime']) - pd.to_datetime(icu_df['intime'])
+                return dt.dt.total_seconds() / 3600
+            return None
+        
+        elif database == 'eicu':
+            # unitdischargeoffset is in minutes from admission
+            if 'unitdischargeoffset' in icu_df.columns:
+                return pd.to_numeric(icu_df['unitdischargeoffset'], errors='coerce') / 60
+            return None
+        
+        elif database == 'aumc':
+            if 'admittedat' in icu_df.columns and 'dischargedat' in icu_df.columns:
+                # stored in milliseconds from some epoch
+                admitted = pd.to_numeric(icu_df['admittedat'], errors='coerce')
+                discharged = pd.to_numeric(icu_df['dischargedat'], errors='coerce')
+                return (discharged - admitted) / 1000 / 3600  # ms -> hours
+            return None
+        
+        elif database == 'hirid':
+            # HiRID general_table doesn't have reliable LOS — return None to skip filter
+            return None
+        
+        elif database == 'mimic':
+            if 'los' in icu_df.columns:
+                return pd.to_numeric(icu_df['los'], errors='coerce') * 24  # stored in days
+            elif 'intime' in icu_df.columns and 'outtime' in icu_df.columns:
+                dt = pd.to_datetime(icu_df['outtime']) - pd.to_datetime(icu_df['intime'])
+                return dt.dt.total_seconds() / 3600
+            return None
+        
+        elif database == 'sic':
+            # SICdb: TimeOfStay in seconds
+            tos_col = None
+            for c in icu_df.columns:
+                if c.lower() == 'timeofstay':
+                    tos_col = c
+                    break
+            if tos_col:
+                return pd.to_numeric(icu_df[tos_col], errors='coerce') / 3600  # seconds -> hours
+            return None
+        
+        return None
+    except Exception as e:
+        print(f"[COHORT] _get_los_hours_series error ({database}): {e}")
+        return None
+
+
+def _get_sex_series(icu_df, database, patient_df, id_col, subject_col):
+    """Return a Series of sex normalized to 'M'/'F'."""
+    try:
+        SEX_MAP_M = {'m', 'male', 'man', 'männlich', 'Man', 'Male'}
+        SEX_MAP_F = {'f', 'female', 'woman', 'weiblich', 'Vrouw', 'Female'}
+        
+        def normalize_sex(s):
+            if pd.isna(s):
+                return None
+            s_str = str(s).strip()
+            if s_str.lower() in {x.lower() for x in SEX_MAP_M}:
+                return 'M'
+            if s_str.lower() in {x.lower() for x in SEX_MAP_F}:
+                return 'F'
+            return None
+        
+        if database == 'miiv':
+            if patient_df is not None and 'gender' in patient_df.columns:
+                merged = icu_df[[subject_col]].merge(
+                    patient_df[[subject_col, 'gender']], on=subject_col, how='left'
+                )
+                return merged['gender'].map(normalize_sex).reindex(icu_df.index)
+            return None
+        
+        elif database == 'eicu':
+            if 'gender' in icu_df.columns:
+                return icu_df['gender'].map(normalize_sex)
+            return None
+        
+        elif database == 'aumc':
+            if 'gender' in icu_df.columns:
+                return icu_df['gender'].map(normalize_sex)
+            return None
+        
+        elif database == 'hirid':
+            if 'sex' in icu_df.columns:
+                return icu_df['sex'].map(normalize_sex)
+            return None
+        
+        elif database == 'mimic':
+            if patient_df is not None and 'gender' in patient_df.columns:
+                merged = icu_df[[subject_col]].merge(
+                    patient_df[[subject_col, 'gender']], on=subject_col, how='left'
+                )
+                return merged['gender'].map(normalize_sex).reindex(icu_df.index)
+            return None
+        
+        elif database == 'sic':
+            sex_col = None
+            for c in icu_df.columns:
+                if c.lower() == 'sex':
+                    sex_col = c
+                    break
+            if sex_col:
+                def sic_sex(v):
+                    if pd.isna(v):
+                        return None
+                    v_int = int(v) if isinstance(v, (int, float)) else None
+                    # SICdb uses 735=Male, 736=Female
+                    if v_int == 735 or v_int == 0 or str(v).lower() in {'m', 'male', '0'}:
+                        return 'M'
+                    if v_int == 736 or v_int == 1 or str(v).lower() in {'f', 'female', '1', 'w'}:
+                        return 'F'
+                    return normalize_sex(v)
+                return icu_df[sex_col].map(sic_sex)
+            return None
+        
+        return None
+    except Exception as e:
+        print(f"[COHORT] _get_sex_series error ({database}): {e}")
+        return None
+
+
+def _pick_death_stay(merged, dead_mask, id_col, deathtime_col, intime_col, outtime_col):
+    """For multi-stay admissions, pick the ICU stay to which death should be attributed.
+    
+    The death concept assigns the death event (using deathtime as the index) to
+    a specific ICU stay via a rolling join.  This helper replicates that logic:
+      1. If deathtime falls within [intime, outtime] → that stay.
+      2. Otherwise the last ICU stay whose intime ≤ deathtime.
+      3. Fallback: the very last ICU stay in the admission.
+    """
+    dead_rows = merged[dead_mask].copy()
+    if dead_rows.empty:
+        return set()
+    
+    dt = pd.to_datetime(dead_rows[deathtime_col], errors='coerce')
+    it = pd.to_datetime(dead_rows[intime_col], errors='coerce')
+    ot = pd.to_datetime(dead_rows[outtime_col], errors='coerce')
+    
+    dead_rows = dead_rows.copy()
+    dead_rows['_dt'] = dt
+    dead_rows['_it'] = it
+    dead_rows['_ot'] = ot
+    dead_rows['_in_stay'] = (it <= dt) & (dt <= ot)
+    
+    result_ids = set()
+    for hadm, grp in dead_rows.groupby('hadm_id'):
+        if len(grp) == 1:
+            result_ids.add(grp.iloc[0][id_col])
+            continue
+        # 1. deathtime within the ICU stay
+        in_stay = grp[grp['_in_stay']]
+        if len(in_stay) > 0:
+            result_ids.add(in_stay.iloc[0][id_col])
+            continue
+        # 2. last stay whose intime ≤ deathtime
+        before = grp[grp['_it'] <= grp['_dt']]
+        if len(before) > 0:
+            result_ids.add(before.sort_values('_it').iloc[-1][id_col])
+            continue
+        # 3. fallback: last ICU stay overall
+        result_ids.add(grp.sort_values('_it').iloc[-1][id_col])
+    return result_ids
+
+
+def _get_death_series(icu_df, database, patient_df, admission_df, id_col, subject_col):
+    """Return a boolean Series: True where patient died in hospital/ICU.
+    
+    IMPORTANT: This must match the PyRICU 'death' concept definition exactly,
+    so that filtering for 'deceased' patients guarantees death=True in the output.
+    
+    Concept definitions (concept-dict.json):
+      - miiv/mimic: admissions.hospital_expire_flag == 1, index_var=deathtime
+      - eicu: patient.hospitaldischargestatus == 'Expired'
+      - aumc: aumc_death callback → dateofdeath not null AND (dateofdeath - dischargedat) < 72h
+      - hirid: hirid_death callback → discharge_status == 'dead' in general table
+      - sic: no death concept defined
+    """
+    try:
+        if database == 'miiv':
+            # Concept: admissions table, hospital_expire_flag == 1, index_var = deathtime
+            # Must have BOTH flag=1 AND non-null deathtime (concept needs timestamp)
+            # For multi-stay admissions, death is only attributed to the ICU stay
+            # where deathtime falls (matching the concept's rolling-join behavior).
+            if admission_df is not None and 'hospital_expire_flag' in admission_df.columns:
+                merge_cols = ['hadm_id', 'hospital_expire_flag']
+                if 'deathtime' in admission_df.columns:
+                    merge_cols.append('deathtime')
+                merged = icu_df.merge(
+                    admission_df[merge_cols].drop_duplicates('hadm_id'),
+                    on='hadm_id', how='left'
+                )
+                dead_base = (merged['hospital_expire_flag'] == 1)
+                if 'deathtime' in merged.columns:
+                    dead_base = dead_base & merged['deathtime'].notna()
+                # For multi-stay admissions, only attribute death to the correct stay
+                if 'deathtime' in merged.columns and 'intime' in merged.columns:
+                    dead_stay_ids = _pick_death_stay(merged, dead_base, id_col, 'deathtime', 'intime', 'outtime')
+                    return merged[id_col].isin(dead_stay_ids).reindex(icu_df.index).fillna(False)
+                return dead_base.fillna(False).reindex(icu_df.index)
+            return None
+        
+        elif database == 'eicu':
+            # Concept: patient.hospitaldischargestatus == 'Expired'
+            # (NOT unitdischargestatus — concept uses hospitaldischargestatus)
+            if 'hospitaldischargestatus' in icu_df.columns:
+                return (icu_df['hospitaldischargestatus'].astype(str).str.strip() == 'Expired')
+            # Fallback to unit status only if hospital status is missing
+            if 'unitdischargestatus' in icu_df.columns:
+                return icu_df['unitdischargestatus'].str.lower().str.contains('expire', na=False)
+            return None
+        
+        elif database == 'aumc':
+            # Concept: aumc_death callback → dateofdeath not null AND
+            #   (dateofdeath - dischargedat) < 72 hours (in milliseconds)
+            if 'dateofdeath' in icu_df.columns and 'dischargedat' in icu_df.columns:
+                dateofdeath = pd.to_numeric(icu_df['dateofdeath'], errors='coerce')
+                dischargedat = pd.to_numeric(icu_df['dischargedat'], errors='coerce')
+                hours_72_ms = 72 * 3600 * 1000
+                diff = dateofdeath - dischargedat
+                return (dateofdeath.notna() & (diff < hours_72_ms)).fillna(False)
+            # Fallback: dateofdeath not null
+            if 'dateofdeath' in icu_df.columns:
+                return icu_df['dateofdeath'].notna()
+            if 'destination' in icu_df.columns:
+                return icu_df['destination'].str.lower().str.contains('overleden', na=False)
+            return None
+        
+        elif database == 'hirid':
+            # Concept: hirid_death callback → discharge_status == 'dead' from general table
+            if 'discharge_status' in icu_df.columns:
+                ds = icu_df['discharge_status']
+                if ds.dtype == object:
+                    return ds.str.lower().str.strip() == 'dead'
+                else:
+                    return ds == 1
+            return None
+        
+        elif database == 'mimic':
+            # Concept: admissions.hospital_expire_flag == 1, index_var = deathtime
+            # Same multi-stay logic as MIIV.
+            if admission_df is not None and 'hospital_expire_flag' in admission_df.columns:
+                if 'hadm_id' in icu_df.columns:
+                    merge_cols = ['hadm_id', 'hospital_expire_flag']
+                    if 'deathtime' in admission_df.columns:
+                        merge_cols.append('deathtime')
+                    merged = icu_df.merge(
+                        admission_df[merge_cols].drop_duplicates('hadm_id'),
+                        on='hadm_id', how='left'
+                    )
+                    dead_base = (merged['hospital_expire_flag'] == 1)
+                    if 'deathtime' in merged.columns:
+                        dead_base = dead_base & merged['deathtime'].notna()
+                    if 'deathtime' in merged.columns and 'intime' in merged.columns:
+                        dead_stay_ids = _pick_death_stay(merged, dead_base, id_col, 'deathtime', 'intime', 'outtime')
+                        return merged[id_col].isin(dead_stay_ids).reindex(icu_df.index).fillna(False)
+                    return dead_base.fillna(False).reindex(icu_df.index)
+            # Alternative: dod in patients
+            if patient_df is not None and 'dod' in patient_df.columns:
+                merged = icu_df[[subject_col]].merge(
+                    patient_df[[subject_col, 'dod']], on=subject_col, how='left'
+                )
+                return merged['dod'].notna().reindex(icu_df.index)
+            return None
+        
+        elif database == 'sic':
+            # No death concept defined in concept-dict.json
+            # Use OffsetOfDeath > 0 as best available approximation
+            death_col = None
+            for c in icu_df.columns:
+                if c.lower() == 'offsetofdeath':
+                    death_col = c
+                    break
+            if death_col:
+                return icu_df[death_col].notna() & (pd.to_numeric(icu_df[death_col], errors='coerce') > 0)
+            return None
+        
+        return None
+    except Exception as e:
+        print(f"[COHORT] _get_death_series error ({database}): {e}")
+        return None
 
 
 # ============ 国际化文本 ============
@@ -4754,6 +5457,27 @@ def render_sidebar():
                 stats_label = f"📊 {n_files} files, {n_patients} patients" if st.session_state.language == 'en' else f"📊 {n_files} 个文件, {n_patients} 个患者"
                 st.caption(stats_label)
             
+            # 显示队列筛选统计
+            cohort_stats = st.session_state.get('_cohort_stats')
+            if cohort_stats and cohort_stats.get('excluded', 0) > 0:
+                n_before = cohort_stats['before']
+                n_excluded = cohort_stats['excluded']
+                n_after = cohort_stats['after']
+                details = cohort_stats.get('filter_details', [])
+                if st.session_state.language == 'en':
+                    cohort_info = f"👥 **Cohort Selection**: {n_before} candidates → **{n_after} patients** exported ({n_excluded} excluded)"
+                    if details:
+                        reasons = ", ".join(f"{label_en}: -{cnt}" for label_en, _, cnt in details if cnt > 0)
+                        if reasons:
+                            cohort_info += f"\n\nExclusion reasons: {reasons}"
+                else:
+                    cohort_info = f"👥 **队列筛选**: {n_before} 候选 → 最终导出 **{n_after} 位患者**（排除 {n_excluded} 人）"
+                    if details:
+                        reasons = "、".join(f"{label_cn}: -{cnt}人" for _, label_cn, cnt in details if cnt > 0)
+                        if reasons:
+                            cohort_info += f"\n\n排除原因: {reasons}"
+                st.info(cohort_info)
+            
             st.markdown("---")
             
             # 重新提取按钮
@@ -4772,6 +5496,8 @@ def render_sidebar():
                 # 清理导出结果
                 if '_export_success_result' in st.session_state:
                     del st.session_state['_export_success_result']
+                if '_cohort_stats' in st.session_state:
+                    del st.session_state['_cohort_stats']
                 if '_skipped_modules' in st.session_state:
                     del st.session_state['_skipped_modules']
                 if '_overwrite_modules' in st.session_state:
@@ -5134,7 +5860,7 @@ def render_sidebar():
             step2_confirm_label = "✅ Confirm Cohort Selection" if st.session_state.language == 'en' else "✅ 确认队列筛选"
             if st.button(step2_confirm_label, type="primary", use_container_width=True, key="step2_confirm"):
                 st.session_state.step2_confirmed = True
-                step2_done_msg = "✅ Step 2 completed! Proceed to Step 3: Select Features" if st.session_state.language == 'en' else "✅ 步骤2已完成！请继续步骤3: 选择特征"
+                step2_done_msg = "✅ Step 2 completed!" if st.session_state.language == 'en' else "✅ 步骤2已完成！"
                 st.success(step2_done_msg)
         else:
             # 队列筛选禁用时的提示
@@ -5344,9 +6070,9 @@ def render_sidebar():
             20000: "20,000",
             0: "All patients" if st.session_state.language == 'en' else "全部患者"
         }
-        current_limit = st.session_state.get('patient_limit', 0)  # 默认全量
+        current_limit = st.session_state.get('patient_limit', 1000)  # 🔧 FIX: 默认1000患者（全量太慢）
         if current_limit not in patient_limit_options:
-            current_limit = 0  # 🔧 FIX: 默认全量加载
+            current_limit = 1000  # 🔧 FIX: 默认1000患者
         patient_limit = st.selectbox(
             limit_label,
             options=patient_limit_options,
@@ -5621,45 +6347,81 @@ def load_data():
             
             # 🚀 优化：真正的批量加载 - 一次调用加载所有concepts
             # 🚀 性能优化：参照 extract_baseline_features.py 的配置
-            # 关键：使用 patient_ids 限制加载的患者范围（默认0表示全量）
             patient_limit = st.session_state.get('patient_limit', 0)
             
-            # 获取可用的患者ID列表（如果有缓存就使用缓存）
+            # 获取数据库信息
+            data_path = Path(st.session_state.data_path)
+            database = st.session_state.get('database', 'miiv')
+            id_col_map = {
+                'miiv': 'stay_id',
+                'eicu': 'patientunitstayid', 
+                'aumc': 'admissionid',
+                'hirid': 'patientid',
+                'mimic': 'icustay_id',
+                'sic': 'CaseID'
+            }
+            id_col = id_col_map.get(database, 'stay_id')
             patient_ids_filter = None
-            if patient_limit and patient_limit > 0:
-                # 尝试从 icustays 获取患者ID
-                try:
-                    data_path = Path(st.session_state.data_path)
-                    database = st.session_state.get('database', 'miiv')
-                    
-                    # 根据数据库类型确定 ID 列名
-                    id_col_map = {
-                        'miiv': 'stay_id',
-                        'eicu': 'patientunitstayid', 
-                        'aumc': 'admissionid',
-                        'hirid': 'patientid'
-                    }
-                    id_col = id_col_map.get(database, 'stay_id')
-                    
-                    # 读取 icustays 获取患者ID
-                    icustays_files = ['icustays.parquet', 'patient.parquet', 'admissions.parquet']
-                    for f in icustays_files:
-                        fp = data_path / f
-                        if fp.exists():
-                            icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
-                            if id_col in icustays_df.columns:
-                                all_patient_ids = icustays_df[id_col].unique().tolist()
-                                # 限制患者数量
-                                if len(all_patient_ids) > patient_limit:
-                                    sample_ids = all_patient_ids[:patient_limit]
-                                else:
-                                    sample_ids = all_patient_ids
-                                patient_ids_filter = {id_col: sample_ids}
-                                break
-                except Exception:
-                    pass  # 无法获取患者ID，不使用过滤
             
-            # 🚀 智能并行配置：根据系统资源和患者数量动态调整
+            # 👥 先从数据库选patient_limit个患者，再对这些患者做人群筛选
+            try:
+                # Step 1: 先选patient_limit个患者作为候选集
+                candidate_ids = None
+                if patient_limit and patient_limit > 0:
+                    try:
+                        icustays_files = ['icustays.parquet', 'patient.parquet', 'admissions.parquet']
+                        for f in icustays_files:
+                            fp = data_path / f
+                            if fp.exists():
+                                icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
+                                if id_col in icustays_df.columns:
+                                    all_patient_ids = icustays_df[id_col].unique().tolist()
+                                    candidate_ids = _sample_patient_ids_random(all_patient_ids, patient_limit)
+                                    break
+                    except Exception:
+                        pass
+                
+                # Step 2: 在候选集上应用人群筛选
+                data_path_for_cohort = st.session_state.data_path
+                database_for_cohort = st.session_state.get('database', 'miiv')
+                cohort_result = apply_cohort_filter(data_path_for_cohort, database_for_cohort, candidate_ids=candidate_ids)
+                if cohort_result is not None:
+                    cohort_id_col = cohort_result['id_col']
+                    filtered_ids = cohort_result['filtered_ids']
+                    id_col = cohort_id_col
+                    patient_ids_filter = {id_col: filtered_ids}
+                    # Save cohort stats for completion message
+                    n_before = len(candidate_ids) if candidate_ids else 0
+                    n_after = len(filtered_ids)
+                    st.session_state['_cohort_stats'] = {
+                        'before': n_before, 'after': n_after, 'excluded': n_before - n_after,
+                        'filter_details': cohort_result.get('filter_details', []),
+                    }
+                elif candidate_ids is not None:
+                    # No cohort filter active, use the candidate set directly
+                    patient_ids_filter = {id_col: candidate_ids}
+                    st.session_state['_cohort_stats'] = None
+                else:
+                    st.session_state['_cohort_stats'] = None
+            except Exception as _cohort_err:
+                print(f"[COHORT] Error in load_data: {_cohort_err}")
+                # Fallback: just apply patient_limit without cohort filter
+                if patient_limit and patient_limit > 0:
+                    try:
+                        icustays_files = ['icustays.parquet', 'patient.parquet', 'admissions.parquet']
+                        for f in icustays_files:
+                            fp = data_path / f
+                            if fp.exists():
+                                icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
+                                if id_col in icustays_df.columns:
+                                    all_patient_ids = icustays_df[id_col].unique().tolist()
+                                    sample_ids = _sample_patient_ids_random(all_patient_ids, patient_limit)
+                                    patient_ids_filter = {id_col: sample_ids}
+                                    break
+                    except Exception:
+                        pass
+            
+            # �🚀 智能并行配置：根据系统资源和患者数量动态调整
             num_patients = len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
             parallel_workers, parallel_backend = get_optimal_parallel_config(num_patients, task_type='load')
             
@@ -5790,8 +6552,7 @@ def load_data_for_preview(max_patients: int = 50):
         # 只加载前5个concept作为预览
         preview_concepts = selected[:5]
         
-        # 🚀 性能优化：参照 extract_baseline_features.py
-        # 预览只加载少量患者（max_patients 个）
+        # 先选max_patients个患者，再对这些患者做人群筛选
         patient_ids_filter = None
         id_col = 'stay_id'
         try:
@@ -5800,15 +6561,32 @@ def load_data_for_preview(max_patients: int = 50):
             id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid', 'mimic': 'icustay_id', 'sic': 'CaseID'}
             id_col = id_col_map.get(database, 'stay_id')
             
+            # Step 1: 先选max_patients个患者作为候选集
+            candidate_ids = None
             for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:
                 fp = data_path / f
                 if fp.exists():
                     icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
                     if id_col in icustays_df.columns:
-                        # 预览只需要 max_patients 个患者
-                        sample_ids = icustays_df[id_col].unique().tolist()[:max_patients]
-                        patient_ids_filter = {id_col: sample_ids}
+                        candidate_ids = _sample_patient_ids_random(icustays_df[id_col].unique().tolist(), max_patients)
                         break
+            
+            # Step 2: 在候选集上应用人群筛选
+            try:
+                data_path_for_cohort = st.session_state.data_path
+                database_for_cohort = st.session_state.get('database', 'miiv')
+                cohort_result = apply_cohort_filter(data_path_for_cohort, database_for_cohort, candidate_ids=candidate_ids)
+                if cohort_result is not None:
+                    cohort_id_col = cohort_result['id_col']
+                    filtered_ids = cohort_result['filtered_ids']
+                    id_col = cohort_id_col
+                    patient_ids_filter = {id_col: filtered_ids}
+                elif candidate_ids is not None:
+                    patient_ids_filter = {id_col: candidate_ids}
+            except Exception as _cohort_err:
+                print(f"[COHORT] Error in load_data_for_preview: {_cohort_err}")
+                if candidate_ids is not None:
+                    patient_ids_filter = {id_col: candidate_ids}
         except Exception:
             pass
         
@@ -6645,6 +7423,27 @@ def render_home_extract_mode(lang):
             success_msg = f"✅ Successfully exported {len(exported_files)} files to `{export_dir}`" if lang == 'en' else f"✅ 成功导出 {concept_count} 个概念（{len(exported_files)} 个文件）到 `{export_dir}`"
             st.success(success_msg)
             
+            # 🆕 显示队列筛选统计（在导出成功消息之后）
+            cohort_stats = st.session_state.get('_cohort_stats')
+            if cohort_stats and cohort_stats.get('excluded', 0) > 0:
+                n_before = cohort_stats['before']
+                n_excluded = cohort_stats['excluded']
+                n_after = cohort_stats['after']
+                details = cohort_stats.get('filter_details', [])
+                if lang == 'en':
+                    cohort_info = f"👥 **Cohort Selection**: {n_before} candidates → **{n_after} patients** exported ({n_excluded} excluded)"
+                    if details:
+                        reasons = ", ".join(f"{label_en}: -{cnt}" for label_en, _, cnt in details if cnt > 0)
+                        if reasons:
+                            cohort_info += f"\n\nExclusion reasons: {reasons}"
+                else:
+                    cohort_info = f"👥 **队列筛选**: {n_before} 候选 → 最终导出 **{n_after} 位患者**（排除 {n_excluded} 人）"
+                    if details:
+                        reasons = "、".join(f"{label_cn}: -{cnt}人" for _, label_cn, cnt in details if cnt > 0)
+                        if reasons:
+                            cohort_info += f"\n\n排除原因: {reasons}"
+                st.info(cohort_info)
+            
             # 显示时间统计
             time_stats_title = "⏱️ Export Time Statistics" if lang == 'en' else "⏱️ 导出耗时统计"
             with st.expander(time_stats_title, expanded=False):
@@ -6679,22 +7478,35 @@ def render_home_extract_mode(lang):
                     more_msg = f"... and {len(exported_files) - 12} more files" if lang == 'en' else f"... 及其他 {len(exported_files) - 12} 个文件"
                     st.markdown(f"<p style='color: #1e1e1e; font-size: 0.9rem; margin: 2px 0;'>{more_msg}</p>", unsafe_allow_html=True)
             
-            # 🆕 显示被选择但未能提取的特征（这是正常情况，不是错误）
+            # 🆕 显示被选择但未能提取的特征（区分无数据源 vs 无数据）
             unavailable_concepts = export_result.get('unavailable_concepts', [])
+            unsupported_list = export_result.get('unsupported_concepts', [])
+            empty_data_list = export_result.get('empty_data_concepts', [])
             if unavailable_concepts:
-                # 🔧 显示所有不可用的特征，使用换行分隔
-                concepts_formatted = '<br>'.join([', '.join(unavailable_concepts[i:i+8]) for i in range(0, len(unavailable_concepts), 8)])
-                if lang == 'en':
-                    unavailable_msg = f"""<div class="info-box" style="margin-top: 15px;">
-<p style="margin-bottom: 10px;"><b>{len(unavailable_concepts)} selected features</b> were not extracted because they are not available in this database:</p>
-<p style="color: #64748b; font-size: 0.95rem; line-height: 1.8;">{concepts_formatted}</p>
-<p style="margin-top: 10px; font-size: 0.9rem; color: #6b7280;">💡 <i>This is normal — not all features are available across all ICU databases.</i></p>
-</div>"""
-                else:
-                    unavailable_msg = f"""<div class="info-box" style="margin-top: 15px;">
-<p style="margin-bottom: 10px;"><b>{len(unavailable_concepts)} 个已选特征</b>未能提取，因为它们在当前数据库中不可用：</p>
-<p style="color: #64748b; font-size: 0.95rem; line-height: 1.8;">{concepts_formatted}</p>
-<p style="margin-top: 10px; font-size: 0.9rem; color: #6b7280;">💡 <i>这是正常现象——并非所有特征都在所有ICU数据库中可用。</i></p>
+                # 🔧 FIX(2026-02-09): 分别显示无数据源和无数据的特征
+                unsupported_in_unavail = [c for c in unavailable_concepts if c in unsupported_list]
+                empty_or_other = [c for c in unavailable_concepts if c not in unsupported_list]
+                
+                parts_html = []
+                if unsupported_in_unavail:
+                    concepts_formatted = ', '.join(sorted(unsupported_in_unavail))
+                    if lang == 'en':
+                        parts_html.append(f'<p style="margin-bottom:5px;"><b>🚫 Not configured ({len(unsupported_in_unavail)}):</b> <span style="color:#64748b;">{concepts_formatted}</span></p>')
+                    else:
+                        parts_html.append(f'<p style="margin-bottom:5px;"><b>🚫 该数据库未配置 ({len(unsupported_in_unavail)})：</b> <span style="color:#64748b;">{concepts_formatted}</span></p>')
+                if empty_or_other:
+                    concepts_formatted = ', '.join(sorted(empty_or_other))
+                    if lang == 'en':
+                        parts_html.append(f'<p style="margin-bottom:5px;"><b>📭 No data for selected patients ({len(empty_or_other)}):</b> <span style="color:#64748b;">{concepts_formatted}</span></p>')
+                    else:
+                        parts_html.append(f'<p style="margin-bottom:5px;"><b>📭 所选患者无数据 ({len(empty_or_other)})：</b> <span style="color:#64748b;">{concepts_formatted}</span></p>')
+                
+                body = ''.join(parts_html)
+                tip = '💡 <i>Try increasing the patient sample size or selecting All Patients to get more features.</i>' if lang == 'en' else '💡 <i>尝试增大患者样本量或选择全部患者以获取更多特征。</i>'
+                unavailable_msg = f"""<div class="info-box" style="margin-top: 15px;">
+<p style="margin-bottom: 10px;"><b>{len(unavailable_concepts)} selected features</b> were not extracted:</p>
+{body}
+<p style="margin-top: 10px; font-size: 0.9rem; color: #6b7280;">{tip}</p>
 </div>"""
                 st.markdown(unavailable_msg, unsafe_allow_html=True)
             
@@ -6928,19 +7740,67 @@ def render_home_data_dictionary(lang):
     dict_title = "📖 Complete Data Dictionary" if lang == 'en' else "📖 完整数据字典"
     
     with st.expander(dict_title, expanded=True):
-
+        
+        # 🔍 搜索框
+        search_placeholder = "Search by code, name or description... (e.g. hr, heart rate, lactate)" if lang == 'en' else "按代码、名称或描述搜索... (如 hr、heart rate、心率)"
+        search_query = st.text_input(
+            "🔍 Search" if lang == 'en' else "🔍 搜索",
+            placeholder=search_placeholder,
+            key="dict_search_input",
+        )
         
         # 获取分组
         concept_groups = get_concept_groups()
         
-        # 所有分类统一用 expander 展示（不再分开前8个和更多类别）
-        categories_title = "📂 Categories" if lang == 'en' else "📂 类别"
-        st.markdown(f"#### {categories_title}")
-        
-        for group_name in concept_groups.keys():
-            feat_text = "features" if lang == 'en' else "个特征"
-            with st.expander(f"{group_name} ({len(concept_groups[group_name])} {feat_text})"):
-                _render_home_dict_table(concept_groups[group_name], lang)
+        # 如果有搜索词，展示搜索结果
+        if search_query and search_query.strip():
+            query = search_query.strip().lower()
+            matched_rows = []
+            for group_name, concepts in concept_groups.items():
+                for concept in concepts:
+                    if concept in CONCEPT_DICTIONARY:
+                        eng_name, chn_name, unit = CONCEPT_DICTIONARY[concept]
+                        eng_desc, chn_desc = CONCEPT_DESCRIPTIONS.get(concept, ('', ''))
+                        # 匹配 code、英文名、中文名、描述
+                        if lang == 'en':
+                            searchable = f"{concept} {eng_name} {eng_desc}".lower()
+                        else:
+                            searchable = f"{concept} {eng_name} {chn_name} {eng_desc} {chn_desc}".lower()
+                        if query in searchable:
+                            if lang == 'en':
+                                matched_rows.append({
+                                    'Code': concept,
+                                    'Full Name': eng_name,
+                                    'Category': group_name,
+                                    'Description': eng_desc if eng_desc else eng_name,
+                                    'Unit': unit if unit else '-'
+                                })
+                            else:
+                                matched_rows.append({
+                                    '代码': concept,
+                                    '全称': eng_name,
+                                    '类别': group_name,
+                                    '说明': chn_desc if chn_desc else chn_name,
+                                    '单位': unit if unit else '-'
+                                })
+            
+            if matched_rows:
+                n = len(matched_rows)
+                result_text = f"Found **{n}** matching feature(s)" if lang == 'en' else f"找到 **{n}** 个匹配特征"
+                st.success(result_text)
+                st.dataframe(pd.DataFrame(matched_rows), width="stretch", hide_index=True, height=min(300, 50 + 35 * n))
+            else:
+                no_result = "No matching features found." if lang == 'en' else "未找到匹配的特征。"
+                st.warning(no_result)
+        else:
+            # 无搜索词时，按类别展示
+            categories_title = "📂 Categories" if lang == 'en' else "📂 类别"
+            st.markdown(f"#### {categories_title}")
+            
+            for group_name in concept_groups.keys():
+                feat_text = "features" if lang == 'en' else "个特征"
+                with st.expander(f"{group_name} ({len(concept_groups[group_name])} {feat_text})"):
+                    _render_home_dict_table(concept_groups[group_name], lang)
 
 
 def _render_home_dict_table(concepts, lang):
@@ -8981,11 +9841,11 @@ def render_quality_page():
                     # 对于事件型数据，只统计非零记录
                     if concept in event_time_series and main_col and main_col in df.columns:
                         col_data = df[main_col]
-                        # 检查数据类型，只对数值类型进行 > 0 比较
-                        if pd.api.types.is_numeric_dtype(col_data):
-                            event_count = (col_data.fillna(0) > 0).sum()
-                        elif pd.api.types.is_bool_dtype(col_data):
+                        # 检查数据类型，bool必须在numeric之前（nullable bool也算numeric）
+                        if pd.api.types.is_bool_dtype(col_data):
                             event_count = col_data.fillna(False).sum()
+                        elif pd.api.types.is_numeric_dtype(col_data):
+                            event_count = (col_data.fillna(0) > 0).sum()
                         else:
                             # 字符串或其他类型，统计非空非零记录
                             event_count = col_data.notna().sum()
@@ -9274,7 +10134,13 @@ def render_quality_page():
                                 
                                 # 对于事件型数据，只计算事件发生的记录
                                 if concept in event_time_series and main_col in df.columns:
-                                    event_count = (df[main_col].fillna(0) > 0).sum()
+                                    _col = df[main_col]
+                                    if pd.api.types.is_bool_dtype(_col):
+                                        event_count = _col.fillna(False).sum()
+                                    elif pd.api.types.is_numeric_dtype(_col):
+                                        event_count = (_col.fillna(0) > 0).sum()
+                                    else:
+                                        event_count = _col.notna().sum()
                                     records_per_patient = event_count / n_patients
                                 
                                 coverage = records_per_patient / time_grid_size
@@ -12011,31 +12877,69 @@ def execute_sidebar_export():
             status_text.markdown(batch_msg)
             
             # 🚀 性能优化：参照 extract_baseline_features.py 的配置
-            patient_limit = st.session_state.get('patient_limit', 0)  # 导出默认不限制
+            patient_limit = st.session_state.get('patient_limit', 1000)  # 🔧 FIX: 默认1000患者
             
-            # 获取患者ID过滤器
             patient_ids_filter = None
             id_col = 'stay_id'
-            if patient_limit and patient_limit > 0:
-                try:
-                    data_path = Path(data_path_str)
-                    database = st.session_state.get('database', 'miiv')
-                    id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid', 'mimic': 'icustay_id', 'sic': 'CaseID'}
-                    id_col = id_col_map.get(database, 'stay_id')
-                    
-                    for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:
-                        fp = data_path / f
-                        if fp.exists():
-                            icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
-                            if id_col in icustays_df.columns:
-                                all_ids = icustays_df[id_col].unique().tolist()
-                                sample_ids = all_ids[:patient_limit] if len(all_ids) > patient_limit else all_ids
-                                patient_ids_filter = {id_col: sample_ids}
-                                break
-                except Exception:
-                    pass
+            data_path = Path(data_path_str)
+            database = st.session_state.get('database', 'miiv')
+            id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid', 'mimic': 'icustay_id', 'sic': 'CaseID'}
+            id_col = id_col_map.get(database, 'stay_id')
             
-            # 🚀 智能并行配置：根据系统资源和患者数量动态调整
+            # 👥 先从数据库选patient_limit个患者，再对这些患者做人群筛选
+            try:
+                # Step 1: 先选patient_limit个患者作为候选集
+                candidate_ids = None
+                if patient_limit and patient_limit > 0:
+                    try:
+                        for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:
+                            fp = data_path / f
+                            if fp.exists():
+                                icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
+                                if id_col in icustays_df.columns:
+                                    all_ids = icustays_df[id_col].unique().tolist()
+                                    candidate_ids = _sample_patient_ids_random(all_ids, patient_limit)
+                                    break
+                    except Exception:
+                        pass
+                
+                # Step 2: 在候选集上应用人群筛选
+                database_for_cohort = st.session_state.get('database', 'miiv')
+                cohort_result = apply_cohort_filter(data_path_str, database_for_cohort, candidate_ids=candidate_ids)
+                if cohort_result is not None:
+                    cohort_id_col = cohort_result['id_col']
+                    filtered_ids = cohort_result['filtered_ids']
+                    id_col = cohort_id_col
+                    patient_ids_filter = {id_col: filtered_ids}
+                    # Save cohort stats for completion message
+                    n_before = len(candidate_ids) if candidate_ids else 0
+                    n_after = len(filtered_ids)
+                    st.session_state['_cohort_stats'] = {
+                        'before': n_before, 'after': n_after, 'excluded': n_before - n_after,
+                        'filter_details': cohort_result.get('filter_details', []),
+                    }
+                elif candidate_ids is not None:
+                    patient_ids_filter = {id_col: candidate_ids}
+                    st.session_state['_cohort_stats'] = None
+                else:
+                    st.session_state['_cohort_stats'] = None
+            except Exception as _cohort_err:
+                print(f"[COHORT] Error in execute_sidebar_export: {_cohort_err}")
+                # Fallback: just apply patient_limit without cohort filter
+                if patient_limit and patient_limit > 0:
+                    try:
+                        for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:
+                            fp = data_path / f
+                            if fp.exists():
+                                icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
+                                if id_col in icustays_df.columns:
+                                    all_ids = icustays_df[id_col].unique().tolist()
+                                    sample_ids = _sample_patient_ids_random(all_ids, patient_limit)
+                                    patient_ids_filter = {id_col: sample_ids}
+                                    break
+                    except Exception:
+                        pass
+            
             num_patients = len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
             parallel_workers, parallel_backend = get_optimal_parallel_config(num_patients, task_type='export')
             
@@ -12079,6 +12983,24 @@ def execute_sidebar_export():
                 unsupported_concepts = []
                 special_concepts_to_load = []  # 🆕 特殊概念（AKI, circ_failure等）
                 
+                # 🔧 FIX (2026-02-09): 递归检查概念是否有数据路径
+                # 解决 has_callback=True 但无数据源的概念被误判为有效的问题
+                def _has_any_source_recursive(concept_name, db, cd_dict, visited=None):
+                    """递归检查概念或其子概念是否在目标数据库有数据源"""
+                    if visited is None:
+                        visited = set()
+                    if concept_name in visited:
+                        return False
+                    visited.add(concept_name)
+                    cdef = cd_dict.get(concept_name)
+                    if not cdef:
+                        return False
+                    if cdef.sources.get(db):
+                        return True
+                    if cdef.sub_concepts:
+                        return any(_has_any_source_recursive(sc, db, cd_dict, visited) for sc in cdef.sub_concepts)
+                    return False
+                
                 # 🔧 使用 concepts_to_export 而不是 selected_concepts（跳过已存在模块的概念）
                 for c in concepts_to_export:
                     # 🆕 先检查是否是特殊概念
@@ -12088,13 +13010,10 @@ def execute_sidebar_export():
                     
                     concept_def = cd.get(c)
                     if concept_def:
-                        # 🔧 FIX 2025-01-23: SOFA 等回调概念没有直接的 sources，但有 sub_concepts
-                        # 这些概念是有效的，因为它们会递归加载子概念
-                        has_sources = concept_def.sources.get(database) if hasattr(concept_def, 'sources') else False
-                        has_sub_concepts = bool(concept_def.sub_concepts) if hasattr(concept_def, 'sub_concepts') else False
-                        has_callback = bool(concept_def.callback) if hasattr(concept_def, 'callback') else False
-                        
-                        if has_sources or has_sub_concepts or has_callback:
+                        # 🔧 FIX 2026-02-09: 使用递归检查替代简单的 has_callback 判断
+                        # 旧逻辑: has_sources or has_sub_concepts or has_callback → 很多概念有 callback 但无数据源
+                        # 新逻辑: 递归检查概念树中是否有至少一个数据源
+                        if _has_any_source_recursive(c, database, cd):
                             valid_concepts.append(c)
                         else:
                             unsupported_concepts.append(c)
@@ -12109,88 +13028,147 @@ def execute_sidebar_export():
                     st.error("❌ 所选概念在当前数据库中都不可用")
                     return
                 
-                # 🚀 智能并行：根据概念数量和系统资源动态调整 concept_workers
-                smart_concept_workers = min(len(valid_concepts), actual_workers) if len(valid_concepts) > 1 else 1
+                # � FIX(2026-02-09): 强制 concept_workers=1，避免多线程加载引起的死锁
+                # 原因：多线程同时加载概念会导致 DuckDB 连接竞争、缓存失效、
+                #       以及 SIC/MIMIC-III 等数据库的复杂回调函数中的线程安全问题
+                # 模块级顺序加载已足够高效（每模块 1-5s），无需概念级并行
+                smart_concept_workers = 1
                 
-                load_kwargs = {
-                    'data_path': st.session_state.data_path,
-                    'database': database,
-                    'concepts': valid_concepts,  # 🚀 只传入有效概念
-                    'verbose': False,
-                    'merge': False,  # 返回 dict，每个概念单独的DataFrame
-                    'concept_workers': smart_concept_workers,  # 🚀 智能并行
-                    # 不传 parallel_workers，避免触发分批加载路径
-                }
-                if patient_ids_filter:
-                    load_kwargs['patient_ids'] = patient_ids_filter
+                # 🚀 FIX(2026-02-09): 按模块分组加载，实时显示进度
+                # 解决 HiRID/SICdb 加载 100+ 概念时用户无法看到进度的问题
+                # 按模块分组：保留同组概念的批量优化（宽表、共享子概念缓存）
+                module_concept_map = {}  # {module_key: [concepts]}
+                concept_to_module = {}
+                for mod_key, mod_concepts in CONCEPT_GROUPS_INTERNAL.items():
+                    for c in mod_concepts:
+                        concept_to_module[c] = mod_key
                 
-                progress_bar.progress(0.2)
+                for c in valid_concepts:
+                    mod = concept_to_module.get(c, '_other')
+                    if mod not in module_concept_map:
+                        module_concept_map[mod] = []
+                    module_concept_map[mod].append(c)
                 
-                try:
-                    result = load_concepts(**load_kwargs)
+                # 🔧 模块加载优先级：快的模块先加载（给用户更快的反馈）
+                MODULE_PRIORITY = [
+                    'vitals', 'demographics', 'outcome',        # 快
+                    'chemistry', 'hematology', 'blood_gas',     # 中等
+                    'medications', 'ventilator', 'respiratory',  # 中等
+                    'vasopressors', 'renal', 'neurological',    # 较慢
+                    'other_scores', 'circulatory',               # callback
+                    'sofa1_score', 'sofa2_score',                # 慢（SOFA计算）
+                    'sepsis3_sofa1', 'sepsis3_sofa2', 'sepsis_shared',  # 慢（依赖SOFA）
+                    '_other',
+                ]
+                ordered_modules = []
+                for mod in MODULE_PRIORITY:
+                    if mod in module_concept_map:
+                        ordered_modules.append(mod)
+                # 添加遗漏的module
+                for mod in module_concept_map:
+                    if mod not in ordered_modules:
+                        ordered_modules.append(mod)
+                
+                total_modules = len(ordered_modules)
+                loaded_module_count = 0
+                import time as _time_mod
+                _export_start = _time_mod.time()
+                
+                progress_bar.progress(0.15)
+                
+                for mod_idx, mod_key in enumerate(ordered_modules):
+                    mod_concepts = module_concept_map[mod_key]
+                    mod_display = CONCEPT_GROUP_NAMES.get(mod_key, (mod_key, mod_key))
+                    mod_name = mod_display[1] if lang != 'en' else mod_display[0]
                     
-                    # 处理返回结果（dict of DataFrames）
-                    if isinstance(result, dict):
-                        for cname, df in result.items():
-                            # 🔧 处理各种返回类型
-                            if hasattr(df, 'to_pandas'):
-                                df = df.to_pandas()
-                            elif hasattr(df, 'dataframe'):
-                                df = df.dataframe()
-                            elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
-                                df = df.data
-                            
-                            if isinstance(df, pd.DataFrame) and len(df) > 0:
-                                data[cname] = df
-                            elif isinstance(df, pd.Series):
-                                data[cname] = df.to_frame().reset_index()
-                            else:
-                                # 🆕 空结果（未配置或无数据）
-                                empty_concepts.append(cname)
-                    elif isinstance(result, pd.DataFrame):
-                        # 如果返回单个DataFrame（merged模式），拆分成各列
-                        for concept in selected_concepts:
-                            if concept in result.columns:
-                                data[concept] = result
-                                break  # merged模式只需要一个
+                    # 🔧 实时进度显示
+                    elapsed = _time_mod.time() - _export_start
+                    if loaded_module_count > 0:
+                        avg_per_module = elapsed / loaded_module_count
+                        remaining = avg_per_module * (total_modules - loaded_module_count)
+                        eta_str = f" (剩余 ~{remaining:.0f}s)" if lang != 'en' else f" (~{remaining:.0f}s remaining)"
+                    else:
+                        eta_str = ""
                     
-                    # 检查哪些概念没有加载成功（🆕 区分失败和空结果）
-                    for c in valid_concepts:
-                        if c not in data and c not in empty_concepts:
-                            empty_concepts.append(c)
+                    status_msg = (f"**Loading {mod_name}** ({len(mod_concepts)} concepts, {mod_idx+1}/{total_modules}){eta_str}"
+                                  if lang == 'en'
+                                  else f"**正在加载 {mod_name}** ({len(mod_concepts)} 个概念, {mod_idx+1}/{total_modules}){eta_str}")
+                    status_text.markdown(status_msg)
                     
-                except Exception as batch_e:
-                    # 批量加载失败，回退到逐个加载
-                    st.warning(f"⚠️ 批量加载失败，回退到逐个加载: {batch_e}")
-                    for i, concept in enumerate(selected_concepts):
-                        try:
-                            single_kwargs = {
-                                'data_path': st.session_state.data_path,
-                                'database': st.session_state.get('database'),
-                                'concepts': [concept],
-                                'verbose': False,
-                                'merge': False,
-                                'concept_workers': 1,
-                            }
-                            if patient_ids_filter:
-                                single_kwargs['patient_ids'] = patient_ids_filter
-                            
-                            result = load_concepts(**single_kwargs)
-                            
-                            if isinstance(result, dict):
-                                for cname, df in result.items():
-                                    if hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
-                                        df = df.data
-                                    if isinstance(df, pd.DataFrame) and len(df) > 0:
-                                        data[cname] = df
-                            elif isinstance(result, pd.DataFrame) and len(result) > 0:
-                                data[concept] = result
-                            
-                            progress_bar.progress(0.1 + 0.4 * (i + 1) / total_concepts)
-                            
-                        except Exception:
-                            failed_concepts.append(concept)
-                            continue
+                    load_kwargs = {
+                        'data_path': st.session_state.data_path,
+                        'database': database,
+                        'concepts': mod_concepts,
+                        'verbose': False,
+                        'merge': False,
+                        'concept_workers': 1,  # 🔧 FIX: 强制串行加载，避免线程死锁
+                    }
+                    if patient_ids_filter:
+                        load_kwargs['patient_ids'] = patient_ids_filter
+                    
+                    try:
+                        result = load_concepts(**load_kwargs)
+                        
+                        # 处理返回结果（dict of DataFrames）
+                        if isinstance(result, dict):
+                            for cname, df in result.items():
+                                if hasattr(df, 'to_pandas'):
+                                    df = df.to_pandas()
+                                elif hasattr(df, 'dataframe'):
+                                    df = df.dataframe()
+                                elif hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                                    df = df.data
+                                
+                                if isinstance(df, pd.DataFrame) and len(df) > 0:
+                                    data[cname] = df
+                                elif isinstance(df, pd.Series):
+                                    data[cname] = df.to_frame().reset_index()
+                                else:
+                                    empty_concepts.append(cname)
+                        elif isinstance(result, pd.DataFrame):
+                            for concept in mod_concepts:
+                                if concept in result.columns:
+                                    data[concept] = result
+                                    break
+                        
+                        # 检查空结果
+                        for c in mod_concepts:
+                            if c not in data and c not in empty_concepts:
+                                empty_concepts.append(c)
+                        
+                    except Exception as mod_e:
+                        # 模块加载失败，逐个概念回退
+                        for concept in mod_concepts:
+                            try:
+                                single_kwargs = {
+                                    'data_path': st.session_state.data_path,
+                                    'database': database,
+                                    'concepts': [concept],
+                                    'verbose': False,
+                                    'merge': False,
+                                    'concept_workers': 1,
+                                }
+                                if patient_ids_filter:
+                                    single_kwargs['patient_ids'] = patient_ids_filter
+                                
+                                result = load_concepts(**single_kwargs)
+                                
+                                if isinstance(result, dict):
+                                    for cname, df in result.items():
+                                        if hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                                            df = df.data
+                                        if isinstance(df, pd.DataFrame) and len(df) > 0:
+                                            data[cname] = df
+                                elif isinstance(result, pd.DataFrame) and len(result) > 0:
+                                    data[concept] = result
+                                
+                            except Exception:
+                                failed_concepts.append(concept)
+                                continue
+                    
+                    loaded_module_count += 1
+                    # 进度条：15% (准备) + 35% (概念加载) = 50%
+                    progress_bar.progress(0.15 + 0.35 * (mod_idx + 1) / total_modules)
                 
                 progress_bar.progress(0.5)
                 
@@ -12451,9 +13429,14 @@ def execute_sidebar_export():
                                 df_to_add = df_to_add.rename(columns=rename_map)
                     
                     # 补充缺失的 merge_cols (例如 Static 变量缺失 charttime)
+                    # 🔧 FIX(2026-02-09): 对 death/los_icu 等静态概念，charttime 设为 0 (= 入院时刻)
+                    # 这样下游分析代码可以统一处理，不会因缺少 charttime 而报错
                     for mc in merge_cols:
                         if mc not in df_to_add.columns:
-                            df_to_add[mc] = np.nan
+                            if mc in {'charttime', 'time', 'starttime', 'endtime', 'itemtime'}:
+                                df_to_add[mc] = 0.0  # 静态概念：charttime = 0 表示入院时刻
+                            else:
+                                df_to_add[mc] = np.nan
                             
                     # 只保留相关列
                     keep_cols = merge_cols + [c for c in df_to_add.columns if c not in merge_cols]
@@ -12811,6 +13794,8 @@ def execute_sidebar_export():
                 'patient_count': actual_patient_count,  # 🆕 保存实际患者数
                 'concept_count': exported_concept_count,  # 🆕 保存实际概念数
                 'unavailable_concepts': selected_but_not_exported,  # 🆕 被选择但未能提取的概念
+                'unsupported_concepts': unsupported_concepts,  # 🆕 FIX(2026-02-09): 无数据源的概念
+                'empty_data_concepts': empty_concepts,  # 🆕 FIX(2026-02-09): 有数据源但无数据的概念
             }
             st.rerun()  # 🆕 立即刷新页面，让 Step 4 变为 DONE
         else:
