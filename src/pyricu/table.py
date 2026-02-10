@@ -171,6 +171,17 @@ class IdTbl:
         """Get metadata variable names (ID columns)."""
         return self.id_vars
     
+    @property
+    def id_columns(self) -> List[str]:
+        """Alias for id_vars (compatibility with ICUTable dataclass)."""
+        return self.id_vars
+    
+    @property
+    def value_column(self) -> Optional[str]:
+        """First non-meta data column (compatibility with ICUTable dataclass)."""
+        data_cols = self.data_vars()
+        return data_cols[0] if data_cols else None
+
     def data_vars(self) -> List[str]:
         """Get data variable names (non-ID columns)."""
         return [c for c in self.data.columns if c not in self.id_vars]
@@ -446,6 +457,11 @@ class TsTbl(IdTbl):
         """Get metadata variable names (ID + index columns)."""
         return self.id_vars + [self.index_var]
     
+    @property
+    def index_column(self) -> Optional[str]:
+        """Alias for index_var (compatibility with ICUTable dataclass)."""
+        return self.index_var
+
     def time_vars(self) -> List[str]:
         """Get time variable names."""
         return [self.index_var]
