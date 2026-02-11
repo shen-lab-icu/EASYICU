@@ -923,6 +923,35 @@ def _sample_patient_ids_random(all_ids: list, n: int, seed: int = 42) -> list:
     return sorted(rng.sample(all_ids, n))
 
 
+def _get_patient_id_table_files(database: str) -> list:
+    """返回数据库特定的患者ID表文件查找列表。
+    
+    不同数据库的患者ID存储在不同的表中：
+    - MIIV/MIMIC-III: icustays.parquet
+    - eICU: patient.parquet
+    - AUMC: admissions.parquet
+    - HiRID: general.parquet
+    - SICdb: cases.parquet
+    
+    返回按优先级排序的文件列表，确保所有数据库都能正确找到患者ID。
+    """
+    # 数据库特定的主表
+    db_specific = {
+        'hirid': ['general.parquet'],
+        'sic': ['cases.parquet'],
+        'aumc': ['admissions.parquet'],
+    }
+    specific = db_specific.get(database, [])
+    # 通用查找列表
+    generic = ['icustays.parquet', 'patient.parquet', 'admissions.parquet', 'general.parquet', 'cases.parquet']
+    # 合并：先查数据库特定的，再查通用的（去重）
+    result = list(specific)
+    for f in generic:
+        if f not in result:
+            result.append(f)
+    return result
+
+
 # 全局特征分组定义 - 供侧边栏和数据字典共用
 # 使用英文key，并提供双语显示名称
 CONCEPT_GROUPS_INTERNAL = {
@@ -6369,7 +6398,7 @@ def load_data():
                 candidate_ids = None
                 if patient_limit and patient_limit > 0:
                     try:
-                        icustays_files = ['icustays.parquet', 'patient.parquet', 'admissions.parquet']
+                        icustays_files = _get_patient_id_table_files(database)
                         for f in icustays_files:
                             fp = data_path / f
                             if fp.exists():
@@ -6408,7 +6437,7 @@ def load_data():
                 # Fallback: just apply patient_limit without cohort filter
                 if patient_limit and patient_limit > 0:
                     try:
-                        icustays_files = ['icustays.parquet', 'patient.parquet', 'admissions.parquet']
+                        icustays_files = _get_patient_id_table_files(database)
                         for f in icustays_files:
                             fp = data_path / f
                             if fp.exists():
@@ -6563,7 +6592,7 @@ def load_data_for_preview(max_patients: int = 50):
             
             # Step 1: 先选max_patients个患者作为候选集
             candidate_ids = None
-            for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:
+            for f in _get_patient_id_table_files(database):
                 fp = data_path / f
                 if fp.exists():
                     icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
@@ -12892,7 +12921,7 @@ def execute_sidebar_export():
                 candidate_ids = None
                 if patient_limit and patient_limit > 0:
                     try:
-                        for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:
+                        for f in _get_patient_id_table_files(database):
                             fp = data_path / f
                             if fp.exists():
                                 icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
@@ -12928,7 +12957,7 @@ def execute_sidebar_export():
                 # Fallback: just apply patient_limit without cohort filter
                 if patient_limit and patient_limit > 0:
                     try:
-                        for f in ['icustays.parquet', 'patient.parquet', 'admissions.parquet']:
+                        for f in _get_patient_id_table_files(database):
                             fp = data_path / f
                             if fp.exists():
                                 icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
@@ -12946,8 +12975,9 @@ def execute_sidebar_export():
             # 显示系统资源信息（包含性能层级）
             resources = get_system_resources()
             perf_tier = resources.get('performance_tier', 'unknown')
-            # 🔧 使用 parallel_config 的 recommended_workers，确保显示与实际一致
-            actual_workers = resources.get('recommended_workers', parallel_workers)
+            # 🔧 FIX: 显示实际使用的 concept_workers=1（串行），而非 recommended_workers
+            # 实际加载时 concept_workers=1 避免死锁，不应显示 64 workers 误导用户
+            actual_workers = 1  # 与 load_kwargs['concept_workers'] 一致
             tier_emoji = {
                 'high-performance': '🚀',
                 'server': '💻',
@@ -12956,17 +12986,11 @@ def execute_sidebar_export():
                 'limited': '⚠️'
             }.get(perf_tier, '💻')
             
+            n_patients_display = num_patients or 'all'
             if lang == 'en':
-                perf_msg = f"{tier_emoji} System: {resources['cpu_count']} cores, {resources['total_memory_gb']}GB RAM ({perf_tier}) → Using {actual_workers} workers ({parallel_backend})"
+                perf_msg = f"{tier_emoji} System: {resources['cpu_count']} cores, {resources['total_memory_gb']}GB RAM → Loading {n_patients_display} patients (sequential by module)"
             else:
-                tier_cn = {
-                    'high-performance': '高性能服务器',
-                    'server': '服务器',
-                    'workstation': '工作站',
-                    'standard': '标准配置',
-                    'limited': '内存受限'
-                }.get(perf_tier, perf_tier)
-                perf_msg = f"{tier_emoji} 系统: {resources['cpu_count']} 核心, {resources['total_memory_gb']}GB 内存 ({tier_cn}) → 使用 {actual_workers} 并行 ({parallel_backend})"
+                perf_msg = f"{tier_emoji} 系统: {resources['cpu_count']} 核心, {resources['total_memory_gb']}GB 内存 → 加载 {n_patients_display} 患者（按模块顺序加载）"
             st.info(perf_msg)
             
             try:
@@ -13694,10 +13718,28 @@ def execute_sidebar_export():
             if export_format == 'csv':
                 merged_df.to_csv(file_path, index=False, encoding='utf-8-sig')  # 🔧 FIX: 使用 BOM 编码防止中文乱码
             elif export_format == 'parquet':
+                # Clean up mixed-type object columns before parquet export
+                for col in merged_df.columns:
+                    if merged_df[col].dtype == object:
+                        numeric_vals = pd.to_numeric(merged_df[col], errors='coerce')
+                        orig_valid = merged_df[col].notna().sum()
+                        if orig_valid > 0 and numeric_vals.notna().sum() >= orig_valid * 0.5:
+                            merged_df[col] = numeric_vals
+                        else:
+                            merged_df[col] = merged_df[col].astype(str)
                 merged_df.to_parquet(file_path, index=False)
             elif export_format == 'excel':
                 merged_df.to_excel(file_path, index=False)
             else:
+                # Clean up mixed-type object columns before parquet export
+                for col in merged_df.columns:
+                    if merged_df[col].dtype == object:
+                        numeric_vals = pd.to_numeric(merged_df[col], errors='coerce')
+                        orig_valid = merged_df[col].notna().sum()
+                        if orig_valid > 0 and numeric_vals.notna().sum() >= orig_valid * 0.5:
+                            merged_df[col] = numeric_vals
+                        else:
+                            merged_df[col] = merged_df[col].astype(str)
                 merged_df.to_parquet(file_path, index=False)
             
             exported_files.append(str(file_path))

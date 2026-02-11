@@ -1202,9 +1202,6 @@ def calc_dur(
         grouped = data_subset.groupby(group_cols, dropna=False)
         agg_result = grouped.agg(**agg_funcs)
         
-        # 🔧 DEBUG: Print columns info
-        import sys
-        print(f"DEBUG calc_dur: agg_result.columns={list(agg_result.columns)}, index.names={agg_result.index.names}", file=sys.stderr)
         
         # 🔧 FIX: Check for column conflicts before reset_index
         # If any index level name exists as a column, drop that column first

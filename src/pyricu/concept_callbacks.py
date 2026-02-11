@@ -2572,9 +2572,15 @@ def _callback_sofa_score(
                     interval = pd.Timedelta(hours=max(1, inferred_hours))
                 
                 # Fill gaps with inferred interval
-                # ✅ FIX: Use default expand_forward=True to match ricu's symmetric timeline
-                # This generates complete hourly grid covering the full patient timeline
+                # Replicate R ricu's collapse() → fill_gaps() → expand() interaction:
+                # R's collapse() converts end to duration (max - min) as a win_tbl,
+                # but expand() misinterprets this duration as an absolute end time.
+                # This extends the grid from [min, max] to [min, max - min] per patient.
                 limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
+                if limits_df is not None and 'start' in limits_df.columns and 'end' in limits_df.columns:
+                    # R bug: grid_end = max_time - min_time (duration treated as absolute)
+                    limits_df = limits_df.copy()
+                    limits_df['end'] = limits_df['end'] - limits_df['start']
                 data = fill_gaps(
                     data,
                     id_cols=id_cols_to_group,
@@ -3287,13 +3293,10 @@ def _match_fio2(
             # 然后在merge后转换回numeric类型
             o2_time_backup = None
             # 🔧 FIX: 根据数据库选择正确的时间单位
-            # - AUMC: 原始数据是毫秒 -> datasource.py 转换为分钟 -> downsampling 转换为小时
-            # - SIC: 原始数据是秒，未经 downsampling 处理
+            # - AUMC: 原始数据是毫秒 -> datasource.py 转换为分钟 -> _align_time_to_admission 转换为小时
+            # - SIC: 原始数据是秒 -> _align_time_to_admission 转换为小时
             # - 其他数据库: 通常是小时
-            if database == 'sic':
-                numeric_unit = 's'  # SIC 使用秒为单位
-            else:
-                numeric_unit = 'h'  # 其他数据库在 downsampling 后使用小时
+            numeric_unit = 'h'  # 所有数据库在 _align_time_to_admission 后都使用小时
             if o2_time_is_numeric:
                 o2_time_backup = o2_df[index_column]
                 # 对于numeric类型，需要转换为datetime进行merge_asof
@@ -3992,9 +3995,10 @@ def _callback_vent_ind(
         if df.empty:
             return None
 
-        # 🔧 FIX 2025-02-14: WinTbl doesn't have value_column attribute
+        # 🔧 FIX 2025-02-14: WinTbl.value_column returns index_var ('starttime')
+        # which is a structural column, not the data column. Always use 'mech_vent'.
         value_col = "mech_vent"
-        if hasattr(mech, 'value_column') and mech.value_column:
+        if not isinstance(mech, WinTbl) and hasattr(mech, 'value_column') and mech.value_column:
             value_col = mech.value_column
         if value_col in df.columns:
             df["vent_flag"] = pd.Series(df[value_col]).fillna(False)
@@ -4614,12 +4618,12 @@ def _callback_vaso_ind(
     time_is_numeric = pd.api.types.is_numeric_dtype(time_series)
     
     # 🔧 FIX 2025-01: Database-specific time units for vaso_ind
-    # SIC uses seconds for relative time, other databases use hours
+    # After _align_time_to_admission, all databases use hours for relative time
     ds_name = ''
     if ctx is not None:
         ds_cfg = getattr(getattr(ctx, 'data_source', None), 'config', None)
         ds_name = getattr(ds_cfg, 'name', '') if ds_cfg is not None else ''
-    numeric_unit = 's' if ds_name == 'sic' else 'h'
+    numeric_unit = 'h'  # All databases use hours after _align_time_to_admission
     
     if time_is_numeric:
         numeric_time = pd.to_numeric(time_series, errors="coerce")
@@ -5075,11 +5079,9 @@ def _callback_vaso60(
         ds_name = getattr(ds_cfg, 'name', '') if ds_cfg is not None else ''
     
     # 🔧 FIX 2025-01: Database-specific time units
-    # SIC uses seconds for relative time, other databases use hours
-    if ds_name == 'sic':
-        numeric_unit = 's'  # SIC uses seconds
-    else:
-        numeric_unit = 'h'  # MIIV, AUMC, HIRID, EICU, MIMIC use hours
+    # After sic_dur/sic_rate_kg callbacks, SIC medication Offset is already converted to hours
+    # All databases use hours for relative time at this point
+    numeric_unit = 'h'  # All databases: hours (SIC medication Offset already converted from seconds)
 
     rate_time_is_numeric = pd.api.types.is_numeric_dtype(rate_df[rate_index_col])
     dur_time_is_numeric = pd.api.types.is_numeric_dtype(dur_df[dur_index_col])
