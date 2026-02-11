@@ -3873,6 +3873,36 @@ class ConceptResolver:
             
             return data
         
+        if db_name == 'sic':
+            # SIC tables (data_float_h, laboratory, medication) use Offset in SECONDS.
+            # R ricu converts via change_interval(hours(1)) → divide by 3600.
+            # Some callbacks (sic_dur, sic_rate_kg) already convert medication Offset
+            # to hours internally — detect via magnitude check to avoid double-conversion.
+            
+            cols_to_convert = set()
+            if index_column and index_column in data.columns:
+                cols_to_convert.add(index_column)
+            
+            if time_columns:
+                for col in time_columns:
+                    if col and col in data.columns:
+                        if not col.endswith('_dur'):
+                            cols_to_convert.add(col)
+            
+            for col in data.columns:
+                if col in ['start', 'stop']:
+                    if pd.api.types.is_numeric_dtype(data[col]):
+                        cols_to_convert.add(col)
+            
+            for col in cols_to_convert:
+                if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
+                    max_abs = data[col].abs().max()
+                    if pd.notna(max_abs) and max_abs > 5000:
+                        # Values > 5000 cannot be hours (= 208 days), must be seconds
+                        data[col] = data[col] / 3600.0
+            
+            return data
+        
         # Early return checks (no verbose output for performance)
         if data.empty or not index_column or index_column not in data.columns:
             return data
@@ -7937,18 +7967,19 @@ def _apply_callback(
                     break
         
         if not index_var:
-            for candidate in ["OffsetDrugStart", "start", "charttime"]:
+            for candidate in ["Offset", "OffsetDrugStart", "start", "charttime"]:
                 if candidate in frame.columns:
                     index_var = candidate
                     break
         
         if stop_var and stop_var in frame.columns and index_var and index_var in frame.columns:
             frame = frame.copy()
-            # Determine ID columns
-            id_cols = [c for c in frame.columns if c.lower().endswith('id') and c not in ['itemid', 'drugid']]
+            # Use standard patient-level ID columns only (not row-level id, bucket_id, PatientID etc.)
+            _PATIENT_ID_COLS = ['CaseID', 'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
+            id_cols = [c for c in _PATIENT_ID_COLS if c in frame.columns]
             
             # Group by ID (and optionally grp_var)
-            group_cols = id_cols
+            group_cols = list(id_cols)
             if grp_var and grp_var in frame.columns:
                 group_cols = id_cols + [grp_var]
             
@@ -7959,11 +7990,25 @@ def _apply_callback(
                     stop_var: 'max'
                 }).reset_index()
                 
-                # Duration = stop - start
-                agg_df[val_var] = pd.to_numeric(agg_df[stop_var], errors='coerce') - pd.to_numeric(agg_df[index_var], errors='coerce')
+                # SICdb medication.Offset is in seconds → convert to hours
+                # Duration = floor(max_stop/3600) - floor(min_start/3600)
+                # This matches R ricu's change_interval(hours(1)) behavior
+                min_start = pd.to_numeric(agg_df[index_var], errors='coerce')
+                max_stop = pd.to_numeric(agg_df[stop_var], errors='coerce')
+                start_hours = (min_start // 3600).astype(int)
+                stop_hours = (max_stop // 3600).astype(int)
+                agg_df[val_var] = stop_hours - start_hours
+                agg_df[index_var] = start_hours
+                
+                # If grp_var was used, set index to min per patient and pick max duration
+                if grp_var and grp_var in frame.columns and id_cols:
+                    min_idx = agg_df.groupby(id_cols)[index_var].transform('min')
+                    agg_df[index_var] = min_idx
+                    agg_df = agg_df.sort_values(val_var, ascending=False).drop_duplicates(
+                        subset=id_cols + [index_var], keep='first')
                 
                 # Keep only required columns
-                result_cols = group_cols + [index_var, val_var]
+                result_cols = id_cols + [index_var, val_var]
                 frame = agg_df[[c for c in result_cols if c in agg_df.columns]]
         
         return frame
@@ -7972,6 +8017,9 @@ def _apply_callback(
     # R ricu logic: add_weight + multiply by 10^6 / weight + expand
     if expr == "sic_rate_kg":
         val_var = source.value_var or concept_name
+        # Fix: source.value_var may have been renamed to concept_name during loading
+        if val_var not in frame.columns and concept_name in frame.columns:
+            val_var = concept_name
         stop_var = source.params.get("stop_var") if source.params else None
         
         if not stop_var:
@@ -7983,7 +8031,8 @@ def _apply_callback(
         # Try to add weight
         if 'weight' not in frame.columns and resolver is not None and data_source is not None:
             try:
-                id_cols = [c for c in frame.columns if c.lower().endswith('id') and c not in ['itemid', 'drugid']]
+                _PATIENT_ID_COLS_W = ['CaseID', 'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
+                id_cols = [c for c in _PATIENT_ID_COLS_W if c in frame.columns]
                 if id_cols:
                     unique_ids = frame[id_cols[0]].unique().tolist()
                     weight_table = resolver._load_single_concept(
@@ -8017,14 +8066,45 @@ def _apply_callback(
             frame.loc[mask, val_var] = frame.loc[mask, val_var] * 1e6 / frame.loc[mask, 'weight']
             frame = frame.drop(columns=['weight'], errors='ignore')
         
-        # Expand time range if stop_var exists
-        # (Simplified - full expand would require hourly expansion)
+        # Expand time range: convert each (start, stop) interval into hourly rows
         index_var = source.index_var
         if not index_var:
-            for candidate in ["OffsetDrugStart", "start", "charttime"]:
+            for candidate in ["Offset", "OffsetDrugStart", "start", "charttime"]:
                 if candidate in frame.columns:
                     index_var = candidate
                     break
+        
+        if stop_var and stop_var in frame.columns and index_var and index_var in frame.columns:
+            # R ricu expand(): generate hourly observations between start and stop
+            # Use standard patient-level ID columns only
+            _PATIENT_ID_COLS_E = ['CaseID', 'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
+            id_cols = [c for c in _PATIENT_ID_COLS_E if c in frame.columns]
+            keep_cols = id_cols + [val_var] if val_var in frame.columns else id_cols
+            
+            expanded_rows = []
+            for _, row in frame.iterrows():
+                start_val = pd.to_numeric(row.get(index_var), errors='coerce')
+                stop_val = pd.to_numeric(row.get(stop_var), errors='coerce')
+                if pd.isna(start_val) or pd.isna(stop_val) or stop_val <= start_val:
+                    continue
+                # SICdb medication.Offset is in seconds → convert to hourly steps
+                # R ricu floor(): floor to nearest hour
+                start_hour = int(start_val // 3600)
+                stop_hour = int(stop_val // 3600)
+                for t in range(start_hour, stop_hour + 1):
+                    new_row = {index_var: t}  # Output Offset in hours
+                    for c in keep_cols:
+                        if c in row.index:
+                            new_row[c] = row[c]
+                    expanded_rows.append(new_row)
+            
+            if expanded_rows:
+                frame = pd.DataFrame(expanded_rows)
+                # Aggregate: median rate per (patient, hour) to match R ricu change_interval behavior
+                if id_cols and index_var in frame.columns and val_var in frame.columns:
+                    group_keys = id_cols + [index_var]
+                    frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
+                    frame = frame.groupby(group_keys, as_index=False).agg({val_var: 'median'})
         
         return frame
 

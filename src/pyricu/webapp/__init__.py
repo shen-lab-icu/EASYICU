@@ -70,7 +70,7 @@ def _is_port_in_use(port: int) -> bool:
 
 def run_app(
     host: str = 'localhost',
-    port: int = 8502,
+    port: int = 8503,
     debug: bool = False,
     daemon: bool = False,
     background: bool = False,
