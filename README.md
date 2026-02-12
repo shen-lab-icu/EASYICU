@@ -231,7 +231,7 @@ converter.convert_all()
   author = {Shen Lab ICU Analytics Team},
   year = {2026},
   url = {https://github.com/shen-lab-icu/pyricu},
-  version = {0.3.0}
+  version = {0.1.0}
 }
 ```
 
