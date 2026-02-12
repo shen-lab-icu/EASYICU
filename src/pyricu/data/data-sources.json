@@ -10594,7 +10594,7 @@
         "id": "CaseID",
         "position": 2,
         "start": "ICUOffset",
-        "end": "TimeOparquetay",
+        "end": "TimeOfStay",
         "table": "cases"
       }
     },
@@ -10626,8 +10626,8 @@
             "name": "AdmissionYear",
             "spec": "col_integer"
           },
-          "timeoparquetay": {
-            "name": "TimeOparquetay",
+          "timeofstay": {
+            "name": "TimeOfStay",
             "spec": "col_integer"
           },
           "icuoffset": {

@@ -1384,6 +1384,56 @@ def _callback_aumc_death(
     
     return _as_icutbl(result, id_columns=id_columns, index_column=None, value_column='death')
 
+def _callback_sic_death(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """SICdb death callback: marks death based on OffsetOfDeath in cases table.
+
+    SICdb stores OffsetOfDeath in seconds from ICU admission.
+    If OffsetOfDeath is NaN, patient survived.
+    If OffsetOfDeath is not NaN, patient died.
+
+    Returns DataFrame with CaseID, charttime (OffsetOfDeath in hours), death (bool).
+    """
+    if not tables or len(tables) == 0:
+        return _empty_icutbl(ctx)
+
+    input_table = list(tables.values())[0]
+    data = input_table.df.copy()
+
+    if data.empty:
+        return _empty_icutbl(ctx)
+
+    id_columns = input_table.id_columns
+
+    # OffsetOfDeath is the index_var in concept-dict.json
+    offset_col = input_table.index_column or 'OffsetOfDeath'
+
+    if offset_col not in data.columns:
+        # Fall back: look for any column with "death" in name
+        for c in data.columns:
+            if 'death' in c.lower():
+                offset_col = c
+                break
+
+    if offset_col in data.columns:
+        offset_vals = pd.to_numeric(data[offset_col], errors='coerce')
+        # death = TRUE if OffsetOfDeath is not NaN
+        data['death'] = (~offset_vals.isna()).astype(bool)
+        # Convert offset from seconds to hours for charttime
+        data['charttime'] = offset_vals / 3600.0
+    else:
+        data['death'] = False
+        data['charttime'] = np.nan
+
+    output_cols = list(id_columns) + ['charttime', 'death']
+    output_cols = [c for c in output_cols if c in data.columns]
+    result = data[output_cols].copy()
+
+    return _as_icutbl(result, id_columns=id_columns, index_column='charttime', value_column='death')
+
+
 def _callback_aumc_bxs(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -6628,6 +6678,7 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "sofa2_score": _callback_sofa2_score,  # SOFA-2 总分计算（使用 sofa2_* 组件）
     # AUMC-specific callbacks
     "aumc_death": _callback_aumc_death,
+    "sic_death": _callback_sic_death,
     "aumc_bxs": _callback_aumc_bxs,
     "aumc_rass": _callback_aumc_rass,
     "aumc_dur": _callback_aumc_dur,
