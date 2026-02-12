@@ -2691,6 +2691,17 @@ class ConceptResolver:
                     data_source=data_source,
                     interval=interval,
                 )
+
+            # 🔧 FIX: After callback, if source_index_column was consumed/renamed by
+            # the callback (e.g. sic_death renames OffsetOfDeath→death and adds charttime),
+            # update source_index_column to the new time column so it appears in ordered_cols.
+            if (source_index_column and
+                    source_index_column not in frame.columns and
+                    len(frame) > 0):
+                for fallback_time in ['charttime', 'starttime', 'datetime']:
+                    if fallback_time in frame.columns:
+                        source_index_column = fallback_time
+                        break
             
             # 单位过滤（在回调之后）
             if definition.units and source_unit_column and source_unit_column in frame.columns:
@@ -4873,8 +4884,9 @@ class ConceptResolver:
         is_numeric_time = pd.api.types.is_numeric_dtype(start_col)
         ds_name = (data_source.config.name or "").lower()
         
-        # Determine time unit: eICU uses minutes, AUMC uses milliseconds
+        # Determine time unit: eICU uses minutes, AUMC uses milliseconds, SICdb uses seconds
         is_eicu = ds_name.startswith("eicu")
+        is_sic = ds_name == "sic"
         
         if is_numeric_time:
             start_val = pd.to_numeric(start_col, errors="coerce")
@@ -4894,6 +4906,11 @@ class ConceptResolver:
                 los_days = (end_val.loc[valid_mask] - start_val.loc[valid_mask]) / (60 * 24)
                 duration_hours = (end_val.loc[valid_mask] - start_val.loc[valid_mask]) / 60
                 start_hours = start_val.loc[valid_mask] / 60
+            elif is_sic:
+                # SICdb: times are relative SECONDS from admission
+                los_days = (end_val.loc[valid_mask] - start_val.loc[valid_mask]) / (3600 * 24)
+                duration_hours = (end_val.loc[valid_mask] - start_val.loc[valid_mask]) / 3600
+                start_hours = start_val.loc[valid_mask] / 3600
             else:
                 # AUMC/HiRID: times are relative MILLISECONDS from admission
                 los_days = (end_val.loc[valid_mask] - start_val.loc[valid_mask]) / (1000 * 60 * 60 * 24)
@@ -6493,6 +6510,35 @@ def _apply_callback(
         # Rows with dateofdeath NA remain as None (NA)
         
         df[value_col] = death_values
+        return df
+
+    # 🔧 SICdb death callback — OffsetOfDeath in seconds, NaN = survived
+    if expr == "sic_death":
+        df = frame.copy()
+        # OffsetOfDeath is both index_var and val_var, so it gets renamed to
+        # concept_name ('death') before this callback runs. The numeric values
+        # (seconds from ICU admission) are now in the 'death' column.
+        offset_col = None
+        # First try the original column name
+        for c in ['OffsetOfDeath', 'offsetofdeath']:
+            if c in df.columns:
+                offset_col = c
+                break
+        # Fallback: val_var was renamed to concept_name
+        if offset_col is None and concept_name in df.columns:
+            offset_col = concept_name
+
+        if offset_col is None:
+            return df.head(0)
+
+        offset_vals = pd.to_numeric(df[offset_col], errors='coerce')
+        # death = TRUE if OffsetOfDeath is not NaN, NA otherwise (matches ricu behavior)
+        death_values = pd.Series(index=df.index, dtype=object)
+        death_values[offset_vals.notna()] = True
+        # NaN = survived (NA, not FALSE)
+        df[concept_name] = death_values
+        # Add charttime as OffsetOfDeath converted to hours
+        df['charttime'] = offset_vals / 3600.0
         return df
 
     # 🔧 HiRID death callback — matches R ricu hirid_death (callback-itm.R:197)

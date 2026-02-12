@@ -745,11 +745,11 @@ CONCEPT_DICTIONARY = {
     'sofa2_renal': ('SOFA-2 Renal', 'SOFA-2肾脏评分', '0-4'),
     
     # Sepsis 诊断
-    'sep3': ('Sepsis-3 Diagnosis (Default)', 'Sepsis-3诊断 (默认)', 'boolean'),
+    'sep3': ('Sepsis-3 Diagnosis (Default = SOFA-1 + Suspected Infection)', 'Sepsis-3诊断 (默认=传统SOFA+疑似感染)', 'boolean'),
     'sep3_sofa1': ('Sepsis-3 (SOFA-1 based)', 'Sepsis-3诊断 (基于传统SOFA)', 'boolean'),
     'sep3_sofa2': ('Sepsis-3 (SOFA-2 based)', 'Sepsis-3诊断 (基于SOFA-2, 2025新标准)', 'boolean'),
-    'susp_inf': ('Suspected Infection', '疑似感染', 'boolean'),
-    'infection_icd': ('ICD Infection Diagnosis', 'ICD感染诊断 (Angus标准)', 'boolean'),
+    'susp_inf': ('Suspected Infection (ICD or Abx+Culture timing)', '疑似感染 (ICD诊断码或抗生素+培养时间窗)', 'boolean'),
+    'infection_icd': ('ICD Infection Diagnosis (eICU only, Angus 2001)', 'ICD感染诊断 (仅eICU, Angus标准)', 'boolean'),
     
     # 呼吸系统 (扩展)
     'spo2': ('Peripheral Oxygen Saturation', '脉搏血氧饱和度', '%'),
@@ -830,7 +830,7 @@ CONCEPT_DICTIONARY = {
     'adm': ('Admission Type', '入院类型', ''),
     
     # 微生物
-    'samp': ('Body Fluid Sampling', '体液采样', 'boolean'),
+    'samp': ('Body Fluid Sampling (for infection workup)', '体液采样 (用于感染检查)', 'boolean'),
 }
 
 # 特征详细描述（英文和中文）
@@ -845,10 +845,12 @@ CONCEPT_DESCRIPTIONS = {
     'sofa2_renal': ('Renal: creatinine and urine output (6h/12h/24h windows), score 4 for RRT or meeting RRT criteria', '肾脏：基于肌酐和尿量（6h/12h/24h窗口），接受RRT或满足RRT标准则为4分'),
     
     # Sepsis
+    'sep3': ('Sepsis-3 diagnosis (default=SOFA-1): suspected infection + SOFA ≥2 point increase from baseline. Combines susp_inf and sofa concepts.', 'Sepsis-3诊断（默认=传统SOFA）：疑似感染 + SOFA较基线升高≥2分。由susp_inf和sofa概念组合而成'),
     'sep3_sofa2': ('Sepsis-3 diagnosis: suspected infection + SOFA-2 ≥2 point increase from baseline', '基于SOFA-2的Sepsis-3诊断：疑似感染 + SOFA-2较基线升高≥2分'),
     'sep3_sofa1': ('Sepsis-3 diagnosis: suspected infection + traditional SOFA ≥2 point increase', '基于传统SOFA的Sepsis-3诊断：疑似感染 + SOFA较基线升高≥2分'),
-    'susp_inf': ('Suspected infection: antibiotics started within 72h of culture OR culture within 24h of antibiotics', '疑似感染：培养后72小时内开始抗生素 或 抗生素后24小时内进行培养'),
-    'infection_icd': ('Infection diagnosis based on Angus ICD criteria (explicit infection codes)', '基于Angus ICD标准的感染诊断（显性感染编码）'),
+    'susp_inf': ('Suspected infection: (1) ICD infection diagnosis codes (eICU only) OR (2) antibiotics started within 72h of culture OR culture within 24h of antibiotics. Combines infection_icd, abx, and samp concepts.', '疑似感染：(1) ICD感染诊断码（仅eICU可用）或 (2) 培养后72小时内开始抗生素 或 抗生素后24小时内进行培养。由infection_icd、abx和samp概念组合而成'),
+    'infection_icd': ('Infection diagnosis based on Angus 2001 ICD criteria (explicit infection codes). ONLY available in eICU database.', '基于Angus 2001 ICD标准的感染诊断（显性感染编码）。仅eICU数据库可用'),
+    'samp': ('Body fluid sampling (blood, urine, sputum, etc.) for culture-based infection workup. Used as a marker for suspected infection when combined with antibiotic timing.', '体液采样（血液、尿液、痰液等）用于培养检查。与抗生素时间窗结合作为疑似感染的标志'),
     
     # Vitals
     'hr': ('Heart rate in beats per minute', '每分钟心跳次数'),
@@ -1258,7 +1260,7 @@ def _load_sep3_diagnosis(
             id_col = c
             break
     time_col = None
-    for c in ['charttime', 'time', 'starttime', 'datetime']:
+    for c in ['charttime', 'time', 'starttime', 'datetime', 'Offset', 'measuredat_minutes', 'measuredat']:
         if c in merged.columns:
             time_col = c
             break
@@ -6335,9 +6337,10 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
         
         # ID列和时间列，不作为特征
         id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 
-                        'patientunitstayid', 'admissionid', 'patientid']
+                        'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
         time_candidates = ['time', 'charttime', 'starttime', 'endtime', 
-                          'datetime', 'timestamp', 'index']
+                          'datetime', 'timestamp', 'index', 'Offset',
+                          'measuredat_minutes', 'measuredat']
         exclude_cols = set(id_candidates + time_candidates)
         
         # 扫描并加载选中的数据文件
@@ -6705,7 +6708,7 @@ def load_data():
             # 获取患者列表 - 统计所有患者数，但UI选择器限制显示数量
             patient_ids = set()
             id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 
-                           'patientunitstayid', 'admissionid', 'patientid']
+                           'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
             
             for concept_df in data.values():
                 if isinstance(concept_df, pd.DataFrame):
@@ -6869,7 +6872,7 @@ def load_data_for_preview(max_patients: int = 50):
         patient_ids = set()
         id_col_found = 'stay_id'
         id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 
-                       'patientunitstayid', 'admissionid', 'patientid']
+                       'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
         
         for concept_df in data.values():
             if isinstance(concept_df, pd.DataFrame):
@@ -8216,11 +8219,12 @@ def render_timeseries_page():
                     # 排除ID列和所有可能的时间列
                     exclude_cols = ['stay_id', 'hadm_id', 'icustay_id', 'index', 'time', 
                                    'charttime', 'starttime', 'endtime', 'datetime', 'timestamp',
-                                   'patientunitstayid', 'admissionid', 'patientid']
+                                   'patientunitstayid', 'admissionid', 'patientid', 'CaseID', 'Offset',
+                                   'measuredat_minutes', 'measuredat']
                     value_cols = [c for c in numeric_cols if c not in exclude_cols]
                     
                     # 检测时间列 - 支持多种命名
-                    time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp']
+                    time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat']
                     time_col = None
                     for tc in time_candidates:
                         if tc in patient_df.columns:
@@ -8449,11 +8453,12 @@ def render_timeseries_page():
                 # 排除ID列和所有可能的时间列
                 exclude_cols = ['stay_id', 'hadm_id', 'icustay_id', 'index', 'time',
                                'charttime', 'starttime', 'endtime', 'datetime', 'timestamp',
-                               'patientunitstayid', 'admissionid', 'patientid']
+                               'patientunitstayid', 'admissionid', 'patientid', 'CaseID', 'Offset',
+                               'measuredat_minutes', 'measuredat']
                 value_cols = [c for c in numeric_cols if c not in exclude_cols]
                 
                 # 检测时间列
-                time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp']
+                time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat']
                 time_col = None
                 for tc in time_candidates:
                     if tc in df.columns:
@@ -8703,7 +8708,7 @@ def render_patient_page():
                 # 收集所有生命体征数据
                 vitals = ['hr', 'map', 'sbp', 'resp', 'spo2']
                 vitals_data = {}
-                time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp']
+                time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat']
                 
                 for v in vitals:
                     if v in st.session_state.loaded_concepts:
@@ -9164,7 +9169,7 @@ def render_patient_page():
         
         elif view_mode == category_mode:
             # 时间列候选（提前定义，避免UnboundLocalError）
-            time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp']
+            time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat']
             
             # 生命体征
             vitals_title = "### ❤️ Vital Signs" if lang == 'en' else "### ❤️ 生命体征"
@@ -9698,7 +9703,7 @@ def render_data_table_subtab():
                 
                 # 智能检测合并列：检查所有 DataFrame 共有的列
                 # 可能的时间列
-                time_col_candidates = ['charttime', 'time', 'datetime', 'measuredat', 'starttime']
+                time_col_candidates = ['charttime', 'time', 'datetime', 'measuredat', 'measuredat_minutes', 'starttime', 'Offset']
                 
                 # 找到所有 DataFrame 共有的列
                 common_cols = set(dfs_to_merge[0].columns)
@@ -9895,7 +9900,7 @@ def render_quality_page():
         time_candidates = [
             'time',  # 🔧 模拟数据使用的时间列（小时数）
             'charttime', 'datetime', 'measuredat', 'measuredat_minutes',
-            'observationoffset', 'starttime', 'endtime', 'givenat', 'timestamp',
+            'observationoffset', 'Offset', 'starttime', 'endtime', 'givenat', 'timestamp',
         ]
         for col in time_candidates:
             if col in df.columns:
@@ -10215,7 +10220,7 @@ def render_quality_page():
                 time_candidates = [
                     'time',  # 🔧 模拟数据使用的时间列（小时数）
                     'charttime', 'datetime', 'measuredat', 'measuredat_minutes',
-                    'observationoffset', 'starttime', 'endtime', 'givenat', 'timestamp',
+                    'observationoffset', 'Offset', 'starttime', 'endtime', 'givenat', 'timestamp',
                 ]
                 for col in time_candidates:
                     if col in df.columns:
@@ -13535,8 +13540,8 @@ def execute_sidebar_export():
             
             # 将同一分组的所有 concept 合并为宽表
             # 找到共同的 ID 列和时间列
-            id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid']
-            time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'itemtime']
+            id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+            time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'itemtime', 'Offset', 'measuredat_minutes', 'measuredat']
             
             # 🔧 先统一所有 DataFrame 的时间列名称
             # 不同概念可能使用不同的时间列名（charttime, starttime等）

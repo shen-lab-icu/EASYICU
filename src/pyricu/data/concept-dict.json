@@ -2190,6 +2190,15 @@
           "callback": "transform_fun(comp_na(`==`, 1L))",
           "class_name": "col_itm"
         }
+      ],
+      "sic": [
+        {
+          "table": "cases",
+          "index_var": "OffsetOfDeath",
+          "val_var": "OffsetOfDeath",
+          "callback": "sic_death",
+          "class_name": "col_itm"
+        }
       ]
     }
   },
@@ -4511,6 +4520,13 @@
         }
       ],
       "mimic_demo": [
+        {
+          "callback": "los_callback",
+          "win_type": "icustay",
+          "class_name": "fun_itm"
+        }
+      ],
+      "sic": [
         {
           "callback": "los_callback",
           "win_type": "icustay",
