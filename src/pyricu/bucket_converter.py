@@ -63,8 +63,10 @@ def _duckdb_hash(itemid: int, num_buckets: int = 100) -> int:
     """
     import duckdb
     conn = duckdb.connect()
-    result = conn.execute(f"SELECT hash({itemid}) % {num_buckets}").fetchone()[0]
-    conn.close()
+    try:
+        result = conn.execute(f"SELECT hash({itemid}) % {num_buckets}").fetchone()[0]
+    finally:
+        conn.close()
     return result
 
 
@@ -74,11 +76,13 @@ def _duckdb_hash_batch(itemids: Set[int], num_buckets: int = 100) -> Set[int]:
     """
     import duckdb
     conn = duckdb.connect()
-    # 使用 UNNEST 批量计算
-    itemid_list = list(itemids)
-    conn.execute("CREATE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
-    result = conn.execute(f"SELECT DISTINCT hash(itemid) % {num_buckets} FROM items").fetchall()
-    conn.close()
+    try:
+        # 使用 UNNEST 批量计算
+        itemid_list = list(itemids)
+        conn.execute("CREATE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
+        result = conn.execute(f"SELECT DISTINCT hash(itemid) % {num_buckets} FROM items").fetchall()
+    finally:
+        conn.close()
     return {row[0] for row in result}
 
 
@@ -207,13 +211,12 @@ def convert_to_buckets(
                  OVERWRITE_OR_IGNORE)
             """
         else:
-            log("执行分桶转换 (排序 + 分桶)...")
+            log("执行分桶转换...")
             sql = f"""
                 COPY (
                     SELECT *,
                            hash({config.partition_col}) % {config.num_buckets} as bucket_id
                     FROM {read_expr}
-                    ORDER BY {config.partition_col}
                 )
                 TO '{output_dir}'
                 (FORMAT PARQUET,
@@ -228,8 +231,11 @@ def convert_to_buckets(
         # 统计结果
         elapsed = time.time() - start_time
         
-        # 计算总行数
-        row_count = conn.execute(f"SELECT COUNT(*) FROM {read_expr}").fetchone()[0]
+        # 🚀 优化: 从已写出的parquet桶计数，避免重新扫描源文件（对80GB CSV节省10-30分钟）
+        try:
+            row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{output_dir}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
+        except Exception:
+            row_count = 0  # 如果计数失败，不影响转换结果
         
         # 计算总大小
         total_size = sum(f.stat().st_size for f in output_dir.rglob('*.parquet'))
@@ -255,6 +261,10 @@ def convert_to_buckets(
     except Exception as e:
         elapsed = time.time() - start_time
         logger.exception("转换失败")
+        try:
+            conn.close()
+        except Exception:
+            pass
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=elapsed,
@@ -491,14 +501,13 @@ def convert_aumc_numericitems(
             strict_mode=false
         )"""
         
-        log("执行分桶转换 (encoding=latin-1 + 排序 + 分桶)...")
+        log("执行分桶转换 (encoding=latin-1)...")
         
         sql = f"""
             COPY (
                 SELECT *,
                        hash(itemid) % {num_buckets} as bucket_id
                 FROM {read_expr}
-                ORDER BY itemid
             )
             TO '{output}'
             (FORMAT PARQUET,
@@ -513,8 +522,11 @@ def convert_aumc_numericitems(
         # 统计结果
         elapsed = time.time() - start_time
         
-        # 计算总行数
-        row_count = conn.execute(f"SELECT COUNT(*) FROM {read_expr}").fetchone()[0]
+        # 🚀 优化: 从已写出的parquet桶计数，避免重新扫描80GB源CSV
+        try:
+            row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{output}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
+        except Exception:
+            row_count = 0
         
         # 计算总大小
         total_size = sum(f.stat().st_size for f in output.rglob('*.parquet'))
@@ -539,6 +551,10 @@ def convert_aumc_numericitems(
     except Exception as e:
         elapsed = time.time() - start_time
         logger.exception("转换失败")
+        try:
+            conn.close()
+        except Exception:
+            pass
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=elapsed,
@@ -664,14 +680,13 @@ def convert_parquet_directory_to_buckets(
         read_expr = f"read_parquet('{glob_pattern}', union_by_name=true)"
         
         # 分桶转换
-        log("执行分桶转换 (读取 → 排序 → 分桶)...")
+        log("执行分桶转换 (读取 → 分桶)...")
         
         sql = f"""
             COPY (
                 SELECT *,
                        hash({partition_col}) % {num_buckets} as bucket_id
                 FROM {read_expr}
-                ORDER BY {partition_col}
             )
             TO '{output_dir}'
             (FORMAT PARQUET,
@@ -686,8 +701,11 @@ def convert_parquet_directory_to_buckets(
         # 统计结果
         elapsed = time.time() - start_time
         
-        # 计算总行数
-        row_count = conn.execute(f"SELECT COUNT(*) FROM {read_expr}").fetchone()[0]
+        # 🚀 优化: 从已写出的parquet桶计数，避免重新扫描源parquet分片
+        try:
+            row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{output_dir}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
+        except Exception:
+            row_count = 0
         
         # 计算总大小
         total_size = sum(f.stat().st_size for f in output_dir.rglob('*.parquet'))
@@ -716,6 +734,10 @@ def convert_parquet_directory_to_buckets(
     except Exception as e:
         elapsed = time.time() - start_time
         logger.exception("转换失败")
+        try:
+            conn.close()
+        except Exception:
+            pass
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=elapsed,

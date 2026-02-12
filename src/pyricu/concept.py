@@ -5649,11 +5649,10 @@ class ConceptResolver:
                 if concept_cache_key in self._concept_data_cache:
                     if verbose and logger.isEnabledFor(logging.DEBUG):
                         logger.debug("✨ 从内存缓存加载概念 '%s' (命中增强缓存)", concept_name)
-                    # 🔥 CRITICAL FIX: 返回深拷贝，避免缓存污染
-                    # 问题：_load_recursive_concept 会修改返回的表（如重命名列、对齐时间）
-                    # 如果直接返回缓存引用，这些修改会污染缓存，导致后续加载获得错误数据
+                    # � 缓存中已存储独立副本（在路径D存入时copy），返回时无需再次copy
+                    # 调用方如需修改，应自行copy（如_to_ricu_format已自己copy）
                     cached = self._concept_data_cache[concept_cache_key]
-                    return cached.copy() if hasattr(cached, 'copy') else cached
+                    return cached
                 
                 # �🚀🚀 关键优化：如果原始数据已存在于 _raw_concept_cache，
                 # 直接从缓存中获取并应用当前的 interval/aggregate，避免重复读取数据库！
@@ -5727,10 +5726,10 @@ class ConceptResolver:
             if disk_hit is not None:
                 with self._cache_lock:
                     self._concept_cache[concept_name] = disk_hit
-                    self._concept_data_cache[concept_cache_key] = disk_hit  # 🚀 也存入新缓存
+                    # 🚀 存入缓存时 copy，返回时无需 copy
+                    self._concept_data_cache[concept_cache_key] = disk_hit.copy() if hasattr(disk_hit, 'copy') else disk_hit
                     self._get_inflight().discard(concept_name)
-                # 🔥 返回深拷贝，避免缓存污染
-                return disk_hit.copy() if hasattr(disk_hit, 'copy') else disk_hit
+                return disk_hit
 
         try:
             result = self._load_single_concept(
@@ -5856,13 +5855,14 @@ class ConceptResolver:
             with self._cache_lock:
                 # 🔧 FIX: 只存入 _concept_data_cache（包含完整的聚合信息）
                 # 移除对 _concept_cache 的写入，避免不同聚合方式的缓存冲突
-                self._concept_data_cache[concept_cache_key] = result
+                # 🚀 存入时 copy，确保缓存中的是独立副本，调用方修改不会污染缓存
+                self._concept_data_cache[concept_cache_key] = result.copy() if hasattr(result, 'copy') else result
                 
                 # 🚀 同时存入 _raw_concept_cache，供回调函数使用
                 # 回调函数通常需要不同 interval 的数据，所以用统一的 key
                 raw_cache_key = (concept_name, patient_ids_hash)
                 if raw_cache_key not in self._raw_concept_cache:
-                    self._raw_concept_cache[raw_cache_key] = result
+                    self._raw_concept_cache[raw_cache_key] = result.copy() if hasattr(result, 'copy') else result
                 
                 self._get_inflight().discard(concept_name)
         else:

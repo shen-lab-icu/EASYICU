@@ -1717,7 +1717,7 @@ def convert_data_with_progress(data_path: str, database: str):
             
             # 检查分桶目录是否已存在
             bucket_dir = csv_file.parent / f"{stem}_bucket"
-            if bucket_dir.exists() and list(bucket_dir.glob('*.parquet')):
+            if bucket_dir.exists() and list(bucket_dir.glob('bucket_id=*')):
                 skipped += 1
                 with details_container:
                     st.caption(f"⏭️ {file_name} (bucket exists)")
@@ -1726,7 +1726,7 @@ def convert_data_with_progress(data_path: str, database: str):
                     config = BucketConfig(
                         num_buckets=num_buckets,
                         partition_col=partition_col,
-                        memory_limit='4GB'
+                        memory_limit='8GB'
                     )
                     result = convert_to_buckets(
                         source_path=csv_file,
@@ -1964,6 +1964,150 @@ def get_mock_params_with_cohort():
     return params
 
 
+# ============ 辅助函数：加载后按队列条件过滤已提取数据中的 None 值患者 ============
+
+def _post_filter_cohort_data(data: dict, database: str) -> dict:
+    """Remove patients from loaded concept data whose cohort-critical features are None.
+    
+    After load_concepts(), certain patients may have None for features like 'death'
+    or 'los_icu' because the concept extraction pipeline differs from the cohort
+    filter (e.g., multi-stay death attribution). This function removes such patients
+    so the exported data is consistent with the cohort criteria.
+    
+    Args:
+        data: dict of {concept_name: DataFrame} loaded by load_concepts
+        database: Database name for ID column detection
+    
+    Returns:
+        Filtered data dict with inconsistent patients removed
+    """
+    cf = st.session_state.get('cohort_filter', {})
+    if not cf or not data:
+        return data
+    
+    # Determine ID column
+    id_col_map = {
+        'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid',
+        'hirid': 'patientid', 'mimic': 'icustay_id', 'sic': 'CaseID',
+    }
+    id_col = id_col_map.get(database, 'stay_id')
+    
+    # Detect actual ID column from data
+    id_candidates = [id_col, 'stay_id', 'icustay_id', 'hadm_id',
+                     'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+    actual_id_col = None
+    for df in data.values():
+        if isinstance(df, pd.DataFrame):
+            for c in id_candidates:
+                if c in df.columns:
+                    actual_id_col = c
+                    break
+            if actual_id_col:
+                break
+    if not actual_id_col:
+        return data
+    
+    # Collect all patient IDs across all concepts
+    all_patient_ids = set()
+    for df in data.values():
+        if isinstance(df, pd.DataFrame) and actual_id_col in df.columns:
+            all_patient_ids.update(df[actual_id_col].dropna().unique())
+    
+    if not all_patient_ids:
+        return data
+    
+    # Determine which patients to exclude based on cohort filter + loaded data
+    exclude_ids = set()
+    
+    # 1. Survival filter: if survived=False (Deceased), patients must have death data
+    #    if survived=True (Survived), patients must NOT have death data
+    if cf.get('survived') is not None and 'death' in data:
+        death_df = data['death']
+        if isinstance(death_df, pd.DataFrame) and actual_id_col in death_df.columns:
+            # Get value column (last column or 'death')
+            val_col = 'death' if 'death' in death_df.columns else death_df.columns[-1]
+            # Patients with valid death data
+            death_valid_ids = set(
+                death_df.loc[death_df[val_col].notna(), actual_id_col].unique()
+            )
+            if not cf['survived']:
+                # Deceased filter: exclude patients without death data
+                exclude_ids |= (all_patient_ids - death_valid_ids)
+            else:
+                # Survived filter: exclude patients WITH death data
+                exclude_ids |= death_valid_ids
+    
+    # 2. Min LOS filter: patients must have valid los_icu >= threshold
+    if cf.get('los_min') is not None and 'los_icu' in data:
+        los_df = data['los_icu']
+        if isinstance(los_df, pd.DataFrame) and actual_id_col in los_df.columns:
+            val_col = 'los_icu' if 'los_icu' in los_df.columns else los_df.columns[-1]
+            los_valid = los_df[los_df[val_col].notna()].copy()
+            # LOS is in days, threshold is in hours
+            los_hours = pd.to_numeric(los_valid[val_col], errors='coerce') * 24
+            los_ok_ids = set(los_valid.loc[los_hours >= cf['los_min'], actual_id_col].unique())
+            # Exclude patients without valid LOS or LOS < threshold
+            exclude_ids |= (all_patient_ids - los_ok_ids)
+    
+    # 3. Age filter: patients must have valid age within range
+    if (cf.get('age_min') is not None or cf.get('age_max') is not None) and 'age' in data:
+        age_df = data['age']
+        if isinstance(age_df, pd.DataFrame) and actual_id_col in age_df.columns:
+            val_col = 'age' if 'age' in age_df.columns else age_df.columns[-1]
+            age_valid = age_df[age_df[val_col].notna()].copy()
+            age_vals = pd.to_numeric(age_valid[val_col], errors='coerce')
+            age_ok = pd.Series(True, index=age_valid.index)
+            if cf.get('age_min') is not None:
+                age_ok &= (age_vals >= cf['age_min'])
+            if cf.get('age_max') is not None:
+                age_ok &= (age_vals <= cf['age_max'])
+            age_ok_ids = set(age_valid.loc[age_ok, actual_id_col].unique())
+            exclude_ids |= (all_patient_ids - age_ok_ids)
+    
+    # 4. Gender filter: patients must have matching sex
+    if cf.get('gender') is not None and 'sex' in data:
+        sex_df = data['sex']
+        if isinstance(sex_df, pd.DataFrame) and actual_id_col in sex_df.columns:
+            val_col = 'sex' if 'sex' in sex_df.columns else sex_df.columns[-1]
+            sex_valid = sex_df[sex_df[val_col].notna()].copy()
+            sex_vals = sex_valid[val_col].astype(str).str.strip().str.upper()
+            target = cf['gender'].upper()
+            sex_ok_ids = set(sex_valid.loc[sex_vals.isin([target, target[0]]), actual_id_col].unique())
+            exclude_ids |= (all_patient_ids - sex_ok_ids)
+    
+    if not exclude_ids:
+        return data
+    
+    # Remove excluded patients from all concept DataFrames
+    n_excluded = len(exclude_ids)
+    n_total = len(all_patient_ids)
+    n_remaining = n_total - n_excluded
+    print(f"[COHORT POST-FILTER] Removing {n_excluded}/{n_total} patients with inconsistent cohort feature values")
+    
+    filtered_data = {}
+    for concept, df in data.items():
+        if isinstance(df, pd.DataFrame) and actual_id_col in df.columns:
+            filtered_data[concept] = df[~df[actual_id_col].isin(exclude_ids)].copy()
+        else:
+            filtered_data[concept] = df
+    
+    # 🔧 Update _cohort_stats so displayed message matches actual patient count
+    cohort_stats = st.session_state.get('_cohort_stats')
+    if cohort_stats:
+        cohort_stats['after'] = n_remaining
+        cohort_stats['excluded'] = cohort_stats['before'] - n_remaining
+        # Add post-filter detail
+        lang = st.session_state.get('language', 'en')
+        detail_label_en = f"Data consistency check: -{n_excluded}"
+        detail_label_cn = f"数据一致性检查: -{n_excluded}"
+        cohort_stats.setdefault('filter_details', []).append(
+            (detail_label_en, detail_label_cn, n_excluded)
+        )
+        st.session_state['_cohort_stats'] = cohort_stats
+    
+    return filtered_data
+
+
 # ============ 辅助函数：真正的 Cohort 筛选（读取 Parquet 元数据过滤患者） ============
 
 def apply_cohort_filter(data_path, database, candidate_ids=None):
@@ -2093,6 +2237,7 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
     if candidate_ids is not None:
         mask = icu_df[id_col_lower].isin(candidate_ids)
         icu_df = icu_df[mask].copy()
+        icu_df = icu_df.reset_index(drop=True)  # reset index so merge-based filters align
     
     total_before = len(icu_df)
     keep_mask = pd.Series(True, index=icu_df.index)
@@ -2104,10 +2249,11 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
                                      id_col_lower, subject_col_lower)
         if age_series is not None:
             before_count = keep_mask.sum()
+            age_valid = age_series.notna()
             if cf.get('age_min') is not None:
-                keep_mask &= (age_series >= cf['age_min'])
+                keep_mask &= age_valid & (age_series >= cf['age_min'])
             if cf.get('age_max') is not None:
-                keep_mask &= (age_series <= cf['age_max'])
+                keep_mask &= age_valid & (age_series <= cf['age_max'])
             excluded = int(before_count - keep_mask.sum())
             age_range = f"{cf.get('age_min', 0)}-{cf.get('age_max', '∞')}"
             filter_details.append((f"Age {age_range}", f"年龄 {age_range}", excluded))
@@ -2117,10 +2263,11 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
         first_mask = _get_first_icu_mask(icu_df, database, id_col_lower, subject_col_lower)
         if first_mask is not None:
             before_count = keep_mask.sum()
+            first_valid = first_mask.notna()
             if cf['first_icu_stay']:
-                keep_mask &= first_mask
+                keep_mask &= first_valid & first_mask.fillna(False).astype(bool)
             else:
-                keep_mask &= ~first_mask
+                keep_mask &= first_valid & ~first_mask.fillna(True).astype(bool)
             excluded = int(before_count - keep_mask.sum())
             en_label = "First ICU stay only" if cf['first_icu_stay'] else "Non-first ICU stay only"
             cn_label = "仅首次ICU入住" if cf['first_icu_stay'] else "仅非首次ICU入住"
@@ -2131,7 +2278,7 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
         los_series = _get_los_hours_series(icu_df, database)
         if los_series is not None:
             before_count = keep_mask.sum()
-            keep_mask &= (los_series >= cf['los_min'])
+            keep_mask &= los_series.notna() & (los_series >= cf['los_min'])
             excluded = int(before_count - keep_mask.sum())
             filter_details.append((f"LOS ≥ {cf['los_min']}h", f"住院时长 ≥ {cf['los_min']}h", excluded))
     
@@ -2141,7 +2288,7 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
                                      id_col_lower, subject_col_lower)
         if sex_series is not None:
             before_count = keep_mask.sum()
-            keep_mask &= (sex_series == cf['gender'])
+            keep_mask &= sex_series.notna() & (sex_series == cf['gender'])
             excluded = int(before_count - keep_mask.sum())
             gender_en = "Male" if cf['gender'] == 'M' else "Female"
             gender_cn = "男性" if cf['gender'] == 'M' else "女性"
@@ -2153,10 +2300,12 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
                                          id_col_lower, subject_col_lower)
         if death_series is not None:
             before_count = keep_mask.sum()
+            death_valid = death_series.notna()
+            death_bool = pd.array(death_series.fillna(False), dtype=bool)
             if cf['survived']:
-                keep_mask &= ~death_series  # survived = not dead
+                keep_mask &= death_valid & ~death_bool  # survived = known not dead
             else:
-                keep_mask &= death_series   # deceased = dead
+                keep_mask &= death_valid & death_bool   # deceased = known dead
             excluded = int(before_count - keep_mask.sum())
             en_label = "Survived only" if cf['survived'] else "Deceased only"
             cn_label = "仅存活" if cf['survived'] else "仅死亡"
@@ -6426,6 +6575,26 @@ def load_data():
                         'before': n_before, 'after': n_after, 'excluded': n_before - n_after,
                         'filter_details': cohort_result.get('filter_details', []),
                     }
+                    # 🚫 Zero patients after cohort filter — abort extraction
+                    if n_after == 0:
+                        lang = st.session_state.get('language', 'en')
+                        details_parts = []
+                        for fd in cohort_result.get('filter_details', []):
+                            label = fd[0] if lang == 'en' else fd[1]
+                            details_parts.append(f"{label} (excluded {fd[2]})")
+                        details_str = ", ".join(details_parts) if details_parts else ""
+                        if lang == 'en':
+                            msg = f"No patients meet the cohort criteria. {n_before} candidates were all excluded."
+                            if details_str:
+                                msg += f" Filters applied: {details_str}."
+                            msg += " Please adjust your cohort filters in Step 2 and try again."
+                        else:
+                            msg = f"没有患者满足队列筛选条件。{n_before} 名候选患者全部被排除。"
+                            if details_str:
+                                msg += f" 已应用的筛选条件: {details_str}。"
+                            msg += " 请在步骤2中调整筛选条件后重试。"
+                        st.error(msg)
+                        return
                 elif candidate_ids is not None:
                     # No cohort filter active, use the candidate set directly
                     patient_ids_filter = {id_col: candidate_ids}
@@ -6527,6 +6696,10 @@ def load_data():
                 st.warning(warn_msg)
                 return
             
+            # 🔧 POST-FILTER: Remove patients whose cohort-critical features are None
+            database = st.session_state.get('database', 'miiv')
+            data = _post_filter_cohort_data(data, database)
+            
             st.session_state.loaded_concepts = data
             
             # 获取患者列表 - 统计所有患者数，但UI选择器限制显示数量
@@ -6610,6 +6783,15 @@ def load_data_for_preview(max_patients: int = 50):
                     filtered_ids = cohort_result['filtered_ids']
                     id_col = cohort_id_col
                     patient_ids_filter = {id_col: filtered_ids}
+                    # 🚫 Zero patients after cohort filter — abort preview
+                    if len(filtered_ids) == 0:
+                        lang = st.session_state.get('language', 'en')
+                        n_before = len(candidate_ids) if candidate_ids else 0
+                        if lang == 'en':
+                            st.error(f"No patients meet the cohort criteria. {n_before} candidates were all excluded. Please adjust your cohort filters in Step 2.")
+                        else:
+                            st.error(f"没有患者满足队列筛选条件。{n_before} 名候选患者全部被排除。请在步骤2中调整筛选条件。")
+                        return
                 elif candidate_ids is not None:
                     patient_ids_filter = {id_col: candidate_ids}
             except Exception as _cohort_err:
@@ -6678,6 +6860,10 @@ def load_data_for_preview(max_patients: int = 50):
             warn_msg = "⚠️ Failed to load any data" if lang == 'en' else "⚠️ 未能加载任何数据"
             st.warning(warn_msg)
             return
+        
+        # 🔧 POST-FILTER: Remove patients whose cohort-critical features are None
+        database = st.session_state.get('database', 'miiv')
+        data = _post_filter_cohort_data(data, database)
         
         # 获取患者列表并限制数量
         patient_ids = set()
@@ -12276,7 +12462,7 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
         file_size_mb = csv_file.stat().st_size / (1024 * 1024)
         
         try:
-            if bucket_dir.exists() and list(bucket_dir.glob('*.parquet')) and not overwrite:
+            if bucket_dir.exists() and list(bucket_dir.glob('bucket_id=*')) and not overwrite:
                 with details:
                     st.caption(f"⏭️ {csv_file.name} (bucket exists)")
                 processed_size_mb += file_size_mb
@@ -12947,6 +13133,26 @@ def execute_sidebar_export():
                         'before': n_before, 'after': n_after, 'excluded': n_before - n_after,
                         'filter_details': cohort_result.get('filter_details', []),
                     }
+                    # 🚫 Zero patients after cohort filter — abort export
+                    if n_after == 0:
+                        lang = st.session_state.get('language', 'en')
+                        details_parts = []
+                        for fd in cohort_result.get('filter_details', []):
+                            label = fd[0] if lang == 'en' else fd[1]
+                            details_parts.append(f"{label} (excluded {fd[2]})")
+                        details_str = ", ".join(details_parts) if details_parts else ""
+                        if lang == 'en':
+                            msg = f"No patients meet the cohort criteria. {n_before} candidates were all excluded."
+                            if details_str:
+                                msg += f" Filters applied: {details_str}."
+                            msg += " Please adjust your cohort filters in Step 2 and try again."
+                        else:
+                            msg = f"没有患者满足队列筛选条件。{n_before} 名候选患者全部被排除。"
+                            if details_str:
+                                msg += f" 已应用的筛选条件: {details_str}。"
+                            msg += " 请在步骤2中调整筛选条件后重试。"
+                        st.error(msg)
+                        return
                 elif candidate_ids is not None:
                     patient_ids_filter = {id_col: candidate_ids}
                     st.session_state['_cohort_stats'] = None
@@ -13249,6 +13455,10 @@ def execute_sidebar_export():
                 warn_msg = f"⚠️ Batch loading failed: {e}" if lang == 'en' else f"⚠️ 批量加载失败: {e}"
                 st.warning(warn_msg)
                 data = {}
+        
+        # 🔧 POST-FILTER: Remove patients whose cohort-critical features are None
+        database = st.session_state.get('database', 'miiv')
+        data = _post_filter_cohort_data(data, database)
         
         # 按模块分组导出（将同一分组的特征合并为宽表）
         merge_msg = "**Merging and exporting by module...**" if lang == 'en' else "**正在按模块合并导出...**"
