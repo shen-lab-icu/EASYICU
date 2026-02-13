@@ -745,7 +745,6 @@ CONCEPT_DICTIONARY = {
     'sofa2_renal': ('SOFA-2 Renal', 'SOFA-2肾脏评分', '0-4'),
     
     # Sepsis 诊断
-    'sep3': ('Sepsis-3 Diagnosis (Default = SOFA-1 + Suspected Infection)', 'Sepsis-3诊断 (默认=传统SOFA+疑似感染)', 'boolean'),
     'sep3_sofa1': ('Sepsis-3 (SOFA-1 based)', 'Sepsis-3诊断 (基于传统SOFA)', 'boolean'),
     'sep3_sofa2': ('Sepsis-3 (SOFA-2 based)', 'Sepsis-3诊断 (基于SOFA-2, 2025新标准)', 'boolean'),
     'susp_inf': ('Suspected Infection (ICD or Abx+Culture timing)', '疑似感染 (ICD诊断码或抗生素+培养时间窗)', 'boolean'),
@@ -845,7 +844,6 @@ CONCEPT_DESCRIPTIONS = {
     'sofa2_renal': ('Renal: creatinine and urine output (6h/12h/24h windows), score 4 for RRT or meeting RRT criteria', '肾脏：基于肌酐和尿量（6h/12h/24h窗口），接受RRT或满足RRT标准则为4分'),
     
     # Sepsis
-    'sep3': ('Sepsis-3 diagnosis (default=SOFA-1): suspected infection + SOFA ≥2 point increase from baseline. Combines susp_inf and sofa concepts.', 'Sepsis-3诊断（默认=传统SOFA）：疑似感染 + SOFA较基线升高≥2分。由susp_inf和sofa概念组合而成'),
     'sep3_sofa2': ('Sepsis-3 diagnosis: suspected infection + SOFA-2 ≥2 point increase from baseline', '基于SOFA-2的Sepsis-3诊断：疑似感染 + SOFA-2较基线升高≥2分'),
     'sep3_sofa1': ('Sepsis-3 diagnosis: suspected infection + traditional SOFA ≥2 point increase', '基于传统SOFA的Sepsis-3诊断：疑似感染 + SOFA较基线升高≥2分'),
     'susp_inf': ('Suspected infection: (1) ICD infection diagnosis codes (eICU only) OR (2) antibiotics started within 72h of culture OR culture within 24h of antibiotics. Combines infection_icd, abx, and samp concepts.', '疑似感染：(1) ICD感染诊断码（仅eICU可用）或 (2) 培养后72小时内开始抗生素 或 抗生素后24小时内进行培养。由infection_icd、abx和samp概念组合而成'),
@@ -961,7 +959,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'sofa1_score': ['sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal'],
     'sepsis3_sofa2': ['sep3_sofa2'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
-    'sepsis_shared': ['sep3', 'susp_inf', 'infection_icd', 'samp'],  # 包含sep3默认诊断
+    'sepsis_shared': ['susp_inf', 'infection_icd', 'samp'],  # Sepsis共享概念（已移除sep3）
     'vitals': ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp'],  # 🔧 etco2 移到 ventilator
     'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp'],
     'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps'],
@@ -2021,23 +2019,29 @@ def _post_filter_cohort_data(data: dict, database: str) -> dict:
     # Determine which patients to exclude based on cohort filter + loaded data
     exclude_ids = set()
     
-    # 1. Survival filter: if survived=False (Deceased), patients must have death data
-    #    if survived=True (Survived), patients must NOT have death data
+    # 1. Survival filter: check death column value
+    #    Mock data: death=0 (survived) or death=1 (deceased) for ALL patients
+    #    Real data: death column may only exist for deceased patients (NaN = survived)
     if cf.get('survived') is not None and 'death' in data:
         death_df = data['death']
         if isinstance(death_df, pd.DataFrame) and actual_id_col in death_df.columns:
             # Get value column (last column or 'death')
             val_col = 'death' if 'death' in death_df.columns else death_df.columns[-1]
-            # Patients with valid death data
-            death_valid_ids = set(
-                death_df.loc[death_df[val_col].notna(), actual_id_col].unique()
-            )
+            # Convert death values to numeric for comparison
+            death_valid = death_df[death_df[val_col].notna()].copy()
+            death_vals = pd.to_numeric(death_valid[val_col], errors='coerce')
+            
+            # Patients who died (death value == 1 or True)
+            died_ids = set(death_valid.loc[death_vals == 1, actual_id_col].unique())
+            # Patients who survived (death value == 0 or False, or no death record)
+            survived_ids = all_patient_ids - died_ids
+            
             if not cf['survived']:
-                # Deceased filter: exclude patients without death data
-                exclude_ids |= (all_patient_ids - death_valid_ids)
+                # Deceased filter: keep only patients who died
+                exclude_ids |= survived_ids
             else:
-                # Survived filter: exclude patients WITH death data
-                exclude_ids |= death_valid_ids
+                # Survived filter: keep only patients who survived
+                exclude_ids |= died_ids
     
     # 2. Min LOS filter: patients must have valid los_icu >= threshold
     if cf.get('los_min') is not None and 'los_icu' in data:
@@ -2073,8 +2077,13 @@ def _post_filter_cohort_data(data: dict, database: str) -> dict:
             val_col = 'sex' if 'sex' in sex_df.columns else sex_df.columns[-1]
             sex_valid = sex_df[sex_df[val_col].notna()].copy()
             sex_vals = sex_valid[val_col].astype(str).str.strip().str.upper()
-            target = cf['gender'].upper()
-            sex_ok_ids = set(sex_valid.loc[sex_vals.isin([target, target[0]]), actual_id_col].unique())
+            target = cf['gender'].upper()  # 'M' or 'F'
+            # Match both short ('M','F') and long ('MALE','FEMALE') formats
+            if target == 'M':
+                target_variants = {'M', 'MALE', 'MAN', 'MÄNNLICH'}
+            else:
+                target_variants = {'F', 'FEMALE', 'WOMAN', 'WEIBLICH', 'VROUW', 'W'}
+            sex_ok_ids = set(sex_valid.loc[sex_vals.isin(target_variants), actual_id_col].unique())
             exclude_ids |= (all_patient_ids - sex_ok_ids)
     
     if not exclude_ids:
@@ -4589,15 +4598,8 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                     })
         data['other_vaso'] = pd.DataFrame(other_vaso_records) if other_vaso_records else pd.DataFrame(columns=['stay_id', 'time', 'other_vaso'])
     
-    # 8. sep3: Sepsis-3 诊断（sep3_sofa1 的别名）
-    if 'sep3_sofa1' in data and not data['sep3_sofa1'].empty:
-        data['sep3'] = data['sep3_sofa1'].copy()
-        data['sep3'] = data['sep3'].rename(columns={'sep3_sofa1': 'sep3'})
-    else:
-        data['sep3'] = pd.DataFrame(columns=['stay_id', 'time', 'sep3'])
-    
-    # 🔧 已删除冗余别名概念（2025-02-06）：与 CONCEPT_GROUPS_INTERNAL 保持一致
-    # 删除: sepsis_sofa2 (sep3_sofa2的别名), sep3 (sep3_sofa1的别名)
+    # 🔧 已删除 sep3 别名概念（2026-02-13）：不再提取 sep3 特征
+    # 保留 sep3_sofa1 和 sep3_sofa2 作为独立的 Sepsis-3 诊断概念
     
     return data, patient_ids
 
@@ -9864,7 +9866,7 @@ def render_quality_page():
         # 循环衰竭
         'circ_failure', 'circ_event',
         # Sepsis-3 诊断
-        'sep3_sofa2', 'sep3_sofa1', 'sep3', 'sepsis_sofa2',
+        'sep3_sofa2', 'sep3_sofa1', 'sepsis_sofa2',
         # 感染相关
         'susp_inf', 'infection_icd', 'samp',
         # 肾替代治疗
@@ -10184,7 +10186,7 @@ def render_quality_page():
                 # 循环衰竭
                 'circ_failure', 'circ_event',
                 # Sepsis-3 诊断
-                'sep3_sofa2', 'sep3_sofa1', 'sep3', 'sepsis_sofa2',
+                'sep3_sofa2', 'sep3_sofa1', 'sepsis_sofa2',
                 # 感染相关
                 'susp_inf', 'infection_icd', 'samp',
                 # 肾替代治疗
@@ -13051,6 +13053,11 @@ def execute_sidebar_export():
             skip_info = f"⏭️ Skipping {skip_count} concepts (files exist), exporting {load_count} concepts" if lang == 'en' else f"⏭️ 跳过 {skip_count} 个概念（文件已存在），导出 {load_count} 个概念"
             st.info(skip_info)
         
+        # 🔧 FIX: 初始化变量，避免 demo 模式下引用未定义变量
+        unsupported_concepts = []
+        empty_concepts = []
+        failed_concepts = []
+        
         if use_mock:
             # 生成模拟数据并导出
             gen_msg = "**Generating mock data...**" if lang == 'en' else "**正在生成模拟数据...**"
@@ -14016,6 +14023,9 @@ def execute_sidebar_export():
                     elif file_path.endswith('.csv'):
                         # 只读取列名，不读取全部数据
                         temp_df = pd.read_csv(file_path, nrows=0)
+                    elif file_path.endswith('.xlsx'):
+                        # 🔧 FIX (2026-02-13): xlsx 文件也需要统计列名
+                        temp_df = pd.read_excel(file_path, nrows=0)
                     else:
                         continue
                     for col in temp_df.columns:
