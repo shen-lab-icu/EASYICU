@@ -1,183 +1,219 @@
+[**中文版 README**](README_zh.md)
+
 # EasyICU
 
-> 🏥 面向多公开 ICU 数据库的统一、高效、临床友好型数据提取与可视化框架
+> A unified, high-performance, clinician-friendly framework for data extraction and visualization across multiple public ICU databases.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/shen-lab-icu/pyricu)
 
-EasyICU 是一个专为重症监护室 (ICU) 数据分析设计的 Python 工具包。它通过数据库抽象层统一处理 6 个主流公开 ICU 数据库，支持 166种 标准化临床概念的自动提取，并提供基于 Web 的可视化界面，使非编程背景的临床研究人员也能高效完成队列定义、特征筛选与数据质量审查。
+EasyICU is a Python toolkit designed for intensive care unit (ICU) data analysis. Through a database abstraction layer, it provides unified access to **6 major public ICU databases**, supports automated extraction of **166 standardized clinical concepts**, and offers a **web-based visualization interface** — enabling clinical researchers without programming backgrounds to efficiently perform cohort definition, feature selection, and data quality review.
 
-## ✨ 核心特性
+## ✨ Key Features
 
-**🎯 统一的多数据库临床概念提取** — EasyICU 将「临床概念」作为特征工程的基本单位，通过语义建模取代传统的静态变量映射。系统支持从 MIMIC-IV、MIMIC-III、eICU、AmsterdamUMCdb、HiRID、SICdb 六个主流公开 ICU 数据库中提取 166 标准化临床概念，并率先实现了 SOFA-2 的自动化计算。
+**🎯 Unified Multi-Database Clinical Concept Extraction** — EasyICU treats *clinical concepts* as the fundamental unit of feature engineering, replacing traditional static variable mappings with semantic modeling. The system extracts 166 standardized clinical concepts from six major public ICU databases — MIMIC-IV, MIMIC-III, eICU-CRD, AmsterdamUMCdb, HiRID, and SICdb — and is the first to implement automated computation of the **SOFA-2** score.
 
-**🌐 面向临床用户的可视化交互界面** — EasyICU 集成了基于 Web 的图形化操作界面，旨在降低 EHR 数据分析的技术门槛。临床用户无需编程即可完成队列定义、特征选择、时间窗配置和数据质量审查，系统将患者的时序数据整合为统一视图，支持从个体病例到群体分析的多维度审阅。
+**🌐 Clinician-Oriented Visual Interface** — EasyICU integrates a web-based graphical interface designed to lower the technical barrier for EHR data analysis. Clinicians can perform cohort definition, feature selection, time-window configuration, and data quality review without writing code. The system consolidates patient time-series data into a unified view, supporting perspectives from individual case review to population-level analysis.
 
-**⚡ 高性能计算优化** — 针对 ICU 数据高频、高维、稀疏的特点，EasyICU 引入多种性能优化策略，确保在 16GB 内存设备上稳定运行。
+**⚡ High-Performance Computing Optimizations** — Tailored for the high-frequency, high-dimensional, and sparse nature of ICU data, EasyICU incorporates multiple performance optimization strategies to ensure stable operation on machines with as little as **16 GB of RAM**.
 
 ---
 
-## 快速开始指南
+## Quick Start Guide
+
+### Step 1: Install Anaconda
+
+1. **Download Anaconda**
+   Visit the [Anaconda website](https://www.anaconda.com/download) to download the latest version.
+
+   > 💡 **Lightweight alternative:** If disk space is limited, use [Miniconda](https://docs.conda.io/en/latest/miniconda.html) instead.
+
+2. **Install Anaconda**
+   - Run the installer.
+   - (Optional) Click "Browse" to change the installation directory.
+   - Check "Add Anaconda to my PATH environment variable".
+   - Click "Next" to complete the installation.
 
 
-### 第一步：安装 Anaconda
+### Step 2: Install EasyICU
 
-1. **下载 Anaconda**  
-   访问 [Anaconda 官网](https://www.anaconda.com/download) 下载 Anaconda 最新版本
-   
-   > 💡 **轻量替代方案**: 如果 存储空间紧张，可使用 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)
-
-2. **安装 Anaconda**  
-   - 打开安装包
-   - 点击 "Browse" 修改安装目录
-   - 勾选 "Add Anaconda to my PATH environment variable"
-   - 点击 "Next" 直到完成
-
-
-### 第二步：安装 PyRICU
-
-在 **Anaconda Prompt** 中执行：
+Open an **Anaconda Prompt** (or any terminal with conda activated) and run:
 
 ```bash
-# 使用git下载pyciu (若没有git，可直接在github官网下载压缩包后解压)
+# Clone the repository (or download and extract the ZIP from GitHub)
 git clone "https://github.com/shen-lab-icu/pyricu.git"
 
-#在pyicu安装路径输入
+# Navigate into the project directory and install
+cd pyricu
 pip install -e ".[all]"
 ```
 
-### 第三步：启动 Web 应用
+### Step 3: Launch the Web Application
 
 ```bash
-# 在 Anaconda Prompt 中输入：
 pyricu-webapp
 ```
 
-会有以下显示：
+You should see output similar to:
+
+```
 You can now view your Streamlit app in your browser.
-
 URL: http://localhost:8501
+```
 
-使用浏览器打开网址 `http://localhost:8501`，显示 EasyICU 界面。
+Open `http://localhost:8501` in your browser to access the EasyICU interface.
 
-### 第四步：准备数据
+### Step 4: Obtain ICU Data
 
-1. **下载 ICU 数据库**（需要先申请权限）
-   - MIMIC-III: https://physionet.org/content/mimiciii/
-   - MIMIC-IV: https://physionet.org/content/mimiciv/
-   - eICU: https://physionet.org/content/eicu-crd/
-   - AmsterdamUMCdb: https://amsterdammedicaldatascience.nl/
-   - HiRID: https://hirid.intensivecare.ai/
-   - SICdb: https://physionet.org/content/sicdb/
+1. **Download ICU databases** (access credentials required):
+   | Database | URL |
+   |----------|-----|
+   | MIMIC-III | https://physionet.org/content/mimiciii/ |
+   | MIMIC-IV | https://physionet.org/content/mimiciv/ |
+   | eICU-CRD | https://physionet.org/content/eicu-crd/ |
+   | AmsterdamUMCdb | https://amsterdammedicaldatascience.nl/ |
+   | HiRID | https://hirid.intensivecare.ai/ |
+   | SICdb | https://physionet.org/content/sicdb/ |
 
-2. **解压数据到本地目录**
+2. **Extract the data** to a local directory.
 
-### 第五步：数据转换
+### Step 5: Data Conversion
 
- **Web 界面转换**
-   - 点击左侧 **⚙️ 管理** 按钮进入数据管理模式
-   - 输入数据目录路径
-   - 点击 **转换** 按钮，系统自动：
-     - 将 CSV/CSV.GZ 转换为 Parquet 格式
-     - 对大表（chartevents、labevents 等）的读取进行优化
-   - 转换完成后刷新页面
+1. Enter the path to your data directory in the web interface.
+2. The system automatically detects the data format.
+   - If the data is **not in Parquet format**, a conversion prompt will appear.
+3. Click the **Convert** button. The system will:
+   - Convert **CSV / CSV.GZ** files to **Parquet** format.
+   - Apply read-performance optimizations for large tables (e.g., `chartevents`, `labevents`).
+4. Refresh the page after conversion to load the new data.
 
-### 第六步：队列选择 (Cohort Selection)
-
-1. 在 Web 界面左侧选择 **🎯 队列**
-2. 设置筛选条件：
-   - **患者数量限制** - 设为 0 表示全部患者
-   - **ICU 住院时长** - 如 ≥24 小时
-   - **年龄范围** - 如 18-90 岁
-   - **排除条件** - 如排除二次入院
-3. 点击 **应用筛选** 查看符合条件的患者数
-
-### 第七步：特征选择 (Select Features)
-
-1. 在 Web 界面左侧选择 **📊 特征**
-2. 按类别勾选需要的特征：
-   - **生命体征** (hr, sbp, dbp, map, temp, resp, spo2)
-   - **实验室检查** (bili, crea, glu, plt, wbc...)
-   - **评分系统** (sofa, sofa2, qsofa, sirs, sep3...)
-   - **血管活性药物** (norepi_rate, dopa_rate...)
-3. 设置时间参数：
-   - **时间间隔** - 如 1 小时
-   - **聚合方式** - mean / median / first / last
-
-### 第八步：批量导出
-
-1. 在 Web 界面选择 **📤 导出**
-2. 选择导出格式：
-   - **Parquet** - 推荐，文件小、加载快
-   - **CSV** - 通用格式，可用 Excel 打开
-   - **Excel** - 直接用 Excel 打开，但文件较大
-3. 点击 **开始导出**，文件保存到指定目录
-
-### 第九步：可视化分析
-
-1. **快速可视化 (Quick Visualization)**
-   - 选择患者 ID 和特征
-   - 查看时间序列图、分布直方图
-   - 支持多特征叠加对比
-
-2. **队列分析 (Cohort Analysis)**
-   - 查看队列人口统计学特征
-   - 生成特征相关性热图
-   - 导出分析报告
+<img width="1931" height="956" alt="Data Conversion" src="https://github.com/user-attachments/assets/86ea826b-6a0f-491a-b967-c5a7ebdfaa5b" />
 
 ---
 
-## 🚀 更进一步 (开发者 / 高级用户)
+### Step 6: Cohort Selection
+
+1. Click **Cohort Selection** in the left sidebar.
+2. Configure inclusion/exclusion criteria, for example:
+   - **ICU length of stay** — e.g., ≥ 24 hours
+   - **Age range** — e.g., 18–90 years
+   - **First ICU admission only** — to exclude readmissions
+   - **Sex**
+   - **In-hospital mortality**
+3. Click **Apply Filter**.
+4. The interface displays the number of patients matching the criteria.
+
+<img width="1931" height="736" alt="Cohort Selection" src="https://github.com/user-attachments/assets/628caf50-bed3-4918-b36f-5930464e9fb7" />
 
 ---
+
+### Step 7: Feature Selection
+
+1. Click **Select Features** in the left sidebar.
+2. Check the desired clinical features grouped by category.
+3. The dictionary panel on the right provides feature definitions and variable mapping details for reference.
+
+<img width="1931" height="1018" alt="Feature Selection" src="https://github.com/user-attachments/assets/f37fc262-b0e8-4894-8a08-2614614f4f18" />
+
+---
+
+### Step 8: Batch Data Export
+
+1. Click **Export Data** in the left sidebar.
+2. Choose an export format and output path:
+
+   | Format | Pros |
+   |--------|------|
+   | **Parquet** (recommended) | Small file size, fast I/O |
+   | **CSV** | Universal, compatible with Excel and most statistics tools |
+   | **Excel** | Opens directly in spreadsheet software; larger file size |
+
+3. Set the number of patients to export.
+4. Click **Start Export**.
+5. Exported files are saved to the specified directory.
+
+<img width="4249" height="2241" alt="Batch Export" src="https://github.com/user-attachments/assets/9575d396-14ef-4e02-a4ac-a2a6222b1776" />
+
+---
+
+### Step 9: Visualization & Analysis
+
+#### Quick Visualization
+
+The system provides interactive visualization tools for rapid data exploration:
+
+- **Data Tables Explorer** — Browse loaded data by module with sorting and filtering.
+- **Time Series Analysis** — Overlay multiple feature trends with interactive zoom and custom aggregation.
+- **Patient Overview** — Comprehensive clinical trajectory for individual patients, highlighting key events and indicator changes.
+- **Data Quality Assessment** — Missing-rate analysis, temporal coverage evaluation, and completeness statistics.
+
+---
+
+#### Cohort Analysis
+
+The system supports statistical analysis of filtered research cohorts:
+
+- **Group Comparison Analysis** — Multiple statistical tests available.
+- **Multi-Database Feature Distribution** — Compare feature distributions across different ICU databases.
+- **Cohort Dashboard** — Interactive display of demographics, clinical outcomes, and key indicators.
+
+---
+
+#### Visualization Example
+
+<img width="3051" height="1823" alt="Quick Visualization Example" src="https://github.com/user-attachments/assets/09c64137-9c6a-401e-a1d0-fe358ea458de" />
+
+---
+
+## 🚀 Going Further (Developers / Advanced Users)
 
 ## 💻 Python API
 
-### Easy API - 一行代码
+### Easy API — One-Liners
 
 ```python
 from pyricu import load_sofa, load_sofa2, load_vitals, load_labs
 
-# 加载 SOFA 评分
+# Load SOFA scores
 sofa = load_sofa(
     database='miiv',
     data_path='/path/to/mimic-iv',
     patient_ids=[30000123, 30000456]
 )
 
-# 加载 SOFA-2 (2025 新标准)
+# Load SOFA-2 (2025 revised criteria)
 sofa2 = load_sofa2(
     database='miiv',
     data_path='/path/to/mimic-iv',
     patient_ids=[30000123],
-    keep_components=True  # 保留各器官分数
+    keep_components=True  # retain organ sub-scores
 )
 
-# 加载生命体征
+# Load vital signs
 vitals = load_vitals(database='miiv', data_path='/path/to/data')
 
-# 加载实验室检查
+# Load laboratory results
 labs = load_labs(database='miiv', data_path='/path/to/data')
 ```
 
-### Concept API - 灵活自定义
+### Concept API — Flexible & Customizable
 
 ```python
 from pyricu import load_concepts
 
-# 批量加载多个概念
+# Batch-load multiple concepts
 data = load_concepts(
     concepts=['hr', 'sbp', 'dbp', 'temp', 'resp', 'spo2'],
     database='miiv',
     data_path='/path/to/mimic-iv',
     patient_ids=[30000123],
-    interval='1h',       # 1小时对齐
-    aggregate='mean',    # 平均值聚合
+    interval='1h',       # align to 1-hour bins
+    aggregate='mean',    # aggregate with mean
     verbose=True
 )
 
-# 加载 Sepsis-3 诊断
+# Load Sepsis-3 diagnosis
 sepsis = load_concepts(
     'sep3',
     database='miiv',
@@ -185,23 +221,23 @@ sepsis = load_concepts(
 )
 ```
 
-### 专业模块函数
+### Domain-Specific Loaders
 
 ```python
 from pyricu import (
-    load_demographics,      # 人口统计学
-    load_outcomes,          # 结局指标
-    load_vitals_detailed,   # 详细生命体征
-    load_neurological,      # 神经系统评估
-    load_output,            # 输出量
-    load_respiratory,       # 呼吸系统
-    load_lab_comprehensive, # 全面实验室检查
-    load_blood_gas,         # 血气分析
-    load_hematology,        # 血液学检查
-    load_medications,       # 药物治疗
+    load_demographics,      # Demographics
+    load_outcomes,          # Clinical outcomes
+    load_vitals_detailed,   # Detailed vital signs
+    load_neurological,      # Neurological assessments
+    load_output,            # Fluid output
+    load_respiratory,       # Respiratory parameters
+    load_lab_comprehensive, # Comprehensive lab panels
+    load_blood_gas,         # Arterial blood gas
+    load_hematology,        # Hematology
+    load_medications,       # Medications
 )
 
-# 示例：加载人口统计学
+# Example: load demographics
 demo = load_demographics(
     database='miiv',
     data_path='/path/to/data',
@@ -209,42 +245,28 @@ demo = load_demographics(
 )
 ```
 
-### 数据转换
+### Data Conversion (Programmatic)
 
-Web 应用会自动检测数据格式。如果检测到 CSV 文件，会提示一键转换：
+The web application detects CSV data automatically and offers one-click conversion. You can also convert programmatically:
 
 ```python
-# 命令行转换
 from pyricu.data_converter import DataConverter
 
 converter = DataConverter('/path/to/csv/data', database='miiv')
 converter.convert_all()
 ```
 
-## 📝 引用
+---
 
-如果在研究中使用 PyRICU，请引用：
+## 📄 License
 
-```bibtex
-@software{easyicu2026,
-  title = {EasyICU: Python Toolkit for ICU Data Analysis},
-  author = {Shen Lab ICU Analytics Team},
-  year = {2026},
-  url = {https://github.com/shen-lab-icu/pyricu},
-  version = {0.1.0}
-}
-```
-
-
-## 📄 许可证
-
-本项目采用 **MIT 许可证**。详见 [LICENSE](LICENSE) 文件。
+This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
 
 ---
 
 <div align="center">
 
-**⭐ 如果 EasyICU 对您有帮助，请给我们一个 Star！⭐**
+**⭐ If EasyICU is helpful for your research, please give us a Star! ⭐**
 
 Made with ❤️ for ICU researchers worldwide
 
