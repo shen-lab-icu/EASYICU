@@ -78,4 +78,5 @@ scripts/
 # 其他
 *.md
 !README.md
+!README_zh.md
 
