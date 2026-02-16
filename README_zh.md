@@ -8,11 +8,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/shen-lab-icu/pyricu)
 
-EasyICU 是一个专为重症监护室（ICU）数据分析设计的 Python 工具包。它通过数据库抽象层统一处理 **6 个主流公开 ICU 数据库**，支持 **166 种**标准化临床概念的自动提取，并提供基于 **Web 的可视化界面**，使非编程背景的临床研究人员也能高效完成队列定义、特征筛选与数据质量审查。
+EasyICU 是一个专为重症监护室（ICU）数据分析设计的 Python 工具包。它通过数据库抽象层统一处理 **6 个主流公开 ICU 数据库**，支持 **167 种**标准化临床概念的自动提取，并提供基于 **Web 的可视化界面**，使非编程背景的临床研究人员也能高效完成队列定义、特征筛选与数据质量审查。
 
 ## ✨ 核心特性
 
-**🎯 统一的多数据库临床概念提取** — EasyICU 将「临床概念」作为特征工程的基本单位，以语义建模取代传统的静态变量映射。系统支持从 MIMIC-IV、MIMIC-III、eICU-CRD、AmsterdamUMCdb、HiRID、SICdb 六个主流公开 ICU 数据库中提取 166 种标准化临床概念，并率先实现了 **SOFA-2** 评分的自动化计算。
+**🎯 统一的多数据库临床概念提取** — EasyICU 将「临床概念」作为特征工程的基本单位，以语义建模取代传统的静态变量映射。系统支持从 MIMIC-IV、MIMIC-III、eICU-CRD、AmsterdamUMCdb、HiRID、SICdb 六个主流公开 ICU 数据库中提取 167 种标准化临床概念，并率先实现了 **SOFA-2** 评分的自动化计算。
 
 **🌐 面向临床用户的可视化交互界面** — EasyICU 集成了基于 Web 的图形化操作界面，旨在降低 EHR 数据分析的技术门槛。临床用户无需编程即可完成队列定义、特征选择、时间窗配置和数据质量审查，系统将患者时序数据整合为统一视图，支持从个体病例到群体分析的多维度审阅。
 
