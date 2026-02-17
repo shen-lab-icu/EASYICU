@@ -2043,7 +2043,7 @@ def _post_filter_cohort_data(data: dict, database: str) -> dict:
                 # Survived filter: keep only patients who survived
                 exclude_ids |= died_ids
     
-    # 2. Min LOS filter: patients must have valid los_icu >= threshold
+    # 2. Min LOS filter: patients must have los >= threshold
     if cf.get('los_min') is not None and 'los_icu' in data:
         los_df = data['los_icu']
         if isinstance(los_df, pd.DataFrame) and actual_id_col in los_df.columns:
@@ -2052,22 +2052,21 @@ def _post_filter_cohort_data(data: dict, database: str) -> dict:
             # LOS is in days, threshold is in hours
             los_hours = pd.to_numeric(los_valid[val_col], errors='coerce') * 24
             los_ok_ids = set(los_valid.loc[los_hours >= cf['los_min'], actual_id_col].unique())
-            # Exclude patients without valid LOS or LOS < threshold
             exclude_ids |= (all_patient_ids - los_ok_ids)
     
-    # 3. Age filter: patients must have valid age within range
+    # 3. Age filter: patients must have age within range
     if (cf.get('age_min') is not None or cf.get('age_max') is not None) and 'age' in data:
         age_df = data['age']
         if isinstance(age_df, pd.DataFrame) and actual_id_col in age_df.columns:
             val_col = 'age' if 'age' in age_df.columns else age_df.columns[-1]
             age_valid = age_df[age_df[val_col].notna()].copy()
             age_vals = pd.to_numeric(age_valid[val_col], errors='coerce')
-            age_ok = pd.Series(True, index=age_valid.index)
+            age_mask = pd.Series(True, index=age_valid.index)
             if cf.get('age_min') is not None:
-                age_ok &= (age_vals >= cf['age_min'])
+                age_mask &= (age_vals >= cf['age_min'])
             if cf.get('age_max') is not None:
-                age_ok &= (age_vals <= cf['age_max'])
-            age_ok_ids = set(age_valid.loc[age_ok, actual_id_col].unique())
+                age_mask &= (age_vals <= cf['age_max'])
+            age_ok_ids = set(age_valid.loc[age_mask, actual_id_col].unique())
             exclude_ids |= (all_patient_ids - age_ok_ids)
     
     # 4. Gender filter: patients must have matching sex
@@ -2647,7 +2646,7 @@ def _pick_death_stay(merged, dead_mask, id_col, deathtime_col, intime_col, outti
 def _get_death_series(icu_df, database, patient_df, admission_df, id_col, subject_col):
     """Return a boolean Series: True where patient died in hospital/ICU.
     
-    IMPORTANT: This must match the PyRICU 'death' concept definition exactly,
+    IMPORTANT: This must match the EasyICU 'death' concept definition exactly,
     so that filtering for 'deceased' patients guarantees death=True in the output.
     
     Concept definitions (concept-dict.json):
@@ -5675,6 +5674,21 @@ def render_sidebar():
                 st.session_state.concept_checkboxes = {}
                 st.session_state.selected_groups = []
                 st.session_state.loaded_concepts = {}
+                # 🔧 FIX (2026-02-15): 重置采样参数，避免上次提取的 patient_limit/patient_ids 泄露到新提取
+                st.session_state.patient_limit = 1000  # 重置为默认值
+                st.session_state.patient_ids = []
+                st.session_state.all_patient_count = 0
+                # 🔧 FIX (2026-02-15): 清除 pyricu 内部缓存，避免上次提取的数据影响新提取
+                try:
+                    from pyricu.cache_manager import clear_pyricu_cache
+                    clear_pyricu_cache()
+                except Exception:
+                    pass
+                try:
+                    from pyricu.api import clear_global_loader
+                    clear_global_loader()
+                except Exception:
+                    pass
                 # 清理导出结果
                 if '_export_success_result' in st.session_state:
                     del st.session_state['_export_success_result']
@@ -5684,6 +5698,10 @@ def render_sidebar():
                     del st.session_state['_skipped_modules']
                 if '_overwrite_modules' in st.session_state:
                     del st.session_state['_overwrite_modules']
+                if '_exporting_in_progress' in st.session_state:
+                    del st.session_state['_exporting_in_progress']
+                if '_viz_import_export_auto_trigger' in st.session_state:
+                    del st.session_state['_viz_import_export_auto_trigger']
                 st.rerun()
             
             # 返回首页按钮
@@ -7461,7 +7479,7 @@ def render_home_extract_mode(lang):
             st.markdown('''
             <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
                 <h3 style="color: #0369a1; margin-bottom: 15px;">👈 Select Features in the Left Sidebar</h3>
-                <p style="margin-bottom: 15px;">EasyICU provides <b>168 comprehensive ICU clinical features</b> across 19 categories, covering:</p>
+                <p style="margin-bottom: 15px;">EasyICU provides <b>167 comprehensive ICU clinical features</b> across 19 categories, covering:</p>
                 <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
                     <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
                         <b style="color: #1d4ed8;">📊 Vital Signs</b>
@@ -7499,7 +7517,7 @@ def render_home_extract_mode(lang):
             st.markdown('''
             <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
                 <h3 style="color: #0369a1; margin-bottom: 15px;">👈 在左侧边栏选择特征</h3>
-                <p style="margin-bottom: 15px;">EasyICU 提供 <b>168 个 ICU 临床特征</b>（19 个类别），涵盖：</p>
+                <p style="margin-bottom: 15px;">EasyICU 提供 <b>167 个 ICU 临床特征</b>（19 个类别），涵盖：</p>
                 <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
                     <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
                         <b style="color: #1d4ed8;">📊 生命体征</b>
@@ -7913,7 +7931,7 @@ def render_home_extract_mode(lang):
         st.markdown('''
         <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
             <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
-                📚 <b>Reference Guide</b>: This dictionary contains all 168 ICU clinical features available in EasyICU, organized into 19 categories. 
+                📚 <b>Reference Guide</b>: This dictionary contains all 167 ICU clinical features available in EasyICU, organized into 19 categories. 
                 Each feature includes its code name, full description, and measurement unit. 
                 Use this to understand what data you're extracting and make informed selections.
                 Note that some features may not be available in all ICU databases.
@@ -7924,7 +7942,7 @@ def render_home_extract_mode(lang):
         st.markdown('''
         <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
             <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
-                📚 <b>参考指南</b>：本字典包含 EasyICU 提供的全部 168 个 ICU 临床特征，分为 19 个类别。
+                📚 <b>参考指南</b>：本字典包含 EasyICU 提供的全部 167 个 ICU 临床特征，分为 19 个类别。
                 每个特征包括代码名称、完整描述和测量单位。
                 使用此字典了解您正在提取的数据，做出明智的选择。
             </p>
@@ -7939,8 +7957,8 @@ def render_home_extract_mode(lang):
         st.markdown('''
         <div style="text-align:center;color:#aaa;font-size:0.85rem">
             <p>🏥 EasyICU - ICU Data Analysis Toolkit | 
-            📦 <a href="https://github.com/your-repo/pyricu" style="color:#4fc3f7">GitHub</a> | 
-            📖 <a href="#" style="color:#4fc3f7">Docs</a></p>
+            📦 <a href="https://github.com/shen-lab-icu/EASYICU" style="color:#4fc3f7">GitHub</a> | 
+            📖 <a href="https://github.com/shen-lab-icu/EASYICU/blob/main/README.md" style="color:#4fc3f7">Docs</a></p>
             <p>All data processing is done locally, no data is uploaded to any server 🔒</p>
         </div>
         ''', unsafe_allow_html=True)
@@ -7948,8 +7966,8 @@ def render_home_extract_mode(lang):
         st.markdown('''
         <div style="text-align:center;color:#aaa;font-size:0.85rem">
             <p>🏥 EasyICU - ICU 数据分析工具包 | 
-            📦 <a href="https://github.com/your-repo/pyricu" style="color:#4fc3f7">GitHub</a> | 
-            📖 <a href="#" style="color:#4fc3f7">文档</a></p>
+            📦 <a href="https://github.com/shen-lab-icu/EASYICU" style="color:#4fc3f7">GitHub</a> | 
+            📖 <a href="https://github.com/shen-lab-icu/EASYICU/blob/main/README.md" style="color:#4fc3f7">Docs</a></p>
             <p>所有数据处理均在本地完成，不会上传到任何服务器 🔒</p>
         </div>
         ''', unsafe_allow_html=True)
@@ -13087,6 +13105,20 @@ def execute_sidebar_export():
             # 加载真实数据并导出（批量并行加载）
             from pyricu import load_concepts
             import os
+            
+            # 🔧 FIX (2026-02-15): 每次导出前清除 pyricu 缓存，防止上次导出的患者数据泄漏
+            # 问题场景：用户先导出100患者到dir1，再导出"全部数据"到dir2
+            # 如果不清缓存，_concept_data_cache 中的旧数据可能被混入新导出
+            try:
+                from pyricu.cache_manager import clear_pyricu_cache
+                clear_pyricu_cache()
+            except Exception:
+                pass
+            try:
+                from pyricu.api import clear_global_loader
+                clear_global_loader()
+            except Exception:
+                pass
             
             # 🔧 FIX: 检查 data_path 是否有效（可视化模式导入数据后可能无效）
             data_path_str = st.session_state.get('data_path', '')
