@@ -1009,6 +1009,7 @@ class MultiDatabaseDistribution:
                 continue
             
             all_data = []
+            
             for concept in concepts:
                 try:
                     df = load_concepts(
@@ -1021,6 +1022,7 @@ class MultiDatabaseDistribution:
                     
                     if df is not None and not df.empty and concept in df.columns:
                         values = df[concept].dropna()
+                        
                         if len(values) > sample_size:
                             values = values.sample(n=sample_size, random_state=42)
                         
@@ -1033,7 +1035,8 @@ class MultiDatabaseDistribution:
                     continue
             
             if all_data:
-                result[db] = pd.concat(all_data, ignore_index=True)
+                combined = pd.concat(all_data, ignore_index=True)
+                result[db] = combined
         
         return result
     
