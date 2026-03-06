@@ -70,7 +70,7 @@ def _is_port_in_use(port: int) -> bool:
 
 def run_app(
     host: str = 'localhost',
-    port: int = 8501,
+    port: int = 8502,
     debug: bool = False,
     daemon: bool = False,
     background: bool = False,
@@ -99,6 +99,9 @@ def run_app(
         '--server.runOnSave', 'false',
         '--server.fileWatcherType', 'none',  # 禁用文件监视，减少资源占用
         '--browser.gatherUsageStats', 'false',
+        # 🔧 FIX (2026-02-18): 防止全量导出时 WebSocket 断连
+        '--server.websocketPingInterval', '60',  # 每60秒ping一次，保持连接
+        '--server.disconnectedSessionTTL', '3600',  # 断连后保持会话1小时
     ]
     
     if not debug:

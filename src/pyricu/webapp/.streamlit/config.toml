@@ -15,11 +15,22 @@ enableXsrfProtection = false
 fileWatcherType = "none"
 
 # 增加连接超时时间（秒）
-# 默认是 60 秒，设置为更长时间
 maxUploadSize = 200
 
 # 允许的最大消息大小（MB）
 maxMessageSize = 200
+
+# 🔧 FIX (2026-02-20): WebSocket 保活配置
+# 启用 WebSocket 压缩（减少带宽）
+enableWebsocketCompression = true
+
+# WebSocket ping 间隔（秒）— 保持连接活跃
+# 注意：浏览器端也有超时，Streamlit需要主动ping
+# 设为0由应用层通过线程keepalive保活
+# 不设置此项让 Streamlit 使用默认值（如果有的话）
+
+# 断连后会话保活时间（秒）— 设为1小时防止长任务中断
+disconnectedSessionTTL = 3600
 
 [browser]
 # 禁止自动打开浏览器

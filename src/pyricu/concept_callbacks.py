@@ -2619,33 +2619,27 @@ def _callback_sofa_score(
         id_cols_to_group = list(id_columns) if id_columns else []
         data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
         
-        # Infer interval from data (median time difference per patient)
+        # 🚀 Vectorized interval inference (replaces per-patient loop)
+        # cProfile: old per-patient loop contributed ~2s for 5000 patients
         if id_cols_to_group and len(data) > 1:
-            time_diffs = []
-            for _, group in data.groupby(id_cols_to_group):
-                if len(group) > 1:
-                    sorted_times = group[index_column].sort_values()
-                    diffs = sorted_times.diff().dropna()
-                    time_diffs.extend(diffs.tolist())
-            if time_diffs:
-                inferred_interval = pd.Series(time_diffs).median()
+            _diffs = data.groupby(id_cols_to_group, sort=False)[index_column].diff().dropna()
+            if pd.api.types.is_numeric_dtype(_diffs):
+                _pos = _diffs[_diffs > 0]
+            else:
+                _pos = _diffs[_diffs > pd.Timedelta(0)]
+            if len(_pos) > 0:
+                inferred_interval = _pos.median()
                 # Handle numeric (hours) vs timedelta
                 if isinstance(inferred_interval, (int, float)):
-                    # Numeric time in hours
                     interval = pd.Timedelta(hours=max(1, round(inferred_interval)))
                 else:
-                    # Timedelta
                     inferred_hours = round(inferred_interval.total_seconds() / 3600)
                     interval = pd.Timedelta(hours=max(1, inferred_hours))
                 
                 # Fill gaps with inferred interval
-                # Replicate R ricu's collapse() → fill_gaps() → expand() interaction:
-                # R's collapse() converts end to duration (max - min) as a win_tbl,
-                # but expand() misinterprets this duration as an absolute end time.
-                # This extends the grid from [min, max] to [min, max - min] per patient.
+                # Replicate R ricu's collapse() → fill_gaps() → expand() interaction
                 limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
                 if limits_df is not None and 'start' in limits_df.columns and 'end' in limits_df.columns:
-                    # R bug: grid_end = max_time - min_time (duration treated as absolute)
                     limits_df = limits_df.copy()
                     limits_df['end'] = limits_df['end'] - limits_df['start']
                 data = fill_gaps(
@@ -2751,26 +2745,21 @@ def _callback_sofa2_score(
         id_cols_to_group = list(id_columns) if id_columns else []
         data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
         
-        # Infer interval from data (same as SOFA-1)
+        # 🚀 Vectorized interval inference (same optimization as SOFA-1)
         if id_cols_to_group and len(data) > 1:
-            time_diffs = []
-            for _, group in data.groupby(id_cols_to_group):
-                if len(group) > 1:
-                    sorted_times = group[index_column].sort_values()
-                    diffs = sorted_times.diff().dropna()
-                    time_diffs.extend(diffs.tolist())
-            
-            if time_diffs:
-                inferred_interval = pd.Series(time_diffs).median()
-                # Handle numeric (hours) vs timedelta
+            _diffs = data.groupby(id_cols_to_group, sort=False)[index_column].diff().dropna()
+            if pd.api.types.is_numeric_dtype(_diffs):
+                _pos = _diffs[_diffs > 0]
+            else:
+                _pos = _diffs[_diffs > pd.Timedelta(0)]
+            if len(_pos) > 0:
+                inferred_interval = _pos.median()
                 if isinstance(inferred_interval, (int, float)):
                     interval = pd.Timedelta(hours=max(1, round(inferred_interval)))
                 else:
                     inferred_hours = round(inferred_interval.total_seconds() / 3600)
                     interval = pd.Timedelta(hours=max(1, inferred_hours))
                 
-                # Fill gaps with inferred interval
-                # ✅ FIX: Use default expand_forward=True to match ricu's symmetric timeline
                 limits_df = _compose_fill_limits(data, id_cols_to_group, index_column, ctx)
                 data = fill_gaps(
                     data,
@@ -4413,6 +4402,106 @@ def _callback_vent_ind(
 
     return event_result
 
+def _urine24_batch(
+    df: pd.DataFrame,
+    id_col: str,
+    time_col: str,
+    urine_col: str,
+    time_step: float,
+    window_steps: int,
+    min_steps: int,
+    step_factor: float,
+) -> pd.DataFrame:
+    """Batch-vectorized urine24 computation for all patients at once.
+    
+    🚀 Performance: Replaces per-patient loop (4796 calls to process_patient = 13.3s)
+    with batch operations:
+    - 1 groupby().agg() for patient stats
+    - 1 merge for urine values onto grid
+    - 1 groupby().rolling() for rolling sum
+    
+    Expected speedup: 13.3s → ~2-3s (5-6x faster)
+    
+    Args:
+        df: Input DataFrame with urine data
+        id_col: Patient ID column name
+        time_col: Time column name (numeric)
+        urine_col: Urine value column name
+        time_step: Time step size (in time column units)
+        window_steps: Rolling window size in steps (typically 24)
+        min_steps: Minimum window steps for non-NA output (typically 12)
+        step_factor: Scaling factor (typically 24.0)
+    """
+    # Step 1: Compute per-patient stats
+    stats = df.groupby(id_col)[time_col].agg(['min', 'max']).reset_index()
+    stats['ricu_end'] = stats['max'] - stats['min']  # ricu buggy behavior: duration as end
+    
+    # Step 2: Generate time grids for all patients (vectorized with numpy)
+    # Each patient needs: arange(start, ricu_end + step, step)
+    grid_sizes = np.maximum(1, np.floor(
+        (stats['ricu_end'].values - stats['min'].values) / time_step + 1
+    ).astype(int))
+    
+    # Handle edge case: ricu_end < start (duration = 0)
+    grid_sizes = np.where(stats['ricu_end'].values >= stats['min'].values, grid_sizes, 1)
+    
+    total_points = grid_sizes.sum()
+    
+    # Pre-allocate arrays for speed
+    all_times = np.empty(total_points, dtype=np.float64)
+    all_ids = np.empty(total_points, dtype=df[id_col].dtype)
+    
+    offset = 0
+    for i in range(len(stats)):
+        n = grid_sizes[i]
+        start = stats.iloc[i]['min']
+        end = stats.iloc[i]['ricu_end']
+        if end >= start:
+            times = np.arange(start, end + time_step * 0.5, time_step)[:n]
+        else:
+            times = np.array([start])
+            n = 1
+        actual_n = len(times)
+        all_times[offset:offset + actual_n] = times
+        all_ids[offset:offset + actual_n] = stats.iloc[i][id_col]
+        offset += actual_n
+    
+    full_grid = pd.DataFrame({
+        id_col: all_ids[:offset],
+        time_col: all_times[:offset],
+    })
+    
+    # Step 3: Merge original urine values onto grid (single merge!)
+    orig = df[[id_col, time_col, urine_col]].drop_duplicates([id_col, time_col])
+    full_grid = full_grid.merge(orig, on=[id_col, time_col], how='left')
+    full_grid[urine_col] = full_grid[urine_col].fillna(0.0)
+    full_grid = full_grid.sort_values([id_col, time_col]).reset_index(drop=True)
+    
+    # Step 4: Rolling sum using groupby().rolling() (single operation!)
+    rolling_sum = (
+        full_grid
+        .groupby(id_col, sort=True)[urine_col]
+        .rolling(window=window_steps, min_periods=min_steps, center=False)
+        .sum()
+    )
+    # Drop group level from MultiIndex to align with full_grid
+    if isinstance(rolling_sum.index, pd.MultiIndex):
+        rolling_sum = rolling_sum.droplevel(0)
+    rolling_sum_vals = rolling_sum.values
+    
+    # Step 5: Calculate urine24 = rolling_sum * step_factor / actual_window_length
+    cumcount = full_grid.groupby(id_col).cumcount().values + 1
+    actual_window_lens = np.minimum(cumcount, window_steps)
+    
+    full_grid['urine24'] = np.where(
+        (actual_window_lens >= min_steps) & np.isfinite(rolling_sum_vals),
+        rolling_sum_vals * step_factor / actual_window_lens,
+        np.nan
+    )
+    
+    return full_grid[[id_col, time_col, 'urine24']]
+
+
 def _callback_urine24(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -4496,22 +4585,40 @@ def _callback_urine24(
     min_steps = 12  # min_win = 12 hours
     step_factor = 24.0  # step_factor = 24
     
+    # Compute window size in integer steps (same for all patients)
+    if is_numeric_time:
+        if numeric_time_step >= 60:
+            window_steps = max(1, int(24.0 * 3600.0 / numeric_time_step))
+        else:
+            window_steps = int(24.0 / interval_hours)
+    else:
+        window_steps = int(pd.Timedelta(hours=24) / interval)
+    
+    n_patients = df[id_cols[0]].nunique() if id_cols else 1
+    
+    # 🚀 BATCH FAST PATH: process all patients in a single merge + rolling
+    # cProfile: per-patient loop (4796 calls to process_patient) = 13.3s
+    # Batch: single merge + single groupby().rolling() ≈ 2-3s
+    if id_cols and len(id_cols) == 1 and is_numeric_time and n_patients > 20:
+        try:
+            result_df = _urine24_batch(
+                df, id_cols[0], time_col, urine_col,
+                numeric_time_step, window_steps, min_steps, step_factor
+            )
+            output_cols = id_cols + [time_col, 'urine24']
+            available_cols = [c for c in output_cols if c in result_df.columns]
+            return _as_icutbl(
+                result_df[available_cols],
+                id_columns=urine_tbl.id_columns,
+                index_column=urine_tbl.index_column,
+                value_column="urine24"
+            )
+        except Exception:
+            pass  # Fall through to per-patient loop
+    
+    # === PER-PATIENT LOOP (fallback for small groups, datetime, multi-id) ===
     def process_patient(group):
-        """Process urine24 for a single patient.
-        
-        IMPORTANT: This replicates ricu's fill_gaps behavior where the collapse() function
-        returns a win_tbl with start=min and end=duration (not absolute end time).
-        When fill_gaps uses expand() with this win_tbl, it incorrectly treats the duration
-        as an absolute end time because 'end' is already in colnames, so the duration->end
-        calculation is skipped.
-        
-        For patient 141179 with urine times [11, 15, 23, 28]:
-        - collapse returns start=11, end=17 (duration = 28-11 = 17)
-        - fill_gaps erroneously generates seq(11, 17) = [11,12,13,14,15,16,17]
-        - This is different from the expected [11..28] range
-        
-        We replicate this behavior to match ricu's output exactly.
-        """
+        """Process urine24 for a single patient (ricu-compatible)."""
         group = group.sort_values(time_col).reset_index(drop=True)
         original_times = group[time_col].values
         original_urine = group[urine_col].values
@@ -4519,61 +4626,34 @@ def _callback_urine24(
         if len(original_times) == 0:
             return pd.DataFrame(columns=[time_col, urine_col, 'urine24'] + id_cols)
         
-        # Step 1: Get min and max times (ricu's collapse behavior)
-        start_time = original_times[0]  # min
-        actual_end_time = original_times[-1]  # max
-        
-        # CRITICAL: Match ricu's buggy behavior
-        # ricu's collapse() stores duration in 'end' column, but fill_gaps/expand
-        # mistakenly treats it as absolute end time when 'end' is already a column
-        # Duration = max - min
+        start_time = original_times[0]
+        actual_end_time = original_times[-1]
         duration = actual_end_time - start_time
         
-        # ricu uses this duration value directly as the end time (buggy behavior we need to match)
-        # So time_grid = range(start_time, duration)
-        # For patient 141179: start=11, duration=17, so grid = seq(11, 17) = [11..17]
+        # CRITICAL: Match ricu's buggy behavior
         if is_numeric_time:
-            # Use duration as the absolute end time (matching ricu's bug)
-            ricu_end_time = duration  # NOT start_time + duration
+            ricu_end_time = duration
             time_grid = np.arange(start_time, ricu_end_time + numeric_time_step, numeric_time_step)
         else:
             ricu_end_time = pd.Timedelta(hours=duration) if isinstance(duration, (int, float)) else duration
             time_grid = pd.date_range(start=start_time, end=start_time + ricu_end_time, freq=interval)
         
-        # Step 3: Build filled DataFrame with urine values
         filled_df = pd.DataFrame({time_col: time_grid})
-        
-        # Merge with original urine values
         orig_df = pd.DataFrame({time_col: original_times, urine_col: original_urine})
         filled_df = filled_df.merge(orig_df, on=time_col, how='left')
         filled_df[urine_col] = filled_df[urine_col].fillna(0.0)
         filled_df = filled_df.sort_values(time_col).reset_index(drop=True)
         
-        # Step 4: Compute urine24 using vectorized sliding window
-        # 🚀 OPTIMIZATION 2025-01-31: Replace per-row loop with pandas rolling
         n = len(filled_df)
         urine_vals = filled_df[urine_col].values
         
-        if is_numeric_time:
-            if numeric_time_step >= 60:
-                # Time in seconds (e.g., SIC: step=3600s → 24h = 24 steps)
-                window_size = max(1, int(24.0 * 3600.0 / numeric_time_step))
-            else:
-                # Time in hours (e.g., MIIV: step=1.0h → 24h = 24 steps)
-                window_size = int(24.0 / interval_hours)
-        else:
-            window_size = int(pd.Timedelta(hours=24) / interval)
-        
-        # Use pandas rolling for vectorized computation
         rolling_sum = pd.Series(urine_vals).rolling(
-            window=window_size, min_periods=min_steps, center=False
+            window=window_steps, min_periods=min_steps, center=False
         ).sum()
         
-        # Calculate actual window lengths for all positions
         positions = np.arange(n) + 1
-        actual_window_lens = np.minimum(positions, window_size)
+        actual_window_lens = np.minimum(positions, window_steps)
         
-        # Calculate urine24: sum * step_factor / window_length
         urine24_values = np.where(
             (actual_window_lens >= min_steps) & pd.notna(rolling_sum.values),
             rolling_sum.values * step_factor / actual_window_lens,
@@ -4582,24 +4662,20 @@ def _callback_urine24(
         
         filled_df['urine24'] = urine24_values
         
-        # Add ID columns - CRITICAL: preserve id columns from original group
         for col in id_cols:
             if col in group.columns:
                 filled_df[col] = group[col].iloc[0]
             elif col in df.columns:
-                # Fallback: get from outer df if not in group
                 filled_df[col] = df[col].iloc[0]
         
         return filled_df
     
-    # Process each patient using groupby.apply
+    # Process each patient
     if id_cols:
         df = df.sort_values(id_cols + [time_col]).reset_index(drop=True)
-        # Use include_groups=False to avoid duplicate columns, but restore them manually
         result_dfs = []
         for keys, group in df.groupby(id_cols, sort=False):
             patient_result = process_patient(group)
-            # Ensure ID columns are present
             if isinstance(keys, tuple):
                 for i, col in enumerate(id_cols):
                     if col not in patient_result.columns:
@@ -4616,7 +4692,6 @@ def _callback_urine24(
     else:
         result_df = process_patient(df)
     
-    # Return only the required columns
     output_cols = id_cols + [time_col, 'urine24']
     available_cols = [c for c in output_cols if c in result_df.columns]
     
@@ -6797,3 +6872,10 @@ def _callback_miiv_icu_patients_filter(
 
 # miiv_icu_patients_filter is imported from callbacks.py at the top of this file
 # No need to redefine it here
+
+
+
+# Note: _apply_convert_unit_post_agg was removed (dead code).
+# Unit conversion is now handled inline in DuckDB via CASE WHEN + regexp_matches
+# in datasource.py's load_bucketed_table_aggregated().
+
