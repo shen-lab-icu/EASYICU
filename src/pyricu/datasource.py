@@ -2240,6 +2240,10 @@ def load_bucketed_table_aggregated(
     time_col: Optional[str] = None,
     value_min: Optional[float] = None,
     value_max: Optional[float] = None,
+    include_unit: bool = False,  # 🚀 包含unit列（供convert_unit callback使用）
+    convert_unit_op: Optional[str] = None,  # 🚀 DuckDB内联convert_unit运算符
+    convert_unit_factor: Optional[float] = None,  # 🚀 DuckDB内联convert_unit因子
+    convert_unit_filter: Optional[str] = None,  # 🚀 DuckDB内联convert_unit单位过滤模式
 ) -> pd.DataFrame:
     """
     🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
@@ -2388,6 +2392,55 @@ def load_bucketed_table_aggregated(
     
     # 构建时间聚合表达式
     # AUMC: measuredat是毫秒时间戳，需要转换后再聚合
+    # 🚀 DuckDB内联convert_unit：在聚合前转换单位值
+    # 当 convert_unit_op/factor 有效时，用 CASE WHEN 在聚合前转换值
+    # 并且不按 itemid 分组（R ricu 行为：跨 itemid 取 median）
+    _has_inline_convert = (convert_unit_op is not None and convert_unit_factor is not None)
+    
+    # 🔧 FIX: 如果 convert_unit_filter 需要 unit 列但表没有该列，
+    # 跳过 inline convert（匹配 R ricu 行为：无 unit 列时不转换）
+    if _has_inline_convert and convert_unit_filter:
+        # 检查第一个 parquet 文件是否包含 unit 列
+        try:
+            _col_info = conn.execute(
+                f"SELECT * FROM read_parquet('{target_files[0]}') LIMIT 0"
+            ).description
+            _col_names = {col[0] for col in _col_info}
+            if 'unit' not in _col_names:
+                import logging
+                logging.getLogger(__name__).info(
+                    f"⚠️ 表无 unit 列，跳过 inline convert_unit（filter={convert_unit_filter}）"
+                )
+                _has_inline_convert = False
+        except Exception:
+            _has_inline_convert = False
+    
+    if _has_inline_convert:
+        # 构建 CASE WHEN 表达式做单位转换
+        _op_sql = {'*': '*', '/': '/', '+': '+', '-': '-'}.get(convert_unit_op, '*')
+        if convert_unit_filter:
+            # 有单位过滤：只对匹配的行做转换
+            # 使用 DuckDB regexp_matches 进行正则匹配（case-insensitive）
+            _value_expr = f"CASE WHEN regexp_matches(CAST(unit AS VARCHAR), '(?i){convert_unit_filter}') THEN {value_column} {_op_sql} {convert_unit_factor} ELSE {value_column} END"
+        else:
+            # 无单位过滤：转换所有行
+            _value_expr = f"{value_column} {_op_sql} {convert_unit_factor}"
+        _agg_value_expr = f"{duckdb_agg}({_value_expr}) as {value_column}"
+    else:
+        _agg_value_expr = f"{duckdb_agg}({value_column}) as {value_column}"
+    
+    unit_select = ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
+    
+    # 当有内联 convert_unit 时，不按 itemid 分组（匹配 R ricu 跨 itemid 聚合行为）
+    if _has_inline_convert:
+        _group_itemid = ""
+        _select_itemid = ""
+        _order_itemid = ""
+    else:
+        _group_itemid = f", {itemid_col}"
+        _select_itemid = f",\n            {itemid_col}"
+        _order_itemid = f", {itemid_col}"
+    
     if db_name == 'aumc':
         # AUMC measuredat是Unix毫秒时间戳，转换为分钟后再取整
         time_round_expr = f"FLOOR(({time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
@@ -2397,13 +2450,12 @@ def load_bucketed_table_aggregated(
         query = f"""
         SELECT 
             {id_col},
-            {output_time_expr},
-            {itemid_col},
-            {duckdb_agg}({value_column}) as {value_column}
+            {output_time_expr}{_select_itemid},
+            {_agg_value_expr}{unit_select}
         FROM read_parquet({glob_pattern}, union_by_name=true)
         {where_clause}
-        GROUP BY {id_col}, {time_round_expr}, {itemid_col}
-        ORDER BY {id_col}, 2, {itemid_col}
+        GROUP BY {id_col}, {time_round_expr}{_group_itemid}
+        ORDER BY {id_col}, 2{_order_itemid}
         """
     elif db_name == 'hirid':
         # 🚀 HiRID 优化: 在 DuckDB 中直接完成时间转换（datetime → 相对入院小时数）
@@ -2426,6 +2478,26 @@ def load_bucketed_table_aggregated(
         hirid_where_clause = where_clause.replace(f'{itemid_col}', f'o.{itemid_col}')
         hirid_where_clause = hirid_where_clause.replace(f'{id_col} IN', f'o.{id_col} IN')
         
+        # 🚀 HiRID 内联 convert_unit
+        if _has_inline_convert:
+            # HiRID 内联 convert_unit: 为列名添加表别名 'o.'
+            _op_sql = {'*': '*', '/': '/', '+': '+', '-': '-'}.get(convert_unit_op, '*')
+            if convert_unit_filter:
+                _hirid_value_expr = f"CASE WHEN regexp_matches(CAST(o.unit AS VARCHAR), '(?i){convert_unit_filter}') THEN o.{value_column} {_op_sql} {convert_unit_factor} ELSE o.{value_column} END"
+            else:
+                _hirid_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
+            _hirid_agg_expr = f"{duckdb_agg}({_hirid_value_expr}) as {value_column}"
+            _hirid_group_itemid = ""
+            _hirid_select_itemid = ""
+            _hirid_order_itemid = ""
+        else:
+            _hirid_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
+            _hirid_group_itemid = f", o.{itemid_col}"
+            _hirid_select_itemid = f",\n            o.{itemid_col}"
+            _hirid_order_itemid = f", o.{itemid_col}"
+        
+        hirid_unit_select = ",\n            ANY_VALUE(o.unit) as unit" if include_unit else ""
+        
         query = f"""
         WITH adm AS (
             SELECT patientid, CAST(admissiontime AS TIMESTAMP) as admissiontime 
@@ -2433,29 +2505,28 @@ def load_bucketed_table_aggregated(
         )
         SELECT 
             o.{id_col},
-            {output_time_expr},
-            o.{itemid_col},
-            {duckdb_agg}(o.{value_column}) as {value_column}
+            {output_time_expr}{_hirid_select_itemid},
+            {_hirid_agg_expr}{hirid_unit_select}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
         JOIN adm a ON o.{id_col} = a.patientid
         {hirid_where_clause}
-        GROUP BY o.{id_col}, {time_round_expr}, o.{itemid_col}
-        ORDER BY o.{id_col}, 2, o.{itemid_col}
+        GROUP BY o.{id_col}, {time_round_expr}{_hirid_group_itemid}
+        ORDER BY o.{id_col}, 2{_hirid_order_itemid}
         """
     else:
         time_round_expr = f"FLOOR({time_col} / {interval_minutes}) * {interval_minutes}"
         output_time_expr = f"{time_round_expr} as charttime"
+        default_unit_select = ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
         # 标准查询
         query = f"""
         SELECT 
             {id_col},
-            {output_time_expr},
-            {itemid_col},
-            {duckdb_agg}({value_column}) as {value_column}
+            {output_time_expr}{_select_itemid},
+            {_agg_value_expr}{default_unit_select}
         FROM read_parquet({glob_pattern}, union_by_name=true)
         {where_clause}
-        GROUP BY {id_col}, {time_round_expr}, {itemid_col}
-        ORDER BY {id_col}, 2, {itemid_col}
+        GROUP BY {id_col}, {time_round_expr}{_group_itemid}
+        ORDER BY {id_col}, 2{_order_itemid}
         """
     
     try:

@@ -1069,14 +1069,20 @@ class ConceptResolver:
             # 🔧 嵌套调用深度跟踪：减少深度计数器
             self._load_depth -= 1
             # 🔧 只有顶层调用才清除概念缓存和inflight，避免递归概念内部调用清除外层所需的缓存
-            # 🚀 重要：不再清除 _concept_data_cache，以支持多次 load_concepts 调用之间共享缓存
-            # 例如：先加载 sofa，再加载 sofa2 时，共享的子概念（fio2, plt 等）可以复用
             if is_top_level:
                 with self._cache_lock:
                     self._concept_cache.clear()
-                    # self._concept_data_cache.clear()  # 🚀 不清除，保留用于跨调用缓存
+                    # 🔧 FIX: 顶层调用结束后清除内存缓存，避免碎片内存泄漏
+                    # 磁盘缓存（_store_in_disk_cache）已负责跨调用复用
+                    self._concept_data_cache.clear()
+                    self._raw_concept_cache.clear()
+                    self._table_cache.clear()
                     # 清除当前线程的inflight集合
                     self._get_inflight().clear()
+                
+                # 🔧 释放碎片内存
+                from .memory_manager import release_memory
+                release_memory()
 
     def _load_single_concept(
         self,
@@ -1215,6 +1221,7 @@ class ConceptResolver:
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
 
         for source in sources:
+            _convert_unit_callback_for_duckdb = False  # 每个 source 重置
             if source.class_name == "fun_itm":
                 return self._load_fun_item(
                     concept_name,
@@ -1544,21 +1551,90 @@ class ConceptResolver:
                     # 性能提升：32秒→2.5秒，内存5.4GB→269MB
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                     use_duckdb_aggregation = False
+                    _convert_unit_callback_for_duckdb = False  # 标记是否convert_unit已在DuckDB中内联完成
                     
                     # 判断是否可以使用DuckDB聚合
-                    # 条件：1)是AUMC/HiRID 2)是高频表 3)有itemid过滤 4)无callback
+                    # 条件：1)是AUMC/HiRID 2)是高频表 3)有itemid过滤 4)无callback或convert_unit
+                    # 🚀 FIX: convert_unit callback 在DuckDB中内联执行
+                    # 使用 CASE WHEN 在聚合前转换单位，然后按(id,time)分组（不含itemid）
+                    # 效果：etco2 从 873s → <3s, fio2 从 ~200s → <3s
+                    _convert_unit_callback_for_duckdb = False  # 标记是否需要DuckDB内联convert_unit
+                    _convert_unit_factor = None  # 乘法因子
+                    _convert_unit_op = None  # 运算符
+                    _convert_unit_filter = None  # 单位过滤模式
+                    
                     if db_name == 'aumc' and source.table == 'numericitems':
                         has_sub_var = getattr(source, 'sub_var', None) is not None
                         has_callback = getattr(source, 'callback', None) is not None
-                        if has_sub_var and not has_callback and source.ids:
+                        # 检测 convert_unit callback（线性变换，可在DuckDB中内联）
+                        is_convert_unit = (
+                            has_callback and isinstance(source.callback, str) and
+                            source.callback.strip().startswith('convert_unit(')
+                        )
+                        if has_sub_var and (not has_callback or is_convert_unit) and source.ids:
                             itemids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
                             use_duckdb_aggregation = len(itemids) > 0
+                            if is_convert_unit and use_duckdb_aggregation:
+                                _convert_unit_callback_for_duckdb = True
+                                # 解析 convert_unit 参数
+                                import re as _re
+                                _cb = source.callback.strip()
+                                _m = _re.match(r"convert_unit\((.+)\)", _cb, _re.DOTALL)
+                                if _m:
+                                    _args_str = _m.group(1)
+                                    # 简单分割（处理嵌套括号）
+                                    _args = []
+                                    _lvl, _cur = 0, []
+                                    for _ch in _args_str:
+                                        if _ch == '(': _lvl += 1
+                                        elif _ch == ')': _lvl -= 1
+                                        elif _ch == ',' and _lvl == 0:
+                                            _args.append(''.join(_cur).strip())
+                                            _cur = []
+                                            continue
+                                        _cur.append(_ch)
+                                    if _cur: _args.append(''.join(_cur).strip())
+                                    # 解析 binary_op
+                                    _bm = _re.match(r"binary_op\(`(.+?)`,\s*(.+)\)", _args[0].strip()) if _args else None
+                                    if _bm:
+                                        _convert_unit_op = _bm.group(1)  # '*', '/', etc.
+                                        try: _convert_unit_factor = float(_bm.group(2))
+                                        except: pass
+                                    _convert_unit_filter = _args[2].strip().strip("'\"") if len(_args) > 2 else None
                     elif db_name == 'hirid' and source.table == 'observations':
                         has_sub_var = getattr(source, 'sub_var', None) is not None
                         has_callback = getattr(source, 'callback', None) is not None
-                        if has_sub_var and not has_callback and source.ids:
+                        is_convert_unit = (
+                            has_callback and isinstance(source.callback, str) and
+                            source.callback.strip().startswith('convert_unit(')
+                        )
+                        if has_sub_var and (not has_callback or is_convert_unit) and source.ids:
                             itemids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
                             use_duckdb_aggregation = len(itemids) > 0
+                            if is_convert_unit and use_duckdb_aggregation:
+                                _convert_unit_callback_for_duckdb = True
+                                import re as _re
+                                _cb = source.callback.strip()
+                                _m = _re.match(r"convert_unit\((.+)\)", _cb, _re.DOTALL)
+                                if _m:
+                                    _args_str = _m.group(1)
+                                    _args = []
+                                    _lvl, _cur = 0, []
+                                    for _ch in _args_str:
+                                        if _ch == '(': _lvl += 1
+                                        elif _ch == ')': _lvl -= 1
+                                        elif _ch == ',' and _lvl == 0:
+                                            _args.append(''.join(_cur).strip())
+                                            _cur = []
+                                            continue
+                                        _cur.append(_ch)
+                                    if _cur: _args.append(''.join(_cur).strip())
+                                    _bm = _re.match(r"binary_op\(`(.+?)`,\s*(.+)\)", _args[0].strip()) if _args else None
+                                    if _bm:
+                                        _convert_unit_op = _bm.group(1)
+                                        try: _convert_unit_factor = float(_bm.group(2))
+                                        except: pass
+                                    _convert_unit_filter = _args[2].strip().strip("'\"") if len(_args) > 2 else None
                     
                     if use_duckdb_aggregation:
                         # 使用DuckDB层聚合
@@ -1599,7 +1675,15 @@ class ConceptResolver:
                             # R ricu 流程: change_interval(median) → filter_bounds
                             # DuckDB 聚合等价于 change_interval，所以 min/max 过滤
                             # 应该在聚合之后由 filter_bounds 统一处理
+                            include_unit=False,  # unit 不再通过 ANY_VALUE 获取
+                            # 🚀 convert_unit 内联参数：在DuckDB中直接做单位转换
+                            convert_unit_op=_convert_unit_op if _convert_unit_callback_for_duckdb else None,
+                            convert_unit_factor=_convert_unit_factor if _convert_unit_callback_for_duckdb else None,
+                            convert_unit_filter=_convert_unit_filter if _convert_unit_callback_for_duckdb else None,
                         )
+                        
+                        if _convert_unit_callback_for_duckdb and verbose and len(frame) > 0:
+                            print(f"   🔧 convert_unit DuckDB内联完成: {len(frame):,} 行")
                         
                         # 创建ICUTable对象
                         id_col = 'admissionid' if db_name == 'aumc' else 'patientid'
@@ -1610,11 +1694,74 @@ class ConceptResolver:
                             id_columns=[id_col],
                             index_column=time_col,
                             value_column=value_col,
-                            unit_column=None,
                         )
                         
                         if verbose:
                             print(f"   ✅ DuckDB聚合完成: {len(frame):,} 行")
+                    elif (db_name == 'hirid' and 
+                          getattr(source, 'callback', '') == 'hirid_death' and
+                          source.table == 'observations'):
+                        # 🚀 hirid_death 快速路径：跳过加载 115M 行原始数据
+                        # 直接在 DuckDB 中 GROUP BY patientid → MAX(datetime)
+                        # 然后与 general 表的 discharge_status 合并
+                        import duckdb as _hd_duckdb
+                        bucket_dir = data_source.base_path / 'observations_bucket'
+                        _hd_conn = _hd_duckdb.connect()
+                        
+                        # 先获取死亡患者ID
+                        try:
+                            general_tbl = data_source.load_table('general', columns=['patientid', 'discharge_status'], verbose=False)
+                            general_df = general_tbl.data if hasattr(general_tbl, 'data') else general_tbl
+                            if not isinstance(general_df, pd.DataFrame):
+                                general_df = pd.DataFrame(general_df)
+                            dead_pids = set(general_df.loc[
+                                general_df['discharge_status'].astype(str).str.lower() == 'dead',
+                                'patientid'
+                            ].unique())
+                        except Exception:
+                            dead_pids = set()
+                        
+                        # 确定要查询的死亡患者列表
+                        _query_pids = dead_pids
+                        if patient_ids and dead_pids:
+                            if isinstance(patient_ids, dict):
+                                pid_list = list(next(iter(patient_ids.values())))
+                            else:
+                                pid_list = list(patient_ids)
+                            _query_pids = set(p for p in pid_list if p in dead_pids)
+                        
+                        if _query_pids and bucket_dir.exists():
+                            glob_pattern = str(bucket_dir / 'bucket_id=*' / '*.parquet')
+                            src_ids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
+                            ids_str = ', '.join(str(x) for x in src_ids)
+                            pids_str = ', '.join(str(p) for p in _query_pids)
+                            
+                            query = f"""
+                                SELECT patientid, MAX(datetime) as datetime
+                                FROM read_parquet('{glob_pattern}', union_by_name=true)
+                                WHERE variableid IN ({ids_str})
+                                  AND patientid IN ({pids_str})
+                                GROUP BY patientid
+                            """
+                            frame = _hd_conn.execute(query).fetchdf()
+                            frame[concept_name] = True
+                        else:
+                            frame = pd.DataFrame(columns=['patientid', 'datetime', concept_name])
+                        
+                        _hd_conn.close()
+                        
+                        table = ICUTable(
+                            data=frame,
+                            id_columns=['patientid'],
+                            index_column='datetime',
+                            value_column=concept_name,
+                        )
+                        
+                        if verbose:
+                            print(f"   ✅ hirid_death 快速路径: {len(frame):,} 行")
+                        
+                        # 标记callback已处理，跳过后续callback
+                        _convert_unit_callback_for_duckdb = True
                     else:
                         # 原始加载路径
                         table = data_source.load_table(
@@ -2584,7 +2731,8 @@ class ConceptResolver:
                 print(f"   🔎 重命名前: value_column={value_column}, 在frame中={value_column in frame.columns}, frame行数={len(frame)}")
             
             # 标记回调是否已被应用，避免重复调用
-            callback_applied = False
+            # 🚀 如果 convert_unit 已在 DuckDB 后置处理中应用，标记为已完成
+            callback_applied = _convert_unit_callback_for_duckdb
             
             if value_column not in frame.columns:
                 # 对于某些概念（如lgl_cncpt），value_column可能通过callback创建
@@ -4281,6 +4429,10 @@ class ConceptResolver:
             **sub_kwargs,  # Pass kwargs with allow_missing flag
         )
 
+        # 🔧 释放子概念加载过程中的碎片内存
+        from .memory_manager import release_memory
+        release_memory()
+
         if isinstance(sub_tables, ICUTable):
             sub_tables = {sub_names[0]: sub_tables}
 
@@ -4432,6 +4584,11 @@ class ConceptResolver:
             logger.debug(f"🎯 Executing callback '{callback_name}' for concept '{concept_name}' with {len(sub_tables)} sub-tables")
 
         result = execute_concept_callback(callback_name, sub_tables, ctx)
+
+        # 🔧 回调执行后释放子概念的中间内存
+        # sub_tables 在回调内已经被消费，可以释放
+        del sub_tables
+        release_memory()
 
         # CRITICAL: Align WinTbl result time columns immediately after callback
         # This ensures that when this concept is used as a sub-concept in parent recursion,
@@ -5870,16 +6027,16 @@ class ConceptResolver:
             self._store_in_disk_cache(concept_name, data_source, cache_key, result)
 
             with self._cache_lock:
-                # 🔧 FIX: 只存入 _concept_data_cache（包含完整的聚合信息）
-                # 移除对 _concept_cache 的写入，避免不同聚合方式的缓存冲突
-                # 🚀 存入时 copy，确保缓存中的是独立副本，调用方修改不会污染缓存
-                self._concept_data_cache[concept_cache_key] = result.copy() if hasattr(result, 'copy') else result
+                # 🔧 FIX: 缓存写入使用共享引用（不 copy）
+                # 缓存会在顶层调用结束后清除，不需要防护性 copy
+                # 读取时再 copy，节省内存
+                self._concept_data_cache[concept_cache_key] = result
                 
                 # 🚀 同时存入 _raw_concept_cache，供回调函数使用
-                # 回调函数通常需要不同 interval 的数据，所以用统一的 key
+                # 共享同一个引用，避免重复内存开销
                 raw_cache_key = (concept_name, patient_ids_hash)
                 if raw_cache_key not in self._raw_concept_cache:
-                    self._raw_concept_cache[raw_cache_key] = result.copy() if hasattr(result, 'copy') else result
+                    self._raw_concept_cache[raw_cache_key] = result
                 
                 self._get_inflight().discard(concept_name)
         else:
@@ -6548,53 +6705,65 @@ def _apply_callback(
     #   3. load_id(env[["general"]], cols="discharge_status") → load general table
     #   4. merge with dead patients → keep only patients who died
     #   5. Set val_var = TRUE
+    # 🚀 优化: variableids 110, 200 有 115M 行（高频数据），
+    #    直接在 DuckDB 中 GROUP BY patientid → MAX(datetime) 避免加载全量。
     if expr == "hirid_death":
-        df = frame.copy()
+        id_col = 'patientid'
         
-        # Detect id and time columns
-        id_col = None
-        for c in ['patientid', 'stay_id', 'admissionid']:
-            if c in df.columns:
-                id_col = c
-                break
-        if id_col is None:
-            return df.head(0)
-        
-        time_col = None
-        for c in ['datetime', 'measuredat', 'charttime']:
-            if c in df.columns:
-                time_col = c
-                break
-        if time_col is None:
-            return df.head(0)
-        
-        # Step 1: Get last observation time per patient
-        last_obs = df.groupby(id_col, as_index=False).agg({time_col: 'max'})
-        
-        # Step 2: Load general table and filter for dead patients
+        # Step 1: Load general table and find dead patients
+        dead_pids = set()
         if data_source is not None:
             try:
                 general_tbl = data_source.load_table('general', columns=[id_col, 'discharge_status'])
-                # load_table returns ICUTable, extract DataFrame
                 general_df = general_tbl.data if hasattr(general_tbl, 'data') else general_tbl
                 if not isinstance(general_df, pd.DataFrame):
                     general_df = pd.DataFrame(general_df)
-                dead_pids = general_df.loc[
-                    general_df['discharge_status'].astype(str).str.lower() == 'dead', 
+                dead_pids = set(general_df.loc[
+                    general_df['discharge_status'].astype(str).str.lower() == 'dead',
                     id_col
-                ].unique()
+                ].unique())
             except Exception:
-                dead_pids = []
-        else:
-            dead_pids = []
+                pass
         
-        if len(dead_pids) == 0:
-            return df.head(0)
+        if not dead_pids:
+            return frame.head(0) if hasattr(frame, 'head') else pd.DataFrame()
         
-        # Step 3: Merge — keep only dead patients
-        result = last_obs[last_obs[id_col].isin(dead_pids)].copy()
+        # Step 2: 🚀 使用 DuckDB 直接聚合获取最后观测时间（避免加载 115M 行）
+        last_obs = None
+        if data_source is not None and hasattr(data_source, 'base_path'):
+            bucket_dir = data_source.base_path / 'observations_bucket'
+            if bucket_dir.exists():
+                try:
+                    import duckdb
+                    conn = duckdb.connect()
+                    glob_pattern = str(bucket_dir / 'bucket_id=*' / '*.parquet')
+                    dead_pids_str = ', '.join(str(p) for p in dead_pids)
+                    query = f"""
+                        SELECT patientid, MAX(datetime) as datetime
+                        FROM read_parquet('{glob_pattern}', union_by_name=true)
+                        WHERE variableid IN (110, 200)
+                          AND patientid IN ({dead_pids_str})
+                        GROUP BY patientid
+                    """
+                    last_obs = conn.execute(query).fetchdf()
+                    conn.close()
+                except Exception:
+                    pass
         
-        # Step 4: Set death = TRUE
+        # Fallback: 使用已加载的 frame（旧行为）
+        if last_obs is None or last_obs.empty:
+            df = frame.copy() if hasattr(frame, 'copy') else pd.DataFrame()
+            if id_col in df.columns:
+                time_col = 'datetime' if 'datetime' in df.columns else ('charttime' if 'charttime' in df.columns else None)
+                if time_col:
+                    last_obs = df.groupby(id_col, as_index=False).agg({time_col: 'max'})
+                    last_obs = last_obs[last_obs[id_col].isin(dead_pids)]
+        
+        if last_obs is None or last_obs.empty:
+            return frame.head(0) if hasattr(frame, 'head') else pd.DataFrame()
+        
+        # Step 3: Set death = TRUE
+        result = last_obs.copy()
         result[concept_name] = True
         
         return result

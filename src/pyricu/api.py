@@ -113,6 +113,31 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
         return None
 
 
+def _get_total_patient_count(loader: 'BaseICULoader') -> Optional[int]:
+    """
+    快速获取数据库中的总患者数（用于自动分批决策）。
+    使用 DuckDB COUNT(DISTINCT) 避免加载全部数据。
+    """
+    db_name = loader.database
+    id_table_map = {
+        'miiv': ('icustays', 'stay_id'),
+        'mimic': ('icustays', 'icustay_id'),
+        'eicu': ('patient', 'patientunitstayid'),
+        'eicu_demo': ('patient', 'patientunitstayid'),
+        'aumc': ('admissions', 'admissionid'),
+        'hirid': ('general', 'patientid'),
+        'sic': ('cases', 'CaseID'),
+    }
+    
+    table_name, id_col = id_table_map.get(db_name, ('icustays', 'stay_id'))
+    
+    try:
+        id_table = loader.datasource.load_table(table_name, columns=[id_col], verbose=False)
+        return id_table.data[id_col].nunique()
+    except Exception:
+        return None
+
+
 def _compress_dtypes(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
     """
     压缩 DataFrame 的数据类型以减少内存使用
@@ -443,85 +468,156 @@ def load_concepts(
             print(f"   ⚡ 智能优化: concept_workers={effective_concept_workers}, "
                   f"parallel_workers={effective_parallel_workers or '不分批'}")
 
-    # 🆕 分批处理支持（用于内存控制）
-    if batch_size is not None and patient_ids is not None:
-        # 提取患者ID列表
-        if isinstance(patient_ids, dict):
-            id_col = list(patient_ids.keys())[0]
-            all_patient_ids = list(patient_ids.values())[0]
-        else:
-            id_col = 'stay_id'  # 默认
-            all_patient_ids = list(patient_ids)
-        
-        total_patients = len(all_patient_ids)
-        if total_patients > batch_size:
-            if verbose:
-                print(f"🔄 分批处理: {total_patients} 患者，每批 {batch_size} 患者")
+    # ====================================================================
+    # 🆕 内存感知自动分批处理
+    # ====================================================================
+    # 策略：
+    # 1. 用户指定了 batch_size → 使用用户指定值
+    # 2. patient_ids=None（全量加载）→ 自动检测总患者数并估算内存
+    # 3. 内存充足 → 不分批直接加载
+    # 4. 内存不足 → 自动计算 batch_size 并分批
+    # 5. 可用内存 < 16GB → 使用子进程隔离（内存完全归还）
+    # 6. 可用内存 >= 16GB → 进程内分批 + malloc_trim（更快）
+    # ====================================================================
+    
+    from .memory_manager import (
+        auto_batch_size, estimate_memory_mb, release_memory,
+        get_available_memory_mb, get_rss_mb, inprocess_batch_load,
+        subprocess_batch_load,
+    )
+    
+    effective_batch_size = batch_size
+    use_subprocess = False
+    
+    # 提取患者ID信息
+    _id_col = None
+    _all_ids = None
+    if patient_ids is not None and isinstance(patient_ids, dict):
+        _id_col = list(patient_ids.keys())[0]
+        _all_ids = list(patient_ids.values())[0]
+        _total_patients = len(_all_ids)
+    elif patient_ids is not None and isinstance(patient_ids, (list, tuple)):
+        _total_patients = len(patient_ids)
+    else:
+        _total_patients = None
+    
+    # 自动检测全量加载场景
+    if _total_patients is None and patient_ids is None and effective_batch_size is None:
+        # 全量加载：查询总患者数来决定是否需要分批
+        try:
+            _total_patients_in_db = _get_total_patient_count(loader)
+            if _total_patients_in_db and _total_patients_in_db > 1000:
+                # 估算内存需求
+                est_mem = estimate_memory_mb(concepts_list, loader.database, _total_patients_in_db)
+                avail_mem = get_available_memory_mb()
+                
+                if est_mem > avail_mem * 0.6:
+                    # 需要分批 — 自动采样所有患者ID
+                    patient_ids = _sample_patient_ids(loader, _total_patients_in_db, verbose,
+                                                      sample_strategy='sorted')
+                    if patient_ids is not None:
+                        # 规范化
+                        database_name = loader.database
+                        if database_name in ['eicu', 'eicu_demo']:
+                            patient_ids = {'patientunitstayid': patient_ids}
+                        elif database_name in ['aumc']:
+                            patient_ids = {'admissionid': patient_ids}
+                        elif database_name in ['hirid']:
+                            patient_ids = {'patientid': patient_ids}
+                        elif database_name == 'sic':
+                            patient_ids = {'CaseID': patient_ids}
+                        elif database_name == 'mimic':
+                            patient_ids = {'icustay_id': patient_ids}
+                        else:
+                            patient_ids = {'stay_id': patient_ids}
+                        
+                        _id_col = list(patient_ids.keys())[0]
+                        _all_ids = list(patient_ids.values())[0]
+                        _total_patients = len(_all_ids)
+                        
+                        effective_batch_size = auto_batch_size(
+                            concepts_list, loader.database, _total_patients, avail_mem
+                        )
+                        
+                        if verbose and effective_batch_size:
+                            print(f"📊 全量加载 {_total_patients} patients, "
+                                  f"估算峰值 {est_mem:.0f}MB > 可用 {avail_mem:.0f}MB×60%, "
+                                  f"自动分批: batch_size={effective_batch_size}")
+                        
+                        # 小内存环境使用子进程隔离
+                        use_subprocess = avail_mem < 16 * 1024
+        except Exception as e:
+            logger.debug(f"自动分批检测失败: {e}")
+    
+    # 用户显式指定了 batch_size
+    if effective_batch_size is None and batch_size is not None:
+        effective_batch_size = batch_size
+    
+    # 自动检测：用户指定了 patient_ids 但未指定 batch_size
+    if effective_batch_size is None and _total_patients is not None and _total_patients > 5000:
+        avail_mem = get_available_memory_mb()
+        est_mem = estimate_memory_mb(concepts_list, loader.database, _total_patients)
+        if est_mem > avail_mem * 0.6:
+            effective_batch_size = auto_batch_size(
+                concepts_list, loader.database, _total_patients, avail_mem
+            )
+            if verbose and effective_batch_size:
+                print(f"📊 自动分批: {_total_patients} patients, "
+                      f"估算 {est_mem:.0f}MB > budget {avail_mem*0.6:.0f}MB, "
+                      f"batch_size={effective_batch_size}")
+            use_subprocess = avail_mem < 16 * 1024
+    
+    # 执行分批处理
+    if effective_batch_size is not None and _id_col is not None and _all_ids is not None:
+        if _total_patients > effective_batch_size:
+            load_kwargs = dict(
+                interval=interval,
+                win_length=win_length,
+                aggregate=aggregate,
+                keep_components=keep_components,
+                merge=merge,
+                ricu_compatible=ricu_compatible,
+                chunk_size=chunk_size,
+                progress=progress,
+                parallel_workers=effective_parallel_workers,
+                concept_workers=effective_concept_workers,
+                parallel_backend=parallel_backend,
+                **kwargs,
+            )
             
-            import gc
-            results = []
-            for i in range(0, total_patients, batch_size):
-                batch_ids = all_patient_ids[i:i+batch_size]
-                batch_patient_ids = {id_col: batch_ids}
-                
+            if use_subprocess:
+                # 子进程隔离（内存 < 16GB）
                 if verbose:
-                    batch_num = i // batch_size + 1
-                    total_batches = (total_patients + batch_size - 1) // batch_size
-                    print(f"   📦 处理批次 {batch_num}/{total_batches} ({len(batch_ids)} 患者)...")
-                
-                # 🔧 清除缓存以确保每批使用正确的患者ID
-                loader.clear_cache()
-                
-                batch_result = loader.load_concepts(
+                    print(f"🔒 使用子进程隔离模式 (可用内存 < 16GB)")
+                final_result = subprocess_batch_load(
                     concepts=concepts_list,
-                    patient_ids=batch_patient_ids,
-                    interval=interval,
-                    win_length=win_length,
-                    aggregate=aggregate,
-                    keep_components=keep_components,
+                    database=loader.database,
+                    all_patient_ids={_id_col: _all_ids},
+                    batch_size=effective_batch_size,
+                    data_path=str(loader.data_path) if hasattr(loader, 'data_path') else None,
+                    interval=interval if isinstance(interval, str) else '1h',
+                    verbose=verbose,
                     merge=merge,
                     ricu_compatible=ricu_compatible,
-                    chunk_size=chunk_size,
-                    progress=progress,
-                    parallel_workers=effective_parallel_workers,
-                    concept_workers=effective_concept_workers,
-                    parallel_backend=parallel_backend,
-                    **kwargs
+                    dict_path=dict_path,
+                    use_sofa2=use_sofa2,
                 )
-                
-                if isinstance(batch_result, pd.DataFrame) and len(batch_result) > 0:
-                    results.append(batch_result)
-                elif isinstance(batch_result, dict):
-                    results.append(batch_result)
-                
-                # 释放内存
-                gc.collect()
-            
-            # 合并结果
-            if results:
-                if isinstance(results[0], pd.DataFrame):
-                    final_result = pd.concat(results, ignore_index=True)
-                    # 🆕 内存优化模式：压缩数据类型
-                    if memory_efficient:
-                        final_result = _compress_dtypes(final_result, verbose=verbose)
-                    if verbose:
-                        print(f"✅ 分批完成: 共 {len(final_result)} 行")
-                    return final_result
-                else:
-                    # dict 结果合并
-                    merged_dict = {}
-                    for r in results:
-                        for k, v in r.items():
-                            if k not in merged_dict:
-                                merged_dict[k] = []
-                            merged_dict[k].append(v)
-                    final_dict = {k: pd.concat(vs, ignore_index=True) for k, vs in merged_dict.items()}
-                    # 🆕 内存优化模式：压缩数据类型
-                    if memory_efficient:
-                        final_dict = {k: _compress_dtypes(v, verbose=verbose) for k, v in final_dict.items()}
-                    return final_dict
             else:
-                return pd.DataFrame()
+                # 进程内分批 + malloc_trim（内存 >= 16GB）
+                final_result = inprocess_batch_load(
+                    loader=loader,
+                    concepts=concepts_list,
+                    patient_ids={_id_col: _all_ids},
+                    batch_size=effective_batch_size,
+                    verbose=verbose,
+                    memory_efficient=memory_efficient,
+                    **load_kwargs,
+                )
+            
+            if memory_efficient and isinstance(final_result, pd.DataFrame):
+                final_result = _compress_dtypes(final_result, verbose=verbose)
+            
+            return final_result
 
     # 使用统一加载器加载概念
     result = loader.load_concepts(
