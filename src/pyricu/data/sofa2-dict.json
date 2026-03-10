@@ -1,4 +1,18 @@
 {
+  "sep3_sofa2": {
+    "concepts": [
+      "sofa2",
+      "susp_inf"
+    ],
+    "description": "sepsis-3 criterion based on SOFA-2",
+    "category": "outcome",
+    "callback": "sep3_sofa2",
+    "keep_components": [
+      false,
+      true
+    ],
+    "class_name": "rec_cncpt"
+  },
   "sofa2": {
     "concepts": [
       "sofa2_resp",

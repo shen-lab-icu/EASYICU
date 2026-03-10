@@ -3967,7 +3967,7 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL', 'g/l')",
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
           "class_name": "hrd_itm"
         }
       ],

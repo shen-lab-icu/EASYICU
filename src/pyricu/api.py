@@ -29,6 +29,7 @@ pyricu 高层API - 提供简单易用的接口，同时支持高级自定义
 from typing import List, Union, Optional, Dict
 from pathlib import Path
 import os
+import numpy as np
 import pandas as pd
 import logging
 
@@ -41,6 +42,253 @@ logger = logging.getLogger(__name__)
 # 全局加载器实例，用于复用初始化开销
 _global_loader = None
 _loader_config = None
+
+
+def _normalize_patient_ids_for_db(database_name: str, patient_ids):
+    """Normalize patient IDs to the canonical ID column for each database."""
+    if patient_ids is None or isinstance(patient_ids, dict):
+        return patient_ids
+
+    if database_name in ['eicu', 'eicu_demo']:
+        return {'patientunitstayid': patient_ids}
+    if database_name in ['aumc']:
+        return {'admissionid': patient_ids}
+    if database_name in ['hirid']:
+        return {'patientid': patient_ids}
+    if database_name == 'sic':
+        return {'CaseID': patient_ids}
+    if database_name == 'mimic':
+        return {'icustay_id': patient_ids}
+    return {'stay_id': patient_ids}
+
+
+def _expand_public_numeric_win_tbl_output(
+    result: pd.DataFrame,
+    concept_name: str,
+    interval: Optional[Union[str, pd.Timedelta]],
+) -> pd.DataFrame:
+    """Expand single-concept numeric win_tbl output to ricu-compatible rows."""
+    if not isinstance(result, pd.DataFrame) or result.empty:
+        return result
+    if concept_name not in result.columns or 'dur_var' not in result.columns:
+        return result
+
+    numeric_values = pd.to_numeric(result[concept_name], errors='coerce')
+    if numeric_values.notna().sum() == 0:
+        return result
+
+    index_candidates = [
+        'charttime', 'starttime', 'start', 'datetime', 'measuredat', 'measuredat_minutes',
+        'givenat', 'infusionoffset', 'observationoffset', 'labresultoffset',
+    ]
+    index_column = next((col for col in index_candidates if col in result.columns), None)
+    if index_column is None:
+        return result
+
+    id_priority = ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID', 'subject_id']
+    id_columns = [col for col in id_priority if col in result.columns]
+    if not id_columns:
+        id_columns = [col for col in result.columns if col.lower().endswith('id') and col not in {index_column, 'dur_var'}]
+    if not id_columns:
+        return result
+
+    interval_td = pd.to_timedelta(interval or '1h')
+    if pd.isna(interval_td) or interval_td <= pd.Timedelta(0):
+        interval_td = pd.Timedelta(hours=1)
+
+    work = result[id_columns + [index_column, 'dur_var', concept_name]].copy()
+    work[concept_name] = numeric_values
+    work = work.dropna(subset=[index_column, concept_name])
+    if work.empty:
+        return result
+
+    expanded_rows = []
+    is_datetime_index = pd.api.types.is_datetime64_any_dtype(work[index_column])
+
+    if is_datetime_index:
+        work[index_column] = pd.to_datetime(work[index_column], errors='coerce')
+        # 🔧 FIX: dur_var may already be pd.Timedelta (set by ts_to_win_tbl for datetime indices).
+        # pd.to_numeric on Timedelta returns nanoseconds, so pd.to_timedelta(..., unit='m')
+        # would treat those nanoseconds as minutes → duration of ~114,000 years → infinite loop.
+        if pd.api.types.is_timedelta64_dtype(work['dur_var']):
+            duration_values = work['dur_var'].fillna(pd.Timedelta(0))
+        else:
+            dur_numeric = pd.to_numeric(work['dur_var'], errors='coerce').fillna(0.0)
+            duration_values = pd.to_timedelta(dur_numeric, unit='m')
+        epsilon = pd.Timedelta(microseconds=1)
+
+        for row, duration in zip(work.itertuples(index=False), duration_values):
+            row_dict = row._asdict()
+            start = row_dict[index_column]
+            if pd.isna(start):
+                continue
+            end = start + duration
+            current = start
+            while current <= end + epsilon:
+                expanded_rows.append({
+                    **{col: row_dict[col] for col in id_columns},
+                    index_column: current,
+                    concept_name: row_dict[concept_name],
+                })
+                current = current + interval_td
+    else:
+        work[index_column] = pd.to_numeric(work[index_column], errors='coerce')
+        work = work.dropna(subset=[index_column])
+        if work.empty:
+            return result
+
+        # 🔧 FIX: dur_var may be pd.Timedelta (set by ts_to_win_tbl for datetime indices).
+        # After time alignment, the index becomes numeric (hours) but dur_var stays as Timedelta.
+        # pd.to_numeric on Timedelta returns nanoseconds → wildly wrong duration → infinite loop.
+        if pd.api.types.is_timedelta64_dtype(work['dur_var']):
+            # Convert Timedelta to minutes (the standard ricu unit for dur_var)
+            dur_numeric = work['dur_var'].dt.total_seconds().div(60.0).fillna(0.0)
+        else:
+            dur_numeric = pd.to_numeric(work['dur_var'], errors='coerce').fillna(0.0)
+        interval_hours = interval_td.total_seconds() / 3600.0
+        if interval_hours <= 0:
+            interval_hours = 1.0
+
+        # 兼容多库 win_tbl：有的 `dur_var` 是分钟（如 eICU medication），有的是小时
+        # （如 HiRID grp_mount_to_rate 之后的 `givenat` + `dur_var`）。
+        dur_sample = dur_numeric.loc[work.index].dropna()
+        duration_is_hours = False
+        if not dur_sample.empty:
+            q95 = float(dur_sample.quantile(0.95))
+            median = float(dur_sample.median())
+            duration_is_hours = q95 <= 48.0 and median <= 24.0
+
+        duration_hours = dur_numeric.loc[work.index] if duration_is_hours else (dur_numeric.loc[work.index] / 60.0)
+        epsilon = 1e-9
+
+        for row, duration_hour in zip(work.itertuples(index=False), duration_hours):
+            row_dict = row._asdict()
+            start = row_dict[index_column]
+            if pd.isna(start):
+                continue
+            end = start + max(float(duration_hour), 0.0)
+            current = float(start)
+            while current <= end + epsilon:
+                expanded_rows.append({
+                    **{col: row_dict[col] for col in id_columns},
+                    index_column: current,
+                    concept_name: row_dict[concept_name],
+                })
+                current += interval_hours
+
+    if not expanded_rows:
+        return result
+
+    expanded = pd.DataFrame(expanded_rows)
+    expanded = (
+        expanded
+        .groupby(id_columns + [index_column], as_index=False)[concept_name]
+        .median()
+        .sort_values(id_columns + [index_column], kind='mergesort')
+        .reset_index(drop=True)
+    )
+    return expanded
+
+
+def _build_fast_scan_expr(loader: 'BaseICULoader', table_name: str) -> Optional[str]:
+    """Build a DuckDB scan expression for a table without materializing it in pandas."""
+    data_source = getattr(loader, 'datasource', None)
+    if data_source is None or not hasattr(data_source, '_resolve_loader_from_disk'):
+        return None
+
+    source = data_source._resolve_loader_from_disk(table_name)
+    if not isinstance(source, Path):
+        return None
+
+    def _escape(path: str) -> str:
+        return path.replace("'", "''")
+
+    if source.is_dir():
+        bucket_dirs = list(source.glob('bucket_id=*'))
+        if bucket_dirs:
+            pattern = str(source / 'bucket_id=*' / '*.parquet')
+        else:
+            parquet_files = list(source.glob('*.parquet')) + list(source.glob('*.pq'))
+            if not parquet_files:
+                return None
+            pattern = str(source / '*.parquet') if list(source.glob('*.parquet')) else str(source / '*.pq')
+        return f"read_parquet('{_escape(pattern)}', union_by_name=true)"
+
+    suffixes = [s.lower() for s in source.suffixes]
+    source_str = _escape(str(source))
+    if source.suffix.lower() in {'.parquet', '.pq'}:
+        return f"read_parquet('{source_str}', union_by_name=true)"
+    if '.csv' in suffixes or source.suffix.lower() == '.csv':
+        return f"read_csv_auto('{source_str}')"
+    return None
+
+
+def _query_patient_ids_fast(
+    loader: 'BaseICULoader',
+    table_name: str,
+    id_col: str,
+    *,
+    limit: Optional[int] = None,
+    sample_strategy: str = 'sorted',
+) -> Optional[List]:
+    """Fetch distinct patient IDs via DuckDB, avoiding full-table pandas loads."""
+    scan_expr = _build_fast_scan_expr(loader, table_name)
+    if not scan_expr:
+        return None
+
+    try:
+        import duckdb
+    except ImportError:
+        return None
+
+    order_expr = f'"{id_col}"'
+    if sample_strategy == 'random':
+        order_expr = f'hash("{id_col}")'
+
+    limit_clause = f' LIMIT {int(limit)}' if limit and limit > 0 else ''
+    query = (
+        f'SELECT DISTINCT "{id_col}" AS patient_id '
+        f'FROM {scan_expr} '
+        f'WHERE "{id_col}" IS NOT NULL '
+        f'ORDER BY {order_expr}{limit_clause}'
+    )
+
+    conn = duckdb.connect()
+    try:
+        conn.execute("SET timezone='UTC'")
+        conn.execute("SET enable_progress_bar = false")
+        conn.execute("SET enable_progress_bar_print = false")
+        return conn.execute(query).fetchnumpy()['patient_id'].tolist()
+    finally:
+        conn.close()
+
+
+def _count_patient_ids_fast(loader: 'BaseICULoader', table_name: str, id_col: str) -> Optional[int]:
+    """Count distinct patient IDs via DuckDB without loading the ID table into pandas."""
+    scan_expr = _build_fast_scan_expr(loader, table_name)
+    if not scan_expr:
+        return None
+
+    try:
+        import duckdb
+    except ImportError:
+        return None
+
+    query = (
+        f'SELECT COUNT(DISTINCT "{id_col}") AS n '
+        f'FROM {scan_expr} '
+        f'WHERE "{id_col}" IS NOT NULL'
+    )
+
+    conn = duckdb.connect()
+    try:
+        conn.execute("SET timezone='UTC'")
+        conn.execute("SET enable_progress_bar = false")
+        conn.execute("SET enable_progress_bar_print = false")
+        result = conn.execute(query).fetchone()
+        return int(result[0]) if result and result[0] is not None else None
+    finally:
+        conn.close()
 
 def clear_global_loader():
     """清除全局加载器，强制下一次调用重新创建"""
@@ -88,6 +336,25 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
     table_name, id_col = id_table_map.get(db_name, ('icustays', 'stay_id'))
     
     try:
+        fast_ids = _query_patient_ids_fast(
+            loader,
+            table_name,
+            id_col,
+            limit=max_patients if sample_strategy != 'random' else max_patients,
+            sample_strategy=sample_strategy,
+        )
+        if fast_ids is not None:
+            if sample_strategy == 'random':
+                sampled_ids = sorted(fast_ids[:max_patients])
+                strategy_label = "随机采样"
+            else:
+                sampled_ids = fast_ids[:max_patients]
+                strategy_label = "已排序"
+
+            if verbose:
+                print(f"🎯 max_patients={max_patients}: DuckDB 快速采样 {len(sampled_ids)} 个患者 ({strategy_label})")
+            return sampled_ids
+
         # 只加载ID列，限制行数
         id_table = loader.datasource.load_table(table_name, columns=[id_col], verbose=False)
         all_ids = id_table.data[id_col].dropna().unique()
@@ -132,6 +399,9 @@ def _get_total_patient_count(loader: 'BaseICULoader') -> Optional[int]:
     table_name, id_col = id_table_map.get(db_name, ('icustays', 'stay_id'))
     
     try:
+        fast_count = _count_patient_ids_fast(loader, table_name, id_col)
+        if fast_count is not None:
+            return fast_count
         id_table = loader.datasource.load_table(table_name, columns=[id_col], verbose=False)
         return id_table.data[id_col].nunique()
     except Exception:
@@ -256,6 +526,124 @@ def _get_smart_workers(num_concepts: int, num_patients: Optional[int] = None) ->
         parallel_workers = min(config.max_workers, 4)
     
     return concept_workers, parallel_workers
+
+
+def _is_low_memory_chunk_candidate(
+    concepts_list: List[str],
+    *,
+    merge: bool,
+    chunk_size: Optional[int],
+    batch_size: Optional[int],
+) -> bool:
+    """Whether the request should prefer the validated low-memory chunk path."""
+    if os.getenv('PYRICU_DISABLE_AUTO_CHUNK'):
+        return False
+    if not merge:
+        return False
+    if chunk_size is not None or batch_size is not None:
+        return False
+
+    normalized = {str(name).lower() for name in concepts_list}
+    heavy_concepts = {
+        'sofa',
+        'sofa2',
+        'kdigo_aki',
+        'aki',
+        'sep3',
+        'sep3_sofa2',
+    }
+    return bool(normalized.intersection(heavy_concepts))
+
+
+def _get_auto_chunk_strategy(
+    concepts_list: List[str],
+    num_patients: Optional[int],
+    *,
+    merge: bool,
+    chunk_size: Optional[int],
+    batch_size: Optional[int],
+    parallel_workers: Optional[int],
+    concept_workers: Optional[int],
+) -> Optional[Dict[str, int]]:
+    """Return an auto-tuned chunk strategy for heavy large-scale extraction.
+
+    Default policy now targets a balanced speed/memory profile rather than the
+    most conservative low-memory path. On machines with about 10GB available RAM,
+    it will prefer larger chunks to reduce batch overhead while still keeping a
+    large safety margin.
+    """
+    if not _is_low_memory_chunk_candidate(
+        concepts_list,
+        merge=merge,
+        chunk_size=chunk_size,
+        batch_size=batch_size,
+    ):
+        return None
+    if num_patients is None or num_patients < 2000:
+        return None
+
+    from .parallel_config import get_global_config
+    from .memory_manager import get_available_memory_mb
+
+    config = get_global_config()
+    available_memory_mb = get_available_memory_mb()
+    normalized = {str(name).lower() for name in concepts_list}
+
+    sepsis_heavy_concepts = {'sep3', 'sep3_sofa2'}
+    renal_heavy_concepts = {'kdigo_aki', 'aki'}
+    sofa_heavy_concepts = {'sofa', 'sofa2'}
+
+    if 'PYRICU_AUTO_CHUNK_SIZE' in os.environ:
+        auto_chunk_size = max(250, int(os.getenv('PYRICU_AUTO_CHUNK_SIZE', '1000')))
+    elif normalized.intersection(sepsis_heavy_concepts):
+        # 复合 sepsis 链路更依赖批次数带来的并行度；过大 chunk 会明显拖慢速度
+        auto_chunk_size = 1000
+    elif normalized.intersection(renal_heavy_concepts):
+        if available_memory_mb >= 10 * 1024:
+            auto_chunk_size = 4000
+        elif available_memory_mb >= 6 * 1024:
+            auto_chunk_size = 2000
+        else:
+            auto_chunk_size = 1000
+    elif normalized.intersection(sofa_heavy_concepts):
+        if available_memory_mb >= 10 * 1024:
+            auto_chunk_size = 8000
+        elif available_memory_mb >= 6 * 1024:
+            auto_chunk_size = 4000
+        elif available_memory_mb >= 3 * 1024:
+            auto_chunk_size = 2000
+        else:
+            auto_chunk_size = 1000
+    elif available_memory_mb >= 10 * 1024:
+        auto_chunk_size = 8000
+    elif available_memory_mb >= 6 * 1024:
+        auto_chunk_size = 4000
+    elif available_memory_mb >= 3 * 1024:
+        auto_chunk_size = 2000
+    else:
+        auto_chunk_size = 1000
+
+    if num_patients is not None:
+        auto_chunk_size = min(auto_chunk_size, max(250, int(num_patients)))
+
+    if 'PYRICU_AUTO_CHUNK_WORKERS' in os.environ:
+        auto_parallel_cap = max(1, int(os.getenv('PYRICU_AUTO_CHUNK_WORKERS', '8')))
+    elif available_memory_mb >= 10 * 1024:
+        auto_parallel_cap = 8
+    elif available_memory_mb >= 6 * 1024:
+        auto_parallel_cap = 6
+    else:
+        auto_parallel_cap = 4
+
+    batches = max(1, (num_patients + auto_chunk_size - 1) // auto_chunk_size)
+    tuned_parallel_workers = parallel_workers if parallel_workers is not None else min(config.max_workers, auto_parallel_cap, batches)
+    tuned_concept_workers = concept_workers if concept_workers is not None else 1
+
+    return {
+        'chunk_size': auto_chunk_size,
+        'parallel_workers': max(1, tuned_parallel_workers),
+        'concept_workers': max(1, tuned_concept_workers),
+    }
 
 
 def load_concepts(
@@ -428,19 +816,7 @@ def load_concepts(
 
     # 规范化患者ID
     if patient_ids is not None and not isinstance(patient_ids, dict):
-        database_name = loader.database
-        if database_name in ['eicu', 'eicu_demo']:
-            patient_ids = {'patientunitstayid': patient_ids}
-        elif database_name in ['aumc']:
-            patient_ids = {'admissionid': patient_ids}
-        elif database_name in ['hirid']:
-            patient_ids = {'patientid': patient_ids}
-        elif database_name == 'sic':
-            patient_ids = {'CaseID': patient_ids}  # SICdb uses CaseID
-        elif database_name == 'mimic':
-            patient_ids = {'icustay_id': patient_ids}  # MIMIC-III uses icustay_id
-        else:
-            patient_ids = {'stay_id': patient_ids}
+        patient_ids = _normalize_patient_ids_for_db(loader.database, patient_ids)
 
     # 🚀 智能并行配置：根据概念数量和患者数量自动优化
     num_patients = None
@@ -452,13 +828,26 @@ def load_concepts(
                     break
         elif isinstance(patient_ids, (list, tuple)):
             num_patients = len(patient_ids)
+
+    prefer_low_memory_chunk = _is_low_memory_chunk_candidate(
+        concepts_list,
+        merge=merge,
+        chunk_size=chunk_size,
+        batch_size=batch_size,
+    )
+    inferred_total_patients = num_patients
+    if inferred_total_patients is None and patient_ids is None and prefer_low_memory_chunk:
+        try:
+            inferred_total_patients = _get_total_patient_count(loader)
+        except Exception as e:
+            logger.debug(f"低内存 chunk 总患者数检测失败: {e}")
     
     # 只有当用户没有指定时才使用智能配置
     effective_concept_workers = concept_workers
     effective_parallel_workers = parallel_workers
     
     if concept_workers is None or parallel_workers is None:
-        smart_concept, smart_parallel = _get_smart_workers(len(concepts_list), num_patients)
+        smart_concept, smart_parallel = _get_smart_workers(len(concepts_list), inferred_total_patients)
         if concept_workers is None:
             effective_concept_workers = smart_concept
         if parallel_workers is None:
@@ -467,6 +856,49 @@ def load_concepts(
         if verbose and (effective_concept_workers > 1 or effective_parallel_workers):
             print(f"   ⚡ 智能优化: concept_workers={effective_concept_workers}, "
                   f"parallel_workers={effective_parallel_workers or '不分批'}")
+
+    effective_chunk_size = chunk_size
+    auto_chunk_strategy = _get_auto_chunk_strategy(
+        concepts_list,
+        inferred_total_patients,
+        merge=merge,
+        chunk_size=chunk_size,
+        batch_size=batch_size,
+        parallel_workers=parallel_workers,
+        concept_workers=concept_workers,
+    )
+    if auto_chunk_strategy:
+        effective_chunk_size = auto_chunk_strategy['chunk_size']
+        effective_parallel_workers = auto_chunk_strategy['parallel_workers']
+        effective_concept_workers = auto_chunk_strategy['concept_workers']
+        if verbose:
+            print(
+                f"   🚀 大样本复合概念优先使用平衡分块: chunk_size={effective_chunk_size}, "
+                f"parallel_workers={effective_parallel_workers}, "
+                f"concept_workers={effective_concept_workers}"
+            )
+
+        if patient_ids is None and inferred_total_patients:
+            patient_ids = _sample_patient_ids(
+                loader,
+                inferred_total_patients,
+                verbose=verbose,
+                sample_strategy='sorted',
+            )
+            if patient_ids is not None and not isinstance(patient_ids, dict):
+                patient_ids = _normalize_patient_ids_for_db(loader.database, patient_ids)
+            if isinstance(patient_ids, dict):
+                for v in patient_ids.values():
+                    if isinstance(v, (list, tuple)):
+                        num_patients = len(v)
+                        break
+            elif isinstance(patient_ids, (list, tuple)):
+                num_patients = len(patient_ids)
+            else:
+                num_patients = inferred_total_patients
+
+            if verbose and patient_ids is not None:
+                print(f"   📦 已为平衡分块准备全量患者ID: {num_patients} patients")
 
     # ====================================================================
     # 🆕 内存感知自动分批处理
@@ -502,7 +934,7 @@ def load_concepts(
         _total_patients = None
     
     # 自动检测全量加载场景
-    if _total_patients is None and patient_ids is None and effective_batch_size is None:
+    if (not auto_chunk_strategy) and _total_patients is None and patient_ids is None and effective_batch_size is None:
         # 全量加载：查询总患者数来决定是否需要分批
         try:
             _total_patients_in_db = _get_total_patient_count(loader)
@@ -517,19 +949,7 @@ def load_concepts(
                                                       sample_strategy='sorted')
                     if patient_ids is not None:
                         # 规范化
-                        database_name = loader.database
-                        if database_name in ['eicu', 'eicu_demo']:
-                            patient_ids = {'patientunitstayid': patient_ids}
-                        elif database_name in ['aumc']:
-                            patient_ids = {'admissionid': patient_ids}
-                        elif database_name in ['hirid']:
-                            patient_ids = {'patientid': patient_ids}
-                        elif database_name == 'sic':
-                            patient_ids = {'CaseID': patient_ids}
-                        elif database_name == 'mimic':
-                            patient_ids = {'icustay_id': patient_ids}
-                        else:
-                            patient_ids = {'stay_id': patient_ids}
+                        patient_ids = _normalize_patient_ids_for_db(loader.database, patient_ids)
                         
                         _id_col = list(patient_ids.keys())[0]
                         _all_ids = list(patient_ids.values())[0]
@@ -554,7 +974,7 @@ def load_concepts(
         effective_batch_size = batch_size
     
     # 自动检测：用户指定了 patient_ids 但未指定 batch_size
-    if effective_batch_size is None and _total_patients is not None and _total_patients > 5000:
+    if (not auto_chunk_strategy) and effective_batch_size is None and _total_patients is not None and _total_patients > 5000:
         avail_mem = get_available_memory_mb()
         est_mem = estimate_memory_mb(concepts_list, loader.database, _total_patients)
         if est_mem > avail_mem * 0.6:
@@ -566,6 +986,9 @@ def load_concepts(
                       f"估算 {est_mem:.0f}MB > budget {avail_mem*0.6:.0f}MB, "
                       f"batch_size={effective_batch_size}")
             use_subprocess = avail_mem < 16 * 1024
+
+    if auto_chunk_strategy and verbose and effective_batch_size is None:
+        print("   🧠 已跳过自动 batch 分批，优先采用已验证的平衡 chunk 路径")
     
     # 执行分批处理
     if effective_batch_size is not None and _id_col is not None and _all_ids is not None:
@@ -577,7 +1000,7 @@ def load_concepts(
                 keep_components=keep_components,
                 merge=merge,
                 ricu_compatible=ricu_compatible,
-                chunk_size=chunk_size,
+                chunk_size=effective_chunk_size,
                 progress=progress,
                 parallel_workers=effective_parallel_workers,
                 concept_workers=effective_concept_workers,
@@ -589,18 +1012,19 @@ def load_concepts(
                 # 子进程隔离（内存 < 16GB）
                 if verbose:
                     print(f"🔒 使用子进程隔离模式 (可用内存 < 16GB)")
+                subprocess_kwargs = dict(load_kwargs)
                 final_result = subprocess_batch_load(
                     concepts=concepts_list,
                     database=loader.database,
                     all_patient_ids={_id_col: _all_ids},
                     batch_size=effective_batch_size,
                     data_path=str(loader.data_path) if hasattr(loader, 'data_path') else None,
-                    interval=interval if isinstance(interval, str) else '1h',
                     verbose=verbose,
                     merge=merge,
                     ricu_compatible=ricu_compatible,
                     dict_path=dict_path,
                     use_sofa2=use_sofa2,
+                    **subprocess_kwargs,
                 )
             else:
                 # 进程内分批 + malloc_trim（内存 >= 16GB）
@@ -629,7 +1053,7 @@ def load_concepts(
         keep_components=keep_components,
         merge=merge,
         ricu_compatible=ricu_compatible,
-        chunk_size=chunk_size,
+        chunk_size=effective_chunk_size,
         progress=progress,
         parallel_workers=effective_parallel_workers,
         concept_workers=effective_concept_workers,
@@ -643,6 +1067,9 @@ def load_concepts(
             result = _compress_dtypes(result, verbose=verbose)
         elif isinstance(result, dict):
             result = {k: _compress_dtypes(v, verbose=verbose) for k, v in result.items()}
+
+    if ricu_compatible and merge and len(concepts_list) == 1 and isinstance(result, pd.DataFrame):
+        result = _expand_public_numeric_win_tbl_output(result, concepts_list[0], interval)
     
     return result
 

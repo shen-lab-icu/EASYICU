@@ -306,9 +306,17 @@ class ConceptLoader:
             return values
         if isinstance(patient_ids, pd.Series):
             return [value for value in patient_ids.tolist() if not pd.isna(value)]
+        # numpy array support
+        import numpy as np
+        if isinstance(patient_ids, np.ndarray):
+            return [v for v in patient_ids.tolist() if not pd.isna(v)]
         if isinstance(patient_ids, (list, tuple, set)):
             return [value for value in patient_ids if not pd.isna(value)]
-        return [patient_ids] if not pd.isna(patient_ids) else []
+        try:
+            return [patient_ids] if not pd.isna(patient_ids) else []
+        except (ValueError, TypeError):
+            # pd.isna on array-like returns array, not scalar
+            return list(patient_ids)
 
     def _load_id_lookup(self) -> pd.DataFrame:
         """加载包含 stay/hadm/subject 映射的参考表，用于ID转换。"""
@@ -770,7 +778,9 @@ class ConceptLoader:
                 callback_extra_cols = ['givendose', 'doseunit', 'infusionid', 'givenat']
             elif source.callback in ('aumc_rate_kg', 'aumc_rate'):
                 callback_extra_cols = ['dose', 'doseunit', 'doseunitid', 'rate', 'rateunit', 'infusionid', 'start', 'stop']
-            elif source.callback in ('mimic_rate_cv', 'mimic_rate_mv'):
+            elif source.callback in ('mimic_rate_cv', 'mimic_rate_mv') or (
+                source.callback and 'mimv_rate' in source.callback
+            ):
                 callback_extra_cols = ['amount', 'amountuom', 'rate', 'rateuom', 'ordercategorydescription']
             
             if required_columns is None:

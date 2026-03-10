@@ -1059,11 +1059,12 @@ def news_score(
     if avpu is None and gcs is None:
         avpu = pd.Series("A", index=resp.index)
     elif avpu is None and gcs is not None:
-        # Convert GCS to AVPU (rough approximation)
-        avpu = pd.Series("A", index=gcs.index)
-        avpu[gcs < 15] = "V"
-        avpu[gcs < 13] = "P"
-        avpu[gcs < 9] = "U"
+        # Convert GCS to AVPU: R ricu findInterval(x, c(2,3,9,13,15), left.open=TRUE)
+        avpu = pd.Series(np.nan, index=gcs.index, dtype=object)
+        avpu[(gcs > 13) & (gcs <= 15)] = "A"
+        avpu[(gcs > 9) & (gcs <= 13)] = "V"
+        avpu[(gcs > 3) & (gcs <= 9)] = "P"
+        avpu[(gcs > 2) & (gcs <= 3)] = "U"
     # Initialize component scores
     resp_score = pd.Series(0, index=resp.index, dtype=int)
     resp_score[resp <= 8] = 3
@@ -1649,7 +1650,6 @@ def _urine_window_avg(
     
     result = merged.groupby(id_cols, group_keys=False).apply(
         calc_uo_rate_fast,
-        include_groups=True,
     )
 
     # 如果未来的 pandas 默认移除了 ID 列，这里仍兜底补齐
@@ -1935,7 +1935,7 @@ def gcs(
     # Apply sedation imputation
     # (Simplified - would need ett_gcs merge for full implementation)
     
-    # Set NA to max if requested
+    # Set NA to max - R ricu unconditionally fills all NA components with max
     if set_na_max:
         if 'egcs' in result.columns:
             result['egcs'] = result['egcs'].fillna(4)
@@ -2122,7 +2122,12 @@ def urine24(
         return group
     
     if id_cols:
+        # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
+        _id_backup = result[id_cols].copy()
         result = result.groupby(id_cols, group_keys=False).apply(calc_urine24)
+        for _gc in id_cols:
+            if _gc not in result.columns:
+                result[_gc] = _id_backup[_gc].values
     else:
         result = calc_urine24(result)
     

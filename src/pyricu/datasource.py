@@ -9,7 +9,48 @@ import logging
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 from threading import RLock
 
+import numpy as np
 import pandas as pd
+
+
+def _coerce_string_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert pandas StringDtype columns to object dtype for pandas 3.0 compatibility.
+
+    In pandas 3.0, reading parquet/arrow data returns string columns as pd.StringDtype
+    (backed by pyarrow) instead of numpy object. This causes TypeError when assigning
+    float values using .loc[mask, col], which is common in PyRICU callbacks.
+
+    This function converts StringDtype columns back to numpy object dtype so that
+    existing code works correctly without modification.
+    """
+    if df.empty:
+        return df
+    str_cols = [c for c in df.columns if isinstance(df[c].dtype, pd.StringDtype)]
+    if str_cols:
+        df = df.copy()
+        for col in str_cols:
+            df[col] = df[col].astype(object)
+    return df
+
+
+def _arrow_to_pandas_compat(arrow_table, **kwargs) -> pd.DataFrame:
+    """Convert Arrow table to pandas DataFrame with StringDtype→object coercion.
+
+    Wraps arrow_table.to_pandas() to ensure string columns use numpy object dtype
+    rather than pd.StringDtype, preventing pandas 3.0 compatibility issues.
+    """
+    try:
+        import pyarrow as pa
+        # Map all string/large_string types to numpy object to avoid pd.StringDtype
+        def types_mapper(arrow_type):
+            if pa.types.is_string(arrow_type) or pa.types.is_large_string(arrow_type):
+                return np.dtype('O')
+            return None
+        df = arrow_table.to_pandas(types_mapper=types_mapper, **kwargs)
+    except Exception:
+        df = arrow_table.to_pandas(**kwargs)
+        df = _coerce_string_dtypes(df)
+    return df
 
 from .config import DataSourceConfig, DataSourceRegistry, DatasetOptions
 from .table import ICUTable
@@ -1472,18 +1513,20 @@ class ICUDataSource:
                     target_ids = list(patient_ids_filter._value_set)
                     
                     # 使用PyArrow读取并过滤 - 使用 DNF 格式
-                    df = pq.read_table(
+                    tbl = pq.read_table(
                         path,
                         columns=list(columns) if columns else None,
                         filters=[[(patient_ids_filter.column, 'in', target_ids)]]
-                    ).to_pandas()
+                    )
+                    df = _arrow_to_pandas_compat(tbl)
+                    del tbl
                 except (ImportError, Exception):
                     # 如果PyArrow过滤失败，回退到pandas后过滤
-                    df = pd.read_parquet(path, columns=list(columns) if columns else None, engine='pyarrow')
+                    df = _coerce_string_dtypes(pd.read_parquet(path, columns=list(columns) if columns else None, engine='pyarrow'))
                     if patient_ids_filter.column in df.columns:
                         df = patient_ids_filter.apply(df)
             else:
-                df = pd.read_parquet(path, columns=list(columns) if columns else None, engine='pyarrow')
+                df = _coerce_string_dtypes(pd.read_parquet(path, columns=list(columns) if columns else None, engine='pyarrow'))
             
             # 处理重复列名（如果存在）
             if df.columns.duplicated().any():
@@ -1626,7 +1669,7 @@ class ICUDataSource:
             con.execute("SET enable_progress_bar_print = false")
             try:
                 arrow_table = con.execute(query).fetch_arrow_table()
-                df = arrow_table.to_pandas(split_blocks=True, self_destruct=True)
+                df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
                 del arrow_table
             except Exception:
                 df = con.execute(query).fetchdf()
@@ -1844,7 +1887,7 @@ class ICUDataSource:
             # 🚀 优化: 使用 Arrow → pandas 零拷贝转换，减少内存峰值约40%
             try:
                 arrow_table = con.execute(query).fetch_arrow_table()
-                df = arrow_table.to_pandas(split_blocks=True, self_destruct=True)
+                df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
                 del arrow_table
             except Exception:
                 df = con.execute(query).fetchdf()
@@ -1931,7 +1974,7 @@ class ICUDataSource:
                 )
 
             # 转换为 pandas，使用 zero-copy 优化
-            return table.to_pandas(split_blocks=True, self_destruct=True)
+            return _arrow_to_pandas_compat(table, split_blocks=True)
             
         except Exception:
             # 回退到简单方式
@@ -2031,12 +2074,12 @@ class ICUDataSource:
                     )
                     if arrow_filters is not None:
                         table = table.filter(arrow_filters)
-                    df = table.to_pandas()
+                    df = _arrow_to_pandas_compat(table)
                     dfs.append(df)
                     continue
                 except Exception:
                     pass  # Fallback to pandas.read_parquet below
-            df = pd.read_parquet(f, columns=list(columns) if columns else None)
+            df = _coerce_string_dtypes(pd.read_parquet(f, columns=list(columns) if columns else None))
             if filter_tuple:
                 col_name, target_ids = filter_tuple
                 if col_name in df.columns:
@@ -2079,7 +2122,7 @@ class ICUDataSource:
                     dataset = ds.dataset(directory, format="parquet")
 
             table = dataset.to_table(columns=columns, filter=filter_expr)
-            return table.to_pandas()
+            return _arrow_to_pandas_compat(table)
         except (OSError, ValueError, TypeError) as exc:
             if DEBUG_MODE:
                 logger.debug("PyArrow dataset read failed for %s: %s", directory, exc)
@@ -2160,7 +2203,7 @@ class ICUDataSource:
                 effective_columns = None
 
         table = dataset.to_table(columns=effective_columns, filter=filter_expr)
-        frame = table.to_pandas()
+        frame = _arrow_to_pandas_compat(table)
 
         if requested_columns:
             frame = frame.reindex(columns=requested_columns)
@@ -2431,8 +2474,13 @@ def load_bucketed_table_aggregated(
     
     unit_select = ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
     
-    # 当有内联 convert_unit 时，不按 itemid 分组（匹配 R ricu 跨 itemid 聚合行为）
-    if _has_inline_convert:
+    # R ricu 的 change_interval 聚合不按 itemid 分组:
+    # 它将同一 (patient, hour) 的所有 itemid 数据池化后取 median/max 等。
+    # 但对于 AUMC，不同 itemid 可能使用不同单位（如 pco2 的 mmHg vs kPa），
+    # 不能池化。这种情况下必须保留 itemid 分组，让后续 change_interval + 
+    # filter_bounds 逐个处理。HiRID 无此问题，可以安全池化。
+    if _has_inline_convert or db_name == 'hirid':
+        # convert_unit 已在 SQL 中统一单位，或 HiRID 同单位，可以池化
         _group_itemid = ""
         _select_itemid = ""
         _order_itemid = ""
@@ -2487,14 +2535,12 @@ def load_bucketed_table_aggregated(
             else:
                 _hirid_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
             _hirid_agg_expr = f"{duckdb_agg}({_hirid_value_expr}) as {value_column}"
-            _hirid_group_itemid = ""
-            _hirid_select_itemid = ""
-            _hirid_order_itemid = ""
         else:
             _hirid_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
-            _hirid_group_itemid = f", o.{itemid_col}"
-            _hirid_select_itemid = f",\n            o.{itemid_col}"
-            _hirid_order_itemid = f", o.{itemid_col}"
+        # R ricu 不按 variableid 分组（跨 variableid 池化取聚合）
+        _hirid_group_itemid = ""
+        _hirid_select_itemid = ""
+        _hirid_order_itemid = ""
         
         hirid_unit_select = ",\n            ANY_VALUE(o.unit) as unit" if include_unit else ""
         
@@ -2532,7 +2578,7 @@ def load_bucketed_table_aggregated(
     try:
         try:
             arrow_table = conn.execute(query).fetch_arrow_table()
-            df = arrow_table.to_pandas(split_blocks=True, self_destruct=True)
+            df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
             del arrow_table
         except Exception:
             df = conn.execute(query).fetchdf()
@@ -2703,7 +2749,7 @@ def load_wide_table_aggregated(
     try:
         try:
             arrow_table = conn.execute(query).fetch_arrow_table()
-            df = arrow_table.to_pandas(split_blocks=True, self_destruct=True)
+            df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
             del arrow_table
         except Exception:
             df = conn.execute(query).fetchdf()

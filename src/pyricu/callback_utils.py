@@ -710,7 +710,13 @@ def locf(max_gap: Optional[pd.Timedelta] = None) -> Callable:
                 
                 return group
             
-            data = data.groupby(id_cols).apply(fill_group, include_groups=True).reset_index(drop=True)
+            # 🔧 FIX pandas 3.0: groupby().apply() drops group columns.
+            # Re-add group columns after apply.
+            _grp_backup = data[id_cols].copy()
+            data = data.groupby(id_cols).apply(fill_group).reset_index(drop=True)
+            for _gc in id_cols:
+                if _gc not in data.columns:
+                    data[_gc] = _grp_backup[_gc].values
         else:
             # Simple forward fill
             data[val_col] = data[val_col].fillna(method='ffill')
@@ -772,7 +778,13 @@ def locb(max_gap: Optional[pd.Timedelta] = None) -> Callable:
                 
                 return group
             
-            data = data.groupby(id_cols).apply(fill_group, include_groups=True).reset_index(drop=True)
+            # 🔧 FIX pandas 3.0: groupby().apply() drops group columns.
+            # Re-add group columns after apply.
+            _grp_backup = data[id_cols].copy()
+            data = data.groupby(id_cols).apply(fill_group).reset_index(drop=True)
+            for _gc in id_cols:
+                if _gc not in data.columns:
+                    data[_gc] = _grp_backup[_gc].values
         else:
             # Simple backward fill
             data[val_col] = data[val_col].fillna(method='bfill')
@@ -897,10 +909,20 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
             if frame.empty:
                 return frame
             
-            # For numeric offsets, convert to datetime temporarily for group_measurements
-            # which expects datetime. We'll convert back later.
+            # CRITICAL: R ricu converts minutes to hours BEFORE grouping.
+            # floor(offset/60) → hour-level, then groups on unique hours.
+            # This affects gap detection: e.g., 310min gap < 5h (strict >) stays together,
+            # but at minute-level 310 > 300 would split incorrectly.
+            frame['_hour'] = (frame[index_var] // 60).astype(int)
+            # Keep original offset for min tracking
+            frame['_orig_offset'] = frame[index_var]
+            # Deduplicate per (patient, hour) — keep first occurrence per hour
+            dedup_cols = [c for c in id_cols if c in frame.columns] + ['_hour']
+            frame = frame.drop_duplicates(subset=dedup_cols, keep='first')
+            
+            # For group_measurements, convert HOURS to datetime (so gap unit matches hours)
             base_time = pd.Timestamp('2000-01-01')
-            frame['__temp_time'] = base_time + pd.to_timedelta(frame[index_var], unit='min')
+            frame['__temp_time'] = base_time + pd.to_timedelta(frame['_hour'], unit='h')
             temp_index_var = '__temp_time'
         else:
             # Other databases use datetime
@@ -950,10 +972,15 @@ def eicu_duration_callback(gap_length: pd.Timedelta) -> Callable:
         
         # R ricu: res <- res[, c(val_var) := get(val_var) - get(index_var)]
         # Calculate duration: max - min
-        # For numeric offset (minutes), convert to hours; for datetime, result is already timedelta
         if is_offset:
-            # eICU: offset in minutes, duration should be in hours
-            result[val_col] = (result['max_time'] - result['min_time']) / 60.0
+            # eICU: use _hour for duration (integer hour difference, matching R ricu)
+            # R does: floor(max_offset/60) - floor(min_offset/60)
+            result_hr = grouped.groupby(groupby_cols, dropna=False).agg(
+                min_hour=('_hour', 'min'),
+                max_hour=('_hour', 'max'),
+            ).reset_index()
+            result[val_col] = result_hr['max_hour'] - result_hr['min_hour']
+            result[val_col] = result[val_col].astype(float)
         else:
             # Other databases: datetime difference gives timedelta, convert to hours
             result[val_col] = (result['max_time'] - result['min_time']).dt.total_seconds() / 3600.0
@@ -1509,31 +1536,15 @@ def create_intervals(
         # 4. endtime = start + diff
         
         if by_cols:
-            def calc_end(group):
-                group = group.copy()
-                # Step 1: Calculate diff to next time (padded_diff)
-                next_times = group[index_var].shift(-1)
-                diff = next_times - group[index_var]
-                # For last row, use overhang
-                diff = diff.fillna(overhang_val)
-                
-                # Step 2: Truncate to [0, max_len]
-                # NOTE: In ricu 0.6.3, trunc_time has a bug - max_len is NOT applied
-                # We match this bug to produce identical results to gold standard
-                # diff = diff.clip(lower=0, upper=max_len_val)  # Disabled to match ricu bug
-                diff = diff.clip(lower=0)  # Only apply lower bound
-                
-                # Step 3: Subtract interval
-                diff = diff - interval_val
-                
-                # Ensure diff is not negative
-                diff = diff.clip(lower=0)
-                
-                # Step 4: endtime = start + diff
-                group[end_var] = group[index_var] + diff
-                return group
-            
-            data = data.groupby(by_cols, group_keys=False).apply(calc_end, include_groups=True)
+            # 🔧 FIX pandas 3.0: groupby().apply() drops group columns.
+            # Use vectorized groupby().shift() instead.
+            next_times = data.groupby(by_cols)[index_var].shift(-1)
+            diff = next_times - data[index_var]
+            diff = diff.fillna(overhang_val)
+            diff = diff.clip(lower=0)  # Only apply lower bound (ricu 0.6.3 bug)
+            diff = diff - interval_val
+            diff = diff.clip(lower=0)
+            data[end_var] = data[index_var] + diff
         else:
             next_times = data[index_var].shift(-1)
             diff = next_times - data[index_var]
@@ -1549,19 +1560,15 @@ def create_intervals(
             data[index_var] = pd.to_datetime(data[index_var])
         
         if by_cols:
-            def calc_end(group):
-                group = group.copy()
-                next_times = group[index_var].shift(-1)
-                diff = next_times - group[index_var]
-                diff = diff.fillna(overhang)
-                # NOTE: max_len NOT applied - matching ricu 0.6.3 bug
-                diff = diff.clip(lower=pd.Timedelta(0))
-                diff = diff - interval
-                diff = diff.clip(lower=pd.Timedelta(0))
-                group[end_var] = group[index_var] + diff
-                return group
-            
-            data = data.groupby(by_cols, group_keys=False).apply(calc_end, include_groups=True)
+            # 🔧 FIX pandas 3.0: groupby().apply() drops group columns.
+            # Use vectorized groupby().shift() instead.
+            next_times = data.groupby(by_cols)[index_var].shift(-1)
+            diff = next_times - data[index_var]
+            diff = diff.fillna(overhang)
+            diff = diff.clip(lower=pd.Timedelta(0))
+            diff = diff - interval
+            diff = diff.clip(lower=pd.Timedelta(0))
+            data[end_var] = data[index_var] + diff
         else:
             next_times = data[index_var].shift(-1)
             diff = next_times - data[index_var]
@@ -1881,7 +1888,13 @@ def grp_amount_to_rate(
         else:
             group_cols = id_cols
         
-        data = data.groupby(group_cols, group_keys=False).apply(calc_rate, include_groups=True)
+        # 🔧 FIX pandas 3.0: groupby().apply() drops group columns.
+        _grp_backup = data[group_cols].copy()
+        data = data.groupby(group_cols, group_keys=False).apply(calc_rate)
+        for _gc in group_cols:
+            if _gc not in data.columns:
+                # Re-add from original (align by index)
+                data[_gc] = _grp_backup.loc[data.index, _gc].values if len(data) == len(_grp_backup) else _grp_backup[_gc].iloc[:len(data)].values
         
         # Set units
         if isinstance(unit_val, dict):
@@ -2042,53 +2055,78 @@ def mimv_rate(
 ) -> pd.DataFrame:
     """MIMIC MetaVision rate calculation callback (R ricu mimv_rate).
     
-    For MIMIC-III/IV MetaVision inputevents, calculates infusion rate from
-    amount when rate is not directly available.
+    For MIMIC-III/IV MetaVision inputevents, extracts the infusion rate from
+    the `rate` column, falling back to amount/duration when rate is 0 or NA.
+    
+    This mirrors R ricu's mimv_rate which reads the `rate` column directly
+    from inputevents and fills missing values by computing amount/duration.
     
     Args:
-        data: Input DataFrame
-        val_col: Rate column (output)
+        data: Input DataFrame (must contain a 'rate' column from inputevents)
+        val_col: Output column name where computed rate will be stored
         unit_col: Unit column (output)
         dur_var: Duration column
-        amount_var: Amount column
+        amount_var: Amount column (fallback when rate is 0/NA)
         auom_var: Amount unit of measure column
         **kwargs: Additional arguments
         
     Returns:
-        DataFrame with calculated rates
-        
-    Note:
-        Only calculates rate where val_col is NA.
-        Rate = amount / duration
-        Unit = amountuom / duration_unit
+        DataFrame with val_col set to the infusion rate (mL/hr or drug/hr)
     """
     data = data.copy()
-    
-    # Find rows where rate is NA
-    mask = data[val_col].isna()
-    
-    if not mask.any():
-        return data
-    
-    # Ensure duration is timedelta
-    if dur_var in data.columns:
-        if not pd.api.types.is_timedelta64_dtype(data[dur_var]):
-            data[dur_var] = pd.to_timedelta(data[dur_var], errors='coerce')
-        
-        # Convert duration to hours for rate calculation
-        dur_hours = data.loc[mask, dur_var].dt.total_seconds() / 3600
-        
-        # Avoid division by zero
+
+    # Step 1: if the table has a dedicated 'rate' column (MIMIC inputevents),
+    # copy it into val_col. This is the primary source of truth.
+    if 'rate' in data.columns and val_col != 'rate':
+        data[val_col] = pd.to_numeric(data['rate'], errors='coerce')
+
+    # Step 2: where val_col is still NA or 0, fall back to amount / duration
+    mask = data[val_col].isna() | (data[val_col] == 0)
+
+    if mask.any() and dur_var in data.columns:
+        dur_series = data.loc[mask, dur_var]
+
+        # Determine duration in hours based on dtype:
+        # - timedelta64: use .dt.total_seconds() / 3600
+        # - datetime64: this means dur_var holds an end-time, not duration;
+        #   but concept.py may also store pre-computed minutes as datetime64
+        #   after DuckDB processing – convert to numeric first
+        # - numeric (float/int): concept.py stores as minutes (total_seconds/60)
+        # - string datetime: try parsing as timedelta then as datetime diff
+        if pd.api.types.is_timedelta64_dtype(dur_series):
+            dur_hours = dur_series.dt.total_seconds() / 3600
+        elif pd.api.types.is_datetime64_any_dtype(dur_series):
+            # datetime64 column – try interpreting as numeric minutes
+            # (concept.py sometimes stores duration as minutes in datetime col)
+            dur_numeric = pd.to_numeric(dur_series, errors='coerce')
+            if dur_numeric.notna().any():
+                dur_hours = dur_numeric / 60.0
+            else:
+                dur_hours = pd.Series(np.nan, index=dur_series.index)
+        elif pd.api.types.is_numeric_dtype(dur_series):
+            # Stored in MINUTES by concept.py (see concept.py:2730, 7457)
+            dur_hours = dur_series / 60.0
+        else:
+            # String or datetime: try converting to timedelta
+            try:
+                converted = pd.to_timedelta(dur_series, errors='coerce')
+            except TypeError:
+                converted = pd.to_timedelta(dur_series.astype(str), errors='coerce')
+            dur_hours = converted.dt.total_seconds() / 3600
+
         dur_hours = dur_hours.replace(0, np.nan)
-        
-        # Calculate rate
-        if amount_var in data.columns and auom_var in data.columns:
-            data.loc[mask, val_col] = data.loc[mask, amount_var] / dur_hours
-            
-            # Create unit string (e.g., "mg/hour")
-            # Extract unit suffix from duration (e.g., "hour" from timedelta)
-            data.loc[mask, unit_col] = data.loc[mask, auom_var] + '/hour'
-    
+        dur_hours = dur_hours.where(dur_hours > 0, np.nan)
+
+        if amount_var in data.columns:
+            data.loc[mask, val_col] = (
+                pd.to_numeric(data.loc[mask, amount_var], errors='coerce') / dur_hours
+            )
+        if auom_var in data.columns and unit_col in data.columns:
+            data.loc[mask, unit_col] = data.loc[mask, auom_var].astype(str) + '/hour'
+
+    # Step 3: drop rows that still have no usable rate
+    data = data[data[val_col].notna() & (data[val_col] > 0)]
+
     return data
 
 # 注意: grp_amount_to_rate 已在第1807行定义，此处删除重复的 deprecated wrapper
@@ -2847,12 +2885,18 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         # 3. Create intervals: diff = min(next_hour - current_hour, max_len) - interval
         # 4. Expand each record to [current_hour, current_hour + diff]
         
+        # Step 0: Sort by time so groupby.agg('last') picks the chronologically last record
+        frame = frame.sort_values([id_col, time_col]).reset_index(drop=True)
+        
         # Step 1: Convert to hours
         frame['_hour'] = (frame[time_col] // 60).astype(int)
         
-        # Step 2: Aggregate by patient and hour (take max)
+        # Step 2: Aggregate by patient and hour
+        # CRITICAL: R ricu uses 'last' (chronological order), not 'max'.
+        # When infusion stops, a rate=0 record is written. Using 'max' would
+        # incorrectly keep the pre-stop rate, while 'last' correctly picks up 0.
         hourly = frame.groupby([id_col, '_hour'], as_index=False).agg({
-            concept_name: 'max'
+            concept_name: 'last'
         })
         hourly = hourly.sort_values([id_col, '_hour'])
         
@@ -2877,9 +2921,14 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
             group['_end_hour'] = group['_hour'] + group['_diff']
             return group
         
-        hourly = hourly.groupby(id_col, group_keys=False, sort=False).apply(
-            create_intervals_ricu, include_groups=True
-        )
+        # 🔧 FIX pandas 3.0: groupby().apply() drops group columns.
+        # Use vectorized groupby().shift() instead.
+        hourly = hourly.copy()
+        hourly['_diff'] = hourly.groupby(id_col)['_hour'].shift(-1) - hourly['_hour']
+        hourly.loc[hourly['_diff'].isna(), '_diff'] = overhang
+        hourly['_diff'] = hourly['_diff'].clip(upper=max_len)
+        hourly['_diff'] = hourly['_diff'] - interval
+        hourly['_end_hour'] = hourly['_hour'] + hourly['_diff']
         
         # Step 4: Expand each record using R's seq(start, end, step=1)
         # NOTE: Return time in MINUTES (hour * 60) so that _align_time_to_admission
@@ -2930,9 +2979,9 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
             all_hours = list(range(min_hour, max_hour + 1))
             all_minutes = [h * 60 for h in all_hours]
             
-            # Create grid dataframe
+            # Create grid dataframe - get id from group.name (set by groupby)
             grid = pd.DataFrame({
-                id_col: group[id_col].iloc[0],
+                id_col: group.name if not isinstance(group.name, tuple) else group.name[0],
                 time_col: all_minutes
             })
             
@@ -2944,7 +2993,7 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
             
             return merged
         
-        expanded = expanded.groupby(id_col, group_keys=False).apply(fill_gaps_locf)
+        expanded = expanded.groupby(id_col, group_keys=False).apply(fill_gaps_locf, include_groups=False)
         expanded = expanded.reset_index(drop=True)
         
         return expanded
@@ -3144,11 +3193,21 @@ def eicu_dex_med(
         # dur_var是已计算的duration，单位是小时，转换为分钟
         duration_minutes = dur_vals * 60.0
     else:
-        # dur_var是原始的offset，需要看情况处理
-        # 如果传入的是drugstopoffset，它本身就是停止时间偏移量，不是duration
-        # 这种情况不应该发生（因为我们优先使用{concept}_dur列）
-        # 但作为回退，假设它是分钟
-        duration_minutes = dur_vals
+        # eICU medication 的原始 dur_var 往往是 stop offset，而不是持续时间。
+        # 对 D50 这种短时给药，RICU 使用 stop-start 作为持续时间；若直接把 stop offset
+        # 当 duration，会在负 offset/极小值场景下退化成 1 分钟，从而把速率放大到 7500 ml/hr。
+        start_candidates = [
+            "drugstartoffset",
+            "startoffset",
+            f"{concept_name}_start",
+            "start",
+        ]
+        start_col = next((col for col in start_candidates if col in work.columns), None)
+        if start_col is not None:
+            start_vals = pd.to_numeric(work[start_col], errors="coerce")
+            duration_minutes = dur_vals - start_vals
+        else:
+            duration_minutes = dur_vals
 
     # Filter: duration <= 0 set to 1 min
     duration_minutes = duration_minutes.fillna(1.0)

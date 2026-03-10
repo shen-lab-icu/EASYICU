@@ -542,10 +542,15 @@ def kdigo_stages(
     # Handle RRT - automatic Stage 3
     result['aki_stage_rrt'] = 0  # Default: no RRT
     if rrt_df is not None and not rrt_df.empty:
+        rrt_id_col = _detect_id_col(rrt_df, id_col)
+        rrt_time_col = _detect_time_col(rrt_df, time_col)
         rrt_col = _detect_value_col(rrt_df, 'rrt')
-        if rrt_col:
+        if rrt_id_col and rrt_time_col and rrt_col:
+            rrt_view = rrt_df[[rrt_id_col, rrt_time_col, rrt_col]].rename(
+                columns={rrt_id_col: id_col, rrt_time_col: time_col, rrt_col: 'rrt'}
+            )
             result = result.merge(
-                rrt_df[[id_col, time_col, rrt_col]].rename(columns={rrt_col: 'rrt'}),
+                rrt_view,
                 on=[id_col, time_col],
                 how='left'
             )
@@ -556,6 +561,11 @@ def kdigo_stages(
             )
             # aki_stage_rrt: 3 if RRT active, 0 otherwise
             result.loc[rrt_mask, 'aki_stage_rrt'] = 3
+        else:
+            logger.warning(
+                "Skipping RRT merge because ID/time/value columns could not be detected: %s",
+                list(rrt_df.columns),
+            )
     
     # Calculate combined AKI stage
     result['aki_stage_creat'] = result['aki_stage_creat'].fillna(0).astype(int)

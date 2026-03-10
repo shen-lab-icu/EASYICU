@@ -162,8 +162,6 @@ except ImportError as e:
 # 注意：旧的 load_concepts.load_concepts 已废弃，推荐使用 api.load_concepts
 try:
     from .load_concepts import ConceptLoader
-    # 旧API仅作为 _load_concepts_old 保留，不导出
-    from .load_concepts import load_concepts as _load_concepts_old
     _HAS_LOAD_CONCEPTS = True
 except ImportError:
     _HAS_LOAD_CONCEPTS = False

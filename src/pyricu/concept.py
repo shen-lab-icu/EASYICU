@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 # 全局调试开关 - 设置为 False 可以减少输出
 DEBUG_MODE = False
 
+# 避免在分批/分块加载时重复打印同一条“数据库未配置数据源”提示
+_MISSING_SOURCE_WARNED: set[tuple[str, str]] = set()
+
 # Concepts that require hourly maxima (vasoactive infusion rates)
 VASO_RATE_CONCEPTS = {"dopa_rate", "dobu_rate", "epi_rate", "norepi_rate", "adh_rate"}
 
@@ -71,6 +74,52 @@ def _default_id_columns_for_db(db_name: Optional[str]) -> List[str]:
     if db.startswith("mimic"):
         return ["stay_id"]
     return mapping.get(db, ["stay_id"])
+
+
+def _normalize_patient_ids_for_cache(patient_ids: Optional[Iterable[object]]) -> Optional[object]:
+    """Normalize patient identifiers for stable cache keys."""
+    if patient_ids is None:
+        return None
+
+    if isinstance(patient_ids, Mapping):
+        normalized: Dict[str, object] = {}
+        for key in sorted(patient_ids):
+            value = patient_ids[key]
+            if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+                normalized[str(key)] = sorted(list(value))
+            else:
+                normalized[str(key)] = value
+        return normalized
+
+    if isinstance(patient_ids, (set, frozenset)):
+        return sorted(list(patient_ids))
+
+    if isinstance(patient_ids, Iterable) and not isinstance(patient_ids, (str, bytes)):
+        return sorted(list(patient_ids))
+
+    return patient_ids
+
+
+def _is_patient_id_filter_column(column: object, effective_id_var: Optional[str] = None) -> bool:
+    """Return whether a filter column represents patient/stay identifiers."""
+    if column is None:
+        return False
+
+    column_str = str(column)
+    if effective_id_var and column_str == effective_id_var:
+        return True
+
+    return column_str.lower() in {
+        "subject_id",
+        "stay_id",
+        "hadm_id",
+        "icustay_id",
+        "patientunitstayid",
+        "admissionid",
+        "patientid",
+        "caseid",
+        "case_id",
+    }
 
 @dataclass
 class ConceptSource:
@@ -465,7 +514,8 @@ class ConceptResolver:
             result = loaded.get(concept_name) if isinstance(loaded, dict) else loaded
             
             # 缓存原始数据
-            if isinstance(result, ICUTable):
+            # 🔧 FIX 2026-03-10: Also cache WinTbl/IdTbl/TsTbl (they have .data but aren't ICUTable)
+            if isinstance(result, ICUTable) or hasattr(result, 'data'):
                 with self._cache_lock:
                     self._raw_concept_cache[cache_key] = result
                 return result.copy() if hasattr(result, 'copy') else result
@@ -916,7 +966,7 @@ class ConceptResolver:
             if name in wide_table_batch_results:
                 concept_table = wide_table_batch_results[name]
                 if verbose and logger.isEnabledFor(logging.INFO):
-                    row_count = len(concept_table.data) if isinstance(concept_table, ICUTable) else len(concept_table)
+                    row_count = len(concept_table.data) if (isinstance(concept_table, ICUTable) or hasattr(concept_table, 'data')) else len(concept_table)
                     logger.info("✅  概念 '%s' (批量) 已加载 (行数: %s)", name, row_count)
                 return name, concept_table
             
@@ -935,7 +985,7 @@ class ConceptResolver:
                 _skip_concept_cache=_skip_concept_cache,
             )
             if verbose and logger.isEnabledFor(logging.INFO):
-                if isinstance(concept_table, ICUTable):
+                if isinstance(concept_table, ICUTable) or hasattr(concept_table, 'data'):
                     row_count = len(concept_table.data)
                 elif isinstance(concept_table, pd.DataFrame):
                     row_count = len(concept_table)
@@ -1198,10 +1248,13 @@ class ConceptResolver:
             default_id_cols = _default_id_columns_for_db(db_name)
             
             # 记录友好的警告信息
-            logger.info(
-                f"⚠️  概念 '{concept_name}' 在数据库 '{db_name}' 中未配置数据源，返回空结果。"
-                f"（这是正常的，该特征在此数据库中可能不可用）"
-            )
+            warn_key = (str(db_name), str(concept_name))
+            if warn_key not in _MISSING_SOURCE_WARNED:
+                logger.info(
+                    f"⚠️  概念 '{concept_name}' 在数据库 '{db_name}' 中未配置数据源，返回空结果。"
+                    f"（这是正常的，该特征在此数据库中可能不可用）"
+                )
+                _MISSING_SOURCE_WARNED.add(warn_key)
             
             empty_df = pd.DataFrame(columns=default_id_cols + ['charttime', concept_name])
             return ICUTable(
@@ -1431,8 +1484,8 @@ class ConceptResolver:
             for f in filters:
                 # 判断是否为患者ID过滤器（使用 effective_id_var 或常见的 ID 列）
                 is_patient_filter = (
-                    (effective_id_var and f.column == effective_id_var and f.op == FilterOp.IN) or
-                    (f.column in ['subject_id', 'stay_id', 'hadm_id'] and f.op == FilterOp.IN)
+                    f.op == FilterOp.IN and
+                    _is_patient_id_filter_column(f.column, effective_id_var)
                 )
                 if is_patient_filter:
                     patient_filter_in_filters = f
@@ -1663,6 +1716,14 @@ class ConceptResolver:
                         if verbose:
                             print(f"   🚀 使用DuckDB聚合优化: {source.table} itemids={len(itemids)} value_col={value_col} patients={len(patient_ids_list) if patient_ids_list else 'all'}")
                         
+                        # 🔧 FIX 2026-03: 使用调用者指定的聚合函数，而非硬编码 median
+                        # 关键场景: sofa_cardio 的 MAP 子概念需要 min 聚合
+                        # 如果 DuckDB 层使用 median，后续 Python 层的 min 聚合无效
+                        # （因为每小时已只有1个 median 值，min(single_value) = same_value）
+                        _duckdb_agg = 'median'  # 默认与 R ricu 一致
+                        if isinstance(aggregator, str) and aggregator in ('min', 'max', 'mean', 'sum', 'first'):
+                            _duckdb_agg = aggregator
+                        
                         frame = load_bucketed_table_aggregated(
                             data_source,
                             source.table,
@@ -1670,11 +1731,11 @@ class ConceptResolver:
                             itemids,
                             interval_minutes=interval_minutes,
                             patient_ids=patient_ids_list,  # 🔧 修复: 传入患者ID过滤
-                            agg_func='median',
-                            # 🔧 FIX 2026-02-15: 不在 DuckDB WHERE 中过滤 min/max
-                            # R ricu 流程: change_interval(median) → filter_bounds
-                            # DuckDB 聚合等价于 change_interval，所以 min/max 过滤
-                            # 应该在聚合之后由 filter_bounds 统一处理
+                            agg_func=_duckdb_agg,
+                            # 🔧 NOTE: 不在 DuckDB WHERE 中过滤 min/max
+                            # R ricu 流程: 加载原始值 → 池化所有 itemid → change_interval(median) → filter_bounds
+                            # filter_bounds 在聚合之后执行（见 ~L3866），在聚合前应用会改变 median 值
+                            # AUMC 混合单位问题通过池化解决（kPa 值被多数 mmHg 值稀释）
                             include_unit=False,  # unit 不再通过 ANY_VALUE 获取
                             # 🚀 convert_unit 内联参数：在DuckDB中直接做单位转换
                             convert_unit_op=_convert_unit_op if _convert_unit_callback_for_duckdb else None,
@@ -1684,6 +1745,27 @@ class ConceptResolver:
                         
                         if _convert_unit_callback_for_duckdb and verbose and len(frame) > 0:
                             print(f"   🔧 convert_unit DuckDB内联完成: {len(frame):,} 行")
+                        
+                        # 🔧 FIX 2026-03-10: 对 AUMC per-itemid 聚合结果应用早期 filter_bounds
+                        # 问题: AUMC 有混合单位 itemid（如 pco2: mmHg itemids + kPa itemid）
+                        # DuckDB per-itemid 聚合后，kPa itemid 的 median (~4.5) 与 mmHg itemid 的 
+                        # median (~40) 在后续 change_interval 中等权组合 → 错误结果
+                        # 修复: 在 itemid 列丢弃前，对每行 per-itemid 聚合值应用 filter_bounds
+                        # 这样 kPa itemid 的 median (4.5) 被 pco2 的 min=10 过滤掉，
+                        # 只有 mmHg itemid 的值进入后续处理
+                        if db_name == 'aumc' and len(frame) > 0 and value_col in frame.columns:
+                            _vmin = definition.minimum
+                            _vmax = definition.maximum
+                            if _vmin is not None or _vmax is not None:
+                                _before = len(frame)
+                                frame[value_col] = pd.to_numeric(frame[value_col], errors='coerce')
+                                if _vmin is not None:
+                                    frame = frame[frame[value_col] >= _vmin]
+                                if _vmax is not None:
+                                    frame = frame[frame[value_col] <= _vmax]
+                                frame = frame.dropna(subset=[value_col])
+                                if len(frame) < _before and (verbose or DEBUG_MODE):
+                                    print(f"   🔧 AUMC early filter_bounds: {_before} → {len(frame)} 行 (min={_vmin}, max={_vmax})")
                         
                         # 创建ICUTable对象
                         id_col = 'admissionid' if db_name == 'aumc' else 'patientid'
@@ -3239,17 +3321,10 @@ class ConceptResolver:
                 time_cols_in_data = sorted(time_cols_in_data, key=count_valid_aumc, reverse=True)
                 
                 # 统一时间列为 'charttime'
-                # 1. 首先将所有时间列转换为相同单位（分钟）
-                # measuredat_minutes 已经是分钟
-                # measuredat 的单位需要检测：如果 max > 10000，可能是毫秒
-                for col in time_cols_in_data:
-                    if col == 'measuredat' and col in combined.columns:
-                        # 检测是否是毫秒（AUMC 原始时间是毫秒）
-                        max_val = combined[col].abs().max()
-                        if pd.notna(max_val) and max_val > 100000:  # 大于 100000 表示是毫秒
-                            combined[col] = combined[col] / 60000.0  # 毫秒转分钟
-                            if DEBUG_MODE:
-                                print(f"   🔧 [AUMC] {col} 从毫秒转换为分钟")
+                # 所有时间列到达此处时都已经是分钟单位:
+                # - measuredat_minutes: DuckDB聚合路径直接输出分钟
+                # - measuredat: datasource层已将ms转换为分钟
+                # 不需要额外的单位转换
                 
                 # 2. 合并所有时间列到 charttime
                 combined['charttime'] = combined[time_cols_in_data[0]]
@@ -3362,6 +3437,23 @@ class ConceptResolver:
                 
                 if DEBUG_MODE:
                     print(f"   🔧 [MIMIC-III] 时间列统一完成, charttime 有效值: {combined['charttime'].notna().sum()}/{len(combined)}")
+        
+        # 🔧 CRITICAL FIX 2026-03-10: Multi-source concat produces object dtype for value column
+        # When frames from different sources (e.g., respiratorycharting + lab) are concatenated,
+        # the value column may become object dtype because each frame has different extra columns.
+        # This causes change_interval to use 'first' aggregation instead of 'median'/'max',
+        # silently dropping higher values from one source.
+        # Example: eICU fio2 - lab FiO2=28 + resp FiO2=50 at hour 30 → first(28,50)=28 instead of max(28,50)=50
+        # Fix: Coerce the concept value column to numeric after concat,
+        # but ONLY if most values are actually numeric strings (not legitimate strings like 'invasive').
+        if concept_name in combined.columns and not combined.empty:
+            if not pd.api.types.is_numeric_dtype(combined[concept_name]):
+                sample = combined[concept_name].dropna().head(100)
+                if len(sample) > 0:
+                    numeric_converted = pd.to_numeric(sample, errors='coerce')
+                    pct_convertible = float(numeric_converted.notna().sum()) / len(sample)
+                    if pct_convertible > 0.5:
+                        combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
         
         sort_keys = [col for col in id_columns if col]
         if index_column:
@@ -3744,6 +3836,33 @@ class ConceptResolver:
                     logger.warning(f"Failed to expand win_tbl data for {concept_name}: {e}")
                     # Continue without expansion
             
+            # 🔧 FIX 2026-03-10: filter_bounds (min/max) BEFORE change_interval aggregation
+            # R ricu load_concepts.num_cncpt actual flow:
+            #   1. load_concepts(as_item(x)):
+            #      - do_callback → expand (produces multiple rows per hour)
+            #      - change_interval.data.table (only re-discretizes, does NOT aggregate duplicates)
+            #   2. filter_bounds(res, min, max) → removes out-of-range individual values
+            #   3. stats::aggregate(median) → final aggregation
+            # pyricu's change_interval DOES aggregate, so filter_bounds must go BEFORE it.
+            # Previously filter_bounds was incorrectly placed AFTER change_interval, causing
+            # outlier values to participate in median aggregation (e.g. SIC epi_rate 1.9% error).
+            if concept_name in combined.columns:
+                if definition.minimum is not None or definition.maximum is not None:
+                    combined = combined.copy()
+                    combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
+                if definition.minimum is not None:
+                    before_len = len(combined)
+                    combined = combined[combined[concept_name] >= definition.minimum]
+                    if DEBUG_MODE and len(combined) < before_len:
+                        print(f"   🔍 DEBUG: filter_bounds(pre-agg) min={definition.minimum}: {before_len} -> {len(combined)}")
+                if definition.maximum is not None:
+                    before_len = len(combined)
+                    combined = combined[combined[concept_name] <= definition.maximum]
+                    if DEBUG_MODE and len(combined) < before_len:
+                        print(f"   🔍 DEBUG: filter_bounds(pre-agg) max={definition.maximum}: {before_len} -> {len(combined)}")
+                if definition.minimum is not None or definition.maximum is not None:
+                    combined = combined.dropna(subset=[concept_name])
+
             # Create ICUTable temporarily to use change_interval
             temp_table = ICUTable(
                 data=combined,
@@ -3792,28 +3911,7 @@ class ConceptResolver:
                 index_column
             )
         
-        # 🔧 FIX 2026-02-15: filter_bounds (min/max 值范围过滤) 在 change_interval 之后执行
-        # R ricu load_concepts.num_cncpt flow:
-        #   res <- load_concepts(as_item(x))  # 含 change_interval 聚合
-        #   res <- filter_bounds(res, "val_var", x[["min"]], x[["max"]])  # 聚合后过滤
-        # 这确保先进行时间聚合（如每小时 median），再过滤异常值
-        if concept_name in combined.columns:
-            if definition.minimum is not None or definition.maximum is not None:
-                combined = combined.copy()
-                combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
-            if definition.minimum is not None:
-                before_len = len(combined)
-                combined = combined[combined[concept_name] >= definition.minimum]
-                if DEBUG_MODE and len(combined) < before_len:
-                    print(f"   🔍 DEBUG: filter_bounds min={definition.minimum}: {before_len} -> {len(combined)}")
-            if definition.maximum is not None:
-                before_len = len(combined)
-                combined = combined[combined[concept_name] <= definition.maximum]
-                if DEBUG_MODE and len(combined) < before_len:
-                    print(f"   🔍 DEBUG: filter_bounds max={definition.maximum}: {before_len} -> {len(combined)}")
-            if definition.minimum is not None or definition.maximum is not None:
-                # 过滤后删除 NaN（filter_bounds 可能引入 coerce 产生的 NaN）
-                combined = combined.dropna(subset=[concept_name])
+        # NOTE: filter_bounds已移至change_interval之前（见上方FIX 2026-03-10注释）
         
         # 🔧 NOTE: 不过滤负时间（入ICU前的数据），ricu 保留这些数据
         # 例如：AUMC esr measuredat=-2 表示入院前2小时的数据，ricu 也保留
@@ -4433,7 +4531,8 @@ class ConceptResolver:
         from .memory_manager import release_memory
         release_memory()
 
-        if isinstance(sub_tables, ICUTable):
+        # 🔧 FIX 2026-03-10: Also handle WinTbl/TsTbl which don't inherit from ICUTable
+        if isinstance(sub_tables, ICUTable) or (hasattr(sub_tables, 'data') and not isinstance(sub_tables, dict)):
             sub_tables = {sub_names[0]: sub_tables}
 
         # Standardize time column names for eICU BEFORE passing to callbacks
@@ -4451,20 +4550,22 @@ class ConceptResolver:
             
             standardized_sub_tables = {}
             for name, table in sub_tables.items():
-                if isinstance(table, ICUTable) and table.index_column:
+                # 🔧 FIX 2026-03-10: Handle both ICUTable (.index_column) and WinTbl/TsTbl (.index_var)
+                idx_col = getattr(table, 'index_column', None) or getattr(table, 'index_var', None)
+                if idx_col:
                     # Check if this table uses an eICU-specific time column
-                    if table.index_column in eicu_time_cols and table.index_column != 'charttime':
+                    if idx_col in eicu_time_cols and idx_col != 'charttime':
                         # Rename the column in the DataFrame
-                        if table.index_column in table.data.columns:
-                            renamed_data = table.data.rename(columns={table.index_column: 'charttime'})
+                        if idx_col in table.data.columns:
+                            renamed_data = table.data.rename(columns={idx_col: 'charttime'})
                             # Create new ICUTable with updated index_column
                             table = ICUTable(
                                 data=renamed_data,
-                                id_columns=table.id_columns,
+                                id_columns=table.id_columns if hasattr(table, 'id_columns') else list(getattr(table, 'id_vars', [])),
                                 index_column='charttime',  # Update metadata
-                                value_column=table.value_column,
-                                unit_column=table.unit_column,
-                                time_columns=table.time_columns,
+                                value_column=getattr(table, 'value_column', None),
+                                unit_column=getattr(table, 'unit_column', None),
+                                time_columns=getattr(table, 'time_columns', []),
                             )
                 standardized_sub_tables[name] = table
             sub_tables = standardized_sub_tables
@@ -5346,28 +5447,25 @@ class ConceptResolver:
             )
 
         data = base_table.data.copy()
-        # 🔧 FIX 2025-02-14: Handle WinTbl which doesn't have value_column attribute
-        # WinTbl uses the last non-id, non-index, non-dur column as value column
-        if hasattr(base_table, 'value_column') and base_table.value_column:
-            value_col = base_table.value_column
-        else:
-            # For WinTbl, find the value column by exclusion
-            # It's typically the concept name or the last column that's not id/index/dur_var
-            if isinstance(base_table, WinTbl):
-                id_cols = set(base_table.id_vars or [])
-                idx_col = base_table.index_var
-                dur_col = base_table.dur_var
-                excluded = id_cols | {idx_col, dur_col}
-                potential_value_cols = [c for c in data.columns if c not in excluded]
-                # Prefer base_name if it exists
-                if base_name in potential_value_cols:
-                    value_col = base_name
-                elif potential_value_cols:
-                    value_col = potential_value_cols[-1]  # Last non-excluded column
-                else:
-                    value_col = base_name
+        # 🔧 FIX 2025-03-07: WinTbl 可能带有错误的 value_column 元数据（例如被设成 index 列）
+        # 对 fwd_concept 来说应优先从 WinTbl 的实际列中推断值列，否则像 HiRID ett_gcs
+        # 这种从 mech_vent 转发再 comp_na 的逻辑会错误地拿 datetime 去比较，最终全为 False。
+        if isinstance(base_table, WinTbl):
+            id_cols = set(base_table.id_vars or [])
+            idx_col = base_table.index_var
+            dur_col = base_table.dur_var
+            excluded = id_cols | {idx_col, dur_col}
+            potential_value_cols = [c for c in data.columns if c not in excluded]
+            if base_name in potential_value_cols:
+                value_col = base_name
+            elif potential_value_cols:
+                value_col = potential_value_cols[-1]
             else:
                 value_col = base_name
+        elif hasattr(base_table, 'value_column') and base_table.value_column:
+            value_col = base_table.value_column
+        else:
+            value_col = base_name
 
         comp_match = re.search(r"comp_na\(`(.+?)`,\s*(.+?)\)", callback, flags=re.DOTALL)
         if comp_match:
@@ -5686,7 +5784,7 @@ class ConceptResolver:
         cache_params = {
             "concept_name": concept_name,
             "database": data_source.config.name if hasattr(data_source.config, 'name') else str(data_source.config),
-            "patient_ids": sorted(list(patient_ids)) if patient_ids else None,
+            "patient_ids": _normalize_patient_ids_for_cache(patient_ids),
             "interval": str(interval) if interval else None,
             "align_to_admission": align_to_admission,
             "aggregator": str(aggregator),
@@ -5722,8 +5820,8 @@ class ConceptResolver:
             with open(cache_file, "rb") as f:
                 cached_data = pickle.load(f)
                 
-            # Verify the cached data is an ICUTable
-            if isinstance(cached_data, ICUTable):
+            # Verify the cached data is an ICUTable or WinTbl/TsTbl/IdTbl
+            if isinstance(cached_data, ICUTable) or hasattr(cached_data, 'data'):
                 return cached_data
                 
         except Exception:
@@ -5871,7 +5969,22 @@ class ConceptResolver:
                 inflight.add(concept_name)
 
         definition = self.dictionary[concept_name]
+
+        # 🔧 FIX 2026-03-09: For recursive concepts (like sofa_cardio), skip pre-loading
+        # dependencies that are also sub_concepts. These will be loaded later by the
+        # recursive concept callback with the CORRECT per-sub-concept aggregation
+        # (e.g., map→min, dopa60→max). Pre-loading them here with 'auto' (median)
+        # pollutes _raw_concept_cache, causing the later min/max reload to re-aggregate
+        # already-aggregated data (one value per hour), effectively losing the min/max.
+        skip_deps = set()
+        if definition.sub_concepts and definition.callback:
+            # This is a recursive concept with a callback; sub_concepts will be loaded
+            # by _load_recursive_concept with the correct aggregation from definition.aggregate
+            skip_deps = set(definition.sub_concepts)
+
         for dependency in definition.depends_on:
+            if dependency in skip_deps:
+                continue
             self._ensure_concept_loaded(
                 dependency,
                 data_source,
@@ -6034,7 +6147,8 @@ class ConceptResolver:
                 
                 # 🚀 同时存入 _raw_concept_cache，供回调函数使用
                 # 共享同一个引用，避免重复内存开销
-                raw_cache_key = (concept_name, patient_ids_hash)
+                # 🔧 FIX 2026-03-10: Include aggregator in key to prevent cross-aggregation pollution
+                raw_cache_key = (concept_name, patient_ids_hash, str(agg_value))
                 if raw_cache_key not in self._raw_concept_cache:
                     self._raw_concept_cache[raw_cache_key] = result
                 
@@ -6517,7 +6631,9 @@ class ConceptResolver:
             if hasattr(data_source.config, 'id_configs') and 'icustay' in data_source.config.id_configs:
                 default_id_col = data_source.config.id_configs['icustay'].id
         
-        # 将ICUTable转换为DataFrame字典
+        # 将ICUTable/WinTbl/IdTbl转换为DataFrame字典
+        # 🔧 FIX 2026-03-10: WinTbl inherits from IdTbl (not ICUTable), so isinstance(table, ICUTable)
+        # fails for WinTbl/TsTbl/IdTbl. Use hasattr(table, 'data') as a generic check.
         concept_data: Dict[str, pd.DataFrame] = {}
         for name, table in tables.items():
             if isinstance(table, ICUTable):
@@ -6526,6 +6642,19 @@ class ConceptResolver:
                 if name not in df.columns:
                     # 查找可能的值列
                     value_candidates = ['value', 'valuenum', table.index_column] if hasattr(table, 'index_column') else ['value', 'valuenum']
+                    for cand in value_candidates:
+                        if cand in df.columns and cand != name:
+                            df = df.rename(columns={cand: name})
+                            break
+                concept_data[name] = df
+            elif hasattr(table, 'data') and isinstance(table.data, pd.DataFrame):
+                # Handle WinTbl/TsTbl/IdTbl which have .data but don't inherit from ICUTable
+                df = table.data.copy()
+                if name not in df.columns:
+                    # For WinTbl, try index_var as value column candidate
+                    value_candidates = ['value', 'valuenum']
+                    if hasattr(table, 'index_var') and table.index_var:
+                        value_candidates.append(table.index_var)
                     for cand in value_candidates:
                         if cand in df.columns and cand != name:
                             df = df.rename(columns={cand: name})
@@ -7407,8 +7536,13 @@ def _apply_callback(
             # 写入CSV时序列化为数值 1.0（分钟）
             frame['dur_var'] = duration.total_seconds() / 60.0  # 转换为分钟
         else:
-            # 时间列是datetime型或未知，dur_var用Timedelta
-            frame['dur_var'] = duration
+            # 🔧 FIX: 始终使用数值分钟，而非 Timedelta 对象
+            # 原因：后续 _align_to_admission_time 会将 datetime → 相对小时数，
+            # 但 Timedelta dur_var 会被转为 int64 纳秒（而非分钟），
+            # 导致 _expand_public_numeric_win_tbl_output 中 duration 被误解为
+            # 60 000 000 000 小时 → 无限循环。
+            # R ricu 的 dur_var 也是数值型（分钟），所以统一用分钟。
+            frame['dur_var'] = duration.total_seconds() / 60.0  # 转换为分钟
             
         return frame
     
@@ -8315,11 +8449,15 @@ def _apply_callback(
             
             if expanded_rows:
                 frame = pd.DataFrame(expanded_rows)
-                # Aggregate: median rate per (patient, hour) to match R ricu change_interval behavior
-                if id_cols and index_var in frame.columns and val_var in frame.columns:
-                    group_keys = id_cols + [index_var]
+                # 🔧 FIX 2026-03-11: Do NOT hardcode median aggregation here!
+                # Previously this did groupby(...).agg({val_var: 'median'}) which pre-aggregated
+                # the expanded rates. This prevents vaso60 callback from getting raw per-interval
+                # rates needed for MAX aggregation (dobu60/norepi60/epi60/dopa60 etc).
+                # change_interval() in _load_single_concept handles aggregation correctly:
+                #   - standalone dobu_rate: change_interval(median) → correct median
+                #   - vaso60 sub-concept: change_interval(False) → preserves all rows → vaso60 takes max
+                if val_var in frame.columns:
                     frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
-                    frame = frame.groupby(group_keys, as_index=False).agg({val_var: 'median'})
         
         return frame
 
@@ -8398,32 +8536,24 @@ def _apply_callback(
         from .callback_utils import mimv_rate
         duration_col = None
         start_col = source.index_var
-        if not start_col:
-            if "starttime" in frame.columns:
-                start_col = "starttime"
+        if not start_col and "starttime" in frame.columns:
+            start_col = "starttime"
+
         end_col = None
-        if source.params:
-            end_col = source.params.get("dur_var") or source.params.get("end_var")
-        if not end_col and "endtime" in frame.columns:
+        if "endtime" in frame.columns:
             end_col = "endtime"
-        
-        # 首先检查是否已经有计算好的duration列 (概念名_dur格式)
-        possible_dur_cols = [concept_name + '_dur', 'duration', '__duration__']
+        elif source.dur_var and source.dur_var in frame.columns:
+            end_col = source.dur_var
+
+        # 首先检查是否已经有计算好的 duration 列
+        possible_dur_cols = [concept_name + '_dur', 'duration', '__duration__', 'dur_var']
         for col in possible_dur_cols:
             if col in frame.columns:
                 duration_col = col
                 break
-        
-        # 如果没有现成的duration列，尝试从start和end计算
-        if not duration_col:
-            if end_col and end_col in frame.columns and start_col and start_col in frame.columns:
-                start = pd.to_datetime(frame[start_col], errors="coerce")
-                stop = pd.to_datetime(frame[end_col], errors="coerce")
-                frame = frame.copy()
-                frame["__duration__"] = stop - start
-                duration_col = "__duration__"
-            elif end_col and end_col in frame.columns:
-                duration_col = end_col
+
+        if duration_col is None and end_col and end_col in frame.columns:
+            duration_col = end_col
         
         if not duration_col or duration_col not in frame.columns:
             return frame
@@ -8514,9 +8644,8 @@ def _apply_callback(
             # 回退到原始配置
             if source.params:
                 dur_var = source.params.get("dur_var") or source.params.get("stop_var")
-            if not dur_var or dur_var not in frame.columns:
-                if "drugstopoffset" in frame.columns:
-                    dur_var = "drugstopoffset"
+            if (not dur_var or dur_var not in frame.columns) and "drugstopoffset" in frame.columns:
+                dur_var = "drugstopoffset"
         
         if not dur_var or dur_var not in frame.columns:
             return frame
@@ -8643,6 +8772,21 @@ def _apply_callback(
                 print(f"    wbc_val_col = {wbc_val_col}")
             if wbc_val_col != 'wbc' and wbc_val_col in wbc_df.columns:
                 wbc_df = wbc_df.rename(columns={wbc_val_col: 'wbc'})
+            
+            # 🔧 FIX 2026-03-09: Handle time column name mismatch between raw source
+            # data and WBC loaded via load_concepts (DuckDB aggregation).
+            # e.g. AUMC raw source has 'measuredat' (minutes) but WBC has
+            # 'measuredat_minutes' (hourly-binned minutes) from DuckDB aggregation.
+            # Rename WBC's time column to match frame's time column for merge_asof.
+            wbc_index_col = wbc_result['wbc'].index_column
+            if (index_col and wbc_index_col and
+                    index_col != wbc_index_col and
+                    index_col not in wbc_df.columns and
+                    wbc_index_col in wbc_df.columns):
+                if DEBUG_CALLBACK:
+                    print(f"    [TIME COL FIX] Renaming WBC time col: "
+                          f"{wbc_index_col} -> {index_col}")
+                wbc_df = wbc_df.rename(columns={wbc_index_col: index_col})
             
             # Ensure ID column exists in WBC data
             if id_col not in wbc_df.columns:
@@ -8915,14 +9059,17 @@ def _parse_r_value(token: str):
 def _split_arguments(argument_str: str) -> List[str]:
     args: List[str] = []
     level = 0
+    in_backtick = False
     current: List[str] = []
 
     for char in argument_str:
-        if char == "(":
+        if char == "`":
+            in_backtick = not in_backtick
+        elif char == "(" and not in_backtick:
             level += 1
-        elif char == ")":
+        elif char == ")" and not in_backtick:
             level = max(level - 1, 0)
-        elif char == "," and level == 0:
+        elif char == "," and level == 0 and not in_backtick:
             arg = "".join(current).strip()
             if arg:
                 args.append(arg)
