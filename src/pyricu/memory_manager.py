@@ -25,7 +25,7 @@ import logging
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Optional, List, Union, Dict, Any
+from typing import Optional, List, Union, Dict, Any, Tuple
 from dataclasses import dataclass
 
 import pandas as pd
@@ -336,30 +336,171 @@ def _subprocess_load_worker(args: dict) -> str:
     # 在子进程中导入（避免 fork 问题）
     from pyricu.api import load_concepts as _load_concepts
     
+    load_kwargs = dict(args.get('load_kwargs') or {})
+
     result = _load_concepts(
         concepts=args['concepts'],
         patient_ids=args['patient_ids'],
         database=args['database'],
         data_path=args.get('data_path'),
-        interval=args.get('interval', '1h'),
         verbose=False,
         ricu_compatible=args.get('ricu_compatible', True),
         merge=args.get('merge', True),
         dict_path=args.get('dict_path'),
         use_sofa2=args.get('use_sofa2', False),
+        **load_kwargs,
     )
     
     # 写入临时 parquet 文件
-    output_path = args['output_path']
+    output_prefix = args['output_prefix']
     if isinstance(result, pd.DataFrame) and len(result) > 0:
-        result.to_parquet(output_path, index=False, engine='pyarrow')
+        result.to_parquet(f"{output_prefix}.parquet", index=False, engine='pyarrow')
     elif isinstance(result, dict):
         # dict 结果：序列化为多个 parquet 文件
         for k, v in result.items():
             if isinstance(v, pd.DataFrame) and len(v) > 0:
-                v.to_parquet(f"{output_path}.{k}.parquet", index=False, engine='pyarrow')
+                v.to_parquet(f"{output_prefix}.{k}.parquet", index=False, engine='pyarrow')
     
-    return output_path
+    return output_prefix
+
+
+def _estimate_result_size_mb(result: Union[pd.DataFrame, Dict[str, pd.DataFrame]]) -> float:
+    """Estimate in-memory size of a batch result in MB."""
+    if isinstance(result, pd.DataFrame):
+        if result.empty:
+            return 0.0
+        return float(result.memory_usage(deep=True).sum()) / 1024.0 / 1024.0
+
+    if isinstance(result, dict):
+        total = 0.0
+        for value in result.values():
+            if isinstance(value, pd.DataFrame) and not value.empty:
+                total += float(value.memory_usage(deep=True).sum()) / 1024.0 / 1024.0
+        return total
+
+    return 0.0
+
+
+def _write_batch_result_to_parquet(
+    result: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
+    output_prefix: str,
+) -> bool:
+    """Persist a batch result to parquet shards.
+
+    Returns True if at least one parquet file was written.
+    """
+    wrote = False
+    if isinstance(result, pd.DataFrame):
+        if not result.empty:
+            result.to_parquet(f"{output_prefix}.parquet", index=False, engine='pyarrow')
+            wrote = True
+        return wrote
+
+    if isinstance(result, dict):
+        for name, frame in result.items():
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                frame.to_parquet(f"{output_prefix}.{name}.parquet", index=False, engine='pyarrow')
+                wrote = True
+    return wrote
+
+
+def _should_spill_inprocess_batches(
+    *,
+    memory_efficient: bool,
+    num_batches: int,
+    estimated_total_mb: float,
+    buffered_mb: float,
+) -> bool:
+    """Decide whether in-process batching should spill intermediate results to disk."""
+    if num_batches <= 1:
+        return False
+
+    if memory_efficient:
+        return True
+
+    if estimated_total_mb <= 0 and buffered_mb <= 0:
+        return False
+
+    available_mb = get_available_memory_mb()
+    spill_threshold_mb = min(max(available_mb * 0.25, 1024.0), 4096.0)
+    return estimated_total_mb >= spill_threshold_mb or buffered_mb >= spill_threshold_mb
+
+
+def _merge_buffered_batches(
+    buffered_batches: List[Union[pd.DataFrame, Dict[str, pd.DataFrame]]]
+) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+    """Merge in-memory buffered batch results without writing temporary parquet files."""
+    if not buffered_batches:
+        return pd.DataFrame()
+
+    first = next((item for item in buffered_batches if item is not None), None)
+    if first is None:
+        return pd.DataFrame()
+
+    if isinstance(first, dict):
+        grouped: Dict[str, List[pd.DataFrame]] = {}
+        for batch in buffered_batches:
+            if not isinstance(batch, dict):
+                continue
+            for name, frame in batch.items():
+                if isinstance(frame, pd.DataFrame) and not frame.empty:
+                    grouped.setdefault(name, []).append(frame)
+        return {name: pd.concat(frames, ignore_index=True) for name, frames in grouped.items() if frames}
+
+    frames = [frame for frame in buffered_batches if isinstance(frame, pd.DataFrame) and not frame.empty]
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _merge_parquet_batches(temp_dir: str) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+    """Merge parquet shards produced by batch loading."""
+    from collections import defaultdict
+    import re
+
+    temp_path = Path(temp_dir)
+    flat_files = sorted(
+        f for f in temp_path.glob('batch_*.parquet')
+        if re.fullmatch(r'batch_\d{4}\.parquet', f.name)
+    )
+    dict_files = sorted(temp_path.glob('batch_*.*.parquet'))
+
+    if flat_files:
+        frames = []
+        for f in flat_files:
+            try:
+                frames.append(pd.read_parquet(f, engine='pyarrow'))
+            except Exception as e:
+                logger.warning(f"⚠️ 读取 {f} 失败: {e}")
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    grouped: Dict[str, List[Path]] = defaultdict(list)
+    for f in dict_files:
+        try:
+            parts = f.name.split('.')
+            if len(parts) < 3:
+                continue
+            concept = '.'.join(parts[1:-1])
+            grouped[concept].append(f)
+        except Exception as e:
+            logger.warning(f"⚠️ 读取 {f} 失败: {e}")
+
+    merged: Dict[str, pd.DataFrame] = {}
+    for concept, files in grouped.items():
+        frames = []
+        for f in files:
+            try:
+                frames.append(pd.read_parquet(f, engine='pyarrow'))
+            except Exception as e:
+                logger.warning(f"⚠️ 读取 {f} 失败: {e}")
+        if frames:
+            merged[concept] = pd.concat(frames, ignore_index=True)
+            del frames
+            release_memory()
+
+    return merged
 
 
 def subprocess_batch_load(
@@ -368,14 +509,13 @@ def subprocess_batch_load(
     all_patient_ids: dict,
     batch_size: int,
     data_path: Optional[str] = None,
-    interval: str = '1h',
     verbose: bool = False,
     merge: bool = True,
     ricu_compatible: bool = True,
     dict_path=None,
     use_sofa2: bool = False,
     **kwargs,
-) -> pd.DataFrame:
+) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
     使用子进程隔离的分批加载。
     
@@ -405,13 +545,11 @@ def subprocess_batch_load(
         print(f"🔄 子进程隔离分批: {total} patients, batch_size={batch_size}, {num_batches} batches")
     
     temp_dir = tempfile.mkdtemp(prefix='pyricu_batch_')
-    temp_files = []
-    
     try:
         for i in range(0, total, batch_size):
             batch_num = i // batch_size + 1
             batch_ids = ids[i:i + batch_size]
-            output_path = os.path.join(temp_dir, f'batch_{batch_num:04d}.parquet')
+            output_prefix = os.path.join(temp_dir, f'batch_{batch_num:04d}')
             
             if verbose:
                 rss = get_rss_mb()
@@ -423,13 +561,13 @@ def subprocess_batch_load(
                 'patient_ids': {id_col: batch_ids},
                 'database': database,
                 'data_path': data_path,
-                'interval': interval,
-                'output_path': output_path,
+                'output_prefix': output_prefix,
                 'ricu_data_path': ricu_data_path,
                 'ricu_compatible': ricu_compatible,
                 'merge': merge,
                 'dict_path': str(dict_path) if dict_path else None,
                 'use_sofa2': use_sofa2,
+                'load_kwargs': kwargs,
             }
             
             # 在子进程中运行
@@ -445,37 +583,31 @@ def subprocess_batch_load(
                     print(f" ❌ (exit={proc.exitcode})")
                 continue
             
-            if os.path.exists(output_path):
-                temp_files.append(output_path)
+            output_files = [f for f in Path(temp_dir).glob(f"batch_{batch_num:04d}*.parquet")]
+            if output_files:
                 if verbose:
-                    file_mb = os.path.getsize(output_path) / 1024 / 1024
+                    file_mb = sum(os.path.getsize(f) for f in output_files) / 1024 / 1024
                     print(f" ✅ ({file_mb:.1f}MB)")
             else:
                 if verbose:
                     print(f" ⚠️ (no output)")
         
         # 合并所有 batch 的结果
-        if not temp_files:
+        produced_files = list(Path(temp_dir).glob('batch_*.parquet')) + list(Path(temp_dir).glob('batch_*.*.parquet'))
+        if not produced_files:
             return pd.DataFrame()
         
         if verbose:
-            print(f"   📋 合并 {len(temp_files)} 个批次...")
-        
-        frames = []
-        for f in temp_files:
-            try:
-                df = pd.read_parquet(f, engine='pyarrow')
-                frames.append(df)
-            except Exception as e:
-                logger.warning(f"⚠️ 读取 {f} 失败: {e}")
-        
-        if not frames:
-            return pd.DataFrame()
-        
-        result = pd.concat(frames, ignore_index=True)
+            print(f"   📋 合并批次结果...")
+
+        result = _merge_parquet_batches(temp_dir)
         
         if verbose:
-            print(f"   ✅ 合并完成: {len(result)} rows, RSS: {get_rss_mb():.0f}MB")
+            if isinstance(result, pd.DataFrame):
+                print(f"   ✅ 合并完成: {len(result)} rows, RSS: {get_rss_mb():.0f}MB")
+            else:
+                total_rows = sum(len(df) for df in result.values())
+                print(f"   ✅ 合并完成: {len(result)} concepts / {total_rows} rows, RSS: {get_rss_mb():.0f}MB")
         
         return result
     
@@ -500,7 +632,7 @@ def inprocess_batch_load(
     verbose: bool = False,
     memory_efficient: bool = False,
     **load_kwargs,
-) -> pd.DataFrame:
+) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
     进程内分批加载，每批间调用 gc + malloc_trim 回收碎片。
     
@@ -524,7 +656,12 @@ def inprocess_batch_load(
     if verbose:
         print(f"🔄 进程内分批: {total} patients, batch_size={batch_size}, {num_batches} batches")
     
-    results = []
+    buffered_batches: List[Union[pd.DataFrame, Dict[str, pd.DataFrame]]] = []
+    buffered_mb = 0.0
+    estimated_total_mb = 0.0
+    representative_batch_mb = 0.0
+    spill_dir: Optional[str] = None
+    spill_batches = 0
     
     for i in range(0, total, batch_size):
         batch_num = i // batch_size + 1
@@ -544,28 +681,83 @@ def inprocess_batch_load(
             **load_kwargs,
         )
         
+        if spill_dir is None:
+            if representative_batch_mb == 0.0:
+                representative_batch_mb = _estimate_result_size_mb(batch_result)
+                if representative_batch_mb > 0:
+                    estimated_total_mb = representative_batch_mb * num_batches
+            batch_result_mb = representative_batch_mb
+        else:
+            batch_result_mb = 0.0
+
         if isinstance(batch_result, pd.DataFrame) and len(batch_result) > 0:
-            results.append(batch_result)
             if verbose:
                 print(f" ✅ ({len(batch_result)} rows)", end='')
+        elif isinstance(batch_result, dict):
+            if verbose:
+                non_empty = sum(len(df) for df in batch_result.values() if isinstance(df, pd.DataFrame) and len(df) > 0)
+                print(f" ✅ ({non_empty} rows / {len(batch_result)} concepts)", end='')
         elif verbose:
             print(f" ⚪ (empty)", end='')
+
+        if spill_dir is None and _should_spill_inprocess_batches(
+            memory_efficient=memory_efficient,
+            num_batches=num_batches,
+            estimated_total_mb=estimated_total_mb,
+            buffered_mb=buffered_mb + batch_result_mb,
+        ):
+            spill_dir = tempfile.mkdtemp(prefix='pyricu_inprocess_')
+            if verbose:
+                print(f" 💽 spill→disk[{spill_dir}]", end='')
+            for buffered in buffered_batches:
+                spill_batches += 1
+                _write_batch_result_to_parquet(buffered, os.path.join(spill_dir, f'batch_{spill_batches:04d}'))
+            buffered_batches.clear()
+            buffered_mb = 0.0
+            release_memory(aggressive=True)
+
+        if spill_dir is not None:
+            spill_batches += 1
+            _write_batch_result_to_parquet(batch_result, os.path.join(spill_dir, f'batch_{spill_batches:04d}'))
+            del batch_result
+        elif (
+            isinstance(batch_result, pd.DataFrame) and not batch_result.empty
+        ) or isinstance(batch_result, dict):
+            buffered_batches.append(batch_result)
+            buffered_mb += batch_result_mb
         
         # 关键：释放碎片内存
         freed = release_memory()
         if verbose:
             print(f" [freed {freed}MB, RSS: {get_rss_mb():.0f}MB]")
     
-    if not results:
+    if not buffered_batches and spill_dir is None:
         return pd.DataFrame()
-    
-    final = pd.concat(results, ignore_index=True)
-    
-    # 释放分片引用
-    del results
-    release_memory()
-    
+
+    if spill_dir is not None:
+        try:
+            final = _merge_parquet_batches(spill_dir)
+        finally:
+            import shutil
+            shutil.rmtree(spill_dir, ignore_errors=True)
+        release_memory(aggressive=True)
+        if verbose:
+            if isinstance(final, pd.DataFrame):
+                print(f"   ✅ 完成(disk): {len(final)} rows, RSS: {get_rss_mb():.0f}MB")
+            else:
+                total_rows = sum(len(df) for df in final.values())
+                print(f"   ✅ 完成(disk): {len(final)} concepts / {total_rows} rows, RSS: {get_rss_mb():.0f}MB")
+        return final
+
+    final = _merge_buffered_batches(buffered_batches)
+    del buffered_batches
+    release_memory(aggressive=True)
+
     if verbose:
-        print(f"   ✅ 完成: {len(final)} rows, RSS: {get_rss_mb():.0f}MB")
-    
+        if isinstance(final, pd.DataFrame):
+            print(f"   ✅ 完成: {len(final)} rows, RSS: {get_rss_mb():.0f}MB")
+        else:
+            total_rows = sum(len(df) for df in final.values())
+            print(f"   ✅ 完成: {len(final)} concepts / {total_rows} rows, RSS: {get_rss_mb():.0f}MB")
+
     return final

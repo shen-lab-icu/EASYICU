@@ -84,7 +84,10 @@ def sep3_sofa2(
     """
     # Filter SI events
     if 'susp_inf' in susp_inf_df.columns:
-        si_events = susp_inf_df[susp_inf_df['susp_inf'].fillna(False)].copy()
+        si_mask = susp_inf_df['susp_inf'].fillna(False)
+        if not pd.api.types.is_bool_dtype(si_mask):
+            si_mask = pd.to_numeric(si_mask, errors='coerce').fillna(0).astype(bool)
+        si_events = susp_inf_df.loc[si_mask].copy()
     else:
         # If no susp_inf column, assume all rows are SI events
         si_events = susp_inf_df.copy()

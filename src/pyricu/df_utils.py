@@ -353,6 +353,11 @@ def forward_fill_by_group(
                     group[col] = group[col].fillna(method='ffill')
         return group
     
+    # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
+    _grp_backup = df[group_cols].copy()
     result = df.groupby(group_cols, group_keys=False).apply(fill_group)
+    for _gc in group_cols:
+        if _gc not in result.columns:
+            result[_gc] = _grp_backup[_gc].values
     
     return result

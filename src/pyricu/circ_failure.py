@@ -288,7 +288,11 @@ def calculate_circ_failure_status(
                         
             return group
         
+        # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
+        _id_backup = df[[id_col]].copy()
         df = df.groupby(id_col, group_keys=False).apply(apply_rolling_window)
+        if id_col not in df.columns:
+            df[id_col] = _id_backup[id_col].values
     else:
         # Simple point-in-time assessment
         df['circ_event'] = df.apply(get_event_level, axis=1)

@@ -27,15 +27,15 @@ except ImportError:
 from .table import ICUTable
 
 def _safe_group_apply(grouped, func):
-    """Call groupby.apply explicitly keeping group columns in the result."""
+    """Call groupby.apply without group keys in function (pandas 3.0 compatible)."""
     import warnings
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', message='.*DataFrameGroupBy.apply.*', category=FutureWarning)
         try:
-            # include_groups=True preserves ID columns for pandas ≥2.1 while
-            # maintaining backwards compatibility with earlier versions.
-            return grouped.apply(func, include_groups=True)
-        except TypeError:  # pandas < 2.1
+            # pandas 2.1+: include_groups=False excludes group key cols from func input
+            # pandas 3.0: include_groups parameter removed; False was the correct value anyway
+            return grouped.apply(func)
+        except TypeError:  # pandas < 2.1 doesn't have include_groups at all
             return grouped.apply(func)
 
 def change_interval(
@@ -1148,7 +1148,12 @@ def replace_na(
                 group, columns, method, value, limit, max_gap, index_col
             )
         
-        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=True)
+        # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
+        _id_backup = data[existing_id_cols].copy()
+        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group)
+        for _gc in existing_id_cols:
+            if _gc not in data.columns:
+                data[_gc] = _id_backup[_gc].values
         return data.reset_index(drop=True)
     else:
         return _fill_na_single(data, columns, method, value, limit, max_gap, index_col)
@@ -2185,7 +2190,12 @@ def locf(
             
             return group
         
-        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=True)
+        # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
+        _id_backup = data[existing_id_cols].copy()
+        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group)
+        for _gc in existing_id_cols:
+            if _gc not in data.columns:
+                data[_gc] = _id_backup[_gc].values
     else:
         # No grouping
         if max_gap is not None and index_col is not None:
@@ -2255,7 +2265,12 @@ def locb(
             
             return group
         
-        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group, include_groups=True)
+        # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
+        _id_backup = data[existing_id_cols].copy()
+        data = data.groupby(existing_id_cols, group_keys=False).apply(fill_group)
+        for _gc in existing_id_cols:
+            if _gc not in data.columns:
+                data[_gc] = _id_backup[_gc].values
     else:
         # No grouping
         if max_gap is not None and index_col is not None:
