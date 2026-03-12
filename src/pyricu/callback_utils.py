@@ -702,11 +702,11 @@ def locf(max_gap: Optional[pd.Timedelta] = None) -> Callable:
                     can_fill = time_diff <= max_gap
                     
                     # Forward fill with limit
-                    filled = group[val_col].fillna(method='ffill')
+                    filled = group[val_col].ffill()
                     group[val_col] = group[val_col].where(can_fill, filled)
                 else:
                     # Simple forward fill
-                    group[val_col] = group[val_col].fillna(method='ffill')
+                    group[val_col] = group[val_col].ffill()
                 
                 return group
             
@@ -719,7 +719,7 @@ def locf(max_gap: Optional[pd.Timedelta] = None) -> Callable:
                     data[_gc] = _grp_backup[_gc].values
         else:
             # Simple forward fill
-            data[val_col] = data[val_col].fillna(method='ffill')
+            data[val_col] = data[val_col].ffill()
         
         return data
     
@@ -770,11 +770,11 @@ def locb(max_gap: Optional[pd.Timedelta] = None) -> Callable:
                     can_fill = time_diff <= max_gap
                     
                     # Backward fill with limit
-                    filled = group[val_col].fillna(method='bfill')
+                    filled = group[val_col].bfill()
                     group[val_col] = group[val_col].where(can_fill, filled)
                 else:
                     # Simple backward fill
-                    group[val_col] = group[val_col].fillna(method='bfill')
+                    group[val_col] = group[val_col].bfill()
                 
                 return group
             
@@ -787,7 +787,7 @@ def locb(max_gap: Optional[pd.Timedelta] = None) -> Callable:
                     data[_gc] = _grp_backup[_gc].values
         else:
             # Simple backward fill
-            data[val_col] = data[val_col].fillna(method='bfill')
+            data[val_col] = data[val_col].bfill()
         
         return data
     
@@ -1732,8 +1732,55 @@ def expand_intervals(
         
         return expanded
     
-    # Non-eICU path: original logic for datetime-based data
-    # Create intervals (overhang=1 hour, max_len=6 hours)
+    # 🔧 FIX: R ricu's flow for CareVue data:
+    #   1. load_difftime() → change_interval(x, 1h) floors RELATIVE times to hours FIRST
+    #   2. callback (mimic_rate_cv) receives ALL rows (including NA rate/amount-only rows)
+    #   3. create_intervals(x) on ALL rows — NA rows provide time references for diffs
+    #   4. expand(x) — rows where start > end (from 0-diff within same hour) auto-filtered
+    #   5. After expand, NA value rows are gone (their intervals had start > end)
+    #
+    # CRITICAL: R ricu does NOT filter NA rows before create_intervals.
+    # The NA rows at later time points provide the diff reference needed to compute
+    # correct endtimes. E.g. rate=0 at h=41 + NA at h=48 → diff=7 → endtime=47 → 7 rows.
+    # Without the NA row: rate=0 is last → diff=overhang(1) → endtime=41 → only 1 row.
+    #
+    # CRITICAL: R ricu floors RELATIVE time (time since admission), not absolute datetime.
+    # Example: charttime=19:30, intime=14:22 → relative=5.13h → floor=5
+    # If we floor absolute datetime: 19:30→19:00 → relative=4.63h → floor=4 (WRONG!)
+
+    data = data.copy()
+    
+    if data.empty:
+        return data
+    
+    is_datetime = pd.api.types.is_datetime64_any_dtype(data[index_var])
+    is_numeric = pd.api.types.is_numeric_dtype(data[index_var])
+    
+    # Convert datetime to relative-hour-boundary datetimes using admission_times
+    # (matching R ricu's load_difftime which floors relative time before callbacks).
+    # IMPORTANT: Keep the column as datetime (not float) to avoid type conflicts
+    # when multi-source data is concatenated (CareVue datetime + MetaVision datetime).
+    admission_times = kwargs.get('admission_times', None)
+    converted_to_relative_datetime = False
+    if is_datetime and admission_times is not None and id_cols:
+        id_col = id_cols[0]
+        if id_col in admission_times.columns and 'intime' in admission_times.columns:
+            at = admission_times[[id_col, 'intime']].drop_duplicates(subset=[id_col])
+            if not pd.api.types.is_datetime64_any_dtype(at['intime']):
+                at['intime'] = pd.to_datetime(at['intime'])
+            data = data.merge(at, on=id_col, how='left')
+            rel_hours = (data[index_var] - data['intime']).dt.total_seconds() / 3600.0
+            floored_rel = np.floor(rel_hours)
+            data[index_var] = data['intime'] + pd.to_timedelta(floored_rel, unit='h')
+            data = data.drop(columns=['intime'])
+            converted_to_relative_datetime = True
+            # is_datetime stays True — column is still datetime
+    
+    # Fallback floor for data without admission_times
+    if is_datetime and not converted_to_relative_datetime:
+        data[index_var] = pd.to_datetime(data[index_var], errors='coerce').dt.floor('h')
+
+    # Create intervals on ALL rows (including NA value rows — they provide time refs)
     data = create_intervals(
         data,
         by_cols=by_cols,
@@ -1756,16 +1803,27 @@ def expand_intervals(
     # Also DO NOT add grp_var - R ricu expand drops it after intervals are created
     
     # Expand with step_size=1 hour
+    # Pass admission_times so expand uses relative-hour-aware flooring (not absolute-hour)
     expanded = expand(
         data,
         start_var=index_var,
         end_var='endtime',
         step_size=pd.Timedelta(hours=1),
         id_cols=id_cols,
-        keep_vars=keep_vars
+        keep_vars=keep_vars,
+        admission_times=admission_times
     )
     
-    # 🔧 CRITICAL FIX: Aggregate duplicate (patient, time) combinations
+    # 🔧 After expand, filter out rows where value columns are NA
+    # Only for MIMIC CareVue (when admission_times is provided), not for HiRID
+    # (NA rows from amount-only CareVue records that had start <= end by chance)
+    if admission_times is not None and keep_vars and len(expanded) > 0:
+        val_keep = [v for v in keep_vars if v in expanded.columns and v not in id_cols]
+        if val_keep:
+            mask = expanded[val_keep].notna().any(axis=1)
+            expanded = expanded[mask]
+    
+    # 🔧 CRITICAL: Aggregate duplicate (patient, time) combinations
     # When multiple infusions overlap in time, expand produces multiple rows
     # R ricu's aggregate() uses median for numeric values
     if len(expanded) > 0:
@@ -1792,6 +1850,7 @@ def mimic_rate_cv(
     grp_var: Optional[str] = None,
     unit_col: Optional[str] = None,
     id_cols: Optional[list] = None,
+    admission_times: Optional[pd.DataFrame] = None,
     **kwargs
 ) -> pd.DataFrame:
     """MIMIC CareVue infusion rate callback (R ricu mimic_rate_cv).
@@ -1804,6 +1863,7 @@ def mimic_rate_cv(
         grp_var: Grouping variable (e.g., linkorderid)
         unit_col: Unit column (rate units)
         id_cols: ID columns for grouping
+        admission_times: DataFrame with id and intime columns for relative time
         **kwargs: Additional arguments
         
     Returns:
@@ -1814,8 +1874,9 @@ def mimic_rate_cv(
     if unit_col and unit_col in data.columns:
         keep_vars.append(unit_col)
     
-    # Call expand_intervals — pass id_cols to avoid false-positive detection
-    return expand_intervals(data, keep_vars=keep_vars, grp_var=grp_var, id_cols=id_cols)
+    # Call expand_intervals — pass id_cols and admission_times to avoid false-positive detection
+    return expand_intervals(data, keep_vars=keep_vars, grp_var=grp_var, id_cols=id_cols,
+                            admission_times=admission_times)
 
 # 注意: hirid_vent 的完整版本在第4104行定义（支持展开到小时级别）
 
@@ -3257,10 +3318,11 @@ def eicu_dex_inf(
     if idx_col and idx_col in work.columns:
         interval = _infer_interval_from_series(work[idx_col])
 
-    # 🔧 FIX: 使用数值类型（小时）而不是Timedelta，与eicu_dex_med保持一致
-    # 这样在合并两个表时不会有类型冲突
-    interval_hours = interval.total_seconds() / 3600.0
-    work["dur_var"] = interval_hours
+    # 🔧 FIX: Output dur_var in MINUTES (eICU native unit) so that
+    # _align_time_to_admission's auto-detect correctly converts dur_var / 60 → hours.
+    # Previously output hours → auto-detect would double-convert (hours/60 = wrong).
+    interval_minutes = interval.total_seconds() / 60.0
+    work["dur_var"] = interval_minutes
     work["unit_var"] = "ml/hr"
 
     return work
@@ -3662,6 +3724,12 @@ def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
                 df[index_col] = df[index_col] / 60.0
                 df[stop_col] = df[stop_col] / 60.0
                 
+                # 🔧 FIX: R ricu calls change_interval(re_time) BEFORE callback,
+                # which floors start times to hour boundaries. This changes expand
+                # behavior: seq(floor(start), stop, 1h) generates more rows when
+                # an interval crosses an hour boundary. Stop is NOT floored.
+                df[index_col] = np.floor(df[index_col])
+                
                 try:
                     df = expand(
                         df,
@@ -3812,6 +3880,8 @@ def hirid_rate_kg(
     index_col: Optional[str],
     default_weight: float = 70.0,
     interval_minutes: float = 60.0,
+    value_min: Optional[float] = None,
+    value_max: Optional[float] = None,
 ) -> pd.DataFrame:
     """
     HiRID rate per kg callback - converts dose to mcg/kg/min.
@@ -3870,10 +3940,7 @@ def hirid_rate_kg(
         unit_series = df[unit_col].astype(str).str.lower().str.strip()
         # Accept µg, ug, mcg variations
         ug_mask = unit_series.isin(['µg', 'ug', 'mcg', 'μg'])
-        old_len = len(df)
         df = df[ug_mask]
-        if len(df) < old_len:
-            pass  # Lost some rows due to unexpected units
     
     if df.empty:
         return empty_result
@@ -3901,22 +3968,15 @@ def hirid_rate_kg(
                 break
     
     if index_col and index_col in df.columns:
-        # 🔧 FIX: Floor time based on interval_minutes to match R ricu's change_interval behavior
-        # - interval=60min (1h): floor to hours, so multiple 15-min records in same hour get summed
-        # - interval=1min: floor to minutes, so each 15-min record stays separate (no aggregation)
+        # Floor time based on interval_minutes to match R ricu's change_interval behavior
         time_series = df[index_col]
         if pd.api.types.is_numeric_dtype(time_series):
-            # Already in hours (from datetime conversion)
             if interval_minutes >= 60:
-                # Floor to hours
                 df['_time_bin'] = np.floor(time_series).astype(int)
             else:
-                # Floor to minutes: time_hours * 60 -> minutes, floor, back to hours for consistency
-                # But keep original time for minute-level grouping
                 time_in_minutes = time_series * 60
-                df['_time_bin'] = np.floor(time_in_minutes).astype(int) / 60  # Keep in hours but with minute precision
+                df['_time_bin'] = np.floor(time_in_minutes).astype(int) / 60
         else:
-            # This shouldn't happen for HiRID after datetime conversion
             df['_time_bin'] = time_series
     else:
         df['_time_bin'] = 0
@@ -3930,18 +3990,13 @@ def hirid_rate_kg(
     weight_map = df.groupby(id_col)['weight'].first().to_dict()
     
     grouped = df.groupby(group_cols, as_index=False).agg({
-        actual_val_col: 'sum',  # Sum doses within each hour
+        actual_val_col: 'sum',
     })
     
     # Map weight back
     grouped['weight'] = grouped[id_col].map(weight_map).fillna(default_weight)
     
     # Step 5: Calculate rate = dose / interval_minutes / weight
-    # 🔧 FIX: R ricu uses frac = 1 / interval(x), where interval(x) is the concept's
-    # interval attribute. This affects the grouping and rate calculation:
-    # - interval=60min: data is grouped by hour, doses summed, rate = sum/60/weight
-    # - interval=1min: each point is independent (no aggregation beyond same minute),
-    #   rate = dose/1/weight (60x higher values)
     grouped[concept_name] = grouped[actual_val_col] / interval_minutes / grouped['weight']
     
     # Rename _time_bin to index_col for consistency
@@ -3962,10 +4017,17 @@ def hirid_rate_kg(
     result_cols = [c for c in result_cols if c in grouped.columns]
     result = grouped[result_cols].dropna(subset=[concept_name])
     
-    # 🔧 FIX: R ricu calls expand_intervals at the end of hirid_rate_kg
-    # This creates time intervals and expands to fill gaps (forward-fill)
-    # expand_intervals(x, val_var, grp_var) creates intervals using create_intervals
-    # with overhang=1h, max_len=6h, then expands with 1h step_size
+    # Apply filter_bounds BEFORE expand_intervals to remove outlier rates per
+    # infusionid that would otherwise distort the cross-infusion median.
+    # R ricu applies filter_bounds after change_interval (which only re-discretizes,
+    # NOT aggregates) and before aggregate(median). Since pyricu's expand_intervals 
+    # already aggregates overlapping infusions with median, filter_bounds must run here.
+    if value_min is not None:
+        result = result[result[concept_name] >= value_min]
+    if value_max is not None:
+        result = result[result[concept_name] <= value_max]
+    
+    # expand_intervals creates time intervals and expands to fill gaps
     keep_vars = [concept_name]
     if unit_col and unit_col in result.columns:
         keep_vars.append(unit_col)
@@ -4300,6 +4362,11 @@ def hirid_vent(
     
     # Apply per patient
     df[dur_var] = df.groupby(id_col)[actual_index_col].transform(padded_capped_diff_minutes)
+    
+    # Convert dur_var from minutes to hours to match index unit
+    # The index is already in hours; dur_var must be in the same unit for
+    # correct endtime computation (start_hours + dur_hours) in _load_single_concept
+    df[dur_var] = df[dur_var] / 60.0
     
     # Round datetime to integer hours (R ricu behavior)
     if actual_index_col in df.columns and not np.issubdtype(df[actual_index_col].dtype, np.datetime64):

@@ -663,10 +663,7 @@ class ConceptLoader:
         
         # 🔍 调试：显示推断的列
         if required_columns:
-            import logging
-            logger = logging.getLogger('pyricu.load_concepts')
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"   🔹 表 {table_name} 推断的列: {required_columns}")
+            logger.debug(f"   🔹 表 {table_name} 推断的列: {required_columns}")
         
         try:
             df = self._safe_load_table(table_name, required_columns)
@@ -1237,7 +1234,7 @@ class ConceptLoader:
         Returns:
             time列转换为数值、列格式与ricu一致的DataFrame
         """
-        print(f"[DEBUG _convert_time_to_hours] Input: shape={df.shape}, columns={df.columns.tolist()}, id_type={id_type}")
+        logger.debug(f"[_convert_time_to_hours] Input: shape={df.shape}, columns={df.columns.tolist()}, id_type={id_type}")
         
         if df.empty:
             return df
@@ -1257,23 +1254,33 @@ class ConceptLoader:
             from pyricu.table import load_id_tbl
             icu_times = load_id_tbl(self._src_name, id_type, path=self.data_path)
             
-            if not icu_times.empty and 'intime' in icu_times.columns:
-                # 确定ID列名
-                id_col = self._get_id_column(df, id_type)
-                if id_col and id_col in df.columns:
-                    # 合并入院时间
-                    df = df.merge(icu_times[[id_col, 'intime']], on=id_col, how='left')
+            if not icu_times.empty:
+                # 检测 intime 列名（不同数据库使用不同列名）
+                intime_candidates = ['intime', 'admittedat', 'admissiontime', 
+                                     'hospitaladmittime', 'ICUOffset']
+                intime_col = None
+                for cand in intime_candidates:
+                    if cand in icu_times.columns:
+                        intime_col = cand
+                        break
+                
+                if intime_col is not None:
+                    # 确定ID列名
+                    id_col = self._get_id_column(df, id_type)
+                    if id_col and id_col in df.columns:
+                        # 合并入院时间
+                        df = df.merge(icu_times[[id_col, intime_col]], on=id_col, how='left')
+                        
+                        # 转换时间列为相对小时数
+                        df[time_col_name] = pd.to_datetime(df[time_col_name], errors='coerce')
+                        df[intime_col] = pd.to_datetime(df[intime_col], errors='coerce')
+                        
+                        # 计算时间差(小时)
+                        time_diff = (df[time_col_name] - df[intime_col]).dt.total_seconds() / 3600
+                        df[time_col_name] = time_diff.round(2)
                     
-                    # 转换时间列为相对小时数
-                    df[time_col_name] = pd.to_datetime(df[time_col_name], errors='coerce')
-                    df['intime'] = pd.to_datetime(df['intime'], errors='coerce')
-                    
-                    # 计算时间差(小时)
-                    time_diff = (df[time_col_name] - df['intime']).dt.total_seconds() / 3600
-                    df[time_col_name] = time_diff.round(2)
-                    
-                    # 删除intime辅助列
-                    df = df.drop(columns=['intime'])
+                        # 删除辅助列
+                        df = df.drop(columns=[intime_col])
         
         # 2. 清理列格式以匹配ricu输出
         # 确定主ID列(根据id_type)
@@ -1295,7 +1302,7 @@ class ConceptLoader:
             # 回退到_get_id_column
             id_col = self._get_id_column(df, id_type)
         
-        print(f"[DEBUG _convert_time_to_hours] id_col={id_col}, all columns={df.columns.tolist()}")
+        logger.debug(f"[_convert_time_to_hours] id_col={id_col}, all columns={df.columns.tolist()}")
         
         # 移除多余的ID列(保留主ID列)
         all_id_cols = set()
@@ -1304,11 +1311,11 @@ class ConceptLoader:
         
         extra_id_cols = [col for col in df.columns if col in all_id_cols and col != id_col]
         
-        print(f"[DEBUG _convert_time_to_hours] all_id_cols={all_id_cols}, extra_id_cols={extra_id_cols}")
+        logger.debug(f"[_convert_time_to_hours] all_id_cols={all_id_cols}, extra_id_cols={extra_id_cols}")
         
         if extra_id_cols:
             df = df.drop(columns=extra_id_cols)
-            print(f"[DEBUG _convert_time_to_hours] After drop: columns={df.columns.tolist()}")
+            logger.debug(f"[_convert_time_to_hours] After drop: columns={df.columns.tolist()}")
         
         # 3. 统一时间列名为charttime(ricu使用charttime)
         if 'time' in df.columns:
@@ -1437,6 +1444,26 @@ class ConceptLoader:
                 'icustay': 'patientunitstayid',
                 'hadm': 'patienthealthsystemstayid',
                 'subject': 'uniquepid',
+            },
+            'miiv': {
+                'icustay': 'stay_id',
+                'hadm': 'hadm_id',
+                'subject': 'subject_id',
+            },
+            'aumc': {
+                'icustay': 'admissionid',
+                'hadm': 'admissionid',
+                'subject': 'patientid',
+            },
+            'hirid': {
+                'icustay': 'patientid',
+                'hadm': 'patientid',
+                'subject': 'patientid',
+            },
+            'sic': {
+                'icustay': 'CaseID',
+                'hadm': 'CaseID',
+                'subject': 'PatientID',
             },
         }
         

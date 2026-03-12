@@ -150,7 +150,7 @@ def sofa2_resp(
         s = pd.to_numeric(spo2, errors="coerce")
         f = pd.to_numeric(fio2, errors="coerce")
         # Convert fio2 percent to fraction if looks like 21-100
-        f_adj = f.where(~((f > 1) & (f <= 100)), f / 100.0)
+        f_adj = f.where(~((f >= 21) & (f <= 100)), f / 100.0)
         
         with np.errstate(invalid="ignore", divide="ignore"):
             sf = s / f_adj

@@ -318,9 +318,9 @@ def replace_na(
         cols = [cols]
     
     if method == 'ffill':
-        df[cols] = df[cols].fillna(method='ffill')
+        df[cols] = df[cols].ffill()
     elif method == 'bfill':
-        df[cols] = df[cols].fillna(method='bfill')
+        df[cols] = df[cols].bfill()
     else:  # const or None
         if value is not None:
             df[cols] = df[cols].fillna(value)

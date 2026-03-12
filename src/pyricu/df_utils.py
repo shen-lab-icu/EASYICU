@@ -345,12 +345,12 @@ def forward_fill_by_group(
             for col in value_cols:
                 if col in group.columns:
                     # Simple forward fill
-                    group[col] = group[col].fillna(method='ffill')
+                    group[col] = group[col].ffill()
         else:
             # Simple forward fill
             for col in value_cols:
                 if col in group.columns:
-                    group[col] = group[col].fillna(method='ffill')
+                    group[col] = group[col].ffill()
         return group
     
     # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
