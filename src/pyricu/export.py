@@ -108,11 +108,15 @@ def read_psv(
     
     for filepath in psv_files:
         # Extract patient ID from filename (e.g., 'p001.psv' -> 1)
-        patient_id = filepath.stem
-        if patient_id.startswith('p'):
-            patient_id = int(patient_id[1:])
-        else:
-            patient_id = int(patient_id)
+        patient_id_str = filepath.stem
+        try:
+            if patient_id_str.startswith('p'):
+                patient_id = int(patient_id_str[1:])
+            else:
+                patient_id = int(patient_id_str)
+        except ValueError:
+            # Non-numeric filename, use string as ID
+            patient_id = patient_id_str
         
         # Read file
         df = pd.read_csv(filepath, sep='|', na_values='NaN')

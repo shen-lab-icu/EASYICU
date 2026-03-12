@@ -1186,11 +1186,9 @@ def _fill_na_single(
                 gap_groups = large_gap.cumsum()
                 
                 # Fill within each gap group
-                data[col] = data.groupby(gap_groups)[col].fillna(
-                    method='ffill', limit=limit
-                )
+                data[col] = data.groupby(gap_groups)[col].ffill(limit=limit)
             else:
-                data[col] = data[col].fillna(method='ffill', limit=limit)
+                data[col] = data[col].ffill(limit=limit)
         
         elif method == "bfill":
             if max_gap is not None and index_col is not None:
@@ -1201,11 +1199,9 @@ def _fill_na_single(
                 large_gap = time_diffs > max_gap
                 gap_groups = large_gap[::-1].cumsum()[::-1]
                 
-                data[col] = data.groupby(gap_groups)[col].fillna(
-                    method='bfill', limit=limit
-                )
+                data[col] = data.groupby(gap_groups)[col].bfill(limit=limit)
             else:
-                data[col] = data[col].fillna(method='bfill', limit=limit)
+                data[col] = data[col].bfill(limit=limit)
         
         elif method == "interpolate":
             if index_col is not None:
@@ -2183,10 +2179,10 @@ def locf(
                 # Fill within each gap group
                 for col in group.columns:
                     if col not in existing_id_cols and col != index_col:
-                        group[col] = group.groupby(gap_groups)[col].fillna(method='ffill')
+                        group[col] = group.groupby(gap_groups)[col].ffill()
             else:
                 # Simple forward fill
-                group = group.fillna(method='ffill')
+                group = group.ffill()
             
             return group
         
@@ -2206,9 +2202,9 @@ def locf(
             
             for col in data.columns:
                 if col != index_col:
-                    data[col] = data.groupby(gap_groups)[col].fillna(method='ffill')
+                    data[col] = data.groupby(gap_groups)[col].ffill()
         else:
-            data = data.fillna(method='ffill')
+            data = data.ffill()
     
     return data
 
@@ -2258,10 +2254,10 @@ def locb(
                 # Fill within each gap group
                 for col in group.columns:
                     if col not in existing_id_cols and col != index_col:
-                        group[col] = group.groupby(gap_groups)[col].fillna(method='bfill')
+                        group[col] = group.groupby(gap_groups)[col].bfill()
             else:
                 # Simple backward fill
-                group = group.fillna(method='bfill')
+                group = group.bfill()
             
             return group
         
@@ -2281,9 +2277,9 @@ def locb(
             
             for col in data.columns:
                 if col != index_col:
-                    data[col] = data.groupby(gap_groups)[col].fillna(method='bfill')
+                    data[col] = data.groupby(gap_groups)[col].bfill()
         else:
-            data = data.fillna(method='bfill')
+            data = data.bfill()
     
     return data
 

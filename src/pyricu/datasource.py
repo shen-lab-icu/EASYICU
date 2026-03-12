@@ -1500,7 +1500,6 @@ class ICUDataSource:
                 return self._read_partitioned_data_optimized(path, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
         
         suffix = path.suffix.lower()
-        [s.lower() for s in path.suffixes]
         
         # Preferred: Parquet format
         if suffix in {".parquet", ".pq"}:
@@ -1553,11 +1552,13 @@ class ICUDataSource:
             目标桶 ID 集合
         """
         conn = duckdb_module.connect()
-        itemid_list = list(itemids)
-        conn.execute("CREATE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
-        result = conn.execute(f"SELECT DISTINCT hash(itemid) % {num_buckets} FROM items").fetchall()
-        conn.close()
-        return {row[0] for row in result}
+        try:
+            itemid_list = list(itemids)
+            conn.execute("CREATE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
+            result = conn.execute(f"SELECT DISTINCT hash(itemid) % {int(num_buckets)} FROM items").fetchall()
+            return {row[0] for row in result}
+        finally:
+            conn.close()
     
     def _read_mimic3_csv_fallback(
         self,
@@ -1664,16 +1665,18 @@ class ICUDataSource:
         
         try:
             con = duckdb.connect()
-            con.execute("SET timezone='UTC'")
-            con.execute("SET enable_progress_bar = false")
-            con.execute("SET enable_progress_bar_print = false")
             try:
-                arrow_table = con.execute(query).fetch_arrow_table()
-                df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
-                del arrow_table
-            except Exception:
-                df = con.execute(query).fetchdf()
-            con.close()
+                con.execute("SET timezone='UTC'")
+                con.execute("SET enable_progress_bar = false")
+                con.execute("SET enable_progress_bar_print = false")
+                try:
+                    arrow_table = con.execute(query).fetch_arrow_table()
+                    df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+                    del arrow_table
+                except Exception:
+                    df = con.execute(query).fetchdf()
+            finally:
+                con.close()
             
             # Normalize column names to lowercase (MIMIC-III CSV uses uppercase)
             df.columns = [c.lower() for c in df.columns]
@@ -1876,22 +1879,24 @@ class ICUDataSource:
         
         try:
             con = duckdb.connect()
-            # 🔧 CRITICAL FIX: 设置 DuckDB 时区为 UTC
-            # DuckDB 默认将 UTC 时间转换为本地时区，这会导致时间偏移
-            # 例如：UTC 15:37 会被转换成 Asia/Shanghai 23:37 (+8 小时)
-            # 设置时区为 UTC 可以保持原始 UTC 时间不变
-            con.execute("SET timezone='UTC'")
-            # 🔧 禁用DuckDB进度条，避免终端输出开销
-            con.execute("SET enable_progress_bar = false")
-            con.execute("SET enable_progress_bar_print = false")
-            # 🚀 优化: 使用 Arrow → pandas 零拷贝转换，减少内存峰值约40%
             try:
-                arrow_table = con.execute(query).fetch_arrow_table()
-                df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
-                del arrow_table
-            except Exception:
-                df = con.execute(query).fetchdf()
-            con.close()
+                # 🔧 CRITICAL FIX: 设置 DuckDB 时区为 UTC
+                # DuckDB 默认将 UTC 时间转换为本地时区，这会导致时间偏移
+                # 例如：UTC 15:37 会被转换成 Asia/Shanghai 23:37 (+8 小时)
+                # 设置时区为 UTC 可以保持原始 UTC 时间不变
+                con.execute("SET timezone='UTC'")
+                # 🔧 禁用DuckDB进度条，避免终端输出开销
+                con.execute("SET enable_progress_bar = false")
+                con.execute("SET enable_progress_bar_print = false")
+                # 🚀 优化: 使用 Arrow → pandas 零拷贝转换，减少内存峰值约40%
+                try:
+                    arrow_table = con.execute(query).fetch_arrow_table()
+                    df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+                    del arrow_table
+                except Exception:
+                    df = con.execute(query).fetchdf()
+            finally:
+                con.close()
             return df
         except Exception as e:
             logger.warning(f"DuckDB 读取失败，回退到 PyArrow: {e}")
@@ -1970,7 +1975,7 @@ class ICUDataSource:
             else:
                 table = dataset.to_table(
                     filter=filter_expr,
-                    use_threads=thread_count
+                    use_threads=True
                 )
 
             # 转换为 pandas，使用 zero-copy 优化
@@ -1978,53 +1983,54 @@ class ICUDataSource:
             
         except Exception:
             # 回退到简单方式
-            parquet_files = sorted(directory.glob("*.parquet"))
-            if not parquet_files:
-                parquet_files = sorted(directory.glob("*.pq"))
-            
-            if not parquet_files:
-                return pd.DataFrame(columns=list(columns) if columns else [])
-            
-            # 准备过滤条件
-            filter_ids = None
-            id_column = None
-            if patient_ids_filter:
-                id_column = patient_ids_filter.column
-                if isinstance(patient_ids_filter.value, (list, tuple, set)):
-                    filter_ids = set(patient_ids_filter.value)
-                else:
-                    filter_ids = {patient_ids_filter.value}
-            
-            # 快速读取+过滤
-            chunks = []
-            for file_path in parquet_files:
-                if columns:
-                    df_chunk = pd.read_parquet(file_path, columns=list(columns))
-                else:
-                    df_chunk = pd.read_parquet(file_path)
+            try:
+                parquet_files = sorted(directory.glob("*.parquet"))
+                if not parquet_files:
+                    parquet_files = sorted(directory.glob("*.pq"))
                 
-                # 立即应用过滤（减少内存占用）
-                if filter_ids and id_column and id_column in df_chunk.columns:
-                    df_chunk = df_chunk[df_chunk[id_column].isin(filter_ids)]
+                if not parquet_files:
+                    return pd.DataFrame(columns=list(columns) if columns else [])
                 
-                # 只保留有数据的chunk
-                if len(df_chunk) > 0:
-                    chunks.append(df_chunk)
-            
-            # 合并所有chunks
-            if chunks:
-                return pd.concat(chunks, ignore_index=True)
-            else:
-                # 返回空DataFrame，保持列结构
-                if columns:
-                    return pd.DataFrame(columns=list(columns))
+                # 准备过滤条件
+                filter_ids = None
+                id_column = None
+                if patient_ids_filter:
+                    id_column = patient_ids_filter.column
+                    if isinstance(patient_ids_filter.value, (list, tuple, set)):
+                        filter_ids = set(patient_ids_filter.value)
+                    else:
+                        filter_ids = {patient_ids_filter.value}
+                
+                # 快速读取+过滤
+                chunks = []
+                for file_path in parquet_files:
+                    if columns:
+                        df_chunk = pd.read_parquet(file_path, columns=list(columns))
+                    else:
+                        df_chunk = pd.read_parquet(file_path)
+                    
+                    # 立即应用过滤（减少内存占用）
+                    if filter_ids and id_column and id_column in df_chunk.columns:
+                        df_chunk = df_chunk[df_chunk[id_column].isin(filter_ids)]
+                    
+                    # 只保留有数据的chunk
+                    if len(df_chunk) > 0:
+                        chunks.append(df_chunk)
+                
+                # 合并所有chunks
+                if chunks:
+                    return pd.concat(chunks, ignore_index=True)
                 else:
-                    return pd.DataFrame()
+                    # 返回空DataFrame，保持列结构
+                    if columns:
+                        return pd.DataFrame(columns=list(columns))
+                    else:
+                        return pd.DataFrame()
             
-        except Exception as e:
-            # 最终回退到原始实现
-            logger.warning(f"优化读取失败: {e}，回退到fallback方法")
-            return self._read_partitioned_data_fallback(directory, columns, patient_ids_filter)
+            except Exception as e:
+                # 最终回退到原始实现
+                logger.warning(f"优化读取失败: {e}，回退到fallback方法")
+                return self._read_partitioned_data_fallback(directory, columns, patient_ids_filter)
     
     def _read_partitioned_data_fallback(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None) -> pd.DataFrame:
         """Read partitioned data from a directory, respecting format priority."""
@@ -2345,6 +2351,12 @@ def load_bucketed_table_aggregated(
             id_col = 'admissionid'
         elif db_name == 'hirid':
             id_col = 'patientid'
+        elif db_name in ('mimic', 'mimic_demo'):
+            id_col = 'icustay_id'
+        elif db_name in ('sic', 'sic_demo'):
+            id_col = 'CaseID'
+        elif db_name in ('eicu', 'eicu_demo'):
+            id_col = 'patientunitstayid'
         else:
             id_col = 'stay_id'
     
@@ -2353,6 +2365,12 @@ def load_bucketed_table_aggregated(
             time_col = 'measuredat'  # AUMC使用measuredat（毫秒时间戳）
         elif db_name == 'hirid':
             time_col = 'datetime'
+        elif db_name in ('sic', 'sic_demo'):
+            time_col = 'Offset'
+        elif db_name in ('eicu', 'eicu_demo'):
+            # eICU tables have different time columns; use the one from table config
+            # Common: labresultoffset (lab), nursingchartoffset (nursecharting)
+            time_col = 'labresultoffset'  # default, may be overridden by caller
         else:
             time_col = 'charttime'
     
@@ -2361,6 +2379,12 @@ def load_bucketed_table_aggregated(
         itemid_col = 'itemid'
     elif db_name == 'hirid':
         itemid_col = 'variableid'
+    elif db_name in ('sic', 'sic_demo'):
+        # SIC tables: data_float_h uses DataID, laboratory uses LaboratoryID
+        # Caller should pass the correct column via source.sub_var
+        itemid_col = 'DataID' if table_name in ('data_float_h',) else 'LaboratoryID'
+    elif db_name in ('eicu', 'eicu_demo'):
+        itemid_col = 'labname'  # eICU lab uses string labname
     else:
         itemid_col = 'itemid'
     
@@ -2402,8 +2426,12 @@ def load_bucketed_table_aggregated(
     # 构建WHERE条件
     where_conditions = []
     
-    # itemid过滤
-    ids_str = ", ".join(str(x) for x in itemids)
+    # itemid过滤 (handle both numeric and string itemids)
+    _is_string_ids = any(isinstance(x, str) for x in itemids)
+    if _is_string_ids:
+        ids_str = ", ".join(f"'{x}'" for x in itemids)
+    else:
+        ids_str = ", ".join(str(x) for x in itemids)
     where_conditions.append(f"{itemid_col} IN ({ids_str})")
     
     # 患者过滤
@@ -2449,7 +2477,20 @@ def load_bucketed_table_aggregated(
                 f"SELECT * FROM read_parquet('{target_files[0]}') LIMIT 0"
             ).description
             _col_names = {col[0] for col in _col_info}
-            if 'unit' not in _col_names:
+            # 🔧 FIX: 查找实际的单位列名（eICU lab用labmeasurenameinterface，其他表用unit）
+            _unit_col_name = None
+            if 'unit' in _col_names:
+                _unit_col_name = 'unit'
+            else:
+                # 从表配置获取 unit_var
+                try:
+                    _table_cfg = data_source.config.get_table(table_name)
+                    _configured_unit = getattr(_table_cfg.defaults, 'unit_var', None)
+                    if _configured_unit and _configured_unit in _col_names:
+                        _unit_col_name = _configured_unit
+                except Exception:
+                    pass
+            if _unit_col_name is None:
                 import logging
                 logging.getLogger(__name__).info(
                     f"⚠️ 表无 unit 列，跳过 inline convert_unit（filter={convert_unit_filter}）"
@@ -2464,7 +2505,7 @@ def load_bucketed_table_aggregated(
         if convert_unit_filter:
             # 有单位过滤：只对匹配的行做转换
             # 使用 DuckDB regexp_matches 进行正则匹配（case-insensitive）
-            _value_expr = f"CASE WHEN regexp_matches(CAST(unit AS VARCHAR), '(?i){convert_unit_filter}') THEN {value_column} {_op_sql} {convert_unit_factor} ELSE {value_column} END"
+            _value_expr = f"CASE WHEN regexp_matches(CAST({_unit_col_name} AS VARCHAR), '(?i){convert_unit_filter}') THEN {value_column} {_op_sql} {convert_unit_factor} ELSE {value_column} END"
         else:
             # 无单位过滤：转换所有行
             _value_expr = f"{value_column} {_op_sql} {convert_unit_factor}"
@@ -2476,18 +2517,14 @@ def load_bucketed_table_aggregated(
     
     # R ricu 的 change_interval 聚合不按 itemid 分组:
     # 它将同一 (patient, hour) 的所有 itemid 数据池化后取 median/max 等。
-    # 但对于 AUMC，不同 itemid 可能使用不同单位（如 pco2 的 mmHg vs kPa），
-    # 不能池化。这种情况下必须保留 itemid 分组，让后续 change_interval + 
-    # filter_bounds 逐个处理。HiRID 无此问题，可以安全池化。
-    if _has_inline_convert or db_name == 'hirid':
-        # convert_unit 已在 SQL 中统一单位，或 HiRID 同单位，可以池化
-        _group_itemid = ""
-        _select_itemid = ""
-        _order_itemid = ""
-    else:
-        _group_itemid = f", {itemid_col}"
-        _select_itemid = f",\n            {itemid_col}"
-        _order_itemid = f", {itemid_col}"
+    # 2026-03-11 FIX: 始终池化所有 itemid。R ricu 从不按 itemid 分组聚合。
+    # 对有 convert_unit 回调的概念，_has_inline_convert 已在 SQL 中统一单位。
+    # 对无回调的概念（如 resp: 8874+12266），所有 itemid 共享同一单位，池化安全。
+    # 混合单位 itemid（如 AUMC pco2 的 mmHg+kPa）通过池化中位数的鲁棒性 +
+    # 后续 filter_bounds (min/max) 处理。
+    _group_itemid = ""
+    _select_itemid = ""
+    _order_itemid = ""
     
     if db_name == 'aumc':
         # AUMC measuredat是Unix毫秒时间戳，转换为分钟后再取整
@@ -2531,7 +2568,7 @@ def load_bucketed_table_aggregated(
             # HiRID 内联 convert_unit: 为列名添加表别名 'o.'
             _op_sql = {'*': '*', '/': '/', '+': '+', '-': '-'}.get(convert_unit_op, '*')
             if convert_unit_filter:
-                _hirid_value_expr = f"CASE WHEN regexp_matches(CAST(o.unit AS VARCHAR), '(?i){convert_unit_filter}') THEN o.{value_column} {_op_sql} {convert_unit_factor} ELSE o.{value_column} END"
+                _hirid_value_expr = f"CASE WHEN regexp_matches(CAST(o.{_unit_col_name} AS VARCHAR), '(?i){convert_unit_filter}') THEN o.{value_column} {_op_sql} {convert_unit_factor} ELSE o.{value_column} END"
             else:
                 _hirid_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
             _hirid_agg_expr = f"{duckdb_agg}({_hirid_value_expr}) as {value_column}"
@@ -2559,11 +2596,114 @@ def load_bucketed_table_aggregated(
         GROUP BY o.{id_col}, {time_round_expr}{_hirid_group_itemid}
         ORDER BY o.{id_col}, 2{_hirid_order_itemid}
         """
-    else:
+    elif db_name in ('miiv', 'miiv_demo', 'mimic', 'mimic_demo'):
+        # MIIV/MIMIC: charttime is absolute datetime, need JOIN with icustays to compute relative hours
+        # Find icustays parquet
+        icustays_path = base_path / 'icustays.parquet'
+        if not icustays_path.exists():
+            icustays_path = base_path / 'icu' / 'icustays.parquet'
+        if not icustays_path.exists():
+            # Fallback: try CSV
+            icustays_csv = base_path / 'icustays.csv.gz'
+            if icustays_csv.exists():
+                icustays_path = icustays_csv
+        
+        stay_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
+        
+        # Compute hours from admission: FLOOR(EPOCH(charttime - intime) / 3600)
+        _interval_hours = interval_minutes / 60.0
+        time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+        output_time_expr = f"{time_round_expr} as charttime"
+        
+        # Alias value references for JOIN query
+        if _has_inline_convert:
+            _op_sql = {'*': '*', '/': '/', '+': '+', '-': '-'}.get(convert_unit_op, '*')
+            if convert_unit_filter:
+                _mimic_value_expr = f"CASE WHEN regexp_matches(CAST(o.{_unit_col_name} AS VARCHAR), '(?i){convert_unit_filter}') THEN o.{value_column} {_op_sql} {convert_unit_factor} ELSE o.{value_column} END"
+            else:
+                _mimic_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
+            _mimic_agg_expr = f"{duckdb_agg}({_mimic_value_expr}) as {value_column}"
+        else:
+            _mimic_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
+        _mimic_unit_select = ",\n            ANY_VALUE(o.unit) as unit" if include_unit else ""
+        
+        # Alias WHERE clause for JOIN
+        _mimic_where = where_clause.replace(f'{itemid_col}', f'o.{itemid_col}')
+        _mimic_where = _mimic_where.replace(f'{id_col} IN', f'o.{id_col} IN')
+        # Also handle value_column filters
+        _mimic_where = _mimic_where.replace(f'{value_column} >=', f'o.{value_column} >=')
+        _mimic_where = _mimic_where.replace(f'{value_column} <=', f'o.{value_column} <=')
+        
+        _read_func = 'read_csv' if str(icustays_path).endswith('.csv.gz') else 'read_parquet'
+        
+        query = f"""
+        WITH adm AS (
+            SELECT {stay_col}, CAST(intime AS TIMESTAMP) as intime
+            FROM {_read_func}('{icustays_path}')
+        )
+        SELECT
+            o.{id_col},
+            {output_time_expr},
+            {_mimic_agg_expr}{_mimic_unit_select}
+        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        JOIN adm a ON o.{id_col} = a.{stay_col}
+        {_mimic_where}
+        GROUP BY o.{id_col}, {time_round_expr}
+        ORDER BY o.{id_col}, 2
+        """
+    elif db_name in ('sic', 'sic_demo'):
+        # SIC: Offset is in seconds relative to hospital admission
+        # 🔧 FIX: R ricu 和旧 Python 路径不减去 ICUOffset，直接 Offset/3600 → 小时
+        # _align_time_to_admission 中 SIC 用 magnitude check > 5000 来决定是否除以 3600
+        # DuckDB 输出秒级时间（FLOOR 到整小时的秒数），保持与旧路径一致
+        _interval_seconds = interval_minutes * 60.0
+        # Quote "Offset" as it's a reserved word in DuckDB
+        time_round_expr = f'FLOOR(o."Offset" / {_interval_seconds}) * {_interval_seconds}'
+        output_time_expr = f"{time_round_expr} as charttime"
+        
+        if _has_inline_convert:
+            _op_sql = {'*': '*', '/': '/', '+': '+', '-': '-'}.get(convert_unit_op, '*')
+            if convert_unit_filter:
+                _sic_value_expr = f"CASE WHEN regexp_matches(CAST(o.{_unit_col_name} AS VARCHAR), '(?i){convert_unit_filter}') THEN o.{value_column} {_op_sql} {convert_unit_factor} ELSE o.{value_column} END"
+            else:
+                _sic_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
+            _sic_agg_expr = f"{duckdb_agg}({_sic_value_expr}) as {value_column}"
+        else:
+            _sic_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
+        
+        # 🔧 FIX: SIC 不再需要 JOIN cases 表（不减 ICUOffset），直接查询
+        query = f"""
+        SELECT
+            {id_col},
+            {output_time_expr},
+            {_sic_agg_expr}
+        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        {where_clause}
+        GROUP BY {id_col}, {time_round_expr}
+        ORDER BY {id_col}, 2
+        """
+    elif db_name in ('eicu', 'eicu_demo'):
+        # eICU: time columns are already relative offsets in minutes
+        # 🔧 FIX: 输出保持分钟单位（与原始数据一致），让 _align_time_to_admission 统一转换为小时
+        # 之前输出小时导致 _align_time_to_admission 再除以60（双重转换）
         time_round_expr = f"FLOOR({time_col} / {interval_minutes}) * {interval_minutes}"
         output_time_expr = f"{time_round_expr} as charttime"
         default_unit_select = ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
-        # 标准查询
+        query = f"""
+        SELECT 
+            {id_col},
+            {output_time_expr}{_select_itemid},
+            {_agg_value_expr}{default_unit_select}
+        FROM read_parquet({glob_pattern}, union_by_name=true)
+        {where_clause}
+        GROUP BY {id_col}, {time_round_expr}{_group_itemid}
+        ORDER BY {id_col}, 2{_order_itemid}
+        """
+    else:
+        # Generic fallback: assume time_col is numeric in minutes
+        time_round_expr = f"FLOOR({time_col} / {interval_minutes}) * {interval_minutes}"
+        output_time_expr = f"{time_round_expr} as charttime"
+        default_unit_select = ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
         query = f"""
         SELECT 
             {id_col},

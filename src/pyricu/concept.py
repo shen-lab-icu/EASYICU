@@ -1068,35 +1068,26 @@ class ConceptResolver:
                                     'mimic': 'icustay_id', 'sic': 'CaseID'
                                 }
                                 target_id_col = id_col_map.get(db_name, 'stay_id')
-                                # Ensure we have the correct columns: id_col, starttime, dur_var, concept
                                 result_cols = []
-                                # Find ID column
                                 for cand in [target_id_col, 'stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']:
                                     if cand in df.columns:
                                         result_cols.append(cand)
                                         break
-                                # 🔧 FIX 2025-02-13: Keep original time column name (R ricu preserves it)
-                                # e.g., eICU uses 'nursingchartoffset', AUMC uses 'measuredat', HiRID uses 'datetime'
                                 time_col = None
-                                # Prioritize original table time columns over generic names
                                 for cand in ['nursingchartoffset', 'nursingchartentryoffset', 'observationoffset',
                                              'charttime', 'measuredat', 'datetime', 'givenat', 'starttime', 'start']:
                                     if cand in df.columns:
                                         time_col = cand
                                         break
                                 if time_col:
-                                    # Do NOT rename - keep the original column name
                                     result_cols.append(time_col)
-                                # Add dur_var if present
                                 if 'dur_var' in df.columns:
                                     result_cols.append('dur_var')
                                 elif 'dex_dur' in df.columns:
                                     df = df.rename(columns={'dex_dur': 'dur_var'})
                                     result_cols.append('dur_var')
-                                # Add concept value column
                                 if concept_name in df.columns:
                                     result_cols.append(concept_name)
-                                # Select and order columns
                                 df = df[[c for c in result_cols if c in df.columns]]
                                 if verbose:
                                     logger.info(f"🔧 win_tbl 概念 '{concept_name}' 直接返回原始格式: {len(df)} 行, 列={df.columns.tolist()}")
@@ -1599,69 +1590,37 @@ class ConceptResolver:
                     if getattr(source, 'unit_var', None):
                         extra_columns.append(source.unit_var)
                     
-                    # 🚀 DuckDB层聚合优化：对AUMC/HiRID高频表直接在DuckDB中降采样
-                    # 这可以将3700万行→250万行的降采样从Python移到DuckDB层
-                    # 性能提升：32秒→2.5秒，内存5.4GB→269MB
+                    # 🚀 DuckDB层聚合优化：对有分桶目录的表直接在DuckDB中降采样
+                    # 支持所有数据库（AUMC/HiRID/MIIV/MIMIC/SIC/eICU），只要表有分桶目录
+                    # 性能提升：MIIV 6 vitals 50 patients 从 545s → ~10s
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                     use_duckdb_aggregation = False
-                    _convert_unit_callback_for_duckdb = False  # 标记是否convert_unit已在DuckDB中内联完成
+                    _convert_unit_callback_for_duckdb = False
+                    _convert_unit_factor = None
+                    _convert_unit_op = None
+                    _convert_unit_filter = None
                     
-                    # 判断是否可以使用DuckDB聚合
-                    # 条件：1)是AUMC/HiRID 2)是高频表 3)有itemid过滤 4)无callback或convert_unit
-                    # 🚀 FIX: convert_unit callback 在DuckDB中内联执行
-                    # 使用 CASE WHEN 在聚合前转换单位，然后按(id,time)分组（不含itemid）
-                    # 效果：etco2 从 873s → <3s, fio2 从 ~200s → <3s
-                    _convert_unit_callback_for_duckdb = False  # 标记是否需要DuckDB内联convert_unit
-                    _convert_unit_factor = None  # 乘法因子
-                    _convert_unit_op = None  # 运算符
-                    _convert_unit_filter = None  # 单位过滤模式
+                    # 通用检查：表是否有分桶目录 + 源是否有 sub_var + ids + 无复杂 callback
+                    _has_bucket_dir = False
+                    try:
+                        _bucket_dir_check = data_source._resolve_bucket_directory(source.table)
+                        _has_bucket_dir = _bucket_dir_check is not None
+                    except Exception:
+                        pass
                     
-                    if db_name == 'aumc' and source.table == 'numericitems':
-                        has_sub_var = getattr(source, 'sub_var', None) is not None
-                        has_callback = getattr(source, 'callback', None) is not None
-                        # 检测 convert_unit callback（线性变换，可在DuckDB中内联）
-                        is_convert_unit = (
-                            has_callback and isinstance(source.callback, str) and
-                            source.callback.strip().startswith('convert_unit(')
-                        )
-                        if has_sub_var and (not has_callback or is_convert_unit) and source.ids:
-                            itemids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
-                            use_duckdb_aggregation = len(itemids) > 0
-                            if is_convert_unit and use_duckdb_aggregation:
-                                _convert_unit_callback_for_duckdb = True
-                                # 解析 convert_unit 参数
-                                import re as _re
-                                _cb = source.callback.strip()
-                                _m = _re.match(r"convert_unit\((.+)\)", _cb, _re.DOTALL)
-                                if _m:
-                                    _args_str = _m.group(1)
-                                    # 简单分割（处理嵌套括号）
-                                    _args = []
-                                    _lvl, _cur = 0, []
-                                    for _ch in _args_str:
-                                        if _ch == '(': _lvl += 1
-                                        elif _ch == ')': _lvl -= 1
-                                        elif _ch == ',' and _lvl == 0:
-                                            _args.append(''.join(_cur).strip())
-                                            _cur = []
-                                            continue
-                                        _cur.append(_ch)
-                                    if _cur: _args.append(''.join(_cur).strip())
-                                    # 解析 binary_op
-                                    _bm = _re.match(r"binary_op\(`(.+?)`,\s*(.+)\)", _args[0].strip()) if _args else None
-                                    if _bm:
-                                        _convert_unit_op = _bm.group(1)  # '*', '/', etc.
-                                        try: _convert_unit_factor = float(_bm.group(2))
-                                        except: pass
-                                    _convert_unit_filter = _args[2].strip().strip("'\"") if len(_args) > 2 else None
-                    elif db_name == 'hirid' and source.table == 'observations':
+                    if _has_bucket_dir:
                         has_sub_var = getattr(source, 'sub_var', None) is not None
                         has_callback = getattr(source, 'callback', None) is not None
                         is_convert_unit = (
                             has_callback and isinstance(source.callback, str) and
                             source.callback.strip().startswith('convert_unit(')
                         )
-                        if has_sub_var and (not has_callback or is_convert_unit) and source.ids:
+                        # 🔧 FIX: id_tbl 概念（height, weight 等）需要 per-patient 聚合，不适合 DuckDB 的 per-hour GROUP BY
+                        _target = getattr(definition, 'target', 'ts_tbl')
+                        # 🔧 SIC: 暂不启用 DuckDB（SIC laboratory 的 Offset 是相对时间秒数，
+                        # 需要额外处理与 _align_time_to_admission 的交互）
+                        _skip_db_duckdb = db_name in ('sic', 'sic_demo')
+                        if has_sub_var and (not has_callback or is_convert_unit) and source.ids and _target != 'id_tbl' and not _skip_db_duckdb:
                             itemids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
                             use_duckdb_aggregation = len(itemids) > 0
                             if is_convert_unit and use_duckdb_aggregation:
@@ -1688,6 +1647,11 @@ class ConceptResolver:
                                         try: _convert_unit_factor = float(_bm.group(2))
                                         except: pass
                                     _convert_unit_filter = _args[2].strip().strip("'\"") if len(_args) > 2 else None
+                                # 🔧 FIX: 非 binary_op 转换（如 fahr_to_cels）无法在 DuckDB 中内联
+                                # 必须回退到 Python 回调路径
+                                if _convert_unit_factor is None:
+                                    _convert_unit_callback_for_duckdb = False
+                                    use_duckdb_aggregation = False
                     
                     if use_duckdb_aggregation:
                         # 使用DuckDB层聚合
@@ -1732,10 +1696,12 @@ class ConceptResolver:
                             interval_minutes=interval_minutes,
                             patient_ids=patient_ids_list,  # 🔧 修复: 传入患者ID过滤
                             agg_func=_duckdb_agg,
-                            # 🔧 NOTE: 不在 DuckDB WHERE 中过滤 min/max
-                            # R ricu 流程: 加载原始值 → 池化所有 itemid → change_interval(median) → filter_bounds
-                            # filter_bounds 在聚合之后执行（见 ~L3866），在聚合前应用会改变 median 值
-                            # AUMC 混合单位问题通过池化解决（kPa 值被多数 mmHg 值稀释）
+                            # 2026-03-11: 在 DuckDB WHERE 中过滤 min/max（匹配 R ricu）
+                            # R ricu 流程: load_id → filter_bounds(raw) → change_interval → aggregate
+                            # 但只对无 convert_unit 的概念使用（raw value 单位 = 概念单位）。
+                            # 有 convert_unit 时，raw value 可能是不同单位，min/max 不适用于 raw。
+                            value_min=definition.minimum if not _convert_unit_callback_for_duckdb else None,
+                            value_max=definition.maximum if not _convert_unit_callback_for_duckdb else None,
                             include_unit=False,  # unit 不再通过 ANY_VALUE 获取
                             # 🚀 convert_unit 内联参数：在DuckDB中直接做单位转换
                             convert_unit_op=_convert_unit_op if _convert_unit_callback_for_duckdb else None,
@@ -1746,35 +1712,35 @@ class ConceptResolver:
                         if _convert_unit_callback_for_duckdb and verbose and len(frame) > 0:
                             print(f"   🔧 convert_unit DuckDB内联完成: {len(frame):,} 行")
                         
-                        # 🔧 FIX 2026-03-10: 对 AUMC per-itemid 聚合结果应用早期 filter_bounds
-                        # 问题: AUMC 有混合单位 itemid（如 pco2: mmHg itemids + kPa itemid）
-                        # DuckDB per-itemid 聚合后，kPa itemid 的 median (~4.5) 与 mmHg itemid 的 
-                        # median (~40) 在后续 change_interval 中等权组合 → 错误结果
-                        # 修复: 在 itemid 列丢弃前，对每行 per-itemid 聚合值应用 filter_bounds
-                        # 这样 kPa itemid 的 median (4.5) 被 pco2 的 min=10 过滤掉，
-                        # 只有 mmHg itemid 的值进入后续处理
-                        if db_name == 'aumc' and len(frame) > 0 and value_col in frame.columns:
-                            _vmin = definition.minimum
-                            _vmax = definition.maximum
-                            if _vmin is not None or _vmax is not None:
-                                _before = len(frame)
-                                frame[value_col] = pd.to_numeric(frame[value_col], errors='coerce')
-                                if _vmin is not None:
-                                    frame = frame[frame[value_col] >= _vmin]
-                                if _vmax is not None:
-                                    frame = frame[frame[value_col] <= _vmax]
-                                frame = frame.dropna(subset=[value_col])
-                                if len(frame) < _before and (verbose or DEBUG_MODE):
-                                    print(f"   🔧 AUMC early filter_bounds: {_before} → {len(frame)} 行 (min={_vmin}, max={_vmax})")
+                        # 2026-03-11: 移除 AUMC 早期 filter_bounds（不再需要）
+                        # 现在 DuckDB 池化所有 itemid 后直接聚合（匹配 R ricu），
+                        # 标准 filter_bounds 在 change_interval 之后执行（~L3839）
                         
                         # 创建ICUTable对象
-                        id_col = 'admissionid' if db_name == 'aumc' else 'patientid'
-                        time_col = 'measuredat_minutes' if db_name == 'aumc' else 'charttime'
+                        # 确定输出列名（匹配 load_bucketed_table_aggregated 的输出）
+                        if db_name == 'aumc':
+                            _duckdb_id_col = 'admissionid'
+                            _duckdb_time_col = 'measuredat_minutes'
+                        elif db_name == 'hirid':
+                            _duckdb_id_col = 'patientid'
+                            _duckdb_time_col = 'charttime'
+                        elif db_name in ('mimic', 'mimic_demo'):
+                            _duckdb_id_col = 'icustay_id'
+                            _duckdb_time_col = 'charttime'
+                        elif db_name in ('sic', 'sic_demo'):
+                            _duckdb_id_col = 'CaseID'
+                            _duckdb_time_col = 'charttime'
+                        elif db_name in ('eicu', 'eicu_demo'):
+                            _duckdb_id_col = 'patientunitstayid'
+                            _duckdb_time_col = 'charttime'
+                        else:
+                            _duckdb_id_col = 'stay_id'
+                            _duckdb_time_col = 'charttime'
                         
                         table = ICUTable(
                             data=frame,
-                            id_columns=[id_col],
-                            index_column=time_col,
+                            id_columns=[_duckdb_id_col],
+                            index_column=_duckdb_time_col,
                             value_column=value_col,
                         )
                         
@@ -2781,7 +2747,6 @@ class ConceptResolver:
                                     # AUMC: 分钟（datasource.py 已将 ms 转为分钟）
                                     # eICU: 分钟（offset 列本身就是分钟）
                                     frame[duration_col] = frame[source.dur_var] - frame[source_index_column]
-                                    # NO conversion to hours - R ricu uses minutes
                                     
                                     if DEBUG_MODE:
                                         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
@@ -3570,6 +3535,12 @@ class ConceptResolver:
         # If we apply change_interval first, we get median-of-means instead of median-of-all-values
         is_id_tbl_target = getattr(definition, 'target', 'ts_tbl') == 'id_tbl'
         
+        # num_cncpt with target=win_tbl (like dex): needs expansion, not change_interval
+        _is_num_win_tbl = (
+            getattr(definition, 'target', 'ts_tbl') == 'win_tbl'
+            and not _is_true_win_tbl_class  # Not lgl/fct
+        )
+        
         # Apply interval alignment and aggregation if interval is specified
         # BUT skip for win_tbl/id_tbl target concepts
         if interval is not None and index_column and index_column in combined.columns and not is_win_tbl_target and not is_id_tbl_target:
@@ -3633,15 +3604,13 @@ class ConceptResolver:
                                 agg_method = agg_match.group(1)  # e.g., 'sum'
                                 break
                 
-                # 🔧 FIX 2026-02-16: For num_cncpt with target=win_tbl (like dex),
-                # R ricu's change_interval.win_tbl only floors the start time + dedup,
-                # it does NOT aggregate values. So we disable aggregation.
-                _is_num_win_tbl = (
-                    getattr(definition, 'target', 'ts_tbl') == 'win_tbl'
-                    and not _is_true_win_tbl_class  # Not lgl/fct (those skip entirely)
-                )
+                # 🔧 FIX 2026-03-13: For num_cncpt with target=win_tbl (like dex),
+                # R ricu's expand.win_tbl uses raw (unfloored) start times to compute
+                # end = floor(raw_start + dur). change_interval would floor start first,
+                # causing floor(floored_start + dur) ≠ floor(raw_start + dur).
+                # Skip change_interval entirely; expansion in _ensure_concept_loaded handles it.
                 if _is_num_win_tbl:
-                    agg_method = False  # Floor only, no aggregation (matches R change_interval.win_tbl)
+                    agg_method = '__skip_change_interval__'
                 
                 # Default aggregation based on value type (matches R ricu)
                 if agg_method is None:
@@ -3713,9 +3682,13 @@ class ConceptResolver:
                     if callback_already_expanded:
                         break
             
-            # 🔧 FIX 2025-02-12: Do NOT expand concepts with target="win_tbl"
-            # R ricu returns win_tbl format (starttime + dur_var) without expanding to time series
-            # This applies to ALL win_tbl targets (including num_cncpt like dex)
+            # 🔧 FIX 2026-03-12: DO expand concepts with target="win_tbl"
+            # R ricu expands win_tbl (starttime + dur_var) to hourly time series:
+            # - fct_cncpt (mech_vent): expand + fill_gaps in load_concepts.fct_cncpt
+            # - num_cncpt (dex): expand as part of change_interval then aggregate
+            # Previously expansion was disabled, causing dex to have ~6 rows vs R's ~142.
+            # WinTbl concepts used as dependencies (mech_vent for GCS) will be expanded;
+            # the GCS callback handles both expanded (Path B: merge) and WinTbl (Path A: window_match).
             is_win_tbl_target_expand = getattr(definition, 'target', 'ts_tbl') == 'win_tbl'
             
             should_expand = (has_endtime or has_stoptime or has_stop or has_duration or has_dur_var) and not is_point_event and not is_duration_concept and not callback_already_expanded and not is_win_tbl_target_expand
@@ -3728,41 +3701,40 @@ class ConceptResolver:
                 
                 # 🔧 FIX 2024-12-26: Handle dur_var column from grp_mount_to_rate callback
                 # dur_var contains duration as Timedelta or numeric hours, calculate endtime = starttime + dur_var
-                if has_dur_var and not has_endtime:
+                # 🔧 FIX 2026-03-12: Also handle case where endtime exists but has NaN
+                # (multi-source concat: one source has endtime, other has dur_var)
+                if has_dur_var:
                     dur_col = combined['dur_var']
                     start_col = combined[index_column]
                     
-                    # Check types of both columns
-                    is_dur_timedelta = 'timedelta' in str(dur_col.dtype).lower()
-                    is_start_datetime = pd.api.types.is_datetime64_any_dtype(start_col)
-                    is_start_numeric = pd.api.types.is_numeric_dtype(start_col)
-                    is_dur_numeric = pd.api.types.is_numeric_dtype(dur_col)
+                    # Compute endtime from dur_var for rows that need it
+                    needs_endtime = not has_endtime or (has_endtime and combined['endtime'].isna().any())
                     
-                    if is_start_datetime and is_dur_timedelta:
-                        # Both datetime-compatible: datetime + timedelta
-                        combined['endtime'] = start_col + dur_col
-                    elif is_start_datetime and is_dur_numeric:
-                        # datetime + numeric hours
-                        combined['endtime'] = start_col + pd.to_timedelta(dur_col, unit='h')
-                    elif is_start_numeric and is_dur_numeric:
-                        # Both numeric (hours)
-                        combined['endtime'] = start_col + dur_col
-                    elif is_start_numeric and is_dur_timedelta:
-                        # 🔧 FIX: numeric start (hours) + timedelta duration
-                        # Convert timedelta to hours
-                        dur_hours = dur_col.dt.total_seconds() / 3600.0
-                        combined['endtime'] = start_col + dur_hours
-                    else:
-                        # Fallback: try direct addition
-                        try:
-                            combined['endtime'] = start_col + dur_col
-                        except Exception:
-                            # Convert dur to hours as last resort
-                            if is_dur_timedelta:
-                                dur_hours = dur_col.dt.total_seconds() / 3600.0
-                                combined['endtime'] = start_col + dur_hours
-                            else:
-                                combined['endtime'] = start_col + dur_col
+                    if needs_endtime:
+                        # Normalize dur_col to numeric hours
+                        if 'timedelta' in str(dur_col.dtype).lower():
+                            dur_numeric = dur_col.dt.total_seconds() / 3600.0
+                        elif pd.api.types.is_numeric_dtype(dur_col):
+                            dur_numeric = dur_col
+                        else:
+                            # Mixed or object dtype: try to_numeric, fallback to timedelta
+                            dur_numeric = pd.to_numeric(dur_col, errors='coerce')
+                            # For any remaining NaN that were timedelta strings
+                            still_na = dur_numeric.isna() & dur_col.notna()
+                            if still_na.any():
+                                td = pd.to_timedelta(dur_col[still_na], errors='coerce')
+                                dur_numeric.loc[still_na] = td.dt.total_seconds() / 3600.0
+                        
+                        if pd.api.types.is_datetime64_any_dtype(start_col):
+                            endtime_from_dur = start_col + pd.to_timedelta(dur_numeric, unit='h')
+                        else:
+                            endtime_from_dur = start_col + dur_numeric
+                        
+                        if has_endtime:
+                            # Fill NaN endtimes with computed values from dur_var
+                            combined['endtime'] = combined['endtime'].fillna(endtime_from_dur)
+                        else:
+                            combined['endtime'] = endtime_from_dur
                     
                     has_endtime = True
                     # Drop dur_var to avoid confusion
@@ -3880,28 +3852,33 @@ class ConceptResolver:
             if DEBUG_MODE:
                 print(f"   🔍 DEBUG: change_interval前, 行数={len(combined)}")
             
-            # Apply interval change with aggregation (SINGLE aggregation on relative time)
-            combined_result = change_interval(
-                temp_table,
-                interval=interval,
-                aggregation=agg_method,
-                fill_gaps=fill_missing,
-                fill_method=fill_method,
-                copy=False
-            )
-            
-            # Extract data if ICUTable is returned
-            if hasattr(combined_result, 'data'):
-                combined = combined_result.data
-                if DEBUG_MODE:
-                    print(f"   🔍 DEBUG: change_interval后, 行数={len(combined)}")
-                # 更新index_column：change_interval可能改变了时间列名(如变为'start')
-                if hasattr(combined_result, 'index_column') and combined_result.index_column:
-                    index_column = combined_result.index_column
-            else:
-                combined = combined_result
-                if DEBUG_MODE:
-                    print(f"   🔍 DEBUG: change_interval后(raw), 行数={len(combined)}")
+            # 🔧 FIX 2026-03-13: Skip change_interval for num_cncpt win_tbl (like dex).
+            # R ricu's expand.win_tbl uses raw start times: end = floor(raw_start + dur).
+            # change_interval floors start first, causing precision loss:
+            # floor(2.9 + 0.2)=3 vs floor(floor(2.9) + 0.2)=floor(2.2)=2
+            if agg_method != '__skip_change_interval__':
+                # Apply interval change with aggregation (SINGLE aggregation on relative time)
+                combined_result = change_interval(
+                    temp_table,
+                    interval=interval,
+                    aggregation=agg_method,
+                    fill_gaps=fill_missing,
+                    fill_method=fill_method,
+                    copy=False
+                )
+                
+                # Extract data if ICUTable is returned
+                if hasattr(combined_result, 'data'):
+                    combined = combined_result.data
+                    if DEBUG_MODE:
+                        print(f"   🔍 DEBUG: change_interval后, 行数={len(combined)}")
+                    # 更新index_column：change_interval可能改变了时间列名(如变为'start')
+                    if hasattr(combined_result, 'index_column') and combined_result.index_column:
+                        index_column = combined_result.index_column
+                else:
+                    combined = combined_result
+                    if DEBUG_MODE:
+                        print(f"   🔍 DEBUG: change_interval后(raw), 行数={len(combined)}")
         elif align_to_admission:
             # Just alignment, no interval/aggregation
             combined = self._align_time_to_admission(
@@ -3979,19 +3956,23 @@ class ConceptResolver:
         # 🔧 FIX 2025-02-14: For win_tbl target concepts that have dur_var column,
         # return WinTbl instead of ICUTable so that fwd_concept can properly
         # detect the WinTbl and preserve dur_var for concepts like ett_gcs
-        if is_win_tbl_target and 'dur_var' in combined.columns and index_column:
+        # 🔧 FIX 2026-03-13: Use broader condition — ANY concept with target='win_tbl'
+        # (not just lgl/fct). num_cncpt win_tbl (dex) also needs WinTbl return path
+        # so _ensure_concept_loaded can expand it with proper clamping.
+        _any_win_tbl = getattr(definition, 'target', 'ts_tbl') == 'win_tbl'
+        if _any_win_tbl and 'dur_var' in combined.columns and index_column:
             from .table import WinTbl
             # 🔧 FIX: Ensure dur_var is numeric (can become object after pd.concat with NaN)
             combined['dur_var'] = pd.to_numeric(combined['dur_var'], errors='coerce')
-            # Drop rows where dur_var is NaN (these came from sources without duration info)
+            # Separate rows: with dur_var (WinTbl sources) and without (TsTbl sources)
+            ts_source_rows = combined[combined['dur_var'].isna()].copy()
             combined = combined.dropna(subset=['dur_var'])
             
             # 🔧 FIX 2026-02-15: Apply R ricu's change_interval behavior for win_tbl
-            # R ricu: change_interval.ts_tbl also runs for win_tbl (inheritance):
-            #   1. re_time: floor index_column to hourly (but NOT dur_var)
-            #   2. unique(x, by=c(id_cols, index_col)): keep first row per group
-            # This matches: time_vars.win_tbl excludes dur_var from time rounding
-            if interval is not None and index_column in combined.columns:
+            # For lgl/fct win_tbl (mech_vent): floor + dedup as before
+            # For num_cncpt win_tbl (dex): skip floor+dedup — expansion needs raw start times
+            # R ricu's expand.win_tbl uses raw start: end = floor(raw_start + dur)
+            if not _is_num_win_tbl and interval is not None and index_column in combined.columns:
                 if pd.api.types.is_numeric_dtype(combined[index_column]):
                     interval_hours = interval.total_seconds() / 3600.0
                     combined = combined.copy()
@@ -4003,12 +3984,17 @@ class ConceptResolver:
                 dedup_cols = [c for c in id_columns if c in combined.columns] + [index_column]
                 combined = combined.drop_duplicates(subset=dedup_cols, keep='first')
             
-            return WinTbl(
+            win_tbl = WinTbl(
                 data=combined,
                 id_vars=id_columns,
                 index_var=index_column,
                 dur_var='dur_var',
             )
+            # 🔧 FIX 2026-03-11: Save TsTbl source rows for later expansion
+            # These rows came from sources without dur_var (e.g., eICU infusiondrug, MIMIC inputevents_cv)
+            # They'll be combined with expanded WinTbl rows in _ensure_concept_loaded
+            win_tbl._ts_source_rows = ts_source_rows
+            return win_tbl
         
         try:
             return ICUTable(
@@ -4078,9 +4064,9 @@ class ConceptResolver:
                         if not col.endswith('_dur'):
                             cols_to_convert.add(col)
             
-            # 自动检测其他可能的时间列 (start, stop)
+            # 自动检测其他可能的时间列 (start, stop, dur_var)
             for col in data.columns:
-                if col in ['start', 'stop']:
+                if col in ['start', 'stop', 'dur_var']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
             
@@ -4115,7 +4101,7 @@ class ConceptResolver:
                             cols_to_convert.add(col)
             
             for col in data.columns:
-                if col in ['start', 'stop']:
+                if col in ['start', 'stop', 'dur_var']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
             
@@ -4291,6 +4277,10 @@ class ConceptResolver:
             except Exception as _:
                 # 过滤失败则原样返回
                 pass
+            # Convert dur_var from minutes to hours (same as datetime path at L4388)
+            # Callbacks like hirid_vent produce dur_var in minutes; index is already in hours
+            if 'dur_var' in data.columns and pd.api.types.is_numeric_dtype(data['dur_var']):
+                data['dur_var'] = data['dur_var'] / 60.0
             return data
         
         # 检查时间列是否是有效的datetime类型
@@ -4398,6 +4388,10 @@ class ConceptResolver:
                 data[time_col] = minutes_col / 60.0
             
             # 注意：不过滤负时间（入ICU前）或超过outtime的数据，匹配 R ricu 行为
+            
+            # Convert dur_var from minutes to hours (dur_is_end outputs minutes)
+            if 'dur_var' in data.columns and pd.api.types.is_numeric_dtype(data['dur_var']):
+                data['dur_var'] = data['dur_var'] / 60.0
             
             # Drop the temporary alignment columns
             drop_cols = ['intime']
@@ -6033,11 +6027,20 @@ class ConceptResolver:
             # CRITICAL: Expand WinTbl to time series if interval is specified
             # This must happen after loading but before caching, so all concepts
             # (including those without sub_concepts) get expanded
-            # 🔧 FIX 2025-02-13: Do NOT expand WinTbl for concepts with target='win_tbl'
-            # These concepts should return the original WinTbl format (starttime + dur_var)
+            # NOTE: Do NOT expand win_tbl target concepts here — they need to stay WinTbl
+            # for callbacks that check isinstance(table, WinTbl). Expansion for top-level
+            # ricu_compatible loading happens in load_concepts_enhanced at the return path.
             from .table import WinTbl
+            
             definition = self.dictionary.get(concept_name)
-            is_win_tbl_target = definition and getattr(definition, 'target', 'ts_tbl') == 'win_tbl'
+            _cls = getattr(definition, 'class_name', None) if definition else None
+            _cls_list = _cls if isinstance(_cls, list) else ([_cls] if _cls else ['num_cncpt'])
+            _is_true_win_tbl_class = any(c in ('lgl_cncpt', 'fct_cncpt') for c in _cls_list)
+            is_win_tbl_target = (
+                definition is not None
+                and getattr(definition, 'target', 'ts_tbl') == 'win_tbl'
+                and _is_true_win_tbl_class
+            )
             
             if isinstance(result, WinTbl) and interval is not None and not result.data.empty and not is_win_tbl_target:
                 idx_col = result.index_var
@@ -6050,17 +6053,26 @@ class ConceptResolver:
                     
                     # 扩展窗口到时间序列
                     expanded_rows = []
+                    interval_hours = interval.total_seconds() / 3600.0
                     for _, row in result.data.iterrows():
                         start_time = row[idx_col]
                         duration = row[dur_col]
                         
-                        # 计算结束时间（小时）
-                        # R ricu 使用 seq(min, max, step) 包含终点，所以这里用 <=
-                        end_time = start_time + duration
+                        # 🔧 FIX 2026-03-13: R ricu expand.win_tbl behavior:
+                        # In R ricu, merge_time floors start BEFORE expand.win_tbl runs.
+                        # So end = re_time(floored_start + dur, interval).
+                        # Using raw start gives incorrect expansion for short durations:
+                        #   raw: end = floor(45.77 + 0.5) = floor(46.27) = 46 → [45,46] (wrong)
+                        #   floored: end = floor(45 + 0.5) = floor(45.5) = 45 → [45] (correct)
+                        start_floored = np.floor(start_time / interval_hours) * interval_hours
+                        end_time = start_floored + duration
+                        if interval_hours > 0:
+                            end_time = np.floor(end_time / interval_hours) * interval_hours
+                        # Clamp negative end times to 0 (R ricu: x[end < 0, end := 0])
+                        end_time = max(end_time, 0.0)
                         
                         # 生成时间序列（每个 interval）
-                        interval_hours = interval.total_seconds() / 3600.0
-                        current_time = np.floor(start_time / interval_hours) * interval_hours
+                        current_time = start_floored
                         
                         while current_time <= end_time:
                             new_row = {idx_col: current_time}
@@ -6068,25 +6080,49 @@ class ConceptResolver:
                             for col in id_cols:
                                 if col in row.index:
                                     new_row[col] = row[col]
-                            # 复制值列（除了 dur_col）
-                            for col in result.data.columns:
-                                if col not in [idx_col, dur_col] and col not in id_cols:
-                                    new_row[col] = row[col]
+                            # 🔧 FIX 2026-03-13: Only copy the concept value column
+                            # Extra columns (stop, doseunit, etc.) from original WinTbl
+                            # cause value_column detection to pick wrong column.
+                            if concept_name in row.index:
+                                new_row[concept_name] = row[concept_name]
                             expanded_rows.append(new_row)
                             current_time += interval_hours
                     
                     # 转换为 DataFrame
                     if expanded_rows:
                         expanded_df = pd.DataFrame(expanded_rows)
-                        # 转换为 ICUTable
-                        value_col = [c for c in expanded_df.columns if c not in id_cols and c != idx_col]
-                        value_col = value_col[0] if value_col else None
+                    else:
+                        expanded_df = pd.DataFrame()
+                    
+
+                    
+                    # 🔧 FIX 2026-03-11: Incorporate TsTbl source rows (from sources without dur_var)
+                    # These were saved in _load_single_concept when combining WinTbl + TsTbl sources
+                    ts_rows = getattr(result, '_ts_source_rows', None)
+                    if ts_rows is not None and not ts_rows.empty:
+                        # Drop dur_var from TsTbl rows (it's all NaN) and align columns
+                        ts_rows = ts_rows.drop(columns=[dur_col], errors='ignore')
+                        combined_parts = [expanded_df, ts_rows] if not expanded_df.empty else [ts_rows]
+                        expanded_df = pd.concat(combined_parts, ignore_index=True)
+                    
+                    if not expanded_df.empty:
+                        # Aggregate by (id, time) using median — matches R ricu's stats::aggregate
+                        group_cols = [c for c in id_cols if c in expanded_df.columns] + [idx_col]
+                        val_cols = [c for c in expanded_df.columns if c not in group_cols]
+                        # Ensure numeric columns for median aggregation
+                        for vc in val_cols:
+                            if not pd.api.types.is_numeric_dtype(expanded_df[vc]):
+                                expanded_df[vc] = pd.to_numeric(expanded_df[vc], errors='coerce')
+                        if val_cols:
+                            expanded_df = expanded_df.groupby(group_cols, dropna=False)[val_cols].median().reset_index()
+                        
+                        # 转换为 ICUTable — use concept_name as value_column
                         from .table import ICUTable
                         result = ICUTable(
                             data=expanded_df,
                             id_columns=id_cols,
                             index_column=idx_col,
-                            value_column=value_col,
+                            value_column=concept_name if concept_name in expanded_df.columns else None,
                             unit_column=None,
                             time_columns=[],
                         )
@@ -6640,8 +6676,11 @@ class ConceptResolver:
                 df = table.data.copy()
                 # 重命名值列为概念名
                 if name not in df.columns:
-                    # 查找可能的值列
-                    value_candidates = ['value', 'valuenum', table.index_column] if hasattr(table, 'index_column') else ['value', 'valuenum']
+                    # 查找可能的值列 - 优先使用 ICUTable 元数据中的 value_column
+                    value_candidates = []
+                    if table.value_column and table.value_column in df.columns:
+                        value_candidates.append(table.value_column)
+                    value_candidates.extend(['value', 'valuenum'])
                     for cand in value_candidates:
                         if cand in df.columns and cand != name:
                             df = df.rename(columns={cand: name})
@@ -6733,6 +6772,22 @@ class ConceptResolver:
             result = result.rename(columns={time_col: 'charttime'})
         
         return result
+
+
+def _get_concept_bounds(concept_name: str, bound: str) -> Optional[float]:
+    """Get min/max bounds from concept-dict.json for filter_bounds."""
+    try:
+        import json
+        from pathlib import Path
+        dict_path = Path(__file__).parent / 'data' / 'concept-dict.json'
+        with open(dict_path) as f:
+            d = json.load(f)
+        c = d.get(concept_name, {})
+        val = c.get(bound)
+        return float(val) if val is not None else None
+    except Exception:
+        return None
+
 
 def _apply_callback(
     frame: pd.DataFrame,
@@ -7689,12 +7744,33 @@ def _apply_callback(
         unit_col = source.unit_var if hasattr(source, 'unit_var') else None
         val_col = concept_name
         
+        # 🔧 FIX: Load admission_times for R ricu-compatible relative time flooring
+        # R ricu converts datetime to relative difftime BEFORE callbacks (in load_difftime).
+        # CareVue expand_intervals needs this to correctly floor to hour boundaries.
+        admission_times = None
+        if data_source is not None:
+            try:
+                icustays_result = data_source.load_table('icustays')
+                if hasattr(icustays_result, 'data'):
+                    icustays = icustays_result.data
+                else:
+                    icustays = icustays_result
+                if icustays is not None and len(icustays) > 0:
+                    id_col = id_cols[0] if id_cols else None
+                    if id_col and id_col in icustays.columns:
+                        patient_ids_in_frame = frame[id_col].unique() if id_col in frame.columns else None
+                        if patient_ids_in_frame is not None:
+                            admission_times = icustays[icustays[id_col].isin(patient_ids_in_frame)][[id_col, 'intime']].drop_duplicates()
+            except Exception:
+                pass
+        
         return mimic_rate_cv(
             frame,
             val_col=val_col,
             grp_var=grp_var,
             unit_col=unit_col,
-            id_cols=id_cols
+            id_cols=id_cols,
+            admission_times=admission_times,
         )
 
     if expr.strip() == "vent_flag":
@@ -7962,25 +8038,51 @@ def _apply_callback(
                         break
                 if id_col:
                     unique_ids = frame[id_col].unique().tolist()
-                    weight_table = resolver._load_single_concept(
-                        'weight',
-                        data_source,
-                        aggregator=False,
-                        patient_ids={id_col: unique_ids},
-                        verbose=False,
-                        _bypass_callback=True,
-                    )
-                    if weight_table is not None and not weight_table.data.empty:
-                        weight_df = weight_table.data
-                        if 'weight' in weight_df.columns:
-                            weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
-                            merge_cols = [c for c in [id_col] if c in weight_df.columns]
-                            if merge_cols:
-                                # 🔧 FIX: Use median weight per patient to match R ricu's behavior
-                                # R ricu's weight concept has target="id_tbl", which uses default
-                                # aggregation (median) to get a single weight value per patient.
+                    weight_per_patient = None
+                    
+                    # 🔧 FIX 2026-03-12: For HiRID, load raw weight from parquet
+                    # and compute direct per-patient median (bypassing DuckDB hourly aggregation).
+                    # R ricu: load_concepts("weight", aggregate=NULL) → median(all_raw_values)
+                    # Previous pyricu: DuckDB GROUP BY (patient,hour) MEDIAN → groupby(patient).median() = "median of medians" ≠ direct median
+                    db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                    if db_name == 'hirid':
+                        try:
+                            import duckdb
+                            bucket_dir = data_source.base_path / 'observations_bucket'
+                            if bucket_dir.exists():
+                                conn = duckdb.connect()
+                                # weight variableid = 10000400
+                                pid_list = ','.join(str(int(p)) for p in unique_ids)
+                                sql = f"""
+                                    SELECT patientid, MEDIAN(value) as weight
+                                    FROM read_parquet('{bucket_dir}/**/*.parquet', hive_partitioning=true)
+                                    WHERE variableid = 10000400 AND patientid IN ({pid_list})
+                                      AND value IS NOT NULL AND value >= 1 AND value <= 500
+                                    GROUP BY patientid
+                                """
+                                weight_per_patient = conn.execute(sql).fetchdf()
+                                conn.close()
+                        except Exception:
+                            weight_per_patient = None
+                    
+                    if weight_per_patient is None or weight_per_patient.empty:
+                        # Fallback: use standard loading path
+                        weight_table = resolver._load_single_concept(
+                            'weight',
+                            data_source,
+                            aggregator=False,
+                            patient_ids={id_col: unique_ids},
+                            verbose=False,
+                            _bypass_callback=True,
+                        )
+                        if weight_table is not None and not weight_table.data.empty:
+                            weight_df = weight_table.data
+                            if 'weight' in weight_df.columns:
+                                weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
                                 weight_per_patient = weight_df.groupby(id_col)['weight'].median().reset_index()
-                                frame = frame.merge(weight_per_patient, on=id_col, how='left')
+                    
+                    if weight_per_patient is not None and not weight_per_patient.empty:
+                        frame = frame.merge(weight_per_patient, on=id_col, how='left')
             except Exception as e:
                 if DEBUG_MODE:
                     print(f"   ⚠️  获取体重失败: {e}")
@@ -8010,6 +8112,8 @@ def _apply_callback(
             grp_var=grp_var,
             index_col=index_var,
             interval_minutes=interval_minutes,
+            value_min=_get_concept_bounds(concept_name, 'min'),
+            value_max=_get_concept_bounds(concept_name, 'max'),
         )
 
     # Handle hirid_rate callback - HiRID dose rate (no weight normalization)
@@ -8921,7 +9025,7 @@ def _apply_callback(
                 
                 # CRITICAL: Convert time back to original format (minutes) for AUMC
                 # The subsequent processing will apply the minutes->hours conversion again
-                if frame_time_max > 1000 and wbc_time_max < 1000 and wbc_time_max > 0:
+                if need_frame_to_hours:
                     # We converted frame from minutes to hours, now convert back
                     frame_merged[index_col] = frame_merged[index_col] * 60.0
                     if DEBUG_CALLBACK:

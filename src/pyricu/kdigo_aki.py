@@ -462,7 +462,7 @@ def _calc_aki_stage_uo(
     
     # Stage 3: UO < 0.3 for ≥24h OR anuria (0) for ≥12h
     mask_3_oliguria = uo_24h_num < 0.3
-    mask_3_anuria = uo_12h_num == 0
+    mask_3_anuria = uo_12h_num < 0.01
     stage[mask_3_oliguria | mask_3_anuria] = 3
     
     return stage

@@ -75,8 +75,12 @@ def bmi(weight_kg: Union[float, pd.Series], height_m: Union[float, pd.Series]) -
     if isinstance(weight_kg, pd.Series) or isinstance(height_m, pd.Series):
         weight_kg = pd.Series(weight_kg) if not isinstance(weight_kg, pd.Series) else weight_kg
         height_m = pd.Series(height_m) if not isinstance(height_m, pd.Series) else height_m
-        return weight_kg / (height_m ** 2)
+        result = weight_kg / (height_m ** 2)
+        result[(weight_kg <= 0) | (height_m <= 0)] = np.nan
+        return result
     
+    if height_m <= 0 or weight_kg <= 0:
+        return np.nan
     return weight_kg / (height_m ** 2)
 
 def gcs(eye: Optional[Union[int, pd.Series]] = None,
@@ -105,18 +109,21 @@ def gcs(eye: Optional[Union[int, pd.Series]] = None,
     """
     if total is not None:
         if isinstance(total, pd.Series):
-            return total
-        return total
+            return total.clip(3, 15)
+        return min(max(total, 3), 15) if pd.notna(total) else total
     
     if eye is None or verbal is None or motor is None:
         raise ValueError("Either total or all of eye, verbal, motor must be provided")
     
     if isinstance(eye, pd.Series) or isinstance(verbal, pd.Series) or isinstance(motor, pd.Series):
-        eye = pd.Series(eye) if not isinstance(eye, pd.Series) else eye
-        verbal = pd.Series(verbal) if not isinstance(verbal, pd.Series) else verbal
-        motor = pd.Series(motor) if not isinstance(motor, pd.Series) else motor
+        eye = pd.Series(eye).clip(1, 4) if not isinstance(eye, pd.Series) else eye.clip(1, 4)
+        verbal = pd.Series(verbal).clip(1, 5) if not isinstance(verbal, pd.Series) else verbal.clip(1, 5)
+        motor = pd.Series(motor).clip(1, 6) if not isinstance(motor, pd.Series) else motor.clip(1, 6)
         return eye + verbal + motor
     
+    eye = min(max(eye, 1), 4)
+    verbal = min(max(verbal, 1), 5)
+    motor = min(max(motor, 1), 6)
     return eye + verbal + motor
 
 def norepi_equiv(rate: Union[float, pd.Series], 
@@ -227,8 +234,12 @@ def urine24(urine_vol: Union[float, pd.Series],
     if isinstance(urine_vol, pd.Series) or isinstance(duration_hours, pd.Series):
         urine_vol = pd.Series(urine_vol) if not isinstance(urine_vol, pd.Series) else urine_vol
         duration_hours = pd.Series(duration_hours) if not isinstance(duration_hours, pd.Series) else duration_hours
-        return urine_vol * (24.0 / duration_hours)
+        result = urine_vol * (24.0 / duration_hours)
+        result[duration_hours <= 0] = np.nan
+        return result
     
+    if duration_hours <= 0:
+        return np.nan
     return urine_vol * (24.0 / duration_hours)
 
 def vaso60(rate: Union[float, pd.Series]) -> Union[bool, pd.Series]:

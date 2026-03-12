@@ -55,7 +55,8 @@ def apply_binary_op(symbol: str, series: pd.Series, value: object) -> pd.Series:
         return series.apply(safe_op)
     else:
         try:
-            return op_map[symbol](series, value)
+            series_num = pd.to_numeric(series, errors='coerce')
+            return op_map[symbol](series_num, value)
         except (TypeError, ZeroDivisionError):
             return series  # Return original series on error
 

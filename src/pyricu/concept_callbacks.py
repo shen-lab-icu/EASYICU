@@ -2624,12 +2624,11 @@ def _callback_sofa_score(
                 )
                 data = data.sort_values(list(id_columns) + [index_column] if id_columns else [index_column])
         
-        # Apply 36h LOCF to sofa_cns (matches R ricu locf(valid_win = hours(36L)) on GCS)
-        # R ricu applies LOCF to GCS values before scoring sofa_cns; we apply it to
-        # the sofa_cns scores after fill_gaps creates the hourly grid.  Each grid
-        # point represents 1 hour, so limit=36 equals a 36-hour forward carry.
-        if 'sofa_cns' in data.columns and id_columns:
-            data['sofa_cns'] = data.groupby(list(id_columns), sort=False)['sofa_cns'].ffill(limit=36)
+        # R ricu's sofa_score does NOT apply any LOCF to components.
+        # The 24h sliding window (slide with max_or_na) naturally handles gaps:
+        # - If data exists within the 24h window → max value is used
+        # - If no data in the 24h window → NA → treated as 0 in rowSums
+        # GCS has a 6h LOCF applied in its own callback (gcs), not here.
         
         # Apply sliding window to each component (replicates R ricu slide)
         agg_dict = {}
@@ -4102,18 +4101,19 @@ def _callback_vent_ind(
         else:
             time_hours = pd.to_numeric(time_values, errors="coerce")
 
-        # 🔧 FIX 2025-02-14: dur_var is already in MINUTES from concept loading
-        # No conversion needed - use the value directly
+        # 🔧 FIX: dur_var must be in HOURS to match start_time unit (hours)
+        # After _align_time_to_admission, numeric dur_var from concept loading is already in hours.
+        # For timedelta and match_win fallback, convert to hours explicitly.
         if dur_col is not None:
             dur_values = df[dur_col]
             if pd.api.types.is_timedelta64_dtype(dur_values):
-                dur_minutes = dur_values.dt.total_seconds() / 60.0
+                dur_hours = dur_values.dt.total_seconds() / 3600.0
             else:
-                # dur_var is already in minutes (from concept.py fix)
-                dur_minutes = pd.to_numeric(dur_values, errors="coerce")
+                # dur_var already converted to hours by _align_time_to_admission
+                dur_hours = pd.to_numeric(dur_values, errors="coerce")
         else:
-            # 默认持续时间为 match_win（以分钟计）
-            dur_minutes = match_win.total_seconds() / 60.0
+            # 默认持续时间为 match_win（转换为小时）
+            dur_hours = match_win.total_seconds() / 3600.0
 
         # 🔧 创建 win_tbl 格式输出
         result_df = pd.DataFrame()
@@ -4121,7 +4121,7 @@ def _callback_vent_ind(
             if col in df.columns:
                 result_df[col] = df[col].values
         result_df["starttime"] = time_hours.values
-        result_df["dur_var"] = dur_minutes if isinstance(dur_minutes, (int, float)) else dur_minutes.values
+        result_df["dur_var"] = dur_hours if isinstance(dur_hours, (int, float)) else dur_hours.values
         result_df["vent_ind"] = True
         
         # 按时间聚合 (change_interval 行为)
@@ -5527,6 +5527,19 @@ def _callback_vaso60(
             value_column=ctx.concept_name,
         )
 
+    # 🔧 FIX: Carry forward rate values by +1 hour for MIMIC CareVue data
+    # R ricu's expand_intervals expands rate records at 1-minute resolution.
+    # A rate charted at fractional relative hour H (e.g., 30.866h) is expanded
+    # for ~59 minutes, spanning into hour H+1. After flooring to hours and
+    # taking max, hour H+1 gets the HIGHER of old and new rate.
+    # pyricu's expand_intervals uses 1-hour steps, losing this cross-boundary effect.
+    # This only affects MIMIC CareVue (mimic_rate_cv → expand_intervals path).
+    # Other databases use different callbacks with proper start/stop expansion.
+    if ds_name.lower() in ('mimic', 'mimic_demo'):
+        rate_shifted = rate_df.copy()
+        rate_shifted[rate_index_col] = rate_shifted[rate_index_col] + pd.Timedelta(hours=1)
+        rate_df = pd.concat([rate_df, rate_shifted], ignore_index=True)
+
     merged = rate_df.merge(intervals.drop(columns=["__length"]), on=id_columns, how="inner")
     mask = (merged[rate_index_col] >= merged["__start"]) & (merged[rate_index_col] <= merged["__end"])
     filtered = merged[mask]
@@ -5550,19 +5563,6 @@ def _callback_vaso60(
     grouped[ctx.concept_name] = grouped[rate_col]
     grouped = grouped.drop(columns=[rate_col])
 
-    # 🔧 FIX: R ricu's vaso60 does NOT expand/fill missing hours with max values.
-    # It simply joins rate to duration windows and keeps the ACTUAL hourly rate values.
-    # The only aggregation is when the same hour has multiple rate values (takes max).
-    # The previous expansion code incorrectly replaced all hourly values with the window max.
-    #
-    # R ricu logic:
-    # 1. Join rate where rate.time >= dur.start AND rate.time <= dur.end
-    # 2. change_interval() to floor times to hours (already done above)
-    # 3. aggregate("max") - only aggregates if same hour has multiple values
-    #
-    # The `grouped` variable already contains the correct hourly values from step 1 and 3.
-    # No expansion is needed.
-
     if final_interval is not None and not grouped.empty:
         grouped[rate_index_col] = grouped[rate_index_col].dt.floor(final_interval)
         grouped = (
@@ -5573,7 +5573,8 @@ def _callback_vaso60(
 
     output_index_col = rate_index_col if rate_index_col in ['start', 'measuredat', 'charttime'] else dur_index_col
     cols = id_columns + [output_index_col, ctx.concept_name]
-    result = grouped[cols].reset_index(drop=True)
+    avail_cols = [c for c in cols if c in grouped.columns]
+    result = grouped[avail_cols].reset_index(drop=True)
     # 若上面为了计算将时间转换为datetime（源头为相对小时），在返回前还原为相对小时
     if rate_time_is_numeric or dur_time_is_numeric:
         try:
@@ -5886,7 +5887,7 @@ def _callback_gcs(
         matched = pd.Series(False, index=base_df.index, dtype=bool)
         base_hours = _time_to_hours(base_df, time_col)
         window_hours = _time_to_hours(window_df, window_time_col)
-        dur_hours = pd.to_numeric(window_df[dur_col], errors="coerce") / 60.0
+        dur_hours = pd.to_numeric(window_df[dur_col], errors="coerce")
 
         if id_columns:
             grouped = base_df.groupby(list(id_columns), dropna=False, sort=False).groups
@@ -5899,24 +5900,29 @@ def _callback_gcs(
                 if windows.empty:
                     continue
                 starts = window_hours.loc[windows.index].to_numpy(dtype=float)
-                ends = starts + dur_hours.loc[windows.index].to_numpy(dtype=float)
+                durs = dur_hours.loc[windows.index].to_numpy(dtype=float)
                 times = base_hours.loc[idx].to_numpy(dtype=float)
                 coverage = np.zeros(len(times), dtype=bool)
-                for start, end in zip(starts, ends):
-                    if np.isnan(start) or np.isnan(end):
+                for start, dur in zip(starts, durs):
+                    if np.isnan(start) or np.isnan(dur):
                         continue
-                    coverage |= (times >= start) & (times < end)
+                    # Match R ricu: seq(floor(start), floor(floor(start)+dur))
+                    fs = np.floor(start)
+                    fe = np.floor(fs + dur)
+                    coverage |= (times >= fs) & (times <= fe)
                 matched.loc[idx] = coverage
             return matched
 
         starts = window_hours.to_numpy(dtype=float)
-        ends = starts + dur_hours.to_numpy(dtype=float)
+        durs = dur_hours.to_numpy(dtype=float)
         times = base_hours.to_numpy(dtype=float)
         coverage = np.zeros(len(times), dtype=bool)
-        for start, end in zip(starts, ends):
-            if np.isnan(start) or np.isnan(end):
+        for start, dur in zip(starts, durs):
+            if np.isnan(start) or np.isnan(dur):
                 continue
-            coverage |= (times >= start) & (times < end)
+            fs = np.floor(start)
+            fe = np.floor(fs + dur)
+            coverage |= (times >= fs) & (times <= fe)
         return pd.Series(coverage, index=base_df.index, dtype=bool)
 
     ett_gcs = None
@@ -5927,8 +5933,20 @@ def _callback_gcs(
             ett_df = ett_gcs_table
         if 'ett_gcs' in ett_df.columns and not ett_df.empty:
             merge_cols = list(id_columns) + ([index_column] if index_column else [])
-            ett_time_col = _get_index_column(ett_gcs_table) if hasattr(ett_gcs_table, 'data') else index_column
+            ett_time_col = _get_index_column(ett_gcs_table) if hasattr(ett_gcs_table, 'data') else None
+            if not ett_time_col or ett_time_col not in ett_df.columns:
+                # Detect actual time column in ett_df
+                for cand in [index_column, 'datetime', 'charttime', 'starttime', 'time']:
+                    if cand in ett_df.columns:
+                        ett_time_col = cand
+                        break
             dur_col = getattr(ett_gcs_table, 'dur_var', None) if hasattr(ett_gcs_table, 'dur_var') else None
+            
+            # 🔧 FIX: Handle time column name mismatch between ett_gcs and GCS data
+            if ett_time_col and ett_time_col != index_column and ett_time_col in ett_df.columns:
+                ett_df = ett_df.rename(columns={ett_time_col: index_column})
+                ett_time_col = index_column
+            
             if dur_col and ett_time_col and dur_col in ett_df.columns and ett_time_col in ett_df.columns and index_column in data.columns:
                 ett_true = ett_df[ett_df['ett_gcs'].fillna(False)].copy()
                 if not ett_true.empty:

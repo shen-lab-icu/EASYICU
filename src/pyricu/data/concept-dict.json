@@ -3315,7 +3315,7 @@
           "table": "listitems",
           "sub_var": "itemid",
           "target": "ts_tbl",
-          "callback": "combine_callbacks(\n               transform_fun(comp_na(`==`, 'Ge\u00efntubeerd')),\n               ts_to_win_tbl(mins(1L))\n             )"
+          "callback": "combine_callbacks(\n               transform_fun(comp_na(`==`, 'Geïntubeerd')),\n               ts_to_win_tbl(mins(1L))\n             )"
         }
       ],
       "eicu": [
@@ -4971,30 +4971,6 @@
             225794
           ],
           "table": "procedureevents",
-          "sub_var": "itemid",
-          "dur_var": "endtime",
-          "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')"
-        }
-      ],
-      "mimic": [
-        {
-          "ids": [
-            225792,
-            225794
-          ],
-          "table": "procedureevents_mv",
-          "sub_var": "itemid",
-          "dur_var": "endtime",
-          "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')"
-        }
-      ],
-      "mimic_demo": [
-        {
-          "ids": [
-            225792,
-            225794
-          ],
-          "table": "procedureevents_mv",
           "sub_var": "itemid",
           "dur_var": "endtime",
           "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')"
@@ -7383,7 +7359,7 @@
   "temp": {
     "unit": [
       "C",
-      "\u00b0C"
+      "°C"
     ],
     "min": 32,
     "max": 42,
@@ -7500,31 +7476,12 @@
     }
   },
   "tgcs": {
-    "concepts": [
-      "egcs",
-      "mgcs",
-      "vgcs"
-    ],
     "description": "GCS total",
     "omopid": 4093836,
     "category": "neurological",
     "min": 3,
     "max": 15,
-    "callback": "sum_components",
-    "class_name": "rec_cncpt",
     "sources": {
-      "aumc": [
-        {
-          "concepts": [
-            "egcs",
-            "mgcs",
-            "vgcs",
-            "ett_gcs"
-          ],
-          "callback": "gcs",
-          "class_name": "rec_cncpt"
-        }
-      ],
       "eicu": [
         {
           "ids": "GCS Total",
@@ -7552,24 +7509,13 @@
           "table": "chartevents",
           "sub_var": "itemid"
         }
-      ],
-      "hirid": [
-        {
-          "concepts": [
-            "egcs",
-            "mgcs",
-            "vgcs"
-          ],
-          "callback": "sum_components",
-          "class_name": "rec_cncpt"
-        }
       ]
     }
   },
   "tnt": {
     "unit": [
       "ng/mL",
-      "\u00b5g/l",
+      "µg/l",
       "ug/l"
     ],
     "min": 0,
@@ -7965,28 +7911,6 @@
           "sub_var": "itemid",
           "callback": "transform_fun(set_val(TRUE))"
         }
-      ],
-      "miiv": [
-        {
-          "ids": [
-            225468,
-            225477,
-            227194
-          ],
-          "table": "procedureevents",
-          "sub_var": "itemid",
-          "callback": "transform_fun(set_val(TRUE))"
-        },
-        {
-          "ids": [
-            467,
-            469,
-            226732
-          ],
-          "table": "chartevents",
-          "sub_var": "itemid",
-          "callback": "transform_fun(set_val(TRUE))"
-        }
       ]
     }
   },
@@ -8210,41 +8134,6 @@
           "sub_var": "itemid",
           "callback": "transform_fun(set_val(TRUE))"
         }
-      ],
-      "miiv": [
-        {
-          "ids": [
-            220339,
-            223848,
-            223849,
-            224419,
-            224684,
-            224685,
-            224686,
-            224687,
-            224695,
-            224696,
-            224697,
-            224700,
-            224701,
-            224702,
-            224703,
-            224704,
-            224705,
-            224706,
-            224707,
-            224709,
-            224738,
-            224746,
-            224747,
-            224750,
-            226873,
-            227187
-          ],
-          "table": "chartevents",
-          "sub_var": "itemid",
-          "callback": "transform_fun(set_val(TRUE))"
-        }
       ]
     }
   },
@@ -8266,7 +8155,7 @@
           "ids": 13066,
           "table": "listitems",
           "sub_var": "itemid",
-          "callback": "apply_map( c(`Geen geluid` = 1, `Onverstaanbare woorden` = 2, `Onjuiste woorden` = 3, `Verwarde taal` = 4, `Geori\u00ebnteerd` = 5) )"
+          "callback": "apply_map( c(`Geen geluid` = 1, `Onverstaanbare woorden` = 2, `Onjuiste woorden` = 3, `Verwarde taal` = 4, `Georiënteerd` = 5) )"
         }
       ],
       "eicu": [
@@ -8672,14 +8561,21 @@
         {
           "table": "procedureevents_mv",
           "sub_var": "itemid",
-          "ids": [225441, 225802, 225803, 225809],
+          "ids": [
+            225441,
+            225802,
+            225803,
+            225809
+          ],
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "MV: 225441=Hemodialysis, 225802=Dialysis-CRRT, 225803=Dialysis-CVVHD, 225809=Dialysis-CVVHDF"
         },
         {
           "table": "chartevents",
           "sub_var": "itemid",
-          "ids": [227290],
+          "ids": [
+            227290
+          ],
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "MV: 227290=CRRT mode"
         }
@@ -8688,7 +8584,13 @@
         {
           "table": "data_float_h",
           "sub_var": "DataID",
-          "ids": [723, 730, 731, 732, 2022],
+          "ids": [
+            723,
+            730,
+            731,
+            732,
+            2022
+          ],
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "723=CRRT Bloodflow, 730=CRRT DialysateFlow, 731=CRRT SubstitutePrae, 732=CRRT SubstitutePost, 2022=CRRT Withdrawal"
         }
@@ -8697,7 +8599,7 @@
   },
   "rrt_criteria": {
     "class_name": "lgl_cncpt",
-    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+\u22656.0 OR acidosis pH\u22647.20+HCO3\u226412)",
+    "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+≥6.0 OR acidosis pH≤7.20+HCO3≤12)",
     "category": "renal",
     "sources": {
       "miiv": [],
@@ -9219,7 +9121,9 @@
       ],
       "sic": [
         {
-          "ids": [717],
+          "ids": [
+            717
+          ],
           "table": "data_float_h",
           "sub_var": "DataID",
           "_comment": "717=TV (insp), unit=ml"

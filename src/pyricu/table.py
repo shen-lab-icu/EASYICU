@@ -412,11 +412,17 @@ class TsTbl(IdTbl):
         # Return minimum non-zero difference
         if is_numeric:
             # For numeric times (hours), convert to Timedelta
-            min_diff = min(d for d in diffs if d > 0)
+            positive = [d for d in diffs if d > 0]
+            if not positive:
+                return pd.Timedelta(hours=1)
+            min_diff = min(positive)
             return pd.Timedelta(hours=min_diff)
         else:
             # For temporal types, already Timedelta
-            min_diff = min(d for d in diffs if d > pd.Timedelta(0))
+            positive = [d for d in diffs if d > pd.Timedelta(0)]
+            if not positive:
+                return pd.Timedelta(hours=1)
+            min_diff = min(positive)
             return min_diff
     
     def _validate(self):
@@ -887,8 +893,12 @@ def cbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
         raise ValueError("Duplicate column names found")
     
     # Return same type as first input
-    if isinstance(tables[0], (IdTbl, TsTbl, WinTbl)):
-        return type(tables[0])(result, tables[0].id_vars)
+    if isinstance(tables[0], WinTbl):
+        return WinTbl(result, tables[0].id_vars, tables[0].index_var, tables[0].dur_var, tables[0].interval)
+    elif isinstance(tables[0], TsTbl):
+        return TsTbl(result, tables[0].id_vars, tables[0].index_var, tables[0].interval)
+    elif isinstance(tables[0], IdTbl):
+        return IdTbl(result, tables[0].id_vars)
     else:
         return result
 

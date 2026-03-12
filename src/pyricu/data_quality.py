@@ -29,11 +29,11 @@ class DataQualityValidator:
         'lactate': (0, 50),       # Lactate (mmol/L)
         'creatinine': (0, 30),    # Creatinine (mg/dL)
         'bilirubin': (0, 100),    # Bilirubin (mg/dL)
-        'wbc': (0, 500),          # WBC count (x10^9/L)
+        'wbc': (0, 200),          # WBC count (x10^9/L)
         'platelets': (0, 2000),   # Platelet count (x10^9/L)
         'hemoglobin': (0, 25),    # Hemoglobin (g/dL)
         'hematocrit': (0, 100),   # Hematocrit (%)
-        'sodium': (100, 200),     # Sodium (mEq/L)
+        'sodium': (80, 200),      # Sodium (mEq/L)
         'potassium': (0, 15),     # Potassium (mEq/L)
         'chloride': (50, 150),    # Chloride (mEq/L)
         'bicarbonate': (0, 100),  # Bicarbonate (mEq/L)
@@ -47,7 +47,7 @@ class DataQualityValidator:
         'ph': (6.5, 8.0),         # pH
         'pco2': (10, 150),        # PaCO2 (mmHg)
         'po2': (10, 700),         # PaO2 (mmHg)
-        'fio2': (0, 1),           # FiO2 (fraction)
+        'fio2': (0, 100),         # FiO2 (fraction 0-1 or percentage 21-100)
         
         # Scores
         'gcs': (3, 15),           # Glasgow Coma Scale

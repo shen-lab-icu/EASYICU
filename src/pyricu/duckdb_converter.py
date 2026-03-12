@@ -142,7 +142,7 @@ class DuckDBConverter:
         """Get the output parquet path for a CSV file."""
         # Remove .gz extension if present
         stem = csv_path.stem
-        if stem.endswith('.csv'):
+        if stem.lower().endswith('.csv'):
             stem = stem[:-4]
         elif csv_path.suffix.lower() == '.csv':
             stem = csv_path.stem
@@ -184,57 +184,58 @@ class DuckDBConverter:
             
             # Create DuckDB connection with optimized settings
             con = duckdb.connect(':memory:')
-            con.execute(f"SET memory_limit = '{self.memory_limit_gb}GB'")
-            # 不设置线程数，让DuckDB自动检测CPU核心数
-            con.execute("SET preserve_insertion_order = false")  # 允许并行写入
+            try:
+                con.execute(f"SET memory_limit = '{self.memory_limit_gb}GB'")
+                # 不设置线程数，让DuckDB自动检测CPU核心数
+                con.execute("SET preserve_insertion_order = false")  # 允许并行写入
             
-            # Read CSV and write to Parquet in one streaming operation
-            # DuckDB handles this efficiently without loading entire file
-            if self.verbose:
-                logger.info(f"  Converting {csv_path.name} -> {parquet_path.name}...")
-            
-            # Use COPY for memory-efficient streaming
-            # First, create a view of the CSV file
-            escaped_path = str(source_path).replace("'", "''")
-            escaped_output = str(parquet_path).replace("'", "''")
-            
-            # Read CSV with auto-detection (DuckDB handles .gz automatically)
-            # Detect if file is gzipped
-            is_gzipped = str(source_path).lower().endswith('.gz')
-            compression_opt = ", compression='gzip'" if is_gzipped else ""
-            
-            # AUMC 使用 latin-1 编码（含有特殊字符如 °C）
-            encoding_opt = ", encoding='latin-1'" if self.db_type == 'aumc' else ""
-            
-            # 优化参数：
-            # - ZSTD压缩比snappy高30%，速度接近
-            # - ROW_GROUP_SIZE=1000000 减少写入次数
-            # - sample_size=100000 平衡速度和类型推断准确性（避免扫描80GB文件）
-            con.execute(f"""
-                COPY (
-                    SELECT * FROM read_csv('{escaped_path}', 
-                        auto_detect=true, 
-                        header=true,
-                        sample_size=100000,
-                        ignore_errors=true,
-                        null_padding=true,
-                        all_varchar=false
-                        {compression_opt}
-                        {encoding_opt}
+                # Read CSV and write to Parquet in one streaming operation
+                # DuckDB handles this efficiently without loading entire file
+                if self.verbose:
+                    logger.info(f"  Converting {csv_path.name} -> {parquet_path.name}...")
+                
+                # Use COPY for memory-efficient streaming
+                # First, create a view of the CSV file
+                escaped_path = str(source_path).replace("'", "''")
+                escaped_output = str(parquet_path).replace("'", "''")
+                
+                # Read CSV with auto-detection (DuckDB handles .gz automatically)
+                # Detect if file is gzipped
+                is_gzipped = str(source_path).lower().endswith('.gz')
+                compression_opt = ", compression='gzip'" if is_gzipped else ""
+                
+                # AUMC 使用 latin-1 编码（含有特殊字符如 °C）
+                encoding_opt = ", encoding='latin-1'" if self.db_type == 'aumc' else ""
+                
+                # 优化参数：
+                # - ZSTD压缩比snappy高30%，速度接近
+                # - ROW_GROUP_SIZE=1000000 减少写入次数
+                # - sample_size=100000 平衡速度和类型推断准确性（避免扫描80GB文件）
+                con.execute(f"""
+                    COPY (
+                        SELECT * FROM read_csv('{escaped_path}', 
+                            auto_detect=true, 
+                            header=true,
+                            sample_size=100000,
+                            ignore_errors=true,
+                            null_padding=true,
+                            all_varchar=false
+                            {compression_opt}
+                            {encoding_opt}
+                        )
+                    ) TO '{escaped_output}' (
+                        FORMAT PARQUET, 
+                        COMPRESSION 'ZSTD',
+                        ROW_GROUP_SIZE 1000000
                     )
-                ) TO '{escaped_output}' (
-                    FORMAT PARQUET, 
-                    COMPRESSION 'ZSTD',
-                    ROW_GROUP_SIZE 1000000
-                )
-            """)
-            
-            # Get row count from parquet metadata (faster than COUNT(*))
-            row_count = con.execute(f"""
-                SELECT COUNT(*) FROM parquet_scan('{escaped_output}')
-            """).fetchone()[0]
-            
-            con.close()
+                """)
+                
+                # Get row count from parquet metadata (faster than COUNT(*))
+                row_count = con.execute(f"""
+                    SELECT COUNT(*) FROM parquet_scan('{escaped_output}')
+                """).fetchone()[0]
+            finally:
+                con.close()
             
             result['status'] = 'success'
             result['row_count'] = row_count

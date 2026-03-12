@@ -783,6 +783,18 @@ def load_concepts(
     if any(c in sofa2_concepts or 'sofa2' in c.lower() for c in concepts_list):
         use_sofa2 = True
 
+    # 防御性检查: 检测常见的位置参数误用 (load_concepts(['hr'], 'miiv') 应为 database='miiv')
+    _known_dbs = {'miiv', 'mimic', 'eicu', 'hirid', 'aumc', 'sic',
+                  'miiv_demo', 'mimic_demo', 'eicu_demo', 'sic_demo'}
+    if isinstance(patient_ids, str) and patient_ids.lower() in _known_dbs:
+        if database is None:
+            database = patient_ids
+            patient_ids = None
+        else:
+            raise TypeError(
+                f"patient_ids 收到字符串 '{patient_ids}'，看起来是数据库名。"
+                f"请使用关键字参数: load_concepts(concepts, database='{patient_ids}')")
+
     if verbose:
         print(f"📊 使用统一API加载 {len(concepts_list)} 个概念...")
         print(f"   概念: {', '.join(concepts_list)}")
@@ -1451,79 +1463,20 @@ def load_demographics(
     if verbose:
         print("👥 加载基础人口统计学数据...")
 
-    # 修复：分别加载概念以避免ID列冲突
+    demo_concepts = ['age', 'bmi', 'height', 'sex', 'weight']
+
     try:
-        all_data = []
-
-        # 加载age和sex（来自patients表，使用subject_id）
-        try:
-            age_sex_data = load_concepts(
-                concepts=['age', 'sex'],
-                patient_ids=patient_ids,
-                database=database,
-                data_path=data_path,
-                merge=True,
-                verbose=False
-            )
-            if age_sex_data is not None and not age_sex_data.empty:
-                all_data.append(age_sex_data)
-                if verbose:
-                    logger.debug(f"age/sex: {len(age_sex_data)}行")
-        except Exception as e:
-            if verbose:
-                print(f"  ⚠️  age/sex加载失败: {str(e)[:50]}")
-
-        # 加载height和weight（来自chartevents表，使用stay_id）
-        try:
-            height_weight_data = load_concepts(
-                concepts=['height', 'weight'],
-                patient_ids=patient_ids,
-                database=database,
-                data_path=data_path,
-                merge=True,
-                verbose=False
-            )
-            if height_weight_data is not None and not height_weight_data.empty:
-                all_data.append(height_weight_data)
-                if verbose:
-                    logger.debug(f"height/weight: {len(height_weight_data)}行")
-        except Exception as e:
-            if verbose:
-                print(f"  ⚠️  height/weight加载失败: {str(e)[:50]}")
-
-        # 如果没有数据，返回空DataFrame
-        if not all_data:
-            if verbose:
-                print("  ❌ 没有可用的人口统计学数据")
+        result = load_concepts(
+            concepts=demo_concepts,
+            patient_ids=patient_ids,
+            database=database,
+            data_path=data_path,
+            merge=True,
+            verbose=verbose
+        )
+        if result is None:
             return pd.DataFrame()
-
-        # 手动合并数据，处理ID列差异
-        merged_data = all_data[0]
-        for i, df in enumerate(all_data[1:], 1):
-            if df.empty:
-                continue
-
-            # 确定共同的ID列
-            common_cols = set(merged_data.columns) & set(df.columns)
-            id_cols = [col for col in common_cols if 'id' in col.lower() or col in ['stay_id', 'subject_id', 'patientunitstayid']]
-
-            if id_cols:
-                id_col = id_cols[0]
-                try:
-                    merged_data = pd.merge(merged_data, df, on=id_col, how='outer', suffixes=('', f'_{i}'))
-                except Exception as e:
-                    if verbose:
-                        print(f"  ⚠️  合并失败: {str(e)[:50]}")
-                    # 如果合并失败，使用concat
-                    merged_data = pd.concat([merged_data, df], ignore_index=True)
-            else:
-                # 如果没有共同ID列，使用concat
-                merged_data = pd.concat([merged_data, df], ignore_index=True)
-
-        if verbose:
-            logger.debug(f"最终合并结果: {len(merged_data)}行, {len(merged_data.columns)}列")
-
-        return merged_data
+        return result
 
     except Exception as e:
         if verbose:

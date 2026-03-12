@@ -599,8 +599,9 @@ def sep3(
 def label_sep3(
     sofa_data: pd.DataFrame,
     susp_inf_data: pd.DataFrame,
+    id_cols: list,
+    index_col: str,
     delta_sofa: int = 2,
-    si_mode: str = "abx_ind",
     keep_components: bool = False,
     **kwargs
 ) -> pd.DataFrame:
@@ -612,8 +613,9 @@ def label_sep3(
     Args:
         sofa_data: SOFA 评分数据
         susp_inf_data: 疑似感染数据
+        id_cols: 患者 ID 列
+        index_col: 时间索引列
         delta_sofa: SOFA 评分增量阈值（默认 2）
-        si_mode: 疑似感染模式
         keep_components: 是否保留组件
         **kwargs: 其他参数
         
@@ -621,17 +623,15 @@ def label_sep3(
         Sepsis-3 标注结果
         
     Examples:
-        >>> # 使用 SOFA 和疑似感染数据
-        >>> sep3_labels = label_sep3(sofa_df, si_df)
-        >>> 
-        >>> # 自定义阈值
-        >>> sep3_labels = label_sep3(sofa_df, si_df, delta_sofa=3)
+        >>> sep3_labels = label_sep3(sofa_df, si_df, ['stay_id'], 'charttime')
+        >>> sep3_labels = label_sep3(sofa_df, si_df, ['stay_id'], 'charttime', delta_sofa=3)
     """
     return sep3(
-        sofa_data=sofa_data,
-        susp_inf_data=susp_inf_data,
-        delta_sofa=delta_sofa,
-        si_mode=si_mode,
+        sofa=sofa_data,
+        susp_inf=susp_inf_data,
+        id_cols=id_cols,
+        index_col=index_col,
+        sofa_thresh=delta_sofa,
         keep_components=keep_components,
         **kwargs
     )
