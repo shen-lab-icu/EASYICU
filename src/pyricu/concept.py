@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import copy
+import functools
 import json
 import logging
 import re
 import operator
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 from dataclasses import dataclass, field, replace, asdict
@@ -426,8 +428,9 @@ class ConceptResolver:
         # 🚀 新增：概念数据缓存（避免重复加载相同概念，如urine）
         # Key: (concept_name, patient_ids_hash, interval, aggregate)
         self._concept_data_cache: Dict[tuple, pd.DataFrame] = {}
-        # 🆕 原始数据缓存：回调函数用于获取未对齐的原始数据
-        # Key: (concept_name, patient_ids_hash)
+        # 🆕 原始数据缓存：回调函数和重复聚合重建都可复用
+        # Key: (concept_name, patient_ids_hash, agg_token)
+        # Legacy key: (concept_name, patient_ids_hash)
         self._raw_concept_cache: Dict[tuple, ICUTable] = {}
         # 多线程支持：使用线程局部存储避免循环依赖误报
         self._thread_local = thread_local()
@@ -492,12 +495,15 @@ class ConceptResolver:
         """
         # 🔧 使用统一的 hash 函数
         patient_ids_hash = _compute_patient_ids_hash(patient_ids)
-        
-        cache_key = (concept_name, patient_ids_hash)
-        
+
         with self._cache_lock:
-            if cache_key in self._raw_concept_cache:
-                cached = self._raw_concept_cache[cache_key]
+            cached = self._get_raw_concept_from_cache(
+                concept_name,
+                patient_ids_hash,
+                aggregator=None,
+                allow_aggregated=False,
+            )
+            if cached is not None:
                 return cached.copy() if hasattr(cached, 'copy') else cached
         
         # 加载原始数据（interval=None）
@@ -517,11 +523,81 @@ class ConceptResolver:
             # 🔧 FIX 2026-03-10: Also cache WinTbl/IdTbl/TsTbl (they have .data but aren't ICUTable)
             if isinstance(result, ICUTable) or hasattr(result, 'data'):
                 with self._cache_lock:
-                    self._raw_concept_cache[cache_key] = result
+                    self._store_raw_concept_cache(
+                        concept_name,
+                        patient_ids_hash,
+                        result,
+                        aggregator=None,
+                        store_legacy=True,
+                    )
                 return result.copy() if hasattr(result, 'copy') else result
         except Exception:
             pass
         return None
+
+    @staticmethod
+    def _normalize_raw_cache_aggregator(aggregator: object) -> str:
+        """Normalize aggregator value for raw cache keys."""
+        if aggregator in (None, False):
+            return "__raw__"
+        return str(aggregator)
+
+    def _raw_cache_key(
+        self,
+        concept_name: str,
+        patient_ids_hash: object,
+        aggregator: object,
+    ) -> tuple:
+        return (
+            concept_name,
+            patient_ids_hash,
+            self._normalize_raw_cache_aggregator(aggregator),
+        )
+
+    def _get_raw_concept_from_cache(
+        self,
+        concept_name: str,
+        patient_ids_hash: object,
+        aggregator: object,
+        *,
+        allow_aggregated: bool,
+    ):
+        """Lookup raw cache entries with backward-compatible fallback order."""
+        keys = [self._raw_cache_key(concept_name, patient_ids_hash, aggregator)]
+        if allow_aggregated:
+            keys.extend(
+                [
+                    self._raw_cache_key(concept_name, patient_ids_hash, "auto"),
+                    self._raw_cache_key(concept_name, patient_ids_hash, None),
+                ]
+            )
+            keys.append((concept_name, patient_ids_hash))
+        # 🔧 FIX: allow_aggregated=False 时不退回到 None key 和 legacy 2-tuple
+        # 否则特定聚合器请求会命中默认聚合的缓存
+
+        seen = set()
+        for key in keys:
+            if key in seen:
+                continue
+            seen.add(key)
+            cached = self._raw_concept_cache.get(key)
+            if cached is not None:
+                return cached
+        return None
+
+    def _store_raw_concept_cache(
+        self,
+        concept_name: str,
+        patient_ids_hash: object,
+        table: object,
+        *,
+        aggregator: object,
+        store_legacy: bool = False,
+    ) -> None:
+        """Store raw cache entries without duplicating table objects."""
+        self._raw_concept_cache[self._raw_cache_key(concept_name, patient_ids_hash, aggregator)] = table
+        if store_legacy:
+            self._raw_concept_cache[(concept_name, patient_ids_hash)] = table
 
     def _get_inflight(self) -> set:
         """获取当前线程的inflight集合（线程安全）"""
@@ -820,30 +896,53 @@ class ConceptResolver:
                             table_to_concepts[table_name] = []
                         table_to_concepts[table_name].append((name, value_var))
         
-        # 🚀 宽表批量加载优化：检测是否可以使用DuckDB批量加载
+        # 🚀 批量加载优化：检测是否可以使用DuckDB批量加载
         # 宽表如vitalperiodic有多个值列，可以一次性加载并聚合
         WIDE_TABLES = {'vitalperiodic', 'vitalaperiodic'}
         wide_table_batch_results = {}  # {concept_name: DataFrame}
         wide_table_merged_df = None  # 🚀 保存批量加载的合并结果，避免重复合并
+        wide_table_covered_names = set()
+        wide_table_frames: List[pd.DataFrame] = []
         
         # 🔧 FIX: 只有当没有多数据源概念时才使用批量加载
         # 因为批量加载只处理一个表，不支持多表合并（如eICU的map需要合并vitalperiodic和vitalaperiodic）
-        if len(table_to_concepts) == 1 and not multi_source_concepts:
-            shared_table = list(table_to_concepts.keys())[0]
-            concepts_info = table_to_concepts[shared_table]
-            
+        # 🚀 长表多概念批量加载支持的表（有 _bucket 目录和 sub_var 过滤）
+        _MULTI_BATCH_TABLES = {
+            'chartevents',       # MIIV/MIMIC
+            'data_float_h',      # SIC vitals
+            'laboratory',        # SIC labs
+            'labevents',         # MIIV/MIMIC labs
+            'lab',               # eICU labs
+        }
+        for shared_table, concepts_info in table_to_concepts.items():
+            table_batch_results = {}
+            table_batch_df = None
+            table_covered_names = set()
+
+            def _detect_batch_id_col(frame: pd.DataFrame, fallback: str) -> str:
+                for cand in [fallback, 'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID', 'subject_id']:
+                    if cand in frame.columns:
+                        return cand
+                return frame.columns[0]
+
             # 检查是否为宽表且所有概念都有value_var
             # 🚀 优化：对于单个概念也使用批量加载，因为DuckDB聚合比pandas快10倍
-            if shared_table in WIDE_TABLES and len(concepts_info) >= 1:
-                all_have_value_var = all(val_var is not None for _, val_var in concepts_info)
+            # 🔧 FIX: 排除使用非默认聚合的概念（如sofa_cardio的MAP需要min而非median）
+            # 这些概念需要精确控制聚合函数，必须走正常加载路径
+            concepts_info_filtered = [
+                (name, val_var) for name, val_var in concepts_info
+                if aggregators.get(name) in (None, False, 'auto', 'median')
+                and name not in multi_source_concepts
+            ]
+            if shared_table in WIDE_TABLES and len(concepts_info_filtered) >= 1:
+                all_have_value_var = all(val_var is not None for _, val_var in concepts_info_filtered)
                 
                 if all_have_value_var:
                     try:
                         from .datasource import load_wide_table_aggregated
                         
-                        # 获取所有需要的value_var列
-                        value_columns = [val_var for _, val_var in concepts_info]
-                        {name: val_var for name, val_var in concepts_info}
+                        # 获取所有需要的value_var列（去重，避免DuckDB重复加载同一列）
+                        value_columns = list(dict.fromkeys(val_var for _, val_var in concepts_info_filtered))
                         
                         # 计算interval_hours
                         interval_hours = 1.0
@@ -863,6 +962,16 @@ class ConceptResolver:
                         else:
                             patient_ids_list = list(patient_ids)
                         
+                        # 🔧 构建 per-column filter bounds（与 R ricu 的 pre-aggregation filter_bounds 一致）
+                        column_bounds = {}
+                        for concept_name, val_var in concepts_info_filtered:
+                            concept = self.dictionary.get(concept_name)
+                            if concept:
+                                vmin = concept.minimum
+                                vmax = concept.maximum
+                                if vmin is not None or vmax is not None:
+                                    column_bounds[val_var] = (vmin, vmax)
+                        
                         if verbose:
                             logger.info(f"🚀 宽表批量加载: {shared_table} ({len(value_columns)} 列)")
                         
@@ -873,7 +982,8 @@ class ConceptResolver:
                             value_columns,
                             interval_hours=interval_hours,
                             patient_ids=patient_ids_list,
-                            agg_func='median'
+                            agg_func='median',
+                            column_bounds=column_bounds,
                         )
                         
                         # 确定ID列和时间列
@@ -882,48 +992,193 @@ class ConceptResolver:
                         if not id_col:
                             icustay_cfg = data_source.config.id_configs.get('icustay')
                             id_col = icustay_cfg.id if icustay_cfg else 'patientunitstayid'
+                        id_col = _detect_batch_id_col(batch_df, id_col)
                         
-                        # 🚀 创建概念名称到value_var的映射，用于重命名列
-                        {concept_name: val_var for concept_name, val_var in concepts_info}
+                        # 🚀 处理多概念共享同一 val_var 的情况（如 spo2 和 o2sat 都用 sao2）
+                        # 不能用简单 rename — dict 键冲突会导致 last-write-wins
+                        # 策略：对共享 val_var 的概念，复制列
+                        _val_to_concepts = {}
+                        for concept_name, val_var in concepts_info_filtered:
+                            _val_to_concepts.setdefault(val_var, []).append(concept_name)
                         
-                        # 重命名列：value_var -> concept_name
-                        rename_map = {val_var: concept_name for concept_name, val_var in concepts_info}
-                        batch_df = batch_df.rename(columns=rename_map)
+                        for val_var, concept_names in _val_to_concepts.items():
+                            if val_var in batch_df.columns:
+                                for cname in concept_names:
+                                    if cname != val_var:
+                                        batch_df[cname] = batch_df[val_var]
+                        # 删除不再需要的原始 val_var 列（避免列名混乱）
+                        _orig_val_vars = set(_val_to_concepts.keys())
+                        _concept_names = {cn for cns in _val_to_concepts.values() for cn in cns}
+                        for vv in _orig_val_vars:
+                            if vv not in _concept_names and vv in batch_df.columns:
+                                batch_df = batch_df.drop(columns=[vv])
                         
-                        # 🚀 保存合并后的DataFrame（已经是按时间聚合和合并好的）
-                        # 列：id_col, charttime, concept1, concept2, ...
-                        wide_table_merged_df = batch_df
+                        # 🚀 保存合并后的DataFrame
+                        table_batch_df = batch_df
+                        table_covered_names = _concept_names
                         
-                        # 分割成各个概念的DataFrame（用于merge=False的情况）
-                        for concept_name, val_var in concepts_info:
-                            # 提取该概念的数据
+                        # 🚀 将每个概念放入 batch_results，使 _resolve 能跳过 _ensure_concept_loaded
+                        for concept_name, val_var in concepts_info_filtered:
                             concept_df = batch_df[[id_col, 'charttime', concept_name]].copy()
                             concept_df = concept_df.dropna(subset=[concept_name])
-                            
-                            # 创建ICUTable（ICUTable已在文件顶部导入）
-                            wide_table_batch_results[concept_name] = ICUTable(
+                            _tbl = ICUTable(
                                 data=concept_df, 
                                 id_columns=[id_col],
                                 index_column='charttime',
                                 value_column=concept_name
                             )
+                            _tbl._pre_aggregated = True
+                            table_batch_results[concept_name] = _tbl
                         
                         if verbose:
-                            logger.info(f"✅ 宽表批量加载完成，加载了 {len(wide_table_batch_results)} 个概念")
+                            logger.info(f"✅ 宽表批量加载完成，加载了 {len(concepts_info_filtered)} 个概念")
                         
                     except Exception as e:
                         logger.warning(f"宽表批量加载失败，回退到普通加载: {e}")
-                        wide_table_batch_results = {}
-                        wide_table_merged_df = None
-            
-            # 如果没有使用批量加载，使用串行加载
-            if not wide_table_batch_results and concept_workers > 1 and total > 1:
-                if verbose:
-                    logger.info(f"🔄 所有 {total} 个概念共享表 '{shared_table}'，使用串行加载以共享缓存")
-                effective_workers = 1
-        elif concept_workers > 1 and total > 1:
-            # 多个表的情况，保持并行
-            pass
+                        table_batch_results = {}
+                        table_batch_df = None
+                        table_covered_names = set()
+
+            # 🚀 长表多概念批量加载：同一 itemid/sub_var 表的一次扫描多列聚合
+            elif shared_table in _MULTI_BATCH_TABLES and len(concepts_info) >= 2:
+                try:
+                    from .datasource import load_bucketed_table_multi_aggregated
+
+                    batch_itemids = {}
+                    batch_bounds = {}
+                    batch_sub_var = None
+                    for concept_name, _ in concepts_info:
+                        if concept_name in multi_source_concepts:
+                            continue
+                        concept = self.dictionary.get(concept_name)
+                        if not concept or not getattr(concept, 'sources', None):
+                            continue
+                        src_list = concept.sources.get(src_name, [])
+                        if not src_list or len(src_list) != 1:
+                            continue
+                        src = src_list[0]
+                        if getattr(src, 'callback', None):
+                            continue
+                        _sub_var = getattr(src, 'sub_var', None)
+                        if not _sub_var:
+                            continue
+                        ids = getattr(src, 'ids', None)
+                        if ids is None:
+                            continue
+                        # Track sub_var (must be consistent within a table)
+                        if batch_sub_var is None:
+                            batch_sub_var = _sub_var
+                        elif _sub_var != batch_sub_var:
+                            continue
+                        ids_list = ids if isinstance(ids, list) else [ids]
+                        # Handle string IDs (eICU labname) vs int IDs
+                        if isinstance(ids_list[0], str):
+                            batch_itemids[concept_name] = [str(x) for x in ids_list]
+                        else:
+                            batch_itemids[concept_name] = [int(x) for x in ids_list]
+                        batch_bounds[concept_name] = {
+                            "min": _get_concept_bounds(concept_name, "min"),
+                            "max": _get_concept_bounds(concept_name, "max"),
+                        }
+
+                    if len(batch_itemids) >= 2:
+                        interval_hours = 1.0
+                        if interval is not None:
+                            if hasattr(interval, 'total_seconds'):
+                                interval_hours = interval.total_seconds() / 3600.0
+                            elif isinstance(interval, (int, float)):
+                                interval_hours = float(interval)
+
+                        if patient_ids is None:
+                            patient_ids_list = None
+                        elif isinstance(patient_ids, dict):
+                            patient_ids_list = list(next(iter(patient_ids.values())))
+                        else:
+                            patient_ids_list = list(patient_ids)
+
+                        # Determine value_column from table config
+                        table_cfg = data_source.config.get_table(shared_table)
+                        _val_col = getattr(table_cfg.defaults, 'val_var', None) or 'valuenum'
+                        _time_col = getattr(table_cfg.defaults, 'index_var', None)
+
+                        batch_df = load_bucketed_table_multi_aggregated(
+                            data_source,
+                            shared_table,
+                            batch_itemids,
+                            value_column=_val_col,
+                            interval_minutes=interval_hours * 60.0,
+                            patient_ids=patient_ids_list,
+                            agg_func='median',
+                            itemid_col=batch_sub_var,
+                            concept_bounds=batch_bounds,
+                            time_col=_time_col,
+                        )
+
+                        id_col = _detect_batch_id_col(batch_df, 'stay_id')
+
+                        # Detect the time column in batch output
+                        # AUMC outputs measuredat_minutes, others output charttime
+                        _time_col_out = 'charttime'
+                        if 'measuredat_minutes' in batch_df.columns:
+                            _time_col_out = 'measuredat_minutes'
+
+                        covered_names = set()
+                        for concept_name in batch_itemids:
+                            if concept_name not in batch_df.columns:
+                                continue
+                            concept_df = batch_df[[id_col, _time_col_out, concept_name]].copy()
+                            concept_df = concept_df.dropna(subset=[concept_name])
+                            _tbl = ICUTable(
+                                data=concept_df,
+                                id_columns=[id_col],
+                                index_column=_time_col_out,
+                                value_column=concept_name,
+                            )
+                            _tbl._pre_aggregated = True
+                            table_batch_results[concept_name] = _tbl
+                            covered_names.add(concept_name)
+
+                        if covered_names:
+                            keep_cols = [id_col, _time_col_out] + [name for name in names if name in covered_names and name in batch_df.columns]
+                            table_batch_df = batch_df[keep_cols].copy()
+                            table_covered_names = set(covered_names)
+
+                        if verbose and covered_names:
+                            logger.info(
+                                "✅ 长表批量加载完成: %s (%d/%d 概念)",
+                                shared_table,
+                                len(covered_names),
+                                len(names),
+                            )
+                except Exception as e:
+                    logger.warning(f"长表批量加载失败，回退到普通加载: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
+
+            if table_batch_results:
+                wide_table_batch_results.update(table_batch_results)
+            if table_batch_df is not None and not table_batch_df.empty:
+                wide_table_frames.append(table_batch_df)
+                wide_table_covered_names.update(table_covered_names)
+
+        if wide_table_frames:
+            wide_table_merged_df = wide_table_frames[0]
+            for frame in wide_table_frames[1:]:
+                # Find common time column (charttime or measuredat_minutes)
+                _time_merge = 'charttime'
+                for candidate in ('charttime', 'measuredat_minutes'):
+                    if candidate in wide_table_merged_df.columns and candidate in frame.columns:
+                        _time_merge = candidate
+                        break
+                merge_keys = [wide_table_merged_df.columns[0], _time_merge]
+                wide_table_merged_df = wide_table_merged_df.merge(frame, on=merge_keys, how='outer', sort=False)
+
+        # 如果没有使用批量加载，使用串行加载
+        if not wide_table_batch_results and len(table_to_concepts) == 1 and concept_workers > 1 and total > 1:
+            shared_table = list(table_to_concepts.keys())[0]
+            if verbose:
+                logger.info(f"🔄 所有 {total} 个概念共享表 '{shared_table}'，使用串行加载以共享缓存")
+            effective_workers = 1
         
         # 🚀 新优化：检测共享子概念，强制串行加载以利用缓存
         # 例如 uo_6h, uo_12h, uo_24h 都有子概念 urine, weight
@@ -1095,13 +1350,29 @@ class ConceptResolver:
                 
                 # 🚀 宽表优化：如果有批量加载的合并结果，直接用它
                 if wide_table_merged_df is not None:
-                    if verbose:
-                        logger.info("🚀 使用宽表批量加载的合并结果 (ricu格式)")
-                    # 只需要排序，不需要重新合并
-                    merged = wide_table_merged_df.sort_values(
-                        [wide_table_merged_df.columns[0], 'charttime']
-                    ).reset_index(drop=True)
-                    return merged
+                    _all_covered = wide_table_covered_names >= set(names)
+                    if not _all_covered and wide_table_covered_names:
+                        merged_partial = self._merge_partial_ricu_wide_result(
+                            wide_table_merged_df,
+                            tables,
+                            names,
+                            wide_table_covered_names,
+                            data_source=data_source,
+                        )
+                        if merged_partial is not None:
+                            if verbose:
+                                logger.info("🚀 使用部分宽表批量结果并仅合并剩余概念")
+                            return merged_partial
+                        # Partial merge failed (e.g. non-charttime time column) — fall through to full merge
+                    elif _all_covered:
+                        if verbose:
+                            logger.info("🚀 使用宽表批量加载的合并结果 (ricu格式)")
+                        _sort_time = 'charttime'
+                        for _tc in ('charttime', 'measuredat_minutes'):
+                            if _tc in wide_table_merged_df.columns:
+                                _sort_time = _tc
+                                break
+                        return wide_table_merged_df.reset_index(drop=True)
                 return self._to_ricu_format_merged_enhanced(tables, names, interval, data_source=data_source)
 
             merged = self._merge_tables(tables)
@@ -1260,6 +1531,7 @@ class ConceptResolver:
         index_column: Optional[str] = None
         unit_column: Optional[str] = None
         time_columns: List[str] = []
+        _duckdb_source_count = 0  # 🚀 跟踪 DuckDB 预聚合源数量
         
         # 🔧 提取数据库名称，用于后续的数据库特定处理
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
@@ -1600,10 +1872,12 @@ class ConceptResolver:
                     _convert_unit_op = None
                     _convert_unit_filter = None
                     
-                    # 通用检查：表是否有分桶目录 + 源是否有 sub_var + ids + 无复杂 callback
+                    # 通用检查：表是否有分桶目录或扁平parquet目录 + 源是否有 sub_var + ids + 无复杂 callback
                     _has_bucket_dir = False
                     try:
                         _bucket_dir_check = data_source._resolve_bucket_directory(source.table)
+                        if _bucket_dir_check is None:
+                            _bucket_dir_check = data_source._resolve_flat_parquet_directory(source.table)
                         _has_bucket_dir = _bucket_dir_check is not None
                     except Exception:
                         pass
@@ -1615,11 +1889,17 @@ class ConceptResolver:
                             has_callback and isinstance(source.callback, str) and
                             source.callback.strip().startswith('convert_unit(')
                         )
+                        _mimic_hospital_tables = {'prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services'}
+                        _needs_hadm_to_stay_mapping = (
+                            db_name in ('miiv', 'miiv_demo', 'mimic', 'mimic_demo')
+                            and source.table in _mimic_hospital_tables
+                        )
                         # 🔧 FIX: id_tbl 概念（height, weight 等）需要 per-patient 聚合，不适合 DuckDB 的 per-hour GROUP BY
                         _target = getattr(definition, 'target', 'ts_tbl')
-                        # 🔧 SIC: 暂不启用 DuckDB（SIC laboratory 的 Offset 是相对时间秒数，
-                        # 需要额外处理与 _align_time_to_admission 的交互）
-                        _skip_db_duckdb = db_name in ('sic', 'sic_demo')
+                        # 🔧 eICU nursecharting 暂不启用 DuckDB（string itemid）
+                        _skip_db_duckdb = (
+                            (db_name in ('eicu', 'eicu_demo') and source.table == 'nursecharting')
+                        )
                         if has_sub_var and (not has_callback or is_convert_unit) and source.ids and _target != 'id_tbl' and not _skip_db_duckdb:
                             itemids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
                             use_duckdb_aggregation = len(itemids) > 0
@@ -1743,6 +2023,9 @@ class ConceptResolver:
                             index_column=_duckdb_time_col,
                             value_column=value_col,
                         )
+                        # 🚀 标记为 DuckDB 预聚合，change_interval 可跳过冗余 groupby
+                        table._pre_aggregated = True
+                        _duckdb_source_count += 1
                         
                         if verbose:
                             print(f"   ✅ DuckDB聚合完成: {len(frame):,} 行")
@@ -1810,6 +2093,97 @@ class ConceptResolver:
                         
                         # 标记callback已处理，跳过后续callback
                         _convert_unit_callback_for_duckdb = True
+                    elif (
+                        _has_bucket_dir
+                        and not has_sub_var
+                        and not getattr(source, 'ids', None)
+                        and getattr(source, 'value_var', None)
+                        and not has_callback
+                        and _target != 'id_tbl'
+                    ):
+                        logger.debug(f"🚀 宽表单列DuckDB聚合触发: {source.table}.{source.value_var}")
+                        # 🚀 Wide table single-column DuckDB aggregation
+                        # eICU vitalperiodic/vitalaperiodic: column-based tables without itemid
+                        # Raw loading reads ALL rows (146M+ for vitalperiodic), this does
+                        # GROUP BY in DuckDB to reduce to ~2M rows before pandas processing
+                        import duckdb as _wt_duckdb
+                        from .datasource import _get_duckdb_connection
+
+                        _wt_val_var = source.value_var
+                        _wt_table_cfg = data_source.config.get_table(source.table)
+                        _wt_id_col = _wt_table_cfg.defaults.id_var or 'patientunitstayid'
+                        _wt_time_col = _wt_table_cfg.defaults.index_var or 'observationoffset'
+                        _wt_interval_minutes = 60.0
+
+                        _wt_agg_func = 'MEDIAN'
+                        if isinstance(aggregator, str) and aggregator in ('min', 'max', 'mean', 'sum'):
+                            _wt_agg_func = aggregator.upper()
+
+                        # Find parquet files
+                        _wt_table_path = data_source._resolve_loader_from_disk(source.table)
+                        if _wt_table_path is not None:
+                            _wt_dir = Path(_wt_table_path) if not isinstance(_wt_table_path, Path) else _wt_table_path
+                            _wt_glob = str(_wt_dir / '*.parquet') if _wt_dir.is_dir() else str(_wt_dir)
+
+                            # Patient ID filter
+                            if patient_ids is None:
+                                _wt_pid_list = None
+                            elif isinstance(patient_ids, dict):
+                                _wt_pid_list = list(next(iter(patient_ids.values())))
+                            else:
+                                _wt_pid_list = list(patient_ids)
+
+                            _wt_pid_filter = ''
+                            if _wt_pid_list:
+                                _wt_ids_str = ','.join(str(x) for x in _wt_pid_list)
+                                _wt_pid_filter = f'AND {_wt_id_col} IN ({_wt_ids_str})'
+
+                            # Output in ORIGINAL time units (minutes for eICU) but floored to hourly
+                            # This keeps compatibility with raw loading path — downstream
+                            # time alignment and change_interval work unchanged
+                            _wt_time_expr = f'FLOOR({_wt_time_col} / {_wt_interval_minutes}) * {_wt_interval_minutes}'
+                            _wt_query = f"""
+                                SELECT {_wt_id_col},
+                                       {_wt_time_expr} AS {_wt_time_col},
+                                       {_wt_agg_func}({_wt_val_var}) AS {_wt_val_var}
+                                FROM read_parquet('{_wt_glob}', union_by_name=true)
+                                WHERE {_wt_val_var} IS NOT NULL {_wt_pid_filter}
+                                GROUP BY {_wt_id_col}, {_wt_time_expr}
+                                ORDER BY {_wt_id_col}, 2
+                            """
+
+                            _wt_conn = _get_duckdb_connection()
+                            try:
+                                frame = _wt_conn.execute(_wt_query).fetchdf()
+                            except Exception:
+                                # Fallback to raw loading
+                                frame = None
+
+                            if frame is not None and len(frame) > 0:
+                                table = ICUTable(
+                                    data=frame,
+                                    id_columns=[_wt_id_col],
+                                    index_column=_wt_time_col,
+                                    value_column=_wt_val_var,
+                                )
+                                table._pre_aggregated = True
+                                if verbose:
+                                    logger.info(f"   🚀 宽表单列DuckDB聚合: {source.table}.{_wt_val_var} -> {len(frame):,} 行")
+                            else:
+                                # Fallback
+                                table = data_source.load_table(
+                                    source.table,
+                                    columns=extra_columns if extra_columns else None,
+                                    filters=filters, verbose=verbose
+                                )
+                                frame = table.data.copy()
+                        else:
+                            table = data_source.load_table(
+                                source.table,
+                                columns=extra_columns if extra_columns else None,
+                                filters=filters, verbose=verbose
+                            )
+                            frame = table.data.copy()
                     else:
                         # 原始加载路径
                         table = data_source.load_table(
@@ -2953,6 +3327,39 @@ class ConceptResolver:
                         f"发现: {mismatched}",
                         UserWarning
                     )
+
+            db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+            if (
+                db_name in ['mimic', 'mimic_demo']
+                and source_index_column
+                and source_index_column in frame.columns
+                and pd.api.types.is_datetime64_any_dtype(frame[source_index_column])
+                and 'icustay_id' in frame.columns
+                and len(frame) > 0
+            ):
+                try:
+                    icustays_table = data_source.load_table(
+                        'icustays',
+                        columns=['icustay_id', 'intime'],
+                        verbose=False,
+                    )
+                    icustays_df = icustays_table.data if hasattr(icustays_table, 'data') else icustays_table
+                    if 'intime' in icustays_df.columns:
+                        intime_map = icustays_df[['icustay_id', 'intime']].drop_duplicates().copy()
+                        intime_map['intime'] = pd.to_datetime(intime_map['intime'], errors='coerce')
+                        if intime_map['intime'].dt.tz is not None:
+                            intime_map['intime'] = intime_map['intime'].dt.tz_localize(None)
+
+                        frame = frame.merge(intime_map, on='icustay_id', how='left')
+                        time_values = pd.to_datetime(frame[source_index_column], errors='coerce')
+                        if hasattr(time_values.dt, 'tz') and time_values.dt.tz is not None:
+                            time_values = time_values.dt.tz_localize(None)
+                        rel_minutes = np.floor((time_values - frame['intime']).dt.total_seconds() / 60.0)
+                        frame[source_index_column] = rel_minutes / 60.0
+                        frame = frame.drop(columns=['intime'], errors='ignore')
+                except Exception as e:
+                    if DEBUG_MODE:
+                        print(f"   ⚠️ [MIMIC-III] source级时间标准化失败: {e}")
                 
                 # 🔧 以下是被禁用的严格过滤逻辑（保留作为参考）
                 skip_unit_filter = True  # 与 R ricu 一致，不过滤数据
@@ -3402,6 +3809,69 @@ class ConceptResolver:
                 
                 if DEBUG_MODE:
                     print(f"   🔧 [MIMIC-III] 时间列统一完成, charttime 有效值: {combined['charttime'].notna().sum()}/{len(combined)}")
+
+            # Multi-source concat may leave charttime as object with a mix of
+            # relative-hour numerics and absolute datetimes. Converting the whole
+            # object column with pd.to_datetime() would reinterpret numeric hours
+            # as Unix epoch timestamps, producing huge negative relative times.
+            if 'charttime' in combined.columns and combined['charttime'].dtype == 'object':
+                raw_charttime = combined['charttime'].copy()
+                numeric_like_mask = raw_charttime.map(
+                    lambda value: (
+                        isinstance(value, (int, float, np.integer, np.floating))
+                        and not isinstance(value, bool)
+                    ) or (
+                        isinstance(value, str)
+                        and value.strip() != ''
+                        and pd.to_numeric(pd.Series([value]), errors='coerce').notna().iloc[0]
+                    )
+                )
+                datetime_like_mask = raw_charttime.map(
+                    lambda value: isinstance(value, (pd.Timestamp, datetime, np.datetime64))
+                )
+
+                charttime_numeric = pd.Series(np.nan, index=raw_charttime.index, dtype='float64')
+                if numeric_like_mask.any():
+                    charttime_numeric.loc[numeric_like_mask] = pd.to_numeric(
+                        raw_charttime.loc[numeric_like_mask],
+                        errors='coerce',
+                    )
+                combined['charttime'] = charttime_numeric
+
+                remaining_mask = datetime_like_mask | ((~numeric_like_mask) & raw_charttime.notna())
+                if remaining_mask.any():
+                    raw_time = pd.to_datetime(
+                        raw_charttime.loc[remaining_mask],
+                        errors='coerce',
+                    )
+                    if raw_time.notna().any() and 'icustay_id' in combined.columns:
+                        try:
+                            icustays_table = data_source.load_table(
+                                'icustays',
+                                columns=['icustay_id', 'intime'],
+                                verbose=False,
+                            )
+                            icustays_df = icustays_table.data if hasattr(icustays_table, 'data') else icustays_table
+                            if 'intime' in icustays_df.columns:
+                                icu_intime = icustays_df[['icustay_id', 'intime']].drop_duplicates().copy()
+                                icu_intime['intime'] = pd.to_datetime(icu_intime['intime'], errors='coerce')
+                                if icu_intime['intime'].dt.tz is not None:
+                                    icu_intime['intime'] = icu_intime['intime'].dt.tz_localize(None)
+
+                                converted = combined.loc[remaining_mask, ['icustay_id']].copy()
+                                converted['charttime_abs'] = raw_time.values
+                                if hasattr(converted['charttime_abs'].dt, 'tz') and converted['charttime_abs'].dt.tz is not None:
+                                    converted['charttime_abs'] = converted['charttime_abs'].dt.tz_localize(None)
+                                converted = converted.merge(icu_intime, on='icustay_id', how='left')
+                                rel_minutes = np.floor(
+                                    (converted['charttime_abs'] - converted['intime']).dt.total_seconds() / 60.0
+                                )
+                                combined.loc[remaining_mask, 'charttime'] = rel_minutes / 60.0
+                        except Exception as e:
+                            if DEBUG_MODE:
+                                print(f"   ⚠️ [MIMIC-III] charttime mixed-type 规范化失败: {e}")
+
+                combined['charttime'] = pd.to_numeric(combined['charttime'], errors='coerce')
         
         # 🔧 CRITICAL FIX 2026-03-10: Multi-source concat produces object dtype for value column
         # When frames from different sources (e.g., respiratorycharting + lab) are concatenated,
@@ -3436,59 +3906,45 @@ class ConceptResolver:
                     # 保留第一个出现的列，删除重复的
                     combined = combined.loc[:, ~combined.columns.duplicated()]
 
-                # 🚀 大数据集排序优化：使用 DuckDB 代替 pandas sort_values
-                # pandas sort_values 在 1.46亿行数据上需要 25 秒，而 DuckDB ORDER BY 只需 1.9 秒
-                DUCKDB_SORT_THRESHOLD = 10_000_000  # 超过 1000万行使用 DuckDB 排序
-                use_duckdb_sort = len(combined) > DUCKDB_SORT_THRESHOLD
-                
-                if use_duckdb_sort:
-                    try:
-                        import duckdb
-                        order_cols = ", ".join(sort_keys)
-                        combined = duckdb.query(f"SELECT * FROM combined ORDER BY {order_cols}").df()
-                        if DEBUG_MODE:
-                            logger.debug(f"🚀 使用 DuckDB 排序: {len(combined):,} 行, 键={sort_keys}")
-                    except Exception as e:
-                        # DuckDB 失败，回退到 pandas
-                        if DEBUG_MODE:
-                            logger.debug(f"DuckDB 排序失败，使用 pandas: {e}")
-                        use_duckdb_sort = False
-                
-                if not use_duckdb_sort:
-                    # 修复：确保排序键中的列具有一致的类型，避免混合类型排序问题
-                    try:
-                        combined = combined.sort_values(by=sort_keys)
-                    except TypeError as e:
-                        if 'ordered' in str(e) or 'not supported between instances' in str(e):
-                            # 处理混合类型排序问题
-                            if DEBUG_MODE:
-                                print(f"      [排序修复] 检测到混合类型排序问题: {e}")
-
-                            # 尝试逐个检查和修复排序键的类型
-                            cleaned_combined = combined.copy()
-                            for key in sort_keys:
-                                if key in cleaned_combined.columns:
-                                    # 如果是时间列，确保都是datetime类型
-                                    if 'time' in key.lower() or key == 'charttime':
-                                        try:
-                                            cleaned_combined[key] = pd.to_datetime(cleaned_combined[key], errors='coerce')
-                                        except Exception:
-                                            pass
-                                    # 如果有混合类型，转换为字符串进行排序
+                # 🚀 跳过中间排序：change_interval 使用 groupby 不需要预排序，
+                # merge_concepts_ricu_style 会做最终排序。
+                # 仅修复混合类型问题（DuckDB float64 + datetime64 concat → object）
+                for key in sort_keys:
+                    if key in combined.columns and combined[key].dtype == object:
+                        if 'time' in key.lower() or key == 'charttime':
+                            # Bug 32 fix: DuckDB返回float64(相对小时)，非DuckDB返回datetime64
+                            # concat后变为object dtype — 统一为float
+                            original = combined[key]
+                            numeric_vals = pd.to_numeric(original, errors='coerce')
+                            dt_mask = numeric_vals.isna() & original.notna()
+                            if dt_mask.any():
+                                dt_vals = pd.to_datetime(original[dt_mask], errors='coerce')
+                                if dt_vals.notna().any():
+                                    # 加载 intime 以转换 datetime → 相对小时
+                                    intime_col = None
+                                    if 'intime' in combined.columns:
+                                        intime_col = pd.to_datetime(combined.loc[dt_mask, 'intime'], errors='coerce')
                                     else:
                                         try:
-                                            # 尝试排序以检测问题
-                                            cleaned_combined.sort_values(by=[key])
-                                        except TypeError:
-                                            if DEBUG_MODE:
-                                                print(f"      [排序修复] 列{key}存在混合类型，转换为字符串")
-                                            cleaned_combined[key] = cleaned_combined[key].astype(str)
-
-                            # 重新排序
-                            combined = cleaned_combined.sort_values(by=sort_keys)
-                        else:
-                            # 其他类型的错误，重新抛出
-                            raise
+                                            icu_tbl = data_source.load_table('icustays',
+                                                columns=[id_columns[0], 'intime'], verbose=False)
+                                            icu_df = icu_tbl.data if hasattr(icu_tbl, 'data') else icu_tbl
+                                            if pd.api.types.is_datetime64_any_dtype(icu_df['intime']):
+                                                if hasattr(icu_df['intime'].dt, 'tz') and icu_df['intime'].dt.tz is not None:
+                                                    icu_df['intime'] = icu_df['intime'].dt.tz_localize(None)
+                                            combined = combined.merge(
+                                                icu_df[[id_columns[0], 'intime']], on=id_columns[0], how='left')
+                                            intime_col = pd.to_datetime(combined.loc[dt_mask, 'intime'], errors='coerce')
+                                        except Exception:
+                                            pass
+                                    if intime_col is not None:
+                                        if hasattr(intime_col.dt, 'tz') and intime_col.dt.tz is not None:
+                                            intime_col = intime_col.dt.tz_localize(None)
+                                        if hasattr(dt_vals.dt, 'tz') and dt_vals.dt.tz is not None:
+                                            dt_vals = dt_vals.dt.tz_localize(None)
+                                        rel_hours = np.floor((dt_vals - intime_col).dt.total_seconds() / 3600.0)
+                                        numeric_vals.loc[dt_mask] = rel_hours
+                            combined[key] = numeric_vals
         combined = combined.reset_index(drop=True)
         agg_value = self._coerce_final_aggregator(aggregator)
         if agg_value in (None, "auto"):
@@ -3820,7 +4276,6 @@ class ConceptResolver:
             # outlier values to participate in median aggregation (e.g. SIC epi_rate 1.9% error).
             if concept_name in combined.columns:
                 if definition.minimum is not None or definition.maximum is not None:
-                    combined = combined.copy()
                     combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
                 if definition.minimum is not None:
                     before_len = len(combined)
@@ -3844,6 +4299,9 @@ class ConceptResolver:
                 unit_column=final_unit_column,
                 time_columns=[col for col in time_columns if col],
             )
+            # 🚀 传播 DuckDB 预聚合标记：单源 DuckDB → 无需 change_interval groupby
+            if len(frames) <= 1 and _duckdb_source_count == 1:
+                temp_table._pre_aggregated = True
 
             fill_missing = self._should_fill_gaps(concept_name, definition)
             fill_method = self._get_fill_method(concept_name, definition)
@@ -4228,6 +4686,32 @@ class ConceptResolver:
                 data = data.merge(icustays_temp_df[[primary_id, 'intime']], on=primary_id, how='left')
             except Exception:
                 return data
+        
+        # 🔧 FIX Bug 32: Handle dtype=object time column from multi-source concat.
+        # When DuckDB returns float64 (relative hours) for one source and another source
+        # contributes datetime64 values, pd.concat produces dtype=object. Without this,
+        # is_numeric_dtype fails and the datetime path reinterprets float hours as
+        # nanosecond Unix timestamps (e.g., 38.0 → 1970-01-01), corrupting ALL rows
+        # to the same time value, which change_interval then collapses to 1 row.
+        # Example: MIIV o2sat — chartevents (DuckDB float64) + labevents (datetime64)
+        if data[index_column].dtype == 'object':
+            original_vals = data[index_column].copy()
+            numeric_vals = pd.to_numeric(original_vals, errors='coerce')
+            datetime_mask = numeric_vals.isna() & original_vals.notna()
+            
+            if datetime_mask.any() and 'intime' in data.columns:
+                # Convert datetime remnants to relative hours using already-available intime
+                dt_vals = pd.to_datetime(original_vals[datetime_mask], errors='coerce')
+                if dt_vals.notna().any():
+                    intime = pd.to_datetime(data.loc[datetime_mask, 'intime'], errors='coerce')
+                    if hasattr(intime.dt, 'tz') and intime.dt.tz is not None:
+                        intime = intime.dt.tz_localize(None)
+                    if hasattr(dt_vals.dt, 'tz') and dt_vals.dt.tz is not None:
+                        dt_vals = dt_vals.dt.tz_localize(None)
+                    rel_minutes = np.floor((dt_vals - intime).dt.total_seconds() / 60.0)
+                    numeric_vals.loc[datetime_mask] = rel_minutes / 60.0
+            
+            data[index_column] = numeric_vals
         
         # 若时间列已是numeric（相对小时），仍尝试按ICU窗口裁剪范围
         if pd.api.types.is_numeric_dtype(data[index_column]):
@@ -4622,9 +5106,18 @@ class ConceptResolver:
             # 将已加载的子概念数据缓存为原始数据
             with self._cache_lock:
                 for sub_name, sub_table in sub_tables.items():
-                    cache_key = (sub_name, patient_ids_hash)
-                    if cache_key not in self._raw_concept_cache:
-                        self._raw_concept_cache[cache_key] = sub_table
+                    sub_agg = (aggregate_mapping or {}).get(sub_name, "auto")
+                    if sub_agg in (None, "auto"):
+                        sub_def = self.dictionary.get(sub_name)
+                        if sub_def and sub_def.aggregate is not None:
+                            sub_agg = sub_def.aggregate
+                    self._store_raw_concept_cache(
+                        sub_name,
+                        patient_ids_hash,
+                        sub_table,
+                        aggregator=sub_agg,
+                        store_legacy=False,
+                    )
         
         ctx = ConceptCallbackContext(
             concept_name=concept_name,
@@ -4951,6 +5444,63 @@ class ConceptResolver:
         # 🔧 NOTE: 不过滤负时间（入ICU前的数据），ricu 保留这些数据
 
         return result
+
+    def _merge_partial_ricu_wide_result(
+        self,
+        merged_df: pd.DataFrame,
+        tables: Mapping[str, ICUTable],
+        concept_names: List[str],
+        covered_names: set[str],
+        data_source: Optional['ICUDataSource'] = None,
+    ) -> Optional[pd.DataFrame]:
+        """Merge a pre-built wide batch result with a small number of remaining simple tables."""
+        if merged_df is None or merged_df.empty:
+            return None
+
+        result = merged_df
+        id_col = result.columns[0]
+        if 'charttime' not in result.columns:
+            return None
+
+        remaining = [name for name in concept_names if name not in covered_names]
+
+        merge_keys = [id_col, 'charttime']
+
+        # 🚀 Collect remaining concept frames first, then merge with batch result once
+        # This avoids N sequential merges on the large batch DataFrame (12M+ rows).
+        # Instead: merge small remaining frames together, then single merge with batch.
+        remaining_frames = []
+        for name in remaining:
+            table = tables.get(name)
+            if table is None:
+                continue
+            if isinstance(table, WinTbl):
+                return None
+            if not hasattr(table, 'data') or getattr(table, 'index_column', None) != 'charttime':
+                return None
+            frame = table.data
+            if frame is None or frame.empty:
+                continue
+            if id_col not in frame.columns or 'charttime' not in frame.columns:
+                return None
+            if name not in frame.columns:
+                return None
+            frame = frame[merge_keys + [name]].drop_duplicates(subset=merge_keys, keep='last')
+            remaining_frames.append(frame)
+
+        if remaining_frames:
+            # Sort by size — merge smallest frames first to minimize intermediate sizes
+            remaining_frames.sort(key=len)
+            combined = remaining_frames[0]
+            for frame in remaining_frames[1:]:
+                combined = combined.merge(frame, on=merge_keys, how='outer', copy=False)
+            # Single merge with the large batch result
+            result = result.merge(combined, on=merge_keys, how='outer', copy=False)
+
+        final_cols = [id_col, 'charttime']
+        final_cols.extend([name for name in concept_names if name in result.columns])
+        final_cols.extend([c for c in result.columns if c not in final_cols])
+        return result[final_cols].reset_index(drop=True)
 
     @staticmethod
     def _build_sub_aggregate(
@@ -5923,10 +6473,19 @@ class ConceptResolver:
                 # �🚀🚀 关键优化：如果原始数据已存在于 _raw_concept_cache，
                 # 直接从缓存中获取并应用当前的 interval/aggregate，避免重复读取数据库！
                 # 这解决了 dopa_dur 在 vaso_ind、sofa_cardio、dopa60 中被重复加载的问题
-                raw_cache_key = (concept_name, patient_ids_hash)
                 is_simple_aggregator = agg_value in (None, False, "auto") or isinstance(agg_value, str)
-                if raw_cache_key in self._raw_concept_cache and is_simple_aggregator:
-                    raw_cached = self._raw_concept_cache[raw_cache_key]
+                # 🔧 FIX: 特定聚合器 (min/max/sum 等) 不应退回到 None/auto 缓存
+                # 否则 pafi 请求 po2(min) 会命中批量加载缓存的 po2(median)
+                _is_specific_agg = isinstance(agg_value, str) and agg_value not in (None, "auto")
+                raw_cached = None
+                if is_simple_aggregator:
+                    raw_cached = self._get_raw_concept_from_cache(
+                        concept_name,
+                        patient_ids_hash,
+                        aggregator=agg_value,
+                        allow_aggregated=not _is_specific_agg,
+                    )
+                if raw_cached is not None:
                     if hasattr(raw_cached, 'copy'):
                         raw_cached = raw_cached.copy()
                     if verbose and logger.isEnabledFor(logging.DEBUG):
@@ -5942,7 +6501,7 @@ class ConceptResolver:
                     
                     # 缓存处理后的结果
                     self._concept_data_cache[concept_cache_key] = result
-                    return result.copy() if hasattr(result, 'copy') else result
+                    return result
                 
                 # �🔧 FIX: 移除旧的简单缓存和概念缓存回退逻辑
                 # 这些旧缓存不区分聚合方式，导致错误的缓存命中
@@ -6007,9 +6566,11 @@ class ConceptResolver:
             if disk_hit is not None:
                 with self._cache_lock:
                     self._concept_cache[concept_name] = disk_hit
-                    # 🚀 存入缓存时 copy，返回时无需 copy
-                    self._concept_data_cache[concept_cache_key] = disk_hit.copy() if hasattr(disk_hit, 'copy') else disk_hit
+                    self._concept_data_cache[concept_cache_key] = disk_hit
                     self._get_inflight().discard(concept_name)
+                # Return a copy to prevent caller from corrupting cached data
+                if hasattr(disk_hit, 'copy'):
+                    return disk_hit.copy()
                 return disk_hit
 
         try:
@@ -6184,9 +6745,13 @@ class ConceptResolver:
                 # 🚀 同时存入 _raw_concept_cache，供回调函数使用
                 # 共享同一个引用，避免重复内存开销
                 # 🔧 FIX 2026-03-10: Include aggregator in key to prevent cross-aggregation pollution
-                raw_cache_key = (concept_name, patient_ids_hash, str(agg_value))
-                if raw_cache_key not in self._raw_concept_cache:
-                    self._raw_concept_cache[raw_cache_key] = result
+                self._store_raw_concept_cache(
+                    concept_name,
+                    patient_ids_hash,
+                    result,
+                    aggregator=agg_value,
+                    store_legacy=interval is None and agg_value in (None, False, "auto"),
+                )
                 
                 self._get_inflight().discard(concept_name)
         else:
@@ -6670,10 +7235,12 @@ class ConceptResolver:
         # 将ICUTable/WinTbl/IdTbl转换为DataFrame字典
         # 🔧 FIX 2026-03-10: WinTbl inherits from IdTbl (not ICUTable), so isinstance(table, ICUTable)
         # fails for WinTbl/TsTbl/IdTbl. Use hasattr(table, 'data') as a generic check.
+        # 🚀 优化：不再 .copy()。merge_concepts_ricu_style 的 rename/drop_duplicates 
+        # 都会创建新对象，不会修改原始 DataFrame。缓存在顶层 finally 中清空。
         concept_data: Dict[str, pd.DataFrame] = {}
         for name, table in tables.items():
             if isinstance(table, ICUTable):
-                df = table.data.copy()
+                df = table.data
                 # 重命名值列为概念名
                 if name not in df.columns:
                     # 查找可能的值列 - 优先使用 ICUTable 元数据中的 value_column
@@ -6688,7 +7255,7 @@ class ConceptResolver:
                 concept_data[name] = df
             elif hasattr(table, 'data') and isinstance(table.data, pd.DataFrame):
                 # Handle WinTbl/TsTbl/IdTbl which have .data but don't inherit from ICUTable
-                df = table.data.copy()
+                df = table.data
                 if name not in df.columns:
                     # For WinTbl, try index_var as value column candidate
                     value_candidates = ['value', 'valuenum']
@@ -6700,7 +7267,7 @@ class ConceptResolver:
                             break
                 concept_data[name] = df
             elif isinstance(table, pd.DataFrame):
-                df = table.copy()
+                df = table
                 if name not in df.columns:
                     for cand in ['value', 'valuenum']:
                         if cand in df.columns and cand != name:
@@ -6714,26 +7281,20 @@ class ConceptResolver:
         # 检测ID列和时间列
         id_col = None
         time_col = None
+        _time_candidates = ['charttime', 'datetime', 'givenat', 'time', 'starttime', 'start', 'index_var',
+                     'measuredat_minutes', 'measuredat',  # AUMC: measuredat_minutes first!
+                     'Offset', 'offset',  # SICdb: Offset (uppercase)
+                     'nursingchartoffset', 'labresultoffset', 'observationoffset',
+                     'respchartoffset', 'intakeoutputoffset', 'infusionoffset']
         for df in concept_data.values():
             if df is None or df.empty:
                 continue
-            # 检测ID列 - 使用数据库特定的优先级
-            # 🔧 FIX 2025-01-31: 优先检测数据库特定的ID列
-            # 🔧 FIX 2026-01-26: 添加 CaseID, caseid, icustay_id 支持 MIMIC-III 和 SICdb
             id_candidates = [default_id_col, 'CaseID', 'caseid', 'icustay_id', 'stay_id', 'subject_id', 'patientunitstayid', 'admissionid', 'patientid']
             for cand in id_candidates:
                 if cand in df.columns:
                     id_col = cand
                     break
-            # 检测时间列 - FIX: 优先使用 charttime 以保持输出一致性
-            # 所有数据库的输出都应该使用统一的 'charttime' 列名
-            # 🔧 FIX 2025-01-30: measuredat_minutes 应该在 measuredat 之前，因为 DuckDB 聚合后返回的是 measuredat_minutes
-            # 🔧 FIX 2026-01-26: 添加 Offset 支持 SICdb
-            for cand in ['charttime', 'datetime', 'givenat', 'time', 'starttime', 'start', 'index_var',
-                         'measuredat_minutes', 'measuredat',  # AUMC: measuredat_minutes first!
-                         'Offset', 'offset',  # SICdb: Offset (uppercase)
-                         'nursingchartoffset', 'labresultoffset', 'observationoffset',
-                         'respchartoffset', 'intakeoutputoffset', 'infusionoffset']:
+            for cand in _time_candidates:
                 if cand in df.columns:
                     time_col = cand
                     break
@@ -6741,9 +7302,23 @@ class ConceptResolver:
                 break
         
         if not id_col:
-            id_col = default_id_col  # 🔧 FIX: 使用数据库特定的默认值
+            id_col = default_id_col
         if not time_col:
-            time_col = 'charttime'  # 默认值
+            time_col = 'charttime'
+        
+        # 🔧 FIX: 标准化每个概念 DataFrame 的时间列名
+        # DuckDB path 输出 'charttime'，raw path 输出原始列名（如 SIC 的 'Offset'）
+        # 如果不统一，merge 时会因时间列名不同而丢失数据
+        for name in list(concept_data.keys()):
+            df = concept_data[name]
+            if df is None or df.empty:
+                continue
+            if time_col in df.columns:
+                continue
+            for cand in _time_candidates:
+                if cand in df.columns:
+                    concept_data[name] = df.rename(columns={cand: time_col})
+                    break
         
         # 使用ricu_compat模块进行合并
         result = ricu_compat.merge_concepts_ricu_style(
@@ -6771,17 +7346,30 @@ class ConceptResolver:
         if time_col != 'charttime' and time_col in result.columns:
             result = result.rename(columns={time_col: 'charttime'})
         
+        # 🚀 内存优化：将 float64 值列降级为 float32
+        # 临床数据精度（HR=80, MAP=65.5, FiO2=0.21）完全在 float32 范围内（~7位有效数字）
+        # 对 198K 患者 × 15 概念可节省 ~800MB
+        import numpy as np
+        for col in result.columns:
+            if result[col].dtype == np.float64 and col not in (id_col, 'charttime', time_col):
+                result[col] = result[col].astype(np.float32)
+        
         return result
+
+
+@functools.lru_cache(maxsize=1)
+def _load_concept_dict_cached():
+    """Load concept-dict.json once and cache in memory."""
+    import json
+    dict_path = Path(__file__).parent / 'data' / 'concept-dict.json'
+    with open(dict_path) as f:
+        return json.load(f)
 
 
 def _get_concept_bounds(concept_name: str, bound: str) -> Optional[float]:
     """Get min/max bounds from concept-dict.json for filter_bounds."""
     try:
-        import json
-        from pathlib import Path
-        dict_path = Path(__file__).parent / 'data' / 'concept-dict.json'
-        with open(dict_path) as f:
-            d = json.load(f)
+        d = _load_concept_dict_cached()
         c = d.get(concept_name, {})
         val = c.get(bound)
         return float(val) if val is not None else None
@@ -7066,7 +7654,10 @@ def _apply_callback(
                 series = series.where(~mask, fallback_series)
                 mask = missing_mask(series)
 
-        frame.loc[:, concept_name] = series.apply(parse_percent)
+        # 🚀 向量化：避免 222k+ 次 Python 函数调用
+        frame.loc[:, concept_name] = pd.to_numeric(
+            series.astype(str).str.strip().str.rstrip('%'), errors='coerce'
+        )
         return frame
 
     match = re.fullmatch(r"transform_fun\(set_val\((.+)\)\)", expr, flags=re.DOTALL)

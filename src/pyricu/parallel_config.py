@@ -15,9 +15,22 @@ Usage:
 import os
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from math import ceil
+from typing import Dict, Iterable, Optional
 
 logger = logging.getLogger(__name__)
+
+_HEAVY_CONCEPTS = {
+    'sofa',
+    'sofa2',
+    'sofa_resp',
+    'sep3',
+    'sep3_sofa2',
+    'kdigo_aki',
+    'aki',
+    'pafi',
+    'safi',
+}
 
 
 @dataclass
@@ -256,6 +269,106 @@ def get_recommended_batch_size(
     
     # 确保至少1000
     return max(1000, recommended)
+
+
+def get_runtime_load_strategy(
+    concepts: Optional[Iterable[str]] = None,
+    *,
+    num_patients: Optional[int] = None,
+    chunk_size: Optional[int] = None,
+    requested_concept_workers: Optional[int] = None,
+    requested_parallel_workers: Optional[int] = None,
+    requested_backend: Optional[str] = None,
+    config: Optional[ParallelConfig] = None,
+) -> Dict[str, object]:
+    """Return a balanced runtime strategy for speed and memory.
+
+    The policy is intentionally conservative on low-memory machines and more
+    permissive on servers. Explicit user-provided worker/backend values always
+    win over auto-tuning.
+    """
+    config = config or get_global_config()
+    normalized = [str(name).lower() for name in (concepts or [])]
+    num_concepts = max(1, len(normalized))
+    heavy_request = any(name in _HEAVY_CONCEPTS for name in normalized)
+    very_large_request = num_patients is not None and num_patients >= 5000
+    medium_large_request = num_patients is not None and num_patients >= 2000
+    available_mem = config.available_memory_gb
+    cpu_count = max(1, config.cpu_count)
+
+    if requested_concept_workers is not None:
+        concept_workers = max(1, int(requested_concept_workers))
+    else:
+        if available_mem < 6:
+            concept_cap = 1
+        elif available_mem < 12:
+            concept_cap = 2 if num_concepts >= 4 and not heavy_request else 1
+        elif available_mem < 24:
+            concept_cap = 2 if not heavy_request else 1
+        elif heavy_request:
+            concept_cap = 2
+        else:
+            concept_cap = min(3, max(2, cpu_count // 6))
+        concept_workers = max(1, min(num_concepts, concept_cap, config.max_workers))
+
+    chunking_active = chunk_size is not None or very_large_request
+    if requested_parallel_workers is not None:
+        parallel_workers = max(1, int(requested_parallel_workers))
+    elif chunking_active:
+        if available_mem < 8:
+            parallel_cap = 1
+        elif available_mem < 16:
+            parallel_cap = 2
+        elif available_mem < 32:
+            parallel_cap = 2 if heavy_request else 3
+        elif available_mem < 64:
+            parallel_cap = 3 if heavy_request else 4
+        else:
+            parallel_cap = 4 if heavy_request else 6
+
+        if heavy_request and very_large_request:
+            if available_mem < 64:
+                parallel_cap = min(parallel_cap, 2)
+            else:
+                parallel_cap = min(parallel_cap, 3)
+
+        if concept_workers > 1:
+            parallel_cap = max(1, parallel_cap - 1)
+        if num_patients is not None:
+            effective_chunk = max(1, int(chunk_size or get_recommended_batch_size(
+                config=config,
+                num_concepts=num_concepts,
+            )))
+            total_batches = max(1, ceil(num_patients / effective_chunk))
+            parallel_workers = min(parallel_cap, total_batches)
+        else:
+            parallel_workers = parallel_cap
+    else:
+        parallel_workers = 1
+
+    if requested_backend:
+        backend = requested_backend
+    else:
+        if available_mem < 64 or heavy_request:
+            backend = "thread"
+        elif very_large_request and cpu_count >= 24 and config.performance_tier in {"server", "high-performance"}:
+            backend = "process"
+        else:
+            backend = "thread"
+
+    preserve_concept_cache = (
+        config.enable_concept_cache
+        and num_concepts > 1
+        and not (heavy_request and available_mem < 12 and very_large_request)
+    )
+
+    return {
+        "concept_workers": max(1, int(concept_workers)),
+        "parallel_workers": max(1, int(parallel_workers)),
+        "parallel_backend": backend,
+        "preserve_concept_cache": bool(preserve_concept_cache),
+        "heavy_request": heavy_request,
+    }
 
 
 # 全局配置缓存
