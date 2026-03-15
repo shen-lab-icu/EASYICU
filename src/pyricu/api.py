@@ -229,6 +229,7 @@ def _query_patient_ids_fast(
     id_col: str,
     *,
     limit: Optional[int] = None,
+    offset: Optional[int] = None,
     sample_strategy: str = 'sorted',
 ) -> Optional[List]:
     """Fetch distinct patient IDs via DuckDB, avoiding full-table pandas loads."""
@@ -246,11 +247,12 @@ def _query_patient_ids_fast(
         order_expr = f'hash("{id_col}")'
 
     limit_clause = f' LIMIT {int(limit)}' if limit and limit > 0 else ''
+    offset_clause = f' OFFSET {int(offset)}' if offset and offset > 0 else ''
     query = (
         f'SELECT DISTINCT "{id_col}" AS patient_id '
         f'FROM {scan_expr} '
         f'WHERE "{id_col}" IS NOT NULL '
-        f'ORDER BY {order_expr}{limit_clause}'
+        f'ORDER BY {order_expr}{limit_clause}{offset_clause}'
     )
 
     conn = duckdb.connect()
@@ -380,6 +382,61 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
         return None
 
 
+def _get_patient_id_source(loader: 'BaseICULoader') -> tuple[str, str]:
+    """Return the canonical (table_name, id_col) pair for a database."""
+    id_table_map = {
+        'miiv': ('icustays', 'stay_id'),
+        'mimic': ('icustays', 'icustay_id'),
+        'mimic_demo': ('icustays', 'icustay_id'),
+        'eicu': ('patient', 'patientunitstayid'),
+        'eicu_demo': ('patient', 'patientunitstayid'),
+        'aumc': ('admissions', 'admissionid'),
+        'hirid': ('general', 'patientid'),
+        'sic': ('cases', 'CaseID'),
+    }
+    return id_table_map.get(loader.database, ('icustays', 'stay_id'))
+
+
+def _iter_patient_id_batches(
+    loader: 'BaseICULoader',
+    batch_size: int,
+    *,
+    total_patients: Optional[int] = None,
+    sample_strategy: str = 'sorted',
+):
+    """Yield patient-id batches directly from storage without materializing the full ID list."""
+    table_name, id_col = _get_patient_id_source(loader)
+    remaining = total_patients
+    offset = 0
+
+    while remaining is None or remaining > 0:
+        limit = batch_size if remaining is None else min(batch_size, remaining)
+        batch_ids = _query_patient_ids_fast(
+            loader,
+            table_name,
+            id_col,
+            limit=limit,
+            offset=offset,
+            sample_strategy=sample_strategy,
+        )
+
+        if batch_ids is None:
+            all_ids = _sample_patient_ids(loader, total_patients or 999999999, verbose=False, sample_strategy=sample_strategy)
+            if not all_ids:
+                return
+            for start in range(0, len(all_ids), batch_size):
+                yield {id_col: all_ids[start:start + batch_size]}
+            return
+
+        if not batch_ids:
+            return
+
+        yield {id_col: batch_ids}
+        offset += len(batch_ids)
+        if remaining is not None:
+            remaining -= len(batch_ids)
+
+
 def _get_total_patient_count(loader: 'BaseICULoader') -> Optional[int]:
     """
     快速获取数据库中的总患者数（用于自动分批决策）。
@@ -505,27 +562,16 @@ def _get_smart_workers(num_concepts: int, num_patients: Optional[int] = None) ->
     if os.getenv('PYRICU_NO_AUTO_PARALLEL'):
         return 1, None
     
-    # 使用统一的并行配置模块
-    from .parallel_config import get_global_config
-    config = get_global_config()
-    
-    # 🚀 策略1: 基于系统资源的概念级并行
-    # 使用 parallel_config 计算的最大工作线程数
-    if num_concepts >= 3:
-        concept_workers = min(num_concepts, config.max_workers)
-    elif num_concepts == 2:
-        concept_workers = min(2, config.max_workers)
-    else:
-        concept_workers = 1
-    
-    # 🚀 策略2: 大量患者时启用患者批次并行
-    # 患者数 > 5000 时，分批处理更高效
-    parallel_workers = None  # 默认不分批
-    if num_patients is not None and num_patients > 5000:
-        # 基于系统资源的分批并行
-        parallel_workers = min(config.max_workers, 4)
-    
-    return concept_workers, parallel_workers
+    from .parallel_config import get_global_config, get_runtime_load_strategy
+
+    strategy = get_runtime_load_strategy(
+        [f"concept_{i}" for i in range(num_concepts)],
+        num_patients=num_patients,
+        config=get_global_config(),
+    )
+    concept_workers = int(strategy["concept_workers"])
+    parallel_workers = int(strategy["parallel_workers"])
+    return concept_workers, (parallel_workers if parallel_workers > 1 else None)
 
 
 def _is_low_memory_chunk_candidate(
@@ -582,7 +628,7 @@ def _get_auto_chunk_strategy(
     if num_patients is None or num_patients < 2000:
         return None
 
-    from .parallel_config import get_global_config
+    from .parallel_config import get_global_config, get_runtime_load_strategy
     from .memory_manager import get_available_memory_mb
 
     config = get_global_config()
@@ -626,18 +672,17 @@ def _get_auto_chunk_strategy(
     if num_patients is not None:
         auto_chunk_size = min(auto_chunk_size, max(250, int(num_patients)))
 
-    if 'PYRICU_AUTO_CHUNK_WORKERS' in os.environ:
-        auto_parallel_cap = max(1, int(os.getenv('PYRICU_AUTO_CHUNK_WORKERS', '8')))
-    elif available_memory_mb >= 10 * 1024:
-        auto_parallel_cap = 8
-    elif available_memory_mb >= 6 * 1024:
-        auto_parallel_cap = 6
-    else:
-        auto_parallel_cap = 4
-
     batches = max(1, (num_patients + auto_chunk_size - 1) // auto_chunk_size)
-    tuned_parallel_workers = parallel_workers if parallel_workers is not None else min(config.max_workers, auto_parallel_cap, batches)
-    tuned_concept_workers = concept_workers if concept_workers is not None else 1
+    runtime_strategy = get_runtime_load_strategy(
+        concepts_list,
+        num_patients=num_patients,
+        chunk_size=auto_chunk_size,
+        requested_concept_workers=concept_workers,
+        requested_parallel_workers=parallel_workers,
+        config=config,
+    )
+    tuned_parallel_workers = min(int(runtime_strategy['parallel_workers']), batches)
+    tuned_concept_workers = int(runtime_strategy['concept_workers'])
 
     return {
         'chunk_size': auto_chunk_size,
@@ -728,6 +773,9 @@ def load_concepts(
         # === 其他 ===
         merge: 是否合并多个概念到一个DataFrame
         verbose: 是否显示详细信息
+        max_patients: 自动采样的患者上限
+        limit: max_patients 的别名
+        n_patients: max_patients 的兼容别名（可通过 kwargs 传入）
         **kwargs: 其他参数传递给底层API
 
     Returns:
@@ -816,10 +864,34 @@ def load_concepts(
                 patient_ids = {id_key: kwargs.pop(id_key)}
                 break
 
+    # 🚀 处理患者数量别名（兼容旧测试/benchmark）
+    n_patients_alias = kwargs.pop('n_patients', None)
+    if (
+        n_patients_alias is not None
+        and max_patients is not None
+        and int(n_patients_alias) != int(max_patients)
+    ):
+        raise ValueError(
+            f"收到冲突的患者上限参数: n_patients={n_patients_alias}, "
+            f"max_patients={max_patients}"
+        )
+    if (
+        n_patients_alias is not None
+        and limit is not None
+        and int(n_patients_alias) != int(limit)
+        and max_patients is None
+    ):
+        raise ValueError(
+            f"收到冲突的患者上限参数: n_patients={n_patients_alias}, "
+            f"limit={limit}"
+        )
+
     # 🚀 处理 limit 别名（兼容性）
     effective_max_patients = max_patients
     if effective_max_patients is None and limit is not None:
         effective_max_patients = limit
+    if effective_max_patients is None and n_patients_alias is not None:
+        effective_max_patients = int(n_patients_alias)
 
     # 🚀 max_patients 支持：自动从数据库采样患者ID
     if effective_max_patients is not None and patient_ids is None:
@@ -859,11 +931,22 @@ def load_concepts(
     effective_parallel_workers = parallel_workers
     
     if concept_workers is None or parallel_workers is None:
-        smart_concept, smart_parallel = _get_smart_workers(len(concepts_list), inferred_total_patients)
+        from .parallel_config import get_global_config, get_runtime_load_strategy
+
+        runtime_strategy = get_runtime_load_strategy(
+            concepts_list,
+            num_patients=inferred_total_patients,
+            chunk_size=chunk_size,
+            requested_concept_workers=concept_workers,
+            requested_parallel_workers=parallel_workers,
+            requested_backend=parallel_backend if parallel_backend != 'auto' else None,
+            config=get_global_config(),
+        )
         if concept_workers is None:
-            effective_concept_workers = smart_concept
+            effective_concept_workers = int(runtime_strategy['concept_workers'])
         if parallel_workers is None:
-            effective_parallel_workers = smart_parallel
+            auto_parallel = int(runtime_strategy['parallel_workers'])
+            effective_parallel_workers = auto_parallel if auto_parallel > 1 else None
         
         if verbose and (effective_concept_workers > 1 or effective_parallel_workers):
             print(f"   ⚡ 智能优化: concept_workers={effective_concept_workers}, "
@@ -927,11 +1010,12 @@ def load_concepts(
     from .memory_manager import (
         auto_batch_size, estimate_memory_mb, release_memory,
         get_available_memory_mb, get_rss_mb, inprocess_batch_load,
-        subprocess_batch_load,
+        inprocess_batch_load_streaming, subprocess_batch_load,
     )
     
     effective_batch_size = batch_size
     use_subprocess = False
+    use_streaming_patient_batches = False
     
     # 提取患者ID信息
     _id_col = None
@@ -956,28 +1040,19 @@ def load_concepts(
                 avail_mem = get_available_memory_mb()
                 
                 if est_mem > avail_mem * 0.6:
-                    # 需要分批 — 自动采样所有患者ID
-                    patient_ids = _sample_patient_ids(loader, _total_patients_in_db, verbose,
-                                                      sample_strategy='sorted')
-                    if patient_ids is not None:
-                        # 规范化
-                        patient_ids = _normalize_patient_ids_for_db(loader.database, patient_ids)
-                        
-                        _id_col = list(patient_ids.keys())[0]
-                        _all_ids = list(patient_ids.values())[0]
-                        _total_patients = len(_all_ids)
-                        
-                        effective_batch_size = auto_batch_size(
-                            concepts_list, loader.database, _total_patients, avail_mem
-                        )
-                        
-                        if verbose and effective_batch_size:
-                            print(f"📊 全量加载 {_total_patients} patients, "
-                                  f"估算峰值 {est_mem:.0f}MB > 可用 {avail_mem:.0f}MB×60%, "
-                                  f"自动分批: batch_size={effective_batch_size}")
-                        
-                        # 小内存环境使用子进程隔离
-                        use_subprocess = avail_mem < 16 * 1024
+                    _total_patients = _total_patients_in_db
+                    effective_batch_size = auto_batch_size(
+                        concepts_list, loader.database, _total_patients, avail_mem
+                    )
+
+                    if verbose and effective_batch_size:
+                        print(f"📊 全量加载 {_total_patients} patients, "
+                              f"估算峰值 {est_mem:.0f}MB > 可用 {avail_mem:.0f}MB×60%, "
+                              f"自动分批: batch_size={effective_batch_size}")
+
+                    # 小内存环境使用子进程隔离；进程内路径优先走流式 patient batch
+                    use_subprocess = avail_mem < 16 * 1024
+                    use_streaming_patient_batches = effective_batch_size is not None
         except Exception as e:
             logger.debug(f"自动分批检测失败: {e}")
     
@@ -1054,6 +1129,61 @@ def load_concepts(
                 final_result = _compress_dtypes(final_result, verbose=verbose)
             
             return final_result
+
+    if (
+        effective_batch_size is not None
+        and use_streaming_patient_batches
+        and _total_patients is not None
+        and patient_ids is None
+    ):
+        load_kwargs = dict(
+            interval=interval,
+            win_length=win_length,
+            aggregate=aggregate,
+            keep_components=keep_components,
+            merge=merge,
+            ricu_compatible=ricu_compatible,
+            chunk_size=effective_chunk_size,
+            progress=progress,
+            parallel_workers=effective_parallel_workers,
+            concept_workers=effective_concept_workers,
+            parallel_backend=parallel_backend,
+            **kwargs,
+        )
+        if use_subprocess:
+            patient_ids = _sample_patient_ids(loader, _total_patients, verbose, sample_strategy='sorted')
+            if patient_ids is not None:
+                patient_ids = _normalize_patient_ids_for_db(loader.database, patient_ids)
+                _id_col = list(patient_ids.keys())[0]
+                _all_ids = list(patient_ids.values())[0]
+                return subprocess_batch_load(
+                    concepts=concepts_list,
+                    database=loader.database,
+                    all_patient_ids={_id_col: _all_ids},
+                    batch_size=effective_batch_size,
+                    data_path=str(loader.data_path) if hasattr(loader, 'data_path') else None,
+                    verbose=verbose,
+                    merge=merge,
+                    ricu_compatible=ricu_compatible,
+                    dict_path=dict_path,
+                    use_sofa2=use_sofa2,
+                    **load_kwargs,
+                )
+        return inprocess_batch_load_streaming(
+            loader=loader,
+            concepts=concepts_list,
+            patient_batches=_iter_patient_id_batches(
+                loader,
+                effective_batch_size,
+                total_patients=_total_patients,
+                sample_strategy='sorted',
+            ),
+            total_patients=_total_patients,
+            batch_size=effective_batch_size,
+            verbose=verbose,
+            memory_efficient=memory_efficient,
+            **load_kwargs,
+        )
 
     # 使用统一加载器加载概念
     result = loader.load_concepts(
@@ -2693,4 +2823,3 @@ def get_smart_parallel_config(
         >>> print(f"概念并行: {concept_workers}, 患者批次并行: {parallel_workers}")
     """
     return _get_smart_workers(num_concepts, num_patients)
-

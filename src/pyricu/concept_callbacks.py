@@ -3256,285 +3256,133 @@ def _match_fio2(
     
     if mode == "match_vals":
         # Rolling join: merge o2 and fio2 within time window
-        # This matches R's rolling join behavior
-        o2_df = o2_tbl.data.copy()
-        fio2_df = fio2_tbl.data.copy()
-        
-        # CRITICAL FIX: Standardize time column names before processing
-        # o2_tbl and fio2_tbl may have different index_column names (e.g., 'charttime' vs 'measuredat_minutes')
-        # We need to rename them to a common name for merge_asof to work
+        # 🚀 Optimized: avoid full-table copies, skip datetime conversion for numeric time,
+        # use single merge_asof (matching R ricu's single rolling join)
+
+        # Detect time columns and value columns
         o2_idx_col = o2_tbl.index_column
         fio2_idx_col = fio2_tbl.index_column
-        
-        # 🔧 FIX 2025-01-30: 智能检测并统一时间列
-        # 问题场景：
-        #   - _assert_shared_schema 返回 index_column='measuredat'（来自 ICUTable.index_column 属性）
-        #   - 但实际数据列是 'measuredat_minutes'（来自 DuckDB 聚合）
-        # 解决方案：检测数据中实际存在的时间列，并统一重命名为 charttime
-        
+        o2_val_col = o2_tbl.value_column or o2_col
+        fio2_val_col = fio2_tbl.value_column or fio2_col
+
         time_col_priority = ['charttime', 'measuredat_minutes', 'datetime', 'givenat', 'measuredat']
-        
-        def detect_actual_time_col(df, declared_idx_col):
-            """检测数据中实际的时间列"""
-            # 优先使用声明的 index_column（如果在数据中存在且有有效值）
-            if declared_idx_col and declared_idx_col in df.columns:
-                if not df[declared_idx_col].isna().all():
-                    return declared_idx_col
-            # 按优先级查找有有效值的时间列
+
+        def _detect_time_col(df, declared):
+            if declared and declared in df.columns and not df[declared].isna().all():
+                return declared
             for col in time_col_priority:
                 if col in df.columns and not df[col].isna().all():
                     return col
-            # 回退到声明的列（即使全是 NaN）
-            return declared_idx_col
-        
-        o2_actual_time_col = detect_actual_time_col(o2_df, o2_idx_col)
-        fio2_actual_time_col = detect_actual_time_col(fio2_df, fio2_idx_col)
-        
-        # 统一使用 'charttime' 作为标准时间列名
+            return declared
+
+        o2_actual_time = _detect_time_col(o2_tbl.data, o2_idx_col)
+        fio2_actual_time = _detect_time_col(fio2_tbl.data, fio2_idx_col)
         unified_time_col = 'charttime'
-        
-        # 删除冗余的时间列，只保留实际使用的那个
-        for df_ref, actual_col in [(o2_df, o2_actual_time_col), (fio2_df, fio2_actual_time_col)]:
-            cols_to_drop = [col for col in time_col_priority 
-                           if col in df_ref.columns and col != actual_col]
-            if cols_to_drop:
-                df_ref.drop(columns=cols_to_drop, inplace=True)
-            
-            # 重命名为统一的时间列名
-            if actual_col and actual_col != unified_time_col and actual_col in df_ref.columns:
-                df_ref.rename(columns={actual_col: unified_time_col}, inplace=True)
-        
-        # 更新 index_column 为统一的时间列名
         index_column = unified_time_col
-        o2_idx_col = unified_time_col
-        fio2_idx_col = unified_time_col
-        
-        # Rename value columns
-        o2_val_col = o2_tbl.value_column or o2_col
-        fio2_val_col = fio2_tbl.value_column or fio2_col
-        
-        if o2_val_col != o2_col:
-            o2_df = o2_df.rename(columns={o2_val_col: o2_col})
-        if fio2_val_col != fio2_col:
-            fio2_df = fio2_df.rename(columns={fio2_val_col: fio2_col})
-        
-        # Use pd.merge_asof for rolling join (similar to R's data.table rolling join)
-        if index_column:
-            # 时间列已在上面统一为 unified_time_col，无需再次重命名
-            
-            # 保存原始时间列类型（numeric或datetime）
-            o2_time_is_numeric = pd.api.types.is_numeric_dtype(o2_df[index_column])
-            fio2_time_is_numeric = pd.api.types.is_numeric_dtype(fio2_df[index_column])
-            # 统一用于 numeric<->datetime 临时转换的基准时间
-            base_time = pd.Timestamp('2000-01-01')
-            
-            # Convert to datetime if not already (但不转换numeric类型)
-            # 对于numeric类型，merge_asof需要先转换为datetime，然后在merge后转换回numeric
-            if not o2_time_is_numeric:
-                o2_df[index_column] = pd.to_datetime(o2_df[index_column], errors='coerce')
-            if not fio2_time_is_numeric:
-                fio2_df[index_column] = pd.to_datetime(fio2_df[index_column], errors='coerce')
-            
-            # 如果原始时间列是numeric类型，需要临时转换为datetime进行merge_asof
-            # 然后在merge后转换回numeric类型
-            o2_time_backup = None
-            # 🔧 FIX: 根据数据库选择正确的时间单位
-            # - AUMC: 原始数据是毫秒 -> datasource.py 转换为分钟 -> _align_time_to_admission 转换为小时
-            # - SIC: 原始数据是秒 -> _align_time_to_admission 转换为小时
-            # - 其他数据库: 通常是小时
-            numeric_unit = 'h'  # 所有数据库在 _align_time_to_admission 后都使用小时
-            if o2_time_is_numeric:
-                o2_time_backup = o2_df[index_column]
-                # 对于numeric类型，需要转换为datetime进行merge_asof
-                o2_df = o2_df.copy()  # Only copy when we need to modify
-                o2_df[index_column] = base_time + pd.to_timedelta(o2_df[index_column], unit=numeric_unit)
-            if fio2_time_is_numeric:
-                fio2_df[index_column]
-                fio2_df = fio2_df.copy()  # Only copy when we need to modify
-                fio2_df[index_column] = base_time + pd.to_timedelta(fio2_df[index_column], unit=numeric_unit)
-            
-            # 确保数据在每个by分组内都是排序的（merge_asof的严格要求）
-            # 先选择需要的列，然后排序
-            o2_subset = o2_df[id_columns + [index_column, o2_col]]
-            fio2_subset = fio2_df[id_columns + [index_column, fio2_col]]
 
-            # 新增：数据库自适应的FiO2单位标准化
-            if database is not None and not fio2_subset.empty:
-                logger.debug(f"开始FiO2单位标准化: database={database}, fio2_col={fio2_col}, 数据行数={len(fio2_subset)}")
-                # 调试：显示原始数据范围
-                if fio2_col in fio2_subset.columns:
-                    orig_values = fio2_subset[fio2_col].dropna()
-                    if len(orig_values) > 0:
-                        logger.debug(f"原始FiO2值范围: {orig_values.min():.3f} - {orig_values.max():.3f}")
+        # 🚀 Select only needed columns first, THEN copy (avoid copying wide tables)
+        o2_cols_needed = list(set(id_columns + [o2_actual_time, o2_val_col]))
+        fio2_cols_needed = list(set(id_columns + [fio2_actual_time, fio2_val_col]))
+        o2_subset = o2_tbl.data[[c for c in o2_cols_needed if c in o2_tbl.data.columns]].copy()
+        fio2_subset = fio2_tbl.data[[c for c in fio2_cols_needed if c in fio2_tbl.data.columns]].copy()
 
-                fio2_subset = _standardize_fio2_units(fio2_subset, fio2_col, database)
+        # Rename to unified column names
+        if o2_actual_time != unified_time_col and o2_actual_time in o2_subset.columns:
+            o2_subset.rename(columns={o2_actual_time: unified_time_col}, inplace=True)
+        if fio2_actual_time != unified_time_col and fio2_actual_time in fio2_subset.columns:
+            fio2_subset.rename(columns={fio2_actual_time: unified_time_col}, inplace=True)
+        if o2_val_col != o2_col and o2_val_col in o2_subset.columns:
+            o2_subset.rename(columns={o2_val_col: o2_col}, inplace=True)
+        if fio2_val_col != fio2_col and fio2_val_col in fio2_subset.columns:
+            fio2_subset.rename(columns={fio2_val_col: fio2_col}, inplace=True)
 
-                # 调试：显示转换后数据范围
-                if fio2_col in fio2_subset.columns:
-                    conv_values = fio2_subset[fio2_col].dropna()
-                    if len(conv_values) > 0:
-                        logger.debug(f"转换后FiO2值范围: {conv_values.min():.3f} - {conv_values.max():.3f}")
-            else:
-                logger.debug(f"跳过FiO2单位标准化: database={database}, fio2_subset.empty={fio2_subset.empty}")
+        # FiO2 unit standardization
+        if database is not None and not fio2_subset.empty and fio2_col in fio2_subset.columns:
+            fio2_subset = _standardize_fio2_units(fio2_subset, fio2_col, database)
 
-            # 移除NaN时间值（NaN会导致排序问题）
-            o2_subset = o2_subset.dropna(subset=[index_column])
-            fio2_subset = fio2_subset.dropna(subset=[index_column])
-            
-            # 关键：merge_asof要求每个by分组内的on列必须严格排序
-            # 必须按by列+on列排序，确保每个分组内on列都是递增的
-            if id_columns:
-                # 🚀 性能优化：使用全局排序替代逐个分组排序
-                # 原始循环方式在2000患者时耗时严重 (O(N*M))
-                # 全局排序 (O(N*M*log(N*M))) 在Pandas中通常更快，因为是C层实现
-                
-                # 确保排序稳定 (kind='mergesort')
-                sort_cols = id_columns + [index_column]
-                
-                if not o2_subset.empty:
-                    o2_subset = o2_subset.sort_values(by=sort_cols, kind='mergesort')
-                
-                if not fio2_subset.empty:
-                    fio2_subset = fio2_subset.sort_values(by=sort_cols, kind='mergesort')
-                
-                # 关键修复：如果o2_subset为空，返回空结果
-                # 但如果fio2_subset为空，不返回空结果（后面会用21%填充）
-                if o2_subset.empty:
-                    return pd.DataFrame(columns=id_columns + [index_column]), id_columns, index_column
-                
-                # 如果fio2为空，创建与o2_subset时间点对齐的DataFrame
-                # 所有fio2值都是NaN，后续会被fix_na_fio2填充为21%
-                if fio2_subset.empty:
-                    merged = o2_subset
-                    merged = merged.assign(**{fio2_col: float('nan')})
-                    # 转换回原始时间类型
-                    if o2_time_is_numeric:
-                        merged[index_column] = o2_time_backup
-                    # Fix missing FiO2 with 21% room air
-                    if fix_na_fio2:
-                        merged[fio2_col] = merged[fio2_col].fillna(21.0)
-                    return merged, id_columns, index_column
-                
-                # 正常情况：o2和fio2都有数据，进行merge_asof
-                # 最后再次按id列和时间列排序，确保整体顺序正确
-                o2_subset = o2_subset.sort_values(by=id_columns + [index_column], kind='mergesort')
-                fio2_subset = fio2_subset.sort_values(by=id_columns + [index_column], kind='mergesort')
-            else:
-                o2_subset = o2_subset.sort_values(by=index_column, kind='mergesort')
-                fio2_subset = fio2_subset.sort_values(by=index_column, kind='mergesort')
-            
-            # 🚀 OPTIMIZATION 2025-01-31: 使用 merge_asof 的 by 参数进行批量处理
-            # 之前的实现对每个患者ID分别调用 merge_asof (2*N 次调用)
-            # 优化后使用 by 参数，只需要 2 次调用
-            if id_columns:
-                # 处理 fio2 为空的患者
-                o2_patient_ids = set(o2_subset[id_columns[0]].unique())
-                fio2_patient_ids = set(fio2_subset[id_columns[0]].unique())
-                
-                # 找出只有 o2 数据但没有 fio2 数据的患者
-                patients_without_fio2 = o2_patient_ids - fio2_patient_ids
-                
-                # 对于没有 fio2 的患者，直接创建 NaN 结果
-                if patients_without_fio2:
-                    o2_no_fio2 = o2_subset[o2_subset[id_columns[0]].isin(patients_without_fio2)]
-                    merged_no_fio2 = o2_no_fio2.assign(**{fio2_col: float('nan')})
-                else:
-                    merged_no_fio2 = pd.DataFrame(columns=id_columns + [index_column, o2_col, fio2_col])
-                
-                # 对于有 fio2 数据的患者，使用 merge_asof 的 by 参数进行批量处理
-                patients_with_fio2 = o2_patient_ids & fio2_patient_ids
-                
-                if patients_with_fio2:
-                    o2_with_fio2 = o2_subset[o2_subset[id_columns[0]].isin(patients_with_fio2)].copy()
-                    fio2_with_fio2 = fio2_subset[fio2_subset[id_columns[0]].isin(patients_with_fio2)].copy()
-                    
-                    # 🔧 FIX: merge_asof 的 by 参数要求每个 by 组内的 on 列必须单调递增
-                    # 先按 by+on 排序，然后重置索引以确保符合 merge_asof 的严格要求
-                    o2_with_fio2 = o2_with_fio2.sort_values(
-                        by=id_columns + [index_column], 
-                        kind='mergesort'
-                    ).reset_index(drop=True)
-                    fio2_with_fio2 = fio2_with_fio2.sort_values(
-                        by=id_columns + [index_column],
-                        kind='mergesort'
-                    ).reset_index(drop=True)
-                    
-                    # 🔧 FIX: 当时间列是数值类型（小时）时，tolerance 也需要转换为数值
-                    effective_tolerance = match_win
-                    if pd.api.types.is_numeric_dtype(o2_with_fio2[index_column]):
-                        # 时间列已经是小时单位，tolerance 也转换为小时
-                        effective_tolerance = match_win.total_seconds() / 3600.0
-                    
-                    try:
-                        # Forward join: 使用 by 参数批量处理
-                        merged_fwd = pd.merge_asof(
-                            o2_with_fio2[[*id_columns, index_column, o2_col]],
-                            fio2_with_fio2[[*id_columns, index_column, fio2_col]],
-                            on=index_column,
-                            by=id_columns,
-                            tolerance=effective_tolerance,
-                            direction='backward'
-                        )
-                    except Exception:
-                        # 如果 by 参数失败（例如 pandas 的全局排序要求），回退到逐个处理
-                        # 这是预期行为，因为 pandas 的 merge_asof 即使使用 by 参数
-                        # 也要求 on 列全局单调递增，这在多患者数据中很难满足
-                        merged_fwd = _match_fio2_fallback_loop(
-                            o2_with_fio2, fio2_with_fio2, id_columns, index_column, 
-                            o2_col, fio2_col, match_win, 'forward'
-                        )
-                    
-                    try:
-                        # Backward join: 使用 by 参数批量处理
-                        merged_bwd = pd.merge_asof(
-                            fio2_with_fio2[[*id_columns, index_column, fio2_col]],
-                            o2_with_fio2[[*id_columns, index_column, o2_col]],
-                            on=index_column,
-                            by=id_columns,
-                            tolerance=effective_tolerance,
-                            direction='backward'
-                        )
-                    except Exception:
-                        # 回退到逐个处理
-                        merged_bwd = _match_fio2_fallback_loop(
-                            fio2_with_fio2, o2_with_fio2, id_columns, index_column,
-                            fio2_col, o2_col, match_win, 'backward'
-                        )
-                    
-                    # 合并两个方向的结果
-                    merge_cols = id_columns + [index_column, o2_col, fio2_col]
-                    merged_fwd = merged_fwd[merge_cols] if not merged_fwd.empty else pd.DataFrame(columns=merge_cols)
-                    merged_bwd = merged_bwd[merge_cols] if not merged_bwd.empty else pd.DataFrame(columns=merge_cols)
-                    
-                    merged_with_fio2 = pd.concat([merged_fwd, merged_bwd], ignore_index=True)
-                    merged_with_fio2 = merged_with_fio2.drop_duplicates()
-                else:
-                    merged_with_fio2 = pd.DataFrame(columns=id_columns + [index_column, o2_col, fio2_col])
-                
-                # 合并有 fio2 和无 fio2 的结果
-                merged = pd.concat([merged_with_fio2, merged_no_fio2], ignore_index=True)
-            else:
-                # 没有ID列，直接处理
-                merged_fwd = pd.merge_asof(
-                    o2_subset,
-                    fio2_subset,
-                    on=index_column,
-                    tolerance=match_win,
-                    direction='backward'
-                )
-                merged = merged_fwd
-            
-            # 如果两个输入原本都是数值型相对小时，则将结果时间列转换回相对小时
-            if o2_time_is_numeric and fio2_time_is_numeric:
-                try:
-                    merged[index_column] = (
-                        pd.to_datetime(merged[index_column], errors='coerce') - base_time
-                    ) / pd.Timedelta(hours=1)
-                except Exception:
-                    pass
+        # dropna + sort
+        o2_subset = o2_subset.dropna(subset=[unified_time_col])
+        fio2_subset = fio2_subset.dropna(subset=[unified_time_col])
+
+        if o2_subset.empty:
+            return pd.DataFrame(columns=id_columns + [index_column]), id_columns, index_column
+
+        if fio2_subset.empty:
+            merged = o2_subset.copy()
+            merged[fio2_col] = float('nan')
+            if fix_na_fio2:
+                merged[fio2_col] = 21.0
+            return merged, id_columns, index_column
+
+        # 🚀 Determine tolerance: use numeric tolerance for numeric time columns
+        o2_time_is_numeric = pd.api.types.is_numeric_dtype(o2_subset[unified_time_col])
+        fio2_time_is_numeric = pd.api.types.is_numeric_dtype(fio2_subset[unified_time_col])
+
+        if o2_time_is_numeric and fio2_time_is_numeric:
+            # Time is in hours — use numeric tolerance directly (skip datetime conversion)
+            effective_tolerance = match_win.total_seconds() / 3600.0
         else:
-            # No time index, just merge
-            merged, _, _ = _merge_tables({o2_col: o2_tbl, fio2_col: fio2_tbl}, ctx=ctx, how='inner')
+            # Time is datetime — convert numeric side if mixed
+            base_time = pd.Timestamp('2000-01-01')
+            if o2_time_is_numeric:
+                o2_subset[unified_time_col] = base_time + pd.to_timedelta(o2_subset[unified_time_col], unit='h')
+            else:
+                o2_subset[unified_time_col] = pd.to_datetime(o2_subset[unified_time_col], errors='coerce')
+            if fio2_time_is_numeric:
+                fio2_subset[unified_time_col] = base_time + pd.to_timedelta(fio2_subset[unified_time_col], unit='h')
+            else:
+                fio2_subset[unified_time_col] = pd.to_datetime(fio2_subset[unified_time_col], errors='coerce')
+            effective_tolerance = match_win
+
+        sort_cols = id_columns + [unified_time_col]
+        o2_subset = o2_subset.sort_values(by=sort_cols, kind='mergesort').reset_index(drop=True)
+        fio2_subset = fio2_subset.sort_values(by=sort_cols, kind='mergesort').reset_index(drop=True)
+
+        # 🚀 Bidirectional merge_asof with direction='nearest'
+        # fwd: for each PO2, find nearest FiO2 within window
+        # bwd: for each FiO2, find nearest PO2 within window
+        o2_cols = id_columns + [unified_time_col, o2_col]
+        fio2_cols = id_columns + [unified_time_col, fio2_col]
+        merge_cols = id_columns + [unified_time_col, o2_col, fio2_col]
+        by_cols = id_columns if id_columns else None
+
+        try:
+            merged_fwd = pd.merge_asof(
+                o2_subset[o2_cols], fio2_subset[fio2_cols],
+                on=unified_time_col, by=by_cols,
+                tolerance=effective_tolerance, direction='nearest'
+            )
+        except Exception:
+            merged_fwd = _match_fio2_fallback_loop(
+                o2_subset, fio2_subset, id_columns, unified_time_col,
+                o2_col, fio2_col, match_win, 'forward'
+            )
+
+        try:
+            merged_bwd = pd.merge_asof(
+                fio2_subset[fio2_cols], o2_subset[o2_cols],
+                on=unified_time_col, by=by_cols,
+                tolerance=effective_tolerance, direction='nearest'
+            )
+        except Exception:
+            merged_bwd = _match_fio2_fallback_loop(
+                fio2_subset, o2_subset, id_columns, unified_time_col,
+                fio2_col, o2_col, match_win, 'backward'
+            )
+
+        # 🚀 Skip drop_duplicates — rare exact duplicates are handled by downstream median aggregation
+        merged_fwd = merged_fwd[merge_cols] if not merged_fwd.empty else pd.DataFrame(columns=merge_cols)
+        merged_bwd = merged_bwd[merge_cols] if not merged_bwd.empty else pd.DataFrame(columns=merge_cols)
+        merged = pd.concat([merged_fwd, merged_bwd], ignore_index=True)
+
+        # Convert datetime back to numeric if we converted above
+        if not (o2_time_is_numeric and fio2_time_is_numeric) and (o2_time_is_numeric or fio2_time_is_numeric):
+            try:
+                merged[unified_time_col] = (
+                    pd.to_datetime(merged[unified_time_col], errors='coerce') - base_time
+                ) / pd.Timedelta(hours=1)
+            except Exception:
+                pass
             
     else:
         # mode = "extreme_vals" or "fill_gaps"

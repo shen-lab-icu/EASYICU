@@ -211,19 +211,32 @@ def change_interval(
         if agg_dict:
             # Optimization: If all aggregations are 'first', use drop_duplicates (much faster)
             if all(agg == 'first' for agg in agg_dict.values()):
-                df = df.drop_duplicates(subset=group_cols, keep='first')
+                _pre_agg = getattr(table, '_pre_aggregated', False) if not isinstance(table, pd.DataFrame) else False
+                if not _pre_agg:
+                    df = df.drop_duplicates(subset=group_cols, keep='first')
             else:
-                try:
-                    df = df.groupby(group_cols, as_index=False).agg(agg_dict)
-                except Exception:
-                    # 聚合失败时退化为去重，避免抛错
-                    df = df.drop_duplicates(subset=group_cols, keep="first")
+                # 🚀 优化：如果数据标记为已预聚合（DuckDB单源），跳过 groupby
+                # DuckDB 已经执行了 GROUP BY (patient, FLOOR(time/interval)) + MEDIAN，
+                # 数据保证每 (patient, time) 唯一，groupby 是纯开销
+                _pre_agg = getattr(table, '_pre_aggregated', False) if not isinstance(table, pd.DataFrame) else False
+                if _pre_agg:
+                    pass  # DuckDB pre-aggregated, skip redundant groupby
+                else:
+                    try:
+                        df = df.groupby(group_cols, as_index=False).agg(agg_dict)
+                    except Exception:
+                        # 聚合失败时退化为去重，避免抛错
+                        df = df.drop_duplicates(subset=group_cols, keep="first")
         else:
             # 无可聚合列，退化为去重
-            df = df.drop_duplicates(subset=group_cols, keep="first")
+            _pre_agg = getattr(table, '_pre_aggregated', False) if not isinstance(table, pd.DataFrame) else False
+            if not _pre_agg:
+                df = df.drop_duplicates(subset=group_cols, keep="first")
     else:
         # Just drop duplicates, keeping first occurrence
-        df = df.drop_duplicates(subset=group_cols, keep="first")
+        _pre_agg = getattr(table, '_pre_aggregated', False) if not isinstance(table, pd.DataFrame) else False
+        if not _pre_agg:
+            df = df.drop_duplicates(subset=group_cols, keep="first")
     
     if fill_gaps:
         fill_fn = globals().get("fill_gaps")

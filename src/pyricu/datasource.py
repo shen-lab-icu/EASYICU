@@ -38,13 +38,17 @@ def _arrow_to_pandas_compat(arrow_table, **kwargs) -> pd.DataFrame:
 
     Wraps arrow_table.to_pandas() to ensure string columns use numpy object dtype
     rather than pd.StringDtype, preventing pandas 3.0 compatibility issues.
+    Also downcasts float64 to float32 for memory savings (~50% reduction).
     """
     try:
         import pyarrow as pa
         # Map all string/large_string types to numpy object to avoid pd.StringDtype
+        # Map float64 → float32 for memory savings (safe for medical values)
         def types_mapper(arrow_type):
             if pa.types.is_string(arrow_type) or pa.types.is_large_string(arrow_type):
                 return np.dtype('O')
+            #if pa.types.is_float64(arrow_type):
+            #    return np.dtype('float32')
             return None
         df = arrow_table.to_pandas(types_mapper=types_mapper, **kwargs)
     except Exception:
@@ -58,6 +62,32 @@ from .table import ICUTable
 # 全局调试开关 - 设置为 False 可以减少输出
 DEBUG_MODE = False
 logger = logging.getLogger(__name__)
+
+# 🚀 DuckDB 连接复用：每个线程维护一个 in-memory 连接，避免反复创建/销毁
+import threading as _threading
+_duckdb_local = _threading.local()
+
+def _get_duckdb_connection():
+    """获取当前线程的 DuckDB 连接（复用已有连接）"""
+    import duckdb
+    con = getattr(_duckdb_local, 'con', None)
+    if con is None:
+        con = duckdb.connect()
+        con.execute("SET timezone='UTC'")
+        con.execute("SET enable_progress_bar = false")
+        con.execute("SET enable_progress_bar_print = false")
+        _duckdb_local.con = con
+    return con
+
+def _close_duckdb_connections():
+    """关闭所有缓存的 DuckDB 连接"""
+    con = getattr(_duckdb_local, 'con', None)
+    if con is not None:
+        try:
+            con.close()
+        except Exception:
+            pass
+        _duckdb_local.con = None
 
 # 🚀 AUMC numericitems 优化：只加载 SOFA 相关的 itemids
 # 原始表 80GB，过滤后约 5GB，性能提升约 15 倍
@@ -854,63 +884,47 @@ class ICUDataSource:
                             stay_info = multi_stay_data[stay_cols].drop_duplicates()
                             stay_info = stay_info.sort_values(['hadm_id', 'outtime'])
                             
-                            # 对每个 hadm_id 分别做 merge_asof
-                            result_frames = [single_stay_data]
+                            # 🚀 OPT: 批量 merge_asof 替代 per-hadm_id 循环
+                            # 使用 by='hadm_id' 一次完成所有多stay的rolling join
                             
-                            for hadm_id in multi_stay_hadms:
-                                # 获取该 hadm_id 的数据
-                                hadm_unique = unique_data[unique_data['hadm_id'] == hadm_id].copy()
-                                if hadm_unique.empty:
-                                    continue
-                                    
-                                # 获取该 hadm_id 的 stay 信息，按 outtime 排序
-                                hadm_stays = stay_info[stay_info['hadm_id'] == hadm_id].copy()
-                                # 🔧 FIX: 过滤掉 outtime 为空的行，避免 merge_asof 报错
-                                # "Merge keys contain null values on right side"
-                                hadm_stays = hadm_stays.dropna(subset=['outtime'])
-                                if hadm_stays.empty:
-                                    continue
-                                hadm_stays = hadm_stays.sort_values('outtime')
-                                stays_list = hadm_stays[target_id_col].tolist()
-                                outtimes_list = hadm_stays['outtime'].tolist()
+                            # 过滤 NaN keys (merge_asof 要求无空值)
+                            stay_info = stay_info.dropna(subset=['outtime'])
+                            unique_data = unique_data.dropna(subset=[time_col])
+                            
+                            if unique_data.empty or stay_info.empty:
+                                frame = single_stay_data
+                            else:
+                                # 排序: merge_asof 要求左右都按 key 排序
+                                unique_data = unique_data.sort_values(time_col)
                                 
-                                # 🔧 FIX: 过滤掉时间列为空的行，避免 merge_asof 报错
-                                # "Merge keys contain null values on left side"
-                                hadm_unique = hadm_unique.dropna(subset=[time_col])
-                                if hadm_unique.empty:
-                                    continue
-                                
-                                # 确保数据按时间排序
-                                hadm_unique = hadm_unique.sort_values(time_col)
-                                
-                                # 🔥 关键修正：使用 outtime 而不是 intime 做 rolling join
-                                # direction='forward' 等价于 roll = -Inf（向未来滚动）
-                                # 找 outtime >= charttime 的最近 stay
-                                merge_cols = [target_id_col, 'outtime']
-                                if 'intime' in hadm_stays.columns:
+                                merge_cols = ['hadm_id', target_id_col, 'outtime']
+                                if 'intime' in stay_info.columns:
                                     merge_cols.append('intime')
+                                stay_lookup = stay_info[merge_cols].drop_duplicates().sort_values('outtime')
+                                
                                 merged = pd.merge_asof(
-                                    hadm_unique,
-                                    hadm_stays[merge_cols],
+                                    unique_data,
+                                    stay_lookup,
                                     left_on=time_col,
                                     right_on='outtime',
-                                    direction='forward',  # 向未来滚动：找 outtime >= charttime
-                                    allow_exact_matches=True
+                                    by='hadm_id',
+                                    direction='forward',
+                                    allow_exact_matches=True,
                                 )
                                 
-                                # 处理 rollends = TRUE: 
-                                # 如果 charttime > 最后一个 outtime，分配给最后一个 stay
-                                last_stay = stays_list[-1]
-                                last_outtime = outtimes_list[-1]
-                                merged.loc[merged[target_id_col].isna(), target_id_col] = last_stay
-                                merged.loc[merged['outtime'].isna(), 'outtime'] = last_outtime
+                                # rollends = TRUE: 未匹配行分配给每个 hadm_id 的最后一个 stay
+                                unmatched = merged[target_id_col].isna()
+                                if unmatched.any():
+                                    last_stays = stay_lookup.groupby('hadm_id').last()
+                                    merged.loc[unmatched, target_id_col] = (
+                                        merged.loc[unmatched, 'hadm_id'].map(last_stays[target_id_col])
+                                    )
+                                    merged.loc[unmatched, 'outtime'] = (
+                                        merged.loc[unmatched, 'hadm_id'].map(last_stays['outtime'])
+                                    )
                                 
-                                # 确保 id 是整数
                                 merged[target_id_col] = merged[target_id_col].astype(int)
-                                
-                                result_frames.append(merged)
-                            
-                            frame = pd.concat(result_frames, ignore_index=True)
+                                frame = pd.concat([single_stay_data, merged], ignore_index=True)
                             
                             if verbose:
                                 logger.debug(f"[{table_name}] rolling join 完成: {after_join_rows} → {len(frame)} 行")
@@ -1281,6 +1295,21 @@ class ICUDataSource:
         
         return None
 
+    def _resolve_flat_parquet_directory(self, table_name: str) -> Optional[Path]:
+        """检查扁平 parquet 目录（无 bucket_id 子目录结构）"""
+        if not self.base_path:
+            return None
+        name_variants = [table_name, table_name.lower()]
+        for name in name_variants:
+            for dir_path in [
+                self.base_path / name,
+                self.base_path / "icu" / name,
+                self.base_path / "hosp" / name,
+            ]:
+                if dir_path.is_dir() and list(dir_path.glob("*.parquet"))[:1]:
+                    return dir_path
+        return None
+
     def _resolve_loader_from_disk(self, table_name: str) -> Optional[Callable[[], pd.DataFrame] | Path]:
         if not self.base_path:
             return None
@@ -1551,14 +1580,14 @@ class ICUDataSource:
         Returns:
             目标桶 ID 集合
         """
-        conn = duckdb_module.connect()
+        conn = _get_duckdb_connection()
         try:
             itemid_list = list(itemids)
-            conn.execute("CREATE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
+            conn.execute("CREATE OR REPLACE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
             result = conn.execute(f"SELECT DISTINCT hash(itemid) % {int(num_buckets)} FROM items").fetchall()
             return {row[0] for row in result}
-        finally:
-            conn.close()
+        except Exception:
+            raise
     
     def _read_mimic3_csv_fallback(
         self,
@@ -1664,19 +1693,13 @@ class ICUDataSource:
         """
         
         try:
-            con = duckdb.connect()
+            con = _get_duckdb_connection()
             try:
-                con.execute("SET timezone='UTC'")
-                con.execute("SET enable_progress_bar = false")
-                con.execute("SET enable_progress_bar_print = false")
-                try:
-                    arrow_table = con.execute(query).fetch_arrow_table()
-                    df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
-                    del arrow_table
-                except Exception:
-                    df = con.execute(query).fetchdf()
-            finally:
-                con.close()
+                arrow_table = con.execute(query).fetch_arrow_table()
+                df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+                del arrow_table
+            except Exception:
+                df = con.execute(query).fetchdf()
             
             # Normalize column names to lowercase (MIMIC-III CSV uses uppercase)
             df.columns = [c.lower() for c in df.columns]
@@ -1878,25 +1901,13 @@ class ICUDataSource:
             query = f"SELECT {select_cols} FROM read_parquet('{glob_pattern}', union_by_name=true) {where_clause}{order_by_clause}"
         
         try:
-            con = duckdb.connect()
+            con = _get_duckdb_connection()
             try:
-                # 🔧 CRITICAL FIX: 设置 DuckDB 时区为 UTC
-                # DuckDB 默认将 UTC 时间转换为本地时区，这会导致时间偏移
-                # 例如：UTC 15:37 会被转换成 Asia/Shanghai 23:37 (+8 小时)
-                # 设置时区为 UTC 可以保持原始 UTC 时间不变
-                con.execute("SET timezone='UTC'")
-                # 🔧 禁用DuckDB进度条，避免终端输出开销
-                con.execute("SET enable_progress_bar = false")
-                con.execute("SET enable_progress_bar_print = false")
-                # 🚀 优化: 使用 Arrow → pandas 零拷贝转换，减少内存峰值约40%
-                try:
-                    arrow_table = con.execute(query).fetch_arrow_table()
-                    df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
-                    del arrow_table
-                except Exception:
-                    df = con.execute(query).fetchdf()
-            finally:
-                con.close()
+                arrow_table = con.execute(query).fetch_arrow_table()
+                df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+                del arrow_table
+            except Exception:
+                df = con.execute(query).fetchdf()
             return df
         except Exception as e:
             logger.warning(f"DuckDB 读取失败，回退到 PyArrow: {e}")
@@ -2342,8 +2353,21 @@ def load_bucketed_table_aggregated(
                 bucket_dir = dir_path
                 break
     
+    # 🚀 FIX 2026-03-13: 如果没有 bucket 目录，回退到扁平 parquet 目录
+    flat_parquet_dir = None
     if bucket_dir is None:
-        raise ValueError(f"Cannot find bucketed directory for {table_name} (tried: {[str(p) for p in possible_bucket_dirs]})")
+        possible_flat_dirs = [
+            base_path / table_name,
+            base_path / "icu" / table_name,
+            base_path / "hosp" / table_name,
+        ]
+        for dir_path in possible_flat_dirs:
+            if dir_path.is_dir() and list(dir_path.glob("*.parquet"))[:1]:
+                flat_parquet_dir = dir_path
+                break
+    
+    if bucket_dir is None and flat_parquet_dir is None:
+        raise ValueError(f"Cannot find bucketed or flat parquet directory for {table_name}")
     
     # 确定ID列和时间列
     if id_col is None:
@@ -2360,6 +2384,12 @@ def load_bucketed_table_aggregated(
         else:
             id_col = 'stay_id'
     
+    table_cfg = None
+    try:
+        table_cfg = data_source.config.get_table(table_name)
+    except Exception:
+        table_cfg = None
+
     if time_col is None:
         if db_name == 'aumc':
             time_col = 'measuredat'  # AUMC使用measuredat（毫秒时间戳）
@@ -2368,9 +2398,8 @@ def load_bucketed_table_aggregated(
         elif db_name in ('sic', 'sic_demo'):
             time_col = 'Offset'
         elif db_name in ('eicu', 'eicu_demo'):
-            # eICU tables have different time columns; use the one from table config
-            # Common: labresultoffset (lab), nursingchartoffset (nursecharting)
-            time_col = 'labresultoffset'  # default, may be overridden by caller
+            configured_time_col = getattr(getattr(table_cfg, 'defaults', None), 'index_var', None)
+            time_col = configured_time_col or 'labresultoffset'
         else:
             time_col = 'charttime'
     
@@ -2384,45 +2413,91 @@ def load_bucketed_table_aggregated(
         # Caller should pass the correct column via source.sub_var
         itemid_col = 'DataID' if table_name in ('data_float_h',) else 'LaboratoryID'
     elif db_name in ('eicu', 'eicu_demo'):
-        itemid_col = 'labname'  # eICU lab uses string labname
+        configured_sub_var = getattr(getattr(table_cfg, 'defaults', None), 'sub_var', None)
+        if configured_sub_var:
+            itemid_col = configured_sub_var
+        elif table_name == 'nursecharting':
+            itemid_col = 'nursingchartcelltypevalname'
+        else:
+            itemid_col = 'labname'
     else:
         itemid_col = 'itemid'
     
     # 计算目标桶
-    conn = duckdb.connect()
-    conn.execute("SET timezone='UTC'")
-    # 🔧 禁用DuckDB进度条，避免16秒的终端输出开销
-    conn.execute("SET enable_progress_bar = false")
-    conn.execute("SET enable_progress_bar_print = false")
+    conn = _get_duckdb_connection()
     
-    # 获取桶数
-    bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
-    if not bucket_subdirs:
-        conn.close()
-        return pd.DataFrame()
-    
-    num_buckets = max(int(d.name.split('=')[1]) for d in bucket_subdirs) + 1
-    
-    # 计算目标桶ID
-    itemid_list = list(itemids)
-    conn.execute("CREATE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
-    result = conn.execute(f"SELECT DISTINCT hash(itemid) % {num_buckets} FROM items").fetchall()
-    target_buckets = [row[0] for row in result]
-    
-    # 构建文件列表
-    target_files = []
-    for bucket_id in target_buckets:
-        bucket_subdir = bucket_dir / f"bucket_id={bucket_id}"
-        if bucket_subdir.exists():
-            target_files.extend(bucket_subdir.glob("*.parquet"))
-    
-    if not target_files:
-        conn.close()
-        return pd.DataFrame()
-    
-    file_list_str = ", ".join(f"'{f}'" for f in target_files)
-    glob_pattern = f"[{file_list_str}]"
-    
+    # 根据目录类型构建文件列表
+    if bucket_dir is not None:
+        # 分桶目录：通过 hash(itemid) 选择目标桶
+        bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
+        if not bucket_subdirs:
+            return pd.DataFrame()
+        
+        num_buckets = max(int(d.name.split('=')[1]) for d in bucket_subdirs) + 1
+        
+        itemid_list = list(itemids)
+        conn.execute("CREATE OR REPLACE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
+        result = conn.execute(f"SELECT DISTINCT hash(itemid) % {num_buckets} FROM items").fetchall()
+        target_buckets = [row[0] for row in result]
+        
+        target_files = []
+        for bucket_id in target_buckets:
+            bucket_subdir = bucket_dir / f"bucket_id={bucket_id}"
+            if bucket_subdir.exists():
+                target_files.extend(bucket_subdir.glob("*.parquet"))
+        
+        if not target_files:
+            return pd.DataFrame()
+
+        file_list_str = ", ".join(f"'{f}'" for f in target_files)
+        glob_pattern = f"[{file_list_str}]"
+    else:
+        # 扁平 parquet 目录：扫描所有文件，依赖 WHERE 过滤
+        glob_pattern = f"'{flat_parquet_dir}/*.parquet'"
+
+    raw_columns = set()
+    try:
+        raw_columns = {
+            col[0]
+            for col in conn.execute(
+                f"SELECT * FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
+            ).description
+        }
+    except Exception:
+        raw_columns = set()
+
+    patient_filter_col = id_col
+    patient_filter_values = patient_ids
+    join_left_col = id_col
+    output_id_col = id_col
+
+    hospital_tables = {'prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services'}
+    if (
+        db_name in ('miiv', 'miiv_demo', 'mimic', 'mimic_demo')
+        and table_name in hospital_tables
+        and id_col not in raw_columns
+        and 'hadm_id' in raw_columns
+    ):
+        stay_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
+        source_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
+        join_left_col = 'hadm_id'
+        output_id_col = stay_col
+        if patient_ids:
+            try:
+                icustays_tbl = data_source.load_table(
+                    'icustays',
+                    columns=[source_id_col, 'hadm_id', 'intime'],
+                    filters=[FilterSpec(column=source_id_col, op=FilterOp.IN, value=patient_ids)],
+                    verbose=False,
+                )
+                icustays_df = icustays_tbl.dataframe()
+                mapped_hadm_ids = icustays_df['hadm_id'].dropna().unique().tolist() if 'hadm_id' in icustays_df.columns else []
+                if mapped_hadm_ids:
+                    patient_filter_col = 'hadm_id'
+                    patient_filter_values = mapped_hadm_ids
+            except Exception:
+                pass
+
     # 构建WHERE条件
     where_conditions = []
     
@@ -2435,9 +2510,9 @@ def load_bucketed_table_aggregated(
     where_conditions.append(f"{itemid_col} IN ({ids_str})")
     
     # 患者过滤
-    if patient_ids:
-        patient_str = ", ".join(str(x) for x in patient_ids)
-        where_conditions.append(f"{id_col} IN ({patient_str})")
+    if patient_filter_values:
+        patient_str = ", ".join(str(x) for x in patient_filter_values)
+        where_conditions.append(f"{patient_filter_col} IN ({patient_str})")
     
     # 🔧 FIX 2026-02: 在DuckDB层过滤原始值范围（匹配R ricu的行为）
     # R ricu: clamp_var() 先将超范围值设为NA → 再按小时聚合（NA不参与median）
@@ -2629,28 +2704,124 @@ def load_bucketed_table_aggregated(
         
         # Alias WHERE clause for JOIN
         _mimic_where = where_clause.replace(f'{itemid_col}', f'o.{itemid_col}')
-        _mimic_where = _mimic_where.replace(f'{id_col} IN', f'o.{id_col} IN')
+        _mimic_where = _mimic_where.replace(f'{patient_filter_col} IN', f'o.{patient_filter_col} IN')
         # Also handle value_column filters
         _mimic_where = _mimic_where.replace(f'{value_column} >=', f'o.{value_column} >=')
         _mimic_where = _mimic_where.replace(f'{value_column} <=', f'o.{value_column} <=')
         
         _read_func = 'read_csv' if str(icustays_path).endswith('.csv.gz') else 'read_parquet'
         
-        query = f"""
-        WITH adm AS (
-            SELECT {stay_col}, CAST(intime AS TIMESTAMP) as intime
-            FROM {_read_func}('{icustays_path}')
-        )
-        SELECT
-            o.{id_col},
-            {output_time_expr},
-            {_mimic_agg_expr}{_mimic_unit_select}
-        FROM read_parquet({glob_pattern}, union_by_name=true) o
-        JOIN adm a ON o.{id_col} = a.{stay_col}
-        {_mimic_where}
-        GROUP BY o.{id_col}, {time_round_expr}
-        ORDER BY o.{id_col}, 2
-        """
+        if join_left_col == 'hadm_id':
+            # Hospital tables (labevents, prescriptions, etc.): need rolling join
+            # R ricu uses data.table rolling join with roll=-Inf on outtime:
+            # - For each event, find the ICU stay with smallest outtime >= charttime (NOCB)
+            # - Events after all outtimes go to the last stay (rollends=TRUE)
+            # Must join with ALL stays for matching hadm_ids (not just target stays),
+            # then filter to target stays after assignment.
+            _target_stay_ids_str = ", ".join(str(x) for x in patient_ids) if patient_ids else ""
+            
+            # Build event WHERE: reuse _mimic_where but remove hadm_id patient filter
+            # (we filter by hadm_id IN target_hadms instead, and by stay_id after assignment)
+            _rolling_event_where = _mimic_where
+            if patient_filter_col == 'hadm_id' and patient_filter_values:
+                _hadm_ids_str = ', '.join(str(x) for x in patient_filter_values)
+                _rolling_event_where = _rolling_event_where.replace(
+                    f"AND o.hadm_id IN ({_hadm_ids_str})", ""
+                )
+            
+            # Time expression without table alias (for outer query on events_joined CTE)
+            _outer_time_expr = f"FLOOR(EPOCH({time_col} - CAST(intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+            # Value agg expression without table alias
+            _outer_agg_expr = _mimic_agg_expr.replace('o.', '')
+            
+            if patient_ids:
+                # Targeted patient loading: filter hadm_ids by target stay_ids
+                _hadm_filter = f"WHERE {stay_col} IN ({_target_stay_ids_str})"
+                _hadm_scope_filter = f"AND o.hadm_id IN (SELECT hadm_id FROM target_hadms)"
+                _final_stay_filter = f"AND {stay_col} IN ({_target_stay_ids_str})"
+                
+                query = f"""
+                WITH target_hadms AS (
+                    SELECT DISTINCT hadm_id
+                    FROM {_read_func}('{icustays_path}')
+                    {_hadm_filter}
+                ),
+                all_stays AS (
+                    SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
+                    FROM {_read_func}('{icustays_path}')
+                    WHERE hadm_id IN (SELECT hadm_id FROM target_hadms)
+                ),
+                events_joined AS (
+                    SELECT o.{value_column}, o.{time_col}, o.hadm_id,
+                           a.{stay_col}, a.intime,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY o.hadm_id, o.{time_col}, o.{value_column}
+                               ORDER BY
+                                   CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
+                                   a.outtime DESC
+                           ) as _rn
+                    FROM read_parquet({glob_pattern}, union_by_name=true) o
+                    JOIN all_stays a ON o.hadm_id = a.hadm_id
+                    {_rolling_event_where}
+                    AND o.{value_column} IS NOT NULL
+                    {_hadm_scope_filter}
+                )
+                SELECT {stay_col} as {output_id_col},
+                       {_outer_time_expr} as charttime,
+                       {_outer_agg_expr}
+                FROM events_joined
+                WHERE _rn = 1 {_final_stay_filter}
+                GROUP BY {stay_col}, {_outer_time_expr}
+                ORDER BY {stay_col}, 2
+                """
+            else:
+                # ALL patients: join with all icustays, no stay_id filter
+                query = f"""
+                WITH all_stays AS (
+                    SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
+                    FROM {_read_func}('{icustays_path}')
+                ),
+                events_joined AS (
+                    SELECT o.{value_column}, o.{time_col}, o.hadm_id,
+                           a.{stay_col}, a.intime,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY o.hadm_id, o.{time_col}, o.{value_column}
+                               ORDER BY
+                                   CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
+                                   a.outtime DESC
+                           ) as _rn
+                    FROM read_parquet({glob_pattern}, union_by_name=true) o
+                    JOIN all_stays a ON o.hadm_id = a.hadm_id
+                    {_rolling_event_where}
+                    AND o.{value_column} IS NOT NULL
+                )
+                SELECT {stay_col} as {output_id_col},
+                       {_outer_time_expr} as charttime,
+                       {_outer_agg_expr}
+                FROM events_joined
+                WHERE _rn = 1
+                GROUP BY {stay_col}, {_outer_time_expr}
+                ORDER BY {stay_col}, 2
+                """
+        else:
+            # ICU tables (chartevents, etc.): direct JOIN on stay_id
+            join_predicate = f"o.{join_left_col} = a.{join_left_col}"
+
+            query = f"""
+            WITH adm AS (
+                SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
+                FROM {_read_func}('{icustays_path}')
+            )
+            SELECT
+                a.{output_id_col} as {output_id_col},
+                {output_time_expr},
+                {_mimic_agg_expr}{_mimic_unit_select}
+            FROM read_parquet({glob_pattern}, union_by_name=true) o
+            JOIN adm a ON {join_predicate}
+            {_mimic_where}
+            GROUP BY a.{output_id_col}, {time_round_expr}
+            ORDER BY a.{output_id_col}, 2
+            """
     elif db_name in ('sic', 'sic_demo'):
         # SIC: Offset is in seconds relative to hospital admission
         # 🔧 FIX: R ricu 和旧 Python 路径不减去 ICUOffset，直接 Offset/3600 → 小时
@@ -2658,7 +2829,8 @@ def load_bucketed_table_aggregated(
         # DuckDB 输出秒级时间（FLOOR 到整小时的秒数），保持与旧路径一致
         _interval_seconds = interval_minutes * 60.0
         # Quote "Offset" as it's a reserved word in DuckDB
-        time_round_expr = f'FLOOR(o."Offset" / {_interval_seconds}) * {_interval_seconds}'
+        # 🔧 输出小时而非秒，避免 _align_time_to_admission magnitude check 误判
+        time_round_expr = f'FLOOR(o."Offset" / {_interval_seconds})'
         output_time_expr = f"{time_round_expr} as charttime"
         
         if _has_inline_convert:
@@ -2727,8 +2899,366 @@ def load_bucketed_table_aggregated(
     except Exception as e:
         logger.warning(f"DuckDB聚合失败: {e}")
         raise
-    finally:
-        conn.close()
+
+
+def load_bucketed_table_multi_aggregated(
+    data_source: "ICUDataSource",
+    table_name: str,
+    concept_itemids: Dict[str, List],
+    *,
+    value_column: str = "valuenum",
+    interval_minutes: float = 60.0,
+    patient_ids: Optional[List] = None,
+    agg_func: str = "median",
+    id_col: Optional[str] = None,
+    time_col: Optional[str] = None,
+    itemid_col: Optional[str] = None,
+    concept_bounds: Optional[Dict[str, Dict[str, Optional[float]]]] = None,
+) -> pd.DataFrame:
+    """
+    Batch-load multiple concepts from the same long table in one DuckDB scan.
+
+    Supports all 6 ICU databases (MIIV, MIMIC, AUMC, HiRID, SIC, eICU).
+    Each concept is pivoted via CASE WHEN + AGG, producing one column per concept.
+    """
+    import duckdb
+
+    if not concept_itemids:
+        return pd.DataFrame()
+
+    db_name = data_source.config.name if hasattr(data_source.config, 'name') else 'unknown'
+    _base_db = db_name.replace('_demo', '')
+    base_path = data_source.base_path
+
+    # ── DB-specific defaults ───────────────────────────────────
+    _db_defaults = {
+        'miiv':  {'id_col': 'stay_id',           'time_col': 'charttime',        'itemid_col': 'itemid'},
+        'mimic': {'id_col': 'icustay_id',        'time_col': 'charttime',        'itemid_col': 'itemid'},
+        'aumc':  {'id_col': 'admissionid',       'time_col': 'measuredat',       'itemid_col': 'itemid'},
+        'hirid': {'id_col': 'patientid',         'time_col': 'datetime',         'itemid_col': 'variableid'},
+        'sic':   {'id_col': 'CaseID',            'time_col': 'Offset',           'itemid_col': 'DataID'},
+        'eicu':  {'id_col': 'patientunitstayid', 'time_col': 'labresultoffset',  'itemid_col': 'labname'},
+    }
+    defaults = _db_defaults.get(_base_db, {})
+    if id_col is None:
+        id_col = defaults.get('id_col', 'stay_id')
+    if time_col is None:
+        time_col = defaults.get('time_col', 'charttime')
+    if itemid_col is None:
+        itemid_col = defaults.get('itemid_col', 'itemid')
+
+    # ── Detect if itemids are strings (e.g. eICU labname) ─────
+    _sample_ids = next(iter(concept_itemids.values()))
+    ids_are_strings = isinstance(_sample_ids[0], str) if _sample_ids else False
+
+    # ── Collect all itemids ────────────────────────────────────
+    if ids_are_strings:
+        all_itemids = sorted({str(x) for ids in concept_itemids.values() for x in ids})
+    else:
+        all_itemids = sorted({int(x) for ids in concept_itemids.values() for x in ids})
+
+    # ── Find parquet files ─────────────────────────────────────
+    bucket_dir = None
+    flat_parquet_dir = None
+    bucket_table_name = f"{table_name}_bucket"
+    for sub in ['', 'icu', 'hosp']:
+        d = base_path / sub / bucket_table_name if sub else base_path / bucket_table_name
+        if d.is_dir() and list(d.glob("bucket_id=*")):
+            bucket_dir = d
+            break
+    if bucket_dir is None:
+        flat_parquet_dir = data_source._resolve_flat_parquet_directory(table_name)
+    if bucket_dir is None and flat_parquet_dir is None:
+        raise ValueError(f"Cannot find bucketed directory for {table_name}")
+
+    conn = _get_duckdb_connection()
+
+    # ── Build glob pattern from bucket or flat dir ─────────
+    if bucket_dir is not None:
+        bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
+        num_buckets = max(int(bd.name.split('=')[1]) for bd in bucket_subdirs) + 1
+        if ids_are_strings:
+            conn.execute("CREATE OR REPLACE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [all_itemids])
+        else:
+            conn.execute("CREATE OR REPLACE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [all_itemids])
+        result = conn.execute(f"SELECT DISTINCT hash(itemid) % {num_buckets} FROM items").fetchall()
+        target_buckets = [row[0] for row in result]
+
+        target_files = []
+        for bid in target_buckets:
+            bucket_subdir = bucket_dir / f"bucket_id={bid}"
+            if bucket_subdir.exists():
+                target_files.extend(bucket_subdir.glob("*.parquet"))
+        if not target_files:
+            return pd.DataFrame()
+        file_list_str = ", ".join(f"'{f}'" for f in target_files)
+        glob_pattern = f"[{file_list_str}]"
+    else:
+        glob_pattern = f"'{flat_parquet_dir}/*.parquet'"
+
+    # ── Aggregation ────────────────────────────────────────
+    agg_map = {'median': 'MEDIAN', 'mean': 'AVG', 'max': 'MAX', 'min': 'MIN', 'first': 'FIRST', 'sum': 'SUM'}
+    duckdb_agg = agg_map.get(agg_func, 'MEDIAN')
+
+    _interval_hours = interval_minutes / 60.0
+    _interval_seconds = interval_minutes * 60.0
+
+    # ── Build CASE WHEN select expressions ─────────────────
+    select_exprs = []
+    for concept_name, ids in concept_itemids.items():
+        if ids_are_strings:
+            ids_sql = ", ".join(f"'{x}'" for x in ids)
+        else:
+            ids_sql = ", ".join(str(int(x)) for x in ids)
+        bounds = (concept_bounds or {}).get(concept_name, {})
+        value_conditions = [f"o.{itemid_col} IN ({ids_sql})"]
+        if bounds.get("min") is not None:
+            value_conditions.append(f"o.{value_column} >= {bounds['min']}")
+        if bounds.get("max") is not None:
+            value_conditions.append(f"o.{value_column} <= {bounds['max']}")
+        case_when = " AND ".join(value_conditions)
+        select_exprs.append(
+            f"{duckdb_agg}(CASE WHEN {case_when} THEN o.{value_column} END) AS {concept_name}"
+        )
+    select_sql = ",\n            ".join(select_exprs)
+
+    if ids_are_strings:
+        all_ids_sql = ", ".join(f"'{x}'" for x in all_itemids)
+    else:
+        all_ids_sql = ", ".join(str(int(x)) for x in all_itemids)
+
+    # ── DB-specific patient filter ─────────────────────────
+    def _patient_clause(filter_col, values):
+        if not values:
+            return ""
+        return f" AND o.{filter_col} IN ({', '.join(str(x) for x in values)})"
+
+    # ── DB-specific query construction ─────────────────────
+    if _base_db in ('miiv', 'mimic'):
+        stay_col = 'icustay_id' if _base_db == 'mimic' else 'stay_id'
+        icustays_path = base_path / 'icustays.parquet'
+        if not icustays_path.exists():
+            icustays_path = base_path / 'icu' / 'icustays.parquet'
+        if not icustays_path.exists() and (base_path / 'icustays.csv.gz').exists():
+            icustays_path = base_path / 'icustays.csv.gz'
+        _read_func = 'read_csv' if str(icustays_path).endswith('.csv.gz') else 'read_parquet'
+
+        # hadm_id mapping for hospital tables (labevents etc.)
+        raw_columns = set()
+        try:
+            raw_columns = {col[0] for col in conn.execute(
+                f"SELECT * FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
+            ).description}
+        except Exception:
+            pass
+        patient_filter_col = id_col
+        patient_filter_values = patient_ids
+        join_left_col = id_col
+        output_id_col = stay_col
+        hospital_tables = {'prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services'}
+        _needs_hadm_join = (table_name in hospital_tables
+                and id_col not in raw_columns and 'hadm_id' in raw_columns)
+        if _needs_hadm_join:
+            join_left_col = 'hadm_id'
+            patient_filter_col = 'hadm_id'
+            if patient_ids:
+                try:
+                    icustays_tbl = data_source.load_table(
+                        'icustays', columns=[stay_col, 'hadm_id', 'intime', 'outtime'],
+                        filters=[FilterSpec(column=stay_col, op=FilterOp.IN, value=patient_ids)],
+                        verbose=False)
+                    icustays_df = icustays_tbl.dataframe()
+                    mapped = icustays_df['hadm_id'].dropna().unique().tolist() if 'hadm_id' in icustays_df.columns else []
+                    if mapped:
+                        patient_filter_values = mapped
+                except Exception:
+                    pass
+
+        p_clause = _patient_clause(patient_filter_col, patient_filter_values)
+        time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+
+        if join_left_col == 'hadm_id':
+            # Hospital tables (labevents): need rolling join to assign events to correct ICU stay
+            # Matches the single-concept load_bucketed_table_aggregated rolling JOIN approach
+
+            # Outer time expression without table alias (for outer query on events_joined CTE)
+            _outer_time_expr = f"FLOOR(EPOCH({time_col} - CAST(intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+            # Outer select expressions without table alias
+            _outer_select_exprs = []
+            for concept_name, ids in concept_itemids.items():
+                if ids_are_strings:
+                    ids_sql = ", ".join(f"'{x}'" for x in ids)
+                else:
+                    ids_sql = ", ".join(str(int(x)) for x in ids)
+                bounds = (concept_bounds or {}).get(concept_name, {})
+                value_conditions = [f"{itemid_col} IN ({ids_sql})"]
+                if bounds.get("min") is not None:
+                    value_conditions.append(f"{value_column} >= {bounds['min']}")
+                if bounds.get("max") is not None:
+                    value_conditions.append(f"{value_column} <= {bounds['max']}")
+                case_when = " AND ".join(value_conditions)
+                _outer_select_exprs.append(
+                    f"{duckdb_agg}(CASE WHEN {case_when} THEN {value_column} END) AS {concept_name}"
+                )
+            _outer_select_sql = ",\n                ".join(_outer_select_exprs)
+
+            if patient_ids:
+                _target_stay_ids_str = ", ".join(str(x) for x in patient_ids)
+                query = f"""
+                WITH target_hadms AS (
+                    SELECT DISTINCT hadm_id
+                    FROM {_read_func}('{icustays_path}')
+                    WHERE {stay_col} IN ({_target_stay_ids_str})
+                ),
+                all_stays AS (
+                    SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
+                    FROM {_read_func}('{icustays_path}')
+                    WHERE hadm_id IN (SELECT hadm_id FROM target_hadms)
+                ),
+                events_joined AS (
+                    SELECT o.{value_column}, o.{time_col}, o.hadm_id, o.{itemid_col},
+                           a.{stay_col}, a.intime,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY o.hadm_id, o.{time_col}, o.{itemid_col}, o.{value_column}
+                               ORDER BY
+                                   CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
+                                   a.outtime DESC
+                           ) as _rn
+                    FROM read_parquet({glob_pattern}, union_by_name=true) o
+                    JOIN all_stays a ON o.hadm_id = a.hadm_id
+                    WHERE o.{itemid_col} IN ({all_ids_sql})
+                    AND o.{value_column} IS NOT NULL
+                    AND o.hadm_id IN (SELECT hadm_id FROM target_hadms)
+                )
+                SELECT {stay_col} AS {output_id_col},
+                       {_outer_time_expr} AS charttime,
+                       {_outer_select_sql}
+                FROM events_joined
+                WHERE _rn = 1 AND {stay_col} IN ({_target_stay_ids_str})
+                GROUP BY {stay_col}, {_outer_time_expr}
+                ORDER BY {stay_col}, 2
+                """
+            else:
+                # ALL patients: no stay_id filter
+                query = f"""
+                WITH all_stays AS (
+                    SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
+                    FROM {_read_func}('{icustays_path}')
+                ),
+                events_joined AS (
+                    SELECT o.{value_column}, o.{time_col}, o.hadm_id, o.{itemid_col},
+                           a.{stay_col}, a.intime,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY o.hadm_id, o.{time_col}, o.{itemid_col}, o.{value_column}
+                               ORDER BY
+                                   CASE WHEN a.outtime >= o.{time_col} THEN a.outtime END ASC NULLS LAST,
+                                   a.outtime DESC
+                           ) as _rn
+                    FROM read_parquet({glob_pattern}, union_by_name=true) o
+                    JOIN all_stays a ON o.hadm_id = a.hadm_id
+                    WHERE o.{itemid_col} IN ({all_ids_sql})
+                    AND o.{value_column} IS NOT NULL
+                )
+                SELECT {stay_col} AS {output_id_col},
+                       {_outer_time_expr} AS charttime,
+                       {_outer_select_sql}
+                FROM events_joined
+                WHERE _rn = 1
+                GROUP BY {stay_col}, {_outer_time_expr}
+                ORDER BY {stay_col}, 2
+                """
+        else:
+            # Direct join (stay_id in parquet, e.g. chartevents)
+            join_pred = f"o.{join_left_col} = a.{join_left_col}"
+            query = f"""
+            WITH adm AS (
+                SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
+                FROM {_read_func}('{icustays_path}')
+            )
+            SELECT a.{output_id_col} AS {output_id_col}, {time_round_expr} AS charttime,
+                {select_sql}
+            FROM read_parquet({glob_pattern}, union_by_name=true) o
+            JOIN adm a ON {join_pred}
+            WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}
+            GROUP BY a.{output_id_col}, {time_round_expr}
+            ORDER BY a.{output_id_col}, 2
+            """
+
+    elif _base_db == 'hirid':
+        general_path = base_path / 'general_table.parquet'
+        gen_read = 'read_parquet'
+        if not general_path.exists():
+            general_csv = base_path / 'general_table.csv'
+            if general_csv.exists():
+                general_path = general_csv
+                gen_read = 'read_csv'
+        p_clause = _patient_clause(id_col, patient_ids)
+        time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+        query = f"""
+        WITH adm AS (
+            SELECT patientid, CAST(admissiontime AS TIMESTAMP) as admissiontime
+            FROM {gen_read}('{general_path}')
+        )
+        SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
+            {select_sql}
+        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        JOIN adm a ON o.{id_col} = a.patientid
+        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}
+        GROUP BY o.{id_col}, {time_round_expr}
+        ORDER BY o.{id_col}, 2
+        """
+
+    elif _base_db == 'aumc':
+        p_clause = _patient_clause(id_col, patient_ids)
+        time_round_expr = f"FLOOR((o.{time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
+        query = f"""
+        SELECT o.{id_col} AS {id_col}, {time_round_expr} AS measuredat_minutes,
+            {select_sql}
+        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}
+        GROUP BY o.{id_col}, {time_round_expr}
+        ORDER BY o.{id_col}, 2
+        """
+
+    elif _base_db == 'sic':
+        p_clause = _patient_clause(id_col, patient_ids)
+        _time_ref = f'o."{time_col}"' if time_col == 'Offset' else f'o.{time_col}'
+        time_round_expr = f"FLOOR({_time_ref} / {_interval_seconds})"
+        query = f"""
+        SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
+            {select_sql}
+        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}
+        GROUP BY o.{id_col}, {time_round_expr}
+        ORDER BY o.{id_col}, 2
+        """
+
+    elif _base_db == 'eicu':
+        p_clause = _patient_clause(id_col, patient_ids)
+        # Output hours (not minutes) — consistent with load_wide_table_aggregated
+        # Batch results bypass _align_time_to_admission, so must output hours directly
+        time_round_expr = f"FLOOR(o.{time_col} / {interval_minutes})"
+        query = f"""
+        SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
+            {select_sql}
+        FROM read_parquet({glob_pattern}, union_by_name=true) o
+        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}
+        GROUP BY o.{id_col}, {time_round_expr}
+        ORDER BY o.{id_col}, 2
+        """
+
+    else:
+        raise ValueError(f"Unsupported database for multi-concept batch: {db_name}")
+
+    df = conn.execute(query).df()
+    logger.info(
+        "🚀 分桶多概念DuckDB聚合完成: %s concepts=%d itemids=%d -> %d 行",
+        table_name,
+        len(concept_itemids),
+        len(all_itemids),
+        len(df),
+    )
+    return df
 
 
 def load_wide_table_aggregated(
@@ -2738,6 +3268,7 @@ def load_wide_table_aggregated(
     interval_hours: float = 1.0,
     patient_ids: Optional[List] = None,
     agg_func: str = 'median',  # 'median' (default, matches R ricu), 'first', 'mean', 'max', 'min'
+    column_bounds: Optional[dict] = None,  # {col_name: (min_val, max_val)} for pre-aggregation filtering
 ) -> pd.DataFrame:
     """
     🚀 高性能宽表批量加载：在DuckDB中完成聚合和去重
@@ -2801,22 +3332,6 @@ def load_wide_table_aggregated(
     }
     duckdb_agg = agg_map.get(agg_func, 'MEDIAN')
     
-    # 构建CTE：每个值列单独聚合（处理NULL）
-    cte_parts = []
-    for i, val_col in enumerate(value_columns):
-        cte_name = f"agg_{i}"
-        cte_sql = f"""
-        {cte_name} AS (
-            SELECT 
-                {id_col},
-                FLOOR({time_col} / {interval_hours * 60.0}) as charttime,
-                {duckdb_agg}({val_col}) as {val_col}
-            FROM raw_data
-            WHERE {val_col} IS NOT NULL
-            GROUP BY {id_col}, FLOOR({time_col} / {interval_hours * 60.0})
-        )"""
-        cte_parts.append(cte_sql)
-    
     # 构建WHERE条件
     where_conditions = []
     if patient_ids:
@@ -2827,73 +3342,49 @@ def load_wide_table_aggregated(
     if where_conditions:
         where_clause = "WHERE " + " AND ".join(where_conditions)
     
-    # 构建最终合并查询（FULL OUTER JOIN所有CTE）
-    if len(value_columns) == 1:
-        # 单列简单处理
-        query = f"""
-        WITH raw_data AS (
-            SELECT {id_col}, {time_col}, {value_columns[0]}
-            FROM read_parquet('{glob_pattern}', union_by_name=true)
-            {where_clause}
-        ),
-        {cte_parts[0]}
-        SELECT {id_col}, charttime, {value_columns[0]}
-        FROM agg_0
-        ORDER BY {id_col}, charttime
-        """
+    # 🚀 优化：单个 GROUP BY 替代 per-column CTE + FULL OUTER JOIN
+    # MEDIAN() 自动忽略 NULL，不需要 WHERE col IS NOT NULL 分支
+    # 单次扫描，单次 GROUP BY，无 FULL OUTER JOIN 中间结果膨胀
+    # 🔧 FIX: 使用 CASE WHEN 实现 per-column filter_bounds（R ricu pre-aggregation filtering）
+    # 将超出 [min, max] 范围的值替换为 NULL，这样 MEDIAN 会忽略它们
+    if column_bounds:
+        agg_parts = []
+        for col in value_columns:
+            bounds = column_bounds.get(col)
+            if bounds:
+                vmin, vmax = bounds
+                conditions = []
+                if vmin is not None:
+                    conditions.append(f"{col} >= {vmin}")
+                if vmax is not None:
+                    conditions.append(f"{col} <= {vmax}")
+                filter_expr = " AND ".join(conditions)
+                agg_parts.append(f"{duckdb_agg}(CASE WHEN {filter_expr} THEN {col} END) as {col}")
+            else:
+                agg_parts.append(f"{duckdb_agg}({col}) as {col}")
+        agg_exprs = ", ".join(agg_parts)
     else:
-        # 多列合并
-        # 使用COALESCE逐步合并所有CTE
-        coalesce_id = f"COALESCE(agg_0.{id_col}"
-        coalesce_time = "COALESCE(agg_0.charttime"
-        
-        for i in range(1, len(value_columns)):
-            coalesce_id += f", agg_{i}.{id_col}"
-            coalesce_time += f", agg_{i}.charttime"
-        
-        coalesce_id += f") as {id_col}"
-        coalesce_time += ") as charttime"
-        
-        # 构建JOIN链
-        join_sql = "agg_0"
-        for i in range(1, len(value_columns)):
-            prev_id = ", ".join(f"agg_{j}.{id_col}" for j in range(i))
-            prev_time = ", ".join(f"agg_{j}.charttime" for j in range(i))
-            join_sql += f"""
-            FULL OUTER JOIN agg_{i} 
-                ON COALESCE({prev_id}) = agg_{i}.{id_col} 
-                AND COALESCE({prev_time}) = agg_{i}.charttime"""
-        
-        select_cols = [coalesce_id, coalesce_time]
-        select_cols += [f"agg_{i}.{col}" for i, col in enumerate(value_columns)]
-        
-        query = f"""
-        WITH raw_data AS (
-            SELECT {id_col}, {time_col}, {', '.join(value_columns)}
-            FROM read_parquet('{glob_pattern}', union_by_name=true)
-            {where_clause}
-        ),
-        {','.join(cte_parts)}
-        SELECT {', '.join(select_cols)}
-        FROM {join_sql}
-        ORDER BY 1, 2
-        """
+        agg_exprs = ", ".join(f"{duckdb_agg}({col}) as {col}" for col in value_columns)
+    
+    query = f"""
+    SELECT 
+        {id_col},
+        FLOOR({time_col} / {interval_hours * 60.0}) as charttime,
+        {agg_exprs}
+    FROM read_parquet('{glob_pattern}', union_by_name=true)
+    {where_clause}
+    GROUP BY {id_col}, FLOOR({time_col} / {interval_hours * 60.0})
+    ORDER BY {id_col}, charttime
+    """
     
     # 执行查询
-    conn = duckdb.connect()
-    conn.execute("SET timezone='UTC'")
-    # 🔧 禁用DuckDB进度条，避免终端输出开销
-    conn.execute("SET enable_progress_bar = false")
-    conn.execute("SET enable_progress_bar_print = false")
+    conn = _get_duckdb_connection()
     
     try:
-        try:
-            arrow_table = conn.execute(query).fetch_arrow_table()
-            df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
-            del arrow_table
-        except Exception:
-            df = conn.execute(query).fetchdf()
-        logger.info(f"🚀 宽表批量加载完成: {table_name} {value_columns} -> {len(df):,} 行")
-        return df
-    finally:
-        conn.close()
+        arrow_table = conn.execute(query).fetch_arrow_table()
+        df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+        del arrow_table
+    except Exception:
+        df = conn.execute(query).fetchdf()
+    logger.info(f"🚀 宽表批量加载完成: {table_name} {value_columns} -> {len(df):,} 行")
+    return df

@@ -20,6 +20,7 @@ from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary
 from .resources import load_data_sources, load_dictionary
 from .cache_manager import get_cache_manager
+from .parallel_config import get_global_config, get_runtime_load_strategy
 from .table import ICUTable
 
 logger = logging.getLogger(__name__)
@@ -575,17 +576,17 @@ class BaseICULoader:
             if isinstance(win_length, str):
                 win_length = pd.Timedelta(win_length)
 
-            # 🚀 智能并行配置：如果未指定，根据概念数量自动优化
-            effective_concept_workers = concept_workers
-            if effective_concept_workers is None:
-                num_concepts = len(concepts)
-                if num_concepts >= 3:
-                    cpu_count = os.cpu_count() or 4
-                    effective_concept_workers = min(num_concepts, max(2, cpu_count // 2))
-                elif num_concepts == 2:
-                    effective_concept_workers = 2
-                else:
-                    effective_concept_workers = 1
+            num_patients = _batch_patient_count(patient_ids)
+            runtime_strategy = get_runtime_load_strategy(
+                concepts,
+                num_patients=num_patients if num_patients > 0 else None,
+                chunk_size=chunk_size,
+                requested_concept_workers=concept_workers,
+                requested_parallel_workers=parallel_workers,
+                requested_backend=parallel_backend if parallel_backend != "auto" else None,
+                config=get_global_config(),
+            )
+            effective_concept_workers = int(runtime_strategy["concept_workers"])
             
             if self.verbose:
                 logger.info(f"Loading {len(concepts)} concepts: {', '.join(concepts)}")
@@ -594,7 +595,11 @@ class BaseICULoader:
 
             batches = self._build_patient_batches(patient_ids, chunk_size)
             if batches:
-                worker_count = self._resolve_parallel_workers(parallel_workers)
+                worker_count = (
+                    self._resolve_parallel_workers(parallel_workers)
+                    if parallel_workers is not None
+                    else int(runtime_strategy["parallel_workers"])
+                )
                 return self._load_concepts_chunked(
                     concepts,
                     batches,
@@ -607,7 +612,7 @@ class BaseICULoader:
                     progress,
                     worker_count,
                     effective_concept_workers,
-                    parallel_backend,
+                    str(runtime_strategy["parallel_backend"]),
                     kwargs,
                 )
 
@@ -622,7 +627,7 @@ class BaseICULoader:
                 ricu_compatible,
                 effective_concept_workers,
                 kwargs,
-                preserve_cache=len(concepts) > 1,  # 🚀 多概念时保留缓存以加速
+                preserve_cache=bool(runtime_strategy["preserve_concept_cache"]),
             )
 
         except Exception as e:
@@ -636,7 +641,6 @@ class BaseICULoader:
         if not results:
             return pd.DataFrame()
 
-        # Start with first DataFrame
         merged_df = None
         id_cols = None
 
@@ -644,31 +648,80 @@ class BaseICULoader:
             if df.empty:
                 continue
 
-            # Identify ID columns from first non-empty DataFrame
             if id_cols is None:
-                id_cols = [col for col in df.columns if col in ['stay_id', 'subject_id', 'patientunitstayid', 'admissionid', 'patientid']]
+                id_cols = [
+                    col for col in df.columns
+                    if col in ['stay_id', 'subject_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']
+                ]
                 if not id_cols:
-                    id_cols = [df.columns[0]]  # Use first column as fallback
-                merged_df = df.copy()
+                    id_cols = [df.columns[0]]
+                merged_df = df
             else:
-                # Merge on ID columns
-                time_cols = [col for col in df.columns if 'time' in col.lower()]
-                merge_on = list(id_cols)
-                if time_cols:
-                    merge_on.extend(time_cols)
-
-                # Remove duplicate merge columns from df
-                df_merge = df.drop(columns=[col for col in merge_on if col in df.columns and col != merge_on[0]])
-
-                merged_df = pd.merge(
-                    merged_df,
-                    df_merge,
-                    on=id_cols,
-                    how='outer',
-                    suffixes=('', f'_{concept}')
-                )
+                merge_keys = self._get_merge_keys(merged_df, df, id_cols)
+                merged_df = self._outer_merge_frames(merged_df, df, merge_keys, concept)
 
         return merged_df if merged_df is not None else pd.DataFrame()
+
+    @staticmethod
+    def _get_merge_keys(left: pd.DataFrame, right: pd.DataFrame, id_cols: List[str]) -> List[str]:
+        """Choose stable merge keys, preferring shared ID + time columns."""
+        shared_ids = [col for col in id_cols if col in left.columns and col in right.columns]
+        shared_time = [
+            col for col in left.columns
+            if col in right.columns and ('time' in col.lower() or col in {'date', 'day'})
+        ]
+        return shared_ids + [col for col in shared_time if col not in shared_ids]
+
+    @staticmethod
+    def _has_unique_keys(frame: pd.DataFrame, merge_keys: List[str]) -> bool:
+        if not merge_keys:
+            return False
+        if any(col not in frame.columns for col in merge_keys):
+            return False
+        return not frame.duplicated(subset=merge_keys).any()
+
+    def _outer_merge_frames(
+        self,
+        left: pd.DataFrame,
+        right: pd.DataFrame,
+        merge_keys: List[str],
+        concept_name: str,
+    ) -> pd.DataFrame:
+        """Merge two concept frames with a low-copy fast path for unique keys."""
+        if not merge_keys:
+            return pd.concat([left, right], ignore_index=True, sort=False, copy=False)
+
+        overlapping_cols = [
+            col for col in left.columns
+            if col in right.columns and col not in merge_keys
+        ]
+        can_fast_join = (
+            not overlapping_cols
+            and self._has_unique_keys(left, merge_keys)
+            and self._has_unique_keys(right, merge_keys)
+        )
+
+        if can_fast_join:
+            left_indexed = left.set_index(merge_keys, drop=True)
+            right_indexed = right.set_index(merge_keys, drop=True)
+            return (
+                pd.concat(
+                    [left_indexed, right_indexed],
+                    axis=1,
+                    join='outer',
+                    sort=False,
+                    copy=False,
+                )
+                .reset_index()
+            )
+
+        return pd.merge(
+            left,
+            right,
+            on=merge_keys,
+            how='outer',
+            suffixes=('', f'_{concept_name}')
+        )
 
     def _load_concepts_once(
         self,
@@ -688,9 +741,6 @@ class BaseICULoader:
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         params = dict(extra_kwargs)
         verbose_flag = params.pop("verbose", self.verbose)
-        
-        # 🚀 优化：当加载多个相关概念时保留缓存（如SOFA的多个子概念）
-        preserve_cache or len(concepts) > 1
         
         resolver_obj: ConceptResolver
         if resolver is not None:
@@ -734,7 +784,7 @@ class BaseICULoader:
             # 🚀 优化：只清除表缓存，保留概念数据缓存以加速批量加载
             # 表缓存可能很大（原始数据），但概念缓存较小（聚合后的数据）
             # 这允许在连续的 load_concepts 调用之间共享概念缓存（如 sofa 和 sofa2 共享 fio2, plt 等）
-            resolver_obj.clear_table_cache(keep_concept_cache=True)
+            resolver_obj.clear_table_cache(keep_concept_cache=preserve_cache)
 
         if isinstance(result, dict):
             if not merge:
@@ -775,21 +825,11 @@ class BaseICULoader:
             logger.info(
                 f"🚀 启用多线程优化({backend}): {parallel_workers}线程处理{total_batches}批次"
             )
-            
-            # 智能预加载：只在患者数量足够时才预加载
-            all_patient_ids = []
-            for batch in batches:
-                if isinstance(batch, dict):
-                    for value in batch.values():
-                        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-                            all_patient_ids.extend(value)
-                            break
-                else:
-                    all_patient_ids.extend(batch)
 
             # ❌ 临时禁用预加载：预加载逻辑有bug，会在load_table时无限递归
             # TODO: 修复预加载逻辑后重新启用
-            logger.info(f"⚡ 数据规模({len(all_patient_ids)}患者)，预加载功能暂时禁用")
+            total_patients = sum(_batch_patient_count(batch) for batch in batches)
+            logger.info(f"⚡ 数据规模({total_patients}患者)，预加载功能暂时禁用")
             # if len(all_patient_ids) >= 1000:
             #     preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
             #     logger.
@@ -801,19 +841,9 @@ class BaseICULoader:
                 f"🚀 启用多进程优化: {parallel_workers}进程处理{total_batches}批次"
             )
 
-            # 为多进程模式也预加载大表，避免重复I/O
-            all_patient_ids = []
-            for batch in batches:
-                if isinstance(batch, dict):
-                    for value in batch.values():
-                        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-                            all_patient_ids.extend(value)
-                            break
-                else:
-                    all_patient_ids.extend(batch)
-
             # ❌ 临时禁用预加载
-            logger.info("⚡ 多进程模式，预加载功能暂时禁用")
+            total_patients = sum(_batch_patient_count(batch) for batch in batches)
+            logger.info(f"⚡ 多进程模式({total_patients}患者)，预加载功能暂时禁用")
             # preload_tables = ['chartevents', 'labevents', 'outputevents', 'procedureevents']
             # logger.info(f"📦 多进程模式预加载大表: {', '.join(preload_tables)}")
             # self.datasource.preload_tables(preload_tables, patient_ids=all_patient_ids)
@@ -963,7 +993,7 @@ class BaseICULoader:
             combined: Dict[str, Any] = {}
             for name, frames in aggregated_dict.items():
                 combined_frame = (
-                    pd.concat(frames, ignore_index=True)
+                    pd.concat(frames, ignore_index=True, sort=False, copy=False)
                     if len(frames) > 1
                     else frames[0]
                 )
@@ -985,7 +1015,7 @@ class BaseICULoader:
 
         if aggregated_frames:
             return (
-                pd.concat(aggregated_frames, ignore_index=True)
+                pd.concat(aggregated_frames, ignore_index=True, sort=False, copy=False)
                 if len(aggregated_frames) > 1
                 else aggregated_frames[0]
             )

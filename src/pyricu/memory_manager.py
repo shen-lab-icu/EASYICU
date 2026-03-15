@@ -445,12 +445,16 @@ def _merge_buffered_batches(
             for name, frame in batch.items():
                 if isinstance(frame, pd.DataFrame) and not frame.empty:
                     grouped.setdefault(name, []).append(frame)
-        return {name: pd.concat(frames, ignore_index=True) for name, frames in grouped.items() if frames}
+        return {
+            name: pd.concat(frames, ignore_index=True, sort=False, copy=False)
+            for name, frames in grouped.items()
+            if frames
+        }
 
     frames = [frame for frame in buffered_batches if isinstance(frame, pd.DataFrame) and not frame.empty]
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+    return pd.concat(frames, ignore_index=True, sort=False, copy=False)
 
 
 def _merge_parquet_batches(temp_dir: str) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
@@ -474,7 +478,7 @@ def _merge_parquet_batches(temp_dir: str) -> Union[pd.DataFrame, Dict[str, pd.Da
                 logger.warning(f"⚠️ 读取 {f} 失败: {e}")
         if not frames:
             return pd.DataFrame()
-        return pd.concat(frames, ignore_index=True)
+        return pd.concat(frames, ignore_index=True, sort=False, copy=False)
 
     grouped: Dict[str, List[Path]] = defaultdict(list)
     for f in dict_files:
@@ -496,7 +500,7 @@ def _merge_parquet_batches(temp_dir: str) -> Union[pd.DataFrame, Dict[str, pd.Da
             except Exception as e:
                 logger.warning(f"⚠️ 读取 {f} 失败: {e}")
         if frames:
-            merged[concept] = pd.concat(frames, ignore_index=True)
+            merged[concept] = pd.concat(frames, ignore_index=True, sort=False, copy=False)
             del frames
             release_memory()
 
@@ -760,4 +764,117 @@ def inprocess_batch_load(
             total_rows = sum(len(df) for df in final.values())
             print(f"   ✅ 完成: {len(final)} concepts / {total_rows} rows, RSS: {get_rss_mb():.0f}MB")
 
+    return final
+
+
+def inprocess_batch_load_streaming(
+    loader,
+    concepts: List[str],
+    patient_batches,
+    total_patients: int,
+    batch_size: int,
+    verbose: bool = False,
+    memory_efficient: bool = False,
+    **load_kwargs,
+) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+    """
+    流式分批加载，不预先物化全部 patient_ids。
+
+    适用于全量 cohort：ID 批次直接从底层存储流出，避免先在 Python 中构造一个超大 ID 列表。
+    """
+    num_batches = max(1, (total_patients + batch_size - 1) // batch_size)
+
+    if verbose:
+        print(f"🔄 流式进程内分批: {total_patients} patients, batch_size={batch_size}, {num_batches} batches")
+
+    buffered_batches: List[Union[pd.DataFrame, Dict[str, pd.DataFrame]]] = []
+    buffered_mb = 0.0
+    estimated_total_mb = 0.0
+    representative_batch_mb = 0.0
+    spill_dir: Optional[str] = None
+    spill_batches = 0
+
+    for batch_num, patient_id_batch in enumerate(patient_batches, start=1):
+        id_col = list(patient_id_batch.keys())[0]
+        batch_ids = list(patient_id_batch.values())[0]
+
+        if verbose:
+            rss = get_rss_mb()
+            print(
+                f"   📦 Batch {batch_num}/{num_batches}: {len(batch_ids)} patients (RSS: {rss:.0f}MB)...",
+                end='',
+                flush=True,
+            )
+
+        loader.clear_cache()
+        batch_result = loader.load_concepts(
+            concepts=concepts,
+            patient_ids={id_col: batch_ids},
+            **load_kwargs,
+        )
+
+        if spill_dir is None:
+            if representative_batch_mb == 0.0:
+                representative_batch_mb = _estimate_result_size_mb(batch_result)
+                if representative_batch_mb > 0:
+                    estimated_total_mb = representative_batch_mb * num_batches
+            batch_result_mb = representative_batch_mb
+        else:
+            batch_result_mb = 0.0
+
+        if isinstance(batch_result, pd.DataFrame) and len(batch_result) > 0:
+            if verbose:
+                print(f" ✅ ({len(batch_result)} rows)", end='')
+        elif isinstance(batch_result, dict):
+            if verbose:
+                non_empty = sum(len(df) for df in batch_result.values() if isinstance(df, pd.DataFrame) and len(df) > 0)
+                print(f" ✅ ({non_empty} rows / {len(batch_result)} concepts)", end='')
+        elif verbose:
+            print(" ⚪ (empty)", end='')
+
+        if spill_dir is None and _should_spill_inprocess_batches(
+            memory_efficient=memory_efficient,
+            num_batches=num_batches,
+            estimated_total_mb=estimated_total_mb,
+            buffered_mb=buffered_mb + batch_result_mb,
+        ):
+            spill_dir = tempfile.mkdtemp(prefix='pyricu_streaming_')
+            if verbose:
+                print(f" 💽 spill→disk[{spill_dir}]", end='')
+            for buffered in buffered_batches:
+                spill_batches += 1
+                _write_batch_result_to_parquet(buffered, os.path.join(spill_dir, f'batch_{spill_batches:04d}'))
+            buffered_batches.clear()
+            buffered_mb = 0.0
+            release_memory(aggressive=True)
+
+        if spill_dir is not None:
+            spill_batches += 1
+            _write_batch_result_to_parquet(batch_result, os.path.join(spill_dir, f'batch_{spill_batches:04d}'))
+            del batch_result
+        elif (
+            isinstance(batch_result, pd.DataFrame) and not batch_result.empty
+        ) or isinstance(batch_result, dict):
+            buffered_batches.append(batch_result)
+            buffered_mb += batch_result_mb
+
+        freed = release_memory()
+        if verbose:
+            print(f" [freed {freed}MB, RSS: {get_rss_mb():.0f}MB]")
+
+    if not buffered_batches and spill_dir is None:
+        return pd.DataFrame()
+
+    if spill_dir is not None:
+        try:
+            final = _merge_parquet_batches(spill_dir)
+        finally:
+            import shutil
+            shutil.rmtree(spill_dir, ignore_errors=True)
+        release_memory(aggressive=True)
+        return final
+
+    final = _merge_buffered_batches(buffered_batches)
+    del buffered_batches
+    release_memory(aggressive=True)
     return final
