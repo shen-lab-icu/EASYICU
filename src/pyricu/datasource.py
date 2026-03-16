@@ -76,6 +76,12 @@ def _get_duckdb_connection():
         con.execute("SET timezone='UTC'")
         con.execute("SET enable_progress_bar = false")
         con.execute("SET enable_progress_bar_print = false")
+        # 🚀 性能优化: 支持通过环境变量限制 DuckDB 线程数
+        # 并行模式下 6 个进程 × 默认线程数(half cores) → 严重过度订阅
+        import os
+        _max_threads = os.environ.get('PYRICU_DUCKDB_THREADS')
+        if _max_threads:
+            con.execute(f"SET threads = {int(_max_threads)}")
         _duckdb_local.con = con
     return con
 
@@ -1550,11 +1556,17 @@ class ICUDataSource:
                     del tbl
                 except (ImportError, Exception):
                     # 如果PyArrow过滤失败，回退到pandas后过滤
-                    df = _coerce_string_dtypes(pd.read_parquet(path, columns=list(columns) if columns else None, engine='pyarrow'))
+                    import pyarrow.parquet as _pq2
+                    _tbl2 = _pq2.read_table(path, columns=list(columns) if columns else None)
+                    df = _arrow_to_pandas_compat(_tbl2)
+                    del _tbl2
                     if patient_ids_filter.column in df.columns:
                         df = patient_ids_filter.apply(df)
             else:
-                df = _coerce_string_dtypes(pd.read_parquet(path, columns=list(columns) if columns else None, engine='pyarrow'))
+                import pyarrow.parquet as _pq3
+                _tbl3 = _pq3.read_table(path, columns=list(columns) if columns else None)
+                df = _arrow_to_pandas_compat(_tbl3)
+                del _tbl3
             
             # 处理重复列名（如果存在）
             if df.columns.duplicated().any():
@@ -2097,6 +2109,7 @@ class ICUDataSource:
                 except Exception:
                     pass  # Fallback to pandas.read_parquet below
             df = _coerce_string_dtypes(pd.read_parquet(f, columns=list(columns) if columns else None))
+            # NOTE: This fallback path is rare; primary path uses _arrow_to_pandas_compat above
             if filter_tuple:
                 col_name, target_ids = filter_tuple
                 if col_name in df.columns:
@@ -2304,6 +2317,7 @@ def load_bucketed_table_aggregated(
     convert_unit_op: Optional[str] = None,  # 🚀 DuckDB内联convert_unit运算符
     convert_unit_factor: Optional[float] = None,  # 🚀 DuckDB内联convert_unit因子
     convert_unit_filter: Optional[str] = None,  # 🚀 DuckDB内联convert_unit单位过滤模式
+    value_transform: Optional[str] = None,  # 🚀 通用SQL值转换表达式（如 percent_as_numeric, set_val_na）
 ) -> pd.DataFrame:
     """
     🚀 高性能分桶表加载：在DuckDB中完成聚合降采样
@@ -2518,10 +2532,16 @@ def load_bucketed_table_aggregated(
     # R ricu: clamp_var() 先将超范围值设为NA → 再按小时聚合（NA不参与median）
     # PyRICU: 必须在聚合前过滤，否则per-itemid-per-hour的median可能超范围
     # 导致某些小时全部被丢弃（即使该小时有其他itemid的合法值）
-    if value_min is not None:
-        where_conditions.append(f"{value_column} >= {value_min}")
-    if value_max is not None:
-        where_conditions.append(f"{value_column} <= {value_max}")
+    # 🚀 当 value_transform 或 inline convert_unit 存在时，min/max 不在 WHERE 过滤 raw column
+    # - value_transform (fahr_to_cels/percent_as_numeric): raw column 可能是 VARCHAR 或不同单位
+    # - _has_inline_convert (binary_op(*, factor)): raw 值单位与 min/max 不同（如 µmol/L vs mg/dL）
+    # R ricu 流程: callback(convert) → change_interval(aggregate) → filter_bounds
+    # 所以 bounds 应该在 post-aggregation 阶段（concept.py ~L3838）应用
+    if not value_transform and not (convert_unit_op is not None and convert_unit_factor is not None):
+        if value_min is not None:
+            where_conditions.append(f"{value_column} >= {value_min}")
+        if value_max is not None:
+            where_conditions.append(f"{value_column} <= {value_max}")
     
     where_clause = "WHERE " + " AND ".join(where_conditions)
     
@@ -2585,6 +2605,12 @@ def load_bucketed_table_aggregated(
             # 无单位过滤：转换所有行
             _value_expr = f"{value_column} {_op_sql} {convert_unit_factor}"
         _agg_value_expr = f"{duckdb_agg}({_value_expr}) as {value_column}"
+    elif value_transform:
+        # 🚀 通用值转换表达式（percent_as_numeric, set_val_na, fahr_to_cels）
+        # R ricu 流程: callback → change_interval(aggregate) → filter_bounds
+        # filter_bounds 在 aggregation 之后执行，所以 DuckDB 只做 MEDIAN(transform)
+        # 不在 MEDIAN 内部过滤 min/max。post-agg filter_bounds 在 concept.py 中处理
+        _agg_value_expr = f"{duckdb_agg}({value_transform}) as {value_column}"
     else:
         _agg_value_expr = f"{duckdb_agg}({value_column}) as {value_column}"
     
@@ -2647,6 +2673,10 @@ def load_bucketed_table_aggregated(
             else:
                 _hirid_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
             _hirid_agg_expr = f"{duckdb_agg}({_hirid_value_expr}) as {value_column}"
+        elif value_transform:
+            # 🚀 通用值转换表达式 — post-agg filter_bounds 在 concept.py 中处理
+            _vt_aliased = value_transform.replace(f'"{ value_column}"', f'o."{value_column}"')
+            _hirid_agg_expr = f"{duckdb_agg}({_vt_aliased}) as {value_column}"
         else:
             _hirid_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
         # R ricu 不按 variableid 分组（跨 variableid 池化取聚合）
@@ -2698,6 +2728,10 @@ def load_bucketed_table_aggregated(
             else:
                 _mimic_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
             _mimic_agg_expr = f"{duckdb_agg}({_mimic_value_expr}) as {value_column}"
+        elif value_transform:
+            # 🚀 通用值转换表达式 — post-agg filter_bounds 在 concept.py 中处理
+            _vt_aliased = value_transform.replace(f'"{ value_column}"', f'o."{value_column}"')
+            _mimic_agg_expr = f"{duckdb_agg}({_vt_aliased}) as {value_column}"
         else:
             _mimic_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
         _mimic_unit_select = ",\n            ANY_VALUE(o.unit) as unit" if include_unit else ""
@@ -2733,6 +2767,10 @@ def load_bucketed_table_aggregated(
             _outer_time_expr = f"FLOOR(EPOCH({time_col} - CAST(intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
             # Value agg expression without table alias
             _outer_agg_expr = _mimic_agg_expr.replace('o.', '')
+            # Extra columns needed in CTE for outer agg expression (e.g. unit column for convert_unit)
+            _cte_extra_cols = ""
+            if _has_inline_convert and convert_unit_filter and _unit_col_name:
+                _cte_extra_cols = f", o.{_unit_col_name}"
             
             if patient_ids:
                 # Targeted patient loading: filter hadm_ids by target stay_ids
@@ -2752,7 +2790,7 @@ def load_bucketed_table_aggregated(
                     WHERE hadm_id IN (SELECT hadm_id FROM target_hadms)
                 ),
                 events_joined AS (
-                    SELECT o.{value_column}, o.{time_col}, o.hadm_id,
+                    SELECT o.{value_column}, o.{time_col}, o.hadm_id{_cte_extra_cols},
                            a.{stay_col}, a.intime,
                            ROW_NUMBER() OVER (
                                PARTITION BY o.hadm_id, o.{time_col}, o.{value_column}
@@ -2782,7 +2820,7 @@ def load_bucketed_table_aggregated(
                     FROM {_read_func}('{icustays_path}')
                 ),
                 events_joined AS (
-                    SELECT o.{value_column}, o.{time_col}, o.hadm_id,
+                    SELECT o.{value_column}, o.{time_col}, o.hadm_id{_cte_extra_cols},
                            a.{stay_col}, a.intime,
                            ROW_NUMBER() OVER (
                                PARTITION BY o.hadm_id, o.{time_col}, o.{value_column}
@@ -2840,6 +2878,10 @@ def load_bucketed_table_aggregated(
             else:
                 _sic_value_expr = f"o.{value_column} {_op_sql} {convert_unit_factor}"
             _sic_agg_expr = f"{duckdb_agg}({_sic_value_expr}) as {value_column}"
+        elif value_transform:
+            # 🚀 通用值转换表达式 — post-agg filter_bounds 在 concept.py 中处理
+            _vt_aliased = value_transform.replace(f'"{value_column}"', f'o."{value_column}"')
+            _sic_agg_expr = f"{duckdb_agg}({_vt_aliased}) as {value_column}"
         else:
             _sic_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
         
@@ -2894,6 +2936,11 @@ def load_bucketed_table_aggregated(
             del arrow_table
         except Exception:
             df = conn.execute(query).fetchdf()
+        # Downcast float64 value columns to float32 (skip ID/time columns)
+        _skip_cols = {id_col, 'charttime', 'unit'}
+        for c in df.columns:
+            if c not in _skip_cols and df[c].dtype == np.float64:
+                df[c] = df[c].astype(np.float32)
         logger.info(f"🚀 分桶表DuckDB聚合完成: {table_name} itemids={len(itemids)} -> {len(df):,} 行")
         return df
     except Exception as e:
@@ -3258,6 +3305,11 @@ def load_bucketed_table_multi_aggregated(
         len(all_itemids),
         len(df),
     )
+    # Downcast float64 value columns to float32 (skip ID/time columns)
+    _skip_cols = {id_col, 'charttime', 'measuredat_minutes'}
+    for c in df.columns:
+        if c not in _skip_cols and df[c].dtype == np.float64:
+            df[c] = df[c].astype(np.float32)
     return df
 
 
@@ -3386,5 +3438,10 @@ def load_wide_table_aggregated(
         del arrow_table
     except Exception:
         df = conn.execute(query).fetchdf()
+    # Downcast float64 value columns to float32 (skip ID/time columns)
+    _skip_cols = {id_col, 'charttime'}
+    for c in df.columns:
+        if c not in _skip_cols and df[c].dtype == np.float64:
+            df[c] = df[c].astype(np.float32)
     logger.info(f"🚀 宽表批量加载完成: {table_name} {value_columns} -> {len(df):,} 行")
     return df
