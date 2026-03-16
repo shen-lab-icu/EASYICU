@@ -806,7 +806,9 @@ def merge_concepts_ricu_style(
     if len(indexed_frames) == 1:
         merged = indexed_frames[0].reset_index()
     else:
-        merged = pd.concat(indexed_frames, axis=1, join="outer", sort=False, copy=False).reset_index()
+        # 🚀 sort=True: 在 concat 过程中排序 (id, time) 索引，
+        # 比 concat 后再 sort_values 更快（利用部分有序性）
+        merged = pd.concat(indexed_frames, axis=1, join="outer", sort=True, copy=False).reset_index()
     del indexed_frames  # 释放索引帧
     
     # 合并静态概念 (outer join 确保仅有静态数据的患者也被保留)
@@ -814,8 +816,9 @@ def merge_concepts_ricu_style(
         merged = merged.merge(sdf, on="id", how="outer", suffixes=('', '_drop'))
         merged = merged[[c for c in merged.columns if not c.endswith('_drop')]]
     
-    # 排序 (NaT 放在最后)
-    merged = merged.sort_values(["id", "time"], ignore_index=True, na_position="last")
+    # 🚀 已在 pd.concat(sort=True) 中排序，仅需处理静态概念合并后的新行
+    if static_concepts:
+        merged = merged.sort_values(["id", "time"], ignore_index=True, na_position="last")
     
     # 重命名列以匹配ricu输出
     merged = merged.rename(columns={"id": id_col, "time": time_col})

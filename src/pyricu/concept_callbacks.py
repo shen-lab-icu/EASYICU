@@ -3029,6 +3029,14 @@ def _match_fio2_fallback_loop(
     left_sorted = left_df.sort_values(by=id_columns + [index_column]).reset_index(drop=True)
     right_sorted = right_df.sort_values(by=id_columns + [index_column]).reset_index(drop=True)
     
+    # 🔧 Align ID column dtypes (int32 vs int64 from different DuckDB sources)
+    for col in id_columns:
+        if col in left_sorted.columns and col in right_sorted.columns:
+            if left_sorted[col].dtype != right_sorted[col].dtype:
+                common_dtype = np.result_type(left_sorted[col].dtype, right_sorted[col].dtype)
+                left_sorted[col] = left_sorted[col].astype(common_dtype)
+                right_sorted[col] = right_sorted[col].astype(common_dtype)
+
     # 创建 key 到整数索引的映射（用于计算偏移量）
     all_keys = pd.concat([left_sorted[id_columns[0]], right_sorted[id_columns[0]]]).unique()
     key_to_idx = {k: i for i, k in enumerate(sorted(all_keys))}
@@ -3335,45 +3343,77 @@ def _match_fio2(
             effective_tolerance = match_win
 
         sort_cols = id_columns + [unified_time_col]
+        # 🔧 Align by-column dtypes before merge_asof (int32 vs int64 from different DuckDB sources)
+        for col in id_columns:
+            if col in o2_subset.columns and col in fio2_subset.columns:
+                if o2_subset[col].dtype != fio2_subset[col].dtype:
+                    common_dtype = np.result_type(o2_subset[col].dtype, fio2_subset[col].dtype)
+                    o2_subset[col] = o2_subset[col].astype(common_dtype)
+                    fio2_subset[col] = fio2_subset[col].astype(common_dtype)
+
         o2_subset = o2_subset.sort_values(by=sort_cols, kind='mergesort').reset_index(drop=True)
         fio2_subset = fio2_subset.sort_values(by=sort_cols, kind='mergesort').reset_index(drop=True)
 
-        # 🚀 Bidirectional merge_asof with direction='nearest'
-        # fwd: for each PO2, find nearest FiO2 within window
-        # bwd: for each FiO2, find nearest PO2 within window
-        o2_cols = id_columns + [unified_time_col, o2_col]
-        fio2_cols = id_columns + [unified_time_col, fio2_col]
+        # 🚀 Single backward merge_asof with per-patient time offset
+        # R ricu: merge(o2, fio2, roll = match_win) = single backward rolling join.
+        # Per-patient offset avoids 'by' parameter (which fails on dtype mismatches)
+        # and cross-patient isolation is guaranteed by offset >> tolerance.
         merge_cols = id_columns + [unified_time_col, o2_col, fio2_col]
-        by_cols = id_columns if id_columns else None
+        id_col_name = id_columns[0] if id_columns else None
 
-        try:
-            merged_fwd = pd.merge_asof(
-                o2_subset[o2_cols], fio2_subset[fio2_cols],
-                on=unified_time_col, by=by_cols,
-                tolerance=effective_tolerance, direction='nearest'
-            )
-        except Exception:
-            merged_fwd = _match_fio2_fallback_loop(
-                o2_subset, fio2_subset, id_columns, unified_time_col,
-                o2_col, fio2_col, match_win, 'forward'
-            )
+        if id_col_name is not None:
+            # Compute numeric hours for offset computation
+            if pd.api.types.is_numeric_dtype(o2_subset[unified_time_col]):
+                o2_t = o2_subset[unified_time_col].values.astype(np.float64)
+                fio2_t = fio2_subset[unified_time_col].values.astype(np.float64)
+            else:
+                _base = pd.Timestamp('2000-01-01')
+                o2_t = (o2_subset[unified_time_col] - _base).dt.total_seconds().values / 3600.0
+                fio2_t = (fio2_subset[unified_time_col] - _base).dt.total_seconds().values / 3600.0
+            tol_hours = match_win.total_seconds() / 3600.0
 
-        try:
-            merged_bwd = pd.merge_asof(
-                fio2_subset[fio2_cols], o2_subset[o2_cols],
-                on=unified_time_col, by=by_cols,
-                tolerance=effective_tolerance, direction='nearest'
-            )
-        except Exception:
-            merged_bwd = _match_fio2_fallback_loop(
-                fio2_subset, o2_subset, id_columns, unified_time_col,
-                fio2_col, o2_col, match_win, 'backward'
-            )
+            # Build per-patient offset (data already sorted by pid+time → global time is sorted)
+            all_pids = np.union1d(o2_subset[id_col_name].unique(), fio2_subset[id_col_name].unique())
+            pid_rank = dict(zip(sorted(all_pids), range(len(all_pids))))
+            o2_prank = o2_subset[id_col_name].map(pid_rank).values
+            fio2_prank = fio2_subset[id_col_name].map(pid_rank).values
+            tr = max(np.ptp(o2_t[np.isfinite(o2_t)]) if np.isfinite(o2_t).any() else 0,
+                     np.ptp(fio2_t[np.isfinite(fio2_t)]) if np.isfinite(fio2_t).any() else 0)
+            offset = max(tr, 1000000.0) * 10 + 100
 
-        # 🚀 Skip drop_duplicates — rare exact duplicates are handled by downstream median aggregation
-        merged_fwd = merged_fwd[merge_cols] if not merged_fwd.empty else pd.DataFrame(columns=merge_cols)
-        merged_bwd = merged_bwd[merge_cols] if not merged_bwd.empty else pd.DataFrame(columns=merge_cols)
-        merged = pd.concat([merged_fwd, merged_bwd], ignore_index=True)
+            o2_g = o2_t + o2_prank * offset
+            fio2_g = fio2_t + fio2_prank * offset
+
+            # Bidirectional merge_asof on global time (no 'by' parameter, no failure)
+            # Both use direction='backward': perspective 1 finds fio2 before o2,
+            # perspective 2 finds o2 before fio2. Together they cover all temporal orderings.
+            left_o = pd.DataFrame({'_g': o2_g, o2_col: o2_subset[o2_col].values})
+            right_f = pd.DataFrame({'_g': fio2_g, fio2_col: fio2_subset[fio2_col].values})
+            result_fwd = pd.merge_asof(left_o, right_f, on='_g', tolerance=tol_hours, direction='backward')
+            left_f = pd.DataFrame({'_g': fio2_g, fio2_col: fio2_subset[fio2_col].values})
+            right_o = pd.DataFrame({'_g': o2_g, o2_col: o2_subset[o2_col].values})
+            result_bwd = pd.merge_asof(left_f, right_o, on='_g', tolerance=tol_hours, direction='backward')
+
+            merged = pd.concat([
+                pd.DataFrame({
+                    id_col_name: o2_subset[id_col_name].values,
+                    unified_time_col: o2_subset[unified_time_col].values,
+                    o2_col: result_fwd[o2_col].values,
+                    fio2_col: result_fwd[fio2_col].values,
+                }),
+                pd.DataFrame({
+                    id_col_name: fio2_subset[id_col_name].values,
+                    unified_time_col: fio2_subset[unified_time_col].values,
+                    o2_col: result_bwd[o2_col].values,
+                    fio2_col: result_bwd[fio2_col].values,
+                }),
+            ], ignore_index=True)
+        else:
+            o2_sorted = o2_subset[[unified_time_col, o2_col]].sort_values(unified_time_col)
+            fio2_sorted = fio2_subset[[unified_time_col, fio2_col]].sort_values(unified_time_col)
+            fwd = pd.merge_asof(o2_sorted, fio2_sorted, on=unified_time_col, tolerance=effective_tolerance, direction='backward')
+            bwd = pd.merge_asof(fio2_sorted, o2_sorted, on=unified_time_col, tolerance=effective_tolerance, direction='backward')
+            merged = pd.concat([fwd, bwd], ignore_index=True)
 
         # Convert datetime back to numeric if we converted above
         if not (o2_time_is_numeric and fio2_time_is_numeric) and (o2_time_is_numeric or fio2_time_is_numeric):

@@ -62,6 +62,7 @@ demo_easy_output.txt
 demo.py
 examples/
 hl_sepsis_newborn/
+hl_sepsis_newborn_model/
 tools/archived
 output
 # 测试文件 - 不上传测试代码

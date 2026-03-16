@@ -432,6 +432,10 @@ class ConceptResolver:
         # Key: (concept_name, patient_ids_hash, agg_token)
         # Legacy key: (concept_name, patient_ids_hash)
         self._raw_concept_cache: Dict[tuple, ICUTable] = {}
+        # 🚀 预聚合缓存：存储 change_interval 之前的原始数据
+        # Key: (concept_name, patient_ids_hash)
+        # Value: dict with temp_table, interval, fill_missing, fill_method, skip_ci
+        self._pre_agg_cache: Dict[tuple, dict] = {}
         # 多线程支持：使用线程局部存储避免循环依赖误报
         self._thread_local = thread_local()
         # 🔧 嵌套调用深度跟踪：防止递归概念的内部调用清除缓存
@@ -472,6 +476,7 @@ class ConceptResolver:
             if not keep_concept_cache:
                 self._concept_data_cache.clear()  # 🚀 清除概念数据缓存
                 self._raw_concept_cache.clear()   # 🆕 清除原始数据缓存
+                self._pre_agg_cache.clear()        # 🆕 清除预聚合缓存
             # 清除 rgx_itm DISTINCT 缓存
             if hasattr(self, '_rgx_distinct_cache'):
                 self._rgx_distinct_cache.clear()
@@ -482,6 +487,23 @@ class ConceptResolver:
     def clear(self) -> None:
         """Alias for clear_table_cache, used by CacheManager."""
         self.clear_table_cache(keep_concept_cache=False)
+
+    @staticmethod
+    def _downcast_float64_to_float32(df: pd.DataFrame) -> pd.DataFrame:
+        """Downcast float64 value columns to float32 to save ~50% memory.
+        
+        Skips ID columns and time columns which need full precision.
+        Idempotent: float32 columns are unchanged.
+        """
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return df
+        _skip = {'charttime', 'measuredat_minutes',
+                 'stay_id', 'patientunitstayid', 'admissionid',
+                 'patientid', 'icustay_id', 'CaseID'}
+        for col in df.columns:
+            if col not in _skip and df[col].dtype == np.float64:
+                df[col] = df[col].astype(np.float32)
+        return df
 
     def get_raw_concept(
         self,
@@ -1289,7 +1311,7 @@ class ConceptResolver:
             if wide_table_merged_df is not None and not ricu_compatible:
                 if verbose:
                     logger.info("🚀 使用宽表批量加载的合并结果，跳过合并步骤")
-                return wide_table_merged_df
+                return self._downcast_float64_to_float32(wide_table_merged_df)
 
             # 如果是ricu_compatible模式，使用增强的ricu风格合并
             if ricu_compatible:
@@ -1362,7 +1384,7 @@ class ConceptResolver:
                         if merged_partial is not None:
                             if verbose:
                                 logger.info("🚀 使用部分宽表批量结果并仅合并剩余概念")
-                            return merged_partial
+                            return self._downcast_float64_to_float32(merged_partial)
                         # Partial merge failed (e.g. non-charttime time column) — fall through to full merge
                     elif _all_covered:
                         if verbose:
@@ -1372,7 +1394,7 @@ class ConceptResolver:
                             if _tc in wide_table_merged_df.columns:
                                 _sort_time = _tc
                                 break
-                        return wide_table_merged_df.reset_index(drop=True)
+                        return self._downcast_float64_to_float32(wide_table_merged_df.reset_index(drop=True))
                 return self._to_ricu_format_merged_enhanced(tables, names, interval, data_source=data_source)
 
             merged = self._merge_tables(tables)
@@ -1414,6 +1436,8 @@ class ConceptResolver:
             verbose = False  # 批量加载时抑制verbose输出
         definition = self.dictionary[concept_name]
         
+        # 🔧 FIX 2025-02-14: vent_ind 是特殊的 rec_cncpt - 它有 callback 且需要正确的 win_tbl 格式
+
         # 🔧 FIX 2025-02-14: vent_ind 是特殊的 rec_cncpt - 它有 callback 且需要正确的 win_tbl 格式
         # 其他有 callback 的概念（如 gcs, sofa_*）可能有直接的数据源，应该优先使用直接加载
         use_recursive = False
@@ -1502,6 +1526,7 @@ class ConceptResolver:
             )
         
         config = data_source.config
+        
         sources = definition.for_data_source(config)
         if not sources:
             # 🔧 FIX: 当数据源未配置时，返回空表而不是报错
@@ -1535,6 +1560,21 @@ class ConceptResolver:
         
         # 🔧 提取数据库名称，用于后续的数据库特定处理
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+
+        # 🚀 预检查：多源概念的 value_transform 回调计数
+        # 当 2+ 个源使用 value_transform（percent_as_numeric, set_val_na, fahr_to_cels）时，
+        # DuckDB 每源单独 MEDIAN 聚合会产生 median-of-medians（≠ median-of-all-raw-data）。
+        # 禁止 DuckDB 聚合以保持与 R ricu 一致的跨源池化 MEDIAN。
+        _n_value_transform_sources = 0
+        for _src in sources:
+            _cb = getattr(_src, 'callback', None)
+            if isinstance(_cb, str):
+                _cb_stripped = _cb.strip()
+                if (_cb_stripped == 'transform_fun(percent_as_numeric)' or
+                    (_cb_stripped.startswith('convert_unit(') and
+                     ('set_val(' in _cb_stripped or 'fahr_to_cels' in _cb_stripped))):
+                    _n_value_transform_sources += 1
+        _block_duckdb_value_transform = _n_value_transform_sources > 1
 
         for source in sources:
             _convert_unit_callback_for_duckdb = False  # 每个 source 重置
@@ -1882,12 +1922,23 @@ class ConceptResolver:
                     except Exception:
                         pass
                     
+                    # 🚀 DuckDB 可内联回调检测
+                    _is_percent_as_numeric = False
+                    _is_set_val_na = False
+                    _is_fahr_to_cels = False
+                    _duckdb_value_transform = None  # SQL transform expression
+                    
                     if _has_bucket_dir:
                         has_sub_var = getattr(source, 'sub_var', None) is not None
                         has_callback = getattr(source, 'callback', None) is not None
                         is_convert_unit = (
                             has_callback and isinstance(source.callback, str) and
                             source.callback.strip().startswith('convert_unit(')
+                        )
+                        # 🚀 检测 transform_fun(percent_as_numeric) — 可内联到 DuckDB
+                        _is_percent_as_numeric = (
+                            has_callback and isinstance(source.callback, str) and
+                            source.callback.strip() == 'transform_fun(percent_as_numeric)'
                         )
                         _mimic_hospital_tables = {'prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services'}
                         _needs_hadm_to_stay_mapping = (
@@ -1900,8 +1951,18 @@ class ConceptResolver:
                         _skip_db_duckdb = (
                             (db_name in ('eicu', 'eicu_demo') and source.table == 'nursecharting')
                         )
-                        if has_sub_var and (not has_callback or is_convert_unit) and source.ids and _target != 'id_tbl' and not _skip_db_duckdb:
-                            itemids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
+                        # 🚀 使用 regex 预匹配的 IDs 作为 source.ids 的补充
+                        _effective_ids = source.ids
+                        if not _effective_ids and _rgx_pre_matched_ids:
+                            _effective_ids = _rgx_pre_matched_ids
+                        # 🚀 扩展 DuckDB 门控：接受 percent_as_numeric/set_val_na/fahr_to_cels 回调
+                        # 但多源概念的 value_transform 会被禁止（防止 median-of-medians）
+                        _can_inline_callback = not has_callback or is_convert_unit or _is_percent_as_numeric
+                        if _block_duckdb_value_transform and (_is_percent_as_numeric or is_convert_unit):
+                            # 多源 value_transform：禁止内联，回退到 Python 回调路径
+                            _can_inline_callback = not has_callback
+                        if has_sub_var and _can_inline_callback and _effective_ids and _target != 'id_tbl' and not _skip_db_duckdb:
+                            itemids = list(_effective_ids) if hasattr(_effective_ids, '__iter__') else [_effective_ids]
                             use_duckdb_aggregation = len(itemids) > 0
                             if is_convert_unit and use_duckdb_aggregation:
                                 _convert_unit_callback_for_duckdb = True
@@ -1926,12 +1987,25 @@ class ConceptResolver:
                                         _convert_unit_op = _bm.group(1)
                                         try: _convert_unit_factor = float(_bm.group(2))
                                         except: pass
+                                    # 🚀 检测 set_val(NA) 和 fahr_to_cels
+                                    elif _args:
+                                        _first_arg = _args[0].strip()
+                                        if _first_arg == 'set_val(NA)':
+                                            _is_set_val_na = True
+                                        elif _first_arg == 'fahr_to_cels':
+                                            _is_fahr_to_cels = True
                                     _convert_unit_filter = _args[2].strip().strip("'\"") if len(_args) > 2 else None
-                                # 🔧 FIX: 非 binary_op 转换（如 fahr_to_cels）无法在 DuckDB 中内联
-                                # 必须回退到 Python 回调路径
+                                # 🚀 set_val(NA) / fahr_to_cels 可内联到 DuckDB
                                 if _convert_unit_factor is None:
-                                    _convert_unit_callback_for_duckdb = False
-                                    use_duckdb_aggregation = False
+                                    if _is_set_val_na or _is_fahr_to_cels:
+                                        _convert_unit_callback_for_duckdb = True
+                                        # value_transform will be built below after value_col is known
+                                    else:
+                                        _convert_unit_callback_for_duckdb = False
+                                        use_duckdb_aggregation = False
+                            if _is_percent_as_numeric and use_duckdb_aggregation:
+                                _convert_unit_callback_for_duckdb = True
+                                # value_transform will be built below after value_col is known
                     
                     if use_duckdb_aggregation:
                         # 使用DuckDB层聚合
@@ -1960,7 +2034,36 @@ class ConceptResolver:
                         if verbose:
                             print(f"   🚀 使用DuckDB聚合优化: {source.table} itemids={len(itemids)} value_col={value_col} patients={len(patient_ids_list) if patient_ids_list else 'all'}")
                         
-                        # 🔧 FIX 2026-03: 使用调用者指定的聚合函数，而非硬编码 median
+                        # � 构建 DuckDB 值转换表达式（用于内联回调）
+                        if _is_percent_as_numeric:
+                            # percent_as_numeric: 去除 '%' 并转为数值
+                            _duckdb_value_transform = f"TRY_CAST(REPLACE(TRIM(CAST({value_col} AS VARCHAR)), '%', '') AS DOUBLE)"
+                        elif (_is_set_val_na or _is_fahr_to_cels) and _convert_unit_filter:
+                            # 需要 unit 列匹配过滤模式 — 从表配置获取实际列名
+                            _unit_var_for_duckdb = None
+                            try:
+                                _tcfg_for_unit = data_source.config.get_table(source.table)
+                                _unit_var_for_duckdb = getattr(_tcfg_for_unit.defaults, "unit_var", None)
+                            except Exception:
+                                pass
+                            if not _unit_var_for_duckdb:
+                                _unit_var_for_duckdb = "unit"
+                            if _is_set_val_na:
+                                # set_val(NA): 匹配单位模式时设为 NULL
+                                _duckdb_value_transform = (
+                                    f'CASE WHEN regexp_matches(COALESCE(CAST("{_unit_var_for_duckdb}" AS VARCHAR), '
+                                    f"''), '(?i){_convert_unit_filter}') "
+                                    f'THEN NULL ELSE TRY_CAST("{value_col}" AS DOUBLE) END'
+                                )
+                            elif _is_fahr_to_cels:
+                                # fahr_to_cels: 无条件 F→C 转换
+                                # 源 itemid 已确保数据为华氏度（如 MIIV 223761/224027）
+                                # 不能依赖 unit 列（可能为 NaN），否则未转换的 F 值
+                                # 会被 filter_bounds(max=42) 错误丢弃
+                                _duckdb_value_transform = (
+                                    f'(TRY_CAST("{value_col}" AS DOUBLE) - 32.0) * 5.0 / 9.0'
+                                )
+                        # �🔧 FIX 2026-03: 使用调用者指定的聚合函数，而非硬编码 median
                         # 关键场景: sofa_cardio 的 MAP 子概念需要 min 聚合
                         # 如果 DuckDB 层使用 median，后续 Python 层的 min 聚合无效
                         # （因为每小时已只有1个 median 值，min(single_value) = same_value）
@@ -1977,16 +2080,18 @@ class ConceptResolver:
                             patient_ids=patient_ids_list,  # 🔧 修复: 传入患者ID过滤
                             agg_func=_duckdb_agg,
                             # 2026-03-11: 在 DuckDB WHERE 中过滤 min/max（匹配 R ricu）
-                            # R ricu 流程: load_id → filter_bounds(raw) → change_interval → aggregate
-                            # 但只对无 convert_unit 的概念使用（raw value 单位 = 概念单位）。
-                            # 有 convert_unit 时，raw value 可能是不同单位，min/max 不适用于 raw。
-                            value_min=definition.minimum if not _convert_unit_callback_for_duckdb else None,
-                            value_max=definition.maximum if not _convert_unit_callback_for_duckdb else None,
+                            # R ricu 流程: load_id → callback → filter_bounds → change_interval → aggregate
+                            # 对于 value_transform 内联回调，min/max 应用于转换后的值（在聚合表达式内部）
+                            # 对于无回调概念，min/max 直接在 WHERE 子句过滤 raw value
+                            value_min=definition.minimum,
+                            value_max=definition.maximum,
                             include_unit=False,  # unit 不再通过 ANY_VALUE 获取
                             # 🚀 convert_unit 内联参数：在DuckDB中直接做单位转换
                             convert_unit_op=_convert_unit_op if _convert_unit_callback_for_duckdb else None,
                             convert_unit_factor=_convert_unit_factor if _convert_unit_callback_for_duckdb else None,
                             convert_unit_filter=_convert_unit_filter if _convert_unit_callback_for_duckdb else None,
+                            # 🚀 通用值转换表达式（percent_as_numeric, set_val_na, fahr_to_cels）
+                            value_transform=_duckdb_value_transform,
                         )
                         
                         if _convert_unit_callback_for_duckdb and verbose and len(frame) > 0:
@@ -3434,6 +3539,7 @@ class ConceptResolver:
                 # 检查是否在merge模式（通过kwargs传递）
                 keep_na_rows = kwargs.get('_keep_na_rows', False)
                 if not keep_na_rows:
+                    _before_dropna = len(frame)
                     # 只在非merge模式下删除NaN（单独加载概念时）
                     frame = frame.dropna(subset=[concept_name])
                 # 在merge模式下，保留NaN行以便后续合并时创建完整时间网格
@@ -3871,7 +3977,7 @@ class ConceptResolver:
                             if DEBUG_MODE:
                                 print(f"   ⚠️ [MIMIC-III] charttime mixed-type 规范化失败: {e}")
 
-                combined['charttime'] = pd.to_numeric(combined['charttime'], errors='coerce')
+                combined['charttime'] = pd.to_numeric(combined['charttime'], errors='coerce') if not pd.api.types.is_numeric_dtype(combined['charttime']) else combined['charttime']
         
         # 🔧 CRITICAL FIX 2026-03-10: Multi-source concat produces object dtype for value column
         # When frames from different sources (e.g., respiratorycharting + lab) are concatenated,
@@ -4033,7 +4139,7 @@ class ConceptResolver:
                         id_columns=id_columns,
                         index_column=None,
                         value_column=concept_name,
-                        unit_column=final_unit_column,
+                        unit_column=final_unit_column if final_unit_column and final_unit_column in combined.columns else None,
                         time_columns=[col for col in time_columns if col and col in combined.columns],
                     )
                 
@@ -4296,7 +4402,7 @@ class ConceptResolver:
                 id_columns=id_columns,
                 index_column=index_column,
                 value_column=concept_name,
-                unit_column=final_unit_column,
+                unit_column=final_unit_column if final_unit_column and final_unit_column in combined.columns else None,
                 time_columns=[col for col in time_columns if col],
             )
             # 🚀 传播 DuckDB 预聚合标记：单源 DuckDB → 无需 change_interval groupby
@@ -4460,7 +4566,7 @@ class ConceptResolver:
                 id_columns=id_columns,
                 index_column=index_column,  # Already updated for eICU if needed
                 value_column=concept_name,
-                unit_column=final_unit_column,
+                unit_column=final_unit_column if final_unit_column and final_unit_column in combined.columns else None,
                 time_columns=[col for col in time_columns if col],
             )
         except KeyError as exc:
@@ -4472,7 +4578,7 @@ class ConceptResolver:
                     id_columns=id_columns,
                     index_column=index_column,
                     value_column=concept_name,
-                    unit_column=final_unit_column,
+                    unit_column=final_unit_column if final_unit_column and final_unit_column in combined.columns else None,
                     time_columns=[col for col in time_columns if col],
                 )
             raise exc
@@ -5485,17 +5591,55 @@ class ConceptResolver:
                 return None
             if name not in frame.columns:
                 return None
-            frame = frame[merge_keys + [name]].drop_duplicates(subset=merge_keys, keep='last')
+            frame = frame[merge_keys + [name]]
             remaining_frames.append(frame)
 
         if remaining_frames:
-            # Sort by size — merge smallest frames first to minimize intermediate sizes
-            remaining_frames.sort(key=len)
-            combined = remaining_frames[0]
-            for frame in remaining_frames[1:]:
-                combined = combined.merge(frame, on=merge_keys, how='outer', copy=False)
-            # Single merge with the large batch result
-            result = result.merge(combined, on=merge_keys, how='outer', copy=False)
+            # 🚀 Hash-based vectorized merge: avoid pd.merge entirely for 98%+ of rows
+            # Build combined int64 key for O(1) hash lookup. Most remaining keys overlap
+            # with batch (13.2M batch → 13.4M final = only ~1.5% extra rows).
+            # This replaces N sequential merges (16.4s) + 1 big merge (4.2s) = 20.6s
+            # with hash-build (~0.5s) + N get_indexer (~1.5s) = ~2s total.
+            id_vals = result[id_col].values.astype(np.int64)
+            time_vals = result[merge_keys[1]].values.astype(np.int64)
+            time_min = int(time_vals.min()) if len(time_vals) > 0 else 0
+            stride = int(time_vals.max()) - time_min + 2
+            batch_key = id_vals * stride + (time_vals - time_min)
+            # Hash table for O(1) key → row_index lookup
+            batch_idx_map = pd.Index(batch_key)
+
+            extra_frames = []
+            remaining_names = []
+            for frame in remaining_frames:
+                name = [c for c in frame.columns if c not in merge_keys][0]
+                remaining_names.append(name)
+                fid = frame[id_col].values.astype(np.int64)
+                ftime = frame[merge_keys[1]].values.astype(np.int64)
+                fkey = fid * stride + (ftime - time_min)
+
+                indexer = batch_idx_map.get_indexer(fkey)
+                matched = indexer >= 0
+
+                # Assign matched values directly (no merge needed)
+                col_data = np.full(len(result), np.nan)
+                col_data[indexer[matched]] = pd.to_numeric(
+                    frame[name].iloc[np.where(matched)[0]], errors='coerce'
+                ).values
+                result[name] = col_data
+
+                # Collect unmatched rows for append
+                if not matched.all():
+                    extra_frames.append(frame.iloc[np.where(~matched)[0]])
+
+            # Handle extra rows (keys not in batch) — typically < 2% of data
+            if extra_frames:
+                extras = pd.concat(extra_frames, ignore_index=True)
+                # Merge extra rows together (small: ~200K rows)
+                extra_names = [c for c in extras.columns if c not in merge_keys]
+                if len(extra_names) > 1:
+                    # Multiple extra columns — need to consolidate duplicates
+                    extras = extras.groupby(merge_keys, sort=False).first().reset_index()
+                result = pd.concat([result, extras], ignore_index=True)
 
         final_cols = [id_col, 'charttime']
         final_cols.extend([name for name in concept_names if name in result.columns])
@@ -6186,7 +6330,7 @@ class ConceptResolver:
 
     def _merge_tables(self, tables: Mapping[str, ICUTable]) -> pd.DataFrame:
         from .table import WinTbl
-        merged: Optional[pd.DataFrame] = None
+        all_frames: list = []
         index_column: Optional[str] = None
         id_columns: Optional[List[str]] = None
 
@@ -6274,40 +6418,35 @@ class ConceptResolver:
                 frame = frame[cols_to_keep].copy()
             
             # 在设置索引前排序，避免"left keys must be sorted"错误
-            frame = frame.sort_values(key_cols)
-            
-            # 设置索引用于合并
             frame = frame.set_index(key_cols)
 
-            if merged is None:
-                merged = frame
-            else:
-                # 确保索引层级一致
-                if merged.index.nlevels != frame.index.nlevels:
-                    print(f"⚠️  警告: 索引层级不一致 ({merged.index.nlevels} vs {frame.index.nlevels})，重置索引后重新合并")
-                    # 重置为共同的索引列
-                    common_keys = [col for col in merged.index.names if col in frame.index.names]
-                    merged = merged.reset_index()
-                    frame = frame.reset_index()
-                    # 检测列重叠，使用suffixes避免冲突
-                    overlapping_cols = set(merged.columns) & set(frame.columns) - set(common_keys)
-                    if overlapping_cols:
-                        merged = merged.merge(frame, on=common_keys, how='outer', suffixes=('', '_dup'))
-                        # 删除重复列
-                        merged = merged[[c for c in merged.columns if not c.endswith('_dup')]]
-                    else:
-                        merged = merged.merge(frame, on=common_keys, how='outer')
-                    merged = merged.sort_values(common_keys)
-                    merged = merged.set_index(common_keys)
-                else:
-                    merged = merged.join(frame, how="outer", rsuffix='_dup')
-                    # 删除join产生的重复列
-                    merged = merged[[c for c in merged.columns if not c.endswith('_dup')]]
+            all_frames.append(frame)
 
-        if merged is None:
+        if not all_frames:
             return pd.DataFrame()
 
-        merged = merged.reset_index()
+        if len(all_frames) == 1:
+            merged = all_frames[0].reset_index()
+        else:
+            # 🚀 优化: 用 pd.concat(axis=1) 替代 sequential join
+            # 单次操作完成所有概念的 outer join，避免 N-1 次 _get_indexer
+            try:
+                merged = pd.concat(all_frames, axis=1).reset_index()
+            except Exception:
+                # Fallback: sequential join for edge cases (mismatched index levels)
+                merged = all_frames[0]
+                for frame in all_frames[1:]:
+                    if merged.index.nlevels != frame.index.nlevels:
+                        common_keys = [col for col in merged.index.names if col in frame.index.names]
+                        merged = merged.reset_index()
+                        frame = frame.reset_index()
+                        merged = merged.merge(frame, on=common_keys, how='outer')
+                        merged = merged.sort_values(common_keys)
+                        merged = merged.set_index(common_keys)
+                    else:
+                        merged = merged.join(frame, how="outer", rsuffix='_dup')
+                        merged = merged[[c for c in merged.columns if not c.endswith('_dup')]]
+                merged = merged.reset_index()
         return merged
 
     def _build_cache_key(
@@ -7625,39 +7764,44 @@ def _apply_callback(
 
     # Handle percent_as_numeric - remove '%' and convert to numeric
     if re.fullmatch(r"transform_fun\(percent_as_numeric\)", expr):
-        series = frame[concept_name].copy()
+        series = frame[concept_name]
 
-        def parse_percent(val):
-            if pd.isna(val):
-                return np.nan
-            if isinstance(val, str):
-                val_clean = val.strip().rstrip('%')
-                try:
-                    return float(val_clean)
-                except (ValueError, AttributeError):
-                    return np.nan
-            try:
-                return float(val)
-            except (TypeError, ValueError):
-                return np.nan
+        # 🚀 Fast path: if already numeric (DuckDB pre-processed), skip all string ops
+        if pd.api.types.is_numeric_dtype(series):
+            na_mask = series.isna()
+            if na_mask.any():
+                for fallback_col in ("value", "valuetext"):
+                    if fallback_col in frame.columns and fallback_col != concept_name:
+                        fallback = pd.to_numeric(frame[fallback_col], errors='coerce')
+                        series = series.where(~na_mask, fallback)
+                        na_mask = series.isna()
+                        if not na_mask.any():
+                            break
+                frame.loc[:, concept_name] = series
+            return frame
 
-        def missing_mask(values: pd.Series) -> pd.Series:
-            mask = values.isna()
-            as_str = values.astype(str).str.strip().str.lower()
-            mask |= as_str.eq("") | as_str.eq("nan") | as_str.eq("none")
-            return mask
+        # 🚀 Optimized slow path: try to_numeric first, only strip '%' on failures
+        # Most string values are plain numbers ('50', '0.21') that pd.to_numeric handles directly.
+        # Only actual percent strings ('50%') need the rstrip. This reduces _str_map calls from
+        # 2 (strip+rstrip on ALL 12.9M rows) to at most 1 (rstrip on the small failed subset).
+        na_mask = series.isna()
+        if na_mask.any():
+            for fallback_col in ("value", "valuetext"):
+                if fallback_col in frame.columns and fallback_col != concept_name:
+                    series = series.where(~na_mask, frame[fallback_col])
+                    na_mask = series.isna()
+                    if not na_mask.any():
+                        break
 
-        mask = missing_mask(series)
-        for fallback_col in ("value", "valuetext"):
-            if fallback_col in frame.columns and fallback_col != concept_name:
-                fallback_series = frame[fallback_col]
-                series = series.where(~mask, fallback_series)
-                mask = missing_mask(series)
-
-        # 🚀 向量化：避免 222k+ 次 Python 函数调用
-        frame.loc[:, concept_name] = pd.to_numeric(
-            series.astype(str).str.strip().str.rstrip('%'), errors='coerce'
-        )
+        result = pd.to_numeric(series, errors='coerce')
+        failed_mask = result.isna() & series.notna()
+        if failed_mask.any():
+            fixed = pd.to_numeric(
+                series[failed_mask].astype(str).str.rstrip('%'), errors='coerce'
+            )
+            result = result.copy()
+            result.loc[failed_mask] = fixed
+        frame.loc[:, concept_name] = result
         return frame
 
     match = re.fullmatch(r"transform_fun\(set_val\((.+)\)\)", expr, flags=re.DOTALL)
@@ -7731,9 +7875,10 @@ def _apply_callback(
         if isinstance(value, (int, float)) and not pd.api.types.is_numeric_dtype(series):
             series = pd.to_numeric(series, errors="coerce")
         comparator = op_map[op_token]
-        comparison = series.apply(
-            lambda item: False if pd.isna(item) else comparator(item, value)
-        ).astype("boolean")
+        # 🚀 Vectorized comparison instead of .apply(lambda) — avoids N python calls
+        na_mask = series.isna()
+        comparison = comparator(series, value)
+        comparison = comparison.where(~na_mask, False).astype("boolean")
         frame = frame.copy()
         # 如果比较的是 concept_name 列，删除它；否则保留原列
         if compare_col == concept_name:
