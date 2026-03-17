@@ -1632,9 +1632,14 @@ def convert_data_with_progress(data_path: str, database: str):
         from pyricu.bucket_converter import convert_to_buckets, BucketConfig
         import gc
         
+        # 自动检测可用内存，预留 3GB 给 OS/Python
+        from pyricu.memory_manager import get_available_memory_mb
+        _avail_gb = get_available_memory_mb() / 1024
+        _duckdb_mem_gb = max(2.0, _avail_gb - 3.0)
+        
         converter = DuckDBConverter(
             data_path=data_path, 
-            memory_limit_gb=12.0,
+            memory_limit_gb=_duckdb_mem_gb,
             verbose=True
         )
         
@@ -13119,6 +13124,17 @@ def execute_sidebar_export():
                     
                     mod_time = _time_mod.time() - mod_start
                     _module_elapsed_list.append(mod_time)
+                    
+                    # ⚡ 内存安全: 模块完成后检查可用内存，不足时释放缓存
+                    try:
+                        from pyricu.memory_manager import get_available_memory_mb, release_memory
+                        _avail = get_available_memory_mb()
+                        if _avail < 2048:  # < 2GB 可用 → 紧急清理缓存
+                            _loader.concept_resolver._raw_concept_cache.clear()
+                            _loader.concept_resolver._table_cache.clear()
+                            release_memory(aggressive=True)
+                    except Exception:
+                        pass
                     
                     # 更新进度条
                     progress_bar.progress(0.15 + 0.35 * (mod_idx + 1) / total_modules)
