@@ -440,6 +440,8 @@ class ConceptResolver:
         self._thread_local = thread_local()
         # 🔧 嵌套调用深度跟踪：防止递归概念的内部调用清除缓存
         self._load_depth = 0
+        # ⚡ PERF: 跨模块缓存复用模式 — 保留 raw/table 缓存在 top-level 调用间
+        self._keep_cache_between_calls = False
         self.cache_dir = cache_dir if cache_dir else None
         self.cache_schema_version = "1"
         self.dictionary_signature = self._compute_dictionary_signature()
@@ -1406,11 +1408,12 @@ class ConceptResolver:
             if is_top_level:
                 with self._cache_lock:
                     self._concept_cache.clear()
-                    # 🔧 FIX: 顶层调用结束后清除内存缓存，避免碎片内存泄漏
-                    # 磁盘缓存（_store_in_disk_cache）已负责跨调用复用
                     self._concept_data_cache.clear()
-                    self._raw_concept_cache.clear()
-                    self._table_cache.clear()
+                    if not self._keep_cache_between_calls:
+                        # 🔧 FIX: 顶层调用结束后清除内存缓存，避免碎片内存泄漏
+                        # 磁盘缓存（_store_in_disk_cache）已负责跨调用复用
+                        self._raw_concept_cache.clear()
+                        self._table_cache.clear()
                     # 清除当前线程的inflight集合
                     self._get_inflight().clear()
                 

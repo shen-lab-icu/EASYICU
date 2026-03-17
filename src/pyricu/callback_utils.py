@@ -1655,67 +1655,71 @@ def expand_intervals(
     is_eicu_minutes = index_var.lower() == 'infusionoffset' and pd.api.types.is_numeric_dtype(data[index_var])
     
     if is_eicu_minutes:
-        # 🔧 NEW APPROACH: Keep data in MINUTES, expand at 1-minute intervals
-        # Then aggregate to hourly resolution
+        # OPTIMIZED: Compute hourly output directly without minute-level expansion.
+        # For each interval, calculate which hours it covers and assign the rate value.
+        # This avoids creating 60× more rows than needed.
         data = data.copy()
         
-        # Create intervals at minute resolution
-        # overhang=60 minutes (1 hour), max_len=360 minutes (6 hours)
+        # Create intervals at minute resolution (for correct interval boundaries)
         data = create_intervals(
             data,
             by_cols=by_cols,
             overhang=pd.Timedelta(minutes=60),
             max_len=pd.Timedelta(minutes=360),
             end_var='endtime',
-            interval=pd.Timedelta(minutes=1)  # 1-minute interval
+            interval=pd.Timedelta(minutes=1)
         )
         
-        # Prepare keep_vars - EXCLUDE grp_var to match R behavior
+        # Prepare keep_vars
         if keep_vars is None:
             keep_vars = []
         elif isinstance(keep_vars, str):
             keep_vars = [keep_vars]
-        
         keep_vars = list(id_cols) + list(keep_vars)
         keep_vars = [v for v in keep_vars if v in data.columns and v != index_var]
         
-        # Expand at 1-minute resolution
-        expanded = expand(
-            data,
-            start_var=index_var,
-            end_var='endtime',
-            step_size=pd.Timedelta(minutes=1),  # Minute resolution
-            id_cols=id_cols,
-            keep_vars=keep_vars
-        )
+        # Direct hour-level expansion: for each row, generate one entry per covered hour
+        starts_min = data[index_var].values.astype(float)
+        ends_min = data['endtime'].values.astype(float)
         
-        if len(expanded) > 0:
-            # Convert minutes to floor hours
-            expanded = expanded.copy()
-            expanded['_hour'] = np.floor(expanded[index_var] / 60.0).astype(int)
-            
-            # Aggregate to hourly resolution using median (R ricu default)
-            group_cols = list(id_cols) + ['_hour']
-            val_cols = [c for c in expanded.columns if c not in group_cols and c != index_var]
-            
-            # Build aggregation dict
-            agg_dict = {}
-            for col in val_cols:
-                if pd.api.types.is_numeric_dtype(expanded[col]):
-                    agg_dict[col] = 'median'
-                else:
-                    agg_dict[col] = 'first'
-            
-            if agg_dict:
-                expanded = expanded.groupby(group_cols, as_index=False).agg(agg_dict)
-            else:
-                expanded = expanded.drop_duplicates(subset=group_cols, keep='last')
-            
-            # Convert hours back to minutes for output
-            expanded[index_var] = expanded['_hour'] * 60
-            expanded = expanded.drop(columns=['_hour'])
+        # Filter valid intervals (start <= end)
+        valid = starts_min <= ends_min
+        if not valid.any():
+            cols = list(id_cols) + [index_var] + [v for v in keep_vars if v not in id_cols]
+            return pd.DataFrame(columns=cols)
         
-        # Aggregate duplicates
+        starts_min = starts_min[valid]
+        ends_min = ends_min[valid]
+        data_valid = data[valid].reset_index(drop=True)
+        
+        start_hours = np.floor(starts_min / 60.0).astype(int)
+        end_hours = np.floor(ends_min / 60.0).astype(int)
+        counts = end_hours - start_hours + 1
+        counts = np.maximum(counts, 1)
+        
+        total = counts.sum()
+        hours_arr = np.empty(total, dtype=np.int64)
+        row_idx = np.empty(total, dtype=np.intp)
+        pos = 0
+        for i in range(len(counts)):
+            c = counts[i]
+            hours_arr[pos:pos+c] = np.arange(start_hours[i], start_hours[i]+c)
+            row_idx[pos:pos+c] = i
+            pos += c
+        
+        # Build expanded DataFrame
+        exp_data = {}
+        for col in id_cols:
+            if col in data_valid.columns:
+                exp_data[col] = data_valid[col].values[row_idx]
+        exp_data[index_var] = hours_arr * 60  # Convert back to minutes
+        for v in keep_vars:
+            if v not in id_cols and v in data_valid.columns:
+                exp_data[v] = data_valid[v].values[row_idx]
+        
+        expanded = pd.DataFrame(exp_data)
+        
+        # Aggregate to hourly: median for numeric, first for others
         if len(expanded) > 0:
             group_cols = list(id_cols) + [index_var]
             if expanded.duplicated(subset=group_cols).any():
