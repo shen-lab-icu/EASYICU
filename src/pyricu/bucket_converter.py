@@ -13,7 +13,7 @@
 - write_statistics=true 确保Row Group统计信息用于谓词下推
 
 16GB内存优化：
-- 转换时设置memory_limit='10GB'，预留系统内存
+- 转换时自动检测可用内存，预留3GB给OS/Python
 - 指定temp_directory到高速SSD，避免内存溢出
 - 读取时列投影 + 谓词下推，最小化内存占用
 """
@@ -28,6 +28,27 @@ import time
 logger = logging.getLogger(__name__)
 
 
+def _auto_memory_limit() -> str:
+    """根据系统可用内存自动设置 DuckDB memory_limit，预留 3GB 给 OS/Python。"""
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemAvailable:'):
+                    avail_mb = int(line.split()[1]) / 1024.0
+                    limit_gb = max(2, int(avail_mb / 1024) - 3)
+                    return f'{limit_gb}GB'
+    except (OSError, ValueError):
+        pass
+    try:
+        import psutil
+        avail_gb = psutil.virtual_memory().available / (1024 ** 3)
+        limit_gb = max(2, int(avail_gb) - 3)
+        return f'{limit_gb}GB'
+    except ImportError:
+        pass
+    return '6GB'
+
+
 @dataclass
 class BucketConfig:
     """分桶配置"""
@@ -35,11 +56,15 @@ class BucketConfig:
     partition_col: str = 'itemid'  # 分桶列
     row_group_size: int = 1_000_000  # Row Group大小，1M行最优平衡
     compression: str = 'zstd'  # zstd压缩率更高，速度接近snappy
-    memory_limit: str = '12GB'  # 充分利用内存
+    memory_limit: str = ''  # 空字符串 = 自动检测（预留3GB给OS）
     threads: int = 0  # 0=自动检测CPU核心数
     temp_directory: Optional[str] = None  # 临时文件目录，建议SSD
     skip_sorting: bool = True  # 跳过排序，大幅加速
     column_types: Optional[dict] = None  # 强制指定列类型，如 {'VALUE': 'VARCHAR'}
+
+    def __post_init__(self):
+        if not self.memory_limit:
+            self.memory_limit = _auto_memory_limit()
 
 
 @dataclass 
