@@ -17,43 +17,601 @@ os.environ['PYRICU_AUTO_CLEAR_CACHE'] = 'False'
 # 尝试导入美化组件
 try:
     from streamlit_extras.metric_cards import style_metric_cards
+    HAS_EXTRAS = True
 except ImportError:
-    style_metric_cards = None
+    HAS_EXTRAS = False
 
-st.markdown(
-    """
+# 页面配置
+st.set_page_config(
+    page_title="EasyICU Data Explorer",
+    page_icon="🏥",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+# 初始化侧边栏展开状态
+if 'sidebar_expanded' not in st.session_state:
+    st.session_state.sidebar_expanded = False
+
+# 侧边栏宽度设置 - 根据展开状态动态调整
+sidebar_width = "100vw" if st.session_state.sidebar_expanded else "450px"
+sidebar_min_width = "100vw" if st.session_state.sidebar_expanded else "380px"
+main_display = "none" if st.session_state.sidebar_expanded else "block"
+
+st.markdown(f"""
 <style>
-    .success-box, .warning-box, .info-box {
-        padding: 12px 16px;
-        border-radius: 8px;
-        margin: 10px 0;
-    }
+    [data-testid="stSidebar"] {{
+        min-width: {sidebar_min_width};
+        max-width: {sidebar_width};
+        width: {sidebar_width} !important;
+        transition: all 0.3s ease;
+    }}
+    [data-testid="stSidebar"] > div {{
+        width: 100% !important;
+    }}
+    /* 隐藏侧边栏折叠按钮 */
+    [data-testid="collapsedControl"] {{
+        display: none !important;
+    }}
+    button[kind="headerNoPadding"] {{
+        display: none !important;
+    }}
+    [data-testid="stSidebarCollapseButton"] {{
+        display: none !important;
+    }}
+    /* 展开时隐藏右侧主内容 */
+    [data-testid="stMain"] {{
+        display: {main_display} !important;
+    }}
+</style>
+""", unsafe_allow_html=True)
 
+# 🎨 现代化 CSS 样式系统
+st.markdown("""
+<style>
+    /* ============ 全局主题变量 ============ */
+    :root {
+        /* 主色调 */
+        --primary-color: #667eea;
+        --primary-dark: #5a67d8;
+        --secondary-color: #764ba2;
+        --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --gradient-success: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        --gradient-info: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
+        --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        --gradient-danger: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        
+        /* 功能色 */
+        --success-color: #10b981;
+        --warning-color: #f59e0b;
+        --danger-color: #ef4444;
+        --info-color: #06b6d4;
+        
+        /* 阴影 */
+        --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.08);
+        --shadow-hover: 0 8px 30px rgba(0, 0, 0, 0.12);
+        --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.06);
+        --shadow-glow: 0 4px 15px rgba(102, 126, 234, 0.35);
+        
+        /* 圆角 */
+        --radius-sm: 8px;
+        --radius-md: 12px;
+        --radius-lg: 16px;
+        --radius-xl: 20px;
+        
+        /* 动画 */
+        --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        --transition-fast: all 0.15s ease;
+        
+        /* 浅色主题 */
+        --card-bg-light: #ffffff;
+        --text-primary-light: #1e1e1e;
+        --text-secondary-light: #64748b;
+        --border-light: rgba(102, 126, 234, 0.1);
+        
+        /* 深色主题 */
+        --card-bg-dark: rgba(30, 35, 45, 0.95);
+        --text-primary-dark: #e0e0e0;
+        --text-secondary-dark: #94a3b8;
+        --border-dark: rgba(102, 126, 234, 0.2);
+    }
+    
+    /* ============ 页面头部 ============ */
+    .block-container {
+        padding-top: 0.5rem !important;
+        margin-top: 0 !important;
+    }
+    header[data-testid="stHeader"] {
+        height: 0 !important;
+        min-height: 0 !important;
+        visibility: hidden !important;
+    }
+    
+    /* ============ 现代化标签页 ============ */
+    div[data-baseweb="tab-list"] {
+        gap: 10px !important;
+        margin-top: 0 !important;
+        padding: 12px !important;
+        background: linear-gradient(180deg, rgba(102,126,234,0.05), transparent) !important;
+        border-radius: var(--radius-lg) !important;
+        border: 1px solid rgba(102, 126, 234, 0.08);
+    }
+    
+    div[data-baseweb="tab-list"] button {
+        font-size: 1.15rem !important;
+        font-weight: 600 !important;
+        padding: 12px 24px !important;
+        border-radius: var(--radius-md) !important;
+        transition: var(--transition-smooth) !important;
+        border: 1px solid transparent !important;
+        background: transparent !important;
+    }
+    
+    div[data-baseweb="tab-list"] button:hover {
+        background: rgba(102, 126, 234, 0.1) !important;
+        border-color: rgba(102, 126, 234, 0.2) !important;
+    }
+    
+    div[data-baseweb="tab-list"] button[aria-selected="true"] {
+        background: var(--gradient-primary) !important;
+        color: white !important;
+        box-shadow: var(--shadow-glow) !important;
+        border-color: transparent !important;
+    }
+    
+    div[data-baseweb="tab-list"] button p {
+        font-size: 1.15rem !important;
+        font-weight: 600 !important;
+    }
+    
+    /* ============ Metric 卡片美化 ============ */
+    div[data-testid="stMetric"] {
+        background: linear-gradient(145deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
+        border: 1px solid var(--border-light);
+        border-radius: var(--radius-lg);
+        padding: 1.2rem 1.5rem;
+        box-shadow: var(--shadow-card);
+        transition: var(--transition-smooth);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    div[data-testid="stMetric"]::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 4px;
+        height: 100%;
+        background: var(--gradient-primary);
+        border-radius: 4px 0 0 4px;
+    }
+    
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-4px);
+        box-shadow: var(--shadow-hover);
+        border-color: rgba(102, 126, 234, 0.25);
+    }
+    
+    div[data-testid="stMetric"] label {
+        font-weight: 600 !important;
+        color: var(--text-secondary-light) !important;
+        font-size: 0.85rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        font-size: 1.75rem !important;
+        font-weight: 700 !important;
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    /* 深色模式 Metric */
+    @media (prefers-color-scheme: dark) {
+        div[data-testid="stMetric"] {
+            background: linear-gradient(145deg, rgba(30,35,45,0.98), rgba(40,45,55,0.95));
+            border-color: var(--border-dark);
+        }
+        div[data-testid="stMetric"] label {
+            color: var(--text-secondary-dark) !important;
+        }
+    }
+    
+    /* ============ 主标题样式 ============ */
+    .main-header {
+        font-size: 2.2rem;
+        font-weight: 800;
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-top: 0;
+        margin-bottom: 0.5rem;
+        text-align: center;
+        letter-spacing: -0.5px;
+    }
+    
+    .sub-header {
+        font-size: 1.1rem;
+        color: var(--text-secondary-light);
+        margin-bottom: 1.5rem;
+        text-align: center;
+        font-weight: 400;
+    }
+    
+    @media (prefers-color-scheme: dark) {
+        .sub-header { color: var(--text-secondary-dark); }
+    }
+    
+    /* ============ 功能卡片 ============ */
+    .metric-card, .feature-card {
+        background: linear-gradient(145deg, #ffffff, #f8f9ff);
+        border-radius: var(--radius-lg);
+        padding: 1.4rem;
+        margin: 0.5rem 0;
+        box-shadow: var(--shadow-card);
+        border: 1px solid var(--border-light);
+        transition: var(--transition-smooth);
+        color: var(--text-primary-light);
+    }
+    
+    .metric-card:hover, .feature-card:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--shadow-hover);
+        border-color: rgba(102, 126, 234, 0.3);
+    }
+    
+    @media (prefers-color-scheme: dark) {
+        .metric-card, .feature-card {
+            background: linear-gradient(145deg, rgba(40,45,60,0.95), rgba(30,35,50,0.95));
+            border-color: var(--border-dark);
+            color: var(--text-primary-dark);
+        }
+    }
+    
+    .feature-card h4 {
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 0.8rem;
+        font-weight: 600;
+    }
+    
+    /* ============ 按钮样式 ============ */
+    .stButton > button[kind="primary"] {
+        background: var(--gradient-primary) !important;
+        border: none !important;
+        border-radius: var(--radius-md) !important;
+        padding: 0.75rem 2rem !important;
+        font-weight: 600 !important;
+        box-shadow: var(--shadow-glow) !important;
+        transition: var(--transition-smooth) !important;
+    }
+    
+    .stButton > button[kind="primary"]:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.45) !important;
+    }
+    
+    /* 侧边栏按钮 */
+    [data-testid="stSidebar"] .stButton button {
+        background: var(--gradient-primary) !important;
+        color: white !important;
+        border: none !important;
+        font-weight: 600 !important;
+        border-radius: var(--radius-md) !important;
+    }
+    
+    [data-testid="stSidebar"] .stButton button:hover {
+        box-shadow: var(--shadow-glow) !important;
+        transform: translateY(-1px) !important;
+    }
+    
+    /* ============ 状态提示框 ============ */
     .success-box {
         background: rgba(16, 185, 129, 0.12);
-        border-left: 4px solid #10b981;
+        border-left: 4px solid var(--success-color);
+        border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+        padding: 12px 16px;
+        margin: 10px 0;
+        color: #065f46;
     }
-
+    
     .warning-box {
         background: rgba(245, 158, 11, 0.12);
-        border-left: 4px solid #f59e0b;
+        border-left: 4px solid var(--warning-color);
+        border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+        padding: 12px 16px;
+        margin: 10px 0;
+        color: #92400e;
     }
-
+    
     .info-box {
-        background: rgba(59, 130, 246, 0.12);
-        border-left: 4px solid #3b82f6;
+        background: rgba(6, 182, 212, 0.12);
+        border-left: 4px solid var(--info-color);
+        border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+        padding: 12px 16px;
+        margin: 10px 0;
+        color: #0e7490;
     }
-
+    
+    @media (prefers-color-scheme: dark) {
+        .success-box { color: #6ee7b7; background: rgba(16, 185, 129, 0.15); }
+        .warning-box { color: #fcd34d; background: rgba(245, 158, 11, 0.15); }
+        .info-box { color: #67e8f9; background: rgba(6, 182, 212, 0.15); }
+    }
+    
+    /* ============ 分隔线 ============ */
     .divider {
         height: 2px;
         background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.3), transparent);
         margin: 1.5rem 0;
         border: none;
     }
+    
+    hr {
+        border: none;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.2), transparent);
+        margin: 1.5rem 0;
+    }
+    
+    /* ============ 统计数字 ============ */
+    .stat-number {
+        font-size: 2.5rem;
+        font-weight: 700;
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    .stat-label {
+        font-size: 0.9rem;
+        color: var(--text-secondary-light);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    @media (prefers-color-scheme: dark) {
+        .stat-label { color: var(--text-secondary-dark); }
+    }
+    
+    /* ============ 患者信息卡片 ============ */
+    .patient-card {
+        background: #f8f9fa;
+        border-radius: var(--radius-md);
+        padding: 1.5rem;
+        border: 2px solid #e2e8f0;
+        margin-bottom: 1rem;
+        color: var(--text-primary-light);
+        transition: var(--transition-smooth);
+    }
+    
+    .patient-card:hover {
+        border-color: rgba(102, 126, 234, 0.3);
+        box-shadow: var(--shadow-soft);
+    }
+    
+    @media (prefers-color-scheme: dark) {
+        .patient-card {
+            background: rgba(30, 40, 50, 0.9);
+            border-color: rgba(255,255,255,0.15);
+            color: var(--text-primary-dark);
+        }
+    }
+    
+    .patient-card.critical { border-color: var(--danger-color); background: rgba(239, 68, 68, 0.08); }
+    .patient-card.warning { border-color: var(--warning-color); background: rgba(245, 158, 11, 0.08); }
+    .patient-card.stable { border-color: var(--success-color); background: rgba(16, 185, 129, 0.08); }
+    
+    /* ============ 侧边栏美化 ============ */
+    [data-testid="stSidebar"] {
+        min-width: 450px !important;
+        max-width: 55000px !important;
+    }
+    
+    [data-testid="stSidebar"] > div:first-child {
+        min-width: 450px !important;
+        max-width: 55000px !important;
+    }
+    
+    /* 侧边栏头部装饰 */
+    .sidebar-header {
+        background: var(--gradient-primary);
+        border-radius: var(--radius-md);
+        padding: 1rem 1.5rem;
+        text-align: center;
+        margin-bottom: 1.5rem;
+        color: white;
+    }
+    
+    .sidebar-header h3 {
+        margin: 0;
+        font-weight: 700;
+    }
+    
+    /* ============ SOFA2 特殊标识 ============ */
+    .sofa2-badge {
+        background: linear-gradient(135deg, #ff6b6b, #ffa500);
+        color: white;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        display: inline-block;
+        margin-left: 8px;
+        box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
+    }
+    
+    /* ============ 数据表格优化 ============ */
+    .dataframe {
+        border-radius: var(--radius-sm) !important;
+        overflow: hidden;
+    }
+    
+    /* 表格字体颜色改为黑色 */
+    [data-testid="stDataFrame"] {
+        color: #000000 !important;
+    }
+    
+    [data-testid="stDataFrame"] table {
+        color: #000000 !important;
+    }
+    
+    [data-testid="stDataFrame"] th,
+    [data-testid="stDataFrame"] td {
+        color: #000000 !important;
+    }
+    
+    /* 列标题特别强制 */
+    [data-testid="stDataFrame"] thead th,
+    [data-testid="stDataFrame"] thead td,
+    [data-testid="stDataFrame"] .col_heading {
+        color: #000000 !important;
+        font-weight: 600 !important;
+    }
+    
+    .stDataFrame {
+        color: #000000 !important;
+    }
+    
+    .stDataFrame table,
+    .stDataFrame th,
+    .stDataFrame td,
+    .stDataFrame tbody,
+    .stDataFrame thead {
+        color: #000000 !important;
+    }
+    
+    /* 列标题 */
+    .stDataFrame thead th,
+    .stDataFrame thead td,
+    .stDataFrame .col_heading,
+    .stDataFrame th.col_heading {
+        color: #000000 !important;
+        font-weight: 600 !important;
+    }
+    
+    /* DataFrame内部文本元素 */
+    div[data-testid="stDataFrame"] * {
+        color: #000000 !important;
+    }
+    
+    /* Streamlit dataframe column headers */
+    div[data-testid="stDataFrame"] div[role="columnheader"],
+    div[data-testid="stDataFrame"] div[data-testid="stDataFrameResizable"] div[role="columnheader"] {
+        color: #000000 !important;
+        font-weight: 600 !important;
+    }
+    
+    /* Glide data grid headers (Streamlit uses this) */
+    .dvn-scroller div[class*="header"],
+    .glide-header,
+    [class*="headerCell"] {
+        color: #000000 !important;
+        font-weight: 600 !important;
+    }
+    
+    /* 深色模式下保持良好的对比度 */
+    @media (prefers-color-scheme: dark) {
+        [data-testid="stDataFrame"],
+        [data-testid="stDataFrame"] table,
+        [data-testid="stDataFrame"] th,
+        [data-testid="stDataFrame"] td {
+            color: #e0e0e0 !important;
+        }
+        
+        .stDataFrame,
+        .stDataFrame table,
+        .stDataFrame th,
+        .stDataFrame td,
+        .stDataFrame tbody,
+        .stDataFrame thead {
+            color: #e0e0e0 !important;
+        }
+        
+        div[data-testid="stDataFrame"] * {
+            color: #e0e0e0 !important;
+        }
+    }
+    
+    /* ============ 进度条美化 ============ */
+    .progress-bar {
+        height: 8px;
+        background: #e2e8f0;
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    
+    .progress-bar-fill {
+        height: 100%;
+        background: var(--gradient-primary);
+        border-radius: 4px;
+        transition: width 0.3s ease;
+    }
+    
+    /* ============ 高亮卡片 ============ */
+    .highlight-card {
+        background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
+        border: 2px solid #0ea5e9;
+        border-radius: var(--radius-md);
+        padding: 1.2rem;
+        margin: 1rem 0;
+        color: #0c4a6e;
+    }
+    
+    .highlight-card h4 { color: #0369a1; margin-bottom: 0.8rem; }
+    .highlight-card p, .highlight-card li { color: #0e7490; }
+    .highlight-card b { color: #0284c7; }
+    
+    @media (prefers-color-scheme: dark) {
+        .highlight-card {
+            background: linear-gradient(135deg, #0c4a6e, #164e63);
+            border-color: #06b6d4;
+            color: #e0f2fe;
+        }
+        .highlight-card h4 { color: #67e8f9; }
+        .highlight-card p, .highlight-card li { color: #a5f3fc; }
+        .highlight-card b { color: #22d3ee; }
+    }
+    
+    /* ============ 动画效果 ============ */
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    .animate-fade-in {
+        animation: fadeInUp 0.4s ease-out;
+    }
+    
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
+    
+    .animate-pulse {
+        animation: pulse 2s infinite;
+    }
+    
+    /* ============ Tooltip 美化 ============ */
+    [data-baseweb="tooltip"] {
+        border-radius: var(--radius-sm) !important;
+        box-shadow: var(--shadow-soft) !important;
+    }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 
 # 数据字典定义 - 特征缩写及其含义
@@ -1384,6 +1942,8 @@ def init_session_state():
         st.session_state.step1_confirmed = False
     if 'step2_confirmed' not in st.session_state:
         st.session_state.step2_confirmed = False
+    if 'sidebar_expanded' not in st.session_state:
+        st.session_state.sidebar_expanded = False
 
 
 # ============ 辅助函数：获取完整的 mock_params（包含最新的 cohort_filter） ============
@@ -12396,6 +12956,15 @@ def execute_sidebar_export():
                 
                 progress_bar.progress(0.15)
                 
+                # ⚡ PERF: 启用跨模块缓存复用 — 共享子概念（MAP/GCS/fio2等）无需重复加载
+                try:
+                    from pyricu.api import _get_global_loader
+                    _loader = _get_global_loader(database=database, data_path=st.session_state.data_path,
+                                                 use_sofa2=True)
+                    _loader.concept_resolver._keep_cache_between_calls = True
+                except Exception:
+                    pass
+                
                 # 🚀 FIX: 全模块批量加载 + 改善进度提示
                 # 测试结果：逐概念加载比批量慢 3-10x（etco2: 873s 逐概念 vs <100s 批量）
                 # 原因：每次 load_concepts() 调用后清除 _table_cache，重新从磁盘读取
@@ -13158,6 +13727,14 @@ def execute_sidebar_export():
         progress_bar.progress(1.0)
         status_text.empty()
         cancel_placeholder.empty()  # 🔧 清理取消按钮
+        
+        # ⚡ PERF: 清理跨模块缓存
+        try:
+            _loader.concept_resolver._keep_cache_between_calls = False
+            _loader.concept_resolver._raw_concept_cache.clear()
+            _loader.concept_resolver._table_cache.clear()
+        except Exception:
+            pass
         
         # 🔧 清理临时状态
         if '_skipped_modules' in st.session_state:

@@ -304,6 +304,32 @@ def clear_global_loader():
     _global_loader = None
     _loader_config = None
 
+
+from contextlib import contextmanager
+
+@contextmanager
+def keep_cache(database=None, data_path=None, dict_path=None, use_sofa2=False, verbose=False):
+    """Context manager: keep raw/table cache between sequential load_concepts calls.
+    
+    Usage::
+    
+        with keep_cache(database='miiv'):
+            df1 = load_concepts(['hr', 'sbp'], database='miiv', max_patients=1000)
+            df2 = load_concepts(['sofa'], database='miiv', max_patients=1000)
+            # sofa reuses cached hr/sbp/map/etc. from df1's sub-concept loads
+    """
+    loader = _get_global_loader(database=database, data_path=data_path,
+                                dict_path=dict_path, use_sofa2=use_sofa2, verbose=verbose)
+    resolver = loader.concept_resolver
+    resolver._keep_cache_between_calls = True
+    try:
+        yield loader
+    finally:
+        resolver._keep_cache_between_calls = False
+        with resolver._cache_lock:
+            resolver._raw_concept_cache.clear()
+            resolver._table_cache.clear()
+
 import numpy as np
 
 def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: bool = False,
@@ -2163,6 +2189,10 @@ __all__ = [
     'list_available_concepts',
     'list_available_sources',
     'get_concept_info',
+    
+    # 缓存管理
+    'keep_cache',
+    'clear_global_loader',
     
     # 增强功能（从api_enhanced.py合并）
     'load_concept_cached',

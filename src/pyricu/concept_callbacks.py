@@ -2389,6 +2389,53 @@ def _callback_sofa_component(
 
     return wrapper
 
+
+def _expand_wintbl_to_hourly(vent_df, vent_id_cols, start_col, dur_col, time_col_name):
+    """Vectorized expansion of WinTbl vent_ind data to hourly time points.
+    
+    Replaces iterrows() loop with numpy vectorized operations.
+    Each window (start, dur) is expanded to cover all integer hours in [floor(start), floor(start+dur/60)].
+    """
+    if vent_df.empty:
+        return pd.DataFrame(columns=list(vent_id_cols) + [time_col_name, 'vent_ind'])
+    
+    starts = pd.to_numeric(vent_df[start_col], errors='coerce').values
+    if dur_col in vent_df.columns:
+        durs = pd.to_numeric(vent_df[dur_col], errors='coerce').fillna(0).values
+    else:
+        durs = np.zeros(len(vent_df))
+    
+    ends = np.where(durs > 0, starts + durs / 60.0, starts)
+    start_hours = np.floor(starts).astype(int)
+    end_hours = np.floor(ends).astype(int)
+    counts = np.maximum(end_hours - start_hours + 1, 1)
+    
+    # Build expanded arrays
+    total = counts.sum()
+    hours_arr = np.empty(total, dtype=np.float64)
+    row_indices = np.empty(total, dtype=np.intp)
+    pos = 0
+    for i in range(len(counts)):
+        c = counts[i]
+        hours_arr[pos:pos+c] = np.arange(start_hours[i], start_hours[i] + c)
+        row_indices[pos:pos+c] = i
+        pos += c
+    
+    # Build result DataFrame
+    id_data = {}
+    for col in vent_id_cols:
+        if col in vent_df.columns:
+            id_data[col] = vent_df[col].values[row_indices]
+    id_data[time_col_name] = hours_arr
+    id_data['vent_ind'] = True
+    
+    result = pd.DataFrame(id_data)
+    # Aggregate by id + time (any=True for overlapping windows)
+    group_cols = [c for c in list(vent_id_cols) + [time_col_name] if c in result.columns]
+    result = result.groupby(group_cols, as_index=False).agg({'vent_ind': 'any'})
+    return result
+
+
 def _callback_sofa_resp(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -2440,43 +2487,14 @@ def _callback_sofa_resp(
     # Ensure numeric pafi
     pafi_df['pafi'] = pd.to_numeric(pafi_df['pafi'], errors='coerce')
     
-    # Expand vent_ind WinTbl to hourly points WITHIN windows only
-    # (same pattern as _callback_supp_o2)
+    # Expand vent_ind WinTbl to hourly points WITHIN windows only (vectorized)
     if isinstance(vent_tbl, WinTbl):
         vent_df = vent_tbl.data.copy()
         vent_id_cols = vent_tbl.id_vars if hasattr(vent_tbl, 'id_vars') else id_columns
         start_col = vent_tbl.index_var if hasattr(vent_tbl, 'index_var') else "starttime"
         dur_col = vent_tbl.dur_var if hasattr(vent_tbl, 'dur_var') else "dur_var"
         
-        # Expand each window to hourly points
-        expanded_rows = []
-        for _, row in vent_df.iterrows():
-            start_val = row[start_col]
-            dur_val = row[dur_col] if dur_col in vent_df.columns else 0
-            
-            # Calculate end time (dur_var is in minutes)
-            if pd.notna(dur_val) and dur_val > 0:
-                end_val = start_val + dur_val / 60  # Convert minutes to hours
-            else:
-                end_val = start_val
-            
-            # Generate hourly points within the window
-            start_hour = int(np.floor(start_val))
-            end_hour = int(np.floor(end_val))
-            
-            for hour in range(start_hour, end_hour + 1):
-                new_row = {col: row[col] for col in vent_id_cols if col in row.index}
-                new_row[pafi_index] = float(hour)  # Use pafi's index name
-                new_row['vent_ind'] = True
-                expanded_rows.append(new_row)
-        
-        if expanded_rows:
-            vent_df = pd.DataFrame(expanded_rows)
-            # Aggregate by id + time (any=True for overlapping windows)
-            group_cols = list(vent_id_cols) + [pafi_index]
-            vent_df = vent_df.groupby([c for c in group_cols if c in vent_df.columns], as_index=False).agg({'vent_ind': 'any'})
-        else:
-            vent_df = pd.DataFrame(columns=list(vent_id_cols) + [pafi_index, 'vent_ind'])
+        vent_df = _expand_wintbl_to_hourly(vent_df, vent_id_cols, start_col, dur_col, pafi_index)
     else:
         vent_df = vent_tbl.data.copy()
         vent_index = vent_tbl.index_column if hasattr(vent_tbl, 'index_column') and vent_tbl.index_column else pafi_index
@@ -2906,53 +2924,31 @@ def _apply_locf_24h(
     
     data["_time_hours_"] = time_hours
     
-    # For each patient, apply LOCF within the time window
-    # IMPORTANT: Use ORIGINAL values only, not values that were already LOCF-filled
-    def locf_within_window(group, group_key=None):
-        group = group.sort_values("_time_hours_")
-        if any(col not in group.columns for col in id_columns):
-            key_tuple = group_key if isinstance(group_key, tuple) else (group_key,)
-            for col, value in zip(id_columns, key_tuple):
-                group[col] = value
-        times = group["_time_hours_"].values
-        n = len(times)
+    # ⚡ Fully vectorized LOCF — no groupby.apply(), no per-patient Python dispatch.
+    # Uses pandas ffill + time window mask to achieve O(n) total complexity.
+    for col in value_columns:
+        if col not in data.columns:
+            continue
         
-        for col in value_columns:
-            if col not in group.columns:
-                continue
-            # Keep original values separate to avoid cascading propagation
-            original_values = group[col].values.copy()
-            result_values = original_values.copy()
-            
-            for i in range(n):
-                if pd.isna(result_values[i]):
-                    # Look backward within the window for the LAST ORIGINAL non-NA value
-                    # This matches R locf: last_elem(x[!is.na(x)])
-                    last_valid = np.nan
-                    for j in range(i - 1, -1, -1):
-                        if times[i] - times[j] <= win_length_hours:
-                            if pd.notna(original_values[j]):
-                                last_valid = original_values[j]
-                                break  # Found the most recent original value
-                        else:
-                            break  # Outside window, stop looking
-                    result_values[i] = last_valid
-            
-            group[col] = result_values
-        return group
+        # Save original non-NA positions and values
+        valid_mask = data[col].notna()
+        
+        # Record the time of each valid observation
+        data["_last_valid_time_"] = np.where(valid_mask, data["_time_hours_"], np.nan)
+        
+        # Forward-fill the last-valid-time within each patient group
+        data["_last_valid_time_"] = data.groupby(id_columns, dropna=False, sort=False)["_last_valid_time_"].ffill()
+        
+        # Forward-fill the value within each patient group
+        data[col] = data.groupby(id_columns, dropna=False, sort=False)[col].ffill()
+        
+        # Mask values that are outside the time window
+        outside_window = (data["_time_hours_"] - data["_last_valid_time_"]) > win_length_hours
+        data.loc[outside_window, col] = np.nan
     
-    grouped_frames = []
-    for group_key, group in data.groupby(id_columns, dropna=False, sort=False):
-        grouped_frames.append(locf_within_window(group.copy(), group_key=group_key))
-
-    if grouped_frames:
-        result = pd.concat(grouped_frames, ignore_index=True)
-    else:
-        result = data.iloc[0:0].copy()
-
-    result = result.drop(columns=["_time_hours_"], errors="ignore")
+    data = data.drop(columns=["_time_hours_", "_last_valid_time_"], errors="ignore")
     
-    return result
+    return data
 
 
 def _callback_qsofa(
@@ -3648,42 +3644,14 @@ def _callback_supp_o2(
     if not id_columns:
         id_columns = [c for c in fio2_df.columns if c in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']]
     
-    # Expand vent_ind WinTbl to hourly points WITHIN windows only
+    # Expand vent_ind WinTbl to hourly points WITHIN windows only (vectorized)
     if isinstance(vent_tbl, WinTbl):
         vent_df = vent_tbl.data.copy()
         vent_id_cols = vent_tbl.id_vars if hasattr(vent_tbl, 'id_vars') else id_columns
         start_col = vent_tbl.index_var if hasattr(vent_tbl, 'index_var') else "starttime"
         dur_col = vent_tbl.dur_var if hasattr(vent_tbl, 'dur_var') else "dur_var"
         
-        # Expand each window to hourly points
-        expanded_rows = []
-        for _, row in vent_df.iterrows():
-            start_val = row[start_col]
-            dur_val = row[dur_col] if dur_col in vent_df.columns else 0
-            
-            # Calculate end time (dur_var is in minutes)
-            if pd.notna(dur_val) and dur_val > 0:
-                end_val = start_val + dur_val / 60  # Convert minutes to hours
-            else:
-                end_val = start_val
-            
-            # Generate hourly points within the window
-            start_hour = int(np.floor(start_val))
-            end_hour = int(np.floor(end_val))
-            
-            for hour in range(start_hour, end_hour + 1):
-                new_row = {col: row[col] for col in vent_id_cols if col in row.index}
-                new_row[fio2_index] = float(hour)  # Use fio2's index name
-                new_row['vent_ind'] = True
-                expanded_rows.append(new_row)
-        
-        if expanded_rows:
-            vent_df = pd.DataFrame(expanded_rows)
-            # Aggregate by id + time (any=True)
-            group_cols = list(vent_id_cols) + [fio2_index]
-            vent_df = vent_df.groupby([c for c in group_cols if c in vent_df.columns], as_index=False).agg({'vent_ind': 'any'})
-        else:
-            vent_df = pd.DataFrame(columns=list(vent_id_cols) + [fio2_index, 'vent_ind'])
+        vent_df = _expand_wintbl_to_hourly(vent_df, vent_id_cols, start_col, dur_col, fio2_index)
     else:
         vent_df = vent_tbl.data.copy()
         vent_index = vent_tbl.index_column if hasattr(vent_tbl, 'index_column') and vent_tbl.index_column else fio2_index
@@ -5779,25 +5747,34 @@ def _callback_gcs(
 
         if id_columns:
             grouped = base_df.groupby(list(id_columns), dropna=False, sort=False).groups
+            # ⚡ Pre-group window_df by patient — O(W) once, instead of O(P × W)
+            win_grouped = window_df.groupby(list(id_columns), dropna=False, sort=False).groups
             for key, idx in grouped.items():
-                key_tuple = key if isinstance(key, tuple) else (key,)
-                mask = pd.Series(True, index=window_df.index)
-                for col, value in zip(id_columns, key_tuple):
-                    mask &= window_df[col] == value
-                windows = window_df.loc[mask]
-                if windows.empty:
+                win_idx = win_grouped.get(key)
+                if win_idx is None or len(win_idx) == 0:
                     continue
-                starts = window_hours.loc[windows.index].to_numpy(dtype=float)
-                durs = dur_hours.loc[windows.index].to_numpy(dtype=float)
+                starts = window_hours.loc[win_idx].to_numpy(dtype=float)
+                durs = dur_hours.loc[win_idx].to_numpy(dtype=float)
                 times = base_hours.loc[idx].to_numpy(dtype=float)
-                coverage = np.zeros(len(times), dtype=bool)
-                for start, dur in zip(starts, durs):
-                    if np.isnan(start) or np.isnan(dur):
-                        continue
-                    # Match R ricu: seq(floor(start), floor(floor(start)+dur))
-                    fs = np.floor(start)
-                    fe = np.floor(fs + dur)
-                    coverage |= (times >= fs) & (times <= fe)
+                # Vectorized interval coverage — avoid per-window Python loop
+                valid = ~(np.isnan(starts) | np.isnan(durs))
+                if not valid.any():
+                    continue
+                fs = np.floor(starts[valid])
+                fe = np.floor(fs + durs[valid])
+                # Broadcasting: times[i] vs all windows — O(T × W_patient)
+                if len(fs) <= 50:
+                    # Small number of windows: vectorized broadcasting
+                    coverage = np.zeros(len(times), dtype=bool)
+                    for s, e in zip(fs, fe):
+                        coverage |= (times >= s) & (times <= e)
+                else:
+                    # Many windows: sort and scan
+                    coverage = np.zeros(len(times), dtype=bool)
+                    order = np.argsort(fs)
+                    fs_sorted, fe_sorted = fs[order], fe[order]
+                    for s, e in zip(fs_sorted, fe_sorted):
+                        coverage |= (times >= s) & (times <= e)
                 matched.loc[idx] = coverage
             return matched
 
@@ -5930,7 +5907,7 @@ def _callback_gcs(
     
     return _as_icutbl(frame.reset_index(drop=True), id_columns=id_columns, index_column=index_column, value_column=output_col)
 
-from .callbacks import uo_6h as calc_uo_6h, uo_12h as calc_uo_12h, uo_24h as calc_uo_24h
+from .callbacks import uo_6h as calc_uo_6h, uo_12h as calc_uo_12h, uo_24h as calc_uo_24h, uo_all_windows
 
 def _callback_rrt_criteria(
     tables: Dict[str, ICUTable],
@@ -6020,18 +5997,11 @@ def _callback_rrt_criteria(
                 if cols:
                     weight_df = weight_df.rename(columns={cols[0]: "weight"})
             
-            # 计算并封装为 ICUTable
-            if "uo_6h" in missing_uo:
-                df = calc_uo_6h(urine_df, weight_df, interval=ctx.interval)
-                tables["uo_6h"] = _as_icutbl(df, id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="uo_6h")
-            
-            if "uo_12h" in missing_uo:
-                df = calc_uo_12h(urine_df, weight_df, interval=ctx.interval)
-                tables["uo_12h"] = _as_icutbl(df, id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="uo_12h")
-                
-            if "uo_24h" in missing_uo:
-                df = calc_uo_24h(urine_df, weight_df, interval=ctx.interval)
-                tables["uo_24h"] = _as_icutbl(df, id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column="uo_24h")
+            # ⚡ PERF: Compute all 3 UO windows in a single merge+sort+groupby
+            uo_results = uo_all_windows(urine_df, weight_df, interval=ctx.interval)
+            for uo_name in missing_uo:
+                if uo_name in uo_results:
+                    tables[uo_name] = _as_icutbl(uo_results[uo_name], id_columns=urine_tbl.id_columns, index_column=urine_tbl.index_column, value_column=uo_name)
     
     # 🔧 FIX: 如果所有依赖都加载失败，返回空表而不是报错
     if not tables:

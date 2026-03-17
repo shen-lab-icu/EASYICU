@@ -1453,60 +1453,21 @@ def safi(
     return result
 
 def uo_6h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = None) -> pd.DataFrame:
-    """Calculate 6-hour average urine output in mL/kg/h.
-    
-    This function computes a rolling 6-hour average of urine output, normalized
-    by patient weight, for SOFA-2 renal scoring.
-    
-    SOFA-2 criterion: UO <0.5 mL/kg/h for 6-12 hours → Score 1
-    
-    Args:
-        urine: DataFrame with urine output (mL)
-        weight: DataFrame with patient weight (kg)
-        interval: Time interval for data (if None, inferred from data)
-        
-    Returns:
-        DataFrame with 'uo_6h' column (mL/kg/h)
-    """
+    """Calculate 6-hour average urine output in mL/kg/h."""
     return _urine_window_avg(urine, weight, window_hours=6, min_hours=3, interval=interval)
 
 def uo_12h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = None) -> pd.DataFrame:
-    """Calculate 12-hour average urine output in mL/kg/h.
-    
-    This function computes a rolling 12-hour average of urine output, normalized
-    by patient weight, for SOFA-2 renal scoring.
-    
-    SOFA-2 criteria:
-    - UO <0.5 mL/kg/h for ≥12 hours → Score 2
-    - Anuria (0 mL) for ≥12 hours → Score 4
-    
-    Args:
-        urine: DataFrame with urine output (mL)
-        weight: DataFrame with patient weight (kg)
-        interval: Time interval for data (if None, inferred from data)
-        
-    Returns:
-        DataFrame with 'uo_12h' column (mL/kg/h)
-    """
+    """Calculate 12-hour average urine output in mL/kg/h."""
     return _urine_window_avg(urine, weight, window_hours=12, min_hours=6, interval=interval)
 
 def uo_24h(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = None) -> pd.DataFrame:
-    """Calculate 24-hour average urine output in mL/kg/h.
-    
-    This function computes a rolling 24-hour average of urine output, normalized
-    by patient weight, for SOFA-2 renal scoring.
-    
-    SOFA-2 criterion: UO <0.3 mL/kg/h for ≥24 hours → Score 3
-    
-    Args:
-        urine: DataFrame with urine output (mL)
-        weight: DataFrame with patient weight (kg)
-        interval: Time interval for data (if None, inferred from data)
-        
-    Returns:
-        DataFrame with 'uo_24h' column (mL/kg/h)
-    """
+    """Calculate 24-hour average urine output in mL/kg/h."""
     return _urine_window_avg(urine, weight, window_hours=24, min_hours=12, interval=interval)
+
+
+def uo_all_windows(urine: pd.DataFrame, weight: pd.DataFrame, interval: pd.Timedelta = None):
+    """Compute uo_6h, uo_12h, uo_24h in a single pass (shared merge+sort+groupby)."""
+    return _urine_window_avg_multi(urine, weight, interval=interval)
 
 def _urine_window_avg(
     urine: pd.DataFrame,
@@ -1666,6 +1627,102 @@ def _urine_window_avg(
     result = result[[col for col in keep_cols if col in result.columns]]
 
     return result
+
+def _urine_window_avg_multi(urine, weight, interval=None):
+    """Compute uo_6h, uo_12h, uo_24h in a single merge+sort+groupby pass.
+    
+    Returns dict: {'uo_6h': DataFrame, 'uo_12h': DataFrame, 'uo_24h': DataFrame}
+    """
+    windows = [(6, 3), (12, 6), (24, 12)]  # (window_hours, min_hours)
+    
+    # Reuse _urine_window_avg's column detection logic for the first call
+    # Then share the merged+sorted data for subsequent windows
+    id_cols = [col for col in urine.columns if col.endswith('_id') or col in [
+        'stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']]
+    
+    time_col = None
+    for candidate in ['charttime', 'measuredat', 'measuredat_minutes', 'nursingchartoffset',
+                       'observationoffset', 'intakeoutputoffset', 'registeredat']:
+        if candidate in urine.columns:
+            time_col = candidate
+            break
+    if time_col is None:
+        time_like = [c for c in urine.columns if 'time' in c.lower() or 'offset' in c.lower() or 'minute' in c.lower()]
+        if time_like:
+            time_col = time_like[0]
+        else:
+            # Fallback to individual calls
+            return {
+                'uo_6h': _urine_window_avg(urine, weight, 6, 3, interval),
+                'uo_12h': _urine_window_avg(urine, weight, 12, 6, interval),
+                'uo_24h': _urine_window_avg(urine, weight, 24, 12, interval),
+            }
+    
+    if not id_cols:
+        for pid in ['admissionid', 'stay_id', 'patientunitstayid', 'patientid', 'icustay_id', 'CaseID']:
+            if pid in urine.columns:
+                id_cols = [pid]
+                break
+    
+    # Single merge of urine + weight
+    common_ids = [c for c in id_cols if c in weight.columns]
+    if common_ids:
+        merged = pd.merge(urine, weight, on=common_ids, how='left', suffixes=('', '_weight'))
+    else:
+        merged = urine.copy()
+        if 'weight' in weight.columns and len(weight) > 0:
+            merged['weight'] = weight['weight'].iloc[0]
+    
+    if 'charttime_weight' in merged.columns:
+        merged = merged.sort_values(id_cols + [time_col])
+        for ic in id_cols:
+            merged['weight'] = merged.groupby(ic)['weight'].ffill()
+    
+    merged = merged[merged['weight'].notna() & (merged['weight'] > 0)]
+    
+    if len(merged) == 0:
+        empty = urine[id_cols + [time_col]].copy()
+        results = {}
+        for wh, _ in windows:
+            r = empty.copy()
+            r[f'uo_{wh}h'] = np.nan
+            results[f'uo_{wh}h'] = r
+        return results
+    
+    merged = merged.sort_values(id_cols + [time_col])
+    
+    if interval is None:
+        if len(merged) > 1:
+            td = merged.groupby(id_cols)[time_col].diff()
+            valid = td[td.notna() & (td > pd.Timedelta(0))]
+            interval = valid.median() if len(valid) > 0 else pd.Timedelta(hours=1)
+        else:
+            interval = pd.Timedelta(hours=1)
+    
+    val_col = 'urine'
+    interval_hours = interval.total_seconds() / 3600
+    
+    # Single groupby, compute all 3 rolling windows per group
+    def calc_all_windows(group):
+        group = group.sort_values(time_col)
+        w = group['weight']
+        for wh, mh in windows:
+            n_meas = max(1, int(wh / interval_hours))
+            min_p = max(1, int(mh / interval_hours))
+            usum = group[val_col].rolling(window=n_meas, min_periods=min_p, closed='right').sum()
+            group[f'uo_{wh}h'] = usum / (w * wh)
+        return group
+    
+    result = merged.groupby(id_cols, group_keys=False).apply(calc_all_windows)
+    
+    results = {}
+    for wh, _ in windows:
+        col = f'uo_{wh}h'
+        keep = id_cols + [time_col, col]
+        results[col] = result[[c for c in keep if c in result.columns]].copy()
+    
+    return results
+
 
 def miiv_icu_patients_filter(data: Union[IdTbl, pd.DataFrame], **kwargs) -> Union[IdTbl, pd.DataFrame]:
     """Filter MIMIC-IV patients data to only include ICU patients.

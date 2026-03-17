@@ -253,16 +253,13 @@ def _si_and(
 ) -> pd.DataFrame:
     """Detect SI when both antibiotic AND sampling occur.
     
-    Simple iterrows implementation (correctness-focused)
+    Vectorized merge implementation: O(n log n) instead of O(n²).
     """
     if abx.empty or samp.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
     
-    # Deduplicate columns (MIMIC-III samp can have duplicate 'charttime'
-    # from aux_time parameter) and strip to needed columns only.
-    # Use positional indexing to handle duplicate column names correctly.
+    # Deduplicate columns (MIMIC-III samp can have duplicate 'charttime')
     def _dedup_cols(df, keep_set):
-        """Keep only first occurrence of each wanted column, using iloc."""
         seen = set()
         keep_idx = []
         for i, col in enumerate(df.columns):
@@ -277,11 +274,10 @@ def _si_and(
     samp_needed = set(id_cols + [index_col, 'samp', 'org_itemid']) & set(samp.columns)
     samp = _dedup_cols(samp, samp_needed)
     
-    # Determine time type
+    # Determine time type and window values
     time_is_numeric = pd.api.types.is_numeric_dtype(abx[index_col])
     
     if not time_is_numeric:
-        # 🚀 优化：仅在需要时copy（datetime转换可能已在上游完成）
         if not pd.api.types.is_datetime64_any_dtype(abx[index_col]):
             abx = abx.copy()
             abx[index_col] = pd.to_datetime(abx[index_col], errors='coerce')
@@ -294,82 +290,54 @@ def _si_and(
         abx_win_val = abx_win.total_seconds() / 3600.0
         samp_win_val = samp_win.total_seconds() / 3600.0
     
-    results = []
+    # Drop rows with NA times
+    abx = abx.dropna(subset=[index_col])
+    samp = samp.dropna(subset=[index_col])
     
-    # Method 1: ABX → sampling
-    for _, abx_row in abx.iterrows():
-        abx_time = abx_row[index_col]
-        if pd.isna(abx_time):
-            continue
-        
-        samp_mask = pd.Series(True, index=samp.index)
-        for col in id_cols:
-            samp_mask &= (samp[col] == abx_row[col])
-        
-        samp_subset = samp[samp_mask]
-        if samp_subset.empty:
-            continue
-        
-        if time_is_numeric:
-            samp_in_win = samp_subset[
-                (samp_subset[index_col] >= abx_time) &
-                (samp_subset[index_col] < abx_time + abx_win_val)
-            ]
-        else:
-            samp_in_win = samp_subset[
-                (samp_subset[index_col] >= abx_time) &
-                (samp_subset[index_col] < abx_time + abx_win_val)
-            ]
-        
-        if not samp_in_win.empty:
-            result_row = {col: abx_row[col] for col in id_cols}
-            result_row[index_col] = abx_time
-            
-            if keep_components:
-                result_row['abx_time'] = abx_time
-                result_row['samp_time'] = samp_in_win.iloc[0][index_col]
-            
-            results.append(result_row)
-    
-    # Method 2: Sampling → ABX
-    for _, samp_row in samp.iterrows():
-        samp_time = samp_row[index_col]
-        if pd.isna(samp_time):
-            continue
-        
-        abx_mask = pd.Series(True, index=abx.index)
-        for col in id_cols:
-            abx_mask &= (abx[col] == samp_row[col])
-        
-        abx_subset = abx[abx_mask]
-        if abx_subset.empty:
-            continue
-        
-        if time_is_numeric:
-            abx_in_win = abx_subset[
-                (abx_subset[index_col] >= samp_time) &
-                (abx_subset[index_col] < samp_time + samp_win_val)
-            ]
-        else:
-            abx_in_win = abx_subset[
-                (abx_subset[index_col] >= samp_time) &
-                (abx_subset[index_col] < samp_time + samp_win_val)
-            ]
-        
-        if not abx_in_win.empty:
-            result_row = {col: samp_row[col] for col in id_cols}
-            result_row[index_col] = samp_time
-            
-            if keep_components:
-                result_row['abx_time'] = abx_in_win.iloc[0][index_col]
-                result_row['samp_time'] = samp_time
-            
-            results.append(result_row)
-    
-    if not results:
+    if abx.empty or samp.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
     
-    result_df = pd.DataFrame(results)
+    # ⚡ Vectorized: merge on id_cols, then filter by time window
+    abx_slim = abx[id_cols + [index_col]].copy()
+    abx_slim = abx_slim.rename(columns={index_col: '_abx_time'})
+    samp_slim = samp[id_cols + [index_col]].copy()
+    samp_slim = samp_slim.rename(columns={index_col: '_samp_time'})
+    
+    # Inner merge on patient IDs — O(n) with hash join
+    merged = abx_slim.merge(samp_slim, on=id_cols, how='inner')
+    
+    if merged.empty:
+        return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
+    
+    # Method 1: ABX → sampling (samp_time in [abx_time, abx_time + abx_win))
+    m1 = merged[(merged['_samp_time'] >= merged['_abx_time']) &
+                (merged['_samp_time'] < merged['_abx_time'] + abx_win_val)]
+    
+    # Method 2: Sampling → ABX (abx_time in [samp_time, samp_time + samp_win))
+    m2 = merged[(merged['_abx_time'] >= merged['_samp_time']) &
+                (merged['_abx_time'] < merged['_samp_time'] + samp_win_val)]
+    
+    parts = []
+    if not m1.empty:
+        r1 = m1[id_cols].copy()
+        r1[index_col] = m1['_abx_time'].values
+        if keep_components:
+            r1['abx_time'] = m1['_abx_time'].values
+            r1['samp_time'] = m1['_samp_time'].values
+        parts.append(r1)
+    
+    if not m2.empty:
+        r2 = m2[id_cols].copy()
+        r2[index_col] = m2['_samp_time'].values
+        if keep_components:
+            r2['abx_time'] = m2['_abx_time'].values
+            r2['samp_time'] = m2['_samp_time'].values
+        parts.append(r2)
+    
+    if not parts:
+        return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
+    
+    result_df = pd.concat(parts, ignore_index=True)
     result_df = result_df.drop_duplicates(subset=id_cols + [index_col])
     result_df['susp_inf'] = True
     return result_df
