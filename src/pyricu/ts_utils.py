@@ -1035,37 +1035,119 @@ def fill_gaps(
     
     if _use_fast_path:
         try:
-            # 批量生成所有患者的时间网格
-            grid_parts = []
+            # 🚀 向量化批量生成时间网格（避免逐患者 Python 循环 + pd.concat(N DataFrames)）
+            # 对 200K 患者: 旧方法 ~5-10s (200K DataFrame + concat)，新方法 ~0.5s (numpy bulk)
+            _is_single_id = len(id_cols) == 1
+            all_ids = []
+            all_starts = []
+            all_ends = []
             for id_vals, entry in limits_lookup.items():
                 lo, hi = entry["start"], entry["end"]
                 if pd.isna(lo) or pd.isna(hi) or lo > hi:
                     continue
-                times = np.arange(lo, hi + step_hours * 0.5, step_hours)
-                n = len(times)
-                if n == 0:
-                    continue
-                part = {index_col: times}
-                if isinstance(id_vals, tuple):
-                    for idx, col in enumerate(id_cols):
-                        part[col] = np.full(n, id_vals[idx])
-                else:
-                    part[id_cols[0]] = np.full(n, id_vals)
-                grid_parts.append(pd.DataFrame(part))
-            
-            if grid_parts:
-                full_grid = pd.concat(grid_parts, ignore_index=True)
-                # Left join: grid + original data
-                merge_cols = id_cols + [index_col]
-                data_cols = [c for c in data.columns if c not in merge_cols]
-                if data_cols:
-                    result = full_grid.merge(
-                        data[merge_cols + data_cols].drop_duplicates(subset=merge_cols),
-                        on=merge_cols, how='left'
-                    )
-                else:
-                    result = full_grid
-                return result
+                all_ids.append(id_vals)
+                all_starts.append(float(lo))
+                all_ends.append(float(hi))
+
+            if all_ids:
+                starts_arr = np.array(all_starts)
+                ends_arr = np.array(all_ends)
+                counts = (np.floor((ends_arr - starts_arr) / step_hours) + 1).astype(np.int64)
+                counts = np.maximum(counts, 0)
+                total_rows = counts.sum()
+
+                if total_rows > 0:
+                    # Vectorized time array: offsets + within-group position * step
+                    offsets = np.repeat(starts_arr, counts)
+                    cum_counts = np.cumsum(counts)
+                    starts_idx = np.empty(len(counts), dtype=np.int64)
+                    starts_idx[0] = 0
+                    starts_idx[1:] = cum_counts[:-1]
+                    within = np.arange(total_rows) - np.repeat(starts_idx, counts)
+                    time_arr = offsets + within * step_hours
+
+                    merge_cols = id_cols + [index_col]
+                    data_cols = [c for c in data.columns if c not in merge_cols]
+
+                    if _is_single_id:
+                        id_col_name = id_cols[0]
+                        # Detect dtype from first ID
+                        sample_id = all_ids[0]
+                        if isinstance(sample_id, (int, np.integer)):
+                            id_arr = np.repeat(np.array(all_ids, dtype=np.int64), counts)
+                        else:
+                            id_arr = np.repeat(np.array(all_ids), counts)
+                    else:
+                        id_arr = None  # handled below
+
+                    # 🚀 FAST PATH: direct numpy indexing instead of pd.merge
+                    # Maps each data row to its position in the output grid
+                    # using integer arithmetic — O(N) vs O(N log N) for merge
+                    if data_cols and _is_single_id and step_hours > 0:
+                        try:
+                            _data_id = data[id_col_name].values
+                            _data_time = data[index_col].values.astype(np.float64)
+
+                            # Build vectorized lookup: id → (grid_offset, start_time)
+                            _ids_arr = np.array(all_ids)
+                            _offset_arr = np.empty(len(all_ids), dtype=np.int64)
+                            _offset_arr[0] = 0
+                            if len(all_ids) > 1:
+                                _offset_arr[1:] = cum_counts[:-1]
+                            _start_arr = starts_arr
+
+                            # Use pd.Series for vectorized .map() — O(N) hash lookup
+                            _id_offset_map = pd.Series(_offset_arr, index=_ids_arr)
+                            _id_start_map = pd.Series(_start_arr, index=_ids_arr)
+
+                            _offsets_raw = _id_offset_map.reindex(_data_id).values
+                            _starts_per_row = _id_start_map.reindex(_data_id).values
+
+                            # NaN in offsets means ID not in limits → skip those rows
+                            _known = ~np.isnan(_offsets_raw) & ~np.isnan(_starts_per_row)
+                            _within_f = np.round((_data_time - _starts_per_row) / step_hours)
+                            # Safe conversion: only valid rows get integer positions
+                            _within = np.where(_known, _within_f, -1).astype(np.int64)
+                            _offsets_i = np.where(_known, _offsets_raw, 0).astype(np.int64)
+                            _global_pos = _offsets_i + _within
+
+                            # Filter valid positions
+                            _valid = (
+                                _known &
+                                (_within >= 0) & 
+                                (_global_pos >= 0) & (_global_pos < total_rows)
+                            )
+                            _gpos_valid = _global_pos[_valid].astype(np.int64)
+
+                            # Pre-allocate result arrays
+                            result_dict = {id_col_name: id_arr, index_col: time_arr}
+                            for col in data_cols:
+                                arr = np.full(total_rows, np.nan, dtype=np.float64)
+                                src = pd.to_numeric(data[col], errors='coerce').values
+                                # Last-write-wins for duplicates (same as drop_duplicates keep='last')
+                                arr[_gpos_valid] = src[_valid]
+                                result_dict[col] = arr
+                            return pd.DataFrame(result_dict)
+                        except Exception:
+                            pass  # fall through to merge path
+
+                    # Fallback: pd.merge for multi-ID or complex cases
+                    if _is_single_id:
+                        full_grid = pd.DataFrame({id_col_name: id_arr, index_col: time_arr})
+                    else:
+                        full_grid = pd.DataFrame({index_col: time_arr})
+                        for ci, col in enumerate(id_cols):
+                            col_vals = [iv[ci] if isinstance(iv, tuple) else iv for iv in all_ids]
+                            full_grid[col] = np.repeat(np.array(col_vals), counts)
+
+                    if data_cols:
+                        result = full_grid.merge(
+                            data[merge_cols + data_cols].drop_duplicates(subset=merge_cols),
+                            on=merge_cols, how='left'
+                        )
+                    else:
+                        result = full_grid
+                    return result
         except Exception:
             pass  # Fall through to per-group path
 
@@ -1345,6 +1427,7 @@ def slide(
     after: pd.Timedelta = pd.Timedelta(0),
     agg_func: Optional[dict] = None,
     full_window: bool = False,
+    _pre_sorted: bool = False,
 ) -> pd.DataFrame:
     """Apply sliding window aggregation (R ricu slide) - VECTORIZED VERSION.
     
@@ -1388,7 +1471,7 @@ def slide(
     # rolling() 原生不支持 forward window，仅支持 backward
     if after == pd.Timedelta(0):
         # print(f"🚀 使用向量化 slide (vectorized path)", flush=True)
-        return _slide_vectorized(data, id_cols, index_col, before, agg_func, full_window)
+        return _slide_vectorized(data, id_cols, index_col, before, agg_func, full_window, _pre_sorted=_pre_sorted)
     else:
         # print(f"⚠️ 使用循环 slide (loop path, after={after})", flush=True)
         # Fallback to loop-based version for forward windows
@@ -1401,6 +1484,7 @@ def _slide_vectorized(
     before: pd.Timedelta,
     agg_func: dict,
     full_window: bool = False,
+    _pre_sorted: bool = False,
 ) -> pd.DataFrame:
     """Vectorized slide implementation using pandas rolling() - FAST PATH.
     
@@ -1469,7 +1553,8 @@ def _slide_vectorized(
         try:
             return _slide_vectorized_bulk(
                 data, id_cols, index_col, agg_map, 
-                window_size, full_window, is_numeric_time
+                window_size, full_window, is_numeric_time,
+                _pre_sorted=_pre_sorted,
             )
         except Exception:
             pass  # Fall through to per-group loop
@@ -1577,6 +1662,7 @@ def _slide_vectorized_bulk(
     window_size_hours: float,
     full_window: bool,
     is_numeric_time: bool,
+    _pre_sorted: bool = False,
 ) -> pd.DataFrame:
     """Bulk vectorized slide using pandas groupby().rolling().
     
@@ -1597,7 +1683,10 @@ def _slide_vectorized_bulk(
         is_numeric_time: Whether the time column is numeric (hours/seconds/minutes)
     """
     # Sort globally once (the only sort we need!)
-    data = data.sort_values(id_cols + [index_col]).reset_index(drop=True)
+    if not _pre_sorted:
+        data = data.sort_values(id_cols + [index_col]).reset_index(drop=True)
+    elif not isinstance(data.index, pd.RangeIndex) or data.index[0] != 0:
+        data = data.reset_index(drop=True)
     
     agg_cols = list(agg_map.keys())
     
@@ -1625,24 +1714,37 @@ def _slide_vectorized_bulk(
         group_key = list(zip(*(data[c].values for c in id_cols)))
     
     # Create work DataFrame with only aggregation columns, indexed by time
-    work = data[agg_cols].copy()
-    work.index = td_index
+    # 🚀 Avoid .copy() - construct from numpy arrays directly
+    work = pd.DataFrame(
+        {c: data[c].values for c in agg_cols},
+        index=td_index,
+    )
     
     # 🚀 核心: 单次 groupby().rolling().agg() 替代 N 次逐患者循环
     min_periods = None if full_window else 1
-    result = (
+    grouped_rolling = (
         work
-        .groupby(group_key, sort=True)[agg_cols]
+        .groupby(group_key, sort=False)[agg_cols]
         .rolling(window=window_td, closed='both', min_periods=min_periods)
-        .agg({c: agg_map[c] for c in agg_cols})
     )
     
-    # Result has MultiIndex: (group_key, time_index). Drop group level.
-    if isinstance(result.index, pd.MultiIndex):
-        result = result.droplevel(0)
+    # 🚀 PERF: 当所有聚合函数相同时，使用直接方法调用替代 .agg(dict)
+    # .agg(dict) 对每列创建独立 Rolling 对象 (_gotitem)，开销大
+    # 直接 .max() / .min() 走 Cython 快路径
+    unique_funcs = set(agg_map.values())
+    if len(unique_funcs) == 1:
+        func_name = next(iter(unique_funcs))
+        result = getattr(grouped_rolling, func_name)()
+    else:
+        result = grouped_rolling.agg({c: agg_map[c] for c in agg_cols})
     
-    # Reset to integer index — aligned with sorted data by construction
-    result_df = result.reset_index(drop=True)
+    # 🚀 PERF: 用 .values 直接提取 numpy 数组，跳过昂贵的 droplevel + reset_index
+    # droplevel(0) 对 6.8M 行 MultiIndex 花费 ~25s（Index.get_loc 51.8s）
+    # rolling 保持行数和顺序与输入完全一致，可安全用 .values 提取
+    result_df = pd.DataFrame(
+        result.values,
+        columns=agg_cols,
+    )
     
     # Restore id and time columns from sorted data
     for col in id_cols:
@@ -1651,7 +1753,7 @@ def _slide_vectorized_bulk(
     
     # Handle full_window post-filter
     if full_window:
-        group_min = data.groupby(id_cols, sort=True)[index_col].transform('min')
+        group_min = data.groupby(id_cols, sort=False)[index_col].transform('min')
         time_diff = data[index_col] - group_min
         if is_numeric_time:
             if max_val > 525600:

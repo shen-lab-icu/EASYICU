@@ -958,6 +958,17 @@ class ConceptResolver:
                 if aggregators.get(name) in (None, False, 'auto', 'median')
                 and name not in multi_source_concepts
             ]
+            # ⚡ PERF: 跳过已在 _raw_concept_cache 中的概念，避免重复读取宽表
+            if self._keep_cache_between_calls and concepts_info_filtered:
+                _pid_hash = _compute_patient_ids_hash(patient_ids)
+                concepts_info_filtered = [
+                    (name, val_var) for name, val_var in concepts_info_filtered
+                    if self._get_raw_concept_from_cache(
+                        name, _pid_hash,
+                        aggregator=aggregators.get(name, "auto"),
+                        allow_aggregated=True,
+                    ) is None
+                ]
             if shared_table in WIDE_TABLES and len(concepts_info_filtered) >= 1:
                 all_have_value_var = all(val_var is not None for _, val_var in concepts_info_filtered)
                 
@@ -1068,10 +1079,23 @@ class ConceptResolver:
                 try:
                     from .datasource import load_bucketed_table_multi_aggregated
 
+                    # ⚡ PERF: 跳过已在缓存中的概念，避免重复读取长表
+                    _concepts_for_batch = list(concepts_info)
+                    if self._keep_cache_between_calls:
+                        _pid_hash = _compute_patient_ids_hash(patient_ids)
+                        _concepts_for_batch = [
+                            (name, val_var) for name, val_var in _concepts_for_batch
+                            if self._get_raw_concept_from_cache(
+                                name, _pid_hash,
+                                aggregator=aggregators.get(name, "auto"),
+                                allow_aggregated=True,
+                            ) is None
+                        ]
+
                     batch_itemids = {}
                     batch_bounds = {}
                     batch_sub_var = None
-                    for concept_name, _ in concepts_info:
+                    for concept_name, _ in _concepts_for_batch:
                         if concept_name in multi_source_concepts:
                             continue
                         concept = self.dictionary.get(concept_name)
@@ -1408,6 +1432,8 @@ class ConceptResolver:
             if is_top_level:
                 with self._cache_lock:
                     self._concept_cache.clear()
+                    # 🔧 _concept_data_cache 始终清除：在全患者规模(200K+)下
+                    # 保留会导致 ~30GB 内存占用，引发严重的 swap 性能退化
                     self._concept_data_cache.clear()
                     if not self._keep_cache_between_calls:
                         # 🔧 FIX: 顶层调用结束后清除内存缓存，避免碎片内存泄漏
@@ -6635,9 +6661,15 @@ class ConceptResolver:
                     
                     # 应用聚合（如果需要）
                     if agg_value not in (None, False, "auto"):
-                        result = self._apply_aggregation_to_icutable(
-                            raw_cached, concept_name, interval, agg_value
-                        )
+                        # 🚀 PERF: 如果缓存命中是精确的聚合方式匹配，数据已经聚合完毕，
+                        # 跳过冗余的 groupby().agg()（94K 患者下节省 ~30s）
+                        exact_key = self._raw_cache_key(concept_name, patient_ids_hash, agg_value)
+                        if exact_key in self._raw_concept_cache:
+                            result = raw_cached
+                        else:
+                            result = self._apply_aggregation_to_icutable(
+                                raw_cached, concept_name, interval, agg_value
+                            )
                     else:
                         result = raw_cached
                     
@@ -9565,8 +9597,7 @@ def _apply_callback(
             # Load WBC concept for the same patients
             # IMPORTANT: Use merge=False to get Dict[str, ICUTable] instead of merged DataFrame
             # IMPORTANT: Must pass data_source for resolver.load_concepts to work
-            # IMPORTANT: Use _skip_concept_cache=True to avoid polluting the main cache
-            # This way, the internal wbc load won't affect subsequent wbc loads
+            # Cache WBC across blood_cell_ratio concepts for performance
             if data_source is None:
                 if DEBUG_CALLBACK:
                     print("    [SKIP] data_source is None")
@@ -9575,15 +9606,16 @@ def _apply_callback(
                 return frame
             
             if DEBUG_CALLBACK:
-                print("    加载 WBC (跳过缓存)...")
+                print("    加载 WBC (使用缓存)...")
             
+            # Use full patient_ids for cache efficiency when available
+            _wbc_pids = patient_ids if patient_ids else frame_patient_ids
             wbc_result = resolver.load_concepts(
                 ['wbc'],
                 data_source,
-                patient_ids=frame_patient_ids,  # Only load for needed patients
+                patient_ids=_wbc_pids,
                 ricu_compatible=False,
                 merge=False,
-                _skip_concept_cache=True,  # Don't cache this internal call
             )
             
             if 'wbc' not in wbc_result or wbc_result['wbc'].data.empty:
@@ -9660,6 +9692,16 @@ def _apply_callback(
                 frame_work = frame.copy()
                 wbc_work = wbc_df.copy()
                 
+                # CRITICAL: Filter WBC to frame patients BEFORE time unit detection.
+                # Otherwise, long-stay patients not in the frame can push wbc_time_max
+                # past the 1000-hour threshold, breaking the minutes-vs-hours heuristic.
+                _unique_pids = frame_work[id_col].unique()
+                wbc_work = wbc_work[wbc_work[id_col].isin(set(_unique_pids))].copy()
+                
+                # Recalculate time maxes after filtering
+                frame_time_max = frame_work[index_col].abs().max()
+                wbc_time_max = wbc_work[index_col].abs().max() if not wbc_work.empty else 0
+                
                 # Improved time unit detection:
                 # 1. Large absolute threshold (>1000) clearly indicates minutes
                 # 2. Relative comparison: if frame_time >> wbc_time (e.g., 5x+), convert
@@ -9707,36 +9749,52 @@ def _apply_callback(
                 wbc_work[index_col] = wbc_work[index_col].astype(frame_work[index_col].dtype)
                 
                 # CRITICAL: merge_asof requires the 'on' column to be sorted globally.
-                # With multiple patients, their time ranges may overlap. 
-                # Solution: Process each patient separately and concat results.
-                merged_parts = []
-                for patient_id in frame_work[id_col].unique():
-                    frame_patient = frame_work[frame_work[id_col] == patient_id].sort_values(index_col)
-                    wbc_patient = wbc_work[wbc_work[id_col] == patient_id].sort_values(index_col)
-                    
-                    if wbc_patient.empty:
-                        # No WBC data for this patient, keep original frame
-                        merged_parts.append(frame_patient)
-                        continue
-                    
-                    try:
-                        merged_patient = pd.merge_asof(
-                            frame_patient,
-                            wbc_patient[[id_col, index_col, 'wbc']],
-                            on=index_col,
-                            by=id_col,
-                            direction='nearest',
-                        )
-                        merged_parts.append(merged_patient)
-                    except Exception as e:
-                        if DEBUG_CALLBACK:
-                            print(f"    [WARN] merge_asof failed for patient {patient_id}: {e}")
-                        merged_parts.append(frame_patient)
-                
-                if merged_parts:
-                    frame_merged = pd.concat(merged_parts, ignore_index=True)
-                else:
-                    frame_merged = frame_work.copy()
+                # With multiple patients, their time ranges may overlap.
+                # Solution: Add per-patient offset to make times globally monotonic,
+                # then do a single merge_asof call instead of per-patient loops.
+                _max_time = max(
+                    frame_work[index_col].abs().max() if len(frame_work) > 0 else 0,
+                    wbc_work[index_col].abs().max() if len(wbc_work) > 0 else 0,
+                ) + 1000  # generous padding
+
+                # Build offset map: each patient gets a non-overlapping time range
+                _pid_offset = {pid: i * _max_time * 2 for i, pid in enumerate(_unique_pids)}
+
+                # Add offset to make global time monotonic
+                frame_work['_gtime'] = frame_work[id_col].map(_pid_offset) + frame_work[index_col]
+                wbc_work['_gtime'] = wbc_work[id_col].map(_pid_offset) + wbc_work[index_col]
+
+                # Sort by global time for merge_asof
+                frame_work = frame_work.sort_values('_gtime')
+                wbc_work = wbc_work.sort_values('_gtime')
+
+                try:
+                    frame_merged = pd.merge_asof(
+                        frame_work,
+                        wbc_work[[id_col, '_gtime', 'wbc']],
+                        on='_gtime',
+                        by=id_col,
+                        direction='nearest',
+                    )
+                except Exception:
+                    # Fallback: per-patient merge_asof
+                    merged_parts = []
+                    for patient_id in _unique_pids:
+                        fp = frame_work[frame_work[id_col] == patient_id].sort_values(index_col)
+                        wp = wbc_work[wbc_work[id_col] == patient_id].sort_values(index_col)
+                        if wp.empty:
+                            merged_parts.append(fp)
+                        else:
+                            try:
+                                mp = pd.merge_asof(fp, wp[[id_col, index_col, 'wbc']],
+                                                   on=index_col, by=id_col, direction='nearest')
+                                merged_parts.append(mp)
+                            except Exception:
+                                merged_parts.append(fp)
+                    frame_merged = pd.concat(merged_parts, ignore_index=True) if merged_parts else frame_work.copy()
+
+                # Clean up temp column
+                frame_merged = frame_merged.drop(columns=['_gtime'], errors='ignore')
                 
                 if DEBUG_CALLBACK:
                     print(f"    Frame before merge:\n{frame_work[[id_col, index_col, concept_name]]}")

@@ -3076,6 +3076,22 @@ def validate_database_path(data_path: str, database: str) -> dict:
     
     # 如果全部找到
     if len(missing_tables) == 0:
+        has_parquet = len(parquet_files) > 0 or len(bucket_dirs) > 0
+        if not has_parquet:
+            # 所有表仅通过 CSV 找到，没有 Parquet 文件 → 需要转换
+            if lang == 'en':
+                msg = f'⚠️ {db_name}: Found {total_required} required tables as CSV, but no Parquet files. Please convert to Parquet first.'
+                sug = '💡 Click "Convert to Parquet" to convert CSV files for optimal performance'
+            else:
+                msg = f'⚠️ {db_name}: 找到 {total_required} 个必需表（CSV格式），但没有 Parquet 文件。请先转换为 Parquet 格式。'
+                sug = '💡 点击「转换为Parquet」将 CSV 文件转换为 Parquet 格式以获得最佳性能'
+            return {
+                'valid': False,
+                'message': msg,
+                'suggestion': sug,
+                'can_convert': True,
+                'csv_path': str(path),
+            }
         bucket_info = f", {len(bucket_dirs)} bucketed" if bucket_dirs else ""
         msg = f'✅ {db_name}: All {total_required} required tables found ({len(parquet_files)} Parquet files{bucket_info})' if lang == 'en' else f'✅ {db_name}: 所有 {total_required} 个必需表已找到 ({len(parquet_files)} 个 Parquet 文件{bucket_info})'
         return {
