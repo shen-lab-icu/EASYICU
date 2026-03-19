@@ -3049,23 +3049,29 @@ def validate_database_path(data_path: str, database: str) -> dict:
                 table_name = subdir.name[:-7]  # remove '_bucket'
                 bucket_dirs.add(table_name.lower())
     
-    # 合并所有找到的表（单文件、分片目录、分桶目录、CSV文件）
-    all_found = parquet_names | parquet_dirs | bucket_dirs | csv_names
+    # 分别统计 Parquet 可用和仅 CSV 可用的表
+    parquet_available = parquet_names | parquet_dirs | bucket_dirs
     
     # HiRID 特殊处理：pharma_bucket → pharma_records
-    if database == 'hirid' and 'pharma' in all_found:
-        all_found.add('pharma_records')
+    if database == 'hirid' and 'pharma' in parquet_available:
+        parquet_available.add('pharma_records')
+    if database == 'hirid' and 'pharma' in csv_names:
+        csv_names.add('pharma_records')
     
     # 检查各类别的表
     db_tables = required_parquet_tables.get(database, {})
-    found_tables = []
-    missing_tables = []
+    found_tables = []       # Parquet 可用
+    csv_only_tables = []    # 仅 CSV 可用（无 Parquet）
+    missing_tables = []     # 完全缺失
     missing_by_category = {}
     
     for category, tables in db_tables.items():
         for table in tables:
-            if table.lower() in all_found:
+            tl = table.lower()
+            if tl in parquet_available:
                 found_tables.append(table)
+            elif tl in csv_names:
+                csv_only_tables.append(table)
             else:
                 missing_tables.append(table)
                 if category not in missing_by_category:
@@ -3074,24 +3080,8 @@ def validate_database_path(data_path: str, database: str) -> dict:
     
     total_required = sum(len(tables) for tables in db_tables.values())
     
-    # 如果全部找到
-    if len(missing_tables) == 0:
-        has_parquet = len(parquet_files) > 0 or len(bucket_dirs) > 0
-        if not has_parquet:
-            # 所有表仅通过 CSV 找到，没有 Parquet 文件 → 需要转换
-            if lang == 'en':
-                msg = f'⚠️ {db_name}: Found {total_required} required tables as CSV, but no Parquet files. Please convert to Parquet first.'
-                sug = '💡 Click "Convert to Parquet" to convert CSV files for optimal performance'
-            else:
-                msg = f'⚠️ {db_name}: 找到 {total_required} 个必需表（CSV格式），但没有 Parquet 文件。请先转换为 Parquet 格式。'
-                sug = '💡 点击「转换为Parquet」将 CSV 文件转换为 Parquet 格式以获得最佳性能'
-            return {
-                'valid': False,
-                'message': msg,
-                'suggestion': sug,
-                'can_convert': True,
-                'csv_path': str(path),
-            }
+    # 如果所有表都有 Parquet（最佳情况）
+    if len(missing_tables) == 0 and len(csv_only_tables) == 0:
         bucket_info = f", {len(bucket_dirs)} bucketed" if bucket_dirs else ""
         msg = f'✅ {db_name}: All {total_required} required tables found ({len(parquet_files)} Parquet files{bucket_info})' if lang == 'en' else f'✅ {db_name}: 所有 {total_required} 个必需表已找到 ({len(parquet_files)} 个 Parquet 文件{bucket_info})'
         return {
@@ -3099,15 +3089,38 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'message': msg
         }
     
+    # 有表仅通过 CSV 找到（无 Parquet）→ 需要转换
+    if len(missing_tables) == 0 and len(csv_only_tables) > 0:
+        csv_list = ', '.join(csv_only_tables[:5])
+        if len(csv_only_tables) > 5:
+            csv_list += f' (+{len(csv_only_tables)-5} more)'
+        if lang == 'en':
+            msg = f'⚠️ {db_name}: {len(csv_only_tables)} tables only found as CSV (no Parquet): {csv_list}. Please convert to Parquet first.'
+            sug = '💡 Click "Convert to Parquet" to convert CSV files for data loading'
+        else:
+            msg = f'⚠️ {db_name}: {len(csv_only_tables)} 个表仅有 CSV 格式（无 Parquet）: {csv_list}。请先转换为 Parquet 格式。'
+            sug = '💡 点击「转换为Parquet」将 CSV 文件转换为 Parquet 格式'
+        return {
+            'valid': False,
+            'message': msg,
+            'suggestion': sug,
+            'can_convert': True,
+            'csv_path': str(path),
+        }
+    
     # 核心表缺失是严重问题
     core_missing = missing_by_category.get('core', [])
     if core_missing:
         missing_str = ', '.join(core_missing)
+        csv_hint = ""
+        if csv_only_tables:
+            csv_hint_tables = ', '.join(csv_only_tables[:3])
+            csv_hint = f" ({csv_hint_tables} only as CSV)" if lang == 'en' else f"（{csv_hint_tables} 仅有CSV格式）"
         if lang == 'en':
-            msg = f'❌ {db_name}: Missing core tables: {missing_str}'
+            msg = f'❌ {db_name}: Missing core tables: {missing_str}{csv_hint}'
             sug = f'💡 Core tables are required. Please ensure data is properly converted.'
         else:
-            msg = f'❌ {db_name}: 缺少核心表: {missing_str}'
+            msg = f'❌ {db_name}: 缺少核心表: {missing_str}{csv_hint}'
             sug = f'💡 核心表是必需的，请确保数据已正确转换。'
         return {
             'valid': False,
@@ -3115,27 +3128,31 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'suggestion': sug,
             'can_convert': True,
             'csv_path': str(path),
-            'missing_tables': missing_tables,
+            'missing_tables': missing_tables + csv_only_tables,
         }
     
-    # 部分表缺失（非核心）
-    if len(found_tables) > 0:
-        missing_str = ', '.join(missing_tables[:5])
-        if len(missing_tables) > 5:
-            missing_str += f' (+{len(missing_tables)-5} more)'
+    # 部分表缺失（非核心）或仅有 CSV
+    all_need_convert = missing_tables + csv_only_tables
+    if len(found_tables) > 0 or len(csv_only_tables) > 0:
+        parts = []
+        if missing_tables:
+            parts.append(', '.join(missing_tables[:3]) + (' (missing)' if lang == 'en' else '（缺失）'))
+        if csv_only_tables:
+            parts.append(', '.join(csv_only_tables[:3]) + (' (CSV only)' if lang == 'en' else '（仅CSV）'))
+        detail_str = '; '.join(parts)
         if lang == 'en':
-            msg = f'⚠️ {db_name}: Found {len(found_tables)}/{total_required} tables, missing: {missing_str}'
-            sug = f'💡 Click "Convert to Parquet" to convert missing tables'
+            msg = f'⚠️ {db_name}: {len(found_tables)}/{total_required} tables ready (Parquet), need conversion: {detail_str}'
+            sug = f'💡 Click "Convert to Parquet" to convert missing/CSV tables'
         else:
-            msg = f'⚠️ {db_name}: 找到 {len(found_tables)}/{total_required} 个表，缺少: {missing_str}'
-            sug = f'💡 点击「转换为Parquet」转换缺失的表'
+            msg = f'⚠️ {db_name}: {len(found_tables)}/{total_required} 个表就绪（Parquet），需要转换: {detail_str}'
+            sug = f'💡 点击「转换为Parquet」转换缺失或CSV格式的表'
         return {
             'valid': False,
             'message': msg,
             'suggestion': sug,
             'can_convert': True,
             'csv_path': str(path),
-            'missing_tables': missing_tables,
+            'missing_tables': all_need_convert,
         }
     
     # 检查是否存在 CSV 文件（可能需要转换）
