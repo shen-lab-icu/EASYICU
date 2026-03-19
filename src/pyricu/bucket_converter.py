@@ -268,6 +268,10 @@ def convert_to_buckets(
         
         conn.close()
         
+        # 写入完成标记文件 — 用于崩溃恢复检测
+        sentinel = output_dir / '_COMPLETE'
+        sentinel.write_text(f"{row_count},{actual_buckets},{total_size}")
+        
         log(f"转换完成! 耗时: {elapsed:.1f}秒")
         log(f"总行数: {row_count:,}")
         log(f"分桶数: {actual_buckets}")
