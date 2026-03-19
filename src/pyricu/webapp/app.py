@@ -5735,7 +5735,7 @@ def render_sidebar():
         
         # 🚀 患者数量限制（性能优化选项）
         limit_label = "Patient Limit" if st.session_state.language == 'en' else "患者数量限制"
-        limit_help = "Limit number of patients to speed up loading. 0 = no limit (full data, may be slow)" if st.session_state.language == 'en' else "限制加载的患者数量以加速。0 = 不限制（全量数据，可能较慢）"
+        limit_help = "Limit number of patients to speed up loading. 0 = no limit (full data, requires large memory)" if st.session_state.language == 'en' else "限制加载的患者数量以加速。0 = 不限制（全量数据，需要大内存。超过5万患者时自动分批）"
         patient_limit_options = [100, 1000, 5000, 10000, 20000, 50000, 0]
         patient_limit_labels = {
             100: "100 (quick test)" if st.session_state.language == 'en' else "100（快速测试）",
@@ -5743,7 +5743,8 @@ def render_sidebar():
             5000: "5,000", 
             10000: "10,000",
             20000: "20,000",
-            0: "All patients" if st.session_state.language == 'en' else "全部患者"
+            50000: "50,000",
+            0: "All patients (auto-batch)" if st.session_state.language == 'en' else "全部患者（自动分批）"
         }
         current_limit = st.session_state.get('patient_limit', 1000)  # 🔧 FIX: 默认1000患者（全量太慢）
         if current_limit not in patient_limit_options:
@@ -12073,10 +12074,17 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
                     eta_str = f"{eta_seconds/3600:.1f}h"
                 eta_text.markdown(f"⏱️ **Speed**: {speed_mb_per_sec:.1f} MB/s | **ETA**: {eta_str} | **Total**: {total_size_mb:.0f} MB")
     
-    # 创建 DuckDB 转换器（优化配置）
+    # 创建 DuckDB 转换器（根据可用内存自动配置）
+    try:
+        from pyricu.memory_manager import get_available_memory_mb
+        _avail_gb = get_available_memory_mb() / 1024
+        # 使用可用内存的 60%，最低 2GB，最高 24GB
+        _mem_limit_gb = max(2.0, min(_avail_gb * 0.6, 24.0))
+    except Exception:
+        _mem_limit_gb = 8.0  # 保守默认值
     converter = DuckDBConverter(
         data_path=str(source_path),
-        memory_limit_gb=12.0,
+        memory_limit_gb=_mem_limit_gb,
         verbose=False
     )
     
@@ -12133,13 +12141,21 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
         file_size_mb = csv_file.stat().st_size / (1024 * 1024)
         
         try:
-            if bucket_dir.exists() and list(bucket_dir.glob('bucket_id=*')) and not overwrite:
+            # 检查分桶是否已完整完成（通过 _COMPLETE 标记文件）
+            sentinel = bucket_dir / '_COMPLETE'
+            if bucket_dir.exists() and sentinel.exists() and not overwrite:
                 with details:
-                    st.caption(f"⏭️ {csv_file.name} (bucket exists)")
+                    st.caption(f"⏭️ {csv_file.name} (bucket complete)")
                 processed_size_mb += file_size_mb
                 progress_bar.progress(current / total)
                 update_eta(processed_size_mb, time.time() - start_time)
                 continue
+            # 如果目录存在但无 _COMPLETE 标记，说明上次转换不完整，清理后重新转换
+            if bucket_dir.exists() and not sentinel.exists():
+                import shutil
+                with details:
+                    st.caption(f"🔄 {csv_file.name} (incomplete, re-converting...)")
+                shutil.rmtree(bucket_dir)
             
             status_text.markdown(f"**Bucketing**: `{csv_file.name}` ({file_size_mb:.1f}MB) → {num_buckets} buckets [{current}/{total}]")
             
@@ -12147,7 +12163,7 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
             config = BucketConfig(
                 num_buckets=num_buckets,
                 partition_col=partition_col,
-                memory_limit='12GB',
+                memory_limit=f'{_mem_limit_gb:.0f}GB',
                 threads=0,  # 自动检测CPU核心数
                 row_group_size=1_000_000,
                 compression='zstd',
@@ -13001,7 +13017,33 @@ def execute_sidebar_export():
                                                  use_sofa2=True)
                     _loader.concept_resolver._keep_cache_between_calls = True
                 except Exception:
-                    pass
+                    _loader = None
+                
+                # 🧠 内存安全: 大量患者时自动分批，防止 OOM
+                # webapp 按模块加载（每模块5-15个概念），api.py 的自动分批估算
+                # 对单模块可能不触发（估算偏低），需要在 webapp 层显式设置 batch_size
+                _auto_batch_size = None
+                _n_load_patients = len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
+                if _n_load_patients is None or _n_load_patients > 20000:
+                    try:
+                        from pyricu.memory_manager import get_available_memory_mb
+                        _avail_mb = get_available_memory_mb()
+                        # 32GB 系统: ~20000 可用 → batch_size ~10000
+                        # 16GB 系统: ~10000 可用 → batch_size ~5000
+                        # 公式: 每个患者约 0.5-1MB 峰值(含所有中间状态), 使用可用内存的 40%
+                        _safe_patients = int(_avail_mb * 0.4 / 1.0)  # 1MB per patient conservative
+                        _safe_patients = max(2000, min(_safe_patients, 50000))
+                        _actual_n = _n_load_patients or 200000  # 估算全量患者数
+                        if _actual_n > _safe_patients:
+                            _auto_batch_size = _safe_patients
+                            if lang == 'en':
+                                st.info(f"🧠 Auto-batching: {_actual_n} patients, available memory {_avail_mb:.0f}MB → batch_size={_auto_batch_size}")
+                            else:
+                                st.info(f"🧠 自动分批: {_actual_n} 患者, 可用内存 {_avail_mb:.0f}MB → 每批 {_auto_batch_size} 患者")
+                    except Exception:
+                        # 无法检测内存时，对大量患者使用保守默认值
+                        if (_n_load_patients or 200000) > 50000:
+                            _auto_batch_size = 10000
                 
                 # 🚀 FIX: 全模块批量加载 + 改善进度提示
                 # 测试结果：逐概念加载比批量慢 3-10x（etco2: 873s 逐概念 vs <100s 批量）
@@ -13095,6 +13137,8 @@ def execute_sidebar_export():
                     )
                     if patient_ids_filter:
                         load_kwargs['patient_ids'] = patient_ids_filter
+                    if _auto_batch_size:
+                        load_kwargs['batch_size'] = _auto_batch_size
                     
                     _thread_result = {'done': False, 'result': None, 'error': None}
                     
@@ -13162,10 +13206,17 @@ def execute_sidebar_export():
                     try:
                         from pyricu.memory_manager import get_available_memory_mb, release_memory
                         _avail = get_available_memory_mb()
-                        if _avail < 2048:  # < 2GB 可用 → 紧急清理缓存
-                            _loader.concept_resolver._raw_concept_cache.clear()
-                            _loader.concept_resolver._table_cache.clear()
+                        # 分级清理: <4GB 紧急清理, <8GB 清理 table 缓存
+                        if _avail < 4096:
+                            if _loader is not None:
+                                _loader.concept_resolver._raw_concept_cache.clear()
+                                _loader.concept_resolver._table_cache.clear()
                             release_memory(aggressive=True)
+                        elif _avail < 8192:
+                            # 中等压力: 清理 table 缓存（最大的），保留概念缓存
+                            if _loader is not None:
+                                _loader.concept_resolver._table_cache.clear()
+                            release_memory(aggressive=False)
                     except Exception:
                         pass
                     
