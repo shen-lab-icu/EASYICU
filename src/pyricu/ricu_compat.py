@@ -766,13 +766,13 @@ def merge_concepts_ricu_style(
                     is_boolean_col = all(isinstance(v, (bool, np.bool_)) for v in non_na.head(100))
         
         if is_boolean_col:
-            def bool_agg_with_na(x):
-                non_na = x.dropna()
-                if len(non_na) == 0:
-                    return np.nan
-                return non_na.any()
-            
-            prepared = df[keep_cols].groupby(["id", "time"], as_index=False).agg({name: bool_agg_with_na})
+            # ⚡ PERF: 向量化布尔聚合替代逐组 Python 函数
+            # bool 列中 True=1, False=0, max() 相当于 any()，且自动跳过 NaN
+            _bool_df = df[keep_cols].copy()
+            _bool_df[name] = _bool_df[name].astype('float32')
+            prepared = _bool_df.groupby(["id", "time"], as_index=False).agg({name: 'max'})
+            # 将 max 结果转回布尔: 1.0→True, 0.0→False, NaN→NaN
+            prepared[name] = prepared[name].map({1.0: True, 0.0: False})
             boolean_concepts.append(name)
         else:
             prepared = df[keep_cols].drop_duplicates(subset=["id", "time"], keep="last")
