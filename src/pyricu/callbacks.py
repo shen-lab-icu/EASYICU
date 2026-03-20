@@ -1579,52 +1579,23 @@ def _urine_window_avg(
     # Calculate window parameters (use lowercase 'h' to avoid deprecation warning)
     min_periods = max(1, int(min_hours / (interval.total_seconds() / 3600)))
     
-    # PERFORMANCE FIX: Use simple mean instead of complex rolling window
-    # For SOFA scoring, we just need to know if average UO over the period meets threshold
-    # This is much faster than time-based rolling windows
-    
-    # Simple approach: Calculate average UO per patient over recent window
-    # This is an approximation but much faster for large datasets
-    def calc_uo_rate_fast(group):
-        # Sort by time
-        group = group.sort_values(time_col)
-        
-        # Use backward-looking average over last N measurements
-        # Approximate window_hours by number of measurements
-        n_measurements = max(1, int(window_hours / (interval.total_seconds() / 3600)))
-        
-        # Rolling sum of urine (count-based, much faster than time-based)
-        urine_sum = group[val_col].rolling(
-            window=n_measurements,
-            min_periods=max(1, min_periods),
-            closed='right'
-        ).sum()
-        
-        # Use most recent weight (forward fill already done)
-        weight_val = group['weight']
-        
-        # Calculate rate: total_mL / (kg * hours) = mL/kg/h
-        rate = urine_sum / (weight_val * window_hours)
-        
-        group[result_col] = rate
-        return group
-    
-    result = merged.groupby(id_cols, group_keys=False).apply(
-        calc_uo_rate_fast,
-    )
+    # Vectorized rolling — avoids per-group Python function call overhead
+    # Data is already sorted by id_cols + [time_col], so sort=False is safe
+    interval_hours = interval.total_seconds() / 3600
+    n_measurements = max(1, int(window_hours / interval_hours))
 
-    # 如果未来的 pandas 默认移除了 ID 列，这里仍兜底补齐
-    if id_cols:
-        missing_cols = [col for col in id_cols if col not in result.columns]
-        if missing_cols:
-            ids_df = merged[id_cols].reset_index(drop=True)
-            result = result.reset_index(drop=True)
-            for col in missing_cols:
-                result[col] = ids_df[col]
-    
+    urine_sum = merged.groupby(id_cols, sort=False)[val_col].rolling(
+        window=n_measurements,
+        min_periods=max(1, min_periods),
+        closed='right'
+    ).sum()
+
+    # .values preserves row order (sort=False + pre-sorted data)
+    merged[result_col] = urine_sum.values / (merged['weight'].values * window_hours)
+
     # Keep only relevant columns
     keep_cols = id_cols + [time_col, result_col]
-    result = result[[col for col in keep_cols if col in result.columns]]
+    result = merged[[col for col in keep_cols if col in merged.columns]]
 
     return result
 
@@ -1702,24 +1673,20 @@ def _urine_window_avg_multi(urine, weight, interval=None):
     val_col = 'urine'
     interval_hours = interval.total_seconds() / 3600
     
-    # Single groupby, compute all 3 rolling windows per group
-    def calc_all_windows(group):
-        group = group.sort_values(time_col)
-        w = group['weight']
-        for wh, mh in windows:
-            n_meas = max(1, int(wh / interval_hours))
-            min_p = max(1, int(mh / interval_hours))
-            usum = group[val_col].rolling(window=n_meas, min_periods=min_p, closed='right').sum()
-            group[f'uo_{wh}h'] = usum / (w * wh)
-        return group
-    
-    result = merged.groupby(id_cols, group_keys=False).apply(calc_all_windows)
+    # Vectorized rolling for all 3 windows — no per-group function calls
+    for wh, mh in windows:
+        n_meas = max(1, int(wh / interval_hours))
+        min_p = max(1, int(mh / interval_hours))
+        urine_sum = merged.groupby(id_cols, sort=False)[val_col].rolling(
+            window=n_meas, min_periods=min_p, closed='right'
+        ).sum()
+        merged[f'uo_{wh}h'] = urine_sum.values / (merged['weight'].values * wh)
     
     results = {}
     for wh, _ in windows:
         col = f'uo_{wh}h'
         keep = id_cols + [time_col, col]
-        results[col] = result[[c for c in keep if c in result.columns]].copy()
+        results[col] = merged[[c for c in keep if c in merged.columns]].copy()
     
     return results
 

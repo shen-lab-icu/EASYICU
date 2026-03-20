@@ -1672,15 +1672,6 @@ def _slide_vectorized_bulk(
     cProfile benchmark: 5000 patients MIIV SOFA
     - Per-patient loop: 17.4s (sort + set_index + rolling + agg per patient)
     - Bulk groupby().rolling(): ~1-2s (single C-level operation)
-    
-    Args:
-        data: Input DataFrame, will be sorted by id_cols + index_col
-        id_cols: ID columns for grouping (e.g., ['stay_id'])
-        index_col: Time column name
-        agg_map: Dict mapping column names to built-in agg functions ('max','min',etc.)
-        window_size_hours: Window size in hours
-        full_window: Whether to require full window coverage
-        is_numeric_time: Whether the time column is numeric (hours/seconds/minutes)
     """
     # Sort globally once (the only sort we need!)
     if not _pre_sorted:

@@ -357,9 +357,13 @@ def _subprocess_load_worker(args: dict) -> str:
         result.to_parquet(f"{output_prefix}.parquet", index=False, engine='pyarrow')
     elif isinstance(result, dict):
         # dict 结果：序列化为多个 parquet 文件
+        # 处理 ICUTable/TsTbl/WinTbl 等具有 .data 属性的表对象
         for k, v in result.items():
-            if isinstance(v, pd.DataFrame) and len(v) > 0:
-                v.to_parquet(f"{output_prefix}.{k}.parquet", index=False, engine='pyarrow')
+            df = v
+            if hasattr(v, 'data') and isinstance(v.data, pd.DataFrame):
+                df = v.data
+            if isinstance(df, pd.DataFrame) and len(df) > 0:
+                df.to_parquet(f"{output_prefix}.{k}.parquet", index=False, engine='pyarrow')
     
     return output_prefix
 
@@ -374,8 +378,11 @@ def _estimate_result_size_mb(result: Union[pd.DataFrame, Dict[str, pd.DataFrame]
     if isinstance(result, dict):
         total = 0.0
         for value in result.values():
-            if isinstance(value, pd.DataFrame) and not value.empty:
-                total += float(value.memory_usage(deep=True).sum()) / 1024.0 / 1024.0
+            df = value
+            if hasattr(value, 'data') and isinstance(value.data, pd.DataFrame):
+                df = value.data
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                total += float(df.memory_usage(deep=True).sum()) / 1024.0 / 1024.0
         return total
 
     return 0.0
@@ -398,8 +405,11 @@ def _write_batch_result_to_parquet(
 
     if isinstance(result, dict):
         for name, frame in result.items():
-            if isinstance(frame, pd.DataFrame) and not frame.empty:
-                frame.to_parquet(f"{output_prefix}.{name}.parquet", index=False, engine='pyarrow')
+            df = frame
+            if hasattr(frame, 'data') and isinstance(frame.data, pd.DataFrame):
+                df = frame.data
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                df.to_parquet(f"{output_prefix}.{name}.parquet", index=False, engine='pyarrow')
                 wrote = True
     return wrote
 

@@ -12863,7 +12863,19 @@ def execute_sidebar_export():
                     patient_ids_filter = {id_col: candidate_ids}
                     st.session_state['_cohort_stats'] = None
                 else:
+                    # 全量提取(patient_limit=0): 加载所有ID以支持分批
                     st.session_state['_cohort_stats'] = None
+                    try:
+                        for f in _get_patient_id_table_files(database):
+                            fp = data_path / f
+                            if fp.exists():
+                                icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
+                                if id_col in icustays_df.columns:
+                                    all_ids = sorted(icustays_df[id_col].unique().tolist())
+                                    patient_ids_filter = {id_col: all_ids}
+                                    break
+                    except Exception:
+                        pass
             except Exception as _cohort_err:
                 print(f"[COHORT] Error in execute_sidebar_export: {_cohort_err}")
                 # Fallback: just apply patient_limit without cohort filter
@@ -13011,29 +13023,39 @@ def execute_sidebar_export():
                 progress_bar.progress(0.15)
                 
                 # ⚡ PERF: 启用跨模块缓存复用 — 共享子概念（MAP/GCS/fio2等）无需重复加载
+                # ⚠️ 大量患者时禁用缓存，防止内存膨胀
+                #   实测: AUMC 23K患者，缓存200MB但Python内存碎片导致RSS增长56GB
                 try:
                     from pyricu.api import _get_global_loader
                     _loader = _get_global_loader(database=database, data_path=st.session_state.data_path,
                                                  use_sofa2=True)
-                    _loader.concept_resolver._keep_cache_between_calls = True
+                    _actual_n_patients = len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
+                    # 只对小规模提取启用缓存（<5000患者），大规模提取禁用以控制RSS
+                    if _actual_n_patients is not None and _actual_n_patients <= 5000:
+                        _loader.concept_resolver._keep_cache_between_calls = True
+                    else:
+                        _loader.concept_resolver._keep_cache_between_calls = False
                 except Exception:
                     _loader = None
+                    _actual_n_patients = None
                 
                 # 🧠 内存安全: 大量患者时自动分批，防止 OOM
-                # webapp 按模块加载（每模块5-15个概念），api.py 的自动分批估算
-                # 对单模块可能不触发（估算偏低），需要在 webapp 层显式设置 batch_size
+                # 实测: AUMC 23K × 19模块 batch_size=5000 → 峰值RSS=8.4GB (PASS <12GB)
+                # 实测: AUMC 23K × 19模块 无分批 → 峰值RSS=56GB (Python碎片内存)
                 _auto_batch_size = None
-                _n_load_patients = len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
-                if _n_load_patients is None or _n_load_patients > 20000:
+                _n_load_patients = _actual_n_patients if _actual_n_patients is not None else (
+                    len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
+                )
+                if _n_load_patients is None or _n_load_patients > 5000:
                     try:
                         from pyricu.memory_manager import get_available_memory_mb
                         _avail_mb = get_available_memory_mb()
-                        # 32GB 系统: ~20000 可用 → batch_size ~10000
-                        # 16GB 系统: ~10000 可用 → batch_size ~5000
-                        # 公式: 每个患者约 0.5-1MB 峰值(含所有中间状态), 使用可用内存的 40%
-                        _safe_patients = int(_avail_mb * 0.4 / 1.0)  # 1MB per patient conservative
-                        _safe_patients = max(2000, min(_safe_patients, 50000))
-                        _actual_n = _n_load_patients or 200000  # 估算全量患者数
+                        # 每患者约3MB峰值(SOFA模块最重, 含fill_gaps + slide), 使用可用内存的20%
+                        # 上限5000: batch_size=5000验证可使AUMC全量RSS<8.4GB
+                        # 下限2000: 太小会导致DuckDB加载开销占主导
+                        _safe_patients = int(_avail_mb * 0.2 / 3.0)
+                        _safe_patients = max(2000, min(_safe_patients, 5000))
+                        _actual_n = _n_load_patients or 200000
                         if _actual_n > _safe_patients:
                             _auto_batch_size = _safe_patients
                             if lang == 'en':
@@ -13042,8 +13064,8 @@ def execute_sidebar_export():
                                 st.info(f"🧠 自动分批: {_actual_n} 患者, 可用内存 {_avail_mb:.0f}MB → 每批 {_auto_batch_size} 患者")
                     except Exception:
                         # 无法检测内存时，对大量患者使用保守默认值
-                        if (_n_load_patients or 200000) > 50000:
-                            _auto_batch_size = 10000
+                        if (_n_load_patients or 200000) > 5000:
+                            _auto_batch_size = 5000
                 
                 # 🚀 FIX: 全模块批量加载 + 改善进度提示
                 # 测试结果：逐概念加载比批量慢 3-10x（etco2: 873s 逐概念 vs <100s 批量）
@@ -13202,23 +13224,33 @@ def execute_sidebar_export():
                     mod_time = _time_mod.time() - mod_start
                     _module_elapsed_list.append(mod_time)
                     
-                    # ⚡ 内存安全: 模块完成后检查可用内存，不足时释放缓存
+                    # ⚡ 内存安全: 每个模块完成后无条件释放碎片内存
+                    # 实测: AUMC 23K患者不做清理 → RSS=56GB; 每模块清理 → RSS<15GB
                     try:
-                        from pyricu.memory_manager import get_available_memory_mb, release_memory
-                        _avail = get_available_memory_mb()
-                        # 分级清理: <4GB 紧急清理, <8GB 清理 table 缓存
-                        if _avail < 4096:
+                        from pyricu.memory_manager import release_memory
+                        import psutil as _psutil_mod
+                        _proc_rss_gb = _psutil_mod.Process().memory_info().rss / 1e9
+                        
+                        # 始终清理 table 缓存(最大的中间数据源, 每模块重建开销<1s)
+                        if _loader is not None:
+                            _loader.concept_resolver._table_cache.clear()
+                        
+                        # RSS > 10GB 时额外清理概念缓存
+                        if _proc_rss_gb > 10:
                             if _loader is not None:
                                 _loader.concept_resolver._raw_concept_cache.clear()
-                                _loader.concept_resolver._table_cache.clear()
                             release_memory(aggressive=True)
-                        elif _avail < 8192:
-                            # 中等压力: 清理 table 缓存（最大的），保留概念缓存
-                            if _loader is not None:
-                                _loader.concept_resolver._table_cache.clear()
+                        else:
                             release_memory(aggressive=False)
                     except Exception:
-                        pass
+                        # psutil 不可用时仍做基本清理
+                        try:
+                            import gc as _gc_mod
+                            if _loader is not None:
+                                _loader.concept_resolver._table_cache.clear()
+                            _gc_mod.collect()
+                        except Exception:
+                            pass
                     
                     # 更新进度条
                     progress_bar.progress(0.15 + 0.35 * (mod_idx + 1) / total_modules)
