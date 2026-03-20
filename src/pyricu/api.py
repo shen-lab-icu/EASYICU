@@ -1103,6 +1103,18 @@ def load_concepts(
     if auto_chunk_strategy and verbose and effective_batch_size is None:
         print("   🧠 已跳过自动 batch 分批，优先采用已验证的平衡 chunk 路径")
     
+    # 大量患者时自动启用子进程隔离，避免 Python pymalloc 内存碎片
+    # inprocess_batch_load 每批次泄漏 0.5-1.5GB 碎片（pymalloc arena 不归还 OS），
+    # N 批次后 RSS = N * 碎片 + 结果数据。MIIV 94K patients: 15G RSS for 1.4G data.
+    # subprocess 隔离: 每批在子进程中运行，子进程退出后 OS 完整回收内存，零碎片。
+    if (
+        not use_subprocess
+        and _total_patients is not None
+        and _total_patients > 30000
+        and effective_batch_size is not None
+    ):
+        use_subprocess = True
+    
     # 执行分批处理
     if effective_batch_size is not None and _id_col is not None and _all_ids is not None:
         if _total_patients > effective_batch_size:
@@ -1122,10 +1134,12 @@ def load_concepts(
             )
             
             if use_subprocess:
-                # 子进程隔离（内存 < 16GB）
+                # 子进程隔离（内存 < 16GB 或患者数 > 30K — 避免 pymalloc 碎片）
                 if verbose:
-                    print(f"🔒 使用子进程隔离模式 (可用内存 < 16GB)")
-                subprocess_kwargs = dict(load_kwargs)
+                    print(f"🔒 使用子进程隔离模式 ({_total_patients} patients)")
+                # 排除已显式传递的参数，避免重复
+                _explicit_keys = {'merge', 'ricu_compatible', 'verbose'}
+                subprocess_kwargs = {k: v for k, v in load_kwargs.items() if k not in _explicit_keys}
                 final_result = subprocess_batch_load(
                     concepts=concepts_list,
                     database=loader.database,
