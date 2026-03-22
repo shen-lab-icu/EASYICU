@@ -585,8 +585,10 @@ def subprocess_batch_load(
             }
             
             # 在子进程中运行
-            # 使用 'spawn' 方法确保完全隔离
-            ctx = mp.get_context('fork')  # fork 更快，且 pyricu 初始化已在父进程完成
+            # Linux/macOS 使用 fork（快速，继承父进程已初始化的状态）
+            # Windows 仅支持 spawn（需要重新导入，较慢但兼容）
+            _method = 'fork' if hasattr(os, 'fork') else 'spawn'
+            ctx = mp.get_context(_method)
             proc = ctx.Process(target=_subprocess_load_worker, args=(args,))
             proc.start()
             proc.join()
