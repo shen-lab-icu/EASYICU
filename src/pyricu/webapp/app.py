@@ -1729,10 +1729,13 @@ def convert_data_with_progress(data_path: str, database: str):
                     st.caption(f"⏭️ {file_name} (bucket exists)")
             else:
                 try:
+                    # AUMC 使用 latin-1 编码（µmol 等特殊字符）
+                    _encoding = 'latin-1' if database == 'aumc' else None
                     config = BucketConfig(
                         num_buckets=num_buckets,
                         partition_col=partition_col,
-                        memory_limit='8GB'
+                        memory_limit='8GB',
+                        encoding=_encoding,
                     )
                     result = convert_to_buckets(
                         source_path=csv_file,
