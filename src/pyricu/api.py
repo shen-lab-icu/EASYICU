@@ -201,17 +201,17 @@ def _build_fast_scan_expr(loader: 'BaseICULoader', table_name: str) -> Optional[
         return None
 
     def _escape(path: str) -> str:
-        return path.replace("'", "''")
+        return path.replace("'", "''").replace('\\', '/')
 
     if source.is_dir():
         bucket_dirs = list(source.glob('bucket_id=*'))
         if bucket_dirs:
-            pattern = str(source / 'bucket_id=*' / '*.parquet')
+            pattern = str(source / 'bucket_id=*' / '*.parquet').replace('\\', '/')
         else:
             parquet_files = list(source.glob('*.parquet')) + list(source.glob('*.pq'))
             if not parquet_files:
                 return None
-            pattern = str(source / '*.parquet') if list(source.glob('*.parquet')) else str(source / '*.pq')
+            pattern = (str(source / '*.parquet') if list(source.glob('*.parquet')) else str(source / '*.pq')).replace('\\', '/')
         return f"read_parquet('{_escape(pattern)}', union_by_name=true)"
 
     suffixes = [s.lower() for s in source.suffixes]

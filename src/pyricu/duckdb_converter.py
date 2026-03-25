@@ -196,9 +196,8 @@ class DuckDBConverter:
                 
                 # Use COPY for memory-efficient streaming
                 # First, create a view of the CSV file
-                escaped_path = str(source_path).replace("'", "''")
-                escaped_output = str(parquet_path).replace("'", "''")
-                
+                escaped_path = str(source_path).replace("'", "''").replace('\\', '/')
+                escaped_output = str(parquet_path).replace("'", "''").replace('\\', '/')                
                 # Read CSV with auto-detection (DuckDB handles .gz automatically)
                 # Detect if file is gzipped
                 is_gzipped = str(source_path).lower().endswith('.gz')

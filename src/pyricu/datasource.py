@@ -13,6 +13,16 @@ import numpy as np
 import pandas as pd
 
 
+def _duckdb_path(p) -> str:
+    """Convert a Path or string to a DuckDB-safe path string.
+
+    On Windows, Path.__str__() produces backslash separators (e.g. ``D:\\data\\file.parquet``).
+    DuckDB's ``read_parquet()`` and glob functions expect forward slashes on all platforms.
+    This helper normalises the path to forward slashes so DuckDB SQL works cross-platform.
+    """
+    return str(p).replace('\\', '/')
+
+
 def _coerce_string_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     """Convert pandas StringDtype columns to object dtype for pandas 3.0 compatibility.
 
@@ -1696,7 +1706,7 @@ class ICUDataSource:
         query = f"""
             SELECT {columns_sql}
             FROM read_csv_auto(
-                '{csv_path}',
+                '{_duckdb_path(csv_path)}',
                 ignore_errors=true,
                 null_padding=true,
                 types={{'VALUE': 'VARCHAR'}}
@@ -1793,24 +1803,24 @@ class ICUDataSource:
                             target_files.extend(bucket_dir.glob("*.parquet"))
                     if target_files:
                         # 使用精确的文件列表而非全扫描
-                        file_list_str = ", ".join(f"'{f}'" for f in target_files)
+                        file_list_str = ", ".join(f"'{_duckdb_path(f)}'" for f in target_files)
                         glob_pattern = f"[{file_list_str}]"
                         logger.debug(f"🪣 分桶精准读取: {len(target_buckets)}/{num_buckets} 个桶, {len(target_files)} 个文件")
                     else:
                         # 目标桶不存在，可能是空数据
                         logger.warning(f"⚠️ 目标桶不存在: bucket_id in {target_buckets}")
-                        glob_pattern = str(directory / "**/*.parquet")
+                        glob_pattern = _duckdb_path(directory / "**/*.parquet")
                 else:
                     # 字符串型 ID，无法使用 hash 分桶优化
-                    glob_pattern = str(directory / "**/*.parquet")
+                    glob_pattern = _duckdb_path(directory / "**/*.parquet")
                     logger.debug(f"🪣 使用分桶模式读取(全扫描): {directory.name}")
             else:
                 # 没有 itemid 过滤，全扫描
-                glob_pattern = str(directory / "**/*.parquet")
+                glob_pattern = _duckdb_path(directory / "**/*.parquet")
                 logger.debug(f"🪣 使用分桶模式读取(无过滤): {directory.name}")
         else:
             # 普通分区: directory/*.parquet
-            glob_pattern = str(directory / "*.parquet")
+            glob_pattern = _duckdb_path(directory / "*.parquet")
         
         # 列选择
         if columns:
@@ -2463,11 +2473,11 @@ def load_bucketed_table_aggregated(
         if not target_files:
             return pd.DataFrame()
 
-        file_list_str = ", ".join(f"'{f}'" for f in target_files)
+        file_list_str = ", ".join(f"'{_duckdb_path(f)}'" for f in target_files)
         glob_pattern = f"[{file_list_str}]"
     else:
         # 扁平 parquet 目录：扫描所有文件，依赖 WHERE 过滤
-        glob_pattern = f"'{flat_parquet_dir}/*.parquet'"
+        glob_pattern = f"'{_duckdb_path(flat_parquet_dir)}/*.parquet'"
 
     raw_columns = set()
     try:
@@ -2569,7 +2579,7 @@ def load_bucketed_table_aggregated(
         # 检查第一个 parquet 文件是否包含 unit 列
         try:
             _col_info = conn.execute(
-                f"SELECT * FROM read_parquet('{target_files[0]}') LIMIT 0"
+                f"SELECT * FROM read_parquet('{_duckdb_path(target_files[0])}') LIMIT 0"
             ).description
             _col_names = {col[0] for col in _col_info}
             # 🔧 FIX: 查找实际的单位列名（eICU lab用labmeasurenameinterface，其他表用unit）
@@ -2689,7 +2699,7 @@ def load_bucketed_table_aggregated(
         query = f"""
         WITH adm AS (
             SELECT patientid, CAST(admissiontime AS TIMESTAMP) as admissiontime 
-            FROM {general_read_func}('{general_path}')
+            FROM {general_read_func}('{_duckdb_path(general_path)}')
         )
         SELECT 
             o.{id_col},
@@ -2781,12 +2791,12 @@ def load_bucketed_table_aggregated(
                 query = f"""
                 WITH target_hadms AS (
                     SELECT DISTINCT hadm_id
-                    FROM {_read_func}('{icustays_path}')
+                    FROM {_read_func}('{_duckdb_path(icustays_path)}')
                     {_hadm_filter}
                 ),
                 all_stays AS (
                     SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
-                    FROM {_read_func}('{icustays_path}')
+                    FROM {_read_func}('{_duckdb_path(icustays_path)}')
                     WHERE hadm_id IN (SELECT hadm_id FROM target_hadms)
                 ),
                 events_joined AS (
@@ -2817,7 +2827,7 @@ def load_bucketed_table_aggregated(
                 query = f"""
                 WITH all_stays AS (
                     SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
-                    FROM {_read_func}('{icustays_path}')
+                    FROM {_read_func}('{_duckdb_path(icustays_path)}')
                 ),
                 events_joined AS (
                     SELECT o.{value_column}, o.{time_col}, o.hadm_id{_cte_extra_cols},
@@ -2848,7 +2858,7 @@ def load_bucketed_table_aggregated(
             query = f"""
             WITH adm AS (
                 SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
-                FROM {_read_func}('{icustays_path}')
+                FROM {_read_func}('{_duckdb_path(icustays_path)}')
             )
             SELECT
                 a.{output_id_col} as {output_id_col},
@@ -3038,10 +3048,10 @@ def load_bucketed_table_multi_aggregated(
                 target_files.extend(bucket_subdir.glob("*.parquet"))
         if not target_files:
             return pd.DataFrame()
-        file_list_str = ", ".join(f"'{f}'" for f in target_files)
+        file_list_str = ", ".join(f"'{_duckdb_path(f)}'" for f in target_files)
         glob_pattern = f"[{file_list_str}]"
     else:
-        glob_pattern = f"'{flat_parquet_dir}/*.parquet'"
+        glob_pattern = f"'{_duckdb_path(flat_parquet_dir)}/*.parquet'"
 
     # ── Aggregation ────────────────────────────────────────
     agg_map = {'median': 'MEDIAN', 'mean': 'AVG', 'max': 'MAX', 'min': 'MIN', 'first': 'FIRST', 'sum': 'SUM'}
@@ -3154,12 +3164,12 @@ def load_bucketed_table_multi_aggregated(
                 query = f"""
                 WITH target_hadms AS (
                     SELECT DISTINCT hadm_id
-                    FROM {_read_func}('{icustays_path}')
+                    FROM {_read_func}('{_duckdb_path(icustays_path)}')
                     WHERE {stay_col} IN ({_target_stay_ids_str})
                 ),
                 all_stays AS (
                     SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
-                    FROM {_read_func}('{icustays_path}')
+                    FROM {_read_func}('{_duckdb_path(icustays_path)}')
                     WHERE hadm_id IN (SELECT hadm_id FROM target_hadms)
                 ),
                 events_joined AS (
@@ -3190,7 +3200,7 @@ def load_bucketed_table_multi_aggregated(
                 query = f"""
                 WITH all_stays AS (
                     SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
-                    FROM {_read_func}('{icustays_path}')
+                    FROM {_read_func}('{_duckdb_path(icustays_path)}')
                 ),
                 events_joined AS (
                     SELECT o.{value_column}, o.{time_col}, o.hadm_id, o.{itemid_col},
@@ -3220,7 +3230,7 @@ def load_bucketed_table_multi_aggregated(
             query = f"""
             WITH adm AS (
                 SELECT {stay_col}, hadm_id, CAST(intime AS TIMESTAMP) as intime, CAST(outtime AS TIMESTAMP) as outtime
-                FROM {_read_func}('{icustays_path}')
+                FROM {_read_func}('{_duckdb_path(icustays_path)}')
             )
             SELECT a.{output_id_col} AS {output_id_col}, {time_round_expr} AS charttime,
                 {select_sql}
@@ -3244,7 +3254,7 @@ def load_bucketed_table_multi_aggregated(
         query = f"""
         WITH adm AS (
             SELECT patientid, CAST(admissiontime AS TIMESTAMP) as admissiontime
-            FROM {gen_read}('{general_path}')
+            FROM {gen_read}('{_duckdb_path(general_path)}')
         )
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
             {select_sql}
@@ -3370,9 +3380,9 @@ def load_wide_table_aggregated(
     
     # 构建glob pattern
     if directory.is_dir():
-        glob_pattern = str(directory / "*.parquet")
+        glob_pattern = _duckdb_path(directory / "*.parquet")
     else:
-        glob_pattern = str(directory)
+        glob_pattern = _duckdb_path(directory)
     
     # 构建DuckDB聚合函数映射 (median为R ricu默认)
     agg_map = {

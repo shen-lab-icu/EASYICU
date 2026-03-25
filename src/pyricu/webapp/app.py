@@ -13042,32 +13042,46 @@ def execute_sidebar_export():
                     _loader = None
                     _actual_n_patients = None
                 
-                # 🧠 内存安全: 大量患者时自动分批，防止 OOM
-                # 实测: AUMC 23K × 19模块 batch_size=5000 → 峰值RSS=8.4GB (PASS <12GB)
-                # 实测: AUMC 23K × 19模块 无分批 → 峰值RSS=56GB (Python碎片内存)
+                # 🧠 内存安全: 碎片感知的分批策略
+                # 逐模块加载时，每模块的 pandas/numpy 操作在 pymalloc arena 中产生碎片，
+                # gc.collect() + malloc_trim() 无法回收（arena 中只要有1个存活对象就不归还OS）。
+                # 19个模块依次执行，碎片累积导致 RSS 远超实际数据量（实测: 3GB 数据 → 22GB RSS）。
+                #
+                # 分批加载可限制每批的碎片量。实测:
+                #   batch_size=5000 → AUMC 23K × 19模块 峰值 RSS ~8.4GB (安全)
+                #   batch_size=2000 → 228批次 → 1h+ (过度保守)
+                #   无分批       → RSS 22GB (32GB PC 上危险)
+                #
+                # 碎片安全公式: cap = max(5000, int(avail_MB * 0.3))
+                #   12GB PC → 5000, 16GB → 5000, 32GB → 7200, 服务器(1.5TB) → 不分批
                 _auto_batch_size = None
                 _n_load_patients = _actual_n_patients if _actual_n_patients is not None else (
                     len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
                 )
-                if _n_load_patients is None or _n_load_patients > 5000:
+                if _n_load_patients is not None and _n_load_patients > 5000:
                     try:
                         from pyricu.memory_manager import get_available_memory_mb
                         _avail_mb = get_available_memory_mb()
-                        # 每患者约3MB峰值(SOFA模块最重, 含fill_gaps + slide), 使用可用内存的20%
-                        # 上限5000: batch_size=5000验证可使AUMC全量RSS<8.4GB
-                        # 下限2000: 太小会导致DuckDB加载开销占主导
-                        _safe_patients = int(_avail_mb * 0.2 / 3.0)
-                        _safe_patients = max(2000, min(_safe_patients, 5000))
-                        _actual_n = _n_load_patients or 200000
-                        if _actual_n > _safe_patients:
-                            _auto_batch_size = _safe_patients
+                        _frag_safe_max = max(5000, int(_avail_mb * 0.3))
+                        if _n_load_patients > _frag_safe_max:
+                            _auto_batch_size = _frag_safe_max
+                            _n_batches = (_n_load_patients + _auto_batch_size - 1) // _auto_batch_size
                             if lang == 'en':
-                                st.info(f"🧠 Auto-batching: {_actual_n} patients, available memory {_avail_mb:.0f}MB → batch_size={_auto_batch_size}")
+                                st.info(f"🧠 Loading {_n_load_patients} patients (batch={_auto_batch_size}, "
+                                        f"{_n_batches} batches/module), available memory {_avail_mb:.0f}MB")
                             else:
-                                st.info(f"🧠 自动分批: {_actual_n} 患者, 可用内存 {_avail_mb:.0f}MB → 每批 {_auto_batch_size} 患者")
+                                st.info(f"🧠 加载 {_n_load_patients} 患者 (分批={_auto_batch_size}, "
+                                        f"每模块{_n_batches}批), 可用内存 {_avail_mb:.0f}MB")
+                        else:
+                            if lang == 'en':
+                                st.info(f"🧠 Loading {_n_load_patients} patients, "
+                                        f"available memory {_avail_mb:.0f}MB, no batching needed.")
+                            else:
+                                st.info(f"🧠 加载 {_n_load_patients} 患者, "
+                                        f"可用内存 {_avail_mb:.0f}MB, 无需分批。")
                     except Exception:
-                        # 无法检测内存时，对大量患者使用保守默认值
-                        if (_n_load_patients or 200000) > 5000:
+                        # 无法检测内存时，使用保守默认值
+                        if _n_load_patients > 5000:
                             _auto_batch_size = 5000
                 
                 # 🚀 FIX: 全模块批量加载 + 改善进度提示
