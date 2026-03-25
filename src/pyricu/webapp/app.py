@@ -12518,6 +12518,51 @@ def _generate_cohort_prefix() -> str:
     return "_".join(parts)
 
 
+def _subprocess_load_module(concepts, database, data_path, patient_ids_filter,
+                            batch_size, output_dir):
+    """在子进程中加载一个模块的概念，结果写入 parquet 文件。
+    
+    子进程退出后 OS 完整回收所有内存（包括 pymalloc arena 碎片），
+    彻底解决跨模块碎片累积导致的 RSS 膨胀问题。
+    """
+    import os, sys, json
+    os.environ.setdefault('RICU_DATA_PATH', os.environ.get('RICU_DATA_PATH', ''))
+    # 确保能导入 pyricu
+    _src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '')
+    if _src not in sys.path:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    import pandas as pd
+    from pyricu import load_concepts as _lc
+    
+    kwargs = dict(
+        data_path=data_path, database=database,
+        concepts=concepts, verbose=False, merge=False, concept_workers=1,
+    )
+    if patient_ids_filter:
+        kwargs['patient_ids'] = patient_ids_filter
+    if batch_size:
+        kwargs['batch_size'] = batch_size
+    
+    result = _lc(**kwargs)
+    
+    saved = {}
+    if isinstance(result, dict):
+        for c, df in result.items():
+            # 处理各种返回类型
+            if hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                df = df.data
+            elif hasattr(df, 'to_pandas'):
+                df = df.to_pandas()
+            if isinstance(df, pd.DataFrame) and len(df) > 0:
+                path = os.path.join(output_dir, f"{c}.parquet")
+                df.to_parquet(path, index=False)
+                saved[c] = path
+    
+    with open(os.path.join(output_dir, '_manifest.json'), 'w') as f:
+        json.dump(saved, f)
+
+
 def execute_sidebar_export():
     """执行侧边栏触发的数据导出（直接导出到本地目录，带进度条）。
     
@@ -13659,44 +13704,32 @@ def execute_sidebar_export():
                         )
                     status_text.markdown(status_msg)
                     
-                    # 批量加载整个模块（最快，保留内部 _table_cache 和子概念共享）
-                    # 🔧 FIX (2026-02-20): 使用后台线程执行，主线程每2秒发送UI更新保活WebSocket
-                    # 解决全量患者导出时长时间无UI更新导致 "Connection timed out" 的问题
+                    # 批量加载整个模块
+                    # 🔧 FIX (Bug 48): 使用子进程隔离，防止 pymalloc arena 碎片跨模块累积
+                    # 实测: inprocess 17模块 RSS 247→7481MB; subprocess RSS 130→164MB (98%↓)
                     mod_start = _time_mod.time()
                     
-                    load_kwargs = dict(
-                        data_path=st.session_state.data_path,
-                        database=database,
-                        concepts=mod_concepts,
-                        verbose=False, merge=False, concept_workers=1,
-                    )
-                    if patient_ids_filter:
-                        load_kwargs['patient_ids'] = patient_ids_filter
-                    if _auto_batch_size:
-                        load_kwargs['batch_size'] = _auto_batch_size
-                    
-                    _thread_result = {'done': False, 'result': None, 'error': None}
-                    
-                    def _load_module_thread(fn, kwargs, holder):
-                        try:
-                            holder['result'] = fn(**kwargs)
-                        except Exception as _e:
-                            holder['error'] = _e
-                        finally:
-                            holder['done'] = True
-                    
                     try:
-                        _t = threading.Thread(
-                            target=_load_module_thread, 
-                            args=(load_concepts, load_kwargs, _thread_result),
+                        import multiprocessing as _mp_mod
+                        import tempfile as _tmpf_mod
+                        import json as _json_mod
+                        
+                        _tmp_dir = _tmpf_mod.mkdtemp(prefix='pyricu_mod_')
+                        
+                        _sub_proc = _mp_mod.Process(
+                            target=_subprocess_load_module,
+                            args=(mod_concepts, database,
+                                  st.session_state.data_path,
+                                  patient_ids_filter,
+                                  _auto_batch_size, _tmp_dir),
                             daemon=True
                         )
-                        _t.start()
+                        _sub_proc.start()
                         
                         # 主线程每2秒发送UI更新 → 保活WebSocket连接
                         _keepalive_tick = 0
-                        while not _thread_result['done']:
-                            _time_mod.sleep(2)
+                        while _sub_proc.is_alive():
+                            _sub_proc.join(timeout=2)
                             _keepalive_tick += 1
                             _mod_elapsed = _time_mod.time() - mod_start
                             _spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_keepalive_tick % 10]
@@ -13712,15 +13745,33 @@ def execute_sidebar_export():
                                 )
                             status_text.markdown(_alive_msg)
                         
-                        _t.join(timeout=5)
+                        if _sub_proc.exitcode != 0:
+                            raise RuntimeError(f"Subprocess exited with code {_sub_proc.exitcode}")
                         
-                        if _thread_result['error']:
-                            raise _thread_result['error']
+                        # 读取子进程结果（只有干净的 parquet 数据进入主进程，无碎片）
+                        _manifest_path = os.path.join(_tmp_dir, '_manifest.json')
+                        if os.path.exists(_manifest_path):
+                            with open(_manifest_path) as _mf:
+                                _saved = _json_mod.load(_mf)
+                            for _cname, _ppath in _saved.items():
+                                data[_cname] = pd.read_parquet(_ppath)
                         
-                        _process_result(_thread_result['result'], mod_concepts)
+                        # 未产出数据的概念加入 empty_concepts
+                        for _cname in mod_concepts:
+                            if _cname not in data:
+                                if _cname not in empty_concepts:
+                                    empty_concepts.append(_cname)
+                        
+                        # 清理临时目录
+                        import shutil as _shutil_mod
+                        _shutil_mod.rmtree(_tmp_dir, ignore_errors=True)
                     
                     except Exception:
-                        # 批量失败 → 逐概念回退
+                        # 子进程失败 → 逐概念回退（inprocess）
+                        try:
+                            _shutil_mod.rmtree(_tmp_dir, ignore_errors=True)
+                        except Exception:
+                            pass
                         for concept in mod_concepts:
                             try:
                                 result = load_concepts(
@@ -13737,34 +13788,6 @@ def execute_sidebar_export():
                     mod_time = _time_mod.time() - mod_start
                     _module_elapsed_list.append(mod_time)
                     _module_load_times[mod_key] = mod_time  # 记录加载耗时，后续合并到module_times
-                    
-                    # ⚡ 内存安全: 每个模块完成后无条件释放碎片内存
-                    # 实测: AUMC 23K患者不做清理 → RSS=56GB; 每模块清理 → RSS<15GB
-                    try:
-                        from pyricu.memory_manager import release_memory
-                        import psutil as _psutil_mod
-                        _proc_rss_gb = _psutil_mod.Process().memory_info().rss / 1e9
-                        
-                        # 始终清理 table 缓存(最大的中间数据源, 每模块重建开销<1s)
-                        if _loader is not None:
-                            _loader.concept_resolver._table_cache.clear()
-                        
-                        # RSS > 10GB 时额外清理概念缓存
-                        if _proc_rss_gb > 10:
-                            if _loader is not None:
-                                _loader.concept_resolver._raw_concept_cache.clear()
-                            release_memory(aggressive=True)
-                        else:
-                            release_memory(aggressive=False)
-                    except Exception:
-                        # psutil 不可用时仍做基本清理
-                        try:
-                            import gc as _gc_mod
-                            if _loader is not None:
-                                _loader.concept_resolver._table_cache.clear()
-                            _gc_mod.collect()
-                        except Exception:
-                            pass
                     
                     # 更新进度条（加载 = 前80%，导出穿插在加载中）
                     progress_bar.progress(0.15 + 0.65 * (mod_idx + 1) / _total_steps)
