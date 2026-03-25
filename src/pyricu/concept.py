@@ -6128,6 +6128,31 @@ class ConceptResolver:
             except Exception as e:
                 logger.warning(f"Failed to synthesize HiRID end time: {e}")
         
+        # 🔧 AUMC/通用: 转换后的 parquet 可能缺少时间戳列（admittedat/dischargedat），
+        # 但原始 parquet 仍保留这些列。从原始文件直接读取缺失列。
+        if hasattr(data_source, 'base_path') and data_source.base_path is not None:
+            try:
+                from pathlib import Path
+                import pyarrow.parquet as pq
+                
+                id_cfg = data_source.config.id_configs.get('icustay') or data_source.config.id_configs.get('patient')
+                if id_cfg and id_cfg.table:
+                    raw_path = Path(data_source.base_path) / f"{id_cfg.table}.parquet"
+                    if raw_path.is_file():
+                        schema = pq.read_schema(str(raw_path))
+                        if column_name in schema.names:
+                            id_col = id_cfg.id
+                            raw_tbl = pq.read_table(str(raw_path), columns=[id_col, column_name])
+                            raw_df = raw_tbl.to_pandas()
+                            merged = frame[[id_col]].reset_index().merge(
+                                raw_df, on=id_col, how='left'
+                            ).set_index('index')
+                            if column_name in merged.columns:
+                                logger.info(f"Synthesized '{column_name}' from raw parquet for '{ds_name}'")
+                                return merged[column_name]
+            except Exception as e:
+                logger.warning(f"Failed to synthesize column '{column_name}' from raw parquet: {e}")
+        
         return None
 
     def _load_fun_item_forward(
