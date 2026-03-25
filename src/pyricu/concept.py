@@ -1955,6 +1955,9 @@ class ConceptResolver:
                     _is_percent_as_numeric = False
                     _is_set_val_na = False
                     _is_fahr_to_cels = False
+                    _is_transform_binary_op = False  # 🚀 transform_fun(binary_op(...))
+                    _transform_binary_op_operator = None  # '*', '/', '+', '-'
+                    _transform_binary_op_value = None     # numeric factor
                     _duckdb_value_transform = None  # SQL transform expression
                     
                     if _has_bucket_dir:
@@ -1969,6 +1972,19 @@ class ConceptResolver:
                             has_callback and isinstance(source.callback, str) and
                             source.callback.strip() == 'transform_fun(percent_as_numeric)'
                         )
+                        # 🚀 检测 transform_fun(binary_op(`*`, N)) — 简单乘除可内联到 DuckDB
+                        # 例: o2sat AUMC item 12311 callback='transform_fun(binary_op(`*`, 100))'
+                        if (has_callback and isinstance(source.callback, str) and
+                                source.callback.strip().startswith('transform_fun(binary_op(')):
+                            import re as _re_tfm
+                            _tfm_match = _re_tfm.match(
+                                r"transform_fun\(binary_op\(`([*/+-])`,\s*([0-9.]+)\)\)",
+                                source.callback.strip()
+                            )
+                            if _tfm_match:
+                                _is_transform_binary_op = True
+                                _transform_binary_op_operator = _tfm_match.group(1)
+                                _transform_binary_op_value = float(_tfm_match.group(2))
                         _mimic_hospital_tables = {'prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services'}
                         _needs_hadm_to_stay_mapping = (
                             db_name in ('miiv', 'miiv_demo', 'mimic', 'mimic_demo')
@@ -1984,10 +2000,10 @@ class ConceptResolver:
                         _effective_ids = source.ids
                         if not _effective_ids and _rgx_pre_matched_ids:
                             _effective_ids = _rgx_pre_matched_ids
-                        # 🚀 扩展 DuckDB 门控：接受 percent_as_numeric/set_val_na/fahr_to_cels 回调
+                        # 🚀 扩展 DuckDB 门控：接受 percent_as_numeric/set_val_na/fahr_to_cels/binary_op 回调
                         # 但多源概念的 value_transform 会被禁止（防止 median-of-medians）
-                        _can_inline_callback = not has_callback or is_convert_unit or _is_percent_as_numeric
-                        if _block_duckdb_value_transform and (_is_percent_as_numeric or is_convert_unit):
+                        _can_inline_callback = not has_callback or is_convert_unit or _is_percent_as_numeric or _is_transform_binary_op
+                        if _block_duckdb_value_transform and (_is_percent_as_numeric or is_convert_unit or _is_transform_binary_op):
                             # 多源 value_transform：禁止内联，回退到 Python 回调路径
                             _can_inline_callback = not has_callback
                         if has_sub_var and _can_inline_callback and _effective_ids and _target != 'id_tbl' and not _skip_db_duckdb:
@@ -2035,6 +2051,9 @@ class ConceptResolver:
                             if _is_percent_as_numeric and use_duckdb_aggregation:
                                 _convert_unit_callback_for_duckdb = True
                                 # value_transform will be built below after value_col is known
+                            if _is_transform_binary_op and use_duckdb_aggregation:
+                                _convert_unit_callback_for_duckdb = True
+                                # value_transform will be built below after value_col is known
                     
                     if use_duckdb_aggregation:
                         # 使用DuckDB层聚合
@@ -2063,10 +2082,13 @@ class ConceptResolver:
                         if verbose:
                             print(f"   🚀 使用DuckDB聚合优化: {source.table} itemids={len(itemids)} value_col={value_col} patients={len(patient_ids_list) if patient_ids_list else 'all'}")
                         
-                        # � 构建 DuckDB 值转换表达式（用于内联回调）
+                        # ﻿ 构建 DuckDB 值转换表达式（用于内联回调）
                         if _is_percent_as_numeric:
                             # percent_as_numeric: 去除 '%' 并转为数值
                             _duckdb_value_transform = f"TRY_CAST(REPLACE(TRIM(CAST({value_col} AS VARCHAR)), '%', '') AS DOUBLE)"
+                        elif _is_transform_binary_op:
+                            # transform_fun(binary_op(`*`, N)): 简单算术内联到 DuckDB
+                            _duckdb_value_transform = f'(TRY_CAST("{value_col}" AS DOUBLE) {_transform_binary_op_operator} {_transform_binary_op_value})'
                         elif (_is_set_val_na or _is_fahr_to_cels) and _convert_unit_filter:
                             # 需要 unit 列匹配过滤模式 — 从表配置获取实际列名
                             _unit_var_for_duckdb = None
@@ -2590,18 +2612,21 @@ class ConceptResolver:
                     db_name_for_cache = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                     skip_cache_for_mimic3_chartevents = (db_name_for_cache == 'mimic' and source.table == 'chartevents')
                     
-                    # 🚀 FIX 2026-02-09: 跳过分桶表的缓存重载！
-                    # 原问题：对于分桶表(如AUMC numericitems_bucket)，缓存逻辑会重新加载
-                    # 整张表（不带itemid过滤），这意味着读取所有100个桶 → 约2GB内存
-                    # 分桶表的单概念加载已经很快（只读1-2个桶），每个概念独立读取
+                    # 🚀 FIX 2026-02-09: 跳过分桶表/扁平parquet表的缓存重载！
+                    # 原问题：对于分桶表(如AUMC numericitems_bucket)或扁平parquet目录，
+                    # 缓存逻辑会重新加载整张表（不带itemid过滤），导致内存爆炸
+                    # 例如 AUMC numericitems 5000 patients → ~2.7GB 仅为缓存
+                    # 分桶/扁平parquet的单概念加载已经很快（DuckDB），每个概念独立读取
                     # 比缓存整张表更高效且内存友好
                     skip_cache_for_bucket_table = False
                     try:
-                        bucket_dir = data_source._resolve_bucket_directory(source.table)
-                        if bucket_dir is not None:
+                        _cache_skip_dir = data_source._resolve_bucket_directory(source.table)
+                        if _cache_skip_dir is None:
+                            _cache_skip_dir = data_source._resolve_flat_parquet_directory(source.table)
+                        if _cache_skip_dir is not None:
                             skip_cache_for_bucket_table = True
                             if DEBUG_MODE and verbose:
-                                print(f"   ⏭️  跳过分桶表缓存: {source.table} (分桶读取已足够快)")
+                                print(f"   ⏭️  跳过分桶/扁平parquet表缓存: {source.table}")
                     except Exception:
                         pass
                     

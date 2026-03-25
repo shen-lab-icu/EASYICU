@@ -13099,8 +13099,8 @@ def execute_sidebar_export():
                 # 每个模块加载完后立即合并+写文件+释放，不在内存中累积
                 # ──────────────────────────────────────────────
                 import time as time_module
-                _export_start_for_stats = time_module.time()
                 module_times = {}
+                _module_load_times = {}  # 记录每模块的加载耗时
                 
                 # 预构建 concept -> group 映射（不依赖加载结果）
                 _concept_to_group_pre = {}
@@ -13480,7 +13480,9 @@ def execute_sidebar_export():
                     
                     exported_files.append(str(file_path))
                     _mod_exp_elapsed = time_module.time() - _mod_export_start
-                    module_times[group_name] = _mod_exp_elapsed
+                    # 合并加载+导出耗时，反映该模块的真实总耗时
+                    _load_time = _module_load_times.get(group_name, 0)
+                    module_times[group_name] = _load_time + _mod_exp_elapsed
                     return True
                 
                 # ──────────────────────────────────────────────
@@ -13734,6 +13736,7 @@ def execute_sidebar_export():
                     
                     mod_time = _time_mod.time() - mod_start
                     _module_elapsed_list.append(mod_time)
+                    _module_load_times[mod_key] = mod_time  # 记录加载耗时，后续合并到module_times
                     
                     # ⚡ 内存安全: 每个模块完成后无条件释放碎片内存
                     # 实测: AUMC 23K患者不做清理 → RSS=56GB; 每模块清理 → RSS<15GB
@@ -13883,6 +13886,8 @@ def execute_sidebar_export():
                         failed_special = [c for c in special_concepts_to_load if c not in data]
                         failed_concepts.extend(failed_special)
                         
+                        _special_load_elapsed = _time_mod.time() - _sp_start
+                        
                         # 🚀 流式导出: 特殊概念加载完后也立即导出
                         _special_loaded_dfs = {}
                         for cname in special_concepts_to_load:
@@ -13896,6 +13901,10 @@ def execute_sidebar_export():
                                 if _sg not in _special_by_group:
                                     _special_by_group[_sg] = {}
                                 _special_by_group[_sg][_sc] = _sdf
+                            # 将特殊概念加载时间平均分配到各组
+                            _n_sp_groups = max(1, len(_special_by_group))
+                            for _sg_key in _special_by_group:
+                                _module_load_times[_sg_key] = _module_load_times.get(_sg_key, 0) + _special_load_elapsed / _n_sp_groups
                             for _sg_key, _sg_dfs in _special_by_group.items():
                                 _sg_dfs = _apply_cohort_filter_to_dfs(_sg_dfs, _cohort_exclude_ids)
                                 try:
@@ -13961,10 +13970,10 @@ def execute_sidebar_export():
                 st.warning(warn_msg)
                 data = {}
         
-        # � 流式导出已在加载循环中完成，无需旧的 Phase 2 导出循环
-        # export_start_time 用于后续统计
+        # 流式导出已在加载循环中完成，无需旧的 Phase 2 导出循环
         import time as time_module
-        export_start_time = _export_start_for_stats if '_export_start_for_stats' in dir() else time_module.time()
+        # 使用真正的开始时间计算总耗时
+        export_start_time = _export_start if '_export_start' in dir() else time_module.time()
         
         # 完成
         progress_bar.progress(1.0)
