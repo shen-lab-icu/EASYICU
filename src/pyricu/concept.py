@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from .config import DataSourceConfig
-from .datasource import FilterOp, FilterSpec, ICUDataSource
+from .datasource import FilterOp, FilterSpec, ICUDataSource, _duckdb_path
 from .table import ICUTable, WinTbl
 from .concept_callbacks import ConceptCallbackContext, execute_concept_callback
 from . import ricu_compat
@@ -1658,9 +1658,9 @@ class ConceptResolver:
                             import duckdb as _ddb
                             _con = _ddb.connect()
                             if _table_path.is_dir():
-                                _glob = str(_table_path / '**' / '*.parquet')
+                                _glob = _duckdb_path(_table_path / '**' / '*.parquet')
                             else:
-                                _glob = str(_table_path)
+                                _glob = _duckdb_path(_table_path)
                             _sub_var_col = source.sub_var
                             _distinct_vals = _con.execute(
                                 f"SELECT DISTINCT \"{_sub_var_col}\" FROM read_parquet('{_glob}', hive_partitioning=true) WHERE \"{_sub_var_col}\" IS NOT NULL"
@@ -2196,7 +2196,7 @@ class ConceptResolver:
                             _query_pids = set(p for p in pid_list if p in dead_pids)
                         
                         if _query_pids and bucket_dir.exists():
-                            glob_pattern = str(bucket_dir / 'bucket_id=*' / '*.parquet')
+                            glob_pattern = _duckdb_path(bucket_dir / 'bucket_id=*' / '*.parquet')
                             src_ids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
                             ids_str = ', '.join(str(x) for x in src_ids)
                             pids_str = ', '.join(str(p) for p in _query_pids)
@@ -2257,7 +2257,7 @@ class ConceptResolver:
                         _wt_table_path = data_source._resolve_loader_from_disk(source.table)
                         if _wt_table_path is not None:
                             _wt_dir = Path(_wt_table_path) if not isinstance(_wt_table_path, Path) else _wt_table_path
-                            _wt_glob = str(_wt_dir / '*.parquet') if _wt_dir.is_dir() else str(_wt_dir)
+                            _wt_glob = _duckdb_path(_wt_dir / '*.parquet') if _wt_dir.is_dir() else _duckdb_path(_wt_dir)
 
                             # Patient ID filter
                             if patient_ids is None:
@@ -6096,9 +6096,9 @@ class ConceptResolver:
                     
                     glob_pattern = None
                     if bucket_path.is_dir():
-                        glob_pattern = str(bucket_path / '**' / '*.parquet')
+                        glob_pattern = _duckdb_path(bucket_path / '**' / '*.parquet')
                     elif obs_path.is_dir():
-                        glob_pattern = str(obs_path / '*.parquet')
+                        glob_pattern = _duckdb_path(obs_path / '*.parquet')
                     
                     if glob_pattern:
                         con = duckdb.connect()
@@ -7682,7 +7682,7 @@ def _apply_callback(
                 try:
                     import duckdb
                     conn = duckdb.connect()
-                    glob_pattern = str(bucket_dir / 'bucket_id=*' / '*.parquet')
+                    glob_pattern = _duckdb_path(bucket_dir / 'bucket_id=*' / '*.parquet')
                     dead_pids_str = ', '.join(str(p) for p in dead_pids)
                     query = f"""
                         SELECT patientid, MAX(datetime) as datetime
@@ -8826,7 +8826,7 @@ def _apply_callback(
                                 pid_list = ','.join(str(int(p)) for p in unique_ids)
                                 sql = f"""
                                     SELECT patientid, MEDIAN(value) as weight
-                                    FROM read_parquet('{bucket_dir}/**/*.parquet', hive_partitioning=true)
+                                    FROM read_parquet('{_duckdb_path(bucket_dir)}/**/*.parquet', hive_partitioning=true)
                                     WHERE variableid = 10000400 AND patientid IN ({pid_list})
                                       AND value IS NOT NULL AND value >= 1 AND value <= 500
                                     GROUP BY patientid

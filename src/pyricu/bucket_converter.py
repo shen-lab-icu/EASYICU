@@ -28,8 +28,39 @@ import time
 logger = logging.getLogger(__name__)
 
 
+def _duckdb_path(p) -> str:
+    """Convert a Path or string to a DuckDB-safe path string (forward slashes)."""
+    return str(p).replace('\\', '/')
+
+
+def _get_total_ram_gb() -> float:
+    """获取系统总物理内存(GB)"""
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemTotal:'):
+                    return int(line.split()[1]) / 1024 / 1024
+    except (OSError, ValueError):
+        pass
+    try:
+        import psutil
+        return psutil.virtual_memory().total / (1024 ** 3)
+    except ImportError:
+        pass
+    return 16.0  # 保守默认值
+
+
 def _auto_memory_limit() -> str:
-    """根据系统可用内存自动设置 DuckDB memory_limit，预留 3GB 给 OS/Python。"""
+    """根据系统可用内存自动设置 DuckDB memory_limit。
+    
+    低内存系统 (<32GB) 使用基于总内存的保守限制，防止与 PARTITION_BY 的
+    100 个同时分区写入器组合导致内存爆炸。
+    """
+    total_gb = _get_total_ram_gb()
+    if total_gb < 32:
+        # 低内存：基于总量的保守限制（而非可用量，避免页面文件虚高）
+        limit_gb = max(1, int(total_gb * 0.15))  # 12GB→1GB, 16GB→2GB, 24GB→3GB
+        return f'{limit_gb}GB'
     try:
         with open('/proc/meminfo') as f:
             for line in f:
@@ -187,8 +218,25 @@ def convert_to_buckets(
         # 设置临时目录：建议在高速SSD上，处理80GB排序的磁盘溢出
         if config.temp_directory:
             os.makedirs(config.temp_directory, exist_ok=True)
-            conn.execute(f"SET temp_directory='{config.temp_directory}'")
+            conn.execute(f"SET temp_directory='{_duckdb_path(config.temp_directory)}'")
             log(f"临时目录设置为: {config.temp_directory}")
+        
+        # 低内存检测：<32GB RAM 时启用保守策略
+        total_ram_gb = _get_total_ram_gb()
+        low_memory = total_ram_gb < 32
+        
+        if low_memory:
+            # 低内存模式：限制 DuckDB 资源
+            duck_mem = f'{max(1, int(total_ram_gb * 0.15))}GB'
+            conn.execute(f"SET memory_limit='{duck_mem}'")
+            conn.execute(f'SET threads={min(4, os.cpu_count() or 4)}')
+            log(f"低内存模式: {total_ram_gb:.0f}GB RAM, DuckDB {duck_mem}")
+            
+            # 确保设置 temp_directory（DuckDB 溢出用）
+            if not config.temp_directory:
+                import tempfile as _tmpmod
+                _tmp_dir = _tmpmod.gettempdir()
+                conn.execute(f"SET temp_directory='{_duckdb_path(_tmp_dir)}'")
         
         # 确定读取方式
         source_name = source_path.name.lower()
@@ -213,9 +261,13 @@ def convert_to_buckets(
                 except Exception:
                     pass
             
+            # 低内存模式: parallel=false 避免 DuckDB 并行 CSV 扫描器的
+            # null_padding + quoted newlines 兼容性问题
+            parallel_arg = ", parallel=false" if low_memory else ""
+            
             csv_read_expr = (
-                f"read_csv_auto('{source_path}', "
-                f"ignore_errors=true, null_padding=true{types_arg}{encoding_arg})"
+                f"read_csv_auto('{_duckdb_path(source_path)}', "
+                f"ignore_errors=true, null_padding=true{types_arg}{encoding_arg}{parallel_arg})"
             )
             log(f"源文件类型: CSV{'（gzip压缩）' if source_name.endswith('.gz') else ''}")
         elif source_name.endswith('.parquet'):
@@ -231,7 +283,12 @@ def convert_to_buckets(
         # 对 HDD 上的大文件（>1GB CSV），直接 CSV→100 桶会触发大量随机写，
         # 导致 HDD 寻道风暴（75GB CSV 可能耗时 1 小时+）。
         # 两阶段策略：先 CSV→单 Parquet（纯顺序写），再 Parquet→100 桶（内存/缓存读取极快）。
-        # 实测 75GB AUMC numericitems: 1h+ → 2 分钟。
+        # 实测 75GB AUMC numericitems: 1h+ → 2 分钟（大内存服务器）。
+        #
+        # 低内存优化（<32GB RAM）：
+        # DuckDB PARTITION_BY 同时打开 N 个分区写入器，每个缓冲 ROW_GROUP_SIZE 行。
+        # 100 分区 × 大 ROW_GROUP_SIZE → 内存爆炸（12GB PC 上实测 24GB commit）。
+        # 解决：多趟分桶 — 每趟只写 20 个桶，RSS 稳定 <1GB。
         _TWO_STAGE_THRESHOLD = 1 * 1024 * 1024 * 1024  # 1GB
         use_two_stage = is_csv and source_path.stat().st_size > _TWO_STAGE_THRESHOLD
         temp_parquet = None
@@ -250,7 +307,7 @@ def convert_to_buckets(
             t_s1 = time.time()
             conn.execute(f"""
                 COPY (SELECT * FROM {csv_read_expr})
-                TO '{temp_parquet}' (
+                TO '{_duckdb_path(temp_parquet)}' (
                     FORMAT PARQUET, COMPRESSION 'SNAPPY',
                     ROW_GROUP_SIZE 1000000
                 )
@@ -259,30 +316,60 @@ def convert_to_buckets(
             s1_size = os.path.getsize(temp_parquet) / 1e9
             log(f"  Stage 1 完成: {s1_size:.2f}GB, {s1_time:.1f}s")
             
-            read_expr = f"read_parquet('{temp_parquet}')"
-            log(f"  Stage 2/2: Parquet → {config.num_buckets} 个分桶...")
+            read_expr = f"read_parquet('{_duckdb_path(temp_parquet)}')"
         else:
             if is_csv:
                 read_expr = csv_read_expr
             else:
-                read_expr = f"read_parquet('{source_path}')"
+                read_expr = f"read_parquet('{_duckdb_path(source_path)}')"
             log("执行分桶转换...")
         
         try:
-            sql = f"""
-                COPY (
-                    SELECT *,
-                           hash({config.partition_col}) % {config.num_buckets} as bucket_id
-                    FROM {read_expr}
-                )
-                TO '{output_dir}'
-                (FORMAT PARQUET,
-                 PARTITION_BY (bucket_id),
-                 COMPRESSION {config.compression.upper()},
-                 ROW_GROUP_SIZE {config.row_group_size},
-                 OVERWRITE_OR_IGNORE)
-            """
-            conn.execute(sql)
+            # 计算多趟参数
+            # 低内存 + 大文件: 多趟分桶，每趟处理部分桶以限制同时打开的分区写入器
+            if low_memory and use_two_stage:
+                # 每趟 20 个桶：实测每趟 RSS < 1GB，5 趟合计 ~200s（服务器）
+                buckets_per_pass = max(5, min(config.num_buckets, int(total_ram_gb * 2)))
+                n_passes = (config.num_buckets + buckets_per_pass - 1) // buckets_per_pass
+                
+                log(f"  Stage 2/2: Parquet → {config.num_buckets} 桶"
+                    f"（{n_passes} 趟, 每趟 {buckets_per_pass} 桶）")
+                for pi in range(n_passes):
+                    s = pi * buckets_per_pass
+                    e = min(s + buckets_per_pass - 1, config.num_buckets - 1)
+                    log(f"    趟 {pi+1}/{n_passes}: bucket {s}-{e}")
+                    conn.execute(f"""
+                        COPY (
+                            SELECT *,
+                                   hash({config.partition_col}) % {config.num_buckets} as bucket_id
+                            FROM {read_expr}
+                            WHERE hash({config.partition_col}) % {config.num_buckets}
+                                  BETWEEN {s} AND {e}
+                        )
+                        TO '{_duckdb_path(output_dir)}'
+                        (FORMAT PARQUET,
+                         PARTITION_BY (bucket_id),
+                         COMPRESSION {config.compression.upper()},
+                         ROW_GROUP_SIZE {config.row_group_size},
+                         OVERWRITE_OR_IGNORE)
+                    """)
+            else:
+                if use_two_stage:
+                    log(f"  Stage 2/2: Parquet → {config.num_buckets} 个分桶...")
+                sql = f"""
+                    COPY (
+                        SELECT *,
+                               hash({config.partition_col}) % {config.num_buckets} as bucket_id
+                        FROM {read_expr}
+                    )
+                    TO '{_duckdb_path(output_dir)}'
+                    (FORMAT PARQUET,
+                     PARTITION_BY (bucket_id),
+                     COMPRESSION {config.compression.upper()},
+                     ROW_GROUP_SIZE {config.row_group_size},
+                     OVERWRITE_OR_IGNORE)
+                """
+                conn.execute(sql)
         finally:
             # 清理临时 Parquet 文件
             if temp_parquet and os.path.exists(temp_parquet):
@@ -296,7 +383,7 @@ def convert_to_buckets(
         
         # 🚀 优化: 从已写出的parquet桶计数，避免重新扫描源文件（对80GB CSV节省10-30分钟）
         try:
-            row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{output_dir}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
+            row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{_duckdb_path(output_dir)}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
         except Exception:
             row_count = 0  # 如果计数失败，不影响转换结果
         
@@ -644,11 +731,11 @@ def convert_parquet_directory_to_buckets(
         # 使用临时目录防止内存溢出
         temp_dir = output_dir.parent / f".{output_dir.name}_temp"
         temp_dir.mkdir(exist_ok=True)
-        conn.execute(f"SET temp_directory='{temp_dir}'")
+        conn.execute(f"SET temp_directory='{_duckdb_path(temp_dir)}'")
         log(f"临时目录: {temp_dir}")
         
         # 使用 glob 读取所有 parquet，union_by_name 处理 schema 差异
-        glob_pattern = str(source_dir / "*.parquet")
+        glob_pattern = _duckdb_path(source_dir / "*.parquet")
         read_expr = f"read_parquet('{glob_pattern}', union_by_name=true)"
         
         # 分桶转换
@@ -660,7 +747,7 @@ def convert_parquet_directory_to_buckets(
                        hash({partition_col}) % {num_buckets} as bucket_id
                 FROM {read_expr}
             )
-            TO '{output_dir}'
+            TO '{_duckdb_path(output_dir)}'
             (FORMAT PARQUET,
              PARTITION_BY (bucket_id),
              COMPRESSION SNAPPY,
@@ -675,7 +762,7 @@ def convert_parquet_directory_to_buckets(
         
         # 🚀 优化: 从已写出的parquet桶计数，避免重新扫描源parquet分片
         try:
-            row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{output_dir}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
+            row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{_duckdb_path(output_dir)}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
         except Exception:
             row_count = 0
         
