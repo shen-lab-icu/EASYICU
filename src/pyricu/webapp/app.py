@@ -13052,8 +13052,9 @@ def execute_sidebar_export():
                 #   batch_size=2000 → 228批次 → 1h+ (过度保守)
                 #   无分批       → RSS 22GB (32GB PC 上危险)
                 #
-                # 碎片安全公式: cap = max(5000, int(avail_MB * 0.3))
-                #   12GB PC → 5000, 16GB → 5000, 32GB → 7200, 服务器(1.5TB) → 不分批
+                # 碎片安全公式: cap = max(5000, int(avail_MB * 0.5))
+                # 流式导出后每模块及时释放内存，碎片累积更少，可提高系数
+                #   12GB PC → 5000, 16GB → 5000, 32GB → 12000, 服务器(1.5TB) → 不分批
                 _auto_batch_size = None
                 _n_load_patients = _actual_n_patients if _actual_n_patients is not None else (
                     len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
@@ -13062,7 +13063,7 @@ def execute_sidebar_export():
                     try:
                         from pyricu.memory_manager import get_available_memory_mb
                         _avail_mb = get_available_memory_mb()
-                        _frag_safe_max = max(5000, int(_avail_mb * 0.3))
+                        _frag_safe_max = max(5000, int(_avail_mb * 0.5))
                         if _n_load_patients > _frag_safe_max:
                             _auto_batch_size = _frag_safe_max
                             _n_batches = (_n_load_patients + _auto_batch_size - 1) // _auto_batch_size
@@ -13090,6 +13091,34 @@ def execute_sidebar_export():
                 # 方案：保持批量加载（最快），但在每个模块前显示预估时间和概念列表
                 
                 total_modules = len(ordered_modules)
+                # 加上特殊概念模块（如果有）
+                _total_steps = total_modules + (1 if special_concepts_to_load else 0)
+                
+                # ──────────────────────────────────────────────
+                # 🚀 流式导出: 预构建导出相关变量
+                # 每个模块加载完后立即合并+写文件+释放，不在内存中累积
+                # ──────────────────────────────────────────────
+                import time as time_module
+                _export_start_for_stats = time_module.time()
+                module_times = {}
+                
+                # 预构建 concept -> group 映射（不依赖加载结果）
+                _concept_to_group_pre = {}
+                _group_priority = list(CONCEPT_GROUPS_INTERNAL.keys())
+                for _gk in _group_priority:
+                    _gc = CONCEPT_GROUPS_INTERNAL[_gk]
+                    for _c in _gc:
+                        if _c not in _concept_to_group_pre:
+                            _concept_to_group_pre[_c] = _gk
+                
+                # 收集导出文件列表和患者ID
+                all_exported_patient_ids = set()
+                skipped_modules = st.session_state.get('_skipped_modules', set())
+                overwrite_modules = st.session_state.get('_overwrite_modules', set())
+                
+                # cohort filter: 在 demographics/outcome 模块加载后计算排除列表
+                _cohort_exclude_ids = set()
+                _cohort_filter_computed = False
                 
                 def _process_result(result, concept_names):
                     """处理 load_concepts 返回结果"""
@@ -13114,11 +13143,476 @@ def execute_sidebar_export():
                             for c in concept_names:
                                 if c in result.columns:
                                     data[c] = result
-                                    break
                     # 检查空结果
                     for c in concept_names:
                         if c not in data and c not in empty_concepts:
                             empty_concepts.append(c)
+                
+                # ──────────────────────────────────────────────
+                # 🚀 流式导出: 定义模块合并+导出辅助函数
+                # ──────────────────────────────────────────────
+                def _export_module_to_disk(group_name, concept_dfs_dict, step_idx, total_steps):
+                    """将一个模块的概念合并为宽表并写入磁盘。
+                    
+                    Args:
+                        group_name: 模块key (e.g. 'vitals')
+                        concept_dfs_dict: {concept_name: DataFrame} 该模块的数据
+                        step_idx: 当前步骤索引（用于进度条）
+                        total_steps: 总步骤数
+                    Returns:
+                        True if exported, False if skipped/empty
+                    """
+                    nonlocal all_exported_patient_ids
+                    
+                    if not concept_dfs_dict:
+                        return False
+                    
+                    # 🔧 检查是否已取消
+                    if check_cancelled():
+                        return False
+                    
+                    _mod_export_start = time_module.time()
+                    
+                    # 显示导出进度
+                    concept_list = list(concept_dfs_dict.keys())
+                    concepts_str = ', '.join(concept_list[:5]) + (f'... +{len(concept_list)-5}' if len(concept_list) > 5 else '')
+                    if lang == 'en':
+                        _emsg = f"**Exporting**: `{group_name}` ({step_idx+1}/{total_steps}) | {concepts_str}"
+                    else:
+                        _emsg = f"**正在导出**: `{group_name}` ({step_idx+1}/{total_steps}) | {concepts_str}"
+                    cancel_placeholder.markdown(_emsg)
+                    
+                    # ── 合并为宽表（完整保留原有逻辑） ──
+                    id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+                    time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime', 'itemtime', 'Offset', 'measuredat_minutes', 'measuredat']
+                    unified_time_col = 'charttime'
+                    
+                    # 统一时间列名称
+                    normalized_concept_dfs = {}
+                    for cname, cdf in concept_dfs_dict.items():
+                        cdf = cdf.copy()
+                        if unified_time_col in cdf.columns:
+                            other_time_cols = [tc for tc in time_candidates if tc in cdf.columns and tc != unified_time_col]
+                            if other_time_cols:
+                                cdf = cdf.drop(columns=other_time_cols)
+                        else:
+                            for tc in time_candidates:
+                                if tc in cdf.columns:
+                                    cdf = cdf.rename(columns={tc: unified_time_col})
+                                    other_time_cols = [t for t in time_candidates if t in cdf.columns and t != unified_time_col]
+                                    if other_time_cols:
+                                        cdf = cdf.drop(columns=other_time_cols)
+                                    break
+                        normalized_concept_dfs[cname] = cdf
+                    concept_dfs_dict = normalized_concept_dfs
+                    
+                    # 确定主键列
+                    merge_cols = []
+                    _id_col = None
+                    _time_col = None
+                    potential_id_cols = set()
+                    potential_time_cols = set()
+                    for cname, cdf in concept_dfs_dict.items():
+                        for col in id_candidates:
+                            if col in cdf.columns:
+                                potential_id_cols.add(col)
+                                break
+                        for col in time_candidates:
+                            if col in cdf.columns:
+                                potential_time_cols.add(col)
+                                break
+                    for col in id_candidates:
+                        if col in potential_id_cols:
+                            _id_col = col
+                            merge_cols.append(col)
+                            break
+                    for col in time_candidates:
+                        if col in potential_time_cols:
+                            _time_col = col
+                            merge_cols.append(col)
+                            break
+                    
+                    if not merge_cols:
+                        all_dfs = []
+                        for cname, cdf in concept_dfs_dict.items():
+                            cdf = cdf.copy()
+                            cdf['_concept'] = cname
+                            all_dfs.append(cdf)
+                        merged_df = pd.concat(all_dfs, ignore_index=True)
+                    else:
+                        all_concept_dfs = []
+                        for concept_name, df in concept_dfs_dict.items():
+                            if _id_col and _id_col not in df.columns:
+                                continue
+                            metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type']
+                            cols_to_drop = [c for c in df.columns if c in metadata_cols]
+                            if cols_to_drop:
+                                df = df.drop(columns=cols_to_drop)
+                            value_cols = [c for c in df.columns if c not in merge_cols]
+                            df_to_add = df.copy()
+                            if len(value_cols) == 1:
+                                df_to_add = df_to_add.rename(columns={value_cols[0]: concept_name})
+                            elif len(value_cols) > 1:
+                                if concept_name in value_cols:
+                                    keep_val_cols = [concept_name]
+                                else:
+                                    keep_val_cols = value_cols
+                                cols_to_keep = merge_cols + keep_val_cols
+                                df_to_add = df_to_add[[c for c in cols_to_keep if c in df_to_add.columns]]
+                                remaining_val_cols = [c for c in df_to_add.columns if c not in merge_cols]
+                                if len(remaining_val_cols) == 1 and remaining_val_cols[0] != concept_name:
+                                    df_to_add = df_to_add.rename(columns={remaining_val_cols[0]: concept_name})
+                                elif len(remaining_val_cols) > 1:
+                                    rename_map = {}
+                                    for c in remaining_val_cols:
+                                        if c != concept_name and not c.startswith(f"{concept_name}_"):
+                                            rename_map[c] = f"{concept_name}_{c}"
+                                    if rename_map:
+                                        df_to_add = df_to_add.rename(columns=rename_map)
+                            for mc in merge_cols:
+                                if mc not in df_to_add.columns:
+                                    if mc in {'charttime', 'time', 'starttime', 'endtime', 'itemtime'}:
+                                        df_to_add[mc] = 0.0
+                                    else:
+                                        df_to_add[mc] = np.nan
+                            keep_cols = merge_cols + [c for c in df_to_add.columns if c not in merge_cols]
+                            all_concept_dfs.append(df_to_add[keep_cols])
+                        
+                        if len(all_concept_dfs) == 0:
+                            merged_df = None
+                        elif len(all_concept_dfs) == 1:
+                            merged_df = all_concept_dfs[0]
+                        else:
+                            time_related_cols = {'charttime', 'time', 'starttime', 'endtime', 'itemtime'}
+                            id_related_cols = {'stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID'}
+                            for i, df in enumerate(all_concept_dfs):
+                                for col in merge_cols:
+                                    if col in df.columns:
+                                        col_dtype = df[col].dtype
+                                        if col in time_related_cols:
+                                            if col_dtype == 'object' or not pd.api.types.is_numeric_dtype(col_dtype):
+                                                all_concept_dfs[i][col] = pd.to_numeric(df[col], errors='coerce')
+                                        elif col in id_related_cols:
+                                            if col_dtype == 'object':
+                                                all_concept_dfs[i][col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+                                            elif pd.api.types.is_numeric_dtype(col_dtype):
+                                                all_concept_dfs[i][col] = df[col].astype('Int64')
+                                        else:
+                                            if col_dtype == 'object':
+                                                all_concept_dfs[i][col] = pd.to_numeric(df[col], errors='coerce')
+                            
+                            row_counts = [len(df) for df in all_concept_dfs]
+                            for i, df in enumerate(all_concept_dfs):
+                                for col in merge_cols:
+                                    if col in time_related_cols and pd.api.types.is_float_dtype(df[col]):
+                                        all_concept_dfs[i][col] = df[col].round(2)
+                            
+                            total_rows_sum = sum(row_counts)
+                            use_fast_path = (total_rows_sum < 2_000_000)
+                            
+                            if use_fast_path:
+                                try:
+                                    processed_dfs = []
+                                    static_dfs = []
+                                    _empty_concepts_local = []
+                                    for df in all_concept_dfs:
+                                        df_temp = df.copy()
+                                        val_cols = [c for c in df_temp.columns if c not in merge_cols]
+                                        if not val_cols:
+                                            continue
+                                        is_static = False
+                                        if _time_col and _time_col in df_temp.columns:
+                                            if df_temp[_time_col].isna().all():
+                                                is_static = True
+                                        if is_static:
+                                            if _id_col and _id_col in df_temp.columns:
+                                                static_cols = [_id_col] + val_cols
+                                                static_df = df_temp[static_cols].drop_duplicates(subset=[_id_col], keep='last')
+                                                static_dfs.append(static_df)
+                                        else:
+                                            df_temp = df_temp.drop_duplicates(subset=merge_cols, keep='last')
+                                            for value_col in val_cols:
+                                                if len(df_temp) == 0:
+                                                    _empty_concepts_local.append(value_col)
+                                                    continue
+                                                single_val_df = df_temp[merge_cols + [value_col]].copy()
+                                                single_val_df['_concept'] = str(value_col)
+                                                single_val_df['_value'] = single_val_df[value_col]
+                                                single_val_df.drop(columns=[value_col], inplace=True)
+                                                processed_dfs.append(single_val_df)
+                                    
+                                    if not processed_dfs and not static_dfs:
+                                        merged_df = None
+                                    else:
+                                        if processed_dfs:
+                                            stacked = pd.concat(processed_dfs, ignore_index=True)
+                                            merged_df = stacked.pivot_table(
+                                                index=merge_cols, columns='_concept',
+                                                values='_value', aggfunc='first'
+                                            ).reset_index()
+                                            for ec in _empty_concepts_local:
+                                                if ec not in merged_df.columns:
+                                                    merged_df[ec] = np.nan
+                                        else:
+                                            merged_df = None
+                                        if static_dfs:
+                                            from functools import reduce
+                                            static_merged = reduce(
+                                                lambda left, right: pd.merge(left, right, on=_id_col, how='outer'),
+                                                static_dfs
+                                            )
+                                            if merged_df is not None and _id_col in merged_df.columns:
+                                                merged_df = pd.merge(merged_df, static_merged, on=_id_col, how='left')
+                                            else:
+                                                merged_df = static_merged
+                                except Exception:
+                                    use_fast_path = False
+                            
+                            if not use_fast_path:
+                                if len(all_concept_dfs) > 10:
+                                    _batch_sz = 5
+                                    batches = []
+                                    for i in range(0, len(all_concept_dfs), _batch_sz):
+                                        batch = all_concept_dfs[i:i+_batch_sz]
+                                        from functools import reduce
+                                        try:
+                                            batch_merged = reduce(
+                                                lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                                                batch
+                                            )
+                                            if len(batch_merged) > 0:
+                                                batch_merged = batch_merged.drop_duplicates(subset=merge_cols)
+                                            batches.append(batch_merged)
+                                        except Exception:
+                                            continue
+                                    if not batches:
+                                        merged_df = None
+                                    else:
+                                        merged_df = reduce(
+                                            lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                                            batches
+                                        )
+                                else:
+                                    from functools import reduce
+                                    merged_df = reduce(
+                                        lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                                        all_concept_dfs
+                                    )
+                                if merged_df is not None and len(merged_df) > 0:
+                                    merged_df = merged_df.drop_duplicates(subset=merge_cols)
+                    
+                    if merged_df is None:
+                        if merge_cols:
+                            merged_df = pd.DataFrame(columns=merge_cols + list(concept_dfs_dict.keys()))
+                        else:
+                            return False
+                    
+                    # 生成文件名
+                    concept_names_sorted = sorted(list(concept_dfs_dict.keys()))
+                    if len(concept_names_sorted) <= 5:
+                        concepts_suffix = '_'.join(concept_names_sorted)
+                    else:
+                        concepts_suffix = '_'.join(concept_names_sorted[:4]) + f'_etc{len(concept_names_sorted)}'
+                    cohort_suffix = _generate_cohort_prefix()
+                    if cohort_suffix:
+                        safe_filename = f"{group_name}_{concepts_suffix}_{cohort_suffix}".replace('/', '_').replace('\\', '_')
+                    else:
+                        safe_filename = f"{group_name}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
+                    if len(safe_filename) > 150:
+                        safe_filename = safe_filename[:150]
+                    
+                    if export_format == 'csv':
+                        file_path = export_dir / f"{safe_filename}.csv"
+                    elif export_format == 'parquet':
+                        file_path = export_dir / f"{safe_filename}.parquet"
+                    elif export_format == 'excel':
+                        file_path = export_dir / f"{safe_filename}.xlsx"
+                    else:
+                        file_path = export_dir / f"{safe_filename}.parquet"
+                    
+                    # 覆盖模式
+                    _ow_modules = st.session_state.get('_overwrite_modules', set())
+                    if group_name in _ow_modules or is_viz_import_mode:
+                        for ext in ['.parquet', '.csv', '.xlsx']:
+                            for old_file in export_dir.glob(f"{group_name}_*{ext}"):
+                                try:
+                                    old_file.unlink()
+                                except Exception:
+                                    pass
+                    
+                    # 跳过检查
+                    if not use_mock and not is_viz_import_mode and file_path.exists():
+                        if group_name in skipped_modules:
+                            return False
+                    
+                    # 收集患者ID
+                    if merged_df is not None and len(merged_df) > 0:
+                        for _idc in ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']:
+                            if _idc in merged_df.columns:
+                                all_exported_patient_ids.update(merged_df[_idc].dropna().unique())
+                                break
+                    
+                    # 写入文件
+                    if export_format == 'csv':
+                        merged_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+                    elif export_format == 'parquet':
+                        for col in merged_df.columns:
+                            if merged_df[col].dtype == object:
+                                numeric_vals = pd.to_numeric(merged_df[col], errors='coerce')
+                                orig_valid = merged_df[col].notna().sum()
+                                if orig_valid > 0 and numeric_vals.notna().sum() >= orig_valid * 0.5:
+                                    merged_df[col] = numeric_vals
+                                else:
+                                    merged_df[col] = merged_df[col].astype(str)
+                        merged_df.to_parquet(file_path, index=False)
+                    elif export_format == 'excel':
+                        merged_df.to_excel(file_path, index=False)
+                    else:
+                        for col in merged_df.columns:
+                            if merged_df[col].dtype == object:
+                                numeric_vals = pd.to_numeric(merged_df[col], errors='coerce')
+                                orig_valid = merged_df[col].notna().sum()
+                                if orig_valid > 0 and numeric_vals.notna().sum() >= orig_valid * 0.5:
+                                    merged_df[col] = numeric_vals
+                                else:
+                                    merged_df[col] = merged_df[col].astype(str)
+                        merged_df.to_parquet(file_path, index=False)
+                    
+                    exported_files.append(str(file_path))
+                    _mod_exp_elapsed = time_module.time() - _mod_export_start
+                    module_times[group_name] = _mod_exp_elapsed
+                    return True
+                
+                # ──────────────────────────────────────────────
+                # 🚀 流式导出: cohort filter 计算辅助函数
+                # ──────────────────────────────────────────────
+                _cohort_filter_modules = {'demographics', 'outcome'}  # 包含 death/los_icu/age/sex 的模块
+                
+                def _compute_cohort_exclude_ids_inline():
+                    """从 data 中计算要排除的患者ID集合。"""
+                    cf = st.session_state.get('cohort_filter', {})
+                    if not cf:
+                        return set()
+                    
+                    id_col_map = {
+                        'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid',
+                        'hirid': 'patientid', 'mimic': 'icustay_id', 'sic': 'CaseID',
+                    }
+                    _act_id_col = id_col_map.get(database, 'stay_id')
+                    id_cands = [_act_id_col, 'stay_id', 'icustay_id', 'hadm_id',
+                                'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+                    actual_id = None
+                    for df in data.values():
+                        if isinstance(df, pd.DataFrame):
+                            for c in id_cands:
+                                if c in df.columns:
+                                    actual_id = c
+                                    break
+                            if actual_id:
+                                break
+                    if not actual_id:
+                        return set()
+                    
+                    all_pids = set()
+                    for df in data.values():
+                        if isinstance(df, pd.DataFrame) and actual_id in df.columns:
+                            all_pids.update(df[actual_id].dropna().unique())
+                    if not all_pids:
+                        return set()
+                    
+                    excl = set()
+                    if cf.get('survived') is not None and 'death' in data:
+                        death_df = data['death']
+                        if isinstance(death_df, pd.DataFrame) and actual_id in death_df.columns:
+                            val_col = 'death' if 'death' in death_df.columns else death_df.columns[-1]
+                            death_valid = death_df[death_df[val_col].notna()].copy()
+                            death_vals = pd.to_numeric(death_valid[val_col], errors='coerce')
+                            died_ids = set(death_valid.loc[death_vals == 1, actual_id].unique())
+                            survived_ids = all_pids - died_ids
+                            if not cf['survived']:
+                                excl |= survived_ids
+                            else:
+                                excl |= died_ids
+                    
+                    if cf.get('los_min') is not None and 'los_icu' in data:
+                        los_df = data['los_icu']
+                        if isinstance(los_df, pd.DataFrame) and actual_id in los_df.columns:
+                            val_col = 'los_icu' if 'los_icu' in los_df.columns else los_df.columns[-1]
+                            los_valid = los_df[los_df[val_col].notna()].copy()
+                            los_hours = pd.to_numeric(los_valid[val_col], errors='coerce') * 24
+                            los_ok = set(los_valid.loc[los_hours >= cf['los_min'], actual_id].unique())
+                            excl |= (all_pids - los_ok)
+                    
+                    if (cf.get('age_min') is not None or cf.get('age_max') is not None) and 'age' in data:
+                        age_df = data['age']
+                        if isinstance(age_df, pd.DataFrame) and actual_id in age_df.columns:
+                            val_col = 'age' if 'age' in age_df.columns else age_df.columns[-1]
+                            age_valid = age_df[age_df[val_col].notna()].copy()
+                            age_vals = pd.to_numeric(age_valid[val_col], errors='coerce')
+                            age_mask = pd.Series(True, index=age_valid.index)
+                            if cf.get('age_min') is not None:
+                                age_mask &= (age_vals >= cf['age_min'])
+                            if cf.get('age_max') is not None:
+                                age_mask &= (age_vals <= cf['age_max'])
+                            age_ok = set(age_valid.loc[age_mask, actual_id].unique())
+                            excl |= (all_pids - age_ok)
+                    
+                    if cf.get('gender') is not None and 'sex' in data:
+                        sex_df = data['sex']
+                        if isinstance(sex_df, pd.DataFrame) and actual_id in sex_df.columns:
+                            val_col = 'sex' if 'sex' in sex_df.columns else sex_df.columns[-1]
+                            sex_valid = sex_df[sex_df[val_col].notna()].copy()
+                            sex_vals = sex_valid[val_col].astype(str).str.strip().str.upper()
+                            target = cf['gender'].upper()
+                            if target == 'M':
+                                target_variants = {'M', 'MALE', 'MAN', 'MÄNNLICH'}
+                            else:
+                                target_variants = {'F', 'FEMALE', 'WOMAN', 'WEIBLICH', 'VROUW', 'W'}
+                            sex_ok = set(sex_valid.loc[sex_vals.isin(target_variants), actual_id].unique())
+                            excl |= (all_pids - sex_ok)
+                    
+                    if excl:
+                        print(f"[COHORT POST-FILTER] Removing {len(excl)}/{len(all_pids)} patients")
+                        cohort_stats = st.session_state.get('_cohort_stats')
+                        if cohort_stats:
+                            cohort_stats['after'] = len(all_pids) - len(excl)
+                            cohort_stats['excluded'] = cohort_stats['before'] - (len(all_pids) - len(excl))
+                            n_excl = len(excl)
+                            detail_label_en = f"Data consistency check: -{n_excl}"
+                            detail_label_cn = f"数据一致性检查: -{n_excl}"
+                            cohort_stats.setdefault('filter_details', []).append(
+                                (detail_label_en, detail_label_cn, n_excl)
+                            )
+                            st.session_state['_cohort_stats'] = cohort_stats
+                    return excl
+                
+                def _apply_cohort_filter_to_dfs(concept_dfs_dict, exclude_ids):
+                    """对一组概念数据应用 cohort filter，移除 exclude_ids 中的患者。"""
+                    if not exclude_ids:
+                        return concept_dfs_dict
+                    id_cands = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+                    filtered = {}
+                    for cname, df in concept_dfs_dict.items():
+                        if isinstance(df, pd.DataFrame):
+                            for idc in id_cands:
+                                if idc in df.columns:
+                                    filtered[cname] = df[~df[idc].isin(exclude_ids)].copy()
+                                    break
+                            else:
+                                filtered[cname] = df
+                        else:
+                            filtered[cname] = df
+                    return filtered
+                
+                # 跟踪已处理的模块和等待 cohort filter 的缓冲模块
+                _buffered_mod_keys = []  # 等待 cohort filter 计算后再导出的模块
+                _loaded_mod_keys = set()  # 已加载的模块keys
+                _export_step_counter = 0  # 导出计数器
+                # 🔧 FIX: 检查是否有实际设置的 filter 值，而非仅检查 dict 是否非空
+                # cohort_filter 初始化为 {'age_min': None, ...}（8 keys 全 None），
+                # bool(non_empty_dict) = True 导致永远为 True，所有模块被缓冲
+                _cf = st.session_state.get('cohort_filter', {})
+                _has_cohort_filter = any(v is not None for v in _cf.values()) if _cf else False
                 
                 # 模块级别耗时累计（用于动态ETA计算）
                 _module_elapsed_list = []
@@ -13269,10 +13763,65 @@ def execute_sidebar_export():
                         except Exception:
                             pass
                     
-                    # 更新进度条
-                    progress_bar.progress(0.15 + 0.35 * (mod_idx + 1) / total_modules)
+                    # 更新进度条（加载 = 前80%，导出穿插在加载中）
+                    progress_bar.progress(0.15 + 0.65 * (mod_idx + 1) / _total_steps)
+                    
+                    # ──────────────────────────────────────────
+                    # 🚀 流式导出: 加载完立即导出 → 释放内存
+                    # ──────────────────────────────────────────
+                    _loaded_mod_keys.add(mod_key)
+                    
+                    if _has_cohort_filter and not _cohort_filter_computed:
+                        # 需要 cohort filter，但还没计算 → 先缓冲
+                        _buffered_mod_keys.append(mod_key)
+                        
+                        # 检查是否可以计算 cohort filter 了
+                        # 条件: demographics + outcome 都已加载, 或者这是最后一个模块
+                        _filter_ready = (
+                            _cohort_filter_modules.issubset(_loaded_mod_keys)
+                            or mod_idx == len(ordered_modules) - 1
+                        )
+                        if _filter_ready:
+                            _cohort_exclude_ids = _compute_cohort_exclude_ids_inline()
+                            _cohort_filter_computed = True
+                            
+                            # 导出所有缓冲的模块
+                            for _buf_key in _buffered_mod_keys:
+                                _buf_concepts = module_concept_map.get(_buf_key, [])
+                                _buf_dfs = {c: data[c] for c in _buf_concepts if c in data}
+                                if _buf_dfs:
+                                    _buf_dfs = _apply_cohort_filter_to_dfs(_buf_dfs, _cohort_exclude_ids)
+                                    try:
+                                        _export_module_to_disk(_buf_key, _buf_dfs, _export_step_counter, _total_steps)
+                                        _export_step_counter += 1
+                                    except Exception as _exp_e:
+                                        import traceback as _tb_mod
+                                        _tb_mod.print_exc()
+                                        st.warning(f"⚠️ Export failed for module '{_buf_key}': {_exp_e}")
+                                    # 释放已导出模块的数据
+                                    for c in _buf_concepts:
+                                        data.pop(c, None)
+                            _buffered_mod_keys.clear()
+                    else:
+                        # 无 cohort filter 或已计算完 → 立即导出当前模块
+                        if not _cohort_filter_computed and not _has_cohort_filter:
+                            _cohort_filter_computed = True  # 标记无需 filter
+                        
+                        _cur_dfs = {c: data[c] for c in mod_concepts if c in data}
+                        if _cur_dfs:
+                            _cur_dfs = _apply_cohort_filter_to_dfs(_cur_dfs, _cohort_exclude_ids)
+                            try:
+                                _export_module_to_disk(mod_key, _cur_dfs, _export_step_counter, _total_steps)
+                                _export_step_counter += 1
+                            except Exception as _exp_e:
+                                import traceback as _tb_mod
+                                _tb_mod.print_exc()
+                                st.warning(f"⚠️ Export failed for module '{mod_key}': {_exp_e}")
+                            # 释放已导出模块的数据
+                            for c in mod_concepts:
+                                data.pop(c, None)
                 
-                progress_bar.progress(0.5)
+                progress_bar.progress(0.80)
                 
                 # 🆕 加载特殊概念（AKI, circ_failure等）— 使用线程保活
                 if special_concepts_to_load:
@@ -13334,11 +13883,56 @@ def execute_sidebar_export():
                         failed_special = [c for c in special_concepts_to_load if c not in data]
                         failed_concepts.extend(failed_special)
                         
+                        # 🚀 流式导出: 特殊概念加载完后也立即导出
+                        _special_loaded_dfs = {}
+                        for cname in special_concepts_to_load:
+                            if cname in data:
+                                _special_loaded_dfs[cname] = data[cname]
+                        if _special_loaded_dfs:
+                            # 按模块分组导出（特殊概念可能属于不同模块）
+                            _special_by_group = {}
+                            for _sc, _sdf in _special_loaded_dfs.items():
+                                _sg = _concept_to_group_pre.get(_sc, 'other')
+                                if _sg not in _special_by_group:
+                                    _special_by_group[_sg] = {}
+                                _special_by_group[_sg][_sc] = _sdf
+                            for _sg_key, _sg_dfs in _special_by_group.items():
+                                _sg_dfs = _apply_cohort_filter_to_dfs(_sg_dfs, _cohort_exclude_ids)
+                                try:
+                                    _export_module_to_disk(_sg_key, _sg_dfs, _export_step_counter, _total_steps)
+                                    _export_step_counter += 1
+                                except Exception as _exp_e:
+                                    import traceback as _tb_mod
+                                    _tb_mod.print_exc()
+                                    st.warning(f"⚠️ Export failed for special module '{_sg_key}': {_exp_e}")
+                                for _sc in _sg_dfs:
+                                    data.pop(_sc, None)
+                        
                     except Exception as special_e:
                         st.warning(f"⚠️ Failed to load special concepts: {special_e}" if lang == 'en' else f"⚠️ 加载特殊概念失败: {special_e}")
                         failed_concepts.extend(special_concepts_to_load)
                     
-                    progress_bar.progress(0.55)
+                    progress_bar.progress(0.90)
+                
+                # 🚀 流式导出: 导出 data 中剩余的未导出概念（如果有）
+                if data:
+                    _remaining_by_group = {}
+                    for _rc, _rdf in data.items():
+                        if isinstance(_rdf, pd.DataFrame):
+                            _rg = _concept_to_group_pre.get(_rc, 'other')
+                            if _rg not in _remaining_by_group:
+                                _remaining_by_group[_rg] = {}
+                            _remaining_by_group[_rg][_rc] = _rdf
+                    for _rg_key, _rg_dfs in _remaining_by_group.items():
+                        _rg_dfs = _apply_cohort_filter_to_dfs(_rg_dfs, _cohort_exclude_ids)
+                        try:
+                            _export_module_to_disk(_rg_key, _rg_dfs, _export_step_counter, _total_steps)
+                            _export_step_counter += 1
+                        except Exception as _exp_e:
+                            import traceback as _tb_mod
+                            _tb_mod.print_exc()
+                            st.warning(f"⚠️ Export failed for remaining module '{_rg_key}': {_exp_e}")
+                    data.clear()
                 
                 # 🔧 FIX: 合并 unsupported 和 failed 概念，只显示一次警告
                 all_skipped = list(set(unsupported_concepts + failed_concepts))
@@ -13355,522 +13949,22 @@ def execute_sidebar_export():
                     empty_msg = f"ℹ️ {len(empty_concepts)} concepts returned empty (not configured or no data): {empty_list}{more_text}" if lang == 'en' else f"ℹ️ {len(empty_concepts)} 个概念返回空结果（未配置或无数据）: {empty_list}{more_text}"
                     st.info(empty_msg)
                 
-                # 🔧 FIX (2026-02-04): 只显示实际加载的数量，不显示 /total_concepts
-                loaded_msg = f"✅ Loaded {len(data)} concepts" if lang == 'en' else f"✅ 已加载 {len(data)} 个概念"
+                # 概念计数：已导出 = exported_files 中的概念数（后面统计）
+                _n_loaded_concepts = len(valid_concepts) - len(failed_concepts) - len(unsupported_concepts)
+                loaded_msg = f"✅ Loaded & exported {_n_loaded_concepts} concepts" if lang == 'en' else f"✅ 已加载并导出 {_n_loaded_concepts} 个概念"
                 status_text.markdown(loaded_msg)
                 
             except Exception as e:
+                import traceback as _tb_mod
+                _tb_mod.print_exc()
                 warn_msg = f"⚠️ Batch loading failed: {e}" if lang == 'en' else f"⚠️ 批量加载失败: {e}"
                 st.warning(warn_msg)
                 data = {}
         
-        # 🔧 POST-FILTER: Remove patients whose cohort-critical features are None
-        database = st.session_state.get('database', 'miiv')
-        data = _post_filter_cohort_data(data, database)
-        
-        # 按模块分组导出（将同一分组的特征合并为宽表）
-        merge_msg = "**Merging and exporting by module...**" if lang == 'en' else "**正在按模块合并导出...**"
-        status_text.markdown(merge_msg)
-        
-        # 🚀 记录导出开始时间和各模块耗时
+        # � 流式导出已在加载循环中完成，无需旧的 Phase 2 导出循环
+        # export_start_time 用于后续统计
         import time as time_module
-        export_start_time = time_module.time()
-        module_times = {}
-        
-        # 反向映射：concept -> group_key（英文key用于文件名）
-        concept_to_group = {}
-        
-        # 🔧 智能调整分组优先级
-        # 默认使用 定义顺序，但如果检测到用户只使用了 SOFA-1 相关的 Sepsis
-        # 则调整优先级，确保共享概念被归类到 Sepsis-3 (SOFA-1) 组
-        group_priority = list(CONCEPT_GROUPS_INTERNAL.keys())
-        loaded_keys = set(data.keys())
-        if 'sep3_sofa1' in loaded_keys and 'sep3_sofa2' not in loaded_keys:
-            # Sepsis-3 SOFA-1 存在但 SOFA-2 不存在 => 优先使用 SOFA-1 组
-            if 'sepsis3_sofa1' in group_priority and 'sepsis3_sofa2' in group_priority:
-                # 交换位置或重建列表，让 sofa1 排在 sofa2 前面
-                group_priority.remove('sepsis3_sofa1')
-                idx_sofa2 = group_priority.index('sepsis3_sofa2')
-                group_priority.insert(idx_sofa2, 'sepsis3_sofa1')
-        
-        for group_key in group_priority:
-            concepts = CONCEPT_GROUPS_INTERNAL[group_key]
-            for c in concepts:
-                if c not in concept_to_group:  # 优先使用第一个分组
-                    concept_to_group[c] = group_key
-        
-        # 按分组聚合数据
-        grouped_data = {}
-        for concept_name, df in data.items():
-            # 🔧 保留所有DataFrame（包括空的），确保用户选择的特征都被导出
-            if not isinstance(df, pd.DataFrame):
-                continue
-            
-            group_key = concept_to_group.get(concept_name, 'other')
-            
-            if group_key not in grouped_data:
-                grouped_data[group_key] = {}
-            
-            grouped_data[group_key][concept_name] = df
-        
-        # 导出合并后的分组数据（宽表格式）
-        total_groups = len(grouped_data)
-        
-        # 🆕 收集所有导出数据中的唯一患者ID
-        all_exported_patient_ids = set()
-        
-        # 🔧 检查是否有已存在的文件需要覆盖
-        skipped_modules = st.session_state.get('_skipped_modules', set())
-        
-        for idx, (group_name, concept_dfs) in enumerate(grouped_data.items()):
-            # 🔧 检查是否已取消
-            if check_cancelled():
-                cancel_msg = "🛑 Export cancelled by user" if lang == 'en' else "🛑 用户已取消导出"
-                st.warning(cancel_msg)
-                st.session_state._export_cancelled = False  # 重置状态
-                cancel_placeholder.empty()
-                break
-            
-            module_start_time = time_module.time()
-            
-            # 🚀 显示详细进度：模块名 + 包含的特征列表
-            concept_list = list(concept_dfs.keys())
-            concepts_str = ', '.join(concept_list[:5]) + (f'... +{len(concept_list)-5}' if len(concept_list) > 5 else '')
-            export_group_msg = f"**Exporting**: `{group_name}` ({idx+1}/{total_groups})\n\n📋 Features: {concepts_str}" if lang == 'en' else f"**正在导出**: `{group_name}` ({idx+1}/{total_groups})\n\n📋 特征: {concepts_str}"
-            
-            # 🔧 FIX (2026-02-03): 简化进度显示，移除循环内按钮避免 key 冲突导致白屏
-            cancel_placeholder.markdown(export_group_msg)
-            
-            # 将同一分组的所有 concept 合并为宽表
-            # 找到共同的 ID 列和时间列
-            id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
-            time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'itemtime', 'Offset', 'measuredat_minutes', 'measuredat']
-            
-            # 🔧 先统一所有 DataFrame 的时间列名称
-            # 不同概念可能使用不同的时间列名（charttime, starttime等）
-            # 注意：PyRICU 的时间是相对于 ICU 入院的小时数，不是 datetime
-            unified_time_col = 'charttime'  # 统一使用 charttime 作为时间列名
-            normalized_concept_dfs = {}
-            for cname, cdf in concept_dfs.items():
-                cdf = cdf.copy()
-                
-                # 检查是否已经有统一的时间列
-                if unified_time_col in cdf.columns:
-                    # 删除其他时间列以避免重复
-                    other_time_cols = [tc for tc in time_candidates if tc in cdf.columns and tc != unified_time_col]
-                    if other_time_cols:
-                        cdf = cdf.drop(columns=other_time_cols)
-                else:
-                    # 找到当前 DataFrame 的第一个时间列并重命名
-                    for tc in time_candidates:
-                        if tc in cdf.columns:
-                            cdf = cdf.rename(columns={tc: unified_time_col})
-                            # 删除其他时间列
-                            other_time_cols = [t for t in time_candidates if t in cdf.columns and t != unified_time_col]
-                            if other_time_cols:
-                                cdf = cdf.drop(columns=other_time_cols)
-                            break
-                
-                # 🔧 不再强制转换时间列类型，保持原始的小时数格式
-                # PyRICU 的时间是相对于 ICU 入院的小时数（0, 1, 2, 3...）
-                
-                normalized_concept_dfs[cname] = cdf
-            concept_dfs = normalized_concept_dfs
-            
-            # 确定这个分组的主键列
-            merge_cols = []
-            id_col = None
-            time_col = None
-            
-            # 🔧 改进：遍历所有 DataFrame 确定最完整的 merge_cols
-            # 必须从所有 DataFrame 中寻找可能的 ID 列和 Time 列，防止因第一个 DataFrame 是静态变量而漏掉 Time 列
-            potential_id_cols = set()
-            potential_time_cols = set()
-            
-            for cname, cdf in concept_dfs.items():
-                for col in id_candidates:
-                    if col in cdf.columns:
-                        potential_id_cols.add(col)
-                        break 
-                for col in time_candidates:
-                    if col in cdf.columns:
-                        potential_time_cols.add(col)
-                        break
-            
-            for col in id_candidates:
-                if col in potential_id_cols:
-                    id_col = col
-                    merge_cols.append(col)
-                    break
-            for col in time_candidates:
-                if col in potential_time_cols:
-                    time_col = col
-                    merge_cols.append(col)
-                    break
-            
-            if not merge_cols:
-                # 没有共同的合并键，简单拼接
-                all_dfs = []
-                for cname, cdf in concept_dfs.items():
-                    cdf = cdf.copy()
-                    cdf['_concept'] = cname
-                    all_dfs.append(cdf)
-                merged_df = pd.concat(all_dfs, ignore_index=True)
-            else:
-                # 🚀 优化：使用 concat + pivot 替代迭代式 merge，避免数据膨胀
-                all_concept_dfs = []
-                
-                for concept_name, df in concept_dfs.items():
-                    # 🔧 确保当前 df 包含 ID 列
-                    if id_col and id_col not in df.columns:
-                        continue 
-                    
-                    # 🔧 这里不再跳过缺少 Time 列的 DataFrame (Static变量)，而是会补充 Time=NaN
-                    
-                    # 只保留合并键和当前 concept 的值列
-                    # 🔧 删除非核心列（如 valueuom 等元数据列）
-                    metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type']
-                    cols_to_drop = [c for c in df.columns if c in metadata_cols]
-                    if cols_to_drop:
-                        df = df.drop(columns=cols_to_drop)
-                    
-                    value_cols = [c for c in df.columns if c not in merge_cols]
-                    
-                    # 准备要保留的列
-                    df_to_add = df.copy()
-                    
-                    # 🔧 修复：只保留主概念列，避免数据重复
-                    # 对于多列DataFrame（如sofa包含sofa_resp等），只取主列
-                    if len(value_cols) == 1:
-                        # 只有一个值列，用 concept 名重命名
-                        df_to_add = df_to_add.rename(columns={value_cols[0]: concept_name})
-                    elif len(value_cols) > 1:
-                        # 多个值列：只保留主概念列（与concept_name相同或最相关的列）
-                        if concept_name in value_cols:
-                            # 存在与概念同名的列，只保留它
-                            keep_val_cols = [concept_name]
-                        else:
-                            # 不存在同名列，保留所有值列但添加前缀
-                            keep_val_cols = value_cols
-                        
-                        # 只保留需要的值列
-                        cols_to_keep = merge_cols + keep_val_cols
-                        df_to_add = df_to_add[[c for c in cols_to_keep if c in df_to_add.columns]]
-                        
-                        # 如果只保留了一个值列且不是concept_name，重命名
-                        remaining_val_cols = [c for c in df_to_add.columns if c not in merge_cols]
-                        if len(remaining_val_cols) == 1 and remaining_val_cols[0] != concept_name:
-                            df_to_add = df_to_add.rename(columns={remaining_val_cols[0]: concept_name})
-                        elif len(remaining_val_cols) > 1:
-                            # 多列时添加前缀（仅对不以concept_name开头的列）
-                            rename_map = {}
-                            for c in remaining_val_cols:
-                                if c != concept_name and not c.startswith(f"{concept_name}_"):
-                                    rename_map[c] = f"{concept_name}_{c}"
-                            if rename_map:
-                                df_to_add = df_to_add.rename(columns=rename_map)
-                    
-                    # 补充缺失的 merge_cols (例如 Static 变量缺失 charttime)
-                    # 🔧 FIX(2026-02-09): 对 death/los_icu 等静态概念，charttime 设为 0 (= 入院时刻)
-                    # 这样下游分析代码可以统一处理，不会因缺少 charttime 而报错
-                    for mc in merge_cols:
-                        if mc not in df_to_add.columns:
-                            if mc in {'charttime', 'time', 'starttime', 'endtime', 'itemtime'}:
-                                df_to_add[mc] = 0.0  # 静态概念：charttime = 0 表示入院时刻
-                            else:
-                                df_to_add[mc] = np.nan
-                            
-                    # 只保留相关列
-                    keep_cols = merge_cols + [c for c in df_to_add.columns if c not in merge_cols]
-                    all_concept_dfs.append(df_to_add[keep_cols])
-                
-                # 🚀 智能合并策略：根据DataFrame特性选择最优方法
-                if len(all_concept_dfs) == 0:
-                    merged_df = None
-                elif len(all_concept_dfs) == 1:
-                    merged_df = all_concept_dfs[0]
-                else:
-                    # 🔧 统一 merge_cols 的类型，避免 object 和 float64 合并错误
-                    # 注意：统一后的时间列是 'charttime'，不是 time_col 变量
-                    time_related_cols = {'charttime', 'time', 'starttime', 'endtime', 'itemtime'}
-                    id_related_cols = {'stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID'}
-                    
-                    for i, df in enumerate(all_concept_dfs):
-                        for col in merge_cols:
-                            if col in df.columns:
-                                col_dtype = df[col].dtype
-                                if col in time_related_cols:
-                                    # 🔧 时间列：统一转为 float64（PyRICU 的时间是相对小时数）
-                                    if col_dtype == 'object' or not pd.api.types.is_numeric_dtype(col_dtype):
-                                        all_concept_dfs[i][col] = pd.to_numeric(df[col], errors='coerce')
-                                elif col in id_related_cols:
-                                    # 🔧 ID列：统一转为 Int64
-                                    if col_dtype == 'object':
-                                        all_concept_dfs[i][col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
-                                    elif pd.api.types.is_numeric_dtype(col_dtype):
-                                        all_concept_dfs[i][col] = df[col].astype('Int64')
-                                else:
-                                    # 其他列：如果是 object 类型但应该是数值，转换
-                                    if col_dtype == 'object':
-                                        all_concept_dfs[i][col] = pd.to_numeric(df[col], errors='coerce')
-                    
-                    # 🚀 性能优化：检测行数相近的DataFrame，使用concat+pivot避免outer join
-                    row_counts = [len(df) for df in all_concept_dfs]
-                    avg_rows = sum(row_counts) / max(len(row_counts), 1)
-                    max_deviation = max(abs(count - avg_rows) / (avg_rows + 1) for count in row_counts) if row_counts else 0
-                    
-                    # 🔧 增强：为时间列添加四舍五入，增加 Fast Path 命中率并避免 merge 膨胀
-                    for i, df in enumerate(all_concept_dfs):
-                        for col in merge_cols:
-                            if col in time_related_cols and pd.api.types.is_float_dtype(df[col]):
-                                all_concept_dfs[i][col] = df[col].round(2)
-
-                    # 强制使用 Fast Path (Concat+Pivot) 
-                    # 除非数据量极大(>2M total rows)才回退，或者Fast Path出错
-                    # concat+pivot 通常比多次 outer join 更快且更稳定
-                    total_rows_sum = sum(row_counts)
-                    use_fast_path = (total_rows_sum < 2_000_000)
-                    
-                    if use_fast_path:
-                        try:
-                            # 🔥 快速路径：concat + pivot（避免多次outer join）
-                            # 🔧 修复：分离静态概念（无time列）和时间序列概念
-                            # 🔧 修复：正确处理多列概念
-                            processed_dfs = []
-                            static_dfs = []  # 静态概念单独处理
-                            empty_concepts = []  # 记录空DataFrame的概念名
-                            
-                            for df in all_concept_dfs:
-                                df_temp = df.copy()
-                                
-                                val_cols = [c for c in df_temp.columns if c not in merge_cols]
-                                if not val_cols: 
-                                    continue
-                                
-                                # 🔧 检测静态概念：time列全为NaN或不存在有效时间数据
-                                is_static = False
-                                if time_col and time_col in df_temp.columns:
-                                    if df_temp[time_col].isna().all():
-                                        is_static = True
-                                
-                                if is_static:
-                                    # 静态概念：只保留 id_col 和所有 value_cols，后续通过 merge 合并
-                                    if id_col and id_col in df_temp.columns:
-                                        static_cols = [id_col] + val_cols
-                                        static_df = df_temp[static_cols].drop_duplicates(subset=[id_col], keep='last')
-                                        static_dfs.append(static_df)
-                                else:
-                                    # 时间序列概念：对每个值列单独处理并pivot
-                                    # 移除重复键，防止 pivot 失败 
-                                    df_temp = df_temp.drop_duplicates(subset=merge_cols, keep='last')
-                                    
-                                    # 🔧 处理每个值列
-                                    for value_col in val_cols:
-                                        # 🔧 即使DataFrame为空，也记录概念名
-                                        if len(df_temp) == 0:
-                                            empty_concepts.append(value_col)
-                                            continue
-                                        
-                                        # 为每个值列创建单独的处理DataFrame
-                                        single_val_df = df_temp[merge_cols + [value_col]].copy()
-                                        single_val_df['_concept'] = str(value_col) # 确保列名为字符串
-                                        single_val_df['_value'] = single_val_df[value_col]
-                                        single_val_df.drop(columns=[value_col], inplace=True)
-                                        processed_dfs.append(single_val_df)
-                            
-                            if not processed_dfs and not static_dfs:
-                                merged_df = None
-                            else:
-                                # 先处理时间序列概念
-                                if processed_dfs:
-                                    # Concat所有数据
-                                    stacked = pd.concat(processed_dfs, ignore_index=True)
-                                    
-                                    # Pivot成宽表
-                                    merged_df = stacked.pivot_table(
-                                        index=merge_cols,
-                                        columns='_concept',
-                                        values='_value',
-                                        aggfunc='first'  # 取第一个非空值
-                                    ).reset_index()
-                                    
-                                    # 🔧 为空概念添加NaN列
-                                    for empty_concept in empty_concepts:
-                                        if empty_concept not in merged_df.columns:
-                                            merged_df[empty_concept] = np.nan
-                                else:
-                                    # 只有静态概念，创建基础框架
-                                    merged_df = None
-                                
-                                # 🔧 合并静态概念
-                                if static_dfs:
-                                    # 合并所有静态概念为一个宽表
-                                    from functools import reduce
-                                    static_merged = reduce(
-                                        lambda left, right: pd.merge(left, right, on=id_col, how='outer'),
-                                        static_dfs
-                                    )
-                                    
-                                    if merged_df is not None and id_col in merged_df.columns:
-                                        # 将静态概念merge到时间序列数据上
-                                        merged_df = pd.merge(merged_df, static_merged, on=id_col, how='left')
-                                    else:
-                                        # 只有静态数据
-                                        merged_df = static_merged
-                                        
-                        except Exception as fast_path_error:
-                            # print(f"Fast path failed: {fast_path_error}, falling back...")
-                            use_fast_path = False
-                    
-                    if not use_fast_path:
-                        # 🔧 标准路径：reduce + merge（但限制最大概念数避免过慢）
-                        if len(all_concept_dfs) > 10:
-                            # 超过10个概念，分批merge再合并
-                            batch_size = 5
-                            batches = []
-                            for i in range(0, len(all_concept_dfs), batch_size):
-                                batch = all_concept_dfs[i:i+batch_size]
-                                from functools import reduce
-                                try:
-                                    batch_merged = reduce(
-                                        lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
-                                        batch
-                                    )
-                                    # 每一批合并后也去重，减少中间数据量
-                                    if len(batch_merged) > 0:
-                                        batch_merged = batch_merged.drop_duplicates(subset=merge_cols)
-                                    batches.append(batch_merged)
-                                except Exception:
-                                    # 如果某个batch失败，跳过它（很少见）
-                                    continue
-                            
-                            # 最后合并各批次
-                            if not batches:
-                                merged_df = None
-                            else:
-                                merged_df = reduce(
-                                    lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
-                                    batches
-                                )
-                        else:
-                            # 概念数<=10，直接reduce
-                            from functools import reduce
-                            merged_df = reduce(
-                                lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
-                                all_concept_dfs
-                            )
-                        
-                        # 标准路径最后也去重
-                        if merged_df is not None and len(merged_df) > 0:
-                            merged_df = merged_df.drop_duplicates(subset=merge_cols)
-            
-            # 🔧 修复：即使merged_df为空也要导出，保留列结构
-            if merged_df is None:
-                # 如果完全没有数据，创建一个只有merge_cols的空DataFrame
-                if merge_cols:
-                    merged_df = pd.DataFrame(columns=merge_cols + list(concept_dfs.keys()))
-                else:
-                    continue
-            
-            # 生成文件名：模块名_特征1_特征2_...[_筛选条件后缀]
-            concept_names = sorted(list(concept_dfs.keys()))  # 🔧 FIX: 排序确保文件名一致
-            # 限制特征名长度，避免文件名过长
-            if len(concept_names) <= 5:
-                concepts_suffix = '_'.join(concept_names)
-            else:
-                concepts_suffix = '_'.join(concept_names[:4]) + f'_etc{len(concept_names)}'
-            
-            # 🚀 添加队列筛选条件后缀
-            cohort_suffix = _generate_cohort_prefix()
-            
-            # 清理文件名中的特殊字符
-            if cohort_suffix:
-                safe_filename = f"{group_name}_{concepts_suffix}_{cohort_suffix}".replace('/', '_').replace('\\', '_')
-            else:
-                safe_filename = f"{group_name}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
-            # 限制文件名总长度
-            if len(safe_filename) > 150:
-                safe_filename = safe_filename[:150]
-            
-            # 确定文件路径
-            if export_format == 'csv':
-                file_path = export_dir / f"{safe_filename}.csv"
-            elif export_format == 'parquet':
-                file_path = export_dir / f"{safe_filename}.parquet"
-            elif export_format == 'excel':
-                file_path = export_dir / f"{safe_filename}.xlsx"
-            else:
-                file_path = export_dir / f"{safe_filename}.parquet"
-            
-            # 🔧 FIX (2026-02-05): 覆盖模式时，先删除该模块的所有旧文件
-            overwrite_modules = st.session_state.get('_overwrite_modules', set())
-            if group_name in overwrite_modules or is_viz_import_mode:
-                # 删除匹配该模块的所有旧文件（模块名开头）
-                for ext in ['.parquet', '.csv', '.xlsx']:
-                    pattern = f"{group_name}_*{ext}"
-                    old_files = list(export_dir.glob(pattern))
-                    for old_file in old_files:
-                        try:
-                            old_file.unlink()
-                        except Exception:
-                            pass
-            
-            # 🔧 检查文件是否需要跳过（基于预检测阶段的用户选择）
-            # 注意：模拟数据模式不检查已存在文件（直接覆盖）
-            if not use_mock and not is_viz_import_mode and file_path.exists():
-                # 检查用户是否已选择跳过此模块
-                if group_name in skipped_modules:
-                    skip_msg = f"⏭️ Skipped (file exists): `{group_name}`" if lang == 'en' else f"⏭️ 已跳过（文件已存在）: `{group_name}`"
-                    st.info(skip_msg)
-                    continue
-                # 如果不在 skipped_modules 中，说明用户选择了覆盖，直接继续导出
-            
-            # 🆕 收集这个模块中的患者ID
-            if merged_df is not None and len(merged_df) > 0:
-                for id_candidate in ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']:
-                    if id_candidate in merged_df.columns:
-                        all_exported_patient_ids.update(merged_df[id_candidate].dropna().unique())
-                        break
-            
-            # 写入文件
-            if export_format == 'csv':
-                merged_df.to_csv(file_path, index=False, encoding='utf-8-sig')  # 🔧 FIX: 使用 BOM 编码防止中文乱码
-            elif export_format == 'parquet':
-                # Clean up mixed-type object columns before parquet export
-                for col in merged_df.columns:
-                    if merged_df[col].dtype == object:
-                        numeric_vals = pd.to_numeric(merged_df[col], errors='coerce')
-                        orig_valid = merged_df[col].notna().sum()
-                        if orig_valid > 0 and numeric_vals.notna().sum() >= orig_valid * 0.5:
-                            merged_df[col] = numeric_vals
-                        else:
-                            merged_df[col] = merged_df[col].astype(str)
-                merged_df.to_parquet(file_path, index=False)
-            elif export_format == 'excel':
-                merged_df.to_excel(file_path, index=False)
-            else:
-                # Clean up mixed-type object columns before parquet export
-                for col in merged_df.columns:
-                    if merged_df[col].dtype == object:
-                        numeric_vals = pd.to_numeric(merged_df[col], errors='coerce')
-                        orig_valid = merged_df[col].notna().sum()
-                        if orig_valid > 0 and numeric_vals.notna().sum() >= orig_valid * 0.5:
-                            merged_df[col] = numeric_vals
-                        else:
-                            merged_df[col] = merged_df[col].astype(str)
-                merged_df.to_parquet(file_path, index=False)
-            
-            exported_files.append(str(file_path))
-            
-            # 🚀 记录模块耗时
-            module_elapsed = time_module.time() - module_start_time
-            module_times[group_name] = module_elapsed
-            
-            # 更新导出进度（从50%到100%）
-            if use_mock:
-                progress_bar.progress(0.3 + 0.7 * (idx + 1) / total_groups)
-            else:
-                progress_bar.progress(0.5 + 0.5 * (idx + 1) / total_groups)
+        export_start_time = _export_start_for_stats if '_export_start_for_stats' in dir() else time_module.time()
         
         # 完成
         progress_bar.progress(1.0)
@@ -13892,7 +13986,7 @@ def execute_sidebar_export():
             del st.session_state['_overwrite_modules']
         if '_export_cancelled' in st.session_state:
             del st.session_state['_export_cancelled']
-        
+
         if exported_files:
             st.session_state.export_completed = True
             st.session_state.trigger_export = False  # 🔧 FIX (2026-02-03): 导出完成后重置触发状态
