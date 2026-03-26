@@ -12563,6 +12563,130 @@ def _subprocess_load_module(concepts, database, data_path, patient_ids_filter,
         json.dump(saved, f)
 
 
+def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
+                             max_patients, output_dir):
+    """在子进程中加载特殊概念（AKI, CircFailure 等），结果写入 parquet。
+    
+    优化: 先预加载所有依赖概念(crea/urine/weight/rrt/lact/map/norepi_rate等)一次，
+    再传给 AKI/CircFailure 计算函数，避免重复磁盘读取。
+    """
+    import os, sys, json
+    _src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '')
+    if _src not in sys.path:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    import pandas as pd
+    from pyricu.api import load_concepts as _lc
+    
+    # 收集 AKI 和 CircFailure 需要的全部依赖概念
+    aki_deps = ['crea', 'urine', 'weight', 'rrt']
+    circ_deps = ['lact', 'map', 'norepi_rate', 'epi_rate', 'dobu_rate', 'dopa_rate']
+    
+    has_aki = any(c in concepts for c in ['aki', 'aki_stage', 'aki_stage_creat',
+                  'aki_stage_uo', 'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr',
+                  'uo_rt_24hr', 'creat_low_past_48hr', 'creat_low_past_7day'])
+    has_circ = any(c in concepts for c in ['circ_failure', 'circ_event'])
+    
+    all_deps = []
+    if has_aki:
+        all_deps.extend(aki_deps)
+    if has_circ:
+        all_deps.extend(circ_deps)
+    all_deps = list(dict.fromkeys(all_deps))  # dedupe preserving order
+    
+    # 批量预加载所有依赖概念（单次 load_concepts 调用）
+    preloaded = {}
+    if all_deps:
+        load_kwargs = dict(
+            data_path=data_path, database=database,
+            concepts=all_deps, verbose=False, merge=False, concept_workers=1,
+        )
+        if patient_ids_filter:
+            load_kwargs['patient_ids'] = patient_ids_filter
+        if max_patients:
+            load_kwargs['max_patients'] = max_patients
+        try:
+            result = _lc(**load_kwargs)
+            if isinstance(result, dict):
+                for c, df in result.items():
+                    if hasattr(df, 'data'):
+                        df = df.data
+                    if hasattr(df, 'to_pandas'):
+                        df = df.to_pandas()
+                    if isinstance(df, pd.DataFrame) and not df.empty:
+                        preloaded[c] = df
+        except Exception:
+            pass  # fallback: AKI/CircFailure will load individually
+    
+    # 调用 load_special_concepts 但传入预加载数据
+    # 直接调用底层函数而非 load_special_concepts 以传递 preloaded_data
+    saved = {}
+    
+    if has_aki:
+        try:
+            from pyricu.kdigo_aki import load_kdigo_aki
+            aki_kwargs = dict(database=database, data_path=data_path, verbose=False,
+                            preloaded_data=preloaded)
+            if patient_ids_filter:
+                id_col = list(patient_ids_filter.keys())[0]
+                aki_kwargs['patient_ids'] = patient_ids_filter[id_col]
+            if max_patients:
+                aki_kwargs['max_patients'] = max_patients
+            aki_df = load_kdigo_aki(**aki_kwargs)
+            if isinstance(aki_df, pd.DataFrame) and not aki_df.empty:
+                # 为每个 AKI 概念保存（都来自同一个 DataFrame）
+                for c in concepts:
+                    if c in ['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
+                             'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+                             'creat_low_past_48hr', 'creat_low_past_7day']:
+                        path = os.path.join(output_dir, f"{c}.parquet")
+                        aki_df.to_parquet(path, index=False)
+                        saved[c] = path
+        except Exception as e:
+            print(f"AKI loading failed: {e}")
+    
+    if has_circ:
+        try:
+            from pyricu.circ_failure import load_circ_failure
+            circ_kwargs = dict(database=database, data_path=data_path, verbose=False,
+                             preloaded_data=preloaded)
+            if patient_ids_filter:
+                id_col = list(patient_ids_filter.keys())[0]
+                circ_kwargs['patient_ids'] = patient_ids_filter[id_col]
+            if max_patients:
+                circ_kwargs['max_patients'] = max_patients
+            circ_df = load_circ_failure(**circ_kwargs)
+            if isinstance(circ_df, pd.DataFrame) and not circ_df.empty:
+                for c in concepts:
+                    if c in ['circ_failure', 'circ_event']:
+                        path = os.path.join(output_dir, f"{c}.parquet")
+                        circ_df.to_parquet(path, index=False)
+                        saved[c] = path
+        except Exception as e:
+            print(f"CircFailure loading failed: {e}")
+    
+    # Handle sepsis concepts via original load_special_concepts
+    sep_concepts = [c for c in concepts if c in ('sep3_sofa1', 'sep3_sofa2')]
+    if sep_concepts:
+        try:
+            from pyricu.webapp.app import load_special_concepts as _lsc
+            sep_result = _lsc(
+                concepts=sep_concepts, database=database, data_path=data_path,
+                patient_ids=patient_ids_filter, max_patients=max_patients, verbose=False
+            )
+            if isinstance(sep_result, dict):
+                for c, df in sep_result.items():
+                    if isinstance(df, pd.DataFrame) and not df.empty:
+                        path = os.path.join(output_dir, f"{c}.parquet")
+                        df.to_parquet(path, index=False)
+                        saved[c] = path
+        except Exception as e:
+            print(f"Sepsis loading failed: {e}")
+    
+    with open(os.path.join(output_dir, '_manifest.json'), 'w') as f:
+        json.dump(saved, f)
+
+
 def execute_sidebar_export():
     """执行侧边栏触发的数据导出（直接导出到本地目录，带进度条）。
     
@@ -13849,41 +13973,33 @@ def execute_sidebar_export():
                 
                 progress_bar.progress(0.80)
                 
-                # 🆕 加载特殊概念（AKI, circ_failure等）— 使用线程保活
+                # 🆕 加载特殊概念（AKI, circ_failure等）— 使用子进程隔离（与主模块一致）
                 if special_concepts_to_load:
                     special_msg = f"**Loading special concepts (AKI, CircFailure)...**" if lang == 'en' else f"**正在加载特殊概念 (AKI, 循环衰竭)...**"
                     status_text.markdown(special_msg)
                     
                     try:
-                        _special_kwargs = dict(
-                            concepts=special_concepts_to_load,
-                            database=database,
-                            data_path=st.session_state.data_path,
-                            patient_ids=patient_ids_filter,
-                            max_patients=patient_limit if patient_limit and patient_limit > 0 else None,
-                            verbose=False
-                        )
-                        _special_result = {'done': False, 'result': None, 'error': None}
+                        import multiprocessing as _mp_mod
+                        import tempfile as _tmpf_mod
+                        import json as _json_mod
                         
-                        def _load_special_thread(fn, kwargs, holder):
-                            try:
-                                holder['result'] = fn(**kwargs)
-                            except Exception as _e:
-                                holder['error'] = _e
-                            finally:
-                                holder['done'] = True
+                        _sp_tmp_dir = _tmpf_mod.mkdtemp(prefix='pyricu_special_')
+                        _sp_start = _time_mod.time()
                         
-                        _st = threading.Thread(
-                            target=_load_special_thread,
-                            args=(load_special_concepts, _special_kwargs, _special_result),
+                        _sp_proc = _mp_mod.Process(
+                            target=_subprocess_load_special,
+                            args=(special_concepts_to_load, database,
+                                  st.session_state.data_path,
+                                  patient_ids_filter,
+                                  patient_limit if patient_limit and patient_limit > 0 else None,
+                                  _sp_tmp_dir),
                             daemon=True
                         )
-                        _st.start()
+                        _sp_proc.start()
                         
                         _sp_tick = 0
-                        _sp_start = _time_mod.time()
-                        while not _special_result['done']:
-                            _time_mod.sleep(2)
+                        while _sp_proc.is_alive():
+                            _sp_proc.join(timeout=2)
                             _sp_tick += 1
                             _sp_elapsed = _time_mod.time() - _sp_start
                             _sp_spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_sp_tick % 10]
@@ -13893,23 +14009,26 @@ def execute_sidebar_export():
                                 _sp_msg = f"{_sp_spinner} **正在加载特殊概念** (AKI, 循环衰竭, 已用 {_sp_elapsed:.0f}s)"
                             status_text.markdown(_sp_msg)
                         
-                        _st.join(timeout=5)
+                        if _sp_proc.exitcode != 0:
+                            raise RuntimeError(f"Special concepts subprocess exited with code {_sp_proc.exitcode}")
                         
-                        if _special_result['error']:
-                            raise _special_result['error']
-                        
-                        special_data = _special_result['result']
-                        
-                        # 合并特殊概念数据
-                        for cname, df in special_data.items():
-                            if isinstance(df, pd.DataFrame) and not df.empty:
-                                data[cname] = df
+                        # 读取子进程结果
+                        _sp_manifest = os.path.join(_sp_tmp_dir, '_manifest.json')
+                        if os.path.exists(_sp_manifest):
+                            with open(_sp_manifest) as _mf:
+                                _sp_saved = _json_mod.load(_mf)
+                            for _cname, _ppath in _sp_saved.items():
+                                data[_cname] = pd.read_parquet(_ppath)
                         
                         # 记录未成功加载的特殊概念
                         failed_special = [c for c in special_concepts_to_load if c not in data]
                         failed_concepts.extend(failed_special)
                         
                         _special_load_elapsed = _time_mod.time() - _sp_start
+                        
+                        # 清理临时目录
+                        import shutil as _shutil_mod
+                        _shutil_mod.rmtree(_sp_tmp_dir, ignore_errors=True)
                         
                         # 🚀 流式导出: 特殊概念加载完后也立即导出
                         _special_loaded_dfs = {}
@@ -13941,6 +14060,10 @@ def execute_sidebar_export():
                                     data.pop(_sc, None)
                         
                     except Exception as special_e:
+                        try:
+                            _shutil_mod.rmtree(_sp_tmp_dir, ignore_errors=True)
+                        except Exception:
+                            pass
                         st.warning(f"⚠️ Failed to load special concepts: {special_e}" if lang == 'en' else f"⚠️ 加载特殊概念失败: {special_e}")
                         failed_concepts.extend(special_concepts_to_load)
                     
