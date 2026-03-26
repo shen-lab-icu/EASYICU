@@ -585,6 +585,7 @@ def load_kdigo_aki(
     patient_ids: Optional[List] = None,
     max_patients: Optional[int] = None,
     verbose: bool = True,
+    preloaded_data: Optional[Dict[str, pd.DataFrame]] = None,
 ) -> pd.DataFrame:
     """Load KDIGO AKI staging for a given database using PyRICU concepts.
     
@@ -599,6 +600,7 @@ def load_kdigo_aki(
         patient_ids: List of patient IDs to load (loads all if None)
         max_patients: Maximum number of patients to load
         verbose: Print progress messages
+        preloaded_data: Optional dict of {concept_name: DataFrame} to skip re-loading
         
     Returns:
         DataFrame with KDIGO AKI staging including:
@@ -613,20 +615,27 @@ def load_kdigo_aki(
     """
     from .api import load_concepts
     
+    _pre = preloaded_data or {}
+    
+    def _load_or_reuse(concept):
+        if concept in _pre and isinstance(_pre[concept], pd.DataFrame) and not _pre[concept].empty:
+            return _pre[concept]
+        try:
+            return load_concepts(
+                concepts=[concept], database=database, data_path=data_path,
+                patient_ids=patient_ids, max_patients=max_patients, verbose=verbose
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load {concept}: {e}")
+            return None
+    
     if verbose:
         logger.info(f"Loading KDIGO AKI data for {database}...")
     
     # Load creatinine
-    crea_df = load_concepts(
-        concepts=['crea'],
-        database=database,
-        data_path=data_path,
-        patient_ids=patient_ids,
-        max_patients=max_patients,
-        verbose=verbose
-    )
+    crea_df = _load_or_reuse('crea')
     
-    if crea_df.empty:
+    if crea_df is None or crea_df.empty:
         logger.warning(f"No creatinine data found for {database}")
         return pd.DataFrame()
     
@@ -634,47 +643,10 @@ def load_kdigo_aki(
     id_col = _detect_id_col(crea_df)
     time_col = _detect_time_col(crea_df)
     
-    # Load urine output and weight
-    urine_df = None
-    weight_df = None
-    
-    try:
-        urine_df = load_concepts(
-            concepts=['urine'],
-            database=database,
-            data_path=data_path,
-            patient_ids=patient_ids,
-            max_patients=max_patients,
-            verbose=verbose
-        )
-    except Exception as e:
-        logger.warning(f"Failed to load urine data: {e}")
-    
-    try:
-        weight_df = load_concepts(
-            concepts=['weight'],
-            database=database,
-            data_path=data_path,
-            patient_ids=patient_ids,
-            max_patients=max_patients,
-            verbose=verbose
-        )
-    except Exception as e:
-        logger.warning(f"Failed to load weight data: {e}")
-    
-    # Load RRT data
-    rrt_df = None
-    try:
-        rrt_df = load_concepts(
-            concepts=['rrt'],
-            database=database,
-            data_path=data_path,
-            patient_ids=patient_ids,
-            max_patients=max_patients,
-            verbose=verbose
-        )
-    except Exception as e:
-        logger.warning(f"Failed to load RRT data: {e}")
+    # Load urine output, weight, and RRT
+    urine_df = _load_or_reuse('urine')
+    weight_df = _load_or_reuse('weight')
+    rrt_df = _load_or_reuse('rrt')
     
     # Calculate KDIGO AKI staging
     result = kdigo_stages(

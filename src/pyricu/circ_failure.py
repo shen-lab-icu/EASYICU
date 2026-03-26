@@ -310,6 +310,7 @@ def load_circ_failure(
     patient_ids: Optional[List] = None,
     use_rolling_window: bool = False,  # Default to simple for speed
     verbose: bool = True,
+    preloaded_data: Optional[Dict[str, pd.DataFrame]] = None,
 ) -> pd.DataFrame:
     """
     High-level API to load and calculate circulatory failure status.
@@ -340,6 +341,8 @@ def load_circ_failure(
     """
     from pyricu.api import load_concepts
     
+    _pre = preloaded_data or {}
+    
     # Determine ID column based on database
     id_col_map = {
         'miiv': 'stay_id',
@@ -352,59 +355,90 @@ def load_circ_failure(
     id_col = id_col_map.get(database, 'stay_id')
     
     # Concepts to load
-    # Core concepts - note: lactate is 'lact' not 'lac'
-    core_concepts = ['lact', 'map']  # lactate and MAP
-    
-    # Vasopressor concepts - try each one individually
-    # Note: Not all concepts are available in all databases
+    core_concepts = ['lact', 'map']
     optional_concepts = ['norepi_rate', 'epi_rate', 'dobu_rate', 'dopa_rate']
+    all_needed = core_concepts + optional_concepts
     
     if verbose:
         print(f"Loading circulatory failure data for {database}...")
     
-    # First load core concepts
-    try:
-        df = load_concepts(
-            concepts=core_concepts,
-            database=database,
-            data_path=data_path,
-            max_patients=max_patients,
-            patient_ids=patient_ids,
-            verbose=verbose,
-        )
-    except Exception as e:
-        raise RuntimeError(f"Failed to load core concepts (lact, map): {e}")
+    # Batch-load all concepts not already in preloaded_data
+    to_load = [c for c in all_needed if c not in _pre or not isinstance(_pre.get(c), pd.DataFrame) or _pre[c].empty]
     
-    if df.empty:
-        if verbose:
-            print("No core data loaded")
-        return df
-    
-    # Try to load optional concepts one by one
-    loaded_optional = []
-    for concept in optional_concepts:
+    loaded_dfs = dict(_pre)  # start from preloaded
+    if to_load:
         try:
-            opt_df = load_concepts(
-                concepts=[concept],
+            batch_result = load_concepts(
+                concepts=to_load,
                 database=database,
                 data_path=data_path,
                 max_patients=max_patients,
                 patient_ids=patient_ids,
-                verbose=False,
+                verbose=verbose,
+                merge=False,
             )
-            if not opt_df.empty and concept in opt_df.columns:
-                # Merge with main dataframe
-                id_cols = [c for c in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID'] if c in df.columns]
-                time_cols = [c for c in ['charttime', 'datetime', 'measuredat', 'observationoffset'] if c in df.columns]
-                
-                if id_cols and time_cols:
-                    merge_cols = id_cols + time_cols
-                    # Keep only new concept column
-                    opt_df = opt_df[[c for c in merge_cols if c in opt_df.columns] + [concept]]
-                    df = pd.merge(df, opt_df, on=[c for c in merge_cols if c in opt_df.columns], how='left')
-                    loaded_optional.append(concept)
+            if isinstance(batch_result, dict):
+                for c, cdf in batch_result.items():
+                    if hasattr(cdf, 'data'):
+                        cdf = cdf.data
+                    if isinstance(cdf, pd.DataFrame) and not cdf.empty:
+                        loaded_dfs[c] = cdf
         except Exception:
-            pass  # Ignore missing optional concepts
+            # Fallback: load one by one
+            for c in to_load:
+                try:
+                    r = load_concepts(concepts=[c], database=database, data_path=data_path,
+                                      max_patients=max_patients, patient_ids=patient_ids, verbose=False)
+                    if isinstance(r, pd.DataFrame) and not r.empty:
+                        loaded_dfs[c] = r
+                except Exception:
+                    pass
+    
+    # Normalize time columns to 'charttime' (merge=False returns raw column names
+    # like 'measuredat_minutes' / 'start' that differ from merge=True's 'charttime')
+    _time_aliases = ['measuredat_minutes', 'measuredat', 'datetime',
+                     'observationoffset', 'Offset', 'start']
+    for _cname in list(loaded_dfs.keys()):
+        _cdf = loaded_dfs[_cname]
+        if 'charttime' not in _cdf.columns:
+            for _alias in _time_aliases:
+                if _alias in _cdf.columns:
+                    loaded_dfs[_cname] = _cdf.rename(columns={_alias: 'charttime'})
+                    break
+    
+    # Build merged dataframe from core concepts
+    core_dfs = [loaded_dfs[c] for c in core_concepts if c in loaded_dfs]
+    if not core_dfs:
+        if verbose:
+            print("No core data loaded")
+        return pd.DataFrame()
+    
+    # Merge core concepts
+    df = core_dfs[0]
+    id_cols = [c for c in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID'] if c in df.columns]
+    time_cols = [c for c in ['charttime', 'datetime', 'measuredat', 'measuredat_minutes', 'observationoffset', 'start'] if c in df.columns]
+    merge_cols = id_cols + time_cols
+    
+    for cdf in core_dfs[1:]:
+        mcols = [c for c in merge_cols if c in cdf.columns]
+        if mcols:
+            df = pd.merge(df, cdf[mcols + [c for c in cdf.columns if c not in mcols and c not in df.columns]],
+                         on=mcols, how='outer')
+    
+    if df.empty:
+        return df
+    
+    # Merge optional concepts
+    loaded_optional = []
+    for concept in optional_concepts:
+        if concept in loaded_dfs:
+            opt_df = loaded_dfs[concept]
+            if concept in opt_df.columns:
+                mcols = [c for c in merge_cols if c in opt_df.columns]
+                if mcols:
+                    opt_df = opt_df[mcols + [concept]]
+                    df = pd.merge(df, opt_df, on=mcols, how='left')
+                    loaded_optional.append(concept)
     
     if verbose and loaded_optional:
         print(f"Loaded optional concepts: {loaded_optional}")
@@ -415,7 +449,7 @@ def load_circ_failure(
     # Determine time column
     time_col = 'charttime'
     if time_col not in df.columns:
-        time_candidates = ['datetime', 'measuredat', 'observationoffset', 'time']
+        time_candidates = ['datetime', 'measuredat', 'measuredat_minutes', 'observationoffset', 'start', 'time']
         for col in time_candidates:
             if col in df.columns:
                 time_col = col
