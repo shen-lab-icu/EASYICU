@@ -453,8 +453,12 @@ def _merge_buffered_batches(
             if not isinstance(batch, dict):
                 continue
             for name, frame in batch.items():
-                if isinstance(frame, pd.DataFrame) and not frame.empty:
-                    grouped.setdefault(name, []).append(frame)
+                # 处理 ICUTable/TsTbl/WinTbl 等具有 .data 属性的表对象
+                df = frame
+                if hasattr(frame, 'data') and isinstance(frame.data, pd.DataFrame):
+                    df = frame.data
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    grouped.setdefault(name, []).append(df)
         return {
             name: pd.concat(frames, ignore_index=True, sort=False, copy=False)
             for name, frames in grouped.items()
@@ -711,7 +715,11 @@ def inprocess_batch_load(
                 print(f" ✅ ({len(batch_result)} rows)", end='')
         elif isinstance(batch_result, dict):
             if verbose:
-                non_empty = sum(len(df) for df in batch_result.values() if isinstance(df, pd.DataFrame) and len(df) > 0)
+                non_empty = 0
+                for _v in batch_result.values():
+                    _df = _v.data if hasattr(_v, 'data') and isinstance(_v.data, pd.DataFrame) else _v
+                    if isinstance(_df, pd.DataFrame) and len(_df) > 0:
+                        non_empty += len(_df)
                 print(f" ✅ ({non_empty} rows / {len(batch_result)} concepts)", end='')
         elif verbose:
             print(f" ⚪ (empty)", end='')
