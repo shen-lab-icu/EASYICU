@@ -1093,11 +1093,10 @@ def _merge_tables(
         for name, (frame, _) in standardized_tables.items():
             if frame.empty:
                 continue
-            # 🚀 PERF: Skip duplicated() check — pre-aggregated data from change_interval
-            # should not have duplicates. The check is O(N) and adds ~2.5s for 84M rows.
-            # If duplicates exist, pd.concat handles them correctly (last-write-wins via
-            # index alignment). Only check for small frames where the cost is negligible.
-            if len(frame) < 100000 and frame.duplicated(subset=key_cols).any():
+            # 如果同一 key 出现多行，先去重再走 concat fast path。
+            # AUMC vasopressors 这类回调在 batch 场景下可能会暴露重复 key，
+            # 直接 set_index 会触发 pandas InvalidIndexError。
+            if frame.duplicated(subset=key_cols).any():
                 frame = frame.drop_duplicates(subset=key_cols, keep='last')
             indexed = frame.set_index(key_cols, drop=True)
             # Only keep the value column (concept name)
