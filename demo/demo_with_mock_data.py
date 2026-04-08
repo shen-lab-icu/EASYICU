@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""PyRICU 可视化演示 - 使用模拟数据。
+"""EasyICU 可视化演示 - 使用模拟数据。
 
 本脚本使用生成的模拟数据演示可视化功能，无需真实 ICU 数据。
 
@@ -7,7 +7,7 @@ Usage:
     python demo_with_mock_data.py
     
 Requirements:
-    pip install pyricu[viz]
+    pip install easyicu[viz]
 """
 
 import sys
@@ -192,7 +192,7 @@ def generate_mock_data(n_patients=5, hours=72):
 
 def demo_timeline(data, patient_id, output_dir):
     """演示时序图。"""
-    from pyricu.visualization import plot_timeline
+    from easyicu.visualization import plot_timeline
     
     print("\n📈 绘制心率时序图...")
     fig = plot_timeline(
@@ -209,7 +209,7 @@ def demo_timeline(data, patient_id, output_dir):
 
 def demo_vitals_panel(data, patient_id, output_dir):
     """演示生命体征面板。"""
-    from pyricu.visualization import plot_vitals_panel
+    from easyicu.visualization import plot_vitals_panel
     
     print("\n📊 绘制生命体征面板...")
     vitals = {k: data[k] for k in ['hr', 'map', 'sbp', 'resp', 'temp', 'spo2'] if k in data}
@@ -228,7 +228,7 @@ def demo_vitals_panel(data, patient_id, output_dir):
 
 def demo_sofa_breakdown(data, patient_id, output_dir):
     """演示 SOFA 分解图。"""
-    from pyricu.visualization import plot_sofa_breakdown
+    from easyicu.visualization import plot_sofa_breakdown
     
     print("\n📊 绘制 SOFA 分解堆叠图...")
     fig = plot_sofa_breakdown(
@@ -246,7 +246,7 @@ def demo_sofa_breakdown(data, patient_id, output_dir):
 
 def demo_sofa_trajectory(data, output_dir):
     """演示 SOFA 轨迹图。"""
-    from pyricu.visualization import plot_sofa_trajectory
+    from easyicu.visualization import plot_sofa_trajectory
     
     print("\n📈 绘制 SOFA 轨迹图...")
     fig = plot_sofa_trajectory(
@@ -264,7 +264,7 @@ def demo_sofa_trajectory(data, output_dir):
 
 def demo_missing_heatmap(data, output_dir):
     """演示缺失值热力图。"""
-    from pyricu.visualization import plot_missing_heatmap
+    from easyicu.visualization import plot_missing_heatmap
     
     print("\n📋 绘制缺失值热力图...")
     fig = plot_missing_heatmap(data, title="Missing Rate by Concept")
@@ -277,7 +277,7 @@ def demo_missing_heatmap(data, output_dir):
 
 def demo_distribution(data, output_dir):
     """演示数值分布图。"""
-    from pyricu.visualization import plot_concept_distribution
+    from easyicu.visualization import plot_concept_distribution
     
     print("\n📊 绘制心率分布图...")
     fig = plot_concept_distribution(data, 'hr')
@@ -290,7 +290,7 @@ def demo_distribution(data, output_dir):
 
 def demo_patient_dashboard(data, patient_id, output_dir):
     """演示患者仪表盘。"""
-    from pyricu.visualization import PatientDashboard
+    from easyicu.visualization import PatientDashboard
     
     print("\n🏥 生成患者仪表盘...")
     dashboard = PatientDashboard(patient_id=patient_id, database='mock')
@@ -306,7 +306,7 @@ def demo_patient_dashboard(data, patient_id, output_dir):
 
 def main():
     print("=" * 60)
-    print("🏥 PyRICU 可视化演示 (模拟数据)")
+    print("🏥 EasyICU 可视化演示 (模拟数据)")
     print("=" * 60)
     
     # 检查依赖
@@ -315,7 +315,7 @@ def main():
         print(f"\n✅ plotly {plotly.__version__} 已安装")
     except ImportError:
         print("\n❌ plotly 未安装")
-        print("   请运行: pip install pyricu[viz]")
+        print("   请运行: pip install easyicu[viz]")
         sys.exit(1)
     
     # 创建输出目录

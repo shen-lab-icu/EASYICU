@@ -16,13 +16,13 @@
 
 ```bash
 # 安装可视化依赖
-pip install pyricu[viz]
+pip install easyicu[viz]
 
 # 安装 Web 应用依赖
-pip install pyricu[webapp]
+pip install easyicu[webapp]
 
 # 安装全部依赖
-pip install pyricu[all]
+pip install easyicu[all]
 ```
 
 ## 快速开始（推荐）

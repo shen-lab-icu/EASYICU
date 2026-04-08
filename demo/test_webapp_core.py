@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""测试 PyRICU Webapp 核心功能。"""
+"""测试 EasyICU Webapp 核心功能。"""
 
 import sys
-sys.path.insert(0, '/home/zhuhb/project/ricu_to_python/pyricu/src')
+sys.path.insert(0, '/home/zhuhb/project/ricu_to_python/easyicu/src')
 
 import pandas as pd
 import numpy as np
@@ -11,7 +11,7 @@ def test_generate_mock_data():
     """测试模拟数据生成。"""
     print("测试 1: 模拟数据生成...")
     
-    from pyricu.webapp.app import generate_mock_data
+    from easyicu.webapp.app import generate_mock_data
     
     data, patient_ids = generate_mock_data(n_patients=5, hours=24)
     
@@ -105,7 +105,7 @@ def test_export_logic(data):
 
 def main():
     print("=" * 50)
-    print("PyRICU Webapp 功能测试")
+    print("EasyICU Webapp 功能测试")
     print("=" * 50)
     
     try:

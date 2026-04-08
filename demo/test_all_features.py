@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-PyRICU Webapp 完整功能测试
+EasyICU Webapp 完整功能测试
 验证所有核心功能正常工作
 """
 import sys
 import os
 
 # 添加路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src', 'pyricu', 'webapp'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src', 'easyicu', 'webapp'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import pandas as pd
@@ -238,7 +238,7 @@ def test_webapp_endpoints():
 
 def main():
     print("\n" + "=" * 60)
-    print("   PyRICU Webapp 完整功能测试")
+    print("   EasyICU Webapp 完整功能测试")
     print("=" * 60 + "\n")
     
     tests = [

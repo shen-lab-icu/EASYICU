@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""PyRICU Web 应用演示脚本。
+"""EasyICU Web 应用演示脚本。
 
-本脚本启动 PyRICU 的 Streamlit Web 应用，提供交互式 ICU 数据分析界面。
+本脚本启动 EasyICU 的 Streamlit Web 应用，提供交互式 ICU 数据分析界面。
 
 功能特性:
     - 🏠 首页: 数据概览和快速开始指南
@@ -19,13 +19,13 @@ Usage:
     python demo_webapp.py --port 8502
     
     # 方式3: 直接使用命令行
-    pyricu-webapp
+    easyicu-webapp
     
     # 方式4: 使用 streamlit
-    streamlit run ../src/pyricu/webapp/app.py
+    streamlit run ../src/easyicu/webapp/app.py
 
 Requirements:
-    pip install pyricu[webapp]
+    pip install easyicu[webapp]
 """
 
 import sys
@@ -57,7 +57,7 @@ def check_dependencies():
         print(f"\n请安装缺失的依赖:")
         print(f"  pip install {' '.join(missing)}")
         print(f"\n或安装完整的 webapp 依赖:")
-        print(f"  pip install pyricu[webapp]")
+        print(f"  pip install easyicu[webapp]")
         return False
     
     return True
@@ -85,7 +85,7 @@ def print_features():
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="PyRICU Web 应用演示")
+    parser = argparse.ArgumentParser(description="EasyICU Web 应用演示")
     parser.add_argument(
         '--port',
         type=int,
@@ -117,7 +117,7 @@ def main():
     args = parser.parse_args()
     
     print("=" * 60)
-    print("🏥 PyRICU Web 应用")
+    print("🏥 EasyICU Web 应用")
     print("=" * 60)
     print()
     print("本地 ICU 数据分析与可视化平台")
@@ -143,7 +143,7 @@ def main():
     print()
     
     # 启动应用
-    from pyricu.webapp import run_app
+    from easyicu.webapp import run_app
     run_app(
         host=args.host, 
         port=args.port,

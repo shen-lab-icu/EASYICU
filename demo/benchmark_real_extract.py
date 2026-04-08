@@ -15,12 +15,12 @@
 		--output output/benchmark_report.json
 
 也支持环境变量：
-	PYRICU_MIIV_PATH=/data/mimiciv_parquet
-	PYRICU_EICU_PATH=/data/eicu_parquet
-	PYRICU_AUMC_PATH=/data/aumc_parquet
-	PYRICU_HIRID_PATH=/data/hirid_parquet
-	PYRICU_MIMIC_PATH=/data/mimiciii_parquet
-	PYRICU_SIC_PATH=/data/sicdb_parquet
+	EASYICU_MIIV_PATH=/data/mimiciv_parquet
+	EASYICU_EICU_PATH=/data/eicu_parquet
+	EASYICU_AUMC_PATH=/data/aumc_parquet
+	EASYICU_HIRID_PATH=/data/hirid_parquet
+	EASYICU_MIMIC_PATH=/data/mimiciii_parquet
+	EASYICU_SIC_PATH=/data/sicdb_parquet
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def _parse_db_path_items(items: Iterable[str]) -> Dict[str, str]:
 def _discover_env_db_paths() -> Dict[str, str]:
 	env_map = {}
 	for db in SUPPORTED_DATABASES:
-		value = os.environ.get(f"PYRICU_{db.upper()}_PATH")
+		value = os.environ.get(f"EASYICU_{db.upper()}_PATH")
 		if value:
 			env_map[db] = value
 	return env_map
@@ -106,7 +106,7 @@ def _result_rows(result) -> int:
 
 
 def _run_worker(payload: Dict[str, object]) -> Dict[str, object]:
-	from pyricu.api import load_concepts
+	from easyicu.api import load_concepts
 
 	concepts = payload["concepts"]
 	kwargs = dict(payload["kwargs"])
@@ -214,7 +214,7 @@ def _print_console_summary(summary: Dict[str, object]) -> None:
 
 
 def main() -> int:
-	parser = argparse.ArgumentParser(description="Benchmark pyricu real database extraction")
+	parser = argparse.ArgumentParser(description="Benchmark easyicu real database extraction")
 	parser.add_argument("--db-path", action="append", default=[], help="数据库路径，格式 db=/path")
 	parser.add_argument("--patients", type=int, default=2000, help="每个 case 的患者数")
 	parser.add_argument("--cases", nargs="+", default=["vitals", "sofa"], choices=sorted(CASE_PRESETS), help="要运行的 case 预设")
@@ -236,7 +236,7 @@ def main() -> int:
 	db_paths.update(_parse_db_path_items(args.db_path))
 	db_paths = {db: path for db, path in db_paths.items() if Path(path).exists()}
 	if not db_paths:
-		print("未找到可用数据库路径。请传 --db-path db=/path 或设置 PYRICU_<DB>_PATH 环境变量。", file=sys.stderr)
+		print("未找到可用数据库路径。请传 --db-path db=/path 或设置 EASYICU_<DB>_PATH 环境变量。", file=sys.stderr)
 		return 2
 
 	results: List[Dict[str, object]] = []

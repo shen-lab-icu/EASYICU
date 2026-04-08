@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Setup script for pyricu package.
+Setup script for easyicu package.
 
 This is a minimal setup.py for backward compatibility.
 The main configuration is in pyproject.toml.

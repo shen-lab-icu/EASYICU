@@ -8,8 +8,8 @@ include pyproject.toml
 include setup.py
 
 # Include data files
-recursive-include src/pyricu/data *.json
-recursive-include src/pyricu/extdata *.json *.yaml *.yml
+recursive-include src/easyicu/data *.json
+recursive-include src/easyicu/extdata *.json *.yaml *.yml
 
 # Exclude unwanted files
 global-exclude __pycache__

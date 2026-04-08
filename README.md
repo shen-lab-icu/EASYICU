@@ -6,7 +6,7 @@
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/shen-lab-icu/pyricu)
+[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
 EasyICU is a Python toolkit designed for intensive care unit (ICU) data analysis. Through a database abstraction layer, it provides unified access to **6 major public ICU databases**, supports automated extraction of **167 standardized clinical concepts**, and offers a **web-based visualization interface** — enabling clinical researchers without programming backgrounds to efficiently perform cohort definition, feature selection, and data quality review.
 
@@ -42,17 +42,17 @@ Open an **Anaconda Prompt** (or any terminal with conda activated) and run:
 
 ```bash
 # Clone the repository (or download and extract the ZIP from GitHub)
-git clone "https://github.com/shen-lab-icu/pyricu.git"
+git clone "https://github.com/shen-lab-icu/easyicu.git"
 
 # Navigate into the project directory and install
-cd pyricu
+cd easyicu
 pip install -e ".[all]"
 ```
 
 ### Step 3: Launch the Web Application
 
 ```bash
-pyricu-webapp
+easyicu-webapp
 ```
 
 You should see output similar to:
@@ -173,7 +173,7 @@ The system supports statistical analysis of filtered research cohorts:
 ### Easy API — One-Liners
 
 ```python
-from pyricu import load_sofa, load_sofa2, load_vitals, load_labs
+from easyicu import load_sofa, load_sofa2, load_vitals, load_labs
 
 # Load SOFA scores
 sofa = load_sofa(
@@ -200,7 +200,7 @@ labs = load_labs(database='miiv', data_path='/path/to/data')
 ### Concept API — Flexible & Customizable
 
 ```python
-from pyricu import load_concepts
+from easyicu import load_concepts
 
 # Batch-load multiple concepts
 data = load_concepts(
@@ -224,7 +224,7 @@ sepsis = load_concepts(
 ### Domain-Specific Loaders
 
 ```python
-from pyricu import (
+from easyicu import (
     load_demographics,      # Demographics
     load_outcomes,          # Clinical outcomes
     load_vitals_detailed,   # Detailed vital signs
@@ -250,7 +250,7 @@ demo = load_demographics(
 The web application detects CSV data automatically and offers one-click conversion. You can also convert programmatically:
 
 ```python
-from pyricu.data_converter import DataConverter
+from easyicu.data_converter import DataConverter
 
 converter = DataConverter('/path/to/csv/data', database='miiv')
 converter.convert_all()

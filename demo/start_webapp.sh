@@ -1,11 +1,11 @@
 #!/bin/bash
-# PyRICU Webapp 启动脚本 - 带自动重启和健康检查
+# EasyICU Webapp 启动脚本 - 带自动重启和健康检查
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WEBAPP_DIR="$(dirname "$SCRIPT_DIR")/src/pyricu/webapp"
-LOG_FILE="/tmp/pyricu_webapp.log"
-PID_FILE="/tmp/pyricu_webapp.pid"
-PORT="${PYRICU_PORT:-8501}"
+WEBAPP_DIR="$(dirname "$SCRIPT_DIR")/src/easyicu/webapp"
+LOG_FILE="/tmp/easyicu_webapp.log"
+PID_FILE="/tmp/easyicu_webapp.pid"
+PORT="${EASYICU_PORT:-8501}"
 MAX_RETRIES=5
 HEALTH_CHECK_INTERVAL=30
 
@@ -40,7 +40,7 @@ health_check() {
 }
 
 start_webapp() {
-    log "${GREEN}🚀 启动 PyRICU Webapp...${NC}"
+    log "${GREEN}🚀 启动 EasyICU Webapp...${NC}"
     
     # 检查是否已运行
     if check_port; then
@@ -84,7 +84,7 @@ start_webapp() {
 }
 
 stop_webapp() {
-    log "${YELLOW}🛑 停止 PyRICU Webapp...${NC}"
+    log "${YELLOW}🛑 停止 EasyICU Webapp...${NC}"
     
     local pid=$(get_pid)
     if [ -n "$pid" ]; then
@@ -112,7 +112,7 @@ restart_webapp() {
 
 status_webapp() {
     echo "========================================"
-    echo "   PyRICU Webapp 状态"
+    echo "   EasyICU Webapp 状态"
     echo "========================================"
     
     if check_port; then
@@ -176,7 +176,7 @@ daemon_mode() {
 
 # 显示帮助
 show_help() {
-    echo "PyRICU Webapp 管理脚本"
+    echo "EasyICU Webapp 管理脚本"
     echo ""
     echo "用法: $0 [命令]"
     echo ""
@@ -190,7 +190,7 @@ show_help() {
     echo "  help     显示帮助"
     echo ""
     echo "环境变量:"
-    echo "  PYRICU_PORT  指定端口（默认 8501）"
+    echo "  EASYICU_PORT  指定端口（默认 8501）"
 }
 
 # 主入口

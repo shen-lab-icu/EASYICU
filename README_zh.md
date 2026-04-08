@@ -6,7 +6,7 @@
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/shen-lab-icu/pyricu)
+[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
 EasyICU 是一个专为重症监护室（ICU）数据分析设计的 Python 工具包。它通过数据库抽象层统一处理 **6 个主流公开 ICU 数据库**，支持 **167 种**标准化临床概念的自动提取，并提供基于 **Web 的可视化界面**，使非编程背景的临床研究人员也能高效完成队列定义、特征筛选与数据质量审查。
 
@@ -41,17 +41,17 @@ EasyICU 是一个专为重症监护室（ICU）数据分析设计的 Python 工�
 
 ```bash
 # 使用 Git 克隆仓库（也可直接从 GitHub 下载 ZIP 解压）
-git clone "https://github.com/shen-lab-icu/pyricu.git"
+git clone "https://github.com/shen-lab-icu/easyicu.git"
 
 # 进入项目目录并安装
-cd pyricu
+cd easyicu
 pip install -e ".[all]"
 ```
 
 ### 第三步：启动 Web 应用
 
 ```bash
-pyricu-webapp
+easyicu-webapp
 ```
 
 正常启动后会显示如下信息：
@@ -173,7 +173,7 @@ URL: http://localhost:8501
 ### Easy API — 一行代码
 
 ```python
-from pyricu import load_sofa, load_sofa2, load_vitals, load_labs
+from easyicu import load_sofa, load_sofa2, load_vitals, load_labs
 
 # 加载 SOFA 评分
 sofa = load_sofa(
@@ -200,7 +200,7 @@ labs = load_labs(database='miiv', data_path='/path/to/data')
 ### Concept API — 灵活自定义
 
 ```python
-from pyricu import load_concepts
+from easyicu import load_concepts
 
 # 批量加载多个概念
 data = load_concepts(
@@ -224,7 +224,7 @@ sepsis = load_concepts(
 ### 专业模块
 
 ```python
-from pyricu import (
+from easyicu import (
     load_demographics,      # 人口统计学
     load_outcomes,          # 结局指标
     load_vitals_detailed,   # 详细生命体征
@@ -250,7 +250,7 @@ demo = load_demographics(
 Web 应用会自动检测数据格式并提供一键转换，也可通过代码调用：
 
 ```python
-from pyricu.data_converter import DataConverter
+from easyicu.data_converter import DataConverter
 
 converter = DataConverter('/path/to/csv/data', database='miiv')
 converter.convert_all()
