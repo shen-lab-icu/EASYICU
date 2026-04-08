@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""PyRICU Webapp 功能测试脚本。
+"""EasyICU Webapp 功能测试脚本。
 
 本脚本测试 webapp 的核心组件是否正常工作。
 """
@@ -62,7 +62,7 @@ def test_mock_data_generation():
     print("=" * 60)
     
     try:
-        from pyricu.webapp.app import generate_mock_data
+        from easyicu.webapp.app import generate_mock_data
         
         data, patient_ids = generate_mock_data(n_patients=5, hours=24)
         
@@ -126,14 +126,14 @@ def test_webapp_components():
     print("=" * 60)
     
     try:
-        from pyricu.webapp.app import (
+        from easyicu.webapp.app import (
             init_session_state,
             generate_mock_data,
         )
         print("✅ 核心函数导入成功")
         
         # 测试模块结构
-        from pyricu.webapp import run_app
+        from easyicu.webapp import run_app
         print("✅ run_app 函数导入成功")
         
         return True
@@ -148,7 +148,7 @@ def test_webapp_components():
 def main():
     """运行所有测试。"""
     print()
-    print("🏥 PyRICU Webapp 功能测试")
+    print("🏥 EasyICU Webapp 功能测试")
     print("=" * 60)
     print()
     
@@ -179,7 +179,7 @@ def main():
         print("  python demo_webapp.py")
         print()
         print("或直接运行:")
-        print("  streamlit run ../src/pyricu/webapp/app.py")
+        print("  streamlit run ../src/easyicu/webapp/app.py")
     else:
         print("⚠️ 部分测试失败，请检查上述错误信息。")
     

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""PyRICU 可视化演示脚本。
+"""EasyICU 可视化演示脚本。
 
-本脚本演示如何使用 PyRICU 的可视化功能：
+本脚本演示如何使用 EasyICU 的可视化功能：
 1. 加载 ICU 数据
 2. 绘制时序图、SOFA 分解图等
 3. 生成患者仪表盘
@@ -11,7 +11,7 @@ Usage:
     python demo_visualization.py --data-path /path/to/ricu_data/miiv
     
 Requirements:
-    pip install pyricu[viz]
+    pip install easyicu[viz]
 """
 
 import argparse
@@ -43,7 +43,7 @@ def check_dependencies():
 
 def demo_timeseries(data, patient_id, output_dir):
     """演示时序数据可视化。"""
-    from pyricu.visualization import plot_timeline, plot_vitals_panel
+    from easyicu.visualization import plot_timeline, plot_vitals_panel
     
     print("\n" + "=" * 60)
     print("📈 时序数据可视化演示")
@@ -81,7 +81,7 @@ def demo_timeseries(data, patient_id, output_dir):
 
 def demo_scores(data, patient_id, output_dir):
     """演示评分系统可视化。"""
-    from pyricu.visualization import plot_sofa_breakdown, plot_sofa_trajectory
+    from easyicu.visualization import plot_sofa_breakdown, plot_sofa_trajectory
     
     print("\n" + "=" * 60)
     print("📊 评分系统可视化演示")
@@ -118,7 +118,7 @@ def demo_scores(data, patient_id, output_dir):
 
 def demo_cohort(data, output_dir):
     """演示队列分析可视化。"""
-    from pyricu.visualization import plot_missing_heatmap, plot_concept_distribution
+    from easyicu.visualization import plot_missing_heatmap, plot_concept_distribution
     
     print("\n" + "=" * 60)
     print("📋 队列分析可视化演示")
@@ -144,7 +144,7 @@ def demo_cohort(data, output_dir):
 
 def demo_patient_dashboard(data, patient_id, database, output_dir):
     """演示患者仪表盘。"""
-    from pyricu.visualization import PatientDashboard, render_patient_report
+    from easyicu.visualization import PatientDashboard, render_patient_report
     
     print("\n" + "=" * 60)
     print("🏥 患者仪表盘演示")
@@ -177,7 +177,7 @@ def demo_patient_dashboard(data, patient_id, database, output_dir):
 
 def load_sample_data(data_path, concepts, patient_ids=None, limit=100):
     """加载示例数据。"""
-    from pyricu import load_concepts
+    from easyicu import load_concepts
     
     print(f"\n📂 从 {data_path} 加载数据...")
     print(f"   Concepts: {concepts}")
@@ -211,7 +211,7 @@ def load_sample_data(data_path, concepts, patient_ids=None, limit=100):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="PyRICU 可视化演示")
+    parser = argparse.ArgumentParser(description="EasyICU 可视化演示")
     parser.add_argument(
         '--data-path', 
         type=str,
@@ -241,7 +241,7 @@ def main():
     args = parser.parse_args()
     
     print("=" * 60)
-    print("🏥 PyRICU 可视化演示")
+    print("🏥 EasyICU 可视化演示")
     print("=" * 60)
     
     # 检查依赖

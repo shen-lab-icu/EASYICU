@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pyricu"
+name = "easyicu"
 version = "0.2.0"
 description = "Python toolkit for working with ICU datasets inspired by the R ricu package."
 readme = "README.md"
@@ -45,18 +45,18 @@ webapp = [
   "scipy>=1.10"
 ]
 all = [
-  "pyricu[dev,viz,webapp]"
+  "easyicu[dev,viz,webapp]"
 ]
 
 [project.scripts]
-pyricu = "pyricu.scripts.extract_features:main"
-pyricu-webapp = "pyricu.webapp:run_app"
+easyicu = "easyicu.scripts.extract_features:main"
+easyicu-webapp = "easyicu.webapp:run_app"
 
 [project.urls]
-Homepage = "https://github.com/shen-lab-icu/pyricu"
-Repository = "https://github.com/shen-lab-icu/pyricu.git"
-Issues = "https://github.com/shen-lab-icu/pyricu/issues"
-Documentation = "https://github.com/shen-lab-icu/pyricu/blob/main/README.md"
+Homepage = "https://github.com/shen-lab-icu/easyicu"
+Repository = "https://github.com/shen-lab-icu/easyicu.git"
+Issues = "https://github.com/shen-lab-icu/easyicu/issues"
+Documentation = "https://github.com/shen-lab-icu/easyicu/blob/main/README.md"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -65,4 +65,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-pyricu = ["data/*.json"]
+easyicu = ["data/*.json"]

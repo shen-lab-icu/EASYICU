@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""PyRICU 快速上手示例。
+"""EasyICU 快速上手示例。
 
-最简化的演示脚本，展示如何在几行代码内使用 PyRICU。
+最简化的演示脚本，展示如何在几行代码内使用 EasyICU。
 """
 
 import sys
@@ -17,7 +17,7 @@ print("=" * 60)
 print("示例 1: 加载 ICU 数据")
 print("=" * 60)
 
-from pyricu import load_concepts
+from easyicu import load_concepts
 
 # 定义数据路径（请修改为您的实际路径）
 DATA_PATH = "/home/zhuhb/project/ricu_to_python/ricu_data/miiv"
@@ -43,7 +43,7 @@ print("示例 2: 绘制时序图")
 print("=" * 60)
 
 try:
-    from pyricu.visualization import plot_timeline
+    from easyicu.visualization import plot_timeline
     
     # 获取一个患者 ID
     hr_df = data['hr']
@@ -66,7 +66,7 @@ try:
 
 except ImportError as e:
     print(f"⚠️ 可视化依赖未安装: {e}")
-    print("   请运行: pip install pyricu[viz]")
+    print("   请运行: pip install easyicu[viz]")
 
 
 # ============================================================
@@ -77,7 +77,7 @@ print("示例 3: 绘制 SOFA 分解图")
 print("=" * 60)
 
 try:
-    from pyricu.visualization import plot_sofa_breakdown
+    from easyicu.visualization import plot_sofa_breakdown
     
     if 'sofa' in data and patient_id:
         sofa_df = data['sofa']
@@ -101,7 +101,7 @@ print("示例 4: 生成患者仪表盘")
 print("=" * 60)
 
 try:
-    from pyricu.visualization import PatientDashboard
+    from easyicu.visualization import PatientDashboard
     
     if patient_id:
         print(f"\n为患者 {patient_id} 生成综合仪表盘...")
