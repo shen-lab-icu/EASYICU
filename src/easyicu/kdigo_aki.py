@@ -99,50 +99,50 @@ def kdigo_creatinine(
             df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
     
     # Calculate rolling minimum creatinine for 48h and 7 days
-    results = []
+    # Vectorized: use searchsorted for O(N log N) window boundaries per patient
     
-    # Detect time unit for numeric time columns
+    # Detect time unit and convert to hours for uniform processing
     time_unit = _detect_time_unit(df[time_col])
     logger.debug(f"Creatinine baseline calculation using time unit: {time_unit}")
     
-    for patient_id, group in df.groupby(id_col):
-        group = group.sort_values(time_col).copy()
-        
-        # Calculate time differences
-        time_vals = group[time_col].values
-        crea_vals = group[value_col].values
-        
-        creat_low_48hr = np.full(len(group), np.nan)
-        creat_low_7day = np.full(len(group), np.nan)
-        
-        for i in range(len(group)):
-            current_time = time_vals[i]
-            
-            # Find measurements in past 48 hours (excluding current)
-            if time_unit == 'datetime':
-                time_diff_hr = (current_time - time_vals[:i]) / np.timedelta64(1, 'h') if i > 0 else np.array([])
-            elif time_unit == 'seconds':
-                # SICdb uses seconds
-                time_diff_hr = (current_time - time_vals[:i]) / 3600 if i > 0 else np.array([])  # Convert to hours
-            else:
-                # Default: minutes
-                time_diff_hr = (current_time - time_vals[:i]) / 60 if i > 0 else np.array([])  # Convert to hours
-            
-            mask_48 = (time_diff_hr > 0) & (time_diff_hr <= 48)
-            mask_7d = (time_diff_hr > 0) & (time_diff_hr <= 168)  # 7 days = 168 hours
-            
-            if i > 0 and mask_48.any():
-                creat_low_48hr[i] = np.nanmin(crea_vals[:i][mask_48])
-            
-            if i > 0 and mask_7d.any():
-                creat_low_7day[i] = np.nanmin(crea_vals[:i][mask_7d])
-        
-        group['creat_low_past_48hr'] = creat_low_48hr
-        group['creat_low_past_7day'] = creat_low_7day
-        
-        results.append(group)
+    if time_unit == 'datetime':
+        ref_time = df[time_col].min()
+        df['_hours'] = (df[time_col] - ref_time) / pd.Timedelta(hours=1)
+    elif time_unit == 'seconds':
+        df['_hours'] = df[time_col].astype(np.float64) / 3600.0
+    else:  # minutes
+        df['_hours'] = df[time_col].astype(np.float64) / 60.0
     
-    result = pd.concat(results, ignore_index=True)
+    creat_low_48hr = np.full(len(df), np.nan)
+    creat_low_7day = np.full(len(df), np.nan)
+    
+    # Process each patient with vectorized operations
+    for _pid, _idx in df.groupby(id_col, sort=False).indices.items():
+        _idx_sorted = _idx[np.argsort(df['_hours'].values[_idx])]
+        hours = df['_hours'].values[_idx_sorted]
+        creas = df[value_col].values[_idx_sorted]
+        n = len(hours)
+        if n < 2:
+            continue
+        # For each i, find the leftmost j where hours[i] - hours[j] <= window
+        # i.e. hours[j] >= hours[i] - window
+        # searchsorted gives first index >= target
+        bounds_48 = np.searchsorted(hours, hours - 48.0, side='left')
+        bounds_7d = np.searchsorted(hours, hours - 168.0, side='left')
+        
+        for i in range(1, n):
+            left_48 = bounds_48[i]
+            if left_48 < i:  # at least one previous measurement in window
+                creat_low_48hr[_idx_sorted[i]] = np.min(creas[left_48:i])
+            left_7d = bounds_7d[i]
+            if left_7d < i:
+                creat_low_7day[_idx_sorted[i]] = np.min(creas[left_7d:i])
+    
+    df['creat_low_past_48hr'] = creat_low_48hr
+    df['creat_low_past_7day'] = creat_low_7day
+    df.drop(columns=['_hours'], inplace=True)
+    
+    result = df
     
     # Calculate AKI stage based on creatinine
     result['aki_stage_creat'] = _calc_aki_stage_creat(
@@ -365,69 +365,70 @@ def _calculate_uo_rates_simple(
         # Default: minutes
         to_minutes_factor = 1.0
     
-    results = []
+    # Vectorized UO rate calculation using cumsum + searchsorted (O(N log N))
+    # Convert time to minutes for uniform window computation
+    urine = urine.copy()
+    if time_unit == 'datetime':
+        _ref = urine[time_col].min()
+        urine['_min'] = (urine[time_col] - _ref) / pd.Timedelta(minutes=1)
+    elif time_unit == 'seconds':
+        urine['_min'] = urine[time_col].astype(np.float64) / 60.0
+    else:
+        urine['_min'] = urine[time_col].astype(np.float64)
     
-    for patient_id, group in urine.groupby(id_col):
-        group = group.sort_values(time_col).copy()
+    # Map weights to each row
+    urine['_wt'] = urine[id_col].map(weight_per_patient)
+    urine['_wt'] = urine['_wt'].fillna(70.0)
+    urine.loc[(urine['_wt'] <= 0) | urine['_wt'].isna(), '_wt'] = 70.0
+    
+    urine[urine_col] = urine[urine_col].astype(np.float64)
+    urine = urine.sort_values([id_col, '_min']).reset_index(drop=True)
+    
+    # Initialize output columns
+    n_total = len(urine)
+    uo_6h = np.full(n_total, np.nan)
+    uo_12h = np.full(n_total, np.nan)
+    uo_24h = np.full(n_total, np.nan)
+    
+    windows_min = np.array([360.0, 720.0, 1440.0])  # 6h, 12h, 24h in minutes
+    
+    # Process each patient with vectorized searchsorted + cumsum
+    for _pid, _idx in urine.groupby(id_col, sort=False).indices.items():
+        _idx_sorted = _idx[np.argsort(urine['_min'].values[_idx])]
+        times_min = urine['_min'].values[_idx_sorted]
+        u_vals = urine[urine_col].values[_idx_sorted]
+        wt = urine['_wt'].values[_idx_sorted[0]]
+        n = len(times_min)
         
-        # Get patient weight
-        pt_weight = weight_per_patient.get(patient_id)
-        if pt_weight is None:
-            pt_weight = weight_per_patient.get(None, 70.0)  # Default weight
+        # Replace NaN with 0 for cumsum, track NaN positions
+        u_clean = np.where(np.isnan(u_vals), 0.0, u_vals)
+        cum = np.concatenate([[0.0], np.cumsum(u_clean)])
+        idx_arr = np.arange(n)
         
-        if pd.isna(pt_weight) or pt_weight <= 0:
-            pt_weight = 70.0  # Default
-        
-        time_vals = group[time_col].values
-        urine_vals = group[urine_col].values
-        
-        n = len(group)
-        uo_6h = np.full(n, np.nan)
-        uo_12h = np.full(n, np.nan)
-        uo_24h = np.full(n, np.nan)
-        
-        for i in range(n):
-            current_time = time_vals[i]
+        for w_idx in range(3):
+            window = windows_min[w_idx]
+            # For each i, find left boundary: first j where times_min[j] >= times_min[i] - window
+            lefts = np.searchsorted(times_min, times_min - window, side='left')
+            # Clip: only look at j <= i (backward looking)
+            lefts = np.minimum(lefts, idx_arr)
+            # Windowed sum via prefix sum
+            total = cum[idx_arr + 1] - cum[lefts]
+            # Time span in hours (max with 1.0)
+            span_hrs = np.maximum((times_min - times_min[lefts]) / 60.0, 1.0)
+            rates = total / (wt * span_hrs)
             
-            # Calculate time differences in MINUTES
-            if time_unit == 'datetime':
-                time_diffs_min = (current_time - time_vals[:i+1]) / np.timedelta64(1, 'm')
+            if w_idx == 0:
+                uo_6h[_idx_sorted] = rates
+            elif w_idx == 1:
+                uo_12h[_idx_sorted] = rates
             else:
-                # Numeric time (either seconds or minutes)
-                time_diffs_raw = current_time - time_vals[:i+1]
-                time_diffs_min = time_diffs_raw * to_minutes_factor
-            
-            # 6-hour window (0 to 360 minutes)
-            mask_6h = (time_diffs_min >= 0) & (time_diffs_min < 360)
-            if mask_6h.any():
-                total_urine_6h = np.nansum(urine_vals[:i+1][mask_6h])
-                hours_6h = max(time_diffs_min[mask_6h].max() / 60, 1.0)  # At least 1 hour
-                uo_6h[i] = total_urine_6h / (pt_weight * hours_6h)
-            
-            # 12-hour window (0 to 720 minutes)
-            mask_12h = (time_diffs_min >= 0) & (time_diffs_min < 720)
-            if mask_12h.any():
-                total_urine_12h = np.nansum(urine_vals[:i+1][mask_12h])
-                hours_12h = max(time_diffs_min[mask_12h].max() / 60, 1.0)
-                uo_12h[i] = total_urine_12h / (pt_weight * hours_12h)
-            
-            # 24-hour window (0 to 1440 minutes)
-            mask_24h = (time_diffs_min >= 0) & (time_diffs_min < 1440)
-            if mask_24h.any():
-                total_urine_24h = np.nansum(urine_vals[:i+1][mask_24h])
-                hours_24h = max(time_diffs_min[mask_24h].max() / 60, 1.0)
-                uo_24h[i] = total_urine_24h / (pt_weight * hours_24h)
-        
-        group['uo_rt_6hr'] = uo_6h
-        group['uo_rt_12hr'] = uo_12h
-        group['uo_rt_24hr'] = uo_24h
-        
-        results.append(group[[id_col, time_col, 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr']])
+                uo_24h[_idx_sorted] = rates
     
-    if not results:
-        return pd.DataFrame()
+    urine['uo_rt_6hr'] = uo_6h
+    urine['uo_rt_12hr'] = uo_12h
+    urine['uo_rt_24hr'] = uo_24h
     
-    return pd.concat(results, ignore_index=True)
+    return urine[[id_col, time_col, 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr']]
 
 
 def _calc_aki_stage_uo(
@@ -555,7 +556,7 @@ def kdigo_stages(
                 how='left'
             )
             # RRT = Stage 3
-            rrt_mask = result['rrt'].fillna(False).astype(bool)
+            rrt_mask = result['rrt'].fillna(False).infer_objects(copy=False).astype(bool)
             result.loc[rrt_mask, 'aki_stage_creat'] = np.maximum(
                 result.loc[rrt_mask, 'aki_stage_creat'].fillna(0), 3
             )
