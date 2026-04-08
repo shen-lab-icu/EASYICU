@@ -12527,6 +12527,7 @@ def _subprocess_load_module(concepts, database, data_path, patient_ids_filter,
     """
     import os, sys, json
     os.environ.setdefault('EASYICU_DATA_PATH', os.environ.get('EASYICU_DATA_PATH', ''))
+    os.environ.setdefault('EASYICU_DUCKDB_THREADS', '4')
     # 确保能导入 easyicu
     _src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '')
     if _src not in sys.path:
@@ -12563,17 +12564,399 @@ def _subprocess_load_module(concepts, database, data_path, patient_ids_filter,
         json.dump(saved, f)
 
 
+def _subprocess_load_and_export_module(concepts, database, data_path,
+                                       patient_ids_filter, batch_size,
+                                       export_dir, export_format, group_name,
+                                       cohort_exclude_ids, overwrite,
+                                       cohort_suffix, dep_concepts_to_cache,
+                                       deps_cache_dir):
+    """在子进程中完成 load + merge + export 全部工作。
+    
+    主进程不接触任何 DataFrame，彻底消除 pymalloc arena 碎片在主进程中的累积。
+    子进程退出后 OS 完整回收所有内存。
+    
+    返回: 通过 _manifest.json 传回元数据 (exported_file, patient_ids, concepts, rows, empty_concepts)
+    """
+    import os, sys, json, shutil
+    os.environ.setdefault('EASYICU_DATA_PATH', os.environ.get('EASYICU_DATA_PATH', ''))
+    _src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '')
+    if _src not in sys.path:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    import numpy as np
+    import pandas as pd
+    from easyicu import load_concepts as _lc
+    
+    # 限制 DuckDB 线程数，避免在多核服务器上创建数百线程
+    os.environ.setdefault('EASYICU_DUCKDB_THREADS', '4')
+    
+    # ── 1. 加载概念 ──
+    kwargs = dict(
+        data_path=data_path, database=database,
+        concepts=concepts, verbose=False, merge=False, concept_workers=1,
+    )
+    if patient_ids_filter:
+        kwargs['patient_ids'] = patient_ids_filter
+    if batch_size:
+        kwargs['batch_size'] = batch_size
+    
+    result = _lc(**kwargs)
+    
+    concept_dfs = {}
+    if isinstance(result, dict):
+        for c, df in result.items():
+            if hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                df = df.data
+            elif hasattr(df, 'to_pandas'):
+                df = df.to_pandas()
+            if isinstance(df, pd.DataFrame) and len(df) > 0:
+                concept_dfs[c] = df
+    
+    # 缓存特殊概念依赖的 parquet（供 AKI/CircFailure 子进程复用）
+    if deps_cache_dir and dep_concepts_to_cache:
+        os.makedirs(deps_cache_dir, exist_ok=True)
+        for cname, cdf in concept_dfs.items():
+            if cname in dep_concepts_to_cache:
+                try:
+                    cdf.to_parquet(os.path.join(deps_cache_dir, f"{cname}.parquet"), index=False)
+                except Exception:
+                    pass
+    
+    empty_concepts = [c for c in concepts if c not in concept_dfs]
+    
+    # ── 2. 应用 cohort filter ──
+    if cohort_exclude_ids:
+        id_cands = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid',
+                     'admissionid', 'patientid', 'CaseID']
+        for cname, df in list(concept_dfs.items()):
+            for idc in id_cands:
+                if idc in df.columns:
+                    concept_dfs[cname] = df[~df[idc].isin(cohort_exclude_ids)].copy()
+                    break
+    
+    if not concept_dfs:
+        # 无数据 → 写空 manifest
+        with open(os.path.join(export_dir, f'_manifest_{group_name}.json'), 'w') as f:
+            json.dump({'exported_file': None, 'patient_ids': [], 'concepts': [],
+                       'rows': 0, 'empty_concepts': empty_concepts}, f)
+        return
+    
+    # ── 3. 合并宽表 (从 _export_module_to_disk 提取的核心逻辑) ──
+    id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid',
+                     'admissionid', 'patientid', 'CaseID']
+    time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime',
+                       'itemtime', 'Offset', 'measuredat_minutes', 'measuredat']
+    unified_time_col = 'charttime'
+    
+    # 统一时间列名称
+    for cname in list(concept_dfs.keys()):
+        cdf = concept_dfs[cname].copy()
+        if unified_time_col in cdf.columns:
+            other_time_cols = [tc for tc in time_candidates
+                               if tc in cdf.columns and tc != unified_time_col]
+            if other_time_cols:
+                cdf = cdf.drop(columns=other_time_cols)
+        else:
+            for tc in time_candidates:
+                if tc in cdf.columns:
+                    cdf = cdf.rename(columns={tc: unified_time_col})
+                    other_time_cols = [t for t in time_candidates
+                                       if t in cdf.columns and t != unified_time_col]
+                    if other_time_cols:
+                        cdf = cdf.drop(columns=other_time_cols)
+                    break
+        concept_dfs[cname] = cdf
+    
+    # 确定主键列
+    merge_cols = []
+    _id_col = None
+    _time_col = None
+    potential_id_cols = set()
+    potential_time_cols = set()
+    for cdf in concept_dfs.values():
+        for col in id_candidates:
+            if col in cdf.columns:
+                potential_id_cols.add(col)
+                break
+        for col in time_candidates:
+            if col in cdf.columns:
+                potential_time_cols.add(col)
+                break
+    for col in id_candidates:
+        if col in potential_id_cols:
+            _id_col = col
+            merge_cols.append(col)
+            break
+    for col in time_candidates:
+        if col in potential_time_cols:
+            _time_col = col
+            merge_cols.append(col)
+            break
+    
+    if not merge_cols:
+        all_dfs = []
+        for cname, cdf in concept_dfs.items():
+            cdf = cdf.copy()
+            cdf['_concept'] = cname
+            all_dfs.append(cdf)
+        merged_df = pd.concat(all_dfs, ignore_index=True)
+    else:
+        all_concept_dfs = []
+        for concept_name, df in concept_dfs.items():
+            if _id_col and _id_col not in df.columns:
+                continue
+            metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type']
+            cols_to_drop = [c for c in df.columns if c in metadata_cols]
+            if cols_to_drop:
+                df = df.drop(columns=cols_to_drop)
+            value_cols = [c for c in df.columns if c not in merge_cols]
+            df_to_add = df.copy()
+            if len(value_cols) == 1:
+                df_to_add = df_to_add.rename(columns={value_cols[0]: concept_name})
+            elif len(value_cols) > 1:
+                if concept_name in value_cols:
+                    keep_val_cols = [concept_name]
+                else:
+                    keep_val_cols = value_cols
+                cols_to_keep = merge_cols + keep_val_cols
+                df_to_add = df_to_add[[c for c in cols_to_keep if c in df_to_add.columns]]
+                remaining_val_cols = [c for c in df_to_add.columns if c not in merge_cols]
+                if len(remaining_val_cols) == 1 and remaining_val_cols[0] != concept_name:
+                    df_to_add = df_to_add.rename(columns={remaining_val_cols[0]: concept_name})
+                elif len(remaining_val_cols) > 1:
+                    rename_map = {}
+                    for c in remaining_val_cols:
+                        if c != concept_name and not c.startswith(f"{concept_name}_"):
+                            rename_map[c] = f"{concept_name}_{c}"
+                    if rename_map:
+                        df_to_add = df_to_add.rename(columns=rename_map)
+            for mc in merge_cols:
+                if mc not in df_to_add.columns:
+                    if mc in {'charttime', 'time', 'starttime', 'endtime', 'itemtime'}:
+                        df_to_add[mc] = 0.0
+                    else:
+                        df_to_add[mc] = np.nan
+            keep_cols = merge_cols + [c for c in df_to_add.columns if c not in merge_cols]
+            all_concept_dfs.append(df_to_add[keep_cols])
+        
+        if len(all_concept_dfs) == 0:
+            merged_df = pd.DataFrame(columns=merge_cols + list(concept_dfs.keys()))
+        elif len(all_concept_dfs) == 1:
+            merged_df = all_concept_dfs[0]
+        else:
+            # 确保 merge_cols 数值类型一致
+            time_related_cols = {'charttime', 'time', 'starttime', 'endtime', 'itemtime'}
+            id_related_cols = set(id_candidates)
+            for i, df in enumerate(all_concept_dfs):
+                for col in merge_cols:
+                    if col in df.columns:
+                        col_dtype = df[col].dtype
+                        if col in time_related_cols:
+                            if col_dtype == 'object' or not pd.api.types.is_numeric_dtype(col_dtype):
+                                all_concept_dfs[i][col] = pd.to_numeric(df[col], errors='coerce')
+                        elif col in id_related_cols:
+                            if col_dtype == 'object':
+                                all_concept_dfs[i][col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+                            elif pd.api.types.is_numeric_dtype(col_dtype):
+                                all_concept_dfs[i][col] = df[col].astype('Int64')
+                        else:
+                            if col_dtype == 'object':
+                                all_concept_dfs[i][col] = pd.to_numeric(df[col], errors='coerce')
+            
+            for i, df in enumerate(all_concept_dfs):
+                for col in merge_cols:
+                    if col in time_related_cols and pd.api.types.is_float_dtype(df[col]):
+                        all_concept_dfs[i][col] = df[col].round(2)
+            
+            total_rows_sum = sum(len(df) for df in all_concept_dfs)
+            use_fast_path = (total_rows_sum < 2_000_000)
+            
+            if use_fast_path:
+                try:
+                    processed_dfs = []
+                    static_dfs = []
+                    _empty_local = []
+                    for df in all_concept_dfs:
+                        df_temp = df.copy()
+                        val_cols = [c for c in df_temp.columns if c not in merge_cols]
+                        if not val_cols:
+                            continue
+                        is_static = False
+                        if _time_col and _time_col in df_temp.columns:
+                            if df_temp[_time_col].isna().all():
+                                is_static = True
+                        if is_static:
+                            if _id_col and _id_col in df_temp.columns:
+                                static_cols = [_id_col] + val_cols
+                                static_df = df_temp[static_cols].drop_duplicates(subset=[_id_col], keep='last')
+                                static_dfs.append(static_df)
+                        else:
+                            df_temp = df_temp.drop_duplicates(subset=merge_cols, keep='last')
+                            for value_col in val_cols:
+                                if len(df_temp) == 0:
+                                    _empty_local.append(value_col)
+                                    continue
+                                single_val_df = df_temp[merge_cols + [value_col]].copy()
+                                single_val_df['_concept'] = str(value_col)
+                                single_val_df['_value'] = single_val_df[value_col]
+                                single_val_df.drop(columns=[value_col], inplace=True)
+                                processed_dfs.append(single_val_df)
+                    
+                    if not processed_dfs and not static_dfs:
+                        merged_df = pd.DataFrame(columns=merge_cols + list(concept_dfs.keys()))
+                    else:
+                        if processed_dfs:
+                            stacked = pd.concat(processed_dfs, ignore_index=True)
+                            merged_df = stacked.pivot_table(
+                                index=merge_cols, columns='_concept',
+                                values='_value', aggfunc='first'
+                            ).reset_index()
+                            for ec in _empty_local:
+                                if ec not in merged_df.columns:
+                                    merged_df[ec] = np.nan
+                        else:
+                            merged_df = None
+                        if static_dfs:
+                            from functools import reduce
+                            static_merged = reduce(
+                                lambda left, right: pd.merge(left, right, on=_id_col, how='outer'),
+                                static_dfs
+                            )
+                            if merged_df is not None and _id_col in merged_df.columns:
+                                merged_df = pd.merge(merged_df, static_merged, on=_id_col, how='left')
+                            else:
+                                merged_df = static_merged
+                except Exception:
+                    use_fast_path = False
+            
+            if not use_fast_path:
+                if len(all_concept_dfs) > 10:
+                    _batch_sz = 5
+                    batches = []
+                    for i in range(0, len(all_concept_dfs), _batch_sz):
+                        batch = all_concept_dfs[i:i+_batch_sz]
+                        from functools import reduce
+                        try:
+                            batch_merged = reduce(
+                                lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                                batch
+                            )
+                            if len(batch_merged) > 0:
+                                batch_merged = batch_merged.drop_duplicates(subset=merge_cols)
+                            batches.append(batch_merged)
+                        except Exception:
+                            continue
+                    if not batches:
+                        merged_df = pd.DataFrame(columns=merge_cols + list(concept_dfs.keys()))
+                    else:
+                        merged_df = reduce(
+                            lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                            batches
+                        )
+                else:
+                    from functools import reduce
+                    merged_df = reduce(
+                        lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                        all_concept_dfs
+                    )
+                if merged_df is not None and len(merged_df) > 0:
+                    merged_df = merged_df.drop_duplicates(subset=merge_cols)
+    
+    if merged_df is None or len(merged_df) == 0:
+        merged_df = pd.DataFrame(columns=merge_cols + list(concept_dfs.keys()))
+    
+    # ── 4. 生成文件名并写入 ──
+    concept_names_sorted = sorted(list(concept_dfs.keys()))
+    if len(concept_names_sorted) <= 5:
+        concepts_suffix = '_'.join(concept_names_sorted)
+    else:
+        concepts_suffix = '_'.join(concept_names_sorted[:4]) + f'_etc{len(concept_names_sorted)}'
+    if cohort_suffix:
+        safe_filename = f"{group_name}_{concepts_suffix}_{cohort_suffix}".replace('/', '_').replace('\\', '_')
+    else:
+        safe_filename = f"{group_name}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
+    if len(safe_filename) > 150:
+        safe_filename = safe_filename[:150]
+    
+    if export_format == 'csv':
+        file_path = os.path.join(export_dir, f"{safe_filename}.csv")
+    elif export_format == 'parquet':
+        file_path = os.path.join(export_dir, f"{safe_filename}.parquet")
+    elif export_format == 'excel':
+        file_path = os.path.join(export_dir, f"{safe_filename}.xlsx")
+    else:
+        file_path = os.path.join(export_dir, f"{safe_filename}.parquet")
+    
+    # 覆盖模式: 删除旧文件
+    if overwrite:
+        import glob
+        for ext in ['.parquet', '.csv', '.xlsx']:
+            for old_file in glob.glob(os.path.join(export_dir, f"{group_name}_*{ext}")):
+                try:
+                    os.unlink(old_file)
+                except Exception:
+                    pass
+    
+    # 收集患者ID
+    patient_ids_list = []
+    if len(merged_df) > 0:
+        for _idc in id_candidates:
+            if _idc in merged_df.columns:
+                patient_ids_list = merged_df[_idc].dropna().unique().tolist()
+                break
+    
+    # 写入文件
+    if export_format == 'csv':
+        merged_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+    elif export_format == 'parquet':
+        for col in merged_df.columns:
+            if merged_df[col].dtype == object:
+                numeric_vals = pd.to_numeric(merged_df[col], errors='coerce')
+                orig_valid = merged_df[col].notna().sum()
+                if orig_valid > 0 and numeric_vals.notna().sum() >= orig_valid * 0.5:
+                    merged_df[col] = numeric_vals
+                else:
+                    merged_df[col] = merged_df[col].astype(str)
+        merged_df.to_parquet(file_path, index=False)
+    elif export_format == 'excel':
+        merged_df.to_excel(file_path, index=False)
+    else:
+        for col in merged_df.columns:
+            if merged_df[col].dtype == object:
+                numeric_vals = pd.to_numeric(merged_df[col], errors='coerce')
+                orig_valid = merged_df[col].notna().sum()
+                if orig_valid > 0 and numeric_vals.notna().sum() >= orig_valid * 0.5:
+                    merged_df[col] = numeric_vals
+                else:
+                    merged_df[col] = merged_df[col].astype(str)
+        merged_df.to_parquet(file_path, index=False)
+    
+    n_rows = len(merged_df)
+    
+    # ── 5. 写 manifest (metadata only) ──
+    manifest = {
+        'exported_file': file_path,
+        'patient_ids': [int(x) if not np.isnan(x) else None for x in patient_ids_list] if patient_ids_list else [],
+        'concepts': list(concept_dfs.keys()),
+        'rows': n_rows,
+        'empty_concepts': empty_concepts,
+    }
+    with open(os.path.join(export_dir, f'_manifest_{group_name}.json'), 'w') as f:
+        json.dump(manifest, f)
+
+
 def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
-                             max_patients, output_dir):
+                             max_patients, output_dir, preloaded_parquet_dir=None):
     """在子进程中加载特殊概念（AKI, CircFailure 等），结果写入 parquet。
     
-    优化: 先预加载所有依赖概念(crea/urine/weight/rrt/lact/map/norepi_rate等)一次，
-    再传给 AKI/CircFailure 计算函数，避免重复磁盘读取。
+    优化: 优先从 preloaded_parquet_dir 读取已导出的依赖概念 parquet 文件，
+    避免重复从数据库加载。仅缺失的依赖概念才从数据库加载。
     """
     import os, sys, json
     _src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '')
     if _src not in sys.path:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    os.environ.setdefault('EASYICU_DUCKDB_THREADS', '4')
     
     import pandas as pd
     from easyicu.api import load_concepts as _lc
@@ -12594,12 +12977,25 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
         all_deps.extend(circ_deps)
     all_deps = list(dict.fromkeys(all_deps))  # dedupe preserving order
     
-    # 批量预加载所有依赖概念（单次 load_concepts 调用）
+    # 1) 优先从已导出的 parquet 文件读取依赖概念（零数据库开销）
     preloaded = {}
-    if all_deps:
+    if preloaded_parquet_dir and os.path.isdir(preloaded_parquet_dir):
+        for dep in all_deps:
+            pq_path = os.path.join(preloaded_parquet_dir, f"{dep}.parquet")
+            if os.path.exists(pq_path):
+                try:
+                    df = pd.read_parquet(pq_path)
+                    if not df.empty:
+                        preloaded[dep] = df
+                except Exception:
+                    pass
+    
+    # 2) 仅加载缺失的依赖概念（从数据库）
+    missing_deps = [d for d in all_deps if d not in preloaded]
+    if missing_deps:
         load_kwargs = dict(
             data_path=data_path, database=database,
-            concepts=all_deps, verbose=False, merge=False, concept_workers=1,
+            concepts=missing_deps, verbose=False, merge=False, concept_workers=1,
         )
         if patient_ids_filter:
             load_kwargs['patient_ids'] = patient_ids_filter
@@ -13788,6 +14184,16 @@ def execute_sidebar_export():
                 # 模块级别耗时累计（用于动态ETA计算）
                 _module_elapsed_list = []
                 
+                # 🚀 优化: 缓存特殊概念(AKI/CircFailure)的依赖概念 parquet
+                # 在主模块循环中保存，避免特殊概念子进程重新从数据库加载
+                _special_dep_concepts = {'crea', 'urine', 'weight', 'rrt',
+                                         'lact', 'map', 'norepi_rate', 'epi_rate',
+                                         'dobu_rate', 'dopa_rate'}
+                _deps_cache_dir = None
+                if special_concepts_to_load:
+                    import tempfile as _tmpf_deps
+                    _deps_cache_dir = _tmpf_deps.mkdtemp(prefix='easyicu_deps_')
+                
                 for mod_idx, mod_key in enumerate(ordered_modules):
                     mod_concepts = module_concept_map[mod_key]
                     mod_display = CONCEPT_GROUP_NAMES.get(mod_key, (mod_key, mod_key))
@@ -13829,104 +14235,88 @@ def execute_sidebar_export():
                     status_text.markdown(status_msg)
                     
                     # 批量加载整个模块
-                    # 🔧 FIX (Bug 48): 使用子进程隔离，防止 pymalloc arena 碎片跨模块累积
-                    # 实测: inprocess 17模块 RSS 247→7481MB; subprocess RSS 130→164MB (98%↓)
+                    # 🔧 FIX (Bug 52): load + merge + export 全部在子进程内完成
+                    # 主进程不接触任何 DataFrame，彻底消除 pymalloc arena 碎片累积
+                    # 实测: 旧方案 MIIV 94K × 19模块 RSS 661GB; 新方案主进程 RSS 近零增长
                     mod_start = _time_mod.time()
                     
-                    try:
-                        import multiprocessing as _mp_mod
-                        import tempfile as _tmpf_mod
-                        import json as _json_mod
-                        
-                        _tmp_dir = _tmpf_mod.mkdtemp(prefix='easyicu_mod_')
-                        
-                        _sub_proc = _mp_mod.Process(
-                            target=_subprocess_load_module,
-                            args=(mod_concepts, database,
-                                  st.session_state.data_path,
-                                  patient_ids_filter,
-                                  _auto_batch_size, _tmp_dir),
-                            daemon=True
-                        )
-                        _sub_proc.start()
-                        
-                        # 主线程每2秒发送UI更新 → 保活WebSocket连接
-                        _keepalive_tick = 0
-                        while _sub_proc.is_alive():
-                            _sub_proc.join(timeout=2)
-                            _keepalive_tick += 1
-                            _mod_elapsed = _time_mod.time() - mod_start
-                            _spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_keepalive_tick % 10]
-                            if lang == 'en':
-                                _alive_msg = (
-                                    f"{_spinner} **Loading {mod_name}** ({len(mod_concepts)} concepts, "
-                                    f"module {mod_idx+1}/{total_modules}, elapsed {_mod_elapsed:.0f}s){eta_str}"
-                                )
-                            else:
-                                _alive_msg = (
-                                    f"{_spinner} **正在加载 {mod_name}** ({len(mod_concepts)} 个概念, "
-                                    f"模块 {mod_idx+1}/{total_modules}, 已用 {_mod_elapsed:.0f}s){eta_str}"
-                                )
-                            status_text.markdown(_alive_msg)
-                        
-                        if _sub_proc.exitcode != 0:
-                            raise RuntimeError(f"Subprocess exited with code {_sub_proc.exitcode}")
-                        
-                        # 读取子进程结果（只有干净的 parquet 数据进入主进程，无碎片）
-                        _manifest_path = os.path.join(_tmp_dir, '_manifest.json')
-                        if os.path.exists(_manifest_path):
-                            with open(_manifest_path) as _mf:
-                                _saved = _json_mod.load(_mf)
-                            for _cname, _ppath in _saved.items():
-                                data[_cname] = pd.read_parquet(_ppath)
-                        
-                        # 未产出数据的概念加入 empty_concepts
-                        for _cname in mod_concepts:
-                            if _cname not in data:
-                                if _cname not in empty_concepts:
-                                    empty_concepts.append(_cname)
-                        
-                        # 清理临时目录
-                        import shutil as _shutil_mod
-                        _shutil_mod.rmtree(_tmp_dir, ignore_errors=True)
-                    
-                    except Exception:
-                        # 子进程失败 → 逐概念回退（inprocess）
-                        try:
-                            _shutil_mod.rmtree(_tmp_dir, ignore_errors=True)
-                        except Exception:
-                            pass
-                        for concept in mod_concepts:
-                            try:
-                                result = load_concepts(
-                                    data_path=st.session_state.data_path,
-                                    database=database,
-                                    concepts=[concept],
-                                    verbose=False, merge=False, concept_workers=1,
-                                    **(dict(patient_ids=patient_ids_filter) if patient_ids_filter else {})
-                                )
-                                _process_result(result, [concept])
-                            except Exception:
-                                failed_concepts.append(concept)
-                    
-                    mod_time = _time_mod.time() - mod_start
-                    _module_elapsed_list.append(mod_time)
-                    _module_load_times[mod_key] = mod_time  # 记录加载耗时，后续合并到module_times
-                    
-                    # 更新进度条（加载 = 前80%，导出穿插在加载中）
-                    progress_bar.progress(0.15 + 0.65 * (mod_idx + 1) / _total_steps)
-                    
-                    # ──────────────────────────────────────────
-                    # 🚀 流式导出: 加载完立即导出 → 释放内存
-                    # ──────────────────────────────────────────
                     _loaded_mod_keys.add(mod_key)
                     
-                    if _has_cohort_filter and not _cohort_filter_computed:
-                        # 需要 cohort filter，但还没计算 → 先缓冲
+                    # 判断是否需要走旧路径（cohort filter 需要读回数据计算 exclude_ids）
+                    _need_buffered_load = (
+                        _has_cohort_filter and not _cohort_filter_computed
+                        and mod_key in _cohort_filter_modules
+                    )
+                    
+                    if _need_buffered_load:
+                        # ── cohort filter 必需模块: 旧路径（读回小量数据） ──
+                        try:
+                            import multiprocessing as _mp_mod
+                            import tempfile as _tmpf_mod
+                            import json as _json_mod
+                            
+                            _tmp_dir = _tmpf_mod.mkdtemp(prefix='easyicu_mod_')
+                            
+                            _sub_proc = _mp_mod.Process(
+                                target=_subprocess_load_module,
+                                args=(mod_concepts, database,
+                                      st.session_state.data_path,
+                                      patient_ids_filter,
+                                      _auto_batch_size, _tmp_dir),
+                                daemon=True
+                            )
+                            _sub_proc.start()
+                            
+                            _keepalive_tick = 0
+                            while _sub_proc.is_alive():
+                                _sub_proc.join(timeout=2)
+                                _keepalive_tick += 1
+                                _mod_elapsed = _time_mod.time() - mod_start
+                                _spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_keepalive_tick % 10]
+                                _alive_msg = (
+                                    f"{_spinner} **{'Loading' if lang == 'en' else '正在加载'} {mod_name}** "
+                                    f"({len(mod_concepts)} {'concepts' if lang == 'en' else '个概念'}, "
+                                    f"{'module' if lang == 'en' else '模块'} {mod_idx+1}/{total_modules}, "
+                                    f"{'elapsed' if lang == 'en' else '已用'} {_mod_elapsed:.0f}s){eta_str}"
+                                )
+                                status_text.markdown(_alive_msg)
+                            
+                            if _sub_proc.exitcode != 0:
+                                raise RuntimeError(f"Subprocess exited with code {_sub_proc.exitcode}")
+                            
+                            _manifest_path = os.path.join(_tmp_dir, '_manifest.json')
+                            if os.path.exists(_manifest_path):
+                                with open(_manifest_path) as _mf:
+                                    _saved = _json_mod.load(_mf)
+                                for _cname, _ppath in _saved.items():
+                                    data[_cname] = pd.read_parquet(_ppath)
+                            
+                            for _cname in mod_concepts:
+                                if _cname not in data and _cname not in empty_concepts:
+                                    empty_concepts.append(_cname)
+                            
+                            import shutil as _shutil_mod
+                            _shutil_mod.rmtree(_tmp_dir, ignore_errors=True)
+                        except Exception:
+                            try:
+                                _shutil_mod.rmtree(_tmp_dir, ignore_errors=True)
+                            except Exception:
+                                pass
+                            for concept in mod_concepts:
+                                try:
+                                    result = load_concepts(
+                                        data_path=st.session_state.data_path,
+                                        database=database, concepts=[concept],
+                                        verbose=False, merge=False, concept_workers=1,
+                                        **(dict(patient_ids=patient_ids_filter) if patient_ids_filter else {})
+                                    )
+                                    _process_result(result, [concept])
+                                except Exception:
+                                    failed_concepts.append(concept)
+                        
                         _buffered_mod_keys.append(mod_key)
                         
                         # 检查是否可以计算 cohort filter 了
-                        # 条件: demographics + outcome 都已加载, 或者这是最后一个模块
                         _filter_ready = (
                             _cohort_filter_modules.issubset(_loaded_mod_keys)
                             or mod_idx == len(ordered_modules) - 1
@@ -13935,7 +14325,7 @@ def execute_sidebar_export():
                             _cohort_exclude_ids = _compute_cohort_exclude_ids_inline()
                             _cohort_filter_computed = True
                             
-                            # 导出所有缓冲的模块
+                            # 导出所有缓冲的模块（demographics/outcome 数据量小，主进程处理可接受）
                             for _buf_key in _buffered_mod_keys:
                                 _buf_concepts = module_concept_map.get(_buf_key, [])
                                 _buf_dfs = {c: data[c] for c in _buf_concepts if c in data}
@@ -13948,32 +14338,115 @@ def execute_sidebar_export():
                                         import traceback as _tb_mod
                                         _tb_mod.print_exc()
                                         st.warning(f"⚠️ Export failed for module '{_buf_key}': {_exp_e}")
-                                    # 释放已导出模块的数据
                                     for c in _buf_concepts:
                                         data.pop(c, None)
                             _buffered_mod_keys.clear()
                     else:
-                        # 无 cohort filter 或已计算完 → 立即导出当前模块
+                        # ── 正常路径: load + merge + export 全部在子进程内完成 ──
+                        # 主进程不接触任何 DataFrame，子进程退出后 OS 完整回收所有内存
                         if not _cohort_filter_computed and not _has_cohort_filter:
-                            _cohort_filter_computed = True  # 标记无需 filter
+                            _cohort_filter_computed = True
                         
-                        _cur_dfs = {c: data[c] for c in mod_concepts if c in data}
-                        if _cur_dfs:
-                            _cur_dfs = _apply_cohort_filter_to_dfs(_cur_dfs, _cohort_exclude_ids)
-                            try:
-                                _export_module_to_disk(mod_key, _cur_dfs, _export_step_counter, _total_steps)
+                        try:
+                            import multiprocessing as _mp_mod
+                            import json as _json_mod
+                            
+                            _overwrite_this = (mod_key in overwrite_modules or is_viz_import_mode)
+                            
+                            _sub_proc = _mp_mod.Process(
+                                target=_subprocess_load_and_export_module,
+                                args=(mod_concepts, database,
+                                      st.session_state.data_path,
+                                      patient_ids_filter, _auto_batch_size,
+                                      str(export_dir), export_format, mod_key,
+                                      list(_cohort_exclude_ids) if _cohort_exclude_ids else None,
+                                      _overwrite_this, cohort_suffix,
+                                      _special_dep_concepts if _deps_cache_dir else None,
+                                      _deps_cache_dir),
+                                daemon=True
+                            )
+                            _sub_proc.start()
+                            
+                            _keepalive_tick = 0
+                            while _sub_proc.is_alive():
+                                _sub_proc.join(timeout=2)
+                                _keepalive_tick += 1
+                                _mod_elapsed = _time_mod.time() - mod_start
+                                _spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_keepalive_tick % 10]
+                                _alive_msg = (
+                                    f"{_spinner} **{'Loading & exporting' if lang == 'en' else '正在加载并导出'} {mod_name}** "
+                                    f"({len(mod_concepts)} {'concepts' if lang == 'en' else '个概念'}, "
+                                    f"{'module' if lang == 'en' else '模块'} {mod_idx+1}/{total_modules}, "
+                                    f"{'elapsed' if lang == 'en' else '已用'} {_mod_elapsed:.0f}s){eta_str}"
+                                )
+                                status_text.markdown(_alive_msg)
+                            
+                            if _sub_proc.exitcode != 0:
+                                raise RuntimeError(f"Subprocess exited with code {_sub_proc.exitcode}")
+                            
+                            # 读取子进程元数据（不读 DataFrame！主进程零内存增长）
+                            _manifest_path = os.path.join(str(export_dir), f'_manifest_{mod_key}.json')
+                            if os.path.exists(_manifest_path):
+                                with open(_manifest_path) as _mf:
+                                    _meta = _json_mod.load(_mf)
+                                if _meta.get('exported_file'):
+                                    exported_files.append(_meta['exported_file'])
+                                    module_times[mod_key] = _time_mod.time() - mod_start
+                                if _meta.get('patient_ids'):
+                                    all_exported_patient_ids.update(_meta['patient_ids'])
+                                for _ec in _meta.get('empty_concepts', []):
+                                    if _ec not in empty_concepts:
+                                        empty_concepts.append(_ec)
                                 _export_step_counter += 1
-                            except Exception as _exp_e:
-                                import traceback as _tb_mod
-                                _tb_mod.print_exc()
-                                st.warning(f"⚠️ Export failed for module '{mod_key}': {_exp_e}")
-                            # 释放已导出模块的数据
-                            for c in mod_concepts:
-                                data.pop(c, None)
+                                # 清理 manifest 文件
+                                try:
+                                    os.unlink(_manifest_path)
+                                except Exception:
+                                    pass
+                            else:
+                                # 子进程成功但无 manifest → 所有概念为空
+                                for _cname in mod_concepts:
+                                    if _cname not in empty_concepts:
+                                        empty_concepts.append(_cname)
+                        
+                        except Exception as _sub_e:
+                            # 子进程失败 → 逐概念回退（inprocess）
+                            import traceback as _tb_mod
+                            _tb_mod.print_exc()
+                            for concept in mod_concepts:
+                                try:
+                                    result = load_concepts(
+                                        data_path=st.session_state.data_path,
+                                        database=database, concepts=[concept],
+                                        verbose=False, merge=False, concept_workers=1,
+                                        **(dict(patient_ids=patient_ids_filter) if patient_ids_filter else {})
+                                    )
+                                    _process_result(result, [concept])
+                                except Exception:
+                                    failed_concepts.append(concept)
+                            # 回退模式: 用旧方式导出
+                            _cur_dfs = {c: data[c] for c in mod_concepts if c in data}
+                            if _cur_dfs:
+                                _cur_dfs = _apply_cohort_filter_to_dfs(_cur_dfs, _cohort_exclude_ids)
+                                try:
+                                    _export_module_to_disk(mod_key, _cur_dfs, _export_step_counter, _total_steps)
+                                    _export_step_counter += 1
+                                except Exception:
+                                    pass
+                                for c in mod_concepts:
+                                    data.pop(c, None)
+                    
+                    mod_time = _time_mod.time() - mod_start
+                    _module_elapsed_list.append(mod_time)
+                    if mod_key not in module_times:
+                        _module_load_times[mod_key] = mod_time
+                    
+                    # 更新进度条
+                    progress_bar.progress(0.15 + 0.65 * (mod_idx + 1) / _total_steps)
                 
                 progress_bar.progress(0.80)
                 
-                # 🆕 加载特殊概念（AKI, circ_failure等）— 使用子进程隔离（与主模块一致）
+                # 🆕 加载特殊概念（AKI, circ_failure等）— 子进程隔离
                 if special_concepts_to_load:
                     special_msg = f"**Loading special concepts (AKI, CircFailure)...**" if lang == 'en' else f"**正在加载特殊概念 (AKI, 循环衰竭)...**"
                     status_text.markdown(special_msg)
@@ -13992,7 +14465,7 @@ def execute_sidebar_export():
                                   st.session_state.data_path,
                                   patient_ids_filter,
                                   patient_limit if patient_limit and patient_limit > 0 else None,
-                                  _sp_tmp_dir),
+                                  _sp_tmp_dir, _deps_cache_dir),
                             daemon=True
                         )
                         _sp_proc.start()
@@ -14012,41 +14485,36 @@ def execute_sidebar_export():
                         if _sp_proc.exitcode != 0:
                             raise RuntimeError(f"Special concepts subprocess exited with code {_sp_proc.exitcode}")
                         
-                        # 读取子进程结果
+                        # 读取子进程结果 — 特殊概念数据量小，读回主进程可接受
                         _sp_manifest = os.path.join(_sp_tmp_dir, '_manifest.json')
+                        _sp_loaded_concepts = []
                         if os.path.exists(_sp_manifest):
                             with open(_sp_manifest) as _mf:
                                 _sp_saved = _json_mod.load(_mf)
                             for _cname, _ppath in _sp_saved.items():
                                 data[_cname] = pd.read_parquet(_ppath)
+                                _sp_loaded_concepts.append(_cname)
                         
-                        # 记录未成功加载的特殊概念
                         failed_special = [c for c in special_concepts_to_load if c not in data]
                         failed_concepts.extend(failed_special)
                         
                         _special_load_elapsed = _time_mod.time() - _sp_start
                         
-                        # 清理临时目录
                         import shutil as _shutil_mod
                         _shutil_mod.rmtree(_sp_tmp_dir, ignore_errors=True)
+                        if _deps_cache_dir:
+                            _shutil_mod.rmtree(_deps_cache_dir, ignore_errors=True)
+                            _deps_cache_dir = None
                         
-                        # 🚀 流式导出: 特殊概念加载完后也立即导出
-                        _special_loaded_dfs = {}
-                        for cname in special_concepts_to_load:
-                            if cname in data:
-                                _special_loaded_dfs[cname] = data[cname]
+                        # 导出特殊概念（数据量很小，主进程处理可接受）
+                        _special_loaded_dfs = {c: data[c] for c in _sp_loaded_concepts if c in data}
                         if _special_loaded_dfs:
-                            # 按模块分组导出（特殊概念可能属于不同模块）
                             _special_by_group = {}
                             for _sc, _sdf in _special_loaded_dfs.items():
                                 _sg = _concept_to_group_pre.get(_sc, 'other')
                                 if _sg not in _special_by_group:
                                     _special_by_group[_sg] = {}
                                 _special_by_group[_sg][_sc] = _sdf
-                            # 将特殊概念加载时间平均分配到各组
-                            _n_sp_groups = max(1, len(_special_by_group))
-                            for _sg_key in _special_by_group:
-                                _module_load_times[_sg_key] = _module_load_times.get(_sg_key, 0) + _special_load_elapsed / _n_sp_groups
                             for _sg_key, _sg_dfs in _special_by_group.items():
                                 _sg_dfs = _apply_cohort_filter_to_dfs(_sg_dfs, _cohort_exclude_ids)
                                 try:
@@ -14062,6 +14530,12 @@ def execute_sidebar_export():
                     except Exception as special_e:
                         try:
                             _shutil_mod.rmtree(_sp_tmp_dir, ignore_errors=True)
+                        except Exception:
+                            pass
+                        try:
+                            if _deps_cache_dir:
+                                _shutil_mod.rmtree(_deps_cache_dir, ignore_errors=True)
+                                _deps_cache_dir = None
                         except Exception:
                             pass
                         st.warning(f"⚠️ Failed to load special concepts: {special_e}" if lang == 'en' else f"⚠️ 加载特殊概念失败: {special_e}")
