@@ -1117,6 +1117,20 @@ def load_concepts(
     ):
         use_subprocess = True
     
+    # 🔧 FIX Bug 54: daemon 子进程不能创建子进程 (AssertionError)
+    # Webapp 用 daemon=True 启动模块子进程以隔离内存碎片。
+    # 当 load_concepts 在 daemon 子进程内被调用时，subprocess_batch_load 会尝试
+    # multiprocessing.Process.start() → 触发 "daemonic processes are not allowed to have children"。
+    # 导致模块子进程崩溃，全部回退到主进程内逐概念加载，累积 pymalloc 碎片。
+    # 修复: 检测 daemon 进程，强制使用 inprocess 分批（碎片在子进程退出后由 OS 完整回收）。
+    if use_subprocess:
+        try:
+            import multiprocessing as _mp_check
+            if _mp_check.current_process().daemon:
+                use_subprocess = False
+        except Exception:
+            pass
+    
     # 执行分批处理
     if effective_batch_size is not None and _id_col is not None and _all_ids is not None:
         if _total_patients > effective_batch_size:
