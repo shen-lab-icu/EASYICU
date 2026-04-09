@@ -45,6 +45,11 @@ htmlcov/
 .hypothesis/
 .mypy_cache/
 
+# Root-level ad hoc test/benchmark scripts and outputs
+test_*
+/benchmark_*.json
+/benchmark_*.log
+
 # Logs
 logs/
 *.log
@@ -67,7 +72,6 @@ tools/archived
 output
 # 测试文件 - 不上传测试代码
 # test_main.py
-test_sepsis_validation.py
 TEST_SUMMARY.md
 CLEANUP_PLAN.md
 tests/

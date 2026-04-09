@@ -395,9 +395,10 @@ def load_circ_failure(
                     pass
     
     # Normalize time columns to 'charttime' (merge=False returns raw column names
-    # like 'measuredat_minutes' / 'start' that differ from merge=True's 'charttime')
+    # like 'measuredat_minutes' / 'start' / 'starttime' that differ from merge=True's 'charttime')
     _time_aliases = ['measuredat_minutes', 'measuredat', 'datetime',
-                     'observationoffset', 'Offset', 'start']
+                     'observationoffset', 'Offset', 'starttime', 'start',
+                     'givenat', 'enteredentryat']
     for _cname in list(loaded_dfs.keys()):
         _cdf = loaded_dfs[_cname]
         if 'charttime' not in _cdf.columns:

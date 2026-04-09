@@ -1607,6 +1607,8 @@ class ConceptResolver:
 
         for source in sources:
             _convert_unit_callback_for_duckdb = False  # 每个 source 重置
+            use_duckdb_aggregation = False  # 每个 source 重置
+            _idtbl_done = False  # 每个 source 重置
             if source.class_name == "fun_itm":
                 return self._load_fun_item(
                     concept_name,
@@ -1936,6 +1938,7 @@ class ConceptResolver:
                     # 性能提升：MIIV 6 vitals 50 patients 从 545s → ~10s
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                     use_duckdb_aggregation = False
+                    _idtbl_done = False
                     _convert_unit_callback_for_duckdb = False
                     _convert_unit_factor = None
                     _convert_unit_op = None
@@ -2006,6 +2009,127 @@ class ConceptResolver:
                         if _block_duckdb_value_transform and (_is_percent_as_numeric or is_convert_unit or _is_transform_binary_op):
                             # 多源 value_transform：禁止内联，回退到 Python 回调路径
                             _can_inline_callback = not has_callback
+                        # 🚀 id_tbl DuckDB 快速路径：per-patient 聚合（MEDIAN）代替全表加载
+                        # 例如 height/weight 从 chartevents(5.7GB) 只需 ≤500 行
+                        if has_sub_var and _can_inline_callback and _effective_ids and _target == 'id_tbl' and not _skip_db_duckdb:
+                            _idtbl_ids = list(_effective_ids) if hasattr(_effective_ids, '__iter__') else [_effective_ids]
+                            if _idtbl_ids:
+                                try:
+                                    from .datasource import _get_duckdb_connection
+                                    _idtbl_conn = _get_duckdb_connection()
+                                    _idtbl_sub_var = source.sub_var
+                                    _idtbl_val_var = getattr(source, 'value_var', None) or 'value'
+                                    # Resolve bucket/flat directory
+                                    _idtbl_bucket_dir = data_source._resolve_bucket_directory(source.table)
+                                    _idtbl_flat_dir = None
+                                    if _idtbl_bucket_dir is None:
+                                        _idtbl_flat_dir = data_source._resolve_flat_parquet_directory(source.table)
+                                    if _idtbl_bucket_dir is not None or _idtbl_flat_dir is not None:
+                                        # Determine glob pattern
+                                        if _idtbl_bucket_dir is not None:
+                                            _idtbl_bucket_path = Path(_idtbl_bucket_dir) if not isinstance(_idtbl_bucket_dir, Path) else _idtbl_bucket_dir
+                                            _idtbl_glob = _duckdb_path(_idtbl_bucket_path / '**' / '*.parquet')
+                                        else:
+                                            _idtbl_flat_path = Path(_idtbl_flat_dir) if not isinstance(_idtbl_flat_dir, Path) else _idtbl_flat_dir
+                                            _idtbl_glob = _duckdb_path(_idtbl_flat_path / '*.parquet')
+                                        # Determine ID column
+                                        _idtbl_id_cfg = data_source.config.id_configs.get('icustay') or data_source.config.id_configs.get('patient')
+                                        _idtbl_id_col = _idtbl_id_cfg.id if hasattr(_idtbl_id_cfg, 'id') else _idtbl_id_cfg
+                                        if not _idtbl_id_col:
+                                            _idtbl_id_col = {'aumc': 'admissionid', 'hirid': 'patientid',
+                                                            'mimic': 'icustay_id', 'mimic_demo': 'icustay_id',
+                                                            'sic': 'CaseID', 'eicu': 'patientunitstayid',
+                                                            'miiv': 'stay_id'}.get(db_name, 'stay_id')
+                                        # Build WHERE
+                                        _is_str = any(isinstance(x, str) for x in _idtbl_ids)
+                                        _ids_str = ", ".join(f"'{x}'" if _is_str else str(x) for x in _idtbl_ids)
+                                        _idtbl_where = f"{_idtbl_sub_var} IN ({_ids_str})"
+                                        # Patient filter
+                                        _idtbl_pid_filter = ""
+                                        if patient_ids:
+                                            _pids = list(next(iter(patient_ids.values()))) if isinstance(patient_ids, dict) else list(patient_ids)
+                                            _pid_str = ",".join(str(p) for p in _pids)
+                                            _idtbl_pid_filter = f"AND {_idtbl_id_col} IN ({_pid_str})"
+                                        # DuckDB convert_unit inline — CASE WHEN unit filter → convert, ELSE → raw
+                                        _idtbl_val_expr = f'TRY_CAST("{_idtbl_val_var}" AS DOUBLE)'
+                                        if is_convert_unit and source.callback:
+                                            import re as _re_cu
+                                            _cu_m = _re_cu.match(r"convert_unit\((.+)\)", source.callback.strip(), _re_cu.DOTALL)
+                                            if _cu_m:
+                                                _cu_args_str = _cu_m.group(1)
+                                                _cu_args = []
+                                                _cu_lvl, _cu_cur = 0, []
+                                                for _cu_ch in _cu_args_str:
+                                                    if _cu_ch == '(': _cu_lvl += 1
+                                                    elif _cu_ch == ')': _cu_lvl -= 1
+                                                    elif _cu_ch == ',' and _cu_lvl == 0:
+                                                        _cu_args.append(''.join(_cu_cur).strip())
+                                                        _cu_cur = []
+                                                        continue
+                                                    _cu_cur.append(_cu_ch)
+                                                if _cu_cur: _cu_args.append(''.join(_cu_cur).strip())
+                                                # Get unit column name
+                                                _cu_unit_col = None
+                                                try:
+                                                    _cu_tcfg = data_source.config.get_table(source.table)
+                                                    _cu_unit_col = getattr(_cu_tcfg.defaults, 'unit_var', None)
+                                                except Exception:
+                                                    pass
+                                                if not _cu_unit_col:
+                                                    # Fallback: known unit column names per DB
+                                                    _cu_unit_col = {'aumc': 'unitname', 'sic': 'Unit'}.get(db_name, 'valueuom')
+                                                _cu_filter = _cu_args[2].strip().strip("'\"") if len(_cu_args) > 2 else None
+                                                _cu_first = _cu_args[0].strip() if _cu_args else ''
+                                                _cu_bm = _re_cu.match(r"binary_op\(`(.+?)`,\s*(.+)\)", _cu_first)
+                                                if _cu_bm and _cu_filter and _cu_unit_col:
+                                                    _cu_op = _cu_bm.group(1)
+                                                    _cu_factor = _cu_bm.group(2)
+                                                    _idtbl_val_expr = (
+                                                        f'CASE WHEN REGEXP_MATCHES(LOWER("{_cu_unit_col}"), \'{_cu_filter}\') '
+                                                        f'THEN TRY_CAST("{_idtbl_val_var}" AS DOUBLE) {_cu_op} {_cu_factor} '
+                                                        f'ELSE TRY_CAST("{_idtbl_val_var}" AS DOUBLE) END'
+                                                    )
+                                                    _convert_unit_callback_for_duckdb = True
+                                                elif _cu_first == 'set_val(NA)' and _cu_filter and _cu_unit_col:
+                                                    _idtbl_val_expr = (
+                                                        f'CASE WHEN REGEXP_MATCHES(LOWER("{_cu_unit_col}"), \'{_cu_filter}\') '
+                                                        f'THEN NULL '
+                                                        f'ELSE TRY_CAST("{_idtbl_val_var}" AS DOUBLE) END'
+                                                    )
+                                                    _convert_unit_callback_for_duckdb = True
+                                                elif _cu_first == 'fahr_to_cels' and _cu_filter and _cu_unit_col:
+                                                    _idtbl_val_expr = (
+                                                        f'CASE WHEN REGEXP_MATCHES(LOWER("{_cu_unit_col}"), \'{_cu_filter}\') '
+                                                        f'THEN (TRY_CAST("{_idtbl_val_var}" AS DOUBLE) - 32.0) * 5.0 / 9.0 '
+                                                        f'ELSE TRY_CAST("{_idtbl_val_var}" AS DOUBLE) END'
+                                                    )
+                                                    _convert_unit_callback_for_duckdb = True
+                                        # Query: GROUP BY patient, MEDIAN(value)
+                                        _idtbl_sql = f"""
+                                            SELECT {_idtbl_id_col},
+                                                   MEDIAN({_idtbl_val_expr}) AS {concept_name}
+                                            FROM read_parquet('{_idtbl_glob}', hive_partitioning=true, union_by_name=true)
+                                            WHERE {_idtbl_where} {_idtbl_pid_filter}
+                                              AND {_idtbl_val_var} IS NOT NULL
+                                            GROUP BY {_idtbl_id_col}
+                                        """
+                                        frame = _idtbl_conn.execute(_idtbl_sql).fetchdf()
+                                        if len(frame) > 0:
+                                            table = ICUTable(
+                                                data=frame,
+                                                id_columns=[_idtbl_id_col],
+                                                index_column=_idtbl_id_col,
+                                                value_column=concept_name,
+                                            )
+                                            table._pre_aggregated = True
+                                            use_duckdb_aggregation = True
+                                            _idtbl_done = True
+                                            _duckdb_source_count += 1
+                                            if verbose:
+                                                print(f"   ✅ id_tbl DuckDB聚合: {concept_name} → {len(frame):,} 行")
+                                except Exception as _idtbl_err:
+                                    if verbose:
+                                        print(f"   ⚠️ id_tbl DuckDB失败({_idtbl_err}), 回退到原始路径")
                         if has_sub_var and _can_inline_callback and _effective_ids and _target != 'id_tbl' and not _skip_db_duckdb:
                             itemids = list(_effective_ids) if hasattr(_effective_ids, '__iter__') else [_effective_ids]
                             use_duckdb_aggregation = len(itemids) > 0
@@ -2055,7 +2179,10 @@ class ConceptResolver:
                                 _convert_unit_callback_for_duckdb = True
                                 # value_transform will be built below after value_col is known
                     
-                    if use_duckdb_aggregation:
+                    if _idtbl_done:
+                        # id_tbl DuckDB 快速路径已完成 — table 已设置，只需提取 frame
+                        frame = table.data.copy()
+                    elif use_duckdb_aggregation and not _idtbl_done:
                         # 使用DuckDB层聚合
                         from .datasource import load_bucketed_table_aggregated
                         
@@ -2194,6 +2321,7 @@ class ConceptResolver:
                         import duckdb as _hd_duckdb
                         bucket_dir = data_source.base_path / 'observations_bucket'
                         _hd_conn = _hd_duckdb.connect()
+                        _hd_conn.execute("SET memory_limit = '2GB'")
                         
                         # 先获取死亡患者ID
                         try:
@@ -3313,6 +3441,11 @@ class ConceptResolver:
             # 标记回调是否已被应用，避免重复调用
             # 🚀 如果 convert_unit 已在 DuckDB 后置处理中应用，标记为已完成
             callback_applied = _convert_unit_callback_for_duckdb
+            
+            # 🚀 id_tbl DuckDB 路径：value_column 已经是 concept_name（DuckDB SELECT AS）
+            if _idtbl_done and concept_name in frame.columns:
+                value_column = concept_name
+                callback_applied = True
             
             if value_column not in frame.columns:
                 # 对于某些概念（如lgl_cncpt），value_column可能通过callback创建
@@ -6127,6 +6260,7 @@ class ConceptResolver:
                     
                     if glob_pattern:
                         con = duckdb.connect()
+                        con.execute("SET memory_limit = '2GB'")
                         try:
                             # 将患者ID列表注册为 DuckDB 表以支持 IN 过滤
                             pid_df = pd.DataFrame({'patientid': target_patients})
@@ -7732,6 +7866,7 @@ def _apply_callback(
                 try:
                     import duckdb
                     conn = duckdb.connect()
+                    conn.execute("SET memory_limit = '2GB'")
                     glob_pattern = _duckdb_path(bucket_dir / 'bucket_id=*' / '*.parquet')
                     dead_pids_str = ', '.join(str(p) for p in dead_pids)
                     query = f"""
@@ -8872,6 +9007,7 @@ def _apply_callback(
                             bucket_dir = data_source.base_path / 'observations_bucket'
                             if bucket_dir.exists():
                                 conn = duckdb.connect()
+                                conn.execute("SET memory_limit = '2GB'")
                                 # weight variableid = 10000400
                                 pid_list = ','.join(str(int(p)) for p in unique_ids)
                                 sql = f"""

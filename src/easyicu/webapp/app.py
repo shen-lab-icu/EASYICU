@@ -13014,6 +13014,20 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
         except Exception:
             pass  # fallback: AKI/CircFailure will load individually
     
+    # 🔧 FIX Bug 53: 统一 preloaded 中所有概念的时间列名为 'charttime'
+    # merge=False 返回原始列名（如 vasopressor 概念返回 'starttime'），
+    # 如果不统一，downstream 的 merge 会退化为仅 ID 列，产生 Cartesian product → 内存爆炸
+    _time_aliases_pre = ['starttime', 'measuredat_minutes', 'measuredat', 'datetime',
+                         'observationoffset', 'Offset', 'start',
+                         'givenat', 'enteredentryat']
+    for _cname in list(preloaded.keys()):
+        _cdf = preloaded[_cname]
+        if 'charttime' not in _cdf.columns:
+            for _alias in _time_aliases_pre:
+                if _alias in _cdf.columns:
+                    preloaded[_cname] = _cdf.rename(columns={_alias: 'charttime'})
+                    break
+    
     # 调用 load_special_concepts 但传入预加载数据
     # 直接调用底层函数而非 load_special_concepts 以传递 preloaded_data
     saved = {}
@@ -13061,22 +13075,164 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
         except Exception as e:
             print(f"CircFailure loading failed: {e}")
     
-    # Handle sepsis concepts via original load_special_concepts
+    # 🔧 FIX Bug 53: Sep3 从缓存读取 SOFA，不重新计算
+    # 原代码调用 load_special_concepts → _load_sep3_diagnosis → load_concepts(['sofa','sofa2'])
+    # 这会从头重新计算 SOFA（最耗内存的操作），导致 600+ GB RSS
+    # 修复策略:
+    #   A) 优先从缓存读取 sofa/susp_inf（已由前面的 sofa1_score/sepsis_shared 模块缓存）
+    #   B) 缓存不完整时，手动分批 load_concepts(merge=True) 避免在 daemon 进程内创建子进程
     sep_concepts = [c for c in concepts if c in ('sep3_sofa1', 'sep3_sofa2')]
     if sep_concepts:
         try:
-            from easyicu.webapp.app import load_special_concepts as _lsc
-            sep_result = _lsc(
-                concepts=sep_concepts, database=database, data_path=data_path,
-                patient_ids=patient_ids_filter, max_patients=max_patients, verbose=False
-            )
-            if isinstance(sep_result, dict):
-                for c, df in sep_result.items():
-                    if isinstance(df, pd.DataFrame) and not df.empty:
-                        path = os.path.join(output_dir, f"{c}.parquet")
-                        df.to_parquet(path, index=False)
-                        saved[c] = path
+            _sep3_result = None
+            _sep3_load_list = ['susp_inf']
+            if 'sep3_sofa1' in sep_concepts:
+                _sep3_load_list.append('sofa')
+            if 'sep3_sofa2' in sep_concepts:
+                _sep3_load_list.append('sofa2')
+            _sep3_load_list = list(dict.fromkeys(_sep3_load_list))
+            
+            # ── 方案 A: 从缓存读取 ──
+            sep_dfs = {}
+            _time_aliases_all = ['charttime', 'time', 'starttime', 'datetime',
+                                 'measuredat_minutes', 'measuredat', 'Offset']
+            for _dep in _sep3_load_list:
+                _cached = None
+                if _dep in preloaded:
+                    _cached = preloaded[_dep]
+                elif preloaded_parquet_dir:
+                    _pq = os.path.join(preloaded_parquet_dir, f"{_dep}.parquet")
+                    if os.path.exists(_pq):
+                        try:
+                            _cached = pd.read_parquet(_pq)
+                        except Exception:
+                            pass
+                if _cached is not None and len(_cached) > 0:
+                    # 统一时间列名为 charttime
+                    for _ta in _time_aliases_all:
+                        if _ta in _cached.columns and _ta != 'charttime':
+                            _cached = _cached.rename(columns={_ta: 'charttime'})
+                            break
+                    sep_dfs[_dep] = _cached
+            
+            _have_all_cache = all(d in sep_dfs for d in _sep3_load_list)
+            
+            if _have_all_cache:
+                # 所有依赖都在缓存中，直接合并（零 SOFA 重计算）
+                print(f"Sep3: using cached data ({', '.join(f'{k}={len(v)}rows' for k,v in sep_dfs.items())})")
+                susp_df = sep_dfs['susp_inf']
+                _id_col_s = None
+                for _ic in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']:
+                    if _ic in susp_df.columns:
+                        _id_col_s = _ic
+                        break
+                _time_col_s = 'charttime' if 'charttime' in susp_df.columns else None
+                
+                if _id_col_s and _time_col_s:
+                    merged = susp_df.copy()
+                    for _sn in ['sofa', 'sofa2']:
+                        if _sn in sep_dfs:
+                            _sdf = sep_dfs[_sn]
+                            _vcols = [c for c in _sdf.columns if c not in [_id_col_s, 'charttime', 'valueuom', 'unit']]
+                            if _vcols:
+                                _keep = [c for c in [_id_col_s, 'charttime'] + _vcols if c in _sdf.columns]
+                                _sdf = _sdf[_keep].copy()
+                                if _sn not in _sdf.columns and len(_vcols) == 1:
+                                    _sdf = _sdf.rename(columns={_vcols[0]: _sn})
+                                _mc = [c for c in [_id_col_s, 'charttime'] if c in _sdf.columns]
+                                if _mc:
+                                    merged = pd.merge(merged, _sdf, on=_mc, how='left')
+                    
+                    _susp_v = 'susp_inf'
+                    if _susp_v not in merged.columns:
+                        _sc_cands = [c for c in merged.columns if c not in [_id_col_s, 'charttime', 'sofa', 'sofa2']]
+                        if _sc_cands:
+                            merged = merged.rename(columns={_sc_cands[0]: 'susp_inf'})
+                    
+                    if 'susp_inf' in merged.columns:
+                        _sm = merged['susp_inf'].fillna(0).astype(bool)
+                        _rc = [_id_col_s, 'charttime']
+                        if 'sep3_sofa1' in sep_concepts and 'sofa' in merged.columns:
+                            merged['sep3_sofa1'] = (_sm & (merged['sofa'].fillna(0) >= 2)).astype(int)
+                            _rc.append('sep3_sofa1')
+                        if 'sep3_sofa2' in sep_concepts and 'sofa2' in merged.columns:
+                            merged['sep3_sofa2'] = (_sm & (merged['sofa2'].fillna(0) >= 2)).astype(int)
+                            _rc.append('sep3_sofa2')
+                        _sep3_result = merged.loc[_sm, [c for c in _rc if c in merged.columns]].copy()
+            
+            # ── 方案 B: 缓存不完整，手动分批加载（每批 ≤5000 患者） ──
+            if _sep3_result is None or len(_sep3_result) == 0:
+                if not _have_all_cache:
+                    print(f"Sep3: cache incomplete (have={list(sep_dfs.keys())}, need={_sep3_load_list}), batch loading")
+                _all_ids_sep = None
+                _id_col_sep = None
+                if patient_ids_filter:
+                    _id_col_sep = list(patient_ids_filter.keys())[0]
+                    _raw = patient_ids_filter[_id_col_sep]
+                    _all_ids_sep = list(_raw) if not isinstance(_raw, list) else _raw
+                
+                _batch_sz_sep = 5000
+                _all_sep_parts = []
+                
+                if _all_ids_sep:
+                    for _bs in range(0, len(_all_ids_sep), _batch_sz_sep):
+                        _bids = _all_ids_sep[_bs:_bs + _batch_sz_sep]
+                        try:
+                            _bm = _lc(data_path=data_path, database=database,
+                                      concepts=_sep3_load_list, merge=True,
+                                      verbose=False, concept_workers=1,
+                                      patient_ids={_id_col_sep: _bids})
+                            if isinstance(_bm, pd.DataFrame) and not _bm.empty:
+                                _all_sep_parts.append(_bm)
+                        except Exception:
+                            pass
+                else:
+                    _bkw = dict(data_path=data_path, database=database,
+                                concepts=_sep3_load_list, merge=True,
+                                verbose=False, concept_workers=1)
+                    if max_patients:
+                        _bkw['max_patients'] = max_patients
+                    try:
+                        _bm = _lc(**_bkw)
+                        if isinstance(_bm, pd.DataFrame) and not _bm.empty:
+                            _all_sep_parts.append(_bm)
+                    except Exception:
+                        pass
+                
+                if _all_sep_parts:
+                    _sep_merged = pd.concat(_all_sep_parts, ignore_index=True)
+                    _id_s = None
+                    for _ic in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']:
+                        if _ic in _sep_merged.columns:
+                            _id_s = _ic
+                            break
+                    _tc_s = None
+                    for _tc in ['charttime', 'time', 'starttime', 'datetime', 'measuredat_minutes']:
+                        if _tc in _sep_merged.columns:
+                            _tc_s = _tc
+                            break
+                    if _id_s and _tc_s and 'susp_inf' in _sep_merged.columns:
+                        _sm2 = _sep_merged['susp_inf'].fillna(0).astype(bool)
+                        _rc2 = [_id_s, _tc_s]
+                        if 'sep3_sofa1' in sep_concepts and 'sofa' in _sep_merged.columns:
+                            _sep_merged['sep3_sofa1'] = (_sm2 & (_sep_merged['sofa'].fillna(0) >= 2)).astype(int)
+                            _rc2.append('sep3_sofa1')
+                        if 'sep3_sofa2' in sep_concepts and 'sofa2' in _sep_merged.columns:
+                            _sep_merged['sep3_sofa2'] = (_sm2 & (_sep_merged['sofa2'].fillna(0) >= 2)).astype(int)
+                            _rc2.append('sep3_sofa2')
+                        _sep3_result = _sep_merged.loc[_sm2, [c for c in _rc2 if c in _sep_merged.columns]].copy()
+            
+            # 保存结果
+            if _sep3_result is not None and len(_sep3_result) > 0:
+                for _sc in sep_concepts:
+                    if _sc in _sep3_result.columns:
+                        path = os.path.join(output_dir, f"{_sc}.parquet")
+                        _sep3_result.to_parquet(path, index=False)
+                        saved[_sc] = path
+                        print(f"Sep3: saved {_sc} ({len(_sep3_result)} rows)")
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"Sepsis loading failed: {e}")
     
     with open(os.path.join(output_dir, '_manifest.json'), 'w') as f:
@@ -13628,7 +13784,7 @@ def execute_sidebar_export():
                     try:
                         from easyicu.memory_manager import get_available_memory_mb
                         _avail_mb = get_available_memory_mb()
-                        _frag_safe_max = max(5000, int(_avail_mb * 0.5))
+                        _frag_safe_max = min(max(5000, int(_avail_mb * 0.5)), 10000)  # 🔧 FIX Bug 53: 上限10K 防止大内存服务器不分批
                         if _n_load_patients > _frag_safe_max:
                             _auto_batch_size = _frag_safe_max
                             _n_batches = (_n_load_patients + _auto_batch_size - 1) // _auto_batch_size
@@ -14188,7 +14344,8 @@ def execute_sidebar_export():
                 # 在主模块循环中保存，避免特殊概念子进程重新从数据库加载
                 _special_dep_concepts = {'crea', 'urine', 'weight', 'rrt',
                                          'lact', 'map', 'norepi_rate', 'epi_rate',
-                                         'dobu_rate', 'dopa_rate'}
+                                         'dobu_rate', 'dopa_rate',
+                                         'sofa', 'sofa2', 'susp_inf'}  # 🔧 FIX Bug 53: 包含 SOFA/susp_inf 供 Sep3 复用
                 _deps_cache_dir = None
                 if special_concepts_to_load:
                     import tempfile as _tmpf_deps
