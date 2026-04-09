@@ -3055,9 +3055,13 @@ def validate_database_path(data_path: str, database: str) -> dict:
     # 分别统计 Parquet 可用和仅 CSV 可用的表
     parquet_available = parquet_names | parquet_dirs | bucket_dirs
     
-    # HiRID 特殊处理：pharma_bucket → pharma_records
-    if database == 'hirid' and 'pharma' in parquet_available:
-        parquet_available.add('pharma_records')
+    # HiRID 特殊处理：别名映射
+    if database == 'hirid':
+        if 'pharma' in parquet_available:
+            parquet_available.add('pharma_records')
+        # general.parquet (R ricu convention) 或 general_table.parquet (直接转换)
+        if 'general' in parquet_available or 'general_table' in parquet_available:
+            parquet_available.add('general_table')
     if database == 'hirid' and 'pharma' in csv_names:
         csv_names.add('pharma_records')
     
@@ -3098,11 +3102,11 @@ def validate_database_path(data_path: str, database: str) -> dict:
         if len(csv_only_tables) > 5:
             csv_list += f' (+{len(csv_only_tables)-5} more)'
         if lang == 'en':
-            msg = f'⚠️ {db_name}: {len(csv_only_tables)} tables only found as CSV (no Parquet): {csv_list}. Please convert to Parquet first.'
-            sug = '💡 Click "Convert to Parquet" to convert CSV files for data loading'
+            msg = f'⚠️ {db_name}: {len(csv_only_tables)} tables only found as CSV (no Parquet): {csv_list}. Click Validate & Setup to auto-convert.'
+            sug = '💡 Click "Validate & Setup" to auto-convert CSV files'
         else:
-            msg = f'⚠️ {db_name}: {len(csv_only_tables)} 个表仅有 CSV 格式（无 Parquet）: {csv_list}。请先转换为 Parquet 格式。'
-            sug = '💡 点击「转换为Parquet」将 CSV 文件转换为 Parquet 格式'
+            msg = f'⚠️ {db_name}: {len(csv_only_tables)} 个表仅有 CSV 格式（无 Parquet）: {csv_list}。点击「验证并设置」自动转换。'
+            sug = '💡 点击「验证并设置」自动转换 CSV 文件'
         return {
             'valid': False,
             'message': msg,
@@ -3145,10 +3149,10 @@ def validate_database_path(data_path: str, database: str) -> dict:
         detail_str = '; '.join(parts)
         if lang == 'en':
             msg = f'⚠️ {db_name}: {len(found_tables)}/{total_required} tables ready (Parquet), need conversion: {detail_str}'
-            sug = f'💡 Click "Convert to Parquet" to convert missing/CSV tables'
+            sug = f'💡 Click "Validate & Setup" to auto-convert missing/CSV tables'
         else:
             msg = f'⚠️ {db_name}: {len(found_tables)}/{total_required} 个表就绪（Parquet），需要转换: {detail_str}'
-            sug = f'💡 点击「转换为Parquet」转换缺失或CSV格式的表'
+            sug = f'💡 点击「验证并设置」自动转换缺失或CSV格式的表'
         return {
             'valid': False,
             'message': msg,
@@ -3171,7 +3175,7 @@ def validate_database_path(data_path: str, database: str) -> dict:
     if len(found_csvs) >= len(required_csvs) // 2:
         # 找到 CSV 文件但没有 Parquet - 需要转换
         msg = f'⚠️ Found {db_name} raw CSV files ({len(csv_files)} files), need to convert to Parquet' if lang == 'en' else f'⚠️ 找到 {db_name} 原始 CSV 文件 ({len(csv_files)} 个)，需要转换为 Parquet 格式'
-        sug = '💡 Click "Convert to Parquet" button below to convert all files' if lang == 'en' else '💡 点击下方「转换为Parquet」按钮转换所有文件'
+        sug = '💡 Click "Validate & Setup" to auto-convert' if lang == 'en' else '💡 点击「验证并设置」自动转换'
         return {
             'valid': False,
             'message': msg,
@@ -3179,6 +3183,28 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'can_convert': True,
             'csv_path': str(path)
         }
+    
+    # HiRID 特殊检测：可能只有 tar.gz 归档文件（尚未解压）
+    if database == 'hirid':
+        tar_gz_files = list(path.glob('*.tar.gz'))
+        raw_stage = path / 'raw_stage'
+        if raw_stage.exists():
+            tar_gz_files.extend(raw_stage.glob('*.tar.gz'))
+        hirid_archives = [f.name for f in tar_gz_files if any(
+            kw in f.name.lower() for kw in ['observation', 'pharma', 'reference']
+        )]
+        if hirid_archives:
+            archive_list = ', '.join(hirid_archives[:5])
+            msg = (f'⚠️ {db_name}: Found archives ({archive_list}) that need extraction and conversion' if lang == 'en' else
+                   f'⚠️ {db_name}: 发现归档文件 ({archive_list}) 需要解压和转换')
+            sug = '💡 Click "Validate & Setup" to auto-extract and convert' if lang == 'en' else '💡 点击「验证并设置」自动解压和转换'
+            return {
+                'valid': False,
+                'message': msg,
+                'suggestion': sug,
+                'can_convert': True,
+                'csv_path': str(path)
+            }
     
     # 检查是否是子目录结构
     subdirs = [d for d in path.iterdir() if d.is_dir()]
@@ -5305,7 +5331,7 @@ def render_sidebar():
                 st.session_state._last_data_path = data_path
             
             # 验证按钮
-            validate_btn = "🔍 Validate Data Path" if st.session_state.language == 'en' else "🔍 验证数据路径"
+            validate_btn = "🔍 Validate & Setup" if st.session_state.language == 'en' else "🔍 验证并设置"
             if st.button(validate_btn, width="stretch", key="validate_path"):
                 if not data_path:
                     err_msg = "❌ Please enter data path" if st.session_state.language == 'en' else "❌ 请输入数据路径"
@@ -5322,31 +5348,31 @@ def render_sidebar():
                     if validation_result['valid']:
                         st.session_state.data_path = data_path
                         st.session_state.path_validated = True
-                        st.success(f"✅ {validation_result['message']}")
+                        st.success(validation_result['message'])
+                    elif validation_result.get('can_convert'):
+                        # 自动触发转换（在主内容区域显示进度）
+                        st.session_state.path_validated = False
+                        st.session_state._auto_convert = {
+                            'source': data_path,
+                            'database': database,
+                        }
+                        converting_msg = "🔄 Data needs conversion. Starting auto-setup..." if st.session_state.language == 'en' else "🔄 数据需要转换，正在自动设置..."
+                        st.info(converting_msg)
                     else:
                         st.session_state.path_validated = False
                         st.error(validation_result['message'])
                         if validation_result.get('suggestion'):
                             st.info(validation_result['suggestion'])
             
-            # 显示当前验证状态和转换按钮
-            last_validation = st.session_state.get('last_validation', {})
-            last_path = st.session_state.get('last_validated_path', '')
-            
+            # 显示当前验证状态
             if st.session_state.get('path_validated') and st.session_state.data_path == data_path:
                 validated_msg = "✅ Path validated" if st.session_state.language == 'en' else "✅ 路径已验证"
                 st.success(validated_msg)
-            elif last_validation.get('can_convert') and last_path == data_path:
-                # 显示转换按钮
-                convert_btn = "🔄 Convert to Parquet" if st.session_state.language == 'en' else "🔄 转换为Parquet"
-                if st.button(convert_btn, width="stretch", type="primary", key="convert_csv"):
-                    st.session_state.show_convert_dialog = True
-                    st.session_state.convert_source_path = data_path
-                    st.rerun()
-                convert_hint = "💡 Converting to Parquet enables faster data loading" if st.session_state.language == 'en' else "💡 转换为Parquet格式可大幅加速数据加载"
-                st.caption(convert_hint)
+            elif st.session_state.get('_auto_convert'):
+                converting_msg = "🔄 Auto-converting..." if st.session_state.language == 'en' else "🔄 自动转换中..."
+                st.info(converting_msg)
             elif data_path and Path(data_path).exists():
-                validate_hint = "💡 Click the button above to validate data format" if st.session_state.language == 'en' else "💡 点击上方按钮验证数据格式"
+                validate_hint = "💡 Click the button above to validate and setup data" if st.session_state.language == 'en' else "💡 点击上方按钮验证并设置数据"
                 st.caption(validate_hint)
         
         st.markdown("---")
@@ -12030,7 +12056,15 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     source_path = Path(source_dir)
     target_path = Path(target_dir)
     
-    csv_files = list(source_path.rglob('*.csv')) + list(source_path.rglob('*.csv.gz'))
+    # 收集 CSV 文件并去重：同一表名的 .csv 和 .csv.gz 只保留一个（优先 .csv.gz 更小更快）
+    _all_csvs = list(source_path.rglob('*.csv')) + list(source_path.rglob('*.csv.gz'))
+    _csv_by_stem = {}  # stem → file, 优先 .gz
+    for f in _all_csvs:
+        stem = f.stem.lower().replace('.csv', '')  # .csv.gz → .csv → stem
+        key = (str(f.parent), stem)
+        if key not in _csv_by_stem or f.suffix.lower() == '.gz':
+            _csv_by_stem[key] = f
+    csv_files = list(_csv_by_stem.values())
     
     # 分类文件：大表用分桶，小表用普通转换
     bucket_tables_config = BUCKET_TABLES.get(database, {})
@@ -12097,7 +12131,8 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
         file_size_mb = csv_file.stat().st_size / (1024 * 1024)
         try:
             rel_path = csv_file.relative_to(source_path)
-            parquet_name = rel_path.stem.replace('.csv', '') + '.parquet'
+            # 小写化文件名以确保下游一致性（MIMIC-III 使用大写 ADMISSIONS.csv.gz）
+            parquet_name = rel_path.stem.replace('.csv', '').lower() + '.parquet'
             parquet_file = target_path / rel_path.parent / parquet_name
             
             if parquet_file.exists() and not overwrite:
@@ -12113,6 +12148,12 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
             status_text.markdown(f"**Converting**: `{csv_file.name}` ({file_size_mb:.1f}MB) [{current}/{total}]")
             
             result = converter.convert_file(csv_file)
+            
+            # DuckDBConverter 使用原始文件名（可能大写），重命名为小写
+            if result['status'] == 'success' and result.get('output_path'):
+                _out = Path(result['output_path'])
+                if _out.exists() and _out.name != parquet_name:
+                    _out.rename(_out.parent / parquet_name)
             
             processed_size_mb += file_size_mb
             
@@ -12218,11 +12259,14 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
 
 
 def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
-    """HiRID 专用转换：数据已经是 parquet 格式，只需分桶转换。
+    """HiRID 一站式转换：解压 → 重命名 parquet shards → CSV→parquet → 分桶。
     
-    HiRID 目录结构可能是:
-    1. 已解压: observations/, pharma/ 或 pharma_records/
-    2. 原始下载: raw_stage/observation_tables_parquet.tar.gz
+    完整处理流程（用户只需点一次）：
+    1. 解压 raw_stage/*.tar.gz + reference_data.tar.gz
+    2. 重命名 observation_tables/parquet/part-N → observations/N.parquet
+    3. general_table.csv → general.parquet（以及其他小 CSV 文件）
+    4. observations/ → observations_bucket/ (variableid, 100桶)
+    5. pharma/ → pharma_bucket/ (pharmaid, 50桶)
     """
     import time
     
@@ -12230,24 +12274,137 @@ def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = Fals
     
     try:
         from easyicu.bucket_converter import (
-            convert_hirid_observations, 
-            convert_hirid_pharma,
             convert_parquet_directory_to_buckets
         )
+        from easyicu.duckdb_converter import DuckDBConverter
     except ImportError as e:
         st.error(f"Converter not available: {e}")
         return 0, 0
     
     source_path = Path(source_dir)
     
-    # 检查 observations 目录 - 支持多种可能的位置
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    details = st.container()
+    
+    success = 0
+    failed = 0
+    start_time = time.time()
+    
+    # ============================================================
+    # 阶段 1: 解压 tar.gz 文件
+    # ============================================================
+    status_text.markdown("**Phase 1/4**: Extracting archives..." if lang == 'en' else "**阶段 1/4**: 解压归档文件...")
+    
+    # 解压 reference_data.tar.gz → general_table.csv
+    reference_tar = source_path / 'reference_data.tar.gz'
+    general_csv = source_path / 'general_table.csv'
+    if reference_tar.exists() and not general_csv.exists():
+        try:
+            import tarfile
+            with st.spinner("Extracting reference_data.tar.gz..." if lang == 'en' else "正在解压 reference_data.tar.gz..."):
+                with tarfile.open(reference_tar, 'r:gz') as tar:
+                    tar.extractall(path=source_path)
+            with details:
+                st.caption("✅ reference_data.tar.gz → general_table.csv")
+        except Exception as e:
+            with details:
+                st.caption(f"❌ reference_data.tar.gz: {e}")
+            failed += 1
+    
+    # 解压 observation_tables + pharma_records 
+    raw_stage = source_path / 'raw_stage'
+    archives = [
+        ('observation_tables_parquet.tar.gz', 'observation_tables', 'observations'),
+        ('pharma_records_parquet.tar.gz', 'pharma_records', 'pharma'),
+    ]
+    for archive_name, extract_dir, target_dir_name in archives:
+        archive_path = raw_stage / archive_name if raw_stage.exists() else source_path / archive_name
+        if not archive_path.exists():
+            continue
+        # 如果已有重命名后的 shard 目录（如 observations/），跳过
+        shard_dir = source_path / target_dir_name
+        if shard_dir.is_dir() and list(shard_dir.glob('[0-9]*.parquet')):
+            with details:
+                st.caption(f"⏭️ {archive_name} (already extracted → {target_dir_name}/)")
+            continue
+        # 如果解压目录已存在，跳过解压
+        extracted_dir = source_path / extract_dir
+        if not (extracted_dir.is_dir() and any(extracted_dir.rglob('*.parquet'))):
+            try:
+                import tarfile
+                with st.spinner(f"Extracting {archive_name}..." if lang == 'en' else f"正在解压 {archive_name}..."):
+                    with tarfile.open(archive_path, 'r:gz') as tar:
+                        tar.extractall(path=source_path)
+                with details:
+                    st.caption(f"✅ {archive_name}")
+            except Exception as e:
+                with details:
+                    st.caption(f"❌ {archive_name}: {e}")
+                failed += 1
+                continue
+        
+        # 重命名 part-N.parquet → N.parquet (R ricu 格式)
+        parquet_subdir = extracted_dir / 'parquet'
+        if parquet_subdir.is_dir():
+            src_files = sorted(parquet_subdir.glob('part-*.parquet'))
+        elif extracted_dir.is_dir():
+            src_files = sorted(extracted_dir.glob('part-*.parquet'))
+        else:
+            src_files = []
+        
+        if src_files and not (shard_dir.is_dir() and list(shard_dir.glob('[0-9]*.parquet'))):
+            import shutil
+            shard_dir.mkdir(parents=True, exist_ok=True)
+            for f in src_files:
+                try:
+                    idx = int(f.stem.replace('part-', '')) + 1  # 1-based
+                    dst = shard_dir / f'{idx}.parquet'
+                    if not dst.exists():
+                        shutil.copy2(f, dst)
+                except (ValueError, OSError):
+                    pass
+            with details:
+                st.caption(f"✅ Renamed {len(src_files)} shards → {target_dir_name}/")
+    
+    progress_bar.progress(0.2)
+    
+    # ============================================================
+    # 阶段 2: CSV → Parquet (小表)
+    # ============================================================
+    status_text.markdown("**Phase 2/4**: Converting CSV → Parquet..." if lang == 'en' else "**阶段 2/4**: CSV 转换为 Parquet...")
+    
+    csv_files = list(source_path.glob('*.csv'))
+    converter = DuckDBConverter(data_path=str(source_path), memory_limit_gb=8.0, verbose=False)
+    
+    for csv_file in csv_files:
+        parquet_name = csv_file.stem + '.parquet'
+        parquet_file = source_path / parquet_name
+        if parquet_file.exists() and not overwrite:
+            continue
+        try:
+            result = converter.convert_file(csv_file)
+            if result['status'] == 'success':
+                success += 1
+                with details:
+                    st.caption(f"✅ {csv_file.name} → {parquet_name} ({result['row_count']:,} rows)")
+            else:
+                failed += 1
+                with details:
+                    st.caption(f"❌ {csv_file.name}: {result.get('error', 'unknown')[:60]}")
+        except Exception as e:
+            failed += 1
+            with details:
+                st.caption(f"❌ {csv_file.name}: {str(e)[:60]}")
+    
+    progress_bar.progress(0.4)
+    
+    # ============================================================
+    # 阶段 3+4: Parquet shard 目录 → 分桶
+    # ============================================================
     obs_dir = None
     pharma_dir = None
     
-    # 可能的 observations 目录位置
-    # HiRID 解压后可能的目录结构：
-    # 1. observations/ 或 observation_tables/ (直接包含 parquet)
-    # 2. observations/parquet/ 或 observation_tables/parquet/ (parquet 在子目录)
     obs_candidates = [
         source_path / 'observations',
         source_path / 'observations' / 'parquet',
@@ -12256,7 +12413,6 @@ def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = Fals
     ]
     for cand in obs_candidates:
         if cand.exists() and cand.is_dir():
-            # 检查是否有 parquet 文件（直接或在子目录）
             if list(cand.glob('*.parquet')):
                 obs_dir = cand
                 break
@@ -12274,120 +12430,12 @@ def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = Fals
                 pharma_dir = cand
                 break
     
-    # 检查是否需要解压
-    raw_stage = source_path / 'raw_stage'
-    if raw_stage.exists():
-        obs_tar = raw_stage / 'observation_tables_parquet.tar.gz'
-        pharma_tar = raw_stage / 'pharma_records_parquet.tar.gz'
-        
-        # 如果找到压缩文件且还没有解压的目录，自动解压
-        if (obs_tar.exists() or pharma_tar.exists()) and not obs_dir:
-            import tarfile
-            
-            info_msg = "🔄 Detected compressed HiRID data. Auto-extracting tar.gz files..." if lang == 'en' else "🔄 检测到压缩的 HiRID 数据，自动解压中..."
-            st.info(info_msg)
-            
-            extraction_success = True
-            
-            # 解压 observations
-            if obs_tar.exists() and not obs_dir:
-                try:
-                    spinner_msg = f"Extracting {obs_tar.name}... (this may take 5-10 minutes)" if lang == 'en' else f"正在解压 {obs_tar.name}... (可能需要 5-10 分钟)"
-                    with st.spinner(spinner_msg):
-                        with tarfile.open(obs_tar, 'r:gz') as tar:
-                            tar.extractall(path=source_path)
-                    
-                    success_msg = f"✅ Extracted {obs_tar.name}" if lang == 'en' else f"✅ 已解压 {obs_tar.name}"
-                    st.success(success_msg)
-                    
-                    # 重新检查目录
-                    for cand in obs_candidates:
-                        if cand.exists() and cand.is_dir():
-                            if list(cand.glob('*.parquet')) or list(cand.rglob('*.parquet')):
-                                obs_dir = cand
-                                break
-                except Exception as e:
-                    error_msg = f"❌ Failed to extract {obs_tar.name}: {e}" if lang == 'en' else f"❌ 解压 {obs_tar.name} 失败: {e}"
-                    st.error(error_msg)
-                    extraction_success = False
-            
-            # 解压 pharma
-            if pharma_tar.exists() and not pharma_dir:
-                try:
-                    spinner_msg = f"Extracting {pharma_tar.name}..." if lang == 'en' else f"正在解压 {pharma_tar.name}..."
-                    with st.spinner(spinner_msg):
-                        with tarfile.open(pharma_tar, 'r:gz') as tar:
-                            tar.extractall(path=source_path)
-                    
-                    success_msg = f"✅ Extracted {pharma_tar.name}" if lang == 'en' else f"✅ 已解压 {pharma_tar.name}"
-                    st.success(success_msg)
-                    
-                    # 重新检查目录
-                    for cand in pharma_candidates:
-                        if cand.exists() and cand.is_dir():
-                            if list(cand.glob('*.parquet')) or list(cand.rglob('*.parquet')):
-                                pharma_dir = cand
-                                break
-                except Exception as e:
-                    error_msg = f"❌ Failed to extract {pharma_tar.name}: {e}" if lang == 'en' else f"❌ 解压 {pharma_tar.name} 失败: {e}"
-                    st.error(error_msg)
-                    extraction_success = False
-            
-            if not extraction_success:
-                manual_msg = "You can try manual extraction:" if lang == 'en' else "您可以尝试手动解压："
-                st.error(f"❌ {manual_msg}")
-                st.code(f"cd {raw_stage}\ntar -xzf observation_tables_parquet.tar.gz\ntar -xzf pharma_records_parquet.tar.gz")
-                return 0, 1
-    
-    # 检查是否找到了数据目录
+    # 检查是否有数据可分桶
     if not obs_dir and not pharma_dir:
-        if lang == 'en':
-            st.error(f"""
-            ❌ **HiRID data directories not found!**
-            
-            Expected directory structure:
-            ```
-            {source_dir}/
-            ├── observations/       ← Parquet files
-            │   ├── part-0.parquet
-            │   └── ...
-            └── pharma_records/     ← Parquet files
-                ├── part-0.parquet
-                └── ...
-            ```
-            
-            Please check your data path or extract the data first.
-            """)
-        else:
-            st.error(f"""
-            ❌ **未找到 HiRID 数据目录！**
-            
-            预期目录结构：
-            ```
-            {source_dir}/
-            ├── observations/       ← Parquet 文件
-            │   ├── part-0.parquet
-            │   └── ...
-            └── pharma_records/     ← Parquet 文件
-                ├── part-0.parquet
-                └── ...
-            ```
-            
-            请检查数据路径或先解压数据。
-            """)
-        return 0, 1
-    
-    # 开始转换
-    info_msg = "🔄 HiRID uses pre-built parquet files. Converting to bucketed format..." if lang == 'en' else "🔄 HiRID 使用预构建的 parquet 文件，正在转换为分桶格式..."
-    st.info(info_msg)
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    details = st.container()
-    
-    success = 0
-    failed = 0
-    start_time = time.time()
+        st.error("❌ No observation/pharma parquet directories found after extraction. "
+                 "Please check your HiRID data." if lang == 'en' else
+                 "❌ 解压后未找到 observation/pharma parquet 目录，请检查 HiRID 数据。")
+        return success, max(1, failed)
     
     obs_bucket_dir = source_path / 'observations_bucket'
     pharma_bucket_dir = source_path / 'pharma_bucket'
@@ -12401,16 +12449,15 @@ def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = Fals
     total = len(tasks)
     
     for idx, (name, src_dir, bucket_dir, partition_col, num_buckets) in enumerate(tasks):
-        status_msg = f"**Bucketing**: `{name}` → {num_buckets} buckets [{idx+1}/{total}]" if lang == 'en' else f"**分桶中**: `{name}` → {num_buckets} 个桶 [{idx+1}/{total}]"
-        status_text.markdown(status_msg)
+        _pct = 0.6 + 0.4 * idx / max(len(tasks), 1)
+        progress_bar.progress(_pct)
+        status_text.markdown(f"**Phase 3/4**: Bucketing `{name}` → {num_buckets} buckets..." if lang == 'en' else f"**阶段 3/4**: 分桶 `{name}` → {num_buckets} 个桶...")
         
         try:
             if bucket_dir.exists() and list(bucket_dir.rglob('*.parquet')) and not overwrite:
                 with details:
-                    skip_msg = f"⏭️ {name} (bucket exists, skipped)" if lang == 'en' else f"⏭️ {name} (分桶已存在，跳过)"
-                    st.caption(skip_msg)
-                success += 1  # 已存在也算成功
-                progress_bar.progress((idx + 1) / total)
+                    st.caption(f"⏭️ {name} (bucket exists, skipped)" if lang == 'en' else f"⏭️ {name} (分桶已存在，跳过)")
+                success += 1
                 continue
             
             result = convert_parquet_directory_to_buckets(
@@ -12433,34 +12480,13 @@ def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = Fals
             failed += 1
             with details:
                 st.caption(f"❌ {name}: {str(e)[:60]}")
-        
-        progress_bar.progress((idx + 1) / total)
     
     total_time = time.time() - start_time
     progress_bar.progress(1.0)
     status_text.empty()
     
-    # 自动解压 reference_data.tar.gz（包含 general_table.csv）
-    reference_tar = source_path / 'reference_data.tar.gz'
-    if reference_tar.exists():
-        general_table = source_path / 'general_table.csv'
-        if not general_table.exists():
-            try:
-                import tarfile
-                info_msg = "🔄 Extracting reference_data.tar.gz (general_table.csv)..." if lang == 'en' else "🔄 正在解压 reference_data.tar.gz (general_table.csv)..."
-                with st.spinner(info_msg):
-                    with tarfile.open(reference_tar, 'r:gz') as tar:
-                        tar.extractall(path=source_path)
-                
-                extract_msg = "✅ Extracted reference data files" if lang == 'en' else "✅ 已解压参考数据文件"
-                st.success(extract_msg)
-            except Exception as e:
-                warn_msg = f"⚠️ Failed to extract reference_data.tar.gz: {e}" if lang == 'en' else f"⚠️ 解压 reference_data.tar.gz 失败: {e}"
-                st.warning(warn_msg)
-    
     if success > 0:
-        success_msg = f"✅ HiRID conversion completed in {total_time:.1f}s ({success} tables)" if lang == 'en' else f"✅ HiRID 转换完成，耗时 {total_time:.1f}秒 ({success} 个表)"
-        st.success(success_msg)
+        st.success(f"✅ HiRID setup completed in {total_time:.1f}s ({success} steps)" if lang == 'en' else f"✅ HiRID 设置完成，耗时 {total_time:.1f}秒 ({success} 个步骤)")
     
     return success, failed
 
@@ -15251,7 +15277,50 @@ def main():
     # ============ 进入具体模式后，显示完整应用 ============
     render_sidebar()
     
-    # 处理CSV转换对话框
+    # ============ 自动转换处理（在主内容区域显示进度） ============
+    _auto_convert = st.session_state.pop('_auto_convert', None)
+    if _auto_convert:
+        _ac_source = _auto_convert['source']
+        _ac_database = _auto_convert['database']
+        _ac_lang = st.session_state.get('language', 'en')
+        
+        st.markdown("---")
+        _ac_title = f"## 🔄 Auto-Setup: {_ac_database.upper()}" if _ac_lang == 'en' else f"## 🔄 自动设置: {_ac_database.upper()}"
+        st.markdown(_ac_title)
+        _ac_info = f"Converting raw data in `{_ac_source}` to optimized format..." if _ac_lang == 'en' else f"正在将 `{_ac_source}` 中的原始数据转换为优化格式..."
+        st.info(_ac_info)
+        
+        try:
+            _ac_success, _ac_failed = convert_csv_to_parquet(_ac_source, _ac_source, overwrite=False)
+        except Exception as _ac_e:
+            _ac_success, _ac_failed = 0, 1
+            st.error(f"❌ Conversion error: {_ac_e}" if _ac_lang == 'en' else f"❌ 转换出错: {_ac_e}")
+        
+        # 转换后自动重新验证
+        _ac_validation = validate_database_path(_ac_source, _ac_database)
+        st.session_state.last_validation = _ac_validation
+        st.session_state.last_validated_path = _ac_source
+        
+        if _ac_validation['valid']:
+            st.session_state.data_path = _ac_source
+            st.session_state.path_validated = True
+            st.success(_ac_validation['message'])
+            st.balloons()
+            import time as _ac_time
+            _ac_time.sleep(2)
+            st.rerun()
+        else:
+            st.session_state.path_validated = False
+            if _ac_success > 0:
+                _partial_msg = (f"⚠️ Converted {_ac_success} items but validation still incomplete. "
+                                f"You may need to check your data files." if _ac_lang == 'en' else
+                                f"⚠️ 已转换 {_ac_success} 项，但验证仍未通过。请检查数据文件。")
+                st.warning(_partial_msg)
+            st.error(_ac_validation['message'])
+            if _ac_validation.get('suggestion'):
+                st.info(_ac_validation['suggestion'])
+    
+    # 处理CSV转换对话框（保留手动入口作为备用）
     if st.session_state.get('show_convert_dialog', False):
         render_convert_dialog()
     
