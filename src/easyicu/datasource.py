@@ -2663,14 +2663,20 @@ def load_bucketed_table_aggregated(
     elif db_name == 'hirid':
         # 🚀 HiRID 优化: 在 DuckDB 中直接完成时间转换（datetime → 相对入院小时数）
         # 这样避免了 Python 中的 merge + 时间计算开销（从 20s 优化到 0.6s）
-        # 🔧 FIX: HiRID 的 general_table 可能是 CSV 或 Parquet 格式
+        # 🔧 FIX: HiRID 的 general_table 可能有多种文件名和格式
         general_path = data_source.base_path / 'general_table.parquet'
         general_read_func = 'read_parquet'
         if not general_path.exists():
-            general_csv = data_source.base_path / 'general_table.csv'
-            if general_csv.exists():
-                general_path = general_csv
-                general_read_func = 'read_csv'
+            # R ricu 惯例使用 general.parquet
+            general_alt = data_source.base_path / 'general.parquet'
+            if general_alt.exists():
+                general_path = general_alt
+            else:
+                # 最后回退到 CSV
+                general_csv = data_source.base_path / 'general_table.csv'
+                if general_csv.exists():
+                    general_path = general_csv
+                    general_read_func = 'read_csv'
         
         # HiRID: 使用 general 表的 admissiontime 计算相对小时数
         time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {interval_minutes / 60}) * {interval_minutes / 60}"
@@ -3252,10 +3258,14 @@ def load_bucketed_table_multi_aggregated(
         general_path = base_path / 'general_table.parquet'
         gen_read = 'read_parquet'
         if not general_path.exists():
-            general_csv = base_path / 'general_table.csv'
-            if general_csv.exists():
-                general_path = general_csv
-                gen_read = 'read_csv'
+            general_alt = base_path / 'general.parquet'
+            if general_alt.exists():
+                general_path = general_alt
+            else:
+                general_csv = base_path / 'general_table.csv'
+                if general_csv.exists():
+                    general_path = general_csv
+                    gen_read = 'read_csv'
         p_clause = _patient_clause(id_col, patient_ids)
         time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
         query = f"""

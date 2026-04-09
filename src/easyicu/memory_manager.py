@@ -315,6 +315,44 @@ def auto_batch_size(
 # 子进程隔离批处理
 # ============================================================
 
+def _fork_and_run(target, args) -> int:
+    """
+    使用 os.fork() 在子进程中运行 target(args)。
+
+    绕过 multiprocessing.Process 的 daemon 限制——daemon 进程不允许
+    创建 mp.Process 子进程，但 os.fork() 不受此限制。
+    子进程退出后 OS 完整回收所有内存（包括 pymalloc arena 碎片）。
+
+    Args:
+        target: 可调用对象，签名 target(args)
+        args: 传给 target 的参数
+
+    Returns:
+        子进程退出码（0 表示成功）
+    """
+    pid = os.fork()
+    if pid == 0:
+        # ---- 子进程 ----
+        try:
+            target(args)
+            os._exit(0)
+        except SystemExit as e:
+            os._exit(e.code if isinstance(e.code, int) else 1)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            os._exit(1)
+    else:
+        # ---- 父进程 ----
+        _, status = os.waitpid(pid, 0)
+        if hasattr(os, 'waitstatus_to_exitcode'):
+            return os.waitstatus_to_exitcode(status)
+        # Python < 3.9 fallback
+        if os.WIFEXITED(status):
+            return os.WEXITSTATUS(status)
+        return -1
+
+
 def _subprocess_load_worker(args: dict) -> str:
     """
     在子进程中加载概念数据的 worker 函数。
@@ -558,9 +596,20 @@ def subprocess_batch_load(
     num_batches = (total + batch_size - 1) // batch_size
     
     easyicu_data_path = os.environ.get('EASYICU_DATA_PATH', '')
+
+    # 检测是否在 daemon 进程中
+    # daemon 进程不允许 mp.Process.start()，但 os.fork() 不受此限制
+    _in_daemon = False
+    try:
+        _in_daemon = mp.current_process().daemon
+    except Exception:
+        pass
+    _use_raw_fork = _in_daemon and hasattr(os, 'fork')
     
     if verbose:
-        print(f"🔄 子进程隔离分批: {total} patients, batch_size={batch_size}, {num_batches} batches")
+        mode = "os.fork()" if _use_raw_fork else "mp.Process"
+        print(f"🔄 子进程隔离分批: {total} patients, batch_size={batch_size}, "
+              f"{num_batches} batches [{mode}]")
     
     temp_dir = tempfile.mkdtemp(prefix='easyicu_batch_')
     try:
@@ -589,18 +638,23 @@ def subprocess_batch_load(
             }
             
             # 在子进程中运行
-            # Linux/macOS 使用 fork（快速，继承父进程已初始化的状态）
-            # Windows 仅支持 spawn（需要重新导入，较慢但兼容）
-            _method = 'fork' if hasattr(os, 'fork') else 'spawn'
-            ctx = mp.get_context(_method)
-            proc = ctx.Process(target=_subprocess_load_worker, args=(args,))
-            proc.start()
-            proc.join()
+            if _use_raw_fork:
+                # daemon 进程: 用 os.fork() 绕过 mp.Process 的 daemon 限制
+                exitcode = _fork_and_run(_subprocess_load_worker, args)
+            else:
+                # 非 daemon: 用 mp.Process（更安全的管理方式）
+                # Linux/macOS 使用 fork（快速），Windows 用 spawn
+                _method = 'fork' if hasattr(os, 'fork') else 'spawn'
+                ctx = mp.get_context(_method)
+                proc = ctx.Process(target=_subprocess_load_worker, args=(args,))
+                proc.start()
+                proc.join()
+                exitcode = proc.exitcode
             
-            if proc.exitcode != 0:
-                logger.warning(f"⚠️ Batch {batch_num} 子进程退出码: {proc.exitcode}")
+            if exitcode != 0:
+                logger.warning(f"⚠️ Batch {batch_num} 子进程退出码: {exitcode}")
                 if verbose:
-                    print(f" ❌ (exit={proc.exitcode})")
+                    print(f" ❌ (exit={exitcode})")
                 continue
             
             output_files = [f for f in Path(temp_dir).glob(f"batch_{batch_num:04d}*.parquet")]
