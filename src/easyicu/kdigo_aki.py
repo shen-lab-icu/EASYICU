@@ -707,7 +707,7 @@ def _detect_time_col(df: pd.DataFrame, hint: Optional[str] = None) -> Optional[s
     
     # Priority order for time columns
     time_candidates = [
-        'charttime', 'measuredat', 'measuredat_minutes',
+        'charttime', 'starttime', 'measuredat', 'measuredat_minutes',
         'observationoffset', 'labresultoffset', 'datetime',
         'nursingchartoffset', 'OffsetOfDataFloat', 'Offset',
         'intakeoutputoffset', 'intakeoutputentryoffset',  # eICU urine

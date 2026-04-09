@@ -260,6 +260,7 @@ def _query_patient_ids_fast(
         conn.execute("SET timezone='UTC'")
         conn.execute("SET enable_progress_bar = false")
         conn.execute("SET enable_progress_bar_print = false")
+        conn.execute("SET memory_limit = '2GB'")
         return conn.execute(query).fetchnumpy()['patient_id'].tolist()
     finally:
         conn.close()
@@ -287,6 +288,7 @@ def _count_patient_ids_fast(loader: 'BaseICULoader', table_name: str, id_col: st
         conn.execute("SET timezone='UTC'")
         conn.execute("SET enable_progress_bar = false")
         conn.execute("SET enable_progress_bar_print = false")
+        conn.execute("SET memory_limit = '2GB'")
         result = conn.execute(query).fetchone()
         return int(result[0]) if result and result[0] is not None else None
     finally:

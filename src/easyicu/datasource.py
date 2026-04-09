@@ -92,6 +92,13 @@ def _get_duckdb_connection():
         _max_threads = os.environ.get('EASYICU_DUCKDB_THREADS')
         if _max_threads:
             con.execute(f"SET threads = {int(_max_threads)}")
+        # 🚀 限制 DuckDB 内存使用，防止在大内存服务器上分配过多缓冲区
+        # 默认值为系统内存的 75%（1.5TB 服务器上约 1.1TB），严重浪费
+        _mem_limit = os.environ.get('EASYICU_DUCKDB_MEMORY_LIMIT')
+        if _mem_limit:
+            con.execute(f"SET memory_limit = '{_mem_limit}'")
+        else:
+            con.execute("SET memory_limit = '2GB'")
         _duckdb_local.con = con
     return con
 
