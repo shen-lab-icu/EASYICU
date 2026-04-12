@@ -44,6 +44,7 @@ htmlcov/
 .tox/
 .hypothesis/
 .mypy_cache/
+.tmp/
 
 # Root-level ad hoc test/benchmark scripts and outputs
 test_*

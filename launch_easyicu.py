@@ -114,6 +114,13 @@ def install_easyicu(force: bool = False) -> None:
     python_bin = str(_venv_python())
     print("Installing EasyICU webapp dependencies...")
     _run([python_bin, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    subprocess.run(
+        [python_bin, "-m", "pip", "uninstall", "-y", "easyicu"],
+        env=_runtime_env(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
     _run([python_bin, "-m", "pip", "install", "--upgrade", "-e", ".[webapp]"], cwd=PROJECT_ROOT)
 
     STAMP_FILE.write_text(json.dumps(desired_state, indent=2), encoding="utf-8")
