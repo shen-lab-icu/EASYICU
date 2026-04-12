@@ -1088,6 +1088,26 @@ def load_concepts(
     if effective_batch_size is None and batch_size is not None:
         effective_batch_size = batch_size
     
+    # 🔧 FIX: 当 batch_size 已指定但 _id_col/_all_ids 未设置时（patient_ids=None 全量加载），
+    # 从数据库查询所有患者 ID 以启用分批。之前 batch_size 在此场景下被静默忽略，
+    # 导致 34K HiRID 患者在单次 DuckDB 查询中加载，32GB PC 上 OOM。
+    if effective_batch_size is not None and _id_col is None:
+        try:
+            _total_patients_in_db = _get_total_patient_count(loader)
+            if _total_patients_in_db and _total_patients_in_db > effective_batch_size:
+                _fetched_ids = _sample_patient_ids(loader, _total_patients_in_db, verbose=False, sample_strategy='sorted')
+                if _fetched_ids:
+                    # 检测 ID 列名
+                    _db_id_map = {'miiv': 'stay_id', 'mimic': 'icustay_id', 'eicu': 'patientunitstayid',
+                                  'aumc': 'admissionid', 'hirid': 'patientid', 'sic': 'CaseID'}
+                    _id_col = _db_id_map.get(loader.database, 'stay_id')
+                    _all_ids = list(_fetched_ids)
+                    _total_patients = len(_all_ids)
+                    if verbose:
+                        print(f"📊 分批启用: 获取 {_total_patients} 患者ID, batch_size={effective_batch_size}")
+        except Exception as e:
+            logger.debug(f"获取患者ID以启用分批失败: {e}")
+    
     # 自动检测：用户指定了 patient_ids 但未指定 batch_size
     if (not auto_chunk_strategy) and effective_batch_size is None and _total_patients is not None and _total_patients > 5000:
         avail_mem = get_available_memory_mb()

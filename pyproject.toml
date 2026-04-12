@@ -50,7 +50,7 @@ all = [
 
 [project.scripts]
 easyicu = "easyicu.scripts.extract_features:main"
-easyicu-webapp = "easyicu.webapp:run_app"
+easyicu-webapp = "easyicu.webapp.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/shen-lab-icu/easyicu"

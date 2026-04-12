@@ -22,6 +22,39 @@ EasyICU 是一个专为重症监护室（ICU）数据分析设计的 Python 工�
 
 ## 快速开始
 
+### 一键启动（推荐）
+
+如果用户只是想快速打开 EasyICU Web 界面，不需要先装 Anaconda，也不需要先打开 VS Code。
+
+前提：
+- 已安装 **Python 3.9+**
+- 首次启动时可以联网下载依赖
+
+启动方式：
+- **Windows**：双击 `start_easyicu.bat`
+- **macOS**：双击 `start_easyicu.command`
+- **Linux**：运行 `./start_easyicu.sh`
+
+首次运行会自动完成：
+- 创建本地虚拟环境 `.easyicu-runtime/venv`
+- 安装 EasyICU Web 所需依赖
+- 启动本地服务并打开浏览器
+
+默认地址：
+
+```text
+http://127.0.0.1:8501
+```
+
+停止服务：
+- **Windows**：双击 `stop_easyicu.bat`
+- **macOS**：双击 `stop_easyicu.command`
+- **Linux**：运行 `./stop_easyicu.sh`
+
+说明：
+- 首次启动通常会比后续启动慢几分钟
+- macOS 首次双击脚本时，可能需要在系统安全提示里选择“仍要打开”
+
 ### 第一步：安装 Anaconda
 
 1. **下载 Anaconda**
