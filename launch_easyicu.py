@@ -28,6 +28,17 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8501
 
 
+def _latest_source_mtime_ns() -> int:
+    latest = PYPROJECT_FILE.stat().st_mtime_ns
+    src_root = PROJECT_ROOT / "src" / "easyicu"
+    for path in src_root.rglob("*.py"):
+        try:
+            latest = max(latest, path.stat().st_mtime_ns)
+        except OSError:
+            continue
+    return latest
+
+
 def _venv_python() -> Path:
     if os.name == "nt":
         return VENV_DIR / "Scripts" / "python.exe"
@@ -38,6 +49,8 @@ def _runtime_env() -> dict[str, str]:
     env = os.environ.copy()
     env["EASYICU_RUNTIME_DIR"] = str(RUNTIME_DIR)
     env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
     return env
 
 
@@ -65,7 +78,7 @@ def _wait_for_health(port: int, timeout: int = 60) -> bool:
 def _current_install_state() -> dict[str, object]:
     return {
         "schema_version": 1,
-        "pyproject_mtime_ns": PYPROJECT_FILE.stat().st_mtime_ns,
+        "source_mtime_ns": _latest_source_mtime_ns(),
         "python_major": sys.version_info.major,
         "python_minor": sys.version_info.minor,
     }

@@ -5,7 +5,31 @@ interface for loading intensive care datasets, working with configuration
 metadata, and resolving clinical concepts across heterogeneous sources.
 """
 
+import os
+import sys
 import warnings
+
+
+def _configure_stdio_encoding() -> None:
+    """Force UTF-8 stdio on Windows to avoid legacy console codec crashes."""
+    if os.name != "nt":
+        return
+
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+
+
+_configure_stdio_encoding()
 
 # 全局忽略 pandas groupby.apply 相关的 FutureWarning
 warnings.filterwarnings('ignore', message='.*DataFrameGroupBy.apply.*', category=FutureWarning)

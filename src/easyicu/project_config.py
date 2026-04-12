@@ -382,7 +382,7 @@ def validate_paths() -> bool:
         if db_path.exists():
             valid = True
         elif VERBOSE:
-            print(f"ℹ️  Info: {db_name} production data path not found: {db_path}")
+            print(f"Info: {db_name} production data path not found: {db_path}")
     
     return valid
 
