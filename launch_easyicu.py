@@ -9,6 +9,7 @@ dependencies on first run, and starts the EasyICU Streamlit service.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,15 +29,12 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8501
 
 
-def _latest_source_mtime_ns() -> int:
-    latest = PYPROJECT_FILE.stat().st_mtime_ns
-    src_root = PROJECT_ROOT / "src" / "easyicu"
-    for path in src_root.rglob("*.py"):
-        try:
-            latest = max(latest, path.stat().st_mtime_ns)
-        except OSError:
-            continue
-    return latest
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _venv_python() -> Path:
@@ -51,6 +49,7 @@ def _runtime_env() -> dict[str, str]:
     env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("EASYICU_VERBOSE", "0")
     return env
 
 
@@ -77,10 +76,11 @@ def _wait_for_health(port: int, timeout: int = 60) -> bool:
 
 def _current_install_state() -> dict[str, object]:
     return {
-        "schema_version": 1,
-        "source_mtime_ns": _latest_source_mtime_ns(),
+        "schema_version": 2,
+        "pyproject_sha256": _hash_file(PYPROJECT_FILE),
         "python_major": sys.version_info.major,
         "python_minor": sys.version_info.minor,
+        "install_mode": "editable",
     }
 
 
@@ -108,15 +108,33 @@ def install_easyicu(force: bool = False) -> None:
     desired_state = _current_install_state()
     installed_state = _load_install_state()
 
-    if not force and installed_state == desired_state:
+    if not force and installed_state == desired_state and _runtime_package_is_usable():
         return
 
     python_bin = str(_venv_python())
     print("Installing EasyICU webapp dependencies...")
     _run([python_bin, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-    _run([python_bin, "-m", "pip", "install", "--upgrade", ".[webapp]"], cwd=PROJECT_ROOT)
+    _run([python_bin, "-m", "pip", "install", "--upgrade", "-e", ".[webapp]"], cwd=PROJECT_ROOT)
 
     STAMP_FILE.write_text(json.dumps(desired_state, indent=2), encoding="utf-8")
+
+
+def _runtime_package_is_usable() -> bool:
+    python_path = _venv_python()
+    if not python_path.exists():
+        return False
+
+    result = subprocess.run(
+        [
+            str(python_path),
+            "-c",
+            "import easyicu; import easyicu.webapp; print('ok')",
+        ],
+        env=_runtime_env(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
 
 
 def start_easyicu(
@@ -127,14 +145,14 @@ def start_easyicu(
     foreground: bool = False,
     open_browser: bool = True,
 ) -> int:
-    install_easyicu(force=force_reinstall)
-
     if _wait_for_health(port, timeout=1):
         url = f"http://{host}:{port}"
         print(f"EasyICU is already running at {url}")
         if open_browser:
             webbrowser.open(url)
         return 0
+
+    install_easyicu(force=force_reinstall)
 
     python_bin = str(_venv_python())
     cmd = [
