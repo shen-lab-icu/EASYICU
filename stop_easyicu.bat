@@ -1,17 +1,21 @@
 @echo off
 setlocal
 set "SCRIPT_DIR=%~dp0"
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "EASYICU_VERBOSE=0"
+chcp 65001 >nul 2>nul
 
 where py >nul 2>nul
 if %ERRORLEVEL%==0 (
-  py -3 "%SCRIPT_DIR%launch_easyicu.py" stop %*
+  py -3 -X utf8 "%SCRIPT_DIR%launch_easyicu.py" stop %*
   set "EXIT_CODE=%ERRORLEVEL%"
   goto :done
 )
 
 where python >nul 2>nul
 if %ERRORLEVEL%==0 (
-  python "%SCRIPT_DIR%launch_easyicu.py" stop %*
+  python -X utf8 "%SCRIPT_DIR%launch_easyicu.py" stop %*
   set "EXIT_CODE=%ERRORLEVEL%"
   goto :done
 )

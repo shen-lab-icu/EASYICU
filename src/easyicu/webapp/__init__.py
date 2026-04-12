@@ -129,6 +129,7 @@ def run_app(
     child_env = os.environ.copy()
     child_env.setdefault("PYTHONUTF8", "1")
     child_env.setdefault("PYTHONIOENCODING", "utf-8")
+    child_env.setdefault("EASYICU_VERBOSE", "0")
 
     cmd = [
         sys.executable,
