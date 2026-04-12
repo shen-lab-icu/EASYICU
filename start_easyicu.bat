@@ -8,14 +8,14 @@ chcp 65001 >nul 2>nul
 
 where py >nul 2>nul
 if %ERRORLEVEL%==0 (
-  py -3 -X utf8 "%SCRIPT_DIR%launch_easyicu.py" start %*
+  py -3 -X utf8 "%SCRIPT_DIR%launch_easyicu.py" start --force-reinstall %*
   set "EXIT_CODE=%ERRORLEVEL%"
   goto :done
 )
 
 where python >nul 2>nul
 if %ERRORLEVEL%==0 (
-  python -X utf8 "%SCRIPT_DIR%launch_easyicu.py" start %*
+  python -X utf8 "%SCRIPT_DIR%launch_easyicu.py" start --force-reinstall %*
   set "EXIT_CODE=%ERRORLEVEL%"
   goto :done
 )

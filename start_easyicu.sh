@@ -12,7 +12,7 @@ else
   exit 1
 fi
 
-"$PYTHON_BIN" "$SCRIPT_DIR/launch_easyicu.py" start "$@"
+"$PYTHON_BIN" "$SCRIPT_DIR/launch_easyicu.py" start --force-reinstall "$@"
 STATUS=$?
 
 if [ "$STATUS" -ne 0 ]; then
