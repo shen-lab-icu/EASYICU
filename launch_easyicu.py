@@ -152,7 +152,14 @@ def start_easyicu(
     foreground: bool = False,
     open_browser: bool = True,
 ) -> int:
-    if _wait_for_health(port, timeout=1):
+    is_running = _wait_for_health(port, timeout=1)
+
+    if force_reinstall and is_running:
+        print("EasyICU is already running. Stopping it before reinstall...")
+        stop_easyicu()
+        is_running = False
+
+    if is_running:
         url = f"http://{host}:{port}"
         print(f"EasyICU is already running at {url}")
         if open_browser:
