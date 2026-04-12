@@ -22,6 +22,7 @@ def _subprocess_load_module(concepts, database, data_path, patient_ids_filter,
     import os, sys, json
     os.environ.setdefault('EASYICU_DATA_PATH', os.environ.get('EASYICU_DATA_PATH', ''))
     os.environ.setdefault('EASYICU_DUCKDB_THREADS', '4')
+    os.environ.setdefault('EASYICU_DUCKDB_MEMORY_LIMIT', '2GB')
     _src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '')
     if _src not in sys.path:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -71,6 +72,8 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
     """
     import os, sys, json, shutil
     os.environ.setdefault('EASYICU_DATA_PATH', os.environ.get('EASYICU_DATA_PATH', ''))
+    os.environ.setdefault('EASYICU_DUCKDB_THREADS', '4')
+    os.environ.setdefault('EASYICU_DUCKDB_MEMORY_LIMIT', '2GB')
     _src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '')
     if _src not in sys.path:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -78,9 +81,6 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
     import numpy as np
     import pandas as pd
     from easyicu import load_concepts as _lc
-
-    # 限制 DuckDB 线程数，避免在多核服务器上创建数百线程
-    os.environ.setdefault('EASYICU_DUCKDB_THREADS', '4')
 
     # ── 1. 加载概念 ──
     kwargs = dict(
@@ -449,6 +449,7 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
     if _src not in sys.path:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     os.environ.setdefault('EASYICU_DUCKDB_THREADS', '4')
+    os.environ.setdefault('EASYICU_DUCKDB_MEMORY_LIMIT', '2GB')
 
     import pandas as pd
     from easyicu.api import load_concepts as _lc

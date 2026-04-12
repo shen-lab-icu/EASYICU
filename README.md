@@ -22,6 +22,39 @@ EasyICU is a Python toolkit designed for intensive care unit (ICU) data analysis
 
 ## Quick Start Guide
 
+### One-Click Launcher (Recommended)
+
+If users only need to open the EasyICU web interface, they do not need Anaconda or VS Code first.
+
+Requirements:
+- **Python 3.9+** installed
+- Internet access on the first launch to download dependencies
+
+Launch options:
+- **Windows**: double-click `start_easyicu.bat`
+- **macOS**: double-click `start_easyicu.command`
+- **Linux**: run `./start_easyicu.sh`
+
+The first run will automatically:
+- create a local virtual environment in `.easyicu-runtime/venv`
+- install the EasyICU web dependencies
+- start the local service and open the browser
+
+Default URL:
+
+```text
+http://127.0.0.1:8501
+```
+
+Stop the service:
+- **Windows**: double-click `stop_easyicu.bat`
+- **macOS**: double-click `stop_easyicu.command`
+- **Linux**: run `./stop_easyicu.sh`
+
+Notes:
+- The first startup may take a few minutes
+- On macOS, you may need to approve the script in the system security prompt the first time
+
 ### Step 1: Install Anaconda
 
 1. **Download Anaconda**

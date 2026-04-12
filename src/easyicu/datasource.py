@@ -94,8 +94,8 @@ def _get_duckdb_connection():
             con.execute(f"SET threads = {int(_max_threads)}")
         # 🚀 限制 DuckDB 内存使用，防止在大内存服务器上分配过多缓冲区
         # 默认值为系统内存的 75%（1.5TB 服务器上约 1.1TB），严重浪费
-        # 但 2GB 硬编码对 HiRID 全量 34K 患者不够（observations JOIN+GROUP BY 中间结果 > 2GB）
-        # 改为自适应: min(available * 0.25, 8GB), 下限 2GB
+        # 使用保守自适应: min(available * 0.15, 4GB), 下限 2GB
+        # 配合患者分批加载，每次查询只处理部分患者，2-4GB 足够
         _mem_limit = os.environ.get('EASYICU_DUCKDB_MEMORY_LIMIT')
         if _mem_limit:
             con.execute(f"SET memory_limit = '{_mem_limit}'")
@@ -103,10 +103,10 @@ def _get_duckdb_connection():
             try:
                 import psutil
                 _avail_gb = psutil.virtual_memory().available / (1024 ** 3)
-                _duck_gb = max(2.0, min(_avail_gb * 0.25, 8.0))
+                _duck_gb = max(2.0, min(_avail_gb * 0.15, 4.0))
                 con.execute(f"SET memory_limit = '{_duck_gb:.1f}GB'")
             except Exception:
-                con.execute("SET memory_limit = '4GB'")
+                con.execute("SET memory_limit = '2GB'")
         _duckdb_local.con = con
     return con
 
