@@ -126,6 +126,9 @@ def run_app(
 
     app_path = Path(__file__).parent / 'app.py'
     Path(__file__).parent / '.streamlit'
+    child_env = os.environ.copy()
+    child_env.setdefault("PYTHONUTF8", "1")
+    child_env.setdefault("PYTHONIOENCODING", "utf-8")
 
     cmd = [
         sys.executable,
@@ -165,6 +168,7 @@ def run_app(
         with log_path.open('a', encoding='utf-8') as log_file:
             process = subprocess.Popen(
                 cmd,
+                env=child_env,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
@@ -185,7 +189,7 @@ def run_app(
         while retry_count < max_retries:
             print(f"🚀 启动服务... (尝试 {retry_count + 1}/{max_retries})")
 
-            process = subprocess.Popen(cmd)
+            process = subprocess.Popen(cmd, env=child_env)
 
             try:
                 process.wait()
@@ -209,7 +213,7 @@ def run_app(
             print(f"❌ 重试次数已达上限 ({max_retries})，退出")
             sys.exit(1)
     else:
-        subprocess.run(cmd)
+        subprocess.run(cmd, env=child_env)
 
 
 def stop_app():
