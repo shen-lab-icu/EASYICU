@@ -65,238 +65,316 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-# 🎨 现代化 CSS 样式系统
+# 🎨 现代化 CSS 样式系统 — Premium Design System v2
 st.markdown("""
 <style>
-    /* ============ 全局主题变量 ============ */
+    /* ============================================================
+       EasyICU Design System v2 — Premium Medical Analytics UI
+       ============================================================ */
+
+    /* ============ 谷歌字体导入（必须在所有规则之前） ============ */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+    /* ============ 全局设计令牌 ============ */
     :root {
-        /* 主色调 */
-        --primary-color: #667eea;
-        --primary-dark: #5a67d8;
-        --secondary-color: #764ba2;
-        --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        --gradient-success: linear-gradient(135deg, #10b981 0%, #059669 100%);
-        --gradient-info: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
-        --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-        --gradient-danger: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-        
-        /* 功能色 */
+        /* 品牌主色 — 冷调医疗蓝紫 */
+        --primary-color: #6366f1;
+        --primary-dark: #4f46e5;
+        --primary-light: #818cf8;
+        --secondary-color: #8b5cf6;
+        --accent-color: #06b6d4;
+
+        /* 渐变系统 */
+        --gradient-primary: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        --gradient-success: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+        --gradient-info: linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%);
+        --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
+        --gradient-danger: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
+        --gradient-hero: linear-gradient(135deg, #0f172a 0%, #1e1b4b 40%, #312e81 100%);
+        --gradient-glass: linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,255,255,0.05));
+
+        /* 语义色 */
         --success-color: #10b981;
         --warning-color: #f59e0b;
         --danger-color: #ef4444;
         --info-color: #06b6d4;
-        
-        /* 阴影 */
-        --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.08);
-        --shadow-hover: 0 8px 30px rgba(0, 0, 0, 0.12);
-        --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.06);
-        --shadow-glow: 0 4px 15px rgba(102, 126, 234, 0.35);
-        
+
+        /* 阴影系统 — 分层深度 */
+        --shadow-xs: 0 1px 2px rgba(0,0,0,0.04);
+        --shadow-soft: 0 4px 16px rgba(0,0,0,0.06);
+        --shadow-card: 0 1px 3px rgba(0,0,0,0.06), 0 6px 16px rgba(0,0,0,0.04);
+        --shadow-hover: 0 8px 30px rgba(99,102,241,0.12), 0 4px 12px rgba(0,0,0,0.05);
+        --shadow-glow: 0 0 20px rgba(99,102,241,0.25), 0 4px 16px rgba(99,102,241,0.15);
+        --shadow-elevated: 0 12px 40px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.03);
+
         /* 圆角 */
         --radius-sm: 8px;
         --radius-md: 12px;
         --radius-lg: 16px;
-        --radius-xl: 20px;
-        
+        --radius-xl: 24px;
+        --radius-2xl: 32px;
+
         /* 动画 */
-        --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        --transition-fast: all 0.15s ease;
-        
+        --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+        --transition-smooth: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        --transition-fast: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        --transition-spring: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+        /* 排版 */
+        --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
         /* 浅色主题 */
+        --bg-primary: #f8fafc;
+        --bg-secondary: #ffffff;
+        --bg-tertiary: #f1f5f9;
         --card-bg-light: #ffffff;
-        --text-primary-light: #1e1e1e;
+        --text-primary-light: #0f172a;
         --text-secondary-light: #64748b;
-        --border-light: rgba(102, 126, 234, 0.1);
-        
+        --text-tertiary-light: #94a3b8;
+        --border-light: rgba(99,102,241,0.08);
+        --border-subtle: #e2e8f0;
+
         /* 深色主题 */
-        --card-bg-dark: rgba(30, 35, 45, 0.95);
-        --text-primary-dark: #e0e0e0;
+        --card-bg-dark: rgba(30, 32, 48, 0.95);
+        --text-primary-dark: #f1f5f9;
         --text-secondary-dark: #94a3b8;
-        --border-dark: rgba(102, 126, 234, 0.2);
+        --border-dark: rgba(99,102,241,0.15);
     }
     
+    /* ============ 全局排版 ============ */
+    html, body, .stApp {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+    /* 对内容元素应用字体 */
+    .stMarkdown, .stMarkdown p, .stMarkdown li,
+    .stAlert, div[data-testid="stMetric"],
+    div[data-baseweb="select"], div[data-baseweb="input"],
+    div[data-baseweb="textarea"], div[data-baseweb="tab-list"],
+    h1, h2, h3, h4, h5, h6, label,
+    input, textarea, select, option, td, th {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
     /* ============ 页面头部 ============ */
     .block-container {
         padding-top: 0.5rem !important;
         margin-top: 0 !important;
+        max-width: clamp(900px, 88%, 1600px) !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
     }
     header[data-testid="stHeader"] {
         height: 0 !important;
         min-height: 0 !important;
         visibility: hidden !important;
     }
-    
-    /* ============ 现代化标签页 ============ */
+
+    /* ============ 现代化标签页 — Pill 风格 ============ */
     div[data-baseweb="tab-list"] {
-        gap: 10px !important;
+        gap: 6px !important;
         margin-top: 0 !important;
-        padding: 12px !important;
-        background: linear-gradient(180deg, rgba(102,126,234,0.05), transparent) !important;
-        border-radius: var(--radius-lg) !important;
-        border: 1px solid rgba(102, 126, 234, 0.08);
+        padding: 6px !important;
+        background: rgba(241,245,249,0.8) !important;
+        border-radius: var(--radius-xl) !important;
+        border: 1px solid var(--border-subtle);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
     }
-    
+
     div[data-baseweb="tab-list"] button {
-        font-size: 1.15rem !important;
+        font-size: 0.95rem !important;
         font-weight: 600 !important;
-        padding: 12px 24px !important;
-        border-radius: var(--radius-md) !important;
-        transition: var(--transition-smooth) !important;
-        border: 1px solid transparent !important;
+        padding: 10px 22px !important;
+        border-radius: var(--radius-lg) !important;
+        transition: var(--transition-fast) !important;
+        border: none !important;
         background: transparent !important;
+        color: var(--text-secondary-light) !important;
+        letter-spacing: 0.01em;
     }
-    
+
     div[data-baseweb="tab-list"] button:hover {
-        background: rgba(102, 126, 234, 0.1) !important;
-        border-color: rgba(102, 126, 234, 0.2) !important;
+        background: rgba(99,102,241,0.08) !important;
+        color: var(--primary-color) !important;
     }
-    
+
     div[data-baseweb="tab-list"] button[aria-selected="true"] {
         background: var(--gradient-primary) !important;
         color: white !important;
-        box-shadow: var(--shadow-glow) !important;
-        border-color: transparent !important;
+        box-shadow: 0 2px 12px rgba(99,102,241,0.3) !important;
+        border: none !important;
     }
-    
+
     div[data-baseweb="tab-list"] button p {
-        font-size: 1.15rem !important;
+        font-size: 0.95rem !important;
         font-weight: 600 !important;
     }
-    
-    /* ============ Metric 卡片美化 ============ */
+
+    /* Tab 下划线隐藏 */
+    div[data-baseweb="tab-highlight"] {
+        display: none !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        div[data-baseweb="tab-list"] {
+            background: rgba(30,32,48,0.8) !important;
+            border-color: var(--border-dark);
+        }
+        div[data-baseweb="tab-list"] button {
+            color: var(--text-secondary-dark) !important;
+        }
+        div[data-baseweb="tab-list"] button:hover {
+            background: rgba(99,102,241,0.15) !important;
+        }
+    }
+
+    /* ============ Metric 卡片 — 毛玻璃风格 ============ */
     div[data-testid="stMetric"] {
-        background: linear-gradient(145deg, rgba(255,255,255,0.98), rgba(248,250,252,0.95));
-        border: 1px solid var(--border-light);
+        background: rgba(255,255,255,0.7);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(99,102,241,0.06);
         border-radius: var(--radius-lg);
         padding: 1.2rem 1.5rem;
-        box-shadow: var(--shadow-card);
+        box-shadow: var(--shadow-xs);
         transition: var(--transition-smooth);
         position: relative;
         overflow: hidden;
     }
-    
+
     div[data-testid="stMetric"]::before {
         content: '';
         position: absolute;
         top: 0;
         left: 0;
-        width: 4px;
+        width: 3px;
         height: 100%;
         background: var(--gradient-primary);
-        border-radius: 4px 0 0 4px;
+        border-radius: 3px 0 0 3px;
+        opacity: 0.8;
     }
-    
+
     div[data-testid="stMetric"]:hover {
-        transform: translateY(-4px);
+        transform: translateY(-2px);
         box-shadow: var(--shadow-hover);
-        border-color: rgba(102, 126, 234, 0.25);
+        border-color: rgba(99,102,241,0.15);
     }
-    
+
     div[data-testid="stMetric"] label {
         font-weight: 600 !important;
         color: var(--text-secondary-light) !important;
-        font-size: 0.85rem !important;
+        font-size: 0.78rem !important;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.06em;
     }
-    
+
     div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
-        font-size: 1.75rem !important;
-        font-weight: 700 !important;
-        background: var(--gradient-primary);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
+        font-size: 1.6rem !important;
+        font-weight: 800 !important;
+        color: var(--text-primary-light) !important;
+        background: none !important;
+        -webkit-text-fill-color: unset !important;
     }
-    
-    /* 深色模式 Metric */
+
     @media (prefers-color-scheme: dark) {
         div[data-testid="stMetric"] {
-            background: linear-gradient(145deg, rgba(30,35,45,0.98), rgba(40,45,55,0.95));
+            background: rgba(30,32,48,0.7);
             border-color: var(--border-dark);
         }
         div[data-testid="stMetric"] label {
             color: var(--text-secondary-dark) !important;
         }
+        div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+            color: var(--text-primary-dark) !important;
+        }
     }
-    
-    /* ============ 主标题样式 ============ */
+
+    /* ============ 主标题 — 精致排版 ============ */
     .main-header {
-        font-size: 2.2rem;
+        font-size: clamp(1.5rem, 1.2rem + 0.5vw, 2rem);
         font-weight: 800;
-        background: var(--gradient-primary);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
+        color: var(--text-primary-light);
         margin-top: 0;
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.2rem;
         text-align: center;
-        letter-spacing: -0.5px;
+        letter-spacing: -0.03em;
+        line-height: 1.2;
     }
-    
+
     .sub-header {
-        font-size: 1.1rem;
-        color: var(--text-secondary-light);
-        margin-bottom: 1.5rem;
+        font-size: clamp(0.85rem, 0.8rem + 0.15vw, 1rem);
+        color: var(--text-tertiary-light);
+        margin-bottom: 1rem;
         text-align: center;
         font-weight: 400;
+        letter-spacing: 0.02em;
     }
-    
+
     @media (prefers-color-scheme: dark) {
+        .main-header { color: var(--text-primary-dark); }
         .sub-header { color: var(--text-secondary-dark); }
     }
-    
-    /* ============ 功能卡片 ============ */
+
+    /* ============ 功能卡片 — 精致玻璃 ============ */
     .metric-card, .feature-card {
-        background: linear-gradient(145deg, #ffffff, #f8f9ff);
+        background: rgba(255,255,255,0.75);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
         border-radius: var(--radius-lg);
         padding: 1.4rem;
         margin: 0.5rem 0;
         box-shadow: var(--shadow-card);
-        border: 1px solid var(--border-light);
+        border: 1px solid rgba(99,102,241,0.06);
         transition: var(--transition-smooth);
         color: var(--text-primary-light);
     }
-    
+
     .metric-card:hover, .feature-card:hover {
         transform: translateY(-3px);
         box-shadow: var(--shadow-hover);
-        border-color: rgba(102, 126, 234, 0.3);
+        border-color: rgba(99,102,241,0.15);
     }
-    
+
     @media (prefers-color-scheme: dark) {
         .metric-card, .feature-card {
-            background: linear-gradient(145deg, rgba(40,45,60,0.95), rgba(30,35,50,0.95));
+            background: rgba(30,32,48,0.7);
             border-color: var(--border-dark);
             color: var(--text-primary-dark);
         }
     }
-    
+
     .feature-card h4 {
-        background: var(--gradient-primary);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        margin-bottom: 0.8rem;
-        font-weight: 600;
+        color: var(--primary-color);
+        margin-bottom: 0.6rem;
+        font-weight: 700;
+        font-size: 1rem;
     }
-    
-    /* ============ 按钮样式 ============ */
+
+    /* ============ 按钮 — 精致渐变 ============ */
     .stButton > button[kind="primary"] {
         background: var(--gradient-primary) !important;
         border: none !important;
         border-radius: var(--radius-md) !important;
-        padding: 0.75rem 2rem !important;
+        padding: 0.65rem 1.8rem !important;
         font-weight: 600 !important;
-        box-shadow: var(--shadow-glow) !important;
+        font-size: 0.9rem !important;
+        letter-spacing: 0.01em;
+        box-shadow: 0 2px 8px rgba(99,102,241,0.25) !important;
         transition: var(--transition-smooth) !important;
     }
-    
+
     .stButton > button[kind="primary"]:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.45) !important;
+        transform: translateY(-1px) !important;
+        box-shadow: var(--shadow-glow) !important;
     }
-    
+
+    .stButton > button[kind="primary"]:active {
+        transform: translateY(0) !important;
+    }
+
     /* 侧边栏按钮 */
     [data-testid="stSidebar"] .stButton button {
         background: var(--gradient-primary) !important;
@@ -304,311 +382,614 @@ st.markdown("""
         border: none !important;
         font-weight: 600 !important;
         border-radius: var(--radius-md) !important;
+        letter-spacing: 0.01em;
+        transition: var(--transition-smooth) !important;
     }
-    
+
     [data-testid="stSidebar"] .stButton button:hover {
         box-shadow: var(--shadow-glow) !important;
         transform: translateY(-1px) !important;
     }
-    
-    /* ============ 状态提示框 ============ */
+
+    /* ============ 状态提示框 — 更现代 ============ */
     .success-box {
-        background: rgba(16, 185, 129, 0.12);
-        border-left: 4px solid var(--success-color);
-        border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-        padding: 12px 16px;
-        margin: 10px 0;
+        background: linear-gradient(135deg, rgba(16,185,129,0.08), rgba(52,211,153,0.04));
+        border-left: 3px solid var(--success-color);
+        border-radius: 0 var(--radius-md) var(--radius-md) 0;
+        padding: 14px 18px;
+        margin: 12px 0;
         color: #065f46;
+        font-size: 0.9rem;
     }
-    
+
     .warning-box {
-        background: rgba(245, 158, 11, 0.12);
-        border-left: 4px solid var(--warning-color);
-        border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-        padding: 12px 16px;
-        margin: 10px 0;
+        background: linear-gradient(135deg, rgba(245,158,11,0.08), rgba(251,191,36,0.04));
+        border-left: 3px solid var(--warning-color);
+        border-radius: 0 var(--radius-md) var(--radius-md) 0;
+        padding: 14px 18px;
+        margin: 12px 0;
         color: #92400e;
+        font-size: 0.9rem;
     }
-    
+
     .info-box {
-        background: rgba(6, 182, 212, 0.12);
-        border-left: 4px solid var(--info-color);
-        border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-        padding: 12px 16px;
-        margin: 10px 0;
+        background: linear-gradient(135deg, rgba(6,182,212,0.08), rgba(34,211,238,0.04));
+        border-left: 3px solid var(--info-color);
+        border-radius: 0 var(--radius-md) var(--radius-md) 0;
+        padding: 14px 18px;
+        margin: 12px 0;
         color: #0e7490;
+        font-size: 0.9rem;
     }
-    
+
     @media (prefers-color-scheme: dark) {
-        .success-box { color: #6ee7b7; background: rgba(16, 185, 129, 0.15); }
-        .warning-box { color: #fcd34d; background: rgba(245, 158, 11, 0.15); }
-        .info-box { color: #67e8f9; background: rgba(6, 182, 212, 0.15); }
+        .success-box { color: #6ee7b7; background: linear-gradient(135deg, rgba(16,185,129,0.12), rgba(52,211,153,0.06)); }
+        .warning-box { color: #fcd34d; background: linear-gradient(135deg, rgba(245,158,11,0.12), rgba(251,191,36,0.06)); }
+        .info-box { color: #67e8f9; background: linear-gradient(135deg, rgba(6,182,212,0.12), rgba(34,211,238,0.06)); }
     }
-    
-    /* ============ 分隔线 ============ */
+
+    /* ============ 分隔线 — 微妙 ============ */
     .divider {
-        height: 2px;
-        background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.3), transparent);
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--border-subtle), transparent);
         margin: 1.5rem 0;
         border: none;
     }
-    
+
     hr {
         border: none;
-        height: 2px;
-        background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.2), transparent);
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--border-subtle), transparent);
         margin: 1.5rem 0;
     }
-    
+
     /* ============ 统计数字 ============ */
     .stat-number {
-        font-size: 2.5rem;
-        font-weight: 700;
-        background: var(--gradient-primary);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
+        font-size: 2.2rem;
+        font-weight: 800;
+        color: var(--primary-color);
+        letter-spacing: -0.02em;
     }
-    
+
     .stat-label {
-        font-size: 0.9rem;
-        color: var(--text-secondary-light);
+        font-size: 0.78rem;
+        color: var(--text-tertiary-light);
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.06em;
+        font-weight: 600;
     }
-    
+
     @media (prefers-color-scheme: dark) {
         .stat-label { color: var(--text-secondary-dark); }
+        .stat-number { color: var(--primary-light); }
     }
-    
-    /* ============ 患者信息卡片 ============ */
+
+    /* ============ 患者卡片 ============ */
     .patient-card {
-        background: #f8f9fa;
-        border-radius: var(--radius-md);
+        background: rgba(255,255,255,0.75);
+        backdrop-filter: blur(8px);
+        border-radius: var(--radius-lg);
         padding: 1.5rem;
-        border: 2px solid #e2e8f0;
+        border: 1px solid var(--border-subtle);
         margin-bottom: 1rem;
         color: var(--text-primary-light);
         transition: var(--transition-smooth);
     }
-    
+
     .patient-card:hover {
-        border-color: rgba(102, 126, 234, 0.3);
+        border-color: rgba(99,102,241,0.2);
         box-shadow: var(--shadow-soft);
+        transform: translateY(-1px);
     }
-    
+
     @media (prefers-color-scheme: dark) {
         .patient-card {
-            background: rgba(30, 40, 50, 0.9);
-            border-color: rgba(255,255,255,0.15);
+            background: rgba(30,32,48,0.7);
+            border-color: rgba(255,255,255,0.08);
             color: var(--text-primary-dark);
         }
     }
-    
-    .patient-card.critical { border-color: var(--danger-color); background: rgba(239, 68, 68, 0.08); }
-    .patient-card.warning { border-color: var(--warning-color); background: rgba(245, 158, 11, 0.08); }
-    .patient-card.stable { border-color: var(--success-color); background: rgba(16, 185, 129, 0.08); }
-    
-    /* ============ 侧边栏美化 ============ */
-    [data-testid="stSidebar"] {
-        min-width: 450px !important;
-        max-width: 55000px !important;
-    }
-    
+
+    .patient-card.critical { border-color: var(--danger-color); border-width: 2px; }
+    .patient-card.warning { border-color: var(--warning-color); border-width: 2px; }
+    .patient-card.stable { border-color: var(--success-color); border-width: 2px; }
+
+    /* ============ 侧边栏 — 精致 ============ */
+    /* 注意: 侧边栏宽度由顶部动态 CSS 控制 (sidebar_expanded 状态) */
+
     [data-testid="stSidebar"] > div:first-child {
-        min-width: 450px !important;
-        max-width: 55000px !important;
+        background: linear-gradient(180deg, rgba(248,250,252,0.97), rgba(241,245,249,0.97)) !important;
+        border-right: 1px solid var(--border-subtle) !important;
     }
-    
-    /* 侧边栏头部装饰 */
+
+    @media (prefers-color-scheme: dark) {
+        [data-testid="stSidebar"] > div:first-child {
+            background: linear-gradient(180deg, rgba(15,23,42,0.98), rgba(30,32,48,0.98)) !important;
+            border-right-color: var(--border-dark) !important;
+        }
+    }
+
     .sidebar-header {
         background: var(--gradient-primary);
-        border-radius: var(--radius-md);
+        border-radius: var(--radius-lg);
         padding: 1rem 1.5rem;
         text-align: center;
         margin-bottom: 1.5rem;
         color: white;
+        box-shadow: 0 2px 12px rgba(99,102,241,0.2);
     }
-    
+
     .sidebar-header h3 {
         margin: 0;
         font-weight: 700;
+        letter-spacing: -0.01em;
     }
-    
-    /* ============ SOFA2 特殊标识 ============ */
+
+    /* ============ SOFA2 徽章 ============ */
     .sofa2-badge {
-        background: linear-gradient(135deg, #ff6b6b, #ffa500);
+        background: linear-gradient(135deg, #ef4444, #f97316);
         color: white;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 0.8rem;
-        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: 100px;
+        font-size: 0.72rem;
+        font-weight: 700;
         display: inline-block;
-        margin-left: 8px;
-        box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
+        margin-left: 6px;
+        letter-spacing: 0.02em;
+        box-shadow: 0 2px 6px rgba(239,68,68,0.25);
     }
-    
-    /* ============ 数据表格优化 ============ */
+
+    /* ============ 数据表格 ============ */
     .dataframe {
-        border-radius: var(--radius-sm) !important;
+        border-radius: var(--radius-md) !important;
         overflow: hidden;
     }
-    
-    /* 表格字体颜色改为黑色 */
-    [data-testid="stDataFrame"] {
-        color: #000000 !important;
+
+    div[data-testid="stDataFrame"] {
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border-subtle);
+        overflow: hidden;
     }
-    
-    [data-testid="stDataFrame"] table {
-        color: #000000 !important;
-    }
-    
+
     [data-testid="stDataFrame"] th,
     [data-testid="stDataFrame"] td {
         color: #000000 !important;
     }
-    
-    /* 列标题特别强制 */
-    [data-testid="stDataFrame"] thead th,
-    [data-testid="stDataFrame"] thead td,
-    [data-testid="stDataFrame"] .col_heading {
+
+    [data-testid="stDataFrame"] thead th {
         color: #000000 !important;
-        font-weight: 600 !important;
+        font-weight: 700 !important;
+        font-size: 0.82rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
     }
-    
-    .stDataFrame {
-        color: #000000 !important;
-    }
-    
-    .stDataFrame table,
-    .stDataFrame th,
-    .stDataFrame td,
-    .stDataFrame tbody,
-    .stDataFrame thead {
-        color: #000000 !important;
-    }
-    
-    /* 列标题 */
-    .stDataFrame thead th,
-    .stDataFrame thead td,
-    .stDataFrame .col_heading,
-    .stDataFrame th.col_heading {
-        color: #000000 !important;
-        font-weight: 600 !important;
-    }
-    
-    /* DataFrame内部文本元素 */
+
     div[data-testid="stDataFrame"] * {
         color: #000000 !important;
     }
-    
-    /* Streamlit dataframe column headers */
-    div[data-testid="stDataFrame"] div[role="columnheader"],
-    div[data-testid="stDataFrame"] div[data-testid="stDataFrameResizable"] div[role="columnheader"] {
+
+    div[data-testid="stDataFrame"] div[role="columnheader"] {
         color: #000000 !important;
-        font-weight: 600 !important;
+        font-weight: 700 !important;
     }
-    
-    /* Glide data grid headers (Streamlit uses this) */
+
     .dvn-scroller div[class*="header"],
-    .glide-header,
     [class*="headerCell"] {
         color: #000000 !important;
-        font-weight: 600 !important;
+        font-weight: 700 !important;
     }
-    
-    /* 深色模式下保持良好的对比度 */
+
     @media (prefers-color-scheme: dark) {
-        [data-testid="stDataFrame"],
-        [data-testid="stDataFrame"] table,
         [data-testid="stDataFrame"] th,
-        [data-testid="stDataFrame"] td {
-            color: #e0e0e0 !important;
-        }
-        
-        .stDataFrame,
-        .stDataFrame table,
-        .stDataFrame th,
-        .stDataFrame td,
-        .stDataFrame tbody,
-        .stDataFrame thead {
-            color: #e0e0e0 !important;
-        }
-        
-        div[data-testid="stDataFrame"] * {
+        [data-testid="stDataFrame"] td,
+        div[data-testid="stDataFrame"] *,
+        div[data-testid="stDataFrame"] div[role="columnheader"] {
             color: #e0e0e0 !important;
         }
     }
-    
-    /* ============ 进度条美化 ============ */
+
+    /* ============ 进度条 ============ */
     .progress-bar {
-        height: 8px;
-        background: #e2e8f0;
-        border-radius: 4px;
+        height: 6px;
+        background: var(--bg-tertiary);
+        border-radius: 100px;
         overflow: hidden;
     }
-    
+
     .progress-bar-fill {
         height: 100%;
         background: var(--gradient-primary);
-        border-radius: 4px;
-        transition: width 0.3s ease;
+        border-radius: 100px;
+        transition: width 0.5s var(--ease-out-expo);
     }
-    
+
     /* ============ 高亮卡片 ============ */
     .highlight-card {
-        background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
-        border: 2px solid #0ea5e9;
-        border-radius: var(--radius-md);
-        padding: 1.2rem;
+        background: linear-gradient(135deg, rgba(99,102,241,0.04), rgba(139,92,246,0.02));
+        border: 1px solid rgba(99,102,241,0.15);
+        border-radius: var(--radius-lg);
+        padding: 1.4rem 1.6rem;
         margin: 1rem 0;
-        color: #0c4a6e;
+        color: #312e81;
     }
-    
-    .highlight-card h4 { color: #0369a1; margin-bottom: 0.8rem; }
-    .highlight-card p, .highlight-card li { color: #0e7490; }
-    .highlight-card b { color: #0284c7; }
-    
+
+    .highlight-card h4 { color: var(--primary-color); margin-bottom: 0.8rem; font-weight: 700; }
+    .highlight-card p, .highlight-card li { color: #4338ca; }
+    .highlight-card b { color: var(--primary-dark); }
+
     @media (prefers-color-scheme: dark) {
         .highlight-card {
-            background: linear-gradient(135deg, #0c4a6e, #164e63);
-            border-color: #06b6d4;
-            color: #e0f2fe;
+            background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(139,92,246,0.05));
+            border-color: rgba(99,102,241,0.25);
+            color: #c7d2fe;
         }
-        .highlight-card h4 { color: #67e8f9; }
-        .highlight-card p, .highlight-card li { color: #a5f3fc; }
-        .highlight-card b { color: #22d3ee; }
+        .highlight-card h4 { color: #a5b4fc; }
+        .highlight-card p, .highlight-card li { color: #c7d2fe; }
+        .highlight-card b { color: #818cf8; }
     }
-    
-    /* ============ 动画效果 ============ */
+
+    /* ============ 动画 ============ */
     @keyframes fadeInUp {
-        from {
-            opacity: 0;
-            transform: translateY(20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        from { opacity: 0; transform: translateY(16px); }
+        to { opacity: 1; transform: translateY(0); }
     }
-    
     .animate-fade-in {
-        animation: fadeInUp 0.4s ease-out;
+        animation: fadeInUp 0.5s var(--ease-out-expo);
     }
-    
+
+    @keyframes shimmer {
+        0% { background-position: -200% 0; }
+        100% { background-position: 200% 0; }
+    }
+
     @keyframes pulse {
         0%, 100% { opacity: 1; }
-        50% { opacity: 0.6; }
+        50% { opacity: 0.5; }
     }
-    
-    .animate-pulse {
-        animation: pulse 2s infinite;
+    .animate-pulse { animation: pulse 2.5s infinite; }
+
+    @keyframes float {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-6px); }
     }
-    
-    /* ============ Tooltip 美化 ============ */
+
+    /* ============ 输入控件 ============ */
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="input"] > div {
+        border-radius: var(--radius-md) !important;
+        border-color: var(--border-subtle) !important;
+        transition: var(--transition-fast) !important;
+    }
+
+    div[data-baseweb="select"] > div:focus-within,
+    div[data-baseweb="input"] > div:focus-within {
+        border-color: var(--primary-color) !important;
+        box-shadow: 0 0 0 3px rgba(99,102,241,0.1) !important;
+    }
+
+    /* ============ Expander ============ */
+    details[data-testid="stExpander"] {
+        border: 1px solid var(--border-subtle) !important;
+        border-radius: var(--radius-lg) !important;
+        overflow: hidden;
+    }
+
+    details[data-testid="stExpander"] summary {
+        font-weight: 600 !important;
+        font-size: 0.9rem !important;
+    }
+
+    /* ============ Tooltip ============ */
     [data-baseweb="tooltip"] {
-        border-radius: var(--radius-sm) !important;
-        box-shadow: var(--shadow-soft) !important;
+        border-radius: var(--radius-md) !important;
+        box-shadow: var(--shadow-elevated) !important;
+    }
+
+    /* ============ Streamlit Alert 美化 ============ */
+    div[data-testid="stAlert"] {
+        border-radius: var(--radius-md) !important;
+        border: none !important;
+        font-size: 0.88rem !important;
+    }
+
+    /* ============ 入口页面 Hero ============ */
+    .hero-container {
+        background: var(--gradient-hero);
+        border-radius: var(--radius-2xl);
+        padding: clamp(2.5rem, 2rem + 1.5vw, 4rem) clamp(1.5rem, 1rem + 1vw, 3rem) clamp(2rem, 1.5rem + 1.5vw, 3.5rem);
+        margin: 0 auto 2rem;
+        max-width: min(900px, 85%);
+        text-align: center;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .hero-container::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: radial-gradient(ellipse at 30% 20%, rgba(99,102,241,0.15) 0%, transparent 50%),
+                    radial-gradient(ellipse at 70% 80%, rgba(139,92,246,0.1) 0%, transparent 50%);
+        animation: float 8s ease-in-out infinite;
+    }
+
+    .hero-title {
+        font-size: clamp(2rem, 1.5rem + 1.5vw, 3rem);
+        font-weight: 900;
+        color: #ffffff;
+        letter-spacing: -0.04em;
+        line-height: 1.15;
+        margin-bottom: 0.5rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .hero-subtitle {
+        font-size: 1.05rem;
+        color: rgba(255,255,255,0.65);
+        font-weight: 400;
+        letter-spacing: 0.02em;
+        position: relative;
+        z-index: 1;
+    }
+
+    .hero-badge {
+        display: inline-block;
+        background: rgba(255,255,255,0.12);
+        border: 1px solid rgba(255,255,255,0.15);
+        border-radius: 100px;
+        padding: 6px 16px;
+        font-size: 0.78rem;
+        color: rgba(255,255,255,0.8);
+        font-weight: 500;
+        margin-bottom: 1.2rem;
+        letter-spacing: 0.04em;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+    }
+
+    /* ============ 入口模式卡片 — Glass ============ */
+    .mode-card {
+        background: rgba(255,255,255,0.06);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: var(--radius-xl);
+        padding: 2.5rem 2rem;
+        text-align: center;
+        cursor: pointer;
+        transition: var(--transition-smooth);
+        position: relative;
+        overflow: hidden;
+    }
+
+    .mode-card:hover {
+        transform: translateY(-4px);
+        border-color: rgba(255,255,255,0.2);
+        box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+    }
+
+    .mode-card-icon {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+        display: block;
+    }
+
+    .mode-card-title {
+        font-size: 1.3rem;
+        font-weight: 700;
+        color: #ffffff;
+        margin-bottom: 0.6rem;
+    }
+
+    .mode-card-desc {
+        font-size: 0.88rem;
+        color: rgba(255,255,255,0.6);
+        line-height: 1.6;
+        margin-bottom: 1.2rem;
+    }
+
+    .mode-card-tag {
+        display: inline-block;
+        padding: 5px 14px;
+        border-radius: 100px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+    }
+
+    .mode-card-tag.green {
+        background: rgba(16,185,129,0.2);
+        color: #34d399;
+        border: 1px solid rgba(16,185,129,0.3);
+    }
+
+    .mode-card-tag.blue {
+        background: rgba(99,102,241,0.2);
+        color: #a5b4fc;
+        border: 1px solid rgba(99,102,241,0.3);
+    }
+
+    /* ============ 特性展示网格 ============ */
+    .features-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: clamp(0.6rem, 0.4rem + 0.5vw, 1.2rem);
+        margin-top: 1.5rem;
+    }
+
+    .feature-item {
+        background: rgba(255,255,255,0.75);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(99,102,241,0.06);
+        border-radius: var(--radius-lg);
+        padding: clamp(1rem, 0.8rem + 0.5vw, 1.6rem) clamp(0.8rem, 0.6rem + 0.4vw, 1.4rem);
+        text-align: center;
+        transition: var(--transition-smooth);
+    }
+
+    .feature-item:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--shadow-hover);
+        border-color: rgba(99,102,241,0.15);
+    }
+
+    .feature-item-icon {
+        font-size: 2rem;
+        margin-bottom: 0.8rem;
+        display: block;
+    }
+
+    .feature-item-title {
+        font-size: 0.92rem;
+        font-weight: 700;
+        color: var(--text-primary-light);
+        margin-bottom: 0.4rem;
+    }
+
+    .feature-item-desc {
+        font-size: 0.8rem;
+        color: var(--text-tertiary-light);
+        line-height: 1.5;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        .feature-item {
+            background: rgba(30,32,48,0.7);
+            border-color: var(--border-dark);
+        }
+        .feature-item-title { color: var(--text-primary-dark); }
+        .feature-item-desc { color: var(--text-secondary-dark); }
+    }
+
+    @media (max-width: 768px) {
+        .features-grid { grid-template-columns: repeat(2, 1fr); }
+        .hero-title { font-size: 2rem; }
+    }
+
+    /* ============ 步骤指示器 — 精致 ============ */
+    .step-indicator {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        border-radius: var(--radius-md);
+        margin-bottom: 8px;
+        transition: var(--transition-fast);
+        border: 1px solid transparent;
+    }
+
+    .step-indicator.active {
+        background: rgba(99,102,241,0.06);
+        border-color: rgba(99,102,241,0.12);
+    }
+
+    .step-indicator.done {
+        background: rgba(16,185,129,0.06);
+        border-color: rgba(16,185,129,0.12);
+    }
+
+    .step-dot {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.75rem;
+        font-weight: 700;
+        flex-shrink: 0;
+    }
+
+    .step-dot.pending {
+        background: var(--bg-tertiary);
+        color: var(--text-tertiary-light);
+        border: 2px solid var(--border-subtle);
+    }
+
+    .step-dot.active {
+        background: var(--gradient-primary);
+        color: white;
+        border: none;
+        box-shadow: 0 2px 8px rgba(99,102,241,0.3);
+    }
+
+    .step-dot.done {
+        background: var(--success-color);
+        color: white;
+        border: none;
+    }
+
+    .step-text {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-primary-light);
+    }
+
+    .step-text small {
+        display: block;
+        font-size: 0.75rem;
+        font-weight: 400;
+        color: var(--text-tertiary-light);
+        margin-top: 1px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+        .step-text { color: var(--text-primary-dark); }
+        .step-text small { color: var(--text-secondary-dark); }
+        .step-dot.pending { background: rgba(30,32,48,0.8); border-color: var(--border-dark); color: var(--text-secondary-dark); }
+    }
+
+    /* ============ 响应式适配 — 多分辨率 ============ */
+
+    /* 小屏 (≤1366px, 13-14" 笔记本) */
+    @media (max-width: 1366px) {
+        .block-container { max-width: 95% !important; }
+        .main-header { font-size: 1.4rem; }
+        .step-indicator { padding: 10px 12px; gap: 8px; }
+        .step-dot { width: 24px; height: 24px; font-size: 0.7rem; }
+        .step-text { font-size: 0.8rem; }
+        .step-text small { font-size: 0.7rem; }
+        div[data-testid="stMetric"] { padding: 1rem 1.2rem; }
+        div[data-testid="stMetric"] div[data-testid="stMetricValue"] { font-size: 1.4rem; }
+        .highlight-card { padding: 1.1rem 1.3rem; }
+        .mode-card { padding: 2rem 1.5rem; }
+        .mode-card-title { font-size: 1.15rem; }
+    }
+
+    /* 大屏 (≥1920px, 24-27" 显示器) */
+    @media (min-width: 1920px) {
+        .block-container { max-width: min(88%, 1600px) !important; }
+        .hero-container { max-width: min(900px, 65%); }
+        .step-indicator { padding: 14px 20px; gap: 12px; }
+        .step-dot { width: 32px; height: 32px; font-size: 0.8rem; }
+        .step-text { font-size: 0.9rem; }
+        div[data-testid="stMetric"] { padding: 1.4rem 1.8rem; }
+        div[data-baseweb="tab-list"] button { padding: 12px 28px; font-size: 1rem; }
+        div[data-baseweb="tab-list"] button p { font-size: 1rem; }
+    }
+
+    /* 超大屏 (≥2560px, 27"+ 2K/4K) */
+    @media (min-width: 2560px) {
+        .block-container { max-width: min(85%, 1800px) !important; }
+        .hero-container { max-width: min(1000px, 55%); }
+        .main-header { font-size: 2.1rem; }
+        .sub-header { font-size: 1.05rem; }
+        .step-indicator { padding: 16px 24px; gap: 14px; }
+        .step-dot { width: 34px; height: 34px; font-size: 0.85rem; }
+        .step-text { font-size: 0.95rem; }
+        .step-text small { font-size: 0.8rem; }
+        div[data-testid="stMetric"] { padding: 1.6rem 2rem; }
+        div[data-testid="stMetric"] div[data-testid="stMetricValue"] { font-size: 1.8rem; }
+        div[data-baseweb="tab-list"] button { padding: 14px 32px; font-size: 1.05rem; }
+        div[data-baseweb="tab-list"] button p { font-size: 1.05rem; }
+        .highlight-card { padding: 1.6rem 2rem; }
+        .features-grid { gap: 1.4rem; }
+        .feature-item { padding: 1.8rem 1.5rem; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -4678,8 +5059,7 @@ def render_quick_visualization_page():
     lang = st.session_state.get('language', 'en')
     entry_mode = st.session_state.get('entry_mode', 'none')
 
-    st.markdown(f"### {get_text('quick_viz')}")
-
+    _viz_title = get_text('quick_viz')
     hint_text = (
         "Generate demo data or load from exported files for interactive analysis"
         if entry_mode == 'demo'
@@ -4687,7 +5067,13 @@ def render_quick_visualization_page():
     )
     if lang != 'en':
         hint_text = "生成模拟数据或从已导出文件加载，进行交互式分析" if entry_mode == 'demo' else "从已导出的数据文件加载，进行交互式分析"
-    st.caption(hint_text)
+
+    st.markdown(f'''
+    <div style="margin-bottom:16px">
+        <div style="font-size:1.4rem;font-weight:800;color:#111827">{_viz_title}</div>
+        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{hint_text}</div>
+    </div>
+    ''', unsafe_allow_html=True)
 
     data_loaded = len(st.session_state.loaded_concepts) > 0
     if 'viz_export_path' not in st.session_state:
@@ -4862,11 +5248,11 @@ def render_quick_visualization_page():
 
 
 def render_entry_page():
-    """渲染入口选择页面 - Demo模式或真实数据模式"""
+    """渲染入口选择页面 - Premium Hero 设计"""
     lang = st.session_state.get('language', 'en')
-    
-    # 语言切换（右上角）
-    col_lang = st.columns([6, 1])[1]
+
+    # 语言切换（右上角, 紧凑）
+    col_lang = st.columns([8, 1])[1]
     with col_lang:
         lang_select = st.selectbox(
             "🌐",
@@ -4878,167 +5264,151 @@ def render_entry_page():
         if (lang_select == 'EN' and lang != 'en') or (lang_select == 'ZH' and lang != 'zh'):
             st.session_state.language = 'en' if lang_select == 'EN' else 'zh'
             st.rerun()
-    
-    # 主标题
-    if lang == 'en':
-        st.markdown('<div class="main-header">🏥 EasyICU Data Explorer</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-header">Local ICU Data Analytics Platform</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="main-header">🏥 EasyICU 数据探索器</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-header">本地 ICU 数据分析与可视化平台</div>', unsafe_allow_html=True)
-    
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    
-    # 入口选择卡片样式（使用纯文本按钮 + CSS美化）
+
+    # ===== Hero Section =====
+    _hero_title = "EasyICU" if lang == 'en' else "EasyICU"
+    _hero_subtitle = "ICU Data Analytics Platform · Extract · Visualize · Export" if lang == 'en' else "ICU 数据分析平台 · 提取 · 可视化 · 导出"
+    _hero_badge = "v2.0 · Open Source · 6 Databases" if lang == 'en' else "v2.0 · 开源 · 支持 6 大数据库"
+
+    st.markdown(f"""
+    <div class="hero-container animate-fade-in">
+        <div class="hero-badge">{_hero_badge}</div>
+        <div class="hero-title">🏥 {_hero_title}</div>
+        <div class="hero-subtitle">{_hero_subtitle}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ===== 入口按钮 CSS（保持 Streamlit 按钮可点击，纯 CSS 装饰） =====
     st.markdown("""
     <style>
-    /* 入口页面的选择按钮 - 卡片式设计 */
-    div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] {
-        height: 100%;
-    }
-    
-    div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button {
-        min-height: 280px !important;
+    /* 入口按钮 — 深色玻璃卡片风格 */
+    .entry-btn-wrap div[data-testid="stButton"] { height: 100%; }
+    .entry-btn-wrap div[data-testid="stButton"] > button {
+        min-height: 220px !important;
         height: 100% !important;
-        padding: 40px 30px !important;
-        font-size: 1.3rem !important;
+        padding: 2.5rem 2rem !important;
+        font-size: 1.15rem !important;
         white-space: pre-line !important;
-        line-height: 1.8 !important;
-        border-radius: 24px !important;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        border: none !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08) !important;
-        position: relative !important;
+        line-height: 1.7 !important;
+        border-radius: var(--radius-xl) !important;
+        transition: var(--transition-smooth) !important;
+        border: 1px solid rgba(255,255,255,0.08) !important;
         text-align: center !important;
         font-weight: 500 !important;
+        position: relative !important;
+        backdrop-filter: blur(12px) !important;
     }
-    
-    div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button:hover {
-        transform: translateY(-8px) scale(1.02) !important;
-        box-shadow: 0 12px 35px rgba(0, 0, 0, 0.15) !important;
+    .entry-btn-wrap div[data-testid="stButton"] > button:hover {
+        transform: translateY(-4px) !important;
+        box-shadow: 0 16px 40px rgba(0,0,0,0.12) !important;
     }
-    
-    /* Demo按钮样式（绿色渐变） */
-    div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button[kind="primary"] {
-        background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
-        border: 3px solid rgba(5, 150, 105, 0.3) !important;
+    .entry-btn-wrap div[data-testid="stButton"] > button:active {
+        transform: translateY(-1px) !important;
+    }
+    /* 左列 Demo = 绿色渐变 */
+    .entry-btn-wrap.demo-col div[data-testid="stButton"] > button {
+        background: linear-gradient(135deg, #059669, #10b981) !important;
         color: white !important;
+        box-shadow: 0 4px 20px rgba(16,185,129,0.2) !important;
     }
-    
-    div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button[kind="primary"]:hover {
-        border-color: rgba(5, 150, 105, 0.6) !important;
+    .entry-btn-wrap.demo-col div[data-testid="stButton"] > button:hover {
+        box-shadow: 0 8px 30px rgba(16,185,129,0.35) !important;
     }
-    
-    /* Real Data按钮样式（蓝色渐变） */
-    div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button[kind="secondary"] {
-        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
-        border: 3px solid rgba(37, 99, 235, 0.3) !important;
+    /* 右列 Real = 主色渐变 */
+    .entry-btn-wrap.real-col div[data-testid="stButton"] > button {
+        background: var(--gradient-primary) !important;
         color: white !important;
+        box-shadow: 0 4px 20px rgba(99,102,241,0.2) !important;
     }
-    
-    div[data-testid="column"] > div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button[kind="secondary"]:hover {
-        border-color: rgba(37, 99, 235, 0.6) !important;
+    .entry-btn-wrap.real-col div[data-testid="stButton"] > button:hover {
+        box-shadow: 0 8px 30px rgba(99,102,241,0.35) !important;
     }
     </style>
     """, unsafe_allow_html=True)
-    
-    # 选择模式提示
-    if lang == 'en':
-        st.markdown("<h2 style='text-align: center; color: #475569; margin-bottom: 40px; font-size: 2rem;'>🎯 Choose Your Mode</h2>", unsafe_allow_html=True)
-    else:
-        st.markdown("<h2 style='text-align: center; color: #475569; margin-bottom: 40px; font-size: 2rem;'>🎯 选择使用模式</h2>", unsafe_allow_html=True)
-    
-    # 两列布局显示两个选择卡片
-    col1, col2 = st.columns(2, gap="large")
-    
+
+    # ===== 模式选择提示 =====
+    _choose = "Choose Your Mode" if lang == 'en' else "选择使用模式"
+    st.markdown(f"<p style='text-align:center;color:var(--text-secondary-light);font-weight:600;font-size:0.82rem;letter-spacing:0.06em;text-transform:uppercase;margin:1.5rem 0 1rem;'>{_choose}</p>", unsafe_allow_html=True)
+
+    # ===== 两列按钮（居中容器） =====
+    _, col1, col2, _ = st.columns([1, 4, 4, 1], gap="large")
+
     with col1:
-        # Demo模式卡片 - 使用纯文本格式，加大字体
+        st.markdown('<div class="entry-btn-wrap demo-col">', unsafe_allow_html=True)
         if lang == 'en':
-            demo_label = "🎭\n\nDemo Mode\n\nExplore EasyICU with simulated ICU data.\nNo real data required.\n\n✨ Quick Start"
+            demo_label = "🧪\n\nDemo Mode\n\nExplore with simulated ICU data\nNo database required\n\n✨ Quick Start"
         else:
-            demo_label = "🎭\n\n演示模式\n\n使用模拟ICU数据体验EasyICU功能。\n无需真实数据。\n\n✨ 快速开始"
-        
-        demo_clicked = st.button(
-            demo_label,
-            key="entry_demo_btn",
-            use_container_width=True,
-            type="primary"
-        )
-        
-        if demo_clicked:
+            demo_label = "🧪\n\n演示模式\n\n使用模拟 ICU 数据体验全部功能\n无需真实数据库\n\n✨ 快速开始"
+        if st.button(demo_label, key="entry_demo_btn", use_container_width=True, type="primary"):
             st.session_state.entry_mode = 'demo'
             st.session_state.use_mock_data = True
             st.session_state.database = 'mock'
-            # 清空旧数据（包括Cohort Comparison相关）
             st.session_state.loaded_concepts = {}
             st.session_state.patient_ids = []
-            # 清理Cohort相关缓存
             for key in ['group_a_data', 'group_b_data', 'multidb_data', 'dash_demographics',
                         'multidb_is_demo', 'dash_is_demo', 'cohort_is_demo']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
-    
+        st.markdown('</div>', unsafe_allow_html=True)
+
     with col2:
-        # Real Data模式卡片 - 使用纯文本格式，加大字体
+        st.markdown('<div class="entry-btn-wrap real-col">', unsafe_allow_html=True)
         if lang == 'en':
-            real_label = "📊\n\nReal Data Mode\n\nConnect to local ICU databases\n(MIMIC-IV, eICU, AUMC, HiRID, etc.)\n\n🔬 Research Ready"
+            real_label = "📊\n\nReal Data Mode\n\nConnect to local ICU databases\nMIMIC · eICU · AUMC · HiRID · SICdb\n\n🔬 Research Ready"
         else:
-            real_label = "📊\n\n真实数据模式\n\n连接本地ICU数据库\n(MIMIC-IV、eICU、AUMC、HiRID等)\n\n🔬 科研就绪"
-        
-        real_clicked = st.button(
-            real_label,
-            key="entry_real_btn",
-            use_container_width=True,
-            type="secondary"
-        )
-        
-        if real_clicked:
+            real_label = "📊\n\n真实数据模式\n\n连接本地 ICU 数据库\nMIMIC · eICU · AUMC · HiRID · SICdb\n\n🔬 科研就绪"
+        if st.button(real_label, key="entry_real_btn", use_container_width=True, type="secondary"):
             st.session_state.entry_mode = 'real'
             st.session_state.use_mock_data = False
-            # 清空旧数据（包括Cohort Comparison相关）
             st.session_state.loaded_concepts = {}
             st.session_state.patient_ids = []
-            # 清理Cohort相关缓存
             for key in ['group_a_data', 'group_b_data', 'multidb_data', 'dash_demographics',
                         'multidb_is_demo', 'dash_is_demo', 'cohort_is_demo']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
-    
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    
-    # 功能特性介绍
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='height: 1.5rem'></div>", unsafe_allow_html=True)
+
+    # ===== 特性展示 — 纯 HTML 网格 =====
     if lang == 'en':
-        st.markdown("### ✨ Key Features")
-        feature_cols = st.columns(4)
         features = [
-            ("📈", "Time Series Analysis", "Visualize patient metrics over time"),
-            ("🏥", "Patient View", "Comprehensive single patient data"),
-            ("📊", "Cohort Comparison", "Compare patient groups"),
-            ("💾", "Data Export", "Export to CSV/Parquet/Excel"),
+            ("📈", "Time Series", "Visualize patient metrics over time with interactive charts"),
+            ("🏥", "Patient View", "Comprehensive single-patient dashboard with clinical scores"),
+            ("📊", "Cohort Analysis", "Compare patient groups across databases"),
+            ("💾", "Data Export", "Export to Parquet / CSV / Excel with one click"),
         ]
     else:
-        st.markdown("### ✨ 核心功能")
-        feature_cols = st.columns(4)
         features = [
-            ("📈", "时序分析", "可视化患者指标时间趋势"),
-            ("🏥", "患者视图", "综合查看单个患者数据"),
-            ("📊", "队列对比", "对比不同患者组"),
-            ("💾", "数据导出", "导出为CSV/Parquet/Excel"),
+            ("📈", "时序分析", "交互式图表可视化患者指标时间趋势"),
+            ("🏥", "患者视图", "综合查看单患者临床数据与评分"),
+            ("📊", "队列对比", "跨数据库对比不同患者组"),
+            ("💾", "数据导出", "一键导出为 Parquet / CSV / Excel"),
         ]
-    
-    for col, (icon, title, desc) in zip(feature_cols, features):
-        with col:
-            st.markdown(f"""
-            <div class="feature-card" style="text-align: center; padding: 24px;">
-                <div style="font-size: 2.5rem;">{icon}</div>
-                <h4 style="margin: 12px 0 8px 0; font-size: 1.15rem; font-weight: 600;">{title}</h4>
-                <p style="font-size: 0.95rem; color: #64748b; line-height: 1.5;">{desc}</p>
-            </div>
-            """, unsafe_allow_html=True)
+
+    features_html = ""
+    for icon, title, desc in features:
+        features_html += f"""
+        <div class="feature-item">
+            <span class="feature-item-icon">{icon}</span>
+            <div class="feature-item-title">{title}</div>
+            <div class="feature-item-desc">{desc}</div>
+        </div>"""
+
+    st.markdown(f'<div class="features-grid animate-fade-in" style="max-width:min(900px,85%);margin:0 auto">{features_html}</div>', unsafe_allow_html=True)
+
+    # ===== 底部数据库支持 =====
+    _dbs_label = "Supported Databases" if lang == 'en' else "支持的数据库"
+    st.markdown(f"""
+    <div style="text-align:center;margin-top:2rem;padding:1.2rem;border-top:1px solid var(--border-subtle);max-width:min(900px,85%);margin-left:auto;margin-right:auto;">
+        <div style="font-size:0.75rem;color:var(--text-tertiary-light);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;margin-bottom:0.6rem;">{_dbs_label}</div>
+        <div style="display:flex;justify-content:center;gap:1.5rem;flex-wrap:wrap;font-size:0.85rem;color:var(--text-secondary-light);font-weight:500;">
+            <span>MIMIC-IV</span><span>MIMIC-III</span><span>eICU-CRD</span><span>AmsterdamUMCdb</span><span>HiRID</span><span>SICdb</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def render_sidebar():
@@ -5084,21 +5454,25 @@ def render_sidebar():
                 st.rerun()
             st.markdown("---")
         
-        # 显示当前模式标识
+        # 显示当前模式标识 - 精简 pill 样式
         if entry_mode == 'demo':
-            mode_badge = "🎭 Demo Mode" if st.session_state.language == 'en' else "🎭 演示模式"
+            mode_badge = "Demo Mode" if st.session_state.language == 'en' else "演示模式"
             st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #10b981, #059669); 
-                        padding: 12px 16px; border-radius: 10px; color: white; margin-bottom: 15px; text-align: center;">
-                <b style="font-size: 1.1rem;">{mode_badge}</b>
+            <div style="background:#ecfdf5;border:1px solid #a7f3d0;
+                        padding:8px 14px;border-radius:8px;color:#065f46;margin-bottom:12px;
+                        display:flex;align-items:center;gap:8px;font-size:.9rem">
+                <span style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block"></span>
+                <b>{mode_badge}</b>
             </div>
             """, unsafe_allow_html=True)
         elif entry_mode == 'real':
-            mode_badge = "📊 Real Data Mode" if st.session_state.language == 'en' else "📊 真实数据模式"
+            mode_badge = "Real Data" if st.session_state.language == 'en' else "真实数据"
             st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #3b82f6, #2563eb); 
-                        padding: 12px 16px; border-radius: 10px; color: white; margin-bottom: 15px; text-align: center;">
-                <b style="font-size: 1.1rem;">{mode_badge}</b>
+            <div style="background:#eef2ff;border:1px solid #c7d2fe;
+                        padding:8px 14px;border-radius:8px;color:#3730a3;margin-bottom:12px;
+                        display:flex;align-items:center;gap:8px;font-size:.9rem">
+                <span style="width:8px;height:8px;border-radius:50%;background:#6366f1;display:inline-block"></span>
+                <b>{mode_badge}</b>
             </div>
             """, unsafe_allow_html=True)
         
@@ -5222,13 +5596,13 @@ def render_sidebar():
         if entry_mode == 'demo':
             # ===== DEMO 模式：只显示模拟数据参数，不显示数据库选择 =====
             st.markdown(f"### 📊 {get_text('step1')}")
-            demo_title = "✨ Demo Mode" if st.session_state.language == 'en' else "✨ 演示模式"
-            demo_desc = "System generates simulated ICU data for exploration" if st.session_state.language == 'en' else "系统生成模拟ICU数据供体验"
+            demo_title = "Demo Mode" if st.session_state.language == 'en' else "演示模式"
+            demo_desc = "Auto-generated simulated ICU data" if st.session_state.language == 'en' else "自动生成模拟ICU数据"
             st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #10b981, #059669); 
-                        padding: 12px 16px; border-radius: 10px; color: white; margin: 8px 0;">
-                <b>{demo_title}</b><br>
-                <small>{demo_desc}</small>
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;
+                        padding:10px 14px;border-radius:10px;margin:6px 0 10px">
+                <div style="font-weight:600;color:#166534;font-size:.92rem">{demo_title}</div>
+                <div style="color:#4ade80;font-size:.78rem;margin-top:2px">{demo_desc}</div>
             </div>
             """, unsafe_allow_html=True)
             st.session_state.database = 'mock'
@@ -6624,102 +6998,103 @@ def render_data_overview():
     
     # 标题已经在main()中渲染，这里不再重复
     
-    # 准备就绪提示
-    ready_title = "🎉 Ready!" if lang == 'en' else "🎉 准备就绪！"
-    ready_desc = "Data loaded, you can start exploring." if lang == 'en' else "数据已加载，您可以开始探索分析了。"
-    st.markdown(f"## {ready_title}")
-    st.markdown(ready_desc)
-    
-    # 状态概览
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        db_display = "🎭 DEMO" if st.session_state.get('use_mock_data', False) else st.session_state.get('database', 'N/A').upper()
-        db_label = "Database" if lang == 'en' else "数据库"
-        st.markdown(f'''
-        <div class="metric-card">
-            <div class="stat-label">{db_label}</div>
-            <div class="stat-number" style="font-size:1.8rem">{db_display}</div>
+    # 准备就绪提示 - 使用成功横幅
+    db_display = "DEMO" if st.session_state.get('use_mock_data', False) else st.session_state.get('database', 'N/A').upper()
+    # 🔧 FIX (2026-02-04): 统计唯一概念数
+    n_concepts = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
+    # 计算实际患者数
+    n_patients = 0
+    if st.session_state.loaded_concepts:
+        all_ids = set()
+        id_col = st.session_state.get('id_col', 'stay_id')
+        for df in st.session_state.loaded_concepts.values():
+            if isinstance(df, pd.DataFrame) and id_col in df.columns:
+                all_ids.update(df[id_col].unique())
+        n_patients = len(all_ids) if all_ids else len(st.session_state.patient_ids)
+    else:
+        n_patients = len(st.session_state.patient_ids)
+
+    _ready_title = "Data Ready" if lang == 'en' else "数据就绪"
+    _ready_sub = "Your data is loaded and ready for analysis." if lang == 'en' else "数据已加载，可以开始分析。"
+    _lbl_db = "Database" if lang == 'en' else "数据库"
+    _lbl_feat = "Concepts" if lang == 'en' else "已加载概念"
+    _lbl_pat = "Patients" if lang == 'en' else "患者数量"
+    _lbl_status = "Status" if lang == 'en' else "状态"
+    _status_val = "Ready" if lang == 'en' else "就绪"
+
+    st.markdown(f'''
+    <div style="background:linear-gradient(135deg,#ecfdf5 0%,#d1fae5 100%);border:1px solid #a7f3d0;border-radius:16px;padding:24px 28px;margin-bottom:24px;display:flex;align-items:center;gap:16px">
+        <div style="width:48px;height:48px;border-radius:12px;background:#10b981;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <span style="color:#fff;font-size:1.4rem">✓</span>
         </div>
-        ''', unsafe_allow_html=True)
-    
-    with col2:
-        # 🔧 FIX (2026-02-04): 统计唯一概念数
-        n_concepts = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
-        feat_label = "Concepts" if lang == 'en' else "已加载概念"
-        st.markdown(f'''
-        <div class="metric-card">
-            <div class="stat-label">{feat_label}</div>
-            <div class="stat-number">{n_concepts}</div>
+        <div>
+            <div style="font-weight:700;font-size:1.15rem;color:#065f46">{_ready_title}</div>
+            <div style="color:#047857;font-size:0.92rem;margin-top:2px">{_ready_sub}</div>
         </div>
-        ''', unsafe_allow_html=True)
-    
-    with col3:
-        # 优先从已加载数据中计算实际患者数
-        n_patients = 0
-        if st.session_state.loaded_concepts:
-            # 从加载的数据中提取实际患者数
-            all_ids = set()
-            id_col = st.session_state.get('id_col', 'stay_id')
-            for df in st.session_state.loaded_concepts.values():
-                if isinstance(df, pd.DataFrame) and id_col in df.columns:
-                    all_ids.update(df[id_col].unique())
-            n_patients = len(all_ids) if all_ids else len(st.session_state.patient_ids)
-        else:
-            n_patients = len(st.session_state.patient_ids)
-        
-        pat_label = "Patients" if lang == 'en' else "患者数量"
-        st.markdown(f'''
-        <div class="metric-card">
-            <div class="stat-label">{pat_label}</div>
-            <div class="stat-number">{n_patients:,}</div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+    # 状态概览 - 4 个统计卡片
+    st.markdown(f'''
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(10px,.5rem + .5vw,20px);margin-bottom:28px">
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 18px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:8px">{_lbl_db}</div>
+            <div style="font-size:1.5rem;font-weight:800;color:#6366f1">{db_display}</div>
         </div>
-        ''', unsafe_allow_html=True)
-    
-    with col4:
-        status_label = "Status" if lang == 'en' else "数据状态"
-        st.markdown(f'''
-        <div class="metric-card">
-            <div class="stat-label">{status_label}</div>
-            <div class="stat-number" style="color:#28a745">✅ {"Ready" if lang == 'en' else "就绪"}</div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 18px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:8px">{_lbl_feat}</div>
+            <div style="font-size:1.5rem;font-weight:800;color:#111827">{n_concepts}</div>
         </div>
-        ''', unsafe_allow_html=True)
-    
-    # 快捷导航
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    start_label = "🚀 Start Analysis" if lang == 'en' else "🚀 开始分析"
-    tab_hint = "Select a tab above to explore data:" if lang == 'en' else "选择上方的标签页开始探索数据："
-    st.markdown(f"### {start_label}")
-    st.markdown(tab_hint)
-    
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 18px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:8px">{_lbl_pat}</div>
+            <div style="font-size:1.5rem;font-weight:800;color:#111827">{n_patients:,}</div>
+        </div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 18px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:8px">{_lbl_status}</div>
+            <div style="font-size:1.2rem;font-weight:700;color:#10b981">● {_status_val}</div>
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+    # 快捷导航卡片
     if lang == 'en':
         features = [
-            ("📈", "Time Series", "Interactive time series visualization, single/multi-patient comparison"),
-            ("🏥", "Patient View", "Single patient multi-dimensional dashboard"),
-            ("📊", "Data Quality", "Missing rate analysis and data distribution statistics"),
+            ("📈", "Time Series", "Interactive time series visualization with single & multi-patient comparison"),
+            ("🏥", "Patient View", "Multi-dimensional patient dashboard for comprehensive assessment"),
+            ("📊", "Data Quality", "Missing rate analysis, distribution statistics & completeness reports"),
         ]
     else:
         features = [
-            ("📈", "时序分析", "交互式时间序列可视化，支持单患者/多患者比较"),
-            ("🏥", "患者视图", "单患者多维度仪表盘，全景了解患者状态"),
-            ("📊", "数据质量", "缺失率分析与数据分布统计"),
+            ("📈", "时序分析", "交互式时间序列可视化，支持单患者/多患者对比"),
+            ("🏥", "患者视图", "单患者多维度仪表盘，全面了解患者状态"),
+            ("📊", "数据质量", "缺失率分析、数据分布统计及完整度报告"),
         ]
-    
-    cols = st.columns(3)
-    for i, (icon, title, desc) in enumerate(features):
-        with cols[i]:
-            st.markdown(f'''
-            <div class="feature-card" style="text-align:center;min-height:160px;display:flex;flex-direction:column;justify-content:center;padding:20px">
-                <div style="font-size:2.5rem">{icon}</div>
-                <div style="font-weight:600;color:#4fc3f7;margin:10px 0 6px 0;font-size:1.1rem">{title}</div>
-                <div style="font-size:0.95rem;color:#333;line-height:1.5">{desc}</div>
-            </div>
-            ''', unsafe_allow_html=True)
-    
+
+    _nav_title = "Start Exploring" if lang == 'en' else "开始探索"
+    _nav_hint = "Select a tab above to begin:" if lang == 'en' else "选择上方标签页开始："
+    st.markdown(f'''
+    <div style="margin-bottom:8px">
+        <span style="font-size:1.1rem;font-weight:700;color:#111827">{_nav_title}</span>
+        <span style="color:#9ca3af;font-size:0.88rem;margin-left:8px">{_nav_hint}</span>
+    </div>
+    ''', unsafe_allow_html=True)
+
+    _cards_html = ''
+    for icon, title, desc in features:
+        _cards_html += f'''
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:22px 20px;
+                     transition:all .2s ease;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+            <div style="font-size:2rem;margin-bottom:10px">{icon}</div>
+            <div style="font-weight:700;color:#111827;font-size:1rem;margin-bottom:6px">{title}</div>
+            <div style="font-size:0.85rem;color:#6b7280;line-height:1.55">{desc}</div>
+        </div>'''
+    st.markdown(f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:28px">{_cards_html}</div>', unsafe_allow_html=True)
+
     # 数据摘要
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    summary_label = "📋 Data Summary" if lang == 'en' else "📋 数据摘要"
-    st.markdown(f"### {summary_label}")
+    summary_label = "Data Summary" if lang == 'en' else "数据摘要"
+    st.markdown(f'''
+    <div style="font-size:1.05rem;font-weight:700;color:#111827;margin-bottom:12px">{summary_label}</div>
+    ''', unsafe_allow_html=True)
     
     concept_stats = []
     for name, df in st.session_state.loaded_concepts.items():
@@ -6762,157 +7137,125 @@ def render_home():
 
 def render_home_viz_mode(lang):
     """渲染快速可视化模式的首页教程。"""
-    # 进度指示器
-    col1, col2 = st.columns(2)
-    
     # 检查状态
     viz_dir = st.session_state.get('viz_data_dir', '')
     has_files = False
     if viz_dir and Path(viz_dir).exists():
         files = list(Path(viz_dir).glob('*.csv')) + list(Path(viz_dir).glob('*.parquet')) + list(Path(viz_dir).glob('*.xlsx'))
         has_files = len(files) > 0
-    
+
     step1_done = has_files
     step2_done = len(st.session_state.loaded_concepts) > 0
-    
-    done_text = "✅ Done" if lang == 'en' else "✅ 完成"
-    in_progress_text = "🔵 In Progress" if lang == 'en' else "🔵 进行中"
-    waiting_text = "⏳ Waiting" if lang == 'en' else "⏳ 等待"
-    
-    with col1:
-        status = done_text if step1_done else in_progress_text
-        color = "#28a745" if step1_done else "#ffc107"
-        step_label = "Step 1" if lang == 'en' else "步骤 1"
-        step_desc = "Select Data Directory" if lang == 'en' else "选择数据目录"
-        st.markdown(f'''
-        <div class="metric-card" style="border-left: 4px solid {color}">
-            <div class="stat-label">{step_label}</div>
-            <div style="font-weight:600">{step_desc}</div>
-            <div style="color:{color};font-size:0.9rem">{status}</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    
-    with col2:
-        if step1_done:
-            status = done_text if step2_done else in_progress_text
-            color = "#28a745" if step2_done else "#ffc107"
+
+    # 进度指示器 - 使用统一的 step-indicator 样式
+    _steps_viz = [
+        ("Select Directory" if lang == 'en' else "选择目录", "Set data path" if lang == 'en' else "设置数据路径"),
+        ("Load & Visualize" if lang == 'en' else "加载可视化", "Explore data" if lang == 'en' else "浏览数据"),
+    ]
+    _cur_viz = 2 if step2_done else (1 if step1_done else 0)
+
+    _steps_html = ''
+    for idx, (title, desc) in enumerate(_steps_viz):
+        if idx < _cur_viz:
+            _dot = '<div class="step-dot done">✓</div>'
+        elif idx == _cur_viz:
+            _dot = f'<div class="step-dot active">{idx+1}</div>'
         else:
-            status = waiting_text
-            color = "#6c757d"
-        step_label = "Step 2" if lang == 'en' else "步骤 2"
-        step_desc = "Load & Visualize" if lang == 'en' else "加载并可视化"
-        st.markdown(f'''
-        <div class="metric-card" style="border-left: 4px solid {color}">
-            <div class="stat-label">{step_label}</div>
-            <div style="font-weight:600">{step_desc}</div>
-            <div style="color:{color};font-size:0.9rem">{status}</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    
-    # 教程内容
+            _dot = f'<div class="step-dot">{idx+1}</div>'
+        _steps_html += f'<div class="step-indicator"><div style="display:flex;align-items:center;gap:10px">{_dot}<div class="step-text"><div>{title}</div><small>{desc}</small></div></div></div>'
+    st.markdown(f'<div style="display:flex;gap:32px;margin-bottom:28px">{_steps_html}</div>', unsafe_allow_html=True)
+
+    # 教程内容 - 使用更干净的卡片样式
     if not step1_done:
-        task_header = "📍 Current Task: Select Data Directory" if lang == 'en' else "📍 当前任务：选择数据目录"
-        st.markdown(f"## {task_header}")
-        
+        _task = "Select Data Directory" if lang == 'en' else "选择数据目录"
+        st.markdown(f'''
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:20px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+                <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;color:#fff;font-size:0.85rem;font-weight:700">1</div>
+                <span style="font-weight:700;font-size:1.05rem;color:#111827">{_task}</span>
+            </div>
+        ''', unsafe_allow_html=True)
         if lang == 'en':
             st.markdown('''
-            <div class="highlight-card">
-                <h4>👈 Please specify the data directory in the left sidebar</h4>
-                <p style="color:#333; margin-bottom:12px">
-                    Quick Visualization mode loads data from previously exported files:
-                </p>
-                <ul style="color:#444; font-size:0.9rem;">
-                    <li>Enter the path to the directory containing exported data files</li>
-                    <li>Supported formats: <b>CSV, Parquet, Excel</b></li>
-                    <li>If you haven't exported data yet, switch to "Data Extraction" mode first</li>
+                <p style="color:#4b5563;margin-bottom:12px;font-size:.92rem">Specify the data directory in the <b>left sidebar</b>. Quick Visualization loads from previously exported files:</p>
+                <ul style="color:#6b7280;font-size:.88rem;line-height:1.8;padding-left:20px">
+                    <li>Enter the path to exported data files</li>
+                    <li>Supported: <b>CSV, Parquet, Excel</b></li>
+                    <li>No exports yet? Use "Data Extraction" mode first</li>
                 </ul>
-                <p style="color:#b45309; margin-top:12px;">
-                    <b>💡 Tip:</b> Default path is <code>~/easyicu_export/miiv</code>
-                </p>
-            </div>
-            ''', unsafe_allow_html=True)
+                <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;margin-top:14px;font-size:.85rem;color:#92400e">
+                    💡 Default path: <code style="background:#fef3c7;padding:2px 6px;border-radius:4px">~/easyicu_export/miiv</code>
+                </div>
+            </div>''', unsafe_allow_html=True)
         else:
             st.markdown('''
-            <div class="highlight-card">
-                <h4>👈 请在左侧边栏指定数据目录</h4>
-                <p style="color:#333; margin-bottom:12px">
-                    快速可视化模式从已导出的文件加载数据：
-                </p>
-                <ul style="color:#444; font-size:0.9rem;">
-                    <li>输入包含已导出数据文件的目录路径</li>
-                    <li>支持的格式：<b>CSV、Parquet、Excel</b></li>
-                    <li>如果您还没有导出过数据，请先切换到「数据提取导出」模式</li>
+                <p style="color:#4b5563;margin-bottom:12px;font-size:.92rem">在<b>左侧边栏</b>指定数据目录。快速可视化从已导出文件加载数据：</p>
+                <ul style="color:#6b7280;font-size:.88rem;line-height:1.8;padding-left:20px">
+                    <li>输入已导出数据文件的目录路径</li>
+                    <li>支持格式：<b>CSV、Parquet、Excel</b></li>
+                    <li>还没导出数据？请先使用「数据提取导出」模式</li>
                 </ul>
-                <p style="color:#b45309; margin-top:12px;">
-                    <b>💡 提示：</b> 默认路径是 <code>~/easyicu_export/miiv</code>
-                </p>
-            </div>
-            ''', unsafe_allow_html=True)
+                <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;margin-top:14px;font-size:.85rem;color:#92400e">
+                    💡 默认路径：<code style="background:#fef3c7;padding:2px 6px;border-radius:4px">~/easyicu_export/miiv</code>
+                </div>
+            </div>''', unsafe_allow_html=True)
     else:
-        task_header = "📍 Current Task: Load Data" if lang == 'en' else "📍 当前任务：加载数据"
-        st.markdown(f"## {task_header}")
-        
+        _task = "Load Data" if lang == 'en' else "加载数据"
+        st.markdown(f'''
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:20px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+                <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;color:#fff;font-size:0.85rem;font-weight:700">2</div>
+                <span style="font-weight:700;font-size:1.05rem;color:#111827">{_task}</span>
+            </div>
+        ''', unsafe_allow_html=True)
         if lang == 'en':
             st.markdown('''
-            <div class="highlight-card">
-                <h4>👈 Click "Load Data" in the left sidebar</h4>
-                <p style="color:#333; margin-bottom:12px">
-                    Data files found! You can now:
-                </p>
-                <ul style="color:#444; font-size:0.9rem;">
-                    <li>Select specific tables to load (recommended ≤ 3 for best performance)</li>
-                    <li>Click <b>"Load Data"</b> button to load into memory</li>
-                    <li>After loading, use the tabs above to explore and visualize</li>
+                <p style="color:#4b5563;margin-bottom:12px;font-size:.92rem">Data files found! Click <b>"Load Data"</b> in the sidebar:</p>
+                <ul style="color:#6b7280;font-size:.88rem;line-height:1.8;padding-left:20px">
+                    <li>Select specific tables to load (≤ 3 recommended)</li>
+                    <li>Click the <b>Load Data</b> button</li>
+                    <li>After loading, use the tabs above to explore</li>
                 </ul>
-            </div>
-            ''', unsafe_allow_html=True)
+            </div>''', unsafe_allow_html=True)
         else:
             st.markdown('''
-            <div class="highlight-card">
-                <h4>👈 在左侧边栏点击「加载数据」</h4>
-                <p style="color:#333; margin-bottom:12px">
-                    已发现数据文件！您现在可以：
-                </p>
-                <ul style="color:#444; font-size:0.9rem;">
-                    <li>选择要加载的表格（建议不超过3个以保证流畅性）</li>
-                    <li>点击 <b>「加载数据」</b> 按钮将数据加载到内存</li>
-                    <li>加载完成后，使用上方的标签页进行探索和可视化</li>
+                <p style="color:#4b5563;margin-bottom:12px;font-size:.92rem">发现数据文件！在侧边栏点击<b>「加载数据」</b>：</p>
+                <ul style="color:#6b7280;font-size:.88rem;line-height:1.8;padding-left:20px">
+                    <li>选择要加载的表格（建议不超过 3 个）</li>
+                    <li>点击<b>「加载数据」</b>按钮</li>
+                    <li>加载后使用上方标签页探索</li>
                 </ul>
-            </div>
-            ''', unsafe_allow_html=True)
-    
-    # 功能预览
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    preview_title = "🎯 What You Can Do After Loading" if lang == 'en' else "🎯 加载后可用功能"
-    st.markdown(f"### {preview_title}")
-    
+            </div>''', unsafe_allow_html=True)
+
+    # 功能预览 - 使用统一的网格卡片样式
+    _preview_title = "After Loading" if lang == 'en' else "加载后可用"
     if lang == 'en':
         features = [
-            ("�", "Data Tables", "Browse and merge features"),
-            ("📈", "Time Series", "Interactive visualization"),
+            ("📋", "Data Tables", "Browse & merge"),
+            ("📈", "Time Series", "Interactive charts"),
             ("🏥", "Patient View", "Patient dashboard"),
-            ("📊", "Data Quality", "Missing rate analysis"),
+            ("📊", "Data Quality", "Missing analysis"),
         ]
     else:
         features = [
-            ("📋", "数据大表", "浏览与合并特征"),
-            ("📈", "时序分析", "交互式可视化"),
+            ("📋", "数据大表", "浏览与合并"),
+            ("📈", "时序分析", "交互式图表"),
             ("🏥", "患者视图", "患者仪表盘"),
             ("📊", "数据质量", "缺失率分析"),
         ]
-    
-    cols = st.columns(4)
-    for i, (icon, title, desc) in enumerate(features):
-        with cols[i]:
-            st.markdown(f'''
-            <div class="feature-card" style="text-align:center;min-height:160px;display:flex;flex-direction:column;justify-content:center;padding:20px">
-                <div style="font-size:2.5rem">{icon}</div>
-                <div style="font-weight:600;color:#4fc3f7;margin:10px 0 6px 0;font-size:1.1rem">{title}</div>
-                <div style="font-size:0.95rem;color:#333;line-height:1.5">{desc}</div>
-            </div>
-            ''', unsafe_allow_html=True)
+
+    st.markdown(f'''
+    <div style="font-size:0.88rem;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">{_preview_title}</div>
+    ''', unsafe_allow_html=True)
+    _cards = ''
+    for icon, title, desc in features:
+        _cards += f'''
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px 14px;text-align:center">
+            <div style="font-size:1.6rem;margin-bottom:6px">{icon}</div>
+            <div style="font-weight:600;color:#111827;font-size:.9rem">{title}</div>
+            <div style="font-size:.78rem;color:#9ca3af;margin-top:3px">{desc}</div>
+        </div>'''
+    st.markdown(f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(8px,.4rem + .4vw,16px)">{_cards}</div>', unsafe_allow_html=True)
 
 
 def render_home_extract_mode(lang):
@@ -6930,100 +7273,67 @@ def render_home_extract_mode(lang):
     # Step 4 只在真正导出完成后才算完成
     step4_done = st.session_state.get('export_completed', False)
     
-    # ============ 进度指示器 ============
-    # 添加锚点和大标题
+    # ============ 进度指示器 — Stepper 风格 ============
     st.markdown('<div id="progress"></div>', unsafe_allow_html=True)
-    progress_title = "📋 Progress" if lang == 'en' else "📋 进度"
-    st.markdown(f'<h2 style="background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;border-bottom:3px solid #667eea;padding-bottom:10px;margin-top:10px;font-size:1.8rem;">{progress_title}</h2>', unsafe_allow_html=True)
-    
-    # 🆕 添加说明文字
+
     if lang == 'en':
-        progress_desc = """
-        <div style="font-size: 1.15rem; color: #333; margin-bottom: 20px; line-height: 1.6;">
-            👈 <b>Simply click through the left sidebar</b> to complete the 4 steps below. 
-            You'll easily define your ICU cohort, select features, and extract data!
-        </div>
-        """
+        st.markdown("""
+        <p style="font-size:0.9rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.6;">
+            👈 Follow the <b>4 steps in the left sidebar</b> to define your cohort, select features, and export data.
+        </p>
+        """, unsafe_allow_html=True)
     else:
-        progress_desc = """
-        <div style="font-size: 1.15rem; color: #333; margin-bottom: 20px; line-height: 1.6;">
-            👈 <b>只需通过左侧边栏点击</b>，完成下面的4个步骤，
-            即可轻松完成ICU数据的队列定义、特征选择和数据提取！
-        </div>
-        """
-    st.markdown(progress_desc, unsafe_allow_html=True)
-    
+        st.markdown("""
+        <p style="font-size:0.9rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.6;">
+            👈 按照<b>左侧边栏的 4 个步骤</b>操作，即可完成 ICU 数据的队列定义、特征选择和导出。
+        </p>
+        """, unsafe_allow_html=True)
+
+    # 步骤数据
+    _steps = [
+        (step1_done, "1", ("Data Source", "配置数据源"), ("Configure database path", "选择数据路径")),
+        (step2_done, "2", ("Cohort Selection", "队列筛选"), ("Define patient criteria", "定义患者筛选条件")),
+        (step3_done, "3", ("Select Features", "选择特征"), ("Choose clinical variables", "选择临床变量")),
+        (step4_done, "4", ("Export Data", "导出数据"), ("Generate output files", "输出数据文件")),
+    ]
+
+    # 确定当前活跃步骤
+    _current_step = 0
+    for i, (done, *_) in enumerate(_steps):
+        if not done:
+            _current_step = i
+            break
+    else:
+        _current_step = 4  # 全部完成
+
+    # 横向 stepper HTML
+    _stepper_items = []
+    for i, (done, num, (title_en, title_zh), (desc_en, desc_zh)) in enumerate(_steps):
+        _title = title_en if lang == 'en' else title_zh
+        _desc = desc_en if lang == 'en' else desc_zh
+        if done:
+            _dot_cls = "done"
+            _dot_content = "✓"
+            _row_cls = "done"
+        elif i == _current_step:
+            _dot_cls = "active"
+            _dot_content = num
+            _row_cls = "active"
+        else:
+            _dot_cls = "pending"
+            _dot_content = num
+            _row_cls = ""
+        _stepper_items.append(f"""
+        <div class="step-indicator {_row_cls}">
+            <div class="step-dot {_dot_cls}">{_dot_content}</div>
+            <div class="step-text">{_title}<small>{_desc}</small></div>
+        </div>""")
+
     col1, col2, col3, col4 = st.columns(4)
-    
-    # 状态文本
-    done_text = "✅ Done" if lang == 'en' else "✅ 完成"
-    in_progress_text = "🔵 In Progress" if lang == 'en' else "🔵 进行中"
-    waiting_text = "⏳ Waiting" if lang == 'en' else "⏳ 等待"
-    
-    with col1:
-        status = done_text if step1_done else in_progress_text
-        color = "#28a745" if step1_done else "#ffc107"
-        step_label = "Step 1" if lang == 'en' else "步骤 1"
-        step_desc = "Data Source" if lang == 'en' else "配置数据源"
-        st.markdown(f'''
-        <div class="metric-card" style="border-left: 4px solid {color}">
-            <div class="stat-label">{step_label}</div>
-            <div style="font-weight:600">{step_desc}</div>
-            <div style="color:{color};font-size:0.9rem">{status}</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    
-    with col2:
-        if step1_done:
-            status = done_text if step2_done else in_progress_text
-            color = "#28a745" if step2_done else "#ffc107"
-        else:
-            status = waiting_text
-            color = "#6c757d"
-        step_label = "Step 2" if lang == 'en' else "步骤 2"
-        step_desc = "Cohort Selection" if lang == 'en' else "队列筛选"
-        st.markdown(f'''
-        <div class="metric-card" style="border-left: 4px solid {color}">
-            <div class="stat-label">{step_label}</div>
-            <div style="font-weight:600">{step_desc}</div>
-            <div style="color:{color};font-size:0.9rem">{status}</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    
-    with col3:
-        if step1_done and step2_done:
-            status = done_text if step3_done else in_progress_text
-            color = "#28a745" if step3_done else "#ffc107"
-        else:
-            status = waiting_text
-            color = "#6c757d"
-        step_label = "Step 3" if lang == 'en' else "步骤 3"
-        step_desc = "Select Features" if lang == 'en' else "选择特征"
-        st.markdown(f'''
-        <div class="metric-card" style="border-left: 4px solid {color}">
-            <div class="stat-label">{step_label}</div>
-            <div style="font-weight:600">{step_desc}</div>
-            <div style="color:{color};font-size:0.9rem">{status}</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    
-    with col4:
-        if step1_done and step2_done and step3_done:
-            status = done_text if step4_done else in_progress_text
-            color = "#28a745" if step4_done else "#ffc107"
-        else:
-            status = waiting_text
-            color = "#6c757d"
-        step_label = "Step 4" if lang == 'en' else "步骤 4"
-        step_desc = "Export Data" if lang == 'en' else "导出数据"
-        st.markdown(f'''
-        <div class="metric-card" style="border-left: 4px solid {color}">
-            <div class="stat-label">{step_label}</div>
-            <div style="font-weight:600">{step_desc}</div>
-            <div style="color:{color};font-size:0.9rem">{status}</div>
-        </div>
-        ''', unsafe_allow_html=True)
-    
+    for col, item_html in zip([col1, col2, col3, col4], _stepper_items):
+        with col:
+            st.markdown(item_html, unsafe_allow_html=True)
+
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
     # ============ 动态引导内容 ============
@@ -7042,58 +7352,61 @@ def render_home_extract_mode(lang):
     else:
         guide_step = "Complete" if lang == 'en' else "完成"
     
-    guide_title = f"📍 Guide: {guide_step}" if lang == 'en' else f"📍 引导: {guide_step}"
-    st.markdown(f'<h2 style="background:linear-gradient(135deg,#667eea,#764ba2);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;border-bottom:3px solid #667eea;padding-bottom:10px;margin-top:10px;font-size:1.8rem;">{guide_title}</h2>', unsafe_allow_html=True)
+    guide_title_text = f"Guide: {guide_step}" if lang == 'en' else f"引导: {guide_step}"
+    st.markdown(f'''
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+        <div style="width:6px;height:28px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)"></div>
+        <span style="font-size:1.25rem;font-weight:800;color:#111827">{guide_title_text}</span>
+    </div>
+    ''', unsafe_allow_html=True)
     
     if not step1_done:
         # 步骤1引导：配置数据源
         if lang == 'en':
             st.markdown('''
-            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
-                <h3 style="color: #667eea; margin-bottom: 15px;">👈 Configure Data Source in the Left Sidebar</h3>
-                <p style="margin-bottom: 15px;">Choose one of the following modes to get started:</p>
-                <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
-                    <h4 style="color: #10b981;">🎭 Demo Mode (Recommended for First-time Users)</h4>
-                    <ul style="margin-left: 20px; margin-top: 10px;">
-                        <li>No real data required - system generates realistic simulated ICU data</li>
-                        <li>Perfect for learning how EasyICU works</li>
-                        <li>Adjust patient count (50-500) and data duration (24-168 hours)</li>
-                        <li>Click <b>"✅ Confirm Data Source"</b> when ready</li>
-                    </ul>
-                </div>
-                <div style="background: rgba(59, 130, 246, 0.1); padding: 15px; border-radius: 10px;">
-                    <h4 style="color: #3b82f6;">📊 Real Data Mode (For Research)</h4>
-                    <ul style="margin-left: 20px; margin-top: 10px;">
-                        <li>Supports MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb</li>
-                        <li>Enter your local database path</li>
-                        <li>Click "Validate Path" to verify data format</li>
-                        <li>All processing is done locally - your data stays secure 🔒</li>
-                    </ul>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">Configure Data Source in the Sidebar</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+                    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px">
+                        <div style="font-weight:600;color:#166534;margin-bottom:8px">🎭 Demo Mode</div>
+                        <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                            <li>No real data needed — generates simulated ICU data</li>
+                            <li>Adjust patients (50-500) & duration (24-168h)</li>
+                            <li>Click <b>"Confirm Data Source"</b> when ready</li>
+                        </ul>
+                    </div>
+                    <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px">
+                        <div style="font-weight:600;color:#3730a3;margin-bottom:8px">📊 Real Data Mode</div>
+                        <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                            <li>MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb</li>
+                            <li>Enter your local database path</li>
+                            <li>All processing is local — data stays secure 🔒</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
             ''', unsafe_allow_html=True)
         else:
             st.markdown('''
-            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
-                <h3 style="color: #667eea; margin-bottom: 15px;">👈 在左侧边栏配置数据源</h3>
-                <p style="margin-bottom: 15px;">选择以下任一模式开始使用：</p>
-                <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
-                    <h4 style="color: #10b981;">🎭 演示模式（推荐新用户使用）</h4>
-                    <ul style="margin-left: 20px; margin-top: 10px;">
-                        <li>无需真实数据 - 系统会生成逼真的模拟ICU数据</li>
-                        <li>非常适合学习EasyICU的工作方式</li>
-                        <li>可调整患者数量（50-500）和数据时长（24-168小时）</li>
-                        <li>设置完成后点击 <b>"✅ 确认数据源配置"</b></li>
-                    </ul>
-                </div>
-                <div style="background: rgba(59, 130, 246, 0.1); padding: 15px; border-radius: 10px;">
-                    <h4 style="color: #3b82f6;">📊 真实数据模式（用于科研）</h4>
-                    <ul style="margin-left: 20px; margin-top: 10px;">
-                        <li>支持 MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb</li>
-                        <li>输入您本地的数据库路径</li>
-                        <li>点击"验证路径"确认数据格式</li>
-                        <li>所有处理都在本地完成 - 您的数据安全无忧 🔒</li>
-                    </ul>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">在侧边栏配置数据源</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+                    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px">
+                        <div style="font-weight:600;color:#166534;margin-bottom:8px">🎭 演示模式</div>
+                        <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                            <li>无需真实数据 — 自动生成模拟ICU数据</li>
+                            <li>可调整患者数量(50-500)和时长(24-168h)</li>
+                            <li>设置后点击<b>「确认数据源配置」</b></li>
+                        </ul>
+                    </div>
+                    <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px">
+                        <div style="font-weight:600;color:#3730a3;margin-bottom:8px">📊 真实数据模式</div>
+                        <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                            <li>支持 MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb</li>
+                            <li>输入本地数据库路径</li>
+                            <li>所有处理本地完成 — 数据安全 🔒</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
             ''', unsafe_allow_html=True)
@@ -7102,49 +7415,37 @@ def render_home_extract_mode(lang):
         # 步骤2引导：队列筛选
         if lang == 'en':
             st.markdown('''
-            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
-                <h3 style="color: #667eea; margin-bottom: 15px;">👈 Configure Cohort Selection in the Left Sidebar</h3>
-                <p style="margin-bottom: 15px;">Define your study cohort by filtering patients:</p>
-                <div style="background: rgba(99, 102, 241, 0.1); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
-                    <h4 style="color: #6366f1;">🔧 Available Filters</h4>
-                    <ul style="margin-left: 20px; margin-top: 10px;">
-                        <li><b>Age Range</b> - Filter patients by age (e.g., 18-65 years)</li>
-                        <li><b>Gender</b> - Select Male, Female, or Any</li>
-                        <li><b>Survival Status</b> - Include survivors, non-survivors, or all</li>
-                        <li><b>ICU Stay Duration</b> - Minimum length of stay in hours</li>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">Configure Cohort Selection</div>
+                <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px;margin-bottom:12px">
+                    <div style="font-weight:600;color:#3730a3;margin-bottom:8px">Available Filters</div>
+                    <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                        <li><b>Age Range</b> — e.g., 18-65 years</li>
+                        <li><b>Gender</b> — Male, Female, or Any</li>
+                        <li><b>Survival Status</b> — Survivors, non-survivors, or all</li>
+                        <li><b>ICU Stay</b> — Minimum length of stay</li>
                     </ul>
                 </div>
-                <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px;">
-                    <h4 style="color: #10b981;">💡 Tips</h4>
-                    <ul style="margin-left: 20px; margin-top: 10px;">
-                        <li>Enable "Cohort Filtering" toggle to activate filters</li>
-                        <li>You can skip this step by clicking <b>"✅ Confirm (No Filtering)"</b></li>
-                        <li>Filters will be applied when generating/loading data</li>
-                    </ul>
+                <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;font-size:.85rem;color:#92400e">
+                    💡 Click <b>"Confirm (No Filtering)"</b> to skip this step
                 </div>
             </div>
             ''', unsafe_allow_html=True)
         else:
             st.markdown('''
-            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
-                <h3 style="color: #667eea; margin-bottom: 15px;">👈 在左侧边栏配置队列筛选</h3>
-                <p style="margin-bottom: 15px;">通过筛选患者来定义您的研究队列：</p>
-                <div style="background: rgba(99, 102, 241, 0.1); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
-                    <h4 style="color: #6366f1;">🔧 可用的筛选条件</h4>
-                    <ul style="margin-left: 20px; margin-top: 10px;">
-                        <li><b>年龄范围</b> - 按年龄筛选患者（如 18-65 岁）</li>
-                        <li><b>性别</b> - 选择男性、女性或不限</li>
-                        <li><b>存活状态</b> - 包含存活者、死亡者或全部</li>
-                        <li><b>ICU住院时长</b> - 最短住院时长（小时）</li>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">配置队列筛选</div>
+                <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px;margin-bottom:12px">
+                    <div style="font-weight:600;color:#3730a3;margin-bottom:8px">可用筛选条件</div>
+                    <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                        <li><b>年龄范围</b> — 如 18-65 岁</li>
+                        <li><b>性别</b> — 男/女/不限</li>
+                        <li><b>存活状态</b> — 存活/死亡/全部</li>
+                        <li><b>ICU住院时长</b> — 最短住院时长</li>
                     </ul>
                 </div>
-                <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px;">
-                    <h4 style="color: #10b981;">💡 提示</h4>
-                    <ul style="margin-left: 20px; margin-top: 10px;">
-                        <li>启用"队列筛选"开关来激活筛选功能</li>
-                        <li>可以点击 <b>"✅ 确认（不筛选）"</b> 跳过此步骤</li>
-                        <li>筛选条件将在生成/加载数据时应用</li>
-                    </ul>
+                <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;font-size:.85rem;color:#92400e">
+                    💡 点击<b>「确认（不筛选）」</b>可跳过此步骤
                 </div>
             </div>
             ''', unsafe_allow_html=True)
@@ -7153,77 +7454,31 @@ def render_home_extract_mode(lang):
         # 步骤3引导：选择特征
         if lang == 'en':
             st.markdown('''
-            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
-                <h3 style="color: #0369a1; margin-bottom: 15px;">👈 Select Features in the Left Sidebar</h3>
-                <p style="margin-bottom: 15px;">EasyICU provides <b>167 comprehensive ICU clinical features</b> across 19 categories, covering:</p>
-                <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
-                    <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
-                        <b style="color: #1d4ed8;">📊 Vital Signs</b>
-                        <p style="color: #1e40af; margin-top: 5px; font-size: 0.95rem;">Heart rate, blood pressure, temperature, SpO2, respiratory rate</p>
-                    </div>
-                    <div style="flex: 1; min-width: 200px; background: rgba(16, 185, 129, 0.15); padding: 12px; border-radius: 8px;">
-                        <b style="color: #047857;">🧪 Laboratory Tests</b>
-                        <p style="color: #065f46; margin-top: 5px; font-size: 0.95rem;">Blood chemistry, hematology, coagulation, blood gas analysis</p>
-                    </div>
-                    <div style="flex: 1; min-width: 200px; background: rgba(251, 191, 36, 0.15); padding: 12px; border-radius: 8px;">
-                        <b style="color: #b45309;">💊 Medications</b>
-                        <p style="color: #92400e; margin-top: 5px; font-size: 0.95rem;">Vasopressors, sedatives, antibiotics, fluid therapy</p>
-                    </div>
-                    <div style="flex: 1; min-width: 200px; background: rgba(139, 92, 246, 0.15); padding: 12px; border-radius: 8px;">
-                        <b style="color: #6d28d9;">🏥 Clinical Scores</b>
-                        <p style="color: #5b21b6; margin-top: 5px; font-size: 0.95rem;">SOFA, GCS, urine output, organ failure indicators</p>
-                    </div>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">Select Features — 167 ICU Clinical Features</div>
+                <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px">
+                    <div style="background:#eff6ff;border-radius:8px;padding:12px"><b style="color:#1d4ed8">📊 Vital Signs</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">HR, BP, Temp, SpO2, Resp</div></div>
+                    <div style="background:#ecfdf5;border-radius:8px;padding:12px"><b style="color:#047857">🧪 Lab Tests</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">Chemistry, CBC, Coag, ABG</div></div>
+                    <div style="background:#fffbeb;border-radius:8px;padding:12px"><b style="color:#b45309">💊 Medications</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">Vasopressors, Sedatives, ABX</div></div>
+                    <div style="background:#f5f3ff;border-radius:8px;padding:12px"><b style="color:#6d28d9">🏥 Scores</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">SOFA, GCS, AKI, Sepsis-3</div></div>
                 </div>
-                <div style="background: rgba(251, 191, 36, 0.2); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
-                    <h4 style="color: #b45309;">🔥 Quick Selection Methods</h4>
-                    <ul style="margin-left: 20px; margin-top: 10px; color: #78350f;">
-                        <li><b>By Category</b> - Expand a group and select entire group or individual features</li>
-                        <li><b>Custom</b> - Mix and match based on your research needs</li>
-                    </ul>
-                </div>
-                <div style="background: rgba(139, 92, 246, 0.2); padding: 15px; border-radius: 10px;">
-                    <h4 style="color: #6d28d9;">📖 Need Help Choosing?</h4>
-                    <p style="margin-top: 10px; color: #5b21b6;">
-                        👇 Check the <b>Data Dictionary</b> below for detailed descriptions of each feature!
-                    </p>
+                <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;font-size:.85rem;color:#92400e">
+                    💡 Select by category or pick individual features. Check the Data Dictionary below for details.
                 </div>
             </div>
             ''', unsafe_allow_html=True)
         else:
             st.markdown('''
-            <div class="highlight-card" style="font-size: 1.1rem; line-height: 1.8;">
-                <h3 style="color: #0369a1; margin-bottom: 15px;">👈 在左侧边栏选择特征</h3>
-                <p style="margin-bottom: 15px;">EasyICU 提供 <b>167 个 ICU 临床特征</b>（19 个类别），涵盖：</p>
-                <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px;">
-                    <div style="flex: 1; min-width: 200px; background: rgba(59, 130, 246, 0.15); padding: 12px; border-radius: 8px;">
-                        <b style="color: #1d4ed8;">📊 生命体征</b>
-                        <p style="color: #1e40af; margin-top: 5px; font-size: 0.95rem;">心率、血压、体温、血氧饱和度、呼吸频率</p>
-                    </div>
-                    <div style="flex: 1; min-width: 200px; background: rgba(16, 185, 129, 0.15); padding: 12px; border-radius: 8px;">
-                        <b style="color: #047857;">🧪 实验室检验</b>
-                        <p style="color: #065f46; margin-top: 5px; font-size: 0.95rem;">血生化、血常规、凝血功能、血气分析</p>
-                    </div>
-                    <div style="flex: 1; min-width: 200px; background: rgba(251, 191, 36, 0.15); padding: 12px; border-radius: 8px;">
-                        <b style="color: #b45309;">💊 药物治疗</b>
-                        <p style="color: #92400e; margin-top: 5px; font-size: 0.95rem;">血管活性药、镇静药、抗生素、液体治疗</p>
-                    </div>
-                    <div style="flex: 1; min-width: 200px; background: rgba(139, 92, 246, 0.15); padding: 12px; border-radius: 8px;">
-                        <b style="color: #6d28d9;">🏥 临床评分</b>
-                        <p style="color: #5b21b6; margin-top: 5px; font-size: 0.95rem;">SOFA 评分、GCS 评分、尿量、器官衰竭指标</p>
-                    </div>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">选择特征 — 167 个 ICU 临床特征</div>
+                <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px">
+                    <div style="background:#eff6ff;border-radius:8px;padding:12px"><b style="color:#1d4ed8">📊 生命体征</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">心率、血压、体温、SpO2、呼吸</div></div>
+                    <div style="background:#ecfdf5;border-radius:8px;padding:12px"><b style="color:#047857">🧪 实验室检验</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">生化、血常规、凝血、血气</div></div>
+                    <div style="background:#fffbeb;border-radius:8px;padding:12px"><b style="color:#b45309">💊 药物治疗</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">血管活性药、镇静药、抗生素</div></div>
+                    <div style="background:#f5f3ff;border-radius:8px;padding:12px"><b style="color:#6d28d9">🏥 临床评分</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">SOFA、GCS、AKI、Sepsis-3</div></div>
                 </div>
-                <div style="background: rgba(251, 191, 36, 0.2); padding: 15px; border-radius: 10px; margin-bottom: 15px;">
-                    <h4 style="color: #b45309;">🔥 快速选择方法</h4>
-                    <ul style="margin-left: 20px; margin-top: 10px; color: #78350f;">
-                        <li><b>按类别</b> - 展开某个分组，选择整组或单个特征</li>
-                        <li><b>自定义</b> - 根据研究需求自由组合</li>
-                    </ul>
-                </div>
-                <div style="background: rgba(139, 92, 246, 0.2); padding: 15px; border-radius: 10px;">
-                    <h4 style="color: #6d28d9;">📖 不知道该选什么？</h4>
-                    <p style="margin-top: 10px; color: #5b21b6;">
-                        👇 查看下方的 <b>数据字典</b>，了解每个特征的详细描述！
-                    </p>
+                <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;font-size:.85rem;color:#92400e">
+                    💡 按类别选择或选取单个特征，查看下方数据字典了解详情
                 </div>
             </div>
             ''', unsafe_allow_html=True)
@@ -7235,85 +7490,49 @@ def render_home_extract_mode(lang):
         
         if exporting_in_progress:
             # 🆕 导出正在进行中，显示进度标题
-            if lang == 'en':
-                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #ff9800; background: linear-gradient(135deg, #fff8e1 0%, #ffffff 100%);">
-<h3 style="color: #ff9800; margin-bottom: 10px;">⏳ Export in Progress...</h3>
-<p style="color: #555; margin: 0; font-size: 1.1rem;">Please wait while your data is being exported. Progress details will appear below.</p>
-</div>''', unsafe_allow_html=True)
-            else:
-                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #ff9800; background: linear-gradient(135deg, #fff8e1 0%, #ffffff 100%);">
-<h3 style="color: #ff9800; margin-bottom: 10px;">⏳ 导出进行中...</h3>
-<p style="color: #555; margin: 0; font-size: 1.1rem;">请稍候，数据正在导出中。进度详情将显示在下方。</p>
+            _exp_msg = ('Export in Progress...', 'Please wait while your data is being exported.') if lang == 'en' else ('导出进行中...', '请稍候，数据正在导出中，进度详情将显示在下方。')
+            st.markdown(f'''<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:14px;padding:20px 24px;margin-bottom:16px">
+<div style="font-weight:700;color:#b45309;font-size:1.05rem">⏳ {_exp_msg[0]}</div>
+<div style="color:#92400e;font-size:.9rem;margin-top:4px">{_exp_msg[1]}</div>
 </div>''', unsafe_allow_html=True)
         else:
             # 显示导出教程
+            _steps_html = '<ol style="color:#374151;font-size:.92rem;line-height:2;margin:0;padding-left:18px"><li>{}</li><li>{}</li><li>{}</li><li>{}</li></ol>'
+            _tip = ''
             if lang == 'en':
-                export_guide_html = '''<div class="highlight-card" style="border-left: 4px solid #28a745;">
-<h3 style="color: #28a745; margin-bottom: 15px;">📥 How to Export Data</h3>
-<div style="display: flex; gap: 25px; flex-wrap: wrap;">
-<div style="flex: 1; min-width: 280px;">
-<ol style="color: #1a1a1a; font-size: 1.1rem; line-height: 1.8;">
-<li>Go to <b>"Data Export"</b> tab above</li>
-<li>Select export format (CSV/Parquet/Excel)</li>
-<li>Choose save location</li>
-<li>Click <b>"Export Data"</b> button</li>
-</ol>
-<p style="color: #28a745; margin-top: 10px; font-size: 1rem;">✅ Best for large datasets - saves directly to disk without loading to memory</p>
-</div>
-</div>
-</div>'''
-                st.markdown(export_guide_html, unsafe_allow_html=True)
+                _steps_html = _steps_html.format('Go to <b>"Data Export"</b> tab above', 'Select export format (CSV / Parquet / Excel)', 'Choose save location', 'Click <b>"Export Data"</b> button')
+                _tip = '✅ Best for large datasets — saves directly to disk'
             else:
-                export_guide_html = '''<div class="highlight-card" style="border-left: 4px solid #28a745;">
-<h3 style="color: #28a745; margin-bottom: 15px;">📥 如何导出数据</h3>
-<div style="display: flex; gap: 25px; flex-wrap: wrap;">
-<div style="flex: 1; min-width: 280px;">
-<ol style="color: #1a1a1a; font-size: 1.1rem; line-height: 1.8;">
-<li>点击上方 <b>"数据导出"</b> 标签页</li>
-<li>选择导出格式（CSV/Parquet/Excel）</li>
-<li>选择保存位置</li>
-<li>点击 <b>"导出数据"</b> 按钮</li>
-</ol>
-<p style="color: #28a745; margin-top: 10px; font-size: 1rem;">✅ 适合大数据集 - 直接保存到磁盘，不占用内存</p>
-</div>
-<div style="flex: 1; min-width: 280px;">
-<ol style="color: #1a1a1a; font-size: 1.1rem; line-height: 1.8;">
-<li>点击上方 <b>"数据导出"</b> 标签页</li>
-<li>选择导出格式（CSV/Parquet/Excel）</li>
-<li>选择保存位置</li>
-<li>点击 <b>"导出数据"</b> 按钮</li>
-</ol>
-<p style="color: #28a745; margin-top: 10px; font-size: 1rem;">✅ 适合大数据集 - 直接保存到磁盘，不占用内存</p>
-</div>
-</div>
-</div>'''
-                st.markdown(export_guide_html, unsafe_allow_html=True)
+                _steps_html = _steps_html.format('点击上方 <b>"数据导出"</b> 标签页', '选择导出格式（CSV / Parquet / Excel）', '选择保存位置', '点击 <b>"导出数据"</b> 按钮')
+                _tip = '✅ 适合大数据集 — 直接保存到磁盘，不占用内存'
+            st.markdown(f'''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+<div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">{"How to Export Data" if lang=="en" else "如何导出数据"}</div>
+{_steps_html}
+<div style="background:#ecfdf5;border-radius:8px;padding:10px 14px;margin-top:12px;font-size:.85rem;color:#047857">{_tip}</div>
+</div>''', unsafe_allow_html=True)
             
             # 显示当前选择摘要
             selected = st.session_state.get('selected_concepts', [])
             if st.session_state.get('use_mock_data', False):
-                source_info = "🎭 Demo Mode" if lang == 'en' else "🎭 演示模式"
+                source_info = "Demo Mode" if lang == 'en' else "演示模式"
             else:
-                source_info = f"📊 {st.session_state.get('data_path', '')}"
+                source_info = f"{st.session_state.get('data_path', '')}"
             
             source_label = "Data Source" if lang == 'en' else "数据源"
             feat_label = "Selected Features" if lang == 'en' else "已选特征"
             
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown(f'''
-                <div class="metric-card">
-                    <div class="stat-label">{source_label}</div>
-                    <div style="font-weight:600">{source_info}</div>
+            st.markdown(f'''
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px">
+                    <div style="font-size:.75rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{source_label}</div>
+                    <div style="font-weight:600;color:#111827;margin-top:4px;font-size:.9rem">{source_info}</div>
                 </div>
-                ''', unsafe_allow_html=True)
-            with col2:
-                st.markdown(f'''
-                <div class="metric-card">
-                    <div class="stat-label">{feat_label}</div>
-                    <div class="stat-number">{len(selected)}</div>
+                <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px">
+                    <div style="font-size:.75rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{feat_label}</div>
+                    <div style="font-weight:700;color:#6366f1;margin-top:4px;font-size:1.2rem">{len(selected)}</div>
                 </div>
-                ''', unsafe_allow_html=True)
+            </div>
+            ''', unsafe_allow_html=True)
         
         # 🆕 导出进度区域（无论是否正在导出都创建，导出时内容会填充进来）
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
@@ -7417,10 +7636,10 @@ def render_home_extract_mode(lang):
                 
                 body = ''.join(parts_html)
                 tip = '💡 <i>Try increasing the patient sample size or selecting All Patients to get more features.</i>' if lang == 'en' else '💡 <i>尝试增大患者样本量或选择全部患者以获取更多特征。</i>'
-                unavailable_msg = f"""<div class="info-box" style="margin-top: 15px;">
-<p style="margin-bottom: 10px;"><b>{len(unavailable_concepts)} selected features</b> were not extracted:</p>
+                unavailable_msg = f"""<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:16px 20px;margin-top:15px">
+<div style="font-weight:600;color:#92400e;margin-bottom:8px">{len(unavailable_concepts)} {"selected features were not extracted" if lang=="en" else "个已选特征未被提取"}:</div>
 {body}
-<p style="margin-top: 10px; font-size: 0.9rem; color: #6b7280;">{tip}</p>
+<div style="margin-top:10px;font-size:.85rem;color:#6b7280">{tip}</div>
 </div>"""
                 st.markdown(unavailable_msg, unsafe_allow_html=True)
             
@@ -7432,126 +7651,93 @@ def render_home_extract_mode(lang):
             del st.session_state['_export_success_result']
         
         # 显示状态概览卡片
-        col1, col2, col3, col4 = st.columns(4)
-        
         db_label = "Database" if lang == 'en' else "数据库"
         feat_label = "Loaded Concepts" if lang == 'en' else "已加载概念"
         patient_label = "Patients" if lang == 'en' else "患者数量"
         status_label = "Status" if lang == 'en' else "数据状态"
-        ready_status = "✅ Ready" if lang == 'en' else "✅ 就绪"
+        ready_status = "Ready" if lang == 'en' else "就绪"
         
-        with col1:
-            db_display = "🎭 DEMO" if st.session_state.get('use_mock_data', False) else st.session_state.get('database', 'N/A').upper()
-            st.markdown(f'''
-            <div class="metric-card">
-                <div class="stat-label">{db_label}</div>
-                <div class="stat-number" style="font-size:1.8rem">{db_display}</div>
-            </div>
-            ''', unsafe_allow_html=True)
+        db_display = "DEMO" if st.session_state.get('use_mock_data', False) else st.session_state.get('database', 'N/A').upper()
         
-        with col2:
-            # 🔧 FIX (2026-02-12): 由于列名已在 load_from_exported() 中规范化并去重，
-            # 直接使用 len() 统计，每列就是一个 concept
-            export_result = st.session_state.get('_export_success_result')
-            if export_result and 'concept_count' in export_result:
-                # 使用导出时统计的实际概念数
-                n_concepts = export_result['concept_count']
-            elif '_last_export_concept_count' in st.session_state:
-                # 使用上次导出保存的概念数
-                n_concepts = st.session_state['_last_export_concept_count']
-            elif st.session_state.loaded_concepts:
-                # 🔧 使用已加载的概念数（已规范化去重）
-                n_concepts = len(st.session_state.loaded_concepts)
-            elif st.session_state.get('selected_concepts'):
-                # DEMO模式：使用选中的概念数
-                n_concepts = len(st.session_state.selected_concepts)
-            else:
-                # 没有数据时显示 0
-                n_concepts = 0
-            st.markdown(f'''
-            <div class="metric-card">
-                <div class="stat-label">{feat_label}</div>
-                <div class="stat-number">{n_concepts}</div>
-            </div>
-            ''', unsafe_allow_html=True)
+        # 计算概念数
+        export_result = st.session_state.get('_export_success_result')
+        if export_result and 'concept_count' in export_result:
+            n_concepts = export_result['concept_count']
+        elif '_last_export_concept_count' in st.session_state:
+            n_concepts = st.session_state['_last_export_concept_count']
+        elif st.session_state.loaded_concepts:
+            n_concepts = len(st.session_state.loaded_concepts)
+        elif st.session_state.get('selected_concepts'):
+            n_concepts = len(st.session_state.selected_concepts)
+        else:
+            n_concepts = 0
         
-        with col3:
-            # 显示患者数：优先使用导出时记录的实际数量（cohort filter 后的真实数量）
-            n_patients = 0
-            id_col = st.session_state.get('id_col', 'stay_id')
-            
-            # 🔧 DEBUG: 打印各个来源的值
-            print(f"[DEBUG Guide] _exported_patient_count: {st.session_state.get('_exported_patient_count')}")
-            print(f"[DEBUG Guide] patient_ids len: {len(st.session_state.patient_ids) if st.session_state.patient_ids else 0}")
-            print(f"[DEBUG Guide] mock_params: {st.session_state.get('mock_params')}")
-            
-            # 最高优先级：导出时记录的实际患者数（filter 后的真实数量）
-            if st.session_state.get('_exported_patient_count'):
-                n_patients = st.session_state['_exported_patient_count']
-            
-            # 其次：从已加载数据中计算唯一患者数
-            if n_patients == 0 and st.session_state.loaded_concepts:
-                all_ids = set()
-                for df in st.session_state.loaded_concepts.values():
-                    if isinstance(df, pd.DataFrame) and id_col in df.columns:
-                        all_ids.update(df[id_col].unique())
-                if all_ids:
-                    n_patients = len(all_ids)
-            
-            # 然后：使用 patient_ids 列表
-            if n_patients == 0 and st.session_state.patient_ids:
-                n_patients = len(st.session_state.patient_ids)
-            
-            # 最后：用 mock_params（仅用于显示预期值）
-            if n_patients == 0:
-                mock_params = st.session_state.get('mock_params', {})
-                if mock_params.get('n_patients'):
-                    n_patients = mock_params['n_patients']
-            
-            st.markdown(f'''
-            <div class="metric-card">
-                <div class="stat-label">{patient_label}</div>
-                <div class="stat-number">{n_patients:,}</div>
-            </div>
-            ''', unsafe_allow_html=True)
+        # 计算患者数
+        n_patients = 0
+        id_col = st.session_state.get('id_col', 'stay_id')
+        if st.session_state.get('_exported_patient_count'):
+            n_patients = st.session_state['_exported_patient_count']
+        if n_patients == 0 and st.session_state.loaded_concepts:
+            all_ids = set()
+            for df in st.session_state.loaded_concepts.values():
+                if isinstance(df, pd.DataFrame) and id_col in df.columns:
+                    all_ids.update(df[id_col].unique())
+            if all_ids:
+                n_patients = len(all_ids)
+        if n_patients == 0 and st.session_state.patient_ids:
+            n_patients = len(st.session_state.patient_ids)
+        if n_patients == 0:
+            mock_params = st.session_state.get('mock_params', {})
+            if mock_params.get('n_patients'):
+                n_patients = mock_params['n_patients']
         
-        with col4:
-            st.markdown(f'''
-            <div class="metric-card">
-                <div class="stat-label">{status_label}</div>
-                <div class="stat-number" style="color:#28a745">{ready_status}</div>
+        st.markdown(f'''
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(8px,.4rem + .4vw,16px);margin-bottom:16px">
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px">
+                <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{db_label}</div>
+                <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-top:6px">{db_display}</div>
             </div>
-            ''', unsafe_allow_html=True)
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px">
+                <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{feat_label}</div>
+                <div style="font-weight:700;color:#6366f1;font-size:1.4rem;margin-top:6px">{n_concepts}</div>
+            </div>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px">
+                <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{patient_label}</div>
+                <div style="font-weight:700;color:#111827;font-size:1.4rem;margin-top:6px">{n_patients:,}</div>
+            </div>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px">
+                <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{status_label}</div>
+                <div style="font-weight:700;color:#10b981;font-size:1.15rem;margin-top:6px">✓ {ready_status}</div>
+            </div>
+        </div>
+        ''', unsafe_allow_html=True)
         
         # 🆕 What's Next? 两个选项
-        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-        next_step_title = "🔄 What's Next?" if lang == 'en' else "🔄 下一步？"
-        st.markdown(f"### {next_step_title}")
+        next_step_title = "What's Next?" if lang == 'en' else "下一步？"
+        st.markdown(f'<div style="font-weight:700;color:#111827;font-size:1.1rem;margin:20px 0 12px">{next_step_title}</div>', unsafe_allow_html=True)
         
         col_opt1, col_opt2 = st.columns(2)
         
         with col_opt1:
             # Option A: Quick Visualization
             if lang == 'en':
-                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #0277bd;">
-<h4 style="color: #0277bd; margin-bottom: 12px;">📈 Option A: Quick Visualization</h4>
-<p style="color: #1a1a1a; margin-bottom: 15px;">Explore your data with interactive visualizations:</p>
-<ul style="color: #2a2a2a; margin: 10px 0 0 15px; font-size: 0.95rem; line-height: 1.8;">
-<li><b>Data Tables Explorer</b> — Browse and explore loaded data by module, view complete data tables with sorting and filtering</li>
-<li><b>Time Series Analysis</b> — Visualize clinical trends over time with multi-feature overlay, interactive zoom, and customizable aggregation</li>
-<li><b>Patient Overview</b> — Comprehensive single-patient dashboard showing all clinical trajectories and key events</li>
-<li><b>Data Quality Assessment</b> — Analyze missing rates, temporal coverage, and data completeness across all features</li>
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 22px">
+<div style="font-weight:700;color:#0369a1;margin-bottom:10px">📈 Quick Visualization</div>
+<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.88rem;line-height:1.9">
+<li><b>Data Tables Explorer</b> — Browse loaded data by module</li>
+<li><b>Time Series Analysis</b> — Clinical trends over time</li>
+<li><b>Patient Overview</b> — Single-patient dashboard</li>
+<li><b>Data Quality</b> — Missing rates &amp; completeness</li>
 </ul>
 </div>''', unsafe_allow_html=True)
             else:
-                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #0277bd;">
-<h4 style="color: #0277bd; margin-bottom: 12px;">📈 选项 A：快速可视化</h4>
-<p style="color: #1a1a1a; margin-bottom: 15px;">通过交互式可视化探索数据：</p>
-<ul style="color: #2a2a2a; margin: 10px 0 0 15px; font-size: 0.95rem; line-height: 1.8;">
-<li><b>数据表浏览器</b> — 按模块浏览和探索已加载数据，查看完整数据表并支持排序筛选</li>
-<li><b>时序分析</b> — 可视化临床指标随时间的变化趋势，支持多特征叠加、交互缩放和自定义聚合</li>
-<li><b>患者概览</b> — 综合单患者仪表盘，展示所有临床轨迹和关键事件</li>
-<li><b>数据质量评估</b> — 分析所有特征的缺失率、时间覆盖度和数据完整性</li>
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 22px">
+<div style="font-weight:700;color:#0369a1;margin-bottom:10px">📈 快速可视化</div>
+<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.88rem;line-height:1.9">
+<li><b>数据表浏览器</b> — 按模块浏览已加载数据</li>
+<li><b>时序分析</b> — 临床指标随时间变化趋势</li>
+<li><b>患者概览</b> — 单患者综合仪表盘</li>
+<li><b>数据质量</b> — 缺失率与完整性分析</li>
 </ul>
 </div>''', unsafe_allow_html=True)
             
@@ -7564,23 +7750,21 @@ def render_home_extract_mode(lang):
         with col_opt2:
             # Option B: Cohort Analysis
             if lang == 'en':
-                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #6d28d9;">
-<h4 style="color: #6d28d9; margin-bottom: 12px;">🔬 Option B: Cohort Analysis</h4>
-<p style="color: #1a1a1a; margin-bottom: 15px;">Perform statistical analysis on your cohort:</p>
-<ul style="color: #2a2a2a; margin: 10px 0 0 15px; font-size: 0.95rem; line-height: 1.8;">
-<li><b>Group Comparison Analysis</b> — Compare subgroups with statistical tests</li>
-<li><b>Multi-Database Feature Distribution</b> — Compare feature distributions across different ICU databases</li>
-<li><b>Cohort Dashboard</b> — Interactive overview of cohort demographics, outcomes, and key clinical characteristics</li>
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 22px">
+<div style="font-weight:700;color:#6d28d9;margin-bottom:10px">🔬 Cohort Analysis</div>
+<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.88rem;line-height:1.9">
+<li><b>Group Comparison</b> — Statistical tests between subgroups</li>
+<li><b>Multi-DB Distribution</b> — Compare across databases</li>
+<li><b>Cohort Dashboard</b> — Demographics &amp; outcomes overview</li>
 </ul>
 </div>''', unsafe_allow_html=True)
             else:
-                st.markdown('''<div class="highlight-card" style="border-left: 4px solid #6d28d9;">
-<h4 style="color: #6d28d9; margin-bottom: 12px;">🔬 选项 B：队列分析</h4>
-<p style="color: #1a1a1a; margin-bottom: 15px;">对队列进行统计分析：</p>
-<ul style="color: #2a2a2a; margin: 10px 0 0 15px; font-size: 0.95rem; line-height: 1.8;">
-<li><b>组间比较分析</b> — 使用统计检验（t检验、卡方检验、Mann-Whitney U）比较亚组并生成 Table 1</li>
-<li><b>多数据库特征分布</b> — 比较不同ICU数据库（MIMIC、eICU等）间的特征分布差异</li>
-<li><b>队列仪表盘</b> — 队列人口统计学、结局和关键临床特征的交互式概览</li>
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 22px">
+<div style="font-weight:700;color:#6d28d9;margin-bottom:10px">🔬 队列分析</div>
+<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.88rem;line-height:1.9">
+<li><b>组间比较</b> — 统计检验比较亚组</li>
+<li><b>多数据库分布</b> — 跨数据库特征分布比较</li>
+<li><b>队列仪表盘</b> — 人口统计学与结局概览</li>
 </ul>
 </div>''', unsafe_allow_html=True)
             
@@ -7753,25 +7937,23 @@ def render_timeseries_page():
     """渲染时序分析页面。"""
     lang = st.session_state.get('language', 'en')
     
-    page_title = "📈 Time Series Analysis" if lang == 'en' else "📈 时序数据分析"
-    st.markdown(f"## {page_title}")
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    _ts_title = "Time Series Analysis" if lang == 'en' else "时序数据分析"
+    _ts_sub = "Interactive visualization, single & multi-patient comparison" if lang == 'en' else "交互式可视化，支持单/多患者对比"
+    st.markdown(f'''
+    <div style="margin-bottom:16px">
+        <div style="font-size:1.4rem;font-weight:800;color:#111827">{_ts_title}</div>
+        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_ts_sub}</div>
+    </div>
+    ''', unsafe_allow_html=True)
     
     if len(st.session_state.loaded_concepts) == 0:
-        if lang == 'en':
-            st.markdown('''
-            <div class="info-box">
-                <strong>👈 Please load data from the sidebar first</strong><br>
-                💡 Tip: Click "Enable Demo Mode" on homepage for quick start
-            </div>
-            ''', unsafe_allow_html=True)
-        else:
-            st.markdown('''
-            <div class="info-box">
-                <strong>👈 请先在侧边栏加载数据</strong><br>
-                💡 提示：点击首页「一键体验演示模式」快速开始
-            </div>
-            ''', unsafe_allow_html=True)
+        _msg = "Load data to begin time series analysis." if lang == 'en' else "请先加载数据以进行时序分析。"
+        st.markdown(f'''
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:28px;text-align:center;margin:20px 0">
+            <div style="font-size:2rem;margin-bottom:10px">📈</div>
+            <div style="font-weight:600;color:#111827">{_msg}</div>
+        </div>
+        ''', unsafe_allow_html=True)
         return
     
     # Concept 选择区域
@@ -8259,25 +8441,23 @@ def render_patient_page():
     """渲染患者视图页面。"""
     lang = st.session_state.get('language', 'en')
     
-    page_title = "🏥 Patient Overview" if lang == 'en' else "🏥 患者综合视图"
-    st.markdown(f"## {page_title}")
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    _pat_title = "Patient Overview" if lang == 'en' else "患者综合视图"
+    _pat_sub = "Multi-dimensional patient dashboard" if lang == 'en' else "多维度患者仪表盘"
+    st.markdown(f'''
+    <div style="margin-bottom:16px">
+        <div style="font-size:1.4rem;font-weight:800;color:#111827">{_pat_title}</div>
+        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_pat_sub}</div>
+    </div>
+    ''', unsafe_allow_html=True)
     
     if len(st.session_state.loaded_concepts) == 0:
-        if lang == 'en':
-            st.markdown('''
-            <div class="info-box">
-                <strong>👈 Please load data from the sidebar first</strong><br>
-                💡 Tip: Select "Demo Mode" to quickly explore all features
-            </div>
-            ''', unsafe_allow_html=True)
-        else:
-            st.markdown('''
-            <div class="info-box">
-                <strong>👈 请先在侧边栏加载数据</strong><br>
-                💡 提示：勾选「使用模拟数据」可快速体验所有功能
-            </div>
-            ''', unsafe_allow_html=True)
+        _msg = "Load data to view patient dashboards." if lang == 'en' else "请先加载数据以查看患者视图。"
+        st.markdown(f'''
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:28px;text-align:center;margin:20px 0">
+            <div style="font-size:2rem;margin-bottom:10px">🏥</div>
+            <div style="font-weight:600;color:#111827">{_msg}</div>
+        </div>
+        ''', unsafe_allow_html=True)
         return
     
     if not st.session_state.patient_ids:
@@ -8286,8 +8466,10 @@ def render_patient_page():
         return
     
     # 患者选择面板
-    select_title = "🎛️ Patient Selection" if lang == 'en' else "🎛️ 患者选择"
-    st.markdown(f"### {select_title}")
+    select_title = "Patient Selection" if lang == 'en' else "患者选择"
+    st.markdown(f'''
+    <div style="font-size:1.05rem;font-weight:700;color:#111827;margin-bottom:10px">{select_title}</div>
+    ''', unsafe_allow_html=True)
     
     # 快速导航按钮
     first_btn = "⏮️ First" if lang == 'en' else "⏮️ 首位"
@@ -9513,30 +9695,28 @@ def render_quality_page():
     """渲染数据质量页面。"""
     lang = st.session_state.get('language', 'en')
     
-    page_title = "📊 Data Quality Assessment" if lang == 'en' else "📊 数据质量评估"
-    st.markdown(f"## {page_title}")
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    page_title = "Data Quality" if lang == 'en' else "数据质量评估"
+    page_sub = "Missing rate analysis & data completeness" if lang == 'en' else "缺失率分析与数据完整度"
+    st.markdown(f'''
+    <div style="margin-bottom:20px">
+        <div style="font-size:1.4rem;font-weight:800;color:#111827">{page_title}</div>
+        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{page_sub}</div>
+    </div>
+    ''', unsafe_allow_html=True)
     
     if len(st.session_state.loaded_concepts) == 0:
-        if lang == 'en':
-            st.markdown('''
-            <div class="info-box">
-                <strong>👈 Please load data from the sidebar first</strong><br>
-                💡 Tip: Select "Demo Mode" to quickly explore all features
-            </div>
-            ''', unsafe_allow_html=True)
-        else:
-            st.markdown('''
-            <div class="info-box">
-                <strong>👈 请先在侧边栏加载数据</strong><br>
-                💡 提示：勾选「使用模拟数据」可快速体验所有功能
-            </div>
-            ''', unsafe_allow_html=True)
+        _no_data_msg = "Load data to begin quality analysis." if lang == 'en' else "请先加载数据以进行质量分析。"
+        _tip_msg = 'Try "Demo Mode" for a quick start.' if lang == 'en' else '选择「演示模式」快速开始。'
+        st.markdown(f'''
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:28px;text-align:center;margin:20px 0">
+            <div style="font-size:2rem;margin-bottom:10px">📊</div>
+            <div style="font-weight:600;color:#111827;margin-bottom:4px">{_no_data_msg}</div>
+            <div style="font-size:.85rem;color:#9ca3af">{_tip_msg}</div>
+        </div>
+        ''', unsafe_allow_html=True)
         return
     
     # 总体数据质量概览
-    quality_title = "📋 Data Quality Overview" if lang == 'en' else "📋 数据质量概览"
-    st.markdown(f"### {quality_title}")
     
     total_records = 0
     total_missing = 0
@@ -9794,44 +9974,38 @@ def render_quality_page():
                 missing_col: f"{missing_rate:.1f}%",
             })
     
-    # 总体统计卡片（移除Quality Score）
+    # 总体统计
     overall_missing = (total_missing / total_records * 100) if total_records > 0 else 0
     
-    col1, col2, col3 = st.columns(3)
-    
     records_label = "Total Records" if lang == 'en' else "总记录数"
-    missing_label = "Avg Missing %" if lang == 'en' else "平均缺失率"
+    missing_label = "Avg Missing" if lang == 'en' else "平均缺失率"
     items_label = "Data Items" if lang == 'en' else "数据项数"
     
-    with col1:
-        st.markdown(f'''
-        <div class="metric-card" style="text-align:center">
-            <div class="stat-label">{records_label}</div>
-            <div class="stat-number">{total_records:,}</div>
-        </div>
-        ''', unsafe_allow_html=True)
+    # 缺失率颜色映射
+    _miss_color = "#10b981" if overall_missing < 20 else ("#f59e0b" if overall_missing < 50 else "#ef4444")
     
-    with col2:
-        st.markdown(f'''
-        <div class="metric-card" style="text-align:center">
-            <div class="stat-label">{missing_label}</div>
-            <div class="stat-number" style="font-size:1.5rem">{overall_missing:.1f}%</div>
+    st.markdown(f'''
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px">
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px 16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+            <div style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:6px">{records_label}</div>
+            <div style="font-size:1.4rem;font-weight:800;color:#111827">{total_records:,}</div>
         </div>
-        ''', unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown(f'''
-        <div class="metric-card" style="text-align:center">
-            <div class="stat-label">{items_label}</div>
-            <div class="stat-number">{len(quality_data)}</div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px 16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+            <div style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:6px">{missing_label}</div>
+            <div style="font-size:1.4rem;font-weight:800;color:{_miss_color}">{overall_missing:.1f}%</div>
         </div>
-        ''', unsafe_allow_html=True)
-    
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px 16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
+            <div style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:6px">{items_label}</div>
+            <div style="font-size:1.4rem;font-weight:800;color:#111827">{len(quality_data)}</div>
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
     
     # 详细数据表
-    detail_title = "### 📋 Detailed Quality Report" if lang == 'en' else "### 📋 详细质量报告"
-    st.markdown(detail_title)
+    detail_title = "Detailed Report" if lang == 'en' else "详细报告"
+    st.markdown(f'''
+    <div style="font-size:1.05rem;font-weight:700;color:#111827;margin-bottom:10px">{detail_title}</div>
+    ''', unsafe_allow_html=True)
     
     if quality_data:
         quality_df = pd.DataFrame(quality_data)
@@ -10558,9 +10732,14 @@ def render_cohort_comparison_page():
     """渲染队列对比可视化页面 - 包含多个子标签页"""
     lang = st.session_state.get('language', 'en')
     
-    page_title = "📊 Cohort Analysis" if lang == 'en' else "📊 队列分析"
-    st.markdown(f"## {page_title}")
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    _coh_title = "Cohort Analysis" if lang == 'en' else "队列分析"
+    _coh_sub = "Group comparison, multi-database distribution & dashboard" if lang == 'en' else "分组对比、多数据库分布与队列仪表板"
+    st.markdown(f'''
+    <div style="margin-bottom:16px">
+        <div style="font-size:1.4rem;font-weight:800;color:#111827">{_coh_title}</div>
+        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_coh_sub}</div>
+    </div>
+    ''', unsafe_allow_html=True)
     
     # 子标签页
     if lang == 'en':
@@ -10604,14 +10783,14 @@ def render_group_comparison_subtab(lang: str):
             st.markdown("---")
             
             # 居中的配置卡片
-            st.markdown("""
-            <div style="text-align:center; padding:30px; background:linear-gradient(135deg,#1e3c72,#2a5298); 
-                        border-radius:15px; margin:20px 0;">
-                <div style="font-size:3rem; margin-bottom:10px;">🎭</div>
-                <h3 style="color:white; margin:0;">""" + ("Generate Demo Cohort Data" if lang == 'en' else "生成演示队列数据") + """</h3>
-                <p style="color:#ccc; margin-top:10px;">""" + 
-                ("Configure patient count and generate simulated demographics data" if lang == 'en' else "配置患者数量并生成模拟人口统计学数据") + 
-            """</p>
+            _gen_title = "Generate Demo Cohort Data" if lang == 'en' else "生成演示队列数据"
+            _gen_desc = "Configure patient count and generate simulated demographics" if lang == 'en' else "配置患者数量并生成模拟人口统计学数据"
+            st.markdown(f"""
+            <div style="text-align:center;padding:28px;background:#f9fafb;border:1px solid #e5e7eb;
+                        border-radius:14px;margin:16px 0">
+                <div style="font-size:2.2rem;margin-bottom:8px">🎭</div>
+                <div style="font-weight:700;color:#111827;font-size:1.1rem">{_gen_title}</div>
+                <div style="color:#9ca3af;font-size:.88rem;margin-top:4px">{_gen_desc}</div>
             </div>
             """, unsafe_allow_html=True)
             
@@ -13380,7 +13559,9 @@ def execute_sidebar_export():
                                         if not val_cols:
                                             continue
                                         is_static = False
-                                        if _time_col and _time_col in df_temp.columns:
+                                        if _time_col and _time_col not in df_temp.columns:
+                                            is_static = True
+                                        elif _time_col and _time_col in df_temp.columns:
                                             if df_temp[_time_col].isna().all():
                                                 is_static = True
                                         if is_static:
@@ -14090,6 +14271,7 @@ def execute_sidebar_export():
 
         if use_mock and data:
             from functools import reduce
+            import warnings as _mock_warnings
 
             def _export_mock_module_to_disk(group_name, concept_dfs_dict):
                 """Merge demo-mode concept frames and export them as one module file."""
@@ -14158,7 +14340,7 @@ def execute_sidebar_export():
                         frame = frame.rename(columns={value_cols[0]: concept_name})
                         value_cols = [concept_name]
 
-                    is_static = (not time_col) or (time_col in frame.columns and frame[time_col].isna().all())
+                    is_static = (not time_col) or (time_col not in frame.columns) or (time_col in frame.columns and frame[time_col].isna().all())
                     if is_static:
                         if id_col and id_col in frame.columns:
                             static_cols = [id_col] + [c for c in value_cols if c in frame.columns]
@@ -14169,15 +14351,25 @@ def execute_sidebar_export():
 
                 merged_df = None
                 if ts_frames:
-                    merged_df = ts_frames[0] if len(ts_frames) == 1 else reduce(
-                        lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
-                        ts_frames
-                    )
+                    # 统一 id_col 为 Int64 避免 outer merge 中 int/float 混合警告
+                    if id_col:
+                        for i, f in enumerate(ts_frames):
+                            if id_col in f.columns and f[id_col].dtype != 'Int64':
+                                ts_frames[i] = f.copy()
+                                ts_frames[i][id_col] = ts_frames[i][id_col].astype('Int64')
+                    with _mock_warnings.catch_warnings():
+                        _mock_warnings.simplefilter('ignore', UserWarning)
+                        merged_df = ts_frames[0] if len(ts_frames) == 1 else reduce(
+                            lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                            ts_frames
+                        )
                 if static_frames:
-                    static_df = static_frames[0] if len(static_frames) == 1 else reduce(
-                        lambda left, right: pd.merge(left, right, on=[id_col], how='outer'),
-                        static_frames
-                    )
+                    with _mock_warnings.catch_warnings():
+                        _mock_warnings.simplefilter('ignore', UserWarning)
+                        static_df = static_frames[0] if len(static_frames) == 1 else reduce(
+                            lambda left, right: pd.merge(left, right, on=[id_col], how='outer'),
+                            static_frames
+                        )
                     if merged_df is not None and id_col and id_col in merged_df.columns:
                         merged_df = pd.merge(merged_df, static_df, on=[id_col], how='left')
                     else:
@@ -14350,25 +14542,23 @@ def execute_sidebar_export():
 def render_export_page():
     """渲染数据导出页面。"""
     lang = st.session_state.get('language', 'en')
-    export_title = "💾 Data Export" if lang == 'en' else "💾 数据导出"
-    st.markdown(f"## {export_title}")
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    _exp_title = "Data Export" if lang == 'en' else "数据导出"
+    _exp_sub = "Download data in CSV, Parquet, or Excel" if lang == 'en' else "以CSV、Parquet或Excel格式下载数据"
+    st.markdown(f'''
+    <div style="margin-bottom:16px">
+        <div style="font-size:1.4rem;font-weight:800;color:#111827">{_exp_title}</div>
+        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_exp_sub}</div>
+    </div>
+    ''', unsafe_allow_html=True)
     
     if len(st.session_state.loaded_concepts) == 0:
-        if lang == 'en':
-            st.markdown('''
-            <div class="info-box">
-                <strong>👈 Please load data from the sidebar first</strong><br>
-                💡 Tip: Select "Demo Mode" to quickly explore all features
-            </div>
-            ''', unsafe_allow_html=True)
-        else:
-            st.markdown('''
-            <div class="info-box">
-                <strong>👈 请先在侧边栏加载数据</strong><br>
-                💡 提示：勾选「使用模拟数据」可快速体验所有功能
-            </div>
-            ''', unsafe_allow_html=True)
+        _msg = "Load data to enable export." if lang == 'en' else "请先加载数据以启用导出。"
+        st.markdown(f'''
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:28px;text-align:center;margin:20px 0">
+            <div style="font-size:2rem;margin-bottom:10px">💾</div>
+            <div style="font-weight:600;color:#111827">{_msg}</div>
+        </div>
+        ''', unsafe_allow_html=True)
         return
     
     # 快速导出面板
@@ -14573,46 +14763,32 @@ def render_export_page():
         total_cols = max(total_cols, len(df.columns))
     
     # 预览统计卡片
-    col1, col2, col3, col4 = st.columns(4)
-    
     total_records_label = "Total Records" if lang == 'en' else "总记录数"
     est_size_label = "Est. Size" if lang == 'en' else "预估大小"
     format_label_2 = "Format" if lang == 'en' else "格式"
+    est_size = total_rows * total_cols * 10 / 1024
+    size_str = f"{est_size:.0f} KB" if est_size < 1024 else f"{est_size/1024:.1f} MB"
     
-    with col1:
-        st.markdown(f'''
-        <div class="metric-card" style="text-align:center">
-            <div class="stat-label">Concepts</div>
-            <div class="stat-number">{len(concepts_to_export)}</div>
+    st.markdown(f'''
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(8px,.4rem + .4vw,16px);margin-bottom:16px">
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;text-align:center">
+            <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">Concepts</div>
+            <div style="font-weight:700;color:#6366f1;font-size:1.4rem;margin-top:6px">{len(concepts_to_export)}</div>
         </div>
-        ''', unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown(f'''
-        <div class="metric-card" style="text-align:center">
-            <div class="stat-label">{total_records_label}</div>
-            <div class="stat-number">{total_rows:,}</div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;text-align:center">
+            <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{total_records_label}</div>
+            <div style="font-weight:700;color:#111827;font-size:1.4rem;margin-top:6px">{total_rows:,}</div>
         </div>
-        ''', unsafe_allow_html=True)
-    
-    with col3:
-        # 估算文件大小
-        est_size = total_rows * total_cols * 10 / 1024  # 粗略估算 KB
-        size_str = f"{est_size:.0f} KB" if est_size < 1024 else f"{est_size/1024:.1f} MB"
-        st.markdown(f'''
-        <div class="metric-card" style="text-align:center">
-            <div class="stat-label">{est_size_label}</div>
-            <div class="stat-number" style="font-size:1.5rem">{size_str}</div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;text-align:center">
+            <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{est_size_label}</div>
+            <div style="font-weight:700;color:#111827;font-size:1.2rem;margin-top:6px">{size_str}</div>
         </div>
-        ''', unsafe_allow_html=True)
-    
-    with col4:
-        st.markdown(f'''
-        <div class="metric-card" style="text-align:center">
-            <div class="stat-label">{format_label_2}</div>
-            <div class="stat-number" style="font-size:1.5rem">{export_format}</div>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;text-align:center">
+            <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{format_label_2}</div>
+            <div style="font-weight:700;color:#111827;font-size:1.2rem;margin-top:6px">{export_format}</div>
         </div>
-        ''', unsafe_allow_html=True)
+    </div>
+    ''', unsafe_allow_html=True)
     
     # 数据预览表格
     if concepts_to_export:
@@ -14746,21 +14922,21 @@ def main():
     # （实际导出在渲染 Home 页面后执行，确保 container 已创建）
     default_export_container = st.container()
     
-    # ============ 顶部标题（放在导航栏上方） ============
+    # ============ 顶部标题（精简现代风格） ============
     lang = st.session_state.get('language', 'en')
-    
-    # 根据模式显示不同标题
+
+    # 用 badge 显示模式标识
     if entry_mode == 'demo':
-        mode_indicator = " (Demo)" if lang == 'en' else " (演示)"
+        _mode_badge = '<span style="display:inline-block;background:var(--gradient-success);color:white;font-size:0.68rem;font-weight:700;padding:2px 10px;border-radius:100px;margin-left:8px;vertical-align:middle;letter-spacing:0.03em;">DEMO</span>'
     else:
-        mode_indicator = ""
-    
+        _mode_badge = ''
+
     if lang == 'en':
-        st.markdown(f'<div class="main-header">🏥 EasyICU Data Explorer{mode_indicator}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-header">Local ICU Data Analytics Platform</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="main-header">🏥 EasyICU{_mode_badge}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">ICU Data Analytics Platform</div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="main-header">🏥 EasyICU 数据探索器{mode_indicator}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-header">本地 ICU 数据分析与可视化平台</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="main-header">🏥 EasyICU{_mode_badge}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-header">ICU 数据分析平台</div>', unsafe_allow_html=True)
     
     # 主页面标签：Tutorial, Quick Visualization, Cohort Analysis
     tab1, tab2, tab3 = st.tabs([
