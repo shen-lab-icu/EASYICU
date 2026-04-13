@@ -48,5 +48,14 @@ fastReruns = true
 # 显示错误详情
 showErrorDetails = true
 
+[theme]
+# 🔧 FIX: 强制浅色主题 — 防止 Windows 暗色系统下 Streamlit 自动切换暗色
+base = "light"
+backgroundColor = "#f8fafc"
+secondaryBackgroundColor = "#f1f5f9"
+textColor = "#0f172a"
+primaryColor = "#6366f1"
+font = "sans serif"
+
 # 工具栏模式
 toolbarMode = "minimal"

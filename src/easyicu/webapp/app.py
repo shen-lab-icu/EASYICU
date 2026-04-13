@@ -137,7 +137,7 @@ st.markdown("""
     }
     
     /* ============ 全局排版 ============ */
-    html, body, .stApp {
+    html, body, .stApp, *, *::before, *::after {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
@@ -169,6 +169,15 @@ st.markdown("""
     [data-testid="stSidebar"] div {
         color: inherit !important;
     }
+    /* 全局标签、文本强制深色 — 覆盖 Streamlit 暗色 variables */
+    .stApp label,
+    .stApp .stMarkdown p,
+    .stApp .stMarkdown li,
+    .stApp .stMarkdown span,
+    .stApp [data-testid="stWidgetLabel"],
+    .stApp [data-testid="stWidgetLabel"] p {
+        color: #0f172a !important;
+    }
     /* Streamlit secondary button 强制浅色 */
     div[data-testid="stButton"] > button[kind="secondary"],
     div[data-testid="stButton"] > button[data-testid="baseButton-secondary"] {
@@ -188,6 +197,34 @@ st.markdown("""
         background-color: #ffffff !important;
         color: #0f172a !important;
     }
+    /* Radio / Checkbox / NumberInput / Slider 强制浅色 */
+    [data-testid="stRadio"],
+    [data-testid="stRadio"] label,
+    [data-testid="stRadio"] div[role="radiogroup"],
+    [data-testid="stRadio"] div[role="radiogroup"] label {
+        color: #0f172a !important;
+        background-color: transparent !important;
+    }
+    [data-testid="stCheckbox"],
+    [data-testid="stCheckbox"] label {
+        color: #0f172a !important;
+    }
+    [data-testid="stNumberInput"],
+    [data-testid="stNumberInput"] label {
+        color: #0f172a !important;
+    }
+    [data-testid="stNumberInput"] input {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+    }
+    [data-testid="stSlider"],
+    [data-testid="stSlider"] label {
+        color: #0f172a !important;
+    }
+    [data-testid="stMultiSelect"],
+    [data-testid="stMultiSelect"] label {
+        color: #0f172a !important;
+    }
     /* Tab list 强制浅色 */
     div[data-baseweb="tab-list"] {
         background: rgba(241,245,249,0.8) !important;
@@ -198,12 +235,20 @@ st.markdown("""
     div[data-baseweb="tab-list"] button[aria-selected="true"] {
         color: white !important;
     }
-    /* Expander 强制浅色 */
+    /* Expander 强制浅色 — 包括 summary bar */
     details[data-testid="stExpander"] {
         background-color: #ffffff !important;
         border-color: #e2e8f0 !important;
     }
+    details[data-testid="stExpander"] summary {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+    }
     details[data-testid="stExpander"] summary span {
+        color: #0f172a !important;
+    }
+    details[data-testid="stExpander"] > div {
+        background-color: #ffffff !important;
         color: #0f172a !important;
     }
     /* 对内容元素应用字体 */
@@ -660,6 +705,8 @@ st.markdown("""
     details[data-testid="stExpander"] summary {
         font-weight: 600 !important;
         font-size: 0.9rem !important;
+        background-color: #ffffff !important;
+        color: #0f172a !important;
     }
 
     /* ============ Tooltip ============ */
