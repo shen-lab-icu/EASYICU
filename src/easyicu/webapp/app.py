@@ -12631,6 +12631,8 @@ def execute_sidebar_export():
         export_dir.mkdir(parents=True, exist_ok=True)
         
         exported_files = []
+        module_times = {}
+        all_exported_patient_ids = set()
         total_concepts = len(selected_concepts)
         
         # 创建进度条和状态显示
@@ -13242,7 +13244,7 @@ def execute_sidebar_export():
                     
                     # ── 合并为宽表（完整保留原有逻辑） ──
                     id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
-                    time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime', 'itemtime', 'Offset', 'measuredat_minutes', 'measuredat']
+                    time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime', 'itemtime', 'datetime', 'Offset', 'measuredat_minutes', 'measuredat', 'givenat', 'enteredentryat']
                     unified_time_col = 'charttime'
                     
                     # 统一时间列名称
@@ -13302,7 +13304,8 @@ def execute_sidebar_export():
                         for concept_name, df in concept_dfs_dict.items():
                             if _id_col and _id_col not in df.columns:
                                 continue
-                            metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type']
+                            metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type',
+                                            'dur_var', 'entertime']  # dur_var/entertime: WinTbl 内部列
                             cols_to_drop = [c for c in df.columns if c in metadata_cols]
                             if cols_to_drop:
                                 df = df.drop(columns=cols_to_drop)
@@ -14088,6 +14091,152 @@ def execute_sidebar_export():
         import time as time_module
         # 使用真正的开始时间计算总耗时
         export_start_time = _export_start if '_export_start' in dir() else time_module.time()
+
+        if use_mock and data:
+            from functools import reduce
+
+            def _export_mock_module_to_disk(group_name, concept_dfs_dict):
+                """Merge demo-mode concept frames and export them as one module file."""
+                nonlocal all_exported_patient_ids
+
+                if not concept_dfs_dict:
+                    return False
+
+                id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
+                time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime', 'itemtime', 'datetime', 'Offset', 'measuredat_minutes', 'measuredat', 'givenat', 'enteredentryat']
+                unified_time_col = 'charttime'
+
+                normalized = {}
+                for cname, cdf in concept_dfs_dict.items():
+                    if not isinstance(cdf, pd.DataFrame) or cdf.empty:
+                        continue
+                    frame = cdf.copy()
+                    if unified_time_col in frame.columns:
+                        other_time_cols = [tc for tc in time_candidates if tc in frame.columns and tc != unified_time_col]
+                        if other_time_cols:
+                            frame = frame.drop(columns=other_time_cols)
+                    else:
+                        for tc in time_candidates:
+                            if tc in frame.columns:
+                                frame = frame.rename(columns={tc: unified_time_col})
+                                break
+                    normalized[cname] = frame
+
+                if not normalized:
+                    return False
+
+                potential_id_cols = set()
+                potential_time_cols = set()
+                for frame in normalized.values():
+                    for col in id_candidates:
+                        if col in frame.columns:
+                            potential_id_cols.add(col)
+                            break
+                    if unified_time_col in frame.columns:
+                        potential_time_cols.add(unified_time_col)
+
+                merge_cols = []
+                id_col = next((col for col in id_candidates if col in potential_id_cols), None)
+                if id_col:
+                    merge_cols.append(id_col)
+                time_col = unified_time_col if unified_time_col in potential_time_cols else None
+                if time_col:
+                    merge_cols.append(time_col)
+
+                static_frames = []
+                ts_frames = []
+                metadata_cols = {'valueuom', 'unit', 'units', 'category', 'type',
+                                 'dur_var', 'entertime'}  # dur_var/entertime: WinTbl 内部列
+
+                for concept_name, frame in normalized.items():
+                    drop_cols = [c for c in frame.columns if c in metadata_cols]
+                    if drop_cols:
+                        frame = frame.drop(columns=drop_cols)
+
+                    value_cols = [c for c in frame.columns if c not in merge_cols]
+                    if not value_cols:
+                        continue
+
+                    if len(value_cols) == 1:
+                        frame = frame.rename(columns={value_cols[0]: concept_name})
+                        value_cols = [concept_name]
+
+                    is_static = (not time_col) or (time_col in frame.columns and frame[time_col].isna().all())
+                    if is_static:
+                        if id_col and id_col in frame.columns:
+                            static_cols = [id_col] + [c for c in value_cols if c in frame.columns]
+                            static_frames.append(frame[static_cols].drop_duplicates(subset=[id_col], keep='last'))
+                    else:
+                        keep_cols = merge_cols + [c for c in value_cols if c in frame.columns]
+                        ts_frames.append(frame[keep_cols].drop_duplicates(subset=merge_cols, keep='last'))
+
+                merged_df = None
+                if ts_frames:
+                    merged_df = ts_frames[0] if len(ts_frames) == 1 else reduce(
+                        lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
+                        ts_frames
+                    )
+                if static_frames:
+                    static_df = static_frames[0] if len(static_frames) == 1 else reduce(
+                        lambda left, right: pd.merge(left, right, on=[id_col], how='outer'),
+                        static_frames
+                    )
+                    if merged_df is not None and id_col and id_col in merged_df.columns:
+                        merged_df = pd.merge(merged_df, static_df, on=[id_col], how='left')
+                    else:
+                        merged_df = static_df
+
+                if merged_df is None or merged_df.empty:
+                    return False
+
+                if id_col and id_col in merged_df.columns:
+                    all_exported_patient_ids.update(merged_df[id_col].dropna().unique())
+
+                concept_names_sorted = sorted(list(concept_dfs_dict.keys()))
+                if len(concept_names_sorted) <= 5:
+                    concepts_suffix = '_'.join(concept_names_sorted)
+                else:
+                    concepts_suffix = '_'.join(concept_names_sorted[:4]) + f'_etc{len(concept_names_sorted)}'
+
+                cohort_suffix = _generate_cohort_prefix()
+                safe_filename = f"{group_name}_{concepts_suffix}"
+                if cohort_suffix:
+                    safe_filename = f"{safe_filename}_{cohort_suffix}"
+                safe_filename = safe_filename.replace('/', '_').replace('\\', '_')
+                if len(safe_filename) > 150:
+                    safe_filename = safe_filename[:150]
+
+                if export_format == 'csv':
+                    file_path = export_dir / f"{safe_filename}.csv"
+                    merged_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+                elif export_format == 'excel':
+                    file_path = export_dir / f"{safe_filename}.xlsx"
+                    merged_df.to_excel(file_path, index=False)
+                else:
+                    file_path = export_dir / f"{safe_filename}.parquet"
+                    merged_df.to_parquet(file_path, index=False)
+
+                exported_files.append(str(file_path))
+                return True
+
+            mock_modules = []
+            for group_key, group_concepts in selected_modules.items():
+                group_dfs = {c: data[c] for c in group_concepts if c in data}
+                if group_dfs:
+                    mock_modules.append((group_key, group_dfs))
+
+            total_mock_modules = len(mock_modules) or 1
+            for mod_idx, (mod_key, mod_dfs) in enumerate(mock_modules):
+                mod_display = CONCEPT_GROUP_NAMES.get(mod_key, (mod_key, mod_key))
+                mod_name = mod_display[1] if lang != 'en' else mod_display[0]
+                status_text.markdown(
+                    f"**{'Exporting' if lang == 'en' else '正在导出'} {mod_name}** "
+                    f"({mod_idx + 1}/{total_mock_modules})"
+                )
+                mod_start = time_module.time()
+                _export_mock_module_to_disk(mod_key, mod_dfs)
+                module_times[mod_key] = time_module.time() - mod_start
+                progress_bar.progress(0.3 + 0.5 * (mod_idx + 1) / total_mock_modules)
         
         # 完成
         progress_bar.progress(1.0)

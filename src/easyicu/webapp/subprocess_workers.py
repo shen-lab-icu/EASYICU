@@ -137,7 +137,8 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
     id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid',
                      'admissionid', 'patientid', 'CaseID']
     time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime',
-                       'itemtime', 'Offset', 'measuredat_minutes', 'measuredat']
+                       'itemtime', 'datetime', 'Offset', 'measuredat_minutes', 'measuredat',
+                       'givenat', 'enteredentryat']
     unified_time_col = 'charttime'
 
     # 统一时间列名称
@@ -197,7 +198,8 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
         for concept_name, df in concept_dfs.items():
             if _id_col and _id_col not in df.columns:
                 continue
-            metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type']
+            metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type',
+                            'dur_var', 'entertime']  # dur_var/entertime: WinTbl 内部列，不导出
             cols_to_drop = [c for c in df.columns if c in metadata_cols]
             if cols_to_drop:
                 df = df.drop(columns=cols_to_drop)
