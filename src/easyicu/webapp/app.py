@@ -13107,14 +13107,10 @@ def execute_sidebar_export():
                 # gc.collect() + malloc_trim() 无法回收（arena 中只要有1个存活对象就不归还OS）。
                 # 19个模块依次执行，碎片累积导致 RSS 远超实际数据量（实测: 3GB 数据 → 22GB RSS）。
                 #
-                # 分批加载可限制每批的碎片量。实测:
-                #   batch_size=5000 → AUMC 23K × 19模块 峰值 RSS ~8.4GB (安全)
-                #   batch_size=2000 → 228批次 → 1h+ (过度保守)
-                #   无分批       → RSS 22GB (32GB PC 上危险)
-                #
-                # 碎片安全公式: cap = max(5000, int(avail_MB * 0.5))
-                # 流式导出后每模块及时释放内存，碎片累积更少，可提高系数
-                #   12GB PC → 5000, 16GB → 5000, 32GB → 12000, 服务器(1.5TB) → 不分批
+                # 分批加载可限制每批的碎片量。
+                # 流式导出 (2026-04-13): 每批加载 → 合并 → 追加写入 → 释放，
+                # 内存始终受限于单批，无需严格上限。
+                #   16GB → 10000, 32GB → 12000, 64GB → 24000, 服务器(1.5TB) → 不分批
                 _auto_batch_size = None
                 _n_load_patients = _actual_n_patients if _actual_n_patients is not None else (
                     len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
@@ -13123,7 +13119,8 @@ def execute_sidebar_export():
                     try:
                         from easyicu.memory_manager import get_available_memory_mb
                         _avail_mb = get_available_memory_mb()
-                        _frag_safe_max = min(max(5000, int(_avail_mb * 0.5)), 10000)  # 🔧 FIX Bug 53: 上限10K 防止大内存服务器不分批
+                        # 流式导出: 每批峰值 ~0.05-0.2 MB/patient, 无需严格上限
+                        _frag_safe_max = max(10000, int(_avail_mb * 0.5))
                         if _n_load_patients > _frag_safe_max:
                             _auto_batch_size = _frag_safe_max
                             _n_batches = (_n_load_patients + _auto_batch_size - 1) // _auto_batch_size
@@ -14289,16 +14286,20 @@ def execute_sidebar_export():
             for file_path in exported_files:
                 try:
                     if file_path.endswith('.parquet'):
-                        temp_df = pd.read_parquet(file_path)
+                        # 🔧 FIX (2026-04-13): 仅读取 schema（列名），不读取数据
+                        # 之前用 pd.read_parquet 读取完整数据仅为获取列名，
+                        # 对 200K 患者的大 parquet 文件会在主进程产生 GB 级 pymalloc 碎片
+                        import pyarrow.parquet as _pq_stat
+                        _schema = _pq_stat.read_schema(file_path)
+                        _cols = _schema.names
                     elif file_path.endswith('.csv'):
                         # 只读取列名，不读取全部数据
-                        temp_df = pd.read_csv(file_path, nrows=0)
+                        _cols = list(pd.read_csv(file_path, nrows=0).columns)
                     elif file_path.endswith('.xlsx'):
-                        # 🔧 FIX (2026-02-13): xlsx 文件也需要统计列名
-                        temp_df = pd.read_excel(file_path, nrows=0)
+                        _cols = list(pd.read_excel(file_path, nrows=0).columns)
                     else:
                         continue
-                    for col in temp_df.columns:
+                    for col in _cols:
                         if col not in exclude_cols_set:
                             # 规范化列名
                             norm_col = normalize_column_name(col)
