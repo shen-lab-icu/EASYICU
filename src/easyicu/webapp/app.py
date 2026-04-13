@@ -147,6 +147,20 @@ st.markdown("""
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
+        color-scheme: light !important;
+    }
+
+    /* 强制浅色背景 — 覆盖系统/浏览器深色模式 */
+    html, body {
+        background-color: #f8fafc !important;
+        color: #0f172a !important;
+    }
+    .stApp, [data-testid="stAppViewContainer"] {
+        background-color: #f8fafc !important;
+        color: #0f172a !important;
+    }
+    [data-testid="stSidebar"] {
+        color: #0f172a !important;
     }
     /* 对内容元素应用字体 */
     .stMarkdown, .stMarkdown p, .stMarkdown li,
@@ -294,7 +308,7 @@ st.markdown("""
 
     /* ============ 主标题 — 精致排版 ============ */
     .main-header {
-        font-size: clamp(1.5rem, 1.2rem + 0.5vw, 2rem);
+        font-size: clamp(1.7rem, 1.4rem + 0.6vw, 2.4rem);
         font-weight: 800;
         color: var(--text-primary-light);
         margin-top: 0;
@@ -305,7 +319,7 @@ st.markdown("""
     }
 
     .sub-header {
-        font-size: clamp(0.85rem, 0.8rem + 0.15vw, 1rem);
+        font-size: clamp(0.95rem, 0.88rem + 0.2vw, 1.15rem);
         color: var(--text-tertiary-light);
         margin-bottom: 1rem;
         text-align: center;
@@ -925,14 +939,14 @@ st.markdown("""
     }
 
     .step-text {
-        font-size: 0.85rem;
+        font-size: 0.92rem;
         font-weight: 600;
         color: var(--text-primary-light);
     }
 
     .step-text small {
         display: block;
-        font-size: 0.75rem;
+        font-size: 0.8rem;
         font-weight: 400;
         color: var(--text-tertiary-light);
         margin-top: 1px;
@@ -949,7 +963,7 @@ st.markdown("""
     /* 小屏 (≤1366px, 13-14" 笔记本) */
     @media (max-width: 1366px) {
         .block-container { max-width: 95% !important; }
-        .main-header { font-size: 1.4rem; }
+        .main-header { font-size: 1.6rem; }
         .step-indicator { padding: 10px 12px; gap: 8px; }
         .step-dot { width: 24px; height: 24px; font-size: 0.7rem; }
         .step-text { font-size: 0.8rem; }
@@ -977,8 +991,8 @@ st.markdown("""
     @media (min-width: 2560px) {
         .block-container { max-width: min(85%, 1800px) !important; }
         .hero-container { max-width: min(1000px, 55%); }
-        .main-header { font-size: 2.1rem; }
-        .sub-header { font-size: 1.05rem; }
+        .main-header { font-size: 2.4rem; }
+        .sub-header { font-size: 1.15rem; }
         .step-indicator { padding: 16px 24px; gap: 14px; }
         .step-dot { width: 34px; height: 34px; font-size: 0.85rem; }
         .step-text { font-size: 0.95rem; }
@@ -5666,32 +5680,25 @@ def render_sidebar():
             st.session_state.database = database
             st.session_state.use_mock_data = False
             
-            # 根据操作系统和数据库设置默认路径
+            # 数据库简称 → 显示名映射
+            _db_display_names = {
+                'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD', 
+                'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID',
+                'mimic': 'MIMIC-III', 'sic': 'SICdb'
+            }
+            _db_display = _db_display_names.get(database, database)
+            
             import platform
-            if platform.system() == 'Windows':
-                default_paths = {
-                    'miiv': r'D:\mimic-iv-3.1',
-                    'eicu': r'D:\eicu-crd-2.0',
-                    'aumc': r'D:\amsterdamumcdb-1.0.2',
-                    'hirid': r'D:\hirid-1.1.1',
-                    'mimic': r'D:\mimic-iii-1.4',
-                    'sic': r'D:\sicdb-1.0.6',
-                }
-            else:
-                default_paths = {
-                    'miiv': '/home/zhuhb/icudb/mimiciv/3.1',
-                    'eicu': '/home/zhuhb/icudb/eicu/2.0.1',
-                    'aumc': '/home/zhuhb/icudb/aumc/1.0.2',
-                    'hirid': '/home/zhuhb/icudb/hirid/1.1.1',
-                    'mimic': '/home/zhuhb/icudb/mimiciii/1.4',
-                    'sic': '/home/zhuhb/icudb/sicdb/1.0.6',
-                }
-            default_path = default_paths.get(database, '')
+            _is_win = platform.system() == 'Windows'
+            _placeholder = f"D:\\data\\{database}" if _is_win else f"/path/to/{database}"
+            _hint = f"Enter the path to your {_db_display} data directory" if st.session_state.language == 'en' else f"请输入 {_db_display} 数据目录的路径"
+            
             path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
             data_path = st.text_input(
                 path_label,
-                value=st.session_state.data_path or default_path,
-                placeholder=f"/path/to/{database}",
+                value=st.session_state.data_path or "",
+                placeholder=_placeholder,
+                help=_hint,
                 on_change=lambda: None  # 触发 rerun 以检测新数据库
             )
             
@@ -7278,13 +7285,13 @@ def render_home_extract_mode(lang):
 
     if lang == 'en':
         st.markdown("""
-        <p style="font-size:0.9rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.6;">
+        <p style="font-size:1rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.6;">
             👈 Follow the <b>4 steps in the left sidebar</b> to define your cohort, select features, and export data.
         </p>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
-        <p style="font-size:0.9rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.6;">
+        <p style="font-size:1rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.6;">
             👈 按照<b>左侧边栏的 4 个步骤</b>操作，即可完成 ICU 数据的队列定义、特征选择和导出。
         </p>
         """, unsafe_allow_html=True)
@@ -7355,8 +7362,8 @@ def render_home_extract_mode(lang):
     guide_title_text = f"Guide: {guide_step}" if lang == 'en' else f"引导: {guide_step}"
     st.markdown(f'''
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
-        <div style="width:6px;height:28px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)"></div>
-        <span style="font-size:1.25rem;font-weight:800;color:#111827">{guide_title_text}</span>
+        <div style="width:6px;height:32px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)"></div>
+        <span style="font-size:1.4rem;font-weight:800;color:#111827">{guide_title_text}</span>
     </div>
     ''', unsafe_allow_html=True)
     
@@ -7365,11 +7372,11 @@ def render_home_extract_mode(lang):
         if lang == 'en':
             st.markdown('''
             <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
-                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">Configure Data Source in the Sidebar</div>
+                <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">Configure Data Source in the Sidebar</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
                     <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px">
                         <div style="font-weight:600;color:#166534;margin-bottom:8px">🎭 Demo Mode</div>
-                        <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                        <ul style="color:#4b5563;font-size:.92rem;line-height:1.7;padding-left:18px;margin:0">
                             <li>No real data needed — generates simulated ICU data</li>
                             <li>Adjust patients (50-500) & duration (24-168h)</li>
                             <li>Click <b>"Confirm Data Source"</b> when ready</li>
@@ -7377,7 +7384,7 @@ def render_home_extract_mode(lang):
                     </div>
                     <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px">
                         <div style="font-weight:600;color:#3730a3;margin-bottom:8px">📊 Real Data Mode</div>
-                        <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                        <ul style="color:#4b5563;font-size:.92rem;line-height:1.7;padding-left:18px;margin:0">
                             <li>MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb</li>
                             <li>Enter your local database path</li>
                             <li>All processing is local — data stays secure 🔒</li>
@@ -7389,11 +7396,11 @@ def render_home_extract_mode(lang):
         else:
             st.markdown('''
             <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
-                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">在侧边栏配置数据源</div>
+                <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">在侧边栏配置数据源</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
                     <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px">
                         <div style="font-weight:600;color:#166534;margin-bottom:8px">🎭 演示模式</div>
-                        <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                        <ul style="color:#4b5563;font-size:.92rem;line-height:1.7;padding-left:18px;margin:0">
                             <li>无需真实数据 — 自动生成模拟ICU数据</li>
                             <li>可调整患者数量(50-500)和时长(24-168h)</li>
                             <li>设置后点击<b>「确认数据源配置」</b></li>
@@ -7401,7 +7408,7 @@ def render_home_extract_mode(lang):
                     </div>
                     <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px">
                         <div style="font-weight:600;color:#3730a3;margin-bottom:8px">📊 真实数据模式</div>
-                        <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                        <ul style="color:#4b5563;font-size:.92rem;line-height:1.7;padding-left:18px;margin:0">
                             <li>支持 MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb</li>
                             <li>输入本地数据库路径</li>
                             <li>所有处理本地完成 — 数据安全 🔒</li>
@@ -7416,10 +7423,10 @@ def render_home_extract_mode(lang):
         if lang == 'en':
             st.markdown('''
             <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
-                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">Configure Cohort Selection</div>
+                <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">Configure Cohort Selection</div>
                 <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px;margin-bottom:12px">
                     <div style="font-weight:600;color:#3730a3;margin-bottom:8px">Available Filters</div>
-                    <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                    <ul style="color:#4b5563;font-size:.92rem;line-height:1.7;padding-left:18px;margin:0">
                         <li><b>Age Range</b> — e.g., 18-65 years</li>
                         <li><b>Gender</b> — Male, Female, or Any</li>
                         <li><b>Survival Status</b> — Survivors, non-survivors, or all</li>
@@ -7434,10 +7441,10 @@ def render_home_extract_mode(lang):
         else:
             st.markdown('''
             <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
-                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">配置队列筛选</div>
+                <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">配置队列筛选</div>
                 <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px;margin-bottom:12px">
                     <div style="font-weight:600;color:#3730a3;margin-bottom:8px">可用筛选条件</div>
-                    <ul style="color:#4b5563;font-size:.85rem;line-height:1.7;padding-left:18px;margin:0">
+                    <ul style="color:#4b5563;font-size:.92rem;line-height:1.7;padding-left:18px;margin:0">
                         <li><b>年龄范围</b> — 如 18-65 岁</li>
                         <li><b>性别</b> — 男/女/不限</li>
                         <li><b>存活状态</b> — 存活/死亡/全部</li>
@@ -7455,7 +7462,7 @@ def render_home_extract_mode(lang):
         if lang == 'en':
             st.markdown('''
             <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
-                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">Select Features — 167 ICU Clinical Features</div>
+                <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">Select Features — 167 ICU Clinical Features</div>
                 <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px">
                     <div style="background:#eff6ff;border-radius:8px;padding:12px"><b style="color:#1d4ed8">📊 Vital Signs</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">HR, BP, Temp, SpO2, Resp</div></div>
                     <div style="background:#ecfdf5;border-radius:8px;padding:12px"><b style="color:#047857">🧪 Lab Tests</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">Chemistry, CBC, Coag, ABG</div></div>
@@ -7470,7 +7477,7 @@ def render_home_extract_mode(lang):
         else:
             st.markdown('''
             <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
-                <div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">选择特征 — 167 个 ICU 临床特征</div>
+                <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">选择特征 — 167 个 ICU 临床特征</div>
                 <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px">
                     <div style="background:#eff6ff;border-radius:8px;padding:12px"><b style="color:#1d4ed8">📊 生命体征</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">心率、血压、体温、SpO2、呼吸</div></div>
                     <div style="background:#ecfdf5;border-radius:8px;padding:12px"><b style="color:#047857">🧪 实验室检验</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">生化、血常规、凝血、血气</div></div>
@@ -7506,7 +7513,7 @@ def render_home_extract_mode(lang):
                 _steps_html = _steps_html.format('点击上方 <b>"数据导出"</b> 标签页', '选择导出格式（CSV / Parquet / Excel）', '选择保存位置', '点击 <b>"导出数据"</b> 按钮')
                 _tip = '✅ 适合大数据集 — 直接保存到磁盘，不占用内存'
             st.markdown(f'''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
-<div style="font-weight:700;color:#111827;font-size:1.05rem;margin-bottom:14px">{"How to Export Data" if lang=="en" else "如何导出数据"}</div>
+<div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">{"How to Export Data" if lang=="en" else "如何导出数据"}</div>
 {_steps_html}
 <div style="background:#ecfdf5;border-radius:8px;padding:10px 14px;margin-top:12px;font-size:.85rem;color:#047857">{_tip}</div>
 </div>''', unsafe_allow_html=True)
@@ -10430,11 +10437,42 @@ def _generate_mock_demographics(n_patients: int, lang: str = 'en') -> pd.DataFra
     return df[available_cols]
 
 
+def _path_looks_like_database(path: str) -> bool:
+    """检查路径是否看起来像数据库目录（包含 parquet/csv 文件或已知子目录）"""
+    if not os.path.isdir(path):
+        return False
+    try:
+        entries = os.listdir(path)
+    except OSError:
+        return False
+    entries_lower = [e.lower() for e in entries]
+    # 包含 parquet 文件
+    if any(e.endswith('.parquet') for e in entries_lower):
+        return True
+    # 包含已知子目录（MIMIC hosp/icu, eICU 表名, HiRID 分桶等）
+    known_dirs = {'hosp', 'icu', 'observations_bucket', 'pharma_bucket',
+                  'observation_tables', 'pharma_records', 'reference_data'}
+    if known_dirs & set(entries_lower):
+        return True
+    # 包含 csv/csv.gz 文件
+    if any(e.endswith('.csv') or e.endswith('.csv.gz') for e in entries_lower):
+        return True
+    # 包含以 _bucket 结尾的子目录（分桶数据）
+    if any(e.endswith('_bucket') for e in entries_lower):
+        return True
+    return False
+
+
 def find_database_path(root: str, db_name: str) -> str:
     """智能检测数据库路径，支持多种目录命名方式
     
+    支持以下场景:
+    - root=根目录, db_name=数据库 → root/alias[/version]
+    - root=数据库目录本身 → 直接返回 root（当 root 目录名匹配别名或包含数据文件）
+    - root=版本目录 → 直接返回 root（当 root 目录包含 parquet/csv 文件）
+    
     Args:
-        root: ICU数据根目录
+        root: ICU数据根目录，或直接的数据库路径
         db_name: 数据库名称（miiv, eicu, aumc, hirid, mimic, sic）
         
     Returns:
@@ -10442,7 +10480,7 @@ def find_database_path(root: str, db_name: str) -> str:
     """
     # 定义每个数据库可能的目录名称和版本号
     db_aliases = {
-        'miiv': ['mimiciv', 'mimic-iv', 'miiv', 'mimic_iv'],
+        'miiv': ['mimiciv', 'mimic-iv', 'miiv', 'mimic_iv', 'mimic-iv-3.1'],
         'eicu': ['eicu', 'eicu-crd', 'eicu_crd'],
         'aumc': ['aumc', 'amsterdamumc', 'amsterdam'],
         'hirid': ['hirid', 'hi-rid'],
@@ -10452,17 +10490,39 @@ def find_database_path(root: str, db_name: str) -> str:
     
     aliases = db_aliases.get(db_name, [db_name])
     
-    # 尝试每个别名
+    # ===== 优先检查: root 本身就是数据库目录 =====
+    if os.path.isdir(root):
+        root_basename = os.path.basename(os.path.normpath(root)).lower()
+        # 1) root 目录名匹配数据库别名
+        if root_basename in aliases:
+            # 可能还有版本子目录
+            try:
+                subdirs = [d for d in os.listdir(root)
+                           if os.path.isdir(os.path.join(root, d))
+                           and d[0].isdigit()]
+            except OSError:
+                subdirs = []
+            if subdirs:
+                subdirs.sort(reverse=True)
+                return os.path.join(root, subdirs[0])
+            return root
+        # 2) root 目录包含数据文件（用户直接指向了版本目录或扁平数据库目录）
+        if _path_looks_like_database(root):
+            return root
+    
+    # ===== 常规搜索: root 是父目录 =====
     for alias in aliases:
         # 尝试直接目录
         direct_path = os.path.join(root, alias)
         if os.path.isdir(direct_path):
             # 检查是否有版本子目录
-            subdirs = [d for d in os.listdir(direct_path) 
-                       if os.path.isdir(os.path.join(direct_path, d)) 
-                       and d[0].isdigit()]  # 版本号以数字开头
+            try:
+                subdirs = [d for d in os.listdir(direct_path)
+                           if os.path.isdir(os.path.join(direct_path, d))
+                           and d[0].isdigit()]
+            except OSError:
+                subdirs = []
             if subdirs:
-                # 选择最高版本
                 subdirs.sort(reverse=True)
                 return os.path.join(direct_path, subdirs[0])
             else:
@@ -10482,16 +10542,33 @@ def find_database_path(root: str, db_name: str) -> str:
             if os.path.isdir(versioned_path):
                 return versioned_path
     
-    # 回退：返回默认格式
-    fallback_map = {
-        'miiv': 'mimiciv/3.1',
-        'eicu': 'eicu/2.0.1',
-        'aumc': 'aumc/1.0.2',
-        'hirid': 'hirid/1.1.1',
-        'mimic': 'mimiciii/1.4',
-        'sic': 'sicdb/1.0.6',
-    }
-    return os.path.join(root, fallback_map.get(db_name, db_name))
+    # ===== 模糊匹配: 扫描 root 下目录名是否部分匹配 =====
+    if os.path.isdir(root):
+        try:
+            for entry in os.listdir(root):
+                entry_path = os.path.join(root, entry)
+                if not os.path.isdir(entry_path):
+                    continue
+                entry_lower = entry.lower()
+                # 检查目录名是否包含任何别名（如 "my_sic_data" 包含 "sic"）
+                for alias in aliases:
+                    if alias in entry_lower:
+                        # 再检查版本子目录
+                        try:
+                            subdirs = [d for d in os.listdir(entry_path)
+                                       if os.path.isdir(os.path.join(entry_path, d))
+                                       and d[0].isdigit()]
+                        except OSError:
+                            subdirs = []
+                        if subdirs:
+                            subdirs.sort(reverse=True)
+                            return os.path.join(entry_path, subdirs[0])
+                        return entry_path
+        except OSError:
+            pass
+    
+    # 回退：返回 root 本身（而非拼接不存在的路径）
+    return root
 
 
 def render_directory_structure_guide(lang: str = 'en'):
@@ -10847,7 +10924,8 @@ def render_group_comparison_subtab(lang: str):
             with col1:
                 data_root = st.text_input(
                     "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
-                    value=os.environ.get('EASYICU_DATA_PATH', '/home/zhuhb/icudb'),
+                    value=os.environ.get('EASYICU_DATA_PATH', ''),
+                    placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
                     key="grp_data_root",
                     help="Root directory containing database folders (mimiciv, eicu, aumc, hirid)" if lang == 'en' else "包含数据库文件夹的根目录"
                 )
@@ -11602,7 +11680,8 @@ def render_multidb_distribution_subtab(lang: str):
         with col1:
             data_root = st.text_input(
                 "🗂️ " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
-                value=os.environ.get('EASYICU_DATA_PATH', '/home/zhuhb/icudb'),
+                value=os.environ.get('EASYICU_DATA_PATH', ''),
+                placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
                 key="multidb_data_root"
             )
             # 添加目录结构指南
@@ -11703,7 +11782,7 @@ def render_multidb_distribution_subtab(lang: str):
         try:
             from easyicu.cohort_visualization import MultiDatabaseDistribution
             # Demo模式使用默认路径
-            _data_root = st.session_state.get('multidb_data_root', os.environ.get('EASYICU_DATA_PATH', '/home/zhuhb/icudb'))
+            _data_root = st.session_state.get('multidb_data_root', os.environ.get('EASYICU_DATA_PATH', ''))
             mdd = MultiDatabaseDistribution(data_root=_data_root, language=lang)
             
             # 网格图
@@ -11817,7 +11896,8 @@ def render_cohort_dashboard_subtab(lang: str):
             with col1:
                 data_root = st.text_input(
                     "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
-                    value=os.environ.get('EASYICU_DATA_PATH', '/home/zhuhb/icudb'),
+                    value=os.environ.get('EASYICU_DATA_PATH', ''),
+                    placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
                     key="dash_data_root",
                     help="Root directory containing database folders" if lang == 'en' else "包含数据库文件夹的根目录"
                 )
