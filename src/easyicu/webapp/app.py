@@ -13244,7 +13244,7 @@ def execute_sidebar_export():
                     
                     # ── 合并为宽表（完整保留原有逻辑） ──
                     id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
-                    time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime', 'itemtime', 'datetime', 'Offset', 'measuredat_minutes', 'measuredat', 'givenat', 'enteredentryat']
+                    time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime', 'itemtime', 'datetime', 'Offset', 'measuredat_minutes', 'measuredat', 'givenat', 'enteredentryat', 'intakeoutputoffset', 'observationoffset', 'nursingchartoffset', 'labresultoffset', 'respchartoffset']
                     unified_time_col = 'charttime'
                     
                     # 统一时间列名称
@@ -13305,7 +13305,8 @@ def execute_sidebar_export():
                             if _id_col and _id_col not in df.columns:
                                 continue
                             metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type',
-                                            'dur_var', 'entertime']  # dur_var/entertime: WinTbl 内部列
+                                            'dur_var', 'entertime',
+                                            'intakeoutputentryoffset']  # dur_var/entertime: WinTbl; intakeoutputentryoffset: eICU extra
                             cols_to_drop = [c for c in df.columns if c in metadata_cols]
                             if cols_to_drop:
                                 df = df.drop(columns=cols_to_drop)
@@ -13956,13 +13957,20 @@ def execute_sidebar_export():
                         _sp_tmp_dir = _tmpf_mod.mkdtemp(prefix='easyicu_special_')
                         _sp_start = _time_mod.time()
                         
+                        # 构建 concept → group 映射，传给子进程做直接导出
+                        _sp_concept_to_group = {c: _concept_to_group_pre.get(c, 'special')
+                                                for c in special_concepts_to_load}
+                        
                         _sp_proc = _mp_mod.Process(
                             target=_subprocess_load_special,
                             args=(special_concepts_to_load, database,
                                   st.session_state.data_path,
                                   patient_ids_filter,
                                   patient_limit if patient_limit and patient_limit > 0 else None,
-                                  _sp_tmp_dir, _deps_cache_dir),
+                                  _sp_tmp_dir, _deps_cache_dir,
+                                  str(export_dir), export_format,
+                                  list(_cohort_exclude_ids) if _cohort_exclude_ids else None,
+                                  _sp_concept_to_group, cohort_suffix),
                             daemon=True
                         )
                         _sp_proc.start()
@@ -13982,17 +13990,29 @@ def execute_sidebar_export():
                         if _sp_proc.exitcode != 0:
                             raise RuntimeError(f"Special concepts subprocess exited with code {_sp_proc.exitcode}")
                         
-                        # 读取子进程结果 — 特殊概念数据量小，读回主进程可接受
-                        _sp_manifest = os.path.join(_sp_tmp_dir, '_manifest.json')
+                        # 读取子进程导出元数据（不读 DataFrame！主进程零内存增长）
+                        _sp_export_manifest = os.path.join(_sp_tmp_dir, '_export_manifest.json')
                         _sp_loaded_concepts = []
-                        if os.path.exists(_sp_manifest):
-                            with open(_sp_manifest) as _mf:
-                                _sp_saved = _json_mod.load(_mf)
-                            for _cname, _ppath in _sp_saved.items():
-                                data[_cname] = pd.read_parquet(_ppath)
-                                _sp_loaded_concepts.append(_cname)
+                        if os.path.exists(_sp_export_manifest):
+                            with open(_sp_export_manifest) as _mf:
+                                _sp_exports = _json_mod.load(_mf)
+                            for _sg_key, _sg_meta in _sp_exports.items():
+                                if _sg_meta.get('exported_file'):
+                                    exported_files.append(_sg_meta['exported_file'])
+                                    _export_step_counter += 1
+                                if _sg_meta.get('patient_ids'):
+                                    all_exported_patient_ids.update(_sg_meta['patient_ids'])
+                                if _sg_meta.get('concepts'):
+                                    _sp_loaded_concepts.extend(_sg_meta['concepts'])
+                        else:
+                            # Fallback: 旧格式 manifest（个别 parquet）
+                            _sp_manifest = os.path.join(_sp_tmp_dir, '_manifest.json')
+                            if os.path.exists(_sp_manifest):
+                                with open(_sp_manifest) as _mf:
+                                    _sp_saved = _json_mod.load(_mf)
+                                _sp_loaded_concepts = list(_sp_saved.keys())
                         
-                        failed_special = [c for c in special_concepts_to_load if c not in data]
+                        failed_special = [c for c in special_concepts_to_load if c not in _sp_loaded_concepts]
                         failed_concepts.extend(failed_special)
                         
                         _special_load_elapsed = _time_mod.time() - _sp_start
@@ -14002,27 +14022,6 @@ def execute_sidebar_export():
                         if _deps_cache_dir:
                             _shutil_mod.rmtree(_deps_cache_dir, ignore_errors=True)
                             _deps_cache_dir = None
-                        
-                        # 导出特殊概念（数据量很小，主进程处理可接受）
-                        _special_loaded_dfs = {c: data[c] for c in _sp_loaded_concepts if c in data}
-                        if _special_loaded_dfs:
-                            _special_by_group = {}
-                            for _sc, _sdf in _special_loaded_dfs.items():
-                                _sg = _concept_to_group_pre.get(_sc, 'other')
-                                if _sg not in _special_by_group:
-                                    _special_by_group[_sg] = {}
-                                _special_by_group[_sg][_sc] = _sdf
-                            for _sg_key, _sg_dfs in _special_by_group.items():
-                                _sg_dfs = _apply_cohort_filter_to_dfs(_sg_dfs, _cohort_exclude_ids)
-                                try:
-                                    _export_module_to_disk(_sg_key, _sg_dfs, _export_step_counter, _total_steps)
-                                    _export_step_counter += 1
-                                except Exception as _exp_e:
-                                    import traceback as _tb_mod
-                                    _tb_mod.print_exc()
-                                    st.warning(f"⚠️ Export failed for special module '{_sg_key}': {_exp_e}")
-                                for _sc in _sg_dfs:
-                                    data.pop(_sc, None)
                         
                     except Exception as special_e:
                         try:
@@ -14103,7 +14102,7 @@ def execute_sidebar_export():
                     return False
 
                 id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
-                time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime', 'itemtime', 'datetime', 'Offset', 'measuredat_minutes', 'measuredat', 'givenat', 'enteredentryat']
+                time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime', 'itemtime', 'datetime', 'Offset', 'measuredat_minutes', 'measuredat', 'givenat', 'enteredentryat', 'intakeoutputoffset', 'observationoffset', 'nursingchartoffset', 'labresultoffset', 'respchartoffset']
                 unified_time_col = 'charttime'
 
                 normalized = {}
@@ -14146,7 +14145,8 @@ def execute_sidebar_export():
                 static_frames = []
                 ts_frames = []
                 metadata_cols = {'valueuom', 'unit', 'units', 'category', 'type',
-                                 'dur_var', 'entertime'}  # dur_var/entertime: WinTbl 内部列
+                                 'dur_var', 'entertime',
+                                 'intakeoutputentryoffset'}  # dur_var/entertime: WinTbl; intakeoutputentryoffset: eICU extra
 
                 for concept_name, frame in normalized.items():
                     drop_cols = [c for c in frame.columns if c in metadata_cols]
