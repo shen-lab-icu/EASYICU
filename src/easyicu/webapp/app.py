@@ -134,12 +134,6 @@ st.markdown("""
         --text-tertiary-light: #94a3b8;
         --border-light: rgba(99,102,241,0.08);
         --border-subtle: #e2e8f0;
-
-        /* 深色主题 */
-        --card-bg-dark: rgba(30, 32, 48, 0.95);
-        --text-primary-dark: #f1f5f9;
-        --text-secondary-dark: #94a3b8;
-        --border-dark: rgba(99,102,241,0.15);
     }
     
     /* ============ 全局排版 ============ */
@@ -155,11 +149,61 @@ st.markdown("""
         background-color: #f8fafc !important;
         color: #0f172a !important;
     }
-    .stApp, [data-testid="stAppViewContainer"] {
+    .stApp, [data-testid="stAppViewContainer"],
+    [data-testid="stAppViewBlockContainer"],
+    [data-testid="stMain"],
+    .main {
         background-color: #f8fafc !important;
         color: #0f172a !important;
     }
-    [data-testid="stSidebar"] {
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"] > div:first-child {
+        background: linear-gradient(180deg, rgba(248,250,252,0.97), rgba(241,245,249,0.97)) !important;
+        color: #0f172a !important;
+    }
+    /* Streamlit 内部组件强制浅色 */
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] .stMarkdown p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div {
+        color: inherit !important;
+    }
+    /* Streamlit secondary button 强制浅色 */
+    div[data-testid="stButton"] > button[kind="secondary"],
+    div[data-testid="stButton"] > button[data-testid="baseButton-secondary"] {
+        background-color: #f1f5f9 !important;
+        color: #0f172a !important;
+        border-color: #e2e8f0 !important;
+    }
+    /* Streamlit selectbox / input / text_input 强制浅色 */
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="textarea"] > div {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+    }
+    div[data-baseweb="popover"] > div,
+    div[data-baseweb="menu"] {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+    }
+    /* Tab list 强制浅色 */
+    div[data-baseweb="tab-list"] {
+        background: rgba(241,245,249,0.8) !important;
+    }
+    div[data-baseweb="tab-list"] button {
+        color: #64748b !important;
+    }
+    div[data-baseweb="tab-list"] button[aria-selected="true"] {
+        color: white !important;
+    }
+    /* Expander 强制浅色 */
+    details[data-testid="stExpander"] {
+        background-color: #ffffff !important;
+        border-color: #e2e8f0 !important;
+    }
+    details[data-testid="stExpander"] summary span {
         color: #0f172a !important;
     }
     /* 对内容元素应用字体 */
@@ -232,19 +276,7 @@ st.markdown("""
         display: none !important;
     }
 
-    @media (prefers-color-scheme: dark) {
-        div[data-baseweb="tab-list"] {
-            background: rgba(30,32,48,0.8) !important;
-            border-color: var(--border-dark);
-        }
-        div[data-baseweb="tab-list"] button {
-            color: var(--text-secondary-dark) !important;
-        }
-        div[data-baseweb="tab-list"] button:hover {
-            background: rgba(99,102,241,0.15) !important;
-        }
-    }
-
+    
     /* ============ Metric 卡片 — 毛玻璃风格 ============ */
     div[data-testid="stMetric"] {
         background: rgba(255,255,255,0.7);
@@ -293,19 +325,7 @@ st.markdown("""
         -webkit-text-fill-color: unset !important;
     }
 
-    @media (prefers-color-scheme: dark) {
-        div[data-testid="stMetric"] {
-            background: rgba(30,32,48,0.7);
-            border-color: var(--border-dark);
-        }
-        div[data-testid="stMetric"] label {
-            color: var(--text-secondary-dark) !important;
-        }
-        div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
-            color: var(--text-primary-dark) !important;
-        }
-    }
-
+    
     /* ============ 主标题 — 精致排版 ============ */
     .main-header {
         font-size: clamp(1.7rem, 1.4rem + 0.6vw, 2.4rem);
@@ -327,11 +347,7 @@ st.markdown("""
         letter-spacing: 0.02em;
     }
 
-    @media (prefers-color-scheme: dark) {
-        .main-header { color: var(--text-primary-dark); }
-        .sub-header { color: var(--text-secondary-dark); }
-    }
-
+    
     /* ============ 功能卡片 — 精致玻璃 ============ */
     .metric-card, .feature-card {
         background: rgba(255,255,255,0.75);
@@ -352,14 +368,7 @@ st.markdown("""
         border-color: rgba(99,102,241,0.15);
     }
 
-    @media (prefers-color-scheme: dark) {
-        .metric-card, .feature-card {
-            background: rgba(30,32,48,0.7);
-            border-color: var(--border-dark);
-            color: var(--text-primary-dark);
-        }
-    }
-
+    
     .feature-card h4 {
         color: var(--primary-color);
         margin-bottom: 0.6rem;
@@ -436,12 +445,7 @@ st.markdown("""
         font-size: 0.9rem;
     }
 
-    @media (prefers-color-scheme: dark) {
-        .success-box { color: #6ee7b7; background: linear-gradient(135deg, rgba(16,185,129,0.12), rgba(52,211,153,0.06)); }
-        .warning-box { color: #fcd34d; background: linear-gradient(135deg, rgba(245,158,11,0.12), rgba(251,191,36,0.06)); }
-        .info-box { color: #67e8f9; background: linear-gradient(135deg, rgba(6,182,212,0.12), rgba(34,211,238,0.06)); }
-    }
-
+    
     /* ============ 分隔线 — 微妙 ============ */
     .divider {
         height: 1px;
@@ -473,11 +477,7 @@ st.markdown("""
         font-weight: 600;
     }
 
-    @media (prefers-color-scheme: dark) {
-        .stat-label { color: var(--text-secondary-dark); }
-        .stat-number { color: var(--primary-light); }
-    }
-
+    
     /* ============ 患者卡片 ============ */
     .patient-card {
         background: rgba(255,255,255,0.75);
@@ -496,14 +496,7 @@ st.markdown("""
         transform: translateY(-1px);
     }
 
-    @media (prefers-color-scheme: dark) {
-        .patient-card {
-            background: rgba(30,32,48,0.7);
-            border-color: rgba(255,255,255,0.08);
-            color: var(--text-primary-dark);
-        }
-    }
-
+    
     .patient-card.critical { border-color: var(--danger-color); border-width: 2px; }
     .patient-card.warning { border-color: var(--warning-color); border-width: 2px; }
     .patient-card.stable { border-color: var(--success-color); border-width: 2px; }
@@ -516,13 +509,7 @@ st.markdown("""
         border-right: 1px solid var(--border-subtle) !important;
     }
 
-    @media (prefers-color-scheme: dark) {
-        [data-testid="stSidebar"] > div:first-child {
-            background: linear-gradient(180deg, rgba(15,23,42,0.98), rgba(30,32,48,0.98)) !important;
-            border-right-color: var(--border-dark) !important;
-        }
-    }
-
+    
     .sidebar-header {
         background: var(--gradient-primary);
         border-radius: var(--radius-lg);
@@ -593,15 +580,7 @@ st.markdown("""
         font-weight: 700 !important;
     }
 
-    @media (prefers-color-scheme: dark) {
-        [data-testid="stDataFrame"] th,
-        [data-testid="stDataFrame"] td,
-        div[data-testid="stDataFrame"] *,
-        div[data-testid="stDataFrame"] div[role="columnheader"] {
-            color: #e0e0e0 !important;
-        }
-    }
-
+    
     /* ============ 进度条 ============ */
     .progress-bar {
         height: 6px;
@@ -631,17 +610,7 @@ st.markdown("""
     .highlight-card p, .highlight-card li { color: #4338ca; }
     .highlight-card b { color: var(--primary-dark); }
 
-    @media (prefers-color-scheme: dark) {
-        .highlight-card {
-            background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(139,92,246,0.05));
-            border-color: rgba(99,102,241,0.25);
-            color: #c7d2fe;
-        }
-        .highlight-card h4 { color: #a5b4fc; }
-        .highlight-card p, .highlight-card li { color: #c7d2fe; }
-        .highlight-card b { color: #818cf8; }
-    }
-
+    
     /* ============ 动画 ============ */
     @keyframes fadeInUp {
         from { opacity: 0; transform: translateY(16px); }
@@ -871,15 +840,7 @@ st.markdown("""
         line-height: 1.5;
     }
 
-    @media (prefers-color-scheme: dark) {
-        .feature-item {
-            background: rgba(30,32,48,0.7);
-            border-color: var(--border-dark);
-        }
-        .feature-item-title { color: var(--text-primary-dark); }
-        .feature-item-desc { color: var(--text-secondary-dark); }
-    }
-
+    
     @media (max-width: 768px) {
         .features-grid { grid-template-columns: repeat(2, 1fr); }
         .hero-title { font-size: 2rem; }
@@ -952,12 +913,7 @@ st.markdown("""
         margin-top: 1px;
     }
 
-    @media (prefers-color-scheme: dark) {
-        .step-text { color: var(--text-primary-dark); }
-        .step-text small { color: var(--text-secondary-dark); }
-        .step-dot.pending { background: rgba(30,32,48,0.8); border-color: var(--border-dark); color: var(--text-secondary-dark); }
-    }
-
+    
     /* ============ 响应式适配 — 多分辨率 ============ */
 
     /* 小屏 (≤1366px, 13-14" 笔记本) */
@@ -5330,7 +5286,7 @@ def render_entry_page():
     }
     /* 右列 Real = 主色渐变 */
     .entry-btn-wrap.real-col div[data-testid="stButton"] > button {
-        background: var(--gradient-primary) !important;
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
         color: white !important;
         box-shadow: 0 4px 20px rgba(99,102,241,0.2) !important;
     }
@@ -10360,6 +10316,56 @@ def render_quality_page():
                             st.warning(err_msg)
 
 
+def _scan_export_folders(root: str):
+    """扫描导出根目录，返回包含 demographics 文件的子文件夹列表"""
+    folders = []
+    if not root or not os.path.isdir(root):
+        return folders
+    try:
+        for entry in sorted(os.listdir(root)):
+            entry_path = os.path.join(root, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            has_demo = any(f.startswith('demographics') and f.endswith(('.parquet', '.csv'))
+                          for f in os.listdir(entry_path))
+            if has_demo:
+                files = [f for f in os.listdir(entry_path) if f.endswith(('.parquet', '.csv', '.xlsx'))]
+                folders.append((entry, len(files), entry_path))
+    except OSError:
+        pass
+    return folders
+
+
+def _load_demographics_from_export(folder_path: str) -> pd.DataFrame:
+    """从导出文件夹加载 demographics 数据"""
+    demo_files = [f for f in os.listdir(folder_path)
+                  if f.startswith('demographics') and f.endswith(('.parquet', '.csv'))]
+    if not demo_files:
+        raise FileNotFoundError("No demographics file found")
+    
+    demo_path = os.path.join(folder_path, demo_files[0])
+    if demo_path.endswith('.parquet'):
+        df = pd.read_parquet(demo_path)
+    else:
+        df = pd.read_csv(demo_path)
+    
+    # 标准化列名: sex → gender
+    if 'sex' in df.columns and 'gender' not in df.columns:
+        df = df.rename(columns={'sex': 'gender'})
+    if 'gender' in df.columns:
+        df['gender'] = df['gender'].astype(str).str.upper().str[0]
+    
+    # 检测数据库来源
+    folder_name = os.path.basename(folder_path).lower()
+    detected_db = 'unknown'
+    for db_key in ['miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic']:
+        if db_key in folder_name:
+            detected_db = db_key
+            break
+    df.attrs['detected_db'] = detected_db
+    return df
+
+
 def _generate_mock_demographics(n_patients: int, lang: str = 'en') -> pd.DataFrame:
     """生成模拟的人口统计学数据用于Cohort Comparison演示。
     
@@ -10493,8 +10499,14 @@ def find_database_path(root: str, db_name: str) -> str:
     # ===== 优先检查: root 本身就是数据库目录 =====
     if os.path.isdir(root):
         root_basename = os.path.basename(os.path.normpath(root)).lower()
-        # 1) root 目录名匹配数据库别名
-        if root_basename in aliases:
+        # 1) root 目录名精确匹配或包含数据库别名
+        matched = root_basename in aliases
+        if not matched:
+            for alias in aliases:
+                if alias in root_basename or root_basename.startswith(alias):
+                    matched = True
+                    break
+        if matched:
             # 可能还有版本子目录
             try:
                 subdirs = [d for d in os.listdir(root)
@@ -10919,76 +10931,135 @@ def render_group_comparison_subtab(lang: str):
     # ========== Real Data模式：显示完整数据配置 ==========
     else:
         with st.expander("⚙️ " + ("Data Configuration" if lang == 'en' else "数据配置"), expanded=True):
-            col1, col2, col3 = st.columns([2, 1, 1])
-            
-            with col1:
-                data_root = st.text_input(
-                    "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
-                    value=os.environ.get('EASYICU_DATA_PATH', ''),
-                    placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
-                    key="grp_data_root",
-                    help="Root directory containing database folders (mimiciv, eicu, aumc, hirid)" if lang == 'en' else "包含数据库文件夹的根目录"
+            # 数据源选择
+            _src_label = "Data Source" if lang == 'en' else "数据来源"
+            _src_opts = ["📂 Raw Database" if lang == 'en' else "📂 原始数据库",
+                         "📦 Exported Files" if lang == 'en' else "📦 已导出文件"]
+            grp_src = st.radio(_src_label, _src_opts, horizontal=True, key="grp_data_source")
+            _use_exported = (_src_opts.index(grp_src) == 1)
+
+            if not _use_exported:
+                # ===== 原始数据库模式 =====
+                col1, col2, col3 = st.columns([2, 1, 1])
+                
+                with col1:
+                    data_root = st.text_input(
+                        "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
+                        value=os.environ.get('EASYICU_DATA_PATH', ''),
+                        placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
+                        key="grp_data_root",
+                        help="Root directory containing database folders (mimiciv, eicu, aumc, hirid)" if lang == 'en' else "包含数据库文件夹的根目录"
+                    )
+                    render_directory_structure_guide(lang)
+                
+                with col2:
+                    db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
+                    selected_db = st.selectbox(
+                        "🏥 " + ("Database" if lang == 'en' else "数据库"),
+                        options=list(db_options.keys()),
+                        format_func=lambda x: db_options[x],
+                        key="grp_db_select"
+                    )
+                
+                with col3:
+                    max_patients = st.number_input(
+                        "👥 " + ("Max Patients" if lang == 'en' else "最大患者数"),
+                        min_value=100,
+                        max_value=10000,
+                        value=1000,
+                        step=100,
+                        key="grp_max_patients"
+                    )
+                
+                full_data_path = find_database_path(data_root, selected_db)
+                
+                if os.path.exists(full_data_path):
+                    st.success(f"✅ " + (f"Path valid: `{full_data_path}`" if lang == 'en' else f"路径有效: `{full_data_path}`"))
+                else:
+                    st.warning(f"⚠️ " + (f"Path not found: `{full_data_path}`" if lang == 'en' else f"路径不存在: `{full_data_path}`"))
+                
+                load_btn = st.button(
+                    "🚀 " + ("Load Patient Demographics" if lang == 'en' else "加载患者人口统计学数据"),
+                    type="primary",
+                    key="grp_load_btn"
                 )
                 
-                # 🔧 使用通用目录结构指南组件
-                render_directory_structure_guide(lang)
-            
-            with col2:
-                db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
-                selected_db = st.selectbox(
-                    "🏥 " + ("Database" if lang == 'en' else "数据库"),
-                    options=list(db_options.keys()),
-                    format_func=lambda x: db_options[x],
-                    key="grp_db_select"
-                )
-            
-            with col3:
-                max_patients = st.number_input(
-                    "👥 " + ("Max Patients" if lang == 'en' else "最大患者数"),
-                    min_value=100,
-                    max_value=10000,
-                    value=1000,
-                    step=100,
-                    key="grp_max_patients"
-                )
-            
-            # 使用模块级智能路径检测函数
-            full_data_path = find_database_path(data_root, selected_db)
-            
-            # 路径状态提示
-            if os.path.exists(full_data_path):
-                st.success(f"✅ " + (f"Path valid: `{full_data_path}`" if lang == 'en' else f"路径有效: `{full_data_path}`"))
+                if load_btn:
+                    try:
+                        from easyicu.patient_filter import PatientFilter
+                        
+                        with st.spinner("Loading demographics..." if lang == 'en' else "正在加载人口统计学数据..."):
+                            pf = PatientFilter(database=selected_db, data_path=full_data_path)
+                            demographics_df = pf._load_demographics()
+                            
+                            if len(demographics_df) > max_patients:
+                                demographics_df = demographics_df.head(max_patients)
+                            
+                            st.session_state['grp_demographics'] = demographics_df
+                            st.session_state['grp_loaded_db'] = selected_db
+                            st.session_state['grp_loaded_path'] = full_data_path
+                            st.session_state['grp_is_demo'] = False
+                            
+                        st.success(f"✅ Loaded {len(demographics_df):,} patients" if lang == 'en' else f"✅ 已加载 {len(demographics_df):,} 名患者")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
             else:
-                st.warning(f"⚠️ " + (f"Path not found: `{full_data_path}`" if lang == 'en' else f"路径不存在: `{full_data_path}`"))
-            
-            # 加载按钮
-            load_btn = st.button(
-                "🚀 " + ("Load Patient Demographics" if lang == 'en' else "加载患者人口统计学数据"),
-                type="primary",
-                key="grp_load_btn"
-            )
-            
-            if load_btn:
-                try:
-                    from easyicu.patient_filter import PatientFilter
+                # ===== 导出文件模式 =====
+                col1, col2 = st.columns([3, 2])
+                with col1:
+                    export_root = st.text_input(
+                        "📦 " + ("Export Directory" if lang == 'en' else "导出文件目录"),
+                        value=st.session_state.get('export_path', ''),
+                        placeholder="/path/to/easyicu_export" if os.name != 'nt' else "D:\\easyicu_export",
+                        key="grp_export_root",
+                        help="Root directory containing EasyICU exported folders" if lang == 'en' else "包含 EasyICU 导出文件夹的根目录"
+                    )
+                
+                # 扫描导出文件夹
+                _export_folders = _scan_export_folders(export_root if 'export_root' in dir() else st.session_state.get('grp_export_root', ''))
+                
+                with col2:
+                    if _export_folders:
+                        folder_options = {f[0]: f"📁 {f[0]} ({f[1]} files)" for f in _export_folders}
+                        selected_folder = st.selectbox(
+                            "📁 " + ("Select Export" if lang == 'en' else "选择导出文件夹"),
+                            options=list(folder_options.keys()),
+                            format_func=lambda x: folder_options[x],
+                            key="grp_export_folder"
+                        )
+                    elif export_root and os.path.isdir(export_root):
+                        st.warning("⚠️ " + ("No valid export folders found (need demographics_*.parquet)" if lang == 'en' else "未找到有效的导出文件夹（需要 demographics_*.parquet）"))
+                        selected_folder = None
+                    else:
+                        selected_folder = None
+                
+                if _export_folders and selected_folder:
+                    selected_path = os.path.join(export_root, selected_folder)
+                    st.success(f"✅ `{selected_path}`")
                     
-                    with st.spinner("Loading demographics..." if lang == 'en' else "正在加载人口统计学数据..."):
-                        pf = PatientFilter(database=selected_db, data_path=full_data_path)
-                        demographics_df = pf._load_demographics()
-                        
-                        # 限制患者数
-                        if len(demographics_df) > max_patients:
-                            demographics_df = demographics_df.head(max_patients)
-                        
-                        st.session_state['grp_demographics'] = demographics_df
-                        st.session_state['grp_loaded_db'] = selected_db
-                        st.session_state['grp_loaded_path'] = full_data_path
-                        st.session_state['grp_is_demo'] = False
-                        
-                    st.success(f"✅ Loaded {len(demographics_df):,} patients" if lang == 'en' else f"✅ 已加载 {len(demographics_df):,} 名患者")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                    load_btn = st.button(
+                        "🚀 " + ("Load from Exported Files" if lang == 'en' else "从导出文件加载"),
+                        type="primary",
+                        key="grp_load_export_btn"
+                    )
+                    
+                    if load_btn:
+                        try:
+                            with st.spinner("Loading..." if lang == 'en' else "加载中..."):
+                                demographics_df = _load_demographics_from_export(selected_path)
+                                _detected_db = demographics_df.attrs.get('detected_db', 'unknown')
+                                
+                                st.session_state['grp_demographics'] = demographics_df
+                                st.session_state['grp_loaded_db'] = _detected_db
+                                st.session_state['grp_loaded_path'] = selected_path
+                                st.session_state['grp_is_demo'] = False
+                                    
+                            st.success(f"✅ Loaded {len(demographics_df):,} patients from exported files" if lang == 'en' else f"✅ 从导出文件加载了 {len(demographics_df):,} 名患者")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
     
     st.markdown("---")
     
@@ -11891,73 +11962,134 @@ def render_cohort_dashboard_subtab(lang: str):
     # ========== Real Data模式：显示数据配置 ==========
     else:
         with st.expander("⚙️ " + ("Data Configuration" if lang == 'en' else "数据配置"), expanded=True):
-            col1, col2, col3 = st.columns([2, 1, 1])
-            
-            with col1:
-                data_root = st.text_input(
-                    "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
-                    value=os.environ.get('EASYICU_DATA_PATH', ''),
-                    placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
-                    key="dash_data_root",
-                    help="Root directory containing database folders" if lang == 'en' else "包含数据库文件夹的根目录"
+            # 数据源选择
+            _src_label = "Data Source" if lang == 'en' else "数据来源"
+            _src_opts = ["📂 Raw Database" if lang == 'en' else "📂 原始数据库",
+                         "📦 Exported Files" if lang == 'en' else "📦 已导出文件"]
+            dash_src = st.radio(_src_label, _src_opts, horizontal=True, key="dash_data_source")
+            _use_exported = (_src_opts.index(dash_src) == 1)
+
+            if not _use_exported:
+                # ===== 原始数据库模式 =====
+                col1, col2, col3 = st.columns([2, 1, 1])
+                
+                with col1:
+                    data_root = st.text_input(
+                        "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
+                        value=os.environ.get('EASYICU_DATA_PATH', ''),
+                        placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
+                        key="dash_data_root",
+                        help="Root directory containing database folders" if lang == 'en' else "包含数据库文件夹的根目录"
+                    )
+                    render_directory_structure_guide(lang)
+                
+                with col2:
+                    db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
+                    selected_db = st.selectbox(
+                        "🏥 " + ("Database" if lang == 'en' else "数据库"),
+                        options=list(db_options.keys()),
+                        format_func=lambda x: db_options[x],
+                        key="dash_db_select"
+                    )
+                
+                with col3:
+                    max_patients = st.number_input(
+                        "👥 " + ("Max Patients" if lang == 'en' else "最大患者数"),
+                        min_value=100,
+                        max_value=10000,
+                        value=1000,
+                        step=100,
+                        key="dash_max_patients"
+                    )
+                
+                full_data_path = find_database_path(data_root, selected_db)
+                
+                if os.path.exists(full_data_path):
+                    st.success(f"✅ " + (f"Path valid: `{full_data_path}`" if lang == 'en' else f"路径有效: `{full_data_path}`"))
+                else:
+                    st.warning(f"⚠️ " + (f"Path not found: `{full_data_path}`" if lang == 'en' else f"路径不存在: `{full_data_path}`"))
+                
+                load_btn = st.button(
+                    "🚀 " + ("Load Dashboard Data" if lang == 'en' else "加载仪表板数据"),
+                    type="primary",
+                    key="dash_load_btn"
                 )
-                # 添加目录结构指南
-                render_directory_structure_guide(lang)
-            
-            with col2:
-                db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
-                selected_db = st.selectbox(
-                    "🏥 " + ("Database" if lang == 'en' else "数据库"),
-                    options=list(db_options.keys()),
-                    format_func=lambda x: db_options[x],
-                    key="dash_db_select"
-                )
-            
-            with col3:
-                max_patients = st.number_input(
-                    "👥 " + ("Max Patients" if lang == 'en' else "最大患者数"),
-                    min_value=100,
-                    max_value=10000,
-                    value=1000,
-                    step=100,
-                    key="dash_max_patients"
-                )
-            
-            # 使用智能路径检测
-            full_data_path = find_database_path(data_root, selected_db)
-            
-            # 路径状态
-            if os.path.exists(full_data_path):
-                st.success(f"✅ Path valid: `{full_data_path}`" if lang == 'en' else f"✅ 路径有效: `{full_data_path}`")
+                
+                if load_btn:
+                    try:
+                        from easyicu.patient_filter import PatientFilter
+                        
+                        with st.spinner("Loading demographics..." if lang == 'en' else "正在加载..."):
+                            pf = PatientFilter(database=selected_db, data_path=full_data_path)
+                            demographics_df = pf._load_demographics()
+                            
+                            if len(demographics_df) > max_patients:
+                                demographics_df = demographics_df.head(max_patients)
+                            
+                            st.session_state['dash_demographics'] = demographics_df
+                            st.session_state['dash_loaded_db'] = selected_db
+                            st.session_state['dash_loaded_path'] = full_data_path
+                            st.session_state['dash_is_demo'] = False
+                            
+                        st.success(f"✅ Loaded {len(demographics_df):,} patients" if lang == 'en' else f"✅ 已加载 {len(demographics_df):,} 名患者")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
             else:
-                st.warning(f"⚠️ Path not found: `{full_data_path}`" if lang == 'en' else f"⚠️ 路径不存在: `{full_data_path}`")
-            
-            load_btn = st.button(
-                "🚀 " + ("Load Dashboard Data" if lang == 'en' else "加载仪表板数据"),
-                type="primary",
-                key="dash_load_btn"
-            )
-            
-            if load_btn:
-                try:
-                    from easyicu.patient_filter import PatientFilter
+                # ===== 导出文件模式 =====
+                col1, col2 = st.columns([3, 2])
+                with col1:
+                    export_root = st.text_input(
+                        "📦 " + ("Export Directory" if lang == 'en' else "导出文件目录"),
+                        value=st.session_state.get('export_path', ''),
+                        placeholder="/path/to/easyicu_export" if os.name != 'nt' else "D:\\easyicu_export",
+                        key="dash_export_root",
+                        help="Root directory containing EasyICU exported folders" if lang == 'en' else "包含 EasyICU 导出文件夹的根目录"
+                    )
+                
+                _export_folders = _scan_export_folders(export_root if 'export_root' in dir() else st.session_state.get('dash_export_root', ''))
+                
+                with col2:
+                    if _export_folders:
+                        folder_options = {f[0]: f"📁 {f[0]} ({f[1]} files)" for f in _export_folders}
+                        selected_folder = st.selectbox(
+                            "📁 " + ("Select Export" if lang == 'en' else "选择导出文件夹"),
+                            options=list(folder_options.keys()),
+                            format_func=lambda x: folder_options[x],
+                            key="dash_export_folder"
+                        )
+                    elif export_root and os.path.isdir(export_root):
+                        st.warning("⚠️ " + ("No valid export folders found (need demographics_*.parquet)" if lang == 'en' else "未找到有效的导出文件夹（需要 demographics_*.parquet）"))
+                        selected_folder = None
+                    else:
+                        selected_folder = None
+                
+                if _export_folders and selected_folder:
+                    selected_path = os.path.join(export_root, selected_folder)
+                    st.success(f"✅ `{selected_path}`")
                     
-                    with st.spinner("Loading demographics..." if lang == 'en' else "正在加载..."):
-                        pf = PatientFilter(database=selected_db, data_path=full_data_path)
-                        demographics_df = pf._load_demographics()
-                        
-                        if len(demographics_df) > max_patients:
-                            demographics_df = demographics_df.head(max_patients)
-                        
-                        st.session_state['dash_demographics'] = demographics_df
-                        st.session_state['dash_loaded_db'] = selected_db
-                        st.session_state['dash_loaded_path'] = full_data_path
-                        st.session_state['dash_is_demo'] = False
-                        
-                    st.success(f"✅ Loaded {len(demographics_df):,} patients" if lang == 'en' else f"✅ 已加载 {len(demographics_df):,} 名患者")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                    load_btn = st.button(
+                        "🚀 " + ("Load from Exported Files" if lang == 'en' else "从导出文件加载"),
+                        type="primary",
+                        key="dash_load_export_btn"
+                    )
+                    
+                    if load_btn:
+                        try:
+                            with st.spinner("Loading..." if lang == 'en' else "加载中..."):
+                                demographics_df = _load_demographics_from_export(selected_path)
+                                _detected_db = demographics_df.attrs.get('detected_db', 'unknown')
+                                
+                                st.session_state['dash_demographics'] = demographics_df
+                                st.session_state['dash_loaded_db'] = _detected_db
+                                st.session_state['dash_loaded_path'] = selected_path
+                                st.session_state['dash_is_demo'] = False
+                                
+                            st.success(f"✅ Loaded {len(demographics_df):,} patients from exported files" if lang == 'en' else f"✅ 从导出文件加载了 {len(demographics_df):,} 名患者")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
     
     st.markdown("---")
     

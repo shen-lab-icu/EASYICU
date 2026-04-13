@@ -395,26 +395,52 @@ class PatientFilter:
         return cases
     
     def _read_table(self, table_name: str) -> pd.DataFrame:
-        """读取数据表"""
+        """读取数据表，支持多种目录结构"""
         if self.data_path is None:
             raise ValueError("data_path未设置")
         
-        # 尝试多种格式
+        # 搜索路径优先级: 根目录 → 已知子目录(icu/, hosp/) → 任意子目录
+        search_dirs = [self.data_path]
+        for sub in ['icu', 'hosp']:
+            sub_path = self.data_path / sub
+            if sub_path.is_dir():
+                search_dirs.append(sub_path)
+        
+        for search_dir in search_dirs:
+            # 尝试多种格式
+            for ext in ['.parquet', '.csv.gz', '.csv']:
+                path = search_dir / f"{table_name}{ext}"
+                if path.exists():
+                    if ext == '.parquet':
+                        return pd.read_parquet(path)
+                    else:
+                        return pd.read_csv(path)
+            
+            # 尝试目录格式（分片parquet）
+            dir_path = search_dir / table_name
+            if dir_path.is_dir():
+                parquet_files = list(dir_path.glob('*.parquet'))
+                if parquet_files:
+                    dfs = [pd.read_parquet(f) for f in parquet_files]
+                    return pd.concat(dfs, ignore_index=True)
+            
+            # 尝试分桶目录
+            bucket_dir = search_dir / f"{table_name}_bucket"
+            if bucket_dir.is_dir():
+                parquet_files = list(bucket_dir.rglob('*.parquet'))
+                if parquet_files:
+                    dfs = [pd.read_parquet(f) for f in parquet_files[:50]]  # 限制读取量
+                    return pd.concat(dfs, ignore_index=True)
+        
+        # 最后尝试: rglob 搜索任意深度
         for ext in ['.parquet', '.csv.gz', '.csv']:
-            path = self.data_path / f"{table_name}{ext}"
-            if path.exists():
+            found = list(self.data_path.rglob(f"{table_name}{ext}"))
+            if found:
+                path = found[0]
                 if ext == '.parquet':
                     return pd.read_parquet(path)
                 else:
                     return pd.read_csv(path)
-        
-        # 尝试目录格式（分片parquet）
-        dir_path = self.data_path / table_name
-        if dir_path.is_dir():
-            parquet_files = list(dir_path.glob('*.parquet'))
-            if parquet_files:
-                dfs = [pd.read_parquet(f) for f in parquet_files]
-                return pd.concat(dfs, ignore_index=True)
         
         raise FileNotFoundError(f"找不到表 {table_name} (路径: {self.data_path})")
     
