@@ -138,7 +138,9 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
                      'admissionid', 'patientid', 'CaseID']
     time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime',
                        'itemtime', 'datetime', 'Offset', 'measuredat_minutes', 'measuredat',
-                       'givenat', 'enteredentryat']
+                       'givenat', 'enteredentryat',
+                       'intakeoutputoffset', 'observationoffset', 'nursingchartoffset',
+                       'labresultoffset', 'respchartoffset']
     unified_time_col = 'charttime'
 
     # 统一时间列名称
@@ -199,7 +201,8 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
             if _id_col and _id_col not in df.columns:
                 continue
             metadata_cols = ['valueuom', 'unit', 'units', 'category', 'type',
-                            'dur_var', 'entertime']  # dur_var/entertime: WinTbl 内部列，不导出
+                            'dur_var', 'entertime',
+                            'intakeoutputentryoffset']  # dur_var/entertime: WinTbl; intakeoutputentryoffset: eICU extra
             cols_to_drop = [c for c in df.columns if c in metadata_cols]
             if cols_to_drop:
                 df = df.drop(columns=cols_to_drop)
@@ -440,8 +443,14 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
 
 
 def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
-                             max_patients, output_dir, preloaded_parquet_dir=None):
+                             max_patients, output_dir, preloaded_parquet_dir=None,
+                             export_dir=None, export_format='parquet',
+                             cohort_exclude_ids=None, concept_to_group=None,
+                             cohort_suffix=''):
     """在子进程中加载特殊概念（AKI, CircFailure 等），结果写入 parquet。
+
+    当 export_dir 不为 None 时，在子进程内直接完成合并+导出，
+    主进程无需读回 DataFrame，彻底消除 pymalloc arena 碎片。
 
     优化: 优先从 preloaded_parquet_dir 读取已导出的依赖概念 parquet 文件，
     避免重复从数据库加载。仅缺失的依赖概念才从数据库加载。
@@ -702,5 +711,174 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
             import traceback
             traceback.print_exc()
 
+    # ── 直接在子进程内导出（如果提供了 export_dir） ──
+    exported_manifest = {}  # {group_name: {file, patient_ids, concepts, rows}}
+    if export_dir and saved:
+        import numpy as np
+
+        # 读回本进程刚写的 parquet 并分组
+        special_dfs = {}
+        for cname, ppath in saved.items():
+            try:
+                special_dfs[cname] = pd.read_parquet(ppath)
+            except Exception:
+                pass
+
+        # 按模块分组
+        groups = {}
+        _default_group = 'special'
+        for cname, cdf in special_dfs.items():
+            grp = (concept_to_group or {}).get(cname, _default_group)
+            if grp not in groups:
+                groups[grp] = {}
+            groups[grp][cname] = cdf
+
+        # 对每个分组做 merge + export
+        id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid',
+                         'admissionid', 'patientid', 'CaseID']
+        time_candidates_exp = ['time', 'charttime', 'starttime', 'start', 'endtime',
+                               'itemtime', 'datetime', 'Offset', 'measuredat_minutes',
+                               'measuredat', 'givenat', 'enteredentryat',
+                               'intakeoutputoffset', 'observationoffset',
+                               'nursingchartoffset', 'labresultoffset', 'respchartoffset']
+        unified_time_col = 'charttime'
+        metadata_cols_exp = {'valueuom', 'unit', 'units', 'category', 'type',
+                             'dur_var', 'entertime', 'intakeoutputentryoffset'}
+
+        for grp_name, grp_dfs in groups.items():
+            if not grp_dfs:
+                continue
+
+            # 可选 cohort filter
+            if cohort_exclude_ids:
+                _excl = set(cohort_exclude_ids)
+                for _cn in list(grp_dfs.keys()):
+                    _gdf = grp_dfs[_cn]
+                    for _idc in id_candidates:
+                        if _idc in _gdf.columns:
+                            grp_dfs[_cn] = _gdf[~_gdf[_idc].isin(_excl)]
+                            break
+
+            # 时间列统一
+            normalized = {}
+            for cname, cdf in grp_dfs.items():
+                frame = cdf.copy()
+                if unified_time_col in frame.columns:
+                    other_tc = [tc for tc in time_candidates_exp if tc in frame.columns and tc != unified_time_col]
+                    if other_tc:
+                        frame = frame.drop(columns=other_tc)
+                else:
+                    for tc in time_candidates_exp:
+                        if tc in frame.columns:
+                            frame = frame.rename(columns={tc: unified_time_col})
+                            other_tc = [t for t in time_candidates_exp if t in frame.columns and t != unified_time_col]
+                            if other_tc:
+                                frame = frame.drop(columns=other_tc)
+                            break
+                normalized[cname] = frame
+
+            if not normalized:
+                continue
+
+            # 检测 merge_cols
+            _id_col = None
+            for _idc in id_candidates:
+                if any(_idc in df.columns for df in normalized.values()):
+                    _id_col = _idc
+                    break
+
+            merge_cols = []
+            if _id_col:
+                merge_cols.append(_id_col)
+            _ptc = set()
+            for df in normalized.values():
+                _ptc.update(tc for tc in [unified_time_col] if tc in df.columns)
+            if unified_time_col in _ptc:
+                merge_cols.append(unified_time_col)
+
+            # 构建 concept DataFrames
+            all_concept_dfs = []
+            for concept_name, df in normalized.items():
+                drop_cols = [c for c in df.columns if c in metadata_cols_exp]
+                if drop_cols:
+                    df = df.drop(columns=drop_cols)
+                value_cols = [c for c in df.columns if c not in merge_cols]
+                if not value_cols:
+                    continue
+                df_to_add = df.copy()
+                if len(value_cols) == 1:
+                    df_to_add = df_to_add.rename(columns={value_cols[0]: concept_name})
+                elif concept_name in value_cols:
+                    df_to_add = df_to_add[merge_cols + [concept_name]]
+                for mc in merge_cols:
+                    if mc not in df_to_add.columns:
+                        df_to_add[mc] = 0.0
+                all_concept_dfs.append(df_to_add)
+
+            if not all_concept_dfs:
+                continue
+
+            # Merge
+            if len(all_concept_dfs) == 1:
+                merged_df = all_concept_dfs[0]
+            elif all(len([c for c in df.columns if c not in merge_cols]) == 1 for df in all_concept_dfs):
+                stacked = pd.concat([
+                    df.assign(_concept=df.columns.difference(merge_cols)[0]).rename(
+                        columns={df.columns.difference(merge_cols)[0]: '_value'})
+                    for df in all_concept_dfs
+                ], ignore_index=True)
+                try:
+                    merged_df = stacked.pivot_table(
+                        index=merge_cols, columns='_concept', values='_value', aggfunc='first'
+                    ).reset_index()
+                    merged_df.columns.name = None
+                except Exception:
+                    from functools import reduce
+                    merged_df = reduce(lambda a, b: pd.merge(a, b, on=merge_cols, how='outer'), all_concept_dfs)
+            else:
+                from functools import reduce
+                merged_df = reduce(lambda a, b: pd.merge(a, b, on=merge_cols, how='outer'), all_concept_dfs)
+
+            if merged_df.empty:
+                continue
+
+            # Patient IDs
+            pid_list = []
+            if _id_col and _id_col in merged_df.columns:
+                pid_list = sorted(merged_df[_id_col].dropna().unique().tolist())
+
+            # 写文件
+            concepts_sorted = sorted(normalized.keys())
+            concepts_str = '_'.join(concepts_sorted)
+            fname = f"{grp_name}_{concepts_str}{cohort_suffix}.{export_format}"
+            file_path = os.path.join(export_dir, fname)
+
+            for col in merged_df.columns:
+                if merged_df[col].dtype == object:
+                    numeric_vals = pd.to_numeric(merged_df[col], errors='coerce')
+                    orig_valid = merged_df[col].notna().sum()
+                    if orig_valid > 0 and numeric_vals.notna().sum() >= orig_valid * 0.5:
+                        merged_df[col] = numeric_vals
+                    else:
+                        merged_df[col] = merged_df[col].astype(str)
+
+            if export_format == 'csv':
+                merged_df.to_csv(file_path, index=False)
+            else:
+                merged_df.to_parquet(file_path, index=False)
+
+            exported_manifest[grp_name] = {
+                'exported_file': file_path,
+                'patient_ids': [int(x) for x in pid_list
+                                if not (isinstance(x, float) and (x != x))],
+                'concepts': concepts_sorted,
+                'rows': len(merged_df),
+            }
+
     with open(os.path.join(output_dir, '_manifest.json'), 'w') as f:
         json.dump(saved, f)
+
+    # 写增强 manifest（含导出文件信息）
+    if exported_manifest:
+        with open(os.path.join(output_dir, '_export_manifest.json'), 'w') as f:
+            json.dump(exported_manifest, f)
