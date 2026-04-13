@@ -1137,18 +1137,13 @@ def load_concepts(
     ):
         use_subprocess = True
     
-    # 🔧 FIX Bug 54: daemon 子进程不能创建子进程 (AssertionError)
+    # 🔧 FIX Bug 54/63: daemon 子进程的分批隔离
     # Webapp 用 daemon=True 启动模块子进程以隔离内存碎片。
-    # multiprocessing.Process.start() 在 daemon 中会抛出 AssertionError。
-    # 但 os.fork() 不受此限制——subprocess_batch_load 已支持 _fork_and_run() 方式。
-    # 所以仅在无 os.fork 的平台（Windows）禁用 subprocess。
-    if use_subprocess:
-        try:
-            import multiprocessing as _mp_check
-            if _mp_check.current_process().daemon and not hasattr(os, 'fork'):
-                use_subprocess = False
-        except Exception:
-            pass
+    # subprocess_batch_load 已支持三种隔离方式：
+    #   - Linux/macOS daemon: os.fork()（_fork_and_run，不受 daemon 限制）
+    #   - Windows daemon: subprocess.Popen（_popen_and_run，CreateProcess 不受 daemon 限制）
+    #   - 非 daemon: multiprocessing.Process
+    # 因此不再需要在 Windows daemon 中禁用 subprocess 模式。
     
     # 执行分批处理
     if effective_batch_size is not None and _id_col is not None and _all_ids is not None:

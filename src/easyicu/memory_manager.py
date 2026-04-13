@@ -353,6 +353,75 @@ def _fork_and_run(target, args) -> int:
         return -1
 
 
+def _popen_and_run(args: dict, temp_dir: str, batch_num: int) -> int:
+    """
+    使用 subprocess.Popen 在完全独立的进程中运行 _subprocess_load_worker。
+
+    解决 Windows daemon 进程无法创建 multiprocessing.Process 子进程的问题：
+    - multiprocessing.Process.start() 在 daemon 中抛出 AssertionError
+    - os.fork() 在 Windows 上不存在
+    - subprocess.Popen (CreateProcess) 不受 daemon 限制
+
+    子进程退出后 OS 完整回收所有内存（包括 pymalloc arena 碎片），
+    提供与 Linux os.fork() 等价的内存隔离效果。
+
+    Args:
+        args: 传给 _subprocess_load_worker 的参数字典
+        temp_dir: 临时目录路径
+        batch_num: 批次编号
+
+    Returns:
+        子进程退出码（0 表示成功）
+    """
+    import subprocess
+    import sys
+    import json
+
+    # 序列化 args 到 JSON 文件（patient_ids 可能含 numpy int64，需转换）
+    args_file = os.path.join(temp_dir, f'_args_{batch_num:04d}.json')
+    _json_safe = dict(args)
+    if 'patient_ids' in _json_safe and _json_safe['patient_ids']:
+        _json_safe['patient_ids'] = {
+            k: [int(x) for x in v]
+            for k, v in _json_safe['patient_ids'].items()
+        }
+    with open(args_file, 'w') as f:
+        json.dump(_json_safe, f)
+
+    # 确保子进程能 import easyicu（处理非 pip 安装的开发模式）
+    env = os.environ.copy()
+    _easyicu_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _existing_pp = env.get('PYTHONPATH', '')
+    if _easyicu_parent not in _existing_pp:
+        env['PYTHONPATH'] = _easyicu_parent + os.pathsep + _existing_pp
+
+    _code = (
+        "import sys, json; "
+        "from easyicu.memory_manager import _subprocess_load_worker; "
+        "f = open(sys.argv[1], encoding='utf-8'); args = json.load(f); f.close(); "
+        "_subprocess_load_worker(args)"
+    )
+
+    try:
+        result = subprocess.run(
+            [sys.executable, '-c', _code, args_file],
+            env=env,
+            timeout=3600,  # 1 hour timeout per batch
+        )
+        return result.returncode
+    except subprocess.TimeoutExpired:
+        logger.warning(f"⚠️ Batch {batch_num} Popen 超时 (60min)")
+        return -1
+    except Exception as e:
+        logger.warning(f"⚠️ Batch {batch_num} Popen 失败: {e}")
+        return -1
+    finally:
+        try:
+            os.unlink(args_file)
+        except Exception:
+            pass
+
+
 def _subprocess_load_worker(args: dict) -> str:
     """
     在子进程中加载概念数据的 worker 函数。
@@ -605,9 +674,11 @@ def subprocess_batch_load(
     except Exception:
         pass
     _use_raw_fork = _in_daemon and hasattr(os, 'fork')
+    # Windows daemon: 无 os.fork 也无 mp.Process → 用 subprocess.Popen
+    _use_popen = _in_daemon and not hasattr(os, 'fork')
     
     if verbose:
-        mode = "os.fork()" if _use_raw_fork else "mp.Process"
+        mode = "os.fork()" if _use_raw_fork else ("Popen" if _use_popen else "mp.Process")
         print(f"🔄 子进程隔离分批: {total} patients, batch_size={batch_size}, "
               f"{num_batches} batches [{mode}]")
     
@@ -639,8 +710,12 @@ def subprocess_batch_load(
             
             # 在子进程中运行
             if _use_raw_fork:
-                # daemon 进程: 用 os.fork() 绕过 mp.Process 的 daemon 限制
+                # daemon 进程 (Linux/macOS): 用 os.fork() 绕过 mp.Process 的 daemon 限制
                 exitcode = _fork_and_run(_subprocess_load_worker, args)
+            elif _use_popen:
+                # daemon 进程 (Windows): 用 subprocess.Popen 绕过 daemon 限制
+                # Popen 创建完全独立的进程（CreateProcess），不受 daemon 约束
+                exitcode = _popen_and_run(args, temp_dir, batch_num)
             else:
                 # 非 daemon: 用 mp.Process（更安全的管理方式）
                 # Linux/macOS 使用 fork（快速），Windows 用 spawn
