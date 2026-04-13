@@ -2956,15 +2956,20 @@ EXTRACT_MODULE_ORDER: List[str] = [
 # 特殊概念 — 需要专用加载函数而非 load_concepts
 _SPECIAL_CONCEPT_MODULES = {'sepsis3_sofa1', 'sepsis3_sofa2'}
 
-# 已知数据库路径映射（可被 data_paths 参数覆盖）
-DEFAULT_DB_PATHS: Dict[str, str] = {
-    'sic':   '/home/zhuhb/icudb/sic/',
-    'aumc':  '/home/zhuhb/icudb/aumc/1.0.2/',
-    'hirid': '/home/zhuhb/icudb/hirid/1.1.1/',
-    'mimic': '/home/zhuhb/icudb/mimiciii/1.4/',
-    'miiv':  '/home/zhuhb/icudb/mimiciv/3.1/',
-    'eicu':  '/home/zhuhb/icudb/eicu/2.0.1/',
-}
+# 已知数据库路径映射（可被 data_paths 参数或环境变量 EASYICU_DATA_PATH 覆盖）
+# 默认使用环境变量中的数据根目录
+def _build_default_db_paths() -> Dict[str, str]:
+    """从环境变量构建默认数据库路径"""
+    _root = os.environ.get('EASYICU_DATA_PATH', '')
+    if not _root:
+        return {}
+    try:
+        from easyicu.webapp.app import find_database_path
+        return {db: find_database_path(_root, db) for db in ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']}
+    except ImportError:
+        return {db: os.path.join(_root, db) for db in ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']}
+
+DEFAULT_DB_PATHS: Dict[str, str] = _build_default_db_paths()
 
 
 def _extract_module_worker(

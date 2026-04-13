@@ -971,20 +971,34 @@ class MultiDatabaseDistribution:
         'sofa': {'name': 'SOFA Total', 'unit': 'points', 'range': (0, 24)},
     }
     
-    def __init__(self, data_root: str = '/home/zhuhb/icudb', language: str = 'en'):
-        self.data_root = Path(data_root)
+    def __init__(self, data_root: str = '', language: str = 'en'):
+        self.data_root = Path(data_root) if data_root else Path('.')
         self.language = language
         self._data_cache: Dict[str, pd.DataFrame] = {}
     
     def _get_db_path(self, db: str) -> Path:
-        """获取数据库路径"""
-        db_paths = {
-            'miiv': 'mimiciv/3.1',
-            'eicu': 'eicu/2.0.1',
-            'aumc': 'aumc/1.0.2',
-            'hirid': 'hirid/1.1.1',
+        """获取数据库路径，使用智能路径检测"""
+        try:
+            from easyicu.webapp.app import find_database_path
+            result = find_database_path(str(self.data_root), db)
+            return Path(result)
+        except ImportError:
+            pass
+        # fallback: 直接别名搜索
+        db_aliases = {
+            'miiv': ['mimiciv', 'mimic-iv', 'miiv', 'mimic_iv'],
+            'eicu': ['eicu', 'eicu-crd', 'eicu_crd'],
+            'aumc': ['aumc', 'amsterdamumc', 'amsterdam'],
+            'hirid': ['hirid', 'hi-rid'],
+            'mimic': ['mimiciii', 'mimic-iii', 'mimic3'],
+            'sic': ['sicdb', 'sic', 'sic-db'],
         }
-        return self.data_root / db_paths.get(db, db)
+        for alias in db_aliases.get(db, [db]):
+            direct = self.data_root / alias
+            if direct.is_dir():
+                subdirs = sorted([d for d in direct.iterdir() if d.is_dir() and d.name[0].isdigit()], reverse=True)
+                return subdirs[0] if subdirs else direct
+        return self.data_root / db
     
     def load_feature_data(
         self,

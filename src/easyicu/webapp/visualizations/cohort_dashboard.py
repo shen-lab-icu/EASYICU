@@ -918,7 +918,8 @@ def main():
         
         data_path = st.text_input(
             "📁 ICU Data Root Path",
-            value=os.environ.get('EASYICU_DATA_PATH', '/home/zhuhb/icudb'),
+            value=os.environ.get('EASYICU_DATA_PATH', ''),
+            placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
             help="Path to the ICU database files",
         )
         
