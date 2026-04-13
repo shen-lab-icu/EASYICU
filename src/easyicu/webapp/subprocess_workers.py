@@ -57,6 +57,362 @@ def _subprocess_load_module(concepts, database, data_path, patient_ids_filter,
         json.dump(saved, f)
 
 
+def _streaming_load_and_export(concepts, database, data_path, id_key, all_pids,
+                               batch_size, export_dir, export_format, group_name,
+                               cohort_exclude_ids, overwrite, cohort_suffix,
+                               dep_concepts_to_cache, deps_cache_dir, _lc, np, pd):
+    """流式分批导出: 逐批加载 → 合并宽表 → 追加写入 parquet/csv。
+
+    每批独立处理后释放内存，峰值始终受限于单批(~1-3GB)而非全量(~10GB+)。
+    消除了三层子进程嵌套（daemon → load_concepts batch → fork/popen），
+    直接在 daemon 子进程中顺序处理每批。
+
+    被 _subprocess_load_and_export_module 在 n_patients > batch_size 时调用。
+    """
+    import os, sys, json, gc, shutil
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    n_batches = (len(all_pids) + batch_size - 1) // batch_size
+    print(f"[STREAMING] {group_name}: {len(all_pids)} patients × {len(concepts)} concepts, "
+          f"batch_size={batch_size}, n_batches={n_batches}")
+
+    # ── 常量 ──
+    id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid',
+                     'admissionid', 'patientid', 'CaseID']
+    time_candidates = ['time', 'charttime', 'starttime', 'start', 'endtime',
+                       'itemtime', 'datetime', 'Offset', 'measuredat_minutes', 'measuredat',
+                       'givenat', 'enteredentryat',
+                       'intakeoutputoffset', 'observationoffset', 'nursingchartoffset',
+                       'labresultoffset', 'respchartoffset']
+    unified_time_col = 'charttime'
+    metadata_cols_set = {'valueuom', 'unit', 'units', 'category', 'type',
+                         'dur_var', 'entertime', 'intakeoutputentryoffset'}
+
+    # ── 输出文件路径 ──
+    cn_sorted = sorted(concepts)
+    if len(cn_sorted) <= 5:
+        cn_sfx = '_'.join(cn_sorted)
+    else:
+        cn_sfx = '_'.join(cn_sorted[:4]) + f'_etc{len(cn_sorted)}'
+    safe_fn = f"{group_name}_{cn_sfx}"
+    if cohort_suffix:
+        safe_fn = f"{safe_fn}_{cohort_suffix}"
+    safe_fn = safe_fn.replace('/', '_').replace('\\', '_')[:150]
+    if export_format == 'csv':
+        out_path = os.path.join(export_dir, f"{safe_fn}.csv")
+    elif export_format == 'excel':
+        out_path = os.path.join(export_dir, f"{safe_fn}.xlsx")
+    else:
+        out_path = os.path.join(export_dir, f"{safe_fn}.parquet")
+
+    # ── 覆盖旧文件 ──
+    if overwrite:
+        import glob as _gl
+        for _ext in ['.parquet', '.csv', '.xlsx']:
+            for _old in _gl.glob(os.path.join(export_dir, f"{group_name}_*{_ext}")):
+                try:
+                    os.unlink(_old)
+                except Exception:
+                    pass
+
+    # ── 流式处理状态 ──
+    all_patient_ids_set = set()
+    all_empty = set(concepts)
+    writer = None          # PyArrow ParquetWriter (parquet 格式)
+    col_order = None       # 首批确定的列顺序（后续批次对齐）
+    dep_batch_files = {}   # {dep_name: [batch_path, ...]}
+    excel_frames = []      # Excel 格式需要累积
+
+    for bi in range(n_batches):
+        bstart = bi * batch_size
+        bend = min(bstart + batch_size, len(all_pids))
+        batch_ids = all_pids[bstart:bend]
+        print(f"[STREAMING] {group_name}: batch {bi+1}/{n_batches} ({len(batch_ids)} patients)")
+
+        # ── 加载本批 (无子进程嵌套) ──
+        try:
+            result = _lc(data_path=data_path, database=database,
+                         concepts=concepts, verbose=False, merge=False,
+                         concept_workers=1, patient_ids={id_key: batch_ids})
+        except Exception as e:
+            print(f"[STREAMING] batch {bi+1}/{n_batches} load failed: {e}")
+            continue
+
+        # ── 提取概念 DataFrame ──
+        concept_dfs = {}
+        if isinstance(result, dict):
+            for c, df in result.items():
+                if hasattr(df, 'data') and isinstance(df.data, pd.DataFrame):
+                    df = df.data
+                elif hasattr(df, 'to_pandas'):
+                    df = df.to_pandas()
+                if isinstance(df, pd.DataFrame) and len(df) > 0:
+                    concept_dfs[c] = df
+
+        all_empty -= set(concept_dfs.keys())
+
+        # ── 缓存依赖 parquet (写 per-batch 文件) ──
+        if deps_cache_dir and dep_concepts_to_cache:
+            os.makedirs(deps_cache_dir, exist_ok=True)
+            for cn, cd in concept_dfs.items():
+                if cn in dep_concepts_to_cache:
+                    dp = os.path.join(deps_cache_dir, f"{cn}_{bi:04d}.parquet")
+                    try:
+                        cd.to_parquet(dp, index=False)
+                        dep_batch_files.setdefault(cn, []).append(dp)
+                    except Exception:
+                        pass
+
+        # ── Cohort filter ──
+        if cohort_exclude_ids:
+            excl = set(cohort_exclude_ids)
+            for cn in list(concept_dfs.keys()):
+                df = concept_dfs[cn]
+                for idc in id_candidates:
+                    if idc in df.columns:
+                        concept_dfs[cn] = df[~df[idc].isin(excl)]
+                        break
+
+        if not concept_dfs:
+            del result
+            gc.collect()
+            continue
+
+        # ── 时间列归一化 ──
+        for cn in list(concept_dfs.keys()):
+            cdf = concept_dfs[cn]
+            if unified_time_col not in cdf.columns:
+                for tc in time_candidates:
+                    if tc in cdf.columns:
+                        cdf = cdf.rename(columns={tc: unified_time_col})
+                        break
+            other_tc = [t for t in time_candidates if t in cdf.columns and t != unified_time_col]
+            if other_tc:
+                cdf = cdf.drop(columns=other_tc)
+            concept_dfs[cn] = cdf
+
+        # ── merge_cols 检测 ──
+        merge_cols = [id_key]
+        has_time = any(unified_time_col in df.columns for df in concept_dfs.values())
+        if has_time:
+            merge_cols.append(unified_time_col)
+
+        # ── 准备概念 DataFrames ──
+        all_cdfs = []
+        for cn, df in concept_dfs.items():
+            if id_key not in df.columns:
+                continue
+            df = df.drop(columns=[c for c in df.columns if c in metadata_cols_set], errors='ignore')
+            vc = [c for c in df.columns if c not in merge_cols]
+            if not vc:
+                continue
+            da = df.copy()
+            if len(vc) == 1:
+                da = da.rename(columns={vc[0]: cn})
+            elif cn in vc:
+                da = da[merge_cols + [cn]]
+            else:
+                keep = merge_cols + vc
+                da = da[[c for c in keep if c in da.columns]]
+                rvc = [c for c in da.columns if c not in merge_cols]
+                if len(rvc) == 1 and rvc[0] != cn:
+                    da = da.rename(columns={rvc[0]: cn})
+                elif len(rvc) > 1:
+                    rm = {c: f"{cn}_{c}" for c in rvc if c != cn and not c.startswith(f"{cn}_")}
+                    if rm:
+                        da = da.rename(columns=rm)
+            for mc in merge_cols:
+                if mc not in da.columns:
+                    da[mc] = 0.0 if mc == unified_time_col else np.nan
+            all_cdfs.append(da)
+
+        if not all_cdfs:
+            del result, concept_dfs
+            gc.collect()
+            continue
+
+        # ── merge_cols 类型统一 ──
+        time_related = {'charttime', 'time', 'starttime', 'endtime', 'itemtime'}
+        for i, df in enumerate(all_cdfs):
+            for mc in merge_cols:
+                if mc in df.columns:
+                    if mc in time_related:
+                        if df[mc].dtype == 'object' or not pd.api.types.is_numeric_dtype(df[mc].dtype):
+                            all_cdfs[i][mc] = pd.to_numeric(df[mc], errors='coerce')
+                    elif df[mc].dtype == 'object':
+                        all_cdfs[i][mc] = pd.to_numeric(df[mc], errors='coerce').astype('Int64')
+                    elif pd.api.types.is_numeric_dtype(df[mc].dtype):
+                        all_cdfs[i][mc] = df[mc].astype('Int64')
+        for i, df in enumerate(all_cdfs):
+            if unified_time_col in df.columns and pd.api.types.is_float_dtype(df[unified_time_col]):
+                all_cdfs[i][unified_time_col] = df[unified_time_col].round(2)
+
+        # ── 合并宽表 (pivot_table 快速路径) ──
+        processed = []
+        static = []
+        for df in all_cdfs:
+            vcs = [c for c in df.columns if c not in merge_cols]
+            is_static = (unified_time_col in df.columns and df[unified_time_col].isna().all())
+            if is_static:
+                if id_key in df.columns:
+                    static.append(df[[id_key] + vcs].drop_duplicates(subset=[id_key], keep='last'))
+            else:
+                df_dedup = df.drop_duplicates(subset=merge_cols, keep='last')
+                for v in vcs:
+                    if len(df_dedup) == 0:
+                        continue
+                    s = df_dedup[merge_cols + [v]].copy()
+                    s['_concept'] = v
+                    s['_value'] = s[v]
+                    s = s.drop(columns=[v])
+                    processed.append(s)
+
+        merged_df = None
+        if processed:
+            stacked = pd.concat(processed, ignore_index=True)
+            try:
+                merged_df = stacked.pivot_table(
+                    index=merge_cols, columns='_concept', values='_value', aggfunc='first'
+                ).reset_index()
+                merged_df.columns.name = None
+            except Exception:
+                # pivot 失败 → reduce merge fallback
+                from functools import reduce
+                merged_df = reduce(
+                    lambda a, b: pd.merge(a, b, on=merge_cols, how='outer'), all_cdfs)
+                if len(merged_df) > 0:
+                    merged_df = merged_df.drop_duplicates(subset=merge_cols)
+
+        if static:
+            from functools import reduce
+            sm = reduce(lambda a, b: pd.merge(a, b, on=id_key, how='outer'), static)
+            if merged_df is not None and id_key in merged_df.columns:
+                merged_df = pd.merge(merged_df, sm, on=id_key, how='left')
+            else:
+                merged_df = sm
+
+        if merged_df is None or merged_df.empty:
+            del result, concept_dfs, all_cdfs
+            gc.collect()
+            continue
+
+        # 确保所有概念列存在（一致 schema）
+        for c in concepts:
+            if c not in merged_df.columns:
+                merged_df[c] = np.nan
+
+        # 收集患者 ID
+        if id_key in merged_df.columns:
+            all_patient_ids_set.update(merged_df[id_key].dropna().unique().tolist())
+
+        # object → numeric 转换
+        for col in merged_df.columns:
+            if merged_df[col].dtype == object:
+                nv = pd.to_numeric(merged_df[col], errors='coerce')
+                ov = merged_df[col].notna().sum()
+                if ov > 0 and nv.notna().sum() >= ov * 0.5:
+                    merged_df[col] = nv
+                else:
+                    merged_df[col] = merged_df[col].astype(str)
+
+        # ── 写入输出 ──
+        if export_format == 'csv':
+            header = (bi == 0)
+            mode = 'w' if bi == 0 else 'a'
+            merged_df.to_csv(out_path, index=False, encoding='utf-8-sig',
+                             mode=mode, header=header)
+        elif export_format == 'excel':
+            excel_frames.append(merged_df.copy())
+        else:
+            # Parquet: ParquetWriter 流式追加
+            if col_order is None:
+                col_order = list(merged_df.columns)
+            else:
+                merged_df = merged_df.reindex(columns=col_order)
+            table = pa.Table.from_pandas(merged_df, preserve_index=False)
+            if writer is None:
+                writer = pq.ParquetWriter(out_path, table.schema)
+            else:
+                try:
+                    table = table.cast(writer.schema)
+                except Exception:
+                    # Schema 不匹配: 添加缺失列，移除多余列
+                    for f in writer.schema:
+                        if f.name not in table.schema.names:
+                            table = table.append_column(f, pa.nulls(len(table), type=f.type))
+                    table = table.select([f.name for f in writer.schema])
+                    try:
+                        table = table.cast(writer.schema)
+                    except Exception:
+                        pass
+            writer.write_table(table)
+            del table
+
+        # 释放本批内存
+        del result, concept_dfs, all_cdfs, processed, static, merged_df
+        gc.collect()
+
+    # ── 关闭 writer ──
+    if writer:
+        writer.close()
+
+    # Excel 格式: 写累积的全部帧
+    if export_format == 'excel' and excel_frames:
+        full = pd.concat(excel_frames, ignore_index=True)
+        full.to_excel(out_path, index=False)
+        del full, excel_frames
+
+    # ── 合并 dep 批文件 → 单文件 ──
+    if deps_cache_dir and dep_batch_files:
+        for dn, fps in dep_batch_files.items():
+            dep_final = os.path.join(deps_cache_dir, f"{dn}.parquet")
+            if len(fps) == 1:
+                shutil.move(fps[0], dep_final)
+            elif len(fps) > 1:
+                dep_frames = []
+                for fp in fps:
+                    try:
+                        dep_frames.append(pd.read_parquet(fp))
+                    except Exception:
+                        pass
+                    try:
+                        os.unlink(fp)
+                    except Exception:
+                        pass
+                if dep_frames:
+                    pd.concat(dep_frames, ignore_index=True).to_parquet(dep_final, index=False)
+                del dep_frames
+                gc.collect()
+
+    # ── 统计行数 ──
+    n_rows = 0
+    if os.path.exists(out_path):
+        try:
+            if out_path.endswith('.parquet'):
+                n_rows = pq.ParquetFile(out_path).metadata.num_rows
+            else:
+                n_rows = -1  # CSV/Excel 不统计
+        except Exception:
+            n_rows = -1
+
+    # ── 写 manifest ──
+    manifest = {
+        'exported_file': out_path if os.path.exists(out_path) else None,
+        'patient_ids': [int(x) if not (isinstance(x, float) and x != x) else None
+                        for x in all_patient_ids_set] if all_patient_ids_set else [],
+        'concepts': [c for c in concepts if c not in all_empty],
+        'rows': n_rows,
+        'empty_concepts': list(all_empty),
+    }
+    with open(os.path.join(export_dir, f'_manifest_{group_name}.json'), 'w') as f:
+        json.dump(manifest, f)
+
+    print(f"[STREAMING] {group_name}: done — {n_rows} rows, "
+          f"{len(all_patient_ids_set)} patients, "
+          f"{len(concepts) - len(all_empty)}/{len(concepts)} concepts")
+
+
 def _subprocess_load_and_export_module(concepts, database, data_path,
                                        patient_ids_filter, batch_size,
                                        export_dir, export_format, group_name,
@@ -67,6 +423,9 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
 
     主进程不接触任何 DataFrame，彻底消除 pymalloc arena 碎片在主进程中的累积。
     子进程退出后 OS 完整回收所有内存。
+
+    当患者数 > batch_size 时启用**流式导出**: 逐批加载 → 合并宽表 → 追加写入 parquet。
+    内存始终受限于单批大小（~1-3GB），而非全量数据（可达 10GB+）。
 
     返回: 通过 _manifest.json 传回元数据 (exported_file, patient_ids, concepts, rows, empty_concepts)
     """
@@ -82,7 +441,22 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
     import pandas as pd
     from easyicu import load_concepts as _lc
 
-    # ── 1. 加载概念 ──
+    # ── 0. 检查是否需要流式分批导出 ──
+    _need_streaming = False
+    _id_key_s = None
+    if batch_size and patient_ids_filter and isinstance(patient_ids_filter, dict):
+        _id_key_s = next(iter(patient_ids_filter))
+        _pids_s = patient_ids_filter[_id_key_s]
+        if hasattr(_pids_s, '__len__') and len(_pids_s) > batch_size:
+            _need_streaming = True
+
+    if _need_streaming:
+        return _streaming_load_and_export(
+            concepts, database, data_path, _id_key_s, list(_pids_s), batch_size,
+            export_dir, export_format, group_name, cohort_exclude_ids, overwrite,
+            cohort_suffix, dep_concepts_to_cache, deps_cache_dir, _lc, np, pd)
+
+    # ── 1. 加载概念 (非流式 — 小数据集原有逻辑) ──
     kwargs = dict(
         data_path=data_path, database=database,
         concepts=concepts, verbose=False, merge=False, concept_workers=1,
@@ -481,98 +855,248 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
         all_deps.extend(circ_deps)
     all_deps = list(dict.fromkeys(all_deps))  # dedupe preserving order
 
-    # 1) 优先从已导出的 parquet 文件读取依赖概念（零数据库开销）
-    preloaded = {}
-    if preloaded_parquet_dir and os.path.isdir(preloaded_parquet_dir):
-        for dep in all_deps:
-            pq_path = os.path.join(preloaded_parquet_dir, f"{dep}.parquet")
-            if os.path.exists(pq_path):
-                try:
-                    df = pd.read_parquet(pq_path)
-                    if not df.empty:
-                        preloaded[dep] = df
-                except Exception:
-                    pass
+    # 检测患者数以决定是否需要分批处理 AKI/circ
+    _total_sp_patients = 0
+    _sp_id_key = None
+    _sp_all_pids = None
+    if patient_ids_filter:
+        _sp_id_key = next(iter(patient_ids_filter))
+        _sp_all_pids = list(patient_ids_filter[_sp_id_key])
+        _total_sp_patients = len(_sp_all_pids)
 
-    # 2) 仅加载缺失的依赖概念（从数据库）
-    missing_deps = [d for d in all_deps if d not in preloaded]
-    if missing_deps:
-        load_kwargs = dict(
-            data_path=data_path, database=database,
-            concepts=missing_deps, verbose=False, merge=False, concept_workers=1,
-        )
-        if patient_ids_filter:
-            load_kwargs['patient_ids'] = patient_ids_filter
-        if max_patients:
-            load_kwargs['max_patients'] = max_patients
-        try:
-            result = _lc(**load_kwargs)
-            if isinstance(result, dict):
-                for c, df in result.items():
-                    if hasattr(df, 'data'):
-                        df = df.data
-                    if hasattr(df, 'to_pandas'):
-                        df = df.to_pandas()
-                    if isinstance(df, pd.DataFrame) and not df.empty:
-                        preloaded[c] = df
-        except Exception:
-            pass  # fallback: AKI/CircFailure will load individually
+    _need_sp_batch = _total_sp_patients > 20000
 
-    # 统一 preloaded 中所有概念的时间列名为 'charttime'
     _time_aliases_pre = ['starttime', 'measuredat_minutes', 'measuredat', 'datetime',
                          'observationoffset', 'Offset', 'start',
-                         'givenat', 'enteredentryat']
-    for _cname in list(preloaded.keys()):
-        _cdf = preloaded[_cname]
-        if 'charttime' not in _cdf.columns:
-            for _alias in _time_aliases_pre:
-                if _alias in _cdf.columns:
-                    preloaded[_cname] = _cdf.rename(columns={_alias: 'charttime'})
-                    break
+                         'givenat', 'enteredentryat',
+                         'intakeoutputoffset']
+    _id_cands_sp = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid',
+                    'admissionid', 'patientid', 'CaseID']
 
     saved = {}
 
-    if has_aki:
-        try:
-            from easyicu.kdigo_aki import load_kdigo_aki
-            aki_kwargs = dict(database=database, data_path=data_path, verbose=False,
-                            preloaded_data=preloaded)
-            if patient_ids_filter:
-                id_col = list(patient_ids_filter.keys())[0]
-                aki_kwargs['patient_ids'] = patient_ids_filter[id_col]
-            if max_patients:
-                aki_kwargs['max_patients'] = max_patients
-            aki_df = load_kdigo_aki(**aki_kwargs)
-            if isinstance(aki_df, pd.DataFrame) and not aki_df.empty:
-                for c in concepts:
-                    if c in ['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
-                             'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
-                             'creat_low_past_48hr', 'creat_low_past_7day']:
-                        path = os.path.join(output_dir, f"{c}.parquet")
-                        aki_df.to_parquet(path, index=False)
-                        saved[c] = path
-        except Exception as e:
-            print(f"AKI loading failed: {e}")
+    if _need_sp_batch and (has_aki or has_circ):
+        # ── 大数据集批处理: 逐批读取 deps → 计算 AKI/circ → 累积结果 ──
+        import gc as _gc_sp
+        _sp_batch_size = 20000
+        _n_sp_batches = (_total_sp_patients + _sp_batch_size - 1) // _sp_batch_size
+        print(f"[SPECIAL] Batch mode: {_total_sp_patients} patients, "
+              f"batch_size={_sp_batch_size}, batches={_n_sp_batches}")
 
-    if has_circ:
-        try:
-            from easyicu.circ_failure import load_circ_failure
-            circ_kwargs = dict(database=database, data_path=data_path, verbose=False,
-                             preloaded_data=preloaded)
+        _aki_results = []
+        _circ_results = []
+
+        # 确定 deps parquet 中的 ID 列名
+        _dep_id_col = _sp_id_key
+        # 从第一个可用的 dep 文件检测实际 ID 列
+        if preloaded_parquet_dir:
+            for _dep in all_deps:
+                _dpq = os.path.join(preloaded_parquet_dir, f"{_dep}.parquet")
+                if os.path.exists(_dpq):
+                    try:
+                        import pyarrow.parquet as _pq_sp
+                        _sch = _pq_sp.read_schema(_dpq)
+                        for _idc in _id_cands_sp:
+                            if _idc in _sch.names:
+                                _dep_id_col = _idc
+                                break
+                    except Exception:
+                        pass
+                    break
+
+        for _sbi in range(_n_sp_batches):
+            _bstart = _sbi * _sp_batch_size
+            _bend = min(_bstart + _sp_batch_size, _total_sp_patients)
+            _batch_pids = _sp_all_pids[_bstart:_bend]
+            _batch_set = set(_batch_pids)
+            print(f"[SPECIAL] batch {_sbi+1}/{_n_sp_batches}: {len(_batch_pids)} patients")
+
+            # 按批读取并过滤 deps
+            batch_preloaded = {}
+            for _dep in all_deps:
+                _dpq_path = None
+                if preloaded_parquet_dir:
+                    _dpq_path = os.path.join(preloaded_parquet_dir, f"{_dep}.parquet")
+                    if not os.path.exists(_dpq_path):
+                        _dpq_path = None
+                if _dpq_path:
+                    try:
+                        _full = pd.read_parquet(_dpq_path)
+                        if _dep_id_col in _full.columns:
+                            batch_preloaded[_dep] = _full[_full[_dep_id_col].isin(_batch_set)].copy()
+                        del _full
+                    except Exception:
+                        pass
+                else:
+                    # Dep 不在缓存中 → 从数据库加载此批
+                    try:
+                        _br = _lc(data_path=data_path, database=database,
+                                  concepts=[_dep], verbose=False, merge=False,
+                                  concept_workers=1,
+                                  patient_ids={_sp_id_key: _batch_pids})
+                        if isinstance(_br, dict):
+                            for _k, _v in _br.items():
+                                if hasattr(_v, 'data'):
+                                    _v = _v.data
+                                if isinstance(_v, pd.DataFrame) and not _v.empty:
+                                    batch_preloaded[_k] = _v
+                    except Exception:
+                        pass
+
+            # 时间列归一化
+            for _cn in list(batch_preloaded.keys()):
+                _cdf = batch_preloaded[_cn]
+                if 'charttime' not in _cdf.columns:
+                    for _alias in _time_aliases_pre:
+                        if _alias in _cdf.columns:
+                            batch_preloaded[_cn] = _cdf.rename(columns={_alias: 'charttime'})
+                            break
+
+            # 计算 AKI
+            if has_aki and batch_preloaded:
+                try:
+                    from easyicu.kdigo_aki import load_kdigo_aki
+                    _aki_kw = dict(database=database, data_path=data_path, verbose=False,
+                                   preloaded_data=batch_preloaded,
+                                   patient_ids=_batch_pids)
+                    _aki_df = load_kdigo_aki(**_aki_kw)
+                    if isinstance(_aki_df, pd.DataFrame) and not _aki_df.empty:
+                        _aki_results.append(_aki_df)
+                except Exception as _e:
+                    print(f"[SPECIAL] AKI batch {_sbi+1} failed: {_e}")
+
+            # 计算 circ_failure
+            if has_circ and batch_preloaded:
+                try:
+                    from easyicu.circ_failure import load_circ_failure
+                    _circ_kw = dict(database=database, data_path=data_path, verbose=False,
+                                    preloaded_data=batch_preloaded,
+                                    patient_ids=_batch_pids)
+                    _circ_df = load_circ_failure(**_circ_kw)
+                    if isinstance(_circ_df, pd.DataFrame) and not _circ_df.empty:
+                        _circ_results.append(_circ_df)
+                except Exception as _e:
+                    print(f"[SPECIAL] CircFailure batch {_sbi+1} failed: {_e}")
+
+            del batch_preloaded
+            _gc_sp.collect()
+
+        # 合并批次结果并保存
+        if _aki_results:
+            _aki_merged = pd.concat(_aki_results, ignore_index=True)
+            for c in concepts:
+                if c in ['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
+                         'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+                         'creat_low_past_48hr', 'creat_low_past_7day']:
+                    path = os.path.join(output_dir, f"{c}.parquet")
+                    _aki_merged.to_parquet(path, index=False)
+                    saved[c] = path
+            del _aki_merged, _aki_results
+
+        if _circ_results:
+            _circ_merged = pd.concat(_circ_results, ignore_index=True)
+            for c in concepts:
+                if c in ['circ_failure', 'circ_event']:
+                    path = os.path.join(output_dir, f"{c}.parquet")
+                    _circ_merged.to_parquet(path, index=False)
+                    saved[c] = path
+            del _circ_merged, _circ_results
+
+        _gc_sp.collect()
+        print(f"[SPECIAL] Batch mode done. Saved: {list(saved.keys())}")
+
+        # preloaded 保持为空 dict — sep3 会从 preloaded_parquet_dir 回退读取
+        preloaded = {}
+
+    else:
+        # ── 原有逻辑: 小数据集一次性加载 ──
+        # 1) 优先从已导出的 parquet 文件读取依赖概念（零数据库开销）
+        preloaded = {}
+        if preloaded_parquet_dir and os.path.isdir(preloaded_parquet_dir):
+            for dep in all_deps:
+                pq_path = os.path.join(preloaded_parquet_dir, f"{dep}.parquet")
+                if os.path.exists(pq_path):
+                    try:
+                        df = pd.read_parquet(pq_path)
+                        if not df.empty:
+                            preloaded[dep] = df
+                    except Exception:
+                        pass
+
+    # 2) 仅加载缺失的依赖概念（从数据库）
+        missing_deps = [d for d in all_deps if d not in preloaded]
+        if missing_deps:
+            load_kwargs = dict(
+                data_path=data_path, database=database,
+                concepts=missing_deps, verbose=False, merge=False, concept_workers=1,
+            )
             if patient_ids_filter:
-                id_col = list(patient_ids_filter.keys())[0]
-                circ_kwargs['patient_ids'] = patient_ids_filter[id_col]
+                load_kwargs['patient_ids'] = patient_ids_filter
             if max_patients:
-                circ_kwargs['max_patients'] = max_patients
-            circ_df = load_circ_failure(**circ_kwargs)
-            if isinstance(circ_df, pd.DataFrame) and not circ_df.empty:
-                for c in concepts:
-                    if c in ['circ_failure', 'circ_event']:
-                        path = os.path.join(output_dir, f"{c}.parquet")
-                        circ_df.to_parquet(path, index=False)
-                        saved[c] = path
-        except Exception as e:
-            print(f"CircFailure loading failed: {e}")
+                load_kwargs['max_patients'] = max_patients
+            try:
+                result = _lc(**load_kwargs)
+                if isinstance(result, dict):
+                    for c, df in result.items():
+                        if hasattr(df, 'data'):
+                            df = df.data
+                        if hasattr(df, 'to_pandas'):
+                            df = df.to_pandas()
+                        if isinstance(df, pd.DataFrame) and not df.empty:
+                            preloaded[c] = df
+            except Exception:
+                pass  # fallback: AKI/CircFailure will load individually
+
+        # 统一 preloaded 中所有概念的时间列名为 'charttime'
+        for _cname in list(preloaded.keys()):
+            _cdf = preloaded[_cname]
+            if 'charttime' not in _cdf.columns:
+                for _alias in _time_aliases_pre:
+                    if _alias in _cdf.columns:
+                        preloaded[_cname] = _cdf.rename(columns={_alias: 'charttime'})
+                        break
+
+        if has_aki:
+            try:
+                from easyicu.kdigo_aki import load_kdigo_aki
+                aki_kwargs = dict(database=database, data_path=data_path, verbose=False,
+                                preloaded_data=preloaded)
+                if patient_ids_filter:
+                    id_col = list(patient_ids_filter.keys())[0]
+                    aki_kwargs['patient_ids'] = patient_ids_filter[id_col]
+                if max_patients:
+                    aki_kwargs['max_patients'] = max_patients
+                aki_df = load_kdigo_aki(**aki_kwargs)
+                if isinstance(aki_df, pd.DataFrame) and not aki_df.empty:
+                    for c in concepts:
+                        if c in ['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
+                                 'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+                                 'creat_low_past_48hr', 'creat_low_past_7day']:
+                            path = os.path.join(output_dir, f"{c}.parquet")
+                            aki_df.to_parquet(path, index=False)
+                            saved[c] = path
+            except Exception as e:
+                print(f"AKI loading failed: {e}")
+
+        if has_circ:
+            try:
+                from easyicu.circ_failure import load_circ_failure
+                circ_kwargs = dict(database=database, data_path=data_path, verbose=False,
+                                 preloaded_data=preloaded)
+                if patient_ids_filter:
+                    id_col = list(patient_ids_filter.keys())[0]
+                    circ_kwargs['patient_ids'] = patient_ids_filter[id_col]
+                if max_patients:
+                    circ_kwargs['max_patients'] = max_patients
+                circ_df = load_circ_failure(**circ_kwargs)
+                if isinstance(circ_df, pd.DataFrame) and not circ_df.empty:
+                    for c in concepts:
+                        if c in ['circ_failure', 'circ_event']:
+                            path = os.path.join(output_dir, f"{c}.parquet")
+                            circ_df.to_parquet(path, index=False)
+                            saved[c] = path
+            except Exception as e:
+                print(f"CircFailure loading failed: {e}")
 
     # Sep3 从缓存读取 SOFA，不重新计算
     sep_concepts = [c for c in concepts if c in ('sep3_sofa1', 'sep3_sofa2')]
