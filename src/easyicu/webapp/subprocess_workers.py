@@ -253,7 +253,7 @@ def _streaming_load_and_export(concepts, database, data_path, id_key, all_pids,
         static = []
         for df in all_cdfs:
             vcs = [c for c in df.columns if c not in merge_cols]
-            is_static = (unified_time_col in df.columns and df[unified_time_col].isna().all())
+            is_static = (unified_time_col not in df.columns) or (unified_time_col in df.columns and df[unified_time_col].isna().all())
             if is_static:
                 if id_key in df.columns:
                     static.append(df[[id_key] + vcs].drop_duplicates(subset=[id_key], keep='last'))
@@ -653,7 +653,9 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
                         if not val_cols:
                             continue
                         is_static = False
-                        if _time_col and _time_col in df_temp.columns:
+                        if _time_col and _time_col not in df_temp.columns:
+                            is_static = True
+                        elif _time_col and _time_col in df_temp.columns:
                             if df_temp[_time_col].isna().all():
                                 is_static = True
                         if is_static:
