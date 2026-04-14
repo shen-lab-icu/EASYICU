@@ -3233,6 +3233,7 @@ TEXTS = {
         'export_or_preview': 'Export Data or Load Preview',
         'data_dict': '📖 Data Dictionary',
         'view_desc': 'View Feature Descriptions',
+        'ai_assistant': '🤖 AI Assistant',
     },
     'zh': {
         'app_title': '🏥 EasyICU 数据探索器',
@@ -3295,6 +3296,7 @@ TEXTS = {
         'export_or_preview': '导出数据或加载预览',
         'data_dict': '📖 数据字典',
         'view_desc': '查看特征说明',
+        'ai_assistant': '🤖 AI 助手',
     }
 }
 
@@ -3947,6 +3949,12 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 'sofa_cardio': sofa_cardio, 'sofa_cns': sofa_cns, 'sofa_renal': sofa_renal,
             })
     data['sofa'] = pd.DataFrame(sofa_records)
+    # 🔧 FIX: 从父 DF 中提取子组件为独立 DF，然后剥离父 DF 中的子组件列
+    # 避免合并时产生 _x/_y 后缀冲突
+    _sofa_sub_cols = ['sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal']
+    for _sc in _sofa_sub_cols:
+        data[_sc] = data['sofa'][['stay_id', 'time', _sc]].copy()
+    data['sofa'] = data['sofa'][['stay_id', 'time', 'sofa']].copy()
     
     # 肌酐（使用患者级随机采样，约每8小时）
     crea_records = []
@@ -4047,14 +4055,11 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 'sofa2_cardio': sofa2_cardio, 'sofa2_cns': sofa2_cns, 'sofa2_renal': sofa2_renal,
             })
     data['sofa2'] = pd.DataFrame(sofa2_records)
-    # 添加各组件到 data
-    sofa2_df = data['sofa2']
-    data['sofa2_resp'] = sofa2_df[['stay_id', 'time', 'sofa2_resp']].copy()
-    data['sofa2_coag'] = sofa2_df[['stay_id', 'time', 'sofa2_coag']].copy()
-    data['sofa2_liver'] = sofa2_df[['stay_id', 'time', 'sofa2_liver']].copy()
-    data['sofa2_cardio'] = sofa2_df[['stay_id', 'time', 'sofa2_cardio']].copy()
-    data['sofa2_cns'] = sofa2_df[['stay_id', 'time', 'sofa2_cns']].copy()
-    data['sofa2_renal'] = sofa2_df[['stay_id', 'time', 'sofa2_renal']].copy()
+    # 🔧 FIX: 提取子组件并剥离父 DF，避免合并 _x/_y 冲突
+    _sofa2_sub_cols = ['sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal']
+    for _sc in _sofa2_sub_cols:
+        data[_sc] = data['sofa2'][['stay_id', 'time', _sc]].copy()
+    data['sofa2'] = data['sofa2'][['stay_id', 'time', 'sofa2']].copy()
     
     # Sepsis-3 诊断数据 (严格基于 SOFA 变化)
     sep3_sofa2_records = []
@@ -4157,14 +4162,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     sep3_sofa1_in_window = sep3_sofa1_final[(sep3_sofa1_final['susp_inf'] == 1) | (sep3_sofa1_final['infection_icd'] == 1)]
     data['sep3_sofa1'] = sep3_sofa1_in_window[['stay_id', 'time', 'sep3_sofa1']] if len(sep3_sofa1_in_window) > 0 else pd.DataFrame(columns=['stay_id', 'time', 'sep3_sofa1'])
     
-    # 添加 SOFA-1 各组件到 data
-    sofa_df = data['sofa']
-    data['sofa_resp'] = sofa_df[['stay_id', 'time', 'sofa_resp']].copy()
-    data['sofa_coag'] = sofa_df[['stay_id', 'time', 'sofa_coag']].copy()
-    data['sofa_liver'] = sofa_df[['stay_id', 'time', 'sofa_liver']].copy()
-    data['sofa_cardio'] = sofa_df[['stay_id', 'time', 'sofa_cardio']].copy()
-    data['sofa_cns'] = sofa_df[['stay_id', 'time', 'sofa_cns']].copy()
-    data['sofa_renal'] = sofa_df[['stay_id', 'time', 'sofa_renal']].copy()
+    # 🔧 SOFA-1 子组件已在上方提取并剥离，此处无需重复
     
     # ============ 补充更多常用概念 ============
     
@@ -4357,7 +4355,10 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 'aki': 1 if aki_stage > 0 else 0
             })
     data['aki'] = pd.DataFrame(aki_records)
+    # 🔧 FIX: 提取子组件并剥离父 DF
     data['aki_stage'] = data['aki'][['stay_id', 'time', 'aki_stage']].copy()
+    data['creat_low_past_7day'] = data['aki'][['stay_id', 'time', 'creat_low_past_7day']].copy()
+    data['aki'] = data['aki'][['stay_id', 'time', 'aki']].copy()
     # 🔧 添加完整的AKI子特征（基于肌酐、尿量、RRT定义的）
     data['aki_stage_creat'] = data['aki'][['stay_id', 'time', 'aki_stage']].copy()
     data['aki_stage_creat'].columns = ['stay_id', 'time', 'aki_stage_creat']
@@ -4370,7 +4371,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['aki_stage_uo'] = pd.DataFrame(aki_uo_records)
     # RRT定义的AKI（仅接受RRT的患者为Stage 3）
     aki_rrt_records = []
-    for _, row in data['aki'].iterrows():
+    for _, row in data['aki_stage'].iterrows():
         rrt_stage = 3 if row['aki_stage'] == 3 and np.random.random() < 0.3 else 0
         aki_rrt_records.append({'stay_id': row['stay_id'], 'time': row['time'], 'aki_stage_rrt': rrt_stage})
     data['aki_stage_rrt'] = pd.DataFrame(aki_rrt_records)
@@ -4378,14 +4379,12 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     # ============ 新增 KDIGO 相关特征 (2026-02-04) ============
     # creat_low_past_48hr: 过去48小时内最低肌酐（通常与 creat_low_past_7day 相似或稍高）
     creat_48hr_records = []
-    for _, row in data['aki'].iterrows():
+    for _, row in data['creat_low_past_7day'].iterrows():
         # 48hr内的最低肌酐通常略高于7天内的最低值
         baseline = row['creat_low_past_7day']
         creat_48hr = round(baseline * np.random.uniform(1.0, 1.15), 2)
         creat_48hr_records.append({'stay_id': row['stay_id'], 'time': row['time'], 'creat_low_past_48hr': creat_48hr})
     data['creat_low_past_48hr'] = pd.DataFrame(creat_48hr_records)
-    # 提取 creat_low_past_7day 作为独立特征
-    data['creat_low_past_7day'] = data['aki'][['stay_id', 'time', 'creat_low_past_7day']].copy()
     
     # 尿量率（mL/kg/h）：基于患者体重的尿量产出率
     # 正常值: 0.5-1.5 mL/kg/h，AKI时 <0.5 mL/kg/h（Stage 1）, <0.3（Stage 2/3）
@@ -4395,7 +4394,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
         patient_weight = data['weight'][data['weight']['stay_id'] == pid]['weight'].iloc[0] if len(data['weight'][data['weight']['stay_id'] == pid]) > 0 else 70
         
         # 使用与AKI相同的时间点
-        patient_aki = data['aki'][data['aki']['stay_id'] == pid]
+        patient_aki = data['aki_stage'][data['aki_stage']['stay_id'] == pid]
         for _, row in patient_aki.iterrows():
             t = row['time']
             aki_stage = row['aki_stage']
@@ -4464,8 +4463,9 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 'circ_failure': 1 if circ_event > 0 else 0
             })
     data['circ_failure'] = pd.DataFrame(circ_failure_records)
-    # 🔧 添加circ_event作为独立特征
+    # 🔧 FIX: 提取 circ_event 并剥离父 DF
     data['circ_event'] = data['circ_failure'][['stay_id', 'time', 'circ_event']].copy()
+    data['circ_failure'] = data['circ_failure'][['stay_id', 'time', 'circ_failure']].copy()
     
     # ============ 呼吸机参数（使用患者级随机采样） ============
     peep_records = []
@@ -5509,6 +5509,15 @@ def render_sidebar():
         
         st.markdown("---")
         
+        # ============ AI 助手设置（放在侧边栏最上方，方便用户看到）============
+        try:
+            from easyicu.webapp.llm_chat import render_llm_settings
+            render_llm_settings()
+        except Exception:
+            pass  # silently skip if module unavailable
+        
+        st.markdown("---")
+        
         # ============ 侧边栏仅用于数据提取导出模式 ============
         # 快速可视化功能已移至主页面的 "Quick Visualization" 标签页
         
@@ -6224,7 +6233,7 @@ def render_sidebar():
                 **自动优化配置:**
                 - 并行数: {resources['recommended_workers']}
                 - 后端: {resources['recommended_backend']}
-                """)
+                """)  
 
 
 def load_from_exported(export_dir: str, max_patients: int = 100, selected_files: list = None):
@@ -10295,6 +10304,7 @@ def render_quality_page():
                         height=max(300, len(missing_data) * 40),
                         showlegend=False,
                         yaxis_title="",
+                        yaxis=dict(autorange='reversed'),
                         margin=dict(l=100, r=30, t=50, b=50),
                         font=dict(size=14, color='black'),
                     )
@@ -10978,14 +10988,43 @@ def render_group_comparison_subtab(lang: str):
     # ========== Real Data模式：显示完整数据配置 ==========
     else:
         with st.expander("⚙️ " + ("Data Configuration" if lang == 'en' else "数据配置"), expanded=True):
-            # 数据源选择
+            # 数据源选择 — 支持3种模式
             _src_label = "Data Source" if lang == 'en' else "数据来源"
-            _src_opts = ["📂 Raw Database" if lang == 'en' else "📂 原始数据库",
-                         "📦 Exported Files" if lang == 'en' else "📦 已导出文件"]
-            grp_src = st.radio(_src_label, _src_opts, horizontal=True, key="grp_data_source")
-            _use_exported = (_src_opts.index(grp_src) == 1)
+            _allow_demo = entry_mode != 'real'
+            _src_keys = ["raw", "exported"] + (["demo"] if _allow_demo else [])
+            _src_labels = {
+                "raw": "📂 Raw Database" if lang == 'en' else "📂 原始数据库",
+                "exported": "📦 Exported Files" if lang == 'en' else "📦 已导出文件",
+                "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
+            }
+            _default_src = "demo" if _allow_demo and entry_mode == 'demo' else "raw"
+            grp_src = st.radio(
+                _src_label, _src_keys,
+                index=_src_keys.index(_default_src),
+                format_func=lambda x: _src_labels[x],
+                horizontal=True, key="grp_data_source"
+            )
 
-            if not _use_exported:
+            if grp_src == "demo":
+                # ===== 模拟数据模式 =====
+                n_patients = st.slider(
+                    "👥 " + ("Number of Patients" if lang == 'en' else "患者数量"),
+                    min_value=50, max_value=500, value=st.session_state.mock_params.get('n_patients', 100),
+                    key="grp_demo_patients_inline"
+                )
+                load_btn = st.button(
+                    "🚀 " + ("Generate Demo Data" if lang == 'en' else "生成模拟数据"),
+                    type="primary", key="grp_load_demo_btn"
+                )
+                if load_btn:
+                    st.session_state.mock_params['n_patients'] = n_patients
+                    demographics_df = _generate_mock_demographics(n_patients, lang)
+                    st.session_state['grp_demographics'] = demographics_df
+                    st.session_state['grp_loaded_db'] = 'demo'
+                    st.session_state['grp_is_demo'] = True
+                    st.rerun()
+
+            elif grp_src == "raw":
                 # ===== 原始数据库模式 =====
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
@@ -11052,7 +11091,7 @@ def render_group_comparison_subtab(lang: str):
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-            else:
+            elif grp_src == "exported":
                 # ===== 导出文件模式 =====
                 col1, col2 = st.columns([3, 2])
                 with col1:
@@ -11184,6 +11223,8 @@ def render_group_comparison_subtab(lang: str):
             'features': [
                 ('age', 'Age (years)', '年龄 (岁)', 'continuous'),
                 ('gender', 'Male', '男性', 'binary', 'M'),
+                ('weight', 'Weight (kg)', '体重 (kg)', 'continuous'),
+                ('height', 'Height (cm)', '身高 (cm)', 'continuous'),
                 ('los_days', 'ICU LOS (days)', 'ICU住院时长 (天)', 'continuous'),
                 ('first_icu_stay', 'First ICU Stay', '首次ICU入住', 'binary', True),
             ],
@@ -11221,8 +11262,10 @@ def render_group_comparison_subtab(lang: str):
                 ('crea', 'Creatinine (mg/dL)', '肌酐 (mg/dL)', 'continuous'),
                 ('bili', 'Bilirubin (mg/dL)', '胆红素 (mg/dL)', 'continuous'),
                 ('lact', 'Lactate (mmol/L)', '乳酸 (mmol/L)', 'continuous'),
+                ('alb', 'Albumin (g/dL)', '白蛋白 (g/dL)', 'continuous'),
+                ('bun', 'BUN (mg/dL)', '尿素氮 (mg/dL)', 'continuous'),
             ],
-            'default': False
+            'default': True
         },
         'hematology': {
             'name_en': '🩸 Hematology',
@@ -11231,8 +11274,9 @@ def render_group_comparison_subtab(lang: str):
                 ('hgb', 'Hemoglobin (g/dL)', '血红蛋白 (g/dL)', 'continuous'),
                 ('plt', 'Platelets (K/uL)', '血小板 (K/uL)', 'continuous'),
                 ('wbc', 'WBC (K/uL)', '白细胞 (K/uL)', 'continuous'),
+                ('inr_pt', 'INR', 'INR', 'continuous'),
             ],
-            'default': False
+            'default': True
         },
         'blood_gas': {
             'name_en': '🩸 Blood Gas',
@@ -11242,8 +11286,10 @@ def render_group_comparison_subtab(lang: str):
                 ('po2', 'PaO2 (mmHg)', 'PaO2 (mmHg)', 'continuous'),
                 ('pco2', 'PaCO2 (mmHg)', 'PaCO2 (mmHg)', 'continuous'),
                 ('fio2', 'FiO2 (%)', 'FiO2 (%)', 'continuous'),
+                ('pafi', 'P/F Ratio', 'P/F比值', 'continuous'),
+                ('safi', 'S/F Ratio', 'S/F比值', 'continuous'),
             ],
-            'default': False
+            'default': True
         },
         'sofa': {
             'name_en': '🏥 SOFA Scores',
@@ -11257,7 +11303,7 @@ def render_group_comparison_subtab(lang: str):
                 ('sofa_cns', 'SOFA CNS', 'SOFA神经', 'continuous'),
                 ('sofa_renal', 'SOFA Renal', 'SOFA肾脏', 'continuous'),
             ],
-            'default': False
+            'default': True
         },
     }
     
@@ -11268,7 +11314,9 @@ def render_group_comparison_subtab(lang: str):
         options=list(FEATURE_MODULES.keys()),
         default=default_modules,
         format_func=lambda x: FEATURE_MODULES[x]['name_en'] if lang == 'en' else FEATURE_MODULES[x]['name_zh'],
-        key="grp_feature_modules"
+        key="grp_feature_modules",
+        help="Click to add/remove modules. All available modules are listed above."
+             if lang == 'en' else "点击可添加或移除模块，上方列出了所有可用模块"
     )
     
     # 显示将要加载的特征
@@ -12009,14 +12057,37 @@ def render_cohort_dashboard_subtab(lang: str):
     # ========== Real Data模式：显示数据配置 ==========
     else:
         with st.expander("⚙️ " + ("Data Configuration" if lang == 'en' else "数据配置"), expanded=True):
-            # 数据源选择
+            # 数据源选择 — 支持3种模式
             _src_label = "Data Source" if lang == 'en' else "数据来源"
-            _src_opts = ["📂 Raw Database" if lang == 'en' else "📂 原始数据库",
-                         "📦 Exported Files" if lang == 'en' else "📦 已导出文件"]
-            dash_src = st.radio(_src_label, _src_opts, horizontal=True, key="dash_data_source")
-            _use_exported = (_src_opts.index(dash_src) == 1)
+            _allow_demo = entry_mode != 'real'
+            _src_keys = ["raw", "exported"] + (["demo"] if _allow_demo else [])
+            _src_labels = {
+                "raw": "📂 Raw Database" if lang == 'en' else "📂 原始数据库",
+                "exported": "📦 Exported Files" if lang == 'en' else "📦 已导出文件",
+                "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
+            }
+            _default_src = "demo" if _allow_demo and entry_mode == 'demo' else "raw"
+            dash_src = st.radio(
+                _src_label, _src_keys,
+                index=_src_keys.index(_default_src),
+                format_func=lambda x: _src_labels[x],
+                horizontal=True, key="dash_data_source"
+            )
 
-            if not _use_exported:
+            if dash_src == "demo":
+                # ===== 模拟数据模式 =====
+                load_btn = st.button(
+                    "🚀 " + ("Generate Demo Dashboard" if lang == 'en' else "生成演示仪表板"),
+                    type="primary", key="dash_load_demo_btn"
+                )
+                if load_btn:
+                    demo_df = _generate_mock_cohort_dashboard_data(lang)
+                    st.session_state['dash_demographics'] = demo_df
+                    st.session_state['dash_loaded_db'] = 'Demo'
+                    st.session_state['dash_is_demo'] = True
+                    st.rerun()
+
+            elif dash_src == "raw":
                 # ===== 原始数据库模式 =====
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
@@ -12083,7 +12154,7 @@ def render_cohort_dashboard_subtab(lang: str):
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-            else:
+            elif dash_src == "exported":
                 # ===== 导出文件模式 =====
                 col1, col2 = st.columns([3, 2])
                 with col1:
@@ -15198,10 +15269,11 @@ def main():
         st.markdown('<div class="sub-header">ICU 数据分析平台</div>', unsafe_allow_html=True)
     
     # 主页面标签：Tutorial, Quick Visualization, Cohort Analysis
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         get_text('home'),
         get_text('quick_visualization'),
         get_text('cohort_compare'),
+        get_text('ai_assistant'),
     ])
     
     with tab1:
@@ -15212,6 +15284,13 @@ def main():
     
     with tab3:
         render_cohort_comparison_page()
+    
+    with tab4:
+        try:
+            from easyicu.webapp.llm_chat import render_chat_tab
+            render_chat_tab()
+        except Exception as _chat_err:
+            st.error(f"AI Assistant module error: {_chat_err}")
     
     # 🔧 处理侧边栏触发的导出（在标签页渲染后执行，确保 Guide: Complete 中的 container 已创建）
     if st.session_state.get('trigger_export', False):

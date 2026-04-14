@@ -42,7 +42,8 @@ webapp = [
   "openpyxl>=3.1",
   "psutil>=5.9",
   "duckdb>=0.9.0",
-  "scipy>=1.10"
+  "scipy>=1.10",
+  "openai>=1.0"
 ]
 all = [
   "easyicu[dev,viz,webapp]"
