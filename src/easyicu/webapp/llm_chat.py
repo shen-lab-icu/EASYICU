@@ -13,6 +13,7 @@ Supported providers:
 All API credentials are stored in session state only — never persisted.
 """
 import ast
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -122,10 +123,28 @@ PROJECT_CONTEXT_FILES = [
     "README.md",
 ]
 
+
+def _hosted_base_url() -> str:
+    """Return the hosted relay URL exposed to end users."""
+    return os.getenv("EASYICU_HOSTED_BASE_URL", "http://47.241.42.236/v1").strip()
+
+
+def _default_provider_key() -> str:
+    """Prefer hosted mode when a hosted relay URL is configured."""
+    return "easyicu_hosted" if _hosted_base_url() else "openrouter"
+
 # ---------------------------------------------------------------------------
 # Provider registry: (display, default_base_url, default_model, needs_key, description_en, description_zh)
 # ---------------------------------------------------------------------------
 PROVIDERS = {
+    "easyicu_hosted": (
+        "EasyICU Hosted",
+        _hosted_base_url(),
+        "hosted-default",
+        False,
+        "Use the EasyICU managed relay. No user API key required.",
+        "使用 EasyICU 托管代理，无需用户自己填写 API Key。",
+    ),
     "huggingface_free": (
         "🆓 HuggingFace (Free credits)",
         "https://router.huggingface.co/v1",
@@ -206,9 +225,10 @@ PROVIDERS = {
 
 def _init_chat_state():
     """Ensure all chat-related session keys exist."""
+    default_provider = _default_provider_key()
     defaults = {
         "llm_enabled": False,
-        "llm_provider": "openrouter",
+        "llm_provider": default_provider,
         "llm_api_key": "",
         "llm_model": "",
         "llm_base_url": "",
@@ -596,7 +616,8 @@ def _is_configured() -> bool:
     """Return True when the provider is ready to use."""
     provider = st.session_state.get("llm_provider", "openrouter")
     if not _needs_api_key(provider):
-        return True  # HuggingFace free needs no key
+        default_url = PROVIDERS.get(provider, PROVIDERS["custom"])[1]
+        return bool((st.session_state.get("llm_base_url", "") or default_url).strip())
     return bool(st.session_state.get("llm_api_key", "").strip())
 
 
@@ -611,6 +632,9 @@ def _get_client():
     provider = st.session_state.get("llm_provider", "openrouter")
     api_key = st.session_state.get("llm_api_key", "").strip()
     base_url = st.session_state.get("llm_base_url", "").strip() or None
+
+    if not api_key and not _needs_api_key(provider):
+        api_key = os.getenv("EASYICU_HOSTED_CLIENT_TOKEN", "easyicu-hosted")
 
     if not api_key:
         return None

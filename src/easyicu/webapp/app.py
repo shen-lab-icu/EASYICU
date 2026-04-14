@@ -77,15 +77,15 @@ st.markdown("""
 
     /* ============ 全局设计令牌 ============ */
     :root {
-        /* 品牌主色 — 冷调医疗蓝紫 */
-        --primary-color: #6366f1;
-        --primary-dark: #4f46e5;
-        --primary-light: #818cf8;
-        --secondary-color: #8b5cf6;
+        /* 品牌主色 — 医疗蓝青 */
+        --primary-color: #2563eb;
+        --primary-dark: #1d4ed8;
+        --primary-light: #60a5fa;
+        --secondary-color: #0891b2;
         --accent-color: #06b6d4;
 
         /* 渐变系统 */
-        --gradient-primary: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        --gradient-primary: linear-gradient(135deg, #2563eb 0%, #0891b2 100%);
         --gradient-success: linear-gradient(135deg, #10b981 0%, #34d399 100%);
         --gradient-info: linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%);
         --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
@@ -103,8 +103,8 @@ st.markdown("""
         --shadow-xs: 0 1px 2px rgba(0,0,0,0.04);
         --shadow-soft: 0 4px 16px rgba(0,0,0,0.06);
         --shadow-card: 0 1px 3px rgba(0,0,0,0.06), 0 6px 16px rgba(0,0,0,0.04);
-        --shadow-hover: 0 8px 30px rgba(99,102,241,0.12), 0 4px 12px rgba(0,0,0,0.05);
-        --shadow-glow: 0 0 20px rgba(99,102,241,0.25), 0 4px 16px rgba(99,102,241,0.15);
+        --shadow-hover: 0 8px 30px rgba(37,99,235,0.12), 0 4px 12px rgba(0,0,0,0.05);
+        --shadow-glow: 0 0 20px rgba(37,99,235,0.22), 0 4px 16px rgba(8,145,178,0.14);
         --shadow-elevated: 0 12px 40px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.03);
 
         /* 圆角 */
@@ -132,7 +132,7 @@ st.markdown("""
         --text-primary-light: #0f172a;
         --text-secondary-light: #64748b;
         --text-tertiary-light: #94a3b8;
-        --border-light: rgba(99,102,241,0.08);
+        --border-light: rgba(37,99,235,0.08);
         --border-subtle: #e2e8f0;
     }
     
@@ -300,14 +300,14 @@ st.markdown("""
     }
 
     div[data-baseweb="tab-list"] button:hover {
-        background: rgba(99,102,241,0.08) !important;
+        background: rgba(37,99,235,0.08) !important;
         color: var(--primary-color) !important;
     }
 
     div[data-baseweb="tab-list"] button[aria-selected="true"] {
         background: var(--gradient-primary) !important;
         color: white !important;
-        box-shadow: 0 2px 12px rgba(99,102,241,0.3) !important;
+        box-shadow: 0 2px 12px rgba(37,99,235,0.24) !important;
         border: none !important;
     }
 
@@ -327,7 +327,7 @@ st.markdown("""
         background: rgba(255,255,255,0.7);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(99,102,241,0.06);
+        border: 1px solid rgba(37,99,235,0.06);
         border-radius: var(--radius-lg);
         padding: 1.2rem 1.5rem;
         box-shadow: var(--shadow-xs);
@@ -351,7 +351,7 @@ st.markdown("""
     div[data-testid="stMetric"]:hover {
         transform: translateY(-2px);
         box-shadow: var(--shadow-hover);
-        border-color: rgba(99,102,241,0.15);
+        border-color: rgba(37,99,235,0.15);
     }
 
     div[data-testid="stMetric"] label {
@@ -402,7 +402,7 @@ st.markdown("""
         padding: 1.4rem;
         margin: 0.5rem 0;
         box-shadow: var(--shadow-card);
-        border: 1px solid rgba(99,102,241,0.06);
+        border: 1px solid rgba(37,99,235,0.06);
         transition: var(--transition-smooth);
         color: var(--text-primary-light);
     }
@@ -410,7 +410,7 @@ st.markdown("""
     .metric-card:hover, .feature-card:hover {
         transform: translateY(-3px);
         box-shadow: var(--shadow-hover);
-        border-color: rgba(99,102,241,0.15);
+        border-color: rgba(37,99,235,0.15);
     }
 
     
@@ -430,8 +430,16 @@ st.markdown("""
         font-weight: 600 !important;
         font-size: 0.9rem !important;
         letter-spacing: 0.01em;
-        box-shadow: 0 2px 8px rgba(99,102,241,0.25) !important;
+        box-shadow: 0 2px 8px rgba(37,99,235,0.22) !important;
         transition: var(--transition-smooth) !important;
+    }
+
+    .stButton > button[kind="primary"],
+    .stButton > button[kind="primary"] *,
+    [data-testid="stSidebar"] .stButton button,
+    [data-testid="stSidebar"] .stButton button * {
+        color: #ffffff !important;
+        fill: #ffffff !important;
     }
 
     .stButton > button[kind="primary"]:hover {
@@ -5333,12 +5341,12 @@ def render_entry_page():
     }
     /* 右列 Real = 主色渐变 */
     .entry-btn-wrap.real-col div[data-testid="stButton"] > button {
-        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
+        background: linear-gradient(135deg, #2563eb 0%, #0891b2 100%) !important;
         color: white !important;
-        box-shadow: 0 4px 20px rgba(99,102,241,0.2) !important;
+        box-shadow: 0 4px 20px rgba(37,99,235,0.2) !important;
     }
     .entry-btn-wrap.real-col div[data-testid="stButton"] > button:hover {
-        box-shadow: 0 8px 30px rgba(99,102,241,0.35) !important;
+        box-shadow: 0 8px 30px rgba(37,99,235,0.3) !important;
     }
     </style>
     """, unsafe_allow_html=True)
