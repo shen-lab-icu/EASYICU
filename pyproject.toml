@@ -36,6 +36,7 @@ viz = [
 ]
 webapp = [
   "streamlit>=1.28",
+  "streamlit-shadcn-ui>=0.1.18",
   "streamlit-echarts>=0.4.0",
   "plotly>=5.15",
   "kaleido>=0.2.1",
