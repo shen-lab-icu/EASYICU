@@ -1137,6 +1137,11 @@ def render_llm_settings():
                                  if lang == 'en' else "请输入 API Key"))
             st.session_state.llm_configured = False
 
+        jump_label = "🤖 Open AI Assistant" if lang == "en" else "🤖 打开 AI 助手"
+        if st.button(jump_label, use_container_width=True, key="_goto_ai_assistant"):
+            st.session_state["_scroll_to_tab"] = "ai_assistant"
+            st.rerun()
+
         # Clear history button
         if st.session_state.llm_messages:
             if st.button("🗑️ " + ("Clear Chat" if lang == 'en' else "清空对话"),

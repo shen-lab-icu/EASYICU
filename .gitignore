@@ -67,6 +67,8 @@ demo_easy_output.txt
 
 # Demo、示例和工具 - 不上传示例代码
 demo.py
+demo/
+dictionary/
 examples/
 hl_sepsis_newborn/
 hl_sepsis_newborn_model/
