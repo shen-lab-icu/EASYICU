@@ -33,8 +33,8 @@ if 'sidebar_expanded' not in st.session_state:
     st.session_state.sidebar_expanded = False
 
 # 侧边栏宽度设置 - 根据展开状态动态调整
-sidebar_width = "100vw" if st.session_state.sidebar_expanded else "450px"
-sidebar_min_width = "100vw" if st.session_state.sidebar_expanded else "380px"
+sidebar_width = "100vw" if st.session_state.sidebar_expanded else "clamp(320px, 24vw, 540px)"
+sidebar_min_width = "100vw" if st.session_state.sidebar_expanded else "clamp(300px, 22vw, 500px)"
 main_display = "none" if st.session_state.sidebar_expanded else "block"
 
 st.markdown(f"""
@@ -65,11 +65,11 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-# 🎨 现代化 CSS 样式系统 — Premium Design System v2
+# 🎨 现代化 CSS 样式系统 — Premium Design System v1
 st.markdown("""
 <style>
     /* ============================================================
-       EasyICU Design System v2 — Premium Medical Analytics UI
+       EasyICU Design System v1 — Premium Medical Analytics UI
        ============================================================ */
 
     /* ============ 谷歌字体导入（必须在所有规则之前） ============ */
@@ -90,7 +90,7 @@ st.markdown("""
         --gradient-info: linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%);
         --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
         --gradient-danger: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
-        --gradient-hero: linear-gradient(135deg, #0f172a 0%, #1e1b4b 40%, #312e81 100%);
+        --gradient-hero: linear-gradient(135deg, #e6edf5 0%, #d3deea 26%, #aebfd5 62%, #748fad 100%);
         --gradient-glass: linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,255,255,0.05));
 
         /* 语义色 */
@@ -134,6 +134,8 @@ st.markdown("""
         --text-tertiary-light: #94a3b8;
         --border-light: rgba(37,99,235,0.08);
         --border-subtle: #e2e8f0;
+        --fluid-body: clamp(0.98rem, 0.12vw + 0.94rem, 1.08rem);
+        --fluid-small: clamp(0.88rem, 0.08vw + 0.84rem, 0.98rem);
     }
     
     /* ============ 全局排版 ============ */
@@ -225,6 +227,20 @@ st.markdown("""
     [data-testid="stMultiSelect"] label {
         color: #0f172a !important;
     }
+    [data-testid="stMultiSelect"] [data-baseweb="tag"],
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] * {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+    }
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+        background: var(--gradient-primary) !important;
+        border: none !important;
+        box-shadow: 0 6px 16px rgba(37,99,235,0.18) !important;
+    }
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] svg {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+    }
     /* Tab list 强制浅色 */
     div[data-baseweb="tab-list"] {
         background: rgba(241,245,249,0.8) !important;
@@ -265,7 +281,7 @@ st.markdown("""
     .block-container {
         padding-top: 0.5rem !important;
         margin-top: 0 !important;
-        max-width: clamp(900px, 88%, 1600px) !important;
+        max-width: clamp(1040px, 92vw, 1960px) !important;
         margin-left: auto !important;
         margin-right: auto !important;
     }
@@ -288,9 +304,9 @@ st.markdown("""
     }
 
     div[data-baseweb="tab-list"] button {
-        font-size: 0.95rem !important;
-        font-weight: 600 !important;
-        padding: 10px 22px !important;
+        font-size: clamp(1rem, 0.12vw + 0.96rem, 1.16rem) !important;
+        font-weight: 700 !important;
+        padding: clamp(11px, 0.2vw + 10px, 15px) clamp(18px, 0.45vw + 14px, 32px) !important;
         border-radius: var(--radius-lg) !important;
         transition: var(--transition-fast) !important;
         border: none !important;
@@ -312,8 +328,8 @@ st.markdown("""
     }
 
     div[data-baseweb="tab-list"] button p {
-        font-size: 0.95rem !important;
-        font-weight: 600 !important;
+        font-size: clamp(1rem, 0.12vw + 0.96rem, 1.16rem) !important;
+        font-weight: 700 !important;
     }
 
     /* Tab 下划线隐藏 */
@@ -373,7 +389,7 @@ st.markdown("""
     
     /* ============ 主标题 — 精致排版 ============ */
     .main-header {
-        font-size: clamp(1.7rem, 1.4rem + 0.6vw, 2.4rem);
+        font-size: clamp(2rem, 1.55rem + 0.9vw, 3rem);
         font-weight: 800;
         color: var(--text-primary-light);
         margin-top: 0;
@@ -384,11 +400,11 @@ st.markdown("""
     }
 
     .sub-header {
-        font-size: clamp(0.95rem, 0.88rem + 0.2vw, 1.15rem);
+        font-size: clamp(1.04rem, 0.94rem + 0.28vw, 1.34rem);
         color: var(--text-tertiary-light);
         margin-bottom: 1rem;
         text-align: center;
-        font-weight: 400;
+        font-weight: 500;
         letter-spacing: 0.02em;
     }
 
@@ -749,26 +765,27 @@ st.markdown("""
         left: -50%;
         width: 200%;
         height: 200%;
-        background: radial-gradient(ellipse at 30% 20%, rgba(99,102,241,0.15) 0%, transparent 50%),
-                    radial-gradient(ellipse at 70% 80%, rgba(139,92,246,0.1) 0%, transparent 50%);
+        background: radial-gradient(ellipse at 22% 16%, rgba(255,255,255,0.22) 0%, transparent 46%),
+                    radial-gradient(ellipse at 82% 18%, rgba(59,130,246,0.10) 0%, transparent 40%);
         animation: float 8s ease-in-out infinite;
     }
 
     .hero-title {
         font-size: clamp(2rem, 1.5rem + 1.5vw, 3rem);
         font-weight: 900;
-        color: #ffffff;
+        color: #13253c;
         letter-spacing: -0.04em;
         line-height: 1.15;
         margin-bottom: 0.5rem;
         position: relative;
         z-index: 1;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.14);
     }
 
     .hero-subtitle {
         font-size: 1.05rem;
-        color: rgba(255,255,255,0.65);
-        font-weight: 400;
+        color: rgba(19,37,60,0.74);
+        font-weight: 500;
         letter-spacing: 0.02em;
         position: relative;
         z-index: 1;
@@ -776,16 +793,17 @@ st.markdown("""
 
     .hero-badge {
         display: inline-block;
-        background: rgba(255,255,255,0.12);
-        border: 1px solid rgba(255,255,255,0.15);
+        background: rgba(255,255,255,0.18);
+        border: 1px solid rgba(255,255,255,0.30);
         border-radius: 100px;
         padding: 6px 16px;
         font-size: 0.78rem;
-        color: rgba(255,255,255,0.8);
-        font-weight: 500;
+        color: rgba(19,37,60,0.72);
+        font-weight: 600;
         margin-bottom: 1.2rem;
         letter-spacing: 0.04em;
-        backdrop-filter: blur(4px);
+        backdrop-filter: blur(8px);
+        box-shadow: 0 10px 30px rgba(15,34,48,0.08);
         position: relative;
         z-index: 1;
     }
@@ -905,8 +923,8 @@ st.markdown("""
     .step-indicator {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 12px 16px;
+        gap: clamp(10px, 0.3vw + 8px, 16px);
+        padding: clamp(12px, 0.32vw + 10px, 18px) clamp(14px, 0.45vw + 11px, 24px);
         border-radius: var(--radius-md);
         margin-bottom: 8px;
         transition: var(--transition-fast);
@@ -924,13 +942,13 @@ st.markdown("""
     }
 
     .step-dot {
-        width: 28px;
-        height: 28px;
+        width: clamp(28px, 0.45vw + 24px, 40px);
+        height: clamp(28px, 0.45vw + 24px, 40px);
         border-radius: 50%;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 0.75rem;
+        font-size: clamp(0.78rem, 0.12vw + 0.74rem, 1rem);
         font-weight: 700;
         flex-shrink: 0;
     }
@@ -955,17 +973,17 @@ st.markdown("""
     }
 
     .step-text {
-        font-size: 0.92rem;
+        font-size: clamp(0.98rem, 0.16vw + 0.92rem, 1.18rem);
         font-weight: 600;
         color: var(--text-primary-light);
     }
 
     .step-text small {
         display: block;
-        font-size: 0.8rem;
-        font-weight: 400;
+        font-size: clamp(0.88rem, 0.10vw + 0.84rem, 1rem);
+        font-weight: 500;
         color: var(--text-tertiary-light);
-        margin-top: 1px;
+        margin-top: 4px;
     }
 
     
@@ -973,45 +991,51 @@ st.markdown("""
 
     /* 小屏 (≤1366px, 13-14" 笔记本) */
     @media (max-width: 1366px) {
-        .block-container { max-width: 95% !important; }
-        .main-header { font-size: 1.6rem; }
-        .step-indicator { padding: 10px 12px; gap: 8px; }
-        .step-dot { width: 24px; height: 24px; font-size: 0.7rem; }
-        .step-text { font-size: 0.8rem; }
-        .step-text small { font-size: 0.7rem; }
+        .block-container { max-width: 97.5% !important; }
+        .main-header { font-size: 1.95rem; }
+        .sub-header { font-size: 1.02rem; }
+        .step-indicator { padding: 12px 14px; gap: 10px; }
+        .step-dot { width: 28px; height: 28px; font-size: 0.78rem; }
+        .step-text { font-size: 0.96rem; }
+        .step-text small { font-size: 0.86rem; }
         div[data-testid="stMetric"] { padding: 1rem 1.2rem; }
         div[data-testid="stMetric"] div[data-testid="stMetricValue"] { font-size: 1.4rem; }
         .highlight-card { padding: 1.1rem 1.3rem; }
         .mode-card { padding: 2rem 1.5rem; }
         .mode-card-title { font-size: 1.15rem; }
+        div[data-baseweb="tab-list"] button { font-size: 1rem !important; padding: 11px 18px !important; }
+        div[data-baseweb="tab-list"] button p { font-size: 1rem !important; }
     }
 
     /* 大屏 (≥1920px, 24-27" 显示器) */
     @media (min-width: 1920px) {
-        .block-container { max-width: min(88%, 1600px) !important; }
+        .block-container { max-width: min(94vw, 2140px) !important; }
         .hero-container { max-width: min(900px, 65%); }
-        .step-indicator { padding: 14px 20px; gap: 12px; }
-        .step-dot { width: 32px; height: 32px; font-size: 0.8rem; }
-        .step-text { font-size: 0.9rem; }
+        .main-header { font-size: 2.45rem; }
+        .sub-header { font-size: 1.18rem; }
+        .step-indicator { padding: 16px 24px; gap: 14px; }
+        .step-dot { width: 36px; height: 36px; font-size: 0.92rem; }
+        .step-text { font-size: 1.12rem; }
+        .step-text small { font-size: 0.96rem; }
         div[data-testid="stMetric"] { padding: 1.4rem 1.8rem; }
-        div[data-baseweb="tab-list"] button { padding: 12px 28px; font-size: 1rem; }
-        div[data-baseweb="tab-list"] button p { font-size: 1rem; }
+        div[data-baseweb="tab-list"] button { padding: 14px 30px !important; font-size: 1.14rem !important; }
+        div[data-baseweb="tab-list"] button p { font-size: 1.14rem !important; }
     }
 
     /* 超大屏 (≥2560px, 27"+ 2K/4K) */
     @media (min-width: 2560px) {
-        .block-container { max-width: min(85%, 1800px) !important; }
+        .block-container { max-width: min(95vw, 2460px) !important; }
         .hero-container { max-width: min(1000px, 55%); }
-        .main-header { font-size: 2.4rem; }
-        .sub-header { font-size: 1.15rem; }
-        .step-indicator { padding: 16px 24px; gap: 14px; }
-        .step-dot { width: 34px; height: 34px; font-size: 0.85rem; }
-        .step-text { font-size: 0.95rem; }
-        .step-text small { font-size: 0.8rem; }
+        .main-header { font-size: 2.9rem; }
+        .sub-header { font-size: 1.32rem; }
+        .step-indicator { padding: 18px 28px; gap: 16px; }
+        .step-dot { width: 40px; height: 40px; font-size: 1rem; }
+        .step-text { font-size: 1.22rem; }
+        .step-text small { font-size: 1.02rem; }
         div[data-testid="stMetric"] { padding: 1.6rem 2rem; }
         div[data-testid="stMetric"] div[data-testid="stMetricValue"] { font-size: 1.8rem; }
-        div[data-baseweb="tab-list"] button { padding: 14px 32px; font-size: 1.05rem; }
-        div[data-baseweb="tab-list"] button p { font-size: 1.05rem; }
+        div[data-baseweb="tab-list"] button { padding: 16px 34px !important; font-size: 1.2rem !important; }
+        div[data-baseweb="tab-list"] button p { font-size: 1.2rem !important; }
         .highlight-card { padding: 1.6rem 2rem; }
         .features-grid { gap: 1.4rem; }
         .feature-item { padding: 1.8rem 1.5rem; }
@@ -1465,6 +1489,113 @@ def get_concept_groups():
         display_name = en_name if lang == 'en' else zh_name
         result[display_name] = concepts
     return result
+
+
+def _group_label_from_key(group_key: str, lang: str) -> str | None:
+    names = CONCEPT_GROUP_NAMES.get(group_key)
+    if not names:
+        return None
+    return names[0] if lang == 'en' else names[1]
+
+
+def _materialize_feature_preset(payload: dict):
+    """Apply a prepared feature preset into sidebar state."""
+    lang = st.session_state.get('language', 'en')
+    requested_group_keys = [
+        g for g in payload.get('group_keys', [])
+        if isinstance(g, str) and g in CONCEPT_GROUPS_INTERNAL
+    ]
+    selected_groups = []
+    selected_concepts = set()
+    concept_checkboxes = {}
+
+    for group_key in requested_group_keys:
+        label = _group_label_from_key(group_key, lang)
+        if label:
+            selected_groups.append(label)
+        for concept in CONCEPT_GROUPS_INTERNAL.get(group_key, []):
+            concept_checkboxes[concept] = True
+            selected_concepts.add(concept)
+
+    for concept in payload.get('concepts', []):
+        if not isinstance(concept, str):
+            continue
+        selected_concepts.add(concept)
+        concept_checkboxes[concept] = True
+        for group_key, group_concepts in CONCEPT_GROUPS_INTERNAL.items():
+            if concept in group_concepts:
+                label = _group_label_from_key(group_key, lang)
+                if label and label not in selected_groups:
+                    selected_groups.append(label)
+
+    if selected_groups:
+        st.session_state.selected_groups = selected_groups
+    if selected_concepts:
+        st.session_state.concept_checkboxes = concept_checkboxes
+        st.session_state.selected_concepts = sorted(selected_concepts)
+        st.session_state.step3_confirmed = False
+
+
+def _preset_ready_for_materialize() -> bool:
+    """Only apply feature presets once the workflow is ready to expose Step 3."""
+    entry_mode = st.session_state.get('entry_mode', 'none')
+    if entry_mode != 'real':
+        return False
+    data_path = st.session_state.get('data_path')
+    if not data_path:
+        return False
+    if not st.session_state.get('path_validated', False):
+        return False
+    if not st.session_state.get('step2_confirmed', False):
+        return False
+    return True
+
+
+def _maybe_materialize_pending_preset():
+    """Auto-apply a pending assistant preset once the user reaches the right step."""
+    payload = st.session_state.get('_assistant_pending_feature_preset')
+    if not isinstance(payload, dict):
+        return
+    if payload.get('kind') != 'feature_preset':
+        return
+    if not _preset_ready_for_materialize():
+        return
+
+    _materialize_feature_preset(payload)
+    st.session_state.pop('_assistant_pending_feature_preset', None)
+    notice_en = payload.get('apply_notice_en') or "Your AI preset is now applied in Step 3. Review the checked features, then confirm selection."
+    notice_zh = payload.get('apply_notice_zh') or "AI 预设已应用到步骤3。请检查已勾选特征，然后确认选择。"
+    lang = st.session_state.get('language', 'en')
+    st.session_state['_assistant_notice'] = notice_en if lang == 'en' else notice_zh
+
+
+def _apply_assistant_preset():
+    """Consume a chat-triggered preset and stage or apply it safely."""
+    payload = st.session_state.pop('_assistant_preset_request', None)
+    if not isinstance(payload, dict):
+        return
+
+    if payload.get('kind') != 'feature_preset':
+        return
+
+    lang = st.session_state.get('language', 'en')
+    database = payload.get('database')
+    if isinstance(database, str) and database:
+        st.session_state.entry_mode = 'real'
+        st.session_state.use_mock_data = False
+        st.session_state.database = database
+
+    if _preset_ready_for_materialize():
+        _materialize_feature_preset(payload)
+        notice_en = payload.get('apply_notice_en') or "Prepared your sidebar feature preset. Review Step 3 and confirm selection."
+        notice_zh = payload.get('apply_notice_zh') or "已应用侧边栏特征预设。请检查步骤3并确认选择。"
+        st.session_state['_assistant_notice'] = notice_en if lang == 'en' else notice_zh
+    else:
+        st.session_state['_assistant_pending_feature_preset'] = payload
+        notice_en = payload.get('notice_en') or "Prepared a sidebar preset from the AI assistant."
+        notice_zh = payload.get('notice_zh') or "已根据 AI 助手建议预设侧边栏。"
+        st.session_state['_assistant_notice'] = notice_en if lang == 'en' else notice_zh
+    st.session_state['_scroll_to_top'] = True
 
 
 # 🔧 列名规范化映射：将重复的展开列名统一为简短的规范名称
@@ -4362,17 +4493,17 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 'aki_stage': aki_stage,
                 'aki': 1 if aki_stage > 0 else 0
             })
-    data['aki'] = pd.DataFrame(aki_records)
-    # 🔧 FIX: 提取子组件并剥离父 DF
-    data['aki_stage'] = data['aki'][['stay_id', 'time', 'aki_stage']].copy()
-    data['creat_low_past_7day'] = data['aki'][['stay_id', 'time', 'creat_low_past_7day']].copy()
-    data['aki'] = data['aki'][['stay_id', 'time', 'aki']].copy()
+    aki_full = pd.DataFrame(aki_records)
+    data['aki'] = aki_full[['stay_id', 'time', 'aki']].copy()
+    # 🔧 FIX: 先从完整 AKI 表派生子组件，再保留精简后的父 DF
+    data['aki_stage'] = aki_full[['stay_id', 'time', 'aki_stage']].copy()
+    data['creat_low_past_7day'] = aki_full[['stay_id', 'time', 'creat_low_past_7day']].copy()
     # 🔧 添加完整的AKI子特征（基于肌酐、尿量、RRT定义的）
-    data['aki_stage_creat'] = data['aki'][['stay_id', 'time', 'aki_stage']].copy()
+    data['aki_stage_creat'] = aki_full[['stay_id', 'time', 'aki_stage']].copy()
     data['aki_stage_creat'].columns = ['stay_id', 'time', 'aki_stage_creat']
     # 尿量定义的AKI（随机生成，因为demo数据简化）
     aki_uo_records = []
-    for _, row in data['aki'].iterrows():
+    for _, row in aki_full.iterrows():
         # 尿量AKI通常与肌酐AKI相关但不完全一致
         uo_stage = max(0, row['aki_stage'] - np.random.randint(0, 2)) if row['aki_stage'] > 0 else 0
         aki_uo_records.append({'stay_id': row['stay_id'], 'time': row['time'], 'aki_stage_uo': uo_stage})
@@ -5293,7 +5424,7 @@ def render_entry_page():
     # ===== Hero Section =====
     _hero_title = "EasyICU" if lang == 'en' else "EasyICU"
     _hero_subtitle = "ICU Data Analytics Platform · Extract · Visualize · Export" if lang == 'en' else "ICU 数据分析平台 · 提取 · 可视化 · 导出"
-    _hero_badge = "v2.0 · Open Source · 6 Databases" if lang == 'en' else "v2.0 · 开源 · 支持 6 大数据库"
+    _hero_badge = "v1.0 · Open Source · 6 Databases" if lang == 'en' else "v1.0 · 开源 · 支持 6 大数据库"
 
     st.markdown(f"""
     <div class="hero-container animate-fade-in">
@@ -5645,8 +5776,23 @@ def render_sidebar():
             # 模拟数据参数
             n_patients_label = "Number of Patients" if st.session_state.language == 'en' else "患者数量"
             hours_label = "Data Duration (hours)" if st.session_state.language == 'en' else "数据时长(小时)"
-            n_patients = st.slider(n_patients_label, 50, 500, st.session_state.mock_params.get('n_patients', 100))
-            hours = st.slider(hours_label, 24, 168, st.session_state.mock_params.get('hours', 72))
+            if 'demo_mode_patients' not in st.session_state:
+                st.session_state.demo_mode_patients = st.session_state.mock_params.get('n_patients', 100)
+            if 'demo_mode_hours' not in st.session_state:
+                st.session_state.demo_mode_hours = st.session_state.mock_params.get('hours', 72)
+
+            n_patients = st.slider(
+                n_patients_label,
+                50,
+                500,
+                key="demo_mode_patients",
+            )
+            hours = st.slider(
+                hours_label,
+                24,
+                168,
+                key="demo_mode_hours",
+            )
             # 🔧 注意: mock_params 需要在 Step 2 (Cohort Selection) 之后更新
             # 这里只保存基本参数，cohort_filter 在 Step 2 之后的函数中动态获取
             st.session_state.mock_params = {'n_patients': n_patients, 'hours': hours}
@@ -7305,13 +7451,13 @@ def render_home_extract_mode(lang):
 
     if lang == 'en':
         st.markdown("""
-        <p style="font-size:1rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.6;">
+        <p style="font-size:1.1rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.7;font-weight:500;">
             👈 Follow the <b>4 steps in the left sidebar</b> to define your cohort, select features, and export data.
         </p>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
-        <p style="font-size:1rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.6;">
+        <p style="font-size:1.1rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.7;font-weight:500;">
             👈 按照<b>左侧边栏的 4 个步骤</b>操作，即可完成 ICU 数据的队列定义、特征选择和导出。
         </p>
         """, unsafe_allow_html=True)
@@ -7353,7 +7499,7 @@ def render_home_extract_mode(lang):
         _stepper_items.append(f"""
         <div class="step-indicator {_row_cls}">
             <div class="step-dot {_dot_cls}">{_dot_content}</div>
-            <div class="step-text">{_title}<small>{_desc}</small></div>
+            <div class="step-text" style="font-size:1.08rem;font-weight:700;line-height:1.25;color:#1f2937">{_title}<small style="display:block;font-size:0.96rem;font-weight:500;line-height:1.45;color:#7c8faa;margin-top:6px">{_desc}</small></div>
         </div>""")
 
     col1, col2, col3, col4 = st.columns(4)
@@ -7383,7 +7529,7 @@ def render_home_extract_mode(lang):
     st.markdown(f'''
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <div style="width:6px;height:32px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)"></div>
-        <span style="font-size:1.4rem;font-weight:800;color:#111827">{guide_title_text}</span>
+        <span style="font-size:1.7rem;font-weight:800;color:#111827;letter-spacing:-0.02em">{guide_title_text}</span>
     </div>
     ''', unsafe_allow_html=True)
     
@@ -7392,19 +7538,19 @@ def render_home_extract_mode(lang):
         if lang == 'en':
             st.markdown('''
             <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
-                <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">Configure Data Source in the Sidebar</div>
+                <div style="font-weight:800;color:#111827;font-size:1.42rem;margin-bottom:18px;letter-spacing:-0.02em">Configure Data Source in the Sidebar</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
                     <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px">
-                        <div style="font-weight:600;color:#166534;margin-bottom:8px">🎭 Demo Mode</div>
-                        <ul style="color:#4b5563;font-size:.92rem;line-height:1.7;padding-left:18px;margin:0">
+                        <div style="font-weight:700;color:#166534;margin-bottom:10px;font-size:1.12rem">🎭 Demo Mode</div>
+                        <ul style="color:#334155;font-size:1.02rem;line-height:1.8;padding-left:20px;margin:0">
                             <li>No real data needed — generates simulated ICU data</li>
                             <li>Adjust patients (50-500) & duration (24-168h)</li>
                             <li>Click <b>"Confirm Data Source"</b> when ready</li>
                         </ul>
                     </div>
                     <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px">
-                        <div style="font-weight:600;color:#3730a3;margin-bottom:8px">📊 Real Data Mode</div>
-                        <ul style="color:#4b5563;font-size:.92rem;line-height:1.7;padding-left:18px;margin:0">
+                        <div style="font-weight:700;color:#3730a3;margin-bottom:10px;font-size:1.12rem">📊 Real Data Mode</div>
+                        <ul style="color:#334155;font-size:1.02rem;line-height:1.8;padding-left:20px;margin:0">
                             <li>MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb</li>
                             <li>Enter your local database path</li>
                             <li>All processing is local — data stays secure 🔒</li>
@@ -7416,19 +7562,19 @@ def render_home_extract_mode(lang):
         else:
             st.markdown('''
             <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
-                <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">在侧边栏配置数据源</div>
+                <div style="font-weight:800;color:#111827;font-size:1.42rem;margin-bottom:18px;letter-spacing:-0.02em">在侧边栏配置数据源</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
                     <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px">
-                        <div style="font-weight:600;color:#166534;margin-bottom:8px">🎭 演示模式</div>
-                        <ul style="color:#4b5563;font-size:.92rem;line-height:1.7;padding-left:18px;margin:0">
+                        <div style="font-weight:700;color:#166534;margin-bottom:10px;font-size:1.12rem">🎭 演示模式</div>
+                        <ul style="color:#334155;font-size:1.02rem;line-height:1.8;padding-left:20px;margin:0">
                             <li>无需真实数据 — 自动生成模拟ICU数据</li>
                             <li>可调整患者数量(50-500)和时长(24-168h)</li>
                             <li>设置后点击<b>「确认数据源配置」</b></li>
                         </ul>
                     </div>
                     <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px">
-                        <div style="font-weight:600;color:#3730a3;margin-bottom:8px">📊 真实数据模式</div>
-                        <ul style="color:#4b5563;font-size:.92rem;line-height:1.7;padding-left:18px;margin:0">
+                        <div style="font-weight:700;color:#3730a3;margin-bottom:10px;font-size:1.12rem">📊 真实数据模式</div>
+                        <ul style="color:#334155;font-size:1.02rem;line-height:1.8;padding-left:20px;margin:0">
                             <li>支持 MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb</li>
                             <li>输入本地数据库路径</li>
                             <li>所有处理本地完成 — 数据安全 🔒</li>
@@ -15248,6 +15394,9 @@ def main():
     if entry_mode == 'none':
         render_entry_page()
         return
+
+    _apply_assistant_preset()
+    _maybe_materialize_pending_preset()
     
     # ============ 进入具体模式后，显示完整应用 ============
     render_sidebar()
@@ -15275,6 +15424,10 @@ def main():
     else:
         st.markdown(f'<div class="main-header">🏥 EasyICU{_mode_badge}</div>', unsafe_allow_html=True)
         st.markdown('<div class="sub-header">ICU 数据分析平台</div>', unsafe_allow_html=True)
+
+    assistant_notice = st.session_state.pop('_assistant_notice', None)
+    if assistant_notice:
+        st.success(assistant_notice)
     
     # 主页面标签：Tutorial, Quick Visualization, Cohort Analysis
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -15399,6 +15552,56 @@ def main():
                             if (mainContainer) mainContainer.scrollTop = 0;
                             window.parent.document.documentElement.scrollTop = 0;
                         }, 100);
+                    }
+                }, 200);
+            })();
+        </script>
+        '''
+        st.components.v1.html(js_code, height=0)
+    elif scroll_to_tab == 'tutorial':
+        # 跳转到 Tutorial 标签页（第1个标签，索引0）并滚动到顶部
+        js_code = '''
+        <script>
+            (function() {
+                var mainContainer = window.parent.document.querySelector('section.main');
+                if (mainContainer) mainContainer.scrollTop = 0;
+                window.parent.document.documentElement.scrollTop = 0;
+                window.parent.document.body.scrollTop = 0;
+                
+                setTimeout(function() {
+                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+                    if (tabs && tabs.length >= 1) {
+                        tabs[0].click();
+                        setTimeout(function() {
+                            var mainContainer = window.parent.document.querySelector('section.main');
+                            if (mainContainer) mainContainer.scrollTop = 0;
+                            window.parent.document.documentElement.scrollTop = 0;
+                        }, 120);
+                    }
+                }, 200);
+            })();
+        </script>
+        '''
+        st.components.v1.html(js_code, height=0)
+    elif scroll_to_tab == 'home_dict':
+        # 跳转到 Tutorial 标签页并滚动到数据字典锚点
+        js_code = '''
+        <script>
+            (function() {
+                setTimeout(function() {
+                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+                    if (tabs && tabs.length >= 1) {
+                        tabs[0].click();
+                        setTimeout(function() {
+                            var mainDoc = window.parent.document;
+                            var mainContainer = mainDoc.querySelector('section.main');
+                            var dictAnchor = mainDoc.getElementById('dictionary');
+                            if (dictAnchor) {
+                                dictAnchor.scrollIntoView({behavior: 'smooth', block: 'start'});
+                            } else if (mainContainer) {
+                                mainContainer.scrollTop = Math.max(mainContainer.scrollTop, 1800);
+                            }
+                        }, 300);
                     }
                 }, 200);
             })();

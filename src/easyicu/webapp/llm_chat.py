@@ -30,7 +30,7 @@ You are an intelligent assistant embedded in **EasyICU**, an interactive platfor
 for clinical data extraction and exploration across multiple public ICU databases.
 
 ## Platform Overview
-EasyICU is a Python toolkit (v0.3.0) that provides:
+EasyICU is a Python toolkit (v1.0) that provides:
 - Unified access to **6 public ICU databases**: MIMIC-IV (miiv), MIMIC-III (mimic), \
 eICU-CRD (eicu), AmsterdamUMCdb (aumc), HiRID (hirid), SICdb (sic)
 - Automated extraction of **167 standardized clinical concepts** across 19 feature modules
@@ -45,6 +45,12 @@ quality review, and cohort comparison
 3. **Select Features** — pick from 19 modules (167 concepts); supports SOFA-1, SOFA-2, \
 Sepsis-3, KDIGO-AKI, circulatory failure, etc.
 4. **Export Data** — batch export to disk; streaming architecture, subprocess memory isolation
+
+## Main Web Areas
+- **Tutorial** — workflow guide, usage examples, and the in-app data dictionary
+- **Quick Visualization** — load extracted data and inspect trends, missingness, and distributions
+- **Cohort Analysis** — compare groups and review downstream cohort summaries
+- **AI Assistant** — guided help for navigation, feature planning, troubleshooting, and evidence lookup
 
 ## Feature Modules & Concepts (19 modules, 167 concepts)
 - **Vital Signs** (7): hr, map, sbp, dbp, temp, spo2, resp
@@ -102,8 +108,11 @@ sofa = load_sofa(database='eicu', data_path='/data/eicu')
 ## Response Rules
 - Respond in the same language the user is using.
 - Be concise and practical. Start with the direct answer, then give short bullets only if useful.
+- Prioritize helping users use the EasyICU web interface and workflows. Code-level explanations are secondary unless the user explicitly asks for implementation details.
+- When a user asks where something is in the web app, answer with the relevant page, step, or in-app action first. Do not default to repo files.
 - When the user asks about EasyICU implementation, prefer the exact EasyICU concept names and outputs over generic medical summaries.
 - You will also receive a local EasyICU code snapshot at runtime. Use that code context when answering implementation or file-level questions.
+- When pointing users to project files or docs, prefer clickable Markdown links.
 - Do not invent version years, guideline dates, concept names, or unsupported claims. If uncertain, say what you can confirm from EasyICU and stop there.
 - For Sepsis questions, anchor the answer to EasyICU outputs: `sep3_sofa1`, `sep3_sofa2`, `susp_inf`, `infection_icd`, `samp`, `sofa`, `sofa2`.
 - Avoid padded closers like "有什么我可以帮你的吗？" unless the user asks for more detail."""
@@ -123,10 +132,176 @@ PROJECT_CONTEXT_FILES = [
     "README.md",
 ]
 
+PROJECT_LINK_FILES = [
+    "README.md",
+    "HOSTED_LLM.md",
+    "src/easyicu/data/concept-dict.json",
+    "src/easyicu/data/sofa2-dict.json",
+    "src/easyicu/webapp/app.py",
+    "src/easyicu/webapp/llm_chat.py",
+    "src/easyicu/hosted_llm_server.py",
+    "src/easyicu/api.py",
+    "src/easyicu/load_concepts.py",
+    "src/easyicu/concept.py",
+    "src/easyicu/concept_callbacks.py",
+    "src/easyicu/sofa2.py",
+    "src/easyicu/sepsis.py",
+]
+
+ALL_PRESET_GROUP_KEYS = [
+    "sofa2_score",
+    "sofa1_score",
+    "sepsis3_sofa2",
+    "sepsis3_sofa1",
+    "sepsis_shared",
+    "vitals",
+    "respiratory",
+    "ventilator",
+    "blood_gas",
+    "chemistry",
+    "hematology",
+    "vasopressors",
+    "medications",
+    "renal",
+    "neurological",
+    "circulatory",
+    "demographics",
+    "other_scores",
+    "outcome",
+]
+
+SEPSIS_PRESET_CONCEPTS = [
+    "sep3_sofa2",
+    "sep3_sofa1",
+    "susp_inf",
+    "infection_icd",
+    "samp",
+    "sofa2",
+    "sofa2_resp",
+    "sofa2_coag",
+    "sofa2_liver",
+    "sofa2_cardio",
+    "sofa2_cns",
+    "sofa2_renal",
+    "sofa",
+    "sofa_resp",
+    "sofa_coag",
+    "sofa_liver",
+    "sofa_cardio",
+    "sofa_cns",
+    "sofa_renal",
+    "abx",
+    "cort",
+    "lact",
+    "hr",
+    "map",
+    "sbp",
+    "temp",
+    "resp",
+    "spo2",
+    "fio2",
+    "pafi",
+    "wbc",
+    "crp",
+    "crea",
+    "bili",
+    "urine",
+    "urine24",
+    "rrt",
+    "death",
+    "los_icu",
+]
+
+
+def _build_workflow_status_context(lang: str) -> str:
+    """Summarize the current EasyICU web workflow state for the assistant."""
+    entry_mode = st.session_state.get("entry_mode", "none")
+    database = st.session_state.get("database", "miiv")
+    data_path = (st.session_state.get("data_path") or "").strip()
+    path_set = bool(data_path)
+    path_validated = bool(st.session_state.get("path_validated", False))
+    last_validation = st.session_state.get("last_validation", {}) or {}
+    last_validated_path = st.session_state.get("last_validated_path", "")
+    convert_needed = bool(
+        path_set
+        and data_path == last_validated_path
+        and last_validation.get("can_convert")
+        and not path_validated
+    )
+    step2_confirmed = bool(st.session_state.get("step2_confirmed", False))
+    step3_confirmed = bool(st.session_state.get("step3_confirmed", False))
+    selected_count = len(st.session_state.get("selected_concepts", []))
+    loaded_count = len(st.session_state.get("loaded_concepts", {}))
+    pending_preset = st.session_state.get("_assistant_pending_feature_preset")
+    pending_db = pending_preset.get("database") if isinstance(pending_preset, dict) else None
+
+    if lang == "en":
+        lines = [
+            "Current EasyICU workflow state:",
+            f"- entry_mode: {entry_mode}",
+            f"- database: {database}",
+            f"- data_path_set: {'yes' if path_set else 'no'}",
+            f"- data_path_validated: {'yes' if path_validated else 'no'}",
+            f"- convert_or_setup_needed: {'yes' if convert_needed else 'no'}",
+            f"- step2_confirmed: {'yes' if step2_confirmed else 'no'}",
+            f"- step3_confirmed: {'yes' if step3_confirmed else 'no'}",
+            f"- selected_concepts_count: {selected_count}",
+            f"- loaded_concepts_count: {loaded_count}",
+        ]
+        if pending_db:
+            lines.append(f"- pending_ai_preset_for_database: {pending_db}")
+        lines.extend([
+            "",
+            "Guidance rules for this session:",
+            "- For web workflow questions, first say what mode/page/step the user should be in.",
+            "- If the user is not in Real Data mode and asks about extracting from public ICU databases, explicitly tell them to switch to Real Data mode first.",
+            "- If data_path is not set, the next step is to fill the data path.",
+            "- If data_path is set but not validated, the next step is Validate Data Path or Convert & Setup.",
+            "- If conversion/setup is needed, warn that it may take time but normally only needs to be done once per dataset.",
+            "- If step2 is not confirmed yet, tell the user to finish cohort selection before feature selection.",
+            "- Only discuss code locations if the user explicitly asks about implementation.",
+        ])
+        return "\n".join(lines)
+
+    lines = [
+        "当前 EasyICU 工作流状态：",
+        f"- entry_mode: {entry_mode}",
+        f"- database: {database}",
+        f"- 是否已填写数据路径: {'是' if path_set else '否'}",
+        f"- 数据路径是否已验证: {'是' if path_validated else '否'}",
+        f"- 是否需要转换/设置: {'是' if convert_needed else '否'}",
+        f"- 步骤2是否已确认: {'是' if step2_confirmed else '否'}",
+        f"- 步骤3是否已确认: {'是' if step3_confirmed else '否'}",
+        f"- 当前已选特征数: {selected_count}",
+        f"- 当前已加载概念数: {loaded_count}",
+    ]
+    if pending_db:
+        lines.append(f"- 已挂起的 AI 预设数据库: {pending_db}")
+    lines.extend([
+        "",
+        "本轮回答规则：",
+        "- 对 Web 使用问题，先说明用户应该处于哪个模式、页面和步骤。",
+        "- 如果用户问的是公共 ICU 数据库提取，而当前不是 Real Data 模式，要明确先切换到真实数据模式。",
+        "- 如果还没填写数据路径，下一步就是先填写数据路径。",
+        "- 如果数据路径已填写但还没验证，下一步就是点击验证数据路径或转换并设置。",
+        "- 如果需要转换/设置，要提醒用户这一步可能较耗时，但通常同一份数据只需要做一次。",
+        "- 如果步骤2还没确认，不要直接让用户去选特征；先让他完成队列筛选确认。",
+        "- 只有当用户明确问实现细节时，才讨论代码位置。",
+    ])
+    return "\n".join(lines)
+
 
 def _hosted_base_url() -> str:
     """Return the hosted relay URL exposed to end users."""
     return os.getenv("EASYICU_HOSTED_BASE_URL", "http://47.241.42.236/v1").strip()
+
+
+def _repo_blob_base() -> str:
+    """Return the GitHub blob base used for clickable file links."""
+    return os.getenv(
+        "EASYICU_REPO_BLOB_BASE",
+        "https://github.com/shen-lab-icu/easyicu/blob/main",
+    ).rstrip("/")
 
 
 def _default_provider_key() -> str:
@@ -227,7 +402,7 @@ def _init_chat_state():
     """Ensure all chat-related session keys exist."""
     default_provider = _default_provider_key()
     defaults = {
-        "llm_enabled": False,
+        "llm_enabled": True,
         "llm_provider": default_provider,
         "llm_api_key": "",
         "llm_model": "",
@@ -302,8 +477,9 @@ def _is_code_question(prompt: str) -> bool:
     prompt_l = (prompt or "").lower()
     keywords = (
         "code", "代码", "源码", "函数", "function", "class", "实现", "实现逻辑",
-        "在哪", "哪里", ".py", "app.py", "llm_chat", "load_concepts", "sofa",
-        "sepsis", "workflow", "session_state", "bug", "fix",
+        "repo", "repository", "module", "文件", "file", "line", "行号",
+        ".py", "app.py", "llm_chat", "load_concepts", "session_state",
+        "bug", "fix", "stack trace", "traceback", "import", "api.py",
     )
     if any(word in prompt_l for word in keywords):
         return True
@@ -384,6 +560,229 @@ def _build_project_context(prompt: str) -> str:
                 break
 
     return "\n".join(sections)
+
+
+def _github_file_link(rel_path: str, label: str | None = None) -> str:
+    """Build a clickable GitHub link for a project file."""
+    clean_path = rel_path.strip().lstrip("/")
+    text = label or Path(clean_path).name
+    return f"[{text}]({_repo_blob_base()}/{clean_path})"
+
+
+def _collect_quick_links(prompt: str, answer: str) -> list[tuple[str, str]]:
+    """Collect the most relevant clickable links for the current answer."""
+    prompt_l = (prompt or "").lower()
+    answer_l = (answer or "").lower()
+    combined = f"{prompt_l}\n{answer_l}"
+
+    candidates: list[tuple[str, str]] = []
+    seen_paths: set[str] = set()
+
+    keyword_map = {
+        "dictionary": "src/easyicu/data/concept-dict.json",
+        "字典": "src/easyicu/data/concept-dict.json",
+        "concept-dict": "src/easyicu/data/concept-dict.json",
+        "sofa2-dict": "src/easyicu/data/sofa2-dict.json",
+        "export": "src/easyicu/webapp/app.py",
+        "app.py": "src/easyicu/webapp/app.py",
+        "llm_chat": "src/easyicu/webapp/llm_chat.py",
+        "agent": "src/easyicu/webapp/llm_chat.py",
+        "hosted_llm_server": "src/easyicu/hosted_llm_server.py",
+        "api.py": "src/easyicu/api.py",
+        "load_concepts": "src/easyicu/load_concepts.py",
+        "concept.py": "src/easyicu/concept.py",
+        "sepsis": "src/easyicu/sepsis.py",
+        "sofa": "src/easyicu/sofa2.py",
+        "readme": "README.md",
+    }
+
+    for keyword, rel_path in keyword_map.items():
+        if keyword in combined and rel_path not in seen_paths:
+            seen_paths.add(rel_path)
+            candidates.append((Path(rel_path).name, rel_path))
+
+    for rel_path in PROJECT_LINK_FILES:
+        if rel_path.lower() in combined and rel_path not in seen_paths:
+            seen_paths.add(rel_path)
+            candidates.append((Path(rel_path).name, rel_path))
+
+    if not candidates:
+        default_links = [
+            ("README", "README.md"),
+            ("Concept Dictionary", "src/easyicu/data/concept-dict.json"),
+        ]
+        for label, rel_path in default_links:
+            if rel_path not in seen_paths:
+                seen_paths.add(rel_path)
+                candidates.append((label, rel_path))
+
+    return candidates[:4]
+
+
+def _append_quick_links(prompt: str, answer: str, lang: str) -> str:
+    """Append code-file quick links, but only for explicit implementation questions."""
+    if not answer.strip():
+        return answer
+    if not _is_code_question(prompt):
+        return answer
+    if "http://" in answer or "https://" in answer or "Quick links" in answer or "快捷链接" in answer:
+        return answer
+
+    links = _collect_quick_links(prompt, answer)
+    if not links:
+        return answer
+
+    title = "Quick links" if lang == "en" else "快捷链接"
+    lines = [answer.rstrip(), "", f"**{title}**"]
+    for label, rel_path in links:
+        lines.append(f"- {_github_file_link(rel_path, label)}")
+    return "\n".join(lines)
+
+
+def _infer_db_from_text(text: str) -> str | None:
+    text_l = (text or "").lower()
+    db_aliases = {
+        "miiv": ("miiv", "mimic-iv", "mimic iv", "mimiciv"),
+        "mimic": ("mimic-iii", "mimic iii", "mimiciii", "mimic 3"),
+        "eicu": ("eicu", "eicu-crd"),
+        "aumc": ("aumc", "amsterdamumcdb", "amsterdam umc"),
+        "hirid": ("hirid",),
+        "sic": ("sic", "sicdb"),
+    }
+    for db_key, aliases in db_aliases.items():
+        if any(alias in text_l for alias in aliases):
+            return db_key
+    return None
+
+
+def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, object]]:
+    """Suggest in-app navigation or preset actions."""
+    combined = f"{(prompt or '').lower()}\n{(answer or '').lower()}"
+    actions: list[dict[str, object]] = []
+
+    def add_nav(action_id: str, label_en: str, label_zh: str):
+        if any(item["id"] == action_id for item in actions):
+            return
+        actions.append({
+            "id": action_id,
+            "kind": "nav",
+            "label": label_en if lang == "en" else label_zh,
+        })
+
+    def add_preset(
+        action_id: str,
+        label_en: str,
+        label_zh: str,
+        payload: dict[str, object],
+        scroll_to: str = "tutorial",
+    ):
+        if any(item["id"] == action_id for item in actions):
+            return
+        actions.append({
+            "id": action_id,
+            "kind": "preset",
+            "label": label_en if lang == "en" else label_zh,
+            "payload": payload,
+            "scroll_to": scroll_to,
+        })
+
+    if any(key in combined for key in ["字典", "数据字典", "dictionary", "feature list", "concept list"]):
+        add_nav("home_dict", "📖 Open Data Dictionary", "📖 打开数据字典")
+
+    if any(key in combined for key in ["tutorial", "教程", "step", "步骤", "how do i", "怎么做", "workflow", "流程", "guide", "使用"]):
+        add_nav("tutorial", "📚 Open Tutorial", "📚 打开教程")
+
+    if any(key in combined for key in [
+        "quick visualization", "快速可视化", "load data", "加载数据", "visualization",
+        "visualize", "visualise", "plot", "可视化", "图表", "数据分析", "分析我的数据",
+    ]):
+        add_nav("viz", "📊 Open Quick Visualization", "📊 前往快速可视化")
+
+    if any(key in combined for key in ["cohort", "队列", "compare", "comparison", "dashboard", "仪表板"]):
+        add_nav("cohort", "🔬 Open Cohort Analysis", "🔬 前往队列分析")
+
+    if any(key in combined for key in ["export", "导出"]):
+        add_nav("tutorial", "📚 Open Export Guide", "📚 打开导出教程")
+
+    target_db = _infer_db_from_text(combined)
+    is_all_features_request = any(key in combined for key in [
+        "所有临床指标", "所有特征", "全部特征", "all clinical features",
+        "all concepts", "all indicators", "all features",
+    ])
+    is_sepsis_extract_request = (
+        any(key in combined for key in ["sepsis", "脓毒症", "septic shock", "脓毒性休克"])
+        and any(key in combined for key in ["提取", "抽取", "export", "导出", "select", "选择"])
+    )
+
+    if target_db == "miiv" and is_all_features_request:
+        add_preset(
+            "preset_miiv_all",
+            "⚙️ Prepare MIMIC-IV Full Feature Selection",
+            "⚙️ 预设 MIMIC-IV 全量特征选择",
+            {
+                "kind": "feature_preset",
+                "database": "miiv",
+                "group_keys": ALL_PRESET_GROUP_KEYS,
+                "notice_en": "Switched toward Real Data with a MIMIC-IV full-feature preset ready. Next: choose Real Data mode if needed, fill the data path, run Validate Data Path or Convert & Setup, then finish Step 2. The feature preset will appear automatically in Step 3.",
+                "notice_zh": "已切换到面向真实数据的 MIMIC-IV 全量特征预设。下一步：如果还没在真实数据模式，请先切换；然后填写数据路径，执行“验证数据路径”或“转换并设置”，完成步骤2后，步骤3会自动出现这套特征预设。",
+                "apply_notice_en": "Your MIMIC-IV full-feature preset is now loaded in Step 3. Review the checked features, then confirm selection.",
+                "apply_notice_zh": "MIMIC-IV 全量特征预设已加载到步骤3。请检查已勾选特征，然后确认选择。",
+            },
+        )
+
+    if target_db == "miiv" and is_sepsis_extract_request:
+        add_preset(
+            "preset_miiv_sepsis",
+            "🦠 Prepare MIMIC-IV Sepsis Feature Set",
+            "🦠 预设 MIMIC-IV Sepsis 特征集",
+            {
+                "kind": "feature_preset",
+                "database": "miiv",
+                "group_keys": [
+                    "sepsis3_sofa2",
+                    "sepsis3_sofa1",
+                    "sepsis_shared",
+                    "sofa2_score",
+                    "sofa1_score",
+                    "vitals",
+                    "respiratory",
+                    "blood_gas",
+                    "chemistry",
+                    "hematology",
+                    "vasopressors",
+                    "medications",
+                    "renal",
+                    "outcome",
+                ],
+                "concepts": SEPSIS_PRESET_CONCEPTS,
+                "notice_en": "Switched toward Real Data with a MIMIC-IV Sepsis preset ready. Next: choose Real Data mode if needed, fill the data path, run Validate Data Path or Convert & Setup, then finish Step 2. The Sepsis feature preset will appear automatically in Step 3.",
+                "notice_zh": "已切换到面向真实数据的 MIMIC-IV Sepsis 预设。下一步：如果还没在真实数据模式，请先切换；然后填写数据路径，执行“验证数据路径”或“转换并设置”，完成步骤2后，步骤3会自动出现这套 Sepsis 特征预设。",
+                "apply_notice_en": "Your MIMIC-IV Sepsis feature preset is now loaded in Step 3. Review the checked concepts, then confirm selection.",
+                "apply_notice_zh": "MIMIC-IV Sepsis 特征预设已加载到步骤3。请检查已勾选概念，然后确认选择。",
+            },
+        )
+
+    return actions[:3]
+
+
+def _render_nav_actions(actions: list[dict[str, object]], key_prefix: str) -> None:
+    """Render in-app navigation and preset actions as buttons."""
+    if not actions:
+        return
+    action_cols = st.columns(len(actions))
+    for action_idx, action in enumerate(actions):
+        with action_cols[action_idx]:
+            if st.button(
+                action["label"],
+                key=f"{key_prefix}_{action_idx}_{action['id']}",
+                use_container_width=True,
+            ):
+                if action.get("kind") == "preset":
+                    st.session_state["_assistant_preset_request"] = dict(action.get("payload") or {})
+                    st.session_state["_scroll_to_tab"] = str(action.get("scroll_to") or "tutorial")
+                else:
+                    st.session_state["_scroll_to_tab"] = str(action["id"])
+                st.rerun()
 
 
 def _is_external_lookup_question(prompt: str) -> bool:
@@ -493,15 +892,18 @@ def _compose_agent_messages(prompt: str) -> tuple[list[dict[str, str]], list[dic
             "role": "system",
             "content": (
                 "Answer format requirements:\n"
+                "- For web-usage questions, lead with the exact page, step, or action in EasyICU.\n"
+                "- After the direct answer, give the next 1-3 concrete UI steps the user should take now.\n"
+                "- Mention files/functions only when the user explicitly asks about implementation.\n"
                 "- If local code context was used, mention the relevant file/function names.\n"
                 "- If external medical sources were used, include a `Sources` section with direct URLs.\n"
-                "- Include a short `Reasoning summary` section with 1-3 concise bullets.\n"
                 "- Do not reveal hidden chain-of-thought or private deliberation."
             ),
         },
+        {"role": "system", "content": _build_workflow_status_context(st.session_state.get("language", "en"))},
     ]
 
-    project_context = _build_project_context(prompt)
+    project_context = _build_project_context(prompt) if _is_code_question(prompt) else ""
     if project_context:
         tool_events.append({
             "tool": "local_code_search",
@@ -572,6 +974,7 @@ def _verify_response(client, messages: list[dict[str, str]], draft: str, lang: s
         "- Mark `corrected` if you rewrote any unsupported, vague, or overclaimed content.\n"
         "- Mark `uncertain` if the evidence is insufficient.\n"
         "- Preserve links and concrete file/function references when valid.\n"
+        "- For web workflow questions, make sure the answer tells the user the next concrete UI step.\n"
         "- Do not reveal hidden chain-of-thought.\n"
         "- Return exactly this format:\n"
         "STATUS: <pass|corrected|uncertain>\n"
@@ -802,9 +1205,9 @@ def render_chat_tab():
     )
     st.caption(f"**{provider_name}** · `{model_name}`")
     st.caption(
-        "Agent mode: local code search + PubMed evidence when needed"
+        "Guided mode: web workflow first, then code and evidence when needed"
         if lang == "en" else
-        "Agent 模式：按需使用本地代码检索 + PubMed 证据查询"
+        "引导模式：优先教你如何使用 Web 工作流，再按需补充代码与证据"
     )
 
     with st.expander("💡 " + ("What can I ask?" if lang == "en" else "我可以问什么？"),
@@ -833,9 +1236,11 @@ def render_chat_tab():
     # ---- Render message history -----------------------------------------------
     history_container = st.container(height=680, border=True)
     with history_container:
-        for msg in st.session_state.llm_messages:
+        for msg_idx, msg in enumerate(st.session_state.llm_messages):
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
+                if msg["role"] == "assistant" and msg.get("actions"):
+                    _render_nav_actions(msg["actions"], key_prefix=f"_llm_action_{msg_idx}")
 
     # ---- Chat input -----------------------------------------------------------
     placeholder = ("Ask a question about EasyICU …"
@@ -855,11 +1260,19 @@ def render_chat_tab():
                 "issues": [],
             }
             st.session_state.llm_messages.append(
-                {"role": "assistant", "content": instant_reply}
+                {
+                    "role": "assistant",
+                    "content": instant_reply,
+                    "actions": _suggest_ui_actions(prompt, instant_reply, lang),
+                }
             )
             with history_container:
                 with st.chat_message("assistant"):
                     st.markdown(instant_reply)
+                    _render_nav_actions(
+                        _suggest_ui_actions(prompt, instant_reply, lang),
+                        key_prefix="_llm_action_instant",
+                    )
             return
 
         prep_placeholder = st.empty()
@@ -917,27 +1330,25 @@ A built-in conversational helper that knows EasyICU inside-out. It can:
 def _render_tips(lang: str):
     if lang == "en":
         st.markdown("""\
-- **EasyICU usage**: "How do I filter a cohort by age?" / "How to select clinical concepts?"
-- **Database info**: "Which databases does EasyICU support?" / "What vital-sign concepts are available?"
-- **Concept details**: "What is pafi?" / "List all vasopressor concepts"
-- **Scoring systems**: "How is SOFA-2 calculated?" / "Explain KDIGO-AKI staging"
-- **Result interpretation**: "What does high missingness mean?" / "How to handle missing data?"
-- **Python API**: "Show me how to use load_concepts()" / "How to load SOFA scores in Python?"
-- **Code questions**: "Where is export implemented in app.py?" / "How does `load_concepts` work?"
-- **Evidence-backed medical answers**: "Explain Sepsis-3 with PubMed sources"
-- **General ICU**: "What is Sepsis-3?" / "Difference between SOFA-1 and SOFA-2?"
+- **Onboarding**: "I want to extract SOFA-2 from MIMIC-IV. What exact steps should I follow in the web UI?"
+- **Feature planning**: "For septic shock research, which EasyICU concepts should I export besides SOFA and vasopressors?"
+- **Cross-database mapping**: "Which respiratory concepts are available across miiv, mimic, eicu, aumc, hirid, and sic?"
+- **Troubleshooting**: "My exported data shows high missingness for fio2. What are the most likely causes and checks?"
+- **Interpretation**: "How should I interpret `sep3_sofa2`, `susp_inf`, and `sofa2` together?"
+- **Code-aware help**: "Where is export implemented in app.py?" / "How does `load_concepts` work?"
+- **Evidence-backed answers**: "Explain Sepsis-3 with PubMed sources and relate it to EasyICU outputs."
+- **Python workflow**: "Show me a minimal Python example to load pafi, sofa2, and sep3_sofa2."
 """)
     else:
         st.markdown("""\
-- **使用方法**: "怎么按年龄筛选队列？" / "怎么选择临床概念？"
-- **数据库信息**: "EasyICU 支持哪些数据库？" / "有哪些生命体征概念？"
-- **概念详情**: "pafi 是什么？" / "列出所有血管活性药物概念"
-- **评分系统**: "SOFA-2 怎么算的？" / "解释 KDIGO-AKI 分期"
-- **结果解读**: "缺失率高说明什么？" / "缺失数据该怎么处理？"
-- **Python API**: "怎么用 load_concepts()？" / "怎么用 Python 加载 SOFA 评分？"
+- **新手引导**: "我想从 MIMIC-IV 提取 SOFA-2，网页端具体点哪里、按什么顺序做？"
+- **选特征建议**: "如果我要做脓毒症休克研究，除了 SOFA 和升压药，还建议导出哪些概念？"
+- **跨库对照**: "miiv、mimic、eicu、aumc、hirid、sic 里哪些呼吸相关概念都能取到？"
+- **排错诊断**: "我导出的 fio2 缺失率很高，最可能是什么原因，应该检查哪几步？"
+- **结果解读**: "`sep3_sofa2`、`susp_inf` 和 `sofa2` 应该怎么一起解释？"
 - **代码问题**: "app.py 里 export 在哪实现？" / "`load_concepts` 是怎么工作的？"
-- **带证据医学回答**: "用 PubMed 解释 Sepsis-3"
-- **ICU 通识**: "什么是 Sepsis-3？" / "SOFA-1 和 SOFA-2 的区别？"
+- **带证据医学回答**: "结合 PubMed 解释 Sepsis-3，并对应到 EasyICU 的输出概念。"
+- **Python 工作流**: "给我一个最小 Python 例子，同时加载 pafi、sofa2 和 sep3_sofa2。"
 """)
 
 
@@ -1024,8 +1435,19 @@ def _stream_response(messages: list, lang: str):
         )
         verification = _verify_response(client, messages, draft_response, lang)
         final_response = verification.get("corrected_answer") or draft_response
+        final_response = _append_quick_links(
+            prompt=st.session_state.llm_messages[-1]["content"],
+            answer=final_response,
+            lang=lang,
+        )
         answer_placeholder.markdown(final_response)
         st.session_state.llm_last_verification = verification
+        response_actions = _suggest_ui_actions(
+            st.session_state.llm_messages[-1]["content"],
+            final_response,
+            lang,
+        )
+        _render_nav_actions(response_actions, key_prefix="_llm_action_live")
 
         verify_status = verification.get("status", "uncertain")
         verify_event = {
@@ -1039,7 +1461,11 @@ def _stream_response(messages: list, lang: str):
         ]
         status_placeholder.empty()
         st.session_state.llm_messages.append(
-            {"role": "assistant", "content": final_response}
+            {
+                "role": "assistant",
+                "content": final_response,
+                "actions": response_actions,
+            }
         )
     except Exception as exc:
         status_placeholder.empty()

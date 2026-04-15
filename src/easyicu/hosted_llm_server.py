@@ -135,7 +135,7 @@ def _stream_upstream(response: requests.Response) -> Iterator[bytes]:
         response.close()
 
 
-app = FastAPI(title="EasyICU Hosted LLM", version="0.1.0")
+app = FastAPI(title="EasyICU Hosted LLM", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=HOSTED_ALLOWED_ORIGINS or ["*"],
