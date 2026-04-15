@@ -869,52 +869,141 @@ st.markdown("""
         border: 1px solid rgba(99,102,241,0.3);
     }
 
-    /* ============ 特性展示网格 ============ */
-    .features-grid {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: clamp(0.6rem, 0.4rem + 0.5vw, 1.2rem);
-        margin-top: 1.5rem;
+    /* ============ 入口页紧凑总览 ============ */
+    .entry-overview {
+        max-width: min(1200px, 92vw);
+        margin: 1rem auto 0;
+        padding: 0;
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
     }
 
-    .feature-item {
-        background: rgba(255,255,255,0.75);
-        backdrop-filter: blur(8px);
-        border: 1px solid rgba(99,102,241,0.06);
-        border-radius: var(--radius-lg);
-        padding: clamp(1rem, 0.8rem + 0.5vw, 1.6rem) clamp(0.8rem, 0.6rem + 0.4vw, 1.4rem);
+    .entry-overview-lead {
         text-align: center;
-        transition: var(--transition-smooth);
+        color: var(--text-secondary-light);
+        font-size: clamp(0.92rem, 0.12vw + 0.88rem, 1.03rem);
+        line-height: 1.7;
+        max-width: 920px;
+        margin: 0.85rem auto 0;
     }
 
-    .feature-item:hover {
-        transform: translateY(-3px);
-        box-shadow: var(--shadow-hover);
-        border-color: rgba(99,102,241,0.15);
+    .entry-overview-panel {
+        margin-top: 0.55rem;
+        padding: 0.4rem 0 0.2rem;
+        border-radius: 0;
+        background: transparent;
+        border: none;
     }
 
-    .feature-item-icon {
-        font-size: 2rem;
+    .entry-overview-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        align-items: flex-start;
         margin-bottom: 0.8rem;
-        display: block;
     }
 
-    .feature-item-title {
+    .entry-overview-title {
+        font-size: 1.02rem;
+        font-weight: 800;
+        color: #14263d;
+        line-height: 1.3;
+        margin-bottom: 0.18rem;
+    }
+
+    .entry-overview-subtitle {
+        font-size: 0.84rem;
+        line-height: 1.55;
+        color: #6c8099;
+        max-width: 760px;
+    }
+
+    .entry-overview-kicker {
+        font-size: 0.74rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #7185a2;
+        white-space: nowrap;
+    }
+
+    .entry-overview-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: clamp(0.7rem, 0.35rem + 0.5vw, 1rem);
+    }
+
+    .entry-overview-item {
+        display: flex;
+        gap: 0.72rem;
+        align-items: flex-start;
+        padding: 0.15rem 0.1rem;
+        border-radius: 0;
+        background: transparent;
+        border: none;
+    }
+
+    .entry-overview-item.ai {
+        background: transparent;
+        border: none;
+    }
+
+    .entry-overview-icon {
+        font-size: 1rem;
+        line-height: 1.2;
+        margin-top: 0.02rem;
+        flex-shrink: 0;
+    }
+
+    .entry-overview-item-title {
         font-size: 0.92rem;
-        font-weight: 700;
-        color: var(--text-primary-light);
-        margin-bottom: 0.4rem;
+        font-weight: 800;
+        color: #14263d;
+        line-height: 1.28;
+        margin-bottom: 0.16rem;
     }
 
-    .feature-item-desc {
+    .entry-overview-item-desc {
         font-size: 0.8rem;
+        color: #6f829b;
+        line-height: 1.48;
+    }
+
+    .entry-db-inline {
+        margin-top: 0.8rem;
+        padding-top: 0.8rem;
+        border-top: 1px solid rgba(148,163,184,0.18);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .entry-db-inline-label {
+        font-size: 0.75rem;
         color: var(--text-tertiary-light);
-        line-height: 1.5;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 700;
+    }
+
+    .entry-db-inline-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        font-size: 0.86rem;
+        color: var(--text-secondary-light);
+        font-weight: 600;
     }
 
     
     @media (max-width: 768px) {
-        .features-grid { grid-template-columns: repeat(2, 1fr); }
+        .entry-overview-head { flex-direction: column; }
+        .entry-overview-grid { grid-template-columns: 1fr; }
+        .entry-db-inline { flex-direction: column; align-items: flex-start; }
         .hero-title { font-size: 2rem; }
     }
 
@@ -5529,43 +5618,138 @@ def render_entry_page():
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("<div style='height: 1.5rem'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 1rem'></div>", unsafe_allow_html=True)
 
-    # ===== 特性展示 — 纯 HTML 网格 =====
+    try:
+        import streamlit_shadcn_ui as ui
+    except Exception:
+        ui = None
+
     if lang == 'en':
-        features = [
-            ("📈", "Time Series", "Visualize patient metrics over time with interactive charts"),
-            ("🏥", "Patient View", "Comprehensive single-patient dashboard with clinical scores"),
-            ("📊", "Cohort Analysis", "Compare patient groups across databases"),
-            ("💾", "Data Export", "Export to Parquet / CSV / Excel with one click"),
-        ]
+        lead_text = "EasyICU connects cohort design, standardized concept extraction, and review-ready analytics in one local-first ICU workflow."
+        stat_pills = ["6 ICU databases", "167 clinical concepts", "Local-first processing", "Demo + Real Data", "AI-assisted workflow"]
+        tab_options = ["Workflow", "Clinical layer", "Execution"]
+        tab_default = "Workflow"
+        dbs_label = "Supported Databases"
+        overview = {
+            "Workflow": (
+                "User-facing workflow",
+                "Move from study design to analysis-ready data without leaving the same interface.",
+                [
+                    ("🧲", "Cohort design", "Filter by age, ICU stay, outcomes, and study constraints."),
+                    ("🧩", "Concept selection", "Choose from 167 ICU features across 19 clinical groups."),
+                    ("👁️", "Visual review", "Inspect time series, patient view, quality reports, and cohorts."),
+                ],
+            ),
+            "Clinical layer": (
+                "Clinical intelligence",
+                "Standardized concepts and computable rules sit behind every extraction step.",
+                [
+                    ("📚", "Standardized concept library", "One interface spanning all 6 supported public ICU databases."),
+                    ("🧠", "Computable rules & scores", "SOFA, SOFA-2, Sepsis-3, KDIGO-AKI, qSOFA and more."),
+                    ("🤖", "AI assistant", "Guided setup, troubleshooting, concept planning, and evidence-backed answers."),
+                ],
+            ),
+            "Execution": (
+                "Execution engine",
+                "Fast, reproducible extraction with temporal alignment and scalable processing controls.",
+                [
+                    ("⚙️", "Structured extraction", "Export module-aware datasets to CSV, Parquet, or Excel."),
+                    ("⏱️", "Temporal harmonization", "Align intervals and time axes across heterogeneous ICU tables."),
+                    ("🚀", "Caching & parallel processing", "Selective access, memory control, and faster multi-module runs."),
+                ],
+            ),
+        }
     else:
-        features = [
-            ("📈", "时序分析", "交互式图表可视化患者指标时间趋势"),
-            ("🏥", "患者视图", "综合查看单患者临床数据与评分"),
-            ("📊", "队列对比", "跨数据库对比不同患者组"),
-            ("💾", "数据导出", "一键导出为 Parquet / CSV / Excel"),
-        ]
+        lead_text = "EasyICU 将队列设计、标准化概念提取和复核分析整合为一个本地优先的 ICU 数据工作流。"
+        stat_pills = ["支持 6 大 ICU 数据库", "167 个临床概念", "本地优先处理", "演示 + 真实数据模式", "AI 辅助工作流"]
+        tab_options = ["用户工作流", "临床智能层", "执行能力层"]
+        tab_default = "用户工作流"
+        dbs_label = "支持的数据库"
+        overview = {
+            "用户工作流": (
+                "用户工作流",
+                "从研究设计到分析数据导出，尽量在同一界面内完成。",
+                [
+                    ("🧲", "队列设计", "按年龄、ICU 住院时长、结局和研究条件筛选患者。"),
+                    ("🧩", "概念选择", "从 19 个分组、167 个 ICU 特征中选择目标变量。"),
+                    ("👁️", "可视化复核", "查看时序图、患者视图、质量报告和队列分析。"),
+                ],
+            ),
+            "临床智能层": (
+                "临床智能层",
+                "标准化概念和可计算规则支撑提取结果的一致性与可解释性。",
+                [
+                    ("📚", "标准化概念库", "统一接口覆盖 6 个公开 ICU 数据库。"),
+                    ("🧠", "可计算规则与评分", "内置 SOFA、SOFA-2、Sepsis-3、KDIGO-AKI、qSOFA 等。"),
+                    ("🤖", "AI 助手", "引导配置、报错排查、特征规划和证据支持回答。"),
+                ],
+            ),
+            "执行能力层": (
+                "执行能力层",
+                "提供结构化导出、时间统一和更适合大数据的执行机制。",
+                [
+                    ("⚙️", "结构化提取", "按模块导出为 CSV、Parquet 或 Excel。"),
+                    ("⏱️", "时间维度统一", "处理多数据库时间轴、间隔和患者级对齐。"),
+                    ("🚀", "缓存与并行", "选择性读取、内存控制和更快的多模块运行。"),
+                ],
+            ),
+        }
 
-    features_html = ""
-    for icon, title, desc in features:
-        features_html += f"""
-        <div class="feature-item">
-            <span class="feature-item-icon">{icon}</span>
-            <div class="feature-item-title">{title}</div>
-            <div class="feature-item-desc">{desc}</div>
+    st.markdown(f'<div class="entry-overview animate-fade-in">', unsafe_allow_html=True)
+
+    if ui is not None:
+        ui.badges(
+            badge_list=[(item, "secondary") for item in stat_pills],
+            class_name="flex flex-wrap gap-2 justify-center",
+            key=f"entry_badges_{lang}",
+        )
+        selected_tab = ui.tabs(
+            options=tab_options,
+            default_value=tab_default,
+            key=f"entry_tabs_{lang}",
+        )
+    else:
+        selected_tab = st.radio(
+            "",
+            options=tab_options,
+            index=tab_options.index(tab_default),
+            horizontal=True,
+            label_visibility="collapsed",
+            key=f"entry_tabs_fallback_{lang}",
+        )
+
+    panel_title, panel_subtitle, panel_items = overview[selected_tab]
+    items_html = ""
+    for icon, title, desc in panel_items:
+        ai_class = " ai" if ("AI" in title or "助手" in title) else ""
+        items_html += f"""
+        <div class="entry-overview-item{ai_class}">
+            <span class="entry-overview-icon">{icon}</span>
+            <div>
+                <div class="entry-overview-item-title">{title}</div>
+                <div class="entry-overview-item-desc">{desc}</div>
+            </div>
         </div>"""
 
-    st.markdown(f'<div class="features-grid animate-fade-in" style="max-width:min(900px,85%);margin:0 auto">{features_html}</div>', unsafe_allow_html=True)
-
-    # ===== 底部数据库支持 =====
-    _dbs_label = "Supported Databases" if lang == 'en' else "支持的数据库"
     st.markdown(f"""
-    <div style="text-align:center;margin-top:2rem;padding:1.2rem;border-top:1px solid var(--border-subtle);max-width:min(900px,85%);margin-left:auto;margin-right:auto;">
-        <div style="font-size:0.75rem;color:var(--text-tertiary-light);text-transform:uppercase;letter-spacing:0.08em;font-weight:600;margin-bottom:0.6rem;">{_dbs_label}</div>
-        <div style="display:flex;justify-content:center;gap:1.5rem;flex-wrap:wrap;font-size:0.85rem;color:var(--text-secondary-light);font-weight:500;">
-            <span>MIMIC-IV</span><span>MIMIC-III</span><span>eICU-CRD</span><span>AmsterdamUMCdb</span><span>HiRID</span><span>SICdb</span>
+    <div class="entry-overview-panel">
+        <div class="entry-overview-head">
+            <div>
+                <div class="entry-overview-title">{panel_title}</div>
+                <div class="entry-overview-subtitle">{panel_subtitle}</div>
+            </div>
+            <div class="entry-overview-kicker">EasyICU</div>
         </div>
+        <div class="entry-overview-grid">{items_html}</div>
+        <div class="entry-db-inline">
+            <div class="entry-db-inline-label">{dbs_label}</div>
+            <div class="entry-db-inline-list">
+                <span>MIMIC-IV</span><span>MIMIC-III</span><span>eICU-CRD</span><span>AmsterdamUMCdb</span><span>HiRID</span><span>SICdb</span>
+            </div>
+        </div>
+    </div>
+    <div class="entry-overview-lead">{lead_text}</div>
     </div>
     """, unsafe_allow_html=True)
 
