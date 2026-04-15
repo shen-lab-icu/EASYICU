@@ -46,11 +46,6 @@ Default URL:
 http://127.0.0.1:8501
 ```
 
-Stop the service:
-- **Windows**: double-click `stop_easyicu.bat`
-- **macOS**: double-click `stop_easyicu.command`
-- **Linux**: run `./stop_easyicu.sh`
-
 Notes:
 - The first startup may take a few minutes
 - On macOS, you may need to approve the script in the system security prompt the first time

@@ -20,7 +20,7 @@ import urllib.request
 import venv
 import webbrowser
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_DIR = PROJECT_ROOT / ".easyicu-runtime"
 VENV_DIR = RUNTIME_DIR / "venv"
 STAMP_FILE = RUNTIME_DIR / "install-stamp.json"

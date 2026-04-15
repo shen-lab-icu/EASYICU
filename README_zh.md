@@ -6,7 +6,7 @@
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
+[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
 EasyICU 是一个专为重症监护室（ICU）数据分析设计的 Python 工具包。它通过数据库抽象层统一处理 **6 个主流公开 ICU 数据库**，支持 **167 种**标准化临床概念的自动提取，并提供基于 **Web 的可视化界面**，使非编程背景的临床研究人员也能高效完成队列定义、特征筛选与数据质量审查。
 
@@ -45,11 +45,6 @@ EasyICU 是一个专为重症监护室（ICU）数据分析设计的 Python 工�
 ```text
 http://127.0.0.1:8501
 ```
-
-停止服务：
-- **Windows**：双击 `stop_easyicu.bat`
-- **macOS**：双击 `stop_easyicu.command`
-- **Linux**：运行 `./stop_easyicu.sh`
 
 说明：
 - 首次启动通常会比后续启动慢几分钟
