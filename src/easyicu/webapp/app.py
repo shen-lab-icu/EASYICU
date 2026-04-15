@@ -90,7 +90,7 @@ st.markdown("""
         --gradient-info: linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%);
         --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
         --gradient-danger: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
-        --gradient-hero: linear-gradient(135deg, #e6edf5 0%, #d3deea 26%, #aebfd5 62%, #748fad 100%);
+        --gradient-hero: #385d90;
         --gradient-glass: linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,255,255,0.05));
 
         /* 语义色 */
@@ -104,7 +104,7 @@ st.markdown("""
         --shadow-soft: 0 4px 16px rgba(0,0,0,0.06);
         --shadow-card: 0 1px 3px rgba(0,0,0,0.06), 0 6px 16px rgba(0,0,0,0.04);
         --shadow-hover: 0 8px 30px rgba(37,99,235,0.12), 0 4px 12px rgba(0,0,0,0.05);
-        --shadow-glow: 0 0 20px rgba(37,99,235,0.22), 0 4px 16px rgba(8,145,178,0.14);
+        --shadow-glow: 0 0 20px rgba(56,93,144,0.18), 0 4px 16px rgba(56,93,144,0.10);
         --shadow-elevated: 0 12px 40px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.03);
 
         /* 圆角 */
@@ -765,26 +765,25 @@ st.markdown("""
         left: -50%;
         width: 200%;
         height: 200%;
-        background: radial-gradient(ellipse at 22% 16%, rgba(255,255,255,0.22) 0%, transparent 46%),
-                    radial-gradient(ellipse at 82% 18%, rgba(59,130,246,0.10) 0%, transparent 40%);
-        animation: float 8s ease-in-out infinite;
+        background: none;
+        animation: none;
     }
 
     .hero-title {
         font-size: clamp(2rem, 1.5rem + 1.5vw, 3rem);
         font-weight: 900;
-        color: #13253c;
+        color: rgba(255,255,255,0.98);
         letter-spacing: -0.04em;
         line-height: 1.15;
         margin-bottom: 0.5rem;
         position: relative;
         z-index: 1;
-        text-shadow: 0 1px 0 rgba(255,255,255,0.14);
+        text-shadow: 0 1px 0 rgba(0,0,0,0.06);
     }
 
     .hero-subtitle {
         font-size: 1.05rem;
-        color: rgba(19,37,60,0.74);
+        color: rgba(255,255,255,0.82);
         font-weight: 500;
         letter-spacing: 0.02em;
         position: relative;
@@ -798,12 +797,12 @@ st.markdown("""
         border-radius: 100px;
         padding: 6px 16px;
         font-size: 0.78rem;
-        color: rgba(19,37,60,0.72);
+        color: rgba(255,255,255,0.92);
         font-weight: 600;
         margin-bottom: 1.2rem;
         letter-spacing: 0.04em;
         backdrop-filter: blur(8px);
-        box-shadow: 0 10px 30px rgba(15,34,48,0.08);
+        box-shadow: 0 10px 30px rgba(15,34,48,0.12);
         position: relative;
         z-index: 1;
     }
@@ -5461,23 +5460,27 @@ def render_entry_page():
     .entry-btn-wrap div[data-testid="stButton"] > button:active {
         transform: translateY(-1px) !important;
     }
-    /* 左列 Demo = 绿色渐变 */
+    /* 左列 Demo = 柔和浅蓝 */
     .entry-btn-wrap.demo-col div[data-testid="stButton"] > button {
-        background: linear-gradient(135deg, #059669, #10b981) !important;
+        background: #7ea9cd !important;
         color: white !important;
-        box-shadow: 0 4px 20px rgba(16,185,129,0.2) !important;
+        border: 1px solid rgba(255,255,255,0.26) !important;
+        box-shadow: 0 4px 20px rgba(76,112,150,0.18) !important;
     }
     .entry-btn-wrap.demo-col div[data-testid="stButton"] > button:hover {
-        box-shadow: 0 8px 30px rgba(16,185,129,0.35) !important;
+        background: #739dc0 !important;
+        box-shadow: 0 8px 28px rgba(76,112,150,0.24) !important;
     }
-    /* 右列 Real = 主色渐变 */
+    /* 右列 Real = 浅灰蓝 */
     .entry-btn-wrap.real-col div[data-testid="stButton"] > button {
-        background: linear-gradient(135deg, #2563eb 0%, #0891b2 100%) !important;
-        color: white !important;
-        box-shadow: 0 4px 20px rgba(37,99,235,0.2) !important;
+        background: #f5f8fc !important;
+        color: #1f2937 !important;
+        border: 1px solid #d7e2ee !important;
+        box-shadow: 0 4px 20px rgba(15,23,42,0.05) !important;
     }
     .entry-btn-wrap.real-col div[data-testid="stButton"] > button:hover {
-        box-shadow: 0 8px 30px rgba(37,99,235,0.3) !important;
+        background: #eef4fa !important;
+        box-shadow: 0 8px 24px rgba(15,23,42,0.08) !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -7451,13 +7454,13 @@ def render_home_extract_mode(lang):
 
     if lang == 'en':
         st.markdown("""
-        <p style="font-size:1.1rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.7;font-weight:500;">
+        <p style="font-size:1.1rem;color:var(--text-secondary-light);margin:0.35rem 0 0.7rem;line-height:1.7;font-weight:500;">
             👈 Follow the <b>4 steps in the left sidebar</b> to define your cohort, select features, and export data.
         </p>
         """, unsafe_allow_html=True)
     else:
         st.markdown("""
-        <p style="font-size:1.1rem;color:var(--text-secondary-light);margin:0.5rem 0 1rem;line-height:1.7;font-weight:500;">
+        <p style="font-size:1.1rem;color:var(--text-secondary-light);margin:0.35rem 0 0.7rem;line-height:1.7;font-weight:500;">
             👈 按照<b>左侧边栏的 4 个步骤</b>操作，即可完成 ICU 数据的队列定义、特征选择和导出。
         </p>
         """, unsafe_allow_html=True)
@@ -7507,7 +7510,7 @@ def render_home_extract_mode(lang):
         with col:
             st.markdown(item_html, unsafe_allow_html=True)
 
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
     
     # ============ 动态引导内容 ============
     # 添加引导锚点和动态标题（根据当前步骤变化）
@@ -7527,7 +7530,7 @@ def render_home_extract_mode(lang):
     
     guide_title_text = f"Guide: {guide_step}" if lang == 'en' else f"引导: {guide_step}"
     st.markdown(f'''
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
         <div style="width:6px;height:32px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)"></div>
         <span style="font-size:1.7rem;font-weight:800;color:#111827;letter-spacing:-0.02em">{guide_title_text}</span>
     </div>
@@ -7537,7 +7540,7 @@ def render_home_extract_mode(lang):
         # 步骤1引导：配置数据源
         if lang == 'en':
             st.markdown('''
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:12px">
                 <div style="font-weight:800;color:#111827;font-size:1.42rem;margin-bottom:18px;letter-spacing:-0.02em">Configure Data Source in the Sidebar</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
                     <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px">
@@ -7561,7 +7564,7 @@ def render_home_extract_mode(lang):
             ''', unsafe_allow_html=True)
         else:
             st.markdown('''
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:12px">
                 <div style="font-weight:800;color:#111827;font-size:1.42rem;margin-bottom:18px;letter-spacing:-0.02em">在侧边栏配置数据源</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
                     <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px">
@@ -7588,7 +7591,7 @@ def render_home_extract_mode(lang):
         # 步骤2引导：队列筛选
         if lang == 'en':
             st.markdown('''
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:12px">
                 <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">Configure Cohort Selection</div>
                 <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px;margin-bottom:12px">
                     <div style="font-weight:600;color:#3730a3;margin-bottom:8px">Available Filters</div>
@@ -7606,7 +7609,7 @@ def render_home_extract_mode(lang):
             ''', unsafe_allow_html=True)
         else:
             st.markdown('''
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:12px">
                 <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">配置队列筛选</div>
                 <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:16px;margin-bottom:12px">
                     <div style="font-weight:600;color:#3730a3;margin-bottom:8px">可用筛选条件</div>
@@ -7627,7 +7630,7 @@ def render_home_extract_mode(lang):
         # 步骤3引导：选择特征
         if lang == 'en':
             st.markdown('''
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:12px">
                 <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">Select Features — 167 ICU Clinical Features</div>
                 <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px">
                     <div style="background:#eff6ff;border-radius:8px;padding:12px"><b style="color:#1d4ed8">📊 Vital Signs</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">HR, BP, Temp, SpO2, Resp</div></div>
@@ -7642,7 +7645,7 @@ def render_home_extract_mode(lang):
             ''', unsafe_allow_html=True)
         else:
             st.markdown('''
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:12px">
                 <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">选择特征 — 167 个 ICU 临床特征</div>
                 <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px">
                     <div style="background:#eff6ff;border-radius:8px;padding:12px"><b style="color:#1d4ed8">📊 生命体征</b><div style="color:#4b5563;font-size:.82rem;margin-top:3px">心率、血压、体温、SpO2、呼吸</div></div>
@@ -7664,7 +7667,7 @@ def render_home_extract_mode(lang):
         if exporting_in_progress:
             # 🆕 导出正在进行中，显示进度标题
             _exp_msg = ('Export in Progress...', 'Please wait while your data is being exported.') if lang == 'en' else ('导出进行中...', '请稍候，数据正在导出中，进度详情将显示在下方。')
-            st.markdown(f'''<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:14px;padding:20px 24px;margin-bottom:16px">
+            st.markdown(f'''<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:14px;padding:20px 24px;margin-bottom:12px">
 <div style="font-weight:700;color:#b45309;font-size:1.05rem">⏳ {_exp_msg[0]}</div>
 <div style="color:#92400e;font-size:.9rem;margin-top:4px">{_exp_msg[1]}</div>
 </div>''', unsafe_allow_html=True)
@@ -7678,7 +7681,7 @@ def render_home_extract_mode(lang):
             else:
                 _steps_html = _steps_html.format('点击上方 <b>"数据导出"</b> 标签页', '选择导出格式（CSV / Parquet / Excel）', '选择保存位置', '点击 <b>"导出数据"</b> 按钮')
                 _tip = '✅ 适合大数据集 — 直接保存到磁盘，不占用内存'
-            st.markdown(f'''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:16px">
+            st.markdown(f'''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:24px;margin-bottom:12px">
 <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-bottom:14px">{"How to Export Data" if lang=="en" else "如何导出数据"}</div>
 {_steps_html}
 <div style="background:#ecfdf5;border-radius:8px;padding:10px 14px;margin-top:12px;font-size:.85rem;color:#047857">{_tip}</div>
@@ -7708,7 +7711,7 @@ def render_home_extract_mode(lang):
             ''', unsafe_allow_html=True)
         
         # 🆕 导出进度区域（无论是否正在导出都创建，导出时内容会填充进来）
-        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
         export_section = st.container()
         st.session_state['_export_progress_container'] = export_section
     
@@ -7953,7 +7956,7 @@ def render_home_extract_mode(lang):
         st.session_state['_export_progress_container'] = export_section
     
     # ============ 数据字典展示 ============
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
     # 添加字典锚点和大标题
     st.markdown('<div id="dictionary"></div>', unsafe_allow_html=True)
     dict_header = "📖 Data Dictionary" if lang == 'en' else "📖 数据字典"
@@ -7962,7 +7965,7 @@ def render_home_extract_mode(lang):
     # 添加数据字典说明
     if lang == 'en':
         st.markdown('''
-        <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
+        <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 14px; border-left: 4px solid #667eea;">
             <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
                 📚 <b>Reference Guide</b>: This dictionary contains all 167 ICU clinical features available in EasyICU, organized into 19 categories. 
                 Each feature includes its code name, full description, and measurement unit. 
@@ -7973,7 +7976,7 @@ def render_home_extract_mode(lang):
         ''', unsafe_allow_html=True)
     else:
         st.markdown('''
-        <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 20px; border-left: 4px solid #667eea;">
+        <div style="background: rgba(102, 126, 234, 0.15); padding: 18px; border-radius: 12px; margin-bottom: 14px; border-left: 4px solid #667eea;">
             <p style="color: #333; font-size: 1.15rem; margin: 0; line-height: 1.7;">
                 📚 <b>参考指南</b>：本字典包含 EasyICU 提供的全部 167 个 ICU 临床特征，分为 19 个类别。
                 每个特征包括代码名称、完整描述和测量单位。
@@ -15622,6 +15625,31 @@ def main():
                     var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
                     if (tabs && tabs.length >= 3) {
                         tabs[2].click();
+                        setTimeout(function() {
+                            var mainContainer = window.parent.document.querySelector('section.main');
+                            if (mainContainer) mainContainer.scrollTop = 0;
+                            window.parent.document.documentElement.scrollTop = 0;
+                        }, 100);
+                    }
+                }, 200);
+            })();
+        </script>
+        '''
+        st.components.v1.html(js_code, height=0)
+    elif scroll_to_tab == 'ai_assistant':
+        # 跳转到 AI Assistant 标签页（第4个标签，索引3）并滚动到顶部
+        js_code = '''
+        <script>
+            (function() {
+                var mainContainer = window.parent.document.querySelector('section.main');
+                if (mainContainer) mainContainer.scrollTop = 0;
+                window.parent.document.documentElement.scrollTop = 0;
+                window.parent.document.body.scrollTop = 0;
+
+                setTimeout(function() {
+                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+                    if (tabs && tabs.length >= 4) {
+                        tabs[3].click();
                         setTimeout(function() {
                             var mainContainer = window.parent.document.querySelector('section.main');
                             if (mainContainer) mainContainer.scrollTop = 0;
