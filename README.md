@@ -6,7 +6,7 @@
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
+[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
 EasyICU is a Python toolkit designed for intensive care unit (ICU) data analysis. Through a database abstraction layer, it provides unified access to **6 major public ICU databases**, supports automated extraction of **167 standardized clinical concepts**, and offers a **web-based visualization interface** — enabling clinical researchers without programming backgrounds to efficiently perform cohort definition, feature selection, and data quality review.
 
