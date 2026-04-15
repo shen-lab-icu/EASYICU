@@ -80,6 +80,8 @@ TEST_SUMMARY.md
 CLEANUP_PLAN.md
 tests/
 scripts/
+!scripts/
+!scripts/launch_easyicu.py
 
 # 环境文件
 .env

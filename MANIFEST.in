@@ -5,7 +5,10 @@ include CHANGELOG.md
 
 # Include configuration files
 include pyproject.toml
-include setup.py
+include start_easyicu.bat
+include start_easyicu.command
+include start_easyicu.sh
+include scripts/launch_easyicu.py
 
 # Include data files
 recursive-include src/easyicu/data *.json
