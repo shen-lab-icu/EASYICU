@@ -519,7 +519,7 @@ st.markdown("""
     .divider {
         height: 1px;
         background: linear-gradient(90deg, transparent, var(--border-subtle), transparent);
-        margin: 1.5rem 0;
+        margin: 0.9rem 0;
         border: none;
     }
 
@@ -527,7 +527,7 @@ st.markdown("""
         border: none;
         height: 1px;
         background: linear-gradient(90deg, transparent, var(--border-subtle), transparent);
-        margin: 1.5rem 0;
+        margin: 0.9rem 0;
     }
 
     /* ============ 统计数字 ============ */
@@ -1131,6 +1131,135 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+    .compact-summary-card {
+        background: #ffffff;
+        border: 1px solid #dbeafe;
+        border-left: 3px solid #60a5fa;
+        border-radius: 12px;
+        padding: 0.68rem 0.82rem;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+        min-height: 64px;
+    }
+    .compact-summary-card .summary-label {
+        font-size: 0.68rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #64748b;
+        font-weight: 700;
+        margin-bottom: 0.18rem;
+    }
+    .compact-summary-card .summary-value {
+        font-size: 1.22rem;
+        line-height: 1.1;
+        color: #0f172a;
+        font-weight: 800;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .compact-inline-notice {
+        border-radius: 10px;
+        padding: 0.48rem 0.72rem;
+        margin: 0.22rem 0 0.42rem;
+        font-size: 0.84rem;
+        line-height: 1.45;
+        border: 1px solid transparent;
+    }
+    .compact-inline-notice.info {
+        background: rgba(59,130,246,0.08);
+        border-color: rgba(59,130,246,0.14);
+        color: #1d4ed8;
+    }
+    .compact-inline-notice.success {
+        background: rgba(16,185,129,0.09);
+        border-color: rgba(16,185,129,0.15);
+        color: #047857;
+    }
+    .compact-inline-notice.warning {
+        background: rgba(245,158,11,0.10);
+        border-color: rgba(245,158,11,0.18);
+        color: #b45309;
+    }
+    .compact-section-title {
+        font-size: 1.22rem;
+        font-weight: 800;
+        color: #111827;
+        margin: 0 0 0.18rem 0;
+        line-height: 1.25;
+    }
+    .compact-section-desc {
+        font-size: 0.82rem;
+        color: #94a3b8;
+        margin-bottom: 0.55rem;
+        line-height: 1.45;
+    }
+    .mini-stat-card {
+        background: #fff;
+        border: 1px solid #dbeafe;
+        border-left: 3px solid #60a5fa;
+        border-radius: 12px;
+        padding: 0.52rem 0.68rem;
+        min-height: 48px;
+    }
+    .mini-stat-card .mini-label {
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        font-weight: 700;
+        color: #64748b;
+        margin-bottom: 0.1rem;
+    }
+    .mini-stat-card .mini-value {
+        font-size: 1rem;
+        font-weight: 800;
+        color: #0f172a;
+        line-height: 1.15;
+    }
+    .tiny-stat-card {
+        background: #fff;
+        border: 1px solid #dbeafe;
+        border-left: 3px solid #60a5fa;
+        border-radius: 10px;
+        padding: 0.42rem 0.58rem;
+        min-height: 42px;
+    }
+    .tiny-stat-card .tiny-label {
+        font-size: 0.58rem;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        font-weight: 700;
+        color: #64748b;
+        margin-bottom: 0.08rem;
+    }
+    .tiny-stat-card .tiny-value {
+        font-size: 0.94rem;
+        font-weight: 800;
+        color: #0f172a;
+        line-height: 1.12;
+    }
+    .server-browser-box {
+        background: rgba(255,255,255,0.96);
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+        padding: 0.7rem 0.8rem 0.8rem;
+        margin-top: 0.45rem;
+        box-shadow: 0 4px 16px rgba(37, 99, 235, 0.08);
+    }
+    .server-browser-path {
+        font-size: 0.78rem;
+        color: #334155;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 0.45rem 0.55rem;
+        margin: 0.45rem 0 0.55rem;
+        word-break: break-all;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 
 # 数据字典定义 - 特征缩写及其含义
 CONCEPT_DICTIONARY = {
@@ -1543,6 +1672,85 @@ CONCEPT_GROUPS_DISPLAY = {
     'other_scores': '📈 Other Scores',
     'outcome': '🎯 Outcome',
 }
+
+# ============ 临床阈值线（用于时序图表默认标注） ============
+CLINICAL_THRESHOLDS = {
+    'hr':   {'lines': [60, 100], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Bradycardia', 'Tachycardia'], 'unit': 'bpm'},
+    'map':  {'lines': [65], 'colors': ['#ef4444'], 'labels': ['Hypotension'], 'unit': 'mmHg'},
+    'sbp':  {'lines': [90, 140], 'colors': ['#ef4444', '#f59e0b'], 'labels': ['Hypotension', 'Hypertension'], 'unit': 'mmHg'},
+    'spo2': {'lines': [94], 'colors': ['#ef4444'], 'labels': ['Hypoxemia'], 'unit': '%'},
+    'temp': {'lines': [36, 38], 'colors': ['#3b82f6', '#ef4444'], 'labels': ['Hypothermia', 'Fever'], 'unit': '°C'},
+    'resp': {'lines': [12, 20], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Bradypnea', 'Tachypnea'], 'unit': '/min'},
+    'lact': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Elevated'], 'unit': 'mmol/L'},
+    'crea': {'lines': [1.2], 'colors': ['#f59e0b'], 'labels': ['Elevated'], 'unit': 'mg/dL'},
+    'ph':   {'lines': [7.35, 7.45], 'colors': ['#ef4444', '#ef4444'], 'labels': ['Acidosis', 'Alkalosis'], 'unit': ''},
+    'glu':  {'lines': [70, 180], 'colors': ['#ef4444', '#f59e0b'], 'labels': ['Hypoglycemia', 'Hyperglycemia'], 'unit': 'mg/dL'},
+    'k':    {'lines': [3.5, 5.0], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Hypokalemia', 'Hyperkalemia'], 'unit': 'mEq/L'},
+    'na':   {'lines': [135, 145], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Hyponatremia', 'Hypernatremia'], 'unit': 'mEq/L'},
+    'plt':  {'lines': [150], 'colors': ['#ef4444'], 'labels': ['Thrombocytopenia'], 'unit': '×10³/µL'},
+    'hgb':  {'lines': [7], 'colors': ['#ef4444'], 'labels': ['Severe Anemia'], 'unit': 'g/dL'},
+    'inr_pt': {'lines': [1.5], 'colors': ['#f59e0b'], 'labels': ['Coagulopathy'], 'unit': ''},
+    'pafi': {'lines': [300, 200, 100], 'colors': ['#f59e0b', '#ef4444', '#7f1d1d'], 'labels': ['Mild ARDS', 'Moderate ARDS', 'Severe ARDS'], 'unit': 'mmHg'},
+    'bili': {'lines': [1.2], 'colors': ['#f59e0b'], 'labels': ['Elevated'], 'unit': 'mg/dL'},
+    'sofa': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Organ Dysfunction'], 'unit': 'points'},
+    'sofa2': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Organ Dysfunction'], 'unit': 'points'},
+    'gcs':  {'lines': [8], 'colors': ['#ef4444'], 'labels': ['Severe Impairment'], 'unit': 'points'},
+    'qsofa': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Positive qSOFA'], 'unit': 'points'},
+}
+
+# 临床概念分道映射
+CLINICAL_LANES = {
+    'vitals': ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp'],
+    'labs': ['lact', 'crea', 'bili', 'plt', 'hgb', 'wbc', 'inr_pt', 'glu', 'k', 'na', 'alb', 'crp', 'tnt', 'ph', 'po2', 'pco2'],
+    'interventions': ['norepi_rate', 'epi_rate', 'dopa_rate', 'dobu_rate', 'fio2', 'peep', 'ins', 'abx', 'cort', 'rrt'],
+    'scores': ['sofa', 'sofa2', 'qsofa', 'sirs', 'gcs', 'mews', 'news', 'pafi', 'safi'],
+}
+
+# 跨库概念可用性（用于 harmonization badge）
+CONCEPT_DB_COVERAGE = {
+    'hr': 6, 'map': 6, 'sbp': 6, 'dbp': 6, 'resp': 6, 'spo2': 6, 'temp': 6,
+    'glu': 6, 'crea': 6, 'bili': 6, 'plt': 6, 'hgb': 6, 'wbc': 6, 'na': 6, 'k': 6,
+    'age': 6, 'sex': 6, 'weight': 6, 'height': 6, 'death': 6, 'los_icu': 6,
+    'sofa': 6, 'sofa2': 6, 'gcs': 6,
+    'lact': 5, 'alb': 5, 'crp': 5, 'fio2': 5, 'po2': 5, 'pco2': 5, 'ph': 5,
+    'pafi': 5, 'safi': 5, 'urine': 5,
+    'peep': 4, 'tidal_vol': 4, 'ins': 4,
+    'mech_vent': 3, 'vent_ind': 3, 'ecmo': 2, 'rrt': 4,
+}
+
+
+def _get_coverage_badge(concept_name: str) -> str:
+    """返回概念跨库可用性的 HTML badge。"""
+    n = CONCEPT_DB_COVERAGE.get(concept_name, 0)
+    if n >= 6:
+        color, bg = '#059669', 'rgba(5,150,105,0.1)'
+        label = get_text('coverage_badge_full')
+    elif n >= 4:
+        color, bg = '#d97706', 'rgba(217,119,6,0.1)'
+        label = get_text('coverage_badge_caveat')
+    elif n >= 2:
+        color, bg = '#dc2626', 'rgba(220,38,38,0.1)'
+        label = get_text('coverage_badge_partial')
+    else:
+        color, bg = '#6b7280', 'rgba(107,114,128,0.1)'
+        label = get_text('coverage_badge_dbspec')
+    return f'<span style="display:inline-block;font-size:0.7rem;font-weight:600;color:{color};background:{bg};padding:1px 8px;border-radius:20px;margin-left:6px;">{label} ({n}/6)</span>'
+
+
+def _get_missing_cause_tag(concept_name: str, missing_rate: float) -> tuple:
+    """为缺失率提供可解释的原因标签。返回 (text, color)。"""
+    sparse_events = {'ecmo', 'ecmo_indication', 'mech_circ_support', 'cort', 'rrt',
+                     'abx', 'vaso_ind', 'mech_vent', 'vent_ind', 'vent_start', 'vent_end',
+                     'sep3_sofa1', 'sep3_sofa2', 'circ_failure', 'circ_event'}
+    n_db = CONCEPT_DB_COVERAGE.get(concept_name, 0)
+    if n_db == 0:
+        return get_text('missing_cause_db'), '#dc2626'
+    if concept_name in sparse_events and missing_rate > 0.7:
+        return get_text('missing_cause_sparse'), '#6b7280'
+    if missing_rate > 0.8:
+        return get_text('missing_cause_cohort'), '#d97706'
+    return get_text('missing_cause_normal'), '#059669'
+
 
 # 🔧 ADD (2026-02-05): 支持时序分析的模块（排除静态数据模块）
 # 静态数据模块（demographics, outcome）的值不是连续变化的，不适合时序分析
@@ -2012,6 +2220,91 @@ def load_special_concepts(
                 break
     
     return results
+
+
+def _has_any_source_recursive(concept_name, database, concept_dict, visited=None):
+    """递归检查概念或其子概念是否在目标数据库有数据源。"""
+    if visited is None:
+        visited = set()
+    if concept_name in visited:
+        return False
+    visited.add(concept_name)
+
+    concept_def = concept_dict.get(concept_name)
+    if not concept_def:
+        return False
+    if concept_name in SPECIAL_CONCEPTS:
+        return True
+    if concept_def.sources.get(database):
+        return True
+    if concept_def.sub_concepts:
+        return any(_has_any_source_recursive(sub_concept, database, concept_dict, visited) for sub_concept in concept_def.sub_concepts)
+    return False
+
+
+def load_preview_concepts(
+    concepts: list,
+    database: str,
+    data_path: str,
+    max_patients: int = 20,
+    verbose: bool = False,
+):
+    """为 Preview Sample 加载概念，支持普通概念与特殊概念混合。"""
+    from easyicu import load_concepts
+    from easyicu.concept import load_dictionary
+
+    concept_dict = load_dictionary(include_sofa2=True)
+    normal_concepts = []
+    special_concepts = []
+    unsupported_concepts = []
+
+    for concept in concepts or []:
+        if concept in SPECIAL_CONCEPTS:
+            special_concepts.append(concept)
+            continue
+        if concept in concept_dict and _has_any_source_recursive(concept, database, concept_dict):
+            normal_concepts.append(concept)
+        else:
+            unsupported_concepts.append(concept)
+
+    loaded = {}
+
+    if normal_concepts:
+        normal_result = load_concepts(
+            normal_concepts,
+            database=database,
+            data_path=data_path,
+            max_patients=max_patients,
+            merge=False,
+            verbose=verbose,
+        )
+        if isinstance(normal_result, dict):
+            loaded.update({k: v.data if hasattr(v, 'data') else v for k, v in normal_result.items() if v is not None})
+        elif hasattr(normal_result, 'columns'):
+            for concept in normal_concepts:
+                if concept in normal_result.columns:
+                    loaded[concept] = normal_result
+
+    if special_concepts:
+        special_result = load_special_concepts(
+            concepts=special_concepts,
+            database=database,
+            data_path=data_path,
+            max_patients=max_patients,
+            verbose=verbose,
+        )
+        for concept, df in (special_result or {}).items():
+            if hasattr(df, 'data'):
+                df = df.data
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                loaded[concept] = df
+
+    return {
+        'loaded_concepts': loaded,
+        'unsupported_concepts': unsupported_concepts,
+        'requested_normal': normal_concepts,
+        'requested_special': special_concepts,
+    }
 
 
 def render_data_dictionary():
@@ -2536,6 +2829,8 @@ def init_session_state():
         st.session_state.database = 'miiv'
     if 'loaded_concepts' not in st.session_state:
         st.session_state.loaded_concepts = {}
+    if 'loaded_data_origin' not in st.session_state:
+        st.session_state.loaded_data_origin = 'none'
     if 'patient_ids' not in st.session_state:
         st.session_state.patient_ids = []
     if 'all_patient_count' not in st.session_state:
@@ -2577,6 +2872,8 @@ def init_session_state():
         st.session_state.step2_confirmed = False
     if 'sidebar_expanded' not in st.session_state:
         st.session_state.sidebar_expanded = False
+    if 'sidebar_preview_enabled' not in st.session_state:
+        st.session_state.sidebar_preview_enabled = False
 
 
 # ============ 辅助函数：获取完整的 mock_params（包含最新的 cohort_filter） ============
@@ -3460,6 +3757,46 @@ TEXTS = {
         'export_or_preview': 'Export Data or Load Preview',
         'data_dict': '📖 Data Dictionary',
         'view_desc': 'View Feature Descriptions',
+        'preview_btn': '👁️ Preview Sample',
+        'preview_patients': 'Preview Patients',
+        'sanity_title': '📋 Export Summary',
+        'sanity_patients': 'Patients',
+        'sanity_features': 'Features',
+        'sanity_modules': 'Modules',
+        'sanity_format': 'Format',
+        'sanity_path': 'Export Path',
+        'sanity_missing_hotspots': 'High Missingness (>50%)',
+        'sanity_unsupported': 'Unsupported in This DB',
+        'sanity_confirm': '✅ Confirm & Export',
+        'sanity_back': '↩️ Go Back & Modify',
+        'review_tables': '📋 Review Tables',
+        'review_trends': '📈 Review Trends',
+        'review_patients': '🏥 Review Patients',
+        'review_quality': '📊 Review Quality',
+        'clinical_lanes': 'Clinical Lanes',
+        'lane_vitals': '❤️ Vital Signs',
+        'lane_labs': '🧪 Labs',
+        'lane_interventions': '💉 Interventions',
+        'lane_scores': '📊 Scores',
+        'threshold_lines': 'Show Clinical Thresholds',
+        'patient_summary': 'Patient Summary',
+        'demographics_header': 'Demographics',
+        'icu_los_label': 'ICU LOS',
+        'mortality_label': 'Mortality',
+        'key_supports': 'Key Supports',
+        'score_summary': 'Score Timeline',
+        'missing_cause_db': 'Not available in this database',
+        'missing_cause_cohort': 'Not measured in this cohort',
+        'missing_cause_sparse': 'Sparse clinical event',
+        'missing_cause_normal': 'Within expected range',
+        'coverage_badge_full': 'Fully Harmonized',
+        'coverage_badge_caveat': 'Harmonized (caveats)',
+        'coverage_badge_partial': 'Partially Available',
+        'coverage_badge_dbspec': 'DB-Specific',
+        'ai_why_unavailable': 'Why is this concept unavailable?',
+        'ai_suggest_related': 'Suggest related concepts',
+        'ai_explain_score': 'Explain this score',
+        'ai_why_missing': 'Why is missingness high?',
         'ai_assistant': '🤖 AI Assistant',
     },
     'zh': {
@@ -3523,6 +3860,46 @@ TEXTS = {
         'export_or_preview': '导出数据或加载预览',
         'data_dict': '📖 数据字典',
         'view_desc': '查看特征说明',
+        'preview_btn': '👁️ 预览样本',
+        'preview_patients': '预览患者数',
+        'sanity_title': '📋 导出摘要',
+        'sanity_patients': '患者数',
+        'sanity_features': '特征数',
+        'sanity_modules': '模块数',
+        'sanity_format': '格式',
+        'sanity_path': '导出路径',
+        'sanity_missing_hotspots': '高缺失率 (>50%)',
+        'sanity_unsupported': '当前数据库不支持',
+        'sanity_confirm': '✅ 确认导出',
+        'sanity_back': '↩️ 返回修改',
+        'review_tables': '📋 数据审查',
+        'review_trends': '📈 趋势审查',
+        'review_patients': '🏥 患者审查',
+        'review_quality': '📊 质量审查',
+        'clinical_lanes': '临床分道视图',
+        'lane_vitals': '❤️ 生命体征',
+        'lane_labs': '🧪 实验室',
+        'lane_interventions': '💉 药物干预',
+        'lane_scores': '📊 评分',
+        'threshold_lines': '显示临床阈值线',
+        'patient_summary': '患者摘要',
+        'demographics_header': '人口统计',
+        'icu_los_label': 'ICU 住院时长',
+        'mortality_label': '死亡率',
+        'key_supports': '关键支持治疗',
+        'score_summary': '评分时间线',
+        'missing_cause_db': '该数据库无此变量',
+        'missing_cause_cohort': '该队列未测量',
+        'missing_cause_sparse': '稀疏临床事件',
+        'missing_cause_normal': '在预期范围内',
+        'coverage_badge_full': '完全统一',
+        'coverage_badge_caveat': '统一(有注意事项)',
+        'coverage_badge_partial': '部分可用',
+        'coverage_badge_dbspec': '数据库特有',
+        'ai_why_unavailable': '为什么此概念不可用？',
+        'ai_suggest_related': '推荐相关概念',
+        'ai_explain_score': '解释此评分',
+        'ai_why_missing': '为什么缺失率高？',
         'ai_assistant': '🤖 AI 助手',
     }
 }
@@ -3866,6 +4243,250 @@ def validate_database_path(data_path: str, database: str) -> dict:
         'message': msg,
         'suggestion': sug
     }
+
+
+def _choose_directory_dialog(initial_dir: str = "") -> str | None:
+    """Try to open a native folder picker for local desktop usage."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception:
+        return None
+
+    start_dir = initial_dir or os.path.expanduser("~")
+    try:
+        start_dir = str(Path(start_dir).expanduser())
+    except Exception:
+        start_dir = os.path.expanduser("~")
+    if not Path(start_dir).exists():
+        start_dir = str(Path(start_dir).parent)
+
+    root = None
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        selected = filedialog.askdirectory(initialdir=start_dir)
+        return selected or None
+    except Exception:
+        return None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+
+def _closest_existing_dir(path_str: str, fallback: str = "") -> Path:
+    candidate = (path_str or fallback or os.path.expanduser("~")).strip()
+    try:
+        path = Path(candidate).expanduser()
+    except Exception:
+        path = Path(os.path.expanduser("~"))
+    if path.is_file():
+        path = path.parent
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    if not path.exists():
+        path = Path(os.path.expanduser("~"))
+    return path
+
+
+@st.dialog("Browse Server Folders / 浏览服务器目录", width="large")
+def _render_directory_browser_dialog(
+    *,
+    input_key: str,
+    button_key: str,
+    value: str = "",
+) -> None:
+    lang = st.session_state.get("language", "en")
+    browser_open_key = f"{button_key}_open"
+    browser_cwd_key = f"{button_key}_cwd"
+    browser_filter_key = f"{button_key}_filter"
+    browser_show_hidden_key = f"{button_key}_show_hidden"
+    browser_new_folder_key = f"{button_key}_new_folder"
+    pending_input_key = f"{input_key}__pending_value"
+
+    current_dir = _closest_existing_dir(
+        st.session_state.get(browser_cwd_key, ""),
+        st.session_state.get(input_key, value or ""),
+    )
+    st.session_state[browser_cwd_key] = str(current_dir)
+    if browser_filter_key not in st.session_state:
+        st.session_state[browser_filter_key] = ""
+    if browser_show_hidden_key not in st.session_state:
+        st.session_state[browser_show_hidden_key] = False
+    if browser_new_folder_key not in st.session_state:
+        st.session_state[browser_new_folder_key] = ""
+
+    header_hint = (
+        "Choose a folder on the server running EasyICU."
+        if lang == "en" else
+        "选择运行 EasyICU 的服务器上的目录。"
+    )
+    st.caption(header_hint)
+    st.markdown(f'<div class="server-browser-path">{current_dir}</div>', unsafe_allow_html=True)
+
+    nav_cols = st.columns([1, 1, 1.4, 1.4])
+    with nav_cols[0]:
+        up_label = "⬆ Up" if lang == "en" else "⬆ 上级"
+        if st.button(up_label, key=f"{button_key}_dlg_up", use_container_width=True):
+            st.session_state[browser_cwd_key] = str(current_dir.parent if current_dir != current_dir.parent else current_dir)
+            st.rerun()
+    with nav_cols[1]:
+        home_label = "🏠 Home" if lang == "en" else "🏠 主目录"
+        if st.button(home_label, key=f"{button_key}_dlg_home", use_container_width=True):
+            st.session_state[browser_cwd_key] = str(Path.home())
+            st.rerun()
+    with nav_cols[2]:
+        select_label = "✅ Use This Folder" if lang == "en" else "✅ 使用当前目录"
+        if st.button(select_label, key=f"{button_key}_dlg_select", use_container_width=True):
+            st.session_state[pending_input_key] = str(current_dir)
+            st.session_state[browser_open_key] = False
+            st.rerun()
+    with nav_cols[3]:
+        close_label = "✕ Close" if lang == "en" else "✕ 关闭"
+        if st.button(close_label, key=f"{button_key}_dlg_close", use_container_width=True):
+            st.session_state[browser_open_key] = False
+            st.rerun()
+
+    tools_col1, tools_col2 = st.columns([1.4, 2.2])
+    with tools_col1:
+        st.checkbox(
+            "Show hidden folders" if lang == "en" else "显示隐藏目录",
+            key=browser_show_hidden_key,
+            help="Hidden folders starting with '.' are hidden by default." if lang == "en" else "默认隐藏以 . 开头的目录。",
+        )
+    with tools_col2:
+        create_cols = st.columns([2.4, 1])
+        with create_cols[0]:
+            st.text_input(
+                "New folder name" if lang == "en" else "新建文件夹名称",
+                key=browser_new_folder_key,
+                placeholder="e.g. exports_20260415" if lang == "en" else "例如 exports_20260415",
+                label_visibility="collapsed",
+            )
+        with create_cols[1]:
+            create_label = "📁 Create" if lang == "en" else "📁 创建"
+            if st.button(create_label, key=f"{button_key}_dlg_create", use_container_width=True):
+                new_folder_name = str(st.session_state.get(browser_new_folder_key, "")).strip()
+                if not new_folder_name:
+                    st.warning("Please enter a folder name first." if lang == "en" else "请先输入文件夹名称。")
+                elif any(sep in new_folder_name for sep in ('/', '\\')) or new_folder_name in {'.', '..'}:
+                    st.warning("Folder name cannot contain path separators." if lang == "en" else "文件夹名称不能包含路径分隔符。")
+                else:
+                    try:
+                        target_dir = current_dir / new_folder_name
+                        target_dir.mkdir(parents=False, exist_ok=False)
+                        st.session_state[browser_cwd_key] = str(target_dir)
+                        st.session_state[pending_input_key] = str(target_dir)
+                        st.session_state[browser_new_folder_key] = ""
+                        st.success(f"Created folder: {new_folder_name}" if lang == "en" else f"已创建文件夹：{new_folder_name}")
+                        st.rerun()
+                    except FileExistsError:
+                        st.warning(f"Folder already exists: {new_folder_name}" if lang == "en" else f"文件夹已存在：{new_folder_name}")
+                    except Exception as exc:
+                        st.error(f"Create folder failed: {exc}" if lang == "en" else f"创建文件夹失败：{exc}")
+
+    st.text_input(
+        "Directory Filter" if lang == "en" else "目录筛选",
+        key=browser_filter_key,
+        placeholder="Filter subfolders..." if lang == "en" else "筛选子目录...",
+    )
+    dir_filter = st.session_state.get(browser_filter_key, "").strip().lower()
+    show_hidden = bool(st.session_state.get(browser_show_hidden_key, False))
+
+    try:
+        subdirs = [p for p in sorted(current_dir.iterdir(), key=lambda p: p.name.lower()) if p.is_dir()]
+    except Exception as exc:
+        st.error(f"Browse error: {exc}")
+        subdirs = []
+
+    if not show_hidden:
+        subdirs = [p for p in subdirs if not p.name.startswith('.')]
+
+    if dir_filter:
+        subdirs = [p for p in subdirs if dir_filter in p.name.lower()]
+
+    browser_list = st.container(height=460, border=True)
+    with browser_list:
+        if not subdirs:
+            empty_msg = "No subdirectories found" if lang == "en" else "没有可用子目录"
+            st.caption(empty_msg)
+        else:
+            shown_subdirs = subdirs[:120]
+            for subdir in shown_subdirs:
+                if st.button(
+                    f"📁 {subdir.name}",
+                    key=f"{button_key}_dlg_dir_{hash(str(subdir))}",
+                    use_container_width=True,
+                ):
+                    st.session_state[browser_cwd_key] = str(subdir)
+                    st.rerun()
+            if len(subdirs) > len(shown_subdirs):
+                more_msg = (
+                    f"Showing first {len(shown_subdirs)} directories. Narrow with the filter above."
+                    if lang == "en" else
+                    f"当前仅显示前 {len(shown_subdirs)} 个目录。可用上方筛选缩小范围。"
+                )
+                st.caption(more_msg)
+
+
+def _directory_input(
+    label: str,
+    *,
+    input_key: str,
+    button_key: str,
+    value: str = "",
+    placeholder: str = "",
+    help: str | None = None,
+    label_visibility: str = "visible",
+) -> str:
+    """Text input with a modal server-side directory browser."""
+    lang = st.session_state.get("language", "en")
+    browse_label = "📂"
+    pending_input_key = f"{input_key}__pending_value"
+
+    if pending_input_key in st.session_state:
+        st.session_state[input_key] = st.session_state.pop(pending_input_key)
+    elif input_key not in st.session_state:
+        st.session_state[input_key] = value or ""
+
+    browser_open_key = f"{button_key}_open"
+    browser_cwd_key = f"{button_key}_cwd"
+    browser_filter_key = f"{button_key}_filter"
+
+    col_input, col_button = st.columns([8, 1.2])
+    with col_input:
+        typed_value = st.text_input(
+            label,
+            value=st.session_state.get(input_key, value or ""),
+            key=input_key,
+            placeholder=placeholder,
+            help=help,
+            label_visibility=label_visibility,
+        ).strip()
+    with col_button:
+        if label_visibility == "visible":
+            st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+        browse_help = (
+            "Browse directories on the server running EasyICU"
+            if lang == "en" else
+            "浏览运行 EasyICU 的服务器目录"
+        )
+        if st.button(browse_label, key=button_key, use_container_width=True, help=browse_help):
+            st.session_state[browser_open_key] = True
+            st.session_state[browser_cwd_key] = str(_closest_existing_dir(typed_value, value))
+            st.rerun()
+
+    if st.session_state.get(browser_open_key, False):
+        _render_directory_browser_dialog(input_key=input_key, button_key=button_key, value=value)
+
+    return typed_value
 
 
 def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
@@ -5305,49 +5926,71 @@ def render_quick_visualization_page():
 
     _viz_title = get_text('quick_viz')
     hint_text = (
-        "Generate demo data or load from exported files for interactive analysis"
+        "Generate demo data or load previously exported result files for interactive analysis"
         if entry_mode == 'demo'
-        else "Load data from exported files for interactive analysis"
+        else "Load previously exported result files for interactive analysis"
     )
     if lang != 'en':
-        hint_text = "生成模拟数据或从已导出文件加载，进行交互式分析" if entry_mode == 'demo' else "从已导出的数据文件加载，进行交互式分析"
+        hint_text = "生成模拟数据或从之前导出的结果文件中加载，进行交互式分析" if entry_mode == 'demo' else "从之前导出的结果文件中加载，进行交互式分析"
 
-    st.markdown(f'''
-    <div style="margin-bottom:16px">
-        <div style="font-size:1.4rem;font-weight:800;color:#111827">{_viz_title}</div>
-        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{hint_text}</div>
-    </div>
-    ''', unsafe_allow_html=True)
+    st.markdown(
+        f'''
+        <div class="compact-section-title">{_viz_title}</div>
+        <div class="compact-section-desc">{hint_text}</div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+    viz_notices = st.session_state.pop('_viz_notices', [])
+    for notice in viz_notices[:3]:
+        level = str(notice.get('level') or 'info')
+        message = str(notice.get('message') or '').strip()
+        if message:
+            st.markdown(
+                f'<div class="compact-inline-notice {level}">{message}</div>',
+                unsafe_allow_html=True,
+            )
 
     data_loaded = len(st.session_state.loaded_concepts) > 0
     if 'viz_export_path' not in st.session_state:
         st.session_state.viz_export_path = ""
+    recent_export_path = st.session_state.get('viz_confirmed_path') or st.session_state.get('last_export_dir') or ""
+    if recent_export_path and (st.session_state.get('_prefer_exported_viz') or not st.session_state.get('viz_export_path')):
+        st.session_state.viz_export_path = recent_export_path
+        st.session_state['viz_export_path_input'] = recent_export_path
+        st.session_state['viz_data_source_mode'] = "exported"
+        st.session_state['_prefer_exported_viz'] = False
 
     expander_label = "⚙️ Data Loading Settings" if lang == 'en' else "⚙️ 数据加载设置"
     with st.expander(expander_label, expanded=not data_loaded):
         allow_demo = entry_mode != 'real'
         source_options = ["exported"] + (["demo"] if allow_demo else [])
         source_labels = {
-            "exported": "📁 Exported Files" if lang == 'en' else "📁 已导出文件",
+            "exported": "📁 Previously Exported Data" if lang == 'en' else "📁 加载之前导出的结果文件",
             "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
         }
-        default_source = "demo" if allow_demo and entry_mode == 'demo' else "exported"
+        default_source = "exported" if recent_export_path else ("demo" if allow_demo and entry_mode == 'demo' else "exported")
+        if 'viz_data_source_mode' not in st.session_state:
+            st.session_state.viz_data_source_mode = default_source
+        elif st.session_state.get('viz_data_source_mode') not in source_options:
+            st.session_state.viz_data_source_mode = default_source
         current_source = st.radio(
             "Data Source" if lang == 'en' else "数据来源",
             options=source_options,
-            index=source_options.index(default_source),
+            index=source_options.index(st.session_state.get('viz_data_source_mode', default_source)),
             format_func=lambda value: source_labels[value],
             horizontal=True,
             key="viz_data_source_mode",
         )
 
         if current_source == "exported":
-            export_path = st.text_input(
-                "Export Directory" if lang == 'en' else "导出目录",
-                value=st.session_state.viz_export_path,
-                key="viz_export_path_input",
-                help="Folder containing CSV / Parquet / Excel files" if lang == 'en' else "包含 CSV / Parquet / Excel 文件的目录",
-            ).strip()
+            export_path = _directory_input(
+                "Folder Containing Exported Data Files" if lang == 'en' else "存放导出结果文件的文件夹",
+                value=st.session_state.get('viz_export_path') or recent_export_path,
+                input_key="viz_export_path_input",
+                button_key="viz_export_path_browse",
+                help="Choose the folder that contains EasyICU exported CSV / Parquet / Excel files" if lang == 'en' else "选择存放 EasyICU 导出 CSV / Parquet / Excel 文件的文件夹",
+            )
             st.session_state.viz_export_path = export_path
 
             if export_path:
@@ -5456,6 +6099,7 @@ def render_quick_visualization_page():
                     params['hours'] = hours
                     mock_data, patient_ids = generate_mock_data(**params)
                     st.session_state.loaded_concepts = mock_data
+                    st.session_state.loaded_data_origin = 'demo_viz'
                     st.session_state.patient_ids = patient_ids
                     st.session_state.id_col = 'stay_id'
                     st.session_state.time_col = 'time'
@@ -5463,12 +6107,11 @@ def render_quick_visualization_page():
                 st.rerun()
 
     if data_loaded:
-        st.markdown("---")
         sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
-            get_text('sub_data_table'),
-            get_text('sub_timeseries'),
-            get_text('sub_patient_view'),
-            get_text('sub_data_quality'),
+            get_text('review_tables'),
+            get_text('review_trends'),
+            get_text('review_patients'),
+            get_text('review_quality'),
         ])
 
         with sub_tab1:
@@ -5480,7 +6123,6 @@ def render_quick_visualization_page():
         with sub_tab4:
             render_quality_page()
     else:
-        st.markdown("---")
         no_data_msg = f"""
         <div style="text-align: center; padding: 60px 20px; background: linear-gradient(135deg, #f8f9fa, #e9ecef); border-radius: 16px; margin: 20px 0;">
             <div style="font-size: 4rem; margin-bottom: 20px;">📊</div>
@@ -5592,6 +6234,7 @@ def render_entry_page():
             st.session_state.use_mock_data = True
             st.session_state.database = 'mock'
             st.session_state.loaded_concepts = {}
+            st.session_state.loaded_data_origin = 'none'
             st.session_state.patient_ids = []
             for key in ['group_a_data', 'group_b_data', 'multidb_data', 'dash_demographics',
                         'multidb_is_demo', 'dash_is_demo', 'cohort_is_demo']:
@@ -5610,6 +6253,7 @@ def render_entry_page():
             st.session_state.entry_mode = 'real'
             st.session_state.use_mock_data = False
             st.session_state.loaded_concepts = {}
+            st.session_state.loaded_data_origin = 'none'
             st.session_state.patient_ids = []
             for key in ['group_a_data', 'group_b_data', 'multidb_data', 'dash_demographics',
                         'multidb_is_demo', 'dash_is_demo', 'cohort_is_demo']:
@@ -5787,6 +6431,7 @@ def render_sidebar():
                 st.session_state.entry_mode = 'none'
                 # 清空所有数据
                 st.session_state.loaded_concepts = {}
+                st.session_state.loaded_data_origin = 'none'
                 st.session_state.patient_ids = []
                 st.session_state.use_mock_data = False
                 # 清理Cohort相关缓存
@@ -5904,6 +6549,7 @@ def render_sidebar():
                 st.session_state.concept_checkboxes = {}
                 st.session_state.selected_groups = []
                 st.session_state.loaded_concepts = {}
+                st.session_state.loaded_data_origin = 'none'
                 # 🔧 FIX (2026-02-15): 重置采样参数，避免上次提取的 patient_limit/patient_ids 泄露到新提取
                 st.session_state.patient_limit = 1000  # 重置为默认值
                 st.session_state.patient_ids = []
@@ -6047,12 +6693,13 @@ def render_sidebar():
             _hint = f"Enter the path to your {_db_display} data directory" if st.session_state.language == 'en' else f"请输入 {_db_display} 数据目录的路径"
             
             path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
-            data_path = st.text_input(
+            data_path = _directory_input(
                 path_label,
                 value=st.session_state.data_path or "",
+                input_key="sidebar_data_path_input",
+                button_key="sidebar_data_path_browse",
                 placeholder=_placeholder,
                 help=_hint,
-                on_change=lambda: None  # 触发 rerun 以检测新数据库
             )
             
             # 🔧 当路径变化时自动检测并更新数据库
@@ -6424,6 +7071,56 @@ def render_sidebar():
             if st.session_state.get('step3_confirmed', False):
                 step3_confirmed_msg = "✅ Selection confirmed" if st.session_state.language == 'en' else "✅ 已确认选择"
                 st.info(step3_confirmed_msg)
+                if st.session_state.get('loaded_data_origin') == 'preview':
+                    preview_export_hint = (
+                        "ℹ️ Preview only affects the visualization tabs. Confirm Export will re-extract data from the source database using your current cohort filters and patient limit."
+                        if st.session_state.language == 'en' else
+                        "ℹ️ Preview 只影响可视化标签页。点击确认导出时，会按照当前队列筛选和患者数量限制，重新从源数据库提取数据。"
+                    )
+                    st.markdown(f'<div class="compact-inline-notice info">{preview_export_hint}</div>', unsafe_allow_html=True)
+                
+                # ============ 🔍 Preview Sample Button ============
+                st.markdown("---")
+                preview_title = "👁️ Quick Preview" if st.session_state.language == 'en' else "👁️ 快速预览"
+                st.markdown(f"**{preview_title}**")
+                preview_toggle_label = "Enable quick preview before export (optional)" if st.session_state.language == 'en' else "启用导出前快速预览（可选）"
+                preview_toggle_help = "Preview is optional. Turn this on only when you want to inspect a small sample first." if st.session_state.language == 'en' else "预览不是必需步骤。只有在你想先看一小部分样本时再开启。"
+                preview_enabled = st.toggle(
+                    preview_toggle_label,
+                    value=st.session_state.get('sidebar_preview_enabled', False),
+                    key="sidebar_preview_enabled",
+                    help=preview_toggle_help,
+                )
+
+                if preview_enabled:
+                    preview_desc = "Preview a small sample before full extraction" if st.session_state.language == 'en' else "在全量提取前预览一小部分患者数据"
+                    st.caption(preview_desc)
+                    if 'preview_n_patients' not in st.session_state:
+                        st.session_state.preview_n_patients = 10
+                    
+                    preview_n = st.select_slider(
+                        get_text('preview_patients'),
+                        options=[10, 20, 50, 100],
+                        value=10,
+                        key="preview_n_patients"
+                    )
+
+                    if st.session_state.get('_preview_requested', False):
+                        preview_loading_msg = (
+                            f"⏳ Preview request received. Loading {st.session_state.get('_preview_n', 10)} patients now..."
+                            if st.session_state.language == 'en' else
+                            f"⏳ 已收到预览请求，正在加载 {st.session_state.get('_preview_n', 10)} 位患者，请稍候..."
+                        )
+                        st.info(preview_loading_msg)
+                    
+                    if st.button(get_text('preview_btn'), key="sidebar_preview_btn", use_container_width=True):
+                        st.session_state['_preview_requested'] = True
+                        st.session_state['_preview_n'] = preview_n
+                        st.session_state['_scroll_to_tab'] = 'viz'
+                        st.rerun()
+                else:
+                    optional_msg = "Skip preview if you already know the configuration and want to export directly." if st.session_state.language == 'en' else "如果你已经确认配置无误，可以跳过预览，直接导出。"
+                    st.caption(optional_msg)
         else:
             # 如果没有选中任何概念，重置确认状态
             st.session_state.step3_confirmed = False
@@ -6455,9 +7152,11 @@ def render_sidebar():
         timestamp_suffix = datetime.now().strftime('%Y%m%d')
         default_export_path = str(Path(base_export_path) / f"{db_name}_{timestamp_suffix}")
         
-        export_path = st.text_input(
+        export_path = _directory_input(
             "Export Path" if st.session_state.language == 'en' else "导出路径",
             value=default_export_path,
+            input_key="sidebar_export_path_input",
+            button_key="sidebar_export_path_browse",
             placeholder="Select export directory" if st.session_state.language == 'en' else "选择导出目录",
             help=(f"Data will be exported to this directory (Current database: {db_name.upper()})" if st.session_state.language == 'en' else f"数据将导出到此目录（当前数据库: {db_name.upper()}）")
         )
@@ -6523,22 +7222,65 @@ def render_sidebar():
         
         # 导出按钮
         use_mock = st.session_state.get('use_mock_data', False)
-        has_loaded_data = len(st.session_state.get('loaded_concepts', {})) > 0  # 🔧 FIX: 检查是否有已加载的数据
-        can_export = (use_mock or has_loaded_data or (st.session_state.data_path and Path(st.session_state.data_path).exists())) and selected_concepts and export_path and Path(export_path).exists()
+        has_loaded_data = len(st.session_state.get('loaded_concepts', {})) > 0
+        loaded_data_origin = st.session_state.get('loaded_data_origin', 'none')
+        is_viz_import_mode = has_loaded_data and loaded_data_origin == 'exported_files'
+        can_export = (use_mock or is_viz_import_mode or (st.session_state.data_path and Path(st.session_state.data_path).exists())) and selected_concepts and export_path and Path(export_path).exists()
         
-        # 🔧 FIX (2026-02-03): 如果有已加载数据但没有选择特征，自动使用已加载数据的keys
-        if has_loaded_data and not selected_concepts:
+        # 仅对真正的“已导出文件导入模式”自动复用 loaded_concepts；Preview 不应污染导出状态机
+        if is_viz_import_mode and not selected_concepts:
             selected_concepts = list(st.session_state.loaded_concepts.keys())
             st.session_state.selected_concepts = selected_concepts
             can_export = export_path and Path(export_path).exists()
         
         export_btn = "📥 Export Data" if st.session_state.language == 'en' else "📥 导出数据"
+        if st.session_state.get('_exporting_in_progress', False):
+            export_pending_msg = (
+                "⏳ Export has started. EasyICU is re-extracting data from the source database, not reusing the preview sample."
+                if st.session_state.language == 'en' else
+                "⏳ 导出已经开始。EasyICU 正在从源数据库重新提取数据，不会直接复用刚才的预览样本。"
+            )
+            st.info(export_pending_msg)
         if can_export:
-            if st.button(export_btn, type="primary", width="stretch"):
-                st.session_state.trigger_export = True
-                st.session_state.export_completed = False
-                st.session_state['_exporting_in_progress'] = True  # 🆕 标记导出正在进行
-                st.rerun()
+            # ============ Final Sanity Review ============
+            sanity_title = get_text('sanity_title')
+            with st.expander(sanity_title, expanded=True):
+                _sc1, _sc2, _sc3 = st.columns(3)
+                _n_feats = len(selected_concepts)
+                _n_mods = len(set(g for g, cs in CONCEPT_GROUPS_INTERNAL.items() if any(c in selected_concepts for c in cs)))
+                _pat_lim = st.session_state.get('patient_limit', 0)
+                _pat_str = str(_pat_lim) if _pat_lim and _pat_lim > 0 else ("All" if st.session_state.language == 'en' else "全部")
+                with _sc1:
+                    st.markdown(
+                        f'<div class="compact-summary-card"><div class="summary-label">{get_text("sanity_patients")}</div><div class="summary-value">{_pat_str}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                with _sc2:
+                    st.markdown(
+                        f'<div class="compact-summary-card"><div class="summary-label">{get_text("sanity_features")}</div><div class="summary-value">{_n_feats}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                with _sc3:
+                    st.markdown(
+                        f'<div class="compact-summary-card"><div class="summary-label">{get_text("sanity_format")}</div><div class="summary-value">{export_format}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                
+                st.markdown(f"**{get_text('sanity_path')}:** `{export_path}`")
+                st.markdown(f"**{get_text('sanity_modules')}:** {_n_mods}")
+            
+            _col_ok, _col_back = st.columns(2)
+            with _col_ok:
+                if st.button(get_text('sanity_confirm'), type="primary", use_container_width=True, key="final_export_btn"):
+                    st.session_state.trigger_export = True
+                    st.session_state.export_completed = False
+                    st.session_state['_exporting_in_progress'] = True
+                    st.session_state['_scroll_to_top'] = True
+                    st.rerun()
+            with _col_back:
+                if st.button(get_text('sanity_back'), use_container_width=True, key="sanity_back_btn"):
+                    st.session_state.step3_confirmed = False
+                    st.rerun()
         else:
             st.button(export_btn, type="primary", width="stretch", disabled=True)
             if not selected_concepts:
@@ -6708,6 +7450,7 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
                 filtered_data[concept_name] = df
         
         st.session_state.loaded_concepts = filtered_data
+        st.session_state.loaded_data_origin = 'exported_files'
         st.session_state.patient_ids = preview_patient_ids
         st.session_state.all_patient_count = all_patient_count
         st.session_state.id_col = id_col_found
@@ -6729,6 +7472,8 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
             del st.session_state['_skipped_modules']
         if '_overwrite_modules' in st.session_state:
             del st.session_state['_overwrite_modules']
+        if '_viz_import_export_auto_trigger' in st.session_state:
+            del st.session_state['_viz_import_export_auto_trigger']
         
         load_elapsed = time.time() - load_start
         
@@ -7134,6 +7879,7 @@ def load_data():
             data = _post_filter_cohort_data(data, database)
             
             st.session_state.loaded_concepts = data
+            st.session_state.loaded_data_origin = 'quick_load'
             
             # 获取患者列表 - 统计所有患者数，但UI选择器限制显示数量
             patient_ids = set()
@@ -7327,6 +8073,7 @@ def load_data_for_preview(max_patients: int = 50):
                 filtered_data[concept_name] = df
         
         st.session_state.loaded_concepts = filtered_data
+        st.session_state.loaded_data_origin = 'quick_preview'
         st.session_state.patient_ids = preview_patient_ids
         st.session_state.all_patient_count = all_patient_count
         st.session_state.id_col = id_col_found
@@ -8104,6 +8851,9 @@ def render_home_extract_mode(lang):
             # Option A 按钮
             viz_label = "📈 Go to Visualization" if lang == 'en' else "📈 前往可视化"
             if st.button(viz_label, use_container_width=True, key="goto_viz_home", type="primary"):
+                if st.session_state.get('last_export_dir') or st.session_state.get('viz_confirmed_path'):
+                    st.session_state['viz_data_source_mode'] = 'exported'
+                    st.session_state['_prefer_exported_viz'] = True
                 st.session_state['_scroll_to_tab'] = 'viz'
                 st.rerun()
         
@@ -8293,18 +9043,42 @@ def _render_home_dict_table(concepts, lang):
         st.dataframe(df, width="stretch", hide_index=True, height=300)
 
 
+def _add_clinical_thresholds(fig, concept_name: str, show: bool = True):
+    """在 Plotly 时序图上添加临床阈值参考线。"""
+    if not show:
+        return fig
+    thresholds = CLINICAL_THRESHOLDS.get(concept_name)
+    if not thresholds:
+        return fig
+    for val, color, label in zip(thresholds['lines'], thresholds['colors'], thresholds['labels']):
+        fig.add_hline(
+            y=val, line_dash="dot", line_color=color, line_width=1.5,
+            opacity=0.7,
+            annotation_text=label,
+            annotation_position="top right",
+            annotation_font_size=10,
+            annotation_font_color=color,
+        )
+    return fig
+
+
 def render_timeseries_page():
     """渲染时序分析页面。"""
     lang = st.session_state.get('language', 'en')
     
     _ts_title = "Time Series Analysis" if lang == 'en' else "时序数据分析"
     _ts_sub = "Interactive visualization, single & multi-patient comparison" if lang == 'en' else "交互式可视化，支持单/多患者对比"
-    st.markdown(f'''
-    <div style="margin-bottom:16px">
-        <div style="font-size:1.4rem;font-weight:800;color:#111827">{_ts_title}</div>
-        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_ts_sub}</div>
-    </div>
-    ''', unsafe_allow_html=True)
+    _hdr_col1, _hdr_col2 = st.columns([3, 1])
+    with _hdr_col1:
+        st.markdown(f'''
+        <div style="margin-bottom:16px">
+            <div style="font-size:1.4rem;font-weight:800;color:#111827">{_ts_title}</div>
+            <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_ts_sub}</div>
+        </div>
+        ''', unsafe_allow_html=True)
+    with _hdr_col2:
+        _show_thresh = st.toggle(get_text('threshold_lines'), value=True, key="ts_show_thresholds")
+        st.session_state['_ts_show_thresholds'] = _show_thresh
     
     if len(st.session_state.loaded_concepts) == 0:
         _msg = "Load data to begin time series analysis." if lang == 'en' else "请先加载数据以进行时序分析。"
@@ -8319,18 +9093,90 @@ def render_timeseries_page():
     # Concept 选择区域
     available_concepts = list(st.session_state.loaded_concepts.keys())
     
-    # 分析模式选择
+    # 分析模式选择 — 新增 Clinical Lanes 模式
     mode_label = "Analysis Mode" if lang == 'en' else "分析模式"
+    mode_lanes = get_text('clinical_lanes')
     mode_single = "Single Patient" if lang == 'en' else "单患者分析"
     mode_multi = "Multi-Patient Comparison" if lang == 'en' else "多患者比较"
     analysis_mode = st.radio(
         mode_label,
-        options=[mode_single, mode_multi],
+        options=[mode_lanes, mode_single, mode_multi],
         horizontal=True,
         key="ts_mode"
     )
     
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    
+    # ============ Clinical Lanes View (默认) ============
+    if analysis_mode == mode_lanes:
+        import plotly.graph_objects as go
+        
+        if not st.session_state.patient_ids:
+            st.warning("No patient data" if lang == 'en' else "无患者数据")
+        else:
+            _lane_pid = st.selectbox(
+                "Patient" if lang == 'en' else "患者",
+                options=st.session_state.patient_ids,
+                key="lane_patient_select"
+            )
+            
+            id_col = st.session_state.get('id_col', 'stay_id')
+            _show_thresh = st.session_state.get('_ts_show_thresholds', True)
+            
+            for lane_name, lane_concepts in CLINICAL_LANES.items():
+                _lane_avail = [c for c in lane_concepts if c in available_concepts]
+                if not _lane_avail:
+                    continue
+                    
+                lane_label = get_text(f'lane_{lane_name}')
+                st.markdown(f"#### {lane_label}")
+                
+                _n_cols = min(len(_lane_avail), 3)
+                _cols = st.columns(_n_cols)
+                for idx, cname in enumerate(_lane_avail[:6]):
+                    with _cols[idx % _n_cols]:
+                        df = st.session_state.loaded_concepts.get(cname)
+                        if df is None or not hasattr(df, 'columns'):
+                            continue
+                        if id_col not in df.columns or cname not in df.columns:
+                            continue
+                        pdf = df[df[id_col] == _lane_pid].copy()
+                        if pdf.empty:
+                            st.caption(f"{cname}: no data")
+                            continue
+                        
+                        _tcol = None
+                        for tc in ['charttime', 'time', 'hour', 'datetime', 'measuredat_minutes',
+                                   'observationoffset', 'starttime']:
+                            if tc in pdf.columns:
+                                _tcol = tc
+                                break
+                        
+                        if _tcol is None:
+                            st.caption(f"{cname}: no time column")
+                            continue
+                        
+                        try:
+                            fig = go.Figure()
+                            fig.add_trace(go.Scatter(
+                                x=pdf[_tcol], y=pd.to_numeric(pdf[cname], errors='coerce'),
+                                mode='lines+markers', name=cname,
+                                line=dict(width=1.5), marker=dict(size=3)
+                            ))
+                            fig = _add_clinical_thresholds(fig, cname, _show_thresh)
+                            
+                            _unit = CLINICAL_THRESHOLDS.get(cname, {}).get('unit', '')
+                            fig.update_layout(
+                                title=dict(text=f"{cname}" + (f" ({_unit})" if _unit else ""), font=dict(size=12)),
+                                height=200, margin=dict(l=40, r=10, t=30, b=25),
+                                showlegend=False, xaxis=dict(title=""), yaxis=dict(title=""),
+                            )
+                            st.plotly_chart(fig, use_container_width=True, key=f"lane_{lane_name}_{cname}_{_lane_pid}")
+                        except Exception:
+                            st.caption(f"{cname}: render error")
+                
+                st.markdown("---")
+        return
     
     if analysis_mode == mode_single:
         # 顶部控制面板 - 🔧 FIX: 添加模块筛选，方便用户在100+特征中找到想要的
@@ -8800,6 +9646,32 @@ def render_timeseries_page():
 def render_patient_page():
     """渲染患者视图页面。"""
     lang = st.session_state.get('language', 'en')
+    loaded_concepts_map = st.session_state.loaded_concepts
+
+    def _patient_concept_frame(concept_name, patient_id, id_col_name):
+        frame = loaded_concepts_map.get(concept_name)
+        if not isinstance(frame, pd.DataFrame) or id_col_name not in frame.columns:
+            return None
+        patient_frame = frame[frame[id_col_name] == patient_id].copy()
+        if patient_frame.empty:
+            return None
+        return patient_frame
+
+    def _latest_patient_value(concept_name, patient_id, id_col_name):
+        patient_frame = _patient_concept_frame(concept_name, patient_id, id_col_name)
+        if patient_frame is None:
+            return None
+        value_col = concept_name if concept_name in patient_frame.columns else None
+        if value_col is None:
+            excluded_cols = {id_col_name, 'time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat'}
+            candidates = [c for c in patient_frame.columns if c not in excluded_cols]
+            if not candidates:
+                return None
+            value_col = candidates[-1]
+        series = patient_frame[value_col].dropna()
+        if series.empty:
+            return None
+        return series.iloc[-1]
     
     _pat_title = "Patient Overview" if lang == 'en' else "患者综合视图"
     _pat_sub = "Multi-dimensional patient dashboard" if lang == 'en' else "多维度患者仪表盘"
@@ -8824,6 +9696,57 @@ def render_patient_page():
         warn_msg = "⚠️ No patient data found" if lang == 'en' else "⚠️ 未找到患者数据"
         st.warning(warn_msg)
         return
+    
+    # ============ Patient Summary Header (审稿式 Case Review) ============
+    def _render_patient_summary_card(pid):
+        """渲染患者摘要卡片"""
+        loaded = st.session_state.loaded_concepts
+        id_col = st.session_state.get('id_col', 'stay_id')
+        _age = _los = _mort = _sex = "—"
+        _supports = []
+        
+        for cname, df in loaded.items():
+            if df is None or not hasattr(df, 'columns') or id_col not in df.columns:
+                continue
+            pdf = df[df[id_col] == pid]
+            if pdf.empty or cname not in pdf.columns:
+                continue
+            v = pdf[cname].dropna()
+            if len(v) == 0:
+                continue
+            if cname == 'age':
+                _age = f"{float(v.iloc[0]):.0f}"
+            elif cname == 'sex':
+                _sex = str(v.iloc[0])
+            elif cname == 'los_icu':
+                _los = f"{float(v.iloc[0]):.1f}d"
+            elif cname == 'death':
+                _mort = "☠️ Yes" if float(v.iloc[0]) == 1 else "✅ No"
+            elif cname == 'mech_vent' and float(v.iloc[0]) > 0:
+                _supports.append("🌬️ MV")
+            elif cname == 'rrt' and float(v.iloc[0]) > 0:
+                _supports.append("🚰 RRT")
+            elif cname in ('norepi_rate', 'epi_rate', 'dopa_rate', 'dobu_rate') and float(v.max()) > 0:
+                _supports.append("💉 Vasopressors")
+        
+        _supports = list(set(_supports))
+        _supports_str = ", ".join(_supports) if _supports else "—"
+        _demo_lbl = get_text('demographics_header')
+        _los_lbl = get_text('icu_los_label')
+        _mort_lbl = get_text('mortality_label')
+        _sup_lbl = get_text('key_supports')
+        
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#f0f9ff,#e0f2fe);border:1px solid #bae6fd;border-radius:14px;padding:16px 20px;margin-bottom:16px">
+            <div style="font-size:1.1rem;font-weight:800;color:#0369a1;margin-bottom:10px">📋 {get_text('patient_summary')} — Patient {pid}</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">
+                <div><div style="font-size:.72rem;color:#6b7280;text-transform:uppercase;font-weight:700">{_demo_lbl}</div><div style="font-weight:600">{_sex}, {_age}y</div></div>
+                <div><div style="font-size:.72rem;color:#6b7280;text-transform:uppercase;font-weight:700">{_los_lbl}</div><div style="font-weight:600">{_los}</div></div>
+                <div><div style="font-size:.72rem;color:#6b7280;text-transform:uppercase;font-weight:700">{_mort_lbl}</div><div style="font-weight:600">{_mort}</div></div>
+                <div><div style="font-size:.72rem;color:#6b7280;text-transform:uppercase;font-weight:700">{_sup_lbl}</div><div style="font-weight:600">{_supports_str}</div></div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # 患者选择面板
     select_title = "Patient Selection" if lang == 'en' else "患者选择"
@@ -8873,6 +9796,14 @@ def render_patient_page():
         # 显示当前位置
         current_idx = st.session_state.patient_ids.index(st.session_state.get('patient_view_id', st.session_state.patient_ids[0]))
         st.markdown(f"<div style='text-align:center;padding:0.5rem;background:rgba(30,40,50,0.6);border-radius:4px'>{current_idx + 1}/{len(st.session_state.patient_ids)}</div>", unsafe_allow_html=True)
+    
+    # ============ Render Patient Summary Card ============
+    _current_pid = st.session_state.get('patient_view_id', st.session_state.patient_ids[0] if st.session_state.patient_ids else None)
+    if _current_pid is not None:
+        try:
+            _render_patient_summary_card(_current_pid)
+        except Exception:
+            pass
     
     col1, col2, col3 = st.columns([1, 1, 2])
     
@@ -9003,7 +9934,7 @@ def render_patient_page():
                     
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    no_vitals = "ℹ️ No vital signs data available" if lang == 'en' else "ℹ️ 无可用的生命体征数据"
+                    no_vitals = "ℹ️ No standard vital signs are present in the current loaded features" if lang == 'en' else "ℹ️ 当前已加载特征中不包含标准生命体征"
                     st.info(no_vitals)
                 
                 # SOFA 评分趋势
@@ -9282,10 +10213,11 @@ def render_patient_page():
                 st.markdown(summary_title)
                 
                 summary_cols = st.columns(4)
+                not_selected_status = "Not selected ⚪" if lang == 'en' else "未选择 ⚪"
                 
                 # Sepsis 状态
                 with summary_cols[0]:
-                    sepsis_status = "Not loaded ⚪" if lang == 'en' else "未加载 ⚪"
+                    sepsis_status = not_selected_status
                     sepsis_color = "#6c757d"
                     
                     found_sep = False
@@ -9317,7 +10249,7 @@ def render_patient_page():
                 
                 # 机械通气
                 with summary_cols[1]:
-                    vent_status = "Not loaded ⚪" if lang == 'en' else "未加载 ⚪"
+                    vent_status = not_selected_status
                     vent_concepts = ['vent_ind', 'mech_vent', 'vent_start']
                     
                     # 检查是否有相关 concept 被加载
@@ -9339,7 +10271,7 @@ def render_patient_page():
                 
                 # 血管活性药物
                 with summary_cols[2]:
-                    vaso_status = "Not loaded ⚪" if lang == 'en' else "未加载 ⚪"
+                    vaso_status = not_selected_status
                     vaso_concepts = ['norepi_rate', 'epi_rate', 'dopa_rate', 'vaso_ind']
                     
                     found_vaso = any(c in st.session_state.loaded_concepts for c in vaso_concepts)
@@ -9362,7 +10294,7 @@ def render_patient_page():
                 
                 # GCS
                 with summary_cols[3]:
-                    gcs_val = "Not loaded" if lang == 'en' else "未加载"
+                    gcs_val = "Not selected" if lang == 'en' else "未选择"
                     gcs_color = "#6c757d"
                     
                     if 'gcs' in st.session_state.loaded_concepts:
@@ -9398,6 +10330,38 @@ def render_patient_page():
                     
                     st.markdown("**GCS**")
                     st.markdown(f"<span style='color:{gcs_color};font-weight:bold;font-size:1.2rem'>{gcs_val}</span>", unsafe_allow_html=True)
+
+                snapshot_candidates = []
+                snapshot_excluded = {
+                    'sep3_sofa1', 'sep3_sofa2', 'vent_ind', 'mech_vent', 'vent_start',
+                    'norepi_rate', 'epi_rate', 'dopa_rate', 'vaso_ind', 'gcs'
+                }
+                for concept_name in available_concepts:
+                    if concept_name in snapshot_excluded:
+                        continue
+                    latest_value = _latest_patient_value(concept_name, patient_id, id_col)
+                    if latest_value is None:
+                        continue
+                    try:
+                        formatted = safe_format_number(float(latest_value), 2)
+                    except Exception:
+                        formatted = str(latest_value)
+                    snapshot_candidates.append((concept_name, formatted))
+
+                if snapshot_candidates:
+                    snapshot_title = "#### 🧩 Loaded Feature Snapshot" if lang == 'en' else "#### 🧩 已加载特征快照"
+                    st.markdown(snapshot_title)
+                    visible_snapshots = snapshot_candidates[:8]
+                    snap_cols = st.columns(min(4, len(visible_snapshots)))
+                    for idx, (concept_name, formatted) in enumerate(visible_snapshots):
+                        with snap_cols[idx % len(snap_cols)]:
+                            st.markdown(
+                                f'<div class="tiny-stat-card"><div class="tiny-label">{concept_name}</div><div class="tiny-value">{formatted}</div></div>',
+                                unsafe_allow_html=True,
+                            )
+                    if len(snapshot_candidates) > len(visible_snapshots):
+                        more_msg = f"Showing {len(visible_snapshots)} of {len(snapshot_candidates)} loaded features for this patient." if lang == 'en' else f"当前展示该患者 {len(snapshot_candidates)} 个已加载特征中的前 {len(visible_snapshots)} 个。"
+                        st.caption(more_msg)
                             
             except Exception as e:
                 err_msg = f"Dashboard rendering failed: {e}" if lang == 'en' else f"综合仪表盘渲染失败: {e}"
@@ -9441,7 +10405,7 @@ def render_patient_page():
                             if time_col:
                                 st.line_chart(patient_df.set_index(time_col)[value_col], height=120)
             else:
-                no_vitals = "ℹ️ No vital signs data available" if lang == 'en' else "ℹ️ 无可用的生命体征数据"
+                no_vitals = "ℹ️ No standard vital signs are present in the current loaded features" if lang == 'en' else "ℹ️ 当前已加载特征中不包含标准生命体征"
                 st.info(no_vitals)
             
             # SOFA/SOFA2 评分
@@ -9706,10 +10670,10 @@ def render_data_table_subtab():
     lang = st.session_state.get('language', 'en')
     
     page_title = "📋 Data Tables Explorer" if lang == 'en' else "📋 数据大表浏览"
-    st.markdown(f"## {page_title}")
+    st.markdown(f'<div class="compact-section-title">{page_title}</div>', unsafe_allow_html=True)
     
     page_desc = "Browse and explore your loaded data by module. Select a module to view the complete data table." if lang == 'en' else "按模块浏览和探索已加载的数据。选择一个模块查看完整数据表。"
-    st.caption(page_desc)
+    st.markdown(f'<div class="compact-section-desc">{page_desc}</div>', unsafe_allow_html=True)
     
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
@@ -9749,29 +10713,27 @@ def render_data_table_subtab():
     unique_feature_count = len(st.session_state.loaded_concepts)
     
     # 显示模块统计
+    total_rows = sum(
+        len(df) for df in st.session_state.loaded_concepts.values() 
+        if isinstance(df, pd.DataFrame)
+    )
+    stats_items = [
+        ("Modules" if lang == 'en' else "模块数", len(loaded_by_module)),
+        ("Features" if lang == 'en' else "特征数", unique_feature_count),
+        ("Patients" if lang == 'en' else "患者数", len(st.session_state.patient_ids) if st.session_state.patient_ids else 0),
+        ("Total Rows" if lang == 'en' else "总行数", f"{total_rows:,}"),
+    ]
     stats_cols = st.columns(4)
-    with stats_cols[0]:
-        modules_label = "Modules" if lang == 'en' else "模块数"
-        st.metric(modules_label, len(loaded_by_module))
-    with stats_cols[1]:
-        features_label = "Features" if lang == 'en' else "特征数"
-        st.metric(features_label, unique_feature_count)  # 🔧 使用去重后的数量
-    with stats_cols[2]:
-        patients_label = "Patients" if lang == 'en' else "患者数"
-        st.metric(patients_label, len(st.session_state.patient_ids) if st.session_state.patient_ids else 0)
-    with stats_cols[3]:
-        total_rows = sum(
-            len(df) for df in st.session_state.loaded_concepts.values() 
-            if isinstance(df, pd.DataFrame)
-        )
-        rows_label = "Total Rows" if lang == 'en' else "总行数"
-        st.metric(rows_label, f"{total_rows:,}")
-    
-    st.markdown("---")
+    for idx, (label, value) in enumerate(stats_items):
+        with stats_cols[idx]:
+            st.markdown(
+                f'<div class="mini-stat-card"><div class="mini-label">{label}</div><div class="mini-value">{value}</div></div>',
+                unsafe_allow_html=True,
+            )
     
     # 模块选择器 - 🔧 放大标题
     module_select_label = "Select Module to View" if lang == 'en' else "选择要查看的模块"
-    st.markdown(f"### 📦 {module_select_label}")
+    st.markdown(f'<div style="font-size:1.02rem;font-weight:800;color:#111827;margin-bottom:0.4rem">📦 {module_select_label}</div>', unsafe_allow_html=True)
     module_options = list(loaded_by_module.keys())
     
     if not module_options:
@@ -9791,14 +10753,12 @@ def render_data_table_subtab():
         
         # 显示该模块包含的特征
         features_in_module = f"**Features in this module ({len(module_concepts)}):** " + ", ".join(sorted(module_concepts))
-        st.markdown(features_in_module)
-        
-        st.markdown("---")
+        st.caption(features_in_module)
         
         # 特征选择器（单选或多选合并）- 默认合并全部放第一个
         # 🔧 放大标题
         view_mode_label = "View Mode" if lang == 'en' else "查看模式"
-        st.markdown(f"### 👁️ {view_mode_label}")
+        st.markdown(f'<div style="font-size:1.02rem;font-weight:800;color:#111827;margin-bottom:0.4rem">👁️ {view_mode_label}</div>', unsafe_allow_html=True)
         view_modes = ["Merge All (Wide Table)", "Single Feature"] if lang == 'en' else ["合并全部（宽表）", "单个特征"]
         
         view_mode = st.radio("View Mode", view_modes, horizontal=True, key="data_table_view_mode", index=0, label_visibility="collapsed")
@@ -9891,15 +10851,12 @@ def render_data_table_subtab():
         
         else:
             # 合并全部模式（宽表）
-            merge_info = "Merging all features in this module into a wide table (joined by patient ID and time)" if lang == 'en' else "将该模块的所有特征合并为宽表（按患者ID和时间连接）"
-            st.info(f"ℹ️ {merge_info}")
-            
-            # 🔧 添加采样选项，避免大数据量合并超时
-            sample_col1, sample_col2 = st.columns([3, 1])
-            with sample_col1:
+            merge_control_cols = st.columns([2.8, 1.1])
+            with merge_control_cols[0]:
+                merge_info = "Merging all features in this module into a wide table (joined by patient ID and time)" if lang == 'en' else "将该模块的所有特征合并为宽表（按患者ID和时间连接）"
                 sample_hint = "Large datasets will be sampled for performance" if lang == 'en' else "大数据集将被采样以保证性能"
-                st.caption(f"💡 {sample_hint}")
-            with sample_col2:
+                st.markdown(f'<div class="compact-inline-notice info">ℹ️ {merge_info}<br><span style="font-size:0.74rem;opacity:0.82">{sample_hint}</span></div>', unsafe_allow_html=True)
+            with merge_control_cols[1]:
                 max_rows_per_feature = st.selectbox(
                     "Max rows" if lang == 'en' else "最大行数",
                     options=[1000, 2000, 5000, 10000],
@@ -9910,15 +10867,37 @@ def render_data_table_subtab():
             # 收集该模块的所有数据
             dfs_to_merge = []
             id_col = st.session_state.get('id_col', 'stay_id')
-            time_col = st.session_state.get('time_col', 'time')
+            time_col_candidates = [
+                'charttime', 'time', 'starttime', 'start', 'endtime', 'itemtime',
+                'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat',
+                'givenat', 'enteredentryat', 'intakeoutputoffset', 'observationoffset',
+                'nursingchartoffset', 'labresultoffset', 'respchartoffset'
+            ]
+            metadata_cols = {'valueuom', 'unit', 'units', 'category', 'type', 'dur_var', 'entertime', 'intakeoutputentryoffset'}
+            unified_time_col = 'charttime'
             
             for concept_name in module_concepts:
                 if concept_name in st.session_state.loaded_concepts:
                     df = st.session_state.loaded_concepts[concept_name]
                     if isinstance(df, pd.DataFrame) and len(df) > 0:
-                        # 重命名值列为概念名
                         df_copy = df.copy()
-                        value_cols = [c for c in df_copy.columns if c not in [id_col, time_col, 'charttime']]
+
+                        # 统一时间列名，避免不同数据库/概念的时间别名导致只按 ID 合并
+                        if unified_time_col in df_copy.columns:
+                            other_time_cols = [tc for tc in time_col_candidates if tc in df_copy.columns and tc != unified_time_col]
+                            if other_time_cols:
+                                df_copy = df_copy.drop(columns=other_time_cols)
+                        else:
+                            for tc in time_col_candidates:
+                                if tc in df_copy.columns:
+                                    df_copy = df_copy.rename(columns={tc: unified_time_col})
+                                    break
+
+                        drop_meta_cols = [c for c in df_copy.columns if c in metadata_cols]
+                        if drop_meta_cols:
+                            df_copy = df_copy.drop(columns=drop_meta_cols)
+
+                        value_cols = [c for c in df_copy.columns if c not in [id_col, unified_time_col]]
                         if len(value_cols) == 1 and value_cols[0] != concept_name:
                             df_copy = df_copy.rename(columns={value_cols[0]: concept_name})
                         dfs_to_merge.append(df_copy)
@@ -9936,101 +10915,104 @@ def render_data_table_subtab():
                         display_merged[col] = display_merged[col].astype(str)
                 st.dataframe(display_merged, use_container_width=True, height=500)
             else:
-                # 使用 reduce merge
                 from functools import reduce
-                
-                # 智能检测合并列：检查所有 DataFrame 共有的列
-                # 可能的时间列
-                time_col_candidates = ['charttime', 'time', 'datetime', 'measuredat', 'measuredat_minutes', 'starttime', 'Offset']
-                
-                # 找到所有 DataFrame 共有的列
-                common_cols = set(dfs_to_merge[0].columns)
-                for df_check in dfs_to_merge[1:]:
-                    common_cols &= set(df_check.columns)
-                
-                # 确定合并列
-                merge_cols = []
-                if id_col in common_cols:
-                    merge_cols.append(id_col)
-                
-                # 检测共有的时间列
-                time_col_found = None
-                for tc in time_col_candidates:
-                    if tc in common_cols:
-                        time_col_found = tc
-                        merge_cols.append(tc)
-                        break
-                
-                # 如果没有共同时间列，只使用 ID 合并
-                if len(merge_cols) == 0:
-                    # 完全没有共同列，无法合并
-                    no_common_msg = "Cannot merge: no common columns found across features." if lang == 'en' else "无法合并：特征间没有共同列。"
+                merge_cols = [id_col, unified_time_col]
+
+                if not any(id_col in df.columns for df in dfs_to_merge):
+                    no_common_msg = "Cannot merge: patient ID column is missing in all features." if lang == 'en' else "无法合并：所有特征都缺少患者 ID 列。"
                     st.warning(no_common_msg)
                 else:
                     try:
                         merging_msg = "Merging data..." if lang == 'en' else "正在合并数据..."
                         with st.spinner(merging_msg):
-                            # 🔧 性能优化：使用用户选择的最大行数
                             MAX_ROWS_PER_DF = max_rows_per_feature
                             total_rows_before = sum(len(df) for df in dfs_to_merge)
-                            
-                            # 合并前先移除各 DataFrame 中的重复列名（保留不同的值列）
-                            # 找到各 df 的值列（非合并列）
-                            processed_dfs = []
+
+                            dynamic_frames = []
+                            static_frames = []
                             seen_value_cols = set()
-                            
+
                             for df in dfs_to_merge:
+                                if id_col not in df.columns:
+                                    continue
+
                                 df_proc = df.copy()
-                                
-                                # 🔧 限制行数以避免合并超时
                                 if len(df_proc) > MAX_ROWS_PER_DF:
                                     df_proc = df_proc.head(MAX_ROWS_PER_DF)
-                                
-                                # 获取此 df 的值列
-                                value_cols_in_df = [c for c in df_proc.columns if c not in merge_cols]
-                                
-                                # 检查是否有重复列名
-                                for vc in value_cols_in_df:
-                                    if vc in seen_value_cols:
-                                        # 重复列名，跳过这一列（或可以重命名）
-                                        df_proc = df_proc.drop(columns=[vc], errors='ignore')
-                                    else:
-                                        seen_value_cols.add(vc)
-                                
-                                if len(df_proc.columns) > len(merge_cols):
-                                    processed_dfs.append(df_proc)
-                            
-                            if len(processed_dfs) == 0:
+
+                                value_cols_in_df = [c for c in df_proc.columns if c not in [id_col, unified_time_col]]
+                                if not value_cols_in_df:
+                                    continue
+
+                                duplicate_cols = [vc for vc in value_cols_in_df if vc in seen_value_cols]
+                                if duplicate_cols:
+                                    df_proc = df_proc.drop(columns=duplicate_cols, errors='ignore')
+                                    value_cols_in_df = [c for c in value_cols_in_df if c not in duplicate_cols]
+                                seen_value_cols.update(value_cols_in_df)
+                                if not value_cols_in_df:
+                                    continue
+
+                                has_time = unified_time_col in df_proc.columns and not df_proc[unified_time_col].isna().all()
+                                if has_time:
+                                    dynamic_frames.append(df_proc.drop_duplicates(subset=merge_cols, keep='last'))
+                                else:
+                                    static_frames.append(df_proc.drop_duplicates(subset=[id_col], keep='last'))
+
+                            merged_df = None
+
+                            if dynamic_frames:
+                                stacked_frames = []
+                                for df_proc in dynamic_frames:
+                                    value_cols_in_df = [c for c in df_proc.columns if c not in merge_cols]
+                                    for value_col in value_cols_in_df:
+                                        single_val_df = df_proc[merge_cols + [value_col]].copy()
+                                        single_val_df['_concept'] = str(value_col)
+                                        single_val_df['_value'] = single_val_df[value_col]
+                                        single_val_df.drop(columns=[value_col], inplace=True)
+                                        stacked_frames.append(single_val_df)
+
+                                if stacked_frames:
+                                    stacked = pd.concat(stacked_frames, ignore_index=True)
+                                    merged_df = stacked.pivot_table(
+                                        index=merge_cols,
+                                        columns='_concept',
+                                        values='_value',
+                                        aggfunc='first'
+                                    ).reset_index()
+
+                            if static_frames:
+                                static_merged = static_frames[0] if len(static_frames) == 1 else reduce(
+                                    lambda left, right: pd.merge(left, right, on=[id_col], how='outer'),
+                                    static_frames
+                                )
+                                if merged_df is not None and id_col in merged_df.columns:
+                                    merged_df = pd.merge(merged_df, static_merged, on=[id_col], how='left')
+                                else:
+                                    merged_df = static_merged
+
+                            if merged_df is None:
                                 no_data_msg = "No unique data columns to merge." if lang == 'en' else "没有唯一的数据列可合并。"
                                 st.warning(no_data_msg)
-                            elif len(processed_dfs) == 1:
-                                merged_df = processed_dfs[0]
-                            else:
-                                merged_df = reduce(
-                                    lambda left, right: pd.merge(left, right, on=merge_cols, how='outer'),
-                                    processed_dfs
-                                )
-                                
-                                # 清理可能的 _x, _y 后缀列（合并时可能产生）
-                                cols_to_drop = [c for c in merged_df.columns if c.endswith('_x') or c.endswith('_y')]
-                                if cols_to_drop:
-                                    merged_df = merged_df.drop(columns=cols_to_drop)
+                                return
                         
                         # 🔧 显示截断提示
                         if total_rows_before > MAX_ROWS_PER_DF * len(dfs_to_merge):
                             truncate_warn = f"⚠️ Data was sampled (max {MAX_ROWS_PER_DF:,} rows per feature) for performance. Total rows: {total_rows_before:,}" if lang == 'en' else f"⚠️ 数据已采样（每特征最多 {MAX_ROWS_PER_DF:,} 行）以保证性能。原始总行数：{total_rows_before:,}"
                             st.info(truncate_warn)
                         
-                        # 显示合并结果统计
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Rows" if lang == 'en' else "行数", f"{len(merged_df):,}")
-                        with col2:
-                            st.metric("Columns" if lang == 'en' else "列数", len(merged_df.columns))
-                        with col3:
-                            st.metric("Features" if lang == 'en' else "特征数", len(module_concepts))
-                        
-                        st.markdown("---")
+                        # 显示合并结果统计（紧凑版）
+                        result_stats = [
+                            ("Rows" if lang == 'en' else "行数", f"{len(merged_df):,}"),
+                            ("Columns" if lang == 'en' else "列数", len(merged_df.columns)),
+                            ("Features" if lang == 'en' else "特征数", len(module_concepts)),
+                        ]
+                        result_cols = st.columns(3)
+                        for idx, (label, value) in enumerate(result_stats):
+                            with result_cols[idx]:
+                                st.markdown(
+                                    f'<div class="tiny-stat-card"><div class="tiny-label">{label}</div><div class="tiny-value">{value}</div></div>',
+                                    unsafe_allow_html=True,
+                                )
                         
                         # 显示数据
                         max_rows = 1000
@@ -10051,12 +11033,27 @@ def render_data_table_subtab():
                         st.error(err_msg)
 
 
+def _render_ai_context_button(question_key: str, context: str = "", concept: str = ""):
+    """渲染上下文感知的 AI 助手小按钮。点击后将问题发送到全局 AI 助手。"""
+    label = get_text(question_key)
+    btn_key = f"ai_ctx_{question_key}_{concept}_{hash(context) % 10000}"
+    if st.button(f"🤖 {label}", key=btn_key, help=label):
+        full_q = f"{label}"
+        if concept:
+            full_q += f" (concept: {concept})"
+        if context:
+            full_q += f" Context: {context}"
+        st.session_state['_ai_pending_question'] = full_q
+        st.session_state['_floating_ai_open'] = True
+        st.toast("💬 Question sent to AI Assistant" if st.session_state.get('language') == 'en' else "💬 问题已发送到 AI 助手")
+
+
 def render_quality_page():
     """渲染数据质量页面。"""
     lang = st.session_state.get('language', 'en')
     
     page_title = "Data Quality" if lang == 'en' else "数据质量评估"
-    page_sub = "Missing rate analysis & data completeness" if lang == 'en' else "缺失率分析与数据完整度"
+    page_sub = "Missing rate analysis, coverage badges & explainable causes" if lang == 'en' else "缺失率分析、覆盖度标识与可解释原因"
     st.markdown(f'''
     <div style="margin-bottom:20px">
         <div style="font-size:1.4rem;font-weight:800;color:#111827">{page_title}</div>
@@ -10326,12 +11323,20 @@ def render_quality_page():
             records_col = "Records" if lang == 'en' else "记录数"
             patients_col = "Patients" if lang == 'en' else "患者数"
             missing_col = "Missing %" if lang == 'en' else "缺失率"
+            coverage_col = "Coverage" if lang == 'en' else "覆盖度"
+            cause_col = "Likely Cause" if lang == 'en' else "可能原因"
+            
+            _cause_text, _cause_color = _get_missing_cause_tag(concept, missing_rate / 100.0)
+            _n_db = CONCEPT_DB_COVERAGE.get(concept, 0)
+            _badge = f"{_n_db}/6 DBs"
             
             quality_data.append({
                 'Concept': concept,
                 records_col: f"{n_records:,}",
                 patients_col: n_patients,
                 missing_col: f"{missing_rate:.1f}%",
+                coverage_col: _badge,
+                cause_col: _cause_text,
             })
     
     # 总体统计
@@ -10373,6 +11378,10 @@ def render_quality_page():
             quality_df, 
             width="stretch", 
             hide_index=True,
+        )
+        _render_ai_context_button(
+            'ai_why_missing',
+            context=f"database={st.session_state.get('database', '')}; loaded_concepts={len(st.session_state.get('loaded_concepts', {}))}; explain the main missingness patterns and likely reasons based on the current dataset summary",
         )
     
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
@@ -11252,6 +12261,22 @@ def render_cohort_comparison_page():
         render_cohort_dashboard_subtab(lang)
 
 
+def _render_demo_generation_card(icon: str, title: str, desc: str):
+    """统一的 demo 生成空状态卡片。"""
+    st.markdown(
+        f'''
+        <div style="text-align:center;padding:30px 28px;background:linear-gradient(135deg,#eff6ff 0%,#f0fdfa 55%,#f8fafc 100%);
+                    border:1px solid #bfdbfe;border-radius:18px;margin:16px 0 18px;box-shadow:0 10px 28px rgba(37,99,235,0.08)">
+            <div style="width:64px;height:64px;margin:0 auto 14px;border-radius:18px;background:linear-gradient(135deg,#2563eb 0%,#0891b2 100%);
+                        display:flex;align-items:center;justify-content:center;font-size:1.9rem;box-shadow:0 10px 24px rgba(37,99,235,0.18)">{icon}</div>
+            <div style="font-weight:800;color:#0f172a;font-size:1.4rem;letter-spacing:-0.02em">{title}</div>
+            <div style="color:#475569;font-size:.95rem;margin-top:8px;line-height:1.65">{desc}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
 def render_group_comparison_subtab(lang: str):
     """分组对比子标签页 - 带独立数据加载配置"""
     
@@ -11272,14 +12297,7 @@ def render_group_comparison_subtab(lang: str):
             # 居中的配置卡片
             _gen_title = "Generate Demo Cohort Data" if lang == 'en' else "生成演示队列数据"
             _gen_desc = "Configure patient count and generate simulated demographics" if lang == 'en' else "配置患者数量并生成模拟人口统计学数据"
-            st.markdown(f"""
-            <div style="text-align:center;padding:28px;background:#f9fafb;border:1px solid #e5e7eb;
-                        border-radius:14px;margin:16px 0">
-                <div style="font-size:2.2rem;margin-bottom:8px">🎭</div>
-                <div style="font-weight:700;color:#111827;font-size:1.1rem">{_gen_title}</div>
-                <div style="color:#9ca3af;font-size:.88rem;margin-top:4px">{_gen_desc}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            _render_demo_generation_card("👥", _gen_title, _gen_desc)
             
             # 配置区域
             col1, col2, col3 = st.columns([1, 2, 1])
@@ -11335,7 +12353,7 @@ def render_group_comparison_subtab(lang: str):
             _src_keys = ["raw", "exported"] + (["demo"] if _allow_demo else [])
             _src_labels = {
                 "raw": "📂 Raw Database" if lang == 'en' else "📂 原始数据库",
-                "exported": "📦 Exported Files" if lang == 'en' else "📦 已导出文件",
+                "exported": "📦 Previously Exported Results" if lang == 'en' else "📦 之前导出的结果文件",
                 "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
             }
             _default_src = "demo" if _allow_demo and entry_mode == 'demo' else "raw"
@@ -11370,11 +12388,12 @@ def render_group_comparison_subtab(lang: str):
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
-                    data_root = st.text_input(
+                    data_root = _directory_input(
                         "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
                         value=os.environ.get('EASYICU_DATA_PATH', ''),
+                        input_key="grp_data_root",
+                        button_key="grp_data_root_browse",
                         placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
-                        key="grp_data_root",
                         help="Root directory containing database folders (mimiciv, eicu, aumc, hirid)" if lang == 'en' else "包含数据库文件夹的根目录"
                     )
                     render_directory_structure_guide(lang)
@@ -11436,12 +12455,13 @@ def render_group_comparison_subtab(lang: str):
                 # ===== 导出文件模式 =====
                 col1, col2 = st.columns([3, 2])
                 with col1:
-                    export_root = st.text_input(
-                        "📦 " + ("Export Directory" if lang == 'en' else "导出文件目录"),
+                    export_root = _directory_input(
+                        "📦 " + ("Folder with Exported Data Files" if lang == 'en' else "存放导出结果文件的文件夹"),
                         value=st.session_state.get('export_path', ''),
+                        input_key="grp_export_root",
+                        button_key="grp_export_root_browse",
                         placeholder="/path/to/easyicu_export" if os.name != 'nt' else "D:\\easyicu_export",
-                        key="grp_export_root",
-                        help="Root directory containing EasyICU exported folders" if lang == 'en' else "包含 EasyICU 导出文件夹的根目录"
+                        help="Choose the folder that contains EasyICU exported result folders" if lang == 'en' else "选择包含 EasyICU 导出结果子文件夹的目录"
                     )
                 
                 # 扫描导出文件夹
@@ -11451,7 +12471,7 @@ def render_group_comparison_subtab(lang: str):
                     if _export_folders:
                         folder_options = {f[0]: f"📁 {f[0]} ({f[1]} files)" for f in _export_folders}
                         selected_folder = st.selectbox(
-                            "📁 " + ("Select Export" if lang == 'en' else "选择导出文件夹"),
+                            "📁 " + ("Select an Export Result Folder" if lang == 'en' else "选择一批导出结果"),
                             options=list(folder_options.keys()),
                             format_func=lambda x: folder_options[x],
                             key="grp_export_folder"
@@ -11467,7 +12487,7 @@ def render_group_comparison_subtab(lang: str):
                     st.success(f"✅ `{selected_path}`")
                     
                     load_btn = st.button(
-                        "🚀 " + ("Load from Exported Files" if lang == 'en' else "从导出文件加载"),
+                        "🚀 " + ("Load Exported Result Files" if lang == 'en' else "加载这批导出结果文件"),
                         type="primary",
                         key="grp_load_export_btn"
                     )
@@ -11483,7 +12503,7 @@ def render_group_comparison_subtab(lang: str):
                                 st.session_state['grp_loaded_path'] = selected_path
                                 st.session_state['grp_is_demo'] = False
                                     
-                            st.success(f"✅ Loaded {len(demographics_df):,} patients from exported files" if lang == 'en' else f"✅ 从导出文件加载了 {len(demographics_df):,} 名患者")
+                            st.success(f"✅ Loaded {len(demographics_df):,} patients from exported result files" if lang == 'en' else f"✅ 已从这批导出结果文件中加载 {len(demographics_df):,} 名患者")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error: {e}")
@@ -12135,16 +13155,11 @@ def render_multidb_distribution_subtab(lang: str):
             st.markdown("---")
             
             # 居中的配置卡片
-            st.markdown("""
-            <div style="text-align:center; padding:30px; background:linear-gradient(135deg,#2d5016,#4a7c23); 
-                        border-radius:15px; margin:20px 0;">
-                <div style="font-size:3rem; margin-bottom:10px;">📊</div>
-                <h3 style="color:white; margin:0;">""" + ("Generate Multi-DB Distribution Data" if lang == 'en' else "生成多数据库分布数据") + """</h3>
-                <p style="color:#ccc; margin-top:10px;">""" + 
-                ("Click below to generate simulated feature distribution across multiple databases" if lang == 'en' else "点击下方按钮生成多数据库特征分布模拟数据") + 
-            """</p>
-            </div>
-            """, unsafe_allow_html=True)
+            _render_demo_generation_card(
+                "📈",
+                "Generate Multi-DB Distribution Data" if lang == 'en' else "生成多数据库分布数据",
+                "Click below to generate simulated feature distribution across multiple databases" if lang == 'en' else "点击下方按钮生成多数据库特征分布模拟数据",
+            )
             
             # 生成按钮
             col1, col2, col3 = st.columns([1, 2, 1])
@@ -12359,16 +13374,11 @@ def render_cohort_dashboard_subtab(lang: str):
             st.markdown("---")
             
             # 居中的配置卡片
-            st.markdown("""
-            <div style="text-align:center; padding:30px; background:linear-gradient(135deg,#5c2d91,#8e44ad); 
-                        border-radius:15px; margin:20px 0;">
-                <div style="font-size:3rem; margin-bottom:10px;">🎯</div>
-                <h3 style="color:white; margin:0;">""" + ("Generate Cohort Dashboard Data" if lang == 'en' else "生成队列仪表板数据") + """</h3>
-                <p style="color:#ccc; margin-top:10px;">""" + 
-                ("Click below to generate simulated cohort dashboard with interactive visualizations" if lang == 'en' else "点击下方按钮生成带有交互式可视化的队列仪表板") + 
-            """</p>
-            </div>
-            """, unsafe_allow_html=True)
+            _render_demo_generation_card(
+                "🎯",
+                "Generate Cohort Dashboard Data" if lang == 'en' else "生成队列仪表板数据",
+                "Click below to generate simulated cohort dashboard with interactive visualizations" if lang == 'en' else "点击下方按钮生成带有交互式可视化的队列仪表板",
+            )
             
             # 生成按钮
             col1, col2, col3 = st.columns([1, 2, 1])
@@ -12404,7 +13414,7 @@ def render_cohort_dashboard_subtab(lang: str):
             _src_keys = ["raw", "exported"] + (["demo"] if _allow_demo else [])
             _src_labels = {
                 "raw": "📂 Raw Database" if lang == 'en' else "📂 原始数据库",
-                "exported": "📦 Exported Files" if lang == 'en' else "📦 已导出文件",
+                "exported": "📦 Previously Exported Results" if lang == 'en' else "📦 之前导出的结果文件",
                 "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
             }
             _default_src = "demo" if _allow_demo and entry_mode == 'demo' else "raw"
@@ -12433,11 +13443,12 @@ def render_cohort_dashboard_subtab(lang: str):
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
-                    data_root = st.text_input(
+                    data_root = _directory_input(
                         "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
                         value=os.environ.get('EASYICU_DATA_PATH', ''),
+                        input_key="dash_data_root",
+                        button_key="dash_data_root_browse",
                         placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
-                        key="dash_data_root",
                         help="Root directory containing database folders" if lang == 'en' else "包含数据库文件夹的根目录"
                     )
                     render_directory_structure_guide(lang)
@@ -12499,12 +13510,13 @@ def render_cohort_dashboard_subtab(lang: str):
                 # ===== 导出文件模式 =====
                 col1, col2 = st.columns([3, 2])
                 with col1:
-                    export_root = st.text_input(
-                        "📦 " + ("Export Directory" if lang == 'en' else "导出文件目录"),
+                    export_root = _directory_input(
+                        "📦 " + ("Folder with Exported Data Files" if lang == 'en' else "存放导出结果文件的文件夹"),
                         value=st.session_state.get('export_path', ''),
+                        input_key="dash_export_root",
+                        button_key="dash_export_root_browse",
                         placeholder="/path/to/easyicu_export" if os.name != 'nt' else "D:\\easyicu_export",
-                        key="dash_export_root",
-                        help="Root directory containing EasyICU exported folders" if lang == 'en' else "包含 EasyICU 导出文件夹的根目录"
+                        help="Choose the folder that contains EasyICU exported result folders" if lang == 'en' else "选择包含 EasyICU 导出结果子文件夹的目录"
                     )
                 
                 _export_folders = _scan_export_folders(export_root if 'export_root' in dir() else st.session_state.get('dash_export_root', ''))
@@ -12513,7 +13525,7 @@ def render_cohort_dashboard_subtab(lang: str):
                     if _export_folders:
                         folder_options = {f[0]: f"📁 {f[0]} ({f[1]} files)" for f in _export_folders}
                         selected_folder = st.selectbox(
-                            "📁 " + ("Select Export" if lang == 'en' else "选择导出文件夹"),
+                            "📁 " + ("Select an Export Result Folder" if lang == 'en' else "选择一批导出结果"),
                             options=list(folder_options.keys()),
                             format_func=lambda x: folder_options[x],
                             key="dash_export_folder"
@@ -12529,7 +13541,7 @@ def render_cohort_dashboard_subtab(lang: str):
                     st.success(f"✅ `{selected_path}`")
                     
                     load_btn = st.button(
-                        "🚀 " + ("Load from Exported Files" if lang == 'en' else "从导出文件加载"),
+                        "🚀 " + ("Load Exported Result Files" if lang == 'en' else "加载这批导出结果文件"),
                         type="primary",
                         key="dash_load_export_btn"
                     )
@@ -12545,7 +13557,7 @@ def render_cohort_dashboard_subtab(lang: str):
                                 st.session_state['dash_loaded_path'] = selected_path
                                 st.session_state['dash_is_demo'] = False
                                 
-                            st.success(f"✅ Loaded {len(demographics_df):,} patients from exported files" if lang == 'en' else f"✅ 从导出文件加载了 {len(demographics_df):,} 名患者")
+                            st.success(f"✅ Loaded {len(demographics_df):,} patients from exported result files" if lang == 'en' else f"✅ 已从这批导出结果文件中加载 {len(demographics_df):,} 名患者")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error: {e}")
@@ -13433,7 +14445,7 @@ def execute_sidebar_export():
     🔧 支持三种模式：
         1. 模拟数据模式 (use_mock_data=True)
         2. 真实数据模式 (有有效的 data_path)
-        3. 可视化导入模式 (有 loaded_concepts 但无有效 data_path) - 直接导出已加载的数据
+        3. 可视化导入模式 (loaded_data_origin='exported_files') - 直接导出已加载的数据
     """
     from datetime import datetime
     
@@ -13445,13 +14457,13 @@ def execute_sidebar_export():
     
     # 🔧 FIX (2026-02-03): 检测是否是从可视化模式导入数据的场景
     loaded_concepts = st.session_state.get('loaded_concepts', {})
-    data_path_str = st.session_state.get('data_path', '')
-    has_valid_data_path = data_path_str and Path(data_path_str).exists()
     has_loaded_data = len(loaded_concepts) > 0
+    loaded_data_origin = st.session_state.get('loaded_data_origin', 'none')
     
-    # 判断数据来源模式
-    # 🔧 FIX: 如果已经有加载的数据，直接使用它（最高优先级）
-    is_viz_import_mode = has_loaded_data
+    # 只有真正从“已导出文件”加载的数据，才视为 viz import mode。
+    # Preview / quick_load / demo_viz 都不应该污染 Confirm Export 的真实提取流程。
+    is_viz_import_mode = has_loaded_data and loaded_data_origin == 'exported_files'
+    use_loaded_data_export = is_viz_import_mode
     
     # 🔧 FIX (2026-02-03): 在可视化导入模式下，如果 selected_concepts 为空，
     # 使用 loaded_concepts 的 keys 作为要导出的概念
@@ -13473,6 +14485,13 @@ def execute_sidebar_export():
     try:
         export_title = "📤 Export Progress" if lang == 'en' else "📤 导出进度"
         st.markdown(f"### {export_title}")
+        if loaded_data_origin == 'preview':
+            preview_reextract_msg = (
+                "ℹ️ Preview sample detected. Export will re-extract data from the source database instead of exporting the preview sample."
+                if lang == 'en' else
+                "ℹ️ 检测到当前是 Preview 样本。导出时会重新从源数据库提取数据，而不是直接导出这批 Preview 样本。"
+            )
+            st.markdown(f'<div class="compact-inline-notice info">{preview_reextract_msg}</div>', unsafe_allow_html=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
@@ -13651,29 +14670,38 @@ def execute_sidebar_export():
         empty_concepts = []
         failed_concepts = []
         
-        if use_mock:
+        if use_mock or use_loaded_data_export:
             # 生成模拟数据并导出
-            gen_msg = "**Generating mock data...**" if lang == 'en' else "**正在生成模拟数据...**"
-            status_text.markdown(gen_msg)
-            # 🔧 使用 get_mock_params_with_cohort 获取完整参数（包含最新的 cohort_filter）
-            params = get_mock_params_with_cohort()
-            all_mock_data, patient_ids = generate_mock_data(**params)
-            
-            # 保存患者ID列表（用于其他功能）
-            st.session_state.patient_ids = patient_ids
-            
-            # 🔧 根据要导出的 concepts 过滤数据（排除跳过的）
-            data = {}
-            for concept in concepts_to_export:
-                if concept in all_mock_data:
-                    data[concept] = all_mock_data[concept]
-            
-            # 显示加载情况
-            loaded_count = len(data)
-            if loaded_count < len(concepts_to_export):
-                missing = [c for c in concepts_to_export if c not in all_mock_data]
-                skip_msg = f"⚠️ {len(missing)} concepts not in mock data: {', '.join(missing[:5])}" if lang == 'en' else f"⚠️ 模拟数据中不存在 {len(missing)} 个概念: {', '.join(missing[:5])}"
-                st.warning(skip_msg)
+            if use_mock:
+                gen_msg = "**Generating mock data...**" if lang == 'en' else "**正在生成模拟数据...**"
+                status_text.markdown(gen_msg)
+                # 🔧 使用 get_mock_params_with_cohort 获取完整参数（包含最新的 cohort_filter）
+                params = get_mock_params_with_cohort()
+                all_mock_data, patient_ids = generate_mock_data(**params)
+                
+                # 保存患者ID列表（用于其他功能）
+                st.session_state.patient_ids = patient_ids
+                
+                # 🔧 根据要导出的 concepts 过滤数据（排除跳过的）
+                data = {}
+                for concept in concepts_to_export:
+                    if concept in all_mock_data:
+                        data[concept] = all_mock_data[concept]
+                
+                # 显示加载情况
+                loaded_count = len(data)
+                if loaded_count < len(concepts_to_export):
+                    missing = [c for c in concepts_to_export if c not in all_mock_data]
+                    skip_msg = f"⚠️ {len(missing)} concepts not in mock data: {', '.join(missing[:5])}" if lang == 'en' else f"⚠️ 模拟数据中不存在 {len(missing)} 个概念: {', '.join(missing[:5])}"
+                    st.warning(skip_msg)
+            else:
+                status_text.markdown("**Using loaded visualization data...**" if lang == 'en' else "**正在使用已加载的可视化数据...**")
+                data = {concept: loaded_concepts[concept] for concept in concepts_to_export if concept in loaded_concepts}
+                if not data:
+                    err_msg = "❌ No loaded visualization data matches the selected features" if lang == 'en' else "❌ 当前已加载的可视化数据中没有匹配所选特征"
+                    st.error(err_msg)
+                    st.session_state['_exporting_in_progress'] = False
+                    return
             
             progress_bar.progress(0.3)
         else:
@@ -14940,7 +15968,7 @@ def execute_sidebar_export():
         # 使用真正的开始时间计算总耗时
         export_start_time = _export_start if '_export_start' in dir() else time_module.time()
 
-        if use_mock and data:
+        if (use_mock or use_loaded_data_export) and data:
             from functools import reduce
             import warnings as _mock_warnings
 
@@ -15126,6 +16154,8 @@ def execute_sidebar_export():
             st.session_state.last_export_dir = str(export_dir)  # 保存实际导出目录
             st.session_state.last_export_full_dir = str(export_dir)  # 保存完整路径（含cohort子目录）
             st.session_state.viz_export_path = str(export_dir)  # 更新viz_export_path
+            st.session_state.viz_data_source_mode = "exported"
+            st.session_state._prefer_exported_viz = True
             # 🔧 FIX: 更新快速可视化的确认路径，这样切换到可视化页面时会自动填充
             st.session_state.viz_confirmed_path = str(export_dir)
             # 🔧 FIX: 强制重置 text_input 的版本号，确保显示新路径
@@ -15617,48 +16647,112 @@ def main():
         st.success(assistant_notice)
     
     # 主页面标签：Tutorial, Quick Visualization, Cohort Analysis
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3 = st.tabs([
         get_text('home'),
         get_text('quick_visualization'),
         get_text('cohort_compare'),
-        get_text('ai_assistant'),
     ])
     
     with tab1:
         render_home()
     
     with tab2:
+        # 处理侧边栏的 Preview 请求
+        if st.session_state.get('_preview_requested', False):
+            st.session_state['_preview_requested'] = False
+            _preview_n = st.session_state.get('_preview_n', 10)
+            _use_mock = st.session_state.get('use_mock_data', False)
+            _sel_concepts = st.session_state.get('selected_concepts', [])
+            
+            if _use_mock:
+                try:
+                    with st.spinner(f"Generating preview with {_preview_n} mock patients..." if lang == 'en' else f"正在生成 {_preview_n} 位模拟患者的预览..."):
+                        mock_data, preview_patient_ids = generate_mock_data(n_patients=_preview_n, hours=72)
+                    if _sel_concepts:
+                        mock_data = {k: v for k, v in mock_data.items() if k in _sel_concepts}
+                    st.session_state.loaded_concepts = mock_data
+                    st.session_state.loaded_data_origin = 'preview'
+                    st.session_state.patient_ids = sorted(preview_patient_ids)
+                    st.session_state.id_col = 'stay_id'
+                    st.session_state.trigger_export = False
+                    st.session_state['_exporting_in_progress'] = False
+                    for _tmp_key in ['_skipped_modules', '_overwrite_modules', '_viz_import_export_auto_trigger']:
+                        if _tmp_key in st.session_state:
+                            del st.session_state[_tmp_key]
+                    st.session_state['_viz_notices'] = [{
+                        'level': 'success',
+                        'message': f"✅ Preview loaded: {len(mock_data)} concepts, {len(st.session_state.patient_ids)} patients" if lang == 'en' else f"✅ 预览已加载: {len(mock_data)} 个概念, {len(st.session_state.patient_ids)} 位患者",
+                    }]
+                    st.session_state['_scroll_to_tab'] = 'viz'
+                except Exception as e:
+                    st.error(f"Preview error: {e}")
+            else:
+                _db = st.session_state.get('database', '')
+                _data_path = st.session_state.get('data_path', '')
+                if _db and _data_path:
+                    try:
+                        _preview_concepts = _sel_concepts
+                        with st.spinner(f"Loading preview with {_preview_n} patients from {_db.upper()}..." if lang == 'en' else f"正在从 {_db.upper()} 加载 {_preview_n} 位患者的预览..."):
+                            preview_result = load_preview_concepts(
+                                concepts=_preview_concepts,
+                                database=_db,
+                                data_path=_data_path,
+                                max_patients=_preview_n,
+                                verbose=False,
+                            )
+                        st.session_state.loaded_concepts = preview_result.get('loaded_concepts', {})
+                        st.session_state.loaded_data_origin = 'preview'
+                        _unsupported_preview = preview_result.get('unsupported_concepts', [])
+                        _id_map = {
+                            'miiv': 'stay_id',
+                            'mimic': 'icustay_id',
+                            'eicu': 'patientunitstayid',
+                            'aumc': 'admissionid',
+                            'hirid': 'patientid',
+                            'sic': 'CaseID',
+                        }
+                        st.session_state.id_col = _id_map.get(_db, 'stay_id')
+                        _all_ids = set()
+                        for _df in st.session_state.loaded_concepts.values():
+                            if hasattr(_df, 'columns'):
+                                for _ic in ['stay_id', 'patientunitstayid', 'hadm_id', 'admissionid', 'patientid', 'CaseID']:
+                                    if _ic in _df.columns:
+                                        _all_ids.update(_df[_ic].unique())
+                                        break
+                        st.session_state.patient_ids = sorted(_all_ids)
+                        st.session_state.trigger_export = False
+                        st.session_state['_exporting_in_progress'] = False
+                        for _tmp_key in ['_skipped_modules', '_overwrite_modules', '_viz_import_export_auto_trigger']:
+                            if _tmp_key in st.session_state:
+                                del st.session_state[_tmp_key]
+                        _viz_notices = []
+                        if _unsupported_preview:
+                            warn_prefix = "Skipped unsupported preview concepts" if lang == 'en' else "已跳过当前预览不支持的概念"
+                            _viz_notices.append({
+                                'level': 'warning',
+                                'message': f"{warn_prefix}: {', '.join(_unsupported_preview[:8])}" + (" ..." if len(_unsupported_preview) > 8 else ""),
+                            })
+                        _viz_notices.append({
+                            'level': 'success',
+                            'message': f"✅ Preview: {len(st.session_state.loaded_concepts)} concepts, {len(st.session_state.patient_ids)} patients" if lang == 'en' else f"✅ 预览: {len(st.session_state.loaded_concepts)} 个概念, {len(st.session_state.patient_ids)} 位患者",
+                        })
+                        st.session_state['_viz_notices'] = _viz_notices
+                        st.session_state['_scroll_to_tab'] = 'viz'
+                    except Exception as e:
+                        st.error(f"Preview error: {e}")
+                else:
+                    st.warning("Please configure data source first" if lang == 'en' else "请先配置数据源")
+        
         render_quick_visualization_page()
     
     with tab3:
         render_cohort_comparison_page()
-    
-    with tab4:
-        try:
-            from easyicu.webapp.llm_chat import render_chat_tab
-            render_chat_tab()
-        except Exception as _chat_err:
-            st.error(f"AI Assistant module error: {_chat_err}")
     
     # 🔧 处理侧边栏触发的导出（在标签页渲染后执行，确保 Guide: Complete 中的 container 已创建）
     if st.session_state.get('trigger_export', False):
         st.session_state.trigger_export = False
         # 🔧 FIX: 添加 try-except 防止白屏崩溃
         try:
-            # 🔧 FIX: 检查是否有已加载的可视化数据，如果没有选择概念则显示警告但不阻止导出
-            if len(st.session_state.get('loaded_concepts', {})) > 0:
-                if not st.session_state.get('selected_concepts'):
-                    lang = st.session_state.get('language', 'en')
-                    loaded_concepts = list(st.session_state.loaded_concepts.keys())
-                    warn_msg = f"⚠️ No concepts selected. Please select features in sidebar first." if lang == 'en' else f"⚠️ 未选择特征，请先在侧边栏选择要导出的特征。"
-                    st.warning(warn_msg)
-                    st.session_state['_exporting_in_progress'] = False
-                    # 🔧 FIX: 不再 return，让用户看到警告但不继续执行导出
-                    pass  # 仅显示警告，下面会因为 selected_concepts 为空而跳过导出
-                else:
-                    # 🔧 FIX: 有选择的概念，执行导出
-                    pass
-            
             # 🔧 FIX: 使用 JavaScript 切换到 Tutorial 标签页（第1个标签）以显示导出进度
             js_switch_to_tutorial = '''
             <script>
@@ -15681,9 +16775,11 @@ def main():
             '''
             st.components.v1.html(js_switch_to_tutorial, height=0)
             
-            # 🔧 FIX (2026-02-03): 如果有 loaded_concepts 但没有 selected_concepts，
-            # 自动使用 loaded_concepts 的 keys
-            if not st.session_state.get('selected_concepts'):
+            # 仅对真正的“已导出文件导入模式”自动回填 selected_concepts；Preview 不应触发该逻辑。
+            if (
+                not st.session_state.get('selected_concepts')
+                and st.session_state.get('loaded_data_origin') == 'exported_files'
+            ):
                 loaded_concepts = st.session_state.get('loaded_concepts', {})
                 if loaded_concepts:
                     st.session_state.selected_concepts = list(loaded_concepts.keys())
@@ -15775,18 +16871,42 @@ def main():
         js_code = '''
         <script>
             (function() {
+                function scrollToDictionary() {
+                    var mainDoc = window.parent.document;
+                    var mainContainer = mainDoc.querySelector('section.main');
+                    var dictAnchor = mainDoc.getElementById('dictionary');
+                    if (dictAnchor) {
+                        dictAnchor.scrollIntoView({behavior: 'smooth', block: 'start'});
+                        return true;
+                    }
+
+                    var headings = Array.from(mainDoc.querySelectorAll('h1, h2, h3, div, p, span'));
+                    var dictHeading = headings.find(function(node) {
+                        var text = (node.innerText || node.textContent || '').trim();
+                        return text === '📖 Data Dictionary' ||
+                               text === '📖 数据字典' ||
+                               text === '📖 Complete Data Dictionary' ||
+                               text === '📖 完整数据字典';
+                    });
+                    if (dictHeading) {
+                        dictHeading.scrollIntoView({behavior: 'smooth', block: 'start'});
+                        return true;
+                    }
+
+                    if (mainContainer) {
+                        mainContainer.scrollTop = Math.max(mainContainer.scrollTop, 1800);
+                    }
+                    return false;
+                }
+
                 setTimeout(function() {
                     var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
                     if (tabs && tabs.length >= 1) {
                         tabs[0].click();
                         setTimeout(function() {
-                            var mainDoc = window.parent.document;
-                            var mainContainer = mainDoc.querySelector('section.main');
-                            var dictAnchor = mainDoc.getElementById('dictionary');
-                            if (dictAnchor) {
-                                dictAnchor.scrollIntoView({behavior: 'smooth', block: 'start'});
-                            } else if (mainContainer) {
-                                mainContainer.scrollTop = Math.max(mainContainer.scrollTop, 1800);
+                            if (!scrollToDictionary()) {
+                                setTimeout(scrollToDictionary, 300);
+                                setTimeout(scrollToDictionary, 700);
                             }
                         }, 300);
                     }
@@ -15821,30 +16941,20 @@ def main():
         '''
         st.components.v1.html(js_code, height=0)
     elif scroll_to_tab == 'ai_assistant':
-        # 跳转到 AI Assistant 标签页（第4个标签，索引3）并滚动到顶部
-        js_code = '''
-        <script>
-            (function() {
-                var mainContainer = window.parent.document.querySelector('section.main');
-                if (mainContainer) mainContainer.scrollTop = 0;
-                window.parent.document.documentElement.scrollTop = 0;
-                window.parent.document.body.scrollTop = 0;
-
-                setTimeout(function() {
-                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
-                    if (tabs && tabs.length >= 4) {
-                        tabs[3].click();
-                        setTimeout(function() {
-                            var mainContainer = window.parent.document.querySelector('section.main');
-                            if (mainContainer) mainContainer.scrollTop = 0;
-                            window.parent.document.documentElement.scrollTop = 0;
-                        }, 100);
-                    }
-                }, 200);
-            })();
-        </script>
-        '''
-        st.components.v1.html(js_code, height=0)
+        st.session_state['_floating_ai_open'] = True
+        st.components.v1.html(
+            '''
+            <script>
+                (function() {
+                    var mainContainer = window.parent.document.querySelector('section.main');
+                    if (mainContainer) mainContainer.scrollTop = 0;
+                    window.parent.document.documentElement.scrollTop = 0;
+                    window.parent.document.body.scrollTop = 0;
+                })();
+            </script>
+            ''',
+            height=0,
+        )
     elif scroll_to_top:
         # 滚动到页面最顶部
         js_code = '''
@@ -15867,6 +16977,12 @@ def main():
         </script>
         '''
         st.components.v1.html(js_code, height=0)
+
+    try:
+        from easyicu.webapp.llm_chat import render_floating_chat_dock
+        render_floating_chat_dock()
+    except Exception:
+        pass
     
     # 底部状态栏
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)

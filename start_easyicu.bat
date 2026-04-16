@@ -8,16 +8,22 @@ chcp 65001 >nul 2>nul
 
 where py >nul 2>nul
 if %ERRORLEVEL%==0 (
-  py -3 -X utf8 "%SCRIPT_DIR%scripts\\launch_easyicu.py" start --force-reinstall %*
-  set "EXIT_CODE=%ERRORLEVEL%"
-  goto :done
+  py -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)" >nul 2>nul
+  if %ERRORLEVEL%==0 (
+    py -3 -X utf8 "%SCRIPT_DIR%scripts\\launch_easyicu.py" start --force-reinstall %*
+    set "EXIT_CODE=%ERRORLEVEL%"
+    goto :done
+  )
 )
 
 where python >nul 2>nul
 if %ERRORLEVEL%==0 (
-  python -X utf8 "%SCRIPT_DIR%scripts\\launch_easyicu.py" start --force-reinstall %*
-  set "EXIT_CODE=%ERRORLEVEL%"
-  goto :done
+  python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)" >nul 2>nul
+  if %ERRORLEVEL%==0 (
+    python -X utf8 "%SCRIPT_DIR%scripts\\launch_easyicu.py" start --force-reinstall %*
+    set "EXIT_CODE=%ERRORLEVEL%"
+    goto :done
+  )
 )
 
 echo Python 3.9+ was not found. Please install Python from https://www.python.org/downloads/
