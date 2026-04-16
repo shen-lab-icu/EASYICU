@@ -57,6 +57,21 @@ def _run(cmd: list[str], *, cwd: Path | None = None) -> None:
     subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=_runtime_env(), check=True)
 
 
+def _run_capture(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        cmd,
+        env=_runtime_env(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _is_easyicu_cmdline(cmdline: str) -> bool:
+    normalized = (cmdline or "").replace("\\", "/").lower()
+    return "streamlit" in normalized or "easyicu" in normalized
+
+
 def _health_url(port: int) -> str:
     return f"http://127.0.0.1:{port}/_stcore/health"
 
@@ -103,6 +118,164 @@ def ensure_virtualenv() -> None:
     builder.create(VENV_DIR)
 
 
+def _configured_pip_index(python_bin: str) -> tuple[str | None, str | None]:
+    env = _runtime_env()
+    for key in ("PIP_INDEX_URL", "UV_INDEX_URL"):
+        value = env.get(key, "").strip()
+        if value:
+            return value, f"env:{key}"
+
+    for scope_key in ("global.index-url", "user.index-url", "site.index-url"):
+        result = _run_capture([python_bin, "-m", "pip", "config", "get", scope_key])
+        value = (result.stdout or "").strip()
+        if result.returncode == 0 and value:
+            return value, f"pip config:{scope_key}"
+
+    return None, None
+
+
+def _print_pip_source_hint(python_bin: str) -> None:
+    index_url, source = _configured_pip_index(python_bin)
+    if index_url:
+        print(f"Using pip index from {source}: {index_url}")
+        return
+
+    print("Using default pip index: https://pypi.org/simple")
+    locale_hint = " ".join(
+        filter(None, [
+            os.environ.get("LANG", ""),
+            os.environ.get("LC_ALL", ""),
+            os.environ.get("LC_MESSAGES", ""),
+        ])
+    ).lower()
+    if "zh" in locale_hint or "cn" in locale_hint:
+        print(
+            "No custom pip mirror is configured. If installation is slow, set PIP_INDEX_URL, "
+            "for example: https://pypi.tuna.tsinghua.edu.cn/simple"
+        )
+
+
+def _stop_with_source_tree(port: int) -> int:
+    stopper = (
+        "import sys; "
+        f"sys.path.insert(0, {str(PROJECT_ROOT / 'src')!r}); "
+        "from easyicu.webapp import stop_app; "
+        f"stop_app(port={port})"
+    )
+    return subprocess.run([sys.executable, "-c", stopper], env=_runtime_env(), check=False).returncode
+
+
+def _find_port_owners(port: int) -> list[dict[str, object]]:
+    try:
+        import psutil
+    except ImportError:
+        return []
+
+    owners: list[dict[str, object]] = []
+    for conn in psutil.net_connections(kind="inet"):
+        try:
+            if not conn.laddr or conn.laddr.port != port or conn.status != psutil.CONN_LISTEN:
+                continue
+        except Exception:
+            continue
+
+        pid = conn.pid
+        if not pid:
+            continue
+        try:
+            proc = psutil.Process(pid)
+            cmdline = " ".join(proc.cmdline() or [])
+            name = proc.name()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+        owners.append({
+            "pid": pid,
+            "name": name,
+            "cmdline": cmdline,
+            "is_easyicu": _is_easyicu_cmdline(cmdline),
+        })
+
+    unique: list[dict[str, object]] = []
+    seen: set[int] = set()
+    for owner in owners:
+        pid = int(owner["pid"])
+        if pid in seen:
+            continue
+        seen.add(pid)
+        unique.append(owner)
+    return unique
+
+
+def _wait_until_port_state(port: int, *, should_be_free: bool, timeout: float = 5.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        owners = _find_port_owners(port)
+        is_free = len(owners) == 0
+        if is_free == should_be_free:
+            return True
+        time.sleep(0.25)
+    return len(_find_port_owners(port)) == 0 if should_be_free else len(_find_port_owners(port)) > 0
+
+
+def _print_port_conflict_warning(port: int, owners: list[dict[str, object]]) -> None:
+    print(f"Port {port} is still occupied.", file=sys.stderr)
+    foreign = [owner for owner in owners if not bool(owner.get("is_easyicu"))]
+    if foreign:
+        print("EasyICU will not kill non-EasyICU processes automatically.", file=sys.stderr)
+        print("Please stop the process below or choose a different --port.", file=sys.stderr)
+        for owner in foreign[:5]:
+            cmdline = str(owner.get("cmdline") or "").strip()
+            if len(cmdline) > 180:
+                cmdline = cmdline[:177] + "..."
+            print(
+                f"  - PID {owner['pid']} ({owner['name']}): {cmdline or '[command unavailable]'}",
+                file=sys.stderr,
+            )
+        return
+
+    print("An EasyICU-related process is still holding the port after shutdown.", file=sys.stderr)
+    for owner in owners[:5]:
+        cmdline = str(owner.get("cmdline") or "").strip()
+        if len(cmdline) > 180:
+            cmdline = cmdline[:177] + "..."
+        print(
+            f"  - PID {owner['pid']} ({owner['name']}): {cmdline or '[command unavailable]'}",
+            file=sys.stderr,
+        )
+
+
+def _release_port_before_start(port: int) -> bool:
+    runtime_exists = _venv_python().exists()
+    port_busy = _wait_for_health(port, timeout=1)
+    port_in_use = False
+
+    if not port_busy:
+        try:
+            import socket
+
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                port_in_use = sock.connect_ex(("127.0.0.1", port)) == 0
+        except Exception:
+            port_in_use = False
+
+    if not runtime_exists and not port_busy and not port_in_use:
+        return True
+
+    print(f"Releasing EasyICU processes on port {port} before startup...")
+    if runtime_exists:
+        stop_easyicu(port)
+    else:
+        _stop_with_source_tree(port)
+    _wait_until_port_state(port, should_be_free=True, timeout=5.0)
+
+    owners = _find_port_owners(port)
+    if owners:
+        _print_port_conflict_warning(port, owners)
+        return False
+    return True
+
+
 def install_easyicu(force: bool = False) -> None:
     ensure_virtualenv()
     desired_state = _current_install_state()
@@ -113,6 +286,7 @@ def install_easyicu(force: bool = False) -> None:
 
     python_bin = str(_venv_python())
     print("Installing EasyICU webapp dependencies...")
+    _print_pip_source_hint(python_bin)
     _run([python_bin, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
     subprocess.run(
         [python_bin, "-m", "pip", "uninstall", "-y", "easyicu"],
@@ -152,19 +326,8 @@ def start_easyicu(
     foreground: bool = False,
     open_browser: bool = True,
 ) -> int:
-    is_running = _wait_for_health(port, timeout=1)
-
-    if force_reinstall and is_running:
-        print("EasyICU is already running. Stopping it before reinstall...")
-        stop_easyicu()
-        is_running = False
-
-    if is_running:
-        url = f"http://{host}:{port}"
-        print(f"EasyICU is already running at {url}")
-        if open_browser:
-            webbrowser.open(url)
-        return 0
+    if not _release_port_before_start(port):
+        return 1
 
     install_easyicu(force=force_reinstall)
 
@@ -200,12 +363,11 @@ def start_easyicu(
     return 0
 
 
-def stop_easyicu() -> int:
+def stop_easyicu(port: int = DEFAULT_PORT) -> int:
     if not _venv_python().exists():
-        print("EasyICU runtime is not installed yet.")
-        return 1
+        return _stop_with_source_tree(port)
     return subprocess.run(
-        [str(_venv_python()), "-m", "easyicu.webapp", "stop"],
+        [str(_venv_python()), "-m", "easyicu.webapp", "stop", "--port", str(port)],
         env=_runtime_env(),
     ).returncode
 
@@ -248,12 +410,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Reinstall the EasyICU package into the local runtime environment.",
     )
+    parser.add_argument(
+        "--pip-index-url",
+        default="",
+        help="Override pip index URL used to install the runtime environment.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.pip_index_url:
+        os.environ["PIP_INDEX_URL"] = args.pip_index_url.strip()
 
     if sys.version_info < (3, 9):
         print("EasyICU requires Python 3.9 or newer.", file=sys.stderr)
@@ -274,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.command == "stop":
-        return stop_easyicu()
+        return stop_easyicu(args.port)
 
     if args.command == "status":
         return status_easyicu(args.port)

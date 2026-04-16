@@ -657,7 +657,9 @@ def _infer_db_from_text(text: str) -> str | None:
 
 def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, object]]:
     """Suggest in-app navigation or preset actions."""
-    combined = f"{(prompt or '').lower()}\n{(answer or '').lower()}"
+    prompt_l = (prompt or '').lower()
+    answer_l = (answer or '').lower()
+    combined = f"{prompt_l}\n{answer_l}"
     actions: list[dict[str, object]] = []
 
     def add_nav(action_id: str, label_en: str, label_zh: str):
@@ -686,22 +688,31 @@ def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, o
             "scroll_to": scroll_to,
         })
 
-    if any(key in combined for key in ["字典", "数据字典", "dictionary", "feature list", "concept list"]):
-        add_nav("home_dict", "📖 Open Data Dictionary", "📖 打开数据字典")
-
-    if any(key in combined for key in ["tutorial", "教程", "step", "步骤", "how do i", "怎么做", "workflow", "流程", "guide", "使用"]):
-        add_nav("tutorial", "📚 Open Tutorial", "📚 打开教程")
-
-    if any(key in combined for key in [
+    dictionary_requested = any(key in prompt_l for key in ["字典", "数据字典", "dictionary", "feature list", "concept list"])
+    tutorial_requested = any(key in prompt_l for key in ["tutorial", "教程", "step", "步骤", "how do i", "怎么做", "workflow", "流程", "guide", "使用"])
+    viz_requested = any(key in prompt_l for key in [
         "quick visualization", "快速可视化", "load data", "加载数据", "visualization",
         "visualize", "visualise", "plot", "可视化", "图表", "数据分析", "分析我的数据",
-    ]):
+    ])
+    cohort_requested = any(key in prompt_l for key in ["cohort", "队列", "compare", "comparison", "dashboard", "仪表板"])
+    export_requested = any(key in prompt_l for key in ["export", "导出"])
+
+    if dictionary_requested or (
+        any(key in answer_l for key in ["data dictionary", "数据字典", "concept dictionary"]) and
+        any(key in prompt_l for key in ["where", "在哪", "在哪里", "怎么找", "how to find", "查看"])
+    ):
+        add_nav("home_dict", "📖 Open Data Dictionary", "📖 打开数据字典")
+
+    if tutorial_requested and not dictionary_requested:
+        add_nav("tutorial", "📚 Open Tutorial", "📚 打开教程")
+
+    if viz_requested:
         add_nav("viz", "📊 Open Quick Visualization", "📊 前往快速可视化")
 
-    if any(key in combined for key in ["cohort", "队列", "compare", "comparison", "dashboard", "仪表板"]):
+    if cohort_requested:
         add_nav("cohort", "🔬 Open Cohort Analysis", "🔬 前往队列分析")
 
-    if any(key in combined for key in ["export", "导出"]):
+    if export_requested:
         add_nav("tutorial", "📚 Open Export Guide", "📚 打开导出教程")
 
     target_db = _infer_db_from_text(combined)
@@ -1137,9 +1148,9 @@ def render_llm_settings():
                                  if lang == 'en' else "请输入 API Key"))
             st.session_state.llm_configured = False
 
-        jump_label = "🤖 Open AI Assistant" if lang == "en" else "🤖 打开 AI 助手"
+        jump_label = "💬 Open Floating AI Chat" if lang == "en" else "💬 打开悬浮 AI 对话"
         if st.button(jump_label, use_container_width=True, key="_goto_ai_assistant"):
-            st.session_state["_scroll_to_tab"] = "ai_assistant"
+            st.session_state["_floating_ai_open"] = True
             st.rerun()
 
         # Clear history button
@@ -1247,53 +1258,430 @@ def render_chat_tab():
                 if msg["role"] == "assistant" and msg.get("actions"):
                     _render_nav_actions(msg["actions"], key_prefix=f"_llm_action_{msg_idx}")
 
+        pending_prompt = st.session_state.pop("_ai_pending_question", None)
+        if pending_prompt:
+            _submit_prompt(pending_prompt, lang, history_container, key_prefix="_llm_tab")
+
     # ---- Chat input -----------------------------------------------------------
     placeholder = ("Ask a question about EasyICU …"
                     if lang == "en" else "输入关于 EasyICU 的问题 …")
     if prompt := st.chat_input(placeholder, key="_llm_chat_input"):
-        # Append user message
-        st.session_state.llm_messages.append({"role": "user", "content": prompt})
-        with history_container:
-            with st.chat_message("user"):
-                st.markdown(prompt)
+        _submit_prompt(prompt, lang, history_container, key_prefix="_llm_tab")
 
-        instant_reply = _get_instant_reply(prompt, lang)
-        if instant_reply is not None:
-            st.session_state.llm_last_tool_events = []
-            st.session_state.llm_last_verification = {
-                "status": "pass",
-                "issues": [],
+
+def _submit_prompt(prompt: str, lang: str, history_container, key_prefix: str = "_llm"):
+    """Append a prompt, render local instant replies, or stream the model response."""
+    prompt = (prompt or "").strip()
+    if not prompt:
+        return
+
+    st.session_state.llm_messages.append({"role": "user", "content": prompt})
+    with history_container:
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+    instant_reply = _get_instant_reply(prompt, lang)
+    if instant_reply is not None:
+        st.session_state.llm_last_tool_events = []
+        st.session_state.llm_last_verification = {
+            "status": "pass",
+            "issues": [],
+        }
+        instant_actions = _suggest_ui_actions(prompt, instant_reply, lang)
+        st.session_state.llm_messages.append(
+            {
+                "role": "assistant",
+                "content": instant_reply,
+                "actions": instant_actions,
             }
-            st.session_state.llm_messages.append(
-                {
-                    "role": "assistant",
-                    "content": instant_reply,
-                    "actions": _suggest_ui_actions(prompt, instant_reply, lang),
-                }
-            )
-            with history_container:
-                with st.chat_message("assistant"):
-                    st.markdown(instant_reply)
-                    _render_nav_actions(
-                        _suggest_ui_actions(prompt, instant_reply, lang),
-                        key_prefix="_llm_action_instant",
-                    )
-            return
-
-        prep_placeholder = st.empty()
-        prep_placeholder.info(
-            "🛠️ Preparing tools..." if lang == "en" else "🛠️ 正在准备工具..."
         )
-
-        # Build agent payload with local tools / external evidence
-        messages, tool_events = _compose_agent_messages(prompt)
-        st.session_state.llm_last_tool_events = tool_events
-        prep_placeholder.empty()
-
-        # Call LLM with streaming
         with history_container:
             with st.chat_message("assistant"):
-                _stream_response(messages, lang)
+                st.markdown(instant_reply)
+                _render_nav_actions(instant_actions, key_prefix=f"{key_prefix}_instant")
+        return
+
+    prep_placeholder = st.empty()
+    prep_placeholder.info(
+        "🛠️ Preparing tools..." if lang == "en" else "🛠️ 正在准备工具..."
+    )
+    messages, tool_events = _compose_agent_messages(prompt)
+    st.session_state.llm_last_tool_events = tool_events
+    prep_placeholder.empty()
+
+    with history_container:
+        with st.chat_message("assistant"):
+            _stream_response(messages, lang)
+
+
+def render_sidebar_chat_widget():
+    """Render a compact global AI chat box in the sidebar."""
+    _init_chat_state()
+    lang = st.session_state.get("language", "en")
+    pending_prompt = st.session_state.get("_ai_pending_question")
+    expanded = bool(st.session_state.get("_sidebar_ai_open") or pending_prompt)
+
+    title = "💬 AI Chat" if lang == "en" else "💬 AI 对话"
+    with st.expander(title, expanded=expanded):
+        st.session_state["_sidebar_ai_open"] = expanded
+        if not st.session_state.llm_enabled:
+            st.caption(
+                "Enable AI Assistant above to start chatting."
+                if lang == "en" else
+                "请先在上方开启 AI 助手。"
+            )
+            return
+
+        if not _is_configured():
+            st.caption(
+                "Configure the provider/API key above, then chat here."
+                if lang == "en" else
+                "请先在上方完成服务商/API Key 配置，再在这里对话。"
+            )
+            return
+
+        history_container = st.container(height=320, border=True)
+        with history_container:
+            recent_messages = st.session_state.llm_messages[-6:]
+            for msg_idx, msg in enumerate(recent_messages):
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+                    if msg["role"] == "assistant" and msg.get("actions"):
+                        _render_nav_actions(msg["actions"], key_prefix=f"_llm_sidebar_{msg_idx}")
+
+            queued_prompt = st.session_state.pop("_ai_pending_question", None)
+            if queued_prompt:
+                st.info(
+                    "Using page context to ask the assistant..."
+                    if lang == "en" else
+                    "正在带着当前页面上下文向 AI 提问..."
+                )
+                _submit_prompt(queued_prompt, lang, history_container, key_prefix="_llm_sidebar")
+
+        with st.form("_sidebar_llm_form", clear_on_submit=True):
+            prompt = st.text_input(
+                "Ask EasyICU AI" if lang == "en" else "向 EasyICU AI 提问",
+                placeholder="Ask about the current workflow..." if lang == "en" else "询问当前流程、概念或报错...",
+                label_visibility="collapsed",
+            )
+            form_cols = st.columns([1, 1])
+            with form_cols[0]:
+                send_clicked = st.form_submit_button(
+                    "Send" if lang == "en" else "发送",
+                    use_container_width=True,
+                )
+            with form_cols[1]:
+                clear_clicked = st.form_submit_button(
+                    "Clear" if lang == "en" else "清空",
+                    use_container_width=True,
+                )
+
+        if clear_clicked:
+            st.session_state.llm_messages = []
+            st.rerun()
+        if send_clicked and prompt.strip():
+            _submit_prompt(prompt, lang, history_container, key_prefix="_llm_sidebar")
+
+
+def _starter_prompts(lang: str) -> list[str]:
+    if lang == "en":
+        return [
+            "Help me choose features for Sepsis-3 research.",
+            "Explain the difference between SOFA and SOFA-2 in EasyICU.",
+            "Why is missingness high in my exported data?",
+            "How do I export 20 preview patients before full extraction?",
+        ]
+    return [
+        "帮我选一套适合 Sepsis-3 研究的特征。",
+        "解释一下 EasyICU 里的 SOFA 和 SOFA-2 有什么区别。",
+        "为什么我导出的数据缺失率这么高？",
+        "我想先预览 20 个患者再全量导出，应该怎么做？",
+    ]
+
+
+def _render_chat_welcome(*, lang: str, panel_key: str, history_container) -> None:
+    title = "Hi, I am the EasyICU AI Assistant" if lang == "en" else "你好，我是 EasyICU AI 助手"
+    subtitle = (
+        "I can help you navigate the web app, choose concepts, explain scores, and troubleshoot extraction issues."
+        if lang == "en" else
+        "我可以帮你熟悉 Web 工作流、挑选特征、解释临床评分，也能一起排查提取和导出问题。"
+    )
+    prompt_hint = (
+        "Try one of these questions:" if lang == "en" else "你可以直接点下面这些问题："
+    )
+
+    st.markdown(
+        f'''
+        <div class="floating-ai-welcome">
+            <div class="floating-ai-welcome-title">{title}</div>
+            <div class="floating-ai-welcome-subtitle">{subtitle}</div>
+            <div class="floating-ai-welcome-hint">{prompt_hint}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+    prompts = _starter_prompts(lang)
+    for idx, starter in enumerate(prompts):
+        if st.button(
+            starter,
+            key=f"{panel_key}_starter_{idx}",
+            use_container_width=True,
+        ):
+            _submit_prompt(starter, lang, history_container, key_prefix=f"{panel_key}_starter")
+            st.rerun()
+
+
+def _render_compact_chat_panel(*, lang: str, panel_key: str, history_height: int = 320) -> None:
+    """Render a compact chat history + input form panel."""
+    history_container = st.container(height=history_height, border=True)
+    with history_container:
+        recent_messages = st.session_state.llm_messages[-8:]
+        queued_prompt = st.session_state.pop("_ai_pending_question", None)
+        if queued_prompt:
+            st.info(
+                "Using page context to ask the assistant..."
+                if lang == "en" else
+                "正在带着当前页面上下文向 AI 提问..."
+            )
+            _submit_prompt(queued_prompt, lang, history_container, key_prefix=panel_key)
+
+        if not recent_messages and not queued_prompt:
+            _render_chat_welcome(lang=lang, panel_key=panel_key, history_container=history_container)
+        else:
+            for msg_idx, msg in enumerate(recent_messages):
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+                    if msg["role"] == "assistant" and msg.get("actions"):
+                        _render_nav_actions(msg["actions"], key_prefix=f"{panel_key}_{msg_idx}")
+
+    with st.form(f"{panel_key}_form", clear_on_submit=True):
+        prompt = st.text_input(
+            "Ask EasyICU AI" if lang == "en" else "向 EasyICU AI 提问",
+            placeholder="Ask about the current workflow..." if lang == "en" else "询问当前流程、概念或报错...",
+            label_visibility="collapsed",
+        )
+        form_cols = st.columns([1, 1.35])
+        with form_cols[0]:
+            clear_clicked = st.form_submit_button(
+                "Clear" if lang == "en" else "清空",
+                use_container_width=True,
+            )
+        with form_cols[1]:
+            send_clicked = st.form_submit_button(
+                "Send" if lang == "en" else "发送",
+                type="primary",
+                use_container_width=True,
+            )
+
+    if clear_clicked:
+        st.session_state.llm_messages = []
+        st.rerun()
+    if send_clicked and prompt.strip():
+        _submit_prompt(prompt, lang, history_container, key_prefix=panel_key)
+
+
+def render_floating_chat_dock():
+    """Render a fixed bottom-right floating AI chat dock."""
+    _init_chat_state()
+    lang = st.session_state.get("language", "en")
+    if "_floating_ai_open" not in st.session_state:
+        st.session_state["_floating_ai_open"] = False
+    if st.session_state.get("_ai_pending_question"):
+        st.session_state["_floating_ai_open"] = True
+
+    st.markdown(
+        """
+        <style>
+        div.st-key-floating_ai_launcher,
+        div.st-key-floating_ai_panel {
+            position: fixed !important;
+            z-index: 99990 !important;
+            margin: 0 !important;
+        }
+
+        div.st-key-floating_ai_launcher {
+            right: 20px;
+            bottom: 20px;
+            width: 72px;
+        }
+
+        div.st-key-floating_ai_launcher .stButton > button {
+            width: 64px;
+            min-width: 64px;
+            height: 64px;
+            border-radius: 999px;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            background: linear-gradient(135deg, #0f766e 0%, #0f172a 100%);
+            color: #ffffff;
+            font-size: 1.35rem;
+            box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
+        }
+
+        div.st-key-floating_ai_panel {
+            right: 20px;
+            bottom: 96px;
+            width: min(680px, calc(100vw - 28px));
+            max-width: 680px;
+            border-radius: 18px;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            background:
+                radial-gradient(circle at top right, rgba(13, 148, 136, 0.12), transparent 32%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+            box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+            backdrop-filter: blur(12px);
+            padding: 0.35rem 0.35rem 0.45rem 0.35rem;
+            overflow: hidden;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.2rem 0.15rem 0.4rem 0.15rem;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-title {
+            font-size: 1.06rem;
+            font-weight: 700;
+            color: #0f172a;
+            letter-spacing: 0.01em;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-subtitle {
+            font-size: 0.82rem;
+            color: #475569;
+            margin-top: 0.08rem;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-welcome {
+            background:
+                radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 30%),
+                linear-gradient(135deg, rgba(240, 249, 255, 0.95), rgba(248, 250, 252, 0.95));
+            border: 1px solid rgba(14, 165, 233, 0.14);
+            border-radius: 18px;
+            padding: 0.95rem 1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-welcome-title {
+            font-size: 1rem;
+            font-weight: 800;
+            color: #0f172a;
+            margin-bottom: 0.3rem;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-welcome-subtitle {
+            font-size: 0.88rem;
+            line-height: 1.6;
+            color: #334155;
+            margin-bottom: 0.55rem;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-welcome-hint {
+            font-size: 0.76rem;
+            color: #0f766e;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+        }
+
+        div.st-key-floating_ai_panel div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {
+            padding: 0.2rem 0.3rem 0.4rem 0.3rem;
+        }
+
+        div.st-key-floating_ai_panel [data-testid="stChatMessage"] {
+            margin-bottom: 0.45rem;
+        }
+
+        div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] {
+            border-radius: 18px;
+            padding: 0.78rem 0.95rem;
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.98));
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+        }
+
+        div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] p,
+        div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] li {
+            font-size: 0.93rem;
+            line-height: 1.72;
+            color: #0f172a;
+        }
+
+        div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] ul,
+        div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] ol {
+            padding-left: 1.15rem;
+            margin-top: 0.45rem;
+            margin-bottom: 0.2rem;
+        }
+
+        div.st-key-floating_ai_panel .stButton > button {
+            border-radius: 14px;
+        }
+
+        div.st-key-floating_ai_panel .stChatInput {
+            margin-top: 0.3rem;
+        }
+
+        @media (max-width: 768px) {
+            div.st-key-floating_ai_launcher {
+                right: 12px;
+                bottom: 12px;
+            }
+
+            div.st-key-floating_ai_panel {
+                left: 12px;
+                right: 12px;
+                bottom: 88px;
+                width: auto;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not st.session_state.get("_floating_ai_open", False):
+        with st.container(key="floating_ai_launcher"):
+            if st.button("💬", key="_floating_ai_open_btn", help="Open AI chat" if lang == "en" else "打开 AI 对话"):
+                st.session_state["_floating_ai_open"] = True
+                st.rerun()
+        return
+
+    with st.container(key="floating_ai_panel"):
+        dock_title = "AI Assistant" if lang == "en" else "AI 助手"
+        dock_subtitle = "Ask about EasyICU, concepts, exports, or results" if lang == "en" else "随时提问 EasyICU、概念、导出和结果解释"
+        header_cols = st.columns([5, 1, 1])
+        with header_cols[0]:
+            st.markdown(
+                f'<div class="floating-ai-header"><div><div class="floating-ai-title">💬 {dock_title}</div><div class="floating-ai-subtitle">{dock_subtitle}</div></div></div>',
+                unsafe_allow_html=True,
+            )
+        with header_cols[1]:
+            if st.button("—", key="_floating_ai_min_btn", use_container_width=True):
+                st.session_state["_floating_ai_open"] = False
+                st.rerun()
+        with header_cols[2]:
+            if st.button("✕", key="_floating_ai_close_btn", use_container_width=True):
+                st.session_state["_floating_ai_open"] = False
+                st.session_state["_ai_pending_question"] = None
+                st.rerun()
+
+        if not st.session_state.llm_enabled:
+            st.caption(
+                "Enable AI Assistant in the sidebar settings first."
+                if lang == "en" else
+                "请先在侧边栏上方开启 AI 助手。"
+            )
+        elif not _is_configured():
+            st.caption(
+                "Configure provider/API key in the sidebar settings first."
+                if lang == "en" else
+                "请先在侧边栏上方配置服务商/API Key。"
+            )
+        else:
+            _render_compact_chat_panel(lang=lang, panel_key="_llm_floating", history_height=500)
 
 
 # ---------------------------------------------------------------------------

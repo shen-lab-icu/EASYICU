@@ -106,6 +106,36 @@ def _find_running_easyicu_processes():
     return pids
 
 
+def _find_processes_on_port(port: int):
+    """Find processes listening on the target port, preferring Streamlit/EasyICU."""
+    try:
+        import psutil
+    except ImportError:
+        return []
+
+    pids = []
+    for conn in psutil.net_connections(kind="inet"):
+        try:
+            if not conn.laddr or conn.laddr.port != port or conn.status != psutil.CONN_LISTEN:
+                continue
+        except Exception:
+            continue
+
+        pid = conn.pid
+        if not pid:
+            continue
+        try:
+            proc = psutil.Process(pid)
+            cmdline = " ".join(proc.cmdline() or [])
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+        normalized = cmdline.replace("\\", "/").lower()
+        if "streamlit" in normalized or "easyicu" in normalized:
+            pids.append(pid)
+    return list(dict.fromkeys(pids))
+
+
 def run_app(
     host: str = '0.0.0.0',
     port: int = 8501,
@@ -217,9 +247,10 @@ def run_app(
         subprocess.run(cmd, env=child_env)
 
 
-def stop_app():
+def stop_app(port: int = 8501):
     """停止 EasyICU Web 应用。"""
     pid_file = _pid_file()
+    stopped_any = False
 
     if pid_file.exists():
         with pid_file.open('r', encoding='utf-8') as handle:
@@ -228,21 +259,25 @@ def stop_app():
         try:
             os.kill(pid, signal.SIGTERM)
             print(f"✅ 已停止服务 (PID: {pid})")
+            stopped_any = True
         except ProcessLookupError:
-            print("⚠️ 服务未运行")
+            print(f"⚠️ PID 文件中的进程不存在: {pid}，继续扫描旧进程")
 
         pid_file.unlink(missing_ok=True)
-        return
 
-    pids = _find_running_easyicu_processes()
+    pids = list(dict.fromkeys([
+        *_find_running_easyicu_processes(),
+        *_find_processes_on_port(port),
+    ]))
     if pids:
         for pid in pids:
             try:
                 os.kill(pid, signal.SIGTERM)
+                stopped_any = True
             except ProcessLookupError:
                 continue
         print(f"✅ 已停止服务 ({len(pids)} 个进程)")
-    else:
+    elif not stopped_any:
         print("⚠️ 未找到运行中的服务")
 
 

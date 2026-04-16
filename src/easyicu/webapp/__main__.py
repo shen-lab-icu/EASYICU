@@ -48,7 +48,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if command == "stop":
-        stop_app()
+        stop_app(port=args.port)
         return 0
 
     if command == "status":
