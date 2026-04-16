@@ -3296,6 +3296,97 @@ def _render_sepsis_ai_button(lang: str) -> None:
         st.toast("💬 Question sent to AI Assistant" if lang == 'en' else "💬 问题已发送到 AI 助手")
 
 
+def _preview_icd_match(data_path: Path, database: str, tokens: list[str]) -> dict:
+    """Preview ICD code matching: return matched patient count and top codes."""
+    result = {'tokens': tokens, 'matched_patients': 0, 'total_patients': 0, 'top_codes': None, 'error': None}
+    try:
+        DB_META_PREVIEW = {
+            'miiv': {'id_col': 'stay_id', 'icu_table': 'icustays.parquet'},
+            'mimic': {'id_col': 'icustay_id', 'icu_table': 'icustays.parquet'},
+            'eicu': {'id_col': 'patientunitstayid', 'icu_table': 'patient.parquet'},
+        }
+        meta = DB_META_PREVIEW.get(database)
+        if not meta:
+            result['error'] = f"ICD preview not supported for {database}"
+            return result
+        icu_path = data_path / meta['icu_table']
+        if not icu_path.exists():
+            result['error'] = f"ICU table not found: {icu_path.name}"
+            return result
+        icu_df = pd.read_parquet(icu_path)
+        icu_df.columns = [c.lower() for c in icu_df.columns]
+        id_col = meta['id_col'].lower()
+        result['total_patients'] = icu_df[id_col].nunique()
+
+        if database in ('miiv', 'mimic'):
+            diag_path = data_path / 'diagnoses_icd.parquet'
+            if not diag_path.exists():
+                result['error'] = f"diagnoses_icd.parquet not found"
+                return result
+            diag_df = pd.read_parquet(diag_path, columns=['hadm_id', 'icd_code', 'icd_version'] if database == 'miiv' else ['hadm_id', 'icd_code'])
+            codes = diag_df['icd_code'].astype(str).str.upper().str.replace('.', '', regex=False)
+            norm_tokens = [tok.upper().replace('.', '') for tok in tokens]
+            diag_mask = pd.Series(False, index=diag_df.index)
+            for tok in norm_tokens:
+                diag_mask |= codes.str.startswith(tok)
+            matched_diag = diag_df.loc[diag_mask].copy()
+            if 'hadm_id' in icu_df.columns:
+                matched_hadm = set(matched_diag['hadm_id'].dropna().unique())
+                matched_ids = set(icu_df.loc[icu_df['hadm_id'].isin(matched_hadm), id_col].dropna().unique())
+                result['matched_patients'] = len(matched_ids)
+            # Top ICD codes
+            matched_diag['icd_code_clean'] = codes[diag_mask]
+            code_counts = matched_diag['icd_code_clean'].value_counts().head(20).reset_index()
+            code_counts.columns = ['ICD Code', 'Count']
+            # Try enrich with descriptions
+            try:
+                d_path = data_path / 'd_icd_diagnoses.parquet'
+                if d_path.exists():
+                    d_df = pd.read_parquet(d_path)
+                    d_df.columns = [c.lower() for c in d_df.columns]
+                    if 'icd_code' in d_df.columns and 'long_title' in d_df.columns:
+                        d_df['icd_code'] = d_df['icd_code'].astype(str).str.upper().str.replace('.', '', regex=False)
+                        desc_map = dict(zip(d_df['icd_code'], d_df['long_title']))
+                        code_counts['Description'] = code_counts['ICD Code'].map(desc_map).fillna('')
+            except Exception:
+                pass
+            result['top_codes'] = code_counts
+
+        elif database == 'eicu':
+            diag_path = data_path / 'diagnosis.parquet'
+            if not diag_path.exists():
+                result['error'] = f"diagnosis.parquet not found"
+                return result
+            diag_df = pd.read_parquet(diag_path)
+            diag_df.columns = [c.lower() for c in diag_df.columns]
+            if 'patientunitstayid' not in diag_df.columns:
+                result['error'] = "patientunitstayid not found in diagnosis table"
+                return result
+            diag_text = pd.Series('', index=diag_df.index, dtype='object')
+            if 'icd9code' in diag_df.columns:
+                diag_text = diag_text.str.cat(diag_df['icd9code'].astype(str), sep=' ', na_rep='')
+            if 'diagnosisstring' in diag_df.columns:
+                diag_text = diag_text.str.cat(diag_df['diagnosisstring'].astype(str), sep=' ', na_rep='')
+            diag_text_lower = diag_text.str.lower().str.replace('.', '', regex=False)
+            diag_mask = pd.Series(False, index=diag_df.index)
+            for tok in tokens:
+                diag_mask |= diag_text_lower.str.contains(str(tok).lower().replace('.', ''), na=False)
+            matched_diag = diag_df.loc[diag_mask]
+            matched_ids = set(matched_diag['patientunitstayid'].dropna().unique())
+            result['matched_patients'] = len(matched_ids)
+            # Top codes for eICU
+            if 'icd9code' in matched_diag.columns:
+                code_counts = matched_diag['icd9code'].dropna().astype(str).value_counts().head(20).reset_index()
+                code_counts.columns = ['ICD Code', 'Count']
+                if 'diagnosisstring' in matched_diag.columns:
+                    ds_map = dict(zip(matched_diag['icd9code'].astype(str), matched_diag['diagnosisstring'].astype(str)))
+                    code_counts['Description'] = code_counts['ICD Code'].map(ds_map).fillna('')
+                result['top_codes'] = code_counts
+    except Exception as e:
+        result['error'] = str(e)
+    return result
+
+
 # ============ 辅助函数：加载后按队列条件过滤已提取数据中的 None 值患者 ============
 
 def _post_filter_cohort_data(data: dict, database: str) -> dict:
@@ -3703,16 +3794,28 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
     if icd_tokens and database in ICD_FILTER_DATABASES:
         before_count = keep_mask.sum()
         matched_ids = set()
+        icd_mode = cf.get('icd_mode', 'include')
         try:
             matched_ids = _match_ids_by_icd_tokens(data_path, database, icu_df, id_col_lower, icd_tokens)
-            if matched_ids:
-                keep_mask &= icu_df[id_col_lower].isin(matched_ids)
+            if icd_mode == 'exclude':
+                # Exclude patients WITH these ICD codes
+                if matched_ids:
+                    keep_mask &= ~icu_df[id_col_lower].isin(matched_ids)
+                # If no matched_ids, nothing to exclude
+                excluded = int(before_count - keep_mask.sum())
+                filter_details.append((f"ICD exclude ({', '.join(icd_tokens)})",
+                                       f"ICD 排除 ({', '.join(icd_tokens)})",
+                                       excluded))
             else:
-                keep_mask &= False
-            excluded = int(before_count - keep_mask.sum())
-            filter_details.append((f"ICD / keyword filter ({', '.join(icd_tokens)})",
-                                   f"ICD / 关键词过滤 ({', '.join(icd_tokens)})",
-                                   excluded))
+                # Include only patients WITH these ICD codes
+                if matched_ids:
+                    keep_mask &= icu_df[id_col_lower].isin(matched_ids)
+                else:
+                    keep_mask &= False
+                excluded = int(before_count - keep_mask.sum())
+                filter_details.append((f"ICD include ({', '.join(icd_tokens)})",
+                                       f"ICD 包含 ({', '.join(icd_tokens)})",
+                                       excluded))
         except Exception as e:
             print(f"[COHORT] ICD filter skipped ({database}): {e}")
 
@@ -7318,7 +7421,10 @@ def render_sidebar():
                 'has_sepsis': None,
                 'disease_cohort': 'none',
                 'icd_query': '',
+                'icd_mode': 'include',
             }
+        # Ensure icd_mode is always present (upgrade from older sessions)
+        st.session_state.cohort_filter.setdefault('icd_mode', 'include')
         st.session_state.setdefault('sepsis_si_mode', 'auto')
         st.session_state.setdefault('sepsis_abx_win_hours', 24)
         st.session_state.setdefault('sepsis_samp_win_hours', 72)
@@ -7492,13 +7598,23 @@ def render_sidebar():
                 disease_desc = disease_cfg.get('description_en') if st.session_state.language == 'en' else disease_cfg.get('description_zh')
                 if disease_desc:
                     st.caption(disease_desc)
-                if disease_cfg.get('icd_tokens') and st.session_state.get('database') in ICD_FILTER_DATABASES:
-                    icd_note = (
-                        f"Template ICD prefixes: {', '.join(disease_cfg['icd_tokens'])}"
-                        if st.session_state.language == 'en' else
-                        f"模板 ICD 前缀：{', '.join(disease_cfg['icd_tokens'])}"
-                    )
-                    st.caption(icd_note)
+                if disease_cfg.get('icd_tokens'):
+                    if st.session_state.get('database') in ICD_FILTER_DATABASES:
+                        icd_note = (
+                            f"Template ICD prefixes: {', '.join(disease_cfg['icd_tokens'])}"
+                            if st.session_state.language == 'en' else
+                            f"模板 ICD 前缀：{', '.join(disease_cfg['icd_tokens'])}"
+                        )
+                        st.caption(icd_note)
+                    else:
+                        _no_icd_warn = (
+                            f"⚠️ This cohort requires ICD codes, but {st.session_state.get('database', '')} "
+                            "does not have ICD tables. The disease filter will not take effect."
+                            if st.session_state.language == 'en' else
+                            f"⚠️ 此队列需要 ICD 编码，但 {st.session_state.get('database', '')} "
+                            "没有 ICD 诊断表。疾病筛选将不会生效。"
+                        )
+                        st.warning(_no_icd_warn)
 
             if disease_choice == 'sepsis':
                 sepsis_title = "🦠 Sepsis suspected-infection settings" if st.session_state.language == 'en' else "🦠 脓毒症疑似感染设置"
@@ -7558,16 +7674,76 @@ def render_sidebar():
                     if st.session_state.language == 'en' else
                     "对于 MIMIC 数据库，请输入 ICD 前缀，如 A41、I50；对于 eICU，也可输入关键词。"
                 )
-                icd_value = st.text_input(
-                    icd_label,
-                    value=st.session_state.cohort_filter.get('icd_query', ''),
-                    help=icd_help,
-                    key="cohort_icd_query",
-                    placeholder="A41, R65, sepsis" if st.session_state.language == 'en' else "A41, R65, sepsis",
-                )
-                st.session_state.cohort_filter['icd_query'] = icd_value.strip()
+                # ICD include/exclude mode selection
+                icd_mode_label = "Filter mode" if st.session_state.language == 'en' else "过滤模式"
+                icd_mode_col1, icd_mode_col2 = st.columns([3, 2])
+                with icd_mode_col2:
+                    icd_mode_options = {
+                        'include': 'Include (has ICD)' if st.session_state.language == 'en' else '包含（有该ICD）',
+                        'exclude': 'Exclude (no ICD)' if st.session_state.language == 'en' else '排除（无该ICD）',
+                    }
+                    current_icd_mode = st.session_state.cohort_filter.get('icd_mode', 'include')
+                    icd_mode = st.radio(
+                        icd_mode_label,
+                        options=list(icd_mode_options.keys()),
+                        format_func=lambda x: icd_mode_options[x],
+                        index=0 if current_icd_mode == 'include' else 1,
+                        horizontal=True,
+                        key="cohort_icd_mode",
+                    )
+                    st.session_state.cohort_filter['icd_mode'] = icd_mode
+                with icd_mode_col1:
+                    icd_value = st.text_input(
+                        icd_label,
+                        value=st.session_state.cohort_filter.get('icd_query', ''),
+                        help=icd_help,
+                        key="cohort_icd_query",
+                        placeholder="A41, R65, sepsis" if st.session_state.language == 'en' else "A41, R65, sepsis",
+                    )
+                    st.session_state.cohort_filter['icd_query'] = icd_value.strip()
+
+                # ICD preview: show matching patient count and top codes
+                _icd_tokens_preview = _split_query_tokens(icd_value.strip())
+                if _icd_tokens_preview and st.session_state.get('data_path'):
+                    _preview_btn_label = "🔍 Preview ICD Match" if st.session_state.language == 'en' else "🔍 预览 ICD 匹配"
+                    if st.button(_preview_btn_label, key="icd_preview_btn"):
+                        _icd_preview_result = _preview_icd_match(
+                            Path(st.session_state.data_path),
+                            st.session_state.get('database', 'miiv'),
+                            _icd_tokens_preview,
+                        )
+                        st.session_state['_icd_preview_cache'] = _icd_preview_result
+
+                    _cached_preview = st.session_state.get('_icd_preview_cache')
+                    if _cached_preview and _cached_preview.get('tokens') == _icd_tokens_preview:
+                        _pr = _cached_preview
+                        if _pr.get('error'):
+                            st.warning(_pr['error'])
+                        else:
+                            _n_matched = _pr.get('matched_patients', 0)
+                            _n_total = _pr.get('total_patients', 0)
+                            _pct = _n_matched / _n_total * 100 if _n_total > 0 else 0
+                            if st.session_state.language == 'en':
+                                st.success(f"📊 Matched **{_n_matched:,}** / {_n_total:,} patients ({_pct:.1f}%)")
+                            else:
+                                st.success(f"📊 匹配到 **{_n_matched:,}** / {_n_total:,} 位患者 ({_pct:.1f}%)")
+                            _top_codes = _pr.get('top_codes')
+                            if _top_codes is not None and len(_top_codes) > 0:
+                                _code_label = "Top matching ICD codes" if st.session_state.language == 'en' else "匹配频率最高的 ICD 编码"
+                                with st.expander(f"📋 {_code_label}", expanded=False):
+                                    st.dataframe(_top_codes, use_container_width=True, hide_index=True)
             else:
                 st.session_state.cohort_filter['icd_query'] = ""
+                st.session_state.cohort_filter['icd_mode'] = 'include'
+                if st.session_state.get('database') not in ICD_FILTER_DATABASES:
+                    _no_icd_msg = (
+                        f"ℹ️ The current database ({st.session_state.get('database', '')}) does not have ICD diagnosis tables. "
+                        "ICD filtering is only available for MIMIC-IV, MIMIC-III, and eICU."
+                        if st.session_state.language == 'en' else
+                        f"ℹ️ 当前数据库（{st.session_state.get('database', '')}）没有 ICD 诊断表。"
+                        "ICD 过滤仅支持 MIMIC-IV、MIMIC-III 和 eICU。"
+                    )
+                    st.caption(_no_icd_msg)
             
             # 显示当前筛选条件摘要
             filter_summary = []

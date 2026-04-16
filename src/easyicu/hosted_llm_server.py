@@ -40,6 +40,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 HOSTED_DEFAULT_MODEL = os.getenv("EASYICU_HOSTED_DEFAULT_MODEL", "openrouter/free").strip()
+HOSTED_FALLBACK_MODELS = [
+    item.strip()
+    for item in os.getenv(
+        "EASYICU_HOSTED_FALLBACK_MODELS",
+        "openrouter/free,deepseek/deepseek-chat-v3-0324:free",
+    ).split(",")
+    if item.strip()
+]
 HOSTED_SERVER_TOKEN = os.getenv("EASYICU_HOSTED_SERVER_TOKEN", "").strip()
 HOSTED_RATE_LIMIT = int(os.getenv("EASYICU_HOSTED_RATE_LIMIT", "20") or "20")
 HOSTED_ALLOWED_ORIGINS = [
@@ -119,6 +127,70 @@ def _build_upstream_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return upstream_payload
 
 
+def _should_retry_with_fallback(response: requests.Response) -> bool:
+    if response.status_code not in {429, 500, 502, 503, 504}:
+        return False
+    data = _json_or_text(response)
+    message = json.dumps(data, ensure_ascii=False).lower()
+    return any(token in message for token in ("rate", "limit", "temporarily", "overloaded", "provider returned error"))
+
+
+def _fallback_models_for(requested_model: str) -> list[str]:
+    resolved_default = _resolve_model("hosted-default")
+    current = _resolve_model(requested_model)
+    candidates = []
+    for model in HOSTED_FALLBACK_MODELS:
+        resolved = _resolve_model(model)
+        if resolved and resolved not in {current} and resolved not in candidates:
+            candidates.append(resolved)
+    if current != resolved_default and resolved_default not in {current} and resolved_default not in candidates:
+        candidates.insert(0, resolved_default)
+    return candidates
+
+
+def _post_upstream(
+    request: Request,
+    upstream_payload: dict[str, Any],
+    *,
+    stream: bool,
+) -> requests.Response:
+    headers = _build_upstream_headers(request)
+    upstream_url = f"{OPENROUTER_BASE_URL}/chat/completions"
+
+    try:
+        upstream_response = requests.post(
+            upstream_url,
+            headers=headers,
+            json=upstream_payload,
+            timeout=180,
+            stream=stream,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Upstream request failed: {exc}") from exc
+
+    if stream or not _should_retry_with_fallback(upstream_response):
+        return upstream_response
+
+    fallback_payload = dict(upstream_payload)
+    for fallback_model in _fallback_models_for(str(upstream_payload.get("model", ""))):
+        fallback_payload["model"] = fallback_model
+        upstream_response.close()
+        try:
+            upstream_response = requests.post(
+                upstream_url,
+                headers=headers,
+                json=fallback_payload,
+                timeout=180,
+                stream=False,
+            )
+        except requests.RequestException:
+            continue
+        if upstream_response.status_code < 400 or not _should_retry_with_fallback(upstream_response):
+            return upstream_response
+
+    return upstream_response
+
+
 def _json_or_text(response: requests.Response) -> Any:
     try:
         return response.json()
@@ -180,20 +252,8 @@ async def chat_completions(request: Request):
 
     payload = await request.json()
     upstream_payload = _build_upstream_payload(payload)
-    headers = _build_upstream_headers(request)
-    upstream_url = f"{OPENROUTER_BASE_URL}/chat/completions"
     stream = bool(upstream_payload.get("stream"))
-
-    try:
-        upstream_response = requests.post(
-            upstream_url,
-            headers=headers,
-            json=upstream_payload,
-            timeout=180,
-            stream=stream,
-        )
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Upstream request failed: {exc}") from exc
+    upstream_response = _post_upstream(request, upstream_payload, stream=stream)
 
     if stream:
         if upstream_response.status_code >= 400:
