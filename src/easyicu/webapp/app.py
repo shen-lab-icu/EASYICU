@@ -8,7 +8,9 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import os
+import json
 import threading
+from functools import lru_cache
 from typing import Dict, Any, Optional, List
 
 # 🚀 性能优化：禁用自动缓存清除，保持表缓存在多次加载间复用
@@ -144,6 +146,15 @@ st.markdown("""
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
         color-scheme: light !important;
+    }
+
+    div[data-testid="stMarkdownContainer"] hr {
+        margin: 0.45rem 0 0.8rem 0 !important;
+        border-top: 1px solid #dbe4f0 !important;
+    }
+
+    h1, h2, h3, h4, h5, h6 {
+        margin-bottom: 0.38rem !important;
     }
 
     /* 强制浅色背景 — 覆盖系统/浏览器深色模式 */
@@ -889,6 +900,43 @@ st.markdown("""
         margin: 0.85rem auto 0;
     }
 
+    .entry-task-launcher {
+        max-width: min(1220px, 92vw);
+        margin: 0.4rem auto 0;
+    }
+
+    .entry-task-launcher-label {
+        text-align: center;
+        color: #7388a5;
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 0.65rem;
+    }
+
+    .entry-task-wrap div[data-testid="stButton"] > button {
+        min-height: 62px !important;
+        padding: 0.9rem 1rem !important;
+        border-radius: 999px !important;
+        background: rgba(255,255,255,0.78) !important;
+        border: 1px solid rgba(148,163,184,0.22) !important;
+        color: #17304c !important;
+        font-size: 0.94rem !important;
+        font-weight: 700 !important;
+        line-height: 1.35 !important;
+        box-shadow: 0 10px 28px rgba(15,23,42,0.04) !important;
+        transition: var(--transition-smooth) !important;
+        backdrop-filter: blur(10px) !important;
+    }
+
+    .entry-task-wrap div[data-testid="stButton"] > button:hover {
+        transform: translateY(-2px) !important;
+        border-color: rgba(37,99,235,0.26) !important;
+        background: rgba(255,255,255,0.94) !important;
+        box-shadow: 0 14px 32px rgba(37,99,235,0.08) !important;
+    }
+
     .entry-overview-panel {
         margin-top: 0.55rem;
         padding: 0.4rem 0 0.2rem;
@@ -1005,6 +1053,7 @@ st.markdown("""
         .entry-overview-grid { grid-template-columns: 1fr; }
         .entry-db-inline { flex-direction: column; align-items: flex-start; }
         .hero-title { font-size: 2rem; }
+        .entry-task-wrap div[data-testid="stButton"] > button { min-height: 58px !important; font-size: 0.9rem !important; }
     }
 
     /* ============ 步骤指示器 — 精致 ============ */
@@ -1718,10 +1767,74 @@ CONCEPT_DB_COVERAGE = {
     'mech_vent': 3, 'vent_ind': 3, 'ecmo': 2, 'rrt': 4,
 }
 
+SUPPORTED_DB_KEYS = ('miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic')
+
+
+@lru_cache(maxsize=1)
+def _get_quality_concept_dictionary():
+    """Load concept dictionary once for dynamic coverage checks."""
+    try:
+        from easyicu.concept import load_dictionary
+        return load_dictionary(include_sofa2=True)
+    except Exception:
+        return {}
+
+
+def _has_any_source_recursive(concept_name, database, concept_dict, visited=None):
+    """Recursively check whether a concept or one of its sub-concepts has a source in a database."""
+    if visited is None:
+        visited = set()
+    if concept_name in visited:
+        return False
+    visited.add(concept_name)
+    concept_def = concept_dict.get(concept_name)
+    if not concept_def:
+        return False
+    if getattr(concept_def, 'sources', {}).get(database):
+        return True
+    if getattr(concept_def, 'sub_concepts', None):
+        return any(_has_any_source_recursive(sub_concept, database, concept_dict, visited) for sub_concept in concept_def.sub_concepts)
+    return False
+
+
+def _get_supported_db_keys_for_concept(concept_name: str) -> set[str]:
+    """Return supported DB keys for a concept using concept-dict first, then special-concept fallback."""
+    concept_dict = _get_quality_concept_dictionary()
+    if concept_name in concept_dict:
+        return {
+            db for db in SUPPORTED_DB_KEYS
+            if _has_any_source_recursive(concept_name, db, concept_dict)
+        }
+
+    special_all = {
+        'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
+        'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+        'creat_low_past_48hr', 'creat_low_past_7day',
+        'sep3_sofa1', 'sep3_sofa2',
+        'circ_failure', 'circ_event',
+    }
+    if concept_name in special_all:
+        return set(SUPPORTED_DB_KEYS)
+
+    fallback_n = CONCEPT_DB_COVERAGE.get(concept_name, 0)
+    return set(SUPPORTED_DB_KEYS[:fallback_n])
+
+
+def _get_concept_coverage_summary(concept_name: str, current_database: Optional[str] = None) -> tuple[str, bool, int]:
+    """Return display label, current-db support flag, and supported DB count."""
+    supported = _get_supported_db_keys_for_concept(concept_name)
+    count = len(supported)
+    current_supported = True if not current_database else current_database in supported
+    label = f"{count}/6 DBs"
+    if current_database:
+        prefix = "✓ " if current_supported else "✕ "
+        label = f"{prefix}{label}"
+    return label, current_supported, count
+
 
 def _get_coverage_badge(concept_name: str) -> str:
     """返回概念跨库可用性的 HTML badge。"""
-    n = CONCEPT_DB_COVERAGE.get(concept_name, 0)
+    _, _, n = _get_concept_coverage_summary(concept_name)
     if n >= 6:
         color, bg = '#059669', 'rgba(5,150,105,0.1)'
         label = get_text('coverage_badge_full')
@@ -1737,19 +1850,52 @@ def _get_coverage_badge(concept_name: str) -> str:
     return f'<span style="display:inline-block;font-size:0.7rem;font-weight:600;color:{color};background:{bg};padding:1px 8px;border-radius:20px;margin-left:6px;">{label} ({n}/6)</span>'
 
 
-def _get_missing_cause_tag(concept_name: str, missing_rate: float) -> tuple:
+def _get_missing_cause_tag(
+    concept_name: str,
+    missing_rate: float,
+    *,
+    current_database: Optional[str] = None,
+    has_observed_rows: bool = False,
+) -> tuple:
     """为缺失率提供可解释的原因标签。返回 (text, color)。"""
     sparse_events = {'ecmo', 'ecmo_indication', 'mech_circ_support', 'cort', 'rrt',
                      'abx', 'vaso_ind', 'mech_vent', 'vent_ind', 'vent_start', 'vent_end',
                      'sep3_sofa1', 'sep3_sofa2', 'circ_failure', 'circ_event'}
-    n_db = CONCEPT_DB_COVERAGE.get(concept_name, 0)
-    if n_db == 0:
+    _, current_supported, n_db = _get_concept_coverage_summary(concept_name, current_database)
+    if not has_observed_rows and current_database and not current_supported:
         return get_text('missing_cause_db'), '#dc2626'
     if concept_name in sparse_events and missing_rate > 0.7:
         return get_text('missing_cause_sparse'), '#6b7280'
+    if n_db <= 1 and not has_observed_rows:
+        return get_text('missing_cause_db'), '#dc2626'
     if missing_rate > 0.8:
         return get_text('missing_cause_cohort'), '#d97706'
     return get_text('missing_cause_normal'), '#059669'
+
+
+def _prepare_timeseries_plot_df(df: pd.DataFrame, time_col: str, value_col: str) -> pd.DataFrame:
+    """Sort time series and collapse duplicate timestamps for plotting."""
+    if time_col not in df.columns or value_col not in df.columns:
+        return pd.DataFrame(columns=[time_col, value_col])
+    plot_df = df[[time_col, value_col]].copy()
+    plot_df[value_col] = pd.to_numeric(plot_df[value_col], errors='coerce')
+    plot_df = plot_df.dropna(subset=[time_col, value_col])
+    if plot_df.empty:
+        return plot_df
+    if pd.api.types.is_datetime64_any_dtype(plot_df[time_col]):
+        plot_df = plot_df.sort_values(time_col)
+    else:
+        numeric_time = pd.to_numeric(plot_df[time_col], errors='coerce')
+        if numeric_time.notna().any():
+            plot_df['_time_numeric'] = numeric_time
+            plot_df = plot_df.dropna(subset=['_time_numeric']).sort_values('_time_numeric')
+        else:
+            parsed_time = pd.to_datetime(plot_df[time_col], errors='coerce')
+            if parsed_time.notna().any():
+                plot_df['_time_parsed'] = parsed_time
+                plot_df = plot_df.dropna(subset=['_time_parsed']).sort_values('_time_parsed')
+    plot_df = plot_df.groupby(time_col, as_index=False)[value_col].mean()
+    return plot_df.sort_values(time_col).reset_index(drop=True)
 
 
 # 🔧 ADD (2026-02-05): 支持时序分析的模块（排除静态数据模块）
@@ -2072,6 +2218,9 @@ def _load_sep3_diagnosis(
         load_kwargs['max_patients'] = max_patients
     if patient_ids:
         load_kwargs['patient_ids'] = patient_ids
+    for _k in ('si_mode', 'abx_win', 'samp_win', 'positive_cultures', 'abx_min_count'):
+        if _k in kwargs and kwargs[_k] is not None:
+            load_kwargs[_k] = kwargs[_k]
     
     # Load susp_inf + sofa + sofa2
     try:
@@ -2141,7 +2290,8 @@ def load_special_concepts(
     data_path: str,
     patient_ids: dict = None,
     max_patients: int = None,
-    verbose: bool = False
+    verbose: bool = False,
+    **extra_kwargs,
 ) -> dict:
     """
     加载不在 concept-dict.json 中的特殊概念。
@@ -2197,6 +2347,7 @@ def load_special_concepts(
                         id_col = list(patient_ids.keys())[0] if patient_ids else None
                         if id_col:
                             load_kwargs['patient_ids'] = patient_ids[id_col]
+                    load_kwargs.update({k: v for k, v in (extra_kwargs or {}).items() if v is not None})
                     
                     # 调用加载函数
                     df = load_func(**load_kwargs)
@@ -2248,6 +2399,7 @@ def load_preview_concepts(
     data_path: str,
     max_patients: int = 20,
     verbose: bool = False,
+    **extra_kwargs,
 ):
     """为 Preview Sample 加载概念，支持普通概念与特殊概念混合。"""
     from easyicu import load_concepts
@@ -2277,6 +2429,7 @@ def load_preview_concepts(
             max_patients=max_patients,
             merge=False,
             verbose=verbose,
+            **extra_kwargs,
         )
         if isinstance(normal_result, dict):
             loaded.update({k: v.data if hasattr(v, 'data') else v for k, v in normal_result.items() if v is not None})
@@ -2292,6 +2445,7 @@ def load_preview_concepts(
             data_path=data_path,
             max_patients=max_patients,
             verbose=verbose,
+            **extra_kwargs,
         )
         for concept, df in (special_result or {}).items():
             if hasattr(df, 'data'):
@@ -2897,6 +3051,251 @@ def get_mock_params_with_cohort():
     return params
 
 
+DISEASE_COHORT_CONFIG = {
+    'sepsis': {
+        'label_en': 'Sepsis-3 cohort',
+        'label_zh': '脓毒症队列（Sepsis-3）',
+        'description_en': 'Use Sepsis-3 labels (`sep3_sofa2` preferred, fallback `sep3_sofa1`) to keep only septic patients.',
+        'description_zh': '使用 Sepsis-3 标签（优先 `sep3_sofa2`，回退 `sep3_sofa1`）仅保留脓毒症患者。',
+        'required_modules': {'sepsis3_sofa2', 'sepsis3_sofa1', 'sepsis_shared', 'sofa2_score', 'sofa1_score'},
+        'concept_priority': ['sep3_sofa2', 'sep3_sofa1'],
+    },
+    'aki': {
+        'label_en': 'AKI cohort (KDIGO)',
+        'label_zh': 'AKI 队列（KDIGO）',
+        'description_en': 'Use KDIGO-AKI outputs (`aki_stage` preferred, fallback `aki`) to keep AKI-positive patients.',
+        'description_zh': '使用 KDIGO-AKI 输出（优先 `aki_stage`，回退 `aki`）仅保留 AKI 患者。',
+        'required_modules': {'renal'},
+        'concept_priority': ['aki_stage', 'aki'],
+    },
+    'circ_failure': {
+        'label_en': 'Circulatory failure cohort',
+        'label_zh': '循环衰竭队列',
+        'description_en': 'Use `circ_failure` or `circ_event` to keep patients with circulatory failure evidence.',
+        'description_zh': '使用 `circ_failure` 或 `circ_event` 仅保留存在循环衰竭证据的患者。',
+        'required_modules': {'circulatory'},
+        'concept_priority': ['circ_failure', 'circ_event'],
+    },
+    'mech_vent': {
+        'label_en': 'Mechanical ventilation cohort',
+        'label_zh': '机械通气队列',
+        'description_en': 'Use `mech_vent` or `vent_ind` to keep ventilated ICU stays.',
+        'description_zh': '使用 `mech_vent` 或 `vent_ind` 仅保留机械通气 ICU 住院记录。',
+        'required_modules': {'respiratory'},
+        'concept_priority': ['mech_vent', 'vent_ind'],
+    },
+    'rrt': {
+        'label_en': 'Renal replacement therapy cohort',
+        'label_zh': '肾脏替代治疗队列',
+        'description_en': 'Use `rrt` or `rrt_criteria` to keep ICU stays receiving renal replacement therapy.',
+        'description_zh': '使用 `rrt` 或 `rrt_criteria` 仅保留接受肾脏替代治疗的 ICU 住院记录。',
+        'required_modules': {'renal'},
+        'concept_priority': ['rrt', 'rrt_criteria'],
+    },
+    'ards': {
+        'label_en': 'ARDS cohort',
+        'label_zh': 'ARDS 队列',
+        'description_en': 'ICD-backed ARDS template for databases with diagnosis codes. Use for acute respiratory distress syndrome cohorts.',
+        'description_zh': '适用于带诊断编码数据库的 ARDS 模板队列，可用于急性呼吸窘迫综合征研究。',
+        'required_modules': set(),
+        'concept_priority': [],
+        'icd_tokens': ['J80', '51882'],
+    },
+    'pneumonia': {
+        'label_en': 'Pneumonia cohort',
+        'label_zh': '肺炎队列',
+        'description_en': 'ICD-backed pneumonia template for infectious respiratory cohorts.',
+        'description_zh': '适用于呼吸系统感染研究的 ICD 肺炎模板队列。',
+        'required_modules': set(),
+        'concept_priority': [],
+        'icd_tokens': ['J12', 'J13', 'J14', 'J15', 'J16', 'J17', 'J18', '481', '482', '483', '485', '486'],
+    },
+    'heart_failure': {
+        'label_en': 'Heart failure cohort',
+        'label_zh': '心力衰竭队列',
+        'description_en': 'ICD-backed heart-failure template for decompensated heart-failure or cardiogenic cohorts.',
+        'description_zh': '适用于失代偿心衰或心源性相关研究的 ICD 心衰模板队列。',
+        'required_modules': set(),
+        'concept_priority': [],
+        'icd_tokens': ['I50', '428'],
+    },
+    'ami': {
+        'label_en': 'Acute myocardial infarction cohort',
+        'label_zh': '急性心肌梗死队列',
+        'description_en': 'ICD-backed AMI template for STEMI / NSTEMI style cohorts.',
+        'description_zh': '适用于 STEMI / NSTEMI 等急性心肌梗死研究的 ICD 模板队列。',
+        'required_modules': set(),
+        'concept_priority': [],
+        'icd_tokens': ['I21', 'I22', '410'],
+    },
+    'stroke': {
+        'label_en': 'Stroke cohort',
+        'label_zh': '卒中队列',
+        'description_en': 'ICD-backed stroke template covering ischemic and hemorrhagic stroke codes.',
+        'description_zh': '覆盖缺血性与出血性卒中的 ICD 模板队列。',
+        'required_modules': set(),
+        'concept_priority': [],
+        'icd_tokens': ['I60', 'I61', 'I63', 'I64', '430', '431', '434', '436'],
+    },
+}
+
+SEPSIS_MODE_CONFIG = {
+    "auto": {
+        "label_en": "Auto by database",
+        "label_zh": "按数据库自动选择",
+        "desc_en": "Recommended default. eICU uses `ICD + antibiotics`; other databases default to `ABX + sampling`.",
+        "desc_zh": "推荐默认值。eICU 使用 `ICD + 抗生素`；其他数据库默认使用 `抗生素 + 采样`。",
+    },
+    "and": {
+        "label_en": "ABX + sampling (strict window)",
+        "label_zh": "抗生素 + 采样（严格时间窗）",
+        "desc_en": "Classic Sepsis-3 style suspected infection: antibiotics and body-fluid sampling must co-occur within windows.",
+        "desc_zh": "经典 Sepsis-3 风格的疑似感染定义：抗生素与体液采样需在时间窗内共同出现。",
+    },
+    "or": {
+        "label_en": "ABX or sampling",
+        "label_zh": "抗生素或采样",
+        "desc_en": "More permissive suspected infection proxy. Keeps either antibiotics or sampling events.",
+        "desc_zh": "更宽松的疑似感染代理定义。只要出现抗生素或采样事件即可。",
+    },
+    "abx": {
+        "label_en": "Antibiotics only",
+        "label_zh": "仅抗生素",
+        "desc_en": "Antibiotic-only proxy, useful when sampling coverage is sparse.",
+        "desc_zh": "仅抗生素代理定义，适用于采样覆盖较差的数据集。",
+    },
+    "samp": {
+        "label_en": "Sampling only",
+        "label_zh": "仅采样",
+        "desc_en": "Body-fluid sampling only. Useful for exploratory sensitivity analyses.",
+        "desc_zh": "仅使用体液采样事件，适合做敏感性分析。",
+    },
+    "icd_abx": {
+        "label_en": "ICD infection + antibiotics",
+        "label_zh": "感染 ICD + 抗生素",
+        "desc_en": "eICU-oriented fallback: infection ICD identifies patients, antibiotics provide event time.",
+        "desc_zh": "偏 eICU 的替代方案：感染 ICD 先定人，再用抗生素时间定时点。",
+    },
+}
+
+ICD_FILTER_DATABASES = {'miiv', 'mimic', 'eicu'}
+
+
+def _split_query_tokens(text: str) -> list[str]:
+    """Split user ICD / keyword query into compact non-empty tokens."""
+    if not text:
+        return []
+    cleaned = str(text).replace('，', ',').replace(';', ',').replace('；', ',').replace('\n', ',')
+    return [tok.strip() for tok in cleaned.split(',') if tok.strip()]
+
+
+def _get_sepsis_runtime_options() -> dict:
+    """Read current web sepsis settings and return kwargs for load_concepts/callbacks."""
+    abx_hours = st.session_state.get('sepsis_abx_win_hours', 24)
+    samp_hours = st.session_state.get('sepsis_samp_win_hours', 72)
+    return {
+        'si_mode': st.session_state.get('sepsis_si_mode', 'auto'),
+        'positive_cultures': bool(st.session_state.get('sepsis_positive_cultures', False)),
+        'abx_win': f"{int(abx_hours)}h",
+        'samp_win': f"{int(samp_hours)}h",
+    }
+
+
+def _get_supported_disease_cohorts(database: str) -> list[str]:
+    """Return supported disease cohort keys for the current database."""
+    base = ['none', 'sepsis', 'aki', 'circ_failure', 'mech_vent', 'rrt']
+    if database in ICD_FILTER_DATABASES:
+        base.extend(['ards', 'pneumonia', 'heart_failure', 'ami', 'stroke'])
+    return base
+
+
+def _match_ids_by_icd_tokens(data_path: Path, database: str, icu_df: pd.DataFrame, id_col_lower: str, tokens: list[str]) -> set:
+    """Match ICU stay IDs by ICD prefixes / diagnosis keywords for DBs with diagnosis coding."""
+    if not tokens or database not in ICD_FILTER_DATABASES:
+        return set()
+    matched_ids = set()
+    if database in {'miiv', 'mimic'}:
+        diag_path = data_path / 'diagnoses_icd.parquet'
+        if diag_path.exists() and 'hadm_id' in icu_df.columns:
+            diag_df = pd.read_parquet(diag_path, columns=['hadm_id', 'icd_code'])
+            codes = diag_df['icd_code'].astype(str).str.upper().str.replace('.', '', regex=False)
+            norm_tokens = [tok.upper().replace('.', '') for tok in tokens]
+            diag_mask = pd.Series(False, index=diag_df.index)
+            for token in norm_tokens:
+                diag_mask |= codes.str.startswith(token)
+            matched_hadm = set(diag_df.loc[diag_mask, 'hadm_id'].dropna().unique())
+            matched_ids = set(icu_df.loc[icu_df['hadm_id'].isin(matched_hadm), id_col_lower].dropna().unique())
+    elif database == 'eicu':
+        diag_path = data_path / 'diagnosis.parquet'
+        if diag_path.exists():
+            diag_df = pd.read_parquet(diag_path)
+            diag_df.columns = [c.lower() for c in diag_df.columns]
+            if 'patientunitstayid' in diag_df.columns:
+                diag_text = pd.Series('', index=diag_df.index, dtype='object')
+                if 'icd9code' in diag_df.columns:
+                    diag_text = diag_text.str.cat(diag_df['icd9code'].astype(str), sep=' ', na_rep='')
+                if 'diagnosisstring' in diag_df.columns:
+                    diag_text = diag_text.str.cat(diag_df['diagnosisstring'].astype(str), sep=' ', na_rep='')
+                diag_text = diag_text.str.lower().str.replace('.', '', regex=False)
+                diag_mask = pd.Series(False, index=diag_df.index)
+                for token in tokens:
+                    diag_mask |= diag_text.str.contains(str(token).lower().replace('.', ''), na=False)
+                matched_ids = set(diag_df.loc[diag_mask, 'patientunitstayid'].dropna().unique())
+    return matched_ids
+
+
+def _get_positive_patient_ids_from_data(
+    data: dict,
+    actual_id_col: str,
+    concept_priority: list[str],
+) -> set:
+    """Infer patient IDs with positive events/labels from loaded concept data."""
+    true_tokens = {'1', 'true', 't', 'yes', 'y'}
+    for concept_name in concept_priority:
+        df = data.get(concept_name)
+        if not isinstance(df, pd.DataFrame) or df.empty or actual_id_col not in df.columns:
+            continue
+        value_candidates = [concept_name] + [c for c in df.columns if c not in {actual_id_col, 'charttime', 'time', 'starttime', 'datetime', 'valueuom', 'unit'}]
+        value_col = next((c for c in value_candidates if c in df.columns), None)
+        if not value_col:
+            continue
+        vals = pd.to_numeric(df[value_col], errors='coerce')
+        if vals.notna().any():
+            mask = vals > 0
+        else:
+            str_vals = df[value_col].astype(str).str.strip().str.lower()
+            mask = str_vals.isin(true_tokens)
+        return set(df.loc[mask.fillna(False), actual_id_col].dropna().unique())
+    return set()
+
+
+def _render_sepsis_ai_button(lang: str) -> None:
+    """Offer a contextual AI explanation button for Sepsis settings."""
+    button_label = "🤖 Ask AI about Sepsis settings" if lang == 'en' else "🤖 问 AI 解释脓毒症设置"
+    if st.button(button_label, key="ask_ai_about_sepsis_settings", use_container_width=True):
+        si_mode = st.session_state.get('sepsis_si_mode', 'auto')
+        abx_hours = st.session_state.get('sepsis_abx_win_hours', 24)
+        samp_hours = st.session_state.get('sepsis_samp_win_hours', 72)
+        positive = st.session_state.get('sepsis_positive_cultures', False)
+        if lang == 'en':
+            question = (
+                "I am configuring Sepsis-3 in EasyICU. Explain whether my current settings are reasonable for my study, "
+                f"including si_mode={si_mode}, abx_win={abx_hours}h, samp_win={samp_hours}h, "
+                f"positive_cultures={positive}. Also tell me when EasyICU defaults to ICD-based infection evidence "
+                "and how this relates to supported databases."
+            )
+        else:
+            question = (
+                "我正在 EasyICU 中配置 Sepsis-3。请解释我当前的设置是否合理，"
+                f"包括 si_mode={si_mode}、abx_win={abx_hours}h、samp_win={samp_hours}h、"
+                f"positive_cultures={positive}。同时说明 EasyICU 何时会默认使用基于 ICD 的感染证据，"
+                "以及这与支持的数据库有什么关系。"
+            )
+        st.session_state['_ai_pending_question'] = question
+        st.session_state['_floating_ai_open'] = True
+        st.toast("💬 Question sent to AI Assistant" if lang == 'en' else "💬 问题已发送到 AI 助手")
+
+
 # ============ 辅助函数：加载后按队列条件过滤已提取数据中的 None 值患者 ============
 
 def _post_filter_cohort_data(data: dict, database: str) -> dict:
@@ -3017,6 +3416,19 @@ def _post_filter_cohort_data(data: dict, database: str) -> dict:
                 target_variants = {'F', 'FEMALE', 'WOMAN', 'WEIBLICH', 'VROUW', 'W'}
             sex_ok_ids = set(sex_valid.loc[sex_vals.isin(target_variants), actual_id_col].unique())
             exclude_ids |= (all_patient_ids - sex_ok_ids)
+
+    # 5. Disease cohort filters based on loaded clinical concepts
+    disease_cohort = cf.get('disease_cohort')
+    if disease_cohort and disease_cohort != 'none':
+        disease_cfg = DISEASE_COHORT_CONFIG.get(disease_cohort, {})
+        concept_priority = disease_cfg.get('concept_priority', [])
+        if concept_priority:
+            positive_ids = _get_positive_patient_ids_from_data(
+                data,
+                actual_id_col=actual_id_col,
+                concept_priority=concept_priority,
+            )
+            exclude_ids |= (all_patient_ids - positive_ids)
     
     if not exclude_ids:
         return data
@@ -3059,7 +3471,7 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
     
     Reads ICU metadata tables (icustays, patients, admissions) and filters
     patient IDs based on the active cohort criteria (age, first_icu_stay,
-    los_min, gender, survived).
+    los_min, gender, survived, disease cohort, ICD keywords).
     
     Args:
         data_path: Path to the database directory (e.g. /home/zhuhb/icudb/mimiciv/3.1)
@@ -3085,7 +3497,9 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
         cf.get('first_icu_stay') is not None or
         cf.get('los_min') is not None or
         cf.get('gender') is not None or
-        cf.get('survived') is not None
+        cf.get('survived') is not None or
+        cf.get('disease_cohort') not in (None, '', 'none') or
+        bool(str(cf.get('icd_query', '')).strip())
     )
     if not has_active:
         return None
@@ -3253,7 +3667,55 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
             en_label = "Survived only" if cf['survived'] else "Deceased only"
             cn_label = "仅存活" if cf['survived'] else "仅死亡"
             filter_details.append((en_label, cn_label, excluded))
-    
+
+    # ---------- Sepsis / ICD pre-filter ----------
+    disease_cohort = cf.get('disease_cohort')
+    disease_cfg = DISEASE_COHORT_CONFIG.get(disease_cohort or 'none', {})
+    if disease_cohort == 'sepsis':
+        try:
+            from easyicu.patient_filter import PatientFilter
+            before_count = keep_mask.sum()
+            pf = PatientFilter(database=database, data_path=data_path, verbose=False)
+            sepsis_ids = pf._get_sepsis_patients()
+            if sepsis_ids:
+                keep_mask &= icu_df[id_col_lower].isin(sepsis_ids)
+            else:
+                keep_mask &= False
+            excluded = int(before_count - keep_mask.sum())
+            filter_details.append(("Sepsis-3 / sepsis cohort", "脓毒症队列", excluded))
+        except Exception as e:
+            print(f"[COHORT] Sepsis pre-filter skipped ({database}): {e}")
+
+    icd_template_tokens = disease_cfg.get('icd_tokens', [])
+    if disease_cohort not in (None, '', 'none', 'sepsis') and icd_template_tokens and database in ICD_FILTER_DATABASES:
+        before_count = keep_mask.sum()
+        matched_ids = _match_ids_by_icd_tokens(data_path, database, icu_df, id_col_lower, icd_template_tokens)
+        if matched_ids:
+            keep_mask &= icu_df[id_col_lower].isin(matched_ids)
+        else:
+            keep_mask &= False
+        excluded = int(before_count - keep_mask.sum())
+        filter_details.append((disease_cfg.get('label_en', 'Disease cohort'),
+                               disease_cfg.get('label_zh', '疾病队列'),
+                               excluded))
+
+    icd_tokens = _split_query_tokens(cf.get('icd_query', ''))
+    if icd_tokens and database in ICD_FILTER_DATABASES:
+        before_count = keep_mask.sum()
+        matched_ids = set()
+        try:
+            matched_ids = _match_ids_by_icd_tokens(data_path, database, icu_df, id_col_lower, icd_tokens)
+            if matched_ids:
+                keep_mask &= icu_df[id_col_lower].isin(matched_ids)
+            else:
+                keep_mask &= False
+            excluded = int(before_count - keep_mask.sum())
+            filter_details.append((f"ICD / keyword filter ({', '.join(icd_tokens)})",
+                                   f"ICD / 关键词过滤 ({', '.join(icd_tokens)})",
+                                   excluded))
+        except Exception as e:
+            print(f"[COHORT] ICD filter skipped ({database}): {e}")
+
     filtered_ids = icu_df.loc[keep_mask, id_col_lower].unique().tolist()
     total_after = len(filtered_ids)
     
@@ -4500,6 +4962,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
             - gender: 'M' 或 'F'
             - survived: True/False
             - has_sepsis: True/False
+            - disease_cohort: 'sepsis' | 'aki' | 'circ_failure' | 'mech_vent' | 'rrt'
             - los_min: 最短住院时长（小时）
     """
     data = {}
@@ -4521,6 +4984,8 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                 initial_multiplier *= 4  # sepsis约30%
             else:
                 initial_multiplier *= 1.5  # 非sepsis约70%
+        if cohort_filter.get('disease_cohort') not in (None, '', 'none'):
+            initial_multiplier *= 2.5
         if cohort_filter.get('age_min') is not None or cohort_filter.get('age_max') is not None:
             initial_multiplier *= 1.5  # 年龄范围过滤
         initial_multiplier = max(3, int(initial_multiplier))  # 最少3倍
@@ -4584,6 +5049,15 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
             # 采样时间通常在发病前后
             samp_time = onset + np.random.randint(-4, 4)
             samp_time = max(0, min(hours-1, samp_time))
+        has_aki = is_septic or (np.random.random() < 0.18)
+        has_circ_failure = is_septic or (np.random.random() < 0.12)
+        has_mech_vent = has_circ_failure or (np.random.random() < 0.22)
+        has_rrt = has_aki and (np.random.random() < 0.28)
+        has_ards = has_mech_vent and (np.random.random() < 0.3)
+        has_pneumonia = is_septic or has_ards or (np.random.random() < 0.2)
+        has_heart_failure = has_circ_failure or (np.random.random() < 0.14)
+        has_ami = has_heart_failure and (np.random.random() < 0.35)
+        has_stroke = np.random.random() < 0.1
             
         patient_meta[pid] = {
             'age': age,
@@ -4591,6 +5065,15 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
             'death': death,
             'los_icu': los_icu,
             'is_septic': is_septic,
+            'has_aki': has_aki,
+            'has_circ_failure': has_circ_failure,
+            'has_mech_vent': has_mech_vent,
+            'has_rrt': has_rrt,
+            'has_ards': has_ards,
+            'has_pneumonia': has_pneumonia,
+            'has_heart_failure': has_heart_failure,
+            'has_ami': has_ami,
+            'has_stroke': has_stroke,
             'onset': onset,
             'samp_time': samp_time
         }
@@ -4629,6 +5112,28 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                     include = False
                 elif not cohort_filter['has_sepsis'] and meta['is_septic']:
                     include = False
+
+            disease_cohort = cohort_filter.get('disease_cohort')
+            if disease_cohort == 'sepsis' and not meta['is_septic']:
+                include = False
+            elif disease_cohort == 'aki' and not meta['has_aki']:
+                include = False
+            elif disease_cohort == 'circ_failure' and not meta['has_circ_failure']:
+                include = False
+            elif disease_cohort == 'mech_vent' and not meta['has_mech_vent']:
+                include = False
+            elif disease_cohort == 'rrt' and not meta['has_rrt']:
+                include = False
+            elif disease_cohort == 'ards' and not meta['has_ards']:
+                include = False
+            elif disease_cohort == 'pneumonia' and not meta['has_pneumonia']:
+                include = False
+            elif disease_cohort == 'heart_failure' and not meta['has_heart_failure']:
+                include = False
+            elif disease_cohort == 'ami' and not meta['has_ami']:
+                include = False
+            elif disease_cohort == 'stroke' and not meta['has_stroke']:
+                include = False
             
             # 住院时长过滤
             if cohort_filter.get('los_min') is not None:
@@ -5961,6 +6466,27 @@ def render_quick_visualization_page():
         st.session_state['viz_data_source_mode'] = "exported"
         st.session_state['_prefer_exported_viz'] = False
 
+    auto_viz_request = st.session_state.pop('_viz_auto_load_export', None)
+    if auto_viz_request and auto_viz_request.get('path'):
+        auto_path = auto_viz_request.get('path')
+        if Path(auto_path).exists():
+            with st.spinner("Refreshing with newly exported files..." if lang == 'en' else "正在使用最新导出文件刷新..."):
+                load_from_exported(
+                    auto_path,
+                    max_patients=auto_viz_request.get('max_patients', 100),
+                    selected_files=auto_viz_request.get('selected_files'),
+                )
+            st.session_state['_viz_auto_load_notice'] = (
+                f"✅ Auto-loaded exported files from `{auto_path}`"
+                if lang == 'en' else
+                f"✅ 已自动加载最新导出文件：`{auto_path}`"
+            )
+            recent_export_path = auto_path
+
+    auto_notice = st.session_state.pop('_viz_auto_load_notice', None)
+    if auto_notice:
+        st.success(auto_notice)
+
     expander_label = "⚙️ Data Loading Settings" if lang == 'en' else "⚙️ 数据加载设置"
     with st.expander(expander_label, expanded=not data_loaded):
         allow_demo = entry_mode != 'real'
@@ -6270,7 +6796,7 @@ def render_entry_page():
         ui = None
 
     if lang == 'en':
-        lead_text = "EasyICU connects cohort design, standardized concept extraction, and review-ready analytics in one local-first ICU workflow."
+        lead_text = "Start from a clinical task—such as sepsis early warning, AKI cohort construction, or patient trajectory analysis—then map it into one local-first ICU workflow."
         stat_pills = ["6 ICU databases", "167 clinical concepts", "Local-first processing", "Demo + Real Data", "AI-assisted workflow"]
         tab_options = ["Workflow", "Clinical layer", "Execution"]
         tab_default = "Workflow"
@@ -6280,9 +6806,9 @@ def render_entry_page():
                 "User-facing workflow",
                 "Move from study design to analysis-ready data without leaving the same interface.",
                 [
-                    ("🧲", "Cohort design", "Filter by age, ICU stay, outcomes, and study constraints."),
-                    ("🧩", "Concept selection", "Choose from 167 ICU features across 19 clinical groups."),
-                    ("👁️", "Visual review", "Inspect time series, patient view, quality reports, and cohorts."),
+                    ("🧲", "Task → cohort design", "Turn a research question into cohort filters, disease cohorts, and study constraints."),
+                    ("🧩", "Task → concept selection", "Map your goal to 167 ICU features across 19 clinical groups."),
+                    ("👁️", "Task → review", "Inspect time series, patient view, quality reports, and cohort summaries before export."),
                 ],
             ),
             "Clinical layer": (
@@ -6290,8 +6816,8 @@ def render_entry_page():
                 "Standardized concepts and computable rules sit behind every extraction step.",
                 [
                     ("📚", "Standardized concept library", "One interface spanning all 6 supported public ICU databases."),
-                    ("🧠", "Computable rules & scores", "SOFA, SOFA-2, Sepsis-3, KDIGO-AKI, qSOFA and more."),
-                    ("🤖", "AI assistant", "Guided setup, troubleshooting, concept planning, and evidence-backed answers."),
+                    ("🧠", "Computable rules & scores", "SOFA, SOFA-2, Sepsis-3, KDIGO-AKI, qSOFA, circulatory failure, and more."),
+                    ("🤖", "AI copilot", "Start from your task, then get guidance on cohort filters, concepts, settings, and evidence."),
                 ],
             ),
             "Execution": (
@@ -6305,7 +6831,7 @@ def render_entry_page():
             ),
         }
     else:
-        lead_text = "EasyICU 将队列设计、标准化概念提取和复核分析整合为一个本地优先的 ICU 数据工作流。"
+        lead_text = "从研究任务出发，例如脓毒症预警、AKI 队列构建或患者轨迹分析，再映射到一个本地优先的 ICU 数据工作流。"
         stat_pills = ["支持 6 大 ICU 数据库", "167 个临床概念", "本地优先处理", "演示 + 真实数据模式", "AI 辅助工作流"]
         tab_options = ["用户工作流", "临床智能层", "执行能力层"]
         tab_default = "用户工作流"
@@ -6315,9 +6841,9 @@ def render_entry_page():
                 "用户工作流",
                 "从研究设计到分析数据导出，尽量在同一界面内完成。",
                 [
-                    ("🧲", "队列设计", "按年龄、ICU 住院时长、结局和研究条件筛选患者。"),
-                    ("🧩", "概念选择", "从 19 个分组、167 个 ICU 特征中选择目标变量。"),
-                    ("👁️", "可视化复核", "查看时序图、患者视图、质量报告和队列分析。"),
+                    ("🧲", "任务 → 队列设计", "把研究问题转成队列筛选、疾病队列和研究约束。"),
+                    ("🧩", "任务 → 特征选择", "把任务映射到 19 个分组、167 个 ICU 特征。"),
+                    ("👁️", "任务 → 结果复核", "在导出前查看时序图、患者视图、质量报告和队列摘要。"),
                 ],
             ),
             "临床智能层": (
@@ -6325,8 +6851,8 @@ def render_entry_page():
                 "标准化概念和可计算规则支撑提取结果的一致性与可解释性。",
                 [
                     ("📚", "标准化概念库", "统一接口覆盖 6 个公开 ICU 数据库。"),
-                    ("🧠", "可计算规则与评分", "内置 SOFA、SOFA-2、Sepsis-3、KDIGO-AKI、qSOFA 等。"),
-                    ("🤖", "AI 助手", "引导配置、报错排查、特征规划和证据支持回答。"),
+                    ("🧠", "可计算规则与评分", "内置 SOFA、SOFA-2、Sepsis-3、KDIGO-AKI、qSOFA、循环衰竭等定义。"),
+                    ("🤖", "AI 助手", "从任务出发，帮助规划队列、模块、设置和参考依据。"),
                 ],
             ),
             "执行能力层": (
@@ -6512,6 +7038,8 @@ def render_sidebar():
                 n_patients = result.get('patient_count', 0)
                 stats_label = f"📊 {n_files} files, {n_patients} patients" if st.session_state.language == 'en' else f"📊 {n_files} 个文件, {n_patients} 个患者"
                 st.caption(stats_label)
+                if result.get('note'):
+                    st.info(result['note'])
             
             # 显示队列筛选统计
             cohort_stats = st.session_state.get('_cohort_stats')
@@ -6554,6 +7082,8 @@ def render_sidebar():
                 st.session_state.patient_limit = 1000  # 重置为默认值
                 st.session_state.patient_ids = []
                 st.session_state.all_patient_count = 0
+                st.session_state.pop('_viz_auto_load_export', None)
+                st.session_state.pop('_export_success_result', None)
                 # 🔧 FIX (2026-02-15): 清除 easyicu 内部缓存，避免上次提取的数据影响新提取
                 try:
                     from easyicu.cache_manager import clear_easyicu_cache
@@ -6786,7 +7316,13 @@ def render_sidebar():
                 'gender': None,
                 'survived': None,
                 'has_sepsis': None,
+                'disease_cohort': 'none',
+                'icd_query': '',
             }
+        st.session_state.setdefault('sepsis_si_mode', 'auto')
+        st.session_state.setdefault('sepsis_abx_win_hours', 24)
+        st.session_state.setdefault('sepsis_samp_win_hours', 72)
+        st.session_state.setdefault('sepsis_positive_cultures', False)
         if 'cohort_enabled' not in st.session_state:
             st.session_state.cohort_enabled = False
         if 'filtered_patient_count' not in st.session_state:
@@ -6908,9 +7444,130 @@ def render_sidebar():
             else:
                 st.session_state.cohort_filter['survived'] = None
             
-            # 🔧 移除 Sepsis 筛选器（太复杂，用户可能不理解）
-            # 直接设置为 None（不筛选）
-            st.session_state.cohort_filter['has_sepsis'] = None
+            # 疾病队列筛选（任务导向）
+            disease_label = "🩺 Clinical Cohort" if st.session_state.language == 'en' else "🩺 疾病队列"
+            supported_diseases = _get_supported_disease_cohorts(st.session_state.get('database', 'miiv'))
+            disease_options_en = {
+                'none': 'Any / No disease filter',
+                'sepsis': 'Sepsis-3 cohort',
+                'aki': 'AKI cohort (KDIGO)',
+                'circ_failure': 'Circulatory failure cohort',
+                'mech_vent': 'Mechanical ventilation cohort',
+                'rrt': 'Renal replacement therapy cohort',
+                'ards': 'ARDS cohort',
+                'pneumonia': 'Pneumonia cohort',
+                'heart_failure': 'Heart failure cohort',
+                'ami': 'AMI cohort',
+                'stroke': 'Stroke cohort',
+            }
+            disease_options_zh = {
+                'none': '不限 / 不做疾病筛选',
+                'sepsis': '脓毒症队列（Sepsis-3）',
+                'aki': 'AKI 队列（KDIGO）',
+                'circ_failure': '循环衰竭队列',
+                'mech_vent': '机械通气队列',
+                'rrt': '肾脏替代治疗队列',
+                'ards': 'ARDS 队列',
+                'pneumonia': '肺炎队列',
+                'heart_failure': '心力衰竭队列',
+                'ami': '急性心肌梗死队列',
+                'stroke': '卒中队列',
+            }
+            disease_options = disease_options_en if st.session_state.language == 'en' else disease_options_zh
+            current_disease = st.session_state.cohort_filter.get('disease_cohort', 'none')
+            if current_disease not in supported_diseases:
+                current_disease = 'none'
+            disease_choice = st.selectbox(
+                disease_label,
+                options=supported_diseases,
+                format_func=lambda x: disease_options.get(x, x),
+                index=supported_diseases.index(current_disease),
+                key="cohort_disease_cohort",
+            )
+            st.session_state.cohort_filter['disease_cohort'] = disease_choice
+            st.session_state.cohort_filter['has_sepsis'] = True if disease_choice == 'sepsis' else None
+
+            if disease_choice != 'none':
+                disease_cfg = DISEASE_COHORT_CONFIG.get(disease_choice, {})
+                disease_desc = disease_cfg.get('description_en') if st.session_state.language == 'en' else disease_cfg.get('description_zh')
+                if disease_desc:
+                    st.caption(disease_desc)
+                if disease_cfg.get('icd_tokens') and st.session_state.get('database') in ICD_FILTER_DATABASES:
+                    icd_note = (
+                        f"Template ICD prefixes: {', '.join(disease_cfg['icd_tokens'])}"
+                        if st.session_state.language == 'en' else
+                        f"模板 ICD 前缀：{', '.join(disease_cfg['icd_tokens'])}"
+                    )
+                    st.caption(icd_note)
+
+            if disease_choice == 'sepsis':
+                sepsis_title = "🦠 Sepsis suspected-infection settings" if st.session_state.language == 'en' else "🦠 脓毒症疑似感染设置"
+                with st.expander(sepsis_title, expanded=False):
+                    sepsis_mode_cfg = {
+                        key: (value['label_en'] if st.session_state.language == 'en' else value['label_zh'])
+                        for key, value in SEPSIS_MODE_CONFIG.items()
+                    }
+                    sepsis_mode = st.selectbox(
+                        "Detection mode" if st.session_state.language == 'en' else "判定模式",
+                        options=list(SEPSIS_MODE_CONFIG.keys()),
+                        format_func=lambda x: sepsis_mode_cfg[x],
+                        index=list(SEPSIS_MODE_CONFIG.keys()).index(st.session_state.get('sepsis_si_mode', 'auto')),
+                        key="sepsis_si_mode",
+                    )
+                    mode_desc = SEPSIS_MODE_CONFIG[sepsis_mode]['desc_en'] if st.session_state.language == 'en' else SEPSIS_MODE_CONFIG[sepsis_mode]['desc_zh']
+                    st.caption(mode_desc)
+
+                    sepsis_col1, sepsis_col2 = st.columns(2)
+                    with sepsis_col1:
+                        st.number_input(
+                            "ABX → sampling window (hours)" if st.session_state.language == 'en' else "抗生素后采样时间窗（小时）",
+                            min_value=1,
+                            max_value=168,
+                            value=int(st.session_state.get('sepsis_abx_win_hours', 24)),
+                            key="sepsis_abx_win_hours",
+                        )
+                    with sepsis_col2:
+                        st.number_input(
+                            "Sampling → ABX window (hours)" if st.session_state.language == 'en' else "采样后抗生素时间窗（小时）",
+                            min_value=1,
+                            max_value=168,
+                            value=int(st.session_state.get('sepsis_samp_win_hours', 72)),
+                            key="sepsis_samp_win_hours",
+                        )
+
+                    st.checkbox(
+                        "Require positive cultures only" if st.session_state.language == 'en' else "仅使用阳性培养",
+                        value=bool(st.session_state.get('sepsis_positive_cultures', False)),
+                        key="sepsis_positive_cultures",
+                    )
+                    sepsis_ref = (
+                        "Reference note: EasyICU supports multiple suspected-infection definitions. "
+                        "The strict ABX + sampling window follows common Sepsis-3 operational logic; "
+                        "eICU defaults to ICD + antibiotics because microbiology coverage is sparse."
+                        if st.session_state.language == 'en' else
+                        "参考说明：EasyICU 支持多种疑似感染定义。严格的“抗生素 + 采样”时间窗对应常见的 Sepsis-3 操作化逻辑；"
+                        "eICU 默认采用“ICD + 抗生素”，因为微生物采样覆盖较稀疏。"
+                    )
+                    st.info(sepsis_ref)
+                    _render_sepsis_ai_button(st.session_state.language)
+
+            if st.session_state.get('database') in ICD_FILTER_DATABASES:
+                icd_label = "🧾 ICD filter (prefixes or keywords)" if st.session_state.language == 'en' else "🧾 ICD 过滤（前缀或关键词）"
+                icd_help = (
+                    "For MIMIC databases, enter ICD code prefixes such as A41, I50. For eICU, keywords also work."
+                    if st.session_state.language == 'en' else
+                    "对于 MIMIC 数据库，请输入 ICD 前缀，如 A41、I50；对于 eICU，也可输入关键词。"
+                )
+                icd_value = st.text_input(
+                    icd_label,
+                    value=st.session_state.cohort_filter.get('icd_query', ''),
+                    help=icd_help,
+                    key="cohort_icd_query",
+                    placeholder="A41, R65, sepsis" if st.session_state.language == 'en' else "A41, R65, sepsis",
+                )
+                st.session_state.cohort_filter['icd_query'] = icd_value.strip()
+            else:
+                st.session_state.cohort_filter['icd_query'] = ""
             
             # 显示当前筛选条件摘要
             filter_summary = []
@@ -6929,6 +7586,13 @@ def render_sidebar():
                 filter_summary.append(f"Survived: {'Yes' if cf['survived'] else 'No'}" if st.session_state.language == 'en' else f"存活: {'是' if cf['survived'] else '否'}")
             if cf['has_sepsis'] is not None:
                 filter_summary.append(f"Sepsis: {'Yes' if cf['has_sepsis'] else 'No'}" if st.session_state.language == 'en' else f"脓毒症: {'是' if cf['has_sepsis'] else '否'}")
+            if cf.get('disease_cohort') and cf.get('disease_cohort') != 'none':
+                disease_cfg = DISEASE_COHORT_CONFIG.get(cf['disease_cohort'], {})
+                disease_label_summary = disease_cfg.get('label_en') if st.session_state.language == 'en' else disease_cfg.get('label_zh')
+                if disease_label_summary:
+                    filter_summary.append(disease_label_summary)
+            if cf.get('icd_query'):
+                filter_summary.append(f"ICD: {cf['icd_query']}")
             
             if filter_summary:
                 summary_text = " | ".join(filter_summary)
@@ -7150,7 +7814,11 @@ def render_sidebar():
         db_name = st.session_state.get('database', 'mock')
         # 生成带时间戳的默认目录名（只保留年月日）
         timestamp_suffix = datetime.now().strftime('%Y%m%d')
-        default_export_path = str(Path(base_export_path) / f"{db_name}_{timestamp_suffix}")
+        cohort_suffix = _generate_cohort_prefix()
+        default_dir_name = f"{db_name}_{timestamp_suffix}"
+        if cohort_suffix:
+            default_dir_name = f"{default_dir_name}_{cohort_suffix[:48]}"
+        default_export_path = str(Path(base_export_path) / default_dir_name)
         
         export_path = _directory_input(
             "Export Path" if st.session_state.language == 'en' else "导出路径",
@@ -7707,6 +8375,9 @@ def load_data():
                             empty_concepts.append(c)
                 
                 for mod_idx, mod_key in enumerate(ordered_modules):
+                    if check_cancelled():
+                        _handle_export_cancel()
+                        return
                     mod_concepts = module_concept_map[mod_key]
                     mod_display = CONCEPT_GROUP_NAMES.get(mod_key, (mod_key, mod_key))
                     mod_name = mod_display[1] if lang != 'en' else mod_display[0]
@@ -7784,6 +8455,7 @@ def load_data():
                                     'merge': False,
                                     'concept_workers': 1,
                                 }
+                                single_kwargs.update(_get_sepsis_runtime_options())
                                 if patient_ids_filter:
                                     single_kwargs['patient_ids'] = patient_ids_filter
                                 result = load_concepts(**single_kwargs)
@@ -7816,6 +8488,7 @@ def load_data():
                             max_patients=patient_limit if patient_limit and patient_limit > 0 else None,
                             verbose=False,
                         )
+                        _sp_kwargs.update(_get_sepsis_runtime_options())
                         
                         _sp_t = threading.Thread(
                             target=_load_special_thread,
@@ -7991,6 +8664,7 @@ def load_data_for_preview(max_patients: int = 50):
                 'parallel_workers': 1,  # 预览数据少，不需要并行
                 'parallel_backend': "thread",
             }
+            load_kwargs.update(_get_sepsis_runtime_options())
             if patient_ids_filter:
                 load_kwargs['patient_ids'] = patient_ids_filter
             
@@ -8024,6 +8698,7 @@ def load_data_for_preview(max_patients: int = 50):
                         concepts=[concept],
                         verbose=False,
                         merge=True,
+                        **_get_sepsis_runtime_options(),
                     )
                     if hasattr(df, 'to_pandas'):
                         df = df.to_pandas()
@@ -8531,10 +9206,12 @@ def render_home_extract_mode(lang):
                         <li><b>Gender</b> — Male, Female, or Any</li>
                         <li><b>Survival Status</b> — Survivors, non-survivors, or all</li>
                         <li><b>ICU Stay</b> — Minimum length of stay</li>
+                        <li><b>Clinical Cohorts</b> — Sepsis-3, AKI, circulatory failure, mechanical ventilation, RRT</li>
+                        <li><b>ICD filter</b> — For MIMIC/eICU, narrow the cohort by ICD prefixes or diagnosis keywords</li>
                     </ul>
                 </div>
                 <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;font-size:.85rem;color:#92400e">
-                    💡 Click <b>"Confirm (No Filtering)"</b> to skip this step
+                    💡 Start from your target task, then define the cohort you need. You can still click <b>"Confirm (No Filtering)"</b> to skip this step.
                 </div>
             </div>
             ''', unsafe_allow_html=True)
@@ -8549,10 +9226,12 @@ def render_home_extract_mode(lang):
                         <li><b>性别</b> — 男/女/不限</li>
                         <li><b>存活状态</b> — 存活/死亡/全部</li>
                         <li><b>ICU住院时长</b> — 最短住院时长</li>
+                        <li><b>疾病队列</b> — Sepsis-3、AKI、循环衰竭、机械通气、RRT</li>
+                        <li><b>ICD 过滤</b> — 对 MIMIC/eICU 可按 ICD 前缀或诊断关键词缩小队列</li>
                     </ul>
                 </div>
                 <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:12px 16px;font-size:.85rem;color:#92400e">
-                    💡 点击<b>「确认（不筛选）」</b>可跳过此步骤
+                    💡 建议先从研究任务出发定义目标队列；若暂时不需要筛选，也可以点击<b>「确认（不筛选）」</b>跳过此步骤
                 </div>
             </div>
             ''', unsafe_allow_html=True)
@@ -9157,9 +9836,13 @@ def render_timeseries_page():
                             continue
                         
                         try:
+                            plot_pdf = _prepare_timeseries_plot_df(pdf, _tcol, cname)
+                            if plot_pdf.empty:
+                                st.caption(f"{cname}: no valid time series")
+                                continue
                             fig = go.Figure()
                             fig.add_trace(go.Scatter(
-                                x=pdf[_tcol], y=pd.to_numeric(pdf[cname], errors='coerce'),
+                                x=plot_pdf[_tcol], y=plot_pdf[cname],
                                 mode='lines+markers', name=cname,
                                 line=dict(width=1.5), marker=dict(size=3)
                             ))
@@ -9319,6 +10002,10 @@ def render_timeseries_page():
                         value_col = value_cols[0]
                         
                         if time_col:
+                            plot_df = _prepare_timeseries_plot_df(patient_df, time_col, value_col)
+                            if plot_df.empty:
+                                st.info("ℹ️ No valid time series after sorting/cleaning" if lang == 'en' else "ℹ️ 清理后没有可用的时序数据")
+                                return
                             # 根据图表类型创建图表
                             line_type = "Line Chart" if lang == 'en' else "折线图"
                             scatter_type = "Scatter Plot" if lang == 'en' else "散点图"
@@ -9327,19 +10014,19 @@ def render_timeseries_page():
                             
                             if chart_type == line_type:
                                 fig = px.line(
-                                    patient_df, x=time_col, y=value_col,
+                                    plot_df, x=time_col, y=value_col,
                                     title=chart_title,
                                     markers=True
                                 )
                             elif chart_type == scatter_type:
                                 fig = px.scatter(
-                                    patient_df, x=time_col, y=value_col,
+                                    plot_df, x=time_col, y=value_col,
                                     title=chart_title,
                                     size_max=10
                                 )
                             else:  # 面积图
                                 fig = px.area(
-                                    patient_df, x=time_col, y=value_col,
+                                    plot_df, x=time_col, y=value_col,
                                     title=chart_title
                                 )
                             
@@ -11326,9 +12013,16 @@ def render_quality_page():
             coverage_col = "Coverage" if lang == 'en' else "覆盖度"
             cause_col = "Likely Cause" if lang == 'en' else "可能原因"
             
-            _cause_text, _cause_color = _get_missing_cause_tag(concept, missing_rate / 100.0)
-            _n_db = CONCEPT_DB_COVERAGE.get(concept, 0)
-            _badge = f"{_n_db}/6 DBs"
+            _badge, _current_supported, _n_db = _get_concept_coverage_summary(
+                concept,
+                current_database=st.session_state.get('database', ''),
+            )
+            _cause_text, _cause_color = _get_missing_cause_tag(
+                concept,
+                missing_rate / 100.0,
+                current_database=st.session_state.get('database', ''),
+                has_observed_rows=n_records > 0,
+            )
             
             quality_data.append({
                 'Concept': concept,
@@ -11850,6 +12544,108 @@ def _generate_mock_demographics(n_patients: int, lang: str = 'en') -> pd.DataFra
     return df[available_cols]
 
 
+def _compact_spacer(height: int = 10):
+    """Small reusable vertical spacer for dense layouts."""
+    st.markdown(f"<div style='height:{height}px'></div>", unsafe_allow_html=True)
+
+
+def _render_compact_divider(top: int = 6, bottom: int = 12):
+    """Render a lighter divider with tighter vertical rhythm than st.markdown('---')."""
+    st.markdown(
+        f"""
+        <div style="height:{top}px"></div>
+        <div style="border-top:1px solid #e2e8f0; opacity:.9;"></div>
+        <div style="height:{bottom}px"></div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _build_mock_group_feature_data(patient_ids: list, concepts: list, id_col: str = 'stay_id') -> Dict[str, pd.DataFrame]:
+    """Build realistic demo feature data for cohort comparison.
+
+    Prefer aggregating from generate_mock_data() so demo comparisons use the same
+    clinical ranges as the rest of the web demo, especially for SOFA-related concepts.
+    """
+    patient_ids = [int(pid) for pid in patient_ids]
+    if not patient_ids or not concepts:
+        return {}
+
+    mock_data_tuple = generate_mock_data(n_patients=max(len(patient_ids), 10), hours=72)
+    mock_data = mock_data_tuple[0] if isinstance(mock_data_tuple, tuple) else mock_data_tuple
+
+    age_df = mock_data.get('age', pd.DataFrame(columns=['stay_id']))
+    source_ids = sorted(age_df['stay_id'].dropna().astype(int).unique().tolist()) if 'stay_id' in age_df.columns else []
+    if not source_ids:
+        source_ids = list(range(1, len(patient_ids) + 1))
+    id_map = {src_id: patient_ids[idx] for idx, src_id in enumerate(source_ids[:len(patient_ids)])}
+
+    fallback_specs = {
+        'hr': (80, 15, 35, 180, False),
+        'sbp': (120, 20, 70, 220, False),
+        'dbp': (70, 12, 30, 140, False),
+        'map': (85, 15, 45, 160, False),
+        'resp': (18, 4, 8, 45, False),
+        'temp': (37.0, 0.6, 34.0, 41.5, False),
+        'spo2': (96, 3, 70, 100, False),
+        'o2sat': (96, 3, 70, 100, False),
+        'glu': (120, 40, 40, 450, False),
+        'na': (140, 4, 118, 165, False),
+        'k': (4.2, 0.5, 2.2, 7.0, False),
+        'crea': (1.2, 0.8, 0.2, 8.0, False),
+        'bili': (1.5, 2.0, 0.1, 20.0, False),
+        'lact': (1.5, 1.0, 0.2, 12.0, False),
+        'hgb': (11, 2, 5, 19, False),
+        'plt': (200, 80, 10, 600, False),
+        'wbc': (10, 4, 0.5, 45, False),
+        'alb': (3.5, 0.6, 1.0, 5.5, False),
+        'pco2': (40, 8, 20, 90, False),
+        'po2': (90, 20, 35, 220, False),
+        'ph': (7.38, 0.08, 7.0, 7.65, False),
+        'fio2': (40, 20, 21, 100, False),
+        'pafi': (260, 90, 40, 500, False),
+        'safi': (260, 70, 80, 500, False),
+        'sofa': (5.0, 3.0, 0, 24, True),
+        'sofa_resp': (1.2, 1.0, 0, 4, True),
+        'sofa_coag': (0.8, 0.9, 0, 4, True),
+        'sofa_liver': (0.6, 0.8, 0, 4, True),
+        'sofa_cardio': (1.0, 1.1, 0, 4, True),
+        'sofa_cns': (0.8, 1.0, 0, 4, True),
+        'sofa_renal': (0.9, 1.0, 0, 4, True),
+        'sofa2': (4.8, 3.2, 0, 24, True),
+        'sofa2_resp': (1.1, 1.0, 0, 4, True),
+        'sofa2_coag': (0.7, 0.8, 0, 4, True),
+        'sofa2_liver': (0.5, 0.7, 0, 4, True),
+        'sofa2_cardio': (0.9, 1.0, 0, 4, True),
+        'sofa2_cns': (0.7, 0.9, 0, 4, True),
+        'sofa2_renal': (0.8, 0.9, 0, 4, True),
+    }
+
+    feature_data: Dict[str, pd.DataFrame] = {}
+    for concept in concepts:
+        source_df = mock_data.get(concept)
+        if isinstance(source_df, pd.DataFrame) and not source_df.empty and concept in source_df.columns and 'stay_id' in source_df.columns:
+            agg_df = source_df[['stay_id', concept]].copy()
+            agg_df['stay_id'] = agg_df['stay_id'].astype(int)
+            agg_df = agg_df.groupby('stay_id', as_index=False)[concept].mean()
+            agg_df['stay_id'] = agg_df['stay_id'].map(id_map)
+            agg_df = agg_df.dropna(subset=['stay_id'])
+            if not agg_df.empty:
+                if concept.startswith('sofa'):
+                    agg_df[concept] = np.clip(np.round(agg_df[concept]), 0, 24 if concept in {'sofa', 'sofa2'} else 4)
+                feature_data[concept] = agg_df.rename(columns={'stay_id': id_col})
+                continue
+
+        mean, std, min_val, max_val, integer_like = fallback_specs.get(concept, (50, 15, 0, 100, False))
+        values = np.random.normal(mean, std, len(patient_ids))
+        values = np.clip(values, min_val, max_val)
+        if integer_like:
+            values = np.round(values).astype(int)
+        feature_data[concept] = pd.DataFrame({id_col: patient_ids, concept: values})
+
+    return feature_data
+
+
 def _path_looks_like_database(path: str) -> bool:
     """检查路径是否看起来像数据库目录（包含 parquet/csv 文件或已知子目录）"""
     if not os.path.isdir(path):
@@ -12292,7 +13088,7 @@ def render_group_comparison_subtab(lang: str):
         
         if not has_demo_data:
             # 尚未生成数据，显示生成界面
-            st.markdown("---")
+            _render_compact_divider(top=2, bottom=10)
             
             # 居中的配置卡片
             _gen_title = "Generate Demo Cohort Data" if lang == 'en' else "生成演示队列数据"
@@ -12308,7 +13104,7 @@ def render_group_comparison_subtab(lang: str):
                     key="grp_demo_patients_init"
                 )
                 
-                st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+                _compact_spacer(10)
                 
                 if st.button(
                     "🚀 " + ("Generate Demo Data" if lang == 'en' else "生成演示数据"),
@@ -12321,10 +13117,11 @@ def render_group_comparison_subtab(lang: str):
                     st.session_state['grp_demographics'] = demographics_df
                     st.session_state['grp_loaded_db'] = 'demo'
                     st.session_state['grp_is_demo'] = True
+                    st.session_state.pop('grp_feature_data', None)
                     st.rerun()
             
             # 显示提示信息
-            st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+            _compact_spacer(10)
             st.info("💡 " + ("Click the button above to generate demo data for cohort analysis" if lang == 'en' else "点击上方按钮生成队列分析演示数据"))
             return  # 未生成数据时不显示下方分析内容
         
@@ -12342,6 +13139,7 @@ def render_group_comparison_subtab(lang: str):
             if st.button("🔄 " + ("Regenerate Data" if lang == 'en' else "重新生成数据"), key="grp_regen_btn"):
                 st.session_state.mock_params['n_patients'] = n_patients
                 st.session_state['grp_demographics'] = _generate_mock_demographics(n_patients, lang)
+                st.session_state.pop('grp_feature_data', None)
                 st.rerun()
     
     # ========== Real Data模式：显示完整数据配置 ==========
@@ -12381,6 +13179,7 @@ def render_group_comparison_subtab(lang: str):
                     st.session_state['grp_demographics'] = demographics_df
                     st.session_state['grp_loaded_db'] = 'demo'
                     st.session_state['grp_is_demo'] = True
+                    st.session_state.pop('grp_feature_data', None)
                     st.rerun()
 
             elif grp_src == "raw":
@@ -12508,7 +13307,7 @@ def render_group_comparison_subtab(lang: str):
                         except Exception as e:
                             st.error(f"Error: {e}")
     
-    st.markdown("---")
+    _render_compact_divider()
     
     # ========== 分组对比区域 ==========
     if 'grp_demographics' not in st.session_state:
@@ -12533,7 +13332,7 @@ def render_group_comparison_subtab(lang: str):
         mortality = (1 - demographics_df['survived'].mean()) * 100 if 'survived' in demographics_df.columns else 0
         st.metric("Mortality" if lang == 'en' else "死亡率", f"{mortality:.1f}%")
     
-    st.markdown("---")
+    _render_compact_divider()
     
     # 对比模式选择
     st.markdown("#### " + ("🔀 Select Comparison Mode" if lang == 'en' else "🔀 选择对比模式"))
@@ -12571,7 +13370,7 @@ def render_group_comparison_subtab(lang: str):
             key="group_comp_los_threshold"
         )
     
-    st.markdown("---")
+    _render_compact_divider()
     
     # ========== 特征模块选择 ==========
     st.markdown("#### " + ("📊 Select Feature Modules" if lang == 'en' else "📊 选择特征模块"))
@@ -12692,7 +13491,7 @@ def render_group_comparison_subtab(lang: str):
             with st.expander("🔬 " + (f"Features to load: {len(concepts_to_load)}" if lang == 'en' else f"待加载特征: {len(concepts_to_load)}个"), expanded=False):
                 st.caption(", ".join(concepts_to_load))
     
-    st.markdown("---")
+    _render_compact_divider()
     
     # 执行分组
     try:
@@ -12766,7 +13565,7 @@ def render_group_comparison_subtab(lang: str):
             st.warning("One group is empty, please adjust criteria" if lang == 'en' else "其中一个分组为空，请调整条件")
             return
         
-        st.markdown("---")
+        _render_compact_divider()
         
         # ========== 基线特征对比表 (Table One) ==========
         st.markdown("#### " + ("📋 Baseline Characteristics Comparison" if lang == 'en' else "📋 基线特征对比表"))
@@ -12800,25 +13599,11 @@ def render_group_comparison_subtab(lang: str):
                 if entry_mode == 'demo' or database == 'demo':
                     auto_load_msg = "Auto-loading simulated features for demo mode..." if lang == 'en' else "演示模式自动加载模拟特征数据..."
                     with st.spinner(auto_load_msg):
-                        # 特征的模拟参数 (均值, 标准差)
-                        mock_params = {
-                            'hr': (80, 15), 'sbp': (120, 20), 'dbp': (70, 12), 'map': (85, 15),
-                            'resp': (18, 4), 'temp': (37.0, 0.6), 'o2sat': (96, 3),
-                            'glu': (120, 40), 'na': (140, 4), 'k': (4.2, 0.5),
-                            'crea': (1.2, 0.8), 'bili': (1.5, 2.0), 'lact': (1.5, 1.0),
-                            'hgb': (11, 2), 'plt': (200, 80), 'wbc': (10, 4),
-                            'alb': (3.5, 0.6), 'pco2': (40, 8), 'po2': (90, 20),
-                            'ph': (7.38, 0.08), 'fio2': (40, 20),
-                        }
-                        
-                        for concept in missing_concepts:
-                            mean, std = mock_params.get(concept, (50, 15))
-                            values = np.random.normal(mean, std, len(all_patient_ids))
-                            feature_data[concept] = pd.DataFrame({
-                                id_col: all_patient_ids,
-                                concept: values
-                            })
-                        
+                        feature_data = _build_mock_group_feature_data(
+                            all_patient_ids,
+                            concepts_to_load,
+                            id_col=id_col,
+                        )
                         st.session_state['grp_feature_data'] = feature_data
                 else:
                     # 真实数据模式：显示加载提示和按钮
@@ -12846,7 +13631,8 @@ def render_group_comparison_subtab(lang: str):
                                             database=database,
                                             data_path=data_path,
                                             patient_ids=all_patient_ids,
-                                            verbose=False
+                                            verbose=False,
+                                            **_get_sepsis_runtime_options(),
                                         )
                                         if df_concept is not None and len(df_concept) > 0:
                                             # 确定ID列
@@ -13137,9 +13923,9 @@ def render_multidb_distribution_subtab(lang: str):
     import plotly.graph_objects as go
     
     # 🔧 FIX: 使用容器包装标题，确保与下方内容分隔，增加足够的间距
-    st.markdown("""<div style="margin-bottom: 40px;">
-        <h3 style="margin: 0 0 15px 0; padding: 0;">📈 """ + ("Multi-Database Feature Distribution Comparison" if lang == 'en' else "多数据库特征分布对比") + """</h3>
-        <hr style="margin: 0 0 30px 0; border: none; border-top: 2px solid #e0e0e0;">
+    st.markdown("""<div style="margin-bottom: 18px;">
+        <h3 style="margin: 0 0 8px 0; padding: 0;">📈 """ + ("Multi-Database Feature Distribution Comparison" if lang == 'en' else "多数据库特征分布对比") + """</h3>
+        <hr style="margin: 0 0 12px 0; border: none; border-top: 1px solid #e2e8f0;">
     </div>""", unsafe_allow_html=True)
     
     # 获取入口模式
@@ -13152,7 +13938,7 @@ def render_multidb_distribution_subtab(lang: str):
         
         if not has_demo_data:
             # 尚未生成数据，显示生成界面
-            st.markdown("---")
+            _render_compact_divider(top=2, bottom=10)
             
             # 居中的配置卡片
             _render_demo_generation_card(
@@ -13164,7 +13950,7 @@ def render_multidb_distribution_subtab(lang: str):
             # 生成按钮
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
-                st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+                _compact_spacer(10)
                 
                 if st.button(
                     "🚀 " + ("Generate Demo Data" if lang == 'en' else "生成演示数据"),
@@ -13187,7 +13973,7 @@ def render_multidb_distribution_subtab(lang: str):
                     st.rerun()
             
             # 显示提示信息
-            st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+            _compact_spacer(10)
             st.info("💡 " + ("Click the button above to generate demo data for multi-database distribution analysis" if lang == 'en' else "点击上方按钮生成多数据库分布分析演示数据"))
             return  # 未生成数据时不显示下方分析内容
         
@@ -13200,11 +13986,13 @@ def render_multidb_distribution_subtab(lang: str):
         col1, col2, col3 = st.columns([2, 2, 1])
         
         with col1:
-            data_root = st.text_input(
+            data_root = _directory_input(
                 "🗂️ " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
                 value=os.environ.get('EASYICU_DATA_PATH', ''),
+                input_key="multidb_data_root",
+                button_key="multidb_data_root_browse",
                 placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
-                key="multidb_data_root"
+                help="Root directory containing database folders (mimiciv, eicu, aumc, hirid)" if lang == 'en' else "包含数据库文件夹的根目录"
             )
             # 添加目录结构指南
             render_directory_structure_guide(lang)
@@ -13264,7 +14052,7 @@ def render_multidb_distribution_subtab(lang: str):
             key="multidb_load"
         )
         
-        st.markdown("---")
+        _render_compact_divider()
         
         if load_btn and selected_dbs and selected_features:
             try:
@@ -13313,7 +14101,7 @@ def render_multidb_distribution_subtab(lang: str):
             st.plotly_chart(fig, use_container_width=True)
             
             # 单特征详细对比
-            st.markdown("---")
+            _render_compact_divider()
             st.markdown("#### " + ("Detailed Single Feature View" if lang == 'en' else "单特征详细视图"))
             
             selected_single = st.selectbox(
@@ -13371,7 +14159,7 @@ def render_cohort_dashboard_subtab(lang: str):
         
         if not has_demo_data:
             # 尚未生成数据，显示生成界面
-            st.markdown("---")
+            _render_compact_divider(top=2, bottom=10)
             
             # 居中的配置卡片
             _render_demo_generation_card(
@@ -13383,7 +14171,7 @@ def render_cohort_dashboard_subtab(lang: str):
             # 生成按钮
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
-                st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+                _compact_spacer(10)
                 
                 if st.button(
                     "🚀 " + ("Generate Demo Dashboard" if lang == 'en' else "生成演示仪表板"),
@@ -13398,7 +14186,7 @@ def render_cohort_dashboard_subtab(lang: str):
                     st.rerun()
             
             # 显示提示信息
-            st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+            _compact_spacer(10)
             st.info("💡 " + ("Click the button above to generate demo data for cohort dashboard" if lang == 'en' else "点击上方按钮生成队列仪表板演示数据"))
             return  # 未生成数据时不显示下方分析内容
         
@@ -13562,7 +14350,7 @@ def render_cohort_dashboard_subtab(lang: str):
                         except Exception as e:
                             st.error(f"Error: {e}")
     
-    st.markdown("---")
+    _render_compact_divider()
     
     # ========== 仪表板内容 ==========
     if 'dash_demographics' not in st.session_state:
@@ -13579,10 +14367,11 @@ def render_cohort_dashboard_subtab(lang: str):
         
         def metric_card(value, label, bg_gradient):
             st.markdown(f"""
-            <div style="background: {bg_gradient}; 
-                        padding: 15px 5px; border-radius: 12px; text-align: center; color: white;">
-                <div style="font-size: 1.8rem; font-weight: bold;">{value}</div>
-                <div style="font-size: 0.8rem; opacity: 0.9;">{label}</div>
+            <div style="background: {bg_gradient};
+                        padding: 10px 8px; border-radius: 12px; text-align: center; color: white;
+                        min-height: 86px; display:flex; flex-direction:column; justify-content:center;">
+                <div style="font-size: 1.65rem; font-weight: 800; line-height:1.1;">{value}</div>
+                <div style="font-size: 0.76rem; opacity: 0.92; margin-top:6px;">{label}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -13633,7 +14422,7 @@ def render_cohort_dashboard_subtab(lang: str):
                 "linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)"
             )
         
-        st.markdown("---")
+        _render_compact_divider()
         
         # ========== 图表行1: 年龄分布和性别/生存 ==========
         chart_col1, chart_col2 = st.columns(2)
@@ -14423,7 +15212,338 @@ def _generate_cohort_prefix() -> str:
     elif has_sepsis is False:
         parts.append("noSepsis")
     
+    disease_cohort = cf.get('disease_cohort')
+    if disease_cohort and disease_cohort != 'none':
+        parts.append(disease_cohort)
+
+    icd_query = str(cf.get('icd_query', '')).strip()
+    if icd_query:
+        token = _split_query_tokens(icd_query)
+        if token:
+            parts.append(f"icd{token[0][:12]}")
+    
     return "_".join(parts)
+
+
+def _prime_export_completion(export_dir: Path, files: list[str], *, auto_load: bool = True) -> None:
+    """Update session state after an export or export-ready skip path completes."""
+    st.session_state.export_completed = True
+    st.session_state.trigger_export = False
+    st.session_state['_exporting_in_progress'] = False
+    st.session_state.last_export_dir = str(export_dir)
+    st.session_state.last_export_full_dir = str(export_dir)
+    st.session_state.viz_export_path = str(export_dir)
+    st.session_state.viz_data_source_mode = "exported"
+    st.session_state.viz_confirmed_path = str(export_dir)
+    st.session_state._prefer_exported_viz = True
+    st.session_state._viz_export_path_version = st.session_state.get('_viz_export_path_version', 0) + 1
+
+    if auto_load:
+        selected_files = list(dict.fromkeys(Path(path).stem for path in files if path))
+        max_patients_opt = st.session_state.get('viz_max_patients', 100)
+        max_patients = None if max_patients_opt in (None, -1) else max_patients_opt
+        st.session_state['_viz_auto_load_export'] = {
+            'path': str(export_dir),
+            'selected_files': selected_files or None,
+            'max_patients': max_patients,
+        }
+
+
+def _write_export_manifest(
+    export_dir: Path,
+    *,
+    exported_files: list[str],
+    patient_count: int,
+    concept_count: int,
+    export_format: str,
+    unavailable_concepts: list[str] | None = None,
+    unsupported_concepts: list[str] | None = None,
+    empty_data_concepts: list[str] | None = None,
+    failed_concepts: list[str] | None = None,
+    note: str | None = None,
+) -> list[str]:
+    """Write a lightweight export manifest for reproducibility."""
+    from datetime import datetime as _dt
+
+    cohort_filter = st.session_state.get('cohort_filter', {}) if st.session_state.get('cohort_enabled') else {}
+    cohort_filter = {
+        key: value
+        for key, value in cohort_filter.items()
+        if value not in (None, '', 'none', False)
+    }
+
+    manifest = {
+        'easyicu_version': '1.0.0',
+        'exported_at': _dt.now().isoformat(timespec='seconds'),
+        'database': st.session_state.get('database', 'unknown'),
+        'entry_mode': st.session_state.get('entry_mode', 'unknown'),
+        'export_dir': str(export_dir),
+        'export_format': export_format,
+        'patient_count': int(patient_count or 0),
+        'concept_count': int(concept_count or 0),
+        'selected_concepts': list(st.session_state.get('selected_concepts', [])),
+        'selected_groups': list(st.session_state.get('selected_groups', [])),
+        'cohort_enabled': bool(st.session_state.get('cohort_enabled', False)),
+        'cohort_filter': cohort_filter,
+        'cohort_suffix': _generate_cohort_prefix(),
+        'sepsis_runtime_options': _get_sepsis_runtime_options(),
+        'exported_files': [Path(path).name for path in exported_files if path],
+        'unavailable_concepts': unavailable_concepts or [],
+        'unsupported_concepts': unsupported_concepts or [],
+        'empty_data_concepts': empty_data_concepts or [],
+        'failed_concepts': failed_concepts or [],
+        'note': note or '',
+    }
+
+    json_path = export_dir / 'easyicu_export_manifest.json'
+    txt_path = export_dir / 'easyicu_export_manifest.txt'
+
+    with open(json_path, 'w', encoding='utf-8') as fp:
+        json.dump(manifest, fp, ensure_ascii=False, indent=2, default=str)
+
+    lines = [
+        "EasyICU Export Manifest",
+        f"Exported at: {manifest['exported_at']}",
+        f"Database: {manifest['database']}",
+        f"Entry mode: {manifest['entry_mode']}",
+        f"Export directory: {manifest['export_dir']}",
+        f"Export format: {manifest['export_format']}",
+        f"Patients: {manifest['patient_count']}",
+        f"Concepts: {manifest['concept_count']}",
+    ]
+    if manifest['cohort_suffix']:
+        lines.append(f"Cohort suffix: {manifest['cohort_suffix']}")
+    if manifest['cohort_filter']:
+        lines.append("Cohort filter:")
+        for key, value in manifest['cohort_filter'].items():
+            lines.append(f"  - {key}: {value}")
+    if manifest['selected_groups']:
+        lines.append(f"Selected groups: {', '.join(manifest['selected_groups'])}")
+    if manifest['selected_concepts']:
+        lines.append("Selected concepts:")
+        lines.extend([f"  - {concept}" for concept in manifest['selected_concepts']])
+    if manifest['exported_files']:
+        lines.append("Exported files:")
+        lines.extend([f"  - {name}" for name in manifest['exported_files']])
+    if note:
+        lines.append(f"Note: {note}")
+
+    with open(txt_path, 'w', encoding='utf-8') as fp:
+        fp.write("\n".join(lines) + "\n")
+
+    return [str(json_path), str(txt_path)]
+
+
+def _build_quick_viz_pdf_report(*, lang: str, preview_data: dict[str, pd.DataFrame], concepts_to_export: list[str]) -> bytes:
+    """Create a compact one-file PDF summary for Quick Visualization."""
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    id_col = st.session_state.get('id_col', 'stay_id')
+    database = st.session_state.get('database', 'unknown')
+    export_dir = st.session_state.get('viz_confirmed_path') or st.session_state.get('last_export_dir') or "-"
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    total_rows = 0
+    patient_ids = set()
+    summary_rows: list[dict[str, object]] = []
+    coverage_rows: list[dict[str, object]] = []
+
+    for concept in concepts_to_export:
+        df = preview_data.get(concept)
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+
+        rows = len(df)
+        total_rows += rows
+
+        if id_col in df.columns:
+            concept_patients = set(df[id_col].dropna().astype(str))
+            patient_ids |= concept_patients
+            patient_count = len(concept_patients)
+        else:
+            patient_count = 0
+
+        value_col = concept if concept in df.columns else None
+        if value_col is None:
+            candidate_cols = [
+                col for col in df.columns
+                if col not in {id_col, 'time', 'charttime', 'starttime', 'endtime', '_concept'}
+            ]
+            value_col = candidate_cols[0] if candidate_cols else None
+
+        missing_pct = 0.0
+        if value_col and value_col in df.columns:
+            valid = pd.to_numeric(df[value_col], errors='coerce') if df[value_col].dtype == 'object' else df[value_col]
+            missing_pct = float(valid.isna().mean() * 100) if len(valid) else 0.0
+
+        summary_rows.append({
+            'concept': concept,
+            'rows': rows,
+            'patients': patient_count,
+            'missing_pct': missing_pct,
+        })
+
+    summary_df = pd.DataFrame(summary_rows).sort_values('rows', ascending=False).head(10)
+    coverage_df = pd.DataFrame(summary_rows).sort_values('patients', ascending=False).head(10)
+
+    total_patients = len(patient_ids)
+    concept_count = len(summary_rows)
+
+    title_text = "EasyICU Quick Visualization Report" if lang == 'en' else "EasyICU 快速可视化报告"
+    subtitle_text = (
+        f"Database: {database.upper()}   •   Concepts: {concept_count}   •   Patients: {total_patients}   •   Records: {total_rows:,}"
+        if lang == 'en' else
+        f"数据库：{database.upper()}   •   特征：{concept_count}   •   患者：{total_patients}   •   记录：{total_rows:,}"
+    )
+    meta_lines = [
+        f"Generated at: {generated_at}" if lang == 'en' else f"生成时间：{generated_at}",
+        f"Export directory: {export_dir}" if lang == 'en' else f"导出目录：{export_dir}",
+        (
+            f"Selected concepts: {', '.join(concepts_to_export[:10])}" + (" ..." if len(concepts_to_export) > 10 else "")
+            if lang == 'en' else
+            f"所选特征：{', '.join(concepts_to_export[:10])}" + (" ..." if len(concepts_to_export) > 10 else "")
+        ),
+    ]
+
+    fig = make_subplots(
+        rows=2,
+        cols=2,
+        specs=[[{"type": "domain"}, {"type": "bar"}], [{"type": "bar"}, {"type": "table"}]],
+        column_widths=[0.38, 0.62],
+        row_heights=[0.42, 0.58],
+        horizontal_spacing=0.08,
+        vertical_spacing=0.12,
+        subplot_titles=(
+            "Overview" if lang == 'en' else "概览",
+            "Top Concepts by Records" if lang == 'en' else "记录数最高的特征",
+            "Top Concepts by Patient Coverage" if lang == 'en' else "患者覆盖最高的特征",
+            "Detail Table" if lang == 'en' else "明细表",
+        ),
+    )
+
+    overview_labels = [
+        "Patients" if lang == 'en' else "患者数",
+        "Concepts" if lang == 'en' else "特征数",
+        "Records" if lang == 'en' else "记录数",
+    ]
+    overview_values = [total_patients, concept_count, total_rows]
+    fig.add_trace(
+        go.Pie(
+            labels=overview_labels,
+            values=[max(v, 1) for v in overview_values],
+            hole=0.62,
+            marker=dict(colors=["#2563eb", "#0ea5e9", "#14b8a6"]),
+            textinfo="label+value",
+            sort=False,
+        ),
+        row=1,
+        col=1,
+    )
+
+    if not summary_df.empty:
+        fig.add_trace(
+            go.Bar(
+                x=summary_df['rows'],
+                y=summary_df['concept'],
+                orientation='h',
+                marker_color="#2563eb",
+                hovertemplate="%{y}: %{x:,}<extra></extra>",
+                showlegend=False,
+            ),
+            row=1,
+            col=2,
+        )
+    if not coverage_df.empty:
+        fig.add_trace(
+            go.Bar(
+                x=coverage_df['patients'],
+                y=coverage_df['concept'],
+                orientation='h',
+                marker_color="#0f766e",
+                hovertemplate="%{y}: %{x:,}<extra></extra>",
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+
+    table_df = pd.DataFrame(summary_rows).sort_values(['patients', 'rows'], ascending=[False, False]).head(8)
+    if table_df.empty:
+        table_df = pd.DataFrame([{
+            'concept': '-',
+            'rows': 0,
+            'patients': 0,
+            'missing_pct': 0.0,
+        }])
+    fig.add_trace(
+        go.Table(
+            header=dict(
+                values=[
+                    "Concept" if lang == 'en' else "特征",
+                    "Rows" if lang == 'en' else "记录",
+                    "Patients" if lang == 'en' else "患者",
+                    "Missing %" if lang == 'en' else "缺失率",
+                ],
+                fill_color="#e0f2fe",
+                align="left",
+                font=dict(size=13, color="#0f172a"),
+            ),
+            cells=dict(
+                values=[
+                    table_df['concept'],
+                    table_df['rows'].map(lambda x: f"{int(x):,}"),
+                    table_df['patients'].map(lambda x: f"{int(x):,}"),
+                    table_df['missing_pct'].map(lambda x: f"{x:.1f}%"),
+                ],
+                fill_color="#ffffff",
+                align="left",
+                font=dict(size=12, color="#0f172a"),
+                height=28,
+            ),
+        ),
+        row=2,
+        col=2,
+    )
+
+    fig.update_yaxes(autorange="reversed", row=1, col=2)
+    fig.update_yaxes(autorange="reversed", row=2, col=1)
+    fig.update_layout(
+        width=1440,
+        height=1020,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        title=dict(
+            text=f"{title_text}<br><sup>{subtitle_text}</sup>",
+            x=0.5,
+            y=0.98,
+            xanchor="center",
+            yanchor="top",
+            font=dict(size=24, color="#0f172a"),
+        ),
+        margin=dict(l=40, r=40, t=120, b=50),
+        font=dict(family="Arial, sans-serif", color="#0f172a", size=13),
+    )
+
+    meta_text = "<br>".join(meta_lines)
+    fig.add_annotation(
+        x=0.0,
+        y=1.08,
+        xref="paper",
+        yref="paper",
+        xanchor="left",
+        yanchor="top",
+        align="left",
+        showarrow=False,
+        text=meta_text,
+        font=dict(size=12, color="#475569"),
+        bgcolor="rgba(255,255,255,0.92)",
+        bordercolor="#cbd5e1",
+        borderwidth=1,
+        borderpad=8,
+    )
+
+    return fig.to_image(format="pdf")
 
 
 # 🔧 FIX Bug 62: Worker functions moved to subprocess_workers.py (separate from app.py)
@@ -14459,6 +15579,8 @@ def execute_sidebar_export():
     loaded_concepts = st.session_state.get('loaded_concepts', {})
     has_loaded_data = len(loaded_concepts) > 0
     loaded_data_origin = st.session_state.get('loaded_data_origin', 'none')
+    preview_like_origins = {'preview', 'quick_preview'}
+    is_preview_context = loaded_data_origin in preview_like_origins
     
     # 只有真正从“已导出文件”加载的数据，才视为 viz import mode。
     # Preview / quick_load / demo_viz 都不应该污染 Confirm Export 的真实提取流程。
@@ -14485,7 +15607,7 @@ def execute_sidebar_export():
     try:
         export_title = "📤 Export Progress" if lang == 'en' else "📤 导出进度"
         st.markdown(f"### {export_title}")
-        if loaded_data_origin == 'preview':
+        if is_preview_context:
             preview_reextract_msg = (
                 "ℹ️ Preview sample detected. Export will re-extract data from the source database instead of exporting the preview sample."
                 if lang == 'en' else
@@ -14506,20 +15628,44 @@ def execute_sidebar_export():
         
         # 创建进度条和状态显示
         progress_bar = st.progress(0)
-        status_text = st.empty()
+        _export_action_cols = st.columns([4, 1])
+        status_text = _export_action_cols[0].empty()
         
         # 🔧 添加取消按钮
         import time as time_module
-        cancel_placeholder = st.empty()
-        cancel_key = f"cancel_export_{int(time_module.time() * 1000)}"
+        cancel_placeholder = _export_action_cols[1].empty()
         
         # 初始化取消状态
         if '_export_cancelled' not in st.session_state:
             st.session_state._export_cancelled = False
         
+        stop_label = "⏹ Stop" if lang == 'en' else "⏹ 停止"
+        stop_help = (
+            "Stop the export after the current module finishes."
+            if lang == 'en' else
+            "在当前模块结束后尽快停止导出。"
+        )
+        if cancel_placeholder.button(stop_label, key="stop_export_btn", use_container_width=True, help=stop_help):
+            st.session_state._export_cancelled = True
+        
         def check_cancelled():
             """检查是否已取消导出"""
             return st.session_state.get('_export_cancelled', False)
+        
+        def _handle_export_cancel():
+            """统一处理取消导出后的状态清理。"""
+            st.session_state.trigger_export = False
+            st.session_state['_exporting_in_progress'] = False
+            st.session_state['_export_cancelled'] = False
+            progress_bar.empty()
+            status_text.empty()
+            cancel_placeholder.empty()
+            cancel_msg = "⏹ Export stopped by user." if lang == 'en' else "⏹ 导出已被用户停止。"
+            st.warning(cancel_msg)
+        
+        if check_cancelled():
+            _handle_export_cancel()
+            return
         
         # ============================================================
         # 🔧 步骤0：检测已存在的文件（适用于模拟数据和真实数据）
@@ -14651,11 +15797,39 @@ def execute_sidebar_export():
             if concepts_to_skip:
                 skip_msg = f"⏭️ All selected modules already exist, nothing to export" if lang == 'en' else "⏭️ 所有选中的模块都已存在，无需导出"
                 st.info(skip_msg)
+                existing_files = [str(existing_modules[group_key]) for group_key in skipped_modules if group_key in existing_modules]
+                existing_patient_count = st.session_state.get('_exported_patient_count') or len(st.session_state.get('patient_ids', []))
+                _prime_export_completion(export_dir, existing_files, auto_load=True)
+                st.session_state['_export_success_result'] = {
+                    'files': existing_files,
+                    'export_dir': str(export_dir),
+                    'total_time': 0,
+                    'module_times': {},
+                    'patient_count': existing_patient_count,
+                    'concept_count': len(selected_concepts),
+                    'unavailable_concepts': [],
+                    'unsupported_concepts': [],
+                    'empty_data_concepts': [],
+                    'note': (
+                        "All selected modules already existed. EasyICU reused the current export folder."
+                        if lang == 'en' else
+                        "所有选中的模块都已存在。EasyICU 已直接复用当前导出目录。"
+                    ),
+                }
+                _write_export_manifest(
+                    export_dir,
+                    exported_files=existing_files,
+                    patient_count=existing_patient_count,
+                    concept_count=len(selected_concepts),
+                    export_format=export_format,
+                    note=st.session_state['_export_success_result']['note'],
+                )
             # 清理状态
             if '_skipped_modules' in st.session_state:
                 del st.session_state['_skipped_modules']
             if '_overwrite_modules' in st.session_state:
                 del st.session_state['_overwrite_modules']
+            st.rerun()
             return
         
         # 显示跳过信息
@@ -15115,7 +16289,7 @@ def execute_sidebar_export():
                         _emsg = f"**Exporting**: `{group_name}` ({step_idx+1}/{total_steps}) | {concepts_str}"
                     else:
                         _emsg = f"**正在导出**: `{group_name}` ({step_idx+1}/{total_steps}) | {concepts_str}"
-                    cancel_placeholder.markdown(_emsg)
+                    status_text.markdown(_emsg)
                     
                     # ── 合并为宽表（完整保留原有逻辑） ──
                     id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
@@ -15427,7 +16601,11 @@ def execute_sidebar_export():
                 # ──────────────────────────────────────────────
                 # 🚀 流式导出: cohort filter 计算辅助函数
                 # ──────────────────────────────────────────────
+                _cf_runtime = st.session_state.get('cohort_filter', {}) or {}
                 _cohort_filter_modules = {'demographics', 'outcome'}  # 包含 death/los_icu/age/sex 的模块
+                _disease_cohort = _cf_runtime.get('disease_cohort')
+                if _disease_cohort and _disease_cohort != 'none':
+                    _cohort_filter_modules |= DISEASE_COHORT_CONFIG.get(_disease_cohort, {}).get('required_modules', set())
                 
                 def _compute_cohort_exclude_ids_inline():
                     """从 data 中计算要排除的患者ID集合。"""
@@ -15512,6 +16690,22 @@ def execute_sidebar_export():
                             sex_ok = set(sex_valid.loc[sex_vals.isin(target_variants), actual_id].unique())
                             excl |= (all_pids - sex_ok)
                     
+                    disease_cfg = DISEASE_COHORT_CONFIG.get(cf.get('disease_cohort', 'none'))
+                    if disease_cfg and disease_cfg.get('concept_priority'):
+                        disease_ids = _get_positive_patient_ids_from_data(
+                            data,
+                            actual_id_col=actual_id,
+                            concept_priority=disease_cfg.get('concept_priority', []),
+                        )
+                        cohort_stats = st.session_state.get('_cohort_stats')
+                        if cohort_stats is not None:
+                            _label_en = disease_cfg.get('label_en', 'Disease cohort')
+                            _label_zh = disease_cfg.get('label_zh', '疾病队列')
+                            _removed = len(all_pids - disease_ids)
+                            cohort_stats.setdefault('filter_details', []).append((_label_en, _label_zh, _removed))
+                            st.session_state['_cohort_stats'] = cohort_stats
+                        excl |= (all_pids - disease_ids)
+                    
                     if excl:
                         print(f"[COHORT POST-FILTER] Removing {len(excl)}/{len(all_pids)} patients")
                         cohort_stats = st.session_state.get('_cohort_stats')
@@ -15553,7 +16747,18 @@ def execute_sidebar_export():
                 # cohort_filter 初始化为 {'age_min': None, ...}（8 keys 全 None），
                 # bool(non_empty_dict) = True 导致永远为 True，所有模块被缓冲
                 _cf = st.session_state.get('cohort_filter', {})
-                _has_cohort_filter = any(v is not None for v in _cf.values()) if _cf else False
+                _has_cohort_filter = False
+                if _cf:
+                    for _k, _v in _cf.items():
+                        if _k in {'disease_cohort'} and _v not in (None, '', 'none'):
+                            _has_cohort_filter = True
+                            break
+                        if _k in {'icd_query'} and str(_v).strip():
+                            _has_cohort_filter = True
+                            break
+                        if _k not in {'disease_cohort', 'icd_query'} and _v is not None:
+                            _has_cohort_filter = True
+                            break
                 
                 # 模块级别耗时累计（用于动态ETA计算）
                 _module_elapsed_list = []
@@ -15637,13 +16842,25 @@ def execute_sidebar_export():
                                 args=(mod_concepts, database,
                                       st.session_state.data_path,
                                       patient_ids_filter,
-                                      _auto_batch_size, _tmp_dir),
+                                      _auto_batch_size, _tmp_dir,
+                                      _get_sepsis_runtime_options()),
                                 daemon=True
                             )
                             _sub_proc.start()
                             
                             _keepalive_tick = 0
                             while _sub_proc.is_alive():
+                                if check_cancelled():
+                                    try:
+                                        _sub_proc.terminate()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        _sub_proc.join(timeout=2)
+                                    except Exception:
+                                        pass
+                                    _handle_export_cancel()
+                                    return
                                 _sub_proc.join(timeout=2)
                                 _keepalive_tick += 1
                                 _mod_elapsed = _time_mod.time() - mod_start
@@ -15683,7 +16900,8 @@ def execute_sidebar_export():
                                         data_path=st.session_state.data_path,
                                         database=database, concepts=[concept],
                                         verbose=False, merge=False, concept_workers=1,
-                                        **(dict(patient_ids=patient_ids_filter) if patient_ids_filter else {})
+                                        **(dict(patient_ids=patient_ids_filter) if patient_ids_filter else {}),
+                                        **_get_sepsis_runtime_options(),
                                     )
                                     _process_result(result, [concept])
                                 except Exception:
@@ -15737,13 +16955,25 @@ def execute_sidebar_export():
                                       list(_cohort_exclude_ids) if _cohort_exclude_ids else None,
                                       _overwrite_this, cohort_suffix,
                                       _special_dep_concepts if _deps_cache_dir else None,
-                                      _deps_cache_dir),
+                                      _deps_cache_dir,
+                                      _get_sepsis_runtime_options()),
                                 daemon=True
                             )
                             _sub_proc.start()
                             
                             _keepalive_tick = 0
                             while _sub_proc.is_alive():
+                                if check_cancelled():
+                                    try:
+                                        _sub_proc.terminate()
+                                    except Exception:
+                                        pass
+                                    try:
+                                        _sub_proc.join(timeout=2)
+                                    except Exception:
+                                        pass
+                                    _handle_export_cancel()
+                                    return
                                 _sub_proc.join(timeout=2)
                                 _keepalive_tick += 1
                                 _mod_elapsed = _time_mod.time() - mod_start
@@ -15794,7 +17024,8 @@ def execute_sidebar_export():
                                         data_path=st.session_state.data_path,
                                         database=database, concepts=[concept],
                                         verbose=False, merge=False, concept_workers=1,
-                                        **(dict(patient_ids=patient_ids_filter) if patient_ids_filter else {})
+                                        **(dict(patient_ids=patient_ids_filter) if patient_ids_filter else {}),
+                                        **_get_sepsis_runtime_options(),
                                     )
                                     _process_result(result, [concept])
                                 except Exception:
@@ -15847,13 +17078,25 @@ def execute_sidebar_export():
                                   _sp_tmp_dir, _deps_cache_dir,
                                   str(export_dir), export_format,
                                   list(_cohort_exclude_ids) if _cohort_exclude_ids else None,
-                                  _sp_concept_to_group, cohort_suffix),
+                                  _sp_concept_to_group, cohort_suffix,
+                                  _get_sepsis_runtime_options()),
                             daemon=True
                         )
                         _sp_proc.start()
                         
                         _sp_tick = 0
                         while _sp_proc.is_alive():
+                            if check_cancelled():
+                                try:
+                                    _sp_proc.terminate()
+                                except Exception:
+                                    pass
+                                try:
+                                    _sp_proc.join(timeout=2)
+                                except Exception:
+                                    pass
+                                _handle_export_cancel()
+                                return
                             _sp_proc.join(timeout=2)
                             _sp_tick += 1
                             _sp_elapsed = _time_mod.time() - _sp_start
@@ -16115,6 +17358,9 @@ def execute_sidebar_export():
 
             total_mock_modules = len(mock_modules) or 1
             for mod_idx, (mod_key, mod_dfs) in enumerate(mock_modules):
+                if check_cancelled():
+                    _handle_export_cancel()
+                    return
                 mod_display = CONCEPT_GROUP_NAMES.get(mod_key, (mod_key, mod_key))
                 mod_name = mod_display[1] if lang != 'en' else mod_display[0]
                 status_text.markdown(
@@ -16148,20 +17394,7 @@ def execute_sidebar_export():
             del st.session_state['_export_cancelled']
 
         if exported_files:
-            st.session_state.export_completed = True
-            st.session_state.trigger_export = False  # 🔧 FIX (2026-02-03): 导出完成后重置触发状态
-            st.session_state['_exporting_in_progress'] = False  # 清除导出进行中标记
-            st.session_state.last_export_dir = str(export_dir)  # 保存实际导出目录
-            st.session_state.last_export_full_dir = str(export_dir)  # 保存完整路径（含cohort子目录）
-            st.session_state.viz_export_path = str(export_dir)  # 更新viz_export_path
-            st.session_state.viz_data_source_mode = "exported"
-            st.session_state._prefer_exported_viz = True
-            # 🔧 FIX: 更新快速可视化的确认路径，这样切换到可视化页面时会自动填充
-            st.session_state.viz_confirmed_path = str(export_dir)
-            # 🔧 FIX: 强制重置 text_input 的版本号，确保显示新路径
-            if '_viz_export_path_version' not in st.session_state:
-                st.session_state._viz_export_path_version = 0
-            st.session_state._viz_export_path_version += 1
+            _prime_export_completion(export_dir, exported_files, auto_load=True)
             
             # 🆕 保存实际导出的患者数量（从数据中统计，是 cohort filter 后的真实数量）
             actual_patient_count = len(all_exported_patient_ids)
@@ -16228,6 +17461,18 @@ def execute_sidebar_export():
                 'unsupported_concepts': unsupported_concepts,  # 🆕 FIX(2026-02-09): 无数据源的概念
                 'empty_data_concepts': empty_concepts,  # 🆕 FIX(2026-02-09): 有数据源但无数据的概念
             }
+            manifest_paths = _write_export_manifest(
+                export_dir,
+                exported_files=exported_files,
+                patient_count=actual_patient_count,
+                concept_count=exported_concept_count,
+                export_format=export_format,
+                unavailable_concepts=selected_but_not_exported,
+                unsupported_concepts=unsupported_concepts,
+                empty_data_concepts=empty_concepts,
+                failed_concepts=failed_concepts,
+            )
+            st.session_state['_export_success_result']['manifest_files'] = manifest_paths
             st.rerun()  # 🆕 立即刷新页面，让 Step 4 变为 DONE
         else:
             st.session_state['_exporting_in_progress'] = False  # 🆕 清除导出进行中标记
@@ -16265,7 +17510,7 @@ def render_export_page():
     # 快速导出面板
     quick_title = "⚡ Quick Export" if lang == 'en' else "⚡ 快速导出"
     st.markdown(f"### {quick_title}")
-    quick_cols = st.columns(4)
+    quick_cols = st.columns(5)
     
     import io
     from datetime import datetime
@@ -16373,6 +17618,33 @@ def render_export_page():
         else:
             no_labs = "🧪 No Labs Data" if lang == 'en' else "🧪 无实验室数据"
             st.button(no_labs, disabled=True, width="stretch")
+
+    with quick_cols[4]:
+        pdf_label = "📑 PDF Report" if lang == 'en' else "📑 PDF 报告"
+        pdf_help = (
+            "Download a one-page summary report for the currently loaded Quick Visualization data."
+            if lang == 'en' else
+            "下载当前 Quick Visualization 已加载数据的一页式摘要报告。"
+        )
+        try:
+            pdf_bytes = _build_quick_viz_pdf_report(
+                lang=lang,
+                preview_data=st.session_state.loaded_concepts,
+                concepts_to_export=list(st.session_state.loaded_concepts.keys()),
+            )
+            st.download_button(
+                label=pdf_label,
+                data=pdf_bytes,
+                file_name=f"easyicu_quick_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                mime="application/pdf",
+                width="stretch",
+                help=pdf_help,
+            )
+        except Exception as exc:
+            pdf_unavailable = (
+                f"📑 PDF unavailable" if lang == 'en' else "📑 PDF 不可用"
+            )
+            st.button(pdf_unavailable, disabled=True, width="stretch", help=str(exc))
     
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
@@ -16646,6 +17918,11 @@ def main():
     if assistant_notice:
         st.success(assistant_notice)
     
+    export_in_progress = bool(
+        st.session_state.get('trigger_export', False)
+        or st.session_state.get('_exporting_in_progress', False)
+    )
+    
     # 主页面标签：Tutorial, Quick Visualization, Cohort Analysis
     tab1, tab2, tab3 = st.tabs([
         get_text('home'),
@@ -16657,96 +17934,113 @@ def main():
         render_home()
     
     with tab2:
-        # 处理侧边栏的 Preview 请求
-        if st.session_state.get('_preview_requested', False):
-            st.session_state['_preview_requested'] = False
-            _preview_n = st.session_state.get('_preview_n', 10)
-            _use_mock = st.session_state.get('use_mock_data', False)
-            _sel_concepts = st.session_state.get('selected_concepts', [])
-            
-            if _use_mock:
-                try:
-                    with st.spinner(f"Generating preview with {_preview_n} mock patients..." if lang == 'en' else f"正在生成 {_preview_n} 位模拟患者的预览..."):
-                        mock_data, preview_patient_ids = generate_mock_data(n_patients=_preview_n, hours=72)
-                    if _sel_concepts:
-                        mock_data = {k: v for k, v in mock_data.items() if k in _sel_concepts}
-                    st.session_state.loaded_concepts = mock_data
-                    st.session_state.loaded_data_origin = 'preview'
-                    st.session_state.patient_ids = sorted(preview_patient_ids)
-                    st.session_state.id_col = 'stay_id'
-                    st.session_state.trigger_export = False
-                    st.session_state['_exporting_in_progress'] = False
-                    for _tmp_key in ['_skipped_modules', '_overwrite_modules', '_viz_import_export_auto_trigger']:
-                        if _tmp_key in st.session_state:
-                            del st.session_state[_tmp_key]
-                    st.session_state['_viz_notices'] = [{
-                        'level': 'success',
-                        'message': f"✅ Preview loaded: {len(mock_data)} concepts, {len(st.session_state.patient_ids)} patients" if lang == 'en' else f"✅ 预览已加载: {len(mock_data)} 个概念, {len(st.session_state.patient_ids)} 位患者",
-                    }]
-                    st.session_state['_scroll_to_tab'] = 'viz'
-                except Exception as e:
-                    st.error(f"Preview error: {e}")
-            else:
-                _db = st.session_state.get('database', '')
-                _data_path = st.session_state.get('data_path', '')
-                if _db and _data_path:
+        if export_in_progress:
+            export_hold_msg = (
+                "⏳ Export in progress. Preview charts are temporarily paused to avoid preview-state conflicts during full extraction."
+                if lang == 'en' else
+                "⏳ 正在导出。为避免 Preview 状态干扰全量提取，临时暂停渲染预览图表。"
+            )
+            st.markdown(f'<div class="compact-inline-notice info">{export_hold_msg}</div>', unsafe_allow_html=True)
+        else:
+            # 处理侧边栏的 Preview 请求
+            if st.session_state.get('_preview_requested', False):
+                st.session_state['_preview_requested'] = False
+                _preview_n = st.session_state.get('_preview_n', 10)
+                _use_mock = st.session_state.get('use_mock_data', False)
+                _sel_concepts = st.session_state.get('selected_concepts', [])
+                
+                if _use_mock:
                     try:
-                        _preview_concepts = _sel_concepts
-                        with st.spinner(f"Loading preview with {_preview_n} patients from {_db.upper()}..." if lang == 'en' else f"正在从 {_db.upper()} 加载 {_preview_n} 位患者的预览..."):
-                            preview_result = load_preview_concepts(
-                                concepts=_preview_concepts,
-                                database=_db,
-                                data_path=_data_path,
-                                max_patients=_preview_n,
-                                verbose=False,
-                            )
-                        st.session_state.loaded_concepts = preview_result.get('loaded_concepts', {})
+                        with st.spinner(f"Generating preview with {_preview_n} mock patients..." if lang == 'en' else f"正在生成 {_preview_n} 位模拟患者的预览..."):
+                            mock_data, preview_patient_ids = generate_mock_data(n_patients=_preview_n, hours=72)
+                        if _sel_concepts:
+                            mock_data = {k: v for k, v in mock_data.items() if k in _sel_concepts}
+                        st.session_state.loaded_concepts = mock_data
                         st.session_state.loaded_data_origin = 'preview'
-                        _unsupported_preview = preview_result.get('unsupported_concepts', [])
-                        _id_map = {
-                            'miiv': 'stay_id',
-                            'mimic': 'icustay_id',
-                            'eicu': 'patientunitstayid',
-                            'aumc': 'admissionid',
-                            'hirid': 'patientid',
-                            'sic': 'CaseID',
-                        }
-                        st.session_state.id_col = _id_map.get(_db, 'stay_id')
-                        _all_ids = set()
-                        for _df in st.session_state.loaded_concepts.values():
-                            if hasattr(_df, 'columns'):
-                                for _ic in ['stay_id', 'patientunitstayid', 'hadm_id', 'admissionid', 'patientid', 'CaseID']:
-                                    if _ic in _df.columns:
-                                        _all_ids.update(_df[_ic].unique())
-                                        break
-                        st.session_state.patient_ids = sorted(_all_ids)
+                        st.session_state.patient_ids = sorted(preview_patient_ids)
+                        st.session_state.id_col = 'stay_id'
                         st.session_state.trigger_export = False
                         st.session_state['_exporting_in_progress'] = False
                         for _tmp_key in ['_skipped_modules', '_overwrite_modules', '_viz_import_export_auto_trigger']:
                             if _tmp_key in st.session_state:
                                 del st.session_state[_tmp_key]
-                        _viz_notices = []
-                        if _unsupported_preview:
-                            warn_prefix = "Skipped unsupported preview concepts" if lang == 'en' else "已跳过当前预览不支持的概念"
-                            _viz_notices.append({
-                                'level': 'warning',
-                                'message': f"{warn_prefix}: {', '.join(_unsupported_preview[:8])}" + (" ..." if len(_unsupported_preview) > 8 else ""),
-                            })
-                        _viz_notices.append({
+                        st.session_state['_viz_notices'] = [{
                             'level': 'success',
-                            'message': f"✅ Preview: {len(st.session_state.loaded_concepts)} concepts, {len(st.session_state.patient_ids)} patients" if lang == 'en' else f"✅ 预览: {len(st.session_state.loaded_concepts)} 个概念, {len(st.session_state.patient_ids)} 位患者",
-                        })
-                        st.session_state['_viz_notices'] = _viz_notices
+                            'message': f"✅ Preview loaded: {len(mock_data)} concepts, {len(st.session_state.patient_ids)} patients" if lang == 'en' else f"✅ 预览已加载: {len(mock_data)} 个概念, {len(st.session_state.patient_ids)} 位患者",
+                        }]
                         st.session_state['_scroll_to_tab'] = 'viz'
                     except Exception as e:
                         st.error(f"Preview error: {e}")
                 else:
-                    st.warning("Please configure data source first" if lang == 'en' else "请先配置数据源")
-        
-        render_quick_visualization_page()
+                    _db = st.session_state.get('database', '')
+                    _data_path = st.session_state.get('data_path', '')
+                    if _db and _data_path:
+                        try:
+                            _preview_concepts = _sel_concepts
+                            with st.spinner(f"Loading preview with {_preview_n} patients from {_db.upper()}..." if lang == 'en' else f"正在从 {_db.upper()} 加载 {_preview_n} 位患者的预览..."):
+                                preview_result = load_preview_concepts(
+                                    concepts=_preview_concepts,
+                                    database=_db,
+                                    data_path=_data_path,
+                                    max_patients=_preview_n,
+                                    verbose=False,
+                                    **_get_sepsis_runtime_options(),
+                                )
+                            st.session_state.loaded_concepts = preview_result.get('loaded_concepts', {})
+                            st.session_state.loaded_data_origin = 'preview'
+                            _unsupported_preview = preview_result.get('unsupported_concepts', [])
+                            _id_map = {
+                                'miiv': 'stay_id',
+                                'mimic': 'icustay_id',
+                                'eicu': 'patientunitstayid',
+                                'aumc': 'admissionid',
+                                'hirid': 'patientid',
+                                'sic': 'CaseID',
+                            }
+                            st.session_state.id_col = _id_map.get(_db, 'stay_id')
+                            _all_ids = set()
+                            for _df in st.session_state.loaded_concepts.values():
+                                if hasattr(_df, 'columns'):
+                                    for _ic in ['stay_id', 'patientunitstayid', 'hadm_id', 'admissionid', 'patientid', 'CaseID']:
+                                        if _ic in _df.columns:
+                                            _all_ids.update(_df[_ic].unique())
+                                            break
+                            st.session_state.patient_ids = sorted(_all_ids)
+                            st.session_state.trigger_export = False
+                            st.session_state['_exporting_in_progress'] = False
+                            for _tmp_key in ['_skipped_modules', '_overwrite_modules', '_viz_import_export_auto_trigger']:
+                                if _tmp_key in st.session_state:
+                                    del st.session_state[_tmp_key]
+                            _viz_notices = []
+                            if _unsupported_preview:
+                                warn_prefix = "Skipped unsupported preview concepts" if lang == 'en' else "已跳过当前预览不支持的概念"
+                                _viz_notices.append({
+                                    'level': 'warning',
+                                    'message': f"{warn_prefix}: {', '.join(_unsupported_preview[:8])}" + (" ..." if len(_unsupported_preview) > 8 else ""),
+                                })
+                            _viz_notices.append({
+                                'level': 'success',
+                                'message': f"✅ Preview: {len(st.session_state.loaded_concepts)} concepts, {len(st.session_state.patient_ids)} patients" if lang == 'en' else f"✅ 预览: {len(st.session_state.loaded_concepts)} 个概念, {len(st.session_state.patient_ids)} 位患者",
+                            })
+                            st.session_state['_viz_notices'] = _viz_notices
+                            st.session_state['_scroll_to_tab'] = 'viz'
+                        except Exception as e:
+                            st.error(f"Preview error: {e}")
+                    else:
+                        st.warning("Please configure data source first" if lang == 'en' else "请先配置数据源")
+            
+            render_quick_visualization_page()
     
     with tab3:
-        render_cohort_comparison_page()
+        if export_in_progress:
+            export_hold_msg = (
+                "⏳ Export in progress. Cohort dashboards are temporarily paused until extraction finishes."
+                if lang == 'en' else
+                "⏳ 正在导出。提取完成前，暂时不渲染队列分析页面。"
+            )
+            st.markdown(f'<div class="compact-inline-notice info">{export_hold_msg}</div>', unsafe_allow_html=True)
+        else:
+            render_cohort_comparison_page()
     
     # 🔧 处理侧边栏触发的导出（在标签页渲染后执行，确保 Guide: Complete 中的 container 已创建）
     if st.session_state.get('trigger_export', False):
@@ -16787,8 +18081,12 @@ def main():
             
             # 🔧 只有在有选择的概念时才执行导出
             if st.session_state.get('selected_concepts'):
-                # 优先使用 Guide: Complete 中创建的容器
-                export_container = st.session_state.get('_export_progress_container', default_export_container)
+                # Preview 后触发正式导出时，避免复用旧 tab 内的容器对象，直接使用当前 rerun 的安全容器
+                preview_like_origins = {'preview', 'quick_preview'}
+                if st.session_state.get('loaded_data_origin') in preview_like_origins:
+                    export_container = default_export_container
+                else:
+                    export_container = st.session_state.get('_export_progress_container', default_export_container)
                 with export_container:
                     execute_sidebar_export()
             else:

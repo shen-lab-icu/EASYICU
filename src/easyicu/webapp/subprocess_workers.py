@@ -13,7 +13,7 @@ that must import the module containing the target function.
 
 
 def _subprocess_load_module(concepts, database, data_path, patient_ids_filter,
-                            batch_size, output_dir):
+                            batch_size, output_dir, sepsis_options=None):
     """在子进程中加载一个模块的概念，结果写入 parquet 文件。
 
     子进程退出后 OS 完整回收所有内存（包括 pymalloc arena 碎片），
@@ -38,6 +38,8 @@ def _subprocess_load_module(concepts, database, data_path, patient_ids_filter,
         kwargs['patient_ids'] = patient_ids_filter
     if batch_size:
         kwargs['batch_size'] = batch_size
+    if sepsis_options:
+        kwargs.update(sepsis_options)
 
     result = _lc(**kwargs)
 
@@ -60,7 +62,8 @@ def _subprocess_load_module(concepts, database, data_path, patient_ids_filter,
 def _streaming_load_and_export(concepts, database, data_path, id_key, all_pids,
                                batch_size, export_dir, export_format, group_name,
                                cohort_exclude_ids, overwrite, cohort_suffix,
-                               dep_concepts_to_cache, deps_cache_dir, _lc, np, pd):
+                               dep_concepts_to_cache, deps_cache_dir, _lc, np, pd,
+                               sepsis_options=None):
     """流式分批导出: 逐批加载 → 合并宽表 → 追加写入 parquet/csv。
 
     每批独立处理后释放内存，峰值始终受限于单批(~1-3GB)而非全量(~10GB+)。
@@ -132,9 +135,18 @@ def _streaming_load_and_export(concepts, database, data_path, id_key, all_pids,
 
         # ── 加载本批 (无子进程嵌套) ──
         try:
-            result = _lc(data_path=data_path, database=database,
-                         concepts=concepts, verbose=False, merge=False,
-                         concept_workers=1, patient_ids={id_key: batch_ids})
+            _load_kwargs = dict(
+                data_path=data_path,
+                database=database,
+                concepts=concepts,
+                verbose=False,
+                merge=False,
+                concept_workers=1,
+                patient_ids={id_key: batch_ids},
+            )
+            if sepsis_options:
+                _load_kwargs.update(sepsis_options)
+            result = _lc(**_load_kwargs)
         except Exception as e:
             print(f"[STREAMING] batch {bi+1}/{n_batches} load failed: {e}")
             continue
@@ -418,7 +430,7 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
                                        export_dir, export_format, group_name,
                                        cohort_exclude_ids, overwrite,
                                        cohort_suffix, dep_concepts_to_cache,
-                                       deps_cache_dir):
+                                       deps_cache_dir, sepsis_options=None):
     """在子进程中完成 load + merge + export 全部工作。
 
     主进程不接触任何 DataFrame，彻底消除 pymalloc arena 碎片在主进程中的累积。
@@ -454,7 +466,8 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
         return _streaming_load_and_export(
             concepts, database, data_path, _id_key_s, list(_pids_s), batch_size,
             export_dir, export_format, group_name, cohort_exclude_ids, overwrite,
-            cohort_suffix, dep_concepts_to_cache, deps_cache_dir, _lc, np, pd)
+            cohort_suffix, dep_concepts_to_cache, deps_cache_dir, _lc, np, pd,
+            sepsis_options=sepsis_options)
 
     # ── 1. 加载概念 (非流式 — 小数据集原有逻辑) ──
     kwargs = dict(
@@ -465,6 +478,8 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
         kwargs['patient_ids'] = patient_ids_filter
     if batch_size:
         kwargs['batch_size'] = batch_size
+    if sepsis_options:
+        kwargs.update(sepsis_options)
 
     result = _lc(**kwargs)
 
@@ -822,7 +837,7 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
                              max_patients, output_dir, preloaded_parquet_dir=None,
                              export_dir=None, export_format='parquet',
                              cohort_exclude_ids=None, concept_to_group=None,
-                             cohort_suffix=''):
+                             cohort_suffix='', sepsis_options=None):
     """在子进程中加载特殊概念（AKI, CircFailure 等），结果写入 parquet。
 
     当 export_dir 不为 None 时，在子进程内直接完成合并+导出，
@@ -1036,6 +1051,8 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
                 load_kwargs['patient_ids'] = patient_ids_filter
             if max_patients:
                 load_kwargs['max_patients'] = max_patients
+            if sepsis_options:
+                load_kwargs.update(sepsis_options)
             try:
                 result = _lc(**load_kwargs)
                 if isinstance(result, dict):
@@ -1199,6 +1216,8 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
 
                     _load_kw = dict(data_path=data_path, database=database,
                                     concepts=_missing, verbose=False, merge=False, concept_workers=1)
+                    if sepsis_options:
+                        _load_kw.update(sepsis_options)
                     if _pid_list:
                         _id_col_k = list(patient_ids_filter.keys())[0]
                         _total_p = len(_pid_list)
