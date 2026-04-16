@@ -15,6 +15,7 @@ All API credentials are stored in session state only — never persisted.
 import ast
 import os
 import re
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -41,7 +42,7 @@ quality review, and cohort comparison
 
 ## Workflow (4 Steps)
 1. **Data Source** — choose database & path (or Demo mode with simulated data)
-2. **Cohort Selection** — filter by age, sex, ICU LOS, mortality, first-ICU-stay
+2. **Cohort Selection** — filter by age, sex, ICU LOS, mortality, disease cohort (e.g. Sepsis-3, AKI, RRT, mechanical ventilation), and ICD keywords where supported
 3. **Select Features** — pick from 19 modules (167 concepts); supports SOFA-1, SOFA-2, \
 Sepsis-3, KDIGO-AKI, circulatory failure, etc.
 4. **Export Data** — batch export to disk; streaming architecture, subprocess memory isolation
@@ -108,9 +109,15 @@ sofa = load_sofa(database='eicu', data_path='/data/eicu')
 ## Response Rules
 - Respond in the same language the user is using.
 - Be concise and practical. Start with the direct answer, then give short bullets only if useful.
+- If the user describes a study goal or clinical task, answer in a task-first way:
+  1. restate what EasyICU can support for that goal,
+  2. suggest the recommended cohort definition,
+  3. suggest which modules / concepts to extract,
+  4. mention the key web steps to follow.
 - Prioritize helping users use the EasyICU web interface and workflows. Code-level explanations are secondary unless the user explicitly asks for implementation details.
 - When a user asks where something is in the web app, answer with the relevant page, step, or in-app action first. Do not default to repo files.
 - When the user asks about EasyICU implementation, prefer the exact EasyICU concept names and outputs over generic medical summaries.
+- Prefer suggesting concrete research workflows such as early warning, trajectory modelling, cohort construction, outcome analysis, sensitivity analysis, and cross-database feature planning.
 - You will also receive a local EasyICU code snapshot at runtime. Use that code context when answering implementation or file-level questions.
 - When pointing users to project files or docs, prefer clickable Markdown links.
 - Do not invent version years, guideline dates, concept names, or unsupported claims. If uncertain, say what you can confirm from EasyICU and stop there.
@@ -1073,7 +1080,7 @@ def render_llm_settings():
     lang = st.session_state.get("language", "en")
 
     label = "🤖 AI Assistant" if lang == "en" else "🤖 AI 助手"
-    with st.expander(label, expanded=False):
+    with st.expander(label, expanded=True):
         # On/off toggle
         enabled = st.toggle(
             "Enable AI Assistant" if lang == "en" else "启用 AI 助手",
@@ -1153,12 +1160,16 @@ def render_llm_settings():
             st.session_state["_floating_ai_open"] = True
             st.rerun()
 
-        # Clear history button
-        if st.session_state.llm_messages:
-            if st.button("🗑️ " + ("Clear Chat" if lang == 'en' else "清空对话"),
-                         key="_llm_clear"):
-                st.session_state.llm_messages = []
-                st.rerun()
+
+def _build_chat_export_text() -> str:
+    """Serialize chat history to markdown."""
+    lines = ["# EasyICU AI Chat Export", ""]
+    for msg in st.session_state.get("llm_messages", []):
+        role = "User" if msg.get("role") == "user" else "Assistant"
+        lines.append(f"## {role}")
+        lines.append(msg.get("content", "").strip())
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -1305,7 +1316,18 @@ def _submit_prompt(prompt: str, lang: str, history_container, key_prefix: str = 
     prep_placeholder.info(
         "🛠️ Preparing tools..." if lang == "en" else "🛠️ 正在准备工具..."
     )
-    messages, tool_events = _compose_agent_messages(prompt)
+    try:
+        messages, tool_events = _compose_agent_messages(prompt)
+    except Exception as exc:
+        prep_placeholder.empty()
+        error_message = _handle_api_error(exc, lang, render=False)
+        st.session_state.llm_messages.append(
+            {"role": "assistant", "content": error_message, "actions": []}
+        )
+        with history_container:
+            with st.chat_message("assistant"):
+                st.markdown(error_message)
+        return
     st.session_state.llm_last_tool_events = tool_events
     prep_placeholder.empty()
 
@@ -1364,50 +1386,44 @@ def render_sidebar_chat_widget():
                 placeholder="Ask about the current workflow..." if lang == "en" else "询问当前流程、概念或报错...",
                 label_visibility="collapsed",
             )
-            form_cols = st.columns([1, 1])
-            with form_cols[0]:
-                send_clicked = st.form_submit_button(
-                    "Send" if lang == "en" else "发送",
-                    use_container_width=True,
-                )
-            with form_cols[1]:
-                clear_clicked = st.form_submit_button(
-                    "Clear" if lang == "en" else "清空",
-                    use_container_width=True,
-                )
-
-        if clear_clicked:
-            st.session_state.llm_messages = []
-            st.rerun()
+            send_clicked = st.form_submit_button(
+                "Send" if lang == "en" else "发送",
+                use_container_width=True,
+            )
         if send_clicked and prompt.strip():
-            _submit_prompt(prompt, lang, history_container, key_prefix="_llm_sidebar")
+            st.session_state["_ai_pending_question"] = prompt.strip()
+            st.rerun()
 
 
 def _starter_prompts(lang: str) -> list[str]:
     if lang == "en":
         return [
-            "Help me choose features for Sepsis-3 research.",
-            "Explain the difference between SOFA and SOFA-2 in EasyICU.",
-            "Why is missingness high in my exported data?",
-            "How do I export 20 preview patients before full extraction?",
+            "I want to build a sepsis early-warning cohort. Which EasyICU steps and modules should I use?",
+            "I want to cluster sepsis patient trajectories over time. Which concepts and scores should I export?",
+            "I want an AKI cohort for outcome analysis. How should I configure Step 2 and Step 3?",
+            "I want an ICD-defined pneumonia or heart-failure cohort in MIMIC-IV. How should I use the disease template and ICD filter?",
         ]
     return [
-        "帮我选一套适合 Sepsis-3 研究的特征。",
-        "解释一下 EasyICU 里的 SOFA 和 SOFA-2 有什么区别。",
-        "为什么我导出的数据缺失率这么高？",
-        "我想先预览 20 个患者再全量导出，应该怎么做？",
+        "我想构建脓毒症实时预警队列。EasyICU 里应该走哪些步骤、提取哪些模块？",
+        "我想做脓毒症患者时间轨迹聚类。应该导出哪些时间序列概念和评分？",
+        "我想做 AKI 队列结局分析。Step 2 和 Step 3 应该怎么配置？",
+        "我想在 MIMIC-IV 里按 ICD 构建肺炎或心衰队列。疾病模板和 ICD filter 应该怎么用？",
     ]
 
 
-def _render_chat_welcome(*, lang: str, panel_key: str, history_container) -> None:
+def _render_chat_welcome(*, lang: str, panel_key: str, history_container, show_starters: bool = True) -> None:
     title = "Hi, I am the EasyICU AI Assistant" if lang == "en" else "你好，我是 EasyICU AI 助手"
     subtitle = (
-        "I can help you navigate the web app, choose concepts, explain scores, and troubleshoot extraction issues."
+        "Start with your research task. I can map it to the right cohort filters, concepts, scores, and web workflow."
         if lang == "en" else
-        "我可以帮你熟悉 Web 工作流、挑选特征、解释临床评分，也能一起排查提取和导出问题。"
+        "先告诉我你的研究任务。我会把它映射成合适的队列筛选、特征、评分和网页操作流程。"
     )
     prompt_hint = (
         "Try one of these questions:" if lang == "en" else "你可以直接点下面这些问题："
+    ) if show_starters else (
+        "Ask about your current workflow, cohort, or export settings."
+        if lang == "en" else
+        "可以直接询问当前流程、队列筛选或导出设置。"
     )
 
     st.markdown(
@@ -1421,39 +1437,45 @@ def _render_chat_welcome(*, lang: str, panel_key: str, history_container) -> Non
         unsafe_allow_html=True,
     )
 
-    prompts = _starter_prompts(lang)
-    for idx, starter in enumerate(prompts):
-        if st.button(
-            starter,
-            key=f"{panel_key}_starter_{idx}",
-            use_container_width=True,
-        ):
-            _submit_prompt(starter, lang, history_container, key_prefix=f"{panel_key}_starter")
-            st.rerun()
+    if show_starters:
+        prompts = _starter_prompts(lang)
+        for idx, starter in enumerate(prompts):
+            if st.button(
+                starter,
+                key=f"{panel_key}_starter_{idx}",
+                use_container_width=True,
+            ):
+                _submit_prompt(starter, lang, history_container, key_prefix=f"{panel_key}_starter")
+                st.rerun()
 
 
-def _render_compact_chat_panel(*, lang: str, panel_key: str, history_height: int = 320) -> None:
+def _render_compact_chat_panel(*, lang: str, panel_key: str, history_height: int = 320, show_starters: bool = True) -> None:
     """Render a compact chat history + input form panel."""
     history_container = st.container(height=history_height, border=True)
     with history_container:
         recent_messages = st.session_state.llm_messages[-8:]
         queued_prompt = st.session_state.pop("_ai_pending_question", None)
-        if queued_prompt:
-            st.info(
-                "Using page context to ask the assistant..."
-                if lang == "en" else
-                "正在带着当前页面上下文向 AI 提问..."
-            )
-            _submit_prompt(queued_prompt, lang, history_container, key_prefix=panel_key)
 
         if not recent_messages and not queued_prompt:
-            _render_chat_welcome(lang=lang, panel_key=panel_key, history_container=history_container)
+            _render_chat_welcome(
+                lang=lang,
+                panel_key=panel_key,
+                history_container=history_container,
+                show_starters=show_starters,
+            )
         else:
             for msg_idx, msg in enumerate(recent_messages):
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
                     if msg["role"] == "assistant" and msg.get("actions"):
                         _render_nav_actions(msg["actions"], key_prefix=f"{panel_key}_{msg_idx}")
+            if queued_prompt:
+                st.info(
+                    "Using page context to ask the assistant..."
+                    if lang == "en" else
+                    "正在带着当前页面上下文向 AI 提问..."
+                )
+                _submit_prompt(queued_prompt, lang, history_container, key_prefix=panel_key)
 
     with st.form(f"{panel_key}_form", clear_on_submit=True):
         prompt = st.text_input(
@@ -1461,24 +1483,31 @@ def _render_compact_chat_panel(*, lang: str, panel_key: str, history_height: int
             placeholder="Ask about the current workflow..." if lang == "en" else "询问当前流程、概念或报错...",
             label_visibility="collapsed",
         )
-        form_cols = st.columns([1, 1.35])
-        with form_cols[0]:
-            clear_clicked = st.form_submit_button(
-                "Clear" if lang == "en" else "清空",
-                use_container_width=True,
-            )
-        with form_cols[1]:
-            send_clicked = st.form_submit_button(
-                "Send" if lang == "en" else "发送",
-                type="primary",
-                use_container_width=True,
-            )
-
-    if clear_clicked:
-        st.session_state.llm_messages = []
-        st.rerun()
+        send_clicked = st.form_submit_button(
+            "Send" if lang == "en" else "发送",
+            type="primary",
+            use_container_width=True,
+        )
     if send_clicked and prompt.strip():
-        _submit_prompt(prompt, lang, history_container, key_prefix=panel_key)
+        st.session_state["_ai_pending_question"] = prompt.strip()
+        st.rerun()
+
+    if st.session_state.llm_messages:
+        action_cols = st.columns(2)
+        with action_cols[0]:
+            st.download_button(
+                "📄 Export Chat" if lang == "en" else "📄 导出对话",
+                data=_build_chat_export_text(),
+                file_name=f"easyicu_ai_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                mime="text/markdown",
+                use_container_width=True,
+                key=f"{panel_key}_export_chat",
+            )
+        with action_cols[1]:
+            if st.button("🗑️ Clear Chat" if lang == "en" else "🗑️ 清空对话", key=f"{panel_key}_clear_chat", use_container_width=True):
+                st.session_state.llm_messages = []
+                st.session_state["_ai_pending_question"] = None
+                st.rerun()
 
 
 def render_floating_chat_dock():
@@ -1486,13 +1515,23 @@ def render_floating_chat_dock():
     _init_chat_state()
     lang = st.session_state.get("language", "en")
     if "_floating_ai_open" not in st.session_state:
-        st.session_state["_floating_ai_open"] = False
+        st.session_state["_floating_ai_open"] = True
     if st.session_state.get("_ai_pending_question"):
         st.session_state["_floating_ai_open"] = True
 
     st.markdown(
         """
         <style>
+        :root {
+            --easyicu-ai-launcher-size: clamp(56px, 4.2vw, 78px);
+            --easyicu-ai-panel-width: clamp(360px, 34vw, 620px);
+            --easyicu-ai-panel-max-height: min(84vh, 860px);
+            --easyicu-ai-title-size: clamp(0.92rem, 0.35vw + 0.84rem, 1.06rem);
+            --easyicu-ai-subtitle-size: clamp(0.72rem, 0.18vw + 0.68rem, 0.82rem);
+            --easyicu-ai-body-size: clamp(0.82rem, 0.16vw + 0.78rem, 0.93rem);
+            --easyicu-ai-button-size: clamp(2rem, 2vw, 2.45rem);
+        }
+
         div.st-key-floating_ai_launcher,
         div.st-key-floating_ai_panel {
             position: fixed !important;
@@ -1501,28 +1540,29 @@ def render_floating_chat_dock():
         }
 
         div.st-key-floating_ai_launcher {
-            right: 20px;
-            bottom: 20px;
-            width: 72px;
+            right: clamp(12px, 1.25vw, 20px);
+            bottom: clamp(12px, 1.25vw, 20px);
+            width: calc(var(--easyicu-ai-launcher-size) + 12px);
         }
 
         div.st-key-floating_ai_launcher .stButton > button {
-            width: 64px;
-            min-width: 64px;
-            height: 64px;
+            width: var(--easyicu-ai-launcher-size);
+            min-width: var(--easyicu-ai-launcher-size);
+            height: var(--easyicu-ai-launcher-size);
             border-radius: 999px;
             border: 1px solid rgba(15, 23, 42, 0.08);
             background: linear-gradient(135deg, #0f766e 0%, #0f172a 100%);
             color: #ffffff;
-            font-size: 1.35rem;
+            font-size: clamp(1.12rem, 1vw + 0.88rem, 1.55rem);
             box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
         }
 
         div.st-key-floating_ai_panel {
-            right: 20px;
-            bottom: 96px;
-            width: min(680px, calc(100vw - 28px));
-            max-width: 680px;
+            right: clamp(12px, 1.25vw, 20px);
+            bottom: calc(var(--easyicu-ai-launcher-size) + clamp(14px, 1.6vw, 24px));
+            width: min(var(--easyicu-ai-panel-width), calc(100vw - 24px));
+            max-width: calc(100vw - 24px);
+            max-height: var(--easyicu-ai-panel-max-height);
             border-radius: 18px;
             border: 1px solid rgba(15, 23, 42, 0.08);
             background:
@@ -1530,8 +1570,9 @@ def render_floating_chat_dock():
                 linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
             box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
             backdrop-filter: blur(12px);
-            padding: 0.35rem 0.35rem 0.45rem 0.35rem;
-            overflow: hidden;
+            padding: 0.32rem 0.32rem 0.4rem 0.32rem;
+            overflow-x: hidden;
+            overflow-y: auto;
         }
 
         div.st-key-floating_ai_panel .floating-ai-header {
@@ -1542,16 +1583,17 @@ def render_floating_chat_dock():
         }
 
         div.st-key-floating_ai_panel .floating-ai-title {
-            font-size: 1.06rem;
+            font-size: var(--easyicu-ai-title-size);
             font-weight: 700;
             color: #0f172a;
             letter-spacing: 0.01em;
         }
 
         div.st-key-floating_ai_panel .floating-ai-subtitle {
-            font-size: 0.82rem;
+            font-size: var(--easyicu-ai-subtitle-size);
             color: #475569;
             margin-top: 0.08rem;
+            line-height: 1.45;
         }
 
         div.st-key-floating_ai_panel .floating-ai-welcome {
@@ -1565,21 +1607,21 @@ def render_floating_chat_dock():
         }
 
         div.st-key-floating_ai_panel .floating-ai-welcome-title {
-            font-size: 1rem;
+            font-size: clamp(0.9rem, 0.24vw + 0.84rem, 1rem);
             font-weight: 800;
             color: #0f172a;
             margin-bottom: 0.3rem;
         }
 
         div.st-key-floating_ai_panel .floating-ai-welcome-subtitle {
-            font-size: 0.88rem;
+            font-size: var(--easyicu-ai-body-size);
             line-height: 1.6;
             color: #334155;
             margin-bottom: 0.55rem;
         }
 
         div.st-key-floating_ai_panel .floating-ai-welcome-hint {
-            font-size: 0.76rem;
+            font-size: clamp(0.68rem, 0.12vw + 0.65rem, 0.76rem);
             color: #0f766e;
             font-weight: 700;
             letter-spacing: 0.02em;
@@ -1604,8 +1646,8 @@ def render_floating_chat_dock():
 
         div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] p,
         div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] li {
-            font-size: 0.93rem;
-            line-height: 1.72;
+            font-size: var(--easyicu-ai-body-size);
+            line-height: 1.64;
             color: #0f172a;
         }
 
@@ -1618,10 +1660,51 @@ def render_floating_chat_dock():
 
         div.st-key-floating_ai_panel .stButton > button {
             border-radius: 14px;
+            min-height: var(--easyicu-ai-button-size);
+            font-size: clamp(0.8rem, 0.12vw + 0.77rem, 0.9rem);
+            padding-top: 0.38rem;
+            padding-bottom: 0.38rem;
         }
 
         div.st-key-floating_ai_panel .stChatInput {
             margin-top: 0.3rem;
+        }
+
+        div.st-key-floating_ai_panel input,
+        div.st-key-floating_ai_panel textarea,
+        div.st-key-floating_ai_panel label,
+        div.st-key-floating_ai_panel [data-testid="stMarkdownContainer"] p,
+        div.st-key-floating_ai_panel [data-testid="stCaptionContainer"] {
+            font-size: var(--easyicu-ai-body-size) !important;
+        }
+
+        @media (max-width: 1512px) {
+            :root {
+                --easyicu-ai-panel-width: clamp(330px, 31vw, 540px);
+                --easyicu-ai-panel-max-height: min(80vh, 740px);
+                --easyicu-ai-title-size: clamp(0.88rem, 0.26vw + 0.82rem, 0.98rem);
+                --easyicu-ai-subtitle-size: clamp(0.68rem, 0.14vw + 0.64rem, 0.76rem);
+                --easyicu-ai-body-size: clamp(0.78rem, 0.12vw + 0.75rem, 0.86rem);
+                --easyicu-ai-button-size: clamp(1.86rem, 1.7vw, 2.2rem);
+            }
+
+            div.st-key-floating_ai_panel {
+                border-radius: 16px;
+                padding: 0.28rem 0.28rem 0.34rem 0.28rem;
+            }
+
+            div.st-key-floating_ai_panel .floating-ai-welcome {
+                padding: 0.8rem 0.86rem;
+                margin-bottom: 0.6rem;
+            }
+        }
+
+        @media (max-width: 1280px) {
+            :root {
+                --easyicu-ai-panel-width: clamp(320px, 29vw, 500px);
+                --easyicu-ai-panel-max-height: min(78vh, 680px);
+                --easyicu-ai-body-size: 0.8rem;
+            }
         }
 
         @media (max-width: 768px) {
@@ -1633,8 +1716,9 @@ def render_floating_chat_dock():
             div.st-key-floating_ai_panel {
                 left: 12px;
                 right: 12px;
-                bottom: 88px;
+                bottom: 82px;
                 width: auto;
+                max-height: min(74vh, 640px);
             }
         }
         </style>
@@ -1651,18 +1735,26 @@ def render_floating_chat_dock():
 
     with st.container(key="floating_ai_panel"):
         dock_title = "AI Assistant" if lang == "en" else "AI 助手"
-        dock_subtitle = "Ask about EasyICU, concepts, exports, or results" if lang == "en" else "随时提问 EasyICU、概念、导出和结果解释"
-        header_cols = st.columns([5, 1, 1])
+        dock_subtitle = (
+            "Describe your research task first, then I will map it to EasyICU."
+            if lang == "en" else
+            "先描述你的研究任务，我再帮你映射到 EasyICU 的具体步骤。"
+        )
+        header_cols = st.columns([5, 1.25, 1.25, 1, 1])
         with header_cols[0]:
             st.markdown(
                 f'<div class="floating-ai-header"><div><div class="floating-ai-title">💬 {dock_title}</div><div class="floating-ai-subtitle">{dock_subtitle}</div></div></div>',
                 unsafe_allow_html=True,
             )
         with header_cols[1]:
+            st.empty()
+        with header_cols[2]:
+            st.empty()
+        with header_cols[3]:
             if st.button("—", key="_floating_ai_min_btn", use_container_width=True):
                 st.session_state["_floating_ai_open"] = False
                 st.rerun()
-        with header_cols[2]:
+        with header_cols[4]:
             if st.button("✕", key="_floating_ai_close_btn", use_container_width=True):
                 st.session_state["_floating_ai_open"] = False
                 st.session_state["_ai_pending_question"] = None
@@ -1681,7 +1773,12 @@ def render_floating_chat_dock():
                 "请先在侧边栏上方配置服务商/API Key。"
             )
         else:
-            _render_compact_chat_panel(lang=lang, panel_key="_llm_floating", history_height=500)
+            _render_compact_chat_panel(
+                lang=lang,
+                panel_key="_llm_floating",
+                history_height=400,
+                show_starters=True,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1694,29 +1791,31 @@ def _render_intro(lang: str):
         st.markdown("""\
 #### What is the AI Assistant?
 A built-in conversational helper that knows EasyICU inside-out. It can:
-- 📖 Explain any feature, concept, or workflow step
+- 🎯 Start from your study goal, then map it to the right EasyICU workflow
+- 📖 Explain which cohort filters, feature modules, and scores fit your task
 - 🗄️ List supported databases, concepts, and scoring systems
-- 📊 Help interpret extraction results (SOFA, missingness, etc.)
-- 💡 Answer general ICU data analysis questions
+- 📊 Help interpret extraction results (SOFA, Sepsis-3, missingness, etc.)
 
 **Getting started:**
 1. Toggle **Enable AI Assistant** in the sidebar
 2. Choose a provider and enter your API key or token
-3. Start chatting here
+3. Start by describing your task, e.g. "I want to build a sepsis early-warning cohort."
+4. If you already know the disease cohort you want, ask directly for AKI / Sepsis / ventilation / ICD-based filtering.
 """)
     else:
         st.markdown("""\
 #### AI 助手是什么？
 内置的对话助手，熟知 EasyICU 的所有功能。它可以：
-- 📖 解释任何功能、概念或工作流步骤
+- 🎯 从你的研究目标出发，反推最合适的 EasyICU 工作流
+- 📖 解释适合该任务的队列筛选、特征模块和临床评分
 - 🗄️ 列出支持的数据库、概念和评分系统
-- 📊 帮助解读提取结果（SOFA、缺失率等）
-- 💡 回答 ICU 数据分析相关的通识问题
+- 📊 帮助解读提取结果（SOFA、Sepsis-3、缺失率等）
 
 **快速开始：**
 1. 在侧边栏开启 **启用 AI 助手**
 2. 选择服务商并填写对应的 API Key / Token
-3. 在此标签页开始对话
+3. 先描述你的任务，例如“我想做脓毒症实时预警队列”。
+4. 如果你已经知道要筛选的疾病队列，也可以直接问 AKI / Sepsis / 机械通气 / ICD 队列怎么设置。
 """)
 
 
@@ -1724,10 +1823,15 @@ def _render_tips(lang: str):
     if lang == "en":
         st.markdown("""\
 - **Onboarding**: "I want to extract SOFA-2 from MIMIC-IV. What exact steps should I follow in the web UI?"
+- **Task-first planning**: "I want to build a sepsis early-warning model. How can EasyICU support this, and which modules should I extract?"
+- **Disease cohort setup**: "I want to build an AKI cohort. Which cohort filters should I enable, and which concepts should I export?"
+- **Trajectory analysis**: "I want to cluster sepsis trajectories over time. Which time-series concepts and scores should I export?"
 - **Feature planning**: "For septic shock research, which EasyICU concepts should I export besides SOFA and vasopressors?"
+- **ICD filtering**: "I want an ICD-defined pneumonia or heart-failure cohort in MIMIC-IV. How should I use the ICD filter in Step 2?"
 - **Cross-database mapping**: "Which respiratory concepts are available across miiv, mimic, eicu, aumc, hirid, and sic?"
 - **Troubleshooting**: "My exported data shows high missingness for fio2. What are the most likely causes and checks?"
 - **Interpretation**: "How should I interpret `sep3_sofa2`, `susp_inf`, and `sofa2` together?"
+- **Definition help**: "Explain the Sepsis suspected-infection settings in the web app and when I should use `auto`, `and`, or `icd_abx`."
 - **Code-aware help**: "Where is export implemented in app.py?" / "How does `load_concepts` work?"
 - **Evidence-backed answers**: "Explain Sepsis-3 with PubMed sources and relate it to EasyICU outputs."
 - **Python workflow**: "Show me a minimal Python example to load pafi, sofa2, and sep3_sofa2."
@@ -1735,10 +1839,15 @@ def _render_tips(lang: str):
     else:
         st.markdown("""\
 - **新手引导**: "我想从 MIMIC-IV 提取 SOFA-2，网页端具体点哪里、按什么顺序做？"
+- **任务规划**: "我想做脓毒症实时预警，EasyICU 能怎么支持，建议提取哪些模块？"
+- **疾病队列设置**: "我想构建 AKI 队列，Step 2 应该怎么筛，Step 3 建议提取哪些特征？"
+- **轨迹分析**: "我想做脓毒症患者轨迹聚类，应该优先导出哪些时间序列特征和评分？"
 - **选特征建议**: "如果我要做脓毒症休克研究，除了 SOFA 和升压药，还建议导出哪些概念？"
+- **ICD 队列**: "我想在 MIMIC-IV 里按 ICD 筛肺炎或心衰患者，Step 2 应该怎么设置？"
 - **跨库对照**: "miiv、mimic、eicu、aumc、hirid、sic 里哪些呼吸相关概念都能取到？"
 - **排错诊断**: "我导出的 fio2 缺失率很高，最可能是什么原因，应该检查哪几步？"
 - **结果解读**: "`sep3_sofa2`、`susp_inf` 和 `sofa2` 应该怎么一起解释？"
+- **定义说明**: "请解释网页端的 Sepsis 疑似感染设置，什么时候该用 `auto`、`and` 或 `icd_abx`？"
 - **代码问题**: "app.py 里 export 在哪实现？" / "`load_concepts` 是怎么工作的？"
 - **带证据医学回答**: "结合 PubMed 解释 Sepsis-3，并对应到 EasyICU 的输出概念。"
 - **Python 工作流**: "给我一个最小 Python 例子，同时加载 pafi、sofa2 和 sep3_sofa2。"
@@ -1862,7 +1971,15 @@ def _stream_response(messages: list, lang: str):
         )
     except Exception as exc:
         status_placeholder.empty()
-        _handle_api_error(exc, lang)
+        error_message = _handle_api_error(exc, lang, render=False)
+        answer_placeholder.markdown(error_message)
+        st.session_state.llm_messages.append(
+            {
+                "role": "assistant",
+                "content": error_message,
+                "actions": [],
+            }
+        )
 
 
 def _token_generator(stream):
@@ -1876,8 +1993,8 @@ def _token_generator(stream):
                 yield token
 
 
-def _handle_api_error(exc: Exception, lang: str):
-    """Display a user-friendly error for common API failures."""
+def _handle_api_error(exc: Exception, lang: str, render: bool = True) -> str:
+    """Build and optionally display a user-friendly error for common API failures."""
     err_str = str(exc)
     if "authentication" in err_str.lower() or "401" in err_str:
         provider = st.session_state.get("llm_provider", "custom")
@@ -1913,4 +2030,6 @@ def _handle_api_error(exc: Exception, lang: str):
                if lang == "en" else "🌐 连接失败 — 请检查 API Base URL 和网络连接。")
     else:
         msg = ("❌ API error: " if lang == "en" else "❌ API 调用出错: ") + err_str
-    st.error(msg)
+    if render:
+        st.error(msg)
+    return msg
