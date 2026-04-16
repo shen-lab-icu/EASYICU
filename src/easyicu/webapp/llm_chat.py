@@ -418,6 +418,10 @@ def _init_chat_state():
         "llm_configured": False,
         "llm_last_tool_events": [],
         "llm_last_verification": None,
+        # Background response tracking
+        "_ai_bg_responding": False,        # True while LLM is generating in background
+        "_ai_bg_response_ready": False,    # True when background response finished
+        "_ai_bg_unread_count": 0,          # Number of unread responses
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1451,6 +1455,40 @@ def _render_chat_welcome(*, lang: str, panel_key: str, history_container, show_s
 
 def _render_compact_chat_panel(*, lang: str, panel_key: str, history_height: int = 320, show_starters: bool = True) -> None:
     """Render a compact chat history + input form panel."""
+    # Check for background response that completed while panel was minimized
+    bg_result = _check_bg_response()
+    if bg_result:
+        st.session_state["_ai_bg_responding"] = False
+        st.session_state["_ai_bg_session_id"] = None
+        if bg_result.get("status") == "done":
+            final_answer = bg_result["answer"]
+            # Apply post-processing
+            if st.session_state.llm_messages:
+                last_user_msg = ""
+                for m in reversed(st.session_state.llm_messages):
+                    if m["role"] == "user":
+                        last_user_msg = m["content"]
+                        break
+                final_answer = _append_quick_links(last_user_msg, final_answer, lang)
+                response_actions = _suggest_ui_actions(last_user_msg, final_answer, lang)
+            else:
+                response_actions = []
+            st.session_state.llm_messages.append({
+                "role": "assistant",
+                "content": final_answer,
+                "actions": response_actions,
+            })
+        elif bg_result.get("status") == "error":
+            error_msg = _handle_api_error(Exception(bg_result["answer"]), lang, render=False)
+            st.session_state.llm_messages.append({
+                "role": "assistant",
+                "content": error_msg,
+                "actions": [],
+            })
+        # Clear unread since panel is now open
+        st.session_state["_ai_bg_unread_count"] = 0
+        st.session_state["_ai_bg_response_ready"] = False
+
     history_container = st.container(height=history_height, border=True)
     with history_container:
         recent_messages = st.session_state.llm_messages[-8:]
@@ -1532,6 +1570,31 @@ def render_floating_chat_dock():
             --easyicu-ai-button-size: clamp(2rem, 2vw, 2.45rem);
         }
 
+        /* ---- Animation keyframes ---- */
+        @keyframes easyicuPanelSlideIn {
+            from { opacity: 0; transform: translateY(24px) scale(0.96); }
+            to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes easyicuPanelSlideOut {
+            from { opacity: 1; transform: translateY(0) scale(1); }
+            to   { opacity: 0; transform: translateY(24px) scale(0.96); }
+        }
+        @keyframes easyicuLauncherPop {
+            0%   { transform: scale(0.5); opacity: 0; }
+            70%  { transform: scale(1.1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes easyicuBadgePulse {
+            0%, 100% { transform: scale(1); }
+            50%      { transform: scale(1.2); }
+        }
+        @keyframes easyicuBadgeBounce {
+            0%   { transform: scale(0); }
+            50%  { transform: scale(1.3); }
+            70%  { transform: scale(0.9); }
+            100% { transform: scale(1); }
+        }
+
         div.st-key-floating_ai_launcher,
         div.st-key-floating_ai_panel {
             position: fixed !important;
@@ -1543,6 +1606,28 @@ def render_floating_chat_dock():
             right: clamp(12px, 1.25vw, 20px);
             bottom: clamp(12px, 1.25vw, 20px);
             width: calc(var(--easyicu-ai-launcher-size) + 12px);
+            animation: easyicuLauncherPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+        }
+
+        /* Notification badge on the launcher button */
+        div.st-key-floating_ai_launcher .ai-notif-badge {
+            position: absolute;
+            top: -4px; right: 2px;
+            min-width: 20px; height: 20px;
+            border-radius: 10px;
+            background: #ef4444;
+            color: #fff;
+            font-size: 0.72rem;
+            font-weight: 700;
+            display: flex; align-items: center; justify-content: center;
+            padding: 0 5px;
+            box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
+            animation: easyicuBadgeBounce 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+            z-index: 99999;
+            pointer-events: none;
+        }
+        div.st-key-floating_ai_launcher .ai-notif-badge.pulse {
+            animation: easyicuBadgePulse 1.5s ease-in-out infinite;
         }
 
         div.st-key-floating_ai_launcher .stButton > button {
@@ -1573,6 +1658,7 @@ def render_floating_chat_dock():
             padding: 0.32rem 0.32rem 0.4rem 0.32rem;
             overflow-x: hidden;
             overflow-y: auto;
+            animation: easyicuPanelSlideIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
         }
 
         div.st-key-floating_ai_panel .floating-ai-header {
@@ -1727,9 +1813,27 @@ def render_floating_chat_dock():
     )
 
     if not st.session_state.get("_floating_ai_open", False):
+        # Check for unread background responses
+        _unread = st.session_state.get("_ai_bg_unread_count", 0)
+        _responding = st.session_state.get("_ai_bg_responding", False)
         with st.container(key="floating_ai_launcher"):
+            # Show notification badge if there are unread responses
+            if _unread > 0:
+                _badge_class = "ai-notif-badge pulse" if _responding else "ai-notif-badge"
+                st.markdown(
+                    f'<div class="{_badge_class}">{_unread}</div>',
+                    unsafe_allow_html=True,
+                )
+            elif _responding:
+                st.markdown(
+                    '<div class="ai-notif-badge pulse">⋯</div>',
+                    unsafe_allow_html=True,
+                )
             if st.button("💬", key="_floating_ai_open_btn", help="Open AI chat" if lang == "en" else "打开 AI 对话"):
                 st.session_state["_floating_ai_open"] = True
+                # Clear unread count when opening
+                st.session_state["_ai_bg_unread_count"] = 0
+                st.session_state["_ai_bg_response_ready"] = False
                 st.rerun()
         return
 
@@ -1897,6 +2001,96 @@ def _get_instant_reply(prompt: str, lang: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Background LLM response (when panel is minimized)
+# ---------------------------------------------------------------------------
+
+import threading
+
+_bg_lock = threading.Lock()
+
+
+def _bg_llm_call(messages: list, lang: str, provider: str, model: str,
+                 base_url: str, api_key: str, session_id: str):
+    """Run an LLM call in a background thread and store the result."""
+    try:
+        import openai
+        client_kwargs = {"base_url": base_url}
+        if api_key:
+            client_kwargs["api_key"] = api_key
+        else:
+            client_kwargs["api_key"] = "unused"
+        # Strip proxy env vars
+        env_backup = {}
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+                    "ALL_PROXY", "all_proxy"):
+            if var in os.environ:
+                env_backup[var] = os.environ.pop(var)
+        try:
+            client = openai.OpenAI(**client_kwargs)
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=False,
+            )
+            draft = resp.choices[0].message.content or ""
+        finally:
+            os.environ.update(env_backup)
+
+        # Store result in a module-level dict (accessible cross-rerun)
+        with _bg_lock:
+            _bg_results[session_id] = {
+                "status": "done",
+                "answer": draft,
+                "lang": lang,
+            }
+    except Exception as exc:
+        with _bg_lock:
+            _bg_results[session_id] = {
+                "status": "error",
+                "answer": str(exc),
+                "lang": lang,
+            }
+
+
+# Module-level dict to store background results (survives Streamlit reruns)
+_bg_results: dict[str, dict] = {}
+
+
+def _start_bg_response(prompt: str, lang: str) -> str | None:
+    """Prepare and start a background LLM call. Returns a session_id or None."""
+    if not _is_configured():
+        return None
+    try:
+        messages, tool_events = _compose_agent_messages(prompt)
+    except Exception:
+        return None
+    st.session_state.llm_last_tool_events = tool_events
+    provider = st.session_state.get("llm_provider", "openrouter")
+    p_info = PROVIDERS.get(provider, PROVIDERS["custom"])
+    model = (st.session_state.get("llm_model", "").strip() or p_info[2])
+    base_url = st.session_state.get("llm_base_url", "").strip() or p_info[1]
+    api_key = st.session_state.get("llm_api_key", "")
+    session_id = f"bg_{id(st.session_state)}_{len(st.session_state.llm_messages)}"
+    t = threading.Thread(
+        target=_bg_llm_call,
+        args=(messages, lang, provider, model, base_url, api_key, session_id),
+        daemon=True,
+    )
+    t.start()
+    return session_id
+
+
+def _check_bg_response() -> dict | None:
+    """Check if any background response is ready. Returns result dict or None."""
+    session_id = st.session_state.get("_ai_bg_session_id")
+    if not session_id:
+        return None
+    with _bg_lock:
+        result = _bg_results.pop(session_id, None)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Streaming & error handling
 # ---------------------------------------------------------------------------
 
@@ -1996,6 +2190,7 @@ def _token_generator(stream):
 def _handle_api_error(exc: Exception, lang: str, render: bool = True) -> str:
     """Build and optionally display a user-friendly error for common API failures."""
     err_str = str(exc)
+    err_lower = err_str.lower()
     if "authentication" in err_str.lower() or "401" in err_str:
         provider = st.session_state.get("llm_provider", "custom")
         if provider == "huggingface_free":
@@ -2009,7 +2204,19 @@ def _handle_api_error(exc: Exception, lang: str, render: bool = True) -> str:
         else:
             msg = ("❌ Authentication failed — please check your API Key."
                    if lang == "en" else "❌ 认证失败 — 请检查 API Key 是否正确。")
-    elif "socksio" in err_str.lower() or "using socks proxy" in err_str.lower():
+    elif (
+        "429" in err_str
+        or "rate" in err_lower
+        or "temporarily rate-limited" in err_lower
+        or "provider returned error" in err_lower
+        or "retry shortly" in err_lower
+    ):
+        msg = (
+            "⏳ The current hosted model is being rate-limited upstream. Please retry shortly, or switch the hosted default model to a more stable free model."
+            if lang == "en" else
+            "⏳ 当前托管模型被上游限流了。请稍后重试，或把 hosted 默认模型切换到更稳定的免费模型。"
+        )
+    elif "socksio" in err_lower or "using socks proxy" in err_lower:
         msg = (
             "🌐 Proxy configuration error — the app detected a SOCKS proxy from the environment. "
             "EasyICU now ignores system proxy variables by default. Please retry. "
@@ -2019,13 +2226,10 @@ def _handle_api_error(exc: Exception, lang: str, render: bool = True) -> str:
             "EasyICU 现在默认忽略系统代理变量，请重试。"
             "如果你确实需要 SOCKS 代理，请安装 `httpx[socks]`。"
         )
-    elif "rate" in err_str.lower() or "429" in err_str:
-        msg = ("⏳ Rate limit reached — please wait a moment and try again."
-               if lang == "en" else "⏳ 请求频率超限 — 请稍后再试。")
-    elif "model" in err_str.lower() or "404" in err_str:
+    elif "model" in err_lower or "404" in err_str:
         msg = ("⚠️ Model not found — please verify the model name."
                if lang == "en" else "⚠️ 模型未找到 — 请确认模型名称是否正确。")
-    elif "connect" in err_str.lower() or "timeout" in err_str.lower():
+    elif "connect" in err_lower or "timeout" in err_lower:
         msg = ("🌐 Connection error — check the API Base URL and your network."
                if lang == "en" else "🌐 连接失败 — 请检查 API Base URL 和网络连接。")
     else:
