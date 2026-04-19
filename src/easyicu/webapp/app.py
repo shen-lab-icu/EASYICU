@@ -6646,8 +6646,8 @@ def render_quick_visualization_page():
 
                         patient_options = [50, 100, 200, 500, -1]
                         option_labels = {
-                            50: "50 (Fast)" if lang == 'en' else "50 (快速)",
-                            100: "100 (Recommended)" if lang == 'en' else "100 (推荐)",
+                            50: "50 (Recommended)" if lang == 'en' else "50 (推荐)",
+                            100: "100",
                             200: "200",
                             500: "500 (Slow)" if lang == 'en' else "500 (较慢)",
                             -1: "All (May Lag)" if lang == 'en' else "全部 (可能卡顿)",
@@ -6655,7 +6655,7 @@ def render_quick_visualization_page():
                         max_patients_opt = st.selectbox(
                             "Max Patients to Load" if lang == 'en' else "最大加载患者数",
                             options=patient_options,
-                            index=1,
+                            index=0,
                             format_func=lambda value: option_labels[value],
                             key="viz_max_patients",
                         )
@@ -8163,14 +8163,15 @@ def render_sidebar():
                 """)  
 
 
-def load_from_exported(export_dir: str, max_patients: int = 100, selected_files: list = None):
+def load_from_exported(export_dir: str, max_patients: int = 50, selected_files: list = None):
     """从已导出的数据文件加载数据（限制患者数用于快速预览）。
     
     从宽表中提取每个特征列，使其可以单独选择和可视化。
+    对 Parquet 文件使用 PyArrow 行级过滤，避免全量读入内存。
     
     Args:
         export_dir: 导出目录路径
-        max_patients: 最大患者数限制（默认100）
+        max_patients: 最大患者数限制（默认50）
         selected_files: 要加载的文件名列表（不含扩展名），None表示全部加载
     """
     try:
@@ -8188,23 +8189,93 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
                           'measuredat_minutes', 'measuredat']
         exclude_cols = set(id_candidates + time_candidates)
         
-        # 扫描并加载选中的数据文件
+        # --- Phase 0: 收集要加载的文件 ---
+        target_files = []  # [(Path, suffix)]
         for file in export_path.iterdir():
             file_stem = file.stem
-            
-            # 如果指定了文件列表，只加载选中的
             if selected_files is not None and file_stem not in selected_files:
                 continue
-            
-            if file.suffix == '.csv':
-                df = pd.read_csv(file)
-                raw_data[file_stem] = df
-            elif file.suffix == '.parquet':
-                df = pd.read_parquet(file)
-                raw_data[file_stem] = df
-            elif file.suffix == '.xlsx':
-                df = pd.read_excel(file)
-                raw_data[file_stem] = df
+            if file.suffix in ('.csv', '.parquet', '.xlsx'):
+                target_files.append(file)
+        
+        # --- Phase 1: 对 Parquet 文件预扫描，确定 ID 列并采样患者 ---
+        # 只读一个小文件的 ID 列（<0.1s），避免全量读取 19 个大文件
+        _sampled_ids = None  # set | None
+        _id_col_for_filter = None
+        _all_ids_count = 0  # 真实总患者数
+        _need_filter = max_patients is not None and max_patients > 0
+        
+        if _need_filter:
+            parquet_files = [f for f in target_files if f.suffix == '.parquet']
+            if parquet_files:
+                try:
+                    import pyarrow.parquet as pq
+                    # 用第一个 parquet 的 schema 确定 ID 列
+                    _schema = pq.read_schema(parquet_files[0])
+                    _schema_names = _schema.names
+                    for _idc in id_candidates:
+                        if _idc in _schema_names:
+                            _id_col_for_filter = _idc
+                            break
+                    if _id_col_for_filter:
+                        # 优先扫 demographics/outcome（小且包含全部患者）
+                        _priority_names = {'demographics', 'outcome', 'circulatory'}
+                        _scan_file = None
+                        for _pf in parquet_files:
+                            if _pf.stem in _priority_names:
+                                _scan_file = _pf
+                                break
+                        if _scan_file is None:
+                            # 没找到优先文件，选最小的
+                            _scan_file = min(parquet_files, key=lambda f: f.stat().st_size)
+                        
+                        _id_tbl = pq.read_table(_scan_file, columns=[_id_col_for_filter])
+                        _all_ids = set(_id_tbl.column(_id_col_for_filter).to_pylist())
+                        _all_ids_count = len(_all_ids)
+                        
+                        if len(_all_ids) > max_patients:
+                            import random
+                            _sampled_ids = set(random.sample(sorted(_all_ids), max_patients))
+                        else:
+                            _sampled_ids = _all_ids  # 不需要裁剪
+                except Exception:
+                    pass  # 降级到旧路径（全量读取+后过滤）
+        
+        # --- Phase 2: 按文件类型高效加载 ---
+        for file in target_files:
+            file_stem = file.stem
+            try:
+                if file.suffix == '.parquet':
+                    if _sampled_ids is not None and _id_col_for_filter:
+                        import pyarrow.parquet as pq
+                        import pyarrow.compute as pc
+                        import pyarrow as pa
+                        tbl = pq.read_table(file)
+                        if _id_col_for_filter in tbl.column_names:
+                            mask = pc.is_in(tbl.column(_id_col_for_filter),
+                                            value_set=pa.array(sorted(_sampled_ids)))
+                            tbl = tbl.filter(mask)
+                        raw_data[file_stem] = tbl.to_pandas()
+                    else:
+                        raw_data[file_stem] = pd.read_parquet(file)
+                elif file.suffix == '.csv':
+                    if _need_filter and _sampled_ids is not None and _id_col_for_filter:
+                        # CSV: 先读 header 确认 ID 列存在，再分块过滤
+                        _hdr = pd.read_csv(file, nrows=0)
+                        if _id_col_for_filter in _hdr.columns:
+                            _chunks = []
+                            for _chunk in pd.read_csv(file, chunksize=50000):
+                                _chunks.append(_chunk[_chunk[_id_col_for_filter].isin(_sampled_ids)])
+                            raw_data[file_stem] = pd.concat(_chunks, ignore_index=True) if _chunks else pd.DataFrame()
+                        else:
+                            raw_data[file_stem] = pd.read_csv(file)
+                    else:
+                        raw_data[file_stem] = pd.read_csv(file)
+                elif file.suffix == '.xlsx':
+                    raw_data[file_stem] = pd.read_excel(file)
+            except Exception as _read_err:
+                print(f'[load_from_exported] Failed to read {file.name}: {_read_err}')
+                continue
         
         if not raw_data:
             lang = st.session_state.get('language', 'en')
@@ -8272,9 +8343,14 @@ def load_from_exported(export_dir: str, max_patients: int = 100, selected_files:
                 if id_col_found in concept_df.columns:
                     patient_ids.update(concept_df[id_col_found].unique())
         
-        all_patient_count = len(patient_ids)
+        # 如果预扫描阶段已采样过，真实总患者数来自预扫描
+        if _all_ids_count > 0:
+            all_patient_count = _all_ids_count
+        else:
+            all_patient_count = len(patient_ids)
         
         # 限制患者数用于可视化预览（max_patients=None 表示加载全部）
+        # 若 parquet 已在读取阶段预过滤，这里不再需要二次裁剪
         if max_patients is None or max_patients <= 0:
             preview_patient_ids = sorted(list(patient_ids))
             is_limited = False
