@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import os
 import json
+import re
 import threading
 from functools import lru_cache
 from typing import Dict, Any, Optional, List
@@ -35,8 +36,8 @@ if 'sidebar_expanded' not in st.session_state:
     st.session_state.sidebar_expanded = False
 
 # 侧边栏宽度设置 - 根据展开状态动态调整
-sidebar_width = "100vw" if st.session_state.sidebar_expanded else "clamp(320px, 24vw, 540px)"
-sidebar_min_width = "100vw" if st.session_state.sidebar_expanded else "clamp(300px, 22vw, 500px)"
+sidebar_width = "100vw" if st.session_state.sidebar_expanded else "clamp(420px, 31vw, 720px)"
+sidebar_min_width = "100vw" if st.session_state.sidebar_expanded else "clamp(400px, 29vw, 680px)"
 main_display = "none" if st.session_state.sidebar_expanded else "block"
 
 st.markdown(f"""
@@ -3181,12 +3182,41 @@ SEPSIS_MODE_CONFIG = {
 ICD_FILTER_DATABASES = {'miiv', 'mimic', 'eicu'}
 
 
+def _supports_icd_filter(database: str | None) -> bool:
+    """Return whether the current database supports sidebar ICD filters."""
+    return str(database or "").lower() in ICD_FILTER_DATABASES
+
+
 def _split_query_tokens(text: str) -> list[str]:
     """Split user ICD / keyword query into compact non-empty tokens."""
     if not text:
         return []
     cleaned = str(text).replace('，', ',').replace(';', ',').replace('；', ',').replace('\n', ',')
-    return [tok.strip() for tok in cleaned.split(',') if tok.strip()]
+    raw_tokens = [tok.strip() for tok in cleaned.split(',') if tok.strip()]
+    expanded_tokens: list[str] = []
+    for token in raw_tokens:
+        range_match = re.fullmatch(r'([A-Za-z]+)(\d+)\s*-\s*([A-Za-z]+)?(\d+)', token)
+        if not range_match:
+            expanded_tokens.append(token)
+            continue
+
+        prefix_start, start_num, prefix_end, end_num = range_match.groups()
+        prefix_start = prefix_start.upper()
+        prefix_end = (prefix_end or prefix_start).upper()
+        if prefix_start != prefix_end:
+            expanded_tokens.append(token)
+            continue
+
+        start_int = int(start_num)
+        end_int = int(end_num)
+        if end_int < start_int or end_int - start_int > 50:
+            expanded_tokens.append(token)
+            continue
+
+        width = max(len(start_num), len(end_num))
+        expanded_tokens.extend([f"{prefix_start}{value:0{width}d}" for value in range(start_int, end_int + 1)])
+
+    return expanded_tokens
 
 
 def _get_sepsis_runtime_options() -> dict:
@@ -3204,14 +3234,14 @@ def _get_sepsis_runtime_options() -> dict:
 def _get_supported_disease_cohorts(database: str) -> list[str]:
     """Return supported disease cohort keys for the current database."""
     base = ['none', 'sepsis', 'aki', 'circ_failure', 'mech_vent', 'rrt']
-    if database in ICD_FILTER_DATABASES:
+    if _supports_icd_filter(database):
         base.extend(['ards', 'pneumonia', 'heart_failure', 'ami', 'stroke'])
     return base
 
 
 def _match_ids_by_icd_tokens(data_path: Path, database: str, icu_df: pd.DataFrame, id_col_lower: str, tokens: list[str]) -> set:
     """Match ICU stay IDs by ICD prefixes / diagnosis keywords for DBs with diagnosis coding."""
-    if not tokens or database not in ICD_FILTER_DATABASES:
+    if not tokens or not _supports_icd_filter(database):
         return set()
     matched_ids = set()
     if database in {'miiv', 'mimic'}:
@@ -3293,12 +3323,322 @@ def _render_sepsis_ai_button(lang: str) -> None:
             )
         st.session_state['_ai_pending_question'] = question
         st.session_state['_floating_ai_open'] = True
-        st.toast("💬 Question sent to AI Assistant" if lang == 'en' else "💬 问题已发送到 AI 助手")
+
+
+def _clear_icd_preview_state() -> None:
+    """Remove ICD preview caches and temporary UI state."""
+    for key in (
+        '_icd_preview_cache_include',
+        '_icd_preview_cache_exclude',
+    ):
+        st.session_state.pop(key, None)
+
+
+def _render_icd_preview_main_panel(lang: str) -> None:
+    """Render ICD preview results in the main content area instead of the sidebar."""
+    if not _supports_icd_filter(st.session_state.get('database')):
+        _clear_icd_preview_state()
+        return
+
+    include_query = str(st.session_state.get('cohort_filter', {}).get('icd_include_query', '')).strip()
+    exclude_query = str(st.session_state.get('cohort_filter', {}).get('icd_exclude_query', '')).strip()
+    preview_specs = [
+        ("include", include_query, "Include" if lang == 'en' else "包含"),
+        ("exclude", exclude_query, "Exclude" if lang == 'en' else "排除"),
+    ]
+
+    active_previews = []
+    for preview_key, preview_query, preview_label in preview_specs:
+        tokens = _split_query_tokens(preview_query)
+        cached = st.session_state.get(f'_icd_preview_cache_{preview_key}')
+        if not tokens or not cached or cached.get('tokens') != tokens:
+            continue
+        active_previews.append((preview_key, preview_label, cached))
+
+    if not active_previews:
+        return
+
+    title = "🧾 ICD Match Preview" if lang == 'en' else "🧾 ICD 匹配预览"
+    header_cols = st.columns([6, 1.4])
+    with header_cols[0]:
+        st.markdown(f"#### {title}")
+    with header_cols[1]:
+        clear_label = "🧹 Clear Preview" if lang == 'en' else "🧹 清除预览"
+        if st.button(clear_label, key="clear_icd_preview_main", use_container_width=True):
+            _clear_icd_preview_state()
+            st.rerun()
+
+    include_cached = next((cached for key, _, cached in active_previews if key == 'include'), None)
+    exclude_cached = next((cached for key, _, cached in active_previews if key == 'exclude'), None)
+    total_patients = 0
+    if include_cached:
+        total_patients = int(include_cached.get('total_patients', 0) or 0)
+    elif exclude_cached:
+        total_patients = int(exclude_cached.get('total_patients', 0) or 0)
+
+    include_ids = set(include_cached.get('matched_ids', [])) if include_cached else set()
+    exclude_ids = set(exclude_cached.get('matched_ids', [])) if exclude_cached else set()
+
+    if include_cached:
+        final_ids = include_ids - exclude_ids
+        final_count = len(final_ids)
+    elif exclude_cached:
+        final_count = max(total_patients - len(exclude_ids), 0)
+    else:
+        final_count = 0
+
+    final_pct = final_count / total_patients * 100 if total_patients > 0 else 0
+    if lang == 'en':
+        st.info(f"🧮 Final cohort after ICD filters: **{final_count:,}** / {total_patients:,} patients ({final_pct:.1f}%)")
+    else:
+        st.info(f"🧮 ICD 筛选后的最终队列：**{final_count:,}** / {total_patients:,} 位患者 ({final_pct:.1f}%)")
+
+    cols = st.columns(len(active_previews))
+    for col, (_, preview_label, preview_result) in zip(cols, active_previews):
+        with col:
+            if preview_result.get('error'):
+                st.warning(preview_result['error'])
+                continue
+
+            matched = preview_result.get('matched_patients', 0)
+            total = preview_result.get('total_patients', 0)
+            pct = matched / total * 100 if total > 0 else 0
+            if lang == 'en':
+                st.success(f"📊 {preview_label}: matched **{matched:,}** / {total:,} patients ({pct:.1f}%)")
+            else:
+                st.success(f"📊 {preview_label}: 匹配到 **{matched:,}** / {total:,} 位患者 ({pct:.1f}%)")
+
+            top_codes = preview_result.get('top_codes')
+            if top_codes is not None and len(top_codes) > 0:
+                table_label = (
+                    f"📋 Top matching ICD codes ({preview_label})"
+                    if lang == 'en' else
+                    f"📋 匹配频率最高的 ICD 编码（{preview_label}）"
+                )
+                st.markdown(f"**{table_label}**")
+                st.dataframe(top_codes, use_container_width=True, hide_index=True)
+
+
+def _format_definition_list(values, limit: int = 6) -> str:
+    """Format a short, readable comma-separated preview for metadata fields."""
+    cleaned = [str(v).strip() for v in values if v not in (None, "", [], {}) and str(v).strip()]
+    if not cleaned:
+        return "—"
+    if len(cleaned) <= limit:
+        return ", ".join(cleaned)
+    return f"{', '.join(cleaned[:limit])} (+{len(cleaned) - limit} more)"
+
+
+def _format_source_selector(source) -> str:
+    """Summarize the identifying selector used for a raw concept source."""
+    selector_parts = []
+    if getattr(source, 'sub_var', None):
+        if getattr(source, 'ids', None):
+            selector_parts.append(f"{source.sub_var}={_format_definition_list(source.ids, limit=8)}")
+        elif getattr(source, 'regex', None):
+            selector_parts.append(f"{source.sub_var}~/{source.regex}/")
+        else:
+            selector_parts.append(str(source.sub_var))
+    elif getattr(source, 'regex', None):
+        selector_parts.append(f"regex=/{source.regex}/")
+    if getattr(source, 'class_name', None):
+        selector_parts.append(f"class={source.class_name}")
+    if getattr(source, 'params', None):
+        param_keys = sorted(source.params.keys())
+        if param_keys:
+            selector_parts.append(f"params={_format_definition_list(param_keys, limit=6)}")
+    return " | ".join(selector_parts) if selector_parts else "—"
+
+
+def _collect_recursive_concept_sources(concept_name: str, database: str, concept_dict: dict, visited=None) -> list[tuple[str, object]]:
+    """Collect raw source entries for a concept by recursively traversing sub-concepts."""
+    if visited is None:
+        visited = set()
+    if concept_name in visited:
+        return []
+    visited.add(concept_name)
+
+    concept_def = concept_dict.get(concept_name)
+    if not concept_def:
+        return []
+
+    collected = []
+    for source in concept_def.sources.get(database, []):
+        collected.append((concept_name, source))
+    for sub_concept in getattr(concept_def, 'sub_concepts', []) or []:
+        collected.extend(_collect_recursive_concept_sources(sub_concept, database, concept_dict, visited))
+    return collected
+
+
+def _get_feature_definition_rows(selected_concepts: list[str], database: str, lang: str) -> list[dict]:
+    """Build a transparent per-feature definition table for the current database."""
+    concept_dict = _get_quality_concept_dictionary()
+    rows = []
+
+    for concept_name in sorted(set(selected_concepts)):
+        eng_name, chn_name, dict_unit = CONCEPT_DICTIONARY.get(concept_name, (concept_name, concept_name, ''))
+        description_en, description_zh = CONCEPT_DESCRIPTIONS.get(concept_name, ('', ''))
+        display_name = eng_name if lang == 'en' else chn_name
+        description = description_en if lang == 'en' else description_zh
+
+        concept_def = concept_dict.get(concept_name)
+        unit = dict_unit
+        if concept_def and getattr(concept_def, 'units', None):
+            unit = _format_definition_list(concept_def.units, limit=4)
+        unit = unit or "—"
+
+        base_row = {
+            'Feature': concept_name,
+            'Name': display_name,
+            'Unit': unit,
+            'Type': "Direct",
+            'Table(s)': "—",
+            'Selector / ID': "—",
+            'Value / Time': "—",
+            'Logic': description or "—",
+        }
+
+        if concept_def:
+            direct_sources = concept_def.sources.get(database, [])
+            if direct_sources:
+                for source in direct_sources:
+                    logic_parts = []
+                    if getattr(source, 'callback', None):
+                        logic_parts.append(f"source callback: {source.callback}")
+                    if getattr(concept_def, 'callback', None):
+                        logic_parts.append(f"feature callback: {concept_def.callback}")
+                    if getattr(concept_def, 'sub_concepts', None):
+                        logic_parts.append(f"derived from: {_format_definition_list(concept_def.sub_concepts, limit=6)}")
+                    if description:
+                        logic_parts.append(description)
+
+                    value_parts = []
+                    if getattr(source, 'value_var', None):
+                        value_parts.append(f"value={source.value_var}")
+                    if getattr(source, 'unit_var', None):
+                        value_parts.append(f"unit_col={source.unit_var}")
+                    if getattr(source, 'index_var', None):
+                        value_parts.append(f"time={source.index_var}")
+                    if getattr(source, 'dur_var', None):
+                        value_parts.append(f"dur={source.dur_var}")
+
+                    row = dict(base_row)
+                    row['Type'] = "Callback-on-source" if (getattr(source, 'callback', None) or getattr(concept_def, 'callback', None)) else "Direct"
+                    row['Table(s)'] = getattr(source, 'table', None) or "—"
+                    row['Selector / ID'] = _format_source_selector(source)
+                    row['Value / Time'] = " | ".join(value_parts) if value_parts else "—"
+                    row['Logic'] = " ; ".join(logic_parts) if logic_parts else "—"
+                    rows.append(row)
+                continue
+
+            recursive_sources = _collect_recursive_concept_sources(concept_name, database, concept_dict)
+            if recursive_sources:
+                table_names = sorted({src.table for _, src in recursive_sources if getattr(src, 'table', None)})
+                selectors = []
+                for leaf_concept, source in recursive_sources:
+                    selector_summary = _format_source_selector(source)
+                    if selector_summary != "—":
+                        selectors.append(f"{leaf_concept}: {selector_summary}")
+                    else:
+                        selectors.append(f"{leaf_concept}")
+
+                logic_parts = []
+                if getattr(concept_def, 'callback', None):
+                    logic_parts.append(f"feature callback: {concept_def.callback}")
+                if getattr(concept_def, 'sub_concepts', None):
+                    logic_parts.append(f"derived from: {_format_definition_list(concept_def.sub_concepts, limit=8)}")
+                if description:
+                    logic_parts.append(description)
+
+                row = dict(base_row)
+                row['Type'] = "Derived"
+                row['Table(s)'] = _format_definition_list(table_names, limit=8)
+                row['Selector / ID'] = _format_definition_list(selectors, limit=6)
+                row['Logic'] = " ; ".join(logic_parts) if logic_parts else "—"
+                rows.append(row)
+                continue
+
+        if concept_name in SPECIAL_CONCEPTS:
+            module_name, func_name, output_cols = SPECIAL_CONCEPTS[concept_name]
+            row = dict(base_row)
+            row['Type'] = "Special / Derived"
+            row['Table(s)'] = "loader"
+            row['Selector / ID'] = f"{module_name}.{func_name}"
+            logic_parts = [f"output: {_format_definition_list(output_cols, limit=4)}"]
+            if description:
+                logic_parts.append(description)
+            row['Logic'] = " ; ".join(logic_parts)
+            rows.append(row)
+            continue
+
+        row = dict(base_row)
+        row['Type'] = "Definition unavailable"
+        rows.append(row)
+
+    return rows
+
+
+def _render_feature_definition_panel(lang: str) -> None:
+    """Render a transparent feature definition panel for the selected database and features."""
+    if not st.session_state.get('step3_confirmed', False):
+        return
+
+    selected_concepts = list(st.session_state.get('selected_concepts', []) or [])
+    if not selected_concepts:
+        return
+
+    database = str(st.session_state.get('database', '') or '')
+    if not database:
+        return
+
+    rows = _get_feature_definition_rows(selected_concepts, database, lang)
+    if not rows:
+        return
+
+    title = "🧬 Feature Definition Transparency" if lang == 'en' else "🧬 特征定义透明化"
+    caption = (
+        f"Current database: {database.upper()}. This table shows how each selected feature is defined in EasyICU, including raw tables, selectors/item IDs, units, and derived logic."
+        if lang == 'en' else
+        f"当前数据库：{database.upper()}。该表展示 EasyICU 如何定义你已选特征，包括原始表、选择器/item ID、单位以及派生逻辑。"
+    )
+    download_label = "⬇️ Download Definition CSV" if lang == 'en' else "⬇️ 下载定义表 CSV"
+    n_features = len(set(selected_concepts))
+    n_rows = len(rows)
+    summary = (
+        f"Showing **{n_features}** selected features and **{n_rows}** database-specific definition rows."
+        if lang == 'en' else
+        f"当前展示 **{n_features}** 个已选特征，对应 **{n_rows}** 条数据库定义记录。"
+    )
+
+    with st.expander(title, expanded=False):
+        st.caption(caption)
+        st.info(summary)
+        definition_df = pd.DataFrame(rows)
+        st.download_button(
+            download_label,
+            data=definition_df.to_csv(index=False, encoding='utf-8-sig'),
+            file_name=f"easyicu_feature_definition_{database.lower()}.csv",
+            mime="text/csv",
+            key="download_feature_definition_csv",
+        )
+        st.dataframe(
+            definition_df,
+            use_container_width=True,
+            hide_index=True,
+            height=min(640, 120 + 36 * max(len(definition_df), 1)),
+        )
 
 
 def _preview_icd_match(data_path: Path, database: str, tokens: list[str]) -> dict:
     """Preview ICD code matching: return matched patient count and top codes."""
-    result = {'tokens': tokens, 'matched_patients': 0, 'total_patients': 0, 'top_codes': None, 'error': None}
+    result = {
+        'tokens': tokens,
+        'matched_patients': 0,
+        'matched_ids': [],
+        'total_patients': 0,
+        'top_codes': None,
+        'error': None,
+    }
     try:
         DB_META_PREVIEW = {
             'miiv': {'id_col': 'stay_id', 'icu_table': 'icustays.parquet'},
@@ -3334,6 +3674,7 @@ def _preview_icd_match(data_path: Path, database: str, tokens: list[str]) -> dic
                 matched_hadm = set(matched_diag['hadm_id'].dropna().unique())
                 matched_ids = set(icu_df.loc[icu_df['hadm_id'].isin(matched_hadm), id_col].dropna().unique())
                 result['matched_patients'] = len(matched_ids)
+                result['matched_ids'] = sorted(matched_ids)
             # Top ICD codes
             matched_diag['icd_code_clean'] = codes[diag_mask]
             code_counts = matched_diag['icd_code_clean'].value_counts().head(20).reset_index()
@@ -3374,6 +3715,7 @@ def _preview_icd_match(data_path: Path, database: str, tokens: list[str]) -> dic
             matched_diag = diag_df.loc[diag_mask]
             matched_ids = set(matched_diag['patientunitstayid'].dropna().unique())
             result['matched_patients'] = len(matched_ids)
+            result['matched_ids'] = sorted(matched_ids)
             # Top codes for eICU
             if 'icd9code' in matched_diag.columns:
                 code_counts = matched_diag['icd9code'].dropna().astype(str).value_counts().head(20).reset_index()
@@ -3590,7 +3932,8 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
         cf.get('gender') is not None or
         cf.get('survived') is not None or
         cf.get('disease_cohort') not in (None, '', 'none') or
-        bool(str(cf.get('icd_query', '')).strip())
+        bool(str(cf.get('icd_include_query', cf.get('icd_query', ''))).strip()) or
+        bool(str(cf.get('icd_exclude_query', '')).strip())
     )
     if not has_active:
         return None
@@ -3790,34 +4133,35 @@ def apply_cohort_filter(data_path, database, candidate_ids=None):
                                disease_cfg.get('label_zh', '疾病队列'),
                                excluded))
 
-    icd_tokens = _split_query_tokens(cf.get('icd_query', ''))
-    if icd_tokens and database in ICD_FILTER_DATABASES:
+    icd_include_tokens = _split_query_tokens(cf.get('icd_include_query', cf.get('icd_query', '')))
+    if icd_include_tokens and database in ICD_FILTER_DATABASES:
         before_count = keep_mask.sum()
-        matched_ids = set()
-        icd_mode = cf.get('icd_mode', 'include')
         try:
-            matched_ids = _match_ids_by_icd_tokens(data_path, database, icu_df, id_col_lower, icd_tokens)
-            if icd_mode == 'exclude':
-                # Exclude patients WITH these ICD codes
-                if matched_ids:
-                    keep_mask &= ~icu_df[id_col_lower].isin(matched_ids)
-                # If no matched_ids, nothing to exclude
-                excluded = int(before_count - keep_mask.sum())
-                filter_details.append((f"ICD exclude ({', '.join(icd_tokens)})",
-                                       f"ICD 排除 ({', '.join(icd_tokens)})",
-                                       excluded))
+            matched_ids = _match_ids_by_icd_tokens(data_path, database, icu_df, id_col_lower, icd_include_tokens)
+            if matched_ids:
+                keep_mask &= icu_df[id_col_lower].isin(matched_ids)
             else:
-                # Include only patients WITH these ICD codes
-                if matched_ids:
-                    keep_mask &= icu_df[id_col_lower].isin(matched_ids)
-                else:
-                    keep_mask &= False
-                excluded = int(before_count - keep_mask.sum())
-                filter_details.append((f"ICD include ({', '.join(icd_tokens)})",
-                                       f"ICD 包含 ({', '.join(icd_tokens)})",
-                                       excluded))
+                keep_mask &= False
+            excluded = int(before_count - keep_mask.sum())
+            filter_details.append((f"ICD include ({', '.join(icd_include_tokens)})",
+                                   f"ICD 包含 ({', '.join(icd_include_tokens)})",
+                                   excluded))
         except Exception as e:
-            print(f"[COHORT] ICD filter skipped ({database}): {e}")
+            print(f"[COHORT] ICD include filter skipped ({database}): {e}")
+
+    icd_exclude_tokens = _split_query_tokens(cf.get('icd_exclude_query', ''))
+    if icd_exclude_tokens and database in ICD_FILTER_DATABASES:
+        before_count = keep_mask.sum()
+        try:
+            matched_ids = _match_ids_by_icd_tokens(data_path, database, icu_df, id_col_lower, icd_exclude_tokens)
+            if matched_ids:
+                keep_mask &= ~icu_df[id_col_lower].isin(matched_ids)
+            excluded = int(before_count - keep_mask.sum())
+            filter_details.append((f"ICD exclude ({', '.join(icd_exclude_tokens)})",
+                                   f"ICD 排除 ({', '.join(icd_exclude_tokens)})",
+                                   excluded))
+        except Exception as e:
+            print(f"[COHORT] ICD exclude filter skipped ({database}): {e}")
 
     filtered_ids = icu_df.loc[keep_mask, id_col_lower].unique().tolist()
     total_after = len(filtered_ids)
@@ -7421,9 +7765,20 @@ def render_sidebar():
                 'has_sepsis': None,
                 'disease_cohort': 'none',
                 'icd_query': '',
+                'icd_include_query': '',
+                'icd_exclude_query': '',
                 'icd_mode': 'include',
             }
-        # Ensure icd_mode is always present (upgrade from older sessions)
+        # Upgrade older sessions that only had a single ICD box.
+        if 'icd_include_query' not in st.session_state.cohort_filter:
+            legacy_query = str(st.session_state.cohort_filter.get('icd_query', '')).strip()
+            legacy_mode = st.session_state.cohort_filter.get('icd_mode', 'include')
+            st.session_state.cohort_filter['icd_include_query'] = legacy_query if legacy_mode != 'exclude' else ''
+            st.session_state.cohort_filter['icd_exclude_query'] = legacy_query if legacy_mode == 'exclude' else ''
+        else:
+            st.session_state.cohort_filter.setdefault('icd_exclude_query', '')
+        # Keep legacy keys for backward compatibility with existing export/session logic.
+        st.session_state.cohort_filter.setdefault('icd_query', '')
         st.session_state.cohort_filter.setdefault('icd_mode', 'include')
         st.session_state.setdefault('sepsis_si_mode', 'auto')
         st.session_state.setdefault('sepsis_abx_win_hours', 24)
@@ -7443,106 +7798,114 @@ def render_sidebar():
         cohort_enabled = st.session_state.cohort_enabled
         
         if cohort_enabled:
-            # 年龄筛选
-            age_label = "🎂 Age Range" if st.session_state.language == 'en' else "🎂 年龄范围"
-            with st.expander(age_label, expanded=True):
-                age_col1, age_col2 = st.columns(2)
-                with age_col1:
-                    age_min_label = "Min Age" if st.session_state.language == 'en' else "最小年龄"
-                    # 🔧 ADD (2026-02-05): 添加"不限制"选项
-                    no_limit_min_label = "No Limit" if st.session_state.language == 'en' else "不限制"
-                    age_min_no_limit = st.checkbox(no_limit_min_label, value=st.session_state.cohort_filter['age_min'] is None, key="cohort_age_min_no_limit")
-                    if age_min_no_limit:
-                        st.session_state.cohort_filter['age_min'] = None
-                        st.caption("✓ " + ("No minimum age limit" if st.session_state.language == 'en' else "无最小年龄限制"))
-                    else:
-                        age_min = st.number_input(
-                            age_min_label, min_value=0, max_value=120, 
-                            value=18 if st.session_state.cohort_filter['age_min'] is None else int(st.session_state.cohort_filter['age_min']),
-                            key="cohort_age_min"
-                        )
-                        st.session_state.cohort_filter['age_min'] = age_min if age_min > 0 else None
-                with age_col2:
-                    age_max_label = "Max Age" if st.session_state.language == 'en' else "最大年龄"
-                    # 🔧 ADD (2026-02-05): 添加"不限制"选项
-                    no_limit_max_label = "No Limit" if st.session_state.language == 'en' else "不限制"
-                    age_max_no_limit = st.checkbox(no_limit_max_label, value=st.session_state.cohort_filter['age_max'] is None, key="cohort_age_max_no_limit")
-                    if age_max_no_limit:
-                        st.session_state.cohort_filter['age_max'] = None
-                        st.caption("✓ " + ("No maximum age limit" if st.session_state.language == 'en' else "无最大年龄限制"))
-                    else:
-                        age_max = st.number_input(
-                            age_max_label, min_value=0, max_value=120, 
-                            value=100 if st.session_state.cohort_filter['age_max'] is None else int(st.session_state.cohort_filter['age_max']),
-                            key="cohort_age_max"
-                        )
-                        st.session_state.cohort_filter['age_max'] = age_max if age_max < 120 else None
+            # 紧凑年龄筛选：0 / 120 代表不限制，避免单独 expander 占高
+            age_col1, age_col2 = st.columns(2)
+            with age_col1:
+                age_min = st.number_input(
+                    "🎂 Min Age" if st.session_state.language == 'en' else "🎂 最小年龄",
+                    min_value=0,
+                    max_value=120,
+                    value=0 if st.session_state.cohort_filter['age_min'] is None else int(st.session_state.cohort_filter['age_min']),
+                    key="cohort_age_min"
+                )
+                st.session_state.cohort_filter['age_min'] = age_min if age_min > 0 else None
+            with age_col2:
+                age_max = st.number_input(
+                    "🎂 Max Age" if st.session_state.language == 'en' else "🎂 最大年龄",
+                    min_value=0,
+                    max_value=120,
+                    value=120 if st.session_state.cohort_filter['age_max'] is None else int(st.session_state.cohort_filter['age_max']),
+                    key="cohort_age_max"
+                )
+                st.session_state.cohort_filter['age_max'] = age_max if age_max < 120 else None
+            age_hint = "0 / 120 means no age limit" if st.session_state.language == 'en' else "0 / 120 表示不限制年龄"
+            st.caption(age_hint)
             
-            # 首次入ICU筛选
-            first_icu_label = "🏥 First ICU Stay Only" if st.session_state.language == 'en' else "🏥 仅首次入ICU"
+            # 紧凑筛选布局：下拉框替代横向 radio，减少截图高度
+            first_icu_label = "🏥 First ICU" if st.session_state.language == 'en' else "🏥 首次 ICU"
             first_icu_options = {
                 'any': 'Any' if st.session_state.language == 'en' else '不限',
                 'yes': 'Yes (First ICU only)' if st.session_state.language == 'en' else '是（仅首次）',
                 'no': 'No (Readmissions only)' if st.session_state.language == 'en' else '否（仅再入院）',
             }
-            first_icu_val = st.radio(
-                first_icu_label,
-                options=list(first_icu_options.keys()),
-                format_func=lambda x: first_icu_options[x],
-                index=0,
-                horizontal=True,
-                key="cohort_first_icu"
-            )
+            current_first_icu = st.session_state.cohort_filter.get('first_icu_stay')
+            current_first_icu_key = 'any'
+            if current_first_icu is True:
+                current_first_icu_key = 'yes'
+            elif current_first_icu is False:
+                current_first_icu_key = 'no'
+
+            los_label = "⏱️ Min ICU Stay (hours)" if st.session_state.language == 'en' else "⏱️ 最短住院时长（小时）"
+            los_help = "Minimum ICU stay duration to include patients (default 0h = no lower bound)" if st.session_state.language == 'en' else "纳入患者的最短ICU住院时长（默认0小时，表示不设下限）"
+
+            compact_row1_col1, compact_row1_col2 = st.columns([1.3, 1.0])
+            with compact_row1_col1:
+                first_icu_val = st.selectbox(
+                    first_icu_label,
+                    options=list(first_icu_options.keys()),
+                    format_func=lambda x: first_icu_options[x],
+                    index=list(first_icu_options.keys()).index(current_first_icu_key),
+                    key="cohort_first_icu"
+                )
+            with compact_row1_col2:
+                los_min = st.number_input(
+                    los_label, min_value=0, max_value=10000,
+                    value=0 if st.session_state.cohort_filter.get('los_min') is None else int(st.session_state.cohort_filter['los_min']),
+                    help=los_help,
+                    key="cohort_los_min"
+                )
+
             if first_icu_val == 'yes':
                 st.session_state.cohort_filter['first_icu_stay'] = True
             elif first_icu_val == 'no':
                 st.session_state.cohort_filter['first_icu_stay'] = False
             else:
                 st.session_state.cohort_filter['first_icu_stay'] = None
-            
-            # 住院时长筛选（只需要最短时长，默认24小时）
-            los_label = "⏱️ Min ICU Stay (hours)" if st.session_state.language == 'en' else "⏱️ 最短住院时长（小时）"
-            los_help = "Minimum ICU stay duration to include patients (default 24h)" if st.session_state.language == 'en' else "纳入患者的最短ICU住院时长（默认24小时）"
-            los_min = st.number_input(
-                los_label, min_value=0, max_value=10000, value=24,
-                help=los_help,
-                key="cohort_los_min"
-            )
+
             st.session_state.cohort_filter['los_min'] = los_min if los_min > 0 else None
             st.session_state.cohort_filter['los_max'] = None  # 不再使用max
-            
-            # 性别筛选
+
             gender_label = "👤 Gender" if st.session_state.language == 'en' else "👤 性别"
             gender_options = {
                 'any': 'Any' if st.session_state.language == 'en' else '不限',
                 'M': 'Male' if st.session_state.language == 'en' else '男性',
                 'F': 'Female' if st.session_state.language == 'en' else '女性',
             }
-            gender_val = st.radio(
-                gender_label,
-                options=list(gender_options.keys()),
-                format_func=lambda x: gender_options[x],
-                index=0,
-                horizontal=True,
-                key="cohort_gender"
-            )
-            st.session_state.cohort_filter['gender'] = gender_val if gender_val != 'any' else None
-            
-            # 存活状态筛选
+            current_gender_key = st.session_state.cohort_filter.get('gender') or 'any'
+
             survival_label = "💚 Survival Status" if st.session_state.language == 'en' else "💚 存活状态"
             survival_options = {
                 'any': 'Any' if st.session_state.language == 'en' else '不限',
                 'survived': 'Survived' if st.session_state.language == 'en' else '存活',
                 'deceased': 'Deceased' if st.session_state.language == 'en' else '死亡',
             }
-            survival_val = st.radio(
-                survival_label,
-                options=list(survival_options.keys()),
-                format_func=lambda x: survival_options[x],
-                index=0,
-                horizontal=True,
-                key="cohort_survival"
-            )
+            current_survival = st.session_state.cohort_filter.get('survived')
+            current_survival_key = 'any'
+            if current_survival is True:
+                current_survival_key = 'survived'
+            elif current_survival is False:
+                current_survival_key = 'deceased'
+
+            compact_row2_col1, compact_row2_col2 = st.columns(2)
+            with compact_row2_col1:
+                gender_val = st.selectbox(
+                    gender_label,
+                    options=list(gender_options.keys()),
+                    format_func=lambda x: gender_options[x],
+                    index=list(gender_options.keys()).index(current_gender_key),
+                    key="cohort_gender"
+                )
+            with compact_row2_col2:
+                survival_val = st.selectbox(
+                    survival_label,
+                    options=list(survival_options.keys()),
+                    format_func=lambda x: survival_options[x],
+                    index=list(survival_options.keys()).index(current_survival_key),
+                    key="cohort_survival"
+                )
+
+            st.session_state.cohort_filter['gender'] = gender_val if gender_val != 'any' else None
+
             if survival_val == 'survived':
                 st.session_state.cohort_filter['survived'] = True
             elif survival_val == 'deceased':
@@ -7599,7 +7962,7 @@ def render_sidebar():
                 if disease_desc:
                     st.caption(disease_desc)
                 if disease_cfg.get('icd_tokens'):
-                    if st.session_state.get('database') in ICD_FILTER_DATABASES:
+                    if _supports_icd_filter(st.session_state.get('database')):
                         icd_note = (
                             f"Template ICD prefixes: {', '.join(disease_cfg['icd_tokens'])}"
                             if st.session_state.language == 'en' else
@@ -7667,83 +8030,65 @@ def render_sidebar():
                     st.info(sepsis_ref)
                     _render_sepsis_ai_button(st.session_state.language)
 
-            if st.session_state.get('database') in ICD_FILTER_DATABASES:
-                icd_label = "🧾 ICD filter (prefixes or keywords)" if st.session_state.language == 'en' else "🧾 ICD 过滤（前缀或关键词）"
+            if _supports_icd_filter(st.session_state.get('database')):
+                icd_include_label = "🧾 ICD include" if st.session_state.language == 'en' else "🧾 ICD 包含"
+                icd_exclude_label = "🧾 ICD exclude" if st.session_state.language == 'en' else "🧾 ICD 排除"
                 icd_help = (
-                    "For MIMIC databases, enter ICD code prefixes such as A41, I50. For eICU, keywords also work."
+                    "Use commas for multiple ICD prefixes, e.g. A41,A42. Simple ranges like A41-42 are also supported. For eICU, keywords also work."
                     if st.session_state.language == 'en' else
-                    "对于 MIMIC 数据库，请输入 ICD 前缀，如 A41、I50；对于 eICU，也可输入关键词。"
+                    "对于 MIMIC 数据库，可用逗号输入多个 ICD 前缀，如 A41,A42；也支持 A41-42 这种简单范围写法。对于 eICU，也可输入关键词。"
                 )
-                # ICD include/exclude mode selection
-                icd_mode_label = "Filter mode" if st.session_state.language == 'en' else "过滤模式"
-                icd_mode_col1, icd_mode_col2 = st.columns([3, 2])
-                with icd_mode_col2:
-                    icd_mode_options = {
-                        'include': 'Include (has ICD)' if st.session_state.language == 'en' else '包含（有该ICD）',
-                        'exclude': 'Exclude (no ICD)' if st.session_state.language == 'en' else '排除（无该ICD）',
-                    }
-                    current_icd_mode = st.session_state.cohort_filter.get('icd_mode', 'include')
-                    icd_mode = st.radio(
-                        icd_mode_label,
-                        options=list(icd_mode_options.keys()),
-                        format_func=lambda x: icd_mode_options[x],
-                        index=0 if current_icd_mode == 'include' else 1,
-                        horizontal=True,
-                        key="cohort_icd_mode",
-                    )
-                    st.session_state.cohort_filter['icd_mode'] = icd_mode
-                with icd_mode_col1:
-                    icd_value = st.text_input(
-                        icd_label,
-                        value=st.session_state.cohort_filter.get('icd_query', ''),
+                icd_col1, icd_col2 = st.columns(2)
+                with icd_col1:
+                    icd_include_value = st.text_input(
+                        icd_include_label,
+                        value=st.session_state.cohort_filter.get('icd_include_query', ''),
                         help=icd_help,
-                        key="cohort_icd_query",
-                        placeholder="A41, R65, sepsis" if st.session_state.language == 'en' else "A41, R65, sepsis",
+                        key="cohort_icd_include_query",
+                        placeholder="A41,A42 or A41-42" if st.session_state.language == 'en' else "A41,A42 或 A41-42",
                     )
-                    st.session_state.cohort_filter['icd_query'] = icd_value.strip()
+                    st.session_state.cohort_filter['icd_include_query'] = icd_include_value.strip()
+                with icd_col2:
+                    icd_exclude_value = st.text_input(
+                        icd_exclude_label,
+                        value=st.session_state.cohort_filter.get('icd_exclude_query', ''),
+                        help=icd_help,
+                        key="cohort_icd_exclude_query",
+                        placeholder="I50,C34 or I50-51" if st.session_state.language == 'en' else "I50,C34 或 I50-51",
+                    )
+                    st.session_state.cohort_filter['icd_exclude_query'] = icd_exclude_value.strip()
 
-                # ICD preview: show matching patient count and top codes
-                _icd_tokens_preview = _split_query_tokens(icd_value.strip())
-                if _icd_tokens_preview and st.session_state.get('data_path'):
-                    _preview_btn_label = "🔍 Preview ICD Match" if st.session_state.language == 'en' else "🔍 预览 ICD 匹配"
-                    if st.button(_preview_btn_label, key="icd_preview_btn"):
-                        _icd_preview_result = _preview_icd_match(
-                            Path(st.session_state.data_path),
-                            st.session_state.get('database', 'miiv'),
-                            _icd_tokens_preview,
-                        )
-                        st.session_state['_icd_preview_cache'] = _icd_preview_result
+                # 兼容旧逻辑：保留 legacy 单字段，但优先使用 include/exclude
+                st.session_state.cohort_filter['icd_query'] = st.session_state.cohort_filter['icd_include_query']
+                st.session_state.cohort_filter['icd_mode'] = 'include'
 
-                    _cached_preview = st.session_state.get('_icd_preview_cache')
-                    if _cached_preview and _cached_preview.get('tokens') == _icd_tokens_preview:
-                        _pr = _cached_preview
-                        if _pr.get('error'):
-                            st.warning(_pr['error'])
-                        else:
-                            _n_matched = _pr.get('matched_patients', 0)
-                            _n_total = _pr.get('total_patients', 0)
-                            _pct = _n_matched / _n_total * 100 if _n_total > 0 else 0
-                            if st.session_state.language == 'en':
-                                st.success(f"📊 Matched **{_n_matched:,}** / {_n_total:,} patients ({_pct:.1f}%)")
-                            else:
-                                st.success(f"📊 匹配到 **{_n_matched:,}** / {_n_total:,} 位患者 ({_pct:.1f}%)")
-                            _top_codes = _pr.get('top_codes')
-                            if _top_codes is not None and len(_top_codes) > 0:
-                                _code_label = "Top matching ICD codes" if st.session_state.language == 'en' else "匹配频率最高的 ICD 编码"
-                                with st.expander(f"📋 {_code_label}", expanded=False):
-                                    st.dataframe(_top_codes, use_container_width=True, hide_index=True)
+                icd_preview_label = "🔍 Preview ICD Match" if st.session_state.language == 'en' else "🔍 预览 ICD 匹配"
+                preview_specs = [
+                    ("include", icd_include_value.strip(), "include"),
+                    ("exclude", icd_exclude_value.strip(), "exclude"),
+                ]
+                has_preview_input = any(
+                    _split_query_tokens(preview_value) for _, preview_value, _ in preview_specs
+                )
+                if has_preview_input and st.session_state.get('data_path'):
+                    if st.button(icd_preview_label, key="icd_preview_btn_combined"):
+                        for preview_key, preview_value, _preview_mode in preview_specs:
+                            _icd_tokens_preview = _split_query_tokens(preview_value)
+                            if not _icd_tokens_preview:
+                                st.session_state.pop(f'_icd_preview_cache_{preview_key}', None)
+                                continue
+                            _icd_preview_result = _preview_icd_match(
+                                Path(st.session_state.data_path),
+                                st.session_state.get('database', 'miiv'),
+                                _icd_tokens_preview,
+                            )
+                            st.session_state[f'_icd_preview_cache_{preview_key}'] = _icd_preview_result
             else:
                 st.session_state.cohort_filter['icd_query'] = ""
+                st.session_state.cohort_filter['icd_include_query'] = ""
+                st.session_state.cohort_filter['icd_exclude_query'] = ""
                 st.session_state.cohort_filter['icd_mode'] = 'include'
-                if st.session_state.get('database') not in ICD_FILTER_DATABASES:
-                    _no_icd_msg = (
-                        f"ℹ️ The current database ({st.session_state.get('database', '')}) does not have ICD diagnosis tables. "
-                        "ICD filtering is only available for MIMIC-IV, MIMIC-III, and eICU."
-                        if st.session_state.language == 'en' else
-                        f"ℹ️ 当前数据库（{st.session_state.get('database', '')}）没有 ICD 诊断表。"
-                        "ICD 过滤仅支持 MIMIC-IV、MIMIC-III 和 eICU。"
-                    )
-                    st.caption(_no_icd_msg)
+                _clear_icd_preview_state()
             
             # 显示当前筛选条件摘要
             filter_summary = []
@@ -7767,8 +8112,18 @@ def render_sidebar():
                 disease_label_summary = disease_cfg.get('label_en') if st.session_state.language == 'en' else disease_cfg.get('label_zh')
                 if disease_label_summary:
                     filter_summary.append(disease_label_summary)
-            if cf.get('icd_query'):
-                filter_summary.append(f"ICD: {cf['icd_query']}")
+            if _supports_icd_filter(st.session_state.get('database')) and cf.get('icd_include_query'):
+                filter_summary.append(
+                    f"ICD include: {cf['icd_include_query']}"
+                    if st.session_state.language == 'en' else
+                    f"ICD 包含: {cf['icd_include_query']}"
+                )
+            if _supports_icd_filter(st.session_state.get('database')) and cf.get('icd_exclude_query'):
+                filter_summary.append(
+                    f"ICD exclude: {cf['icd_exclude_query']}"
+                    if st.session_state.language == 'en' else
+                    f"ICD 排除: {cf['icd_exclude_query']}"
+                )
             
             if filter_summary:
                 summary_text = " | ".join(filter_summary)
@@ -7784,6 +8139,7 @@ def render_sidebar():
             # ✅ Step 2 确认按钮
             step2_confirm_label = "✅ Confirm Cohort Selection" if st.session_state.language == 'en' else "✅ 确认队列筛选"
             if st.button(step2_confirm_label, type="primary", use_container_width=True, key="step2_confirm"):
+                _clear_icd_preview_state()
                 st.session_state.step2_confirmed = True
                 step2_done_msg = "✅ Step 2 completed!" if st.session_state.language == 'en' else "✅ 步骤2已完成！"
                 st.success(step2_done_msg)
@@ -9384,9 +9740,12 @@ def render_home_extract_mode(lang):
     elif not step4_done:
         guide_step = "Export Data" if lang == 'en' else "数据导出"
     else:
-        guide_step = "Complete" if lang == 'en' else "完成"
+        guide_step = "Export Summary" if lang == 'en' else "导出摘要"
     
-    guide_title_text = f"Guide: {guide_step}" if lang == 'en' else f"引导: {guide_step}"
+    if step4_done:
+        guide_title_text = guide_step
+    else:
+        guide_title_text = f"Guide: {guide_step}" if lang == 'en' else f"引导: {guide_step}"
     st.markdown(f'''
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
         <div style="width:6px;height:32px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)"></div>
@@ -9634,10 +9993,15 @@ def render_home_extract_mode(lang):
             
             # 显示导出的文件列表
             view_files_label = "📁 View Exported Files" if lang == 'en' else "📁 查看导出文件"
-            with st.expander(view_files_label, expanded=True):
-                # 使用多列布局显示文件列表
-                files_to_show = exported_files[:12]  # 最多显示12个
-                num_cols = 3  # 每行3个文件
+            with st.expander(view_files_label, expanded=False):
+                files_to_show = exported_files[:6]  # 只显示少量代表性文件
+                num_cols = 2
+                summary_msg = (
+                    f"Showing {len(files_to_show)} representative files out of {len(exported_files)} exported files."
+                    if lang == 'en' else
+                    f"当前展示 {len(files_to_show)} 个代表性文件，共导出 {len(exported_files)} 个文件。"
+                )
+                st.caption(summary_msg)
                 for i in range(0, len(files_to_show), num_cols):
                     cols = st.columns(num_cols)
                     for j, col in enumerate(cols):
@@ -9645,8 +10009,12 @@ def render_home_extract_mode(lang):
                         if idx < len(files_to_show):
                             with col:
                                 st.markdown(f"<p style='color: #1e1e1e; font-size: 0.9rem; margin: 2px 0;'>• {Path(files_to_show[idx]).name}</p>", unsafe_allow_html=True)
-                if len(exported_files) > 12:
-                    more_msg = f"... and {len(exported_files) - 12} more files" if lang == 'en' else f"... 及其他 {len(exported_files) - 12} 个文件"
+                if len(exported_files) > len(files_to_show):
+                    more_msg = (
+                        f"... and {len(exported_files) - len(files_to_show)} more files"
+                        if lang == 'en' else
+                        f"... 及其他 {len(exported_files) - len(files_to_show)} 个文件"
+                    )
                     st.markdown(f"<p style='color: #1e1e1e; font-size: 0.9rem; margin: 2px 0;'>{more_msg}</p>", unsafe_allow_html=True)
             
             # 🆕 显示被选择但未能提取的特征（区分无数据源 vs 无数据）
@@ -9674,14 +10042,14 @@ def render_home_extract_mode(lang):
                 
                 body = ''.join(parts_html)
                 tip = '💡 <i>Try increasing the patient sample size or selecting All Patients to get more features.</i>' if lang == 'en' else '💡 <i>尝试增大患者样本量或选择全部患者以获取更多特征。</i>'
-                unavailable_msg = f"""<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:16px 20px;margin-top:15px">
+                unavailable_msg = f"""<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:12px;padding:12px 18px;margin:8px 0 6px">
 <div style="font-weight:600;color:#92400e;margin-bottom:8px">{len(unavailable_concepts)} {"selected features were not extracted" if lang=="en" else "个已选特征未被提取"}:</div>
 {body}
 <div style="margin-top:10px;font-size:.85rem;color:#6b7280">{tip}</div>
 </div>"""
                 st.markdown(unavailable_msg, unsafe_allow_html=True)
             
-            st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+            st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
             # 🔧 FIX (2026-02-04): 在删除前保存概念数和患者数，供后面的卡片使用
             st.session_state['_last_export_concept_count'] = export_result.get('concept_count', len(exported_files))
             st.session_state['_last_export_patient_count'] = export_result.get('patient_count', 0)
@@ -9730,38 +10098,38 @@ def render_home_extract_mode(lang):
                 n_patients = mock_params['n_patients']
         
         st.markdown(f'''
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(8px,.4rem + .4vw,16px);margin-bottom:16px">
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px">
-                <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{db_label}</div>
-                <div style="font-weight:700;color:#111827;font-size:1.15rem;margin-top:6px">{db_display}</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:8px">
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px 14px;min-height:72px;display:flex;flex-direction:column;justify-content:center">
+                <div style="font-size:.67rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px;line-height:1.1">{db_label}</div>
+                <div style="font-weight:700;color:#111827;font-size:1.02rem;margin-top:5px;line-height:1.1">{db_display}</div>
             </div>
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px">
-                <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{feat_label}</div>
-                <div style="font-weight:700;color:#6366f1;font-size:1.4rem;margin-top:6px">{n_concepts}</div>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px 14px;min-height:72px;display:flex;flex-direction:column;justify-content:center">
+                <div style="font-size:.67rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px;line-height:1.1">{feat_label}</div>
+                <div style="font-weight:700;color:#6366f1;font-size:1.18rem;margin-top:5px;line-height:1.1">{n_concepts}</div>
             </div>
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px">
-                <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{patient_label}</div>
-                <div style="font-weight:700;color:#111827;font-size:1.4rem;margin-top:6px">{n_patients:,}</div>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px 14px;min-height:72px;display:flex;flex-direction:column;justify-content:center">
+                <div style="font-size:.67rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px;line-height:1.1">{patient_label}</div>
+                <div style="font-weight:700;color:#111827;font-size:1.18rem;margin-top:5px;line-height:1.1">{n_patients:,}</div>
             </div>
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px">
-                <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{status_label}</div>
-                <div style="font-weight:700;color:#10b981;font-size:1.15rem;margin-top:6px">✓ {ready_status}</div>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:10px 14px;min-height:72px;display:flex;flex-direction:column;justify-content:center">
+                <div style="font-size:.67rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px;line-height:1.1">{status_label}</div>
+                <div style="font-weight:700;color:#10b981;font-size:1.02rem;margin-top:5px;line-height:1.1">✓ {ready_status}</div>
             </div>
         </div>
         ''', unsafe_allow_html=True)
         
         # 🆕 What's Next? 两个选项
         next_step_title = "What's Next?" if lang == 'en' else "下一步？"
-        st.markdown(f'<div style="font-weight:700;color:#111827;font-size:1.1rem;margin:20px 0 12px">{next_step_title}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-weight:700;color:#111827;font-size:1.1rem;margin:6px 0 8px">{next_step_title}</div>', unsafe_allow_html=True)
         
         col_opt1, col_opt2 = st.columns(2)
         
         with col_opt1:
             # Option A: Quick Visualization
             if lang == 'en':
-                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 22px">
-<div style="font-weight:700;color:#0369a1;margin-bottom:10px">📈 Quick Visualization</div>
-<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.88rem;line-height:1.9">
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:166px;display:flex;flex-direction:column;justify-content:flex-start">
+<div style="font-weight:700;color:#0369a1;margin-bottom:6px;line-height:1.2">📈 Quick Visualization</div>
+<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.86rem;line-height:1.6">
 <li><b>Data Tables Explorer</b> — Browse loaded data by module</li>
 <li><b>Time Series Analysis</b> — Clinical trends over time</li>
 <li><b>Patient Overview</b> — Single-patient dashboard</li>
@@ -9769,9 +10137,9 @@ def render_home_extract_mode(lang):
 </ul>
 </div>''', unsafe_allow_html=True)
             else:
-                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 22px">
-<div style="font-weight:700;color:#0369a1;margin-bottom:10px">📈 快速可视化</div>
-<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.88rem;line-height:1.9">
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:166px;display:flex;flex-direction:column;justify-content:flex-start">
+<div style="font-weight:700;color:#0369a1;margin-bottom:6px;line-height:1.2">📈 快速可视化</div>
+<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.86rem;line-height:1.6">
 <li><b>数据表浏览器</b> — 按模块浏览已加载数据</li>
 <li><b>时序分析</b> — 临床指标随时间变化趋势</li>
 <li><b>患者概览</b> — 单患者综合仪表盘</li>
@@ -9791,18 +10159,18 @@ def render_home_extract_mode(lang):
         with col_opt2:
             # Option B: Cohort Analysis
             if lang == 'en':
-                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 22px">
-<div style="font-weight:700;color:#6d28d9;margin-bottom:10px">🔬 Cohort Analysis</div>
-<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.88rem;line-height:1.9">
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:166px;display:flex;flex-direction:column;justify-content:flex-start">
+<div style="font-weight:700;color:#6d28d9;margin-bottom:6px;line-height:1.2">🔬 Cohort Analysis</div>
+<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.86rem;line-height:1.6">
 <li><b>Group Comparison</b> — Statistical tests between subgroups</li>
 <li><b>Multi-DB Distribution</b> — Compare across databases</li>
 <li><b>Cohort Dashboard</b> — Demographics &amp; outcomes overview</li>
 </ul>
 </div>''', unsafe_allow_html=True)
             else:
-                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 22px">
-<div style="font-weight:700;color:#6d28d9;margin-bottom:10px">🔬 队列分析</div>
-<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.88rem;line-height:1.9">
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:166px;display:flex;flex-direction:column;justify-content:flex-start">
+<div style="font-weight:700;color:#6d28d9;margin-bottom:6px;line-height:1.2">🔬 队列分析</div>
+<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.86rem;line-height:1.6">
 <li><b>组间比较</b> — 统计检验比较亚组</li>
 <li><b>多数据库分布</b> — 跨数据库特征分布比较</li>
 <li><b>队列仪表盘</b> — 人口统计学与结局概览</li>
@@ -11613,8 +11981,7 @@ def render_data_table_subtab():
     
     page_desc = "Browse and explore your loaded data by module. Select a module to view the complete data table." if lang == 'en' else "按模块浏览和探索已加载的数据。选择一个模块查看完整数据表。"
     st.markdown(f'<div class="compact-section-desc">{page_desc}</div>', unsafe_allow_html=True)
-    
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
     
     if len(st.session_state.loaded_concepts) == 0:
         no_data_msg = "Please load data first in the settings above." if lang == 'en' else "请先在上方设置中加载数据。"
@@ -11669,10 +12036,11 @@ def render_data_table_subtab():
                 f'<div class="mini-stat-card"><div class="mini-label">{label}</div><div class="mini-value">{value}</div></div>',
                 unsafe_allow_html=True,
             )
+    st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
     
     # 模块选择器 - 🔧 放大标题
     module_select_label = "Select Module to View" if lang == 'en' else "选择要查看的模块"
-    st.markdown(f'<div style="font-size:1.02rem;font-weight:800;color:#111827;margin-bottom:0.4rem">📦 {module_select_label}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="font-size:1.02rem;font-weight:800;color:#111827;margin:0 0 0.35rem 0;line-height:1.2">📦 {module_select_label}</div>', unsafe_allow_html=True)
     module_options = list(loaded_by_module.keys())
     
     if not module_options:
@@ -11693,11 +12061,12 @@ def render_data_table_subtab():
         # 显示该模块包含的特征
         features_in_module = f"**Features in this module ({len(module_concepts)}):** " + ", ".join(sorted(module_concepts))
         st.caption(features_in_module)
+        st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
         
         # 特征选择器（单选或多选合并）- 默认合并全部放第一个
         # 🔧 放大标题
         view_mode_label = "View Mode" if lang == 'en' else "查看模式"
-        st.markdown(f'<div style="font-size:1.02rem;font-weight:800;color:#111827;margin-bottom:0.4rem">👁️ {view_mode_label}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:1.02rem;font-weight:800;color:#111827;margin:0 0 0.35rem 0;line-height:1.2">👁️ {view_mode_label}</div>', unsafe_allow_html=True)
         view_modes = ["Merge All (Wide Table)", "Single Feature"] if lang == 'en' else ["合并全部（宽表）", "单个特征"]
         
         view_mode = st.radio("View Mode", view_modes, horizontal=True, key="data_table_view_mode", index=0, label_visibility="collapsed")
@@ -11740,7 +12109,7 @@ def render_data_table_subtab():
                         st.dataframe(col_info, hide_index=True, use_container_width=True)
                     
                     # 显示数据表
-                    st.markdown("---")
+                    st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
                     table_title = f"📋 {selected_feature} Data Table" if lang == 'en' else f"📋 {selected_feature} 数据表"
                     st.markdown(f"### {table_title}")
                     
@@ -11794,8 +12163,9 @@ def render_data_table_subtab():
             with merge_control_cols[0]:
                 merge_info = "Merging all features in this module into a wide table (joined by patient ID and time)" if lang == 'en' else "将该模块的所有特征合并为宽表（按患者ID和时间连接）"
                 sample_hint = "Large datasets will be sampled for performance" if lang == 'en' else "大数据集将被采样以保证性能"
-                st.markdown(f'<div class="compact-inline-notice info">ℹ️ {merge_info}<br><span style="font-size:0.74rem;opacity:0.82">{sample_hint}</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="compact-inline-notice info" style="margin:0.12rem 0 0.16rem;">ℹ️ {merge_info}<br><span style="font-size:0.74rem;opacity:0.82">{sample_hint}</span></div>', unsafe_allow_html=True)
             with merge_control_cols[1]:
+                st.markdown('<div style="height:2px"></div>', unsafe_allow_html=True)
                 max_rows_per_feature = st.selectbox(
                     "Max rows" if lang == 'en' else "最大行数",
                     options=[1000, 2000, 5000, 10000],
@@ -11952,6 +12322,7 @@ def render_data_table_subtab():
                                     f'<div class="tiny-stat-card"><div class="tiny-label">{label}</div><div class="tiny-value">{value}</div></div>',
                                     unsafe_allow_html=True,
                                 )
+                        st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
                         
                         # 显示数据
                         max_rows = 1000
@@ -15468,11 +15839,16 @@ def _generate_cohort_prefix() -> str:
     if disease_cohort and disease_cohort != 'none':
         parts.append(disease_cohort)
 
-    icd_query = str(cf.get('icd_query', '')).strip()
-    if icd_query:
-        token = _split_query_tokens(icd_query)
+    icd_include_query = str(cf.get('icd_include_query', cf.get('icd_query', ''))).strip()
+    if icd_include_query:
+        token = _split_query_tokens(icd_include_query)
         if token:
-            parts.append(f"icd{token[0][:12]}")
+            parts.append(f"icdIn{token[0][:10]}")
+    icd_exclude_query = str(cf.get('icd_exclude_query', '')).strip()
+    if icd_exclude_query:
+        token = _split_query_tokens(icd_exclude_query)
+        if token:
+            parts.append(f"icdEx{token[0][:10]}")
     
     return "_".join(parts)
 
@@ -16016,12 +16392,11 @@ def execute_sidebar_export():
                 col_all_overwrite, col_all_skip = st.columns(2)
                 with col_all_overwrite:
                     all_overwrite_btn = "🔄 OVERWRITE ALL" if lang == 'en' else "🔄 全部覆盖"
-                    st.markdown("<style>.stButton button[kind='primary'] { font-size: 1.2rem !important; padding: 15px !important; }</style>", unsafe_allow_html=True)
                     st.button(all_overwrite_btn, key="file_overwrite_all", type="primary", 
                              use_container_width=True, on_click=on_overwrite_all)
                 with col_all_skip:
                     all_skip_btn = "⏭️ SKIP ALL" if lang == 'en' else "⏭️ 全部跳过"
-                    st.button(all_skip_btn, key="file_skip_all", use_container_width=True,
+                    st.button(all_skip_btn, key="file_skip_all", type="secondary", use_container_width=True,
                              on_click=on_skip_all)
                 
                 # 🔧 FIX: 重新检查用户是否已做出决定（回调可能已更新 session_state）
@@ -17005,10 +17380,10 @@ def execute_sidebar_export():
                         if _k in {'disease_cohort'} and _v not in (None, '', 'none'):
                             _has_cohort_filter = True
                             break
-                        if _k in {'icd_query'} and str(_v).strip():
+                        if _k in {'icd_query', 'icd_include_query', 'icd_exclude_query'} and str(_v).strip():
                             _has_cohort_filter = True
                             break
-                        if _k not in {'disease_cohort', 'icd_query'} and _v is not None:
+                        if _k not in {'disease_cohort', 'icd_query', 'icd_include_query', 'icd_exclude_query'} and _v is not None:
                             _has_cohort_filter = True
                             break
                 
@@ -18169,6 +18544,9 @@ def main():
     assistant_notice = st.session_state.pop('_assistant_notice', None)
     if assistant_notice:
         st.success(assistant_notice)
+
+    _render_icd_preview_main_panel(lang)
+    _render_feature_definition_panel(lang)
     
     export_in_progress = bool(
         st.session_state.get('trigger_export', False)

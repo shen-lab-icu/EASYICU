@@ -114,25 +114,52 @@ def _find_processes_on_port(port: int):
         return []
 
     pids = []
-    for conn in psutil.net_connections(kind="inet"):
-        try:
-            if not conn.laddr or conn.laddr.port != port or conn.status != psutil.CONN_LISTEN:
+    try:
+        inet_connections = list(psutil.net_connections(kind="inet"))
+    except (psutil.AccessDenied, PermissionError):
+        inet_connections = []
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                proc_connections = (
+                    proc.net_connections(kind="inet")
+                    if hasattr(proc, "net_connections")
+                    else proc.connections(kind="inet")
+                )
+            except (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError, NotImplementedError):
                 continue
-        except Exception:
-            continue
 
-        pid = conn.pid
-        if not pid:
-            continue
-        try:
-            proc = psutil.Process(pid)
-            cmdline = " ".join(proc.cmdline() or [])
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
+            cmdline = " ".join(proc.info.get("cmdline") or [])
+            normalized = cmdline.replace("\\", "/").lower()
+            if "streamlit" not in normalized and "easyicu" not in normalized:
+                continue
 
-        normalized = cmdline.replace("\\", "/").lower()
-        if "streamlit" in normalized or "easyicu" in normalized:
-            pids.append(pid)
+            for conn in proc_connections:
+                try:
+                    if not conn.laddr or conn.laddr.port != port or conn.status != psutil.CONN_LISTEN:
+                        continue
+                except Exception:
+                    continue
+                pids.append(proc.info["pid"])
+    else:
+        for conn in inet_connections:
+            try:
+                if not conn.laddr or conn.laddr.port != port or conn.status != psutil.CONN_LISTEN:
+                    continue
+            except Exception:
+                continue
+
+            pid = conn.pid
+            if not pid:
+                continue
+            try:
+                proc = psutil.Process(pid)
+                cmdline = " ".join(proc.cmdline() or [])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+            normalized = cmdline.replace("\\", "/").lower()
+            if "streamlit" in normalized or "easyicu" in normalized:
+                pids.append(pid)
     return list(dict.fromkeys(pids))
 
 
