@@ -87,6 +87,7 @@ scripts/
 # 环境文件
 .env
 .env.local
+.gitignore
 
 # 其他
 *.md
