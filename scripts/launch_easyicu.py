@@ -387,6 +387,13 @@ def _print_port_conflict_warning(port: int, owners: list[dict[str, object]]) -> 
         )
 
 
+def _find_next_available_port(start_port: int, *, max_attempts: int = 20) -> int | None:
+    for candidate in range(start_port + 1, start_port + 1 + max_attempts):
+        if not _is_port_in_use(candidate):
+            return candidate
+    return None
+
+
 def _release_port_before_start(port: int) -> bool:
     runtime_exists = _venv_python().exists()
     port_busy = _wait_for_health(port, timeout=1)
@@ -487,8 +494,21 @@ def start_easyicu(
     foreground: bool = False,
     open_browser: bool = True,
 ) -> int:
-    if not _release_port_before_start(port):
-        return 1
+    resolved_port = port
+    if not _release_port_before_start(resolved_port):
+        fallback_port = _find_next_available_port(resolved_port)
+        if fallback_port is None:
+            print(
+                f"No free fallback port was found after {resolved_port}. "
+                "Try stopping the conflicting app or pass --port manually.",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            f"Port {resolved_port} is occupied by another application. "
+            f"Falling back to port {fallback_port}."
+        )
+        resolved_port = fallback_port
 
     install_easyicu(force=force_reinstall)
 
@@ -501,7 +521,7 @@ def start_easyicu(
         "--host",
         host,
         "--port",
-        str(port),
+        str(resolved_port),
     ]
 
     if foreground:
@@ -512,12 +532,12 @@ def start_easyicu(
     print("Starting EasyICU in the background...")
     _run(cmd)
 
-    if not _wait_for_health(port, timeout=60):
+    if not _wait_for_health(resolved_port, timeout=60):
         log_path = RUNTIME_DIR / "easyicu_webapp.log"
         print(f"EasyICU did not become ready in time. Check {log_path}.", file=sys.stderr)
         return 1
 
-    url = f"http://{host}:{port}"
+    url = f"http://{host}:{resolved_port}"
     print(f"EasyICU is ready: {url}")
     if open_browser:
         webbrowser.open(url)
