@@ -945,7 +945,7 @@ def _compose_agent_messages(prompt: str) -> tuple[list[dict[str, str]], list[dic
 
 
 def _stream_text(stream, placeholder):
-    """Render streaming text manually so it can be replaced after verification."""
+    """Render streaming text manually."""
     chunks = []
     for token in _token_generator(stream):
         chunks.append(token)
@@ -1251,19 +1251,6 @@ def render_chat_tab():
                 icon = "✅" if event.get("status") == "ok" else "⚠️"
                 st.markdown(f"{icon} `{event.get('tool', 'tool')}` — {event.get('detail', '')}")
 
-    if st.session_state.get("llm_last_verification"):
-        verification = st.session_state.llm_last_verification
-        with st.expander("🔎 " + ("Last verification" if lang == "en" else "上次校验"), expanded=False):
-            status = verification.get("status", "uncertain")
-            label_map = {
-                "pass": "✅ Pass" if lang == "en" else "✅ 通过",
-                "corrected": "🛠️ Corrected" if lang == "en" else "🛠️ 已纠正",
-                "uncertain": "⚠️ Uncertain" if lang == "en" else "⚠️ 不确定",
-            }
-            st.markdown(label_map.get(status, status))
-            for issue in verification.get("issues", [])[:5]:
-                st.markdown(f"- {issue}")
-
     # ---- Render message history -----------------------------------------------
     history_container = st.container(height=680, border=True)
     with history_container:
@@ -1554,22 +1541,54 @@ def render_floating_chat_dock():
     lang = st.session_state.get("language", "en")
     if "_floating_ai_open" not in st.session_state:
         st.session_state["_floating_ai_open"] = True
+    if "_floating_ai_size" not in st.session_state:
+        st.session_state["_floating_ai_size"] = "m"
     if st.session_state.get("_ai_pending_question"):
         st.session_state["_floating_ai_open"] = True
 
+    size_presets = {
+        "s": {
+            "panel_width": "clamp(320px, 28vw, 500px)",
+            "panel_max_height": "min(72vh, 680px)",
+            "history_height": 300,
+        },
+        "m": {
+            "panel_width": "clamp(360px, 34vw, 620px)",
+            "panel_max_height": "min(84vh, 860px)",
+            "history_height": 400,
+        },
+        "l": {
+            "panel_width": "clamp(460px, 44vw, 860px)",
+            "panel_max_height": "min(92vh, 1100px)",
+            "history_height": 620,
+        },
+    }
+    size_key = st.session_state.get("_floating_ai_size", "m")
+    if size_key not in size_presets:
+        size_key = "m"
+        st.session_state["_floating_ai_size"] = size_key
+    size_cfg = size_presets[size_key]
+    export_locked = bool(st.session_state.get("_exporting_in_progress", False))
+
     st.markdown(
-        """
+        f"""
         <style>
-        :root {
+        :root {{
             --easyicu-ai-launcher-size: clamp(56px, 4.2vw, 78px);
-            --easyicu-ai-panel-width: clamp(360px, 34vw, 620px);
-            --easyicu-ai-panel-max-height: min(84vh, 860px);
+            --easyicu-ai-panel-width: {size_cfg["panel_width"]};
+            --easyicu-ai-panel-max-height: {size_cfg["panel_max_height"]};
             --easyicu-ai-title-size: clamp(0.92rem, 0.35vw + 0.84rem, 1.06rem);
             --easyicu-ai-subtitle-size: clamp(0.72rem, 0.18vw + 0.68rem, 0.82rem);
             --easyicu-ai-body-size: clamp(0.82rem, 0.16vw + 0.78rem, 0.93rem);
             --easyicu-ai-button-size: clamp(2rem, 2vw, 2.45rem);
-        }
-
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <style>
         /* ---- Animation keyframes ---- */
         @keyframes easyicuPanelSlideIn {
             from { opacity: 0; transform: translateY(24px) scale(0.96); }
@@ -1640,6 +1659,19 @@ def render_floating_chat_dock():
             color: #ffffff;
             font-size: clamp(1.12rem, 1vw + 0.88rem, 1.55rem);
             box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
+        }
+
+        div.st-key-floating_ai_launcher .easyicu-ai-launcher-btn {
+            width: var(--easyicu-ai-launcher-size);
+            min-width: var(--easyicu-ai-launcher-size);
+            height: var(--easyicu-ai-launcher-size);
+            border-radius: 999px;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            background: linear-gradient(135deg, #0f766e 0%, #0f172a 100%);
+            color: #ffffff;
+            font-size: clamp(1.12rem, 1vw + 0.88rem, 1.55rem);
+            box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
+            cursor: pointer;
         }
 
         div.st-key-floating_ai_panel {
@@ -1752,6 +1784,22 @@ def render_floating_chat_dock():
             padding-bottom: 0.38rem;
         }
 
+        div.st-key-floating_ai_panel .easyicu-ai-js-btn {
+            width: 100%;
+            min-height: var(--easyicu-ai-button-size);
+            border-radius: 14px;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(241,245,249,0.98));
+            color: #0f172a;
+            font-size: clamp(0.8rem, 0.12vw + 0.77rem, 0.9rem);
+            cursor: pointer;
+        }
+
+        div.st-key-floating_ai_panel .easyicu-ai-js-btn:hover,
+        div.st-key-floating_ai_launcher .easyicu-ai-launcher-btn:hover {
+            filter: brightness(1.02);
+        }
+
         div.st-key-floating_ai_panel .stChatInput {
             margin-top: 0.3rem;
         }
@@ -1812,57 +1860,77 @@ def render_floating_chat_dock():
         unsafe_allow_html=True,
     )
 
-    if not st.session_state.get("_floating_ai_open", False):
-        # Check for unread background responses
-        _unread = st.session_state.get("_ai_bg_unread_count", 0)
-        _responding = st.session_state.get("_ai_bg_responding", False)
-        with st.container(key="floating_ai_launcher"):
-            # Show notification badge if there are unread responses
-            if _unread > 0:
-                _badge_class = "ai-notif-badge pulse" if _responding else "ai-notif-badge"
-                st.markdown(
-                    f'<div class="{_badge_class}">{_unread}</div>',
-                    unsafe_allow_html=True,
-                )
-            elif _responding:
-                st.markdown(
-                    '<div class="ai-notif-badge pulse">⋯</div>',
-                    unsafe_allow_html=True,
-                )
-            if st.button("💬", key="_floating_ai_open_btn", help="Open AI chat" if lang == "en" else "打开 AI 对话"):
-                st.session_state["_floating_ai_open"] = True
-                # Clear unread count when opening
-                st.session_state["_ai_bg_unread_count"] = 0
-                st.session_state["_ai_bg_response_ready"] = False
-                st.rerun()
-        return
+    # Check for unread background responses
+    _unread = st.session_state.get("_ai_bg_unread_count", 0)
+    _responding = st.session_state.get("_ai_bg_responding", False)
+    with st.container(key="floating_ai_launcher"):
+        if _unread > 0:
+            _badge_class = "ai-notif-badge pulse" if _responding else "ai-notif-badge"
+            st.markdown(
+                f'<div class="{_badge_class}">{_unread}</div>',
+                unsafe_allow_html=True,
+            )
+        elif _responding:
+            st.markdown(
+                '<div class="ai-notif-badge pulse">⋯</div>',
+                unsafe_allow_html=True,
+            )
+        launcher_display = "none" if st.session_state.get("_floating_ai_open", True) else "block"
+        st.markdown(
+            (
+                f'<div id="easyicu-ai-launcher-wrap" style="display:{launcher_display}">'
+                f'<button id="easyicu-ai-open-js" class="easyicu-ai-launcher-btn" type="button" '
+                f'aria-label="{"Open AI chat" if lang == "en" else "打开 AI 对话"}" '
+                "onclick=\"var p=document.querySelector('div.st-key-floating_ai_panel');"
+                "var l=document.getElementById('easyicu-ai-launcher-wrap');"
+                "if(p){p.style.display='block';} if(l){l.style.display='none';}\">💬</button></div>"
+            ),
+            unsafe_allow_html=True,
+        )
 
     with st.container(key="floating_ai_panel"):
+        if not st.session_state.get("_floating_ai_open", True):
+            st.markdown("<style>div.st-key-floating_ai_panel{display:none !important;}</style>", unsafe_allow_html=True)
         dock_title = "AI Assistant" if lang == "en" else "AI 助手"
         dock_subtitle = (
             "Describe your research task first, then I will map it to EasyICU."
             if lang == "en" else
             "先描述你的研究任务，我再帮你映射到 EasyICU 的具体步骤。"
         )
-        header_cols = st.columns([5, 1.25, 1.25, 1, 1])
+        header_cols = st.columns([4.8, 0.8, 0.8, 0.8, 1, 1])
         with header_cols[0]:
             st.markdown(
                 f'<div class="floating-ai-header"><div><div class="floating-ai-title">💬 {dock_title}</div><div class="floating-ai-subtitle">{dock_subtitle}</div></div></div>',
                 unsafe_allow_html=True,
             )
         with header_cols[1]:
-            st.empty()
+            if st.button("S", key="_floating_ai_size_s_btn", use_container_width=True, help="Compact size" if lang == "en" else "紧凑尺寸", disabled=export_locked):
+                st.session_state["_floating_ai_size"] = "s"
+                st.rerun()
         with header_cols[2]:
-            st.empty()
+            if st.button("M", key="_floating_ai_size_m_btn", use_container_width=True, help="Medium size" if lang == "en" else "中等尺寸", disabled=export_locked):
+                st.session_state["_floating_ai_size"] = "m"
+                st.rerun()
         with header_cols[3]:
-            if st.button("—", key="_floating_ai_min_btn", use_container_width=True):
-                st.session_state["_floating_ai_open"] = False
+            if st.button("L", key="_floating_ai_size_l_btn", use_container_width=True, help="Large size" if lang == "en" else "大尺寸", disabled=export_locked):
+                st.session_state["_floating_ai_size"] = "l"
                 st.rerun()
         with header_cols[4]:
-            if st.button("✕", key="_floating_ai_close_btn", use_container_width=True):
-                st.session_state["_floating_ai_open"] = False
-                st.session_state["_ai_pending_question"] = None
-                st.rerun()
+            st.markdown(
+                '<button id="easyicu-ai-min-js" class="easyicu-ai-js-btn" type="button" '
+                "onclick=\"var p=document.querySelector('div.st-key-floating_ai_panel');"
+                "var l=document.getElementById('easyicu-ai-launcher-wrap');"
+                "if(p){p.style.display='none';} if(l){l.style.display='block';}\">—</button>",
+                unsafe_allow_html=True,
+            )
+        with header_cols[5]:
+            st.markdown(
+                '<button id="easyicu-ai-close-js" class="easyicu-ai-js-btn" type="button" '
+                "onclick=\"var p=document.querySelector('div.st-key-floating_ai_panel');"
+                "var l=document.getElementById('easyicu-ai-launcher-wrap');"
+                "if(p){p.style.display='none';} if(l){l.style.display='block';}\">✕</button>",
+                unsafe_allow_html=True,
+            )
 
         if not st.session_state.llm_enabled:
             st.caption(
@@ -1880,7 +1948,7 @@ def render_floating_chat_dock():
             _render_compact_chat_panel(
                 lang=lang,
                 panel_key="_llm_floating",
-                history_height=400,
+                history_height=size_cfg["history_height"],
                 show_starters=True,
             )
 
@@ -2125,36 +2193,20 @@ def _stream_response(messages: list, lang: str):
         status_placeholder.info(
             "✍️ Generating response..." if lang == "en" else "✍️ 正在生成回答..."
         )
-        draft_response = _stream_text(stream, answer_placeholder)
-        status_placeholder.info(
-            "🔎 Verifying answer..." if lang == "en" else "🔎 正在校验回答..."
-        )
-        verification = _verify_response(client, messages, draft_response, lang)
-        final_response = verification.get("corrected_answer") or draft_response
+        final_response = _stream_text(stream, answer_placeholder)
         final_response = _append_quick_links(
             prompt=st.session_state.llm_messages[-1]["content"],
             answer=final_response,
             lang=lang,
         )
         answer_placeholder.markdown(final_response)
-        st.session_state.llm_last_verification = verification
+        st.session_state.llm_last_verification = None
         response_actions = _suggest_ui_actions(
             st.session_state.llm_messages[-1]["content"],
             final_response,
             lang,
         )
         _render_nav_actions(response_actions, key_prefix="_llm_action_live")
-
-        verify_status = verification.get("status", "uncertain")
-        verify_event = {
-            "tool": "answer_verifier",
-            "status": "ok" if verify_status in ("pass", "corrected") else "error",
-            "detail": f"status={verify_status}",
-        }
-        st.session_state.llm_last_tool_events = [
-            *st.session_state.get("llm_last_tool_events", []),
-            verify_event,
-        ]
         status_placeholder.empty()
         st.session_state.llm_messages.append(
             {

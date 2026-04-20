@@ -62,6 +62,7 @@ test_data_miiv/
 test_data_eicu/
 test_data_aumc/
 test_data_hirid/
+path_to_your_export/
 # output/
 demo_easy_output.txt
 
