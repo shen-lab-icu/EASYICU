@@ -14,7 +14,13 @@ EasyICU is a Python toolkit designed for intensive care unit (ICU) data analysis
 
 **🎯 Unified Multi-Database Clinical Concept Extraction** — EasyICU treats *clinical concepts* as the fundamental unit of feature engineering, replacing traditional static variable mappings with semantic modeling. The system extracts 167 standardized clinical concepts from six major public ICU databases — MIMIC-IV, MIMIC-III, eICU-CRD, AmsterdamUMCdb, HiRID, and SICdb — and is the first to implement automated computation of the **SOFA-2** score.
 
+**🐍 Scriptable Python API for Reproducible Pipelines** — In addition to the web interface, EasyICU provides a Python API for loading concepts, organ scores, domain-specific modules, and full-database extractions inside scripts and notebooks. This makes it practical to build repeatable cohort pipelines and feature engineering workflows in code.
+
 **🌐 Clinician-Oriented Visual Interface** — EasyICU integrates a web-based graphical interface designed to lower the technical barrier for EHR data analysis. Clinicians can perform cohort definition, feature selection, time-window configuration, and data quality review without writing code. The system consolidates patient time-series data into a unified view, supporting perspectives from individual case review to population-level analysis.
+
+**🤖 Embedded AI Assistant for Workflow Guidance** — EasyICU includes an integrated AI assistant that helps users translate research questions into concrete EasyICU steps. It can explain which cohort filters, modules, concepts, and scores fit a task, assist with troubleshooting, and guide users through the current workflow with context-aware suggestions.
+
+**🛠 One-Click Data Validation, Conversion, and Setup** — EasyICU can validate raw database directories and prepare them automatically for extraction. The web workflow detects unsupported raw layouts such as CSV / CSV.GZ / tar.gz, converts them to Parquet, applies database-specific optimizations, and prepares the structure needed by both the web interface and Python APIs.
 
 **⚡ High-Performance Computing Optimizations** — Tailored for the high-frequency, high-dimensional, and sparse nature of ICU data, EasyICU incorporates multiple performance optimization strategies to ensure stable operation on machines with as little as **16 GB of RAM**.
 
