@@ -14,6 +14,54 @@ import threading
 from functools import lru_cache
 from typing import Dict, Any, Optional, List
 
+
+def _get_database_download_info(database: str, lang: str = 'en') -> dict | None:
+    """Return the official download/access page for a database."""
+    download_map = {
+        'miiv': {
+            'name': 'MIMIC-IV',
+            'url': 'https://physionet.org/content/mimiciv/',
+        },
+        'mimic': {
+            'name': 'MIMIC-III',
+            'url': 'https://physionet.org/content/mimiciii/',
+        },
+        'eicu': {
+            'name': 'eICU-CRD',
+            'url': 'https://physionet.org/content/eicu-crd/',
+        },
+        'aumc': {
+            'name': 'AmsterdamUMCdb',
+            'url': 'https://amsterdammedicaldatascience.nl/amsterdamumcdb/',
+        },
+        'hirid': {
+            'name': 'HiRID',
+            'url': 'https://hirid.intensivecare.ai/',
+        },
+        'sic': {
+            'name': 'SICdb',
+            'url': 'https://physionet.org/content/sicdb/',
+        },
+    }
+    info = download_map.get(database)
+    if not info:
+        return None
+    return {
+        'name': info['name'],
+        'url': info['url'],
+        'label': (
+            f"Open {info['name']} download page"
+            if lang == 'en' else
+            f"打开 {info['name']} 下载页"
+        ),
+        'note': (
+            'Some databases require credentialed access or data use approval before download.'
+            if lang == 'en' else
+            '部分数据库需要先申请访问权限或完成数据使用审批后才能下载。'
+        ),
+    }
+
+
 # 🚀 性能优化：禁用自动缓存清除，保持表缓存在多次加载间复用
 os.environ['EASYICU_AUTO_CLEAR_CACHE'] = 'False'
 
@@ -39,22 +87,17 @@ if 'sidebar_expanded' not in st.session_state:
 sidebar_width = "100vw" if st.session_state.sidebar_expanded else "clamp(420px, 31vw, 720px)"
 sidebar_min_width = "100vw" if st.session_state.sidebar_expanded else "clamp(400px, 29vw, 680px)"
 main_display = "none" if st.session_state.sidebar_expanded else "block"
-
 st.markdown(f"""
 <style>
     [data-testid="stSidebar"] {{
         min-width: {sidebar_min_width};
         max-width: {sidebar_width};
         width: {sidebar_width} !important;
-        transition: all 0.3s ease;
     }}
     [data-testid="stSidebar"] > div {{
         width: 100% !important;
     }}
     /* 隐藏侧边栏折叠按钮 */
-    [data-testid="collapsedControl"] {{
-        display: none !important;
-    }}
     button[kind="headerNoPadding"] {{
         display: none !important;
     }}
@@ -3429,6 +3472,39 @@ def _format_definition_list(values, limit: int = 6) -> str:
     return f"{', '.join(cleaned[:limit])} (+{len(cleaned) - limit} more)"
 
 
+@st.cache_data(ttl=3600)
+def _get_table_defaults() -> dict:
+    """Load per-database per-table default column mappings from data-sources.json."""
+    import json as _json
+    try:
+        ds_path = Path(__file__).resolve().parent.parent / 'data' / 'data-sources.json'
+        if not ds_path.exists():
+            return {}
+        with open(ds_path, encoding='utf-8') as f:
+            ds_list = _json.load(f)
+        result = {}
+        for entry in ds_list:
+            if not isinstance(entry, dict):
+                continue
+            db_name = entry.get('name', '')
+            tables = entry.get('tables', {})
+            if not isinstance(tables, dict):
+                continue
+            for tbl_name, tbl_def in tables.items():
+                if not isinstance(tbl_def, dict):
+                    continue
+                defaults = tbl_def.get('defaults', {})
+                if not isinstance(defaults, dict):
+                    defaults = {}
+                val_var = defaults.get('val_var') or tbl_def.get('val_var')
+                idx_var = defaults.get('index_var') or tbl_def.get('index_var')
+                if val_var or idx_var:
+                    result[(db_name, tbl_name)] = {'val_var': val_var, 'index_var': idx_var}
+        return result
+    except Exception:
+        return {}
+
+
 def _format_source_selector(source) -> str:
     """Summarize the identifying selector used for a raw concept source."""
     selector_parts = []
@@ -3473,6 +3549,7 @@ def _collect_recursive_concept_sources(concept_name: str, database: str, concept
 def _get_feature_definition_rows(selected_concepts: list[str], database: str, lang: str) -> list[dict]:
     """Build a transparent per-feature definition table for the current database."""
     concept_dict = _get_quality_concept_dictionary()
+    table_defaults = _get_table_defaults()
     rows = []
 
     for concept_name in sorted(set(selected_concepts)):
@@ -3494,7 +3571,7 @@ def _get_feature_definition_rows(selected_concepts: list[str], database: str, la
             'Type': "Direct",
             'Table(s)': "—",
             'Selector / ID': "—",
-            'Value / Time': "—",
+            'Columns': "—",
             'Logic': description or "—",
         }
 
@@ -3504,29 +3581,46 @@ def _get_feature_definition_rows(selected_concepts: list[str], database: str, la
                 for source in direct_sources:
                     logic_parts = []
                     if getattr(source, 'callback', None):
-                        logic_parts.append(f"source callback: {source.callback}")
+                        logic_parts.append(f"callback: {source.callback}")
                     if getattr(concept_def, 'callback', None):
-                        logic_parts.append(f"feature callback: {concept_def.callback}")
+                        logic_parts.append(f"callback: {concept_def.callback}")
                     if getattr(concept_def, 'sub_concepts', None):
-                        logic_parts.append(f"derived from: {_format_definition_list(concept_def.sub_concepts, limit=6)}")
+                        logic_parts.append(f"derived: {_format_definition_list(concept_def.sub_concepts, limit=6)}")
                     if description:
                         logic_parts.append(description)
 
-                    value_parts = []
-                    if getattr(source, 'value_var', None):
-                        value_parts.append(f"value={source.value_var}")
-                    if getattr(source, 'unit_var', None):
-                        value_parts.append(f"unit_col={source.unit_var}")
-                    if getattr(source, 'index_var', None):
-                        value_parts.append(f"time={source.index_var}")
-                    if getattr(source, 'dur_var', None):
-                        value_parts.append(f"dur={source.dur_var}")
+                    # Resolve value_var / index_var from table defaults
+                    tbl_name = getattr(source, 'table', None) or ''
+                    tbl_def = table_defaults.get((database, tbl_name), {})
+                    val_var = getattr(source, 'value_var', None) or tbl_def.get('val_var')
+                    idx_var = getattr(source, 'index_var', None) or tbl_def.get('index_var')
+                    unit_var = getattr(source, 'unit_var', None)
+                    dur_var = getattr(source, 'dur_var', None)
+
+                    col_parts = []
+                    if val_var:
+                        col_parts.append(f"value={val_var}")
+                    if unit_var:
+                        col_parts.append(f"unit={unit_var}")
+                    if idx_var:
+                        col_parts.append(f"time={idx_var}")
+                    if dur_var:
+                        col_parts.append(f"dur={dur_var}")
 
                     row = dict(base_row)
-                    row['Type'] = "Callback-on-source" if (getattr(source, 'callback', None) or getattr(concept_def, 'callback', None)) else "Direct"
-                    row['Table(s)'] = getattr(source, 'table', None) or "—"
+                    has_callback = getattr(source, 'callback', None) or getattr(concept_def, 'callback', None)
+                    src_class = getattr(source, 'class_name', None) or ''
+                    if not tbl_name and src_class == 'fun_itm':
+                        row['Type'] = "Function"
+                        row['Table(s)'] = "computed"
+                    elif not tbl_name and src_class == 'rec_cncpt':
+                        row['Type'] = "Derived"
+                        row['Table(s)'] = "recursive"
+                    else:
+                        row['Type'] = "Callback" if has_callback else "Direct"
+                        row['Table(s)'] = tbl_name or "—"
                     row['Selector / ID'] = _format_source_selector(source)
-                    row['Value / Time'] = " | ".join(value_parts) if value_parts else "—"
+                    row['Columns'] = " | ".join(col_parts) if col_parts else "—"
                     row['Logic'] = " ; ".join(logic_parts) if logic_parts else "—"
                     rows.append(row)
                 continue
@@ -3544,9 +3638,9 @@ def _get_feature_definition_rows(selected_concepts: list[str], database: str, la
 
                 logic_parts = []
                 if getattr(concept_def, 'callback', None):
-                    logic_parts.append(f"feature callback: {concept_def.callback}")
+                    logic_parts.append(f"callback: {concept_def.callback}")
                 if getattr(concept_def, 'sub_concepts', None):
-                    logic_parts.append(f"derived from: {_format_definition_list(concept_def.sub_concepts, limit=8)}")
+                    logic_parts.append(f"derived: {_format_definition_list(concept_def.sub_concepts, limit=8)}")
                 if description:
                     logic_parts.append(description)
 
@@ -3558,10 +3652,31 @@ def _get_feature_definition_rows(selected_concepts: list[str], database: str, la
                 rows.append(row)
                 continue
 
+            # Concept exists in dict but no source for this database
+            if concept_name in SPECIAL_CONCEPTS:
+                module_name, func_name, output_cols = SPECIAL_CONCEPTS[concept_name]
+                row = dict(base_row)
+                row['Type'] = "Special"
+                row['Table(s)'] = "loader"
+                row['Selector / ID'] = f"{module_name}.{func_name}"
+                logic_parts = [f"output: {_format_definition_list(output_cols, limit=4)}"]
+                if description:
+                    logic_parts.append(description)
+                row['Logic'] = " ; ".join(logic_parts)
+                rows.append(row)
+                continue
+
+            row = dict(base_row)
+            no_src_label = f"No source for {database.upper()}" if lang == 'en' else f"{database.upper()} 无数据源"
+            row['Type'] = no_src_label
+            rows.append(row)
+            continue
+
+        # concept_def is None -- check SPECIAL_CONCEPTS
         if concept_name in SPECIAL_CONCEPTS:
             module_name, func_name, output_cols = SPECIAL_CONCEPTS[concept_name]
             row = dict(base_row)
-            row['Type'] = "Special / Derived"
+            row['Type'] = "Special"
             row['Table(s)'] = "loader"
             row['Selector / ID'] = f"{module_name}.{func_name}"
             logic_parts = [f"output: {_format_definition_list(output_cols, limit=4)}"]
@@ -3572,7 +3687,7 @@ def _get_feature_definition_rows(selected_concepts: list[str], database: str, la
             continue
 
         row = dict(base_row)
-        row['Type'] = "Definition unavailable"
+        row['Type'] = "Unknown"
         rows.append(row)
 
     return rows
@@ -3610,7 +3725,7 @@ def _render_feature_definition_panel(lang: str) -> None:
         f"当前展示 **{n_features}** 个已选特征，对应 **{n_rows}** 条数据库定义记录。"
     )
 
-    with st.expander(title, expanded=False):
+    with st.expander(title, expanded=True):
         st.caption(caption)
         st.info(summary)
         definition_df = pd.DataFrame(rows)
@@ -4647,7 +4762,7 @@ TEXTS = {
         'cohort_compare': '📊 Cohort Analysis',
         'sub_data_table': '📋 Data Tables',
         'sub_timeseries': '📈 Time Series',
-        'sub_patient_view': '🏥 Patient View',
+        'sub_patient_view': '🏥 Patient Overview',
         'sub_data_quality': '📊 Data Quality',
         'ready': '🎉 Ready!',
         'ready_desc': 'Data loaded, you can start exploring.',
@@ -4678,10 +4793,10 @@ TEXTS = {
         'sanity_unsupported': 'Unsupported in This DB',
         'sanity_confirm': '✅ Confirm & Export',
         'sanity_back': '↩️ Go Back & Modify',
-        'review_tables': '📋 Review Tables',
-        'review_trends': '📈 Review Trends',
-        'review_patients': '🏥 Review Patients',
-        'review_quality': '📊 Review Quality',
+        'review_tables': '📋 Data Tables',
+        'review_trends': '📈 Time Series',
+        'review_patients': '🏥 Patient Overview',
+        'review_quality': '📊 Data Quality',
         'clinical_lanes': 'Clinical Lanes',
         'lane_vitals': '❤️ Vital Signs',
         'lane_labs': '🧪 Labs',
@@ -4881,6 +4996,7 @@ def validate_database_path(data_path: str, database: str) -> dict:
     """
     path = Path(data_path)
     lang = st.session_state.get('language', 'en')
+    download_info = _get_database_download_info(database, lang)
     
     # 各数据库需要的核心表（Parquet格式）- 包括分片目录
     # 分为必需表和可选表
@@ -5026,6 +5142,9 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'suggestion': sug,
             'can_convert': True,
             'csv_path': str(path),
+            'download_url': download_info['url'] if download_info else None,
+            'download_label': download_info['label'] if download_info else None,
+            'download_note': download_info['note'] if download_info else None,
         }
     
     # 核心表缺失是严重问题
@@ -5049,6 +5168,9 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'can_convert': True,
             'csv_path': str(path),
             'missing_tables': missing_tables + csv_only_tables,
+            'download_url': download_info['url'] if download_info else None,
+            'download_label': download_info['label'] if download_info else None,
+            'download_note': download_info['note'] if download_info else None,
         }
     
     # 部分表缺失（非核心）或仅有 CSV
@@ -5073,6 +5195,9 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'can_convert': True,
             'csv_path': str(path),
             'missing_tables': all_need_convert,
+            'download_url': download_info['url'] if download_info else None,
+            'download_label': download_info['label'] if download_info else None,
+            'download_note': download_info['note'] if download_info else None,
         }
     
     # 检查是否存在 CSV 文件（可能需要转换）
@@ -5094,7 +5219,10 @@ def validate_database_path(data_path: str, database: str) -> dict:
             'message': msg,
             'suggestion': sug,
             'can_convert': True,
-            'csv_path': str(path)
+            'csv_path': str(path),
+            'download_url': download_info['url'] if download_info else None,
+            'download_label': download_info['label'] if download_info else None,
+            'download_note': download_info['note'] if download_info else None,
         }
     
     # HiRID 特殊检测：可能只有 tar.gz 归档文件（尚未解压）
@@ -5140,7 +5268,10 @@ def validate_database_path(data_path: str, database: str) -> dict:
             return {
                 'valid': False,
                 'message': msg,
-                'suggestion': sug
+                'suggestion': sug,
+                'download_url': download_info['url'] if download_info else None,
+                'download_label': download_info['label'] if download_info else None,
+                'download_note': download_info['note'] if download_info else None,
             }
     
     # 完全找不到相关文件
@@ -5150,7 +5281,10 @@ def validate_database_path(data_path: str, database: str) -> dict:
     return {
         'valid': False,
         'message': msg,
-        'suggestion': sug
+        'suggestion': sug,
+        'download_url': download_info['url'] if download_info else None,
+        'download_label': download_info['label'] if download_info else None,
+        'download_note': download_info['note'] if download_info else None,
     }
 
 
@@ -7729,6 +7863,31 @@ def render_sidebar():
                     st.rerun()
                 convert_hint = "💡 One-click: convert → validate → ready" if st.session_state.language == 'en' else "💡 一键完成：转换 → 验证 → 就绪"
                 st.caption(convert_hint)
+                if last_validation.get('download_url'):
+                    st.link_button(
+                        last_validation.get('download_label') or (
+                            "Open database download page"
+                            if st.session_state.language == 'en' else
+                            "打开数据库下载页"
+                        ),
+                        last_validation['download_url'],
+                        use_container_width=True,
+                    )
+                    if last_validation.get('download_note'):
+                        st.caption(last_validation['download_note'])
+            elif last_validation and (not last_validation.get('valid')) and last_path == data_path:
+                if last_validation.get('download_url'):
+                    st.link_button(
+                        last_validation.get('download_label') or (
+                            "Open database download page"
+                            if st.session_state.language == 'en' else
+                            "打开数据库下载页"
+                        ),
+                        last_validation['download_url'],
+                        use_container_width=True,
+                    )
+                    if last_validation.get('download_note'):
+                        st.caption(last_validation['download_note'])
             elif data_path and Path(data_path).exists():
                 validate_hint = "💡 Click the button above to validate data format" if st.session_state.language == 'en' else "💡 点击上方按钮验证数据格式"
                 st.caption(validate_hint)
@@ -8604,14 +8763,23 @@ def load_from_exported(export_dir: str, max_patients: int = 50, selected_files: 
                 if file.suffix == '.parquet':
                     if _sampled_ids is not None and _id_col_for_filter:
                         import pyarrow.parquet as pq
-                        import pyarrow.compute as pc
-                        import pyarrow as pa
-                        tbl = pq.read_table(file)
-                        if _id_col_for_filter in tbl.column_names:
-                            mask = pc.is_in(tbl.column(_id_col_for_filter),
-                                            value_set=pa.array(sorted(_sampled_ids)))
-                            tbl = tbl.filter(mask)
-                        raw_data[file_stem] = tbl.to_pandas()
+                        _filters = [(_id_col_for_filter, "in", sorted(_sampled_ids))]
+                        try:
+                            tbl = pq.read_table(file, filters=_filters)
+                            raw_data[file_stem] = tbl.to_pandas()
+                        except Exception:
+                            # Fallback for older PyArrow / edge-case parquet layouts.
+                            tbl = pq.read_table(file)
+                            if _id_col_for_filter in tbl.column_names:
+                                import pyarrow.compute as pc
+                                import pyarrow as pa
+
+                                mask = pc.is_in(
+                                    tbl.column(_id_col_for_filter),
+                                    value_set=pa.array(sorted(_sampled_ids)),
+                                )
+                                tbl = tbl.filter(mask)
+                            raw_data[file_stem] = tbl.to_pandas()
                     else:
                         raw_data[file_stem] = pd.read_parquet(file)
                 elif file.suffix == '.csv':
@@ -9450,7 +9618,7 @@ def render_data_overview():
     if lang == 'en':
         features = [
             ("📈", "Time Series", "Interactive time series visualization with single & multi-patient comparison"),
-            ("🏥", "Patient View", "Multi-dimensional patient dashboard for comprehensive assessment"),
+            ("🏥", "Patient Overview", "Multi-dimensional patient dashboard for comprehensive assessment"),
             ("📊", "Data Quality", "Missing rate analysis, distribution statistics & completeness reports"),
         ]
     else:
@@ -9623,7 +9791,7 @@ def render_home_viz_mode(lang):
         features = [
             ("📋", "Data Tables", "Browse & merge"),
             ("📈", "Time Series", "Interactive charts"),
-            ("🏥", "Patient View", "Patient dashboard"),
+            ("🏥", "Patient Overview", "Patient dashboard"),
             ("📊", "Data Quality", "Missing analysis"),
         ]
     else:
@@ -18193,7 +18361,7 @@ def render_export_page():
                 st.button(no_pat, disabled=True, width="stretch")
         else:
             no_sel = "👤 No Selection" if lang == 'en' else "👤 未选患者"
-            no_sel_help = "Please select a patient in Patient View first" if lang == 'en' else "请先在患者视图中选择一位患者"
+            no_sel_help = "Please select a patient in Patient Overview first" if lang == 'en' else "请先在患者视图中选择一位患者"
             st.button(no_sel, disabled=True, width="stretch", help=no_sel_help)
     
     with quick_cols[2]:
@@ -18957,7 +19125,7 @@ def main():
                 **📊 Quick Visualization Mode**
                 - Browse exported data folders
                 - 📈 **Time Series**: Multi-patient trends
-                - 🏥 **Patient View**: Single patient details
+                - 🏥 **Patient Overview**: Single patient details
                 - 📊 **Data Quality**: Completeness report
                 
                 **🔬 Cohort Analysis Mode**

@@ -22,9 +22,30 @@ EasyICU 是一个专为重症监护室（ICU）数据分析设计的 Python 工�
 
 ## 快速开始
 
+### 先选择你的使用路径
+
+#### 路线 A：Web 界面用户
+
+如果你想：
+- 快速启动 EasyICU 图形界面
+- 通过可视化方式完成数据校验、原始数据转换和特征导出
+- 不写 Python 代码直接完成分析准备
+
+从 [一键启动（推荐）](#一键启动推荐) 开始。
+
+#### 路线 B：Python API / Notebook / 脚本用户
+
+如果你想：
+- 在 Python 脚本或 notebook 中调用 EasyICU
+- 自动化批量提取流程
+- 在代码里构建可复现的特征工程工作流
+
+从 [可选：为 Python API / 开发环境安装 EasyICU](#可选为-python-api--开发环境安装-easyicu) 开始，然后阅读 [Python API](#-python-api)。
+
 ### 一键启动（推荐）
 
 如果用户只是想快速打开 EasyICU Web 界面，不需要先装 Anaconda，也不需要先打开 VS Code。
+如果一键启动已经满足需求，可以直接跳过下面的 Python/API 安装部分。
 
 前提：
 - 已安装 **Python 3.9+**
@@ -48,9 +69,26 @@ http://127.0.0.1:8501
 
 说明：
 - 首次启动通常会比后续启动慢几分钟
-- macOS 首次双击脚本时，可能需要在系统安全提示里选择“仍要打开”
+- macOS 首次运行 `start_easyicu.command` 时，可能会被系统安全机制拦截
 
-### 第一步：安装 Anaconda
+macOS 首次运行说明：
+1. 先双击一次 `start_easyicu.command`。
+2. 如果系统弹出安全提示，打开 `系统设置 -> 隐私与安全性`。
+3. 在“安全性”区域找到该脚本，点击“仍要打开”。
+4. 如果仍被拦截，可对文件右键选择“打开”，再确认一次。
+
+完成这一步后，后续再次启动通常就不需要重复授权了。
+
+### 可选：为 Python API / 开发环境安装 EasyICU
+
+这一部分只在以下场景需要：
+- 你想在脚本或 notebook 里使用 Python API
+- 你想把 EasyICU 安装到自己的 Python 环境中
+- 你想本地开发或修改 EasyICU
+
+Anaconda/Miniconda 是可选项，不是一键启动的前置要求。
+
+#### 方式一：Conda（可选）
 
 1. **下载 Anaconda**
    访问 [Anaconda 官网](https://www.anaconda.com/download) 下载最新版本。
@@ -60,12 +98,20 @@ http://127.0.0.1:8501
 2. **安装 Anaconda**
    - 运行安装程序。
    - 可点击"Browse"修改安装目录。
-   - 勾选"Add Anaconda to my PATH environment variable"。
+    - 一般不建议额外修改 PATH，直接使用 **Anaconda Prompt** 即可。
    - 点击"Next"完成安装。
 
-### 第二步：安装 EasyICU
+#### 方式二：标准 Python 虚拟环境
 
-在 **Anaconda Prompt**（或已激活 conda 的终端）中执行：
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip
+```
+
+#### 安装 EasyICU
+
+在 **Anaconda Prompt**、已激活 conda 的终端，或普通 Python 虚拟环境中执行：
 
 ```bash
 # 使用 Git 克隆仓库（也可直接从 GitHub 下载 ZIP 解压）
@@ -76,7 +122,7 @@ cd easyicu
 pip install -e ".[all]"
 ```
 
-### 第三步：启动 Web 应用
+#### 启动 Web 应用
 
 ```bash
 easyicu-webapp
@@ -91,7 +137,7 @@ URL: http://localhost:8501
 
 用浏览器打开 `http://localhost:8501` 即可进入 EasyICU 界面。
 
-### 第四步：准备数据
+### 第一步：准备数据
 
 1. **下载 ICU 数据库**（需申请访问权限）：
 
@@ -106,21 +152,22 @@ URL: http://localhost:8501
 
 2. **解压数据到本地目录**。
 
-### 第五步：数据转换
+### 第二步：验证并转换数据
 
-1. 在 Web 界面中输入数据所在目录路径。
-2. 系统自动检测数据格式：
-   - 若数据**不是 Parquet 格式**，系统将提示需要转换。
-3. 点击 **转换** 按钮，系统将自动执行：
-   - 将 **CSV / CSV.GZ** 文件转换为 **Parquet** 格式。
-   - 对大型数据表（如 `chartevents`、`labevents` 等）进行读取性能优化。
-4. 转换完成后，刷新页面以加载转换后的数据。
+1. 在 Web 界面中输入数据目录路径。
+2. 点击 **Validate Data Path**。
+3. EasyICU 会检查当前数据库是否已经是可直接读取的准备完成状态。
+4. 如果检测到原始 **CSV / CSV.GZ / tar.gz** 数据，界面会继续提供 **Convert & Setup**，一键完成：
+   - 转换为 **Parquet**
+   - 对大表进行数据库专用优化
+   - 准备 Web 工作流和 Python API 所需的数据布局
+5. 准备完成后，从同一路径加载数据即可。
 
 <img width="1931" height="956" alt="数据转换" src="https://github.com/user-attachments/assets/86ea826b-6a0f-491a-b967-c5a7ebdfaa5b" />
 
 ---
 
-### 第六步：队列选择
+### 第三步：队列选择
 
 1. 在左侧导航栏点击 **队列选择**。
 2. 设置筛选条件，例如：
@@ -136,7 +183,7 @@ URL: http://localhost:8501
 
 ---
 
-### 第七步：特征选择
+### 第四步：特征选择
 
 1. 在左侧导航栏点击 **选择特征**。
 2. 按分类勾选所需临床特征。
@@ -146,7 +193,7 @@ URL: http://localhost:8501
 
 ---
 
-### 第八步：批量数据导出
+### 第五步：批量数据导出
 
 1. 在左侧导航栏点击 **导出数据**。
 2. 选择导出格式与保存路径：
@@ -165,7 +212,7 @@ URL: http://localhost:8501
 
 ---
 
-### 第九步：可视化分析
+### 第六步：可视化分析
 
 #### 快速可视化
 
@@ -197,6 +244,59 @@ URL: http://localhost:8501
 ## 🚀 进阶使用（开发者 / 高级用户）
 
 ## 💻 Python API
+
+在调用任何提取 API 之前，请先确保数据库已经完成准备。
+原始的 CSV / CSV.GZ / tar.gz 数据并不是特征提取 API 预期的直接输入。
+请先通过 Web 界面的 **Validate Data Path** -> **Convert & Setup**，或先执行下面的程序化数据转换，然后再把准备好的目录传给 `data_path`。
+
+### API 前置条件：先做数据转换
+
+Web 应用可以自动完成数据准备，也可以在代码里手动转换：
+
+```python
+from easyicu.data_converter import DataConverter
+
+converter = DataConverter('/path/to/raw/data', database='miiv')
+converter.convert_all()
+```
+
+完成转换后，再使用下面的 API 示例。
+
+### 最小端到端示例
+
+下面这个示例演示了 API 用户的完整最小流程：从原始数据库目录开始，先转换，再提取标准化特征。
+
+```python
+from easyicu.data_converter import DataConverter
+from easyicu import load_concepts
+
+database = 'miiv'
+raw_data_path = '/path/to/mimic-iv-raw'
+
+# 第一步：把原始数据转换成 EasyICU 期望的准备完成格式
+converter = DataConverter(raw_data_path, database=database)
+converter.convert_all()
+
+# 第二步：从准备完成的数据集中提取标准化临床概念
+vitals = load_concepts(
+    concepts=['hr', 'map', 'resp', 'spo2'],
+    database=database,
+    data_path=raw_data_path,
+    patient_ids=[30000123, 30000456],
+    interval='1h',
+    aggregate='mean',
+)
+
+print(vitals.head())
+
+# 可选：保存提取结果
+vitals.to_parquet('miiv_vitals_1h.parquet', index=False)
+```
+
+这个示例默认你满足以下条件：
+- `raw_data_path` 指向原始下载后的数据库目录
+- 转换会把该目录准备成 EasyICU 可直接读取的格式
+- 转换完成后，把这个准备好的目录继续传给 `data_path`
 
 ### Easy API — 一行代码
 
@@ -271,17 +371,6 @@ demo = load_demographics(
     data_path='/path/to/data',
     patient_ids=[30000123]
 )
-```
-
-### 程序化数据转换
-
-Web 应用会自动检测数据格式并提供一键转换，也可通过代码调用：
-
-```python
-from easyicu.data_converter import DataConverter
-
-converter = DataConverter('/path/to/csv/data', database='miiv')
-converter.convert_all()
 ```
 
 ---

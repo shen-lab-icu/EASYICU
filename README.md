@@ -22,9 +22,30 @@ EasyICU is a Python toolkit designed for intensive care unit (ICU) data analysis
 
 ## Quick Start Guide
 
+### Choose Your Path
+
+#### Path A: Web Interface Users
+
+Choose this path if you want to:
+- launch the EasyICU interface quickly
+- validate data, convert raw files, and export features visually
+- work without writing Python code
+
+Start from [One-Click Launcher (Recommended)](#one-click-launcher-recommended).
+
+#### Path B: Python API / Notebook / Script Users
+
+Choose this path if you want to:
+- call EasyICU from Python scripts or notebooks
+- automate extraction pipelines
+- build reproducible feature engineering workflows in code
+
+Start from [Optional: Install for Python API / Development](#optional-install-for-python-api--development), then read [Python API](#-python-api).
+
 ### One-Click Launcher (Recommended)
 
 If users only need to open the EasyICU web interface, they do not need Anaconda or VS Code first.
+If this launcher already meets your needs, you can skip the Python/API installation section below.
 
 Requirements:
 - **Python 3.9+** installed
@@ -48,9 +69,26 @@ http://127.0.0.1:8501
 
 Notes:
 - The first startup may take a few minutes
-- On macOS, you may need to approve the script in the system security prompt the first time
+- On macOS, the first launch of `start_easyicu.command` may be blocked by Gatekeeper
 
-### Step 1: Install Anaconda
+macOS first-run note:
+1. Double-click `start_easyicu.command` once.
+2. If macOS shows a security warning, open `System Settings -> Privacy & Security`.
+3. In the Security section, click `Open Anyway` for `start_easyicu.command`.
+4. If needed, right-click the file and choose `Open` once to confirm the exception.
+
+After this one-time approval, later launches should open normally.
+
+### Optional: Install for Python API / Development
+
+This section is only needed if you want to:
+- use the Python API in scripts or notebooks
+- install EasyICU into your own environment
+- develop or modify EasyICU locally
+
+Anaconda/Miniconda is optional. The one-click launcher above does not require it.
+
+#### Option 1: Conda (optional)
 
 1. **Download Anaconda**
    Visit the [Anaconda website](https://www.anaconda.com/download) to download the latest version.
@@ -60,13 +98,20 @@ Notes:
 2. **Install Anaconda**
    - Run the installer.
    - (Optional) Click "Browse" to change the installation directory.
-   - Check "Add Anaconda to my PATH environment variable".
+    - Prefer leaving the PATH checkbox unchanged and using **Anaconda Prompt**.
    - Click "Next" to complete the installation.
 
+#### Option 2: Standard Python virtual environment
 
-### Step 2: Install EasyICU
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip
+```
 
-Open an **Anaconda Prompt** (or any terminal with conda activated) and run:
+#### Install EasyICU
+
+Open an **Anaconda Prompt**, a terminal with conda activated, or a standard virtual environment, then run:
 
 ```bash
 # Clone the repository (or download and extract the ZIP from GitHub)
@@ -77,7 +122,7 @@ cd easyicu
 pip install -e ".[all]"
 ```
 
-### Step 3: Launch the Web Application
+#### Launch the Web Application
 
 ```bash
 easyicu-webapp
@@ -92,7 +137,7 @@ URL: http://localhost:8501
 
 Open `http://localhost:8501` in your browser to access the EasyICU interface.
 
-### Step 4: Obtain ICU Data
+### Step 1: Obtain ICU Data
 
 1. **Download ICU databases** (access credentials required):
    | Database | URL |
@@ -106,21 +151,22 @@ Open `http://localhost:8501` in your browser to access the EasyICU interface.
 
 2. **Extract the data** to a local directory.
 
-### Step 5: Data Conversion
+### Step 2: Validate and Convert Data
 
 1. Enter the path to your data directory in the web interface.
-2. The system automatically detects the data format.
-   - If the data is **not in Parquet format**, a conversion prompt will appear.
-3. Click the **Convert** button. The system will:
-   - Convert **CSV / CSV.GZ** files to **Parquet** format.
-   - Apply read-performance optimizations for large tables (e.g., `chartevents`, `labevents`).
-4. Refresh the page after conversion to load the new data.
+2. Click **Validate Data Path**.
+3. EasyICU checks whether the database is already in a supported prepared format.
+4. If raw **CSV / CSV.GZ / tar.gz** files are detected, the interface will offer **Convert & Setup**, which prepares the data in one click, including:
+   - converting raw tables to **Parquet**
+   - applying database-specific optimizations for large tables
+   - preparing the layout needed by Web workflows and Python APIs
+5. After setup finishes, load the prepared database from the same path.
 
 <img width="1931" height="956" alt="Data Conversion" src="https://github.com/user-attachments/assets/86ea826b-6a0f-491a-b967-c5a7ebdfaa5b" />
 
 ---
 
-### Step 6: Cohort Selection
+### Step 3: Cohort Selection
 
 1. Click **Cohort Selection** in the left sidebar.
 2. Configure inclusion/exclusion criteria, for example:
@@ -136,7 +182,7 @@ Open `http://localhost:8501` in your browser to access the EasyICU interface.
 
 ---
 
-### Step 7: Feature Selection
+### Step 4: Feature Selection
 
 1. Click **Select Features** in the left sidebar.
 2. Check the desired clinical features grouped by category.
@@ -146,7 +192,7 @@ Open `http://localhost:8501` in your browser to access the EasyICU interface.
 
 ---
 
-### Step 8: Batch Data Export
+### Step 5: Batch Data Export
 
 1. Click **Export Data** in the left sidebar.
 2. Choose an export format and output path:
@@ -165,7 +211,7 @@ Open `http://localhost:8501` in your browser to access the EasyICU interface.
 
 ---
 
-### Step 9: Visualization & Analysis
+### Step 6: Visualization & Analysis
 
 #### Quick Visualization
 
@@ -197,6 +243,59 @@ The system supports statistical analysis of filtered research cohorts:
 ## 🚀 Going Further (Developers / Advanced Users)
 
 ## 💻 Python API
+
+Before calling any extraction API, make sure your database has already been prepared.
+Raw CSV / CSV.GZ / tar.gz dumps are not the expected input for feature extraction APIs.
+Use either the Web UI **Validate Data Path** -> **Convert & Setup** flow or the programmatic conversion step below first, then pass the prepared directory to `data_path`.
+
+### API Prerequisite: Convert Data First
+
+The web application can prepare the data for you automatically. You can also convert it in code:
+
+```python
+from easyicu.data_converter import DataConverter
+
+converter = DataConverter('/path/to/raw/data', database='miiv')
+converter.convert_all()
+```
+
+After conversion, use the prepared directory in all API examples below.
+
+### Minimal End-to-End Example
+
+The example below shows the full workflow for API users: start from raw data, convert it, then extract standardized features.
+
+```python
+from easyicu.data_converter import DataConverter
+from easyicu import load_concepts
+
+database = 'miiv'
+raw_data_path = '/path/to/mimic-iv-raw'
+
+# Step 1: Convert raw files into the prepared format expected by EasyICU
+converter = DataConverter(raw_data_path, database=database)
+converter.convert_all()
+
+# Step 2: Extract standardized concepts from the prepared dataset
+vitals = load_concepts(
+    concepts=['hr', 'map', 'resp', 'spo2'],
+    database=database,
+    data_path=raw_data_path,
+    patient_ids=[30000123, 30000456],
+    interval='1h',
+    aggregate='mean',
+)
+
+print(vitals.head())
+
+# Optional: save the extracted feature table
+vitals.to_parquet('miiv_vitals_1h.parquet', index=False)
+```
+
+What this example assumes:
+- `raw_data_path` points to your original downloaded database directory
+- conversion prepares that same directory for EasyICU loading
+- after conversion, pass the prepared directory to `data_path`
 
 ### Easy API — One-Liners
 
@@ -271,17 +370,6 @@ demo = load_demographics(
     data_path='/path/to/data',
     patient_ids=[30000123]
 )
-```
-
-### Data Conversion (Programmatic)
-
-The web application detects CSV data automatically and offers one-click conversion. You can also convert programmatically:
-
-```python
-from easyicu.data_converter import DataConverter
-
-converter = DataConverter('/path/to/csv/data', database='miiv')
-converter.convert_all()
 ```
 
 ---
