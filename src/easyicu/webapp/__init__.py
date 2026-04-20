@@ -235,8 +235,8 @@ def run_app(
         with pid_path.open('w', encoding='utf-8') as handle:
             handle.write(str(process.pid))
 
-        print(f"✅ 后台启动成功 (PID: {process.pid})")
-        print(f"   日志文件: {log_path}")
+        print(f"✅ Started EasyICU in the background (PID: {process.pid})")
+        print(f"   Log file: {log_path}")
         return
 
     if daemon:
@@ -245,7 +245,7 @@ def run_app(
         restart_delay = 5
 
         while retry_count < max_retries:
-            print(f"🚀 启动服务... (尝试 {retry_count + 1}/{max_retries})")
+            print(f"🚀 Starting service... (attempt {retry_count + 1}/{max_retries})")
 
             process = subprocess.Popen(cmd, env=child_env)
 
@@ -253,22 +253,22 @@ def run_app(
                 process.wait()
 
                 if process.returncode == 0:
-                    print("✅ 服务正常退出")
+                    print("✅ Service exited normally")
                     break
 
-                print(f"⚠️ 服务异常退出 (code: {process.returncode})")
+                print(f"⚠️ Service exited unexpectedly (code: {process.returncode})")
                 retry_count += 1
-                print(f"⏳ {restart_delay}秒后重试...")
+                print(f"⏳ Retrying in {restart_delay} seconds...")
                 time.sleep(restart_delay)
 
             except KeyboardInterrupt:
-                print("\n🛑 收到停止信号，正在关闭...")
+                print("\n🛑 Received stop signal. Shutting down...")
                 process.terminate()
                 process.wait(timeout=5)
                 break
 
         if retry_count >= max_retries:
-            print(f"❌ 重试次数已达上限 ({max_retries})，退出")
+            print(f"❌ Reached retry limit ({max_retries}). Exiting.")
             sys.exit(1)
     else:
         subprocess.run(cmd, env=child_env)
@@ -285,10 +285,10 @@ def stop_app(port: int = 8501):
 
         try:
             os.kill(pid, signal.SIGTERM)
-            print(f"✅ 已停止服务 (PID: {pid})")
+            print(f"✅ Stopped service (PID: {pid})")
             stopped_any = True
         except ProcessLookupError:
-            print(f"⚠️ PID 文件中的进程不存在: {pid}，继续扫描旧进程")
+            print(f"⚠️ PID file points to a missing process: {pid}. Continuing to scan for stale processes.")
 
         pid_file.unlink(missing_ok=True)
 
@@ -303,21 +303,21 @@ def stop_app(port: int = 8501):
                 stopped_any = True
             except ProcessLookupError:
                 continue
-        print(f"✅ 已停止服务 ({len(pids)} 个进程)")
+        print(f"✅ Stopped service ({len(pids)} process{'es' if len(pids) != 1 else ''})")
     elif not stopped_any:
-        print("⚠️ 未找到运行中的服务")
+        print("⚠️ No running EasyICU service was found")
 
 
 def status_app(port: int = 8501):
     """查看 EasyICU Web 应用状态。"""
     if _is_port_in_use(port):
         healthy = _health_check(port)
-        print(f"✅ 服务运行中 (端口: {port})")
-        print(f"   健康状态: {'正常' if healthy else '检查失败'}")
-        print(f"   访问地址: http://localhost:{port}")
-        print(f"   运行目录: {_runtime_dir()}")
+        print(f"✅ Service is running (port: {port})")
+        print(f"   Health: {'OK' if healthy else 'Check failed'}")
+        print(f"   URL: http://localhost:{port}")
+        print(f"   Runtime dir: {_runtime_dir()}")
     else:
-        print(f"❌ 服务未运行 (端口: {port})")
+        print(f"❌ Service is not running (port: {port})")
 
 
 __all__ = ['run_app', 'stop_app', 'status_app', 'check_dependencies']

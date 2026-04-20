@@ -6,7 +6,7 @@ understand EasyICU features, interpret extraction results, and
 answer ICU data analysis questions.
 
 Supported providers:
-    - HuggingFace (free credits, token required)
+        - HuggingFace (token required)
   - OpenAI, DeepSeek, Anthropic, OpenRouter, Together AI, Groq,
     SiliconFlow, and any custom OpenAI-compatible endpoint.
 
@@ -328,12 +328,12 @@ PROVIDERS = {
         "使用 EasyICU 托管代理，无需用户自己填写 API Key。",
     ),
     "huggingface_free": (
-        "🆓 HuggingFace (Free credits)",
+        "HuggingFace",
         "https://router.huggingface.co/v1",
         "deepseek-ai/DeepSeek-R1:fastest",
         True,
-        "Free credits are available, but a Hugging Face token is still required.",
-        "有免费额度，但仍然需要 Hugging Face token。",
+        "Requires your own Hugging Face token.",
+        "需要用户自己提供 Hugging Face token。",
     ),
     "openai": (
         "OpenAI",
@@ -1661,18 +1661,6 @@ def render_floating_chat_dock():
             box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
         }
 
-        div.st-key-floating_ai_launcher .easyicu-ai-launcher-btn {
-            width: var(--easyicu-ai-launcher-size);
-            min-width: var(--easyicu-ai-launcher-size);
-            height: var(--easyicu-ai-launcher-size);
-            border-radius: 999px;
-            border: 1px solid rgba(15, 23, 42, 0.08);
-            background: linear-gradient(135deg, #0f766e 0%, #0f172a 100%);
-            color: #ffffff;
-            font-size: clamp(1.12rem, 1vw + 0.88rem, 1.55rem);
-            box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
-            cursor: pointer;
-        }
 
         div.st-key-floating_ai_panel {
             right: clamp(12px, 1.25vw, 20px);
@@ -1784,19 +1772,7 @@ def render_floating_chat_dock():
             padding-bottom: 0.38rem;
         }
 
-        div.st-key-floating_ai_panel .easyicu-ai-js-btn {
-            width: 100%;
-            min-height: var(--easyicu-ai-button-size);
-            border-radius: 14px;
-            border: 1px solid rgba(148, 163, 184, 0.22);
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(241,245,249,0.98));
-            color: #0f172a;
-            font-size: clamp(0.8rem, 0.12vw + 0.77rem, 0.9rem);
-            cursor: pointer;
-        }
-
-        div.st-key-floating_ai_panel .easyicu-ai-js-btn:hover,
-        div.st-key-floating_ai_launcher .easyicu-ai-launcher-btn:hover {
+        div.st-key-floating_ai_launcher .stButton > button:hover {
             filter: brightness(1.02);
         }
 
@@ -1863,94 +1839,79 @@ def render_floating_chat_dock():
     # Check for unread background responses
     _unread = st.session_state.get("_ai_bg_unread_count", 0)
     _responding = st.session_state.get("_ai_bg_responding", False)
-    with st.container(key="floating_ai_launcher"):
-        if _unread > 0:
-            _badge_class = "ai-notif-badge pulse" if _responding else "ai-notif-badge"
-            st.markdown(
-                f'<div class="{_badge_class}">{_unread}</div>',
-                unsafe_allow_html=True,
-            )
-        elif _responding:
-            st.markdown(
-                '<div class="ai-notif-badge pulse">⋯</div>',
-                unsafe_allow_html=True,
-            )
-        launcher_display = "none" if st.session_state.get("_floating_ai_open", True) else "block"
-        st.markdown(
-            (
-                f'<div id="easyicu-ai-launcher-wrap" style="display:{launcher_display}">'
-                f'<button id="easyicu-ai-open-js" class="easyicu-ai-launcher-btn" type="button" '
-                f'aria-label="{"Open AI chat" if lang == "en" else "打开 AI 对话"}" '
-                "onclick=\"var p=document.querySelector('div.st-key-floating_ai_panel');"
-                "var l=document.getElementById('easyicu-ai-launcher-wrap');"
-                "if(p){p.style.display='block';} if(l){l.style.display='none';}\">💬</button></div>"
-            ),
-            unsafe_allow_html=True,
-        )
+    if not st.session_state.get("_floating_ai_open", True):
+        with st.container(key="floating_ai_launcher"):
+            if _unread > 0:
+                _badge_class = "ai-notif-badge pulse" if _responding else "ai-notif-badge"
+                st.markdown(
+                    f'<div class="{_badge_class}">{_unread}</div>',
+                    unsafe_allow_html=True,
+                )
+            elif _responding:
+                st.markdown(
+                    '<div class="ai-notif-badge pulse">⋯</div>',
+                    unsafe_allow_html=True,
+                )
+            if st.button("💬", key="_floating_ai_open_btn", help="Open AI chat" if lang == "en" else "打开 AI 对话"):
+                st.session_state["_floating_ai_open"] = True
+                st.rerun()
 
-    with st.container(key="floating_ai_panel"):
-        if not st.session_state.get("_floating_ai_open", True):
-            st.markdown("<style>div.st-key-floating_ai_panel{display:none !important;}</style>", unsafe_allow_html=True)
-        dock_title = "AI Assistant" if lang == "en" else "AI 助手"
-        dock_subtitle = (
-            "Describe your research task first, then I will map it to EasyICU."
-            if lang == "en" else
-            "先描述你的研究任务，我再帮你映射到 EasyICU 的具体步骤。"
-        )
-        header_cols = st.columns([4.8, 0.8, 0.8, 0.8, 1, 1])
-        with header_cols[0]:
-            st.markdown(
-                f'<div class="floating-ai-header"><div><div class="floating-ai-title">💬 {dock_title}</div><div class="floating-ai-subtitle">{dock_subtitle}</div></div></div>',
-                unsafe_allow_html=True,
+    if st.session_state.get("_floating_ai_open", True):
+        with st.container(key="floating_ai_panel"):
+            dock_title = "AI Assistant" if lang == "en" else "AI 助手"
+            dock_subtitle = (
+                "Describe your research task first, then I will map it to EasyICU."
+                if lang == "en" else
+                "先描述你的研究任务，我再帮你映射到 EasyICU 的具体步骤。"
             )
-        with header_cols[1]:
-            if st.button("S", key="_floating_ai_size_s_btn", use_container_width=True, help="Compact size" if lang == "en" else "紧凑尺寸", disabled=export_locked):
-                st.session_state["_floating_ai_size"] = "s"
-                st.rerun()
-        with header_cols[2]:
-            if st.button("M", key="_floating_ai_size_m_btn", use_container_width=True, help="Medium size" if lang == "en" else "中等尺寸", disabled=export_locked):
-                st.session_state["_floating_ai_size"] = "m"
-                st.rerun()
-        with header_cols[3]:
-            if st.button("L", key="_floating_ai_size_l_btn", use_container_width=True, help="Large size" if lang == "en" else "大尺寸", disabled=export_locked):
-                st.session_state["_floating_ai_size"] = "l"
-                st.rerun()
-        with header_cols[4]:
-            st.markdown(
-                '<button id="easyicu-ai-min-js" class="easyicu-ai-js-btn" type="button" '
-                "onclick=\"var p=document.querySelector('div.st-key-floating_ai_panel');"
-                "var l=document.getElementById('easyicu-ai-launcher-wrap');"
-                "if(p){p.style.display='none';} if(l){l.style.display='block';}\">—</button>",
-                unsafe_allow_html=True,
-            )
-        with header_cols[5]:
-            st.markdown(
-                '<button id="easyicu-ai-close-js" class="easyicu-ai-js-btn" type="button" '
-                "onclick=\"var p=document.querySelector('div.st-key-floating_ai_panel');"
-                "var l=document.getElementById('easyicu-ai-launcher-wrap');"
-                "if(p){p.style.display='none';} if(l){l.style.display='block';}\">✕</button>",
-                unsafe_allow_html=True,
-            )
+            header_cols = st.columns([4.8, 0.8, 0.8, 0.8, 1, 1])
+            with header_cols[0]:
+                st.markdown(
+                    f'<div class="floating-ai-header"><div><div class="floating-ai-title">💬 {dock_title}</div><div class="floating-ai-subtitle">{dock_subtitle}</div></div></div>',
+                    unsafe_allow_html=True,
+                )
+            with header_cols[1]:
+                if st.button("S", key="_floating_ai_size_s_btn", use_container_width=True, help="Compact size" if lang == "en" else "紧凑尺寸", disabled=export_locked):
+                    st.session_state["_floating_ai_size"] = "s"
+                    st.rerun()
+            with header_cols[2]:
+                if st.button("M", key="_floating_ai_size_m_btn", use_container_width=True, help="Medium size" if lang == "en" else "中等尺寸", disabled=export_locked):
+                    st.session_state["_floating_ai_size"] = "m"
+                    st.rerun()
+            with header_cols[3]:
+                if st.button("L", key="_floating_ai_size_l_btn", use_container_width=True, help="Large size" if lang == "en" else "大尺寸", disabled=export_locked):
+                    st.session_state["_floating_ai_size"] = "l"
+                    st.rerun()
+            with header_cols[4]:
+                if st.button("—", key="_floating_ai_minimize_btn", use_container_width=True, help="Minimize" if lang == "en" else "最小化", disabled=export_locked):
+                    st.session_state["_floating_ai_open"] = False
+                    st.rerun()
+            with header_cols[5]:
+                if st.button("✕", key="_floating_ai_close_btn", use_container_width=True, help="Close" if lang == "en" else "关闭", disabled=export_locked):
+                    st.session_state["_floating_ai_open"] = False
+                    st.session_state["_ai_pending_question"] = None
+                    st.rerun()
 
-        if not st.session_state.llm_enabled:
-            st.caption(
-                "Enable AI Assistant in the sidebar settings first."
-                if lang == "en" else
-                "请先在侧边栏上方开启 AI 助手。"
-            )
-        elif not _is_configured():
-            st.caption(
-                "Configure provider/API key in the sidebar settings first."
-                if lang == "en" else
-                "请先在侧边栏上方配置服务商/API Key。"
-            )
-        else:
-            _render_compact_chat_panel(
-                lang=lang,
-                panel_key="_llm_floating",
-                history_height=size_cfg["history_height"],
-                show_starters=True,
-            )
+            if not st.session_state.llm_enabled:
+                st.caption(
+                    "Enable AI Assistant in the sidebar settings first."
+                    if lang == "en" else
+                    "请先在侧边栏上方开启 AI 助手。"
+                )
+            elif not _is_configured():
+                st.caption(
+                    "Configure provider/API key in the sidebar settings first."
+                    if lang == "en" else
+                    "请先在侧边栏上方配置服务商/API Key。"
+                )
+            else:
+                _render_compact_chat_panel(
+                    lang=lang,
+                    panel_key="_llm_floating",
+                    history_height=size_cfg["history_height"],
+                    show_starters=True,
+                )
+
 
 
 # ---------------------------------------------------------------------------
@@ -2247,10 +2208,10 @@ def _handle_api_error(exc: Exception, lang: str, render: bool = True) -> str:
         provider = st.session_state.get("llm_provider", "custom")
         if provider == "huggingface_free":
             msg = (
-                "❌ Hugging Face requires a token even for the free credits tier. "
+                "❌ Hugging Face requires your own token. "
                 "Please create an HF token and paste it here."
                 if lang == "en" else
-                "❌ Hugging Face 即使是免费额度也需要 token。"
+                "❌ Hugging Face 需要你自己提供 token。"
                 "请创建 HF token 后再填写。"
             )
         else:
