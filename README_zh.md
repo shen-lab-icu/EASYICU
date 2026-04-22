@@ -63,7 +63,7 @@ EasyICU 是一个专为重症监护室（ICU）数据分析设计的 Python 工�
 - **Linux**：运行 `./start_easyicu.sh`
 
 首次运行会自动完成：
-- 创建本地虚拟环境 `.easyicu-runtime/venv`
+- 按 Python 版本创建独立的本地虚拟环境 `.easyicu-runtime/pyXY/venv`
 - 安装 EasyICU Web 所需依赖
 - 启动本地服务并打开浏览器
 
@@ -75,6 +75,7 @@ http://127.0.0.1:8501
 
 说明：
 - 首次启动通常会比后续启动慢几分钟
+- 如果一台机器装了多个 Python 版本，启动器会为每个 Python 小版本维护独立 runtime，避免依赖包互相冲突
 - macOS 首次运行 `start_easyicu.command` 时，可能会被系统安全机制拦截
 
 macOS 首次运行说明：
