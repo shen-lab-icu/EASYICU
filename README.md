@@ -63,7 +63,7 @@ Launch options:
 - **Linux**: run `./start_easyicu.sh`
 
 The first run will automatically:
-- create a local virtual environment in `.easyicu-runtime/venv`
+- create a Python-version-specific local virtual environment in `.easyicu-runtime/pyXY/venv`
 - install the EasyICU web dependencies
 - start the local service and open the browser
 
@@ -75,6 +75,7 @@ http://127.0.0.1:8501
 
 Notes:
 - The first startup may take a few minutes
+- If a machine has multiple Python versions installed, the launcher keeps a separate runtime for each Python minor version, so package sets do not conflict with each other
 - On macOS, the first launch of `start_easyicu.command` may be blocked by Gatekeeper
 
 macOS first-run note:

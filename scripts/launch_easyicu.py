@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import time
@@ -22,7 +23,9 @@ import venv
 import webbrowser
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RUNTIME_DIR = PROJECT_ROOT / ".easyicu-runtime"
+RUNTIME_ROOT = PROJECT_ROOT / ".easyicu-runtime"
+PYTHON_VERSION_TAG = f"py{sys.version_info.major}{sys.version_info.minor}"
+RUNTIME_DIR = RUNTIME_ROOT / PYTHON_VERSION_TAG
 VENV_DIR = RUNTIME_DIR / "venv"
 STAMP_FILE = RUNTIME_DIR / "install-stamp.json"
 PYPROJECT_FILE = PROJECT_ROOT / "pyproject.toml"
@@ -152,6 +155,7 @@ def _load_install_state() -> dict[str, object] | None:
 
 
 def ensure_virtualenv() -> None:
+    RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     if _venv_python().exists():
         return
@@ -360,6 +364,43 @@ def _wait_until_port_state(port: int, *, should_be_free: bool, timeout: float = 
     return final_free if should_be_free else not final_free
 
 
+def _open_url(url: str) -> bool:
+    try:
+        if webbrowser.open(url):
+            return True
+    except Exception:
+        pass
+
+    opener_commands: list[list[str]] = []
+    if sys.platform.startswith("linux"):
+        opener_commands = [["xdg-open", url], ["gio", "open", url]]
+    elif sys.platform == "darwin":
+        opener_commands = [["open", url]]
+
+    for cmd in opener_commands:
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return True
+        except Exception:
+            continue
+
+    if os.name == "nt":
+        try:
+            os.startfile(url)  # type: ignore[attr-defined]
+            return True
+        except Exception:
+            pass
+
+    return False
+
+
 def _print_port_conflict_warning(port: int, owners: list[dict[str, object]]) -> None:
     print(f"Port {port} is still occupied.", file=sys.stderr)
     foreign = [owner for owner in owners if not bool(owner.get("is_easyicu"))]
@@ -540,7 +581,12 @@ def start_easyicu(
     url = f"http://{host}:{resolved_port}"
     print(f"EasyICU is ready: {url}")
     if open_browser:
-        webbrowser.open(url)
+        opened = _open_url(url)
+        if not opened:
+            print(
+                "Browser auto-open was not available in this environment. "
+                f"Please open the URL manually: {url}"
+            )
     return 0
 
 
