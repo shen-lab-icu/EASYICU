@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use EasyICU in your research, please cite this software repository."
+title: "EasyICU"
+version: "1.0.0"
+type: software
+authors:
+  - family-names: "Zhu"
+    given-names: "Haibo"
+repository-code: "https://github.com/shen-lab-icu/EASYICU"
+url: "https://github.com/shen-lab-icu/EASYICU"
+license: "MIT"
+abstract: >-
+  EasyICU is a reproducible infrastructure for cross-database ICU research
+  with standardized concept extraction, clinician-friendly web workflows,
+  and scriptable Python APIs.
+keywords:
+  - ICU
+  - critical care
+  - clinical research
+  - EHR
+  - feature extraction
+  - reproducibility

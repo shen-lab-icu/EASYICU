@@ -80,6 +80,8 @@ output
 TEST_SUMMARY.md
 CLEANUP_PLAN.md
 tests/
+!tests/
+!tests/**/*.py
 scripts/
 !scripts/
 !scripts/launch_easyicu.py
@@ -93,4 +95,5 @@ scripts/
 *.md
 !README.md
 !README_zh.md
+!CONTRIBUTING.md
 .easyicu-runtime/

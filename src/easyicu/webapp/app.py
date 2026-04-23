@@ -3,16 +3,42 @@
 本地 ICU 数据分析和可视化平台。
 """
 
+from __future__ import annotations
+
 import streamlit as st
 from pathlib import Path
 import pandas as pd
 import numpy as np
 import os
 import json
+import html
 import re
 import threading
 from functools import lru_cache
 from typing import Dict, Any, Optional, List
+
+
+def _dataframe_compat(data, **kwargs):
+    """Render dataframes across Streamlit versions.
+
+    Newer releases accept `width="stretch"`, while older builds expect an
+    integer width. Fall back to `use_container_width=True` when needed.
+    """
+    dataframe_fn = getattr(st, "_easyicu_original_dataframe", st.dataframe)
+    try:
+        return dataframe_fn(data, **kwargs)
+    except TypeError:
+        if kwargs.get("width") != "stretch":
+            raise
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs.pop("width", None)
+        fallback_kwargs["use_container_width"] = True
+        return dataframe_fn(data, **fallback_kwargs)
+
+
+if not hasattr(st, "_easyicu_original_dataframe"):
+    st._easyicu_original_dataframe = st.dataframe
+    st.dataframe = _dataframe_compat
 
 
 def _get_database_download_info(database: str, lang: str = 'en') -> dict | None:
@@ -82,14 +108,20 @@ st.set_page_config(
 # 初始化侧边栏展开状态
 if 'sidebar_expanded' not in st.session_state:
     st.session_state.sidebar_expanded = False
+if 'screenshot_mode' not in st.session_state:
+    st.session_state.screenshot_mode = False
 
 # 侧边栏宽度设置 - 根据展开状态动态调整
+screenshot_mode_enabled = bool(st.session_state.get('screenshot_mode', False))
 sidebar_width = "100vw" if st.session_state.sidebar_expanded else "clamp(420px, 31vw, 720px)"
 sidebar_min_width = "100vw" if st.session_state.sidebar_expanded else "clamp(400px, 29vw, 680px)"
-main_display = "none" if st.session_state.sidebar_expanded else "block"
+sidebar_display = "none" if screenshot_mode_enabled else "block"
+main_display = "block" if screenshot_mode_enabled else ("none" if st.session_state.sidebar_expanded else "block")
+floating_ai_display = "none" if screenshot_mode_enabled else "block"
 st.markdown(f"""
 <style>
     [data-testid="stSidebar"] {{
+        display: {sidebar_display} !important;
         min-width: {sidebar_min_width};
         max-width: {sidebar_width};
         width: {sidebar_width} !important;
@@ -107,6 +139,15 @@ st.markdown(f"""
     /* 展开时隐藏右侧主内容 */
     [data-testid="stMain"] {{
         display: {main_display} !important;
+    }}
+    div.st-key-floating_ai_launcher,
+    div.st-key-floating_ai_panel {{
+        display: {floating_ai_display} !important;
+    }}
+    iframe[title*="streamlit_shadcn_ui"],
+    iframe[title^="streamlit_shadcn_ui"] {{
+        display: {floating_ai_display} !important;
+        visibility: hidden !important;
     }}
 </style>
 """, unsafe_allow_html=True)
@@ -1288,6 +1329,126 @@ st.markdown("""
         margin-bottom: 0.55rem;
         line-height: 1.45;
     }
+    .module-preview-card {
+        background: linear-gradient(135deg, rgba(255,255,255,0.98), rgba(239,246,255,0.94));
+        border: 1px solid rgba(96,165,250,0.28);
+        border-radius: 16px;
+        padding: 0.82rem 0.96rem 0.88rem;
+        box-shadow: 0 8px 24px rgba(37,99,235,0.08);
+        min-height: 112px;
+    }
+    .module-preview-card .eyebrow {
+        font-size: 0.66rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 700;
+        color: #2563eb;
+        margin-bottom: 0.14rem;
+    }
+    .module-preview-card .title {
+        font-size: 1.04rem;
+        font-weight: 800;
+        color: #0f172a;
+        line-height: 1.2;
+        margin-bottom: 0.22rem;
+    }
+    .module-preview-card .summary {
+        font-size: 0.84rem;
+        color: #475569;
+        line-height: 1.45;
+        margin-bottom: 0.55rem;
+    }
+    .module-feature-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.34rem;
+    }
+    .module-feature-chip {
+        display: inline-flex;
+        align-items: center;
+        background: rgba(37,99,235,0.08);
+        border: 1px solid rgba(37,99,235,0.12);
+        border-radius: 999px;
+        padding: 0.2rem 0.5rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: #1d4ed8;
+        line-height: 1.1;
+    }
+    .module-feature-chip.muted {
+        background: rgba(148,163,184,0.12);
+        border-color: rgba(148,163,184,0.18);
+        color: #475569;
+    }
+    .preview-hint-line {
+        font-size: 0.77rem;
+        color: #64748b;
+        margin: 0.15rem 0 0.5rem;
+    }
+    .preview-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.28rem;
+        padding: 0.24rem 0.58rem;
+        border-radius: 999px;
+        background: rgba(59,130,246,0.08);
+        border: 1px solid rgba(59,130,246,0.14);
+        color: #1d4ed8;
+        font-size: 0.72rem;
+        font-weight: 700;
+        line-height: 1;
+    }
+    .preview-badge.warning {
+        background: rgba(245,158,11,0.10);
+        border-color: rgba(245,158,11,0.16);
+        color: #b45309;
+    }
+    .preview-toolbar {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.18rem 0 0.24rem;
+    }
+    .preview-toolbar-main {
+        min-width: 0;
+    }
+    .preview-toolbar-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.78rem;
+        font-weight: 700;
+        color: #2563eb;
+        margin-bottom: 0.14rem;
+    }
+    .preview-toolbar-note {
+        font-size: 0.79rem;
+        color: #64748b;
+        line-height: 1.35;
+    }
+    .preview-toolbar-note code {
+        background: rgba(37,99,235,0.08);
+        color: #1d4ed8;
+        border-radius: 8px;
+        padding: 0.08rem 0.34rem;
+        font-size: 0.76rem;
+        font-weight: 700;
+    }
+    .inline-control-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: #64748b;
+        margin: 0.18rem 0 0.18rem;
+    }
+    .subtle-preview-note {
+        font-size: 0.78rem;
+        color: #64748b;
+        margin: 0.1rem 0 0.35rem;
+        line-height: 1.35;
+    }
     .mini-stat-card {
         background: #fff;
         border: 1px solid #dbeafe;
@@ -1766,6 +1927,135 @@ CONCEPT_GROUPS_DISPLAY = {
     'outcome': '🎯 Outcome',
 }
 
+MODULE_PREVIEW_SUMMARIES = {
+    'renal': {
+        'en': "AKI staging, urine output, RRT, and creatinine-derived context in one module preview.",
+        'zh': "将 AKI 分期、尿量、RRT 和肌酐基线线索放在同一模块预览中。",
+    },
+    'respiratory': {
+        'en': "Respiratory support, oxygenation, and ventilation status in a single preview.",
+        'zh': "在同一预览中查看呼吸支持、氧合和通气状态。",
+    },
+    'vitals': {
+        'en': "Core bedside vital signs aligned into a compact longitudinal preview.",
+        'zh': "将核心床旁生命体征汇总到紧凑的纵向预览中。",
+    },
+    'chemistry': {
+        'en': "Key chemistry measurements grouped for quick sanity checks before deeper analysis.",
+        'zh': "将关键生化指标汇总，便于深入分析前快速核查。",
+    },
+}
+
+MODULE_PREVIEW_TAG_PRIORITY = {
+    'renal': ['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'rrt', 'uo_6h', 'uo_12h', 'creat_low_past_48hr'],
+    'respiratory': ['mech_vent', 'vent_ind', 'fio2', 'pafi', 'safi', 'spo2', 'resp'],
+    'vitals': ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp'],
+    'chemistry': ['crea', 'bun', 'na', 'k', 'glu', 'bicar', 'lact'],
+}
+
+MODULE_PREVIEW_COLUMN_PRIORITY = {
+    'renal': ['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'rrt', 'uo_6h', 'uo_12h', 'creat_low_past_48hr'],
+    'respiratory': ['mech_vent', 'vent_ind', 'fio2', 'pafi', 'safi', 'spo2', 'resp'],
+    'vitals': ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp'],
+    'chemistry': ['crea', 'bun', 'na', 'k', 'glu', 'bicar', 'lact'],
+}
+
+PREVIEW_TIME_COLUMNS = [
+    'charttime', 'time', 'starttime', 'start', 'endtime', 'itemtime',
+    'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat',
+    'givenat', 'enteredentryat', 'intakeoutputoffset', 'observationoffset',
+    'nursingchartoffset', 'labresultoffset', 'respchartoffset'
+]
+
+
+def _build_module_preview_metadata(
+    module_key: str,
+    selected_module: str,
+    module_concepts: List[str],
+    lang: str = 'en',
+) -> Dict[str, Any]:
+    """Build concise copy and representative feature tags for module preview cards."""
+    summary_map = MODULE_PREVIEW_SUMMARIES.get(module_key, {})
+    summary = summary_map.get(lang)
+    if not summary:
+        summary = (
+            f"Representative features from {selected_module} are previewed below."
+            if lang == 'en'
+            else f"下方展示的是 {selected_module} 的代表性特征预览。"
+        )
+
+    ordered_tags = [tag for tag in MODULE_PREVIEW_TAG_PRIORITY.get(module_key, []) if tag in module_concepts]
+    for concept in sorted(module_concepts):
+        if concept not in ordered_tags:
+            ordered_tags.append(concept)
+
+    tags = ordered_tags[:8]
+    overflow_count = max(0, len(module_concepts) - len(tags))
+    return {
+        'summary': summary,
+        'tags': tags,
+        'overflow_count': overflow_count,
+    }
+
+
+def _get_data_table_page_copy(lang: str = 'en') -> Dict[str, str]:
+    if lang == 'en':
+        return {
+            'title': "📋 Module Table Preview",
+            'description': "Preview loaded tables by module before drilling into feature-level detail.",
+        }
+    return {
+        'title': "📋 模块数据预览",
+        'description': "按模块预览已加载数据表，再进入单个特征的细节查看。",
+    }
+
+
+def _get_single_feature_preview_copy(feature_name: str, lang: str = 'en') -> Dict[str, str]:
+    if lang == 'en':
+        return {
+            'title': "🧪 Single Feature Preview",
+            'description': f"Inspect `{feature_name}` with full row-level detail while keeping the preview layout consistent.",
+        }
+    return {
+        'title': "🧪 单特征预览",
+        'description': f"以与预览页一致的版式查看 `{feature_name}` 的逐行明细。",
+    }
+
+
+def _select_preview_columns(
+    df: pd.DataFrame,
+    module_key: str,
+    module_concepts: List[str],
+    id_col: str,
+    max_columns: int = 10,
+) -> List[str]:
+    """Prioritize the most interpretable columns for compact preview tables."""
+    if not isinstance(df, pd.DataFrame):
+        return []
+
+    ordered: List[str] = []
+
+    def add_column(name: Optional[str]) -> None:
+        if name and name in df.columns and name not in ordered:
+            ordered.append(name)
+
+    add_column(id_col)
+    for time_col in PREVIEW_TIME_COLUMNS:
+        if time_col in df.columns:
+            add_column(time_col)
+            break
+
+    for column_name in MODULE_PREVIEW_COLUMN_PRIORITY.get(module_key, []):
+        add_column(column_name)
+
+    for concept_name in module_concepts:
+        add_column(concept_name)
+
+    for column_name in df.columns:
+        add_column(column_name)
+
+    return ordered[:max_columns]
+
 # ============ 临床阈值线（用于时序图表默认标注） ============
 CLINICAL_THRESHOLDS = {
     'hr':   {'lines': [60, 100], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Bradycardia', 'Tachycardia'], 'unit': 'bpm'},
@@ -1965,6 +2255,289 @@ TIME_SERIES_COMPATIBLE_MODULES = {
     # 排除: 'demographics' - 静态数据（年龄、性别、身高、体重等）
     # 排除: 'outcome' - 静态数据（死亡、住院时长等）
 }
+
+SCREENSHOT_TIMESERIES_PRIORITY = [
+    'hr', 'map', 'sbp', 'spo2', 'temp', 'resp',
+    'crea', 'plt', 'wbc', 'lact', 'sofa2', 'sofa',
+]
+
+SCREENSHOT_QUALITY_PRIORITY = [
+    'crea', 'lact', 'hr', 'map', 'sbp', 'temp', 'wbc', 'hgb', 'plt', 'bili', 'sofa2', 'sofa',
+]
+
+QUALITY_DEMOGRAPHIC_STATIC = {
+    'death', 'los_icu', 'los_hosp', 'age', 'weight', 'height', 'sex', 'bmi'
+}
+
+QUALITY_EVENT_TIME_SERIES = {
+    'circ_failure', 'circ_event',
+    'sep3_sofa2', 'sep3_sofa1', 'sepsis_sofa2',
+    'susp_inf', 'infection_icd', 'samp',
+    'rrt', 'rrt_criteria',
+    'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
+    'mech_vent', 'vent_ind', 'vent_start', 'vent_end',
+    'ecmo', 'ecmo_indication', 'mech_circ_support',
+    'abx', 'cort',
+    'vaso_ind',
+}
+
+QUALITY_STATIC_BOOLEAN_EVENTS = {
+    'ecmo', 'ecmo_indication', 'mech_circ_support',
+    'cort', 'abx', 'vaso_ind',
+}
+
+QUALITY_TIME_CANDIDATES = [
+    'time', 'charttime', 'datetime', 'measuredat', 'measuredat_minutes',
+    'observationoffset', 'Offset', 'starttime', 'endtime', 'givenat', 'timestamp',
+]
+
+QUALITY_EXCLUDE_COLUMNS = {
+    'stay_id', 'hadm_id', 'icustay_id', 'time', 'index',
+    'charttime', 'starttime', 'endtime', 'datetime', 'timestamp',
+    'patientunitstayid', 'admissionid', 'patientid', 'CaseID',
+}
+
+
+def _is_screenshot_mode() -> bool:
+    """Return whether figure-oriented screenshot mode is enabled."""
+    return bool(st.session_state.get('screenshot_mode', False))
+
+
+def _apply_screenshot_mode_ui_state(state: dict[str, Any]) -> None:
+    """Hide transient chrome that should not appear in figure screenshots."""
+    state['_floating_ai_open'] = False
+    if state.get('_scroll_to_tab') == 'ai_assistant':
+        state.pop('_scroll_to_tab', None)
+
+
+def _resolve_viz_data_source_mode(
+    *,
+    current_mode: str | None,
+    recent_export_path: str,
+    allow_demo: bool,
+    entry_mode: str,
+) -> str:
+    """Keep the Quick Visualization data-source radio in a valid session-state option."""
+    source_options = ["exported"] + (["demo"] if allow_demo else [])
+    default_source = "exported" if recent_export_path else ("demo" if allow_demo and entry_mode == 'demo' else "exported")
+    return current_mode if current_mode in source_options else default_source
+
+
+def _get_plotly_chart_config() -> dict[str, Any]:
+    """Return a consistent Plotly config, hiding UI chrome in screenshot mode."""
+    base_config = {
+        "displaylogo": False,
+        "responsive": True,
+    }
+    if _is_screenshot_mode():
+        base_config["displayModeBar"] = False
+    return base_config
+
+
+def _select_timeseries_screenshot_concepts(available_concepts: list[str], max_items: int = 4) -> list[str]:
+    """Pick a compact set of representative time series for figure screenshots."""
+    unique_concepts = list(dict.fromkeys(available_concepts))
+    selected: list[str] = []
+    for concept in SCREENSHOT_TIMESERIES_PRIORITY:
+        if concept in unique_concepts and concept not in selected:
+            selected.append(concept)
+        if len(selected) >= max_items:
+            return selected
+    for concept in unique_concepts:
+        if concept not in selected:
+            selected.append(concept)
+        if len(selected) >= max_items:
+            break
+    return selected
+
+
+def _select_quality_distribution_concept(loaded_concepts: dict[str, Any]) -> str | None:
+    """Choose a stable, interpretable concept for the Data Quality distribution preview."""
+    available = [name for name, df in loaded_concepts.items() if isinstance(df, pd.DataFrame) and not df.empty]
+    for concept in SCREENSHOT_QUALITY_PRIORITY:
+        if concept in available:
+            return concept
+    return available[0] if available else None
+
+
+def _apply_quick_viz_screenshot_defaults(state: dict[str, Any], *, lang: str) -> None:
+    """Apply figure-friendly defaults once when screenshot mode is enabled."""
+    _apply_screenshot_mode_ui_state(state)
+    patient_ids = state.get('patient_ids') or []
+    first_patient = patient_ids[0] if patient_ids else None
+    if first_patient is not None:
+        state['lane_patient_select'] = state.get('lane_patient_select') or first_patient
+        state['patient_view_id'] = state.get('patient_view_id') or first_patient
+    state['ts_mode'] = "Clinical Lanes" if lang == 'en' else "临床分道"
+    state['patient_view_mode'] = "Dashboard" if lang == 'en' else "综合仪表盘"
+    state['missing_chart_sort_order'] = 'desc'
+    quality_concept = _select_quality_distribution_concept(state.get('loaded_concepts', {}))
+    if quality_concept:
+        state['quality_concept'] = quality_concept
+    state['data_table_view_mode'] = "Merge All (Wide Table)" if lang == 'en' else "合并全部（宽表）"
+    state['_quick_viz_screenshot_preset_applied'] = True
+
+
+def _sync_quick_viz_screenshot_mode(state: dict[str, Any], *, lang: str) -> bool:
+    """Synchronize screenshot-mode transitions and report whether a rerun is needed."""
+    screenshot_mode = bool(state.get('screenshot_mode', False))
+    previous_mode = bool(state.get('_screenshot_mode_last_value', False))
+
+    if screenshot_mode:
+        _apply_screenshot_mode_ui_state(state)
+
+    if screenshot_mode != previous_mode:
+        state['_screenshot_mode_last_value'] = screenshot_mode
+        if screenshot_mode:
+            _apply_quick_viz_screenshot_defaults(state, lang=lang)
+        else:
+            state['_quick_viz_screenshot_preset_applied'] = False
+        return True
+
+    if screenshot_mode and not state.get('_quick_viz_screenshot_preset_applied', False):
+        _apply_quick_viz_screenshot_defaults(state, lang=lang)
+        return True
+
+    return False
+
+
+def _quality_detect_time_col(df: pd.DataFrame) -> Optional[str]:
+    """Detect the most likely time column for quality-rate calculations."""
+    for col in QUALITY_TIME_CANDIDATES:
+        if col in df.columns:
+            return col
+    return None
+
+
+def _quality_to_hour_bins(series: pd.Series, col_name: str) -> Optional[pd.Series]:
+    """Normalize common EasyICU time formats to hourly bins."""
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series.dt.floor('H')
+    if pd.api.types.is_object_dtype(series):
+        parsed = pd.to_datetime(series, errors='coerce')
+        if parsed.notna().any():
+            return parsed.dt.floor('H')
+        numeric = pd.to_numeric(series, errors='coerce')
+        if numeric.notna().any():
+            col_lower = col_name.lower()
+            if 'second' in col_lower:
+                return (numeric / 3600).floordiv(1)
+            if 'minute' in col_lower or 'offset' in col_lower:
+                return (numeric / 60).floordiv(1)
+            return numeric.floordiv(1)
+        return None
+    if pd.api.types.is_numeric_dtype(series):
+        col_lower = col_name.lower()
+        if 'second' in col_lower:
+            return (series / 3600).floordiv(1)
+        if 'minute' in col_lower or 'offset' in col_lower:
+            return (series / 60).floordiv(1)
+        return series.floordiv(1)
+    return None
+
+
+def _get_quality_cohort_patient_count(state: dict[str, Any]) -> int:
+    """Choose the cohort denominator shown in the current Quick Visualization session."""
+    patient_ids = state.get('patient_ids') or []
+    if patient_ids:
+        return len(patient_ids)
+
+    all_patient_count = int(state.get('all_patient_count') or 0)
+    if all_patient_count > 0:
+        return all_patient_count
+
+    mock_params = state.get('mock_params', {}) or {}
+    mock_patient_count = int(mock_params.get('n_patients') or 0)
+    if mock_patient_count > 0:
+        return mock_patient_count
+
+    id_col = state.get('id_col')
+    max_patients_found = 0
+    if id_col:
+        for df in state.get('loaded_concepts', {}).values():
+            if isinstance(df, pd.DataFrame) and not df.empty and id_col in df.columns:
+                max_patients_found = max(max_patients_found, int(df[id_col].nunique()))
+    if max_patients_found > 0:
+        return max_patients_found
+
+    patient_limit = int(state.get('patient_limit') or 0)
+    return patient_limit if patient_limit > 0 else 0
+
+
+def _count_quality_event_occurrences(series: pd.Series) -> int:
+    """Count event occurrences instead of treating all non-null rows as observed values."""
+    if pd.api.types.is_bool_dtype(series):
+        return int(series.fillna(False).sum())
+    if pd.api.types.is_numeric_dtype(series):
+        return int((series.fillna(0) > 0).sum())
+    return int(series.notna().sum())
+
+
+def _compute_quality_missing_rate(
+    *,
+    concept: str,
+    df: pd.DataFrame,
+    id_col: str,
+    cohort_patient_count: int,
+    time_grid_size: int,
+) -> float:
+    """Compute a consistent concept-level missing rate for both table and chart views."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return 100.0
+
+    numeric_cols = df.select_dtypes(include=['number']).columns
+    value_cols = [c for c in numeric_cols if c not in QUALITY_EXCLUDE_COLUMNS]
+    main_col = concept if concept in df.columns else (value_cols[0] if value_cols else None)
+    n_patients = int(df[id_col].nunique()) if id_col in df.columns else 0
+    cohort_patient_count = int(cohort_patient_count or 0)
+    time_col = _quality_detect_time_col(df)
+
+    if concept in QUALITY_STATIC_BOOLEAN_EVENTS and not time_col:
+        denominator = cohort_patient_count or n_patients
+        if denominator <= 0:
+            return 100.0
+        return float(max(0.0, min(100.0, (1 - min(n_patients, denominator) / denominator) * 100)))
+
+    if main_col is None or main_col not in df.columns:
+        if cohort_patient_count > 0 and n_patients > 0:
+            patient_coverage_missing = (1 - min(n_patients, cohort_patient_count) / cohort_patient_count) * 100
+            return float(max(0.0, min(100.0, patient_coverage_missing)))
+        return 100.0
+
+    na_rate = float(df[main_col].isna().mean() * 100)
+    if concept in QUALITY_DEMOGRAPHIC_STATIC:
+        return na_rate
+
+    if time_col and time_col in df.columns and id_col in df.columns and time_grid_size > 0 and cohort_patient_count > 0:
+        hour_bins = _quality_to_hour_bins(df[time_col], time_col)
+        if hour_bins is not None:
+            observed_mask = df[main_col].notna()
+            if concept in QUALITY_EVENT_TIME_SERIES:
+                observed_mask = df[main_col].notna() & (
+                    df[main_col].astype('boolean').fillna(False)
+                    if pd.api.types.is_bool_dtype(df[main_col])
+                    else (df[main_col].fillna(0) > 0 if pd.api.types.is_numeric_dtype(df[main_col]) else df[main_col].notna())
+                )
+            tmp = df[[id_col]].copy()
+            tmp['_hour_bin'] = hour_bins
+            tmp = tmp.loc[observed_mask].dropna(subset=['_hour_bin'])
+            if not tmp.empty:
+                observed_bins = tmp.drop_duplicates(subset=[id_col, '_hour_bin'])
+                coverage_missing = (1 - len(observed_bins) / (cohort_patient_count * time_grid_size)) * 100
+                coverage_missing = max(0.0, min(100.0, coverage_missing))
+                return float(max(na_rate, coverage_missing))
+
+    if concept in QUALITY_EVENT_TIME_SERIES:
+        observed_count = _count_quality_event_occurrences(df[main_col])
+        if cohort_patient_count > 0 and time_grid_size > 0:
+            coverage_missing = (1 - observed_count / (cohort_patient_count * time_grid_size)) * 100
+            return float(max(na_rate, max(0.0, min(100.0, coverage_missing))))
+
+    if cohort_patient_count > 0 and n_patients > 0:
+        patient_coverage_missing = (1 - min(n_patients, cohort_patient_count) / cohort_patient_count) * 100
+        return float(max(na_rate, max(0.0, min(100.0, patient_coverage_missing))))
+
+    return na_rate
 
 def get_concept_groups():
     """根据当前语言返回带正确显示名称的特征分组。"""
@@ -3056,6 +3629,8 @@ def init_session_state():
         st.session_state.path_validated = False
     if 'language' not in st.session_state:
         st.session_state.language = 'en'  # 默认英文
+    if 'entry_lang_select' not in st.session_state:
+        st.session_state.entry_lang_select = 'EN' if st.session_state.language == 'en' else 'ZH'
     # 🚀 性能优化：患者数量限制
     # 全量 MIIV 约 5万患者/4000万行，加载需 ~50s；100患者约2s
     # 🔧 FIX 2025-01-28: 默认全量加载（0=不限制），满足大多数用户需求
@@ -7009,23 +7584,43 @@ def render_quick_visualization_page():
     """渲染快速可视化主页面 - 包含数据加载区域和四个子模块。"""
     lang = st.session_state.get('language', 'en')
     entry_mode = st.session_state.get('entry_mode', 'none')
-
-    _viz_title = get_text('quick_viz')
-    hint_text = (
-        "Generate demo data or load previously exported result files for interactive analysis"
-        if entry_mode == 'demo'
-        else "Load previously exported result files for interactive analysis"
+    screenshot_title = "📸 Screenshot Mode" if lang == 'en' else "📸 截图模式"
+    screenshot_hint = (
+        "Hide sidebar and AI dock, reduce chart chrome, and apply figure-friendly defaults."
+        if lang == 'en'
+        else "隐藏侧边栏和 AI 浮窗、减少图表工具条，并应用更适合论文截图的默认视图。"
     )
-    if lang != 'en':
-        hint_text = "生成模拟数据或从之前导出的结果文件中加载，进行交互式分析" if entry_mode == 'demo' else "从之前导出的结果文件中加载，进行交互式分析"
 
-    st.markdown(
-        f'''
-        <div class="compact-section-title">{_viz_title}</div>
-        <div class="compact-section-desc">{hint_text}</div>
-        ''',
-        unsafe_allow_html=True,
-    )
+    header_cols = st.columns([3.1, 1.3])
+    with header_cols[0]:
+        _viz_title = get_text('quick_viz')
+        hint_text = (
+            "Generate demo data or load previously exported result files for interactive analysis"
+            if entry_mode == 'demo'
+            else "Load previously exported result files for interactive analysis"
+        )
+        if lang != 'en':
+            hint_text = "生成模拟数据或从之前导出的结果文件中加载，进行交互式分析" if entry_mode == 'demo' else "从之前导出的结果文件中加载，进行交互式分析"
+
+        st.markdown(
+            f'''
+            <div class="compact-section-title">{_viz_title}</div>
+            <div class="compact-section-desc">{hint_text}</div>
+            ''',
+            unsafe_allow_html=True,
+        )
+    with header_cols[1]:
+        screenshot_mode = st.toggle(
+            screenshot_title,
+            value=st.session_state.get('screenshot_mode', False),
+            key='screenshot_mode',
+            help=screenshot_hint,
+        )
+        st.caption(screenshot_hint)
+
+    if _sync_quick_viz_screenshot_mode(st.session_state, lang=lang):
+        st.rerun()
+    screenshot_mode = bool(st.session_state.get('screenshot_mode', False))
 
     viz_notices = st.session_state.pop('_viz_notices', [])
     for notice in viz_notices[:3]:
@@ -7036,6 +7631,14 @@ def render_quick_visualization_page():
                 f'<div class="compact-inline-notice {level}">{message}</div>',
                 unsafe_allow_html=True,
             )
+
+    if screenshot_mode:
+        screenshot_notice = (
+            "Figure preset active: compact layout, hidden side chrome, and screenshot-first defaults."
+            if lang == 'en'
+            else "截图预设已启用：界面更紧凑、隐藏侧边栏干扰，并自动切到更适合论文配图的默认视图。"
+        )
+        st.markdown(f'<div class="compact-inline-notice info">{screenshot_notice}</div>', unsafe_allow_html=True)
 
     data_loaded = len(st.session_state.loaded_concepts) > 0
     if 'viz_export_path' not in st.session_state:
@@ -7076,15 +7679,15 @@ def render_quick_visualization_page():
             "exported": "📁 Previously Exported Data" if lang == 'en' else "📁 加载之前导出的结果文件",
             "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
         }
-        default_source = "exported" if recent_export_path else ("demo" if allow_demo and entry_mode == 'demo' else "exported")
-        if 'viz_data_source_mode' not in st.session_state:
-            st.session_state.viz_data_source_mode = default_source
-        elif st.session_state.get('viz_data_source_mode') not in source_options:
-            st.session_state.viz_data_source_mode = default_source
+        st.session_state.viz_data_source_mode = _resolve_viz_data_source_mode(
+            current_mode=st.session_state.get('viz_data_source_mode'),
+            recent_export_path=recent_export_path,
+            allow_demo=allow_demo,
+            entry_mode=entry_mode,
+        )
         current_source = st.radio(
             "Data Source" if lang == 'en' else "数据来源",
             options=source_options,
-            index=source_options.index(st.session_state.get('viz_data_source_mode', default_source)),
             format_func=lambda value: source_labels[value],
             horizontal=True,
             key="viz_data_source_mode",
@@ -7243,6 +7846,8 @@ def render_quick_visualization_page():
 def render_entry_page():
     """渲染入口选择页面 - Premium Hero 设计"""
     lang = st.session_state.get('language', 'en')
+    if 'entry_lang_select' not in st.session_state:
+        st.session_state.entry_lang_select = 'EN' if lang == 'en' else 'ZH'
 
     # 语言切换（右上角, 紧凑）
     col_lang = st.columns([8, 1])[1]
@@ -7824,7 +8429,7 @@ def render_sidebar():
             
             # 验证按钮
             validate_btn = "🔍 Validate Data Path" if st.session_state.language == 'en' else "🔍 验证数据路径"
-            if st.button(validate_btn, width="stretch", key="validate_path"):
+            if st.button(validate_btn, use_container_width=True, key="validate_path"):
                 if not data_path:
                     err_msg = "❌ Please enter data path" if st.session_state.language == 'en' else "❌ 请输入数据路径"
                     st.error(err_msg)
@@ -7857,7 +8462,7 @@ def render_sidebar():
             elif last_validation.get('can_convert') and last_path == data_path:
                 # 显示转换按钮
                 convert_btn = "🔄 Convert & Setup" if st.session_state.language == 'en' else "🔄 转换并设置"
-                if st.button(convert_btn, width="stretch", type="primary", key="convert_csv"):
+                if st.button(convert_btn, use_container_width=True, type="primary", key="convert_csv"):
                     st.session_state.show_convert_dialog = True
                     st.session_state.convert_source_path = data_path
                     st.rerun()
@@ -8347,7 +8952,7 @@ def render_sidebar():
         col_select, col_all = st.columns([4, 1])
         with col_all:
             all_label = "ALL" if st.session_state.language == 'en' else "全选"
-            if st.button(all_label, key="select_all_groups", width='stretch'):
+            if st.button(all_label, key="select_all_groups", use_container_width=True):
                 st.session_state.selected_groups = list(concept_groups.keys())
                 # 自动选中所有概念
                 for grp in concept_groups.keys():
@@ -8641,7 +9246,7 @@ def render_sidebar():
                     st.session_state.step3_confirmed = False
                     st.rerun()
         else:
-            st.button(export_btn, type="primary", width="stretch", disabled=True)
+            st.button(export_btn, type="primary", use_container_width=True, disabled=True)
             if not selected_concepts:
                 feat_warn = "⚠️ Please select features first" if st.session_state.language == 'en' else "⚠️ 请先选择特征"
                 st.caption(feat_warn)
@@ -8678,6 +9283,63 @@ def render_sidebar():
                 """)  
 
 
+def _get_pyarrow_version() -> str | None:
+    try:
+        import pyarrow as pa
+        return pa.__version__
+    except Exception:
+        return None
+
+
+def _get_parquet_created_by(file_path: Path) -> str | None:
+    try:
+        import pyarrow.parquet as pq
+        parquet_file = pq.ParquetFile(file_path)
+        return parquet_file.metadata.created_by
+    except Exception:
+        return None
+
+
+def _build_export_read_failure_warning(
+    target_files: List[Path],
+    read_failures: List[Dict[str, Any]],
+    lang: str = 'en',
+) -> str:
+    """Explain why exported files were found but could not be read."""
+    if not target_files:
+        return "⚠️ No valid data files found" if lang == 'en' else "⚠️ 未找到有效的数据文件"
+
+    parquet_failures = [item for item in read_failures if item.get('suffix') == '.parquet']
+    if parquet_failures and len(read_failures) == len(target_files):
+        first_failure = parquet_failures[0]
+        pyarrow_version = _get_pyarrow_version() or "unknown"
+        created_by = first_failure.get('created_by')
+        error_text = first_failure.get('error', 'unknown read error')
+
+        if lang == 'en':
+            parts = [
+                f"⚠️ Found {len(target_files)} data file(s), but failed to read them.",
+                f"Current runtime: pyarrow={pyarrow_version}.",
+            ]
+            if created_by:
+                parts.append(f"First parquet writer: {created_by}.")
+            parts.append(f"Reader error: {error_text}.")
+            parts.append("This usually means the exported parquet files were written by a newer Arrow version than the current runtime.")
+            return " ".join(parts)
+
+        parts = [
+            f"⚠️ 已找到 {len(target_files)} 个数据文件，但读取失败。",
+            f"当前运行环境: pyarrow={pyarrow_version}。",
+        ]
+        if created_by:
+            parts.append(f"首个 parquet 写入器: {created_by}。")
+        parts.append(f"读取错误: {error_text}。")
+        parts.append("这通常意味着导出 parquet 的 Arrow 版本比当前运行环境更新。")
+        return " ".join(parts)
+
+    return "⚠️ No valid data files found" if lang == 'en' else "⚠️ 未找到有效的数据文件"
+
+
 def load_from_exported(export_dir: str, max_patients: int = 50, selected_files: list = None):
     """从已导出的数据文件加载数据（限制患者数用于快速预览）。
     
@@ -8695,6 +9357,7 @@ def load_from_exported(export_dir: str, max_patients: int = 50, selected_files: 
         
         export_path = Path(export_dir)
         raw_data = {}  # 原始文件数据
+        read_failures: List[Dict[str, Any]] = []
         
         # ID列和时间列，不作为特征
         id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 
@@ -8799,11 +9462,17 @@ def load_from_exported(export_dir: str, max_patients: int = 50, selected_files: 
                     raw_data[file_stem] = pd.read_excel(file)
             except Exception as _read_err:
                 print(f'[load_from_exported] Failed to read {file.name}: {_read_err}')
+                read_failures.append({
+                    'file': file.name,
+                    'suffix': file.suffix,
+                    'error': str(_read_err),
+                    'created_by': _get_parquet_created_by(file) if file.suffix == '.parquet' else None,
+                })
                 continue
         
         if not raw_data:
             lang = st.session_state.get('language', 'en')
-            warn_msg = "⚠️ No valid data files found" if lang == 'en' else "⚠️ 未找到有效的数据文件"
+            warn_msg = _build_export_read_failure_warning(target_files, read_failures, lang=lang)
             st.warning(warn_msg)
             return
         
@@ -10413,69 +11082,71 @@ def render_home_extract_mode(lang):
 def render_home_data_dictionary(lang):
     """在首页渲染完整的数据字典。"""
     dict_title = "📖 Complete Data Dictionary" if lang == 'en' else "📖 完整数据字典"
-    
-    with st.expander(dict_title, expanded=True):
-        
-        # 🔍 搜索框
-        search_placeholder = "Search by code, name or description... (e.g. hr, heart rate, lactate)" if lang == 'en' else "按代码、名称或描述搜索... (如 hr、heart rate、心率)"
-        search_query = st.text_input(
-            "🔍 Search" if lang == 'en' else "🔍 搜索",
-            placeholder=search_placeholder,
-            key="dict_search_input",
-        )
-        
-        # 获取分组
-        concept_groups = get_concept_groups()
-        
-        # 如果有搜索词，展示搜索结果
-        if search_query and search_query.strip():
-            query = search_query.strip().lower()
-            matched_rows = []
-            for group_name, concepts in concept_groups.items():
-                for concept in concepts:
-                    if concept in CONCEPT_DICTIONARY:
-                        eng_name, chn_name, unit = CONCEPT_DICTIONARY[concept]
-                        eng_desc, chn_desc = CONCEPT_DESCRIPTIONS.get(concept, ('', ''))
-                        # 匹配 code、英文名、中文名、描述
+    st.caption(dict_title)
+
+    # Streamlit forbids nested expanders in recent versions, so the section
+    # heading remains flat and only the per-category groups use expanders.
+    search_placeholder = "Search by code, name or description... (e.g. hr, heart rate, lactate)" if lang == 'en' else "按代码、名称或描述搜索... (如 hr、heart rate、心率)"
+    search_query = st.text_input(
+        "🔍 Search" if lang == 'en' else "🔍 搜索",
+        placeholder=search_placeholder,
+        key="dict_search_input",
+    )
+
+    concept_groups = get_concept_groups()
+
+    if search_query and search_query.strip():
+        query = search_query.strip().lower()
+        matched_rows = []
+        for group_name, concepts in concept_groups.items():
+            for concept in concepts:
+                if concept in CONCEPT_DICTIONARY:
+                    eng_name, chn_name, unit = CONCEPT_DICTIONARY[concept]
+                    eng_desc, chn_desc = CONCEPT_DESCRIPTIONS.get(concept, ('', ''))
+                    # 匹配 code、英文名、中文名、描述
+                    if lang == 'en':
+                        searchable = f"{concept} {eng_name} {eng_desc}".lower()
+                    else:
+                        searchable = f"{concept} {eng_name} {chn_name} {eng_desc} {chn_desc}".lower()
+                    if query in searchable:
                         if lang == 'en':
-                            searchable = f"{concept} {eng_name} {eng_desc}".lower()
+                            matched_rows.append({
+                                'Code': concept,
+                                'Full Name': eng_name,
+                                'Category': group_name,
+                                'Description': eng_desc if eng_desc else eng_name,
+                                'Unit': unit if unit else '-'
+                            })
                         else:
-                            searchable = f"{concept} {eng_name} {chn_name} {eng_desc} {chn_desc}".lower()
-                        if query in searchable:
-                            if lang == 'en':
-                                matched_rows.append({
-                                    'Code': concept,
-                                    'Full Name': eng_name,
-                                    'Category': group_name,
-                                    'Description': eng_desc if eng_desc else eng_name,
-                                    'Unit': unit if unit else '-'
-                                })
-                            else:
-                                matched_rows.append({
-                                    '代码': concept,
-                                    '全称': eng_name,
-                                    '类别': group_name,
-                                    '说明': chn_desc if chn_desc else chn_name,
-                                    '单位': unit if unit else '-'
-                                })
-            
-            if matched_rows:
-                n = len(matched_rows)
-                result_text = f"Found **{n}** matching feature(s)" if lang == 'en' else f"找到 **{n}** 个匹配特征"
-                st.success(result_text)
-                st.dataframe(pd.DataFrame(matched_rows), width="stretch", hide_index=True, height=min(300, 50 + 35 * n))
-            else:
-                no_result = "No matching features found." if lang == 'en' else "未找到匹配的特征。"
-                st.warning(no_result)
+                            matched_rows.append({
+                                '代码': concept,
+                                '全称': eng_name,
+                                '类别': group_name,
+                                '说明': chn_desc if chn_desc else chn_name,
+                                '单位': unit if unit else '-'
+                            })
+
+        if matched_rows:
+            n = len(matched_rows)
+            result_text = f"Found **{n}** matching feature(s)" if lang == 'en' else f"找到 **{n}** 个匹配特征"
+            st.success(result_text)
+            _dataframe_compat(
+                pd.DataFrame(matched_rows),
+                width="stretch",
+                hide_index=True,
+                height=min(300, 50 + 35 * n),
+            )
         else:
-            # 无搜索词时，按类别展示
-            categories_title = "📂 Categories" if lang == 'en' else "📂 类别"
-            st.markdown(f"#### {categories_title}")
-            
-            for group_name in concept_groups.keys():
-                feat_text = "features" if lang == 'en' else "个特征"
-                with st.expander(f"{group_name} ({len(concept_groups[group_name])} {feat_text})"):
-                    _render_home_dict_table(concept_groups[group_name], lang)
+            no_result = "No matching features found." if lang == 'en' else "未找到匹配的特征。"
+            st.warning(no_result)
+    else:
+        categories_title = "📂 Categories" if lang == 'en' else "📂 类别"
+        st.markdown(f"#### {categories_title}")
+
+        for group_name in concept_groups.keys():
+            feat_text = "features" if lang == 'en' else "个特征"
+            with st.expander(f"{group_name} ({len(concept_groups[group_name])} {feat_text})"):
+                _render_home_dict_table(concept_groups[group_name], lang)
 
 
 def _render_home_dict_table(concepts, lang):
@@ -10507,7 +11178,7 @@ def _render_home_dict_table(concepts, lang):
     
     if rows:
         df = pd.DataFrame(rows)
-        st.dataframe(df, width="stretch", hide_index=True, height=300)
+        _dataframe_compat(df, width="stretch", hide_index=True, height=300)
 
 
 def _add_clinical_thresholds(fig, concept_name: str, show: bool = True):
@@ -10532,6 +11203,7 @@ def _add_clinical_thresholds(fig, concept_name: str, show: bool = True):
 def render_timeseries_page():
     """渲染时序分析页面。"""
     lang = st.session_state.get('language', 'en')
+    screenshot_mode = _is_screenshot_mode()
     
     _ts_title = "Time Series Analysis" if lang == 'en' else "时序数据分析"
     _ts_sub = "Interactive visualization, single & multi-patient comparison" if lang == 'en' else "交互式可视化，支持单/多患者对比"
@@ -10546,6 +11218,14 @@ def render_timeseries_page():
     with _hdr_col2:
         _show_thresh = st.toggle(get_text('threshold_lines'), value=True, key="ts_show_thresholds")
         st.session_state['_ts_show_thresholds'] = _show_thresh
+
+    if screenshot_mode:
+        focus_hint = (
+            "Figure preset: showing up to 4 representative trajectories and hiding chart toolbars."
+            if lang == 'en'
+            else "截图预设：默认仅展示最多 4 条代表性轨迹，并隐藏图表工具条。"
+        )
+        st.markdown(f'<div class="compact-inline-notice info">{focus_hint}</div>', unsafe_allow_html=True)
     
     if len(st.session_state.loaded_concepts) == 0:
         _msg = "Load data to begin time series analysis." if lang == 'en' else "请先加载数据以进行时序分析。"
@@ -10589,9 +11269,12 @@ def render_timeseries_page():
             
             id_col = st.session_state.get('id_col', 'stay_id')
             _show_thresh = st.session_state.get('_ts_show_thresholds', True)
+            screenshot_concepts = set(_select_timeseries_screenshot_concepts(available_concepts)) if screenshot_mode else None
             
             for lane_name, lane_concepts in CLINICAL_LANES.items():
                 _lane_avail = [c for c in lane_concepts if c in available_concepts]
+                if screenshot_mode and screenshot_concepts is not None:
+                    _lane_avail = [c for c in _lane_avail if c in screenshot_concepts]
                 if not _lane_avail:
                     continue
                     
@@ -10609,7 +11292,8 @@ def render_timeseries_page():
                             continue
                         pdf = df[df[id_col] == _lane_pid].copy()
                         if pdf.empty:
-                            st.caption(f"{cname}: no data")
+                            if not screenshot_mode:
+                                st.caption(f"{cname}: no data")
                             continue
                         
                         _tcol = None
@@ -10620,13 +11304,15 @@ def render_timeseries_page():
                                 break
                         
                         if _tcol is None:
-                            st.caption(f"{cname}: no time column")
+                            if not screenshot_mode:
+                                st.caption(f"{cname}: no time column")
                             continue
                         
                         try:
                             plot_pdf = _prepare_timeseries_plot_df(pdf, _tcol, cname)
                             if plot_pdf.empty:
-                                st.caption(f"{cname}: no valid time series")
+                                if not screenshot_mode:
+                                    st.caption(f"{cname}: no valid time series")
                                 continue
                             fig = go.Figure()
                             fig.add_trace(go.Scatter(
@@ -10642,9 +11328,15 @@ def render_timeseries_page():
                                 height=200, margin=dict(l=40, r=10, t=30, b=25),
                                 showlegend=False, xaxis=dict(title=""), yaxis=dict(title=""),
                             )
-                            st.plotly_chart(fig, use_container_width=True, key=f"lane_{lane_name}_{cname}_{_lane_pid}")
+                            st.plotly_chart(
+                                fig,
+                                use_container_width=True,
+                                key=f"lane_{lane_name}_{cname}_{_lane_pid}",
+                                config=_get_plotly_chart_config(),
+                            )
                         except Exception:
-                            st.caption(f"{cname}: render error")
+                            if not screenshot_mode:
+                                st.caption(f"{cname}: render error")
                 
                 st.markdown("---")
         return
@@ -10837,7 +11529,7 @@ def render_timeseries_page():
                             fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                             fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                             
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
                         else:
                             # 🔧 只有数值没有时间列（静态数据/单点数据）
                             st.info("ℹ️ Static value (No time series data)" if lang == 'en' else "ℹ️ 静态数值（无时间序列数据）")
@@ -11089,7 +11781,7 @@ def render_timeseries_page():
                     fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                     fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
                     
                     # 比较统计表
                     if comparison_stats:
@@ -11121,6 +11813,7 @@ def render_timeseries_page():
 def render_patient_page():
     """渲染患者视图页面。"""
     lang = st.session_state.get('language', 'en')
+    screenshot_mode = _is_screenshot_mode()
     loaded_concepts_map = st.session_state.loaded_concepts
 
     def _patient_concept_frame(concept_name, patient_id, id_col_name):
@@ -11241,36 +11934,41 @@ def render_patient_page():
     last_help = "Jump to last patient" if lang == 'en' else "跳转到最后一位患者"
     rand_help = "Random select a patient" if lang == 'en' else "随机选择一位患者"
     
-    nav_cols = st.columns(6)
-    with nav_cols[0]:
-        if st.button(first_btn, width="stretch", help=first_help):
-            st.session_state.patient_view_id = st.session_state.patient_ids[0]
-            st.rerun()
-    with nav_cols[1]:
-        if st.button(prev_btn, width="stretch", help=prev_help):
-            current_idx = st.session_state.patient_ids.index(st.session_state.get('patient_view_id', st.session_state.patient_ids[0]))
-            if current_idx > 0:
-                st.session_state.patient_view_id = st.session_state.patient_ids[current_idx - 1]
+    current_idx = st.session_state.patient_ids.index(st.session_state.get('patient_view_id', st.session_state.patient_ids[0]))
+    if screenshot_mode:
+        focus_msg = (
+            f"Figure preset: focusing the dashboard on patient {current_idx + 1}/{len(st.session_state.patient_ids)}. Use the selector below to switch cases."
+            if lang == 'en'
+            else f"截图预设：当前聚焦第 {current_idx + 1}/{len(st.session_state.patient_ids)} 位患者。可通过下方选择器切换病例。"
+        )
+        st.markdown(f'<div class="compact-inline-notice info">{focus_msg}</div>', unsafe_allow_html=True)
+    else:
+        nav_cols = st.columns(6)
+        with nav_cols[0]:
+            if st.button(first_btn, use_container_width=True, help=first_help):
+                st.session_state.patient_view_id = st.session_state.patient_ids[0]
                 st.rerun()
-    with nav_cols[2]:
-        if st.button(next_btn, width="stretch", help=next_help):
-            current_idx = st.session_state.patient_ids.index(st.session_state.get('patient_view_id', st.session_state.patient_ids[0]))
-            if current_idx < len(st.session_state.patient_ids) - 1:
-                st.session_state.patient_view_id = st.session_state.patient_ids[current_idx + 1]
+        with nav_cols[1]:
+            if st.button(prev_btn, use_container_width=True, help=prev_help):
+                if current_idx > 0:
+                    st.session_state.patient_view_id = st.session_state.patient_ids[current_idx - 1]
+                    st.rerun()
+        with nav_cols[2]:
+            if st.button(next_btn, use_container_width=True, help=next_help):
+                if current_idx < len(st.session_state.patient_ids) - 1:
+                    st.session_state.patient_view_id = st.session_state.patient_ids[current_idx + 1]
+                    st.rerun()
+        with nav_cols[3]:
+            if st.button(last_btn, use_container_width=True, help=last_help):
+                st.session_state.patient_view_id = st.session_state.patient_ids[-1]
                 st.rerun()
-    with nav_cols[3]:
-        if st.button(last_btn, width="stretch", help=last_help):
-            st.session_state.patient_view_id = st.session_state.patient_ids[-1]
-            st.rerun()
-    with nav_cols[4]:
-        if st.button(rand_btn, width="stretch", help=rand_help):
-            import random
-            st.session_state.patient_view_id = random.choice(st.session_state.patient_ids)
-            st.rerun()
-    with nav_cols[5]:
-        # 显示当前位置
-        current_idx = st.session_state.patient_ids.index(st.session_state.get('patient_view_id', st.session_state.patient_ids[0]))
-        st.markdown(f"<div style='text-align:center;padding:0.5rem;background:rgba(30,40,50,0.6);border-radius:4px'>{current_idx + 1}/{len(st.session_state.patient_ids)}</div>", unsafe_allow_html=True)
+        with nav_cols[4]:
+            if st.button(rand_btn, use_container_width=True, help=rand_help):
+                import random
+                st.session_state.patient_view_id = random.choice(st.session_state.patient_ids)
+                st.rerun()
+        with nav_cols[5]:
+            st.markdown(f"<div style='text-align:center;padding:0.5rem;background:rgba(30,40,50,0.6);border-radius:4px'>{current_idx + 1}/{len(st.session_state.patient_ids)}</div>", unsafe_allow_html=True)
     
     # ============ Render Patient Summary Card ============
     _current_pid = st.session_state.get('patient_view_id', st.session_state.patient_ids[0] if st.session_state.patient_ids else None)
@@ -11344,6 +12042,13 @@ def render_patient_page():
             # 自定义综合仪表盘
             dash_title = "### 📊 Dashboard" if lang == 'en' else "### 📊 综合仪表盘"
             st.markdown(dash_title)
+            if screenshot_mode:
+                dash_focus_note = (
+                    "Figure preset: emphasizing SOFA comparison and compact case summary."
+                    if lang == 'en'
+                    else "截图预设：突出 SOFA 对比和紧凑病例摘要。"
+                )
+                st.markdown(f'<div class="compact-inline-notice info">{dash_focus_note}</div>', unsafe_allow_html=True)
             
             try:
                 import plotly.graph_objects as go
@@ -11369,7 +12074,7 @@ def render_patient_page():
                                 if time_col:
                                     vitals_data[v] = (patient_df, time_col)
                 
-                if vitals_data:
+                if vitals_data and not screenshot_mode:
                     # 创建多行子图
                     n_vitals = len(vitals_data)
                     fig = make_subplots(
@@ -11407,8 +12112,8 @@ def render_patient_page():
                     fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                     fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                     
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
+                    st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
+                elif not screenshot_mode:
                     no_vitals = "ℹ️ No standard vital signs are present in the current loaded features" if lang == 'en' else "ℹ️ 当前已加载特征中不包含标准生命体征"
                     st.info(no_vitals)
                 
@@ -11424,7 +12129,7 @@ def render_patient_page():
                                 sofa_time_col = tc
                                 break
                         
-                        if len(patient_sofa) > 0 and sofa_time_col:
+                        if len(patient_sofa) > 0 and sofa_time_col and not screenshot_mode:
                             sofa_trend = "#### 📈 SOFA Score Trend" if lang == 'en' else "#### 📈 SOFA 评分趋势"
                             st.markdown(sofa_trend)
                             
@@ -11459,7 +12164,7 @@ def render_patient_page():
                                 fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                                 fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                                 
-                                st.plotly_chart(fig, use_container_width=True)
+                                st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
                 
                 # ============ SOFA-1 vs SOFA-2 对比图表 ============
                 has_sofa1 = 'sofa' in st.session_state.loaded_concepts
@@ -11536,7 +12241,7 @@ def render_patient_page():
                             fig_total.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                             fig_total.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                             
-                            st.plotly_chart(fig_total, use_container_width=True)
+                            st.plotly_chart(fig_total, use_container_width=True, config=_get_plotly_chart_config())
                             
                             # 2. 子器官评分对比（6个子图）
                             organ_compare = "**Organ-specific Score Comparison**" if lang == 'en' else "**各器官评分对比**"
@@ -11641,7 +12346,7 @@ def render_patient_page():
                                                            tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                                 fig_organs.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                                 
-                                st.plotly_chart(fig_organs, use_container_width=True)
+                                st.plotly_chart(fig_organs, use_container_width=True, config=_get_plotly_chart_config())
                             else:
                                 no_organ_msg = "ℹ️ Organ-specific scores not available in current data. Load individual organ concepts (e.g., sofa_resp, sofa2_resp) to see detailed comparison." if lang == 'en' else "ℹ️ 当前数据中无法获取器官子评分。请加载单独的器官概念（如 sofa_resp, sofa2_resp）以查看详细对比。"
                                 st.info(no_organ_msg)
@@ -11678,7 +12383,8 @@ def render_patient_page():
                             })
                             
                             diff_df = pd.DataFrame(diff_data)
-                            st.dataframe(diff_df, width="stretch", hide_index=True)
+                            if not screenshot_mode:
+                                st.dataframe(diff_df, width="stretch", hide_index=True)
                     else:
                         no_compare = "ℹ️ Need both SOFA-1 and SOFA-2 data for comparison" if lang == 'en' else "ℹ️ 需要同时有 SOFA-1 和 SOFA-2 数据才能对比"
                         st.info(no_compare)
@@ -11823,7 +12529,7 @@ def render_patient_page():
                         formatted = str(latest_value)
                     snapshot_candidates.append((concept_name, formatted))
 
-                if snapshot_candidates:
+                if snapshot_candidates and not screenshot_mode:
                     snapshot_title = "#### 🧩 Loaded Feature Snapshot" if lang == 'en' else "#### 🧩 已加载特征快照"
                     st.markdown(snapshot_title)
                     visible_snapshots = snapshot_candidates[:8]
@@ -12143,68 +12849,60 @@ def render_patient_page():
 def render_data_table_subtab():
     """渲染数据大表子模块 - 让用户按模块查看已加载的数据。"""
     lang = st.session_state.get('language', 'en')
-    
-    page_title = "📋 Data Tables Explorer" if lang == 'en' else "📋 数据大表浏览"
+
+    page_copy = _get_data_table_page_copy(lang)
+    page_title = page_copy["title"]
     st.markdown(f'<div class="compact-section-title">{page_title}</div>', unsafe_allow_html=True)
-    
-    page_desc = "Browse and explore your loaded data by module. Select a module to view the complete data table." if lang == 'en' else "按模块浏览和探索已加载的数据。选择一个模块查看完整数据表。"
+
+    page_desc = page_copy["description"]
     st.markdown(f'<div class="compact-section-desc">{page_desc}</div>', unsafe_allow_html=True)
-    st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
     
     if len(st.session_state.loaded_concepts) == 0:
         no_data_msg = "Please load data first in the settings above." if lang == 'en' else "请先在上方设置中加载数据。"
         st.warning(no_data_msg)
         return
     
-    # 按模块分组已加载的概念
-    concept_groups = get_concept_groups()
-    
     # 🔧 FIX (2026-02-12): 使用内部分组定义来构建映射
     # 由于列名已在 load_from_exported() 中规范化，这里直接使用列名查找分组
-    concept_to_group = {}
+    concept_to_group_display = {}
+    concept_to_group_key = {}
     for group_key, concepts in CONCEPT_GROUPS_INTERNAL.items():
         # 获取显示名称
         display_name = CONCEPT_GROUP_NAMES.get(group_key, (group_key, group_key))
         group_display = display_name[0] if lang == 'en' else display_name[1]
         
         for c in concepts:
-            if c not in concept_to_group:
-                concept_to_group[c] = group_display
+            if c not in concept_to_group_display:
+                concept_to_group_display[c] = group_display
+                concept_to_group_key[c] = group_key
     
     # 🔧 FIX (2026-02-12): 列名已在 load_from_exported() 中规范化并去重
     # 每个列就是一个唯一的 concept，直接分组即可
-    loaded_by_module = {}
+    loaded_by_module: Dict[str, Dict[str, Any]] = {}
     
     for column_name in st.session_state.loaded_concepts.keys():
         # 使用列名查找分组（列名已经是规范化后的）
-        group = concept_to_group.get(column_name)
-        if group:
-            if group not in loaded_by_module:
-                loaded_by_module[group] = []
-            loaded_by_module[group].append(column_name)
+        group_display = concept_to_group_display.get(column_name)
+        group_key = concept_to_group_key.get(column_name)
+        if group_display:
+            if group_display not in loaded_by_module:
+                loaded_by_module[group_display] = {
+                    'group_key': group_key,
+                    'concepts': [],
+                }
+            loaded_by_module[group_display]['concepts'].append(column_name)
     
     # 🔧 FIX (2026-02-12): Features = Concepts = 列数（已去重）
     unique_feature_count = len(st.session_state.loaded_concepts)
     
-    # 显示模块统计
-    total_rows = sum(
-        len(df) for df in st.session_state.loaded_concepts.values() 
-        if isinstance(df, pd.DataFrame)
+    patient_count = len(st.session_state.patient_ids) if st.session_state.patient_ids else 0
+    loaded_summary = (
+        f"{len(loaded_by_module)} modules loaded · {unique_feature_count} features · {patient_count} patients"
+        if lang == 'en'
+        else f"已加载 {len(loaded_by_module)} 个模块 · {unique_feature_count} 个特征 · {patient_count} 名患者"
     )
-    stats_items = [
-        ("Modules" if lang == 'en' else "模块数", len(loaded_by_module)),
-        ("Features" if lang == 'en' else "特征数", unique_feature_count),
-        ("Patients" if lang == 'en' else "患者数", len(st.session_state.patient_ids) if st.session_state.patient_ids else 0),
-        ("Total Rows" if lang == 'en' else "总行数", f"{total_rows:,}"),
-    ]
-    stats_cols = st.columns(4)
-    for idx, (label, value) in enumerate(stats_items):
-        with stats_cols[idx]:
-            st.markdown(
-                f'<div class="mini-stat-card"><div class="mini-label">{label}</div><div class="mini-value">{value}</div></div>',
-                unsafe_allow_html=True,
-            )
-    st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="preview-hint-line">{loaded_summary}</div>', unsafe_allow_html=True)
     
     # 模块选择器 - 🔧 放大标题
     module_select_label = "Select Module to View" if lang == 'en' else "选择要查看的模块"
@@ -12224,16 +12922,47 @@ def render_data_table_subtab():
     )
     
     if selected_module:
-        module_concepts = loaded_by_module[selected_module]
-        
-        # 显示该模块包含的特征
-        features_in_module = f"**Features in this module ({len(module_concepts)}):** " + ", ".join(sorted(module_concepts))
-        st.caption(features_in_module)
-        st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
+        module_meta = loaded_by_module[selected_module]
+        module_key = module_meta.get('group_key', '')
+        module_concepts = module_meta['concepts']
+        preview_meta = _build_module_preview_metadata(module_key, selected_module, module_concepts, lang=lang)
+
+        preview_cols = st.columns([2.5, 0.9, 0.9])
+        tags_html = "".join(
+            f'<span class="module-feature-chip">{html.escape(tag)}</span>'
+            for tag in preview_meta['tags']
+        )
+        if preview_meta['overflow_count']:
+            tags_html += f'<span class="module-feature-chip muted">+{preview_meta["overflow_count"]}</span>'
+
+        with preview_cols[0]:
+            selected_label = "Selected Module" if lang == 'en' else "当前模块"
+            st.markdown(
+                f'''
+                <div class="module-preview-card">
+                    <div class="eyebrow">{selected_label}</div>
+                    <div class="title">{html.escape(selected_module)}</div>
+                    <div class="summary">{html.escape(preview_meta["summary"])}</div>
+                    <div class="module-feature-chip-row">{tags_html}</div>
+                </div>
+                ''',
+                unsafe_allow_html=True,
+            )
+        with preview_cols[1]:
+            st.markdown(
+                f'<div class="mini-stat-card"><div class="mini-label">{"Features" if lang == "en" else "特征数"}</div><div class="mini-value">{len(module_concepts)}</div></div>',
+                unsafe_allow_html=True,
+            )
+        with preview_cols[2]:
+            st.markdown(
+                f'<div class="mini-stat-card"><div class="mini-label">{"Patients" if lang == "en" else "患者数"}</div><div class="mini-value">{patient_count}</div></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
         
         # 特征选择器（单选或多选合并）- 默认合并全部放第一个
         # 🔧 放大标题
-        view_mode_label = "View Mode" if lang == 'en' else "查看模式"
+        view_mode_label = "Preview Mode" if lang == 'en' else "预览模式"
         st.markdown(f'<div style="font-size:1.02rem;font-weight:800;color:#111827;margin:0 0 0.35rem 0;line-height:1.2">👁️ {view_mode_label}</div>', unsafe_allow_html=True)
         view_modes = ["Merge All (Wide Table)", "Single Feature"] if lang == 'en' else ["合并全部（宽表）", "单个特征"]
         
@@ -12241,33 +12970,74 @@ def render_data_table_subtab():
         
         if view_mode == view_modes[1]:
             # 单个特征模式 (现在是第二个选项)
+            feature_control_cols = st.columns([1.7, 0.78])
             feature_select_label = "Select Feature" if lang == 'en' else "选择特征"
-            selected_feature = st.selectbox(
-                feature_select_label,
-                options=sorted(module_concepts),
-                key="data_table_feature_select"
-            )
+            with feature_control_cols[0]:
+                selected_feature = st.selectbox(
+                    feature_select_label,
+                    options=sorted(module_concepts),
+                    key="data_table_feature_select"
+                )
+            with feature_control_cols[1]:
+                st.markdown(
+                    f'<div class="inline-control-label">{"Preview rows" if lang == "en" else "预览行数"}</div>',
+                    unsafe_allow_html=True,
+                )
+                max_rows = st.selectbox(
+                    "Preview rows" if lang == 'en' else "预览行数",
+                    options=[500, 1000, 2000, 5000, 10000],
+                    index=1,
+                    key="single_feature_max_rows",
+                    label_visibility="collapsed",
+                )
             
             if selected_feature and selected_feature in st.session_state.loaded_concepts:
                 df = st.session_state.loaded_concepts[selected_feature]
                 
                 if isinstance(df, pd.DataFrame) and len(df) > 0:
-                    # 显示数据统计
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        rows_label = "Rows" if lang == 'en' else "行数"
-                        st.metric(rows_label, f"{len(df):,}")
-                    with col2:
-                        cols_label = "Columns" if lang == 'en' else "列数"
-                        st.metric(cols_label, len(df.columns))
-                    with col3:
-                        size_kb = df.memory_usage(deep=True).sum() / 1024
-                        size_label = "Memory" if lang == 'en' else "内存占用"
-                        st.metric(size_label, f"{size_kb:.1f} KB")
-                    
-                    # 显示列信息
-                    cols_info_label = "Columns" if lang == 'en' else "列信息"
-                    with st.expander(f"📊 {cols_info_label}: {', '.join(df.columns.tolist())}", expanded=False):
+                    feature_copy = _get_single_feature_preview_copy(selected_feature, lang)
+                    st.markdown(
+                        f'''
+                        <div class="preview-toolbar">
+                            <div class="preview-toolbar-main">
+                                <div class="preview-toolbar-title">{feature_copy["title"]}</div>
+                                <div class="preview-toolbar-note">{feature_copy["description"]}</div>
+                            </div>
+                        </div>
+                        ''',
+                        unsafe_allow_html=True,
+                    )
+
+                    stat_cols = st.columns(3)
+                    size_kb = df.memory_usage(deep=True).sum() / 1024
+                    stats = [
+                        ("Feature Rows" if lang == 'en' else "特征行数", f"{len(df):,}"),
+                        ("Columns" if lang == 'en' else "列数", len(df.columns)),
+                        ("Memory" if lang == 'en' else "内存占用", f"{size_kb:.1f} KB"),
+                    ]
+                    for idx, (label, value) in enumerate(stats):
+                        with stat_cols[idx]:
+                            st.markdown(
+                                f'<div class="tiny-stat-card"><div class="tiny-label">{label}</div><div class="tiny-value">{value}</div></div>',
+                                unsafe_allow_html=True,
+                            )
+
+                    column_chip_html = "".join(
+                        f'<span class="module-feature-chip">{html.escape(str(column_name))}</span>'
+                        for column_name in df.columns[:8]
+                    )
+                    if len(df.columns) > 8:
+                        column_chip_html += f'<span class="module-feature-chip muted">+{len(df.columns) - 8}</span>'
+                    st.markdown(
+                        f'''
+                        <div class="subtle-preview-note">{"Columns included in this preview" if lang == "en" else "当前预览包含的列"}</div>
+                        <div class="module-feature-chip-row">{column_chip_html}</div>
+                        ''',
+                        unsafe_allow_html=True,
+                    )
+
+                    cols_info_label = "Column Details" if lang == 'en' else "列详情"
+                    with st.expander(f"📊 {cols_info_label}", expanded=False):
                         col_info = pd.DataFrame({
                             'Column': df.columns,
                             'Type': [str(df[c].dtype) for c in df.columns],
@@ -12275,14 +13045,9 @@ def render_data_table_subtab():
                             'Null %': [f"{df[c].isna().mean()*100:.1f}%" for c in df.columns]
                         })
                         st.dataframe(col_info, hide_index=True, use_container_width=True)
-                    
-                    # 显示数据表
-                    st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
-                    table_title = f"📋 {selected_feature} Data Table" if lang == 'en' else f"📋 {selected_feature} 数据表"
-                    st.markdown(f"### {table_title}")
-                    
+
                     # 添加搜索/过滤选项
-                    filter_expander_label = "🔍 Filter Options" if lang == 'en' else "🔍 过滤选项"
+                    filter_expander_label = "🔎 Preview Filters" if lang == 'en' else "🔎 预览筛选"
                     with st.expander(filter_expander_label, expanded=False):
                         # 患者过滤
                         id_col = st.session_state.get('id_col', 'stay_id')
@@ -12297,28 +13062,23 @@ def render_data_table_subtab():
                             )
                             if selected_ids:
                                 df = df[df[id_col].isin(selected_ids)]
-                        
-                        # 行数限制
-                        max_rows_label = "Max rows to display" if lang == 'en' else "最大显示行数"
-                        max_rows = st.slider(max_rows_label, 100, 10000, 1000, step=100, key=f"max_rows_{selected_feature}")
                     
                     # 显示数据（限制行数以防卡顿）
                     display_df = df.head(max_rows) if len(df) > max_rows else df
                     # 🔧 FIX: 将布尔列转换为字符串"True"/"False"显示，而非复选框图标
                     display_df = display_df.copy()
-                    converted_cols = []
                     for col in display_df.columns:
                         dtype_str = str(display_df[col].dtype).lower()
                         if 'bool' in dtype_str:
                             display_df[col] = display_df[col].astype(str)
-                            converted_cols.append(col)
-                    # 调试：显示转换信息
-                    if converted_cols:
-                        st.caption(f"🔧 DEBUG: 已将布尔列 {converted_cols} 转换为字符串显示")
                     st.dataframe(display_df, use_container_width=True, height=500)
                     
                     if len(df) > max_rows:
-                        truncate_msg = f"⚠️ Showing first {max_rows:,} of {len(df):,} rows. Adjust 'Max rows' in Filter Options to see more." if lang == 'en' else f"⚠️ 显示前 {max_rows:,} 行（共 {len(df):,} 行）。在过滤选项中调整最大行数可查看更多。"
+                        truncate_msg = (
+                            f"Showing first {max_rows:,} preview rows."
+                            if lang == 'en'
+                            else f"当前显示前 {max_rows:,} 行预览。"
+                        )
                         st.caption(truncate_msg)
                     # 不提供下载按钮，因为数据是用户导入的
                 else:
@@ -12327,29 +13087,40 @@ def render_data_table_subtab():
         
         else:
             # 合并全部模式（宽表）
-            merge_control_cols = st.columns([2.8, 1.1])
+            merge_control_cols = st.columns([2.5, 0.95])
             with merge_control_cols[0]:
-                merge_info = "Merging all features in this module into a wide table (joined by patient ID and time)" if lang == 'en' else "将该模块的所有特征合并为宽表（按患者ID和时间连接）"
-                sample_hint = "Large datasets will be sampled for performance" if lang == 'en' else "大数据集将被采样以保证性能"
-                st.markdown(f'<div class="compact-inline-notice info" style="margin:0.12rem 0 0.16rem;">ℹ️ {merge_info}<br><span style="font-size:0.74rem;opacity:0.82">{sample_hint}</span></div>', unsafe_allow_html=True)
+                preview_hint = (
+                    "Representative columns are prioritized below. Switch to Single Feature for full detail."
+                    if lang == 'en'
+                    else "下方优先展示代表性列；如需完整细节可切换到单个特征。"
+                )
+                st.markdown(
+                    f'''
+                    <div class="preview-toolbar">
+                        <div class="preview-toolbar-main">
+                            <div class="preview-toolbar-title">🧭 {"Merged Preview Table" if lang == "en" else "合并预览表"}</div>
+                            <div class="preview-toolbar-note">{preview_hint}</div>
+                        </div>
+                    </div>
+                    ''',
+                    unsafe_allow_html=True,
+                )
             with merge_control_cols[1]:
-                st.markdown('<div style="height:2px"></div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="inline-control-label">{"Rows per feature" if lang == "en" else "每特征行数"}</div>',
+                    unsafe_allow_html=True,
+                )
                 max_rows_per_feature = st.selectbox(
                     "Max rows" if lang == 'en' else "最大行数",
                     options=[1000, 2000, 5000, 10000],
                     index=1,
-                    key="merge_max_rows"
+                    key="merge_max_rows",
+                    label_visibility="collapsed",
                 )
             
             # 收集该模块的所有数据
             dfs_to_merge = []
             id_col = st.session_state.get('id_col', 'stay_id')
-            time_col_candidates = [
-                'charttime', 'time', 'starttime', 'start', 'endtime', 'itemtime',
-                'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat',
-                'givenat', 'enteredentryat', 'intakeoutputoffset', 'observationoffset',
-                'nursingchartoffset', 'labresultoffset', 'respchartoffset'
-            ]
             metadata_cols = {'valueuom', 'unit', 'units', 'category', 'type', 'dur_var', 'entertime', 'intakeoutputentryoffset'}
             unified_time_col = 'charttime'
             
@@ -12361,11 +13132,11 @@ def render_data_table_subtab():
 
                         # 统一时间列名，避免不同数据库/概念的时间别名导致只按 ID 合并
                         if unified_time_col in df_copy.columns:
-                            other_time_cols = [tc for tc in time_col_candidates if tc in df_copy.columns and tc != unified_time_col]
+                            other_time_cols = [tc for tc in PREVIEW_TIME_COLUMNS if tc in df_copy.columns and tc != unified_time_col]
                             if other_time_cols:
                                 df_copy = df_copy.drop(columns=other_time_cols)
                         else:
-                            for tc in time_col_candidates:
+                            for tc in PREVIEW_TIME_COLUMNS:
                                 if tc in df_copy.columns:
                                     df_copy = df_copy.rename(columns={tc: unified_time_col})
                                     break
@@ -12472,38 +13243,62 @@ def render_data_table_subtab():
                                 st.warning(no_data_msg)
                                 return
                         
+                        sampled_for_preview = total_rows_before > MAX_ROWS_PER_DF * len(dfs_to_merge)
                         # 🔧 显示截断提示
-                        if total_rows_before > MAX_ROWS_PER_DF * len(dfs_to_merge):
-                            truncate_warn = f"⚠️ Data was sampled (max {MAX_ROWS_PER_DF:,} rows per feature) for performance. Total rows: {total_rows_before:,}" if lang == 'en' else f"⚠️ 数据已采样（每特征最多 {MAX_ROWS_PER_DF:,} 行）以保证性能。原始总行数：{total_rows_before:,}"
-                            st.info(truncate_warn)
-                        
-                        # 显示合并结果统计（紧凑版）
-                        result_stats = [
-                            ("Rows" if lang == 'en' else "行数", f"{len(merged_df):,}"),
-                            ("Columns" if lang == 'en' else "列数", len(merged_df.columns)),
-                            ("Features" if lang == 'en' else "特征数", len(module_concepts)),
-                        ]
-                        result_cols = st.columns(3)
-                        for idx, (label, value) in enumerate(result_stats):
-                            with result_cols[idx]:
-                                st.markdown(
-                                    f'<div class="tiny-stat-card"><div class="tiny-label">{label}</div><div class="tiny-value">{value}</div></div>',
-                                    unsafe_allow_html=True,
-                                )
-                        st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
-                        
-                        # 显示数据
                         max_rows = 1000
                         display_df = merged_df.head(max_rows).copy() if len(merged_df) > max_rows else merged_df.copy()
+                        preview_columns = _select_preview_columns(
+                            display_df,
+                            module_key=module_key,
+                            module_concepts=module_concepts,
+                            id_col=id_col,
+                            max_columns=10,
+                        )
+                        if preview_columns:
+                            display_df = display_df[preview_columns].copy()
                         # 🔧 FIX: 将布尔列转换为字符串"True"/"False"显示
                         for col in display_df.columns:
                             dtype_str = str(display_df[col].dtype).lower()
                             if 'bool' in dtype_str:
                                 display_df[col] = display_df[col].astype(str)
+                        summary_wrap_cols = st.columns([2.15, 1.0])
+                        with summary_wrap_cols[0]:
+                            summary_cols = st.columns([1.12, 0.9, 0.9])
+                            with summary_cols[0]:
+                                summary_badge = (
+                                    f"⚠️ Sample preview · max {MAX_ROWS_PER_DF:,} rows per feature"
+                                    if sampled_for_preview and lang == 'en'
+                                    else (
+                                        f"⚠️ 采样预览 · 每个特征最多 {MAX_ROWS_PER_DF:,} 行"
+                                        if sampled_for_preview
+                                        else (
+                                            "✅ Merged preview ready"
+                                            if lang == 'en'
+                                            else "✅ 合并预览已就绪"
+                                        )
+                                    )
+                                )
+                                badge_class = "preview-badge warning" if sampled_for_preview else "preview-badge"
+                                st.markdown(f'<div class="{badge_class}">{summary_badge}</div>', unsafe_allow_html=True)
+                            preview_stats = [
+                                ("Preview Rows" if lang == 'en' else "预览行数", f"{len(display_df):,}"),
+                                ("Preview Columns" if lang == 'en' else "预览列数", len(display_df.columns)),
+                            ]
+                            for idx, (label, value) in enumerate(preview_stats, start=1):
+                                with summary_cols[idx]:
+                                    st.markdown(
+                                        f'<div class="tiny-stat-card"><div class="tiny-label">{label}</div><div class="tiny-value">{value}</div></div>',
+                                        unsafe_allow_html=True,
+                                    )
+                        st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
                         st.dataframe(display_df, use_container_width=True, height=500)
-                        
+
                         if len(merged_df) > max_rows:
-                            truncate_msg = f"⚠️ Showing first {max_rows:,} of {len(merged_df):,} rows." if lang == 'en' else f"⚠️ 显示前 {max_rows:,} 行（共 {len(merged_df):,} 行）。"
+                            truncate_msg = (
+                                f"Showing first {max_rows:,} preview rows."
+                                if lang == 'en'
+                                else f"当前显示前 {max_rows:,} 行预览。"
+                            )
                             st.caption(truncate_msg)
                     # 不提供下载按钮，因为数据是用户导入的
                     except Exception as e:
@@ -12529,6 +13324,7 @@ def _render_ai_context_button(question_key: str, context: str = "", concept: str
 def render_quality_page():
     """渲染数据质量页面。"""
     lang = st.session_state.get('language', 'en')
+    screenshot_mode = _is_screenshot_mode()
     
     page_title = "Data Quality" if lang == 'en' else "数据质量评估"
     page_sub = "Missing rate analysis, coverage badges & explainable causes" if lang == 'en' else "缺失率分析、覆盖度标识与可解释原因"
@@ -12538,6 +13334,14 @@ def render_quality_page():
         <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{page_sub}</div>
     </div>
     ''', unsafe_allow_html=True)
+
+    if screenshot_mode:
+        focus_note = (
+            "Figure preset: keeping summary cards and charts prominent while moving the detailed report out of the way."
+            if lang == 'en'
+            else "截图预设：优先突出摘要卡片和图表，并弱化详细报告的存在感。"
+        )
+        st.markdown(f'<div class="compact-inline-notice info">{focus_note}</div>', unsafe_allow_html=True)
     
     if len(st.session_state.loaded_concepts) == 0:
         _no_data_msg = "Load data to begin quality analysis." if lang == 'en' else "请先加载数据以进行质量分析。"
@@ -12556,162 +13360,11 @@ def render_quality_page():
     total_records = 0
     total_missing = 0
     quality_data = []
-    
-    # 🔧 改进的缺失率计算（2026-01-29 v3 重新设计）
-    # 核心原则：
-    # 1. 人口统计学静态概念：每患者一条记录，缺失率 = NA值比例（这些确实只需要1条）
-    # 2. 所有其他概念（包括事件型）：缺失率 = 1 - (实际记录数/患者 / 72)
-    #    72是完整的时间网格（72小时=72个时间点）
-    #    例如：abx有1条 → 缺失率 = (72-1)/72 = 98.6%
-    
-    # 只有人口统计学数据才是真正的"静态"（每患者只需要1条记录）
-    demographic_static = [
-        'death', 'los_icu', 'los_hosp', 'age', 'weight', 'height', 'sex', 'bmi'
-    ]
 
-    # 事件型时间序列：只统计事件发生的时间点（避免全量0导致0%缺失）
-    # 🔧 包含所有布尔事件型概念：sepsis相关、感染相关、RRT、循环衰竭等
-    event_time_series = [
-        # 循环衰竭
-        'circ_failure', 'circ_event',
-        # Sepsis-3 诊断
-        'sep3_sofa2', 'sep3_sofa1', 'sepsis_sofa2',
-        # 感染相关
-        'susp_inf', 'infection_icd', 'samp',
-        # 肾替代治疗
-        'rrt', 'rrt_criteria',
-        # AKI标志
-        'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
-        # 机械通气
-        'mech_vent', 'vent_ind', 'vent_start', 'vent_end',
-        # ECMO 和机械循环支持
-        'ecmo', 'ecmo_indication', 'mech_circ_support',
-        # 药物事件
-        'abx', 'cort',
-        # 血管活性药物指示
-        'vaso_ind',
-    ]
-    
-    # 🔧 FIX (2026-02-04): 静态布尔事件（每患者最多1条，只有发生时才记录）
-    # 缺失率 = 1 - (有记录的患者数 / 总患者数)
-    # 🔧 mech_circ_support 是非常罕见的治疗（约2-3%患者），缺失率应该约97-98%
-    static_boolean_events = [
-        'ecmo', 'ecmo_indication', 'mech_circ_support',  # ECMO/机械循环支持（罕见，约2-3%）
-        'cort',  # 皮质类固醇（约25-30%）
-        'abx',   # 抗生素（静态版本，约70%）
-        'vaso_ind',  # 血管活性药物指示（约50-60%）
-    ]
-    
     # 🔧 完整时间网格大小：优先使用模拟数据的时长参数，否则默认72小时
     mock_params = st.session_state.get('mock_params', {})
     time_grid_size = mock_params.get('hours', 72) if mock_params else 72
-
-    def _detect_time_col(df: pd.DataFrame) -> Optional[str]:
-        # 🔧 添加 'time' 作为首选候选（模拟数据使用 'time' 列表示小时数）
-        time_candidates = [
-            'time',  # 🔧 模拟数据使用的时间列（小时数）
-            'charttime', 'datetime', 'measuredat', 'measuredat_minutes',
-            'observationoffset', 'Offset', 'starttime', 'endtime', 'givenat', 'timestamp',
-        ]
-        for col in time_candidates:
-            if col in df.columns:
-                return col
-        return None
-
-    def _to_hour_bins(series: pd.Series, col_name: str) -> Optional[pd.Series]:
-        if pd.api.types.is_datetime64_any_dtype(series):
-            return series.dt.floor('H')
-        if pd.api.types.is_object_dtype(series):
-            parsed = pd.to_datetime(series, errors='coerce')
-            if parsed.notna().any():
-                return parsed.dt.floor('H')
-            numeric = pd.to_numeric(series, errors='coerce')
-            if numeric.notna().any():
-                col_lower = col_name.lower()
-                if 'second' in col_lower:
-                    return (numeric / 3600).floordiv(1)
-                if 'minute' in col_lower or 'offset' in col_lower:
-                    return (numeric / 60).floordiv(1)
-                return numeric.floordiv(1)
-            return None
-        if pd.api.types.is_numeric_dtype(series):
-            col_lower = col_name.lower()
-            if 'second' in col_lower:
-                return (series / 3600).floordiv(1)
-            if 'minute' in col_lower or 'offset' in col_lower:
-                return (series / 60).floordiv(1)
-            return series.floordiv(1)
-        return None
-
-    def _calc_time_missing(
-        df: pd.DataFrame,
-        id_col: str,
-        time_col: Optional[str],
-        time_grid_size: int,
-        event_mask: Optional[pd.Series] = None,
-    ) -> Optional[float]:
-        if time_col is None or id_col not in df.columns:
-            return None
-        data = df.loc[event_mask] if event_mask is not None else df
-        if data.empty:
-            return 100.0
-        time_series = data[time_col]
-        hour_bins = _to_hour_bins(time_series, time_col)
-        if hour_bins is None:
-            return None
-        tmp = data[[id_col]].copy()
-        tmp['_hour_bin'] = hour_bins
-        tmp = tmp.dropna(subset=['_hour_bin'])
-        if tmp.empty:
-            return None
-
-        # 🔧 简化计算：直接用 (1 - 实际覆盖率) 作为缺失率
-        # 每个患者的唯一小时数
-        unique_hours_per_patient = tmp.groupby(id_col)['_hour_bin'].nunique()
-        
-        # 总患者数
-        n_patients_in_data = len(unique_hours_per_patient)
-        if n_patients_in_data == 0:
-            return 100.0
-        
-        # 平均每患者的唯一小时数
-        avg_unique_hours = unique_hours_per_patient.mean()
-        
-        # 缺失率 = 1 - (平均唯一小时数 / 时间网格大小)
-        coverage = avg_unique_hours / time_grid_size
-        missing_rate = max(0.0, 1.0 - coverage) * 100
-        
-        return float(missing_rate)
-    
-    # 获取总患者数（用于计算患者覆盖率）
-    # 🔧 FIX (2026-02-04): 改进总患者数获取逻辑
-    # 对于静态布尔事件，需要从非静态布尔事件的概念中获取总患者数
-    # 否则会导致 n_patients == total_patients，缺失率错误地显示为 0%
-    
-    # 首先尝试从 mock_params 获取（Demo Mode 最准确）
-    mock_params = st.session_state.get('mock_params', {})
-    total_patients_in_session = mock_params.get('n_patients', 0)
-    
-    # 如果 mock_params 没有，尝试从 patient_limit 获取
-    if total_patients_in_session == 0:
-        total_patients_in_session = st.session_state.get('patient_limit', 0)
-    
-    # 如果仍然为 0，从数据中获取最大的患者数
-    if total_patients_in_session == 0:
-        # 尝试从非静态布尔事件的概念中获取最大患者数
-        max_patients_found = 0
-        for concept, df in st.session_state.loaded_concepts.items():
-            if isinstance(df, pd.DataFrame) and len(df) > 0 and st.session_state.id_col in df.columns:
-                concept_patients = df[st.session_state.id_col].nunique()
-                # 优先使用非静态布尔事件的概念患者数
-                if concept not in static_boolean_events:
-                    max_patients_found = max(max_patients_found, concept_patients)
-        
-        if max_patients_found > 0:
-            total_patients_in_session = max_patients_found
-        else:
-            # 如果所有概念都是静态布尔事件，默认使用 50
-            total_patients_in_session = 50
+    total_patients_in_session = _get_quality_cohort_patient_count(st.session_state)
     
     for concept, df in st.session_state.loaded_concepts.items():
         if isinstance(df, pd.DataFrame) and len(df) > 0:
@@ -12724,76 +13377,13 @@ def render_quality_page():
             
             n_records = len(df)
             n_patients = df[st.session_state.id_col].nunique() if st.session_state.id_col in df.columns else 0
-            
-            # 只有人口统计学数据才是真正的静态概念
-            is_demographic = concept in demographic_static
-            main_col = concept if concept in df.columns else (value_cols[0] if value_cols else None)
-            time_col = _detect_time_col(df)
-            
-            # 🔧 FIX (2026-02-03): 判断是否为静态布尔事件
-            is_static_boolean = concept in static_boolean_events
-            
-            # 计算缺失率
-            if is_demographic:
-                # 人口统计学静态概念：缺失率 = NA值比例（这些确实只需要1条/患者）
-                if value_cols:
-                    main_col = concept if concept in df.columns else (value_cols[0] if value_cols else None)
-                    if main_col and main_col in df.columns:
-                        missing_rate = df[main_col].isna().mean() * 100
-                    else:
-                        missing_rate = df[value_cols].isna().mean().mean() * 100
-                else:
-                    missing_rate = 0
-            elif is_static_boolean:
-                # 🔧 FIX (2026-02-03): 静态布尔事件：只有发生时才记录
-                # 缺失率 = 1 - (有记录的患者数 / 总患者数)
-                # 例如：5%患者使用ECMO → 缺失率 = 95%
-                patients_with_event = n_patients  # 有记录的患者数
-                # 总患者数从session获取
-                total_patients = total_patients_in_session
-                if total_patients > 0:
-                    missing_rate = (1 - patients_with_event / total_patients) * 100
-                else:
-                    missing_rate = 0
-            else:
-                # 🔧 FIX (2026-02-03): 修复从宽表导入时的缺失率计算
-                # 核心问题：宽表可能有完整的时间网格（72行/患者），但值列有大量NaN
-                # 解决方案：优先检查值列的NaN比例
-                
-                if n_patients > 0:
-                    # 🔧 先检查值列的NaN比例（对于从宽表导入的数据更准确）
-                    na_rate_in_column = None
-                    if main_col and main_col in df.columns:
-                        na_rate_in_column = df[main_col].isna().mean() * 100
-                    
-                    # 计算每患者平均记录数
-                    records_per_patient = n_records / n_patients
-                    
-                    # 对于事件型数据，只统计非零记录
-                    if concept in event_time_series and main_col and main_col in df.columns:
-                        col_data = df[main_col]
-                        # 检查数据类型，bool必须在numeric之前（nullable bool也算numeric）
-                        if pd.api.types.is_bool_dtype(col_data):
-                            event_count = col_data.fillna(False).sum()
-                        elif pd.api.types.is_numeric_dtype(col_data):
-                            event_count = (col_data.fillna(0) > 0).sum()
-                        else:
-                            # 字符串或其他类型，统计非空非零记录
-                            event_count = col_data.notna().sum()
-                        records_per_patient = event_count / n_patients if n_patients > 0 else 0
-                    
-                    # 🔧 FIX: 如果值列NaN比例较高（>5%），优先使用NaN比例作为缺失率
-                    # 这对从宽表导入的数据更准确
-                    if na_rate_in_column is not None and na_rate_in_column > 5:
-                        missing_rate = na_rate_in_column
-                    else:
-                        # 缺失率 = 1 - (每患者记录数 / 时间网格大小)
-                        # 例如：每患者9条记录，时间网格72 → 缺失率 = 1 - 9/72 = 87.5%
-                        coverage = records_per_patient / time_grid_size
-                        missing_rate = max(0, min(100, (1 - coverage) * 100))
-                else:
-                    # 无患者数或计算失败
-                    missing_rate = 100
+            missing_rate = _compute_quality_missing_rate(
+                concept=concept,
+                df=df,
+                id_col=st.session_state.id_col,
+                cohort_patient_count=total_patients_in_session,
+                time_grid_size=time_grid_size,
+            )
             
             total_records += n_records
             total_missing += n_records * (missing_rate / 100)
@@ -12851,25 +13441,29 @@ def render_quality_page():
     </div>
     ''', unsafe_allow_html=True)
     
-    # 详细数据表
+    quality_df = pd.DataFrame(quality_data) if quality_data else pd.DataFrame()
     detail_title = "Detailed Report" if lang == 'en' else "详细报告"
-    st.markdown(f'''
-    <div style="font-size:1.05rem;font-weight:700;color:#111827;margin-bottom:10px">{detail_title}</div>
-    ''', unsafe_allow_html=True)
-    
-    if quality_data:
-        quality_df = pd.DataFrame(quality_data)
+
+    def _render_quality_detail_report() -> None:
+        if quality_df.empty:
+            return
         st.dataframe(
-            quality_df, 
-            width="stretch", 
+            quality_df,
+            width="stretch",
             hide_index=True,
         )
-        _render_ai_context_button(
-            'ai_why_missing',
-            context=f"database={st.session_state.get('database', '')}; loaded_concepts={len(st.session_state.get('loaded_concepts', {}))}; explain the main missingness patterns and likely reasons based on the current dataset summary",
-        )
-    
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        if not screenshot_mode:
+            _render_ai_context_button(
+                'ai_why_missing',
+                context=f"database={st.session_state.get('database', '')}; loaded_concepts={len(st.session_state.get('loaded_concepts', {}))}; explain the main missingness patterns and likely reasons based on the current dataset summary",
+            )
+
+    if not screenshot_mode:
+        st.markdown(f'''
+        <div style="font-size:1.05rem;font-weight:700;color:#111827;margin-bottom:10px">{detail_title}</div>
+        ''', unsafe_allow_html=True)
+        _render_quality_detail_report()
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
     # 可视化分析
     tab1_label = "📊 Missing Rate Chart" if lang == 'en' else "📊 缺失率图表"
@@ -12897,142 +13491,10 @@ def render_quality_page():
             import plotly.express as px
             
             missing_data = []
-            # 只有人口统计学数据才是真正的"静态"
-            demographic_static = [
-                'death', 'los_icu', 'los_hosp', 'age', 'weight', 'height', 'sex', 'bmi'
-            ]
-
-            # 事件型时间序列：只统计事件发生的时间点（避免全量0导致0%缺失）
-            # 🔧 包含所有布尔事件型概念：sepsis相关、感染相关、RRT、循环衰竭等
-            event_time_series = [
-                # 循环衰竭
-                'circ_failure', 'circ_event',
-                # Sepsis-3 诊断
-                'sep3_sofa2', 'sep3_sofa1', 'sepsis_sofa2',
-                # 感染相关
-                'susp_inf', 'infection_icd', 'samp',
-                # 肾替代治疗
-                'rrt', 'rrt_criteria',
-                # AKI标志
-                'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
-                # 机械通气
-                'mech_vent', 'vent_ind', 'vent_start', 'vent_end',
-                # ECMO
-                'ecmo', 'ecmo_indication',
-                # 药物事件
-                'abx', 'cort',
-                # 血管活性药物指示
-                'vaso_ind',
-            ]
-            
-            # 🔧 FIX (2026-02-04): 静态布尔事件（每患者最多1条，只有发生时才记录）
-            # 缺失率 = 1 - (有记录的患者数 / 总患者数)
-            # mech_circ_support 是非常罕见的治疗（约2-3%患者），缺失率应该约97-98%
-            static_boolean_events_chart = [
-                'ecmo', 'ecmo_indication', 'mech_circ_support',  # ECMO/机械循环支持（罕见，约2-3%）
-                'cort',  # 皮质类固醇（约25-30%）
-                'abx',   # 抗生素（静态版本，约70%）
-                'vaso_ind',  # 血管活性药物指示（约50-60%）
-            ]
-            
             # 🔧 完整时间网格大小：优先使用模拟数据的时长参数，否则默认72小时
             mock_params = st.session_state.get('mock_params', {})
             time_grid_size = mock_params.get('hours', 72) if mock_params else 72
-
-            def _detect_time_col(df: pd.DataFrame) -> Optional[str]:
-                # 🔧 添加 'time' 作为首选候选（模拟数据使用 'time' 列表示小时数）
-                time_candidates = [
-                    'time',  # 🔧 模拟数据使用的时间列（小时数）
-                    'charttime', 'datetime', 'measuredat', 'measuredat_minutes',
-                    'observationoffset', 'Offset', 'starttime', 'endtime', 'givenat', 'timestamp',
-                ]
-                for col in time_candidates:
-                    if col in df.columns:
-                        return col
-                return None
-
-            def _to_hour_bins(series: pd.Series, col_name: str) -> Optional[pd.Series]:
-                if pd.api.types.is_datetime64_any_dtype(series):
-                    return series.dt.floor('H')
-                if pd.api.types.is_object_dtype(series):
-                    parsed = pd.to_datetime(series, errors='coerce')
-                    if parsed.notna().any():
-                        return parsed.dt.floor('H')
-                    numeric = pd.to_numeric(series, errors='coerce')
-                    if numeric.notna().any():
-                        col_lower = col_name.lower()
-                        if 'second' in col_lower:
-                            return (numeric / 3600).floordiv(1)
-                        if 'minute' in col_lower or 'offset' in col_lower:
-                            return (numeric / 60).floordiv(1)
-                        return numeric.floordiv(1)
-                    return None
-                if pd.api.types.is_numeric_dtype(series):
-                    col_lower = col_name.lower()
-                    if 'second' in col_lower:
-                        return (series / 3600).floordiv(1)
-                    if 'minute' in col_lower or 'offset' in col_lower:
-                        return (series / 60).floordiv(1)
-                    return series.floordiv(1)
-                return None
-
-            def _calc_time_missing(
-                df: pd.DataFrame,
-                id_col: str,
-                time_col: Optional[str],
-                time_grid_size: int,
-                event_mask: Optional[pd.Series] = None,
-            ) -> Optional[float]:
-                if time_col is None or id_col not in df.columns:
-                    return None
-                data = df.loc[event_mask] if event_mask is not None else df
-                if data.empty:
-                    return 100.0
-                time_series = data[time_col]
-                hour_bins = _to_hour_bins(time_series, time_col)
-                if hour_bins is None:
-                    return None
-                tmp = data[[id_col]].copy()
-                tmp['_hour_bin'] = hour_bins
-                tmp = tmp.dropna(subset=['_hour_bin'])
-                if tmp.empty:
-                    return None
-
-                # 🔧 优化：使用向量化操作代替 groupby().apply()
-                unique_hours_per_patient = tmp.groupby(id_col)['_hour_bin'].nunique()
-                
-                if pd.api.types.is_numeric_dtype(tmp['_hour_bin']):
-                    total_hours = time_grid_size
-                    missing_rates = 1.0 - (unique_hours_per_patient / total_hours)
-                else:
-                    time_ranges = tmp.groupby(id_col)['_hour_bin'].agg(lambda x: (x.max() - x.min()) / pd.Timedelta(hours=1) + 1)
-                    time_ranges = time_ranges.clip(upper=time_grid_size)
-                    missing_rates = 1.0 - (unique_hours_per_patient / time_ranges.clip(lower=1))
-                
-                return float(missing_rates.clip(lower=0).mean() * 100)
-            
-            # 🔧 FIX (2026-02-04): 改进总患者数获取逻辑（图表部分）
-            # 首先尝试从 mock_params 获取（Demo Mode 最准确）
-            mock_params = st.session_state.get('mock_params', {})
-            total_patients_chart = mock_params.get('n_patients', 0)
-            
-            # 如果 mock_params 没有，尝试从 patient_limit 获取
-            if total_patients_chart == 0:
-                total_patients_chart = st.session_state.get('patient_limit', 0)
-            
-            # 如果仍然为 0，从数据中获取最大的患者数
-            if total_patients_chart == 0:
-                max_patients_found = 0
-                for concept, df in st.session_state.loaded_concepts.items():
-                    if isinstance(df, pd.DataFrame) and len(df) > 0 and st.session_state.id_col in df.columns:
-                        concept_patients = df[st.session_state.id_col].nunique()
-                        if concept not in static_boolean_events_chart:
-                            max_patients_found = max(max_patients_found, concept_patients)
-                
-                if max_patients_found > 0:
-                    total_patients_chart = max_patients_found
-                else:
-                    total_patients_chart = 50
+            total_patients_chart = _get_quality_cohort_patient_count(st.session_state)
             
             for concept, df in st.session_state.loaded_concepts.items():
                 if isinstance(df, pd.DataFrame) and len(df) > 0:
@@ -13042,55 +13504,13 @@ def render_quality_page():
                                    'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
                     value_cols = [c for c in numeric_cols if c not in exclude_cols]
                     if value_cols:
-                        n_records = len(df)
-                        n_patients = df[st.session_state.id_col].nunique() if st.session_state.id_col in df.columns else 0
-                        
-                        # 只有人口统计学数据才是静态
-                        is_demographic = concept in demographic_static
-                        # 🔧 FIX (2026-02-04): 静态布尔事件需要特殊处理
-                        is_static_boolean_chart = concept in static_boolean_events_chart
-                        
-                        main_col = concept if concept in df.columns else value_cols[0]
-
-                        # 计算缺失率
-                        if is_demographic:
-                            # 人口统计学：只看NA比例
-                            if main_col in df.columns:
-                                final_missing_rate = df[main_col].isna().mean() * 100
-                            else:
-                                final_missing_rate = df[value_cols].isna().mean().mean() * 100
-                        elif is_static_boolean_chart:
-                            # 🔧 FIX (2026-02-04): 静态布尔事件：缺失率 = 1 - (有记录的患者数 / 总患者数)
-                            # 例如：2.5%患者使用机械循环支持 → 缺失率 = 97.5%
-                            patients_with_event = n_patients  # 有记录的患者数
-                            total_patients = total_patients_chart
-                            if total_patients > 0:
-                                final_missing_rate = (1 - patients_with_event / total_patients) * 100
-                            else:
-                                final_missing_rate = 0
-                                final_missing_rate = df[value_cols].isna().mean().mean() * 100
-                        else:
-                            # 🔧 简化的缺失率计算：1 - (每患者记录数 / 时间网格)
-                            # 与详情表保持一致，使用每个概念实际的患者数
-                            if n_patients > 0:
-                                # 每患者平均记录数
-                                records_per_patient = n_records / n_patients
-                                
-                                # 对于事件型数据，只计算事件发生的记录
-                                if concept in event_time_series and main_col in df.columns:
-                                    _col = df[main_col]
-                                    if pd.api.types.is_bool_dtype(_col):
-                                        event_count = _col.fillna(False).sum()
-                                    elif pd.api.types.is_numeric_dtype(_col):
-                                        event_count = (_col.fillna(0) > 0).sum()
-                                    else:
-                                        event_count = _col.notna().sum()
-                                    records_per_patient = event_count / n_patients
-                                
-                                coverage = records_per_patient / time_grid_size
-                                final_missing_rate = max(0, min(100, (1 - coverage) * 100))
-                            else:
-                                final_missing_rate = 100
+                        final_missing_rate = _compute_quality_missing_rate(
+                            concept=concept,
+                            df=df,
+                            id_col=st.session_state.id_col,
+                            cohort_patient_count=total_patients_chart,
+                            time_grid_size=time_grid_size,
+                        )
 
                         missing_rate_label = "Missing Rate (%)" if lang == 'en' else "空值比例 (%)"
                         records_label_2 = "Records" if lang == 'en' else "记录数"
@@ -13145,7 +13565,7 @@ def render_quality_page():
                     )
                     fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                     fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
         except Exception as e:
             err_msg = f"Chart rendering failed: {e}" if lang == 'en' else f"图表渲染失败: {e}"
             st.warning(err_msg)
@@ -13155,9 +13575,13 @@ def render_quality_page():
         
         with col1:
             select_concept_label = "Select Concept" if lang == 'en' else "选择 Concept"
+            available_quality_concepts = list(st.session_state.loaded_concepts.keys())
+            default_quality_concept = _select_quality_distribution_concept(st.session_state.loaded_concepts)
+            if default_quality_concept and 'quality_concept' not in st.session_state:
+                st.session_state['quality_concept'] = default_quality_concept
             concept = st.selectbox(
                 select_concept_label,
-                options=list(st.session_state.loaded_concepts.keys()),
+                options=available_quality_concepts,
                 key="quality_concept"
             )
         
@@ -13191,7 +13615,7 @@ def render_quality_page():
                             fig.update_traces(marker_color='#1f77b4')
                             fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                             fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
                             
                             # 统计摘要
                             summary_label = "**Statistical Summary:**" if lang == 'en' else "**统计摘要:**"
@@ -13206,6 +13630,10 @@ def render_quality_page():
                         except Exception as e:
                             err_msg = f"Distribution chart rendering failed: {e}" if lang == 'en' else f"分布图渲染失败: {e}"
                             st.warning(err_msg)
+
+    if screenshot_mode and not quality_df.empty:
+        with st.expander(f"📋 {detail_title}", expanded=False):
+            _render_quality_detail_report()
 
 
 def _scan_export_folders(root: str):
@@ -15408,7 +15836,7 @@ def render_convert_dialog():
     
     with col1:
         start_label = "🚀 Start Conversion" if lang == 'en' else "🚀 开始转换"
-        if st.button(start_label, type="primary", width="stretch"):
+        if st.button(start_label, type="primary", use_container_width=True):
             if not target_path or not Path(target_path).exists():
                 err_msg = "❌ Please set a valid output directory" if lang == 'en' else "❌ 请设置有效的输出目录"
                 st.error(err_msg)
@@ -15457,7 +15885,7 @@ def render_convert_dialog():
     
     with col2:
         cancel_label = "❌ Cancel" if lang == 'en' else "❌ 取消"
-        if st.button(cancel_label, width="stretch"):
+        if st.button(cancel_label, use_container_width=True):
             st.session_state.show_convert_dialog = False
             st.rerun()
 
@@ -18324,12 +18752,12 @@ def render_export_page():
                 data=csv_all,
                 file_name=f"easyicu_all_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
-                width="stretch",
+                use_container_width=True,
                 help=all_csv_help
             )
         else:
             no_data_label = "📄 No Data" if lang == 'en' else "📄 无数据"
-            st.button(no_data_label, disabled=True, width="stretch")
+            st.button(no_data_label, disabled=True, use_container_width=True)
     
     with quick_cols[1]:
         # 当前选中患者
@@ -18353,16 +18781,16 @@ def render_export_page():
                     data=patient_csv,
                     file_name=f"patient_{patient_id}_{datetime.now().strftime('%H%M%S')}.csv",
                     mime="text/csv",
-                    width="stretch",
+                    use_container_width=True,
                     help=f"Export all data for patient {patient_id}" if lang == 'en' else f"导出患者 {patient_id} 的所有数据"
                 )
             else:
                 no_pat = "👤 No Patient" if lang == 'en' else "👤 无患者"
-                st.button(no_pat, disabled=True, width="stretch")
+                st.button(no_pat, disabled=True, use_container_width=True)
         else:
             no_sel = "👤 No Selection" if lang == 'en' else "👤 未选患者"
             no_sel_help = "Please select a patient in Patient Overview first" if lang == 'en' else "请先在患者视图中选择一位患者"
-            st.button(no_sel, disabled=True, width="stretch", help=no_sel_help)
+            st.button(no_sel, disabled=True, use_container_width=True, help=no_sel_help)
     
     with quick_cols[2]:
         # 生命体征快速导出
@@ -18382,12 +18810,12 @@ def render_export_page():
                 data=vitals_csv,
                 file_name=f"vitals_{datetime.now().strftime('%H%M%S')}.csv",
                 mime="text/csv",
-                width="stretch",
+                use_container_width=True,
                 help=vitals_help
             )
         else:
             no_vitals = "💓 No Vitals" if lang == 'en' else "💓 无体征数据"
-            st.button(no_vitals, disabled=True, width="stretch")
+            st.button(no_vitals, disabled=True, use_container_width=True)
     
     with quick_cols[3]:
         # 实验室数据快速导出
@@ -18407,12 +18835,12 @@ def render_export_page():
                 data=labs_csv,
                 file_name=f"labs_{datetime.now().strftime('%H%M%S')}.csv",
                 mime="text/csv",
-                width="stretch",
+                use_container_width=True,
                 help=labs_help
             )
         else:
             no_labs = "🧪 No Labs Data" if lang == 'en' else "🧪 无实验室数据"
-            st.button(no_labs, disabled=True, width="stretch")
+            st.button(no_labs, disabled=True, use_container_width=True)
 
     with quick_cols[4]:
         pdf_label = "📑 PDF Report" if lang == 'en' else "📑 PDF 报告"
@@ -18432,14 +18860,14 @@ def render_export_page():
                 data=pdf_bytes,
                 file_name=f"easyicu_quick_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                 mime="application/pdf",
-                width="stretch",
+                use_container_width=True,
                 help=pdf_help,
             )
         except Exception as exc:
             pdf_unavailable = (
                 f"📑 PDF unavailable" if lang == 'en' else "📑 PDF 不可用"
             )
-            st.button(pdf_unavailable, disabled=True, width="stretch", help=str(exc))
+            st.button(pdf_unavailable, disabled=True, use_container_width=True, help=str(exc))
     
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
@@ -18577,7 +19005,7 @@ def render_export_page():
         spinner_text = "Preparing export..." if lang == 'en' else "正在准备导出..."
         merge_single = "Merge Into One" if lang == 'en' else "合并为一个文件"
         
-        if st.button(export_btn_label, type="primary", width="stretch"):
+        if st.button(export_btn_label, type="primary", use_container_width=True):
             with st.spinner(spinner_text):
                 import io
                 from datetime import datetime
@@ -19037,7 +19465,8 @@ def main():
         '''
         st.components.v1.html(js_code, height=0)
     elif scroll_to_tab == 'ai_assistant':
-        st.session_state['_floating_ai_open'] = True
+        if not _is_screenshot_mode():
+            st.session_state['_floating_ai_open'] = True
         st.components.v1.html(
             '''
             <script>
@@ -19074,98 +19503,100 @@ def main():
         '''
         st.components.v1.html(js_code, height=0)
 
-    try:
-        from easyicu.webapp.llm_chat import render_floating_chat_dock
-        render_floating_chat_dock()
-    except Exception:
-        pass
+    if not _is_screenshot_mode():
+        try:
+            from easyicu.webapp.llm_chat import render_floating_chat_dock
+            render_floating_chat_dock()
+        except Exception:
+            pass
     
-    # 底部状态栏
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    
-    footer_cols = st.columns([2, 2, 1])
-    
-    with footer_cols[0]:
-        if st.session_state.language == 'en':
-            data_status = "✅ Data Loaded" if len(st.session_state.loaded_concepts) > 0 else "⏳ No Data"
-            patients_label = "Patients"
-        else:
-            data_status = "✅ 数据已加载" if len(st.session_state.loaded_concepts) > 0 else "⏳ 未加载数据"
-            patients_label = "患者"
-        # 🔧 FIX (2026-02-04): 统计唯一概念数
-        n_concepts = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
-        n_patients = len(st.session_state.patient_ids) if st.session_state.patient_ids else 0
-        st.markdown(
-            f"<small style='color:#888'>{data_status} | 📋 {n_concepts} Concepts | 👥 {n_patients} {patients_label}</small>",
-            unsafe_allow_html=True
-        )
-    
-    with footer_cols[1]:
-        if st.session_state.get('selected_patient'):
-            patient_label = "Current Patient" if st.session_state.language == 'en' else "当前患者"
+    if not _is_screenshot_mode():
+        # 底部状态栏
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+        
+        footer_cols = st.columns([2, 2, 1])
+        
+        with footer_cols[0]:
+            if st.session_state.language == 'en':
+                data_status = "✅ Data Loaded" if len(st.session_state.loaded_concepts) > 0 else "⏳ No Data"
+                patients_label = "Patients"
+            else:
+                data_status = "✅ 数据已加载" if len(st.session_state.loaded_concepts) > 0 else "⏳ 未加载数据"
+                patients_label = "患者"
+            # 🔧 FIX (2026-02-04): 统计唯一概念数
+            n_concepts = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
+            n_patients = len(st.session_state.patient_ids) if st.session_state.patient_ids else 0
             st.markdown(
-                f"<small style='color:#888'>🎯 {patient_label}: {st.session_state.selected_patient}</small>",
+                f"<small style='color:#888'>{data_status} | 📋 {n_concepts} Concepts | 👥 {n_patients} {patients_label}</small>",
                 unsafe_allow_html=True
             )
-    
-    with footer_cols[2]:
-        # 帮助按钮
-        help_btn_text = "❓ Help" if st.session_state.language == 'en' else "❓ 帮助"
-        with st.popover(help_btn_text):
-            if st.session_state.language == 'en':
-                st.markdown("""
-                ### 🚀 Quick Start
-                
-                **📤 Data Extraction Mode**
-                - **Step 1**: Select database & data path
-                - **Step 2**: Filter cohort (age, LOS, etc.)
-                - **Step 3**: Choose feature groups
-                - **Step 4**: Export to CSV/Parquet/Excel
-                
-                **📊 Quick Visualization Mode**
-                - Browse exported data folders
-                - 📈 **Time Series**: Multi-patient trends
-                - 🏥 **Patient Overview**: Single patient details
-                - 📊 **Data Quality**: Completeness report
-                
-                **🔬 Cohort Analysis Mode**
-                - Compare patient subgroups
-                - Statistical analysis & hypothesis testing
-                
-                ---
-                
-                💡 **Tips**: 
-                - Use sidebar tabs to extract features
-                - Supports MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb
-                - You can choose Demo Mode to explore EasyICU with simulated ICU data (no real data required)
-                """)
-            else:
-                st.markdown("""
-                ### 🚀 快速上手
-                
-                **📤 数据提取模式**
-                - **步骤1**: 选择数据库和数据路径
-                - **步骤2**: 筛选队列（年龄、住院时长等）
-                - **步骤3**: 选择特征组
-                - **步骤4**: 导出为 CSV/Parquet/Excel
-                
-                **📊 快速可视化模式**
-                - 浏览已导出的数据文件夹
-                - 📈 **时序分析**: 多患者趋势对比
-                - 🏥 **患者视图**: 单患者详情
-                - 📊 **数据质量**: 完整性报告
-                
-                **🔬 队列分析模式**
-                - 比较患者亚组
-                - 统计分析与假设检验
-                
-                ---
-                
-                💡 **提示**: 
-                - 使用侧边栏标签提取特征
-                - 支持 MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb
-                - 可选择演示模式，使用模拟ICU数据快速体验EasyICU（无需真实数据）
-                """)
+        
+        with footer_cols[1]:
+            if st.session_state.get('selected_patient'):
+                patient_label = "Current Patient" if st.session_state.language == 'en' else "当前患者"
+                st.markdown(
+                    f"<small style='color:#888'>🎯 {patient_label}: {st.session_state.selected_patient}</small>",
+                    unsafe_allow_html=True
+                )
+        
+        with footer_cols[2]:
+            # 帮助按钮
+            help_btn_text = "❓ Help" if st.session_state.language == 'en' else "❓ 帮助"
+            with st.popover(help_btn_text):
+                if st.session_state.language == 'en':
+                    st.markdown("""
+                    ### 🚀 Quick Start
+                    
+                    **📤 Data Extraction Mode**
+                    - **Step 1**: Select database & data path
+                    - **Step 2**: Filter cohort (age, LOS, etc.)
+                    - **Step 3**: Choose feature groups
+                    - **Step 4**: Export to CSV/Parquet/Excel
+                    
+                    **📊 Quick Visualization Mode**
+                    - Browse exported data folders
+                    - 📈 **Time Series**: Multi-patient trends
+                    - 🏥 **Patient Overview**: Single patient details
+                    - 📊 **Data Quality**: Completeness report
+                    
+                    **🔬 Cohort Analysis Mode**
+                    - Compare patient subgroups
+                    - Statistical analysis & hypothesis testing
+                    
+                    ---
+                    
+                    💡 **Tips**: 
+                    - Use sidebar tabs to extract features
+                    - Supports MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb
+                    - You can choose Demo Mode to explore EasyICU with simulated ICU data (no real data required)
+                    """)
+                else:
+                    st.markdown("""
+                    ### 🚀 快速上手
+                    
+                    **📤 数据提取模式**
+                    - **步骤1**: 选择数据库和数据路径
+                    - **步骤2**: 筛选队列（年龄、住院时长等）
+                    - **步骤3**: 选择特征组
+                    - **步骤4**: 导出为 CSV/Parquet/Excel
+                    
+                    **📊 快速可视化模式**
+                    - 浏览已导出的数据文件夹
+                    - 📈 **时序分析**: 多患者趋势对比
+                    - 🏥 **患者视图**: 单患者详情
+                    - 📊 **数据质量**: 完整性报告
+                    
+                    **🔬 队列分析模式**
+                    - 比较患者亚组
+                    - 统计分析与假设检验
+                    
+                    ---
+                    
+                    💡 **提示**: 
+                    - 使用侧边栏标签提取特征
+                    - 支持 MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb
+                    - 可选择演示模式，使用模拟ICU数据快速体验EasyICU（无需真实数据）
+                    """)
 
 
 if __name__ == "__main__":

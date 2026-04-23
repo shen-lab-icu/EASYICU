@@ -12,6 +12,9 @@ Supported providers:
 
 All API credentials are stored in session state only — never persisted.
 """
+
+from __future__ import annotations
+
 import ast
 import os
 import re
@@ -409,7 +412,7 @@ def _init_chat_state():
     """Ensure all chat-related session keys exist."""
     default_provider = _default_provider_key()
     defaults = {
-        "llm_enabled": True,
+        "llm_enabled": False,
         "llm_provider": default_provider,
         "llm_api_key": "",
         "llm_model": "",

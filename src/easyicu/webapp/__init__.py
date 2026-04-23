@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from functools import lru_cache
 
 try:
     import streamlit as st
@@ -64,6 +65,69 @@ def check_dependencies():
             f"Missing dependencies for webapp: {', '.join(missing)}. "
             f"Install with: pip install easyicu[webapp]"
         )
+
+
+@lru_cache(maxsize=1)
+def _supported_streamlit_flags() -> set[str]:
+    """Return CLI flags supported by the installed Streamlit version."""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "streamlit", "run", "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return set()
+
+    flags = set()
+    for line in result.stdout.splitlines():
+        text = line.strip()
+        if text.startswith("--"):
+            flags.add(text.split()[0])
+    return flags
+
+
+def _build_streamlit_run_cmd(
+    app_path: Path,
+    *,
+    host: str,
+    port: int,
+    debug: bool,
+) -> list[str]:
+    """Build a Streamlit launch command compatible with the current version."""
+    cmd = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.address",
+        host,
+        "--server.port",
+        str(port),
+        "--server.headless",
+        "true",
+    ]
+
+    optional_args = [
+        ("--server.runOnSave", "false"),
+        ("--server.fileWatcherType", "none"),
+        ("--browser.gatherUsageStats", "false"),
+        ("--server.enableCORS", "false"),
+        ("--server.enableXsrfProtection", "false"),
+        ("--server.websocketPingInterval", "60"),
+        ("--server.disconnectedSessionTTL", "3600"),
+    ]
+    supported_flags = _supported_streamlit_flags()
+    for flag, value in optional_args:
+        if flag in supported_flags:
+            cmd.extend([flag, value])
+
+    if not debug:
+        cmd.extend(["--logger.level", "warning"])
+
+    return cmd
 
 
 def _health_check(port: int) -> bool:
@@ -188,36 +252,12 @@ def run_app(
     child_env.setdefault("PYTHONIOENCODING", "utf-8")
     child_env.setdefault("EASYICU_VERBOSE", "0")
 
-    cmd = [
-        sys.executable,
-        '-m',
-        'streamlit',
-        'run',
-        str(app_path),
-        '--server.address',
-        host,
-        '--server.port',
-        str(port),
-        '--server.headless',
-        'true',
-        '--server.runOnSave',
-        'false',
-        '--server.fileWatcherType',
-        'none',
-        '--browser.gatherUsageStats',
-        'false',
-        '--server.enableCORS',
-        'false',
-        '--server.enableXsrfProtection',
-        'false',
-        '--server.websocketPingInterval',
-        '60',
-        '--server.disconnectedSessionTTL',
-        '3600',
-    ]
-
-    if not debug:
-        cmd.extend(['--logger.level', 'warning'])
+    cmd = _build_streamlit_run_cmd(
+        app_path,
+        host=host,
+        port=port,
+        debug=debug,
+    )
 
     if background:
         log_path = _log_file()
