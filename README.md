@@ -2,252 +2,152 @@
 
 # EasyICU
 
-> A unified, high-performance, clinician-friendly framework for data extraction and visualization across multiple public ICU databases.
+> A reproducible infrastructure for cross-database ICU research, with standardized concept extraction, clinician-friendly web workflows, and scriptable Python APIs.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU is a Python toolkit designed for intensive care unit (ICU) data analysis. Through a database abstraction layer, it provides unified access to **6 major public ICU databases**, supports automated extraction of **167 standardized clinical concepts**, and offers a **web-based visualization interface** — enabling clinical researchers without programming backgrounds to efficiently perform cohort definition, feature selection, and data quality review.
+EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to **6 major public ICU databases**, automated extraction of **167 standardized clinical concepts**, and a **web-based interface** for cohort definition, feature review, visualization, and export.
 
-## ✨ Key Features
+## Why EasyICU
 
-**🎯 Unified Multi-Database Clinical Concept Extraction** — EasyICU treats *clinical concepts* as the fundamental unit of feature engineering, replacing traditional static variable mappings with semantic modeling. The system extracts 167 standardized clinical concepts from six major public ICU databases — MIMIC-IV, MIMIC-III, eICU-CRD, AmsterdamUMCdb, HiRID, and SICdb — and is the first to implement automated computation of the **SOFA-2** score.
+- **One concept layer across six public ICU databases**: EasyICU uses clinical concepts rather than database-specific variable lists, making cross-database analysis easier to write, review, and reuse.
+- **Reproducible from both code and UI**: the same prepared data can be used in the web app and in Python scripts or notebooks.
+- **Validated on clinically meaningful use cases**: the framework includes automated computation of **SOFA-2**, alongside standardized concepts, domain-specific loaders, and cohort analytics.
 
-**🐍 Scriptable Python API for Reproducible Pipelines** — In addition to the web interface, EasyICU provides a Python API for loading concepts, organ scores, domain-specific modules, and full-database extractions inside scripts and notebooks. This makes it practical to build repeatable cohort pipelines and feature engineering workflows in code.
+## Who This Repository Is For
 
-**🌐 Clinician-Oriented Visual Interface** — EasyICU integrates a web-based graphical interface designed to lower the technical barrier for EHR data analysis. Clinicians can perform cohort definition, feature selection, time-window configuration, and data quality review without writing code. The system consolidates patient time-series data into a unified view, supporting perspectives from individual case review to population-level analysis.
+- **Reviewers and clinical researchers** who need to quickly understand what the project contributes and how it can support ICU research workflows.
+- **Web users** who want to validate data, define cohorts, inspect features, and export results without writing code.
+- **Python users** who want to build scripted, reproducible extraction and feature engineering pipelines.
 
-**🤖 Embedded AI Assistant for Workflow Guidance** — EasyICU includes an integrated AI assistant that helps users translate research questions into concrete EasyICU steps. It can explain which cohort filters, modules, concepts, and scores fit a task, assist with troubleshooting, and guide users through the current workflow with context-aware suggestions.
+## Start Here
 
-**🛠 One-Click Data Validation, Conversion, and Setup** — EasyICU can validate raw database directories and prepare them automatically for extraction. The web workflow detects unsupported raw layouts such as CSV / CSV.GZ / tar.gz, converts them to Parquet, applies database-specific optimizations, and prepares the structure needed by both the web interface and Python APIs.
-
-**⚡ High-Performance Computing Optimizations** — Tailored for the high-frequency, high-dimensional, and sparse nature of ICU data, EasyICU incorporates multiple performance optimization strategies to ensure stable operation on machines with as little as **16 GB of RAM**.
-
----
-
-## Quick Start Guide
-
-### Choose Your Path
-
-#### Path A: Web Interface Users
+### Path A: Web Interface
 
 Choose this path if you want to:
-- launch the EasyICU interface quickly
-- validate data, convert raw files, and export features visually
-- work without writing Python code
+- launch EasyICU quickly
+- validate and prepare data visually
+- define cohorts and export features without writing Python
 
-Start from [One-Click Launcher (Recommended)](#one-click-launcher-recommended).
+Recommended entry:
+- Double-click `start_easyicu.bat` on Windows
+- Double-click `start_easyicu.command` on macOS
+- Run `./start_easyicu.sh` on Linux
 
-#### Path B: Python API / Notebook / Script Users
-
-Choose this path if you want to:
-- call EasyICU from Python scripts or notebooks
-- automate extraction pipelines
-- build reproducible feature engineering workflows in code
-
-Start from [Optional: Install for Python API / Development](#optional-install-for-python-api--development), then read [Python API](#-python-api).
-
-### One-Click Launcher (Recommended)
-
-If users only need to open the EasyICU web interface, they do not need Anaconda or VS Code first.
-If this launcher already meets your needs, you can skip the Python/API installation section below.
-
-Requirements:
-- **Python 3.9+** installed
-- Internet access on the first launch to download dependencies
-
-Launch options:
-- **Windows**: double-click `start_easyicu.bat`
-- **macOS**: double-click `start_easyicu.command`
-- **Linux**: run `./start_easyicu.sh`
-
-The first run will automatically:
-- create a Python-version-specific local virtual environment in `.easyicu-runtime/pyXY/venv`
-- install the EasyICU web dependencies
-- start the local service and open the browser
-
-Default URL:
+Default local URL:
 
 ```text
 http://127.0.0.1:8501
 ```
 
-Notes:
-- The first startup may take a few minutes
-- If a machine has multiple Python versions installed, the launcher keeps a separate runtime for each Python minor version, so package sets do not conflict with each other
-- On macOS, the first launch of `start_easyicu.command` may be blocked by Gatekeeper
+### Path B: Python API
 
-macOS first-run note:
-1. Double-click `start_easyicu.command` once.
-2. If macOS shows a security warning, open `System Settings -> Privacy & Security`.
-3. In the Security section, click `Open Anyway` for `start_easyicu.command`.
-4. If needed, right-click the file and choose `Open` once to confirm the exception.
+Choose this path if you want to:
+- call EasyICU from scripts or notebooks
+- automate feature extraction
+- build reproducible cohort pipelines in code
 
-After this one-time approval, later launches should open normally.
-
-### Optional: Install for Python API / Development
-
-This section is only needed if you want to:
-- use the Python API in scripts or notebooks
-- install EasyICU into your own environment
-- develop or modify EasyICU locally
-
-Anaconda/Miniconda is optional. The one-click launcher above does not require it.
-
-#### Option 1: Conda (optional)
-
-1. **Download Anaconda**
-   Visit the [Anaconda website](https://www.anaconda.com/download) to download the latest version.
-
-   > 💡 **Lightweight alternative:** If disk space is limited, use [Miniconda](https://docs.conda.io/en/latest/miniconda.html) instead.
-
-2. **Install Anaconda**
-   - Run the installer.
-   - (Optional) Click "Browse" to change the installation directory.
-    - Prefer leaving the PATH checkbox unchanged and using **Anaconda Prompt**.
-   - Click "Next" to complete the installation.
-
-#### Option 2: Standard Python virtual environment
+Minimal install:
 
 ```bash
+git clone "https://github.com/shen-lab-icu/easyicu.git"
+cd easyicu
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 python -m pip install --upgrade pip
-```
-
-#### Install EasyICU
-
-Open an **Anaconda Prompt**, a terminal with conda activated, or a standard virtual environment, then run:
-
-```bash
-# Clone the repository (or download and extract the ZIP from GitHub)
-git clone "https://github.com/shen-lab-icu/easyicu.git"
-
-# Navigate into the project directory and install
-cd easyicu
 pip install -e ".[all]"
 ```
 
-#### Launch the Web Application
+Launch the web app manually if needed:
 
 ```bash
 easyicu-webapp
 ```
 
-You should see output similar to:
+## Reproducibility & Safety
 
-```
-You can now view your Streamlit app in your browser.
-URL: http://localhost:8501
-```
+- **Prepared data is the shared contract**: raw CSV / CSV.GZ / tar.gz dumps should be converted first, then reused by both the web interface and Python APIs.
+- **AI assistant is opt-in**: the assistant starts disabled until a user explicitly enables it in the sidebar.
+- **Human confirmation stays in the loop**: cohort, feature, conversion, and export actions still require explicit confirmation.
+- **Automated checks are included**: `pytest` and GitHub Actions provide baseline repository and rendering checks for the packaged workflows.
 
-Open `http://localhost:8501` in your browser to access the EasyICU interface.
+## Paper, Citation & Reproducibility
 
-### Step 1: Obtain ICU Data
+- **Software citation**: GitHub citation metadata is provided in [CITATION.cff](CITATION.cff).
+- **Repository entry point for reviewers**: this README is structured to show the project contribution, supported databases, and the shortest reproducible usage paths first.
+- **Reproducible execution paths**: use the one-click launcher for the web workflow, or use the Python API examples below after running data preparation.
+- **Manuscript link**: add the journal article or preprint URL here once it is public.
 
-1. **Download ICU databases** (access credentials required):
-   | Database | URL |
-   |----------|-----|
-   | MIMIC-III | https://physionet.org/content/mimiciii/ |
-   | MIMIC-IV | https://physionet.org/content/mimiciv/ |
-   | eICU-CRD | https://physionet.org/content/eicu-crd/ |
-   | AmsterdamUMCdb | https://amsterdammedicaldatascience.nl/ |
-   | HiRID | https://hirid.intensivecare.ai/ |
-   | SICdb | https://physionet.org/content/sicdb/ |
+## Supported Public ICU Databases
 
-2. **Extract the data** to a local directory.
+| Database | URL |
+|----------|-----|
+| MIMIC-III | https://physionet.org/content/mimiciii/ |
+| MIMIC-IV | https://physionet.org/content/mimiciv/ |
+| eICU-CRD | https://physionet.org/content/eicu-crd/ |
+| AmsterdamUMCdb | https://amsterdammedicaldatascience.nl/ |
+| HiRID | https://hirid.intensivecare.ai/ |
+| SICdb | https://physionet.org/content/sicdb/ |
 
-### Step 2: Validate and Convert Data
+## Web Workflow At A Glance
 
-1. Enter the path to your data directory in the web interface.
-2. Click **Validate Data Path**.
-3. EasyICU checks whether the database is already in a supported prepared format.
-4. If raw **CSV / CSV.GZ / tar.gz** files are detected, the interface will offer **Convert & Setup**, which prepares the data in one click, including:
-   - converting raw tables to **Parquet**
-   - applying database-specific optimizations for large tables
-   - preparing the layout needed by Web workflows and Python APIs
-5. After setup finishes, load the prepared database from the same path.
+1. **Obtain ICU data** and place it in a local directory.
+2. **Validate Data Path** in the web app.
+3. If raw files are detected, use **Convert & Setup** to prepare the dataset.
+4. Define the research cohort, select features, and export the result.
+5. Use the built-in visualization and cohort analysis views for review.
+
+### Data Preparation
+
+EasyICU can validate raw database directories and prepare them automatically for extraction. The web workflow detects unsupported raw layouts such as CSV / CSV.GZ / tar.gz, converts them to Parquet, applies database-specific optimizations, and prepares the structure needed by both the web interface and Python APIs.
 
 <img width="1931" height="956" alt="Data Conversion" src="https://github.com/user-attachments/assets/86ea826b-6a0f-491a-b967-c5a7ebdfaa5b" />
 
----
+### Cohort Definition
 
-### Step 3: Cohort Selection
-
-1. Click **Cohort Selection** in the left sidebar.
-2. Configure inclusion/exclusion criteria, for example:
-   - **ICU length of stay** — e.g., ≥ 24 hours
-   - **Age range** — e.g., 18–90 years
-   - **First ICU admission only** — to exclude readmissions
-   - **Sex**
-   - **In-hospital mortality**
-3. Click **Apply Filter**.
-4. The interface displays the number of patients matching the criteria.
+Typical filters include:
+- ICU length of stay
+- age range
+- first ICU admission only
+- sex
+- in-hospital mortality
 
 <img width="1931" height="736" alt="Cohort Selection" src="https://github.com/user-attachments/assets/628caf50-bed3-4918-b36f-5930464e9fb7" />
 
----
+### Feature Review And Export
 
-### Step 4: Feature Selection
-
-1. Click **Select Features** in the left sidebar.
-2. Check the desired clinical features grouped by category.
-3. The dictionary panel on the right provides feature definitions and variable mapping details for reference.
+Feature selection is organized by category, with concept definitions and mapping details available in the dictionary panel. Export formats include Parquet, CSV, and Excel.
 
 <img width="1931" height="1018" alt="Feature Selection" src="https://github.com/user-attachments/assets/f37fc262-b0e8-4894-8a08-2614614f4f18" />
 
----
-
-### Step 5: Batch Data Export
-
-1. Click **Export Data** in the left sidebar.
-2. Choose an export format and output path:
-
-   | Format | Pros |
-   |--------|------|
-   | **Parquet** (recommended) | Small file size, fast I/O |
-   | **CSV** | Universal, compatible with Excel and most statistics tools |
-   | **Excel** | Opens directly in spreadsheet software; larger file size |
-
-3. Set the number of patients to export.
-4. Click **Start Export**.
-5. Exported files are saved to the specified directory.
-
 <img width="4249" height="2241" alt="Batch Export" src="https://github.com/user-attachments/assets/9575d396-14ef-4e02-a4ac-a2a6222b1776" />
 
----
+## Visualization & Analysis
 
-### Step 6: Visualization & Analysis
+EasyICU includes interactive tools for:
 
-#### Quick Visualization
-
-The system provides interactive visualization tools for rapid data exploration:
-
-- **Data Tables Explorer** — Browse loaded data by module with sorting and filtering.
-- **Time Series Analysis** — Overlay multiple feature trends with interactive zoom and custom aggregation.
-- **Patient Overview** — Comprehensive clinical trajectory for individual patients, highlighting key events and indicator changes.
-- **Data Quality Assessment** — Missing-rate analysis, temporal coverage evaluation, and completeness statistics.
-
----
-
-#### Cohort Analysis
-
-The system supports statistical analysis of filtered research cohorts:
-
-- **Group Comparison Analysis** — Multiple statistical tests available.
-- **Multi-Database Feature Distribution** — Compare feature distributions across different ICU databases.
-- **Cohort Dashboard** — Interactive display of demographics, clinical outcomes, and key indicators.
-
----
-
-#### Visualization Example
+- **Quick Visualization**: data tables, time-series review, patient overview, and data-quality assessment
+- **Cohort Analysis**: group comparison, multi-database distribution review, and cohort dashboards
 
 <img width="3051" height="1823" alt="Quick Visualization Example" src="https://github.com/user-attachments/assets/09c64137-9c6a-401e-a1d0-fe358ea458de" />
 
----
-
 ## 🚀 Going Further (Developers / Advanced Users)
+
+## Development & Testing
+
+Create a local development environment and run the current automated checks:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -e ".[dev,webapp]"
+pytest -q
+```
+
+GitHub Actions runs the same `pytest` suite on pushes and pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected workflow when proposing changes.
 
 ## 💻 Python API
 

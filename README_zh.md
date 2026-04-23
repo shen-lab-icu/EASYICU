@@ -2,253 +2,152 @@
 
 # EasyICU
 
-> 🏥 面向多公开 ICU 数据库的统一、高效、临床友好型数据提取与可视化框架
+> 面向跨公开 ICU 数据库研究的可复现基础设施，提供标准化临床概念提取、面向临床用户的 Web 工作流，以及可编程的 Python API。
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU 是一个专为重症监护室（ICU）数据分析设计的 Python 工具包。它通过数据库抽象层统一处理 **6 个主流公开 ICU 数据库**，支持 **167 种**标准化临床概念的自动提取，并提供基于 **Web 的可视化界面**，使非编程背景的临床研究人员也能高效完成队列定义、特征筛选与数据质量审查。
+EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入 **6 个主流公开 ICU 数据库**，支持 **167 种标准化临床概念**的自动提取，并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。
 
-## ✨ 核心特性
+## 为什么是 EasyICU
 
-**🎯 统一的多数据库临床概念提取** — EasyICU 将「临床概念」作为特征工程的基本单位，以语义建模取代传统的静态变量映射。系统支持从 MIMIC-IV、MIMIC-III、eICU-CRD、AmsterdamUMCdb、HiRID、SICdb 六个主流公开 ICU 数据库中提取 167 种标准化临床概念，并率先实现了 **SOFA-2** 评分的自动化计算。
+- **用一套临床概念层覆盖六个公开 ICU 数据库**：EasyICU 以临床概念而不是数据库专属变量表作为核心抽象，更适合跨数据库研究、复用和同行审阅。
+- **同时支持代码与图形界面的可复现工作流**：同一份准备完成的数据既可用于 Web 界面，也可用于 Python 脚本和 notebook。
+- **围绕有临床意义的研究任务设计**：框架内置 **SOFA-2** 自动计算，并提供标准化概念提取、专业模块和队列分析能力。
 
-**🐍 面向脚本与 Notebook 的 Python API** — 除了 Web 界面，EasyICU 还提供可编程的 Python API，可在脚本和 notebook 中直接加载临床概念、器官评分、专业模块以及整库提取结果，便于构建可复现的队列筛选与特征工程流程。
+## 这个仓库适合谁
 
-**🌐 面向临床用户的可视化交互界面** — EasyICU 集成了基于 Web 的图形化操作界面，旨在降低 EHR 数据分析的技术门槛。临床用户无需编程即可完成队列定义、特征选择、时间窗配置和数据质量审查，系统将患者时序数据整合为统一视图，支持从个体病例到群体分析的多维度审阅。
+- **审稿人和临床研究者**：希望快速理解项目贡献，以及它如何支持 ICU 研究工作流。
+- **Web 用户**：希望不写代码就完成数据校验、队列定义、特征审阅和导出。
+- **Python 用户**：希望通过脚本或 notebook 构建可复现的特征提取与队列分析流程。
 
-**🤖 内置 AI 助手支持研究流程规划** — EasyICU 集成了上下文感知的 AI 助手，可以把研究问题映射成具体的 EasyICU 操作步骤。它能够帮助用户理解应该选择哪些队列筛选条件、模块、概念和评分，也可以辅助排查流程问题并给出当前页面相关的操作建议。
+## 从这里开始
 
-**🛠 一键式数据校验、转换与准备** — EasyICU 可以自动校验原始数据库目录，并将其准备成可直接提取的格式。Web 工作流能够识别 CSV / CSV.GZ / tar.gz 等原始布局，自动转换为 Parquet，执行数据库专用优化，并生成 Web 界面和 Python API 共用的数据准备结构。
-
-**⚡ 高性能计算优化** — 针对 ICU 数据高频、高维、稀疏的特点，EasyICU 引入了多种性能优化策略，确保在 **16 GB 内存**设备上即可稳定运行。
-
----
-
-## 快速开始
-
-### 先选择你的使用路径
-
-#### 路线 A：Web 界面用户
+### 路线 A：Web 界面
 
 如果你想：
-- 快速启动 EasyICU 图形界面
-- 通过可视化方式完成数据校验、原始数据转换和特征导出
-- 不写 Python 代码直接完成分析准备
+- 快速启动 EasyICU
+- 用可视化方式完成数据准备
+- 不写 Python 直接定义队列并导出特征
 
-从 [一键启动（推荐）](#一键启动推荐) 开始。
-
-#### 路线 B：Python API / Notebook / 脚本用户
-
-如果你想：
-- 在 Python 脚本或 notebook 中调用 EasyICU
-- 自动化批量提取流程
-- 在代码里构建可复现的特征工程工作流
-
-从 [可选：为 Python API / 开发环境安装 EasyICU](#可选为-python-api--开发环境安装-easyicu) 开始，然后阅读 [Python API](#-python-api)。
-
-### 一键启动（推荐）
-
-如果用户只是想快速打开 EasyICU Web 界面，不需要先装 Anaconda，也不需要先打开 VS Code。
-如果一键启动已经满足需求，可以直接跳过下面的 Python/API 安装部分。
-
-前提：
-- 已安装 **Python 3.9+**
-- 首次启动时可以联网下载依赖
-
-启动方式：
+推荐入口：
 - **Windows**：双击 `start_easyicu.bat`
 - **macOS**：双击 `start_easyicu.command`
 - **Linux**：运行 `./start_easyicu.sh`
 
-首次运行会自动完成：
-- 按 Python 版本创建独立的本地虚拟环境 `.easyicu-runtime/pyXY/venv`
-- 安装 EasyICU Web 所需依赖
-- 启动本地服务并打开浏览器
-
-默认地址：
+默认本地地址：
 
 ```text
 http://127.0.0.1:8501
 ```
 
-说明：
-- 首次启动通常会比后续启动慢几分钟
-- 如果一台机器装了多个 Python 版本，启动器会为每个 Python 小版本维护独立 runtime，避免依赖包互相冲突
-- macOS 首次运行 `start_easyicu.command` 时，可能会被系统安全机制拦截
+### 路线 B：Python API
 
-macOS 首次运行说明：
-1. 先双击一次 `start_easyicu.command`。
-2. 如果系统弹出安全提示，打开 `系统设置 -> 隐私与安全性`。
-3. 在“安全性”区域找到该脚本，点击“仍要打开”。
-4. 如果仍被拦截，可对文件右键选择“打开”，再确认一次。
+如果你想：
+- 在脚本或 notebook 中调用 EasyICU
+- 自动化特征提取流程
+- 在代码里构建可复现的队列管线
 
-完成这一步后，后续再次启动通常就不需要重复授权了。
-
-### 可选：为 Python API / 开发环境安装 EasyICU
-
-这一部分只在以下场景需要：
-- 你想在脚本或 notebook 里使用 Python API
-- 你想把 EasyICU 安装到自己的 Python 环境中
-- 你想本地开发或修改 EasyICU
-
-Anaconda/Miniconda 是可选项，不是一键启动的前置要求。
-
-#### 方式一：Conda（可选）
-
-1. **下载 Anaconda**
-   访问 [Anaconda 官网](https://www.anaconda.com/download) 下载最新版本。
-
-   > 💡 **轻量替代方案**：如果存储空间紧张，可使用 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)。
-
-2. **安装 Anaconda**
-   - 运行安装程序。
-   - 可点击"Browse"修改安装目录。
-    - 一般不建议额外修改 PATH，直接使用 **Anaconda Prompt** 即可。
-   - 点击"Next"完成安装。
-
-#### 方式二：标准 Python 虚拟环境
+最小安装方式：
 
 ```bash
+git clone "https://github.com/shen-lab-icu/easyicu.git"
+cd easyicu
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 python -m pip install --upgrade pip
-```
-
-#### 安装 EasyICU
-
-在 **Anaconda Prompt**、已激活 conda 的终端，或普通 Python 虚拟环境中执行：
-
-```bash
-# 使用 Git 克隆仓库（也可直接从 GitHub 下载 ZIP 解压）
-git clone "https://github.com/shen-lab-icu/easyicu.git"
-
-# 进入项目目录并安装
-cd easyicu
 pip install -e ".[all]"
 ```
 
-#### 启动 Web 应用
+如需手动启动 Web 应用：
 
 ```bash
 easyicu-webapp
 ```
 
-正常启动后会显示如下信息：
+## 可复现性与安全说明
 
-```
-You can now view your Streamlit app in your browser.
-URL: http://localhost:8501
-```
+- **准备完成的数据是统一契约**：原始 CSV / CSV.GZ / tar.gz 数据需先转换，再供 Web 界面和 Python API 共用。
+- **AI 助手默认关闭**：只有在用户显式启用后才会工作。
+- **始终保留人工确认**：队列、特征、数据转换与导出等关键操作仍需用户确认。
+- **仓库已包含自动化检查**：当前提供 `pytest` 与 GitHub Actions，覆盖基础仓库契约与界面渲染检查。
 
-用浏览器打开 `http://localhost:8501` 即可进入 EasyICU 界面。
+## 论文、引用与可复现
 
-### 第一步：准备数据
+- **软件引用**：GitHub 引用元数据已写入 [CITATION.cff](CITATION.cff)。
+- **给审稿人的仓库入口**：当前 README 已按“项目贡献、支持数据库、最短复现路径”的顺序组织。
+- **可复现使用路径**：Web 用户可直接使用一键启动；Python 用户可在完成数据准备后复用下方 API 示例。
+- **论文链接**：论文或预印本公开后，可在这里补充正式链接。
 
-1. **下载 ICU 数据库**（需申请访问权限）：
+## 支持的公开 ICU 数据库
 
-   | 数据库 | 地址 |
-   |--------|------|
-   | MIMIC-III | https://physionet.org/content/mimiciii/ |
-   | MIMIC-IV | https://physionet.org/content/mimiciv/ |
-   | eICU-CRD | https://physionet.org/content/eicu-crd/ |
-   | AmsterdamUMCdb | https://amsterdammedicaldatascience.nl/ |
-   | HiRID | https://hirid.intensivecare.ai/ |
-   | SICdb | https://physionet.org/content/sicdb/ |
+| 数据库 | 地址 |
+|--------|------|
+| MIMIC-III | https://physionet.org/content/mimiciii/ |
+| MIMIC-IV | https://physionet.org/content/mimiciv/ |
+| eICU-CRD | https://physionet.org/content/eicu-crd/ |
+| AmsterdamUMCdb | https://amsterdammedicaldatascience.nl/ |
+| HiRID | https://hirid.intensivecare.ai/ |
+| SICdb | https://physionet.org/content/sicdb/ |
 
-2. **解压数据到本地目录**。
+## Web 工作流总览
 
-### 第二步：验证并转换数据
+1. **准备 ICU 数据**并放到本地目录。
+2. 在 Web 界面中执行 **Validate Data Path**。
+3. 如检测到原始文件，使用 **Convert & Setup** 完成数据准备。
+4. 定义研究队列、选择特征并导出结果。
+5. 使用内置可视化与队列分析页面进行审阅。
 
-1. 在 Web 界面中输入数据目录路径。
-2. 点击 **Validate Data Path**。
-3. EasyICU 会检查当前数据库是否已经是可直接读取的准备完成状态。
-4. 如果检测到原始 **CSV / CSV.GZ / tar.gz** 数据，界面会继续提供 **Convert & Setup**，一键完成：
-   - 转换为 **Parquet**
-   - 对大表进行数据库专用优化
-   - 准备 Web 工作流和 Python API 所需的数据布局
-5. 准备完成后，从同一路径加载数据即可。
+### 数据准备
+
+EasyICU 可以自动校验原始数据库目录，并将其准备成可直接提取的格式。Web 工作流会识别 CSV / CSV.GZ / tar.gz 等原始布局，将其转换为 Parquet，执行数据库专用优化，并准备 Web 界面和 Python API 共用的数据结构。
 
 <img width="1931" height="956" alt="数据转换" src="https://github.com/user-attachments/assets/86ea826b-6a0f-491a-b967-c5a7ebdfaa5b" />
 
----
+### 队列定义
 
-### 第三步：队列选择
-
-1. 在左侧导航栏点击 **队列选择**。
-2. 设置筛选条件，例如：
-   - **ICU 住院时长** — 如 ≥ 24 小时
-   - **年龄范围** — 如 18–90 岁
-   - **是否首次 ICU 入院** — 排除重复入院
-   - **性别**
-   - **院内死亡情况**
-3. 点击 **应用筛选**。
-4. 系统展示符合条件的患者数量。
+典型筛选条件包括：
+- ICU 住院时长
+- 年龄范围
+- 是否首次 ICU 入院
+- 性别
+- 院内死亡
 
 <img width="1931" height="736" alt="队列选择" src="https://github.com/user-attachments/assets/628caf50-bed3-4918-b36f-5930464e9fb7" />
 
----
+### 特征审阅与导出
 
-### 第四步：特征选择
-
-1. 在左侧导航栏点击 **选择特征**。
-2. 按分类勾选所需临床特征。
-3. 右侧词典面板提供特征定义及变量映射说明，可作为选择参考。
+特征按类别组织，右侧词典面板提供概念定义和变量映射说明。支持导出为 Parquet、CSV 和 Excel。
 
 <img width="1931" height="1018" alt="特征选择" src="https://github.com/user-attachments/assets/f37fc262-b0e8-4894-8a08-2614614f4f18" />
 
----
-
-### 第五步：批量数据导出
-
-1. 在左侧导航栏点击 **导出数据**。
-2. 选择导出格式与保存路径：
-
-   | 格式 | 特点 |
-   |------|------|
-   | **Parquet**（推荐） | 文件体积小，读取速度快 |
-   | **CSV** | 通用格式，兼容 Excel 与多数统计软件 |
-   | **Excel** | 可直接打开；文件体积较大 |
-
-3. 设置导出的患者数量。
-4. 点击 **开始导出**。
-5. 导出文件保存至指定目录。
-
 <img width="4249" height="2241" alt="批量导出" src="https://github.com/user-attachments/assets/9575d396-14ef-4e02-a4ac-a2a6222b1776" />
 
----
+## 可视化与分析
 
-### 第六步：可视化分析
+EasyICU 提供以下交互式工具：
 
-#### 快速可视化
-
-系统提供多种交互式可视化工具，帮助用户快速理解数据结构与临床趋势：
-
-- **数据表浏览器** — 按模块浏览数据，支持排序与筛选。
-- **时间序列分析** — 多特征趋势叠加展示，支持交互缩放与自定义聚合方式。
-- **患者概览** — 单患者综合临床轨迹，显示关键事件与指标变化。
-- **数据质量评估** — 缺失率分析、时间覆盖评估、数据完整性统计。
-
----
-
-#### 队列分析
-
-系统支持对筛选后的研究队列进行统计学分析：
-
-- **分组比较分析** — 支持多种统计检验方法。
-- **跨数据库特征分布比较** — 对比不同 ICU 数据库的特征分布差异。
-- **队列仪表盘** — 交互式展示人口学特征、临床结局与关键指标。
-
----
-
-#### 可视化示例
+- **快速可视化**：数据表浏览、时间序列审阅、单患者概览、数据质量评估
+- **队列分析**：分组比较、跨数据库分布对比、队列仪表盘
 
 <img width="3051" height="1823" alt="快速可视化示例" src="https://github.com/user-attachments/assets/09c64137-9c6a-401e-a1d0-fe358ea458de" />
 
----
-
 ## 🚀 进阶使用（开发者 / 高级用户）
+
+## 开发与测试
+
+建议为本项目创建独立开发环境，并运行当前自动化检查：
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -e ".[dev,webapp]"
+pytest -q
+```
+
+仓库中的 GitHub Actions 会在 push 和 pull request 时运行同一套 `pytest` 检查。提交改动前可先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 💻 Python API
 
@@ -390,7 +289,7 @@ demo = load_demographics(
 
 <div align="center">
 
-**⭐ 如果 EasyICU 对您的研究有所帮助，请给我们一个 Star！⭐**
+**⭐ 如果 EasyICU 对你的研究有帮助，欢迎点一个 Star ⭐**
 
 Made with ❤️ for ICU researchers worldwide
 

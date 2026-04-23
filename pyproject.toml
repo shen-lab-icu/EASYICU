@@ -9,12 +9,12 @@ description = "Python toolkit for working with ICU datasets inspired by the R ri
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [
-  { name = "ICU Analytics", email = "icu-analytics@example.com" }
+  { name = "Haibo Zhu and EasyICU contributors" }
 ]
 license = { text = "MIT" }
 dependencies = [
   "pandas>=1.5",
-  "pyarrow>=11.0",
+  "pyarrow>=23.0.0",
   "numpy>=1.23",
   "pydantic>=2.0",
   "pyyaml>=6.0",
