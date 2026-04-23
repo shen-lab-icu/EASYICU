@@ -1,0 +1,578 @@
+- generic:
+  - generic [ref=e2]:
+    - generic [ref=e11]:
+      - button "⤢" [ref=e23] [cursor=pointer]:
+        - paragraph [ref=e25]: ⤢
+      - button "🔙 Back to Mode Selection" [ref=e28] [cursor=pointer]:
+        - paragraph [ref=e30]: 🔙 Back to Mode Selection
+      - separator [ref=e34]
+      - generic [ref=e40]: Demo Mode
+      - heading "🏥 EasyICU Data Explorer" [level=2] [ref=e44]
+      - generic [ref=e46]:
+        - paragraph [ref=e49]: 🌐 Language
+        - generic [ref=e51]:
+          - generic [ref=e52]:
+            - generic [ref=e53]: EN
+            - combobox "Selected EN. 🌐 Language" [ref=e55]
+          - img "open" [ref=e57] [cursor=pointer]
+      - separator [ref=e62]
+      - group [ref=e65]:
+        - generic "keyboard_arrow_down 🤖 AI Assistant" [ref=e66] [cursor=pointer]:
+          - generic [ref=e67]:
+            - generic [ref=e69]: keyboard_arrow_down
+            - paragraph [ref=e72]: 🤖 AI Assistant
+        - generic [ref=e74]:
+          - generic [ref=e77] [cursor=pointer]:
+            - checkbox "Enable AI Assistant"
+            - paragraph [ref=e83]: Enable AI Assistant
+          - paragraph [ref=e87]: Enable the toggle, then switch to the 🤖 AI Assistant tab.
+      - separator [ref=e91]
+      - heading "📤 Data Extraction" [level=3] [ref=e95]
+      - 'heading "📊 Step 1: Data Source" [level=3] [ref=e99]'
+      - generic [ref=e103]:
+        - generic [ref=e104]: Demo Mode
+        - generic [ref=e105]: Auto-generated simulated ICU data
+      - generic [ref=e108]:
+        - paragraph [ref=e111]: Number of Patients
+        - generic [ref=e112]:
+          - slider "Number of Patients" [ref=e115]:
+            - generic: "100"
+          - generic:
+            - generic: "50"
+            - generic: "500"
+      - generic [ref=e118]:
+        - paragraph [ref=e121]: Data Duration (hours)
+        - generic [ref=e122]:
+          - slider "Data Duration (hours)" [ref=e125]:
+            - generic: "72"
+          - generic:
+            - generic: "24"
+            - generic: "168"
+      - button "✅ Confirm Data Source" [ref=e128] [cursor=pointer]:
+        - paragraph [ref=e130]: ✅ Confirm Data Source
+      - separator [ref=e134]
+      - 'heading "👥 Step 2: Cohort Selection" [level=3] [ref=e138]'
+      - alert [ref=e141]:
+        - paragraph [ref=e146]: ⚠️ Please complete Step 1 first
+    - generic [ref=e149]:
+      - generic [ref=e153]:
+        - text: 🏥 EasyICU
+        - generic [ref=e154]: DEMO
+      - generic [ref=e158]: ICU Data Analytics Platform
+      - generic [ref=e160]:
+        - tablist [ref=e162]:
+          - tab "📚 Tutorial" [ref=e163] [cursor=pointer]:
+            - paragraph [ref=e165]: 📚 Tutorial
+          - tab "📊 Quick Visualization" [selected] [ref=e166] [cursor=pointer]:
+            - paragraph [ref=e168]: 📊 Quick Visualization
+          - tab "📊 Cohort Analysis" [ref=e169] [cursor=pointer]:
+            - paragraph [ref=e171]: 📊 Cohort Analysis
+        - tabpanel "📊 Quick Visualization" [ref=e1776]:
+          - generic [ref=e1777]:
+            - generic [ref=e1779]:
+              - generic [ref=e1784]:
+                - generic [ref=e1785]: 📈 Quick Visualization
+                - generic [ref=e1786]: Generate demo data or load previously exported result files for interactive analysis
+              - generic [ref=e1788]:
+                - generic [ref=e1791] [cursor=pointer]:
+                  - checkbox "📸 Screenshot Mode"
+                  - generic [ref=e1795]:
+                    - paragraph [ref=e1797]: 📸 Screenshot Mode
+                    - img [ref=e1801]
+                - paragraph [ref=e1807]: Hide sidebar and AI dock, reduce chart chrome, and apply figure-friendly defaults.
+            - group [ref=e1810]:
+              - generic "keyboard_arrow_right ⚙️ Data Loading Settings" [ref=e1890] [cursor=pointer]:
+                - generic [ref=e1812]:
+                  - generic [ref=e1892]: keyboard_arrow_right
+                  - paragraph [ref=e1817]: ⚙️ Data Loading Settings
+            - generic [ref=e1894]:
+              - tablist [ref=e1896]:
+                - tab "📋 Data Tables" [ref=e1897] [cursor=pointer]:
+                  - paragraph [ref=e1899]: 📋 Data Tables
+                - tab "📈 Time Series" [ref=e1900] [cursor=pointer]:
+                  - paragraph [ref=e1902]: 📈 Time Series
+                - tab "🏥 Patient Overview" [active] [selected] [ref=e1903] [cursor=pointer]:
+                  - paragraph [ref=e1905]: 🏥 Patient Overview
+                - tab "📊 Data Quality" [ref=e1906] [cursor=pointer]:
+                  - paragraph [ref=e1908]: 📊 Data Quality
+              - tabpanel "🏥 Patient Overview" [ref=e3344]:
+                - generic [ref=e3345]:
+                  - generic [ref=e3349]:
+                    - generic [ref=e3350]: Patient Overview
+                    - generic [ref=e3351]: Multi-dimensional patient dashboard
+                  - generic [ref=e3355]: Patient Selection
+                  - generic [ref=e3357]:
+                    - button "⏮️ First" [ref=e3365] [cursor=pointer]:
+                      - paragraph [ref=e3367]: ⏮️ First
+                    - button "⬅️ Previous" [ref=e3375] [cursor=pointer]:
+                      - paragraph [ref=e3377]: ⬅️ Previous
+                    - button "➡️ Next" [ref=e3385] [cursor=pointer]:
+                      - paragraph [ref=e3387]: ➡️ Next
+                    - button "⏭️ Last" [ref=e3395] [cursor=pointer]:
+                      - paragraph [ref=e3397]: ⏭️ Last
+                    - button "🎲 Random" [ref=e3405] [cursor=pointer]:
+                      - paragraph [ref=e3407]: 🎲 Random
+                    - generic [ref=e3413]: 1/50
+                  - generic [ref=e3417]:
+                    - generic [ref=e3418]: 📋 Patient Summary — Patient 10001
+                    - generic [ref=e3419]:
+                      - generic [ref=e3420]:
+                        - generic [ref=e3421]: Demographics
+                        - generic [ref=e3422]: M, 57y
+                      - generic [ref=e3423]:
+                        - generic [ref=e3424]: ICU LOS
+                        - generic [ref=e3425]: 11.1d
+                      - generic [ref=e3426]:
+                        - generic [ref=e3427]: Mortality
+                        - generic [ref=e3428]: ✅ No
+                      - generic [ref=e3429]:
+                        - generic [ref=e3430]: Key Supports
+                        - generic [ref=e3431]: 💉 Vasopressors
+                  - generic [ref=e3433]:
+                    - generic [ref=e3437]:
+                      - paragraph [ref=e3440]: 👤 Patient ID
+                      - generic [ref=e3442]:
+                        - generic [ref=e3443]:
+                          - generic [ref=e3444]: "10001"
+                          - combobox "Selected 10001. 👤 Patient ID" [ref=e3446]
+                        - img "open" [ref=e3448] [cursor=pointer]
+                    - generic [ref=e3453]:
+                      - paragraph [ref=e3456]: 📋 View Mode
+                      - generic [ref=e3458]:
+                        - generic [ref=e3459]:
+                          - generic [ref=e3460]: Dashboard
+                          - combobox "Selected Dashboard. 📋 View Mode" [ref=e3462]
+                        - img "open" [ref=e3464] [cursor=pointer]
+                    - generic [ref=e3471]:
+                      - generic [ref=e3472]: Available Data
+                      - generic [ref=e3473]:
+                        - generic [ref=e3474]: 📊 140 total
+                        - generic [ref=e3475]: ❤️ 7 vitals
+                        - generic [ref=e3476]: 🧪 7 labs
+                        - generic [ref=e3477]: 📈 5 scores
+                  - heading "📊 Dashboard" [level=3] [ref=e3486]: 📊 Dashboard
+                  - generic [ref=e3493]:
+                    - img:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "60"
+                            - generic:
+                              - generic: "70"
+                            - generic:
+                              - generic: "80"
+                            - generic:
+                              - generic: "90"
+                            - generic:
+                              - generic: "100"
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "60"
+                            - generic:
+                              - generic: "70"
+                            - generic:
+                              - generic: "80"
+                            - generic:
+                              - generic: "90"
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "80"
+                            - generic:
+                              - generic: "100"
+                            - generic:
+                              - generic: "120"
+                            - generic:
+                              - generic: "140"
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "14"
+                            - generic:
+                              - generic: "16"
+                            - generic:
+                              - generic: "18"
+                            - generic:
+                              - generic: "20"
+                            - generic:
+                              - generic: "22"
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "10"
+                            - generic:
+                              - generic: "20"
+                            - generic:
+                              - generic: "30"
+                            - generic:
+                              - generic: "40"
+                            - generic:
+                              - generic: "50"
+                            - generic:
+                              - generic: "60"
+                            - generic:
+                              - generic: "70"
+                          - generic:
+                            - generic:
+                              - generic: "90"
+                            - generic:
+                              - generic: "95"
+                            - generic:
+                              - generic: "100"
+                    - img:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic: Patient 10001 Vital Signs Trend
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: HR
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: MAP
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: SBP
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: RESP
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: SPO2
+                    - toolbar [ref=e3555]:
+                      - button "Download plot as a PNG" [ref=e3557] [cursor=pointer]:
+                        - img [ref=e3558]
+                      - generic [ref=e3560]:
+                        - button "Zoom" [ref=e3561] [cursor=pointer]:
+                          - img [ref=e3562]
+                        - button "Pan" [ref=e3564] [cursor=pointer]:
+                          - img [ref=e3565]
+                      - generic [ref=e3567]:
+                        - button "Zoom in" [ref=e3568] [cursor=pointer]:
+                          - img [ref=e3569]
+                        - button "Zoom out" [ref=e3571] [cursor=pointer]:
+                          - img [ref=e3572]
+                        - button "Autoscale" [ref=e3574] [cursor=pointer]:
+                          - img [ref=e3575]
+                        - button "Reset axes" [ref=e3577] [cursor=pointer]:
+                          - img [ref=e3578]
+                      - button "Fullscreen" [ref=e3581] [cursor=pointer]:
+                        - img [ref=e3582]
+                    - img
+                  - heading "📈 SOFA Score Trend" [level=4] [ref=e3588]: 📈 SOFA Score Trend
+                  - heading "🔄 SOFA-1 vs SOFA-2 Comparison" [level=4] [ref=e3594]: 🔄 SOFA-1 vs SOFA-2 Comparison
+                  - paragraph [ref=e3599]:
+                    - strong [ref=e3600]: Total Score Comparison
+                  - generic [ref=e3606]:
+                    - img:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "10"
+                            - generic:
+                              - generic: "20"
+                            - generic:
+                              - generic: "30"
+                            - generic:
+                              - generic: "40"
+                            - generic:
+                              - generic: "50"
+                            - generic:
+                              - generic: "60"
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "5"
+                            - generic:
+                              - generic: "10"
+                    - img:
+                      - generic:
+                        - generic [ref=e3623]:
+                          - generic [ref=e3625]: SOFA-1 (Traditional)
+                          - generic [ref=e3632]: SOFA-2 (2025 New)
+                        - generic:
+                          - generic: Time (hours from ICU admission)
+                        - generic:
+                          - generic: Total SOFA Score
+                    - toolbar [ref=e3638]:
+                      - button "Download plot as a PNG" [ref=e3640] [cursor=pointer]:
+                        - img [ref=e3641]
+                      - generic [ref=e3643]:
+                        - button "Zoom" [ref=e3644] [cursor=pointer]:
+                          - img [ref=e3645]
+                        - button "Pan" [ref=e3647] [cursor=pointer]:
+                          - img [ref=e3648]
+                      - generic [ref=e3650]:
+                        - button "Zoom in" [ref=e3651] [cursor=pointer]:
+                          - img [ref=e3652]
+                        - button "Zoom out" [ref=e3654] [cursor=pointer]:
+                          - img [ref=e3655]
+                        - button "Autoscale" [ref=e3657] [cursor=pointer]:
+                          - img [ref=e3658]
+                        - button "Reset axes" [ref=e3660] [cursor=pointer]:
+                          - img [ref=e3661]
+                      - button "Fullscreen" [ref=e3664] [cursor=pointer]:
+                        - img [ref=e3665]
+                    - img
+                  - paragraph [ref=e3670]:
+                    - strong [ref=e3671]: Organ-specific Score Comparison
+                  - generic [ref=e3677]:
+                    - img:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "20"
+                            - generic:
+                              - generic: "40"
+                            - generic:
+                              - generic: "60"
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "1"
+                            - generic:
+                              - generic: "2"
+                            - generic:
+                              - generic: "3"
+                            - generic:
+                              - generic: "4"
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "20"
+                            - generic:
+                              - generic: "40"
+                            - generic:
+                              - generic: "60"
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "1"
+                            - generic:
+                              - generic: "2"
+                            - generic:
+                              - generic: "3"
+                            - generic:
+                              - generic: "4"
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "20"
+                            - generic:
+                              - generic: "40"
+                            - generic:
+                              - generic: "60"
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "1"
+                            - generic:
+                              - generic: "2"
+                            - generic:
+                              - generic: "3"
+                            - generic:
+                              - generic: "4"
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "20"
+                            - generic:
+                              - generic: "40"
+                            - generic:
+                              - generic: "60"
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "1"
+                            - generic:
+                              - generic: "2"
+                            - generic:
+                              - generic: "3"
+                            - generic:
+                              - generic: "4"
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "20"
+                            - generic:
+                              - generic: "40"
+                            - generic:
+                              - generic: "60"
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "1"
+                            - generic:
+                              - generic: "2"
+                            - generic:
+                              - generic: "3"
+                            - generic:
+                              - generic: "4"
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "20"
+                            - generic:
+                              - generic: "40"
+                            - generic:
+                              - generic: "60"
+                          - generic:
+                            - generic:
+                              - generic: "0"
+                            - generic:
+                              - generic: "1"
+                            - generic:
+                              - generic: "2"
+                            - generic:
+                              - generic: "3"
+                            - generic:
+                              - generic: "4"
+                    - img:
+                      - generic:
+                        - generic [ref=e3753]:
+                          - generic [ref=e3756]: SOFA-1
+                          - generic [ref=e3764]: SOFA-2
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Respiratory
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Coagulation
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Liver
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Cardiovascular
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Neurological
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Renal
+                    - toolbar [ref=e3770]:
+                      - button "Download plot as a PNG" [ref=e3772] [cursor=pointer]:
+                        - img [ref=e3773]
+                      - generic [ref=e3775]:
+                        - button "Zoom" [ref=e3776] [cursor=pointer]:
+                          - img [ref=e3777]
+                        - button "Pan" [ref=e3779] [cursor=pointer]:
+                          - img [ref=e3780]
+                      - generic [ref=e3782]:
+                        - button "Zoom in" [ref=e3783] [cursor=pointer]:
+                          - img [ref=e3784]
+                        - button "Zoom out" [ref=e3786] [cursor=pointer]:
+                          - img [ref=e3787]
+                        - button "Autoscale" [ref=e3789] [cursor=pointer]:
+                          - img [ref=e3790]
+                        - button "Reset axes" [ref=e3792] [cursor=pointer]:
+                          - img [ref=e3793]
+                      - button "Fullscreen" [ref=e3796] [cursor=pointer]:
+                        - img [ref=e3797]
+                    - img
+                  - paragraph [ref=e3802]:
+                    - strong [ref=e3803]: Score Difference (SOFA-2 - SOFA-1)
+                  - generic [ref=e3808]:
+                    - button "Show/hide columns" [ref=e3812] [cursor=pointer]:
+                      - img [ref=e3813]
+                    - button "Download as CSV" [ref=e3818] [cursor=pointer]:
+                      - img [ref=e3819]
+                    - button "Search" [ref=e3824] [cursor=pointer]:
+                      - img [ref=e3825]
+                    - button "Fullscreen" [ref=e3830] [cursor=pointer]:
+                      - img [ref=e3831]
+                  - heading "📋 Quick Summary" [level=4] [ref=e3846]: 📋 Quick Summary
+                  - generic [ref=e3849]:
+                    - generic [ref=e3851]:
+                      - paragraph [ref=e3855]:
+                        - strong [ref=e3856]: Sepsis-3
+                      - paragraph [ref=e3860]: No Records
+                    - generic [ref=e3862]:
+                      - paragraph [ref=e3866]:
+                        - strong [ref=e3867]: Mechanical Vent
+                      - paragraph [ref=e3871]: No ❌
+                    - generic [ref=e3873]:
+                      - paragraph [ref=e3877]:
+                        - strong [ref=e3878]: Vasopressors
+                      - paragraph [ref=e3882]: Yes ✅
+                    - generic [ref=e3884]:
+                      - paragraph [ref=e3888]:
+                        - strong [ref=e3889]: GCS
+                      - paragraph [ref=e3893]: "13"
+                  - heading "🧩 Loaded Feature Snapshot" [level=4] [ref=e3898]: 🧩 Loaded Feature Snapshot
+                  - generic [ref=e3901]:
+                    - generic [ref=e3903]:
+                      - generic [ref=e3907]:
+                        - generic [ref=e3908]: hr
+                        - generic [ref=e3909]: "73.73"
+                      - generic [ref=e3913]:
+                        - generic [ref=e3914]: resp
+                        - generic [ref=e3915]: "17.10"
+                    - generic [ref=e3917]:
+                      - generic [ref=e3921]:
+                        - generic [ref=e3922]: map
+                        - generic [ref=e3923]: "62.71"
+                      - generic [ref=e3927]:
+                        - generic [ref=e3928]: spo2
+                        - generic [ref=e3929]: "95.51"
+                    - generic [ref=e3931]:
+                      - generic [ref=e3935]:
+                        - generic [ref=e3936]: sbp
+                        - generic [ref=e3937]: "118.41"
+                      - generic [ref=e3941]:
+                        - generic [ref=e3942]: o2sat
+                        - generic [ref=e3943]: "95.51"
+                    - generic [ref=e3945]:
+                      - generic [ref=e3949]:
+                        - generic [ref=e3950]: temp
+                        - generic [ref=e3951]: "36.94"
+                      - generic [ref=e3955]:
+                        - generic [ref=e3956]: sao2
+                        - generic [ref=e3957]: "95.51"
+                  - paragraph [ref=e3961]: Showing 8 of 133 loaded features for this patient.
+      - button "💬" [ref=e1054] [cursor=pointer]:
+        - paragraph [ref=e1056]: 💬
+      - generic [ref=e317]:
+        - paragraph [ref=e323]: ✅ Data Loaded | 📋 167 Concepts | 👥 50 Patients
+        - paragraph [ref=e2098]: "🎯 Current Patient: 10001"
+        - button "❓ Help" [ref=e331] [cursor=pointer]:
+          - paragraph [ref=e333]: ❓ Help
+          - img [ref=e335]
+  - img [ref=e734]

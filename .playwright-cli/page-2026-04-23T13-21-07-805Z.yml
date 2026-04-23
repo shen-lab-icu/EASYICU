@@ -1,0 +1,483 @@
+- generic [active]:
+  - generic [ref=e2]:
+    - generic [ref=e108]:
+      - button "⤢" [ref=e120] [cursor=pointer]:
+        - paragraph [ref=e122]: ⤢
+      - button "🔙 Back to Mode Selection" [ref=e125] [cursor=pointer]:
+        - paragraph [ref=e127]: 🔙 Back to Mode Selection
+      - separator [ref=e131]
+      - generic [ref=e137]: Demo Mode
+      - heading "🏥 EasyICU Data Explorer" [level=2] [ref=e141]
+      - generic [ref=e143]:
+        - paragraph [ref=e146]: 🌐 Language
+        - generic [ref=e148]:
+          - generic [ref=e149]:
+            - generic [ref=e150]: EN
+            - combobox "Selected EN. 🌐 Language" [ref=e152]
+          - img "open" [ref=e154] [cursor=pointer]
+      - separator [ref=e159]
+      - group [ref=e162]:
+        - generic "keyboard_arrow_down 🤖 AI Assistant" [ref=e163] [cursor=pointer]:
+          - generic [ref=e164]:
+            - generic [ref=e166]: keyboard_arrow_down
+            - paragraph [ref=e169]: 🤖 AI Assistant
+        - generic [ref=e171]:
+          - generic [ref=e174] [cursor=pointer]:
+            - checkbox "Enable AI Assistant"
+            - paragraph [ref=e180]: Enable AI Assistant
+          - paragraph [ref=e184]: Enable the toggle, then switch to the 🤖 AI Assistant tab.
+      - separator [ref=e188]
+      - heading "📤 Data Extraction" [level=3] [ref=e192]
+      - 'heading "📊 Step 1: Data Source" [level=3] [ref=e196]'
+      - generic [ref=e200]:
+        - generic [ref=e201]: Demo Mode
+        - generic [ref=e202]: Auto-generated simulated ICU data
+      - generic [ref=e205]:
+        - paragraph [ref=e208]: Number of Patients
+        - generic [ref=e209]:
+          - slider "Number of Patients" [ref=e212]:
+            - generic: "100"
+          - generic:
+            - generic: "50"
+            - generic: "500"
+      - generic [ref=e215]:
+        - paragraph [ref=e218]: Data Duration (hours)
+        - generic [ref=e219]:
+          - slider "Data Duration (hours)" [ref=e222]:
+            - generic: "72"
+          - generic:
+            - generic: "24"
+            - generic: "168"
+      - button "✅ Confirm Data Source" [ref=e225] [cursor=pointer]:
+        - paragraph [ref=e227]: ✅ Confirm Data Source
+      - separator [ref=e231]
+      - 'heading "👥 Step 2: Cohort Selection" [level=3] [ref=e235]'
+      - alert [ref=e238]:
+        - paragraph [ref=e243]: ⚠️ Please complete Step 1 first
+    - generic [ref=e6]:
+      - generic [ref=e27]:
+        - text: 🏥 EasyICU
+        - generic [ref=e246]: DEMO
+      - generic [ref=e250]: ICU Data Analytics Platform
+      - generic [ref=e252]:
+        - tablist [ref=e254]:
+          - tab "📚 Tutorial" [ref=e255] [cursor=pointer]:
+            - paragraph [ref=e257]: 📚 Tutorial
+          - tab "📊 Quick Visualization" [ref=e258] [cursor=pointer]:
+            - paragraph [ref=e260]: 📊 Quick Visualization
+          - tab "📊 Cohort Analysis" [selected] [ref=e261] [cursor=pointer]:
+            - paragraph [ref=e263]: 📊 Cohort Analysis
+        - tabpanel "📊 Cohort Analysis" [ref=e656]:
+          - generic [ref=e657]:
+            - generic [ref=e661]:
+              - generic [ref=e662]: Cohort Analysis
+              - generic [ref=e663]: Group comparison, multi-database distribution & dashboard
+            - generic [ref=e665]:
+              - tablist [ref=e667]:
+                - tab "👥 Group Comparison" [ref=e668] [cursor=pointer]:
+                  - paragraph [ref=e670]: 👥 Group Comparison
+                - tab "📈 Multi-DB Distribution" [ref=e671] [cursor=pointer]:
+                  - paragraph [ref=e673]: 📈 Multi-DB Distribution
+                - tab "🎯 Cohort Dashboard" [selected] [ref=e674] [cursor=pointer]:
+                  - paragraph [ref=e676]: 🎯 Cohort Dashboard
+              - tabpanel "🎯 Cohort Dashboard" [ref=e735]:
+                - generic [ref=e736]:
+                  - heading "🎯 Cohort Dashboard" [level=3] [ref=e741]: 🎯 Cohort Dashboard
+                  - alert [ref=e784]:
+                    - paragraph [ref=e789]: "🎭 Demo Mode: Showing simulated cohort dashboard"
+                  - heading "📊 Cohort Review Snapshot" [level=4] [ref=e796]: 📊 Cohort Review Snapshot
+                  - generic [ref=e799]:
+                    - generic [ref=e805]:
+                      - generic [ref=e806]: "500"
+                      - generic [ref=e807]: Patients
+                      - generic [ref=e808]: cohort size
+                    - generic [ref=e814]:
+                      - generic [ref=e815]: "16"
+                      - generic [ref=e816]: Loaded features
+                      - generic [ref=e817]: available signal
+                    - generic [ref=e823]:
+                      - generic [ref=e824]: "5.0"
+                      - generic [ref=e825]: Median SOFA
+                      - generic [ref=e826]: severity anchor
+                    - generic [ref=e832]:
+                      - generic [ref=e833]: 40.4%
+                      - generic [ref=e834]: Top phenotype
+                      - generic [ref=e835]: max prevalence
+                    - generic [ref=e841]:
+                      - generic [ref=e842]: 31.4%
+                      - generic [ref=e843]: Mortality
+                      - generic [ref=e844]: outcome check
+                    - generic [ref=e850]:
+                      - generic [ref=e851]: 3.5d
+                      - generic [ref=e852]: Median LOS
+                      - generic [ref=e853]: resource use
+                  - generic [ref=e860]:
+                    - generic [ref=e862]:
+                      - heading "Clinical Phenotype Prevalence" [level=5] [ref=e867]: Clinical Phenotype Prevalence
+                      - generic [ref=e874]:
+                        - img:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic:
+                                        - generic:
+                                          - generic: 7.6%
+                                        - generic:
+                                          - generic: 25.0%
+                                        - generic:
+                                          - generic: 27.6%
+                                        - generic:
+                                          - generic: 29.6%
+                                        - generic:
+                                          - generic: 33.8%
+                                        - generic:
+                                          - generic: 34.8%
+                                        - generic:
+                                          - generic: 40.4%
+                              - generic:
+                                - generic:
+                                  - generic: "0"
+                                - generic:
+                                  - generic: "10"
+                                - generic:
+                                  - generic: "20"
+                                - generic:
+                                  - generic: "30"
+                                - generic:
+                                  - generic: "40"
+                              - generic:
+                                - generic:
+                                  - generic: RRT
+                                - generic:
+                                  - generic: Vasopressors
+                                - generic:
+                                  - generic: Sepsis
+                                - generic:
+                                  - generic: AKI
+                                - generic:
+                                  - generic: High SOFA (>=6)
+                                - generic:
+                                  - generic: Mechanical ventilation
+                                - generic:
+                                  - generic: Antibiotics
+                        - img:
+                          - generic:
+                            - generic:
+                              - generic: Prevalence (%)
+                        - toolbar [ref=e888]:
+                          - button "Download plot as a PNG" [ref=e890] [cursor=pointer]:
+                            - img [ref=e891]
+                          - generic [ref=e893]:
+                            - button "Zoom" [ref=e894] [cursor=pointer]:
+                              - img [ref=e895]
+                            - button "Pan" [ref=e897] [cursor=pointer]:
+                              - img [ref=e898]
+                          - generic [ref=e900]:
+                            - button "Zoom in" [ref=e901] [cursor=pointer]:
+                              - img [ref=e902]
+                            - button "Zoom out" [ref=e904] [cursor=pointer]:
+                              - img [ref=e905]
+                            - button "Autoscale" [ref=e907] [cursor=pointer]:
+                              - img [ref=e908]
+                            - button "Reset axes" [ref=e910] [cursor=pointer]:
+                              - img [ref=e911]
+                          - button "Fullscreen" [ref=e914] [cursor=pointer]:
+                            - img [ref=e915]
+                        - img
+                    - generic [ref=e918]:
+                      - heading "Severity & Outcome by SOFA" [level=5] [ref=e923]:
+                        - text: Severity & Outcome by SOFA
+                        - link [ref=e925] [cursor=pointer]:
+                          - /url: "#severity-and-outcome-by-sofa"
+                          - img [ref=e926]
+                      - generic [ref=e933]:
+                        - img:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic:
+                                        - generic:
+                                          - generic: "86"
+                                        - generic:
+                                          - generic: "245"
+                                        - generic:
+                                          - generic: "156"
+                                        - generic:
+                                          - generic: "13"
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic:
+                                        - generic:
+                                          - generic: 27.9%
+                                        - generic:
+                                          - generic: 31.0%
+                                        - generic:
+                                          - generic: 31.4%
+                                        - generic:
+                                          - generic: 61.5%
+                              - generic:
+                                - generic:
+                                  - generic: 0-2
+                                - generic:
+                                  - generic: 3-5
+                                - generic:
+                                  - generic: 6-9
+                                - generic:
+                                  - generic: ">=10"
+                              - generic:
+                                - generic:
+                                  - generic: "0"
+                                - generic:
+                                  - generic: "50"
+                                - generic:
+                                  - generic: "100"
+                                - generic:
+                                  - generic: "150"
+                                - generic:
+                                  - generic: "200"
+                                - generic:
+                                  - generic: "250"
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic: "0"
+                                  - generic:
+                                    - generic: "20"
+                                  - generic:
+                                    - generic: "40"
+                                  - generic:
+                                    - generic: "60"
+                                  - generic:
+                                    - generic: "80"
+                                  - generic:
+                                    - generic: "100"
+                        - img:
+                          - generic:
+                            - generic [ref=e954]:
+                              - generic [ref=e956]: Patients
+                              - generic [ref=e963]: Mortality %
+                            - generic:
+                              - generic: SOFA group
+                            - generic:
+                              - generic: Patients
+                            - generic:
+                              - generic: Mortality %
+                        - toolbar [ref=e969]:
+                          - button "Download plot as a PNG" [ref=e971] [cursor=pointer]:
+                            - img [ref=e972]
+                          - generic [ref=e974]:
+                            - button "Zoom" [ref=e975] [cursor=pointer]:
+                              - img [ref=e976]
+                            - button "Pan" [ref=e978] [cursor=pointer]:
+                              - img [ref=e979]
+                          - generic [ref=e981]:
+                            - button "Zoom in" [ref=e982] [cursor=pointer]:
+                              - img [ref=e983]
+                            - button "Zoom out" [ref=e985] [cursor=pointer]:
+                              - img [ref=e986]
+                            - button "Autoscale" [ref=e988] [cursor=pointer]:
+                              - img [ref=e989]
+                            - button "Reset axes" [ref=e991] [cursor=pointer]:
+                              - img [ref=e992]
+                          - button "Fullscreen" [ref=e995] [cursor=pointer]:
+                            - img [ref=e996]
+                        - img
+                  - generic [ref=e999]:
+                    - generic [ref=e1001]:
+                      - heading "Baseline Distributions" [level=5] [ref=e1006]: Baseline Distributions
+                      - generic [ref=e1013]:
+                        - img:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic: "20"
+                                - generic:
+                                  - generic: "40"
+                                - generic:
+                                  - generic: "60"
+                                - generic:
+                                  - generic: "80"
+                              - generic:
+                                - generic:
+                                  - generic: "0"
+                                - generic:
+                                  - generic: "10"
+                                - generic:
+                                  - generic: "20"
+                                - generic:
+                                  - generic: "30"
+                                - generic:
+                                  - generic: "40"
+                                - generic:
+                                  - generic: "50"
+                                - generic:
+                                  - generic: "60"
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic: "0"
+                                - generic:
+                                  - generic: "5"
+                                - generic:
+                                  - generic: "10"
+                                - generic:
+                                  - generic: "15"
+                              - generic:
+                                - generic:
+                                  - generic: "0"
+                                - generic:
+                                  - generic: "20"
+                                - generic:
+                                  - generic: "40"
+                                - generic:
+                                  - generic: "60"
+                                - generic:
+                                  - generic: "80"
+                        - img:
+                          - generic:
+                            - generic:
+                              - generic: Count
+                            - generic:
+                              - generic: Count
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic: Age
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic: LOS days
+                        - toolbar [ref=e1039]:
+                          - button "Download plot as a PNG" [ref=e1041] [cursor=pointer]:
+                            - img [ref=e1042]
+                          - generic [ref=e1044]:
+                            - button "Zoom" [ref=e1045] [cursor=pointer]:
+                              - img [ref=e1046]
+                            - button "Pan" [ref=e1048] [cursor=pointer]:
+                              - img [ref=e1049]
+                          - generic [ref=e1051]:
+                            - button "Zoom in" [ref=e1052] [cursor=pointer]:
+                              - img [ref=e1053]
+                            - button "Zoom out" [ref=e1055] [cursor=pointer]:
+                              - img [ref=e1056]
+                            - button "Autoscale" [ref=e1058] [cursor=pointer]:
+                              - img [ref=e1059]
+                            - button "Reset axes" [ref=e1061] [cursor=pointer]:
+                              - img [ref=e1062]
+                          - button "Fullscreen" [ref=e1065] [cursor=pointer]:
+                            - img [ref=e1066]
+                        - img
+                    - generic [ref=e1069]:
+                      - heading "Feature Coverage Snapshot" [level=5] [ref=e1074]: Feature Coverage Snapshot
+                      - generic [ref=e1081]:
+                        - img:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic:
+                                        - generic:
+                                          - generic: "1"
+                                        - generic:
+                                          - generic: "3"
+                                        - generic:
+                                          - generic: "4"
+                                        - generic:
+                                          - generic: "4"
+                              - generic:
+                                - generic:
+                                  - generic: "0"
+                                - generic:
+                                  - generic: "2"
+                                - generic:
+                                  - generic: "4"
+                              - generic:
+                                - generic:
+                                  - generic: Severity
+                                - generic:
+                                  - generic: Demographics
+                                - generic:
+                                  - generic: Interventions
+                                - generic:
+                                  - generic: Outcomes
+                        - img:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic: "99.5"
+                                - generic:
+                                  - generic: "100"
+                                - generic:
+                                  - generic: "100.5"
+                              - generic:
+                                - generic:
+                                  - generic: Coverage %
+                            - generic:
+                              - generic: Loaded features
+                        - toolbar [ref=e1095]:
+                          - button "Download plot as a PNG" [ref=e1097] [cursor=pointer]:
+                            - img [ref=e1098]
+                          - generic [ref=e1100]:
+                            - button "Zoom" [ref=e1101] [cursor=pointer]:
+                              - img [ref=e1102]
+                            - button "Pan" [ref=e1104] [cursor=pointer]:
+                              - img [ref=e1105]
+                          - generic [ref=e1107]:
+                            - button "Zoom in" [ref=e1108] [cursor=pointer]:
+                              - img [ref=e1109]
+                            - button "Zoom out" [ref=e1111] [cursor=pointer]:
+                              - img [ref=e1112]
+                            - button "Autoscale" [ref=e1114] [cursor=pointer]:
+                              - img [ref=e1115]
+                            - button "Reset axes" [ref=e1117] [cursor=pointer]:
+                              - img [ref=e1118]
+                          - button "Fullscreen" [ref=e1121] [cursor=pointer]:
+                            - img [ref=e1122]
+                        - img
+                      - generic [ref=e1128]:
+                        - button "Show/hide columns" [ref=e1132] [cursor=pointer]:
+                          - img [ref=e1133]
+                        - button "Download as CSV" [ref=e1138] [cursor=pointer]:
+                          - img [ref=e1139]
+                        - button "Search" [ref=e1144] [cursor=pointer]:
+                          - img [ref=e1145]
+                        - button "Fullscreen" [ref=e1150] [cursor=pointer]:
+                          - img [ref=e1151]
+      - generic [ref=e574]:
+        - generic [ref=e576]:
+          - generic [ref=e583]:
+            - generic [ref=e584]: 💬 AI Assistant
+            - generic [ref=e585]: Describe your research task first, then I will map it to EasyICU.
+          - button "S" [ref=e593] [cursor=pointer]:
+            - generic:
+              - paragraph: S
+          - button "M" [ref=e601] [cursor=pointer]:
+            - generic:
+              - paragraph: M
+          - button "L" [ref=e609] [cursor=pointer]:
+            - generic:
+              - paragraph: L
+          - button "—" [ref=e617] [cursor=pointer]:
+            - generic:
+              - paragraph: —
+          - button "✕" [ref=e625] [cursor=pointer]:
+            - generic:
+              - paragraph: ✕
+        - paragraph [ref=e629]: Enable AI Assistant in the sidebar settings first.
+      - generic [ref=e635]:
+        - paragraph [ref=e641]: ⏳ No Data | 📋 0 Concepts | 👥 0 Patients
+        - button "❓ Help" [ref=e649] [cursor=pointer]:
+          - paragraph [ref=e651]: ❓ Help
+          - img [ref=e653]
+  - img [ref=e1162]

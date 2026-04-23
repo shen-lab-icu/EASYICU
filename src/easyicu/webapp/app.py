@@ -14207,6 +14207,12 @@ def _generate_mock_cohort_dashboard_data(lang: str = 'en') -> pd.DataFrame:
     
     # SOFA分数 - 与病情严重度相关
     sofa_scores = np.clip(np.random.poisson(4, n_patients) + (mech_vent.astype(int) * 2), 0, 20)
+
+    # 关键队列表型 - 让演示仪表板更接近真实队列审阅场景
+    sepsis = np.random.random(n_patients) < np.clip(0.16 + sofa_scores / 50, 0.05, 0.62)
+    aki = np.random.random(n_patients) < np.clip(0.12 + sofa_scores / 60 + ages / 700, 0.04, 0.55)
+    rrt = np.random.random(n_patients) < np.clip(0.02 + sofa_scores / 140 + aki.astype(int) * 0.08, 0.01, 0.28)
+    abx = sepsis | (np.random.random(n_patients) < 0.18)
     
     # 死亡结局 - 与SOFA、年龄、住院时长相关
     mortality_prob = 0.08 + (sofa_scores / 100) + (ages / 500) + (los_days / 200)
@@ -14229,6 +14235,10 @@ def _generate_mock_cohort_dashboard_data(lang: str = 'en') -> pd.DataFrame:
         'los_hours': los_days * 24,  # 添加los_hours列
         'mech_vent': mech_vent,
         'vasopressors': vasopressors,
+        'sepsis': sepsis,
+        'aki': aki,
+        'rrt': rrt,
+        'abx': abx,
         'sofa_max': sofa_scores,
         'mortality': mortality,
         'survived': [1 if not m else 0 for m in mortality],  # 添加survived列（1=存活，0=死亡）
@@ -14237,6 +14247,189 @@ def _generate_mock_cohort_dashboard_data(lang: str = 'en') -> pd.DataFrame:
     })
     
     return df
+
+
+def _cohort_bool_series(df: pd.DataFrame, candidates: List[str]) -> Optional[pd.Series]:
+    """Return a boolean event series from the first available candidate column."""
+    for col in candidates:
+        if col not in df.columns:
+            continue
+        series = df[col]
+        if series.dtype == bool:
+            return series.fillna(False).astype(bool)
+        lowered = series.astype(str).str.lower()
+        if lowered.isin(['true', 'false', '1', '0', 'yes', 'no']).any():
+            return lowered.isin(['true', '1', 'yes'])
+        numeric = pd.to_numeric(series, errors='coerce')
+        if numeric.notna().any():
+            return numeric.fillna(0) > 0
+    return None
+
+
+def _cohort_numeric_series(df: pd.DataFrame, candidates: List[str]) -> Optional[pd.Series]:
+    """Return the first numeric series available among candidate columns."""
+    for col in candidates:
+        if col in df.columns:
+            numeric = pd.to_numeric(df[col], errors='coerce')
+            if numeric.notna().any():
+                return numeric
+    return None
+
+
+def _build_loaded_module_coverage(
+    loaded_concepts: Dict[str, Any],
+    total_patients: int,
+    lang: str = 'en',
+    data_columns: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """Summarize loaded concepts by module for a compact data coverage snapshot."""
+    rows = []
+    if loaded_concepts:
+        concept_groups = get_concept_groups()
+        assigned = set()
+        for module, concepts in concept_groups.items():
+            module_concepts = [c for c in concepts if c in loaded_concepts]
+            if not module_concepts:
+                continue
+            assigned.update(module_concepts)
+            row_count = 0
+            patients = set()
+            for concept in module_concepts:
+                concept_df = loaded_concepts.get(concept)
+                if not isinstance(concept_df, pd.DataFrame):
+                    continue
+                row_count += len(concept_df)
+                id_col = next((c for c in ['stay_id', 'patient_id', 'subject_id'] if c in concept_df.columns), None)
+                if id_col:
+                    patients.update(concept_df[id_col].dropna().unique().tolist())
+            rows.append({
+                'module': module,
+                'features': len(module_concepts),
+                'patients': len(patients),
+                'rows': row_count,
+                'coverage': round((len(patients) / total_patients * 100), 1) if total_patients else 0.0,
+            })
+
+        unassigned = [c for c in loaded_concepts if c not in assigned]
+        if unassigned:
+            unassigned_rows = sum(
+                len(loaded_concepts[c]) for c in unassigned
+                if isinstance(loaded_concepts.get(c), pd.DataFrame)
+            )
+            rows.append({
+                'module': 'Other' if lang == 'en' else '其他',
+                'features': len(unassigned),
+                'patients': 0,
+                'rows': unassigned_rows,
+                'coverage': 0.0,
+            })
+
+    if rows:
+        return pd.DataFrame(rows).sort_values(['features', 'patients'], ascending=False).head(8)
+
+    fallback = [
+        ('Demographics' if lang == 'en' else '人口统计', ['age', 'gender', 'admission_type']),
+        ('Severity' if lang == 'en' else '严重程度', ['sofa_max', 'sofa', 'sofa2']),
+        ('Interventions' if lang == 'en' else '干预措施', ['mech_vent', 'vasopressors', 'rrt', 'abx']),
+        ('Outcomes' if lang == 'en' else '结局', ['survived', 'mortality', 'los_hours', 'los_days']),
+    ]
+    data_columns = data_columns or []
+    for module, columns in fallback:
+        present = [col for col in columns if col in data_columns]
+        rows.append({'module': module, 'features': len(present), 'patients': total_patients, 'rows': total_patients * max(1, len(present)), 'coverage': 100.0 if present else 0.0})
+    return pd.DataFrame(rows)
+
+
+def _build_cohort_dashboard_review_stats(
+    df: pd.DataFrame,
+    loaded_concepts: Optional[Dict[str, Any]] = None,
+    lang: str = 'en',
+) -> Dict[str, Any]:
+    """Build clinically meaningful cohort review summaries for the dashboard."""
+    loaded_concepts = loaded_concepts or {}
+    total = len(df)
+    sofa = _cohort_numeric_series(df, ['sofa_max', 'sofa2', 'sofa'])
+    los_hours = _cohort_numeric_series(df, ['los_hours'])
+    los_days = los_hours / 24 if los_hours is not None else _cohort_numeric_series(df, ['los_days'])
+    age = _cohort_numeric_series(df, ['age'])
+    survived = _cohort_bool_series(df, ['survived'])
+    mortality_series = _cohort_bool_series(df, ['mortality'])
+    if mortality_series is None and survived is not None:
+        mortality_series = ~survived
+
+    sepsis = _cohort_bool_series(df, ['sepsis', 'sepsis3'])
+    if sepsis is None and 'diagnosis_group' in df.columns:
+        sepsis = df['diagnosis_group'].astype(str).str.lower().str.contains('sepsis', na=False)
+
+    phenotype_defs = [
+        ('Sepsis' if lang == 'en' else '脓毒症', sepsis),
+        ('AKI' if lang == 'en' else '急性肾损伤', _cohort_bool_series(df, ['aki', 'aki_stage'])),
+        ('RRT' if lang == 'en' else '肾脏替代治疗', _cohort_bool_series(df, ['rrt'])),
+        ('Mechanical ventilation' if lang == 'en' else '机械通气', _cohort_bool_series(df, ['mech_vent', 'ventilation', 'vent'])),
+        ('Vasopressors' if lang == 'en' else '血管活性药物', _cohort_bool_series(df, ['vasopressors', 'vaso_ind'])),
+        ('Antibiotics' if lang == 'en' else '抗菌药物', _cohort_bool_series(df, ['abx'])),
+    ]
+    if sofa is not None:
+        phenotype_defs.append(('High SOFA (>=6)' if lang == 'en' else '高SOFA (>=6)', sofa >= 6))
+
+    phenotype_rows = []
+    for label, series in phenotype_defs:
+        if series is None:
+            continue
+        count = int(series.fillna(False).sum())
+        phenotype_rows.append({
+            'label': label,
+            'count': count,
+            'pct': round((count / total * 100), 1) if total else 0.0,
+        })
+    phenotype_df = pd.DataFrame(phenotype_rows, columns=['label', 'count', 'pct'])
+    if not phenotype_df.empty:
+        phenotype_df = phenotype_df.sort_values('pct', ascending=True)
+
+    severity_df = pd.DataFrame(columns=['sofa_group', 'patients', 'deaths', 'mortality'])
+    if sofa is not None:
+        severity_source = pd.DataFrame({'sofa': sofa})
+        if mortality_series is not None:
+            severity_source['death'] = mortality_series.fillna(False).astype(bool)
+        else:
+            severity_source['death'] = False
+        severity_source['sofa_group'] = pd.cut(
+            severity_source['sofa'],
+            bins=[-np.inf, 3, 6, 10, np.inf],
+            labels=['0-2', '3-5', '6-9', '>=10'],
+            right=False,
+        )
+        severity_df = severity_source.groupby('sofa_group', observed=False).agg(
+            patients=('sofa', 'count'),
+            deaths=('death', 'sum'),
+        ).reset_index()
+        severity_df['mortality'] = np.where(
+            severity_df['patients'] > 0,
+            (severity_df['deaths'] / severity_df['patients'] * 100).round(1),
+            0.0,
+        )
+
+    features_count = len(loaded_concepts) if loaded_concepts else max(0, len([c for c in df.columns if c not in ['stay_id', 'patient_id', 'subject_id']]))
+    mortality_pct = (float(mortality_series.mean()) * 100) if mortality_series is not None and len(mortality_series) else 0.0
+    metrics = {
+        'patients': f"{total:,}",
+        'features': f"{features_count:,}",
+        'median_sofa': f"{sofa.median():.1f}" if sofa is not None else 'NA',
+        'phenotype_burden': f"{phenotype_df['pct'].max():.1f}%" if not phenotype_df.empty else 'NA',
+        'mortality': f"{mortality_pct:.1f}%",
+        'median_los': f"{los_days.median():.1f}d" if los_days is not None else 'NA',
+        'mean_age': f"{age.mean():.1f}" if age is not None else 'NA',
+    }
+
+    return {
+        'metrics': metrics,
+        'phenotype': phenotype_df,
+        'severity': severity_df,
+        'coverage': _build_loaded_module_coverage(loaded_concepts, total, lang, list(df.columns)),
+        'age': age,
+        'los_days': los_days,
+        'mortality_series': mortality_series,
+    }
 
 
 def render_cohort_comparison_page():
@@ -15579,208 +15772,190 @@ def render_cohort_dashboard_subtab(lang: str):
     df = st.session_state['dash_demographics']
     
     try:
+        review = _build_cohort_dashboard_review_stats(
+            df,
+            loaded_concepts=st.session_state.get('loaded_concepts', {}),
+            lang=lang,
+        )
+
         # ========== 顶部指标卡片 ==========
-        st.markdown("#### " + ("📊 Key Metrics" if lang == 'en' else "📊 关键指标"))
+        st.markdown("#### " + ("📊 Cohort Review Snapshot" if lang == 'en' else "📊 队列审阅快照"))
         
         metric_cols = st.columns(6)
         
-        def metric_card(value, label, bg_gradient):
+        def metric_card(value, label, hint, bg_gradient):
             st.markdown(f"""
             <div style="background: {bg_gradient};
-                        padding: 10px 8px; border-radius: 12px; text-align: center; color: white;
-                        min-height: 86px; display:flex; flex-direction:column; justify-content:center;">
+                        padding: 10px 8px; border-radius: 12px; color: white;
+                        min-height: 92px; display:flex; flex-direction:column; justify-content:center;">
                 <div style="font-size: 1.65rem; font-weight: 800; line-height:1.1;">{value}</div>
-                <div style="font-size: 0.76rem; opacity: 0.92; margin-top:6px;">{label}</div>
+                <div style="font-size: 0.78rem; opacity: 0.96; margin-top:6px; font-weight:700;">{label}</div>
+                <div style="font-size: 0.66rem; opacity: 0.78; margin-top:3px;">{hint}</div>
             </div>
             """, unsafe_allow_html=True)
 
+        metrics = review['metrics']
+        card_specs = [
+            (metrics['patients'], "Patients" if lang == 'en' else "患者数", "cohort size" if lang == 'en' else "队列规模", "linear-gradient(135deg, #2563eb 0%, #0891b2 100%)"),
+            (metrics['features'], "Loaded features" if lang == 'en' else "已载入特征", "available signal" if lang == 'en' else "可用信号", "linear-gradient(135deg, #0f766e 0%, #22c55e 100%)"),
+            (metrics['median_sofa'], "Median SOFA" if lang == 'en' else "SOFA中位数", "severity anchor" if lang == 'en' else "严重程度锚点", "linear-gradient(135deg, #7c3aed 0%, #2563eb 100%)"),
+            (metrics['phenotype_burden'], "Top phenotype" if lang == 'en' else "最高表型占比", "max prevalence" if lang == 'en' else "最高患病/干预率", "linear-gradient(135deg, #ea580c 0%, #facc15 100%)"),
+            (metrics['mortality'], "Mortality" if lang == 'en' else "死亡率", "outcome check" if lang == 'en' else "结局校验", "linear-gradient(135deg, #e11d48 0%, #fb7185 100%)"),
+            (metrics['median_los'], "Median LOS" if lang == 'en' else "LOS中位数", "resource use" if lang == 'en' else "资源占用", "linear-gradient(135deg, #475569 0%, #94a3b8 100%)"),
+        ]
         with metric_cols[0]:
-            metric_card(
-                f"{len(df):,}", 
-                "Total Patients" if lang == 'en' else "患者总数",
-                "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
-            )
-        
+            metric_card(*card_specs[0])
         with metric_cols[1]:
-            avg_age = df['age'].mean() if 'age' in df.columns else 0
-            metric_card(
-                f"{avg_age:.1f}", 
-                "Mean Age" if lang == 'en' else "平均年龄",
-                "linear-gradient(135deg, #11998e 0%, #38ef7d 100%)"
-            )
-        
+            metric_card(*card_specs[1])
         with metric_cols[2]:
-            male_pct = (df['gender'] == 'M').mean() * 100 if 'gender' in df.columns else 0
-            metric_card(
-                f"{male_pct:.1f}%", 
-                "Male %" if lang == 'en' else "男性占比",
-                "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)"
-            )
-        
+            metric_card(*card_specs[2])
         with metric_cols[3]:
-            median_los = df['los_hours'].median() / 24 if 'los_hours' in df.columns else 0
-            metric_card(
-                f"{median_los:.1f}", 
-                "Median LOS (days)" if lang == 'en' else "中位住院(天)",
-                "linear-gradient(135deg, #fa709a 0%, #fee140 100%)"
-            )
-        
+            metric_card(*card_specs[3])
         with metric_cols[4]:
-            mortality = (1 - df['survived'].mean()) * 100 if 'survived' in df.columns else 0
-            metric_card(
-                f"{mortality:.1f}%", 
-                "Mortality" if lang == 'en' else "死亡率",
-                "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)"
-            )
-        
+            metric_card(*card_specs[4])
         with metric_cols[5]:
-            first_icu_pct = df['first_icu_stay'].mean() * 100 if 'first_icu_stay' in df.columns else 0
-            metric_card(
-                f"{first_icu_pct:.1f}%", 
-                "First ICU Stay" if lang == 'en' else "首次ICU",
-                "linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)"
-            )
+            metric_card(*card_specs[5])
         
         _render_compact_divider()
         
-        # ========== 图表行1: 年龄分布和性别/生存 ==========
-        chart_col1, chart_col2 = st.columns(2)
+        # ========== 图表行1: 临床表型和严重程度 ==========
+        chart_col1, chart_col2 = st.columns([1, 1.15])
         
         with chart_col1:
-            st.markdown("##### " + ("Age Distribution" if lang == 'en' else "年龄分布"))
-            if 'age' in df.columns:
-                fig = px.histogram(
-                    df, 
-                    x='age',
-                    nbins=20,
-                    color_discrete_sequence=['#667eea'],
-                    labels={'age': "Age" if lang == 'en' else "年龄", 'count': "Count" if lang == 'en' else "人数"},
-                    template="plotly_white"
+            st.markdown("##### " + ("Clinical Phenotype Prevalence" if lang == 'en' else "临床表型占比"))
+            phenotype_df = review['phenotype']
+            if not phenotype_df.empty:
+                fig = px.bar(
+                    phenotype_df,
+                    x='pct',
+                    y='label',
+                    orientation='h',
+                    text=phenotype_df['pct'].map(lambda x: f"{x:.1f}%"),
+                    color='pct',
+                    color_continuous_scale=['#dbeafe', '#0f766e'],
+                    labels={'pct': "Prevalence (%)" if lang == 'en' else "占比 (%)", 'label': ""},
+                    template='plotly_white',
                 )
-                fig.update_layout(bargap=0.1, margin=dict(l=20, r=20, t=20, b=20), height=320, font=dict(size=14, color='black'))
-                fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                st.plotly_chart(fig, use_container_width=True, key="dash_age_dist")
+                fig.update_traces(textposition='outside', cliponaxis=False)
+                fig.update_layout(
+                    height=330,
+                    margin=dict(l=10, r=40, t=12, b=30),
+                    coloraxis_showscale=False,
+                    font=dict(size=13, color='#111827'),
+                )
+                fig.update_xaxes(range=[0, max(10, float(phenotype_df['pct'].max()) * 1.18)], gridcolor='#e5e7eb')
+                st.plotly_chart(fig, use_container_width=True, key="dash_phenotype_prevalence")
             else:
-                st.warning("No 'age' column found" if lang == 'en' else "未找到'age'列")
+                st.warning("No clinical phenotype columns found" if lang == 'en' else "未找到临床表型列")
         
         with chart_col2:
-            st.markdown("##### " + ("Gender & Survival Breakdown" if lang == 'en' else "性别与存活分布"))
-            if 'gender' in df.columns and 'survived' in df.columns:
-                # 预处理数据以进行可视化
-                df_pie_gender = df['gender'].value_counts().reset_index()
-                df_pie_gender.columns = ['label', 'value']
-                
-                df_pie_survival = df['survived'].value_counts().reset_index()
-                df_pie_survival.columns = ['label', 'value']
-                # 转换标签
-                survived_label = "Survived" if lang == 'en' else "存活"
-                deceased_label = "Deceased" if lang == 'en' else "死亡"
-                df_pie_survival['label'] = df_pie_survival['label'].map({1: survived_label, 0: deceased_label})
-                
-                # 创建子图
-                fig = make_subplots(rows=1, cols=2, specs=[[{'type': 'domain'}, {'type': 'domain'}]],
-                                   subplot_titles=("Gender" if lang == 'en' else "性别", 
-                                                   "Survival" if lang == 'en' else "存活"))
-                
-                fig.add_trace(go.Pie(labels=df_pie_gender['label'], values=df_pie_gender['value'], 
-                                    name="Gender", marker_colors=['#4facfe', '#fa709a']), 1, 1)
-                
-                fig.add_trace(go.Pie(labels=df_pie_survival['label'], values=df_pie_survival['value'], 
-                                    name="Survival", marker_colors=['#38ef7d', '#f5576c']), 1, 2)
-                
-                fig.update_traces(hole=.4, hoverinfo="label+percent+name")
-                fig.update_layout(margin=dict(l=20, r=20, t=30, b=20), height=320, showlegend=True,
-                                 legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-                                 font=dict(size=14, color='black'))
-                st.plotly_chart(fig, use_container_width=True, key="dash_pie_charts")
-            else:
-                st.warning("Data mismatch for pie charts" if lang == 'en' else "饼图数据缺失")
-        
-        # ========== 图表行2: 住院时长和死亡率趋势 ==========
-        chart_col3, chart_col4 = st.columns(2)
-        
-        with chart_col3:
-            st.markdown("##### " + ("Length of Stay Distribution" if lang == 'en' else "住院时长分布"))
-            if 'los_hours' in df.columns:
-                # 截断极值以便更好展示
-                los_days = df['los_hours'] / 24
-                p95 = los_days.quantile(0.95)
-                df_filtered = df[los_days <= p95].copy()
-                df_filtered['los_days'] = df_filtered['los_hours'] / 24
-                
-                median_los = los_days.median()
-                
-                fig = px.histogram(
-                    df_filtered, 
-                    x='los_days',
-                    nbins=30,
-                    color_discrete_sequence=['#11998e'],
-                    labels={'los_days': "LOS (Days)" if lang == 'en' else "住院天数"},
-                    template="plotly_white"
-                )
-                
-                # 增加中位数线
-                fig.add_vline(x=median_los, line_width=3, line_dash="dash", line_color="#f5576c",
-                             annotation_text=f"Median: {median_los:.1f}d", 
-                             annotation_position="top right")
-                
-                fig.update_layout(bargap=0.1, margin=dict(l=20, r=20, t=20, b=20), height=320, font=dict(size=14, color='black'))
-                fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                st.plotly_chart(fig, use_container_width=True, key="dash_los_chart")
-            else:
-                st.warning("No 'los_hours' column" if lang == 'en' else "未找到'los_hours'列")
-        
-        with chart_col4:
-            st.markdown("##### " + ("Mortality by Age Group" if lang == 'en' else "各年龄段死亡率趋势"))
-            if 'age' in df.columns and 'survived' in df.columns:
-                # 预处理数据
-                df_age = df.copy()
-                age_bins = [0, 30, 40, 50, 60, 70, 80, 90, 120]
-                age_labels = ['<30', '30-39', '40-49', '50-59', '60-69', '70-79', '80-89', '≥90']
-                df_age['age_group'] = pd.cut(df_age['age'], bins=age_bins, labels=age_labels, right=False)
-                
-                stats = df_age.groupby('age_group', observed=True).agg(
-                    total=('survived', 'count'),
-                    deaths=('survived', lambda x: (x == 0).sum())
-                ).reset_index()
-                stats['mortality'] = (stats['deaths'] / stats['total'] * 100).round(1)
-                
-                # 双轴图：柱状图（人数）+折线图（死亡率）
+            st.markdown("##### " + ("Severity & Outcome by SOFA" if lang == 'en' else "SOFA分层与结局"))
+            severity_df = review['severity']
+            if not severity_df.empty and severity_df['patients'].sum() > 0:
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
-                
-                # 柱状图 - 患者数
                 fig.add_trace(
-                    go.Bar(x=stats['age_group'].astype(str), y=stats['total'], name="Patients" if lang == 'en' else "患者数",
-                          marker_color='rgba(102, 126, 234, 0.6)'),
+                    go.Bar(
+                        x=severity_df['sofa_group'].astype(str),
+                        y=severity_df['patients'],
+                        name="Patients" if lang == 'en' else "患者数",
+                        marker_color='rgba(37, 99, 235, 0.55)',
+                        text=severity_df['patients'],
+                        textposition='outside',
+                    ),
                     secondary_y=False,
                 )
-                
-                # 折线图 - 死亡率
                 fig.add_trace(
-                    go.Scatter(x=stats['age_group'].astype(str), y=stats['mortality'], name="Mortality %" if lang == 'en' else "死亡率 %",
-                              mode='lines+markers', marker_color='#f5576c', line=dict(width=3)),
+                    go.Scatter(
+                        x=severity_df['sofa_group'].astype(str),
+                        y=severity_df['mortality'],
+                        name="Mortality %" if lang == 'en' else "死亡率 %",
+                        mode='lines+markers+text',
+                        text=severity_df['mortality'].map(lambda x: f"{x:.1f}%"),
+                        textposition='top center',
+                        marker_color='#e11d48',
+                        line=dict(width=3),
+                    ),
                     secondary_y=True,
                 )
-                
                 fig.update_layout(
-                    template="plotly_white",
-                    margin=dict(l=20, r=20, t=20, b=40),
-                    height=320,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    font=dict(size=14, color='black'),
+                    template='plotly_white',
+                    height=330,
+                    margin=dict(l=20, r=20, t=12, b=35),
+                    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                    font=dict(size=13, color='#111827'),
                 )
-                
-                fig.update_yaxes(title_text="Count" if lang == 'en' else "人数", secondary_y=False,
-                                tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                fig.update_yaxes(title_text="Mortality %" if lang == 'en' else "死亡率 %", secondary_y=True, range=[0, 100],
-                                tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                
-                st.plotly_chart(fig, use_container_width=True, key="dash_mortality_chart")
+                fig.update_yaxes(title_text="Patients" if lang == 'en' else "患者数", secondary_y=False, gridcolor='#e5e7eb')
+                fig.update_yaxes(title_text="Mortality %" if lang == 'en' else "死亡率 %", secondary_y=True, range=[0, 100])
+                fig.update_xaxes(title_text="SOFA group" if lang == 'en' else "SOFA分层")
+                st.plotly_chart(fig, use_container_width=True, key="dash_severity_outcome")
             else:
-                st.warning("Data not available" if lang == 'en' else "数据缺失")
+                st.warning("No SOFA severity column found" if lang == 'en' else "未找到SOFA严重程度列")
+        
+        # ========== 图表行2: 基线分布和数据覆盖 ==========
+        chart_col3, chart_col4 = st.columns([1, 1.15])
+        
+        with chart_col3:
+            st.markdown("##### " + ("Baseline Distributions" if lang == 'en' else "基线分布"))
+            age = review['age']
+            los_days = review['los_days']
+            if age is not None or los_days is not None:
+                fig = make_subplots(rows=1, cols=2, subplot_titles=("Age" if lang == 'en' else "年龄", "LOS days" if lang == 'en' else "住院天数"))
+                if age is not None:
+                    fig.add_trace(go.Histogram(x=age.dropna(), nbinsx=18, marker_color='#2563eb', name="Age" if lang == 'en' else "年龄"), row=1, col=1)
+                    fig.add_vline(x=float(age.median()), line_color='#f97316', line_dash='dash', row=1, col=1)
+                if los_days is not None:
+                    capped_los = los_days[los_days <= los_days.quantile(0.95)].dropna()
+                    fig.add_trace(go.Histogram(x=capped_los, nbinsx=20, marker_color='#0f766e', name="LOS" if lang == 'en' else "LOS"), row=1, col=2)
+                    fig.add_vline(x=float(los_days.median()), line_color='#e11d48', line_dash='dash', row=1, col=2)
+                fig.update_layout(
+                    template='plotly_white',
+                    height=315,
+                    margin=dict(l=20, r=20, t=38, b=35),
+                    bargap=0.08,
+                    showlegend=False,
+                    font=dict(size=13, color='#111827'),
+                )
+                fig.update_yaxes(title_text="Count" if lang == 'en' else "人数", gridcolor='#e5e7eb')
+                st.plotly_chart(fig, use_container_width=True, key="dash_baseline_distributions")
+            else:
+                st.warning("No age or LOS columns found" if lang == 'en' else "未找到年龄或住院时长列")
+        
+        with chart_col4:
+            st.markdown("##### " + ("Feature Coverage Snapshot" if lang == 'en' else "特征覆盖快照"))
+            coverage_df = review['coverage']
+            if not coverage_df.empty:
+                fig = px.bar(
+                    coverage_df.sort_values('features', ascending=True),
+                    x='features',
+                    y='module',
+                    orientation='h',
+                    text='features',
+                    color='coverage',
+                    color_continuous_scale=['#fee2e2', '#22c55e'],
+                    range_color=[0, 100],
+                    labels={'features': "Loaded features" if lang == 'en' else "已载入特征", 'module': "", 'coverage': "Patient coverage %" if lang == 'en' else "患者覆盖率 %"},
+                    template='plotly_white',
+                )
+                fig.update_traces(textposition='outside', cliponaxis=False)
+                fig.update_layout(
+                    height=315,
+                    margin=dict(l=10, r=45, t=12, b=35),
+                    coloraxis_colorbar=dict(title="Coverage %" if lang == 'en' else "覆盖率 %"),
+                    font=dict(size=13, color='#111827'),
+                )
+                fig.update_xaxes(range=[0, max(5, float(coverage_df['features'].max()) * 1.25)], gridcolor='#e5e7eb')
+                st.plotly_chart(fig, use_container_width=True, key="dash_feature_coverage")
+                table_df = coverage_df.rename(columns={
+                    'module': "Module" if lang == 'en' else "模块",
+                    'features': "Features" if lang == 'en' else "特征数",
+                    'patients': "Patients" if lang == 'en' else "患者数",
+                    'rows': "Rows" if lang == 'en' else "行数",
+                    'coverage': "Coverage %" if lang == 'en' else "覆盖率 %",
+                })
+                with st.expander("Coverage detail table" if lang == 'en' else "覆盖明细表", expanded=False):
+                    _dataframe_compat(table_df, width="stretch", hide_index=True)
+            else:
+                st.warning("No feature coverage information available" if lang == 'en' else "没有可用的特征覆盖信息")
                 
     except Exception as e:
         st.error(f"Render error: {e}")

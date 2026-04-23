@@ -407,3 +407,54 @@ def test_compute_quality_missing_rate_treats_time_stamped_abx_as_sparse_event_se
     )
 
     assert missing == pytest.approx(92.5)
+
+
+def test_build_cohort_dashboard_review_stats_summarizes_clinical_signal() -> None:
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age": [45, 66, 72, 81],
+            "los_hours": [24, 96, 48, 240],
+            "sofa_max": [2, 7, 10, 4],
+            "survived": [1, 0, 0, 1],
+            "sepsis": [False, True, True, False],
+            "aki": [False, True, True, False],
+            "rrt": [False, False, True, False],
+            "mech_vent": [False, True, True, False],
+            "vasopressors": [False, True, False, False],
+        }
+    )
+
+    stats = app._build_cohort_dashboard_review_stats(df, loaded_concepts={}, lang="en")
+    phenotype = stats["phenotype"]
+    severity = stats["severity"]
+
+    assert stats["metrics"]["patients"] == "4"
+    assert stats["metrics"]["median_sofa"] == "5.5"
+    assert phenotype.loc[phenotype["label"] == "Sepsis", "pct"].item() == pytest.approx(50.0)
+    assert phenotype.loc[phenotype["label"] == "RRT", "count"].item() == 1
+    assert severity.loc[severity["sofa_group"] == "6-9", "mortality"].item() == pytest.approx(100.0)
+    assert severity.loc[severity["sofa_group"] == ">=10", "patients"].item() == 1
+
+
+def test_build_cohort_dashboard_review_stats_reports_loaded_module_coverage(monkeypatch) -> None:
+    df = pd.DataFrame({"stay_id": [1, 2, 3]})
+    loaded_concepts = {
+        "hr": pd.DataFrame({"stay_id": [1, 2], "hr": [80, 90]}),
+        "map": pd.DataFrame({"stay_id": [1, 3], "map": [70, 75]}),
+        "aki": pd.DataFrame({"stay_id": [2], "aki": [1]}),
+    }
+
+    monkeypatch.setattr(
+        app,
+        "get_concept_groups",
+        lambda: {"Vitals": ["hr", "map"], "Renal": ["aki"], "Labs": ["crea"]},
+    )
+
+    stats = app._build_cohort_dashboard_review_stats(df, loaded_concepts=loaded_concepts, lang="en")
+    coverage = stats["coverage"]
+
+    assert stats["metrics"]["features"] == "3"
+    assert coverage.loc[coverage["module"] == "Vitals", "features"].item() == 2
+    assert coverage.loc[coverage["module"] == "Vitals", "patients"].item() == 3
+    assert coverage.loc[coverage["module"] == "Renal", "rows"].item() == 1

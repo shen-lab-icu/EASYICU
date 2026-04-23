@@ -1,0 +1,170 @@
+- generic [active]:
+  - generic [ref=e2]:
+    - generic [ref=e11]:
+      - button "⤢" [ref=e23] [cursor=pointer]:
+        - paragraph [ref=e25]: ⤢
+      - button "🔙 Back to Mode Selection" [ref=e28] [cursor=pointer]:
+        - paragraph [ref=e30]: 🔙 Back to Mode Selection
+      - separator [ref=e34]
+      - generic [ref=e40]: Demo Mode
+      - heading "🏥 EasyICU Data Explorer" [level=2] [ref=e44]
+      - generic [ref=e46]:
+        - paragraph [ref=e49]: 🌐 Language
+        - generic [ref=e51]:
+          - generic [ref=e52]:
+            - generic [ref=e53]: EN
+            - combobox "Selected EN. 🌐 Language" [ref=e55]
+          - img "open" [ref=e57] [cursor=pointer]
+      - separator [ref=e62]
+      - group [ref=e65]:
+        - generic "keyboard_arrow_down 🤖 AI Assistant" [ref=e66] [cursor=pointer]:
+          - generic [ref=e67]:
+            - generic [ref=e69]: keyboard_arrow_down
+            - paragraph [ref=e72]: 🤖 AI Assistant
+        - generic [ref=e74]:
+          - generic [ref=e77] [cursor=pointer]:
+            - checkbox "Enable AI Assistant"
+            - paragraph [ref=e83]: Enable AI Assistant
+          - paragraph [ref=e87]: Enable the toggle, then switch to the 🤖 AI Assistant tab.
+      - separator [ref=e91]
+      - heading "📤 Data Extraction" [level=3] [ref=e95]
+      - 'heading "📊 Step 1: Data Source" [level=3] [ref=e99]'
+      - generic [ref=e103]:
+        - generic [ref=e104]: Demo Mode
+        - generic [ref=e105]: Auto-generated simulated ICU data
+      - generic [ref=e108]:
+        - paragraph [ref=e111]: Number of Patients
+        - generic [ref=e112]:
+          - slider "Number of Patients" [ref=e115]:
+            - generic: "100"
+          - generic:
+            - generic: "50"
+            - generic: "500"
+      - generic [ref=e118]:
+        - paragraph [ref=e121]: Data Duration (hours)
+        - generic [ref=e122]:
+          - slider "Data Duration (hours)" [ref=e125]:
+            - generic: "72"
+          - generic:
+            - generic: "24"
+            - generic: "168"
+      - button "✅ Confirm Data Source" [ref=e128] [cursor=pointer]:
+        - paragraph [ref=e130]: ✅ Confirm Data Source
+      - separator [ref=e134]
+      - 'heading "👥 Step 2: Cohort Selection" [level=3] [ref=e138]'
+      - alert [ref=e141]:
+        - paragraph [ref=e146]: ⚠️ Please complete Step 1 first
+    - generic [ref=e149]:
+      - generic [ref=e153]:
+        - text: 🏥 EasyICU
+        - generic [ref=e154]: DEMO
+      - generic [ref=e158]: ICU Data Analytics Platform
+      - generic [ref=e160]:
+        - tablist [ref=e162]:
+          - tab "📚 Tutorial" [ref=e163] [cursor=pointer]:
+            - paragraph [ref=e165]: 📚 Tutorial
+          - tab "📊 Quick Visualization" [selected] [ref=e166] [cursor=pointer]:
+            - paragraph [ref=e168]: 📊 Quick Visualization
+          - tab "📊 Cohort Analysis" [ref=e169] [cursor=pointer]:
+            - paragraph [ref=e171]: 📊 Cohort Analysis
+        - tabpanel "📊 Quick Visualization" [ref=e1776]:
+          - generic [ref=e1777]:
+            - generic [ref=e1779]:
+              - generic [ref=e1784]:
+                - generic [ref=e1785]: 📈 Quick Visualization
+                - generic [ref=e1786]: Generate demo data or load previously exported result files for interactive analysis
+              - generic [ref=e1788]:
+                - generic [ref=e1791] [cursor=pointer]:
+                  - checkbox "📸 Screenshot Mode"
+                  - generic [ref=e1795]:
+                    - paragraph [ref=e1797]: 📸 Screenshot Mode
+                    - img [ref=e1801]
+                - paragraph [ref=e1807]: Hide sidebar and AI dock, reduce chart chrome, and apply figure-friendly defaults.
+            - group [ref=e1810]:
+              - generic "keyboard_arrow_right ⚙️ Data Loading Settings" [ref=e1890] [cursor=pointer]:
+                - generic [ref=e1812]:
+                  - generic [ref=e1892]: keyboard_arrow_right
+                  - paragraph [ref=e1817]: ⚙️ Data Loading Settings
+            - generic [ref=e1894]:
+              - tablist [ref=e1896]:
+                - tab "📋 Data Tables" [selected] [ref=e1897] [cursor=pointer]:
+                  - paragraph [ref=e1899]: 📋 Data Tables
+                - tab "📈 Time Series" [ref=e1900] [cursor=pointer]:
+                  - paragraph [ref=e1902]: 📈 Time Series
+                - tab "🏥 Patient Overview" [ref=e1903] [cursor=pointer]:
+                  - paragraph [ref=e1905]: 🏥 Patient Overview
+                - tab "📊 Data Quality" [ref=e1906] [cursor=pointer]:
+                  - paragraph [ref=e1908]: 📊 Data Quality
+              - tabpanel "📋 Data Tables" [ref=e1910]:
+                - generic [ref=e1911]:
+                  - generic [ref=e1915]: 📋 Module Table Preview
+                  - generic [ref=e1919]: Preview loaded tables by module before drilling into feature-level detail.
+                  - generic [ref=e1926]: 19 modules loaded · 167 features · 50 patients
+                  - generic [ref=e1930]: 📦 Select Module to View
+                  - generic [ref=e1934]:
+                    - generic [ref=e1935]:
+                      - generic [ref=e1936]: ❤️ Vital Signs
+                      - combobox "Selected ❤️ Vital Signs. Select Module" [ref=e1938]
+                    - img "open" [ref=e1940] [cursor=pointer]
+                  - generic [ref=e1943]:
+                    - generic [ref=e1949]:
+                      - generic [ref=e1950]: Selected Module
+                      - generic [ref=e1951]: ❤️ Vital Signs
+                      - generic [ref=e1952]: Core bedside vital signs aligned into a compact longitudinal preview.
+                      - generic [ref=e1953]:
+                        - generic [ref=e1954]: hr
+                        - generic [ref=e1955]: map
+                        - generic [ref=e1956]: sbp
+                        - generic [ref=e1957]: dbp
+                        - generic [ref=e1958]: temp
+                        - generic [ref=e1959]: spo2
+                        - generic [ref=e1960]: resp
+                    - generic [ref=e1966]:
+                      - generic [ref=e1967]: Features
+                      - generic [ref=e1968]: "7"
+                    - generic [ref=e1974]:
+                      - generic [ref=e1975]: Patients
+                      - generic [ref=e1976]: "50"
+                  - generic [ref=e1983]: 👁️ Preview Mode
+                  - radiogroup "View Mode" [ref=e1986] [cursor=pointer]:
+                    - generic [ref=e1987]:
+                      - radio "Merge All (Wide Table)" [checked]
+                      - paragraph [ref=e1992]: Merge All (Wide Table)
+                    - generic [ref=e1993]:
+                      - radio "Single Feature"
+                      - paragraph [ref=e1998]: Single Feature
+                  - generic [ref=e2000]:
+                    - generic [ref=e2007]:
+                      - generic [ref=e2008]: 🧭 Merged Preview Table
+                      - generic [ref=e2009]: Representative columns are prioritized below. Switch to Single Feature for full detail.
+                    - generic [ref=e2011]:
+                      - generic [ref=e2015]: Rows per feature
+                      - generic [ref=e2019]:
+                        - generic [ref=e2020]:
+                          - generic [ref=e2021]: "2000"
+                          - combobox "Selected 2000. Max rows" [ref=e2023]
+                        - img "open" [ref=e2025] [cursor=pointer]
+                  - generic [ref=e2032]:
+                    - generic [ref=e2038]: ⚠️ Sample preview · max 2,000 rows per feature
+                    - generic [ref=e2044]:
+                      - generic [ref=e2045]: Preview Rows
+                      - generic [ref=e2046]: 1,000
+                    - generic [ref=e2052]:
+                      - generic [ref=e2053]: Preview Columns
+                      - generic [ref=e2054]: "9"
+                  - generic [ref=e2064]:
+                    - button "Download as CSV" [ref=e2067] [cursor=pointer]:
+                      - img [ref=e2068]
+                    - button "Search" [ref=e2073] [cursor=pointer]:
+                      - img [ref=e2074]
+                    - button "Fullscreen" [ref=e2079] [cursor=pointer]:
+                      - img [ref=e2080]
+                  - paragraph [ref=e2094]: Showing first 1,000 preview rows.
+      - button "💬" [ref=e1054] [cursor=pointer]:
+        - paragraph [ref=e1056]: 💬
+      - generic [ref=e317]:
+        - paragraph [ref=e323]: ⏳ No Data | 📋 0 Concepts | 👥 0 Patients
+        - button "❓ Help" [ref=e331] [cursor=pointer]:
+          - paragraph [ref=e333]: ❓ Help
+          - img [ref=e335]
+  - img [ref=e734]
