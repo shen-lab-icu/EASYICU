@@ -46,6 +46,7 @@ htmlcov/
 .hypothesis/
 .mypy_cache/
 .tmp/
+.playwright-cli/
 
 # Root-level ad hoc test/benchmark scripts and outputs
 test_*

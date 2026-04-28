@@ -1111,8 +1111,8 @@ class MultiDatabaseDistribution:
             rows=rows,
             cols=cols,
             subplot_titles=titles,
-            vertical_spacing=0.08,
-            horizontal_spacing=0.05,
+            vertical_spacing=0.12 if rows > 1 else 0.08,
+            horizontal_spacing=0.07,
         )
         
         for idx, concept in enumerate(concepts):
@@ -1153,23 +1153,31 @@ class MultiDatabaseDistribution:
             # 设置轴标签
             fig.update_xaxes(
                 title_text=config.get('unit', ''),
-                title_font_size=14,
-                tickfont=dict(size=12, color='black'),
-                title_font=dict(size=14, color='black'),
+                title_font_size=11,
+                tickfont=dict(size=10, color='black'),
+                title_font=dict(size=11, color='black'),
+                automargin=True,
                 row=row,
                 col=col,
             )
             fig.update_yaxes(
                 title_text='Density' if col == 1 else '',
-                title_font_size=14,
-                tickfont=dict(size=12, color='black'),
-                title_font=dict(size=14, color='black'),
+                title_font_size=11,
+                tickfont=dict(size=9, color='black'),
+                title_font=dict(size=11, color='black'),
+                title_standoff=10,
+                nticks=4,
+                tickformat='.2g',
+                ticks='outside' if col == 1 else '',
+                showticklabels=(col == 1),
+                automargin=True,
                 row=row,
                 col=col,
             )
         
+        row_height = 340 if rows <= 2 else 300
         fig.update_layout(
-            height=240 * rows,
+            height=row_height * rows,
             title_text="Multi-Database Feature Distribution Comparison",
             title_x=0.5,
             title_y=0.98,  # 🔧 FIX: 将标题位置上移
@@ -1181,17 +1189,23 @@ class MultiDatabaseDistribution:
                 y=1.06,
                 xanchor="left",
                 x=0,
-                font=dict(size=16, color='black'),
+                font=dict(size=13, color='black'),
             ),
-            margin=dict(t=120, b=30, l=40, r=20),  # 🔧 FIX: 增加顶部margin给标题和图例更多空间
+            margin=dict(t=120, b=62, l=72, r=24),  # 留出纵坐标标题和刻度，避免重叠
             font=dict(size=14, color='black'),
         )
         
         # 更新子图标题字体
         for annotation in fig.layout.annotations:
             annotation.font.size = 10
-        fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=14, color='black'))
-        fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=14, color='black'))
+        fig.update_xaxes(tickfont=dict(size=10, color='black'), title_font=dict(size=11, color='black'), automargin=True)
+        fig.update_yaxes(
+            tickfont=dict(size=9, color='black'),
+            title_font=dict(size=11, color='black'),
+            nticks=4,
+            tickformat='.2g',
+            automargin=True,
+        )
         
         return fig
     

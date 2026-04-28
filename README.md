@@ -129,7 +129,7 @@ Feature selection is organized by category, with concept definitions and mapping
 EasyICU includes interactive tools for:
 
 - **Quick Visualization**: data tables, time-series review, patient overview, and data-quality assessment
-- **Cohort Analysis**: group comparison, multi-database distribution review, and cohort dashboards
+- **Cohort Analysis**: subgroup contrast tables, cross-database distribution review, cohort snapshots, and SOFA-1/SOFA-2 sensitivity analysis
 
 <img width="3051" height="1823" alt="Quick Visualization Example" src="https://github.com/user-attachments/assets/09c64137-9c6a-401e-a1d0-fe358ea458de" />
 

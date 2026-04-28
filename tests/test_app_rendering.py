@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import sys
+import types
 
+import easyicu
 import easyicu.webapp.app as app
 import pandas as pd
 import pytest
@@ -62,6 +65,11 @@ class _WarningCaptureStreamlit:
         self.warnings.append(message)
 
 
+class _SessionStateStreamlit:
+    def __init__(self, session_state) -> None:
+        self.session_state = session_state
+
+
 def test_home_dictionary_avoids_nested_expanders(monkeypatch) -> None:
     streamlit_stub = _FakeStreamlit()
 
@@ -93,6 +101,46 @@ def test_dataframe_compat_falls_back_when_width_stretch_is_unsupported(monkeypat
     app._dataframe_compat([{"Code": "hr"}], width="stretch", hide_index=True)
 
     assert streamlit_stub.dataframe_calls == 1
+
+
+def test_width_normalizer_translates_deprecated_container_flag() -> None:
+    assert app._normalize_width_kwargs({"use_container_width": True}) == {"width": "stretch"}
+    assert app._normalize_width_kwargs({"use_container_width": False}) == {"width": "content"}
+    assert app._normalize_width_kwargs({"width": "stretch", "use_container_width": True}) == {"width": "stretch"}
+
+
+def test_button_compat_uses_width_instead_of_deprecated_container_flag(monkeypatch) -> None:
+    class _ButtonStub:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def button(self, _label, **kwargs):
+            self.kwargs = kwargs
+            return False
+
+    streamlit_stub = _ButtonStub()
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    app._button_compat("Run", use_container_width=True, key="run")
+
+    assert streamlit_stub.kwargs == {"key": "run", "width": "stretch"}
+
+
+def test_plotly_compat_keeps_plotly_specific_width_api_untouched(monkeypatch) -> None:
+    class _PlotlyStub:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def plotly_chart(self, _figure, **kwargs):
+            self.kwargs = kwargs
+            return None
+
+    streamlit_stub = _PlotlyStub()
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    app._plotly_chart_compat("figure", use_container_width=True, config={"displaylogo": False})
+
+    assert streamlit_stub.kwargs == {"use_container_width": True, "config": {"displaylogo": False}}
 
 
 def test_quick_visualization_demo_loads_after_entry_selection(tmp_path, monkeypatch) -> None:
@@ -264,6 +312,89 @@ def test_select_quality_distribution_concept_prefers_interpretable_lab_over_scor
     assert app._select_quality_distribution_concept(loaded_concepts) == "crea"
 
 
+def test_normalize_figure_target_maps_short_urls_to_panels() -> None:
+    assert app._normalize_figure_target("figure2") == ("paper", "Figure 2")
+    assert app._normalize_figure_target("fig3") == ("paper", "Figure 3")
+    assert app._normalize_figure_target("figure4") == ("paper", "Figure 4")
+    assert app._normalize_figure_target("s1") == ("paper", "Supplementary Figure S1")
+    assert app._normalize_figure_target("coverage") == ("cohort", "Coverage Audit")
+    assert app._normalize_figure_target("cross-db") == ("cohort", "Cross-DB Benchmark")
+    assert app._normalize_figure_target("quality") == ("viz", "Data Quality")
+    assert app._normalize_figure_target("1") == ("", "")
+    assert app._normalize_figure_target("unknown") == ("", "")
+
+
+def test_ensure_cohort_demo_workspace_bootstraps_all_cohort_panels() -> None:
+    state = {"mock_params": {"n_patients": 25}}
+
+    assert app._cohort_demo_workspace_ready(state) is False
+
+    app._ensure_cohort_demo_workspace(state, lang="en")
+
+    assert app._cohort_demo_workspace_ready(state) is True
+    assert state["grp_is_demo"] is True
+    assert state["dash_is_demo"] is True
+    assert state["multidb_is_demo"] is True
+    assert state["cohort_is_demo"] is True
+    assert len(state["grp_demographics"]) == 25
+    assert not state["dash_demographics"].empty
+    assert set(state["multidb_data"].keys()) == {"miiv", "eicu", "aumc", "hirid", "mimic", "sic"}
+    assert state["multidb_concepts"][:4] == ["hr", "sbp", "dbp", "map"]
+
+
+def test_ensure_cohort_real_workspace_syncs_global_review_state(tmp_path, monkeypatch) -> None:
+    class _FakePatientFilter:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def _load_demographics(self) -> pd.DataFrame:
+            return pd.DataFrame(
+                {
+                    "stay_id": [39553978, 39553979],
+                    "age": [64, 72],
+                    "gender": ["M", "F"],
+                    "survived": [1, 0],
+                }
+            )
+
+    fake_pf_module = types.ModuleType("easyicu.patient_filter")
+    fake_pf_module.PatientFilter = _FakePatientFilter
+    monkeypatch.setitem(sys.modules, "easyicu.patient_filter", fake_pf_module)
+
+    def _fake_load_concepts(*_args, **_kwargs) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "stay_id": [39553978, 39553979],
+                "charttime": [0, 0],
+                "hr": [88, 92],
+                "sofa": [3, 8],
+            }
+        )
+
+    monkeypatch.setattr(easyicu, "load_concepts", _fake_load_concepts)
+    monkeypatch.setattr(app, "_default_real_database", lambda: "miiv")
+    monkeypatch.setattr(app, "_default_real_data_root", lambda: str(tmp_path))
+    monkeypatch.setattr(app, "find_database_path", lambda data_path, _database: data_path)
+
+    state = {
+        "patient_ids": [10001],
+        "selected_patient": 10001,
+        "loaded_concepts": {"old_demo": pd.DataFrame({"stay_id": [10001], "old_demo": [1]})},
+        "loaded_data_origin": "demo_viz",
+    }
+
+    ok, message = app._ensure_cohort_real_workspace(state, max_patients=1000)
+
+    assert ok is True
+    assert "Loaded 2 patients" in message
+    assert state["patient_ids"] == [39553978, 39553979]
+    assert state["available_patient_ids"] == [39553978, 39553979]
+    assert state["all_patient_count"] == 2
+    assert state["selected_patient"] == 39553978
+    assert state["loaded_data_origin"] == "real_workspace"
+    assert set(state["loaded_concepts"]) == {"hr", "sofa"}
+
+
 def test_apply_quick_viz_screenshot_defaults_focuses_figure_friendly_views() -> None:
     state = {
         "patient_ids": [101, 202],
@@ -409,6 +540,167 @@ def test_compute_quality_missing_rate_treats_time_stamped_abx_as_sparse_event_se
     assert missing == pytest.approx(92.5)
 
 
+def test_expected_observation_count_prefers_patient_los_for_real_time_series() -> None:
+    patient_df = pd.DataFrame({"stay_id": [1, 1], "time": [0, 12], "hr": [80, 85]})
+
+    expected, source = app._expected_observation_count(
+        concept="hr",
+        patient_df=patient_df,
+        los_icu=2.5,
+    )
+
+    assert expected == 60
+    assert source == "los"
+
+
+def test_expected_observation_count_falls_back_to_demo_hours_then_72h() -> None:
+    patient_df = pd.DataFrame({"stay_id": [1], "time": [0], "hr": [80]})
+
+    demo_expected, demo_source = app._expected_observation_count(
+        concept="hr",
+        patient_df=patient_df,
+        los_icu=None,
+        demo_hours=48,
+    )
+    fallback_expected, fallback_source = app._expected_observation_count(
+        concept="hr",
+        patient_df=patient_df,
+        los_icu=None,
+    )
+
+    assert demo_expected == 48
+    assert demo_source == "demo"
+    assert fallback_expected == 72
+    assert fallback_source == "72h"
+
+
+def test_compute_quality_out_of_physio_rate_uses_harmonized_ranges() -> None:
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2, 2],
+            "time": [0, 1, 0, 1],
+            "hr": [80, 500, -5, None],
+        }
+    )
+
+    rate = app._compute_quality_out_of_physio_rate("hr", df)
+
+    assert rate == pytest.approx(66.7, abs=0.05)
+
+
+def test_compute_quality_duplicate_timestamp_rate_counts_extra_rows_with_same_patient_time() -> None:
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1, 2],
+            "time": [0, 0, 1, 0],
+            "hr": [80, 82, 81, 90],
+        }
+    )
+
+    duplicate_rate = app._compute_quality_duplicate_timestamp_rate(
+        concept="hr",
+        df=df,
+        id_col="stay_id",
+    )
+
+    assert duplicate_rate == pytest.approx(25.0)
+
+
+def test_summarize_quality_temporal_density_reports_median_and_iqr() -> None:
+    df = pd.DataFrame(
+        {
+            "stay_id": [1] * 24 + [2] * 12 + [3] * 6,
+            "time": list(range(24)) + list(range(12)) + list(range(6)),
+            "hr": [80] * 42,
+        }
+    )
+    los_by_patient = pd.Series({1: 1.0, 2: 1.0, 3: 1.0})
+
+    summary = app._summarize_quality_temporal_density(
+        concept="hr",
+        df=df,
+        id_col="stay_id",
+        los_by_patient=los_by_patient,
+    )
+
+    assert summary["median"] == pytest.approx(0.5)
+    assert summary["q25"] == pytest.approx(0.375)
+    assert summary["q75"] == pytest.approx(0.75)
+
+
+def test_choose_concept_value_column_prefers_primary_map_for_abp_like_frames() -> None:
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "time": [0, 1],
+            "sbp": [120, 118],
+            "dbp": [70, 68],
+            "map": [87, 85],
+        }
+    )
+
+    assert app._choose_concept_value_column("abp", df) == "map"
+
+
+def test_choose_concept_value_column_uses_single_numeric_value_when_only_one_exists() -> None:
+    df = pd.DataFrame({"stay_id": [1, 1], "time": [0, 1], "crea": [1.1, 1.3]})
+
+    assert app._choose_concept_value_column("crea", df) == "crea"
+
+
+def test_filter_patient_selector_options_respects_search_and_cap() -> None:
+    patient_ids = list(range(1000, 1300))
+
+    default_options = app._filter_patient_selector_options(patient_ids, query="", max_display=200)
+    searched_options = app._filter_patient_selector_options(patient_ids, query="12", max_display=5)
+
+    assert len(default_options) == 200
+    assert default_options[:3] == [1000, 1001, 1002]
+    assert searched_options == [1012, 1112, 1120, 1121, 1122]
+
+
+def test_compute_smd_continuous_uses_pooled_standard_deviation() -> None:
+    smd = app._compute_smd_continuous(pd.Series([1, 2, 3]), pd.Series([2, 3, 4]))
+
+    assert smd == pytest.approx(-1.0)
+
+
+def test_compute_smd_binary_uses_pooled_proportion() -> None:
+    smd = app._compute_smd_binary(pd.Series([1, 1, 0, 0]), pd.Series([1, 0, 0, 0]))
+
+    assert smd == pytest.approx(0.5164, abs=1e-4)
+
+
+def test_build_group_feature_data_from_loaded_concepts_reuses_loaded_demo_frames() -> None:
+    loaded_concepts = {
+        "hr": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 2, 2],
+                "time": [0, 1, 0, 1],
+                "hr": [80, 100, 70, 90],
+            }
+        ),
+        "sep3_sofa2": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 2, 2],
+                "time": [0, 1, 0, 1],
+                "sep3_sofa2": [0, 1, 0, 0],
+            }
+        ),
+    }
+
+    feature_data = app._build_group_feature_data_from_loaded_concepts(
+        [1, 2],
+        ["hr", "sep3_sofa2"],
+        loaded_concepts,
+        id_col="stay_id",
+    )
+
+    assert set(feature_data.keys()) == {"hr", "sep3_sofa2"}
+    assert feature_data["hr"].set_index("stay_id")["hr"].to_dict() == {1: 90.0, 2: 80.0}
+    assert feature_data["sep3_sofa2"].set_index("stay_id")["sep3_sofa2"].to_dict() == {1: 1, 2: 0}
+
+
 def test_build_cohort_dashboard_review_stats_summarizes_clinical_signal() -> None:
     df = pd.DataFrame(
         {
@@ -458,3 +750,210 @@ def test_build_cohort_dashboard_review_stats_reports_loaded_module_coverage(monk
     assert coverage.loc[coverage["module"] == "Vitals", "features"].item() == 2
     assert coverage.loc[coverage["module"] == "Vitals", "patients"].item() == 3
     assert coverage.loc[coverage["module"] == "Renal", "rows"].item() == 1
+
+
+def test_generate_mock_cohort_dashboard_data_includes_sofa_reclassification_inputs() -> None:
+    df = app._generate_mock_cohort_dashboard_data(lang="en")
+
+    assert {"sofa1_max", "sofa2_max", "sofa1_resp", "sofa2_resp"}.issubset(df.columns)
+    assert len(df) == 500
+    assert (df["sofa2_max"] - df["sofa1_max"]).abs().sum() > 0
+
+    review = app._build_cohort_dashboard_review_stats(df, lang="en")
+    severity = review["severity"].set_index("sofa_group")
+    reclass = review["reclassification"]["summary"].set_index("group")
+
+    assert severity.loc["6-9", "mortality"] > severity.loc["3-5", "mortality"]
+    assert severity.loc[">=10", "mortality"] > severity.loc["6-9", "mortality"]
+    assert reclass.loc["Up-classified", "pct"] == pytest.approx(48.4)
+    assert reclass.loc["Up-classified", "mortality"] > reclass.loc["Same", "mortality"]
+
+
+def test_build_sofa_reclassification_stats_classifies_patient_level_changes() -> None:
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "sofa1_max": [2, 4, 8, 12],
+            "sofa2_max": [4, 4, 5, 13],
+            "survived": [0, 1, 1, 0],
+            "los_hours": [120, 48, 72, 240],
+            "sofa1_resp": [1, 1, 2, 3],
+            "sofa2_resp": [2, 1, 1, 4],
+            "sofa1_renal": [0, 1, 2, 3],
+            "sofa2_renal": [1, 1, 1, 3],
+        }
+    )
+
+    stats = app._build_sofa_reclassification_stats(df, lang="en")
+    summary = stats["summary"]
+    matrix = stats["matrix"]
+    organ = stats["organ"]
+
+    assert stats["available"] is True
+    assert summary.loc[summary["group"] == "Up-classified", "patients"].item() == 2
+    assert summary.loc[summary["group"] == "Down-classified", "patients"].item() == 1
+    assert summary.loc[summary["group"] == "Same", "patients"].item() == 1
+    assert summary.loc[summary["group"] == "Up-classified", "mortality"].item() == pytest.approx(100.0)
+    assert matrix.loc[(matrix["SOFA-1"] == "6-9") & (matrix["SOFA-2"] == "3-5"), "patients"].item() == 1
+    assert organ.loc[organ["organ"] == "Respiratory", "mean_abs_delta"].item() == pytest.approx(0.75)
+
+
+def test_build_reclassification_df_from_loaded_concepts_supports_first24_aligned_worst() -> None:
+    loaded = {
+        "sofa": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 1, 1, 2, 2],
+                "charttime": [-1, 0, 10, 30, 2, 30],
+                "sofa": [1, 2, 5, 9, 3, 8],
+            }
+        ),
+        "sofa2": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 1, 2, 2],
+                "charttime": [0, 10, 30, 2, 30],
+                "sofa2": [3, 4, 10, 7, 9],
+            }
+        ),
+        "death": pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}),
+        "los_icu": pd.DataFrame({"stay_id": [1, 2], "los_icu": [2.5, 4.0]}),
+    }
+
+    result = app._build_reclassification_df_from_loaded_concepts(loaded, mode="first24_worst")
+
+    assert result["analysis_unit"].unique().tolist() == ["patients"]
+    assert result.loc[result["stay_id"] == 1, "sofa1_max"].item() == 5
+    assert result.loc[result["stay_id"] == 1, "sofa2_max"].item() == 4
+    assert result.loc[result["stay_id"] == 2, "sofa1_max"].item() == 3
+    assert result.loc[result["stay_id"] == 2, "sofa2_max"].item() == 7
+    assert result.loc[result["stay_id"] == 2, "mortality"].item() == 1
+
+
+def test_build_reclassification_df_from_loaded_concepts_supports_time_aligned_points() -> None:
+    loaded = {
+        "sofa": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 1],
+                "charttime": [0, 10, 30],
+                "sofa": [2, 5, 9],
+            }
+        ),
+        "sofa2": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 1],
+                "charttime": [0, 10, 30],
+                "sofa2": [3, 4, 10],
+            }
+        ),
+    }
+
+    result = app._build_reclassification_df_from_loaded_concepts(loaded, mode="time_aligned")
+
+    assert result["analysis_unit"].unique().tolist() == ["timepoints"]
+    assert result["charttime"].tolist() == [0, 10, 30]
+    assert result["sofa1_max"].tolist() == [2, 5, 9]
+    assert result["sofa2_max"].tolist() == [3, 4, 10]
+
+
+def test_build_sofa_reclassification_stats_labels_time_aligned_units() -> None:
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2],
+            "charttime": [0, 10, 0],
+            "analysis_unit": ["timepoints", "timepoints", "timepoints"],
+            "sofa1_max": [2, 5, 7],
+            "sofa2_max": [3, 4, 7],
+        }
+    )
+
+    stats = app._build_sofa_reclassification_stats(df, lang="en")
+
+    assert stats["metrics"]["denominator"] == "3"
+    assert stats["metrics"]["denominator_label"] == "Paired points"
+    assert stats["metrics"]["patient_count"] == "2"
+
+
+def test_generate_mock_sofa_timeseries_concepts_unlocks_all_sensitivity_modes() -> None:
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "sofa1_max": [4, 8],
+            "sofa2_max": [5, 7],
+            "sofa1_resp": [1, 2],
+            "sofa2_resp": [2, 1],
+            "sofa1_coag": [1, 1],
+            "sofa2_coag": [1, 1],
+            "sofa1_liver": [0, 1],
+            "sofa2_liver": [0, 1],
+            "sofa1_cardio": [1, 1],
+            "sofa2_cardio": [1, 1],
+            "sofa1_cns": [1, 1],
+            "sofa2_cns": [1, 1],
+            "sofa1_renal": [0, 2],
+            "sofa2_renal": [0, 2],
+            "mortality": [0, 1],
+            "los_days": [3.0, 5.0],
+        }
+    )
+
+    concepts = app._generate_mock_sofa_timeseries_concepts(cohort)
+    availability = app._get_sofa_reclassification_mode_availability(concepts)
+    first24 = app._build_reclassification_df_from_loaded_concepts(concepts, mode="first24_worst")
+    time_aligned = app._build_reclassification_df_from_loaded_concepts(concepts, mode="time_aligned")
+
+    assert availability["available"] == ["worst_icu", "first24_worst", "time_aligned"]
+    assert availability["locked"] == []
+    assert set(concepts).issuperset({"sofa", "sofa2", "sofa_resp", "sofa2_resp", "death", "los_icu"})
+    assert first24["analysis_unit"].unique().tolist() == ["patients"]
+    assert time_aligned["analysis_unit"].unique().tolist() == ["timepoints"]
+    assert time_aligned["stay_id"].nunique() == 2
+
+
+def test_get_sofa_reclassification_mode_availability_locks_time_series_without_data() -> None:
+    availability = app._get_sofa_reclassification_mode_availability({})
+
+    assert availability["available"] == ["worst_icu"]
+    assert availability["locked"] == ["first24_worst", "time_aligned"]
+
+
+def test_get_sofa_reclassification_source_uses_demo_timeseries_for_time_aligned(monkeypatch) -> None:
+    cohort = app._generate_mock_cohort_dashboard_data(lang="en").head(12)
+    streamlit_stub = _SessionStateStreamlit(
+        {
+            "dash_demographics": cohort,
+            "dash_is_demo": True,
+            "loaded_concepts": {},
+        }
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    source_df, source_label = app._get_sofa_reclassification_source(lang="en", mode="time_aligned")
+    stats = app._build_sofa_reclassification_stats(source_df, lang="en")
+
+    assert source_label.startswith("Demo SOFA time series")
+    assert not source_df.empty
+    assert "charttime" in source_df.columns
+    assert stats["metrics"]["denominator_label"] == "Paired points"
+
+
+def test_get_sofa_reclassification_mode_availability_unlocks_time_series_when_loaded() -> None:
+    loaded = {
+        "sofa": pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": [0, 10],
+                "sofa": [2, 5],
+            }
+        ),
+        "sofa2": pd.DataFrame(
+            {
+                "stay_id": [1, 1],
+                "charttime": [0, 10],
+                "sofa2": [3, 4],
+            }
+        ),
+    }
+
+    availability = app._get_sofa_reclassification_mode_availability(loaded)
+
+    assert availability["available"] == ["worst_icu", "first24_worst", "time_aligned"]
+    assert availability["locked"] == []
