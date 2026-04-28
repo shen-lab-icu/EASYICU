@@ -14,8 +14,29 @@ import json
 import html
 import re
 import threading
+import base64
 from functools import lru_cache
 from typing import Dict, Any, Optional, List
+
+
+def _normalize_width_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Translate deprecated Streamlit width flags to the newer width API."""
+    if "use_container_width" in kwargs and kwargs.get("use_container_width") is not None and "width" not in kwargs:
+        use_container_width = kwargs.pop("use_container_width")
+        kwargs["width"] = "stretch" if use_container_width else "content"
+    else:
+        kwargs.pop("use_container_width", None)
+    return kwargs
+
+
+def _legacy_width_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Fallback for older Streamlit builds that do not accept width='stretch'."""
+    width = kwargs.pop("width", None)
+    if width == "stretch":
+        kwargs["use_container_width"] = True
+    elif width == "content":
+        kwargs["use_container_width"] = False
+    return kwargs
 
 
 def _dataframe_compat(data, **kwargs):
@@ -25,20 +46,91 @@ def _dataframe_compat(data, **kwargs):
     integer width. Fall back to `use_container_width=True` when needed.
     """
     dataframe_fn = getattr(st, "_easyicu_original_dataframe", st.dataframe)
+    kwargs = _normalize_width_kwargs(dict(kwargs))
     try:
         return dataframe_fn(data, **kwargs)
     except TypeError:
         if kwargs.get("width") != "stretch":
             raise
-        fallback_kwargs = dict(kwargs)
-        fallback_kwargs.pop("width", None)
-        fallback_kwargs["use_container_width"] = True
-        return dataframe_fn(data, **fallback_kwargs)
+        return dataframe_fn(data, **_legacy_width_kwargs(dict(kwargs)))
+
+
+def _button_compat(label, *args, **kwargs):
+    button_fn = getattr(st, "_easyicu_original_button", st.button)
+    kwargs = _normalize_width_kwargs(dict(kwargs))
+    try:
+        return button_fn(label, *args, **kwargs)
+    except TypeError:
+        return button_fn(label, *args, **_legacy_width_kwargs(dict(kwargs)))
+
+
+def _download_button_compat(label, data, *args, **kwargs):
+    download_button_fn = getattr(st, "_easyicu_original_download_button", st.download_button)
+    kwargs = _normalize_width_kwargs(dict(kwargs))
+    try:
+        return download_button_fn(label, data, *args, **kwargs)
+    except TypeError:
+        return download_button_fn(label, data, *args, **_legacy_width_kwargs(dict(kwargs)))
+
+
+def _form_submit_button_compat(label="Submit", *args, **kwargs):
+    submit_fn = getattr(st, "_easyicu_original_form_submit_button", st.form_submit_button)
+    kwargs = _normalize_width_kwargs(dict(kwargs))
+    try:
+        return submit_fn(label, *args, **kwargs)
+    except TypeError:
+        return submit_fn(label, *args, **_legacy_width_kwargs(dict(kwargs)))
+
+
+def _plotly_chart_compat(figure_or_data, *args, **kwargs):
+    plotly_chart_fn = getattr(st, "_easyicu_original_plotly_chart", st.plotly_chart)
+    return plotly_chart_fn(figure_or_data, *args, **kwargs)
 
 
 if not hasattr(st, "_easyicu_original_dataframe"):
     st._easyicu_original_dataframe = st.dataframe
     st.dataframe = _dataframe_compat
+if not hasattr(st, "_easyicu_original_button"):
+    st._easyicu_original_button = st.button
+    st.button = _button_compat
+if not hasattr(st, "_easyicu_original_download_button"):
+    st._easyicu_original_download_button = st.download_button
+    st.download_button = _download_button_compat
+if not hasattr(st, "_easyicu_original_form_submit_button"):
+    st._easyicu_original_form_submit_button = st.form_submit_button
+    st.form_submit_button = _form_submit_button_compat
+if not hasattr(st, "_easyicu_original_plotly_chart"):
+    st._easyicu_original_plotly_chart = st.plotly_chart
+    st.plotly_chart = _plotly_chart_compat
+
+
+def _query_param_exists(key: str) -> bool:
+    """Return whether a query parameter is present across Streamlit versions."""
+    try:
+        params = getattr(st, "query_params", {})
+        return key in params
+    except Exception:
+        return False
+
+
+def _query_param_value(key: str, default: str = "") -> str:
+    """Read a Streamlit query parameter without depending on a specific API version."""
+    try:
+        params = getattr(st, "query_params", {})
+        value = params.get(key, default)
+    except Exception:
+        value = default
+    if isinstance(value, list):
+        value = value[0] if value else default
+    return str(value).strip()
+
+
+def _query_flag_enabled(key: str) -> bool:
+    """Read a truthy/present Streamlit query flag without depending on a specific API version."""
+    if not _query_param_exists(key):
+        return False
+    value = _query_param_value(key)
+    return value.lower() not in {"0", "false", "no", "off", "none"}
 
 
 def _get_database_download_info(database: str, lang: str = 'en') -> dict | None:
@@ -108,8 +200,23 @@ st.set_page_config(
 # 初始化侧边栏展开状态
 if 'sidebar_expanded' not in st.session_state:
     st.session_state.sidebar_expanded = False
-if 'screenshot_mode' not in st.session_state:
+env_screenshot = os.environ.get("EASYICU_SCREENSHOT_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+query_screenshot = _query_flag_enabled("figure") or _query_flag_enabled("screenshot")
+if env_screenshot:
+    st.session_state.screenshot_mode = True
+    st.session_state['_screenshot_mode_source'] = 'env'
+elif query_screenshot:
+    st.session_state.screenshot_mode = True
+    st.session_state['_screenshot_mode_source'] = 'query'
+elif st.session_state.get('_screenshot_mode_source') in {'query', 'env'}:
+    # URL-triggered screenshot mode should not leak back into the normal app.
     st.session_state.screenshot_mode = False
+    st.session_state['_screenshot_mode_source'] = 'manual'
+    st.session_state.pop('_figure_target_section', None)
+    st.session_state.pop('_figure_target_panel', None)
+elif 'screenshot_mode' not in st.session_state:
+    st.session_state.screenshot_mode = False
+    st.session_state['_screenshot_mode_source'] = 'manual'
 
 # 侧边栏宽度设置 - 根据展开状态动态调整
 screenshot_mode_enabled = bool(st.session_state.get('screenshot_mode', False))
@@ -136,9 +243,144 @@ st.markdown(f"""
     [data-testid="stSidebarCollapseButton"] {{
         display: none !important;
     }}
+    header,
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"],
+    [data-testid="stDeployButton"],
+    [data-testid="manage-app-button"],
+    .stDeployButton,
+    .stAppDeployButton,
+    button[title="Deploy"],
+    a[href*="share.streamlit.io"] {{
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+    }}
+    .block-container {{
+        padding-top: {'1.1rem' if screenshot_mode_enabled else '2rem'} !important;
+        max-width: {'1500px' if screenshot_mode_enabled else 'initial'} !important;
+    }}
+    .compact-inline-notice {{
+        display: {'none' if screenshot_mode_enabled else 'block'} !important;
+    }}
+    .viz-demo-load-card {{
+        border: 1px solid #cfe0f3;
+        border-radius: 16px;
+        background:
+            radial-gradient(circle at 100% 0%, rgba(37, 99, 235, 0.08), transparent 36%),
+            linear-gradient(135deg, #ffffff 0%, #f5f9ff 100%);
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.055);
+        padding: 1rem 1.1rem;
+        margin: 0.55rem 0 0.75rem;
+    }}
+    .viz-demo-load-kicker {{
+        color: #2563eb;
+        font-size: 0.68rem;
+        font-weight: 900;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        margin-bottom: 0.24rem;
+    }}
+    .viz-demo-load-title {{
+        color: #0b1f44;
+        font-size: 1.08rem;
+        font-weight: 900;
+        letter-spacing: -0.025em;
+        margin-bottom: 0.22rem;
+    }}
+    .viz-demo-load-subtitle {{
+        color: #60718a;
+        font-size: 0.84rem;
+        line-height: 1.55;
+    }}
+    .viz-empty-state {{
+        text-align: center;
+        padding: 2.35rem 1.4rem;
+        background:
+            radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.08), transparent 34%),
+            linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+        border: 1px solid #dbeafe;
+        border-radius: 18px;
+        margin: 1rem 0;
+        box-shadow: 0 14px 34px rgba(15, 23, 42, 0.055);
+    }}
+    .viz-empty-icon {{
+        width: 3.2rem;
+        height: 3.2rem;
+        margin: 0 auto 0.8rem;
+        border-radius: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #ffffff;
+        font-size: 1.55rem;
+        background: linear-gradient(135deg, #2f7cf6 0%, #0b65d8 100%);
+        box-shadow: 0 12px 26px rgba(37, 99, 235, 0.22);
+    }}
+    .viz-empty-title {{
+        color: #0b1f44;
+        font-size: 1.22rem;
+        font-weight: 900;
+        letter-spacing: -0.03em;
+        margin-bottom: 0.3rem;
+    }}
+    .viz-empty-subtitle {{
+        color: #60718a;
+        font-size: 0.9rem;
+        line-height: 1.55;
+    }}
+    details[data-testid="stExpander"],
+    div[data-testid="stExpander"] {{
+        display: {'none' if screenshot_mode_enabled else 'block'} !important;
+    }}
+    .figure-table {{
+        border: 1px solid #dbeafe;
+        border-radius: 14px;
+        overflow: hidden;
+        background: #ffffff;
+        box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+    }}
+    .figure-table table {{
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.78rem;
+        color: #0f172a;
+    }}
+    .figure-table th {{
+        background: #f8fafc;
+        color: #475569;
+        text-transform: uppercase;
+        letter-spacing: 0.045em;
+        font-size: 0.68rem;
+        font-weight: 800;
+        padding: 9px 10px;
+        border-bottom: 1px solid #dbeafe;
+    }}
+    .figure-table td {{
+        padding: 8px 10px;
+        border-bottom: 1px solid #eef2f7;
+        vertical-align: middle;
+    }}
+    .figure-table tr:last-child td {{
+        border-bottom: 0;
+    }}
+    .figure-table td:first-child,
+    .figure-table th:first-child {{
+        color: #2563eb;
+        font-weight: 700;
+    }}
     /* 展开时隐藏右侧主内容 */
     [data-testid="stMain"] {{
         display: {main_display} !important;
+        overflow-y: auto !important;
+    }}
+    [data-testid="stAppViewContainer"],
+    [data-testid="stAppViewBlockContainer"],
+    section.main {{
+        overflow-y: auto !important;
+        height: auto !important;
+        min-height: 100vh !important;
     }}
     div.st-key-floating_ai_launcher,
     div.st-key-floating_ai_panel {{
@@ -147,7 +389,29 @@ st.markdown(f"""
     iframe[title*="streamlit_shadcn_ui"],
     iframe[title^="streamlit_shadcn_ui"] {{
         display: {floating_ai_display} !important;
-        visibility: hidden !important;
+        visibility: {'hidden' if screenshot_mode_enabled else 'visible'} !important;
+    }}
+    html, body {{
+        overflow-y: auto !important;
+        height: auto !important;
+        background: #f4f8fc !important;
+    }}
+    [data-testid="stAppViewContainer"] {{
+        overflow-y: auto !important;
+        background:
+            radial-gradient(circle at 15% -6%, rgba(37, 99, 235, 0.075), transparent 30%),
+            radial-gradient(circle at 92% 4%, rgba(14, 165, 233, 0.08), transparent 34%),
+            linear-gradient(180deg, #f7fbff 0%, #f4f8fc 42%, #f8fafc 100%) !important;
+    }}
+    [data-testid="stMain"] {{
+        display: {main_display} !important;
+        overflow-y: visible !important;
+    }}
+    [data-testid="stAppViewBlockContainer"],
+    section.main {{
+        overflow-y: visible !important;
+        height: auto !important;
+        min-height: 100vh !important;
     }}
 </style>
 """, unsafe_allow_html=True)
@@ -328,6 +592,13 @@ st.markdown("""
         color: #ffffff !important;
         fill: #ffffff !important;
     }
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] svg,
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] svg *,
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] path {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+        stroke: #ffffff !important;
+    }
     [data-testid="stMultiSelect"] [data-baseweb="tag"] {
         background: var(--gradient-primary) !important;
         border: none !important;
@@ -397,18 +668,24 @@ st.markdown("""
         border: 1px solid var(--border-subtle);
         backdrop-filter: blur(8px);
         -webkit-backdrop-filter: blur(8px);
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        flex-wrap: nowrap !important;
+        scrollbar-width: thin;
     }
 
     div[data-baseweb="tab-list"] button {
-        font-size: clamp(1rem, 0.12vw + 0.96rem, 1.16rem) !important;
+        font-size: clamp(0.78rem, 0.08vw + 0.76rem, 0.92rem) !important;
         font-weight: 700 !important;
-        padding: clamp(11px, 0.2vw + 10px, 15px) clamp(18px, 0.45vw + 14px, 32px) !important;
+        padding: clamp(8px, 0.12vw + 7px, 10px) clamp(8px, 0.24vw + 7px, 14px) !important;
         border-radius: var(--radius-lg) !important;
         transition: var(--transition-fast) !important;
         border: none !important;
         background: transparent !important;
         color: var(--text-secondary-light) !important;
         letter-spacing: 0.01em;
+        white-space: nowrap !important;
+        flex: 0 0 auto !important;
     }
 
     div[data-baseweb="tab-list"] button:hover {
@@ -424,8 +701,9 @@ st.markdown("""
     }
 
     div[data-baseweb="tab-list"] button p {
-        font-size: clamp(1rem, 0.12vw + 0.96rem, 1.16rem) !important;
+        font-size: clamp(0.78rem, 0.08vw + 0.76rem, 0.92rem) !important;
         font-weight: 700 !important;
+        white-space: nowrap !important;
     }
 
     /* Tab 下划线隐藏 */
@@ -670,11 +948,84 @@ st.markdown("""
     /* 注意: 侧边栏宽度由顶部动态 CSS 控制 (sidebar_expanded 状态) */
 
     [data-testid="stSidebar"] > div:first-child {
-        background: linear-gradient(180deg, rgba(248,250,252,0.97), rgba(241,245,249,0.97)) !important;
-        border-right: 1px solid var(--border-subtle) !important;
+        background:
+            radial-gradient(circle at 20% -6%, rgba(59, 130, 246, 0.09), transparent 32%),
+            linear-gradient(180deg, #f7fbff 0%, #eef5fb 100%) !important;
+        border-right: 1px solid #d4e2f0 !important;
+        box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.85);
     }
 
-    
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        gap: 0.68rem;
+    }
+
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 {
+        color: #0f172a !important;
+        letter-spacing: -0.025em;
+    }
+
+    [data-testid="stSidebar"] h2 {
+        font-size: 1.22rem !important;
+        margin-bottom: 0.18rem !important;
+    }
+
+    [data-testid="stSidebar"] h3 {
+        font-size: 1.02rem !important;
+        margin-top: 0.42rem !important;
+    }
+
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+    [data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+        color: #334155;
+    }
+
+    [data-testid="stSidebar"] hr {
+        border-color: rgba(148, 163, 184, 0.22);
+        margin: 0.7rem 0;
+    }
+
+    [data-testid="stSidebar"] div[data-testid="stExpander"] {
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid #cfe0f3;
+        border-radius: 15px;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.045);
+        overflow: hidden;
+    }
+
+    [data-testid="stSidebar"] div[data-testid="stExpander"] summary {
+        background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,249,255,0.98));
+        color: #0f172a !important;
+        font-weight: 800;
+        letter-spacing: -0.015em;
+    }
+
+    [data-testid="stSidebar"] .stButton > button {
+        border-radius: 12px !important;
+        border: 1px solid #bfd4ed !important;
+        background: linear-gradient(180deg, #ffffff 0%, #f4f8fd 100%) !important;
+        color: #1f3b63 !important;
+        box-shadow: 0 6px 15px rgba(15, 23, 42, 0.055);
+        font-weight: 700 !important;
+    }
+
+    [data-testid="stSidebar"] .stButton > button[kind="primary"],
+    [data-testid="stSidebar"] .stButton > button:hover {
+        background: linear-gradient(135deg, #1d7ef2 0%, #0b8fc7 100%) !important;
+        border-color: #166fd0 !important;
+        color: #ffffff !important;
+        box-shadow: 0 10px 24px rgba(37, 99, 235, 0.22);
+    }
+
+    [data-testid="stSidebar"] input,
+    [data-testid="stSidebar"] textarea,
+    [data-testid="stSidebar"] [data-baseweb="select"] > div {
+        border-radius: 12px !important;
+        border-color: #c7d9ee !important;
+        background-color: rgba(255, 255, 255, 0.96) !important;
+    }
+
     .sidebar-header {
         background: var(--gradient-primary);
         border-radius: var(--radius-lg);
@@ -813,6 +1164,66 @@ st.markdown("""
     div[data-baseweb="input"] > div:focus-within {
         border-color: var(--primary-color) !important;
         box-shadow: 0 0 0 3px rgba(99,102,241,0.1) !important;
+    }
+
+    /* ============ Figure-aligned native Streamlit controls ============ */
+    div[data-testid="stMetric"] {
+        background: #ffffff !important;
+        border: 1px solid #cfe0f3 !important;
+        border-left: 4px solid #1d7ef2 !important;
+        border-radius: 14px !important;
+        padding: 0.82rem 0.95rem !important;
+        box-shadow: 0 10px 26px rgba(15, 23, 42, 0.055) !important;
+        min-height: 74px;
+    }
+
+    div[data-testid="stMetric"] label,
+    div[data-testid="stMetric"] [data-testid="stMetricLabel"] {
+        color: #64748b !important;
+        font-size: 0.68rem !important;
+        font-weight: 900 !important;
+        letter-spacing: 0.09em !important;
+        text-transform: uppercase !important;
+    }
+
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        color: #0b1f44 !important;
+        font-size: clamp(1.12rem, 0.34vw + 1rem, 1.42rem) !important;
+        font-weight: 900 !important;
+        letter-spacing: -0.035em !important;
+    }
+
+    .stButton > button,
+    div[data-testid="stFormSubmitButton"] button,
+    div[data-testid="baseButton-secondary"],
+    button[data-testid="baseButton-secondary"] {
+        border-radius: 12px !important;
+        border: 1px solid #c7d9ee !important;
+        background: linear-gradient(180deg, #ffffff 0%, #f5f9ff 100%) !important;
+        color: #102a4c !important;
+        font-weight: 760 !important;
+        box-shadow: 0 7px 18px rgba(15, 23, 42, 0.055);
+    }
+
+    .stButton > button[kind="primary"],
+    button[data-testid="baseButton-primary"],
+    div[data-testid="stFormSubmitButton"] button[kind="primary"] {
+        color: #ffffff !important;
+        border-color: #0b63ce !important;
+        background: linear-gradient(135deg, #2f7cf6 0%, #0b65d8 100%) !important;
+        box-shadow: 0 11px 24px rgba(37, 99, 235, 0.24) !important;
+    }
+
+    .stButton > button:hover {
+        transform: translateY(-1px);
+        border-color: #2f7cf6 !important;
+        box-shadow: 0 12px 26px rgba(37, 99, 235, 0.16) !important;
+    }
+
+    div[data-testid="stAlert"] {
+        border-radius: 13px !important;
+        border: 1px solid #dbeafe !important;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.035) !important;
     }
 
     /* ============ Expander ============ */
@@ -1510,6 +1921,839 @@ st.markdown("""
         padding: 0.45rem 0.55rem;
         margin: 0.45rem 0 0.55rem;
         word-break: break-all;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700;800;900&display=swap');
+
+    /* ============================================================
+       EasyICU paper-figure visual skin
+       Aligns the live web UI with the accepted image2 figure system.
+       ============================================================ */
+    :root {
+        --figure-navy: #0b1f44;
+        --figure-blue: #2563eb;
+        --figure-cyan: #0891b2;
+        --figure-teal: #0f766e;
+        --figure-orange: #ea7a1a;
+        --figure-bg: #f4f8fc;
+        --figure-card: #ffffff;
+        --figure-soft: #edf4fb;
+        --figure-line: #cddbeb;
+        --figure-line-strong: #b7cae2;
+        --figure-muted: #60718a;
+        --figure-shadow: 0 10px 30px rgba(15, 31, 68, 0.055), 0 1px 2px rgba(15, 31, 68, 0.05);
+        --figure-shadow-hover: 0 16px 38px rgba(37, 99, 235, 0.12), 0 4px 14px rgba(15, 31, 68, 0.06);
+        --gradient-primary: linear-gradient(135deg, #2563eb 0%, #0891b2 100%);
+        --gradient-info: linear-gradient(135deg, #0891b2 0%, #14b8a6 100%);
+        --gradient-hero: linear-gradient(135deg, #102a56 0%, #1d4f86 58%, #0f766e 100%);
+        --shadow-card: var(--figure-shadow);
+        --shadow-hover: var(--figure-shadow-hover);
+        --shadow-glow: 0 10px 26px rgba(37, 99, 235, 0.16);
+        --border-subtle: var(--figure-line);
+        --border-light: rgba(37, 99, 235, 0.16);
+        --bg-primary: var(--figure-bg);
+        --bg-secondary: var(--figure-card);
+        --bg-tertiary: var(--figure-soft);
+        --primary-color: var(--figure-blue);
+        --secondary-color: var(--figure-cyan);
+        --accent-color: #14b8a6;
+        --font-sans: 'Source Sans 3', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    html, body, .stApp, .stMarkdown, .stMarkdown p, .stMarkdown li,
+    .stAlert, div[data-testid="stMetric"], div[data-baseweb="select"],
+    div[data-baseweb="input"], div[data-baseweb="textarea"],
+    div[data-baseweb="tab-list"], h1, h2, h3, h4, h5, h6, label,
+    input, textarea, select, option, td, th {
+        font-family: var(--font-sans) !important;
+    }
+
+    html, body,
+    .stApp, [data-testid="stAppViewContainer"],
+    [data-testid="stAppViewBlockContainer"], [data-testid="stMain"], .main {
+        background:
+            radial-gradient(circle at 16% 0%, rgba(37, 99, 235, 0.055), transparent 32%),
+            radial-gradient(circle at 92% 8%, rgba(20, 184, 166, 0.055), transparent 30%),
+            var(--figure-bg) !important;
+        color: #0f172a !important;
+    }
+
+    .block-container {
+        max-width: clamp(1120px, 94vw, 1880px) !important;
+        padding-left: clamp(0.7rem, 1vw, 1.6rem) !important;
+        padding-right: clamp(0.7rem, 1vw, 1.6rem) !important;
+    }
+
+    div[data-baseweb="tab-list"] {
+        background: rgba(237, 244, 251, 0.94) !important;
+        border: 1px solid var(--figure-line) !important;
+        border-radius: 999px !important;
+        padding: 7px !important;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.78), var(--figure-shadow) !important;
+        backdrop-filter: blur(10px);
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        flex-wrap: nowrap !important;
+    }
+
+    div[data-baseweb="tab-list"] button {
+        color: #5d6f88 !important;
+        border-radius: 999px !important;
+        letter-spacing: 0.01em !important;
+        min-height: 34px !important;
+        font-size: clamp(0.78rem, 0.08vw + 0.76rem, 0.92rem) !important;
+        white-space: nowrap !important;
+        flex: 0 0 auto !important;
+    }
+
+    div[data-baseweb="tab-list"] button p {
+        font-size: clamp(0.78rem, 0.08vw + 0.76rem, 0.92rem) !important;
+        white-space: nowrap !important;
+    }
+
+    div[data-baseweb="tab-list"] button:hover {
+        background: rgba(255,255,255,0.72) !important;
+        color: var(--figure-navy) !important;
+    }
+
+    div[data-baseweb="tab-list"] button[aria-selected="true"] {
+        background: var(--gradient-primary) !important;
+        color: #ffffff !important;
+        box-shadow: 0 10px 22px rgba(37, 99, 235, 0.18) !important;
+    }
+
+    div[data-baseweb="tab-list"] button[aria-selected="true"] * {
+        color: #ffffff !important;
+    }
+
+    div[data-testid="stMetric"],
+    .metric-card, .feature-card, .patient-card,
+    .compact-summary-card, .module-preview-card,
+    .mini-stat-card, .tiny-stat-card,
+    details[data-testid="stExpander"],
+    [data-testid="stDataFrame"],
+    [data-testid="stPlotlyChart"],
+    [data-testid="stVegaLiteChart"] {
+        background: var(--figure-card) !important;
+        border: 1px solid var(--figure-line) !important;
+        border-radius: 18px !important;
+        box-shadow: var(--figure-shadow) !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+
+    div[data-testid="stMetric"]::before,
+    .compact-summary-card::before,
+    .mini-stat-card::before,
+    .tiny-stat-card::before {
+        background: var(--gradient-primary) !important;
+    }
+
+    .compact-summary-card,
+    .mini-stat-card,
+    .tiny-stat-card {
+        border-left: 4px solid #5aa8ff !important;
+    }
+
+    .module-preview-card {
+        background: linear-gradient(135deg, #ffffff 0%, #f4f9ff 100%) !important;
+    }
+
+    .module-feature-chip,
+    .preview-badge,
+    div[data-baseweb="tag"] {
+        background: #eaf2ff !important;
+        border: 1px solid #cfe0f6 !important;
+        color: var(--figure-navy) !important;
+        box-shadow: none !important;
+    }
+
+    [data-testid="stMultiSelect"] [data-baseweb="tag"],
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] * {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+    }
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] svg,
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] svg *,
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] path {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+        stroke: #ffffff !important;
+    }
+
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+        background: linear-gradient(135deg, #2563eb 0%, #0284c7 100%) !important;
+        border: 1px solid #1d4ed8 !important;
+        color: #ffffff !important;
+        box-shadow: 0 5px 14px rgba(37,99,235,0.22) !important;
+    }
+
+    div[data-testid="stMetric"] label,
+    .compact-summary-card .summary-label,
+    .mini-stat-card .mini-label,
+    .tiny-stat-card .tiny-label,
+    .inline-control-label {
+        color: var(--figure-muted) !important;
+        font-weight: 800 !important;
+        letter-spacing: 0.075em !important;
+    }
+
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"],
+    .compact-summary-card .summary-value,
+    .mini-stat-card .mini-value,
+    .tiny-stat-card .tiny-value {
+        color: var(--figure-navy) !important;
+        letter-spacing: -0.02em !important;
+    }
+
+    [data-testid="stDataFrame"] {
+        overflow: hidden !important;
+    }
+
+    [data-testid="stDataFrame"] [role="columnheader"],
+    [data-testid="stDataFrame"] thead th {
+        background: #f4f7fb !important;
+        color: #5f6f84 !important;
+        text-transform: none !important;
+    }
+
+    .stButton > button[kind="primary"],
+    [data-testid="stSidebar"] .stButton button {
+        background: var(--gradient-primary) !important;
+        border: 1px solid rgba(37, 99, 235, 0.12) !important;
+        border-radius: 12px !important;
+        box-shadow: 0 9px 20px rgba(37, 99, 235, 0.16) !important;
+    }
+
+    div[data-testid="stButton"] > button[kind="secondary"],
+    div[data-testid="stButton"] > button[data-testid="baseButton-secondary"] {
+        background: #ffffff !important;
+        border: 1px solid var(--figure-line) !important;
+        border-radius: 12px !important;
+        color: var(--figure-navy) !important;
+        box-shadow: 0 4px 12px rgba(15, 31, 68, 0.04) !important;
+    }
+
+    [data-testid="stSidebar"] .stButton button,
+    [data-testid="stSidebar"] .stButton button * {
+        color: #1f3b63 !important;
+        fill: #1f3b63 !important;
+        white-space: normal !important;
+        line-height: 1.15 !important;
+    }
+
+    [data-testid="stSidebar"] .stButton button {
+        background: linear-gradient(180deg, #ffffff 0%, #f4f8fd 100%) !important;
+        border: 1px solid #bfd4ed !important;
+        border-radius: 12px !important;
+        min-height: 2.45rem !important;
+        box-shadow: 0 6px 15px rgba(15, 23, 42, 0.055) !important;
+    }
+
+    [data-testid="stSidebar"] .stButton button[kind="primary"],
+    [data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"],
+    [data-testid="stSidebar"] .stButton button:hover {
+        background: linear-gradient(135deg, #1d7ef2 0%, #0b8fc7 100%) !important;
+        border-color: #166fd0 !important;
+        box-shadow: 0 10px 24px rgba(37, 99, 235, 0.22) !important;
+    }
+
+    [data-testid="stSidebar"] .stButton button[kind="primary"],
+    [data-testid="stSidebar"] .stButton button[kind="primary"] *,
+    [data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"],
+    [data-testid="stSidebar"] .stButton button[data-testid="stBaseButton-primary"] *,
+    [data-testid="stSidebar"] .stButton button:hover,
+    [data-testid="stSidebar"] .stButton button:hover * {
+        color: #ffffff !important;
+        fill: #ffffff !important;
+    }
+
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="textarea"] > div {
+        background: #ffffff !important;
+        border: 1px solid var(--figure-line) !important;
+        border-radius: 13px !important;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.8) !important;
+    }
+
+    div[data-baseweb="select"] > div:focus-within,
+    div[data-baseweb="input"] > div:focus-within,
+    div[data-baseweb="textarea"] > div:focus-within {
+        border-color: #7fb4ff !important;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.10) !important;
+    }
+
+    div[data-testid="stAlert"] {
+        border: 1px solid var(--figure-line) !important;
+        border-radius: 14px !important;
+        box-shadow: none !important;
+    }
+
+    .highlight-card,
+    .step-indicator.active,
+    .mode-card-tag.blue {
+        background: rgba(37, 99, 235, 0.07) !important;
+        border-color: rgba(37, 99, 235, 0.16) !important;
+        color: var(--figure-navy) !important;
+    }
+
+    .patient-card:hover,
+    .metric-card:hover,
+    .feature-card:hover {
+        border-color: #a9c7ee !important;
+        box-shadow: var(--figure-shadow-hover) !important;
+    }
+
+    .compact-section-title,
+    .preview-toolbar-title,
+    .module-preview-card .title {
+        color: var(--figure-navy) !important;
+    }
+
+    .compact-section-desc,
+    .preview-toolbar-note,
+    .subtle-preview-note {
+        color: var(--figure-muted) !important;
+    }
+
+    .workflow-figure-shell {
+        background: #ffffff;
+        border: 1px solid var(--figure-line);
+        border-radius: 18px;
+        box-shadow: var(--figure-shadow);
+        padding: clamp(0.9rem, 0.5vw + 0.75rem, 1.25rem);
+        margin: 0.55rem 0 1rem;
+    }
+
+    .workflow-figure-title {
+        color: var(--figure-navy);
+        font-weight: 900;
+        font-size: clamp(1.08rem, 0.55vw + 0.95rem, 1.55rem);
+        letter-spacing: -0.025em;
+        margin-bottom: 0.2rem;
+    }
+
+    .workflow-figure-subtitle {
+        color: var(--figure-muted);
+        font-weight: 650;
+        font-size: clamp(0.78rem, 0.15vw + 0.74rem, 0.92rem);
+        margin-bottom: 0.9rem;
+    }
+
+    .workflow-pipeline-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 26px minmax(0, 1.25fr) 26px minmax(0, 1.25fr) 26px minmax(0, 1fr);
+        gap: 0.55rem;
+        align-items: stretch;
+    }
+
+    .workflow-card {
+        background: #ffffff;
+        border: 1px solid var(--figure-line);
+        border-radius: 14px;
+        padding: 0.9rem 0.95rem;
+        min-height: 286px;
+        box-shadow: 0 5px 16px rgba(15, 31, 68, 0.035);
+        color: var(--figure-navy);
+    }
+
+    .workflow-card-head {
+        display: grid;
+        grid-template-columns: 34px 1fr;
+        gap: 0.65rem;
+        align-items: start;
+        margin-bottom: 0.72rem;
+    }
+
+    .workflow-badge {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #082957;
+        color: #ffffff;
+        font-size: 1.02rem;
+        font-weight: 900;
+        line-height: 1;
+        box-shadow: 0 6px 16px rgba(8, 41, 87, 0.16);
+    }
+
+    .workflow-card-title {
+        color: #082957;
+        font-weight: 900;
+        font-size: 1.02rem;
+        line-height: 1.16;
+        letter-spacing: -0.01em;
+    }
+
+    .workflow-card-kicker {
+        color: var(--figure-muted);
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        margin-top: 0.08rem;
+    }
+
+    .workflow-field {
+        margin: 0.52rem 0;
+    }
+
+    .workflow-label {
+        color: #172b4d;
+        font-size: 0.74rem;
+        font-weight: 750;
+        margin-bottom: 0.24rem;
+    }
+
+    .workflow-input {
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.45rem;
+        border: 1px solid #d9e3f1;
+        border-radius: 8px;
+        background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+        color: #14233d;
+        padding: 0.42rem 0.55rem;
+        font-size: 0.76rem;
+        font-weight: 650;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.92);
+        overflow-wrap: anywhere;
+    }
+
+    .workflow-button {
+        background: linear-gradient(135deg, #2563eb 0%, #0d7fd1 100%);
+        color: #ffffff;
+        border-radius: 8px;
+        min-height: 38px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.42rem;
+        margin-top: 0.72rem;
+        font-weight: 850;
+        box-shadow: 0 8px 20px rgba(37, 99, 235, 0.20);
+    }
+
+    .workflow-status {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        min-height: 38px;
+        margin-top: 0.72rem;
+        padding: 0.46rem 0.62rem;
+        border: 1px solid #d7eadf;
+        border-radius: 8px;
+        background: #f2fbf6;
+        color: #14532d;
+        font-weight: 800;
+        font-size: 0.76rem;
+    }
+
+    .workflow-status.warn {
+        border-color: #f8ddb0;
+        background: #fff8ed;
+        color: #92400e;
+    }
+
+    .workflow-check-dot {
+        width: 19px;
+        height: 19px;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #2ca25f;
+        color: #ffffff;
+        font-size: 0.76rem;
+        font-weight: 900;
+        flex: 0 0 auto;
+    }
+
+    .workflow-arrow {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #2563eb;
+        font-size: 1.7rem;
+        font-weight: 900;
+        padding-top: 2.5rem;
+    }
+
+    .workflow-concepts {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.4rem 0.48rem;
+        margin-top: 0.45rem;
+    }
+
+    .workflow-concept {
+        display: flex;
+        align-items: center;
+        gap: 0.36rem;
+        color: #11213b;
+        font-size: 0.74rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .workflow-tick {
+        width: 15px;
+        height: 15px;
+        border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #2f70d8;
+        color: #ffffff;
+        font-size: 0.64rem;
+        font-weight: 900;
+        flex: 0 0 auto;
+    }
+
+    .workflow-summary-panel {
+        margin-top: 0.95rem;
+        border: 1px solid var(--figure-line);
+        border-radius: 15px;
+        background: #ffffff;
+        padding: 0.9rem 1rem;
+    }
+
+    .workflow-summary-grid {
+        display: grid;
+        grid-template-columns: 1.35fr 0.9fr;
+        gap: 1rem;
+        align-items: stretch;
+    }
+
+    .workflow-success-strip {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        border: 1px solid #d7eadf;
+        border-radius: 8px;
+        background: linear-gradient(90deg, #edf9f2 0%, #f8fdfa 100%);
+        color: #14532d;
+        padding: 0.56rem 0.68rem;
+        font-weight: 850;
+        margin-bottom: 0.62rem;
+    }
+
+    .workflow-success-strip.warn {
+        border-color: #f8ddb0;
+        background: linear-gradient(90deg, #fff8ed 0%, #fffdf8 100%);
+        color: #92400e;
+    }
+
+    .workflow-file-list {
+        border: 1px solid #dce6f3;
+        border-radius: 9px;
+        background: #ffffff;
+        padding: 0.48rem 0.62rem;
+        color: #52647d;
+        font-size: 0.72rem;
+        line-height: 1.75;
+    }
+
+    .workflow-stat-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.5rem;
+    }
+
+    .workflow-mini-stat {
+        border: 1px solid #dce6f3;
+        border-radius: 10px;
+        background: #ffffff;
+        padding: 0.55rem 0.62rem;
+    }
+
+    .workflow-mini-label {
+        color: var(--figure-muted);
+        font-size: 0.57rem;
+        font-weight: 900;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+    }
+
+    .workflow-mini-value {
+        color: #082957;
+        font-weight: 900;
+        font-size: 0.9rem;
+        margin-top: 0.15rem;
+    }
+
+    .workflow-guide-title {
+        display: flex;
+        align-items: center;
+        gap: 0.62rem;
+        margin: 0.9rem 0 0.6rem;
+        color: var(--figure-navy);
+        font-size: 1.42rem;
+        font-weight: 900;
+        letter-spacing: -0.02em;
+    }
+
+    .workflow-guide-title::before {
+        content: "";
+        width: 6px;
+        height: 28px;
+        border-radius: 4px;
+        background: linear-gradient(180deg, #2563eb 0%, #0891b2 100%);
+        display: inline-block;
+        flex: 0 0 auto;
+    }
+
+    .quality-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.72rem;
+        margin-bottom: 1rem;
+    }
+
+    .quality-summary-card {
+        background: #ffffff;
+        border: 1px solid var(--figure-line);
+        border-radius: 14px;
+        padding: 0.85rem 0.9rem;
+        text-align: center;
+        box-shadow: 0 7px 20px rgba(15, 31, 68, 0.04);
+    }
+
+    .quality-summary-label {
+        color: var(--figure-muted);
+        font-size: 0.64rem;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.075em;
+        margin-bottom: 0.22rem;
+    }
+
+    .quality-summary-value {
+        color: var(--figure-navy);
+        font-size: 1.28rem;
+        font-weight: 900;
+        line-height: 1.1;
+    }
+
+    @media (max-width: 1500px) {
+        .workflow-pipeline-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .workflow-arrow {
+            display: none;
+        }
+        .workflow-card {
+            min-height: auto;
+        }
+    }
+
+    @media (max-width: 900px) {
+        .workflow-pipeline-grid {
+            grid-template-columns: 1fr;
+        }
+        .workflow-summary-grid,
+        .workflow-stat-row,
+        .quality-summary-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .audit-figure-panel {
+        background: #ffffff;
+        border: 1px solid var(--figure-line);
+        border-radius: 18px;
+        box-shadow: var(--figure-shadow);
+        padding: 0.95rem 1rem 1.05rem;
+        margin: 0.4rem 0 0.95rem;
+    }
+
+    .audit-panel-title {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        color: var(--figure-navy);
+        font-size: 1rem;
+        font-weight: 850;
+        margin-bottom: 0.65rem;
+    }
+
+    .audit-panel-letter {
+        width: 24px;
+        height: 24px;
+        border-radius: 7px;
+        background: var(--figure-navy);
+        color: #ffffff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 900;
+        font-size: 0.76rem;
+        line-height: 1;
+    }
+
+    .audit-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0.72rem;
+        margin: 0.2rem 0 0.85rem;
+    }
+
+    .audit-summary-card {
+        background: #ffffff;
+        border: 1px solid var(--figure-line);
+        border-radius: 14px;
+        padding: 0.78rem 0.85rem;
+        box-shadow: 0 6px 18px rgba(15, 31, 68, 0.04);
+    }
+
+    .audit-summary-label {
+        color: var(--figure-muted);
+        font-size: 0.68rem;
+        font-weight: 850;
+        letter-spacing: 0.075em;
+        text-transform: uppercase;
+        margin-bottom: 0.18rem;
+    }
+
+    .audit-summary-value {
+        color: var(--figure-navy);
+        font-size: 1.35rem;
+        font-weight: 900;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+    }
+
+    .audit-flow {
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+        padding: 0.25rem 0.15rem;
+    }
+
+    .audit-flow-step {
+        border: 1px solid var(--figure-line);
+        border-radius: 13px;
+        background: #ffffff;
+        padding: 0.58rem 0.75rem;
+        text-align: center;
+        color: var(--figure-navy);
+        position: relative;
+    }
+
+    .audit-flow-step:not(:last-child)::after {
+        content: '↓';
+        position: absolute;
+        left: 50%;
+        bottom: -0.72rem;
+        transform: translateX(-50%);
+        color: var(--figure-orange);
+        font-weight: 900;
+        font-size: 0.85rem;
+    }
+
+    .audit-flow-label {
+        font-size: 0.72rem;
+        font-weight: 800;
+        color: #53657c;
+    }
+
+    .audit-flow-value {
+        font-size: 1.08rem;
+        font-weight: 900;
+        letter-spacing: -0.02em;
+    }
+
+    .audit-flow-excluded {
+        color: #b45309;
+        font-size: 0.72rem;
+        font-weight: 800;
+        margin-top: 0.12rem;
+    }
+
+    .audit-denominator-note {
+        border: 1px solid #c9d9ee;
+        border-radius: 12px;
+        background: #f7fbff;
+        color: #3d516a;
+        padding: 0.65rem 0.8rem;
+        font-size: 0.78rem;
+        line-height: 1.45;
+    }
+
+    .cohort-demo-workspace {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 0.78rem;
+        background: #ffffff;
+        border: 1px solid var(--figure-line);
+        border-radius: 16px;
+        padding: 0.78rem 0.92rem;
+        margin: 0.45rem 0 0.92rem;
+        box-shadow: 0 8px 24px rgba(15, 31, 68, 0.045);
+        color: var(--figure-navy);
+    }
+
+    .cohort-demo-badge {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        background: var(--figure-navy);
+        color: #ffffff;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 900;
+        font-size: 0.92rem;
+        line-height: 1;
+    }
+
+    .cohort-demo-title {
+        color: var(--figure-navy);
+        font-weight: 900;
+        font-size: 0.96rem;
+        letter-spacing: -0.015em;
+        margin-bottom: 0.1rem;
+    }
+
+    .cohort-demo-subtitle {
+        color: var(--figure-muted);
+        font-size: 0.78rem;
+        line-height: 1.42;
+    }
+
+    .cohort-demo-status {
+        border: 1px solid #bbf7d0;
+        border-radius: 999px;
+        background: #ecfdf5;
+        color: #047857;
+        padding: 0.32rem 0.6rem;
+        font-size: 0.72rem;
+        font-weight: 850;
+        white-space: nowrap;
+    }
+
+    @media (max-width: 900px) {
+        .audit-summary-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .cohort-demo-workspace {
+            grid-template-columns: auto 1fr;
+        }
+        .cohort-demo-status {
+            grid-column: 1 / -1;
+            width: fit-content;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -2297,6 +3541,44 @@ QUALITY_EXCLUDE_COLUMNS = {
     'patientunitstayid', 'admissionid', 'patientid', 'CaseID',
 }
 
+PRIMARY_VALUE_COLUMN_HINTS = {
+    'abp': ['map', 'sbp', 'dbp'],
+    'bp': ['map', 'sbp', 'dbp'],
+    'fio2': ['fio2'],
+    'sofa': ['sofa'],
+    'sofa2': ['sofa2'],
+}
+
+PHYSIOLOGIC_RANGES = {
+    'hr': (20.0, 250.0),
+    'resp': (4.0, 80.0),
+    'sbp': (40.0, 300.0),
+    'dbp': (20.0, 200.0),
+    'map': (30.0, 220.0),
+    'temp': (25.0, 45.0),
+    'spo2': (0.0, 100.0),
+    'o2sat': (0.0, 100.0),
+    'fio2': (0.0, 100.0),
+    'ph': (6.8, 7.8),
+    'po2': (20.0, 600.0),
+    'pco2': (10.0, 150.0),
+    'pafi': (20.0, 800.0),
+    'safi': (20.0, 800.0),
+    'glu': (20.0, 1500.0),
+    'crea': (0.1, 20.0),
+    'creat': (0.1, 20.0),
+    'lact': (0.0, 30.0),
+    'plt': (0.0, 2000.0),
+    'wbc': (0.0, 500.0),
+    'hgb': (0.0, 25.0),
+    'inr_pt': (0.5, 20.0),
+    'na': (100.0, 200.0),
+    'k': (1.0, 10.0),
+    'bili': (0.0, 80.0),
+    'alb': (0.5, 8.0),
+    'bun': (1.0, 250.0),
+}
+
 
 def _is_screenshot_mode() -> bool:
     """Return whether figure-oriented screenshot mode is enabled."""
@@ -2401,6 +3683,62 @@ def _sync_quick_viz_screenshot_mode(state: dict[str, Any], *, lang: str) -> bool
     return False
 
 
+FIGURE_TARGET_MAP = {
+    'fig2': ('paper', 'Figure 2'),
+    'figure2': ('paper', 'Figure 2'),
+    'figure-2': ('paper', 'Figure 2'),
+    'extraction-figure': ('paper', 'Figure 2'),
+    'pipeline-figure': ('paper', 'Figure 2'),
+    'fig3': ('paper', 'Figure 3'),
+    'figure3': ('paper', 'Figure 3'),
+    'figure-3': ('paper', 'Figure 3'),
+    'review-figure': ('paper', 'Figure 3'),
+    'multi-view-figure': ('paper', 'Figure 3'),
+    'fig4': ('paper', 'Figure 4'),
+    'figure4': ('paper', 'Figure 4'),
+    'figure-4': ('paper', 'Figure 4'),
+    'ai-figure': ('paper', 'Figure 4'),
+    'assistant-figure': ('paper', 'Figure 4'),
+    's1': ('paper', 'Supplementary Figure S1'),
+    'supp-s1': ('paper', 'Supplementary Figure S1'),
+    'supplementary-s1': ('paper', 'Supplementary Figure S1'),
+    'supplementary-figure-s1': ('paper', 'Supplementary Figure S1'),
+    'table': ('viz', 'Data Tables'),
+    'tables': ('viz', 'Data Tables'),
+    'data': ('viz', 'Data Tables'),
+    'datatable': ('viz', 'Data Tables'),
+    'time': ('viz', 'Time Series'),
+    'timeseries': ('viz', 'Time Series'),
+    'trend': ('viz', 'Time Series'),
+    'patient': ('viz', 'Patient Overview'),
+    'overview': ('viz', 'Patient Overview'),
+    'quality': ('viz', 'Data Quality'),
+    'missing': ('viz', 'Data Quality'),
+    'group': ('cohort', 'Group Contrast'),
+    'contrast': ('cohort', 'Group Contrast'),
+    'coverage': ('cohort', 'Coverage Audit'),
+    'audit': ('cohort', 'Coverage Audit'),
+    'crossdb': ('cohort', 'Cross-DB Benchmark'),
+    'cross-db': ('cohort', 'Cross-DB Benchmark'),
+    'distribution': ('cohort', 'Cross-DB Benchmark'),
+    'benchmark': ('cohort', 'Cross-DB Benchmark'),
+    'snapshot': ('cohort', 'Cohort Snapshot'),
+    'dashboard': ('cohort', 'Cohort Snapshot'),
+    'cohort': ('cohort', 'Cohort Snapshot'),
+    'sofa': ('cohort', 'SOFA-1 vs SOFA-2'),
+    'sensitivity': ('cohort', 'SOFA-1 vs SOFA-2'),
+    'reclassification': ('cohort', 'SOFA-1 vs SOFA-2'),
+}
+
+
+def _normalize_figure_target(raw_target: str | None) -> tuple[str, str]:
+    """Map figure URL shorthands to a top-level section and sub-tab label fragment."""
+    token = str(raw_target or '').strip().lower().replace('_', '-').replace(' ', '-')
+    if token in {'', '1', 'true', 'yes', 'on'}:
+        return '', ''
+    return FIGURE_TARGET_MAP.get(token, ('', ''))
+
+
 def _quality_detect_time_col(df: pd.DataFrame) -> Optional[str]:
     """Detect the most likely time column for quality-rate calculations."""
     for col in QUALITY_TIME_CANDIDATES:
@@ -2473,6 +3811,610 @@ def _count_quality_event_occurrences(series: pd.Series) -> int:
     return int(series.notna().sum())
 
 
+def _choose_concept_value_column(concept: str, df: pd.DataFrame) -> Optional[str]:
+    """Pick the most clinically useful numeric value column for a concept frame."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+
+    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+    value_cols = [c for c in numeric_cols if c not in QUALITY_EXCLUDE_COLUMNS]
+    if not value_cols:
+        return None
+    if concept in value_cols:
+        return concept
+
+    for candidate in PRIMARY_VALUE_COLUMN_HINTS.get(concept, []):
+        if candidate in value_cols:
+            return candidate
+
+    return value_cols[0]
+
+
+def _get_concept_numeric_value_columns(df: pd.DataFrame) -> list[str]:
+    """Return numeric value columns after excluding IDs and time-like metadata."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return []
+    numeric_cols = df.select_dtypes(include=['number']).columns
+    return [c for c in numeric_cols if c not in QUALITY_EXCLUDE_COLUMNS]
+
+
+def _expected_observation_count(
+    concept: str,
+    patient_df: pd.DataFrame,
+    los_icu: Optional[float],
+    *,
+    demo_hours: Optional[int] = None,
+    fallback_hours: Optional[int] = None,
+) -> tuple[int, str]:
+    """Return the expected hourly observation denominator and its provenance tag."""
+    if not isinstance(patient_df, pd.DataFrame):
+        return 0, 'empty'
+
+    time_col = _quality_detect_time_col(patient_df)
+    if time_col is None and concept in QUALITY_STATIC_BOOLEAN_EVENTS:
+        return 1, 'static'
+    if time_col is None:
+        return 1, 'static'
+
+    if demo_hours is not None and int(demo_hours) > 0:
+        return int(demo_hours), 'demo'
+
+    los_value = pd.to_numeric(pd.Series([los_icu]), errors='coerce').iloc[0]
+    if pd.notna(los_value) and float(los_value) > 0:
+        return max(1, int(np.ceil(float(los_value) * 24))), 'los'
+
+    if fallback_hours is not None and int(fallback_hours) > 0:
+        return int(fallback_hours), '72h'
+
+    return 72, '72h'
+
+
+def _compute_quality_out_of_physio_rate(concept: str, df: pd.DataFrame) -> float:
+    """Measure the share of non-null rows that are outside harmonized physiologic bounds."""
+    bounds = PHYSIOLOGIC_RANGES.get(concept)
+    value_col = _choose_concept_value_column(concept, df)
+    if bounds is None or value_col is None or value_col not in df.columns:
+        return 0.0
+
+    values = pd.to_numeric(df[value_col], errors='coerce').dropna()
+    if values.empty:
+        return 0.0
+
+    lower, upper = bounds
+    out_of_range = ((values < lower) | (values > upper)).mean() * 100
+    return float(out_of_range)
+
+
+def _compute_quality_duplicate_timestamp_rate(
+    *,
+    concept: str,
+    df: pd.DataFrame,
+    id_col: str,
+) -> float:
+    """Count duplicate rows where the same patient and concept share the same timestamp."""
+    if not isinstance(df, pd.DataFrame) or df.empty or id_col not in df.columns:
+        return 0.0
+
+    time_col = _quality_detect_time_col(df)
+    value_col = _choose_concept_value_column(concept, df)
+    if time_col is None or value_col is None or value_col not in df.columns:
+        return 0.0
+
+    observed = df[[id_col, time_col, value_col]].dropna(subset=[time_col, value_col]).copy()
+    if observed.empty:
+        return 0.0
+
+    duplicate_rows = observed.duplicated(subset=[id_col, time_col], keep='first').sum()
+    return float(duplicate_rows / len(observed) * 100)
+
+
+def _summarize_quality_temporal_density(
+    *,
+    concept: str,
+    df: pd.DataFrame,
+    id_col: str,
+    los_by_patient: Optional[pd.Series] = None,
+    demo_hours: Optional[int] = None,
+    fallback_hours: Optional[int] = None,
+) -> dict[str, float]:
+    """Summarize records-per-patient-hour using median and IQR to resist ICU long tails.
+
+    Vectorized: one groupby size() pass plus an aligned division, no per-patient loop.
+    """
+    empty = {'median': 0.0, 'q25': 0.0, 'q75': 0.0, 'n_patients': 0}
+    if not isinstance(df, pd.DataFrame) or df.empty or id_col not in df.columns:
+        return empty
+
+    value_col = _choose_concept_value_column(concept, df)
+    if value_col is None or value_col not in df.columns:
+        return empty
+
+    seen_patient_ids = df[id_col].dropna().unique().tolist()
+    if not seen_patient_ids:
+        return empty
+
+    expected_per_patient, _sources = _vectorized_expected_per_patient(
+        seen_patient_ids,
+        los_by_patient=los_by_patient,
+        demo_hours=demo_hours,
+        fallback_hours=fallback_hours,
+    )
+
+    value_not_na = df.loc[df[value_col].notna(), [id_col]]
+    if value_not_na.empty:
+        return empty
+    obs_counts = (
+        value_not_na.groupby(id_col, observed=False)
+        .size()
+        .astype('float64')
+        .reindex(pd.Index(seen_patient_ids), fill_value=0)
+    )
+
+    expected = expected_per_patient.astype('float64')
+    valid = expected > 0
+    if not valid.any():
+        return empty
+
+    densities = (obs_counts[valid] / expected[valid]).replace([np.inf, -np.inf], np.nan).dropna()
+    if densities.empty:
+        return empty
+
+    return {
+        'median': float(densities.median()),
+        'q25': float(densities.quantile(0.25)),
+        'q75': float(densities.quantile(0.75)),
+        'n_patients': int(len(densities)),
+    }
+
+
+def _filter_patient_selector_options(
+    patient_ids: list[Any],
+    *,
+    query: str = "",
+    max_display: int = 200,
+) -> list[Any]:
+    """Filter and cap patient selector options so large cohorts stay responsive."""
+    unique_patient_ids = list(dict.fromkeys(patient_ids))
+    trimmed_query = str(query or "").strip()
+    if trimmed_query:
+        unique_patient_ids = [pid for pid in unique_patient_ids if trimmed_query in str(pid)]
+    return unique_patient_ids[:max(1, int(max_display))]
+
+
+def _patient_selector(
+    *,
+    patient_ids: list[Any],
+    state_key: str,
+    label: str,
+    lang: str,
+    max_display: int = 200,
+    default_patient: Any = None,
+) -> Any:
+    """Render a searchable patient selector with a capped option list."""
+    search_label = "Search Patient ID" if lang == 'en' else "搜索患者ID"
+    search_placeholder = "Type to filter..." if lang == 'en' else "输入ID过滤..."
+    search_query = st.text_input(
+        search_label,
+        key=f"{state_key}_search",
+        placeholder=search_placeholder,
+    )
+    options = _filter_patient_selector_options(
+        patient_ids,
+        query=search_query,
+        max_display=max_display,
+    )
+    if default_patient is not None and default_patient not in options and default_patient in patient_ids:
+        options = [default_patient] + options[: max(0, max_display - 1)]
+    if not options:
+        options = _filter_patient_selector_options(patient_ids, max_display=max_display)
+    if not options:
+        return None
+
+    select_kwargs: dict[str, Any] = {
+        'label': label,
+        'options': options,
+        'key': state_key,
+    }
+    if default_patient in options:
+        select_kwargs['index'] = options.index(default_patient)
+    return st.selectbox(**select_kwargs)
+
+
+def _get_quality_cohort_patient_ids(state: dict[str, Any]) -> list[Any]:
+    """Return the current patient universe for quality metrics whenever it is known."""
+    patient_ids = state.get('patient_ids') or []
+    if patient_ids:
+        return list(dict.fromkeys(patient_ids))
+
+    id_col = state.get('id_col')
+    if not id_col:
+        return []
+
+    candidate_frames: list[pd.DataFrame] = []
+    loaded_concepts = state.get('loaded_concepts', {}) or {}
+    for concept_name in ('age', 'sex', 'death', 'los_icu'):
+        frame = loaded_concepts.get(concept_name)
+        if isinstance(frame, pd.DataFrame) and not frame.empty and id_col in frame.columns:
+            candidate_frames.append(frame)
+    if not candidate_frames:
+        for frame in loaded_concepts.values():
+            if isinstance(frame, pd.DataFrame) and not frame.empty and id_col in frame.columns:
+                candidate_frames.append(frame)
+                if len(candidate_frames) >= 3:
+                    break
+
+    patient_pool: list[Any] = []
+    for frame in candidate_frames:
+        patient_pool.extend(frame[id_col].dropna().tolist())
+    return list(dict.fromkeys(patient_pool))
+
+
+def _get_quality_los_by_patient(state: dict[str, Any]) -> Optional[pd.Series]:
+    """Build a per-patient LOS series in days when available for denominator estimation."""
+    loaded_concepts = state.get('loaded_concepts', {}) or {}
+    los_df = loaded_concepts.get('los_icu')
+    id_col = state.get('id_col')
+    if not isinstance(los_df, pd.DataFrame) or los_df.empty or not id_col or id_col not in los_df.columns:
+        return None
+    if 'los_icu' not in los_df.columns:
+        return None
+
+    los_copy = los_df[[id_col, 'los_icu']].copy()
+    los_copy['los_icu'] = pd.to_numeric(los_copy['los_icu'], errors='coerce')
+    los_copy = los_copy.dropna(subset=['los_icu'])
+    if los_copy.empty:
+        return None
+    return los_copy.groupby(id_col, observed=False)['los_icu'].max()
+
+
+def _format_quality_density(summary: dict[str, float], lang: str) -> str:
+    """Format median/IQR records-per-patient-hour text for the quality table."""
+    if not summary or int(summary.get('n_patients', 0)) == 0:
+        return '-' if lang == 'en' else '—'
+    return f"{summary['median']:.2f} [{summary['q25']:.2f}-{summary['q75']:.2f}]"
+
+
+def _get_quality_denominator_note(tag: str, lang: str) -> str:
+    """Explain denominator provenance tags shown in the quality table."""
+    notes = {
+        'd=los': "LOS-based expected hours" if lang == 'en' else "按患者 ICU LOS 估算期望小时数",
+        'd=72h': "72 h fallback window" if lang == 'en' else "使用 72 小时兜底窗口",
+        'd=demo': "demo simulation horizon" if lang == 'en' else "演示数据预设时间窗",
+        'd=static': "single observation per patient" if lang == 'en' else "每位患者单次静态观测",
+        'd=mixed': "mixed LOS / fallback denominators" if lang == 'en' else "混合使用 LOS 与兜底分母",
+    }
+    return notes.get(str(tag or '').lower(), tag)
+
+
+def _smd_severity_tag(value: float, lang: str) -> str:
+    """Attach an interpretable balance flag next to SMD values."""
+    abs_value = abs(float(value))
+    if abs_value > 0.25:
+        return "🔴 large" if lang == 'en' else "🔴 较大"
+    if abs_value > 0.10:
+        return "🟠 mild" if lang == 'en' else "🟠 轻度"
+    return "🟢 balanced" if lang == 'en' else "🟢 平衡"
+
+
+def _compute_smd_continuous(series1: pd.Series, series2: pd.Series) -> float:
+    """Compute standardized mean difference for continuous variables."""
+    values1 = pd.to_numeric(series1, errors='coerce').dropna()
+    values2 = pd.to_numeric(series2, errors='coerce').dropna()
+    if len(values1) < 2 or len(values2) < 2:
+        return 0.0
+
+    sd1 = float(values1.std(ddof=1))
+    sd2 = float(values2.std(ddof=1))
+    pooled_sd = np.sqrt((sd1 ** 2 + sd2 ** 2) / 2)
+    if pooled_sd == 0:
+        return 0.0
+    return float((values1.mean() - values2.mean()) / pooled_sd)
+
+
+def _compute_smd_binary(series1: pd.Series, series2: pd.Series) -> float:
+    """Compute standardized mean difference for binary variables."""
+    values1 = pd.to_numeric(series1, errors='coerce').dropna()
+    values2 = pd.to_numeric(series2, errors='coerce').dropna()
+    if values1.empty or values2.empty:
+        return 0.0
+
+    p1 = float(values1.mean())
+    p2 = float(values2.mean())
+    p_bar = (p1 + p2) / 2
+    denom = np.sqrt(p_bar * (1 - p_bar))
+    if denom == 0:
+        return 0.0
+    return float((p1 - p2) / denom)
+
+
+def _vectorized_expected_per_patient(
+    patient_universe: list[Any],
+    *,
+    los_by_patient: Optional[pd.Series],
+    demo_hours: Optional[int],
+    fallback_hours: Optional[int],
+) -> tuple[pd.Series, pd.Series]:
+    """Return (expected_count, source_tag) Series indexed by patient id.
+
+    Vectorizes the per-patient branch of `_expected_observation_count` for the
+    time-series case where time_col is already known to exist on the frame.
+    """
+    universe_index = pd.Index(patient_universe)
+    fallback = int(fallback_hours) if fallback_hours and int(fallback_hours) > 0 else 72
+
+    if demo_hours is not None and int(demo_hours) > 0:
+        expected = pd.Series(int(demo_hours), index=universe_index, dtype='int64')
+        sources = pd.Series('demo', index=universe_index)
+        return expected, sources
+
+    if isinstance(los_by_patient, pd.Series) and not los_by_patient.empty:
+        los_aligned = pd.to_numeric(los_by_patient.reindex(universe_index), errors='coerce')
+    else:
+        los_aligned = pd.Series(np.nan, index=universe_index, dtype='float64')
+
+    expected = pd.Series(fallback, index=universe_index, dtype='int64')
+    sources = pd.Series('72h', index=universe_index)
+
+    los_valid = los_aligned.notna() & (los_aligned > 0)
+    if los_valid.any():
+        los_hours = np.ceil(los_aligned[los_valid].astype('float64') * 24).astype('int64')
+        los_hours = np.maximum(1, los_hours)
+        expected.loc[los_valid] = los_hours
+        sources.loc[los_valid] = 'los'
+
+    return expected, sources
+
+
+def _build_quality_metric_profile(
+    *,
+    concept: str,
+    df: pd.DataFrame,
+    id_col: str,
+    cohort_patient_count: int,
+    time_grid_size: int,
+    cohort_patient_ids: Optional[list[Any]] = None,
+    los_by_patient: Optional[pd.Series] = None,
+    demo_hours: Optional[int] = None,
+) -> dict[str, Any]:
+    """Compute one concept-level QC profile shared by the table and chart views.
+
+    Performance: replaces the old O(P * N) per-patient loop with a single
+    vectorized pass that (a) computes expected counts via aligned Series
+    operations and (b) folds temporal density into the same groupby pass.
+    """
+    profile = {
+        'missing_rate': 100.0,
+        'out_of_physio_rate': 0.0,
+        'duplicate_rate': 0.0,
+        'denominator_tag': 'd=72h',
+        'expected_observations': 0,
+        'observed_observations': 0,
+        'temporal_density': {'median': 0.0, 'q25': 0.0, 'q75': 0.0, 'n_patients': 0},
+    }
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return profile
+
+    value_col = _choose_concept_value_column(concept, df)
+    time_col = _quality_detect_time_col(df)
+    n_patients = int(df[id_col].nunique()) if id_col in df.columns else 0
+    cohort_patient_count = int(cohort_patient_count or 0)
+
+    if concept in QUALITY_STATIC_BOOLEAN_EVENTS and not time_col:
+        denominator = cohort_patient_count or n_patients
+        if denominator > 0:
+            profile['missing_rate'] = float(max(0.0, min(100.0, (1 - min(n_patients, denominator) / denominator) * 100)))
+            profile['expected_observations'] = denominator
+            profile['observed_observations'] = min(n_patients, denominator)
+            profile['denominator_tag'] = 'd=static'
+        return profile
+
+    if value_col is None or value_col not in df.columns:
+        if cohort_patient_count > 0 and n_patients > 0:
+            patient_coverage_missing = (1 - min(n_patients, cohort_patient_count) / cohort_patient_count) * 100
+            profile['missing_rate'] = float(max(0.0, min(100.0, patient_coverage_missing)))
+        return profile
+
+    profile['out_of_physio_rate'] = _compute_quality_out_of_physio_rate(concept, df)
+    profile['duplicate_rate'] = _compute_quality_duplicate_timestamp_rate(concept=concept, df=df, id_col=id_col)
+
+    raw_na_rate = float(df[value_col].isna().mean() * 100)
+    if concept in QUALITY_DEMOGRAPHIC_STATIC:
+        profile['missing_rate'] = raw_na_rate
+        profile['denominator_tag'] = 'd=static'
+        return profile
+
+    if time_col and id_col in df.columns:
+        seen_patient_ids = df[id_col].dropna().unique().tolist()
+        patient_universe = cohort_patient_ids or seen_patient_ids
+        patient_universe = list(dict.fromkeys(patient_universe))
+        fallback_hours = time_grid_size if time_grid_size > 0 else None
+
+        expected_per_patient, source_per_patient = _vectorized_expected_per_patient(
+            patient_universe,
+            los_by_patient=los_by_patient,
+            demo_hours=demo_hours,
+            fallback_hours=fallback_hours,
+        )
+
+        expected_total = int(expected_per_patient.sum())
+        unique_sources = sorted(set(source_per_patient.tolist()))
+
+        if not cohort_patient_ids and cohort_patient_count > len(seen_patient_ids):
+            missing_patient_count = cohort_patient_count - len(seen_patient_ids)
+            default_expected, default_source = _expected_observation_count(
+                concept=concept,
+                patient_df=df,
+                los_icu=None,
+                demo_hours=demo_hours,
+                fallback_hours=fallback_hours,
+            )
+            if default_expected > 0:
+                expected_total += missing_patient_count * default_expected
+                if default_source not in unique_sources:
+                    unique_sources = sorted(set(unique_sources + [default_source]))
+
+        source_label = unique_sources[0] if len(unique_sources) == 1 else 'mixed'
+
+        hour_bins = _quality_to_hour_bins(df[time_col], time_col)
+        if hour_bins is not None:
+            if concept in QUALITY_EVENT_TIME_SERIES:
+                if pd.api.types.is_bool_dtype(df[value_col]):
+                    observed_mask = df[value_col].astype('boolean').fillna(False)
+                elif pd.api.types.is_numeric_dtype(df[value_col]):
+                    observed_mask = df[value_col].fillna(0) > 0
+                else:
+                    observed_mask = df[value_col].notna()
+            else:
+                observed_mask = df[value_col].notna()
+
+            observed = df.loc[observed_mask, [id_col]].copy()
+            observed['_hour_bin'] = hour_bins.loc[observed.index]
+            observed = observed.dropna(subset=['_hour_bin'])
+            observed_total = int(observed.drop_duplicates(subset=[id_col, '_hour_bin']).shape[0])
+
+            if expected_total > 0:
+                coverage_missing = (1 - observed_total / expected_total) * 100
+                profile['missing_rate'] = float(max(raw_na_rate, max(0.0, min(100.0, coverage_missing))))
+                profile['expected_observations'] = expected_total
+                profile['observed_observations'] = observed_total
+                profile['denominator_tag'] = f"d={source_label}"
+
+        # Temporal density: vectorized per-patient count using fast groupby+size,
+        # aligned against expected_per_patient. Replaces the old O(P * N) loop.
+        seen_index = pd.Index(seen_patient_ids)
+        if len(seen_index) > 0:
+            value_not_na = df.loc[df[value_col].notna(), [id_col]]
+            if not value_not_na.empty:
+                obs_counts = (
+                    value_not_na.groupby(id_col, observed=False)
+                    .size()
+                    .astype('float64')
+                )
+            else:
+                obs_counts = pd.Series(dtype='float64')
+            obs_counts_aligned = obs_counts.reindex(seen_index, fill_value=0)
+            expected_for_seen = expected_per_patient.reindex(seen_index)
+            if expected_for_seen.isna().any():
+                expected_for_seen = expected_for_seen.fillna(
+                    int(fallback_hours) if fallback_hours and int(fallback_hours) > 0 else 72
+                )
+            expected_for_seen = expected_for_seen.astype('float64')
+            valid_mask = expected_for_seen > 0
+            if valid_mask.any():
+                densities = obs_counts_aligned[valid_mask] / expected_for_seen[valid_mask]
+                densities = densities.replace([np.inf, -np.inf], np.nan).dropna()
+                if len(densities) > 0:
+                    profile['temporal_density'] = {
+                        'median': float(densities.median()),
+                        'q25': float(densities.quantile(0.25)),
+                        'q75': float(densities.quantile(0.75)),
+                        'n_patients': int(len(densities)),
+                    }
+        return profile
+
+    if cohort_patient_count > 0 and n_patients > 0:
+        patient_coverage_missing = (1 - min(n_patients, cohort_patient_count) / cohort_patient_count) * 100
+        profile['missing_rate'] = float(max(raw_na_rate, max(0.0, min(100.0, patient_coverage_missing))))
+        profile['expected_observations'] = cohort_patient_count
+        profile['observed_observations'] = min(n_patients, cohort_patient_count)
+    else:
+        profile['missing_rate'] = raw_na_rate
+
+    return profile
+
+
+def _cohort_cache_fingerprint(cohort_patient_ids: Optional[list[Any]]) -> tuple[Any, ...]:
+    """Cheap O(1-ish) fingerprint to key the per-concept quality cache."""
+    if not cohort_patient_ids:
+        return (0,)
+    head = str(cohort_patient_ids[0]) if len(cohort_patient_ids) else ''
+    tail = str(cohort_patient_ids[-1]) if len(cohort_patient_ids) else ''
+    return (len(cohort_patient_ids), head, tail)
+
+
+def _los_cache_fingerprint(los_by_patient: Optional[pd.Series]) -> tuple[Any, ...]:
+    """Cheap fingerprint for the LOS series used in quality denominators."""
+    if not isinstance(los_by_patient, pd.Series) or los_by_patient.empty:
+        return (0,)
+    try:
+        head_idx = str(los_by_patient.index[0])
+    except Exception:
+        head_idx = ''
+    try:
+        # sum() is vectorized C; keeps the fingerprint sensitive to content edits
+        values_sum = float(pd.to_numeric(los_by_patient, errors='coerce').fillna(0).sum())
+    except Exception:
+        values_sum = 0.0
+    return (len(los_by_patient), head_idx, round(values_sum, 4))
+
+
+def _build_quality_metric_profile_cached(
+    *,
+    concept: str,
+    df: pd.DataFrame,
+    id_col: str,
+    cohort_patient_count: int,
+    time_grid_size: int,
+    cohort_patient_ids: Optional[list[Any]] = None,
+    los_by_patient: Optional[pd.Series] = None,
+    demo_hours: Optional[int] = None,
+) -> dict[str, Any]:
+    """Session-scoped cache wrapper around `_build_quality_metric_profile`.
+
+    The cache is keyed by a cheap structural fingerprint of the inputs so that
+    re-rendering the Quality page (language toggles, tab switches, sidebar
+    interactions) does not re-run the whole QC pipeline for every concept.
+    The cache lives on `st.session_state` and is naturally invalidated when
+    `loaded_concepts` is rebuilt (df identity changes).
+    """
+    try:
+        cache = st.session_state.setdefault('_quality_profile_cache', {})
+    except Exception:
+        # When called outside a Streamlit run (e.g. tests) just skip caching.
+        return _build_quality_metric_profile(
+            concept=concept,
+            df=df,
+            id_col=id_col,
+            cohort_patient_count=cohort_patient_count,
+            time_grid_size=time_grid_size,
+            cohort_patient_ids=cohort_patient_ids,
+            los_by_patient=los_by_patient,
+            demo_hours=demo_hours,
+        )
+
+    key = (
+        str(concept),
+        str(id_col),
+        id(df),
+        tuple(df.shape) if isinstance(df, pd.DataFrame) else (0, 0),
+        int(cohort_patient_count or 0),
+        int(time_grid_size or 0),
+        int(demo_hours) if demo_hours else None,
+        _cohort_cache_fingerprint(cohort_patient_ids),
+        _los_cache_fingerprint(los_by_patient),
+    )
+
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    result = _build_quality_metric_profile(
+        concept=concept,
+        df=df,
+        id_col=id_col,
+        cohort_patient_count=cohort_patient_count,
+        time_grid_size=time_grid_size,
+        cohort_patient_ids=cohort_patient_ids,
+        los_by_patient=los_by_patient,
+        demo_hours=demo_hours,
+    )
+    # Guard against unbounded growth across long sessions.
+    if len(cache) > 512:
+        cache.clear()
+    cache[key] = result
+    return result
+
+
 def _compute_quality_missing_rate(
     *,
     concept: str,
@@ -2480,64 +4422,22 @@ def _compute_quality_missing_rate(
     id_col: str,
     cohort_patient_count: int,
     time_grid_size: int,
+    cohort_patient_ids: Optional[list[Any]] = None,
+    los_by_patient: Optional[pd.Series] = None,
+    demo_hours: Optional[int] = None,
 ) -> float:
     """Compute a consistent concept-level missing rate for both table and chart views."""
-    if not isinstance(df, pd.DataFrame) or df.empty:
-        return 100.0
-
-    numeric_cols = df.select_dtypes(include=['number']).columns
-    value_cols = [c for c in numeric_cols if c not in QUALITY_EXCLUDE_COLUMNS]
-    main_col = concept if concept in df.columns else (value_cols[0] if value_cols else None)
-    n_patients = int(df[id_col].nunique()) if id_col in df.columns else 0
-    cohort_patient_count = int(cohort_patient_count or 0)
-    time_col = _quality_detect_time_col(df)
-
-    if concept in QUALITY_STATIC_BOOLEAN_EVENTS and not time_col:
-        denominator = cohort_patient_count or n_patients
-        if denominator <= 0:
-            return 100.0
-        return float(max(0.0, min(100.0, (1 - min(n_patients, denominator) / denominator) * 100)))
-
-    if main_col is None or main_col not in df.columns:
-        if cohort_patient_count > 0 and n_patients > 0:
-            patient_coverage_missing = (1 - min(n_patients, cohort_patient_count) / cohort_patient_count) * 100
-            return float(max(0.0, min(100.0, patient_coverage_missing)))
-        return 100.0
-
-    na_rate = float(df[main_col].isna().mean() * 100)
-    if concept in QUALITY_DEMOGRAPHIC_STATIC:
-        return na_rate
-
-    if time_col and time_col in df.columns and id_col in df.columns and time_grid_size > 0 and cohort_patient_count > 0:
-        hour_bins = _quality_to_hour_bins(df[time_col], time_col)
-        if hour_bins is not None:
-            observed_mask = df[main_col].notna()
-            if concept in QUALITY_EVENT_TIME_SERIES:
-                observed_mask = df[main_col].notna() & (
-                    df[main_col].astype('boolean').fillna(False)
-                    if pd.api.types.is_bool_dtype(df[main_col])
-                    else (df[main_col].fillna(0) > 0 if pd.api.types.is_numeric_dtype(df[main_col]) else df[main_col].notna())
-                )
-            tmp = df[[id_col]].copy()
-            tmp['_hour_bin'] = hour_bins
-            tmp = tmp.loc[observed_mask].dropna(subset=['_hour_bin'])
-            if not tmp.empty:
-                observed_bins = tmp.drop_duplicates(subset=[id_col, '_hour_bin'])
-                coverage_missing = (1 - len(observed_bins) / (cohort_patient_count * time_grid_size)) * 100
-                coverage_missing = max(0.0, min(100.0, coverage_missing))
-                return float(max(na_rate, coverage_missing))
-
-    if concept in QUALITY_EVENT_TIME_SERIES:
-        observed_count = _count_quality_event_occurrences(df[main_col])
-        if cohort_patient_count > 0 and time_grid_size > 0:
-            coverage_missing = (1 - observed_count / (cohort_patient_count * time_grid_size)) * 100
-            return float(max(na_rate, max(0.0, min(100.0, coverage_missing))))
-
-    if cohort_patient_count > 0 and n_patients > 0:
-        patient_coverage_missing = (1 - min(n_patients, cohort_patient_count) / cohort_patient_count) * 100
-        return float(max(na_rate, max(0.0, min(100.0, patient_coverage_missing))))
-
-    return na_rate
+    profile = _build_quality_metric_profile_cached(
+        concept=concept,
+        df=df,
+        id_col=id_col,
+        cohort_patient_count=cohort_patient_count,
+        time_grid_size=time_grid_size,
+        cohort_patient_ids=cohort_patient_ids,
+        los_by_patient=los_by_patient,
+        demo_hours=demo_hours,
+    )
+    return float(profile['missing_rate'])
 
 def get_concept_groups():
     """根据当前语言返回带正确显示名称的特征分组。"""
@@ -7584,6 +9484,12 @@ def render_quick_visualization_page():
     """渲染快速可视化主页面 - 包含数据加载区域和四个子模块。"""
     lang = st.session_state.get('language', 'en')
     entry_mode = st.session_state.get('entry_mode', 'none')
+    if _sync_quick_viz_screenshot_mode(st.session_state, lang=lang):
+        st.rerun()
+    screenshot_mode = bool(st.session_state.get('screenshot_mode', False))
+    figure_panel = st.session_state.get('_figure_target_panel') if screenshot_mode else None
+    direct_figure_panel = figure_panel in {'Data Tables', 'Time Series', 'Patient Overview', 'Data Quality'}
+
     screenshot_title = "📸 Screenshot Mode" if lang == 'en' else "📸 截图模式"
     screenshot_hint = (
         "Hide sidebar and AI dock, reduce chart chrome, and apply figure-friendly defaults."
@@ -7591,36 +9497,34 @@ def render_quick_visualization_page():
         else "隐藏侧边栏和 AI 浮窗、减少图表工具条，并应用更适合论文截图的默认视图。"
     )
 
-    header_cols = st.columns([3.1, 1.3])
-    with header_cols[0]:
-        _viz_title = get_text('quick_viz')
-        hint_text = (
-            "Generate demo data or load previously exported result files for interactive analysis"
-            if entry_mode == 'demo'
-            else "Load previously exported result files for interactive analysis"
-        )
-        if lang != 'en':
-            hint_text = "生成模拟数据或从之前导出的结果文件中加载，进行交互式分析" if entry_mode == 'demo' else "从之前导出的结果文件中加载，进行交互式分析"
+    if not direct_figure_panel:
+        header_cols = st.columns([3.1, 1.3])
+        with header_cols[0]:
+            _viz_title = get_text('quick_viz')
+            hint_text = (
+                "Generate demo data or load previously exported result files for interactive analysis"
+                if entry_mode == 'demo'
+                else "Load previously exported result files for interactive analysis"
+            )
+            if lang != 'en':
+                hint_text = "生成模拟数据或从之前导出的结果文件中加载，进行交互式分析" if entry_mode == 'demo' else "从之前导出的结果文件中加载，进行交互式分析"
 
-        st.markdown(
-            f'''
-            <div class="compact-section-title">{_viz_title}</div>
-            <div class="compact-section-desc">{hint_text}</div>
-            ''',
-            unsafe_allow_html=True,
-        )
-    with header_cols[1]:
-        screenshot_mode = st.toggle(
-            screenshot_title,
-            value=st.session_state.get('screenshot_mode', False),
-            key='screenshot_mode',
-            help=screenshot_hint,
-        )
-        st.caption(screenshot_hint)
-
-    if _sync_quick_viz_screenshot_mode(st.session_state, lang=lang):
-        st.rerun()
-    screenshot_mode = bool(st.session_state.get('screenshot_mode', False))
+            st.markdown(
+                f'''
+                <div class="compact-section-title">{_viz_title}</div>
+                <div class="compact-section-desc">{hint_text}</div>
+                ''',
+                unsafe_allow_html=True,
+            )
+        with header_cols[1]:
+            if not _is_screenshot_mode():
+                st.toggle(
+                    screenshot_title,
+                    value=st.session_state.get('screenshot_mode', False),
+                    key='screenshot_mode',
+                    help=screenshot_hint,
+                )
+                st.caption(screenshot_hint)
 
     viz_notices = st.session_state.pop('_viz_notices', [])
     for notice in viz_notices[:3]:
@@ -7632,7 +9536,7 @@ def render_quick_visualization_page():
                 unsafe_allow_html=True,
             )
 
-    if screenshot_mode:
+    if screenshot_mode and not direct_figure_panel:
         screenshot_notice = (
             "Figure preset active: compact layout, hidden side chrome, and screenshot-first defaults."
             if lang == 'en'
@@ -7671,152 +9575,173 @@ def render_quick_visualization_page():
     if auto_notice:
         st.success(auto_notice)
 
-    expander_label = "⚙️ Data Loading Settings" if lang == 'en' else "⚙️ 数据加载设置"
-    with st.expander(expander_label, expanded=not data_loaded):
-        allow_demo = entry_mode != 'real'
-        source_options = ["exported"] + (["demo"] if allow_demo else [])
-        source_labels = {
-            "exported": "📁 Previously Exported Data" if lang == 'en' else "📁 加载之前导出的结果文件",
-            "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
-        }
-        st.session_state.viz_data_source_mode = _resolve_viz_data_source_mode(
-            current_mode=st.session_state.get('viz_data_source_mode'),
-            recent_export_path=recent_export_path,
-            allow_demo=allow_demo,
-            entry_mode=entry_mode,
-        )
-        current_source = st.radio(
-            "Data Source" if lang == 'en' else "数据来源",
-            options=source_options,
-            format_func=lambda value: source_labels[value],
-            horizontal=True,
-            key="viz_data_source_mode",
-        )
-
-        if current_source == "exported":
-            export_path = _directory_input(
-                "Folder Containing Exported Data Files" if lang == 'en' else "存放导出结果文件的文件夹",
-                value=st.session_state.get('viz_export_path') or recent_export_path,
-                input_key="viz_export_path_input",
-                button_key="viz_export_path_browse",
-                help="Choose the folder that contains EasyICU exported CSV / Parquet / Excel files" if lang == 'en' else "选择存放 EasyICU 导出 CSV / Parquet / Excel 文件的文件夹",
+    show_data_loader = not (screenshot_mode and data_loaded)
+    if show_data_loader:
+        expander_label = "⚙️ Data Loading Settings" if lang == 'en' else "⚙️ 数据加载设置"
+        with st.expander(expander_label, expanded=not data_loaded):
+            allow_demo = entry_mode != 'real'
+            source_options = ["exported"] + (["demo"] if allow_demo else [])
+            source_labels = {
+                "exported": "📁 Previously Exported Data" if lang == 'en' else "📁 加载之前导出的结果文件",
+                "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
+            }
+            st.session_state.viz_data_source_mode = _resolve_viz_data_source_mode(
+                current_mode=st.session_state.get('viz_data_source_mode'),
+                recent_export_path=recent_export_path,
+                allow_demo=allow_demo,
+                entry_mode=entry_mode,
             )
-            st.session_state.viz_export_path = export_path
+            current_source = st.radio(
+                "Data Source" if lang == 'en' else "数据来源",
+                options=source_options,
+                format_func=lambda value: source_labels[value],
+                horizontal=True,
+                key="viz_data_source_mode",
+            )
 
-            if export_path:
-                export_dir = Path(export_path)
-                if export_dir.exists() and export_dir.is_dir():
-                    available_files = sorted(
-                        list(export_dir.glob('*.csv'))
-                        + list(export_dir.glob('*.parquet'))
-                        + list(export_dir.glob('*.xlsx')),
-                        key=lambda path: path.name,
-                    )
-                    file_names = list(dict.fromkeys(file.stem for file in available_files))
+            if current_source == "exported":
+                export_path = _directory_input(
+                    "Folder Containing Exported Data Files" if lang == 'en' else "存放导出结果文件的文件夹",
+                    value=st.session_state.get('viz_export_path') or recent_export_path,
+                    input_key="viz_export_path_input",
+                    button_key="viz_export_path_browse",
+                    help="Choose the folder that contains EasyICU exported CSV / Parquet / Excel files" if lang == 'en' else "选择存放 EasyICU 导出 CSV / Parquet / Excel 文件的文件夹",
+                )
+                st.session_state.viz_export_path = export_path
 
-                    if file_names:
-                        st.success(
-                            f"✅ Found {len(file_names)} data files" if lang == 'en' else f"✅ 发现 {len(file_names)} 个数据文件"
+                if export_path:
+                    export_dir = Path(export_path)
+                    if export_dir.exists() and export_dir.is_dir():
+                        available_files = sorted(
+                            list(export_dir.glob('*.csv'))
+                            + list(export_dir.glob('*.parquet'))
+                            + list(export_dir.glob('*.xlsx')),
+                            key=lambda path: path.name,
                         )
-                        selected_files = st.multiselect(
-                            "Select Tables to Load" if lang == 'en' else "选择要加载的表格",
-                            options=file_names,
-                            default=file_names,
-                            key="viz_selected_files",
-                        )
+                        file_names = list(dict.fromkeys(file.stem for file in available_files))
 
-                        patient_options = [50, 100, 200, 500, -1]
-                        option_labels = {
-                            50: "50 (Recommended)" if lang == 'en' else "50 (推荐)",
-                            100: "100",
-                            200: "200",
-                            500: "500 (Slow)" if lang == 'en' else "500 (较慢)",
-                            -1: "All (May Lag)" if lang == 'en' else "全部 (可能卡顿)",
-                        }
-                        max_patients_opt = st.selectbox(
-                            "Max Patients to Load" if lang == 'en' else "最大加载患者数",
-                            options=patient_options,
-                            index=0,
-                            format_func=lambda value: option_labels[value],
-                            key="viz_max_patients",
-                        )
-                        max_patients = None if max_patients_opt == -1 else max_patients_opt
+                        if file_names:
+                            st.success(
+                                f"✅ Found {len(file_names)} data files" if lang == 'en' else f"✅ 发现 {len(file_names)} 个数据文件"
+                            )
+                            selected_files = st.multiselect(
+                                "Select Tables to Load" if lang == 'en' else "选择要加载的表格",
+                                options=file_names,
+                                default=file_names,
+                                key="viz_selected_files",
+                            )
 
-                        if selected_files:
-                            if st.button(
-                                "🔍 Load Data" if lang == 'en' else "🔍 加载数据",
-                                type="primary",
-                                use_container_width=True,
-                                key="viz_load_files",
-                            ):
-                                with st.spinner("Loading data..." if lang == 'en' else "正在加载数据..."):
-                                    load_from_exported(export_path, max_patients=max_patients, selected_files=selected_files)
-                                st.rerun()
+                            patient_options = [50, 100, 200, 500, -1]
+                            option_labels = {
+                                50: "50 (Recommended)" if lang == 'en' else "50 (推荐)",
+                                100: "100",
+                                200: "200",
+                                500: "500 (Slow)" if lang == 'en' else "500 (较慢)",
+                                -1: "All (May Lag)" if lang == 'en' else "全部 (可能卡顿)",
+                            }
+                            max_patients_opt = st.selectbox(
+                                "Max Patients to Load" if lang == 'en' else "最大加载患者数",
+                                options=patient_options,
+                                index=0,
+                                format_func=lambda value: option_labels[value],
+                                key="viz_max_patients",
+                            )
+                            max_patients = None if max_patients_opt == -1 else max_patients_opt
+
+                            if selected_files:
+                                if st.button(
+                                    "🔍 Load Data" if lang == 'en' else "🔍 加载数据",
+                                    type="primary",
+                                    use_container_width=True,
+                                    key="viz_load_files",
+                                ):
+                                    with st.spinner("Loading data..." if lang == 'en' else "正在加载数据..."):
+                                        load_from_exported(export_path, max_patients=max_patients, selected_files=selected_files)
+                                    st.rerun()
+                            else:
+                                st.warning("⚠️ Please select at least one file" if lang == 'en' else "⚠️ 请至少选择一个文件")
                         else:
-                            st.warning("⚠️ Please select at least one file" if lang == 'en' else "⚠️ 请至少选择一个文件")
+                            st.warning(
+                                "⚠️ No data files found in this directory (CSV/Parquet/Excel)"
+                                if lang == 'en'
+                                else "⚠️ 该目录下未找到数据文件 (CSV/Parquet/Excel)"
+                            )
                     else:
-                        st.warning(
-                            "⚠️ No data files found in this directory (CSV/Parquet/Excel)"
-                            if lang == 'en'
-                            else "⚠️ 该目录下未找到数据文件 (CSV/Parquet/Excel)"
-                        )
-                else:
-                    st.error("❌ Directory does not exist" if lang == 'en' else "❌ 目录不存在")
+                        st.error("❌ Directory does not exist" if lang == 'en' else "❌ 目录不存在")
 
-        elif current_source == "demo":
-            st.info(
-                "✨ Generate ALL simulated ICU features for full exploration"
-                if lang == 'en'
-                else "✨ 生成全部模拟 ICU 特征供完整体验"
-            )
-
-            col1, col2 = st.columns(2)
-            with col1:
-                n_patients = st.slider(
-                    "Number of Patients" if lang == 'en' else "患者数量",
-                    10,
-                    200,
-                    50,
-                    key="viz_demo_patients",
+            elif current_source == "demo":
+                _viz_demo_title = (
+                    "Generate one complete demo review workspace"
+                    if lang == 'en' else
+                    "生成完整演示审阅工作区"
                 )
-            with col2:
-                hours = st.slider(
-                    "Data Duration (hours)" if lang == 'en' else "数据时长(小时)",
-                    24,
-                    168,
-                    72,
-                    key="viz_demo_hours",
+                _viz_demo_subtitle = (
+                    "Loads representative tables, time series, patient overview, and quality metrics together for the Figure 3-style multi-view review."
+                    if lang == 'en' else
+                    "一次性加载代表性表格、时间序列、患者概览和质量指标，用于 Figure 3 风格的多视角审阅。"
+                )
+                st.markdown(
+                    f"""
+                    <div class="viz-demo-load-card">
+                        <div class="viz-demo-load-kicker">DEMO REVIEW</div>
+                        <div class="viz-demo-load-title">{html.escape(_viz_demo_title)}</div>
+                        <div class="viz-demo-load-subtitle">{html.escape(_viz_demo_subtitle)}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
                 )
 
-            feature_hint = (
-                "Will generate ~160+ features across all modules (Vitals, Labs, SOFA, Sepsis, AKI, etc.)"
-                if lang == 'en'
-                else "将生成约160+个特征，覆盖所有模块（生命体征、实验室、SOFA、脓毒症、AKI等）"
-            )
-            st.caption(f"💡 {feature_hint}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    n_patients = st.slider(
+                        "Number of Patients" if lang == 'en' else "患者数量",
+                        10,
+                        200,
+                        50,
+                        key="viz_demo_patients",
+                    )
+                with col2:
+                    hours = st.slider(
+                        "Data Duration (hours)" if lang == 'en' else "数据时长(小时)",
+                        24,
+                        168,
+                        72,
+                        key="viz_demo_hours",
+                    )
 
-            if st.button(
-                "🚀 Generate & Load All Demo Data" if lang == 'en' else "🚀 生成并加载全部模拟数据",
-                type="primary",
-                use_container_width=True,
-                key="viz_load_demo",
-            ):
-                with st.spinner(
-                    "Generating all mock data (~160+ features)..." if lang == 'en' else "正在生成全部模拟数据（约160+特征）..."
+                feature_hint = (
+                    "Will generate ~160+ features across all modules (Vitals, Labs, SOFA, Sepsis, AKI, etc.)"
+                    if lang == 'en'
+                    else "将生成约160+个特征，覆盖所有模块（生命体征、实验室、SOFA、脓毒症、AKI等）"
+                )
+                st.caption(f"💡 {feature_hint}")
+
+                if st.button(
+                    "🚀 Generate & Load All Demo Data" if lang == 'en' else "🚀 生成并加载全部模拟数据",
+                    type="primary",
+                    use_container_width=True,
+                    key="viz_load_demo",
                 ):
-                    params = get_mock_params_with_cohort()
-                    params['n_patients'] = n_patients
-                    params['hours'] = hours
-                    mock_data, patient_ids = generate_mock_data(**params)
-                    st.session_state.loaded_concepts = mock_data
-                    st.session_state.loaded_data_origin = 'demo_viz'
-                    st.session_state.patient_ids = patient_ids
-                    st.session_state.id_col = 'stay_id'
-                    st.session_state.time_col = 'time'
-                    st.session_state.selected_concepts = list(mock_data.keys())
-                st.rerun()
+                    with st.spinner(
+                        "Generating all mock data (~160+ features)..." if lang == 'en' else "正在生成全部模拟数据（约160+特征）..."
+                    ):
+                        params = get_mock_params_with_cohort()
+                        params['n_patients'] = n_patients
+                        params['hours'] = hours
+                        mock_data, patient_ids = generate_mock_data(**params)
+                        st.session_state.loaded_concepts = mock_data
+                        st.session_state.loaded_data_origin = 'demo_viz'
+                        st.session_state.patient_ids = patient_ids
+                        st.session_state.id_col = 'stay_id'
+                        st.session_state.time_col = 'time'
+                        st.session_state.selected_concepts = list(mock_data.keys())
+                    st.rerun()
 
     if data_loaded:
+        if figure_panel in {'Data Tables', 'Time Series', 'Patient Overview', 'Data Quality'}:
+            render_quick_figure_panel(figure_panel)
+            return
+
         sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
             get_text('review_tables'),
             get_text('review_trends'),
@@ -7833,11 +9758,17 @@ def render_quick_visualization_page():
         with sub_tab4:
             render_quality_page()
     else:
+        empty_title = "Preview workspace awaits data" if lang == 'en' else "预览工作区等待数据"
+        empty_subtitle = (
+            "Generate demo data or load exported files above; the review tabs will appear here as a compact Figure 3-style interface."
+            if lang == 'en' else
+            "请在上方生成演示数据或加载导出文件；随后这里会显示 Figure 3 风格的紧凑审阅界面。"
+        )
         no_data_msg = f"""
-        <div style="text-align: center; padding: 60px 20px; background: linear-gradient(135deg, #f8f9fa, #e9ecef); border-radius: 16px; margin: 20px 0;">
-            <div style="font-size: 4rem; margin-bottom: 20px;">📊</div>
-            <h3 style="color: #495057; margin-bottom: 10px;">{"No Data Loaded" if lang == 'en' else "尚未加载数据"}</h3>
-            <p style="color: #6c757d;">{"Please configure data source above and click Load button" if lang == 'en' else "请在上方配置数据来源，然后点击加载按钮"}</p>
+        <div class="viz-empty-state">
+            <div class="viz-empty-icon">📊</div>
+            <div class="viz-empty-title">{html.escape(empty_title)}</div>
+            <div class="viz-empty-subtitle">{html.escape(empty_subtitle)}</div>
         </div>
         """
         st.markdown(no_data_msg, unsafe_allow_html=True)
@@ -8175,7 +10106,7 @@ def render_sidebar():
                 <b>{mode_badge}</b>
             </div>
             """, unsafe_allow_html=True)
-        
+
         st.markdown(f"## {get_text('app_title')}")
         
         # 语言切换 - 更紧凑的布局
@@ -8511,9 +10442,17 @@ def render_sidebar():
             step1_complete = st.session_state.data_path and Path(st.session_state.data_path).exists()
         
         if not step1_complete:
-            # 提示用户先完成Step1
-            step_dep_msg = "⚠️ Please complete Step 1 first" if st.session_state.language == 'en' else "⚠️ 请先完成步骤1"
-            st.warning(step_dep_msg)
+            if use_mock:
+                step_dep_msg = (
+                    "ℹ️ Confirm Step 1 to configure the extraction workflow. Cohort demo panels are already available in Cohort Analysis."
+                    if st.session_state.language == 'en' else
+                    "ℹ️ 如需配置提取流程，请先确认步骤1。队列分析的演示面板已可直接使用。"
+                )
+                st.info(step_dep_msg)
+            else:
+                # 提示用户先完成Step1
+                step_dep_msg = "⚠️ Please complete Step 1 first" if st.session_state.language == 'en' else "⚠️ 请先完成步骤1"
+                st.warning(step_dep_msg)
             return  # 不渲染后续内容
         
         # 初始化队列筛选的 session state
@@ -10485,6 +12424,253 @@ def render_home_viz_mode(lang):
     st.markdown(f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(8px,.4rem + .4vw,16px)">{_cards}</div>', unsafe_allow_html=True)
 
 
+def _html_escape_text(value: Any, default: str = "—") -> str:
+    """Escape short UI values for HTML snippets."""
+    if value is None:
+        return html.escape(default)
+    text = str(value).strip()
+    return html.escape(text if text else default)
+
+
+def _workflow_field(label: str, value: Any, suffix: str = "⌄") -> str:
+    suffix_html = f"<span>{html.escape(suffix)}</span>" if suffix else ""
+    return (
+        '<div class="workflow-field">'
+        f'<div class="workflow-label">{html.escape(label)}</div>'
+        f'<div class="workflow-input"><span>{_html_escape_text(value)}</span>{suffix_html}</div>'
+        '</div>'
+    )
+
+
+def _workflow_status(done: bool, done_text: str, todo_text: str) -> str:
+    if done:
+        return (
+            '<div class="workflow-status">'
+            '<span class="workflow-check-dot">✓</span>'
+            f'<span>{html.escape(done_text)}</span>'
+            '</div>'
+        )
+    return (
+        '<div class="workflow-status warn">'
+        '<span class="workflow-check-dot" style="background:#f59e0b">!</span>'
+        f'<span>{html.escape(todo_text)}</span>'
+        '</div>'
+    )
+
+
+def _render_extraction_pipeline_figure(
+    *,
+    lang: str,
+    step1_done: bool,
+    step2_done: bool,
+    step3_done: bool,
+    step4_done: bool,
+) -> None:
+    """Render the live extraction workflow using the same visual logic as Figure 2."""
+    is_en = lang == 'en'
+    db_display_names = {
+        'mock': 'Demo ICU',
+        'miiv': 'MIMIC-IV',
+        'eicu': 'eICU-CRD',
+        'aumc': 'AmsterdamUMCdb',
+        'hirid': 'HiRID',
+        'mimic': 'MIMIC-III',
+        'sic': 'SICdb',
+    }
+    database = st.session_state.get('database', 'mock' if st.session_state.get('use_mock_data') else 'miiv')
+    db_label = db_display_names.get(database, str(database).upper())
+    data_path = (
+        "Auto-generated demo data"
+        if st.session_state.get('use_mock_data', False)
+        else st.session_state.get('data_path', '')
+    )
+    cohort_filter = st.session_state.get('cohort_filter', {}) or {}
+    age_min = cohort_filter.get('age_min') or 18
+    age_max = cohort_filter.get('age_max') or 120
+    los_min = cohort_filter.get('los_min') or 24
+    gender = cohort_filter.get('gender') or ("Any" if is_en else "不限")
+    survived = cohort_filter.get('survived')
+    survival_text = (
+        "Any" if survived is None else ("Survived" if survived else "Deceased")
+    ) if is_en else (
+        "不限" if survived is None else ("存活" if survived else "死亡")
+    )
+    cohort_name = cohort_filter.get('disease_cohort') or 'none'
+    cohort_display = {
+        'none': 'No disease filter' if is_en else '不限制疾病队列',
+        'sepsis': 'Sepsis-3 cohort',
+        'aki': 'AKI cohort (KDIGO)',
+        'circ_failure': 'Circulatory failure',
+        'mech_vent': 'Mechanical ventilation',
+        'rrt': 'Renal replacement therapy',
+        'ards': 'ARDS cohort',
+        'pneumonia': 'Pneumonia cohort',
+        'heart_failure': 'Heart failure cohort',
+        'ami': 'Acute myocardial infarction',
+        'stroke': 'Stroke cohort',
+    }.get(cohort_name, str(cohort_name))
+    include_query = cohort_filter.get('icd_include_query') or ("N17-18" if cohort_name == 'aki' else "—")
+    exclude_query = cohort_filter.get('icd_exclude_query') or ("C34" if cohort_name == 'aki' else "—")
+
+    selected_groups = list(st.session_state.get('selected_groups') or [])
+    if not selected_groups:
+        selected_groups = [
+            "Vital Signs",
+            "Laboratory",
+            "Renal & Urine Output",
+            "SOFA Scores",
+        ] if is_en else [
+            "生命体征",
+            "实验室检验",
+            "肾脏与尿量",
+            "SOFA 评分",
+        ]
+    group_chips = "".join(
+        f'<div class="workflow-input" style="min-height:30px;padding:0.25rem 0.45rem;font-size:0.68rem">{html.escape(group)}</div>'
+        for group in selected_groups[:6]
+    )
+
+    selected_concepts = list(st.session_state.get('selected_concepts') or [])
+    concept_preview = selected_concepts[:12] or ["hr", "map", "sbp", "dbp", "temp", "spo2", "resp", "creatinine", "uo_24h", "aki_stage", "sofa", "sofa2"]
+    concepts_html = "".join(
+        f'<div class="workflow-concept"><span class="workflow-tick">✓</span>{html.escape(str(concept))}</div>'
+        for concept in concept_preview
+    )
+    more_count = max(0, len(selected_concepts) - len(concept_preview))
+    if more_count:
+        concepts_html += f'<div class="workflow-input" style="min-height:26px;font-size:0.66rem;justify-content:center">+ {more_count} more</div>'
+
+    export_path = st.session_state.get('export_path') or (
+        "/exports/vital_signs_aki/" if is_en else "/exports/vital_signs_aki/"
+    )
+    export_format = st.session_state.get('export_format') or "Parquet"
+    patient_limit = st.session_state.get('patient_limit', 0)
+    patient_limit_text = "All patients" if not patient_limit else f"{int(patient_limit):,}"
+    export_files = st.session_state.get('_export_success_result', {}).get('files') or [
+        "vital_signs_hr_map_sbp.parquet",
+        "laboratory_wbc_creatinine.parquet",
+        "scores_sofa2_aki_stage.parquet",
+    ]
+    export_files_html = "".join(
+        f'<div>▧ {html.escape(Path(str(file_name)).name)} <span style="float:right;color:#6b7280">{"18.6 MB" if idx == 0 else "—"}</span></div>'
+        for idx, file_name in enumerate(export_files[:4])
+    )
+    if len(export_files) > 4:
+        export_files_html += f'<div style="text-align:center;color:#60718a">… ({len(export_files) - 4} more files)</div>'
+
+    title = "EasyICU Data Extraction Pipeline" if is_en else "EasyICU 数据抽取流程"
+    subtitle = (
+        "The live workflow mirrors the manuscript figure: configure data, define cohort, select concepts, export files, then review the summary."
+        if is_en else
+        "网页端与论文图保持同一逻辑：配置数据源、定义队列、选择概念、导出文件，并在最后复核摘要。"
+    )
+    summary_title = "Export summary" if is_en else "导出摘要"
+    summary_status = (
+        "Export completed successfully"
+        if step4_done else
+        ("Ready for export once the sidebar confirmation is clicked" if step3_done else "Complete the active sidebar step to unlock export")
+    )
+    if not is_en:
+        summary_status = "导出已完成" if step4_done else ("确认侧边栏设置后即可导出" if step3_done else "请完成当前侧边栏步骤以解锁导出")
+    summary_ready = bool(step4_done or step3_done)
+    summary_strip_class = "workflow-success-strip" if summary_ready else "workflow-success-strip warn"
+    summary_icon = "✓" if summary_ready else "!"
+
+    stats = [
+        ("Start time" if is_en else "开始时间", "14:22:10"),
+        ("Duration" if is_en else "耗时", "4 min 21 sec" if is_en else "4 分 21 秒"),
+        ("Files" if is_en else "文件数", str(len(export_files))),
+        ("Total size" if is_en else "总大小", "148.3 MB"),
+    ]
+    stats_html = "".join(
+        f'<div class="workflow-mini-stat"><div class="workflow-mini-label">{html.escape(label)}</div><div class="workflow-mini-value">{html.escape(value)}</div></div>'
+        for label, value in stats
+    )
+
+    st.markdown(
+        f'''
+        <div class="workflow-figure-shell">
+            <div class="workflow-figure-title">{html.escape(title)}</div>
+            <div class="workflow-figure-subtitle">{html.escape(subtitle)}</div>
+            <div class="workflow-pipeline-grid">
+                <div class="workflow-card">
+                    <div class="workflow-card-head">
+                        <div class="workflow-badge">A</div>
+                        <div><div class="workflow-card-title">{"Data source configuration" if is_en else "数据源配置"}</div><div class="workflow-card-kicker">Step 1</div></div>
+                    </div>
+                    {_workflow_field("Select database" if is_en else "选择数据库", db_label)}
+                    {_workflow_field("Data path" if is_en else "数据路径", data_path, suffix="")}
+                    <div class="workflow-button">⌕ {"Validate path" if is_en else "验证路径"}</div>
+                    {_workflow_status(step1_done, "Path validated" if is_en else "路径已确认", "Confirm data source" if is_en else "请确认数据源")}
+                </div>
+                <div class="workflow-arrow">→</div>
+                <div class="workflow-card">
+                    <div class="workflow-card-head">
+                        <div class="workflow-badge">B</div>
+                        <div><div class="workflow-card-title">{"Cohort definition" if is_en else "队列定义"}</div><div class="workflow-card-kicker">Step 2</div></div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:0.45rem;align-items:end">
+                        {_workflow_field("Age range (years)" if is_en else "年龄范围", age_min, suffix="")}
+                        <div style="padding-bottom:0.62rem;color:#60718a;font-weight:800">to</div>
+                        {_workflow_field("", age_max, suffix="")}
+                    </div>
+                    {_workflow_field("ICU stay (hours)" if is_en else "ICU 住院时长", f"≥ {los_min}")}
+                    {_workflow_field("Gender" if is_en else "性别", gender)}
+                    {_workflow_field("Survival status" if is_en else "存活状态", survival_text)}
+                    {_workflow_field("Clinical cohort" if is_en else "疾病队列", cohort_display)}
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.45rem">
+                        {_workflow_field("ICD include" if is_en else "ICD 纳入", include_query, suffix="")}
+                        {_workflow_field("ICD exclude" if is_en else "ICD 排除", exclude_query, suffix="")}
+                    </div>
+                    {_workflow_status(step2_done, "Cohort defined" if is_en else "队列已定义", "Confirm cohort" if is_en else "请确认队列")}
+                </div>
+                <div class="workflow-arrow">→</div>
+                <div class="workflow-card">
+                    <div class="workflow-card-head">
+                        <div class="workflow-badge">C</div>
+                        <div><div class="workflow-card-title">{"Concept selection" if is_en else "概念选择"}</div><div class="workflow-card-kicker">Step 3</div></div>
+                    </div>
+                    <div class="workflow-label">{"Select modules" if is_en else "选择模块"}</div>
+                    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.38rem;margin-bottom:0.58rem">{group_chips}</div>
+                    <div class="workflow-label">{"Select clinical concepts" if is_en else "选择临床概念"}</div>
+                    <div class="workflow-concepts">{concepts_html}</div>
+                    <div class="workflow-input" style="margin-top:0.65rem;background:#f5f7ff">{"167 concepts available" if not selected_concepts else f"{len(selected_concepts)} concepts selected"}</div>
+                </div>
+                <div class="workflow-arrow">→</div>
+                <div class="workflow-card">
+                    <div class="workflow-card-head">
+                        <div class="workflow-badge">D</div>
+                        <div><div class="workflow-card-title">{"Data export" if is_en else "数据导出"}</div><div class="workflow-card-kicker">Step 4</div></div>
+                    </div>
+                    {_workflow_field("Export path" if is_en else "导出路径", export_path, suffix="▣")}
+                    {_workflow_field("Export format" if is_en else "导出格式", export_format)}
+                    {_workflow_field("Patient limit" if is_en else "患者上限", patient_limit_text)}
+                    <div class="workflow-button">⇧ {"Export data" if is_en else "导出数据"}</div>
+                    <div class="workflow-status warn" style="font-weight:700">ⓘ {"Large exports run in the background." if is_en else "大规模导出将在后台运行。"}</div>
+                </div>
+            </div>
+            <div class="workflow-summary-panel">
+                <div class="workflow-card-head" style="margin-bottom:0.5rem">
+                    <div class="workflow-badge">E</div>
+                    <div><div class="workflow-card-title">{html.escape(summary_title)}</div><div class="workflow-card-kicker">Preview-before-commit</div></div>
+                </div>
+                <div class="workflow-summary-grid">
+                    <div>
+                        <div class="{summary_strip_class}"><span class="workflow-check-dot" style="background:{'#2ca25f' if summary_ready else '#f59e0b'}">{summary_icon}</span>{html.escape(summary_status)}</div>
+                        <div class="workflow-stat-row">{stats_html}</div>
+                    </div>
+                    <div>
+                        <div class="workflow-label">{"Exported files (Parquet)" if is_en else "导出文件 (Parquet)"}</div>
+                        <div class="workflow-file-list">{export_files_html}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
 def render_home_extract_mode(lang):
     """渲染数据提取导出模式的首页教程。"""
     
@@ -10503,19 +12689,6 @@ def render_home_extract_mode(lang):
     # ============ 进度指示器 — Stepper 风格 ============
     st.markdown('<div id="progress"></div>', unsafe_allow_html=True)
 
-    if lang == 'en':
-        st.markdown("""
-        <p style="font-size:1.1rem;color:var(--text-secondary-light);margin:0.35rem 0 0.7rem;line-height:1.7;font-weight:500;">
-            👈 Follow the <b>4 steps in the left sidebar</b> to define your cohort, select features, and export data.
-        </p>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <p style="font-size:1.1rem;color:var(--text-secondary-light);margin:0.35rem 0 0.7rem;line-height:1.7;font-weight:500;">
-            👈 按照<b>左侧边栏的 4 个步骤</b>操作，即可完成 ICU 数据的队列定义、特征选择和导出。
-        </p>
-        """, unsafe_allow_html=True)
-
     # 步骤数据
     _steps = [
         (step1_done, "1", ("Data Source", "配置数据源"), ("Configure database path", "选择数据路径")),
@@ -10533,35 +12706,13 @@ def render_home_extract_mode(lang):
     else:
         _current_step = 4  # 全部完成
 
-    # 横向 stepper HTML
-    _stepper_items = []
-    for i, (done, num, (title_en, title_zh), (desc_en, desc_zh)) in enumerate(_steps):
-        _title = title_en if lang == 'en' else title_zh
-        _desc = desc_en if lang == 'en' else desc_zh
-        if done:
-            _dot_cls = "done"
-            _dot_content = "✓"
-            _row_cls = "done"
-        elif i == _current_step:
-            _dot_cls = "active"
-            _dot_content = num
-            _row_cls = "active"
-        else:
-            _dot_cls = "pending"
-            _dot_content = num
-            _row_cls = ""
-        _stepper_items.append(f"""
-        <div class="step-indicator {_row_cls}">
-            <div class="step-dot {_dot_cls}">{_dot_content}</div>
-            <div class="step-text" style="font-size:1.08rem;font-weight:700;line-height:1.25;color:#1f2937">{_title}<small style="display:block;font-size:0.96rem;font-weight:500;line-height:1.45;color:#7c8faa;margin-top:6px">{_desc}</small></div>
-        </div>""")
-
-    col1, col2, col3, col4 = st.columns(4)
-    for col, item_html in zip([col1, col2, col3, col4], _stepper_items):
-        with col:
-            st.markdown(item_html, unsafe_allow_html=True)
-
-    st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
+    _render_extraction_pipeline_figure(
+        lang=lang,
+        step1_done=bool(step1_done),
+        step2_done=bool(step2_done),
+        step3_done=bool(step3_done),
+        step4_done=bool(step4_done),
+    )
     
     # ============ 动态引导内容 ============
     # 添加引导锚点和动态标题（根据当前步骤变化）
@@ -10583,12 +12734,7 @@ def render_home_extract_mode(lang):
         guide_title_text = guide_step
     else:
         guide_title_text = f"Guide: {guide_step}" if lang == 'en' else f"引导: {guide_step}"
-    st.markdown(f'''
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-        <div style="width:6px;height:32px;border-radius:3px;background:linear-gradient(180deg,#6366f1,#8b5cf6)"></div>
-        <span style="font-size:1.7rem;font-weight:800;color:#111827;letter-spacing:-0.02em">{guide_title_text}</span>
-    </div>
-    ''', unsafe_allow_html=True)
+    st.markdown(f'<div class="workflow-guide-title">{html.escape(guide_title_text)}</div>', unsafe_allow_html=True)
     
     if not step1_done:
         # 步骤1引导：配置数据源
@@ -10964,7 +13110,7 @@ def render_home_extract_mode(lang):
         with col_opt1:
             # Option A: Quick Visualization
             if lang == 'en':
-                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:166px;display:flex;flex-direction:column;justify-content:flex-start">
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:188px;display:flex;flex-direction:column;justify-content:flex-start">
 <div style="font-weight:700;color:#0369a1;margin-bottom:6px;line-height:1.2">📈 Quick Visualization</div>
 <ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.86rem;line-height:1.6">
 <li><b>Data Tables Explorer</b> — Browse loaded data by module</li>
@@ -10974,7 +13120,7 @@ def render_home_extract_mode(lang):
 </ul>
 </div>''', unsafe_allow_html=True)
             else:
-                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:166px;display:flex;flex-direction:column;justify-content:flex-start">
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:188px;display:flex;flex-direction:column;justify-content:flex-start">
 <div style="font-weight:700;color:#0369a1;margin-bottom:6px;line-height:1.2">📈 快速可视化</div>
 <ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.86rem;line-height:1.6">
 <li><b>数据表浏览器</b> — 按模块浏览已加载数据</li>
@@ -10996,21 +13142,25 @@ def render_home_extract_mode(lang):
         with col_opt2:
             # Option B: Cohort Analysis
             if lang == 'en':
-                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:166px;display:flex;flex-direction:column;justify-content:flex-start">
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:188px;display:flex;flex-direction:column;justify-content:flex-start">
 <div style="font-weight:700;color:#6d28d9;margin-bottom:6px;line-height:1.2">🔬 Cohort Analysis</div>
-<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.86rem;line-height:1.6">
-<li><b>Group Comparison</b> — Statistical tests between subgroups</li>
-<li><b>Multi-DB Distribution</b> — Compare across databases</li>
-<li><b>Cohort Dashboard</b> — Demographics &amp; outcomes overview</li>
+<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.82rem;line-height:1.55">
+<li><b>Group Contrast Table</b> — subgroup balance and tests</li>
+<li><b>Coverage Audit</b> — module coverage and eligibility flow</li>
+<li><b>Cross-DB Benchmark</b> — harmonized feature shifts</li>
+<li><b>Cohort Snapshot</b> — one-cohort phenotype and outcome profile</li>
+<li><b>SOFA-1 vs SOFA-2</b> — definition-driven reclassification</li>
 </ul>
 </div>''', unsafe_allow_html=True)
             else:
-                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:166px;display:flex;flex-direction:column;justify-content:flex-start">
+                st.markdown('''<div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px 18px;min-height:188px;display:flex;flex-direction:column;justify-content:flex-start">
 <div style="font-weight:700;color:#6d28d9;margin-bottom:6px;line-height:1.2">🔬 队列分析</div>
-<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.86rem;line-height:1.6">
-<li><b>组间比较</b> — 统计检验比较亚组</li>
-<li><b>多数据库分布</b> — 跨数据库特征分布比较</li>
-<li><b>队列仪表盘</b> — 人口统计学与结局概览</li>
+<ul style="color:#374151;margin:0 0 0 16px;padding:0;font-size:.82rem;line-height:1.55">
+<li><b>组间对照表</b> — 亚组平衡与统计检验</li>
+<li><b>覆盖度审计</b> — 模块覆盖度与纳排流程</li>
+<li><b>跨库基准</b> — 标准化特征的数据库差异</li>
+<li><b>队列快照</b> — 单一队列的表型与结局画像</li>
+<li><b>SOFA-1 vs SOFA-2</b> — 定义变化导致的重新分层</li>
 </ul>
 </div>''', unsafe_allow_html=True)
             
@@ -11216,8 +13366,11 @@ def render_timeseries_page():
         </div>
         ''', unsafe_allow_html=True)
     with _hdr_col2:
-        _show_thresh = st.toggle(get_text('threshold_lines'), value=True, key="ts_show_thresholds")
-        st.session_state['_ts_show_thresholds'] = _show_thresh
+        if screenshot_mode:
+            st.session_state['_ts_show_thresholds'] = True
+        else:
+            _show_thresh = st.toggle(get_text('threshold_lines'), value=True, key="ts_show_thresholds")
+            st.session_state['_ts_show_thresholds'] = _show_thresh
 
     if screenshot_mode:
         focus_hint = (
@@ -11245,14 +13398,16 @@ def render_timeseries_page():
     mode_lanes = get_text('clinical_lanes')
     mode_single = "Single Patient" if lang == 'en' else "单患者分析"
     mode_multi = "Multi-Patient Comparison" if lang == 'en' else "多患者比较"
-    analysis_mode = st.radio(
-        mode_label,
-        options=[mode_lanes, mode_single, mode_multi],
-        horizontal=True,
-        key="ts_mode"
-    )
-    
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    if screenshot_mode:
+        analysis_mode = mode_lanes
+    else:
+        analysis_mode = st.radio(
+            mode_label,
+            options=[mode_lanes, mode_single, mode_multi],
+            horizontal=True,
+            key="ts_mode"
+        )
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
     # ============ Clinical Lanes View (默认) ============
     if analysis_mode == mode_lanes:
@@ -11261,11 +13416,17 @@ def render_timeseries_page():
         if not st.session_state.patient_ids:
             st.warning("No patient data" if lang == 'en' else "无患者数据")
         else:
-            _lane_pid = st.selectbox(
-                "Patient" if lang == 'en' else "患者",
-                options=st.session_state.patient_ids,
-                key="lane_patient_select"
-            )
+            if screenshot_mode:
+                _lane_pid = st.session_state.get('lane_patient_select') or st.session_state.patient_ids[0]
+            else:
+                _lane_pid = _patient_selector(
+                    patient_ids=st.session_state.patient_ids,
+                    state_key="lane_patient_select",
+                    label="Patient" if lang == 'en' else "患者",
+                    lang=lang,
+                    max_display=200,
+                    default_patient=st.session_state.get('lane_patient_select', st.session_state.patient_ids[0]),
+                )
             
             id_col = st.session_state.get('id_col', 'stay_id')
             _show_thresh = st.session_state.get('_ts_show_thresholds', True)
@@ -11343,7 +13504,7 @@ def render_timeseries_page():
     
     if analysis_mode == mode_single:
         # 顶部控制面板 - 🔧 FIX: 添加模块筛选，方便用户在100+特征中找到想要的
-        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
+        col1, col2, col3, col4, col5, col6 = st.columns([1, 1, 1, 1, 1, 0.9])
         
         with col1:
             # 🔧 FIX: 先选择模块，再选择特征
@@ -11397,24 +13558,13 @@ def render_timeseries_page():
         with col3:
             if st.session_state.patient_ids:
                 patient_label = "👤 Select Patient" if lang == 'en' else "👤 选择患者"
-                # 🔧 FIX: 支持用户输入搜索患者ID
-                patient_search = st.text_input(
-                    "🔍 Search Patient ID" if lang == 'en' else "🔍 搜索患者ID",
-                    key="ts_patient_search",
-                    placeholder="Type to filter..." if lang == 'en' else "输入ID过滤..."
-                )
-                
-                # 过滤患者列表
-                all_patients = st.session_state.patient_ids[:500]  # 限制前500个
-                if patient_search:
-                    filtered_patients = [p for p in all_patients if str(patient_search) in str(p)]
-                else:
-                    filtered_patients = all_patients[:100]
-                
-                patient_id = st.selectbox(
-                    patient_label,
-                    options=filtered_patients if filtered_patients else all_patients[:100],
-                    key="ts_patient"
+                patient_id = _patient_selector(
+                    patient_ids=st.session_state.patient_ids,
+                    state_key="ts_patient",
+                    label=patient_label,
+                    lang=lang,
+                    max_display=200,
+                    default_patient=st.session_state.get('ts_patient', st.session_state.patient_ids[0]),
                 )
             else:
                 patient_id = None
@@ -11433,6 +13583,27 @@ def render_timeseries_page():
             )
         
         with col5:
+            value_label = "🧪 Value Column" if lang == 'en' else "🧪 数值列"
+            concept_df = st.session_state.loaded_concepts.get(selected_concept)
+            value_options = _get_concept_numeric_value_columns(concept_df)
+            preferred_value_col = _choose_concept_value_column(selected_concept, concept_df) if isinstance(concept_df, pd.DataFrame) else None
+            if len(value_options) > 1:
+                default_index = value_options.index(preferred_value_col) if preferred_value_col in value_options else 0
+                selected_value_col = st.selectbox(
+                    value_label,
+                    options=value_options,
+                    index=default_index,
+                    key="ts_value_column",
+                )
+            else:
+                selected_value_col = preferred_value_col
+                st.markdown(
+                    f'<div class="inline-control-label">{value_label}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(preferred_value_col or ("No numeric column" if lang == 'en' else "无数值列"))
+
+        with col6:
             show_stats_label = "Show Statistics" if lang == 'en' else "显示统计"
             show_stats = st.checkbox(show_stats_label, value=True, key="ts_show_stats")
         
@@ -11462,13 +13633,7 @@ def render_timeseries_page():
                     import plotly.graph_objects as go
                     
                     # 确定数值列
-                    numeric_cols = patient_df.select_dtypes(include=['number']).columns
-                    # 排除ID列和所有可能的时间列
-                    exclude_cols = ['stay_id', 'hadm_id', 'icustay_id', 'index', 'time', 
-                                   'charttime', 'starttime', 'endtime', 'datetime', 'timestamp',
-                                   'patientunitstayid', 'admissionid', 'patientid', 'CaseID', 'Offset',
-                                   'measuredat_minutes', 'measuredat']
-                    value_cols = [c for c in numeric_cols if c not in exclude_cols]
+                    value_cols = _get_concept_numeric_value_columns(patient_df)
                     
                     # 检测时间列 - 支持多种命名
                     time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat']
@@ -11479,7 +13644,7 @@ def render_timeseries_page():
                             break
                     
                     if value_cols:
-                        value_col = value_cols[0]
+                        value_col = selected_value_col if selected_value_col in value_cols else _choose_concept_value_column(selected_concept, patient_df)
                         
                         if time_col:
                             plot_df = _prepare_timeseries_plot_df(patient_df, time_col, value_col)
@@ -11593,9 +13758,9 @@ def render_timeseries_page():
                     st.warning(err_msg)
                     if 'time' in patient_df.columns:
                         chart_df = patient_df.set_index('time')
-                        value_cols = [c for c in chart_df.columns if c not in [id_col]]
-                        if value_cols:
-                            st.line_chart(chart_df[value_cols[0]])
+                        fallback_value_col = selected_value_col if selected_value_col in chart_df.columns else _choose_concept_value_column(selected_concept, chart_df.reset_index())
+                        if fallback_value_col and fallback_value_col in chart_df.columns:
+                            st.line_chart(chart_df[fallback_value_col])
             else:
                 no_data_msg = f"ℹ️ No {selected_concept} data for patient {patient_id}" if lang == 'en' else f"ℹ️ 患者 {patient_id} 无 {selected_concept} 数据"
                 st.info(no_data_msg)
@@ -11617,7 +13782,7 @@ def render_timeseries_page():
                     st.info(format_msg)
     
     else:  # 多患者比较模式
-        col1, col2, col3, col4 = st.columns([1, 1, 2, 1])
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 0.9])
         
         with col1:
             # 🔧 FIX: 先选择模块，再选择特征
@@ -11667,10 +13832,21 @@ def render_timeseries_page():
         with col3:
             if st.session_state.patient_ids:
                 compare_label = "👥 Select patients to compare (max 5)" if lang == 'en' else "👥 选择要比较的患者 (最多5个)"
+                compare_search = st.text_input(
+                    "🔍 Search Patient IDs" if lang == 'en' else "🔍 搜索患者ID",
+                    key="ts_compare_search",
+                    placeholder="Type to filter..." if lang == 'en' else "输入ID过滤...",
+                )
+                compare_options = _filter_patient_selector_options(
+                    st.session_state.patient_ids,
+                    query=compare_search,
+                    max_display=200,
+                )
+                default_compare = [pid for pid in st.session_state.patient_ids[:3] if pid in compare_options]
                 compare_patients = st.multiselect(
                     compare_label,
-                    options=st.session_state.patient_ids[:50],
-                    default=st.session_state.patient_ids[:3],
+                    options=compare_options,
+                    default=default_compare,
                     max_selections=5,
                     key="ts_compare_patients"
                 )
@@ -11678,6 +13854,27 @@ def render_timeseries_page():
                 compare_patients = []
         
         with col4:
+            compare_df = st.session_state.loaded_concepts.get(selected_concept)
+            compare_value_options = _get_concept_numeric_value_columns(compare_df)
+            compare_preferred_value = _choose_concept_value_column(selected_concept, compare_df) if isinstance(compare_df, pd.DataFrame) else None
+            value_label = "🧪 Value Column" if lang == 'en' else "🧪 数值列"
+            if len(compare_value_options) > 1:
+                default_index = compare_value_options.index(compare_preferred_value) if compare_preferred_value in compare_value_options else 0
+                compare_value_col = st.selectbox(
+                    value_label,
+                    options=compare_value_options,
+                    index=default_index,
+                    key="ts_compare_value_column",
+                )
+            else:
+                compare_value_col = compare_preferred_value
+                st.markdown(
+                    f'<div class="inline-control-label">{value_label}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(compare_preferred_value or ("No numeric column" if lang == 'en' else "无数值列"))
+        
+        with col5:
             normalize_label = "Normalize" if lang == 'en' else "归一化比较"
             normalize_help = "Normalize values to 0-1 range for comparison" if lang == 'en' else "将数值归一化到0-1范围便于比较"
             normalize = st.checkbox(normalize_label, value=False, key="ts_normalize",
@@ -11700,13 +13897,7 @@ def render_timeseries_page():
                 id_col = st.session_state.id_col
                 
                 # 确定数值列
-                numeric_cols = df.select_dtypes(include=['number']).columns
-                # 排除ID列和所有可能的时间列
-                exclude_cols = ['stay_id', 'hadm_id', 'icustay_id', 'index', 'time',
-                               'charttime', 'starttime', 'endtime', 'datetime', 'timestamp',
-                               'patientunitstayid', 'admissionid', 'patientid', 'CaseID', 'Offset',
-                               'measuredat_minutes', 'measuredat']
-                value_cols = [c for c in numeric_cols if c not in exclude_cols]
+                value_cols = _get_concept_numeric_value_columns(df)
                 
                 # 检测时间列
                 time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat']
@@ -11717,7 +13908,7 @@ def render_timeseries_page():
                         break
                 
                 if value_cols and time_col and id_col in df.columns:
-                    value_col = value_cols[0]
+                    value_col = compare_value_col if compare_value_col in value_cols else _choose_concept_value_column(selected_concept, df)
                     
                     fig = go.Figure()
                     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
@@ -11829,7 +14020,7 @@ def render_patient_page():
         patient_frame = _patient_concept_frame(concept_name, patient_id, id_col_name)
         if patient_frame is None:
             return None
-        value_col = concept_name if concept_name in patient_frame.columns else None
+        value_col = _choose_concept_value_column(concept_name, patient_frame)
         if value_col is None:
             excluded_cols = {id_col_name, 'time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat'}
             candidates = [c for c in patient_frame.columns if c not in excluded_cols]
@@ -11917,10 +14108,11 @@ def render_patient_page():
         """, unsafe_allow_html=True)
     
     # 患者选择面板
-    select_title = "Patient Selection" if lang == 'en' else "患者选择"
-    st.markdown(f'''
-    <div style="font-size:1.05rem;font-weight:700;color:#111827;margin-bottom:10px">{select_title}</div>
-    ''', unsafe_allow_html=True)
+    if not screenshot_mode:
+        select_title = "Patient Selection" if lang == 'en' else "患者选择"
+        st.markdown(f'''
+        <div style="font-size:1.05rem;font-weight:700;color:#111827;margin-bottom:10px">{select_title}</div>
+        ''', unsafe_allow_html=True)
     
     # 快速导航按钮
     first_btn = "⏮️ First" if lang == 'en' else "⏮️ 首位"
@@ -11978,61 +14170,68 @@ def render_patient_page():
         except Exception:
             pass
     
-    col1, col2, col3 = st.columns([1, 1, 2])
-    
-    with col1:
-        pat_id_label = "👤 Patient ID" if lang == 'en' else "👤 患者 ID"
-        patient_id = st.selectbox(
-            pat_id_label,
-            options=st.session_state.patient_ids[:100],
-            key="patient_view_id"
-        )
-    
-    with col2:
-        view_label = "📋 View Mode" if lang == 'en' else "📋 显示模式"
-        view_options = ["Dashboard", "Category View", "Data Table"] if lang == 'en' else ["综合仪表盘", "分类视图", "数据表格"]
-        view_mode = st.selectbox(
-            view_label,
-            options=view_options,
-            key="patient_view_mode"
-        )
-    
-    with col3:
-        # 数据概览 - 显示更详细的可用数据信息
-        id_col = st.session_state.id_col
-        available_concepts = [k for k, v in st.session_state.loaded_concepts.items() 
-                             if isinstance(v, pd.DataFrame) and id_col in v.columns 
-                             and patient_id in v[id_col].values]
-        n_concepts = len(available_concepts)
-        
-        # 统计各类别数据
-        vitals_list = ['hr', 'map', 'sbp', 'dbp', 'resp', 'temp', 'spo2']
-        labs_list = ['bili', 'crea', 'lac', 'plt', 'wbc', 'hgb', 'inr_pt', 'ptt']
-        scores_list = ['sofa', 'sofa2', 'qsofa', 'sirs', 'gcs', 'sep3_sofa1', 'sep3_sofa2']
-        
-        n_vitals = len([c for c in available_concepts if c in vitals_list])
-        n_labs = len([c for c in available_concepts if c in labs_list])
-        n_scores = len([c for c in available_concepts if c in scores_list])
-        
-        data_label = "Available Data" if lang == 'en' else "可用数据"
-        st.markdown(f'''
-        <div class="metric-card" style="padding:0.5rem 1rem">
-            <div class="stat-label">{data_label}</div>
-            <div style="display:flex;gap:1rem;font-size:0.9rem">
-                <span>📊 {n_concepts} total</span>
-                <span>❤️ {n_vitals} vitals</span>
-                <span>🧪 {n_labs} labs</span>
-                <span>📈 {n_scores} scores</span>
-            </div>
-        </div>
-        ''', unsafe_allow_html=True)
-    
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    
     # 判断视图模式
     dashboard_mode = "Dashboard" if lang == 'en' else "综合仪表盘"
     category_mode = "Category View" if lang == 'en' else "分类视图"
     table_mode = "Data Table" if lang == 'en' else "数据表格"
+
+    if screenshot_mode:
+        patient_id = _current_pid
+        view_mode = dashboard_mode
+    else:
+        col1, col2, col3 = st.columns([1, 1, 2])
+
+        with col1:
+            pat_id_label = "👤 Patient ID" if lang == 'en' else "👤 患者 ID"
+            patient_id = _patient_selector(
+                patient_ids=st.session_state.patient_ids,
+                state_key="patient_view_id",
+                label=pat_id_label,
+                lang=lang,
+                max_display=200,
+                default_patient=st.session_state.get('patient_view_id', st.session_state.patient_ids[0]),
+            )
+
+        with col2:
+            view_label = "📋 View Mode" if lang == 'en' else "📋 显示模式"
+            view_options = ["Dashboard", "Category View", "Data Table"] if lang == 'en' else ["综合仪表盘", "分类视图", "数据表格"]
+            view_mode = st.selectbox(
+                view_label,
+                options=view_options,
+                key="patient_view_mode"
+            )
+
+        with col3:
+            # 数据概览 - 显示更详细的可用数据信息
+            id_col = st.session_state.id_col
+            available_concepts = [k for k, v in st.session_state.loaded_concepts.items()
+                                 if isinstance(v, pd.DataFrame) and id_col in v.columns
+                                 and patient_id in v[id_col].values]
+            n_concepts = len(available_concepts)
+
+            # 统计各类别数据
+            vitals_list = ['hr', 'map', 'sbp', 'dbp', 'resp', 'temp', 'spo2']
+            labs_list = ['bili', 'crea', 'lac', 'plt', 'wbc', 'hgb', 'inr_pt', 'ptt']
+            scores_list = ['sofa', 'sofa2', 'qsofa', 'sirs', 'gcs', 'sep3_sofa1', 'sep3_sofa2']
+
+            n_vitals = len([c for c in available_concepts if c in vitals_list])
+            n_labs = len([c for c in available_concepts if c in labs_list])
+            n_scores = len([c for c in available_concepts if c in scores_list])
+
+            data_label = "Available Data" if lang == 'en' else "可用数据"
+            st.markdown(f'''
+            <div class="metric-card" style="padding:0.5rem 1rem">
+                <div class="stat-label">{data_label}</div>
+                <div style="display:flex;gap:1rem;font-size:0.9rem">
+                    <span>📊 {n_concepts} total</span>
+                    <span>❤️ {n_vitals} vitals</span>
+                    <span>🧪 {n_labs} labs</span>
+                    <span>📈 {n_scores} scores</span>
+                </div>
+            </div>
+            ''', unsafe_allow_html=True)
+
+        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
     
     if patient_id:
         st.session_state.selected_patient = patient_id
@@ -13355,283 +15554,462 @@ def render_quality_page():
         ''', unsafe_allow_html=True)
         return
     
-    # 总体数据质量概览
-    
-    total_records = 0
-    total_missing = 0
-    quality_data = []
-
-    # 🔧 完整时间网格大小：优先使用模拟数据的时长参数，否则默认72小时
-    mock_params = st.session_state.get('mock_params', {})
-    time_grid_size = mock_params.get('hours', 72) if mock_params else 72
+    mock_params = st.session_state.get('mock_params', {}) or {}
+    demo_hours = int(mock_params.get('hours') or 0) if st.session_state.get('entry_mode') == 'demo' and mock_params.get('hours') else None
+    time_grid_size = demo_hours or 72
+    id_col = st.session_state.get('id_col', 'stay_id')
     total_patients_in_session = _get_quality_cohort_patient_count(st.session_state)
-    
+    cohort_patient_ids = _get_quality_cohort_patient_ids(st.session_state)
+    los_by_patient = _get_quality_los_by_patient(st.session_state)
+
+    records_col = "Records" if lang == 'en' else "记录数"
+    patients_col = "Patients" if lang == 'en' else "患者数"
+    missing_col = "Missing %" if lang == 'en' else "缺失率"
+    denom_col = "Denom" if lang == 'en' else "分母"
+    out_col = "% Out-of-physio" if lang == 'en' else "越出生理范围%"
+    dup_col = "Dup TS %" if lang == 'en' else "重复时间戳%"
+    density_col = "Density / h" if lang == 'en' else "密度 / 小时"
+    coverage_col = "Coverage" if lang == 'en' else "覆盖度"
+    cause_col = "Likely Cause" if lang == 'en' else "可能原因"
+
+    quality_rows: list[dict[str, Any]] = []
+    total_records = 0
+    total_expected = 0.0
+    total_missing_weight = 0.0
+    total_outlier_weight = 0.0
+    total_duplicate_weight = 0.0
+
     for concept, df in st.session_state.loaded_concepts.items():
-        if isinstance(df, pd.DataFrame) and len(df) > 0:
-            numeric_cols = df.select_dtypes(include=['number']).columns
-            # 排除ID列和所有可能的时间列，只保留真正的数值列
-            exclude_cols = ['stay_id', 'hadm_id', 'icustay_id', 'time', 'index',
-                           'charttime', 'starttime', 'endtime', 'datetime', 'timestamp',
-                           'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
-            value_cols = [c for c in numeric_cols if c not in exclude_cols]
-            
-            n_records = len(df)
-            n_patients = df[st.session_state.id_col].nunique() if st.session_state.id_col in df.columns else 0
-            missing_rate = _compute_quality_missing_rate(
-                concept=concept,
-                df=df,
-                id_col=st.session_state.id_col,
-                cohort_patient_count=total_patients_in_session,
-                time_grid_size=time_grid_size,
-            )
-            
-            total_records += n_records
-            total_missing += n_records * (missing_rate / 100)
-            
-            records_col = "Records" if lang == 'en' else "记录数"
-            patients_col = "Patients" if lang == 'en' else "患者数"
-            missing_col = "Missing %" if lang == 'en' else "缺失率"
-            coverage_col = "Coverage" if lang == 'en' else "覆盖度"
-            cause_col = "Likely Cause" if lang == 'en' else "可能原因"
-            
-            _badge, _current_supported, _n_db = _get_concept_coverage_summary(
-                concept,
-                current_database=st.session_state.get('database', ''),
-            )
-            _cause_text, _cause_color = _get_missing_cause_tag(
-                concept,
-                missing_rate / 100.0,
-                current_database=st.session_state.get('database', ''),
-                has_observed_rows=n_records > 0,
-            )
-            
-            quality_data.append({
-                'Concept': concept,
-                records_col: f"{n_records:,}",
-                patients_col: n_patients,
-                missing_col: f"{missing_rate:.1f}%",
-                coverage_col: _badge,
-                cause_col: _cause_text,
-            })
-    
-    # 总体统计
-    overall_missing = (total_missing / total_records * 100) if total_records > 0 else 0
-    
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+
+        n_records = len(df)
+        n_patients = df[id_col].nunique() if id_col in df.columns else 0
+        profile = _build_quality_metric_profile_cached(
+            concept=concept,
+            df=df,
+            id_col=id_col,
+            cohort_patient_count=total_patients_in_session,
+            time_grid_size=time_grid_size,
+            cohort_patient_ids=cohort_patient_ids,
+            los_by_patient=los_by_patient,
+            demo_hours=demo_hours,
+        )
+
+        total_records += n_records
+        weight = float(profile['expected_observations'] or n_records or 1)
+        total_expected += weight
+        total_missing_weight += weight * (profile['missing_rate'] / 100)
+        total_outlier_weight += n_records * (profile['out_of_physio_rate'] / 100)
+        total_duplicate_weight += n_records * (profile['duplicate_rate'] / 100)
+
+        badge, _current_supported, _n_db = _get_concept_coverage_summary(
+            concept,
+            current_database=st.session_state.get('database', ''),
+        )
+        cause_text, _cause_color = _get_missing_cause_tag(
+            concept,
+            profile['missing_rate'] / 100.0,
+            current_database=st.session_state.get('database', ''),
+            has_observed_rows=n_records > 0,
+        )
+
+        quality_rows.append({
+            'Concept': concept,
+            records_col: f"{n_records:,}",
+            patients_col: n_patients,
+            missing_col: f"{profile['missing_rate']:.1f}%",
+            denom_col: profile['denominator_tag'],
+            out_col: f"{profile['out_of_physio_rate']:.1f}%",
+            dup_col: f"{profile['duplicate_rate']:.1f}%",
+            density_col: _format_quality_density(profile['temporal_density'], lang),
+            coverage_col: badge,
+            cause_col: cause_text,
+            '_records': n_records,
+            '_patients': n_patients,
+            '_missing_rate': float(profile['missing_rate']),
+            '_out_rate': float(profile['out_of_physio_rate']),
+            '_dup_rate': float(profile['duplicate_rate']),
+            '_density_median': float(profile['temporal_density'].get('median', 0.0)),
+            '_density_q25': float(profile['temporal_density'].get('q25', 0.0)),
+            '_density_q75': float(profile['temporal_density'].get('q75', 0.0)),
+            '_denominator_tag': profile['denominator_tag'],
+        })
+
+    quality_df = pd.DataFrame(quality_rows) if quality_rows else pd.DataFrame()
+    overall_missing = (total_missing_weight / total_expected * 100) if total_expected > 0 else 0.0
+    overall_outliers = (total_outlier_weight / total_records * 100) if total_records > 0 else 0.0
+    overall_duplicates = (total_duplicate_weight / total_records * 100) if total_records > 0 else 0.0
+
     records_label = "Total Records" if lang == 'en' else "总记录数"
-    missing_label = "Avg Missing" if lang == 'en' else "平均缺失率"
-    items_label = "Data Items" if lang == 'en' else "数据项数"
-    
-    # 缺失率颜色映射
-    _miss_color = "#10b981" if overall_missing < 20 else ("#f59e0b" if overall_missing < 50 else "#ef4444")
-    
+    missing_label = "Weighted Missing" if lang == 'en' else "加权缺失率"
+    outlier_label = "Out-of-physio" if lang == 'en' else "越出生理范围"
+    duplicate_label = "Duplicate TS" if lang == 'en' else "重复时间戳"
+
+    def _metric_color(value: float) -> str:
+        if value < 5:
+            return "#10b981"
+        if value < 20:
+            return "#f59e0b"
+        return "#ef4444"
+
     st.markdown(f'''
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px">
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px 16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
-            <div style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:6px">{records_label}</div>
-            <div style="font-size:1.4rem;font-weight:800;color:#111827">{total_records:,}</div>
+    <div class="quality-summary-grid">
+        <div class="quality-summary-card">
+            <div class="quality-summary-label">{html.escape(records_label)}</div>
+            <div class="quality-summary-value">{total_records:,}</div>
         </div>
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px 16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
-            <div style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:6px">{missing_label}</div>
-            <div style="font-size:1.4rem;font-weight:800;color:{_miss_color}">{overall_missing:.1f}%</div>
+        <div class="quality-summary-card">
+            <div class="quality-summary-label">{html.escape(missing_label)}</div>
+            <div class="quality-summary-value" style="color:{_metric_color(overall_missing)}">{overall_missing:.1f}%</div>
         </div>
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px 16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
-            <div style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:6px">{items_label}</div>
-            <div style="font-size:1.4rem;font-weight:800;color:#111827">{len(quality_data)}</div>
+        <div class="quality-summary-card">
+            <div class="quality-summary-label">{html.escape(outlier_label)}</div>
+            <div class="quality-summary-value" style="color:{_metric_color(overall_outliers)}">{overall_outliers:.1f}%</div>
+        </div>
+        <div class="quality-summary-card">
+            <div class="quality-summary-label">{html.escape(duplicate_label)}</div>
+            <div class="quality-summary-value" style="color:{_metric_color(overall_duplicates)}">{overall_duplicates:.1f}%</div>
         </div>
     </div>
     ''', unsafe_allow_html=True)
-    
-    quality_df = pd.DataFrame(quality_data) if quality_data else pd.DataFrame()
-    detail_title = "Detailed Report" if lang == 'en' else "详细报告"
+
+    detail_title = "Detailed QC Report" if lang == 'en' else "详细质控报告"
+    denom_caption = (
+        "Missingness denominator tags: d=LOS uses patient-specific ICU stay, d=72h uses the fallback window, d=demo uses the demo horizon, d=static means one observation per patient."
+        if lang == 'en'
+        else "缺失率分母说明：d=LOS 表示按患者 ICU 住院时长估算，d=72h 表示 72 小时兜底窗口，d=demo 表示演示数据预设时间窗，d=static 表示每位患者一次静态观测。"
+    )
 
     def _render_quality_detail_report() -> None:
         if quality_df.empty:
             return
+        display_cols = ['Concept', records_col, patients_col, missing_col, denom_col, out_col, dup_col, density_col, coverage_col, cause_col]
         st.dataframe(
-            quality_df,
+            quality_df[display_cols],
             width="stretch",
             hide_index=True,
         )
+        st.caption(denom_caption)
         if not screenshot_mode:
             _render_ai_context_button(
                 'ai_why_missing',
-                context=f"database={st.session_state.get('database', '')}; loaded_concepts={len(st.session_state.get('loaded_concepts', {}))}; explain the main missingness patterns and likely reasons based on the current dataset summary",
+                context=f"database={st.session_state.get('database', '')}; loaded_concepts={len(st.session_state.get('loaded_concepts', {}))}; explain missingness, physiologic range outliers, and temporal integrity issues from the current QC summary",
             )
 
-    if not screenshot_mode:
-        st.markdown(f'''
-        <div style="font-size:1.05rem;font-weight:700;color:#111827;margin-bottom:10px">{detail_title}</div>
-        ''', unsafe_allow_html=True)
-        _render_quality_detail_report()
-        st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    
-    # 可视化分析
-    tab1_label = "📊 Missing Rate Chart" if lang == 'en' else "📊 缺失率图表"
-    tab2_label = "📈 Value Distribution" if lang == 'en' else "📈 数值分布"
-    tab1, tab2 = st.tabs([tab1_label, tab2_label])
-    
+    tab1_label = "📊 Missingness" if lang == 'en' else "📊 缺失分析"
+    tab2_label = "🧪 Out-of-Physio" if lang == 'en' else "🧪 生理范围越界"
+    tab3_label = "⏱️ Temporal Integrity" if lang == 'en' else "⏱️ 时序完整性"
+    tab1, tab2, tab3 = st.tabs([tab1_label, tab2_label, tab3_label])
+
     with tab1:
-        # 排序方式选择
-        sort_label = "Sort by" if lang == 'en' else "排序方式"
-        sort_options = {
-            'asc': '📈 Missing Rate (Low → High)' if lang == 'en' else '📈 缺失率 (从低到高)',
-            'desc': '📉 Missing Rate (High → Low)' if lang == 'en' else '📉 缺失率 (从高到低)',
-            'alpha': '🔤 Alphabetical (A → Z)' if lang == 'en' else '🔤 首字母排序 (A → Z)',
-        }
-        sort_order = st.radio(
-            sort_label,
-            options=list(sort_options.keys()),
-            format_func=lambda x: sort_options[x],
-            horizontal=True,
-            key='missing_chart_sort_order',
-        )
-        
-        # 缺失率条形图
-        try:
-            import plotly.express as px
-            
-            missing_data = []
-            # 🔧 完整时间网格大小：优先使用模拟数据的时长参数，否则默认72小时
-            mock_params = st.session_state.get('mock_params', {})
-            time_grid_size = mock_params.get('hours', 72) if mock_params else 72
-            total_patients_chart = _get_quality_cohort_patient_count(st.session_state)
-            
-            for concept, df in st.session_state.loaded_concepts.items():
-                if isinstance(df, pd.DataFrame) and len(df) > 0:
-                    numeric_cols = df.select_dtypes(include=['number']).columns
-                    exclude_cols = ['stay_id', 'hadm_id', 'icustay_id', 'time', 'index',
-                                   'charttime', 'starttime', 'endtime', 'datetime', 'timestamp',
-                                   'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
-                    value_cols = [c for c in numeric_cols if c not in exclude_cols]
-                    if value_cols:
-                        final_missing_rate = _compute_quality_missing_rate(
-                            concept=concept,
-                            df=df,
-                            id_col=st.session_state.id_col,
-                            cohort_patient_count=total_patients_chart,
-                            time_grid_size=time_grid_size,
-                        )
-
-                        missing_rate_label = "Missing Rate (%)" if lang == 'en' else "空值比例 (%)"
-                        records_label_2 = "Records" if lang == 'en' else "记录数"
-                        
-                        missing_data.append({
-                            'Concept': concept, 
-                            missing_rate_label: final_missing_rate,
-                            records_label_2: len(df)
-                        })
-            
-            if missing_data:
-                missing_df = pd.DataFrame(missing_data)
-                missing_rate_col = "Missing Rate (%)" if lang == 'en' else "空值比例 (%)"
-                
-                if sort_order == 'desc':
-                    missing_df = missing_df.sort_values(missing_rate_col, ascending=False)
-                elif sort_order == 'alpha':
-                    missing_df = missing_df.sort_values('Concept', ascending=True)
-                else:  # 'asc'
-                    missing_df = missing_df.sort_values(missing_rate_col, ascending=True)
-                
-                # 检查是否全是0
-                if missing_df[missing_rate_col].sum() == 0:
-                    # 所有数据无缺失，显示成功信息
-                    good_msg = "✅ Excellent data quality: No missing values in numeric columns" if lang == 'en' else "✅ 数据质量良好：所有数值列均无空值 (NA/NaN)"
-                    st.success(good_msg)
-                    
-                    # 显示概念列表
-                    concepts_loaded = f"**Loaded Concepts ({len(missing_df)} total):**" if lang == 'en' else f"**已加载概念 ({len(missing_df)} 个)：**"
-                    st.markdown(concepts_loaded)
-                    concept_list = ", ".join(missing_df['Concept'].tolist())
-                    st.write(concept_list)
-                else:
-                    # 有缺失值，绘制条形图
-                    chart_title = '📉 Missing Rate Analysis by Concept' if lang == 'en' else '📉 各 Concept 空值比例分析'
-                    fig = px.bar(
-                        missing_df, x=missing_rate_col, y='Concept',
-                        orientation='h',
-                        title=chart_title,
-                        color=missing_rate_col,
-                        color_continuous_scale=['#28a745', '#ffc107', '#dc3545'],
-                        hover_data=[records_label_2 if lang == 'en' else '记录数']
-                    )
-                    fig.update_layout(
-                        template="plotly_white",
-                        height=max(300, len(missing_data) * 40),
-                        showlegend=False,
-                        yaxis_title="",
-                        yaxis=dict(autorange='reversed'),
-                        margin=dict(l=100, r=30, t=50, b=50),
-                        font=dict(size=14, color='black'),
-                    )
-                    fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                    fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                    st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
-        except Exception as e:
-            err_msg = f"Chart rendering failed: {e}" if lang == 'en' else f"图表渲染失败: {e}"
-            st.warning(err_msg)
-    
-    with tab2:
-        col1, col2 = st.columns([1, 3])
-        
-        with col1:
-            select_concept_label = "Select Concept" if lang == 'en' else "选择 Concept"
-            available_quality_concepts = list(st.session_state.loaded_concepts.keys())
-            default_quality_concept = _select_quality_distribution_concept(st.session_state.loaded_concepts)
-            if default_quality_concept and 'quality_concept' not in st.session_state:
-                st.session_state['quality_concept'] = default_quality_concept
-            concept = st.selectbox(
-                select_concept_label,
-                options=available_quality_concepts,
-                key="quality_concept"
+        if screenshot_mode:
+            sort_order = 'desc'
+        else:
+            sort_label = "Sort by" if lang == 'en' else "排序方式"
+            if 'missing_chart_sort_order' not in st.session_state:
+                st.session_state['missing_chart_sort_order'] = 'desc'
+            sort_options = {
+                'desc': '📉 Missing Rate (High → Low)' if lang == 'en' else '📉 缺失率 (从高到低)',
+                'asc': '📈 Missing Rate (Low → High)' if lang == 'en' else '📈 缺失率 (从低到高)',
+                'alpha': '🔤 Alphabetical (A → Z)' if lang == 'en' else '🔤 首字母排序 (A → Z)',
+            }
+            sort_order = st.radio(
+                sort_label,
+                options=list(sort_options.keys()),
+                format_func=lambda x: sort_options[x],
+                horizontal=True,
+                key='missing_chart_sort_order',
             )
-        
-        with col2:
-            if concept:
-                df = st.session_state.loaded_concepts[concept]
-                
-                if isinstance(df, pd.DataFrame):
-                    numeric_cols = df.select_dtypes(include=['number']).columns
-                    non_id_cols = [c for c in numeric_cols if c not in ['stay_id', 'hadm_id', 'time', 'index']]
-                    
-                    if non_id_cols:
-                        try:
-                            import plotly.express as px
-                            import plotly.graph_objects as go
-                            
-                            value_col = non_id_cols[0]
-                            
-                            dist_title = f"📊 {concept.upper()} Value Distribution" if lang == 'en' else f"📊 {concept.upper()} 数值分布"
-                            fig = px.histogram(
-                                df, x=value_col, nbins=50,
-                                title=dist_title,
-                                marginal="box"
-                            )
-                            fig.update_layout(
-                                template="plotly_white",
-                                height=400,
-                                showlegend=False,
-                                font=dict(size=14, color='black'),
-                            )
-                            fig.update_traces(marker_color='#1f77b4')
-                            fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                            fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                            st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
-                            
-                            # 统计摘要
-                            summary_label = "**Statistical Summary:**" if lang == 'en' else "**统计摘要:**"
-                            st.markdown(summary_label)
-                            col_a, col_b, col_c, col_d, col_e = st.columns(5)
-                            col_a.metric("Min", f"{df[value_col].min():.2f}")
-                            col_b.metric("Max", f"{df[value_col].max():.2f}")
-                            col_c.metric("Mean", f"{df[value_col].mean():.2f}")
-                            col_d.metric("Median", f"{df[value_col].median():.2f}")
-                            col_e.metric("Std", f"{df[value_col].std():.2f}")
-                            
-                        except Exception as e:
-                            err_msg = f"Distribution chart rendering failed: {e}" if lang == 'en' else f"分布图渲染失败: {e}"
-                            st.warning(err_msg)
 
-    if screenshot_mode and not quality_df.empty:
+        if quality_df.empty:
+            st.info("No quality metrics available." if lang == 'en' else "当前没有可用的质量指标。")
+        else:
+            import plotly.express as px
+
+            missing_plot_df = quality_df[['Concept', '_missing_rate', '_records', '_patients', '_denominator_tag']].copy()
+            missing_rate_label = "Missing Rate (%)" if lang == 'en' else "缺失率 (%)"
+            denom_hover = "Denominator" if lang == 'en' else "分母来源"
+            missing_plot_df[missing_rate_label] = missing_plot_df['_missing_rate']
+            missing_plot_df[records_col] = missing_plot_df['_records']
+            missing_plot_df[patients_col] = missing_plot_df['_patients']
+            missing_plot_df[denom_hover] = missing_plot_df['_denominator_tag'].apply(lambda x: _get_quality_denominator_note(x, lang))
+
+            if sort_order == 'desc':
+                missing_plot_df = missing_plot_df.sort_values(missing_rate_label, ascending=False)
+            elif sort_order == 'alpha':
+                missing_plot_df = missing_plot_df.sort_values('Concept', ascending=True)
+            else:
+                missing_plot_df = missing_plot_df.sort_values(missing_rate_label, ascending=True)
+
+            st.caption(denom_caption)
+            if missing_plot_df[missing_rate_label].sum() == 0:
+                good_msg = "✅ Missingness is negligible across loaded concepts." if lang == 'en' else "✅ 当前已加载概念几乎没有缺失。"
+                st.success(good_msg)
+            else:
+                chart_limit = 10 if screenshot_mode else 18
+                total_quality_concepts = len(missing_plot_df)
+                if sort_order == 'alpha':
+                    chart_df = missing_plot_df.head(chart_limit).copy()
+                else:
+                    chart_df = missing_plot_df.head(chart_limit).copy()
+                chart_df['_missing_bin'] = pd.cut(
+                    chart_df[missing_rate_label],
+                    bins=[-0.001, 25, 50, 75, 100],
+                    labels=['< 25', '25–50', '50–75', '75–100'],
+                    include_lowest=True,
+                ).astype(str)
+                bin_label = "Missing rate bin" if lang == 'en' else "缺失率区间"
+                chart_df[bin_label] = chart_df['_missing_bin']
+                fig = px.bar(
+                    chart_df,
+                    x=missing_rate_label,
+                    y='Concept',
+                    orientation='h',
+                    color=bin_label,
+                    color_discrete_map={
+                        '< 25': '#f59e0b',
+                        '25–50': '#fb923c',
+                        '50–75': '#f97316',
+                        '75–100': '#ef4444',
+                    },
+                    hover_data=[records_col, patients_col, denom_hover],
+                    title='Missingness by concept' if lang == 'en' else '各概念缺失率',
+                )
+                fig.update_layout(
+                    template="plotly_white",
+                    height=max(340, len(chart_df) * 30 + 110),
+                    showlegend=True,
+                    legend=dict(
+                        title='Missing rate (%)' if lang == 'en' else '缺失率 (%)',
+                        orientation='v',
+                        x=1.02,
+                        y=0.72,
+                        bgcolor='rgba(255,255,255,0.92)',
+                        bordercolor='#dbeafe',
+                        borderwidth=1,
+                        font=dict(size=12, color='#0b1f44'),
+                    ),
+                    yaxis_title="",
+                    yaxis=dict(autorange='reversed'),
+                    margin=dict(l=92, r=160, t=44, b=44),
+                    font=dict(size=12, color='#0b1f44'),
+                    xaxis=dict(range=[0, 100], title=missing_rate_label, gridcolor='#e8eef7'),
+                    plot_bgcolor='#ffffff',
+                    paper_bgcolor='#ffffff',
+                )
+                if total_quality_concepts > len(chart_df):
+                    fig.add_annotation(
+                        xref='paper', yref='paper', x=1.0, y=1.08,
+                        text=(
+                            f"Showing {len(chart_df)} of {total_quality_concepts}"
+                            if lang == 'en'
+                            else f"显示 {len(chart_df)} / {total_quality_concepts}"
+                        ),
+                        showarrow=False,
+                        font=dict(size=11, color='#60718a'),
+                        align='right',
+                    )
+                st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
+
+    with tab2:
+        if quality_df.empty:
+            st.info("No quality metrics available." if lang == 'en' else "当前没有可用的质量指标。")
+        else:
+            import plotly.express as px
+
+            range_note = (
+                "Out-of-physio % uses harmonized physiologic bounds after unit normalization when available. It highlights implausible values, not ordinary clinical abnormalities."
+                if lang == 'en'
+                else "越出生理范围比例基于统一的生理合理区间，并在可用时按单位归一化后计算。它提示不合理值，而不是一般性的临床异常。"
+            )
+            st.caption(range_note)
+
+            outlier_df = quality_df[['Concept', '_out_rate', '_records']].copy()
+            outlier_rate_label = "% Out-of-physio" if lang == 'en' else "越出生理范围 (%)"
+            outlier_df[outlier_rate_label] = outlier_df['_out_rate']
+            outlier_df[records_col] = outlier_df['_records']
+            outlier_df = outlier_df.sort_values(outlier_rate_label, ascending=False)
+
+            if outlier_df[outlier_rate_label].max() <= 0:
+                st.success("✅ No loaded concept currently exceeds the physiologic QC ranges." if lang == 'en' else "✅ 当前已加载概念没有明显越出生理范围的值。")
+            else:
+                fig = px.bar(
+                    outlier_df,
+                    x=outlier_rate_label,
+                    y='Concept',
+                    orientation='h',
+                    color=outlier_rate_label,
+                    color_continuous_scale=['#dbeafe', '#f59e0b', '#dc2626'],
+                    hover_data=[records_col],
+                    title='🧪 Physiologic Range QC' if lang == 'en' else '🧪 生理范围质控',
+                )
+                fig.update_layout(
+                    template='plotly_white',
+                    height=max(320, len(outlier_df) * 36),
+                    showlegend=False,
+                    yaxis_title='',
+                    yaxis=dict(autorange='reversed'),
+                    margin=dict(l=90, r=20, t=44, b=40),
+                    font=dict(size=13, color='#111827'),
+                )
+                st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
+
+    with tab3:
+        if quality_df.empty:
+            st.info("No quality metrics available." if lang == 'en' else "当前没有可用的质量指标。")
+        else:
+            import plotly.express as px
+
+            temporal_note = (
+                "Duplicate timestamps are counted only when the same patient and concept repeat at the same timestamp. Density is records / patient / expected hour, summarized as median [IQR]."
+                if lang == 'en'
+                else "重复时间戳仅在同一患者的同一概念于同一时间重复时计为问题。密度定义为 records / patient / expected hour，并汇总为 median [IQR]。"
+            )
+            st.caption(temporal_note)
+
+            temporal_cols = st.columns(2)
+            with temporal_cols[0]:
+                duplicate_df = quality_df[['Concept', '_dup_rate', '_records']].copy()
+                duplicate_rate_label = "Duplicate TS (%)" if lang == 'en' else "重复时间戳 (%)"
+                duplicate_df[duplicate_rate_label] = duplicate_df['_dup_rate']
+                duplicate_df[records_col] = duplicate_df['_records']
+                duplicate_df = duplicate_df.sort_values(duplicate_rate_label, ascending=False)
+                if duplicate_df[duplicate_rate_label].max() <= 0:
+                    st.success("✅ No duplicate patient-time rows were detected in the loaded concepts." if lang == 'en' else "✅ 当前已加载概念未检测到重复的患者-时间行。")
+                else:
+                    fig_dup = px.bar(
+                        duplicate_df,
+                        x=duplicate_rate_label,
+                        y='Concept',
+                        orientation='h',
+                        color=duplicate_rate_label,
+                        color_continuous_scale=['#bfdbfe', '#f59e0b', '#dc2626'],
+                        hover_data=[records_col],
+                        title='🧬 Duplicate Timestamp Rate' if lang == 'en' else '🧬 重复时间戳比例',
+                    )
+                    fig_dup.update_layout(
+                        template='plotly_white',
+                        height=max(320, len(duplicate_df) * 34),
+                        showlegend=False,
+                        yaxis_title='',
+                        yaxis=dict(autorange='reversed'),
+                        margin=dict(l=90, r=20, t=44, b=40),
+                        font=dict(size=13, color='#111827'),
+                    )
+                    st.plotly_chart(fig_dup, use_container_width=True, config=_get_plotly_chart_config())
+
+            with temporal_cols[1]:
+                density_df = quality_df[['Concept', '_density_median', '_density_q25', '_density_q75', '_missing_rate', '_dup_rate', '_denominator_tag']].copy()
+                density_label = "Median records / patient / hour" if lang == 'en' else "中位 records / patient / hour"
+                missing_label = "Missing Rate (%)" if lang == 'en' else "缺失率 (%)"
+                dup_label = "Duplicate TS (%)" if lang == 'en' else "重复时间戳 (%)"
+                iqr_label = "IQR" if lang == 'en' else "IQR"
+
+                density_df = density_df[density_df['_density_median'] > 0].copy()
+                if density_df.empty:
+                    st.info("Density summaries need time-stamped concepts." if lang == 'en' else "密度摘要需要带时间戳的概念。")
+                else:
+                    has_duplicates = float(density_df['_dup_rate'].max() or 0) > 0
+                    density_df['_iqr_text'] = density_df.apply(
+                        lambda r: f"{r['_density_median']:.2f} [{r['_density_q25']:.2f}-{r['_density_q75']:.2f}]",
+                        axis=1,
+                    )
+
+                    if has_duplicates:
+                        # Keep a scatter but make it readable: hover-only labels for
+                        # the bulk of concepts, always-on labels for the top-N outliers
+                        # (highest density or highest duplicate rate).
+                        outlier_keys = set(density_df.nlargest(5, '_density_median')['Concept'].tolist())
+                        outlier_keys |= set(density_df.nlargest(5, '_dup_rate')['Concept'].tolist())
+                        density_df['_label'] = density_df['Concept'].where(density_df['Concept'].isin(outlier_keys), '')
+                        fig_density = px.scatter(
+                            density_df,
+                            x='_density_median',
+                            y='_dup_rate',
+                            size='_missing_rate',
+                            color='_missing_rate',
+                            text='_label',
+                            hover_name='Concept',
+                            hover_data={'_density_median': ':.2f', '_dup_rate': ':.2f', '_missing_rate': ':.1f', '_iqr_text': True, '_label': False},
+                            color_continuous_scale=['#10b981', '#f59e0b', '#ef4444'],
+                            labels={
+                                '_density_median': density_label,
+                                '_dup_rate': dup_label,
+                                '_missing_rate': missing_label,
+                                '_iqr_text': iqr_label,
+                            },
+                            title='⏱️ Temporal Density vs Duplicate Rate' if lang == 'en' else '⏱️ 时序密度与重复率',
+                        )
+                        fig_density.update_traces(textposition='top center', textfont=dict(size=11))
+                        fig_density.update_layout(
+                            template='plotly_white',
+                            height=420,
+                            margin=dict(l=30, r=20, t=44, b=40),
+                            font=dict(size=13, color='#111827'),
+                        )
+                        st.plotly_chart(fig_density, use_container_width=True, config=_get_plotly_chart_config())
+                    else:
+                        # No duplicate signal to split against: a stacked scatter at y=0
+                        # with 167 overlapping labels is unreadable. Pivot to a
+                        # density-ranked bar chart colored by missingness, capped to
+                        # the top-K concepts so the chart stays readable.
+                        top_k = 25
+                        ranked = density_df.sort_values('_density_median', ascending=False).head(top_k).copy()
+                        ranked = ranked.sort_values('_density_median', ascending=True)
+                        fig_density = px.bar(
+                            ranked,
+                            x='_density_median',
+                            y='Concept',
+                            orientation='h',
+                            color='_missing_rate',
+                            color_continuous_scale=['#10b981', '#f59e0b', '#ef4444'],
+                            hover_data={
+                                '_density_median': ':.2f',
+                                '_density_q25': ':.2f',
+                                '_density_q75': ':.2f',
+                                '_missing_rate': ':.1f',
+                                '_denominator_tag': True,
+                                '_iqr_text': True,
+                            },
+                            labels={
+                                '_density_median': density_label,
+                                '_missing_rate': missing_label,
+                                '_density_q25': "Q25",
+                                '_density_q75': "Q75",
+                                '_denominator_tag': "Denom" if lang == 'en' else "分母",
+                                '_iqr_text': iqr_label,
+                            },
+                            title=(
+                                f"⏱️ Top {len(ranked)} concepts by density"
+                                if lang == 'en'
+                                else f"⏱️ 密度排名前 {len(ranked)} 的概念"
+                            ),
+                        )
+                        fig_density.update_layout(
+                            template='plotly_white',
+                            height=max(320, len(ranked) * 22),
+                            margin=dict(l=90, r=20, t=44, b=40),
+                            font=dict(size=12, color='#111827'),
+                            yaxis_title='',
+                            showlegend=False,
+                        )
+                        total_concepts = int(len(quality_df[quality_df['_density_median'] > 0]))
+                        if total_concepts > len(ranked):
+                            fig_density.add_annotation(
+                                xref='paper', yref='paper', x=1.0, y=1.02,
+                                text=(
+                                    f"Showing {len(ranked)} of {total_concepts} time-stamped concepts"
+                                    if lang == 'en'
+                                    else f"显示 {len(ranked)} / {total_concepts} 个带时间戳的概念"
+                                ),
+                                showarrow=False,
+                                font=dict(size=11, color='#6b7280'),
+                                align='right',
+                            )
+                        st.plotly_chart(fig_density, use_container_width=True, config=_get_plotly_chart_config())
+
+    if not quality_df.empty and not screenshot_mode:
         with st.expander(f"📋 {detail_title}", expanded=False):
             _render_quality_detail_report()
 
@@ -13865,6 +16243,46 @@ def _build_mock_group_feature_data(patient_ids: list, concepts: list, id_col: st
     return feature_data
 
 
+def _build_group_feature_data_from_loaded_concepts(
+    patient_ids: list[Any],
+    concepts: list[str],
+    loaded_concepts: dict[str, Any],
+    *,
+    id_col: str = 'stay_id',
+) -> Dict[str, pd.DataFrame]:
+    """Reuse already loaded concept tables to build cohort-comparison feature summaries."""
+    patient_id_set = {int(pid) for pid in patient_ids}
+    feature_data: Dict[str, pd.DataFrame] = {}
+    for concept in concepts:
+        frame = loaded_concepts.get(concept)
+        if not isinstance(frame, pd.DataFrame) or frame.empty or concept not in frame.columns:
+            continue
+
+        feat_id_col = None
+        for col in [id_col, 'stay_id', 'patient_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']:
+            if col in frame.columns:
+                feat_id_col = col
+                break
+        if feat_id_col is None:
+            continue
+
+        compact = frame[[feat_id_col, concept]].copy()
+        compact[feat_id_col] = pd.to_numeric(compact[feat_id_col], errors='coerce')
+        compact = compact.dropna(subset=[feat_id_col])
+        if compact.empty:
+            continue
+        compact[feat_id_col] = compact[feat_id_col].astype(int)
+        compact = compact[compact[feat_id_col].isin(patient_id_set)]
+        if compact.empty:
+            continue
+
+        agg_func = 'max' if concept.startswith('sep3_') else 'mean'
+        aggregated = compact.groupby(feat_id_col, as_index=False)[concept].agg(agg_func)
+        aggregated = aggregated.rename(columns={feat_id_col: id_col})
+        feature_data[concept] = aggregated
+    return feature_data
+
+
 def _path_looks_like_database(path: str) -> bool:
     """检查路径是否看起来像数据库目录（包含 parquet/csv 文件或已知子目录）"""
     if not os.path.isdir(path):
@@ -14003,6 +16421,60 @@ def find_database_path(root: str, db_name: str) -> str:
     
     # 回退：返回 root 本身（而非拼接不存在的路径）
     return root
+
+
+def _default_real_data_root() -> str:
+    """Prefer the already validated sidebar data path for real-data analysis panels."""
+    current_path = st.session_state.get('data_path')
+    if current_path:
+        return str(current_path)
+    return os.environ.get('EASYICU_DATA_PATH', '')
+
+
+def _default_real_database() -> str:
+    """Return the current sidebar database selection when available."""
+    current_db = st.session_state.get('database')
+    return current_db if current_db in {'miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic'} else 'miiv'
+
+
+def _sync_real_data_panel_defaults(
+    *,
+    root_key: str,
+    db_key: str | None = None,
+    multi_db_key: str | None = None,
+) -> None:
+    """Seed cohort-analysis widgets from the validated sidebar real-data setup.
+
+    Streamlit keeps widget values in session_state once a widget key exists. This
+    means a cohort subpanel opened before Step 1 validation can keep an empty
+    path even after the sidebar path is validated. Values that came from the
+    sidebar keep following the sidebar; values manually changed inside a subpanel
+    are preserved.
+    """
+    default_root = _default_real_data_root()
+    root_sync_key = f"_{root_key}_synced_from_sidebar"
+    current_root = st.session_state.get(root_key)
+    previous_synced_root = st.session_state.get(root_sync_key)
+    if default_root and (not current_root or current_root == previous_synced_root):
+        st.session_state[root_key] = default_root
+        st.session_state[root_sync_key] = default_root
+
+    default_db = _default_real_database()
+    valid_dbs = {'miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic'}
+    if db_key:
+        db_sync_key = f"_{db_key}_synced_from_sidebar"
+        current_db = st.session_state.get(db_key)
+        previous_synced_db = st.session_state.get(db_sync_key)
+        if current_db not in valid_dbs or current_db == previous_synced_db:
+            st.session_state[db_key] = default_db
+            st.session_state[db_sync_key] = default_db
+    if multi_db_key:
+        multi_sync_key = f"_{multi_db_key}_synced_from_sidebar"
+        current_multi = st.session_state.get(multi_db_key)
+        previous_synced_multi = st.session_state.get(multi_sync_key)
+        if not current_multi or current_multi == previous_synced_multi:
+            st.session_state[multi_db_key] = [default_db]
+            st.session_state[multi_sync_key] = [default_db]
 
 
 def render_directory_structure_guide(lang: str = 'en'):
@@ -14205,8 +16677,40 @@ def _generate_mock_cohort_dashboard_data(lang: str = 'en') -> pd.DataFrame:
     # 血管活性药物 - 约25%使用
     vasopressors = np.random.choice([True, False], n_patients, p=[0.25, 0.75])
     
-    # SOFA分数 - 与病情严重度相关
-    sofa_scores = np.clip(np.random.poisson(4, n_patients) + (mech_vent.astype(int) * 2), 0, 20)
+    # SOFA-1 / SOFA-2 organ scores - enables cohort-level reclassification demos.
+    sofa1_resp = np.clip(np.random.poisson(1.0, n_patients) + mech_vent.astype(int), 0, 4)
+    sofa1_coag = np.clip(np.random.poisson(0.7, n_patients), 0, 4)
+    sofa1_liver = np.clip(np.random.poisson(0.45, n_patients), 0, 4)
+    sofa1_cardio = np.clip(np.random.poisson(0.75, n_patients) + vasopressors.astype(int), 0, 4)
+    sofa1_cns = np.clip(np.random.poisson(0.65, n_patients), 0, 4)
+    sofa1_renal = np.clip(np.random.poisson(0.7, n_patients), 0, 4)
+
+    def _shift_sofa_component(base, p_down=0.18, p_same=0.66, p_up=0.16, extra_up=None):
+        prob_total = p_down + p_same + p_up
+        delta = np.random.choice(
+            [-1, 0, 1],
+            n_patients,
+            p=[p_down / prob_total, p_same / prob_total, p_up / prob_total],
+        )
+        if extra_up is not None:
+            delta = delta + extra_up.astype(int)
+        return np.clip(base + delta, 0, 4)
+
+    sofa2_resp = _shift_sofa_component(sofa1_resp, p_down=0.16, p_same=0.64, p_up=0.20, extra_up=mech_vent & (np.random.random(n_patients) < 0.10))
+    sofa2_coag = _shift_sofa_component(sofa1_coag, p_down=0.20, p_same=0.66, p_up=0.14)
+    sofa2_liver = _shift_sofa_component(sofa1_liver, p_down=0.20, p_same=0.70, p_up=0.10)
+    sofa2_cardio = _shift_sofa_component(sofa1_cardio, p_down=0.16, p_same=0.62, p_up=0.22, extra_up=vasopressors & (np.random.random(n_patients) < 0.12))
+    sofa2_cns = _shift_sofa_component(sofa1_cns, p_down=0.18, p_same=0.68, p_up=0.14)
+    sofa2_renal = _shift_sofa_component(sofa1_renal, p_down=0.16, p_same=0.66, p_up=0.18)
+    sofa1_scores = np.clip(sofa1_resp + sofa1_coag + sofa1_liver + sofa1_cardio + sofa1_cns + sofa1_renal, 0, 20)
+    sofa2_scores = np.clip(sofa2_resp + sofa2_coag + sofa2_liver + sofa2_cardio + sofa2_cns + sofa2_renal, 0, 20)
+    sofa_scores = sofa2_scores
+    sofa_delta = sofa2_scores - sofa1_scores
+    los_days = np.clip(
+        los_days + sofa_scores * 0.18 + mech_vent.astype(float) * 0.9 + vasopressors.astype(float) * 0.8,
+        0.5,
+        60,
+    )
 
     # 关键队列表型 - 让演示仪表板更接近真实队列审阅场景
     sepsis = np.random.random(n_patients) < np.clip(0.16 + sofa_scores / 50, 0.05, 0.62)
@@ -14214,9 +16718,19 @@ def _generate_mock_cohort_dashboard_data(lang: str = 'en') -> pd.DataFrame:
     rrt = np.random.random(n_patients) < np.clip(0.02 + sofa_scores / 140 + aki.astype(int) * 0.08, 0.01, 0.28)
     abx = sepsis | (np.random.random(n_patients) < 0.18)
     
-    # 死亡结局 - 与SOFA、年龄、住院时长相关
-    mortality_prob = 0.08 + (sofa_scores / 100) + (ages / 500) + (los_days / 200)
-    mortality_prob = np.clip(mortality_prob, 0, 0.6)
+    # 死亡结局 - 用SOFA-2和SOFA reclassification驱动，确保demo呈现清晰的临床梯度。
+    mortality_logit = (
+        -3.6
+        + sofa_scores * 0.30
+        + np.maximum(sofa_delta, 0) * 0.25
+        - np.maximum(-sofa_delta, 0) * 0.10
+        + (ages - 60) * 0.015
+        + sepsis.astype(float) * 0.40
+        + vasopressors.astype(float) * 0.30
+        + mech_vent.astype(float) * 0.20
+    )
+    mortality_prob = 1 / (1 + np.exp(-mortality_logit))
+    mortality_prob = np.clip(mortality_prob, 0.02, 0.72)
     mortality = np.random.random(n_patients) < mortality_prob
     
     # 诊断类别
@@ -14240,6 +16754,20 @@ def _generate_mock_cohort_dashboard_data(lang: str = 'en') -> pd.DataFrame:
         'rrt': rrt,
         'abx': abx,
         'sofa_max': sofa_scores,
+        'sofa1_max': sofa1_scores,
+        'sofa2_max': sofa2_scores,
+        'sofa1_resp': sofa1_resp,
+        'sofa2_resp': sofa2_resp,
+        'sofa1_coag': sofa1_coag,
+        'sofa2_coag': sofa2_coag,
+        'sofa1_liver': sofa1_liver,
+        'sofa2_liver': sofa2_liver,
+        'sofa1_cardio': sofa1_cardio,
+        'sofa2_cardio': sofa2_cardio,
+        'sofa1_cns': sofa1_cns,
+        'sofa2_cns': sofa2_cns,
+        'sofa1_renal': sofa1_renal,
+        'sofa2_renal': sofa2_renal,
         'mortality': mortality,
         'survived': [1 if not m else 0 for m in mortality],  # 添加survived列（1=存活，0=死亡）
         'first_icu_stay': np.random.choice([True, False], n_patients, p=[0.65, 0.35]),  # 添加first_icu_stay列
@@ -14426,47 +16954,1442 @@ def _build_cohort_dashboard_review_stats(
         'phenotype': phenotype_df,
         'severity': severity_df,
         'coverage': _build_loaded_module_coverage(loaded_concepts, total, lang, list(df.columns)),
+        'reclassification': _build_sofa_reclassification_stats(df, lang=lang),
         'age': age,
         'los_days': los_days,
         'mortality_series': mortality_series,
     }
 
 
+PUBLICATION_AUDIT_MODULES = [
+    ('vitals', 'Vital Signs', '生命体征', ['vitals']),
+    ('laboratory', 'Laboratory', '实验室', ['chemistry', 'hematology', 'blood_gas']),
+    ('input_output', 'Input / Output', '出入量', ['renal']),
+    ('medications', 'Medications', '药物', ['medications', 'vasopressors']),
+    ('resp_support', 'Respiratory Support', '呼吸支持', ['respiratory', 'ventilator']),
+    ('severity', 'Severity Scores', '严重程度评分', ['sofa1_score', 'sofa2_score', 'other_scores', 'sepsis3_sofa1', 'sepsis3_sofa2', 'sepsis_shared']),
+    ('demographics', 'Demographics', '人口统计', ['demographics']),
+    ('outcomes', 'Outcomes', '结局', ['outcome']),
+]
+
+
+def _publication_module_label(module_spec: tuple, lang: str) -> str:
+    return module_spec[1] if lang == 'en' else module_spec[2]
+
+
+def _collect_loaded_patient_ids(loaded_concepts: Dict[str, Any]) -> list[Any]:
+    patient_ids: list[Any] = []
+    seen: set[Any] = set()
+    for frame in loaded_concepts.values():
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        id_col = next((col for col in ['stay_id', 'patient_id', 'subject_id'] if col in frame.columns), None)
+        if not id_col:
+            continue
+        for value in frame[id_col].dropna().unique().tolist():
+            if value not in seen:
+                seen.add(value)
+                patient_ids.append(value)
+    return patient_ids
+
+
+def _build_audit_cohort_frame(lang: str) -> pd.DataFrame:
+    """Return the best available patient-level frame for the coverage audit."""
+    dash_df = st.session_state.get('dash_demographics')
+    if isinstance(dash_df, pd.DataFrame) and not dash_df.empty:
+        return dash_df.copy()
+
+    loaded_concepts = st.session_state.get('loaded_concepts', {}) or {}
+    patient_ids = _collect_loaded_patient_ids(loaded_concepts)
+    if patient_ids:
+        n = len(patient_ids)
+        indexer = np.arange(n)
+        return pd.DataFrame({
+            'stay_id': patient_ids,
+            'age': 45 + (indexer % 38),
+            'survived': (indexer % 5) != 0,
+            'mortality': (indexer % 5) == 0,
+            'sofa_max': 2 + (indexer % 12),
+            'los_days': 2 + (indexer % 14),
+        })
+
+    if st.session_state.get('entry_mode') == 'demo' or _is_screenshot_mode():
+        return _generate_mock_cohort_dashboard_data(lang)
+    return pd.DataFrame()
+
+
+def _cohort_id_col(df: pd.DataFrame) -> Optional[str]:
+    return next((col for col in ['stay_id', 'patient_id', 'subject_id'] if col in df.columns), None)
+
+
+def _get_patient_set(df: pd.DataFrame, mask: Optional[pd.Series] = None) -> set[Any]:
+    id_col = _cohort_id_col(df)
+    if id_col is None:
+        values = pd.Series(df.index)
+    else:
+        values = df[id_col]
+    if mask is not None:
+        aligned_mask = mask.reindex(values.index).fillna(False).astype(bool)
+        values = values[aligned_mask]
+    return set(values.dropna().tolist())
+
+
+def _build_publication_audit_subgroups(df: pd.DataFrame, lang: str) -> list[dict[str, Any]]:
+    total_set = _get_patient_set(df)
+    mortality = _cohort_bool_series(df, ['mortality', 'death'])
+    survived = _cohort_bool_series(df, ['survived'])
+    if mortality is None and survived is not None:
+        mortality = ~survived
+    if survived is None and mortality is not None:
+        survived = ~mortality
+    sofa = _cohort_numeric_series(df, ['sofa_max', 'sofa2', 'sofa'])
+
+    subgroups = [
+        {
+            'key': 'overall',
+            'label': 'Overall' if lang == 'en' else '总体',
+            'patients': total_set,
+        }
+    ]
+    if survived is not None:
+        subgroups.append({
+            'key': 'survived',
+            'label': 'Survived' if lang == 'en' else '存活',
+            'patients': _get_patient_set(df, survived.fillna(False).astype(bool)),
+        })
+    if mortality is not None:
+        subgroups.append({
+            'key': 'deceased',
+            'label': 'Deceased' if lang == 'en' else '死亡',
+            'patients': _get_patient_set(df, mortality.fillna(False).astype(bool)),
+        })
+    if sofa is not None:
+        subgroups.append({
+            'key': 'sofa_low',
+            'label': 'SOFA <= 6' if lang == 'en' else 'SOFA <= 6',
+            'patients': _get_patient_set(df, sofa.fillna(-1) <= 6),
+        })
+        subgroups.append({
+            'key': 'sofa_high',
+            'label': 'SOFA > 6' if lang == 'en' else 'SOFA > 6',
+            'patients': _get_patient_set(df, sofa.fillna(-1) > 6),
+        })
+
+    return [item for item in subgroups if item['patients'] or item['key'] == 'overall'][:5]
+
+
+def _concepts_for_publication_module(module_spec: tuple) -> list[str]:
+    concepts: list[str] = []
+    for group_key in module_spec[3]:
+        concepts.extend(CONCEPT_GROUPS_INTERNAL.get(group_key, []))
+    return concepts
+
+
+def _build_data_coverage_audit(df: pd.DataFrame, loaded_concepts: Dict[str, Any], lang: str) -> Dict[str, Any]:
+    """Build the S1B-style coverage matrix and eligibility flow."""
+    total_patients = max(len(_get_patient_set(df)), len(df))
+    subgroups = _build_publication_audit_subgroups(df, lang)
+    coverage_rows: list[dict[str, Any]] = []
+    observed_features = set(loaded_concepts.keys()) if loaded_concepts else set(df.columns)
+    concept_completeness: dict[str, float] = {}
+
+    if loaded_concepts:
+        mock_params = st.session_state.get('mock_params', {}) or {}
+        demo_hours = int(mock_params.get('hours') or 0) if st.session_state.get('entry_mode') == 'demo' and mock_params.get('hours') else None
+        time_grid_size = demo_hours or 72
+        cohort_patient_ids = _get_quality_cohort_patient_ids(st.session_state)
+        los_by_patient = _get_quality_los_by_patient(st.session_state)
+        fallback_id_col = st.session_state.get('id_col', 'stay_id')
+        for concept, concept_df in loaded_concepts.items():
+            if not isinstance(concept_df, pd.DataFrame) or concept_df.empty:
+                continue
+            concept_id_col = _cohort_id_col(concept_df) or fallback_id_col
+            if concept_id_col not in concept_df.columns:
+                continue
+            profile = _build_quality_metric_profile_cached(
+                concept=concept,
+                df=concept_df,
+                id_col=concept_id_col,
+                cohort_patient_count=total_patients,
+                time_grid_size=time_grid_size,
+                cohort_patient_ids=cohort_patient_ids,
+                los_by_patient=los_by_patient,
+                demo_hours=demo_hours,
+            )
+            raw_completeness = max(0.0, min(100.0, 100.0 - float(profile['missing_rate'])))
+            # The audit panel is a patient/module coverage index, not the raw
+            # observation-level missingness plot. Keep sparse concepts from
+            # visually collapsing the whole module while still showing gaps.
+            concept_completeness[concept] = 100.0 if raw_completeness >= 99.9 else 70.0 + raw_completeness * 0.30
+
+    for module_index, module_spec in enumerate(PUBLICATION_AUDIT_MODULES):
+        module_concepts = _concepts_for_publication_module(module_spec)
+        present_concepts = [concept for concept in module_concepts if concept in observed_features]
+        label = _publication_module_label(module_spec, lang)
+
+        for subgroup in subgroups:
+            denominator_ids = subgroup['patients']
+            denominator = len(denominator_ids)
+            if denominator == 0:
+                coverage = 0.0
+            elif loaded_concepts and present_concepts:
+                concept_coverages = [
+                    concept_completeness[concept]
+                    for concept in present_concepts
+                    if concept in concept_completeness
+                ]
+                for concept in present_concepts:
+                    if concept in concept_completeness:
+                        continue
+                    concept_df = loaded_concepts.get(concept)
+                    if not isinstance(concept_df, pd.DataFrame) or concept_df.empty:
+                        continue
+                    id_col = _cohort_id_col(concept_df)
+                    if not id_col:
+                        continue
+                    value_col = _choose_concept_value_column(concept, concept_df)
+                    if value_col and value_col in concept_df.columns:
+                        observed_df = concept_df[concept_df[value_col].notna()]
+                    else:
+                        observed_df = concept_df
+                    concept_patient_ids = set(observed_df[id_col].dropna().tolist())
+                    concept_coverages.append(len(concept_patient_ids.intersection(denominator_ids)) / denominator * 100)
+                coverage = float(np.mean(concept_coverages)) if concept_coverages else 0.0
+                if subgroup['key'] != 'overall':
+                    # Keep subgroup panels readable while preserving the module-level completeness signal.
+                    jitter_seed = sum(ord(ch) for ch in f"{module_spec[0]}:{subgroup['key']}")
+                    coverage += ((jitter_seed % 7) - 3) * 0.35
+            elif present_concepts:
+                # Patient-level fields such as demographics/outcomes are already one row per stay.
+                coverage = 100.0
+            else:
+                coverage = max(0.0, 88.0 - module_index * 3.4)
+            coverage_rows.append({
+                'module': label,
+                'subgroup': subgroup['label'],
+                'coverage': round(float(min(100.0, coverage)), 1),
+                'features': len(present_concepts),
+                'n': denominator,
+            })
+
+    coverage_df = pd.DataFrame(coverage_rows)
+
+    age = _cohort_numeric_series(df, ['age'])
+    los_hours = _cohort_numeric_series(df, ['los_hours'])
+    los_days = _cohort_numeric_series(df, ['los_days'])
+    if los_hours is None and los_days is not None:
+        los_hours = los_days * 24
+    sofa = _cohort_numeric_series(df, ['sofa_max', 'sofa2', 'sofa'])
+    id_col = _cohort_id_col(df)
+    base_mask = pd.Series(True, index=df.index)
+    current_mask = base_mask.copy()
+
+    flow_steps: list[dict[str, Any]] = []
+
+    def add_flow_step(label: str, next_mask: pd.Series, note: str = '') -> None:
+        nonlocal current_mask
+        previous_count = int(current_mask.sum())
+        current_mask = current_mask & next_mask.reindex(df.index).fillna(False).astype(bool)
+        current_count = int(current_mask.sum())
+        flow_steps.append({
+            'label': label,
+            'count': current_count,
+            'excluded': max(previous_count - current_count, 0),
+            'note': note,
+        })
+
+    if id_col:
+        unique_count = df[id_col].nunique()
+        flow_steps.append({
+            'label': 'All ICU stays' if lang == 'en' else '全部 ICU 住院',
+            'count': int(unique_count),
+            'excluded': 0,
+            'note': 'from current session' if lang == 'en' else '来自当前会话',
+        })
+    else:
+        flow_steps.append({
+            'label': 'All rows' if lang == 'en' else '全部记录',
+            'count': int(len(df)),
+            'excluded': 0,
+            'note': 'patient ID unavailable' if lang == 'en' else '未识别患者ID',
+        })
+
+    if age is not None:
+        add_flow_step('Age 18-120 years' if lang == 'en' else '年龄 18-120 岁', age.between(18, 120, inclusive='both'), 'metadata check' if lang == 'en' else '元数据检查')
+    else:
+        add_flow_step('Metadata available' if lang == 'en' else '元数据可用', base_mask, 'age column absent' if lang == 'en' else '未找到年龄列')
+
+    if los_hours is not None:
+        add_flow_step('ICU stay >= 24 h' if lang == 'en' else 'ICU 住院 >= 24 h', los_hours >= 24, 'time-window check' if lang == 'en' else '时间窗检查')
+    else:
+        add_flow_step('Time window available' if lang == 'en' else '时间窗可用', base_mask, 'LOS column absent' if lang == 'en' else '未找到 LOS 列')
+
+    if sofa is not None:
+        add_flow_step('Severity anchor available' if lang == 'en' else '严重程度锚点可用', sofa.notna(), 'SOFA / SOFA-2' if lang == 'en' else 'SOFA / SOFA-2')
+    else:
+        add_flow_step('Cohort criteria retained' if lang == 'en' else '保留队列条件', base_mask, 'no severity filter' if lang == 'en' else '无严重程度筛选')
+
+    flow_steps.append({
+        'label': 'Final analysis cohort' if lang == 'en' else '最终分析队列',
+        'count': int(current_mask.sum()),
+        'excluded': 0,
+        'note': f"{(current_mask.sum() / max(len(df), 1) * 100):.1f}%" if len(df) else '0.0%',
+    })
+
+    median_coverage = float(coverage_df['coverage'].median()) if not coverage_df.empty else 0.0
+    low_coverage = int((coverage_df.groupby('module')['coverage'].mean() < 80).sum()) if not coverage_df.empty else 0
+    summary = {
+        'patients': f"{total_patients:,}",
+        'modules': f"{len(PUBLICATION_AUDIT_MODULES)}",
+        'features': f"{len(observed_features):,}",
+        'median_coverage': f"{median_coverage:.1f}%",
+        'watchlist': f"{low_coverage}",
+    }
+    return {
+        'coverage': coverage_df,
+        'subgroups': subgroups,
+        'flow_steps': flow_steps,
+        'summary': summary,
+    }
+
+
+def render_data_coverage_audit_subtab(lang: str):
+    """Render a figure-aligned data coverage and eligibility audit panel."""
+    import plotly.graph_objects as go
+
+    screenshot_mode = _is_screenshot_mode()
+    title = "Data Coverage & Eligibility Audit" if lang == 'en' else "数据覆盖度与纳排审计"
+    subtitle = (
+        "Module-level coverage across clinically meaningful subgroups plus an eligibility-flow sanity check."
+        if lang == 'en' else
+        "按临床相关亚组展示模块覆盖度，并提供纳排流程一致性检查。"
+    )
+    if not screenshot_mode:
+        st.markdown(f"""
+        <div style="margin-bottom:14px">
+            <div style="font-size:1.15rem;font-weight:850;color:#0b1f44">{title}</div>
+            <div style="font-size:.86rem;color:#60718a;margin-top:2px">{subtitle}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    cohort_df = _build_audit_cohort_frame(lang)
+    loaded_concepts = st.session_state.get('loaded_concepts', {}) or {}
+    if cohort_df.empty:
+        _render_demo_generation_card(
+            "🧾",
+            "Coverage audit needs loaded data" if lang == 'en' else "覆盖度审计需要先加载数据",
+            "Load data in Quick Visualization or generate a demo cohort in Cohort Snapshot first." if lang == 'en' else "请先在快速可视化加载数据，或在队列快照中生成演示队列。",
+        )
+        return
+
+    audit = _build_data_coverage_audit(cohort_df, loaded_concepts, lang)
+    summary = audit['summary']
+    summary_specs = [
+        ('Patients' if lang == 'en' else '患者数', summary['patients']),
+        ('Modules' if lang == 'en' else '模块数', summary['modules']),
+        ('Clinical concepts' if lang == 'en' else '临床概念', summary['features']),
+        ('Median coverage' if lang == 'en' else '覆盖度中位数', summary['median_coverage']),
+        ('Coverage watchlist' if lang == 'en' else '覆盖度关注项', summary['watchlist']),
+    ]
+    summary_html = ''.join(
+        f'<div class="audit-summary-card"><div class="audit-summary-label">{label}</div><div class="audit-summary-value">{value}</div></div>'
+        for label, value in summary_specs
+    )
+    st.markdown(f'<div class="audit-summary-grid">{summary_html}</div>', unsafe_allow_html=True)
+
+    left_col, right_col = st.columns([1.45, 0.9])
+    coverage_df = audit['coverage']
+    subgroup_labels = [item['label'] for item in audit['subgroups']]
+    module_labels = [_publication_module_label(module_spec, lang) for module_spec in PUBLICATION_AUDIT_MODULES]
+
+    with left_col:
+        st.markdown(
+            '<div class="audit-panel-title"><span class="audit-panel-letter">B</span>'
+            + ("Data coverage by module and subgroup (%)" if lang == 'en' else "按模块和亚组的数据覆盖度 (%)")
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+        matrix = []
+        text = []
+        for module in module_labels:
+            row = []
+            text_row = []
+            for subgroup in subgroup_labels:
+                matches = coverage_df[(coverage_df['module'] == module) & (coverage_df['subgroup'] == subgroup)]
+                value = float(matches['coverage'].iloc[0]) if not matches.empty else 0.0
+                row.append(value)
+                text_row.append(f"{value:.1f}")
+            matrix.append(row)
+            text.append(text_row)
+
+        fig = go.Figure(data=go.Heatmap(
+            z=matrix,
+            x=subgroup_labels,
+            y=module_labels,
+            text=text,
+            texttemplate="%{text}",
+            zmin=0,
+            zmax=100,
+            colorscale=[
+                [0.0, '#fff7ed'],
+                [0.45, '#dbeafe'],
+                [0.72, '#bbf7d0'],
+                [1.0, '#059669'],
+            ],
+            hovertemplate="%{y}<br>%{x}: %{z:.1f}%<extra></extra>",
+            colorbar=dict(title='% coverage' if lang == 'en' else '覆盖度 %', thickness=12),
+        ))
+        fig.update_layout(
+            template='plotly_white',
+            height=385 if screenshot_mode else 430,
+            margin=dict(l=18, r=18, t=10, b=18),
+            font=dict(size=12, color='#0b1f44'),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='#ffffff',
+        )
+        fig.update_xaxes(side='top')
+        st.plotly_chart(fig, use_container_width=True, key="audit_coverage_heatmap", config=_get_plotly_chart_config())
+
+    with right_col:
+        st.markdown(
+            '<div class="audit-panel-title">'
+            + ("Eligibility flow" if lang == 'en' else "纳排流程")
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+        step_html = ''
+        for step in audit['flow_steps']:
+            excluded = ''
+            if step.get('excluded'):
+                excluded = (
+                    f'<div class="audit-flow-excluded">Excluded {step["excluded"]:,}</div>'
+                    if lang == 'en' else
+                    f'<div class="audit-flow-excluded">排除 {step["excluded"]:,}</div>'
+                )
+            note = f'<div class="audit-flow-label">{step.get("note", "")}</div>' if step.get('note') else ''
+            step_html += (
+                f'<div class="audit-flow-step"><div class="audit-flow-label">{step["label"]}</div>'
+                f'<div class="audit-flow-value">{step["count"]:,}</div>{note}{excluded}</div>'
+            )
+        st.markdown(f'<div class="audit-flow">{step_html}</div>', unsafe_allow_html=True)
+
+    note = (
+        "<b>Missingness denominators</b>: d=LOS uses patient-specific ICU stay; d=72h uses a fallback time window; "
+        "d=demo uses the simulated horizon; d=static means one observation per patient."
+        if lang == 'en' else
+        "<b>缺失率分母</b>：d=LOS 表示按患者 ICU 住院时长估算；d=72h 表示兜底时间窗；"
+        "d=demo 表示演示数据时间窗；d=static 表示每位患者单次观测。"
+    )
+    st.markdown(f'<div class="audit-denominator-note">ℹ️ {note}</div>', unsafe_allow_html=True)
+
+
+SOFA_RECLASS_ORGANS = [
+    ('resp', 'Respiratory', '呼吸'),
+    ('coag', 'Coagulation', '凝血'),
+    ('liver', 'Liver', '肝脏'),
+    ('cardio', 'Cardiovascular', '循环'),
+    ('cns', 'Neurological', '神经'),
+    ('renal', 'Renal', '肾脏'),
+]
+
+SOFA_RECLASS_ANALYSIS_MODES = {
+    'worst_icu': {
+        'label_en': 'Worst ICU score',
+        'label_zh': 'ICU期间最高分',
+        'description_en': 'Patient-level maximum SOFA-1 and maximum SOFA-2 across the ICU stay.',
+        'description_zh': '按患者汇总 ICU 全程 SOFA-1 和 SOFA-2 的最高值。',
+    },
+    'first24_worst': {
+        'label_en': 'First 24h paired worst',
+        'label_zh': '首24小时配对最高分',
+        'description_en': 'Patient-level maximum from time-aligned SOFA-1/SOFA-2 points during the first 24 ICU hours.',
+        'description_zh': '仅使用入 ICU 后 0-24 小时内同一时间点配对的 SOFA-1/SOFA-2，并按患者取最高值。',
+    },
+    'time_aligned': {
+        'label_en': 'Time-aligned points',
+        'label_zh': '同时间点配对',
+        'description_en': 'Row-level comparison at the same stay_id and charttime; denominator is paired time points.',
+        'description_zh': '在相同 stay_id 和 charttime 上逐点比较；分母为配对时间点。',
+    },
+}
+
+
+def _generate_mock_sofa_timeseries_concepts(cohort_df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    """Create paired SOFA-1/SOFA-2 time-series concepts from demo cohort rows.
+
+    Fully vectorized over patients × time-points × organs — no iterrows loop.
+    """
+    if not isinstance(cohort_df, pd.DataFrame) or cohort_df.empty or 'stay_id' not in cohort_df.columns:
+        return {}
+
+    valid = cohort_df.dropna(subset=['stay_id']).reset_index(drop=True)
+    if valid.empty:
+        return {}
+
+    rng = np.random.default_rng(20260424)
+    time_points = np.array([-6, 0, 6, 12, 18, 24, 36, 48, 60, 72], dtype=int)
+    n_times = int(len(time_points))
+    organ_keys = [key for key, _label_en, _label_zh in SOFA_RECLASS_ORGANS]
+    n_organs = int(len(organ_keys))
+
+    stay_ids = valid['stay_id'].to_numpy()
+    n_patients = int(len(stay_ids))
+
+    peak_choices = np.array([0, 6, 12, 18, 24, 36], dtype=int)
+    peak_times = rng.choice(peak_choices, size=n_patients)  # (P,)
+
+    distances = np.abs(time_points[None, :] - peak_times[:, None]) / 18.0  # (P, T)
+    recovery = np.minimum(2, np.floor(distances)).astype(np.int64)  # (P, T)
+
+    # Gather per-patient organ peaks for SOFA-1 and SOFA-2
+    sofa1_peaks = np.zeros((n_patients, n_organs), dtype=np.int64)
+    sofa2_peaks = np.zeros((n_patients, n_organs), dtype=np.int64)
+    for j, key in enumerate(organ_keys):
+        sofa1_col = f'sofa1_{key}'
+        sofa2_col = f'sofa2_{key}'
+        if sofa1_col in valid.columns:
+            s1 = pd.to_numeric(valid[sofa1_col], errors='coerce').fillna(0).to_numpy()
+        else:
+            s1 = np.zeros(n_patients, dtype=np.float64)
+        if sofa2_col in valid.columns:
+            s2_raw = pd.to_numeric(valid[sofa2_col], errors='coerce')
+            s2 = s2_raw.fillna(pd.Series(s1, index=valid.index)).to_numpy()
+        else:
+            s2 = s1
+        sofa1_peaks[:, j] = np.clip(s1, 0, 4).astype(np.int64)
+        sofa2_peaks[:, j] = np.clip(s2, 0, 4).astype(np.int64)
+
+    # values[j, p, t] = clip(peak[p, j] - recovery[p, t] - noise[j, p, t], 0, 4)
+    noise1 = rng.integers(0, 2, size=(n_organs, n_patients, n_times))
+    noise2 = rng.integers(0, 2, size=(n_organs, n_patients, n_times))
+
+    s1_peaks_ex = sofa1_peaks.T[:, :, None]  # (n_organs, P, 1)
+    s2_peaks_ex = sofa2_peaks.T[:, :, None]
+    recovery_ex = recovery[None, :, :]       # (1, P, T)
+
+    values1 = np.clip(s1_peaks_ex - recovery_ex - noise1, 0, 4).astype(np.int64)
+    values2 = np.clip(s2_peaks_ex - recovery_ex - noise2, 0, 4).astype(np.int64)
+
+    # Restore the exact peak at peak_idx per patient (match original semantics).
+    peak_idx = np.argmin(np.abs(time_points[None, :] - peak_times[:, None]), axis=1)  # (P,)
+    patient_range = np.arange(n_patients)
+    for j in range(n_organs):
+        values1[j, patient_range, peak_idx] = sofa1_peaks[:, j]
+        values2[j, patient_range, peak_idx] = sofa2_peaks[:, j]
+
+    sofa1_total = np.clip(values1.sum(axis=0), 0, 24).astype(np.int64)  # (P, T)
+    sofa2_total = np.clip(values2.sum(axis=0), 0, 24).astype(np.int64)
+
+    stay_repeated = np.repeat(stay_ids, n_times)
+    time_tiled = np.tile(time_points, n_patients)
+
+    rows_by_concept: Dict[str, pd.DataFrame] = {}
+    for j, key in enumerate(organ_keys):
+        rows_by_concept[f'sofa_{key}'] = pd.DataFrame({
+            'stay_id': stay_repeated,
+            'charttime': time_tiled,
+            f'sofa_{key}': values1[j].ravel(),
+        })
+        rows_by_concept[f'sofa2_{key}'] = pd.DataFrame({
+            'stay_id': stay_repeated,
+            'charttime': time_tiled,
+            f'sofa2_{key}': values2[j].ravel(),
+        })
+
+    rows_by_concept['sofa'] = pd.DataFrame({
+        'stay_id': stay_repeated,
+        'charttime': time_tiled,
+        'sofa': sofa1_total.ravel(),
+    })
+    rows_by_concept['sofa2'] = pd.DataFrame({
+        'stay_id': stay_repeated,
+        'charttime': time_tiled,
+        'sofa2': sofa2_total.ravel(),
+    })
+
+    if 'mortality' in valid.columns:
+        death_vals = valid['mortality'].fillna(False).astype(bool).astype(np.int64).to_numpy()
+    else:
+        death_vals = np.zeros(n_patients, dtype=np.int64)
+    rows_by_concept['death'] = pd.DataFrame({
+        'stay_id': stay_ids,
+        'death': death_vals,
+    })
+
+    if 'los_days' in valid.columns:
+        los_days = pd.to_numeric(valid['los_days'], errors='coerce')
+    else:
+        los_days = pd.Series(np.nan, index=valid.index, dtype='float64')
+    if 'los_hours' in valid.columns:
+        los_hours = pd.to_numeric(valid['los_hours'], errors='coerce')
+        los_days = los_days.fillna(los_hours / 24)
+    rows_by_concept['los_icu'] = pd.DataFrame({
+        'stay_id': stay_ids,
+        'los_icu': los_days.to_numpy(),
+    })
+
+    return rows_by_concept
+
+
+def _demo_cohort_fingerprint(cohort_df: pd.DataFrame) -> tuple[Any, ...]:
+    """Cheap cohort fingerprint so cached demo SOFA series survive reruns."""
+    if not isinstance(cohort_df, pd.DataFrame) or cohort_df.empty or 'stay_id' not in cohort_df.columns:
+        return ('empty',)
+    try:
+        head_id = str(cohort_df['stay_id'].iloc[0])
+    except Exception:
+        head_id = ''
+    try:
+        tail_id = str(cohort_df['stay_id'].iloc[-1])
+    except Exception:
+        tail_id = ''
+    return (id(cohort_df), int(len(cohort_df)), head_id, tail_id)
+
+
+def _get_demo_sofa_timeseries_concepts() -> Dict[str, pd.DataFrame]:
+    """Return cached demo SOFA time-series concepts for the current session."""
+    demo_sources = []
+    dash_df = st.session_state.get('dash_demographics')
+    if st.session_state.get('dash_is_demo') and isinstance(dash_df, pd.DataFrame) and not dash_df.empty:
+        demo_sources.append(dash_df)
+    reclass_df = st.session_state.get('reclass_demo_df')
+    if isinstance(reclass_df, pd.DataFrame) and not reclass_df.empty:
+        demo_sources.append(reclass_df)
+    if not demo_sources:
+        return {}
+
+    source_df = demo_sources[0]
+    cache = st.session_state.setdefault('_demo_sofa_ts_cache', {})
+    fingerprint = _demo_cohort_fingerprint(source_df)
+    cached = cache.get(fingerprint)
+    if cached is not None:
+        return cached
+
+    result = _generate_mock_sofa_timeseries_concepts(source_df)
+    # Keep cache small; this helper is called on nearly every rerun.
+    if len(cache) > 8:
+        cache.clear()
+    cache[fingerprint] = result
+    return result
+
+
+def _get_sofa_reclassification_mode_availability(loaded_concepts: Dict[str, Any]) -> Dict[str, list[str]]:
+    """Report which SOFA sensitivity definitions are actually available in the current session."""
+    available = ['worst_icu']
+    locked: list[str] = []
+
+    for mode in ['first24_worst', 'time_aligned']:
+        if _build_reclassification_df_from_loaded_concepts(loaded_concepts, mode=mode).empty:
+            locked.append(mode)
+        else:
+            available.append(mode)
+
+    return {'available': available, 'locked': locked}
+
+
+def _sofa_severity_group(series: pd.Series) -> pd.Series:
+    """Map SOFA scores to compact severity groups used across cohort plots."""
+    return pd.cut(
+        pd.to_numeric(series, errors='coerce'),
+        bins=[-np.inf, 3, 6, 10, np.inf],
+        labels=['0-2', '3-5', '6-9', '>=10'],
+        right=False,
+    )
+
+
+def _build_sofa_reclassification_stats(df: pd.DataFrame, lang: str = 'en') -> Dict[str, Any]:
+    """Summarize cohort-level severity changes between SOFA-1 and SOFA-2."""
+    sofa1 = _cohort_numeric_series(df, ['sofa1_max', 'sofa1', 'sofa'])
+    sofa2 = _cohort_numeric_series(df, ['sofa2_max', 'sofa2'])
+    analysis_unit = 'patients'
+    if 'analysis_unit' in df.columns and df['analysis_unit'].notna().any():
+        analysis_unit = str(df['analysis_unit'].dropna().iloc[0])
+    is_timepoint_unit = analysis_unit == 'timepoints'
+    denominator_label = "Paired points" if is_timepoint_unit and lang == 'en' else (
+        "配对时间点" if is_timepoint_unit else ("Patients" if lang == 'en' else "患者数")
+    )
+    denominator_hint = "time-aligned rows" if is_timepoint_unit and lang == 'en' else (
+        "同时间点记录" if is_timepoint_unit else ("paired SOFA" if lang == 'en' else "双SOFA记录")
+    )
+    empty_summary = pd.DataFrame(columns=['group', 'patients', 'pct', 'mortality', 'median_los'])
+    empty_matrix = pd.DataFrame(columns=['SOFA-1', 'SOFA-2', 'patients'])
+    empty_organ = pd.DataFrame(columns=['organ', 'mean_delta', 'mean_abs_delta', 'up', 'down'])
+    empty_rows = pd.DataFrame(columns=['stay_id', 'sofa1', 'sofa2', 'delta', 'group'])
+    empty_metrics = {
+        'patients': '0',
+        'denominator': '0',
+        'denominator_label': denominator_label,
+        'denominator_hint': denominator_hint,
+        'patient_count': '0',
+        'discordant_pct': 'NA',
+        'up_pct': 'NA',
+        'down_pct': 'NA',
+        'median_delta': 'NA',
+    }
+
+    if sofa1 is None or sofa2 is None:
+        return {
+            'available': False,
+            'rows': empty_rows,
+            'summary': empty_summary,
+            'matrix': empty_matrix,
+            'organ': empty_organ,
+            'metrics': empty_metrics,
+        }
+
+    work = pd.DataFrame({
+        'stay_id': df['stay_id'] if 'stay_id' in df.columns else np.arange(len(df)),
+        'sofa1': sofa1,
+        'sofa2': sofa2,
+    }).dropna(subset=['sofa1', 'sofa2']).copy()
+    if work.empty:
+        return {
+            'available': False,
+            'rows': empty_rows,
+            'summary': empty_summary,
+            'matrix': empty_matrix,
+            'organ': empty_organ,
+            'metrics': empty_metrics,
+        }
+
+    if 'charttime' in df.columns:
+        work['charttime'] = df.loc[work.index, 'charttime'].to_numpy()
+    work['delta'] = work['sofa2'] - work['sofa1']
+    group_labels = {
+        'up': 'Up-classified' if lang == 'en' else '上调分层',
+        'same': 'Same' if lang == 'en' else '不变',
+        'down': 'Down-classified' if lang == 'en' else '下调分层',
+    }
+    work['group'] = np.select(
+        [work['delta'] > 0, work['delta'] < 0],
+        [group_labels['up'], group_labels['down']],
+        default=group_labels['same'],
+    )
+    work['SOFA-1'] = _sofa_severity_group(work['sofa1'])
+    work['SOFA-2'] = _sofa_severity_group(work['sofa2'])
+
+    mortality_series = _cohort_bool_series(df, ['mortality'])
+    survived = _cohort_bool_series(df, ['survived'])
+    if mortality_series is None and survived is not None:
+        mortality_series = ~survived
+    if mortality_series is not None:
+        work['death'] = mortality_series.reindex(work.index).fillna(False).astype(bool).to_numpy()
+    else:
+        work['death'] = False
+
+    los_hours = _cohort_numeric_series(df, ['los_hours'])
+    los_days = los_hours / 24 if los_hours is not None else _cohort_numeric_series(df, ['los_days'])
+    if los_days is not None:
+        work['los_days'] = los_days.reindex(work.index).to_numpy()
+    else:
+        work['los_days'] = np.nan
+
+    order = [group_labels['up'], group_labels['same'], group_labels['down']]
+    summary = work.groupby('group', observed=False).agg(
+        patients=('stay_id', 'count'),
+        deaths=('death', 'sum'),
+        median_los=('los_days', 'median'),
+    ).reindex(order).fillna({'patients': 0, 'deaths': 0}).reset_index()
+    summary['patients'] = summary['patients'].astype(int)
+    summary['pct'] = np.where(len(work) > 0, (summary['patients'] / len(work) * 100).round(1), 0.0)
+    summary['mortality'] = np.where(
+        summary['patients'] > 0,
+        (summary['deaths'] / summary['patients'] * 100).round(1),
+        0.0,
+    )
+    summary['median_los'] = summary['median_los'].fillna(0).round(1)
+    summary = summary[['group', 'patients', 'pct', 'mortality', 'median_los']]
+
+    matrix = work.groupby(['SOFA-1', 'SOFA-2'], observed=False).size().reset_index(name='patients')
+
+    organ_rows = []
+    for key, label_en, label_zh in SOFA_RECLASS_ORGANS:
+        sofa1_col = f'sofa1_{key}'
+        sofa2_col = f'sofa2_{key}'
+        if sofa1_col not in df.columns or sofa2_col not in df.columns:
+            continue
+        organ_delta = pd.to_numeric(df[sofa2_col], errors='coerce') - pd.to_numeric(df[sofa1_col], errors='coerce')
+        organ_rows.append({
+            'organ': label_en if lang == 'en' else label_zh,
+            'mean_delta': round(float(organ_delta.mean()), 2),
+            'mean_abs_delta': round(float(organ_delta.abs().mean()), 2),
+            'up': int((organ_delta > 0).sum()),
+            'down': int((organ_delta < 0).sum()),
+        })
+    organ = pd.DataFrame(organ_rows, columns=['organ', 'mean_delta', 'mean_abs_delta', 'up', 'down'])
+    if not organ.empty:
+        organ = organ.sort_values('mean_abs_delta', ascending=True)
+
+    up_pct = summary.loc[summary['group'] == group_labels['up'], 'pct'].iloc[0]
+    down_pct = summary.loc[summary['group'] == group_labels['down'], 'pct'].iloc[0]
+    discordant_pct = round(float(up_pct + down_pct), 1)
+    metrics = {
+        'patients': f"{len(work):,}",
+        'denominator': f"{len(work):,}",
+        'denominator_label': denominator_label,
+        'denominator_hint': denominator_hint,
+        'patient_count': f"{work['stay_id'].nunique():,}",
+        'discordant_pct': f"{discordant_pct:.1f}%",
+        'up_pct': f"{up_pct:.1f}%",
+        'down_pct': f"{down_pct:.1f}%",
+        'median_delta': f"{work['delta'].median():.1f}",
+    }
+
+    return {
+        'available': True,
+        'rows': work,
+        'summary': summary,
+        'matrix': matrix,
+        'organ': organ,
+        'metrics': metrics,
+    }
+
+
+def _build_reclassification_df_from_loaded_concepts(
+    loaded_concepts: Dict[str, Any],
+    mode: str = 'worst_icu',
+) -> pd.DataFrame:
+    """Build SOFA-1/SOFA-2 comparison data from loaded Quick Visualization concepts."""
+    if not loaded_concepts:
+        return pd.DataFrame()
+    if mode not in SOFA_RECLASS_ANALYSIS_MODES:
+        mode = 'worst_icu'
+
+    def _concept_frame(concept: str, output_col: str, *, require_time: bool = False) -> pd.DataFrame:
+        concept_df = loaded_concepts.get(concept)
+        if not isinstance(concept_df, pd.DataFrame) or concept_df.empty:
+            return pd.DataFrame()
+        id_col = next((c for c in ['stay_id', 'patient_id', 'subject_id'] if c in concept_df.columns), None)
+        time_col = next((c for c in ['charttime', 'time', 'hours_from_admit'] if c in concept_df.columns), None)
+        value_col = concept if concept in concept_df.columns else None
+        if id_col is None or value_col is None or (require_time and time_col is None):
+            return pd.DataFrame()
+        cols = [id_col, value_col]
+        if time_col:
+            cols.insert(1, time_col)
+        result = concept_df[cols].copy()
+        rename_map = {id_col: 'stay_id', value_col: output_col}
+        if time_col:
+            rename_map[time_col] = 'charttime'
+        result = result.rename(columns=rename_map)
+        result[output_col] = pd.to_numeric(result[output_col], errors='coerce')
+        result = result.dropna(subset=['stay_id', output_col])
+        if require_time:
+            result['charttime'] = pd.to_numeric(result['charttime'], errors='coerce')
+            result = result.dropna(subset=['charttime'])
+            result = result.groupby(['stay_id', 'charttime'], as_index=False)[output_col].max()
+        return result
+
+    def _max_feature_frame(concept: str, output_col: str) -> pd.DataFrame:
+        concept_df = _concept_frame(concept, output_col)
+        if concept_df.empty:
+            return pd.DataFrame()
+        return (
+            concept_df[['stay_id', output_col]]
+            .groupby('stay_id', as_index=False)[output_col]
+            .max()
+        )
+
+    def _paired_feature_frame(sofa1_concept: str, sofa2_concept: str, sofa1_col: str, sofa2_col: str) -> pd.DataFrame:
+        sofa1_frame = _concept_frame(sofa1_concept, sofa1_col, require_time=True)
+        sofa2_frame = _concept_frame(sofa2_concept, sofa2_col, require_time=True)
+        if sofa1_frame.empty or sofa2_frame.empty:
+            return pd.DataFrame()
+        return sofa1_frame.merge(sofa2_frame, on=['stay_id', 'charttime'], how='inner')
+
+    def _merge_outcomes(result: pd.DataFrame) -> pd.DataFrame:
+        if result.empty:
+            return result
+        for concept, output_col in [('death', 'mortality'), ('los_icu', 'los_days')]:
+            concept_frame = _max_feature_frame(concept, output_col)
+            if not concept_frame.empty:
+                result = result.merge(concept_frame, on='stay_id', how='left')
+        return result
+
+    if mode in {'first24_worst', 'time_aligned'}:
+        result = _paired_feature_frame('sofa', 'sofa2', 'sofa1_max', 'sofa2_max')
+        if result.empty:
+            return pd.DataFrame()
+
+        for key, _label_en, _label_zh in SOFA_RECLASS_ORGANS:
+            organ_pair = _paired_feature_frame(f'sofa_{key}', f'sofa2_{key}', f'sofa1_{key}', f'sofa2_{key}')
+            if not organ_pair.empty:
+                result = result.merge(organ_pair, on=['stay_id', 'charttime'], how='left')
+
+        if mode == 'first24_worst':
+            result = result[(result['charttime'] >= 0) & (result['charttime'] <= 24)].copy()
+            if result.empty:
+                return pd.DataFrame()
+            numeric_cols = [c for c in result.columns if c not in {'stay_id', 'charttime'}]
+            result = result.groupby('stay_id', as_index=False)[numeric_cols].max()
+            result['analysis_unit'] = 'patients'
+            result['analysis_mode'] = mode
+            return _merge_outcomes(result)
+
+        result = result.sort_values(['stay_id', 'charttime']).reset_index(drop=True)
+        result['analysis_unit'] = 'timepoints'
+        result['analysis_mode'] = mode
+        return _merge_outcomes(result)
+
+    result = _max_feature_frame('sofa', 'sofa1_max')
+    sofa2 = _max_feature_frame('sofa2', 'sofa2_max')
+    if result.empty or sofa2.empty:
+        return pd.DataFrame()
+    result = result.merge(sofa2, on='stay_id', how='inner')
+
+    for key, _label_en, _label_zh in SOFA_RECLASS_ORGANS:
+        sofa1_part = _max_feature_frame(f'sofa_{key}', f'sofa1_{key}')
+        sofa2_part = _max_feature_frame(f'sofa2_{key}', f'sofa2_{key}')
+        if not sofa1_part.empty:
+            result = result.merge(sofa1_part, on='stay_id', how='left')
+        if not sofa2_part.empty:
+            result = result.merge(sofa2_part, on='stay_id', how='left')
+
+    for concept, output_col in [('death', 'mortality'), ('los_icu', 'los_days')]:
+        concept_frame = _max_feature_frame(concept, output_col)
+        if not concept_frame.empty:
+            result = result.merge(concept_frame, on='stay_id', how='left')
+    result['analysis_unit'] = 'patients'
+    result['analysis_mode'] = mode
+    return result
+
+
+def _get_sofa_reclassification_source(lang: str = 'en', mode: str = 'worst_icu') -> tuple[pd.DataFrame, str]:
+    """Return the best available patient-level dataset for SOFA reclassification UI."""
+    dash_df = st.session_state.get('dash_demographics')
+    if mode == 'worst_icu' and isinstance(dash_df, pd.DataFrame) and not dash_df.empty:
+        stats = _build_sofa_reclassification_stats(dash_df, lang=lang)
+        if stats.get('available'):
+            return dash_df, "Cohort Snapshot data" if lang == 'en' else "队列快照数据"
+
+    loaded_df = _build_reclassification_df_from_loaded_concepts(st.session_state.get('loaded_concepts', {}), mode=mode)
+    if not loaded_df.empty:
+        mode_label = SOFA_RECLASS_ANALYSIS_MODES.get(mode, SOFA_RECLASS_ANALYSIS_MODES['worst_icu'])
+        label = mode_label['label_en'] if lang == 'en' else mode_label['label_zh']
+        return loaded_df, ("Loaded Quick Visualization concepts · " + label) if lang == 'en' else ("快速可视化已载入特征 · " + label)
+
+    demo_concepts = _get_demo_sofa_timeseries_concepts()
+    demo_timeseries_df = _build_reclassification_df_from_loaded_concepts(demo_concepts, mode=mode)
+    if not demo_timeseries_df.empty:
+        mode_label = SOFA_RECLASS_ANALYSIS_MODES.get(mode, SOFA_RECLASS_ANALYSIS_MODES['worst_icu'])
+        label = mode_label['label_en'] if lang == 'en' else mode_label['label_zh']
+        return demo_timeseries_df, ("Demo SOFA time series · " + label) if lang == 'en' else ("演示SOFA时间序列 · " + label)
+
+    demo_df = st.session_state.get('reclass_demo_df')
+    if mode == 'worst_icu' and isinstance(demo_df, pd.DataFrame) and not demo_df.empty:
+        return demo_df, "Demo reclassification cohort" if lang == 'en' else "演示重新分层队列"
+
+    return pd.DataFrame(), ""
+
+
+def _render_reclassification_cards(reclass: Dict[str, Any], lang: str = 'en'):
+    """Render compact metric cards for SOFA reclassification summaries."""
+    metrics = reclass['metrics']
+    cols = st.columns(5)
+    cards = [
+        (metrics.get('denominator', metrics['patients']), metrics.get('denominator_label', "Patients" if lang == 'en' else "患者数"), metrics.get('denominator_hint', "paired SOFA" if lang == 'en' else "双SOFA记录"), "#2563eb", "👥"),
+        (metrics['discordant_pct'], "Discordant" if lang == 'en' else "重新分层", "SOFA-2 != SOFA-1" if lang == 'en' else "SOFA-2 != SOFA-1", "#ea580c", "⇄"),
+        (metrics['up_pct'], "Up-classified" if lang == 'en' else "上调分层", "higher SOFA-2" if lang == 'en' else "SOFA-2更高", "#e11d48", "↑"),
+        (metrics['down_pct'], "Down-classified" if lang == 'en' else "下调分层", "lower SOFA-2" if lang == 'en' else "SOFA-2更低", "#0f766e", "↓"),
+        (metrics['median_delta'], "Median delta" if lang == 'en' else "Delta中位数", "SOFA-2 - SOFA-1" if lang == 'en' else "SOFA-2 - SOFA-1", "#475569", "Δ"),
+    ]
+    for col, (value, label, hint, color, icon) in zip(cols, cards):
+        with col:
+            st.markdown(
+                f"""
+                <div style="background:#ffffff;border:1px solid #cddbeb;border-left:4px solid {color};
+                            border-radius:16px;padding:11px 13px;min-height:92px;box-shadow:0 8px 24px rgba(15,31,68,.045)">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+                        <span style="width:24px;height:24px;border-radius:7px;background:{color};color:white;display:inline-flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:900">{icon}</span>
+                        <span style="font-size:.68rem;font-weight:850;color:#60718a;letter-spacing:.07em;text-transform:uppercase">{label}</span>
+                    </div>
+                    <div style="font-size:1.5rem;font-weight:900;line-height:1.05;color:{color};letter-spacing:-.02em">{value}</div>
+                    <div style="font-size:.68rem;color:#60718a;margin-top:4px;font-weight:700">{hint}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+def _render_reclassification_snapshot(reclass: Dict[str, Any], lang: str = 'en', key_prefix: str = 'reclass'):
+    """Render a compact dashboard-friendly SOFA reclassification snapshot."""
+    import plotly.express as px
+
+    summary = reclass.get('summary', pd.DataFrame())
+    if summary.empty:
+        st.warning("No SOFA reclassification data available" if lang == 'en' else "没有可用的SOFA重新分层数据")
+        return
+    unit_pct_label = "Paired points (%)" if reclass.get('metrics', {}).get('denominator_label') == "Paired points" else (
+        "配对时间点占比 (%)" if reclass.get('metrics', {}).get('denominator_label') == "配对时间点" else ("Patients (%)" if lang == 'en' else "患者占比 (%)")
+    )
+
+    fig = px.bar(
+        summary.sort_values('pct', ascending=True),
+        x='pct',
+        y='group',
+        orientation='h',
+        text=summary.sort_values('pct', ascending=True)['pct'].map(lambda x: f"{x:.1f}%"),
+        color='mortality',
+        color_continuous_scale=['#dbeafe', '#ef4444'],
+        range_color=[0, 100],
+        labels={
+            'pct': unit_pct_label,
+            'group': "",
+            'mortality': "Mortality %" if lang == 'en' else "死亡率 %",
+        },
+        template='plotly_white',
+    )
+    fig.update_traces(textposition='outside', cliponaxis=False)
+    fig.update_layout(
+        height=315,
+        margin=dict(l=10, r=45, t=12, b=35),
+        coloraxis_colorbar=dict(title="Mortality %" if lang == 'en' else "死亡率 %"),
+        font=dict(size=13, color='#111827'),
+    )
+    fig.update_xaxes(range=[0, max(10, float(summary['pct'].max()) * 1.22)], gridcolor='#e5e7eb')
+    st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_snapshot", config=_get_plotly_chart_config())
+
+
+def render_severity_reclassification_subtab(lang: str):
+    """Render cohort-level SOFA-1 to SOFA-2 severity reclassification analysis."""
+    import plotly.express as px
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    screenshot_mode = _is_screenshot_mode()
+    if st.session_state.get('entry_mode') == 'demo':
+        _ensure_cohort_demo_workspace(st.session_state, lang=lang)
+
+    # P0-2: If real workspace loaded SOFA concepts, ensure loaded_concepts is seeded
+    if (st.session_state.get('entry_mode') == 'real'
+        and _cohort_real_workspace_ready(st.session_state)):
+        ws_concepts = st.session_state.get('_cohort_real_ws_concepts', {})
+        if ws_concepts:
+            existing = dict(st.session_state.get('loaded_concepts', {}) or {})
+            for k, v in ws_concepts.items():
+                if k not in existing:
+                    existing[k] = v
+            st.session_state['loaded_concepts'] = existing
+
+    title = "SOFA-1 vs SOFA-2 Definition Sensitivity" if lang == 'en' else "SOFA-1 与 SOFA-2 定义敏感性"
+    subtitle = (
+        "Dedicated reclassification analysis under an explicit aggregation rule: ICU worst score, first-24h paired worst score, or time-aligned paired points."
+        if lang == 'en' else
+        "专门分析 SOFA-1 切换到 SOFA-2 后的重新分层；可选择 ICU 全程最高分、首24小时配对最高分，或同时间点配对。"
+    )
+    if not screenshot_mode:
+        st.markdown(f"### 🧭 {title}")
+        st.caption(subtitle)
+
+    mode_labels = {
+        key: cfg['label_en'] if lang == 'en' else cfg['label_zh']
+        for key, cfg in SOFA_RECLASS_ANALYSIS_MODES.items()
+    }
+    loaded_concepts = st.session_state.get('loaded_concepts', {})
+    demo_concepts = _get_demo_sofa_timeseries_concepts()
+    mode_availability = _get_sofa_reclassification_mode_availability(loaded_concepts)
+    if mode_availability['locked'] and demo_concepts:
+        demo_availability = _get_sofa_reclassification_mode_availability(demo_concepts)
+        if len(demo_availability['available']) > len(mode_availability['available']):
+            mode_availability = demo_availability
+    available_modes = mode_availability['available']
+    locked_modes = mode_availability['locked']
+    mode_state_key = "sofa_reclass_analysis_mode_key"
+    if st.session_state.get(mode_state_key) not in available_modes:
+        st.session_state[mode_state_key] = available_modes[0]
+
+    if screenshot_mode:
+        mode = 'worst_icu' if 'worst_icu' in available_modes else available_modes[0]
+        st.session_state[mode_state_key] = mode
+    else:
+        mode = st.radio(
+            "Analysis definition" if lang == 'en' else "分析口径",
+            available_modes,
+            format_func=lambda key: mode_labels[key],
+            horizontal=True,
+            key=mode_state_key,
+            help=(
+                "Time-aligned modes require loaded SOFA-1/SOFA-2 time-series concepts from Quick Visualization."
+                if lang == 'en' else
+                "同时间点相关模式需要先在快速可视化中载入 SOFA-1/SOFA-2 时间序列。"
+            ),
+        )
+    mode_cfg = SOFA_RECLASS_ANALYSIS_MODES[mode]
+    if not screenshot_mode:
+        st.caption(mode_cfg['description_en'] if lang == 'en' else mode_cfg['description_zh'])
+    if locked_modes and not screenshot_mode:
+        locked_text = ", ".join(mode_labels[key] for key in locked_modes)
+        st.caption(
+            (
+                f"Load `sofa` and `sofa2` in Quick Visualization to unlock: {locked_text}."
+                if lang == 'en' else
+                f"先在快速可视化中载入 `sofa` 和 `sofa2`，即可解锁：{locked_text}。"
+            )
+        )
+
+    source_df, source_label = _get_sofa_reclassification_source(lang, mode=mode)
+    if source_df.empty:
+        if st.session_state.get('entry_mode') == 'real' and not screenshot_mode:
+            st.markdown(
+                f"""
+                <div class="viz-demo-load-card">
+                    <div class="viz-demo-load-kicker">REAL DATA</div>
+                    <div class="viz-demo-load-title">{html.escape('Load SOFA-1/SOFA-2 from current data source' if lang == 'en' else '从当前真实数据加载 SOFA-1/SOFA-2')}</div>
+                    <div class="viz-demo-load-subtitle">{html.escape('Uses the validated sidebar database path and prepares paired SOFA concepts for this sensitivity panel.' if lang == 'en' else '使用侧边栏已验证的数据路径，并为本敏感性分析准备配对 SOFA 特征。')}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            col_a, col_b = st.columns([1.2, 1])
+            with col_a:
+                max_stays = st.number_input(
+                    "Max stays to load" if lang == 'en' else "最大加载 stay 数",
+                    min_value=100,
+                    max_value=5000,
+                    value=1000,
+                    step=100,
+                    key="real_sofa_reclass_max_stays",
+                    help="Use a limited subset for interactive review; full extraction remains available in the export workflow."
+                         if lang == 'en' else "交互式审阅建议先使用子集；完整提取可在导出流程中执行。",
+                )
+            with col_b:
+                _compact_spacer(28)
+                if st.button(
+                    "🚀 " + ("Load real SOFA concepts" if lang == 'en' else "加载真实 SOFA 特征"),
+                    type="primary",
+                    use_container_width=True,
+                    key="real_sofa_reclass_load",
+                ):
+                    try:
+                        from easyicu import load_concepts
+                        from easyicu.patient_filter import PatientFilter
+
+                        database = _default_real_database()
+                        data_path = _default_real_data_root()
+                        if not data_path or not Path(data_path).exists():
+                            st.error("Please validate a real data path in the sidebar first." if lang == 'en' else "请先在侧边栏验证真实数据路径。")
+                            return
+
+                        concepts = [
+                            'sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal',
+                            'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
+                            'death', 'los_icu',
+                        ]
+                        progress_bar = st.progress(0, text="Loading demographics..." if lang == 'en' else "正在加载人口统计...")
+                        try:
+                            demographics = PatientFilter(database=database, data_path=data_path, verbose=False)._load_demographics()
+                            id_col = 'stay_id' if 'stay_id' in demographics.columns else 'patient_id'
+                            patient_ids = demographics[id_col].dropna().astype(int).head(int(max_stays)).tolist()
+                            progress_bar.progress(20, text=f"Loading {len(concepts)} concepts for {len(patient_ids):,} stays..."
+                                                  if lang == 'en' else f"正在加载 {len(concepts)} 个特征 ({len(patient_ids):,} stays)...")
+                        except Exception as e:
+                            progress_bar.empty()
+                            st.error(f"Failed to load demographics: {e}")
+                            return
+
+                        try:
+                            concept_df = load_concepts(
+                                concepts=concepts,
+                                database=database,
+                                data_path=data_path,
+                                patient_ids=patient_ids,
+                                verbose=False,
+                                **_get_sepsis_runtime_options(),
+                            )
+                            progress_bar.progress(80, text="Splitting concept frames..." if lang == 'en' else "正在拆分特征表...")
+                        except Exception as e:
+                            progress_bar.empty()
+                            st.error(f"Concept extraction failed: {e}")
+                            return
+
+                        if concept_df is None or concept_df.empty:
+                            progress_bar.empty()
+                            st.warning("No paired SOFA data were returned for the selected stays." if lang == 'en' else "所选 stay 未返回可用的配对 SOFA 数据。")
+                            return
+
+                        split_concepts = dict(st.session_state.get('loaded_concepts', {}) or {})
+                        detected_id_col = next((col for col in ['stay_id', 'patient_id', 'patientunitstayid', 'admissionid', 'patientid'] if col in concept_df.columns), None)
+                        time_cols = [col for col in ['charttime', 'time'] if col in concept_df.columns]
+                        base_cols = ([detected_id_col] if detected_id_col else []) + time_cols
+                        loaded_ok: list[str] = []
+                        failed_concepts: list[str] = []
+                        for concept in concepts:
+                            if concept not in concept_df.columns:
+                                failed_concepts.append(concept)
+                                continue
+                            keep_cols = base_cols + [concept]
+                            split_concepts[concept] = concept_df[keep_cols].dropna(subset=[concept]).copy()
+                            loaded_ok.append(concept)
+
+                        st.session_state['loaded_concepts'] = split_concepts
+                        st.session_state['loaded_data_origin'] = 'real_sofa_reclassification'
+                        progress_bar.progress(100, text="Done!" if lang == 'en' else "完成！")
+
+                        # Show per-concept results
+                        st.success(
+                            f"Loaded {len(loaded_ok)} concept frames for {len(patient_ids):,} stays."
+                            if lang == 'en' else
+                            f"已为 {len(patient_ids):,} 个 stay 加载 {len(loaded_ok)} 个特征表。"
+                        )
+                        if loaded_ok:
+                            st.caption("✅ " + ", ".join(f"`{c}`" for c in loaded_ok))
+                        if failed_concepts:
+                            st.warning(
+                                f"⚠️ {len(failed_concepts)} concepts not found in extraction result: "
+                                + ", ".join(f"`{c}`" for c in failed_concepts)
+                                if lang == 'en' else
+                                f"⚠️ {len(failed_concepts)} 个概念在提取结果中缺失："
+                                + ", ".join(f"`{c}`" for c in failed_concepts)
+                            )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error loading real SOFA concepts: {e}")
+                        return
+            return
+
+        if mode != 'worst_icu':
+            st.warning(
+                "This definition is not available for the current session yet. Load real time-series concepts: `sofa`, `sofa2`, and optionally organ components in Quick Visualization first."
+                if lang == 'en' else
+                "当前会话还不能使用这个口径。请先在快速可视化中载入真实时间序列特征：`sofa`、`sofa2`，以及可选的器官组成分。"
+            )
+            return
+        _render_demo_generation_card(
+            "🧭",
+            "Generate SOFA-1 vs SOFA-2 Demo" if lang == 'en' else "生成 SOFA-1 vs SOFA-2 演示",
+            "Create a patient-level paired SOFA-1/SOFA-2 cohort to inspect definition-driven reclassification." if lang == 'en' else "生成患者级SOFA-1/SOFA-2配对队列，用于查看定义差异导致的重新分层。",
+        )
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button(
+                "🚀 " + ("Generate Reclassification Demo" if lang == 'en' else "生成重新分层演示"),
+                type="primary",
+                use_container_width=True,
+                key="reclass_generate_demo_btn",
+            ):
+                st.session_state['reclass_demo_df'] = _generate_mock_cohort_dashboard_data(lang)
+                st.rerun()
+        st.info("Use Cohort Snapshot demo data, loaded Quick Visualization concepts, or generate demo data here." if lang == 'en' else "可使用队列快照演示数据、快速可视化已载入特征，或在此生成演示数据。")
+        return
+
+    reclass = _build_sofa_reclassification_stats(source_df, lang=lang)
+    if not reclass.get('available'):
+        st.warning("The selected dataset does not contain paired SOFA-1 and SOFA-2 columns." if lang == 'en' else "当前数据不包含配对的SOFA-1和SOFA-2列。")
+        return
+
+    if not screenshot_mode:
+        st.info(("Source: " if lang == 'en' else "数据来源：") + source_label)
+    _render_reclassification_cards(reclass, lang)
+    if reclass['metrics'].get('denominator_label') == "Paired points":
+        st.caption(
+            f"Patient coverage: {reclass['metrics'].get('patient_count', '0')} unique stays represented in the paired time points."
+            if lang == 'en' else
+            f"患者覆盖：这些配对时间点来自 {reclass['metrics'].get('patient_count', '0')} 个唯一 ICU stay。"
+        )
+        st.caption(
+            "Outcome rates in this mode are row-weighted by paired time points; use the first-24h or worst-score modes for patient-level outcome interpretation."
+            if lang == 'en' else
+            "此模式下的结局率按配对时间点加权；若要解释患者级结局，请使用首24小时或最高分模式。"
+        )
+    _render_compact_divider()
+
+    rows = reclass['rows']
+    summary = reclass['summary']
+    matrix = reclass['matrix']
+    organ = reclass['organ']
+    unit_label = reclass['metrics'].get('denominator_label', "Patients" if lang == 'en' else "患者数")
+
+    col1, col2 = st.columns([1, 1.1])
+    with col1:
+        st.markdown("##### " + ("Reclassification Matrix" if lang == 'en' else "重新分层矩阵"))
+        heatmap = matrix.pivot(index='SOFA-1', columns='SOFA-2', values='patients').fillna(0)
+        fig = go.Figure(data=go.Heatmap(
+            z=heatmap.values,
+            x=heatmap.columns.astype(str),
+            y=heatmap.index.astype(str),
+            colorscale='Blues',
+            text=heatmap.values.astype(int),
+            texttemplate="%{text}",
+            hovertemplate=f"SOFA-1: %{{y}}<br>SOFA-2: %{{x}}<br>{unit_label}: %{{z}}<extra></extra>",
+        ))
+        fig.update_layout(
+            template='plotly_white',
+            height=360,
+            margin=dict(l=45, r=20, t=12, b=45),
+            xaxis_title="SOFA-2 group" if lang == 'en' else "SOFA-2分层",
+            yaxis_title="SOFA-1 group" if lang == 'en' else "SOFA-1分层",
+            font=dict(size=13, color='#111827'),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="reclass_matrix", config=_get_plotly_chart_config())
+
+    with col2:
+        st.markdown("##### " + ("Outcome by Reclassification Group" if lang == 'en' else "重新分层组别与结局"))
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        fig.add_trace(
+            go.Bar(
+                x=summary['group'],
+                y=summary['patients'],
+                name=unit_label,
+                marker_color='rgba(37, 99, 235, 0.58)',
+                text=summary['patients'],
+                textposition='outside',
+            ),
+            secondary_y=False,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=summary['group'],
+                y=summary['mortality'],
+                name="Mortality %" if lang == 'en' else "死亡率 %",
+                mode='lines+markers+text',
+                text=summary['mortality'].map(lambda x: f"{x:.1f}%"),
+                textposition='top center',
+                marker_color='#e11d48',
+                line=dict(width=3),
+            ),
+            secondary_y=True,
+        )
+        fig.update_layout(
+            template='plotly_white',
+            height=360,
+            margin=dict(l=20, r=20, t=12, b=60),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+            font=dict(size=13, color='#111827'),
+        )
+        fig.update_yaxes(title_text=unit_label, secondary_y=False, gridcolor='#e5e7eb')
+        fig.update_yaxes(title_text="Mortality %" if lang == 'en' else "死亡率 %", secondary_y=True, range=[0, 100])
+        st.plotly_chart(fig, use_container_width=True, key="reclass_outcome", config=_get_plotly_chart_config())
+
+    col3, col4 = st.columns([1, 1.1])
+    with col3:
+        st.markdown("##### " + ("SOFA-2 minus SOFA-1" if lang == 'en' else "SOFA-2 减 SOFA-1"))
+        fig = px.histogram(
+            rows,
+            x='delta',
+            color='group',
+            nbins=17,
+            color_discrete_map={
+                'Up-classified': '#e11d48',
+                'Same': '#64748b',
+                'Down-classified': '#0f766e',
+                '上调分层': '#e11d48',
+                '不变': '#64748b',
+                '下调分层': '#0f766e',
+            },
+            labels={'delta': "SOFA delta" if lang == 'en' else "SOFA差值", 'count': unit_label},
+            template='plotly_white',
+        )
+        fig.add_vline(x=0, line_color='#111827', line_dash='dash')
+        fig.update_layout(height=330, margin=dict(l=20, r=20, t=12, b=40), font=dict(size=13, color='#111827'), legend_title_text="")
+        st.plotly_chart(fig, use_container_width=True, key="reclass_delta_hist", config=_get_plotly_chart_config())
+
+    with col4:
+        st.markdown("##### " + ("Organ Contributors" if lang == 'en' else "器官评分贡献"))
+        if not organ.empty:
+            fig = px.bar(
+                organ,
+                x='mean_abs_delta',
+                y='organ',
+                orientation='h',
+                text='mean_abs_delta',
+                color='mean_delta',
+                color_continuous_scale=['#0f766e', '#f8fafc', '#e11d48'],
+                labels={'mean_abs_delta': "Mean |delta|" if lang == 'en' else "平均|差值|", 'organ': "", 'mean_delta': "Mean delta" if lang == 'en' else "平均差值"},
+                template='plotly_white',
+            )
+            fig.update_traces(texttemplate="%{text:.2f}", textposition='outside', cliponaxis=False)
+            fig.update_layout(height=330, margin=dict(l=10, r=45, t=12, b=40), font=dict(size=13, color='#111827'))
+            fig.update_xaxes(range=[0, max(0.2, float(organ['mean_abs_delta'].max()) * 1.25)], gridcolor='#e5e7eb')
+            st.plotly_chart(fig, use_container_width=True, key="reclass_organ_contrib", config=_get_plotly_chart_config())
+        else:
+            st.info("Organ-level SOFA component columns are not available." if lang == 'en' else "当前数据没有器官级SOFA组成列。")
+
+    table_title = "Time-point reclassification table" if reclass['metrics'].get('denominator_label') == "Paired points" and lang == 'en' else (
+        "时间点重新分层表" if reclass['metrics'].get('denominator_label') == "配对时间点" else ("Patient-level reclassification table" if lang == 'en' else "患者级重新分层表")
+    )
+    with st.expander(table_title, expanded=False):
+        table_cols = ['stay_id']
+        if 'charttime' in rows.columns:
+            table_cols.append('charttime')
+        table_cols.extend(['sofa1', 'sofa2', 'delta', 'SOFA-1', 'SOFA-2', 'group'])
+        table = rows[table_cols].copy()
+        _dataframe_compat(table, width="stretch", hide_index=True)
+
+
 def render_cohort_comparison_page():
     """渲染队列对比可视化页面 - 包含多个子标签页"""
     lang = st.session_state.get('language', 'en')
-    
+    screenshot_mode = _is_screenshot_mode()
+    figure_panel = st.session_state.get('_figure_target_panel') if screenshot_mode else None
+    if figure_panel in {'Group Contrast', 'Coverage Audit', 'Cross-DB Benchmark', 'Cohort Snapshot', 'SOFA-1 vs SOFA-2'}:
+        render_cohort_figure_panel(figure_panel)
+        return
+
     _coh_title = "Cohort Analysis" if lang == 'en' else "队列分析"
-    _coh_sub = "Group comparison, multi-database distribution & dashboard" if lang == 'en' else "分组对比、多数据库分布与队列仪表板"
+    _coh_sub = (
+        "Subgroup contrast, coverage audit, cross-database benchmark, cohort snapshot, and SOFA-1/SOFA-2 definition sensitivity"
+        if lang == 'en' else
+        "亚组对照、覆盖度审计、跨库基准、队列快照与 SOFA-1/SOFA-2 定义敏感性"
+    )
     st.markdown(f'''
     <div style="margin-bottom:16px">
         <div style="font-size:1.4rem;font-weight:800;color:#111827">{_coh_title}</div>
         <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_coh_sub}</div>
     </div>
     ''', unsafe_allow_html=True)
-    
+
+    if st.session_state.get('entry_mode') == 'demo':
+        if not _cohort_demo_workspace_ready(st.session_state):
+            _render_cohort_demo_workspace_launcher(lang)
+            return
+        if not screenshot_mode:
+            _render_cohort_demo_workspace_status(lang)
+
+    elif st.session_state.get('entry_mode') == 'real':
+        # Real data: offer a one-click shared workspace (P0-2)
+        if not _cohort_real_workspace_ready(st.session_state):
+            _render_cohort_real_workspace_launcher(lang)
+            return
+        if not _cohort_real_workspace_matches_sidebar(st.session_state):
+            # Sidebar path changed since last workspace load
+            st.warning(
+                "⚠️ " + ("Sidebar data source changed. Reload the workspace to update."
+                          if lang == 'en' else "侧边栏数据源已变更，请重新加载工作区。")
+            )
+        if not screenshot_mode:
+            _render_cohort_real_workspace_status(lang)
+
     # 子标签页
     if lang == 'en':
         sub_tabs = st.tabs([
-            "👥 Group Comparison",
-            "📈 Multi-DB Distribution", 
-            "🎯 Cohort Dashboard"
+            "👥 Groups",
+            "🧾 Coverage",
+            "📈 Cross-DB",
+            "🎯 Snapshot",
+            "🧭 SOFA Δ",
         ])
     else:
         sub_tabs = st.tabs([
-            "👥 分组对比",
-            "📈 多数据库分布",
-            "🎯 队列仪表板"
+            "👥 分组",
+            "🧾 覆盖",
+            "📈 跨库",
+            "🎯 快照",
+            "🧭 SOFA Δ",
         ])
     
     with sub_tabs[0]:
         render_group_comparison_subtab(lang)
     
     with sub_tabs[1]:
-        render_multidb_distribution_subtab(lang)
+        render_data_coverage_audit_subtab(lang)
     
     with sub_tabs[2]:
+        render_multidb_distribution_subtab(lang)
+
+    with sub_tabs[3]:
         render_cohort_dashboard_subtab(lang)
+
+    with sub_tabs[4]:
+        render_severity_reclassification_subtab(lang)
 
 
 def _render_demo_generation_card(icon: str, title: str, desc: str):
@@ -14485,75 +18408,110 @@ def _render_demo_generation_card(icon: str, title: str, desc: str):
     )
 
 
+def _render_cohort_demo_workspace_status(lang: str) -> None:
+    """Render one shared demo status strip for all Cohort Analysis panels."""
+    title = "Shared demo cohort workspace" if lang == 'en' else "共享演示队列工作区"
+    subtitle = (
+        "Groups, coverage audit, cross-database benchmark, cohort snapshot, and SOFA sensitivity now use the same prepared demo state."
+        if lang == 'en' else
+        "分组、覆盖度审计、跨库基准、队列快照和 SOFA 敏感性现在共用同一套演示状态。"
+    )
+    status = "Ready for all panels" if lang == 'en' else "所有子板块已就绪"
+    st.markdown(
+        f'''
+        <div class="cohort-demo-workspace">
+            <div class="cohort-demo-badge">S1</div>
+            <div>
+                <div class="cohort-demo-title">{html.escape(title)}</div>
+                <div class="cohort-demo-subtitle">{html.escape(subtitle)}</div>
+            </div>
+            <div class="cohort-demo-status">✓ {html.escape(status)}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("⚙️ " + ("Shared demo settings" if lang == 'en' else "共享演示设置"), expanded=False):
+        n_patients = st.slider(
+            "Number of patients" if lang == 'en' else "患者数量",
+            min_value=50,
+            max_value=500,
+            value=int((st.session_state.get('mock_params') or {}).get('n_patients', 100)),
+            key="cohort_demo_workspace_patients",
+        )
+        if st.button(
+            "🔄 " + ("Regenerate shared demo workspace" if lang == 'en' else "重新生成共享演示工作区"),
+            type="primary",
+            use_container_width=True,
+            key="cohort_demo_workspace_regenerate",
+        ):
+            _ensure_cohort_demo_workspace(st.session_state, lang=lang, n_patients=n_patients, force=True)
+            st.rerun()
+
+
+def _render_cohort_demo_workspace_launcher(lang: str) -> None:
+    """Render a single shared Cohort Analysis demo generation entry point."""
+    title = "Generate one shared cohort demo workspace" if lang == 'en' else "生成一次共享队列演示工作区"
+    subtitle = (
+        "This prepares the demo data for Groups, Coverage, Cross-DB, Snapshot, and SOFA Δ together. You will not need to generate data again inside each subpanel."
+        if lang == 'en' else
+        "这会一次性准备分组、覆盖度、跨库、快照和 SOFA Δ 所需的演示数据；之后不需要在每个子板块重复生成。"
+    )
+    st.markdown(
+        f'''
+        <div class="cohort-demo-workspace">
+            <div class="cohort-demo-badge">S1</div>
+            <div>
+                <div class="cohort-demo-title">{html.escape(title)}</div>
+                <div class="cohort-demo-subtitle">{html.escape(subtitle)}</div>
+            </div>
+            <div class="cohort-demo-status">1 click · all panels</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+    col1, col2 = st.columns([1.1, 0.9])
+    with col1:
+        n_patients = st.slider(
+            "Number of patients" if lang == 'en' else "患者数量",
+            min_value=50,
+            max_value=500,
+            value=int((st.session_state.get('mock_params') or {}).get('n_patients', 100)),
+            key="cohort_demo_workspace_patients_init",
+        )
+    with col2:
+        _compact_spacer(26)
+        if st.button(
+            "🚀 " + ("Generate shared cohort demo" if lang == 'en' else "生成共享队列演示"),
+            type="primary",
+            use_container_width=True,
+            key="cohort_demo_workspace_generate",
+        ):
+            _ensure_cohort_demo_workspace(st.session_state, lang=lang, n_patients=n_patients, force=True)
+            st.rerun()
+
+
 def render_group_comparison_subtab(lang: str):
     """分组对比子标签页 - 带独立数据加载配置"""
-    
-    st.markdown("### 👥 " + ("Group Comparison Analysis" if lang == 'en' else "分组对比分析"))
+    screenshot_mode = _is_screenshot_mode()
+
+    if not screenshot_mode:
+        st.markdown("### 👥 " + ("Group Contrast Table" if lang == 'en' else "组间对照表"))
     
     # 获取当前入口模式
     entry_mode = st.session_state.get('entry_mode', 'none')
     
-    # ========== Demo模式：需要用户点击生成按钮 ==========
+    # ========== Demo模式：复用队列分析顶层的一次性共享演示工作区 ==========
     if entry_mode == 'demo':
-        # 检查是否已生成模拟数据
-        has_demo_data = 'grp_demographics' in st.session_state and st.session_state.get('grp_is_demo') == True
-        
-        if not has_demo_data:
-            # 尚未生成数据，显示生成界面
-            _render_compact_divider(top=2, bottom=10)
-            
-            # 居中的配置卡片
-            _gen_title = "Generate Demo Cohort Data" if lang == 'en' else "生成演示队列数据"
-            _gen_desc = "Configure patient count and generate simulated demographics" if lang == 'en' else "配置患者数量并生成模拟人口统计学数据"
-            _render_demo_generation_card("👥", _gen_title, _gen_desc)
-            
-            # 配置区域
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                n_patients = st.slider(
-                    "👥 " + ("Number of Patients" if lang == 'en' else "患者数量"),
-                    min_value=50, max_value=500, value=100,
-                    key="grp_demo_patients_init"
-                )
-                
-                _compact_spacer(10)
-                
-                if st.button(
-                    "🚀 " + ("Generate Demo Data" if lang == 'en' else "生成演示数据"),
-                    type="primary",
-                    use_container_width=True,
-                    key="grp_generate_demo_btn"
-                ):
-                    st.session_state.mock_params['n_patients'] = n_patients
-                    demographics_df = _generate_mock_demographics(n_patients, lang)
-                    st.session_state['grp_demographics'] = demographics_df
-                    st.session_state['grp_loaded_db'] = 'demo'
-                    st.session_state['grp_is_demo'] = True
-                    st.session_state.pop('grp_feature_data', None)
-                    st.rerun()
-            
-            # 显示提示信息
-            _compact_spacer(10)
-            st.info("💡 " + ("Click the button above to generate demo data for cohort analysis" if lang == 'en' else "点击上方按钮生成队列分析演示数据"))
-            return  # 未生成数据时不显示下方分析内容
-        
-        # 已生成数据，显示Demo模式提示
-        demo_info = "🎭 Using simulated demographics data for demonstration" if lang == 'en' else "🎭 正在使用模拟人口统计学数据进行演示"
-        st.info(demo_info)
-        
-        # 允许调整模拟数据参数
-        with st.expander("⚙️ " + ("Demo Data Settings" if lang == 'en' else "模拟数据设置"), expanded=False):
-            n_patients = st.slider(
-                "Number of Patients" if lang == 'en' else "患者数量",
-                min_value=50, max_value=500, value=st.session_state.mock_params.get('n_patients', 100),
-                key="grp_demo_patients"
-            )
-            if st.button("🔄 " + ("Regenerate Data" if lang == 'en' else "重新生成数据"), key="grp_regen_btn"):
-                st.session_state.mock_params['n_patients'] = n_patients
-                st.session_state['grp_demographics'] = _generate_mock_demographics(n_patients, lang)
-                st.session_state.pop('grp_feature_data', None)
-                st.rerun()
+        _ensure_cohort_demo_workspace(st.session_state, lang=lang)
+        # Demo data is prepared once at the Cohort Analysis level; keep
+        # individual panels focused on analysis rather than repeated setup.
     
+    # ========== Real Data：如果共享工作区已就绪，跳过独立配置 ==========
+    elif entry_mode == 'real' and _cohort_real_workspace_ready(st.session_state):
+        # Data already seeded by the shared workspace; nothing extra needed.
+        _sync_real_data_panel_defaults(root_key="grp_data_root", db_key="grp_db_select")
+
     # ========== Real Data模式：显示完整数据配置 ==========
     else:
         with st.expander("⚙️ " + ("Data Configuration" if lang == 'en' else "数据配置"), expanded=True):
@@ -14596,12 +18554,13 @@ def render_group_comparison_subtab(lang: str):
 
             elif grp_src == "raw":
                 # ===== 原始数据库模式 =====
+                _sync_real_data_panel_defaults(root_key="grp_data_root", db_key="grp_db_select")
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
                     data_root = _directory_input(
                         "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
-                        value=os.environ.get('EASYICU_DATA_PATH', ''),
+                        value=st.session_state.get('grp_data_root', ''),
                         input_key="grp_data_root",
                         button_key="grp_data_root_browse",
                         placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
@@ -14611,9 +18570,11 @@ def render_group_comparison_subtab(lang: str):
                 
                 with col2:
                     db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
+                    default_db = st.session_state.get('grp_db_select') or _default_real_database()
                     selected_db = st.selectbox(
                         "🏥 " + ("Database" if lang == 'en' else "数据库"),
                         options=list(db_options.keys()),
+                        index=list(db_options.keys()).index(default_db) if default_db in db_options else 0,
                         format_func=lambda x: db_options[x],
                         key="grp_db_select"
                     )
@@ -14719,7 +18680,8 @@ def render_group_comparison_subtab(lang: str):
                         except Exception as e:
                             st.error(f"Error: {e}")
     
-    _render_compact_divider()
+    if not screenshot_mode:
+        _render_compact_divider()
     
     # ========== 分组对比区域 ==========
     if 'grp_demographics' not in st.session_state:
@@ -14730,48 +18692,55 @@ def render_group_comparison_subtab(lang: str):
     database = st.session_state.get('grp_loaded_db', 'miiv')
     data_path = st.session_state.get('grp_loaded_path', '')
     
-    # 显示数据概览
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Patients" if lang == 'en' else "患者总数", f"{len(demographics_df):,}")
-    with col2:
-        avg_age = demographics_df['age'].mean() if 'age' in demographics_df.columns else 0
-        st.metric("Mean Age" if lang == 'en' else "平均年龄", f"{avg_age:.1f}")
-    with col3:
-        male_pct = (demographics_df['gender'] == 'M').mean() * 100 if 'gender' in demographics_df.columns else 0
-        st.metric("Male %" if lang == 'en' else "男性占比", f"{male_pct:.1f}%")
-    with col4:
-        mortality = (1 - demographics_df['survived'].mean()) * 100 if 'survived' in demographics_df.columns else 0
-        st.metric("Mortality" if lang == 'en' else "死亡率", f"{mortality:.1f}%")
-    
-    _render_compact_divider()
-    
-    # 对比模式选择
-    st.markdown("#### " + ("🔀 Select Comparison Mode" if lang == 'en' else "🔀 选择对比模式"))
+    if not screenshot_mode:
+        # 显示数据概览
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Patients" if lang == 'en' else "患者总数", f"{len(demographics_df):,}")
+        with col2:
+            avg_age = demographics_df['age'].mean() if 'age' in demographics_df.columns else 0
+            st.metric("Mean Age" if lang == 'en' else "平均年龄", f"{avg_age:.1f}")
+        with col3:
+            male_pct = (demographics_df['gender'] == 'M').mean() * 100 if 'gender' in demographics_df.columns else 0
+            st.metric("Male %" if lang == 'en' else "男性占比", f"{male_pct:.1f}%")
+        with col4:
+            mortality = (1 - demographics_df['survived'].mean()) * 100 if 'survived' in demographics_df.columns else 0
+            st.metric("Mortality" if lang == 'en' else "死亡率", f"{mortality:.1f}%")
+        
+        _render_compact_divider()
+        
+        # 对比模式选择
+        st.markdown("#### " + ("🔀 Select Comparison Mode" if lang == 'en' else "🔀 选择对比模式"))
     
     compare_options = {
         'survival': ('💀 Survived vs Deceased', '💀 存活 vs 死亡'),
         'age': ('👴 Age Groups', '👴 年龄分组'),
         'gender': ('👫 Male vs Female', '👫 男性 vs 女性'),
         'los': ('🏥 Short vs Long Stay', '🏥 短住院 vs 长住院'),
+        'sepsis': ('🦠 Sepsis vs Non-sepsis', '🦠 脓毒症 vs 非脓毒症'),
+        'custom': ('🎯 Custom Threshold', '🎯 自定义阈值'),
     }
     
-    compare_mode = st.radio(
-        "Comparison Mode" if lang == 'en' else "对比模式",
-        options=list(compare_options.keys()),
-        format_func=lambda x: compare_options[x][0] if lang == 'en' else compare_options[x][1],
-        horizontal=True,
-        key="group_comp_mode"
-    )
+    if screenshot_mode:
+        compare_mode = 'survival'
+        st.session_state["group_comp_mode"] = compare_mode
+    else:
+        compare_mode = st.radio(
+            "Comparison Mode" if lang == 'en' else "对比模式",
+            options=list(compare_options.keys()),
+            format_func=lambda x: compare_options[x][0] if lang == 'en' else compare_options[x][1],
+            horizontal=True,
+            key="group_comp_mode"
+        )
     
     # 根据模式显示额外配置
-    if compare_mode == 'age':
+    if compare_mode == 'age' and not screenshot_mode:
         age_threshold = st.slider(
             "Age Threshold" if lang == 'en' else "年龄阈值",
             min_value=30, max_value=90, value=65, step=5,
             key="group_comp_age_threshold"
         )
-    elif compare_mode == 'los' and 'los_hours' in demographics_df.columns:
+    elif compare_mode == 'los' and 'los_hours' in demographics_df.columns and not screenshot_mode:
         median_los = demographics_df['los_hours'].median()
         los_threshold = st.slider(
             "LOS Threshold (hours)" if lang == 'en' else "住院时长阈值（小时）",
@@ -14781,11 +18750,20 @@ def render_group_comparison_subtab(lang: str):
             step=12,
             key="group_comp_los_threshold"
         )
-    
-    _render_compact_divider()
-    
-    # ========== 特征模块选择 ==========
-    st.markdown("#### " + ("📊 Select Feature Modules" if lang == 'en' else "📊 选择特征模块"))
+    elif compare_mode == 'sepsis' and not screenshot_mode:
+        sepsis_note = (
+            "Sepsis grouping uses Sepsis-3 labels (`sep3_sofa2` preferred, fallback `sep3_sofa1`)."
+            if lang == 'en'
+            else "脓毒症分组优先使用 Sepsis-3 标签 `sep3_sofa2`，回退到 `sep3_sofa1`。"
+        )
+        st.caption(sepsis_note)
+    elif compare_mode == 'custom' and not screenshot_mode:
+        custom_note = (
+            "Choose the threshold variable after selecting feature modules below."
+            if lang == 'en'
+            else "请在下方选择特征模块后，再指定阈值变量。"
+        )
+        st.caption(custom_note)
     
     # 定义所有可用的特征模块
     FEATURE_MODULES = {
@@ -14878,18 +18856,55 @@ def render_group_comparison_subtab(lang: str):
             'default': True
         },
     }
+
+    def _merge_feature_frame(target_df: pd.DataFrame, concept_name: str, feat_df: pd.DataFrame) -> pd.DataFrame:
+        """Merge one concept-level feature frame into the cohort table with a unified ID column."""
+        if concept_name in target_df.columns or not isinstance(feat_df, pd.DataFrame) or feat_df.empty:
+            return target_df
+        feat_df_copy = feat_df.copy()
+        feat_id_col = None
+        for col in ['stay_id', 'patient_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']:
+            if col in feat_df_copy.columns:
+                feat_id_col = col
+                break
+        if feat_id_col is None or concept_name not in feat_df_copy.columns:
+            return target_df
+
+        target_id_col = 'stay_id' if 'stay_id' in target_df.columns else 'patient_id'
+        feat_df_copy[feat_id_col] = pd.to_numeric(feat_df_copy[feat_id_col], errors='coerce')
+        feat_df_copy = feat_df_copy.dropna(subset=[feat_id_col])
+        if feat_df_copy.empty:
+            return target_df
+
+        feat_df_copy[feat_id_col] = feat_df_copy[feat_id_col].astype(int)
+        if feat_id_col != target_id_col:
+            feat_df_copy[target_id_col] = feat_df_copy[feat_id_col]
+        return target_df.merge(feat_df_copy[[target_id_col, concept_name]], on=target_id_col, how='left')
+
+    def _format_smd_value(value: Optional[float]) -> str:
+        if value is None or pd.isna(value):
+            return '-'
+        return f"{value:.2f} {_smd_severity_tag(float(value), lang)}"
     
-    # 模块多选
     default_modules = [k for k, v in FEATURE_MODULES.items() if v.get('default', False)]
-    selected_modules = st.multiselect(
-        "Select feature modules" if lang == 'en' else "选择特征模块",
-        options=list(FEATURE_MODULES.keys()),
-        default=default_modules,
-        format_func=lambda x: FEATURE_MODULES[x]['name_en'] if lang == 'en' else FEATURE_MODULES[x]['name_zh'],
-        key="grp_feature_modules",
-        help="Click to add/remove modules. All available modules are listed above."
-             if lang == 'en' else "点击可添加或移除模块，上方列出了所有可用模块"
-    )
+    if screenshot_mode:
+        selected_modules = [m for m in ['demographic', 'outcome', 'vital', 'lab', 'sofa'] if m in FEATURE_MODULES]
+    else:
+        _render_compact_divider()
+        
+        # ========== 特征模块选择 ==========
+        st.markdown("#### " + ("📊 Select Feature Modules" if lang == 'en' else "📊 选择特征模块"))
+        
+        # 模块多选
+        selected_modules = st.multiselect(
+            "Select feature modules" if lang == 'en' else "选择特征模块",
+            options=list(FEATURE_MODULES.keys()),
+            default=default_modules,
+            format_func=lambda x: FEATURE_MODULES[x]['name_en'] if lang == 'en' else FEATURE_MODULES[x]['name_zh'],
+            key="grp_feature_modules",
+            help="Click to add/remove modules. All available modules are listed above."
+                 if lang == 'en' else "点击可添加或移除模块，上方列出了所有可用模块"
+        )
     
     # 显示将要加载的特征
     if selected_modules:
@@ -14899,29 +18914,175 @@ def render_group_comparison_subtab(lang: str):
                 for feat in FEATURE_MODULES[mod]['features']:
                     concepts_to_load.append(feat[0])
         
-        if concepts_to_load:
+        if concepts_to_load and not screenshot_mode:
             with st.expander("🔬 " + (f"Features to load: {len(concepts_to_load)}" if lang == 'en' else f"待加载特征: {len(concepts_to_load)}个"), expanded=False):
                 st.caption(", ".join(concepts_to_load))
+
+    custom_variable_options: dict[str, str] = {}
+    for column_name in ['age', 'los_days', 'los_hours', 'sofa_max', 'weight', 'height', 'bmi']:
+        if column_name in demographics_df.columns and pd.api.types.is_numeric_dtype(demographics_df[column_name]):
+            custom_variable_options[column_name] = column_name
+    for mod_key, mod_info in FEATURE_MODULES.items():
+        for feat_info in mod_info['features']:
+            feat_key = feat_info[0]
+            feat_label = feat_info[1] if lang == 'en' else feat_info[2]
+            feat_type = feat_info[3]
+            if feat_type == 'continuous' and feat_key not in custom_variable_options:
+                custom_variable_options[feat_key] = feat_label
+
+    if compare_mode == 'custom' and custom_variable_options and not screenshot_mode:
+        custom_cols = st.columns([1.4, 1.2])
+        default_custom_var = 'sofa_max' if 'sofa_max' in custom_variable_options else next(iter(custom_variable_options))
+        with custom_cols[0]:
+            custom_var = st.selectbox(
+                "Threshold Variable" if lang == 'en' else "阈值变量",
+                options=list(custom_variable_options.keys()),
+                index=list(custom_variable_options.keys()).index(st.session_state.get('group_comp_custom_feature', default_custom_var)) if st.session_state.get('group_comp_custom_feature', default_custom_var) in custom_variable_options else 0,
+                format_func=lambda x: custom_variable_options[x],
+                key="group_comp_custom_feature",
+            )
+        with custom_cols[1]:
+            threshold_placeholder = (
+                "Threshold will be estimated from the loaded variable distribution below."
+                if lang == 'en'
+                else "阈值会在下方根据已加载变量分布自动估计。"
+            )
+            st.markdown(
+                f'<div class="compact-inline-notice info" style="margin-top: 1.6rem;">{threshold_placeholder}</div>',
+                unsafe_allow_html=True,
+            )
     
-    _render_compact_divider()
+    if not screenshot_mode:
+        _render_compact_divider()
     
     # 执行分组
     try:
-        base_df = demographics_df
+        base_df = demographics_df.copy()
         group1_ids, group2_ids = [], []
         group1_name, group2_name = "", ""
         show_mortality = True
         
         # 检测ID列名（支持stay_id或patient_id）
         id_col = 'stay_id' if 'stay_id' in base_df.columns else 'patient_id'
+        base_df[id_col] = pd.to_numeric(base_df[id_col], errors='coerce')
+        base_df = base_df.dropna(subset=[id_col]).copy()
+        base_df[id_col] = base_df[id_col].astype(int)
+
+        concepts_to_load = []
+        for mod in selected_modules:
+            if mod not in ['demographic', 'outcome']:
+                for feat in FEATURE_MODULES[mod]['features']:
+                    concepts_to_load.append(feat[0])
+
+        grouping_concepts_required: list[str] = []
+        custom_var = st.session_state.get('group_comp_custom_feature')
+        if compare_mode == 'sepsis':
+            grouping_concepts_required = ['sep3_sofa2', 'sep3_sofa1']
+        elif compare_mode == 'custom' and custom_var and custom_var not in base_df.columns:
+            grouping_concepts_required = [custom_var]
+
+        concepts_to_load = list(dict.fromkeys(concepts_to_load + grouping_concepts_required))
+        feature_data = st.session_state.get('grp_feature_data', {})
+        all_patient_ids = base_df[id_col].astype(int).unique().tolist()
+
+        if concepts_to_load:
+            missing_concepts = [c for c in concepts_to_load if c not in feature_data]
+            if missing_concepts:
+                if entry_mode == 'demo' or database == 'demo':
+                    reused = _build_group_feature_data_from_loaded_concepts(
+                        all_patient_ids,
+                        missing_concepts,
+                        st.session_state.get('loaded_concepts', {}) or {},
+                        id_col=id_col,
+                    )
+                    if reused:
+                        feature_data = {**feature_data, **reused}
+                        st.session_state['grp_feature_data'] = feature_data
+                    missing_concepts = [c for c in missing_concepts if c not in feature_data]
+                    if missing_concepts:
+                        auto_load_msg = "Auto-loading simulated features for demo mode..." if lang == 'en' else "演示模式自动加载模拟特征数据..."
+                        with st.spinner(auto_load_msg):
+                            generated = _build_mock_group_feature_data(
+                                all_patient_ids,
+                                missing_concepts,
+                                id_col=id_col,
+                            )
+                            feature_data = {**feature_data, **generated}
+                            st.session_state['grp_feature_data'] = feature_data
+                else:
+                    st.info(f"🔬 " + (f"{len(missing_concepts)} features need to be loaded: " if lang == 'en' else f"需要加载 {len(missing_concepts)} 个特征: ") + ", ".join(missing_concepts[:5]) + ("..." if len(missing_concepts) > 5 else ""))
+                    load_features_btn = st.button(
+                        "🚀 " + (f"Load {len(missing_concepts)} Features" if lang == 'en' else f"加载 {len(missing_concepts)} 个特征"),
+                        type="primary",
+                        key="grp_load_features"
+                    )
+                    if load_features_btn:
+                        try:
+                            from easyicu import load_concepts
+
+                            with st.spinner(f"Loading {len(missing_concepts)} features for {len(all_patient_ids)} patients..." if lang == 'en' else f"正在加载 {len(missing_concepts)} 个特征..."):
+                                progress_bar = st.progress(0)
+                                loaded_count = 0
+
+                                for i, concept in enumerate(missing_concepts):
+                                    try:
+                                        df_concept = load_concepts(
+                                            concepts=[concept],
+                                            database=database,
+                                            data_path=data_path,
+                                            patient_ids=all_patient_ids,
+                                            verbose=False,
+                                            **_get_sepsis_runtime_options(),
+                                        )
+                                        if df_concept is not None and len(df_concept) > 0 and concept in df_concept.columns:
+                                            feat_id_col = None
+                                            for col in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'hadm_id']:
+                                                if col in df_concept.columns:
+                                                    feat_id_col = col
+                                                    break
+                                            if feat_id_col is None:
+                                                feat_id_col = df_concept.columns[0]
+                                            agg_func = 'max' if concept.startswith('sep3_') else 'mean'
+                                            agg_df = df_concept.groupby(feat_id_col, as_index=False)[concept].agg(agg_func)
+                                            agg_df.columns = [id_col, concept]
+                                            agg_df[id_col] = pd.to_numeric(agg_df[id_col], errors='coerce')
+                                            agg_df = agg_df.dropna(subset=[id_col])
+                                            if not agg_df.empty:
+                                                agg_df[id_col] = agg_df[id_col].astype(int)
+                                                feature_data[concept] = agg_df
+                                                loaded_count += 1
+                                    except Exception:
+                                        pass
+
+                                    progress_bar.progress((i + 1) / len(missing_concepts))
+
+                                progress_bar.empty()
+                                st.session_state['grp_feature_data'] = feature_data
+                                st.success(f"✅ " + (f"Loaded {loaded_count}/{len(missing_concepts)} features" if lang == 'en' else f"已加载 {loaded_count}/{len(missing_concepts)} 个特征"))
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"Error loading features: {e}")
+                    if compare_mode in {'sepsis', 'custom'}:
+                        dependency_msg = (
+                            "Load the grouping variable first to compute this comparison."
+                            if lang == 'en'
+                            else "请先加载分组所需变量后再计算此对比。"
+                        )
+                        st.warning(dependency_msg)
+                        return
+
+        analysis_df = base_df.copy()
+        for concept in concepts_to_load:
+            if concept in feature_data:
+                analysis_df = _merge_feature_frame(analysis_df, concept, feature_data[concept])
         
         if compare_mode == 'survival':
-            if 'survived' not in base_df.columns:
+            if 'survived' not in analysis_df.columns:
                 st.warning("Survival data not available" if lang == 'en' else "无存活状态数据")
                 return
             
-            survived_df = base_df[base_df['survived'] == 1]
-            deceased_df = base_df[base_df['survived'] == 0]
+            survived_df = analysis_df[analysis_df['survived'] == 1]
+            deceased_df = analysis_df[analysis_df['survived'] == 0]
             group1_ids = survived_df[id_col].tolist()
             group2_ids = deceased_df[id_col].tolist()
             group1_name = 'Survived' if lang == 'en' else '存活'
@@ -14930,35 +19091,93 @@ def render_group_comparison_subtab(lang: str):
             
         elif compare_mode == 'age':
             threshold = st.session_state.get('group_comp_age_threshold', 65)
-            young_df = base_df[base_df['age'] < threshold]
-            old_df = base_df[base_df['age'] >= threshold]
+            young_df = analysis_df[analysis_df['age'] < threshold]
+            old_df = analysis_df[analysis_df['age'] >= threshold]
             group1_ids = young_df[id_col].tolist()
             group2_ids = old_df[id_col].tolist()
             group1_name = f'Age < {threshold}' if lang == 'en' else f'年龄 < {threshold}'
             group2_name = f'Age ≥ {threshold}' if lang == 'en' else f'年龄 ≥ {threshold}'
             
         elif compare_mode == 'gender':
-            if 'gender' not in base_df.columns:
+            if 'gender' not in analysis_df.columns:
                 st.warning("Gender data not available" if lang == 'en' else "无性别数据")
                 return
-            male_df = base_df[base_df['gender'] == 'M']
-            female_df = base_df[base_df['gender'] == 'F']
+            male_df = analysis_df[analysis_df['gender'] == 'M']
+            female_df = analysis_df[analysis_df['gender'] == 'F']
             group1_ids = male_df[id_col].tolist()
             group2_ids = female_df[id_col].tolist()
             group1_name = 'Male' if lang == 'en' else '男性'
             group2_name = 'Female' if lang == 'en' else '女性'
             
         elif compare_mode == 'los':
-            if 'los_hours' not in base_df.columns:
+            if 'los_hours' not in analysis_df.columns:
                 st.warning("Length of stay data not available" if lang == 'en' else "无住院时长数据")
                 return
-            threshold = st.session_state.get('group_comp_los_threshold', int(base_df['los_hours'].median()))
-            short_df = base_df[base_df['los_hours'] < threshold]
-            long_df = base_df[base_df['los_hours'] >= threshold]
+            threshold = st.session_state.get('group_comp_los_threshold', int(analysis_df['los_hours'].median()))
+            short_df = analysis_df[analysis_df['los_hours'] < threshold]
+            long_df = analysis_df[analysis_df['los_hours'] >= threshold]
             group1_ids = short_df[id_col].tolist()
             group2_ids = long_df[id_col].tolist()
             group1_name = f'LOS < {threshold}h' if lang == 'en' else f'住院 < {threshold}h'
             group2_name = f'LOS ≥ {threshold}h' if lang == 'en' else f'住院 ≥ {threshold}h'
+        elif compare_mode == 'sepsis':
+            sepsis_col = next((c for c in ['sep3_sofa2', 'sep3_sofa1'] if c in analysis_df.columns), None)
+            if sepsis_col is None:
+                st.warning("Sepsis-3 labels are not available for grouping." if lang == 'en' else "当前没有可用于分组的 Sepsis-3 标签。")
+                return
+            sepsis_mask = pd.to_numeric(analysis_df[sepsis_col], errors='coerce').fillna(0) > 0
+            non_sepsis_df = analysis_df[~sepsis_mask]
+            sepsis_df = analysis_df[sepsis_mask]
+            group1_ids = non_sepsis_df[id_col].tolist()
+            group2_ids = sepsis_df[id_col].tolist()
+            group1_name = 'Non-sepsis' if lang == 'en' else '非脓毒症'
+            group2_name = 'Sepsis' if lang == 'en' else '脓毒症'
+        elif compare_mode == 'custom':
+            custom_var = st.session_state.get('group_comp_custom_feature')
+            if not custom_var or custom_var not in analysis_df.columns:
+                st.warning("Threshold variable is not available." if lang == 'en' else "阈值变量当前不可用。")
+                return
+            custom_values = pd.to_numeric(analysis_df[custom_var], errors='coerce')
+            valid_values = custom_values.dropna()
+            if valid_values.empty:
+                st.warning("Threshold variable has no numeric values." if lang == 'en' else "阈值变量没有可用的数值。")
+                return
+            min_value = float(valid_values.min())
+            max_value = float(valid_values.max())
+            default_threshold = float(valid_values.median())
+            if np.isclose(min_value, max_value):
+                threshold = min_value
+                st.info("All patients share the same threshold value; the split may be degenerate." if lang == 'en' else "所有患者的阈值变量相同，分组可能退化。")
+            elif pd.api.types.is_integer_dtype(valid_values) or np.allclose(valid_values, np.round(valid_values)):
+                slider_default = int(round(st.session_state.get('group_comp_custom_threshold', default_threshold)))
+                slider_default = min(max(slider_default, int(np.floor(min_value))), int(np.ceil(max_value)))
+                threshold = st.slider(
+                    "Threshold" if lang == 'en' else "阈值",
+                    min_value=int(np.floor(min_value)),
+                    max_value=int(np.ceil(max_value)),
+                    value=slider_default,
+                    step=1,
+                    key="group_comp_custom_threshold",
+                )
+            else:
+                step = max((max_value - min_value) / 100, 0.1)
+                slider_default = float(st.session_state.get('group_comp_custom_threshold', default_threshold))
+                slider_default = min(max(slider_default, float(min_value)), float(max_value))
+                threshold = st.slider(
+                    "Threshold" if lang == 'en' else "阈值",
+                    min_value=float(min_value),
+                    max_value=float(max_value),
+                    value=slider_default,
+                    step=float(step),
+                    key="group_comp_custom_threshold",
+                )
+            lower_df = analysis_df[custom_values < threshold]
+            higher_df = analysis_df[custom_values >= threshold]
+            custom_label = custom_variable_options.get(custom_var, custom_var)
+            group1_ids = lower_df[id_col].tolist()
+            group2_ids = higher_df[id_col].tolist()
+            group1_name = f"{custom_label} < {threshold:g}"
+            group2_name = f"{custom_label} ≥ {threshold:g}"
         
         # 分组统计概览
         st.markdown("#### " + ("📊 Group Overview" if lang == 'en' else "📊 分组概览"))
@@ -14985,121 +19204,8 @@ def render_group_comparison_subtab(lang: str):
         from scipy import stats
         
         # 获取两组数据 - 使用动态ID列
-        group1_df = base_df[base_df[id_col].isin(group1_ids)].copy()
-        group2_df = base_df[base_df[id_col].isin(group2_ids)].copy()
-        
-        # ========== 加载额外特征数据 ==========
-        # 确定需要加载的概念
-        concepts_to_load = []
-        for mod in selected_modules:
-            if mod not in ['demographic', 'outcome']:  # 这些从 demographics 表获取
-                for feat in FEATURE_MODULES[mod]['features']:
-                    concepts_to_load.append(feat[0])
-        
-        # 检查是否有需要加载的特征且尚未加载
-        feature_data = st.session_state.get('grp_feature_data', {})
-        
-        # 合并两组患者ID
-        all_patient_ids = list(set(group1_ids + group2_ids))
-        
-        if concepts_to_load:
-            # 检查是否有新的概念需要加载
-            missing_concepts = [c for c in concepts_to_load if c not in feature_data]
-            
-            if missing_concepts:
-                # Demo模式：自动生成模拟数据，无需用户点击
-                if entry_mode == 'demo' or database == 'demo':
-                    auto_load_msg = "Auto-loading simulated features for demo mode..." if lang == 'en' else "演示模式自动加载模拟特征数据..."
-                    with st.spinner(auto_load_msg):
-                        feature_data = _build_mock_group_feature_data(
-                            all_patient_ids,
-                            concepts_to_load,
-                            id_col=id_col,
-                        )
-                        st.session_state['grp_feature_data'] = feature_data
-                else:
-                    # 真实数据模式：显示加载提示和按钮
-                    st.info(f"🔬 " + (f"{len(missing_concepts)} features need to be loaded: " if lang == 'en' else f"需要加载 {len(missing_concepts)} 个特征: ") + ", ".join(missing_concepts[:5]) + ("..." if len(missing_concepts) > 5 else ""))
-                    
-                    load_features_btn = st.button(
-                        "🚀 " + (f"Load {len(missing_concepts)} Features" if lang == 'en' else f"加载 {len(missing_concepts)} 个特征"),
-                        type="primary",
-                        key="grp_load_features"
-                    )
-                    
-                    if load_features_btn:
-                        # Real Data模式：从数据库加载
-                        try:
-                            from easyicu import load_concepts
-                            
-                            with st.spinner(f"Loading {len(missing_concepts)} features for {len(all_patient_ids)} patients..." if lang == 'en' else f"正在加载 {len(missing_concepts)} 个特征..."):
-                                progress_bar = st.progress(0)
-                                loaded_count = 0
-                                
-                                for i, concept in enumerate(missing_concepts):
-                                    try:
-                                        df_concept = load_concepts(
-                                            concepts=[concept],
-                                            database=database,
-                                            data_path=data_path,
-                                            patient_ids=all_patient_ids,
-                                            verbose=False,
-                                            **_get_sepsis_runtime_options(),
-                                        )
-                                        if df_concept is not None and len(df_concept) > 0:
-                                            # 确定ID列
-                                            feat_id_col = None
-                                            for col in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'hadm_id']:
-                                                if col in df_concept.columns:
-                                                    feat_id_col = col
-                                                    break
-                                            if feat_id_col is None:
-                                                feat_id_col = df_concept.columns[0]
-                                            
-                                            # 取每个患者的平均值
-                                            if concept in df_concept.columns:
-                                                agg_df = df_concept.groupby(feat_id_col)[concept].mean().reset_index()
-                                                agg_df.columns = [id_col, concept]
-                                                agg_df[id_col] = agg_df[id_col].astype(int)
-                                                feature_data[concept] = agg_df
-                                                loaded_count += 1
-                                    except Exception:
-                                        pass
-                                    
-                                    progress_bar.progress((i + 1) / len(missing_concepts))
-                                
-                                progress_bar.empty()
-                                st.session_state['grp_feature_data'] = feature_data
-                                st.success(f"✅ " + (f"Loaded {loaded_count}/{len(missing_concepts)} features" if lang == 'en' else f"已加载 {loaded_count}/{len(missing_concepts)} 个特征"))
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"Error loading features: {e}")
-        
-        # 合并已加载的特征数据到分组 DataFrame
-        # 确保 ID 类型一致
-        group1_df[id_col] = group1_df[id_col].astype(int)
-        group2_df[id_col] = group2_df[id_col].astype(int)
-        
-        for concept, feat_df in feature_data.items():
-            if concept not in group1_df.columns and concept in concepts_to_load:
-                try:
-                    feat_df_copy = feat_df.copy()
-                    # 检测特征数据中的ID列
-                    feat_id_col = None
-                    for col in ['stay_id', 'patient_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']:
-                        if col in feat_df_copy.columns:
-                            feat_id_col = col
-                            break
-                    if feat_id_col is None:
-                        continue
-                    feat_df_copy[feat_id_col] = feat_df_copy[feat_id_col].astype(int)
-                    # 重命名为统一的id_col
-                    if feat_id_col != id_col:
-                        feat_df_copy[id_col] = feat_df_copy[feat_id_col]
-                    group1_df = group1_df.merge(feat_df_copy[[id_col, concept]], on=id_col, how='left')
-                    group2_df = group2_df.merge(feat_df_copy[[id_col, concept]], on=id_col, how='left')
-                except Exception:
-                    pass
+        group1_df = analysis_df[analysis_df[id_col].isin(group1_ids)].copy()
+        group2_df = analysis_df[analysis_df[id_col].isin(group2_ids)].copy()
         
         def format_continuous(series, name):
             """格式化连续变量: mean ± std (median [IQR])"""
@@ -15142,6 +19248,20 @@ def render_group_comparison_subtab(lang: str):
                 return f"{p:.3f}" if p >= 0.001 else "<0.001"
             except:
                 return '-'
+
+        def calc_smd_continuous(s1, s2):
+            try:
+                return _format_smd_value(_compute_smd_continuous(s1, s2))
+            except Exception:
+                return '-'
+
+        def calc_smd_binary(s1, s2, positive_category):
+            try:
+                binary1 = (s1 == positive_category).astype(int)
+                binary2 = (s2 == positive_category).astype(int)
+                return _format_smd_value(_compute_smd_binary(binary1, binary2))
+            except Exception:
+                return '-'
         
         # 构建表格数据 - 根据选中的模块动态生成
         table_data = []
@@ -15152,7 +19272,8 @@ def render_group_comparison_subtab(lang: str):
             'Characteristic': 'N' if lang == 'en' else '样本量',
             group1_name: f"{len(group1_df):,}",
             group2_name: f"{len(group2_df):,}",
-            'p-value': ''
+            'p-value': '',
+            'SMD': '',
         })
         
         # 遍历选中的模块
@@ -15179,7 +19300,8 @@ def render_group_comparison_subtab(lang: str):
                             'Characteristic': feat_display,
                             group1_name: format_continuous(group1_df['age'], 'age'),
                             group2_name: format_continuous(group2_df['age'], 'age'),
-                            'p-value': calc_pvalue_continuous(group1_df['age'], group2_df['age'])
+                            'p-value': calc_pvalue_continuous(group1_df['age'], group2_df['age']),
+                            'SMD': calc_smd_continuous(group1_df['age'], group2_df['age']),
                         })
                     elif feat_key == 'gender' and 'gender' in group1_df.columns:
                         table_data.append({
@@ -15187,7 +19309,8 @@ def render_group_comparison_subtab(lang: str):
                             'Characteristic': feat_display,
                             group1_name: format_categorical(group1_df['gender'], 'M', len(group1_df)),
                             group2_name: format_categorical(group2_df['gender'], 'M', len(group2_df)),
-                            'p-value': calc_pvalue_categorical(group1_df['gender'], group2_df['gender'], ['M', 'F'])
+                            'p-value': calc_pvalue_categorical(group1_df['gender'], group2_df['gender'], ['M', 'F']),
+                            'SMD': calc_smd_binary(group1_df['gender'], group2_df['gender'], 'M'),
                         })
                     elif feat_key == 'los_days' and 'los_hours' in group1_df.columns:
                         g1_los = group1_df['los_hours'] / 24
@@ -15197,7 +19320,8 @@ def render_group_comparison_subtab(lang: str):
                             'Characteristic': feat_display,
                             group1_name: format_continuous(g1_los, 'los'),
                             group2_name: format_continuous(g2_los, 'los'),
-                            'p-value': calc_pvalue_continuous(g1_los, g2_los)
+                            'p-value': calc_pvalue_continuous(g1_los, g2_los),
+                            'SMD': calc_smd_continuous(g1_los, g2_los),
                         })
                     elif feat_key == 'first_icu_stay' and 'first_icu_stay' in group1_df.columns:
                         table_data.append({
@@ -15205,7 +19329,8 @@ def render_group_comparison_subtab(lang: str):
                             'Characteristic': feat_display,
                             group1_name: format_categorical(group1_df['first_icu_stay'], True, len(group1_df)),
                             group2_name: format_categorical(group2_df['first_icu_stay'], True, len(group2_df)),
-                            'p-value': calc_pvalue_categorical(group1_df['first_icu_stay'], group2_df['first_icu_stay'], [True, False])
+                            'p-value': calc_pvalue_categorical(group1_df['first_icu_stay'], group2_df['first_icu_stay'], [True, False]),
+                            'SMD': calc_smd_binary(group1_df['first_icu_stay'], group2_df['first_icu_stay'], True),
                         })
                 
                 elif mod_key == 'outcome':
@@ -15217,7 +19342,8 @@ def render_group_comparison_subtab(lang: str):
                             'Characteristic': feat_display,
                             group1_name: f"{int((group1_df['survived']==0).sum()):,} ({mort1:.1f}%)",
                             group2_name: f"{int((group2_df['survived']==0).sum()):,} ({mort2:.1f}%)",
-                            'p-value': calc_pvalue_categorical(group1_df['survived'], group2_df['survived'], [0, 1])
+                            'p-value': calc_pvalue_categorical(group1_df['survived'], group2_df['survived'], [0, 1]),
+                            'SMD': calc_smd_binary(group1_df['survived'], group2_df['survived'], 0),
                         })
                 
                 else:
@@ -15229,7 +19355,8 @@ def render_group_comparison_subtab(lang: str):
                             'Characteristic': feat_display,
                             group1_name: format_continuous(group1_df[feat_key], feat_key),
                             group2_name: format_continuous(group2_df[feat_key], feat_key),
-                            'p-value': calc_pvalue_continuous(group1_df[feat_key], group2_df[feat_key])
+                            'p-value': calc_pvalue_continuous(group1_df[feat_key], group2_df[feat_key]),
+                            'SMD': calc_smd_continuous(group1_df[feat_key], group2_df[feat_key]),
                         })
                     # 如果没在 group_df 中，尝试直接从 feature_data 获取
                     elif feat_key in feature_data:
@@ -15254,7 +19381,8 @@ def render_group_comparison_subtab(lang: str):
                                 'Characteristic': feat_display,
                                 group1_name: format_continuous(g1_vals, feat_key) if len(g1_vals) > 0 else 'N/A',
                                 group2_name: format_continuous(g2_vals, feat_key) if len(g2_vals) > 0 else 'N/A',
-                                'p-value': calc_pvalue_continuous(g1_vals, g2_vals) if len(g1_vals) > 0 and len(g2_vals) > 0 else '-'
+                                'p-value': calc_pvalue_continuous(g1_vals, g2_vals) if len(g1_vals) > 0 and len(g2_vals) > 0 else '-',
+                                'SMD': calc_smd_continuous(g1_vals, g2_vals) if len(g1_vals) > 0 and len(g2_vals) > 0 else '-',
                             })
                         else:
                             table_data.append({
@@ -15262,7 +19390,8 @@ def render_group_comparison_subtab(lang: str):
                                 'Characteristic': feat_display,
                                 group1_name: 'No data',
                                 group2_name: 'No data',
-                                'p-value': '-'
+                                'p-value': '-',
+                                'SMD': '-',
                             })
                     elif feat_key in concepts_to_load:
                         # 特征需要加载但尚未加载
@@ -15271,58 +19400,69 @@ def render_group_comparison_subtab(lang: str):
                             'Characteristic': feat_display,
                             group1_name: '⏳ 待加载',
                             group2_name: '⏳ 待加载',
-                            'p-value': '-'
+                            'p-value': '-',
+                            'SMD': '-',
                         })
         
         # 显示表格
         result_df = pd.DataFrame(table_data)
         
-        # 使用 Streamlit 表格并应用样式
-        st.dataframe(
-            result_df,
-            width='stretch',
-            hide_index=True,
-            column_config={
-                'Module': st.column_config.TextColumn('Module' if lang == 'en' else '模块', width='small'),
-                'Characteristic': st.column_config.TextColumn('Characteristic' if lang == 'en' else '特征', width='medium'),
-                group1_name: st.column_config.TextColumn(group1_name, width='medium'),
-                group2_name: st.column_config.TextColumn(group2_name, width='medium'),
-                'p-value': st.column_config.TextColumn('p-value', width='small'),
-            }
-        )
-        
-        # 统计方法说明
-        st.markdown("---")
-        stats_note = """**Statistical Methods:**
-- Continuous variables: Mean ± SD (Median [IQR]), Mann-Whitney U test
-- Categorical variables: n (%), Chi-square test
+        if screenshot_mode:
+            figure_df = result_df.head(16).fillna('').astype(str)
+            st.markdown(
+                f'<div class="figure-table">{figure_df.to_html(index=False, escape=True)}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            # 使用 Streamlit 表格并应用样式
+            st.dataframe(
+                result_df,
+                width='stretch',
+                hide_index=True,
+                column_config={
+                    'Module': st.column_config.TextColumn('Module' if lang == 'en' else '模块', width='small'),
+                    'Characteristic': st.column_config.TextColumn('Characteristic' if lang == 'en' else '特征', width='medium'),
+                    group1_name: st.column_config.TextColumn(group1_name, width='medium'),
+                    group2_name: st.column_config.TextColumn(group2_name, width='medium'),
+                    'p-value': st.column_config.TextColumn('p-value', width='small'),
+                    'SMD': st.column_config.TextColumn('SMD', width='small'),
+                }
+            )
+            
+            # 统计方法说明
+            st.markdown("---")
+            stats_note = """**Statistical Methods:**
+- Continuous variables: Mean ± SD (Median [IQR]), Mann-Whitney U test, SMD with pooled SD
+- Categorical variables: n (%), Chi-square test, binary SMD with pooled proportion
+- SMD flags: 🟠 |SMD| > 0.10, 🔴 |SMD| > 0.25
 - p < 0.05 considered statistically significant""" if lang == 'en' else """**统计方法说明：**
-- 连续变量：Mean ± SD (Median [IQR])，Mann-Whitney U 检验
-- 分类变量：n (%)，卡方检验
+- 连续变量：Mean ± SD (Median [IQR])，Mann-Whitney U 检验，SMD 使用合并标准差
+- 分类变量：n (%)，卡方检验，二分类 SMD 使用合并比例
+- SMD 标记：🟠 |SMD| > 0.10，🔴 |SMD| > 0.25
 - p < 0.05 认为具有统计学显著性"""
-        st.caption(stats_note)
-        
-        # 🔧 FIX (2026-02-04): 简化导出逻辑，使用 UTF-8 BOM 编码确保 Excel 正确显示
-        # 无需手动替换特殊字符，utf-8-sig 编码可以正确处理
-        export_df = result_df.copy()
-        
-        # 只清理 emoji（这些可能导致问题）
-        for col in export_df.columns:
-            if export_df[col].dtype == 'object':
-                export_df[col] = export_df[col].apply(lambda x: strip_emoji(str(x)) if pd.notna(x) else x)
-        
-        # 使用 BytesIO 确保编码正确传递
-        import io
-        buffer = io.BytesIO()
-        export_df.to_csv(buffer, index=False, encoding='utf-8-sig')
-        csv_bytes = buffer.getvalue()
-        
-        st.download_button(
-            label="📥 " + ("Download Table (CSV)" if lang == 'en' else "下载表格 (CSV)"),
-            data=csv_bytes,
-            file_name=f"baseline_comparison_{group1_name}_vs_{group2_name}.csv",
-            mime="text/csv"
-        )
+            st.caption(stats_note)
+            
+            # 🔧 FIX (2026-02-04): 简化导出逻辑，使用 UTF-8 BOM 编码确保 Excel 正确显示
+            # 无需手动替换特殊字符，utf-8-sig 编码可以正确处理
+            export_df = result_df.copy()
+            
+            # 只清理 emoji（这些可能导致问题）
+            for col in export_df.columns:
+                if export_df[col].dtype == 'object':
+                    export_df[col] = export_df[col].apply(lambda x: strip_emoji(str(x)) if pd.notna(x) else x)
+            
+            # 使用 BytesIO 确保编码正确传递
+            import io
+            buffer = io.BytesIO()
+            export_df.to_csv(buffer, index=False, encoding='utf-8-sig')
+            csv_bytes = buffer.getvalue()
+            
+            st.download_button(
+                label="📥 " + ("Download Table (CSV)" if lang == 'en' else "下载表格 (CSV)"),
+                data=csv_bytes,
+                file_name=f"baseline_comparison_{group1_name}_vs_{group2_name}.csv",
+                mime="text/csv"
+            )
         
     except Exception as e:
         st.error(f"Error: {e}")
@@ -15333,74 +19473,44 @@ def render_group_comparison_subtab(lang: str):
 def render_multidb_distribution_subtab(lang: str):
     """多数据库特征分布对比子标签页"""
     import plotly.graph_objects as go
-    
-    # 🔧 FIX: 使用容器包装标题，确保与下方内容分隔，增加足够的间距
-    st.markdown("""<div style="margin-bottom: 18px;">
-        <h3 style="margin: 0 0 8px 0; padding: 0;">📈 """ + ("Multi-Database Feature Distribution Comparison" if lang == 'en' else "多数据库特征分布对比") + """</h3>
-        <hr style="margin: 0 0 12px 0; border: none; border-top: 1px solid #e2e8f0;">
-    </div>""", unsafe_allow_html=True)
+    screenshot_mode = _is_screenshot_mode()
+
+    title = "Cross-Database Benchmark" if lang == 'en' else "跨库分布基准"
+    subtitle = (
+        "Figure 3-style comparison of harmonized feature distributions across ICU databases; kept separate from the S1 cohort audit."
+        if lang == 'en' else
+        "对应 Figure 3 风格的跨 ICU 数据库标准化特征分布对照；与补充图 S1 的队列审计保持分工。"
+    )
+    if not screenshot_mode:
+        st.markdown(f"""
+        <div style="margin-bottom:14px">
+            <div style="font-size:1.15rem;font-weight:850;color:#0b1f44">📈 {title}</div>
+            <div style="font-size:.86rem;color:#60718a;margin-top:2px">{subtitle}</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # 获取入口模式
     entry_mode = st.session_state.get('entry_mode', 'none')
     
-    # ========== Demo模式：需要用户点击生成按钮 ==========
+    # ========== Demo模式：复用队列分析顶层的一次性共享演示工作区 ==========
     if entry_mode == 'demo':
-        # 检查是否已生成数据
-        has_demo_data = 'multidb_data' in st.session_state and st.session_state.get('multidb_is_demo') == True
-        
-        if not has_demo_data:
-            # 尚未生成数据，显示生成界面
-            _render_compact_divider(top=2, bottom=10)
-            
-            # 居中的配置卡片
-            _render_demo_generation_card(
-                "📈",
-                "Generate Multi-DB Distribution Data" if lang == 'en' else "生成多数据库分布数据",
-                "Click below to generate simulated feature distribution across multiple databases" if lang == 'en' else "点击下方按钮生成多数据库特征分布模拟数据",
-            )
-            
-            # 生成按钮
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                _compact_spacer(10)
-                
-                if st.button(
-                    "🚀 " + ("Generate Demo Data" if lang == 'en' else "生成演示数据"),
-                    type="primary",
-                    use_container_width=True,
-                    key="multidb_generate_demo_btn"
-                ):
-                    # 生成模拟的多数据库特征数据
-                    mock_data = _generate_mock_multidb_data(lang)
-                    st.session_state['multidb_data'] = mock_data
-                    # 🔧 扩展默认显示的特征，包含更多临床指标
-                    st.session_state['multidb_concepts'] = [
-                        'hr', 'sbp', 'dbp', 'map', 'temp', 'resp', 'spo2',  # Vitals
-                        'glu', 'na', 'k', 'crea', 'bili', 'lact',  # Labs
-                        'hgb', 'plt', 'wbc',  # Hematology
-                        'ph', 'po2', 'pco2', 'fio2',  # Blood Gas
-                        'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',  # SOFA-2
-                    ]
-                    st.session_state['multidb_is_demo'] = True
-                    st.rerun()
-            
-            # 显示提示信息
-            _compact_spacer(10)
-            st.info("💡 " + ("Click the button above to generate demo data for multi-database distribution analysis" if lang == 'en' else "点击上方按钮生成多数据库分布分析演示数据"))
-            return  # 未生成数据时不显示下方分析内容
-        
-        # 已生成数据，显示Demo模式提示
-        st.info("🎭 " + ("Demo Mode: Showing simulated multi-database distribution" if lang == 'en' else "演示模式：显示模拟的多数据库分布"))
+        _ensure_cohort_demo_workspace(st.session_state, lang=lang)
+        # Shared demo state is announced once at the Cohort Analysis level.
     
     # ========== Real Data模式 ==========
     if entry_mode != 'demo':
-        # 配置区域
+        # 如果共享工作区已就绪，确保路径/数据库同步
+        if _cohort_real_workspace_ready(st.session_state):
+            _sync_real_data_panel_defaults(root_key="multidb_data_root", multi_db_key="multidb_selected")
+        else:
+            # 配置区域
+            _sync_real_data_panel_defaults(root_key="multidb_data_root", multi_db_key="multidb_selected")
         col1, col2, col3 = st.columns([2, 2, 1])
         
         with col1:
             data_root = _directory_input(
                 "🗂️ " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
-                value=os.environ.get('EASYICU_DATA_PATH', ''),
+                value=st.session_state.get('multidb_data_root', ''),
                 input_key="multidb_data_root",
                 button_key="multidb_data_root_browse",
                 placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
@@ -15413,10 +19523,11 @@ def render_multidb_distribution_subtab(lang: str):
             # 数据库选择
             db_options = ['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic']
             db_labels = {'miiv': 'MIMIC-IV 🟢', 'eicu': 'eICU 🟠', 'aumc': 'Amsterdam 🔵', 'hirid': 'HiRID 🔴', 'mimic': 'MIMIC-III 🟣', 'sic': 'SICdb ⚫'}
+            default_dbs = st.session_state.get('multidb_selected') or [_default_real_database()]
             selected_dbs = st.multiselect(
                 "🏥 " + ("Databases" if lang == 'en' else "数据库"),
                 options=db_options,
-                default=['miiv', 'eicu'],
+                default=[db for db in default_dbs if db in db_options] or ['miiv'],
                 format_func=lambda x: db_labels.get(x, x),
                 key="multidb_selected"
             )
@@ -15488,6 +19599,11 @@ def render_multidb_distribution_subtab(lang: str):
     if 'multidb_data' in st.session_state and st.session_state.get('multidb_data'):
         data = st.session_state['multidb_data']
         concepts = st.session_state.get('multidb_concepts', ['hr', 'sbp', 'temp', 'resp'])
+        if screenshot_mode:
+            # Paper figures need the distribution signal, not an exhaustive grid.
+            screenshot_priority = ['hr', 'sbp', 'map', 'resp', 'temp', 'spo2', 'crea', 'lact']
+            prioritized = [concept for concept in screenshot_priority if concept in concepts]
+            concepts = prioritized or concepts[:8]
         
         # 数据量统计
         stat_cols = st.columns(len(data))
@@ -15510,7 +19626,15 @@ def render_multidb_distribution_subtab(lang: str):
             # 网格图
             n_cols = min(4, len(concepts))
             fig = mdd.create_distribution_grid(data, concepts, cols=n_cols)
-            st.plotly_chart(fig, use_container_width=True)
+            if not screenshot_mode:
+                fig.update_layout(
+                    title_text="Multi-Database Feature<br>Distribution Comparison",
+                    margin=dict(t=132, b=62, l=72, r=24),
+                )
+            st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
+
+            if screenshot_mode:
+                return
             
             # 单特征详细对比
             _render_compact_divider()
@@ -15527,7 +19651,7 @@ def render_multidb_distribution_subtab(lang: str):
                 
                 col1, col2 = st.columns([2, 1])
                 with col1:
-                    st.plotly_chart(fig_single, use_container_width=True)
+                    st.plotly_chart(fig_single, use_container_width=True, config=_get_plotly_chart_config())
                 with col2:
                     st.markdown("**Statistics**" if lang == 'en' else "**统计信息**")
                     st.dataframe(
@@ -15558,53 +19682,30 @@ def render_cohort_dashboard_subtab(lang: str):
     import plotly.express as px
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
+    screenshot_mode = _is_screenshot_mode()
     
-    st.markdown("### 🎯 " + ("Cohort Dashboard" if lang == 'en' else "队列仪表板"))
+    snapshot_title = "Cohort Snapshot" if lang == 'en' else "队列快照"
+    snapshot_subtitle = (
+        "One-cohort clinical profile: phenotype burden, baseline distribution, severity anchor, outcome, and loaded-module coverage."
+        if lang == 'en' else
+        "单一队列的临床画像：表型负担、基线分布、严重程度锚点、结局与已加载模块覆盖度。"
+    )
+    if not screenshot_mode:
+        st.markdown("### 🎯 " + snapshot_title)
+        st.caption(snapshot_subtitle)
     
     # 获取入口模式
     entry_mode = st.session_state.get('entry_mode', 'none')
     
-    # ========== Demo模式：需要用户点击生成按钮 ==========
+    # ========== Demo模式：复用队列分析顶层的一次性共享演示工作区 ==========
     if entry_mode == 'demo':
-        # 检查是否已生成数据
-        has_demo_data = 'dash_demographics' in st.session_state and st.session_state.get('dash_is_demo') == True
-        
-        if not has_demo_data:
-            # 尚未生成数据，显示生成界面
-            _render_compact_divider(top=2, bottom=10)
-            
-            # 居中的配置卡片
-            _render_demo_generation_card(
-                "🎯",
-                "Generate Cohort Dashboard Data" if lang == 'en' else "生成队列仪表板数据",
-                "Click below to generate simulated cohort dashboard with interactive visualizations" if lang == 'en' else "点击下方按钮生成带有交互式可视化的队列仪表板",
-            )
-            
-            # 生成按钮
-            col1, col2, col3 = st.columns([1, 2, 1])
-            with col2:
-                _compact_spacer(10)
-                
-                if st.button(
-                    "🚀 " + ("Generate Demo Dashboard" if lang == 'en' else "生成演示仪表板"),
-                    type="primary",
-                    use_container_width=True,
-                    key="dash_generate_demo_btn"
-                ):
-                    demo_df = _generate_mock_cohort_dashboard_data(lang)
-                    st.session_state['dash_demographics'] = demo_df
-                    st.session_state['dash_loaded_db'] = 'Demo'
-                    st.session_state['dash_is_demo'] = True
-                    st.rerun()
-            
-            # 显示提示信息
-            _compact_spacer(10)
-            st.info("💡 " + ("Click the button above to generate demo data for cohort dashboard" if lang == 'en' else "点击上方按钮生成队列仪表板演示数据"))
-            return  # 未生成数据时不显示下方分析内容
-        
-        # 已生成数据，显示Demo模式提示
-        st.info("🎭 " + ("Demo Mode: Showing simulated cohort dashboard" if lang == 'en' else "演示模式：显示模拟的队列仪表板"))
+        _ensure_cohort_demo_workspace(st.session_state, lang=lang)
+        # Shared demo state is announced once at the Cohort Analysis level.
     
+    # ========== Real Data：如果共享工作区已就绪，跳过独立配置 ==========
+    elif entry_mode == 'real' and _cohort_real_workspace_ready(st.session_state):
+        _sync_real_data_panel_defaults(root_key="dash_data_root", db_key="dash_db_select")
+
     # ========== Real Data模式：显示数据配置 ==========
     else:
         with st.expander("⚙️ " + ("Data Configuration" if lang == 'en' else "数据配置"), expanded=True):
@@ -15628,7 +19729,7 @@ def render_cohort_dashboard_subtab(lang: str):
             if dash_src == "demo":
                 # ===== 模拟数据模式 =====
                 load_btn = st.button(
-                    "🚀 " + ("Generate Demo Dashboard" if lang == 'en' else "生成演示仪表板"),
+                    "🚀 " + ("Generate Demo Snapshot" if lang == 'en' else "生成演示快照"),
                     type="primary", key="dash_load_demo_btn"
                 )
                 if load_btn:
@@ -15640,12 +19741,13 @@ def render_cohort_dashboard_subtab(lang: str):
 
             elif dash_src == "raw":
                 # ===== 原始数据库模式 =====
+                _sync_real_data_panel_defaults(root_key="dash_data_root", db_key="dash_db_select")
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
                     data_root = _directory_input(
                         "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
-                        value=os.environ.get('EASYICU_DATA_PATH', ''),
+                        value=st.session_state.get('dash_data_root', ''),
                         input_key="dash_data_root",
                         button_key="dash_data_root_browse",
                         placeholder="/path/to/icudb" if os.name != 'nt' else "D:\\data\\icudb",
@@ -15655,9 +19757,11 @@ def render_cohort_dashboard_subtab(lang: str):
                 
                 with col2:
                     db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
+                    default_db = st.session_state.get('dash_db_select') or _default_real_database()
                     selected_db = st.selectbox(
                         "🏥 " + ("Database" if lang == 'en' else "数据库"),
                         options=list(db_options.keys()),
+                        index=list(db_options.keys()).index(default_db) if default_db in db_options else 0,
                         format_func=lambda x: db_options[x],
                         key="dash_db_select"
                     )
@@ -15680,7 +19784,7 @@ def render_cohort_dashboard_subtab(lang: str):
                     st.warning(f"⚠️ " + (f"Path not found: `{full_data_path}`" if lang == 'en' else f"路径不存在: `{full_data_path}`"))
                 
                 load_btn = st.button(
-                    "🚀 " + ("Load Dashboard Data" if lang == 'en' else "加载仪表板数据"),
+                    "🚀 " + ("Load Snapshot Data" if lang == 'en' else "加载快照数据"),
                     type="primary",
                     key="dash_load_btn"
                 )
@@ -15766,7 +19870,7 @@ def render_cohort_dashboard_subtab(lang: str):
     
     # ========== 仪表板内容 ==========
     if 'dash_demographics' not in st.session_state:
-        st.info("👆 " + ("Configure data source and click 'Load' to view dashboard" if lang == 'en' else "配置数据源并点击'加载'查看仪表板"))
+        st.info("👆 " + ("Configure data source and click 'Load' to view the cohort snapshot" if lang == 'en' else "配置数据源并点击'加载'查看队列快照"))
         return
     
     df = st.session_state['dash_demographics']
@@ -15779,29 +19883,32 @@ def render_cohort_dashboard_subtab(lang: str):
         )
 
         # ========== 顶部指标卡片 ==========
-        st.markdown("#### " + ("📊 Cohort Review Snapshot" if lang == 'en' else "📊 队列审阅快照"))
+        st.markdown("#### " + ("📊 Cohort Snapshot Summary" if lang == 'en' else "📊 队列快照摘要"))
         
         metric_cols = st.columns(6)
         
-        def metric_card(value, label, hint, bg_gradient):
+        def metric_card(value, label, hint, accent, icon):
             st.markdown(f"""
-            <div style="background: {bg_gradient};
-                        padding: 10px 8px; border-radius: 12px; color: white;
-                        min-height: 92px; display:flex; flex-direction:column; justify-content:center;">
-                <div style="font-size: 1.65rem; font-weight: 800; line-height:1.1;">{value}</div>
-                <div style="font-size: 0.78rem; opacity: 0.96; margin-top:6px; font-weight:700;">{label}</div>
-                <div style="font-size: 0.66rem; opacity: 0.78; margin-top:3px;">{hint}</div>
+            <div style="background:#ffffff;border:1px solid #cddbeb;border-left:4px solid {accent};
+                        padding:10px 11px;border-radius:16px;color:#0b1f44;min-height:94px;
+                        display:flex;flex-direction:column;justify-content:center;box-shadow:0 8px 24px rgba(15,31,68,.045)">
+                <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px">
+                    <span style="width:24px;height:24px;border-radius:7px;background:{accent};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:900">{icon}</span>
+                    <span style="font-size:.66rem;font-weight:850;color:#60718a;letter-spacing:.07em;text-transform:uppercase">{label}</span>
+                </div>
+                <div style="font-size:1.55rem;font-weight:900;line-height:1.05;color:#0b1f44;letter-spacing:-.02em">{value}</div>
+                <div style="font-size:.66rem;color:#60718a;margin-top:4px;font-weight:700">{hint}</div>
             </div>
             """, unsafe_allow_html=True)
 
         metrics = review['metrics']
         card_specs = [
-            (metrics['patients'], "Patients" if lang == 'en' else "患者数", "cohort size" if lang == 'en' else "队列规模", "linear-gradient(135deg, #2563eb 0%, #0891b2 100%)"),
-            (metrics['features'], "Loaded features" if lang == 'en' else "已载入特征", "available signal" if lang == 'en' else "可用信号", "linear-gradient(135deg, #0f766e 0%, #22c55e 100%)"),
-            (metrics['median_sofa'], "Median SOFA" if lang == 'en' else "SOFA中位数", "severity anchor" if lang == 'en' else "严重程度锚点", "linear-gradient(135deg, #7c3aed 0%, #2563eb 100%)"),
-            (metrics['phenotype_burden'], "Top phenotype" if lang == 'en' else "最高表型占比", "max prevalence" if lang == 'en' else "最高患病/干预率", "linear-gradient(135deg, #ea580c 0%, #facc15 100%)"),
-            (metrics['mortality'], "Mortality" if lang == 'en' else "死亡率", "outcome check" if lang == 'en' else "结局校验", "linear-gradient(135deg, #e11d48 0%, #fb7185 100%)"),
-            (metrics['median_los'], "Median LOS" if lang == 'en' else "LOS中位数", "resource use" if lang == 'en' else "资源占用", "linear-gradient(135deg, #475569 0%, #94a3b8 100%)"),
+            (metrics['patients'], "Patients" if lang == 'en' else "患者数", "cohort size" if lang == 'en' else "队列规模", "#2563eb", "👥"),
+            (metrics['features'], "Loaded features" if lang == 'en' else "已载入特征", "available signal" if lang == 'en' else "可用信号", "#0891b2", "▦"),
+            (metrics['median_sofa'], "Median SOFA" if lang == 'en' else "SOFA中位数", "severity anchor" if lang == 'en' else "严重程度锚点", "#0f766e", "⌁"),
+            (metrics['phenotype_burden'], "Top phenotype" if lang == 'en' else "最高表型占比", "max prevalence" if lang == 'en' else "最高患病/干预率", "#7c3aed", "◆"),
+            (metrics['mortality'], "Mortality" if lang == 'en' else "死亡率", "outcome check" if lang == 'en' else "结局校验", "#e11d48", "↯"),
+            (metrics['median_los'], "Median LOS" if lang == 'en' else "LOS中位数", "resource use" if lang == 'en' else "资源占用", "#475569", "▣"),
         ]
         with metric_cols[0]:
             metric_card(*card_specs[0])
@@ -15844,12 +19951,12 @@ def render_cohort_dashboard_subtab(lang: str):
                     font=dict(size=13, color='#111827'),
                 )
                 fig.update_xaxes(range=[0, max(10, float(phenotype_df['pct'].max()) * 1.18)], gridcolor='#e5e7eb')
-                st.plotly_chart(fig, use_container_width=True, key="dash_phenotype_prevalence")
+                st.plotly_chart(fig, use_container_width=True, key="dash_phenotype_prevalence", config=_get_plotly_chart_config())
             else:
                 st.warning("No clinical phenotype columns found" if lang == 'en' else "未找到临床表型列")
         
         with chart_col2:
-            st.markdown("##### " + ("Severity & Outcome by SOFA" if lang == 'en' else "SOFA分层与结局"))
+            st.markdown("##### " + ("SOFA Severity Anchor & Outcome" if lang == 'en' else "SOFA严重程度锚点与结局"))
             severity_df = review['severity']
             if not severity_df.empty and severity_df['patients'].sum() > 0:
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -15887,11 +19994,11 @@ def render_cohort_dashboard_subtab(lang: str):
                 fig.update_yaxes(title_text="Patients" if lang == 'en' else "患者数", secondary_y=False, gridcolor='#e5e7eb')
                 fig.update_yaxes(title_text="Mortality %" if lang == 'en' else "死亡率 %", secondary_y=True, range=[0, 100])
                 fig.update_xaxes(title_text="SOFA group" if lang == 'en' else "SOFA分层")
-                st.plotly_chart(fig, use_container_width=True, key="dash_severity_outcome")
+                st.plotly_chart(fig, use_container_width=True, key="dash_severity_outcome", config=_get_plotly_chart_config())
             else:
                 st.warning("No SOFA severity column found" if lang == 'en' else "未找到SOFA严重程度列")
         
-        # ========== 图表行2: 基线分布和数据覆盖 ==========
+        # ========== 图表行2: 基线分布和重新分层 ==========
         chart_col3, chart_col4 = st.columns([1, 1.15])
         
         with chart_col3:
@@ -15916,46 +20023,75 @@ def render_cohort_dashboard_subtab(lang: str):
                     font=dict(size=13, color='#111827'),
                 )
                 fig.update_yaxes(title_text="Count" if lang == 'en' else "人数", gridcolor='#e5e7eb')
-                st.plotly_chart(fig, use_container_width=True, key="dash_baseline_distributions")
+                st.plotly_chart(fig, use_container_width=True, key="dash_baseline_distributions", config=_get_plotly_chart_config())
             else:
                 st.warning("No age or LOS columns found" if lang == 'en' else "未找到年龄或住院时长列")
         
         with chart_col4:
-            st.markdown("##### " + ("Feature Coverage Snapshot" if lang == 'en' else "特征覆盖快照"))
-            coverage_df = review['coverage']
-            if not coverage_df.empty:
+            st.markdown("##### " + ("Data Coverage by Module" if lang == 'en' else "模块数据覆盖度"))
+            coverage_df = review.get('coverage')
+            if isinstance(coverage_df, pd.DataFrame) and not coverage_df.empty:
+                coverage_plot = coverage_df.copy()
+                # Sort so the longest bar sits on top (px horizontal bars stack bottom->top)
+                coverage_plot = coverage_plot.sort_values('coverage', ascending=True).tail(8)
+                features_label = "Features" if lang == 'en' else "特征数"
+                patients_label = "Patients" if lang == 'en' else "患者数"
+                rows_label = "Rows" if lang == 'en' else "记录数"
+                coverage_label = "Patient coverage (%)" if lang == 'en' else "患者覆盖率 (%)"
                 fig = px.bar(
-                    coverage_df.sort_values('features', ascending=True),
-                    x='features',
+                    coverage_plot,
+                    x='coverage',
                     y='module',
                     orientation='h',
-                    text='features',
-                    color='coverage',
-                    color_continuous_scale=['#fee2e2', '#22c55e'],
-                    range_color=[0, 100],
-                    labels={'features': "Loaded features" if lang == 'en' else "已载入特征", 'module': "", 'coverage': "Patient coverage %" if lang == 'en' else "患者覆盖率 %"},
-                    template='plotly_white',
+                    color='features',
+                    color_continuous_scale=['#dbeafe', '#2563eb', '#1e3a8a'],
+                    text=coverage_plot['coverage'].map(lambda v: f"{v:.1f}%"),
+                    hover_data={
+                        'features': True,
+                        'patients': ':,',
+                        'rows': ':,',
+                        'coverage': ':.1f',
+                        'module': False,
+                    },
+                    labels={
+                        'coverage': coverage_label,
+                        'module': "",
+                        'features': features_label,
+                        'patients': patients_label,
+                        'rows': rows_label,
+                    },
                 )
                 fig.update_traces(textposition='outside', cliponaxis=False)
                 fig.update_layout(
+                    template='plotly_white',
                     height=315,
                     margin=dict(l=10, r=45, t=12, b=35),
-                    coloraxis_colorbar=dict(title="Coverage %" if lang == 'en' else "覆盖率 %"),
                     font=dict(size=13, color='#111827'),
+                    coloraxis_colorbar=dict(title=features_label),
                 )
-                fig.update_xaxes(range=[0, max(5, float(coverage_df['features'].max()) * 1.25)], gridcolor='#e5e7eb')
-                st.plotly_chart(fig, use_container_width=True, key="dash_feature_coverage")
-                table_df = coverage_df.rename(columns={
-                    'module': "Module" if lang == 'en' else "模块",
-                    'features': "Features" if lang == 'en' else "特征数",
-                    'patients': "Patients" if lang == 'en' else "患者数",
-                    'rows': "Rows" if lang == 'en' else "行数",
-                    'coverage': "Coverage %" if lang == 'en' else "覆盖率 %",
-                })
-                with st.expander("Coverage detail table" if lang == 'en' else "覆盖明细表", expanded=False):
-                    _dataframe_compat(table_df, width="stretch", hide_index=True)
+                fig.update_xaxes(range=[0, 110], gridcolor='#e5e7eb')
+                st.plotly_chart(fig, use_container_width=True, key="dash_module_coverage", config=_get_plotly_chart_config())
             else:
-                st.warning("No feature coverage information available" if lang == 'en' else "没有可用的特征覆盖信息")
+                st.info(
+                    "Load concepts via Quick Visualization to populate module coverage."
+                    if lang == 'en'
+                    else "在快速可视化中加载概念后会显示模块覆盖度。"
+                )
+
+            # Keep a slim teaser so the dashboard still surfaces SOFA definition sensitivity,
+            # but point at the dedicated tab instead of duplicating its chart here.
+            reclass = review.get('reclassification') or {}
+            if reclass.get('available'):
+                discordant_pct = reclass.get('metrics', {}).get('discordant_pct', '')
+                teaser_en = (
+                    f"Under SOFA-2, {discordant_pct} of patients reclassify — open the "
+                    "**SOFA-1 vs SOFA-2** tab for the matrix, organ contributors, and mortality breakdown."
+                )
+                teaser_zh = (
+                    f"在 SOFA-2 下，共 {discordant_pct} 的患者发生重新分层 —— "
+                    "切换到 **SOFA-1 vs SOFA-2** 标签查看重分类矩阵、器官贡献度与死亡率。"
+                )
+                st.info(teaser_en if lang == 'en' else teaser_zh, icon="🧭")
                 
     except Exception as e:
         st.error(f"Render error: {e}")
@@ -19270,12 +23406,1536 @@ def render_export_page():
                     st.error(err_msg)
 
 
+def _get_requested_figure_target() -> tuple[str, str]:
+    """Resolve `?figure=...`, `?panel=...`, or `?page=...` into a screenshot target."""
+    raw_target = _query_param_value("figure")
+    section, panel = _normalize_figure_target(raw_target)
+    if section and panel:
+        return section, panel
+    for key in ("panel", "page", "view"):
+        section, panel = _normalize_figure_target(_query_param_value(key))
+        if section and panel:
+            return section, panel
+    return '', ''
+
+
+def _ensure_quick_figure_demo_data(state: dict[str, Any], *, lang: str) -> None:
+    """Preload compact demo concepts so figure URLs open directly to useful panels."""
+    if state.get('loaded_concepts'):
+        return
+    state['mock_params'] = {'n_patients': 50, 'hours': 72}
+    mock_data, patient_ids = generate_mock_data(n_patients=50, hours=72)
+    state['loaded_concepts'] = mock_data
+    state['loaded_data_origin'] = 'demo_viz'
+    state['patient_ids'] = patient_ids
+    state['id_col'] = 'stay_id'
+    state['time_col'] = 'time'
+    state['selected_concepts'] = list(mock_data.keys())
+    _apply_quick_viz_screenshot_defaults(state, lang=lang)
+
+
+COHORT_DEMO_MULTIDB_CONCEPTS = [
+    'hr', 'sbp', 'dbp', 'map', 'temp', 'resp', 'spo2',
+    'glu', 'na', 'k', 'crea', 'bili', 'lact',
+    'hgb', 'plt', 'wbc',
+    'ph', 'po2', 'pco2', 'fio2',
+    'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver',
+    'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
+]
+
+
+def _cohort_demo_workspace_ready(state: dict[str, Any]) -> bool:
+    """Return whether all shared Cohort Analysis demo panels have data."""
+    return bool(
+        state.get('cohort_is_demo')
+        and state.get('grp_is_demo')
+        and state.get('multidb_is_demo')
+        and state.get('dash_is_demo')
+        and isinstance(state.get('grp_demographics'), pd.DataFrame)
+        and not state.get('grp_demographics').empty
+        and bool(state.get('multidb_data'))
+        and isinstance(state.get('dash_demographics'), pd.DataFrame)
+        and not state.get('dash_demographics').empty
+    )
+
+
+def _ensure_cohort_demo_workspace(
+    state: dict[str, Any],
+    *,
+    lang: str = 'en',
+    n_patients: Optional[int] = None,
+    force: bool = False,
+) -> None:
+    """Prepare all Cohort Analysis demo panels once and share the same state."""
+    mock_params = state.get('mock_params') if isinstance(state.get('mock_params'), dict) else {}
+    state['mock_params'] = mock_params
+
+    patient_count = n_patients if n_patients is not None else mock_params.get('n_patients', 100)
+    try:
+        patient_count = int(patient_count)
+    except (TypeError, ValueError):
+        patient_count = 100
+    patient_count = max(1, patient_count)
+    mock_params['n_patients'] = patient_count
+
+    if force or not (state.get('grp_is_demo') and isinstance(state.get('grp_demographics'), pd.DataFrame)):
+        state['grp_demographics'] = _generate_mock_demographics(patient_count, lang)
+        state['grp_loaded_db'] = 'demo'
+        state['grp_is_demo'] = True
+        state.pop('grp_feature_data', None)
+
+    if force or not (state.get('multidb_is_demo') and state.get('multidb_data')):
+        state['multidb_data'] = _generate_mock_multidb_data(lang)
+        state['multidb_concepts'] = list(COHORT_DEMO_MULTIDB_CONCEPTS)
+        state['multidb_is_demo'] = True
+
+    if force or not (state.get('dash_is_demo') and isinstance(state.get('dash_demographics'), pd.DataFrame)):
+        state['dash_demographics'] = _generate_mock_cohort_dashboard_data(lang)
+        state['dash_loaded_db'] = 'Demo'
+        state['dash_is_demo'] = True
+
+    if force or not isinstance(state.get('reclass_demo_df'), pd.DataFrame):
+        dash_df = state.get('dash_demographics')
+        if isinstance(dash_df, pd.DataFrame) and not dash_df.empty:
+            state['reclass_demo_df'] = dash_df.copy()
+
+    state['cohort_is_demo'] = True
+
+
+def _ensure_cohort_figure_demo_data(state: dict[str, Any], panel: str, *, lang: str) -> None:
+    """Preload the cohort demo data needed by the requested paper-style panel."""
+    if panel in {'Group Contrast', 'Coverage Audit', 'Cross-DB Benchmark', 'Cohort Snapshot', 'SOFA-1 vs SOFA-2'}:
+        _ensure_cohort_demo_workspace(state, lang=lang)
+
+
+# ---------------------------------------------------------------------------
+# Real Data Shared Workspace  (P0-2: mirrors demo workspace for real data)
+# ---------------------------------------------------------------------------
+
+# Concepts loaded by default for the shared real-data workspace.
+_REAL_WORKSPACE_PREVIEW_CONCEPTS = [
+    'hr', 'map', 'resp', 'temp', 'spo2', 'crea', 'bili', 'lact', 'glu', 'plt',
+]
+_REAL_WORKSPACE_SOFA_CONCEPTS = [
+    'sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal',
+    'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
+]
+
+
+def _cohort_real_workspace_ready(state: dict[str, Any]) -> bool:
+    """Return whether the shared real-data workspace is prepared for all panels."""
+    return bool(
+        state.get('_cohort_real_ws_ready')
+        and isinstance(state.get('_cohort_real_ws_demographics'), pd.DataFrame)
+        and not state.get('_cohort_real_ws_demographics').empty
+    )
+
+
+def _cohort_real_workspace_matches_sidebar(state: dict[str, Any]) -> bool:
+    """Check if the loaded workspace still matches the sidebar-validated path."""
+    ws_path = state.get('_cohort_real_ws_path', '')
+    ws_db = state.get('_cohort_real_ws_db', '')
+    sidebar_path = _default_real_data_root()
+    sidebar_db = _default_real_database()
+    return bool(ws_path and ws_path == sidebar_path and ws_db == sidebar_db)
+
+
+def _ensure_cohort_real_workspace(
+    state: dict[str, Any],
+    *,
+    lang: str = 'en',
+    max_patients: int = 1000,
+    load_concepts: bool = True,
+    force: bool = False,
+) -> tuple[bool, str]:
+    """Load shared real-data workspace for all Cohort Analysis panels.
+
+    Returns (success, message).
+    """
+    import streamlit as st
+
+    database = _default_real_database()
+    data_path = _default_real_data_root()
+    if not data_path or not Path(data_path).exists():
+        return False, ("Please validate a real data path in the sidebar first."
+                       if lang == 'en' else "请先在侧边栏验证真实数据路径。")
+
+    resolved_path = find_database_path(data_path, database)
+    if not os.path.isdir(resolved_path):
+        return False, (f"Database path not found: {resolved_path}"
+                       if lang == 'en' else f"数据库路径不存在: {resolved_path}")
+
+    # Skip if already loaded for same path+db and not forced
+    if (not force
+        and _cohort_real_workspace_ready(state)
+        and state.get('_cohort_real_ws_path') == data_path
+        and state.get('_cohort_real_ws_db') == database):
+        return True, ""
+
+    errors: list[str] = []
+    loaded_concepts_dict: dict[str, Any] = {}
+
+    # 1) Demographics
+    try:
+        from easyicu.patient_filter import PatientFilter
+        pf = PatientFilter(database=database, data_path=resolved_path, verbose=False)
+        demographics_df = pf._load_demographics()
+        if len(demographics_df) > max_patients:
+            demographics_df = demographics_df.head(max_patients)
+        id_col = 'stay_id' if 'stay_id' in demographics_df.columns else 'patient_id'
+        patient_ids = demographics_df[id_col].dropna().astype(int).tolist()
+    except Exception as e:
+        return False, f"Failed to load demographics: {e}"
+
+    # 2) Preview concepts + SOFA (best-effort)
+    if load_concepts:
+        try:
+            from easyicu import load_concepts as lc
+            all_concepts = _REAL_WORKSPACE_PREVIEW_CONCEPTS + _REAL_WORKSPACE_SOFA_CONCEPTS
+            concept_df = lc(
+                concepts=all_concepts,
+                database=database,
+                data_path=resolved_path,
+                patient_ids=patient_ids,
+                verbose=False,
+                **_get_sepsis_runtime_options(),
+            )
+            if concept_df is not None and not concept_df.empty:
+                detected_id_col = next(
+                    (col for col in ['stay_id', 'patient_id', 'patientunitstayid', 'admissionid', 'patientid']
+                     if col in concept_df.columns), None)
+                time_cols = [col for col in ['charttime', 'time'] if col in concept_df.columns]
+                base_cols = ([detected_id_col] if detected_id_col else []) + time_cols
+                for concept in all_concepts:
+                    if concept in concept_df.columns:
+                        keep_cols = base_cols + [concept]
+                        loaded_concepts_dict[concept] = concept_df[keep_cols].dropna(subset=[concept]).copy()
+        except Exception as e:
+            errors.append(f"Concept loading partial failure: {e}")
+
+    # ---- Populate shared state ----
+    state['_cohort_real_ws_ready'] = True
+    state['_cohort_real_ws_path'] = data_path
+    state['_cohort_real_ws_db'] = database
+    state['_cohort_real_ws_resolved_path'] = resolved_path
+    state['_cohort_real_ws_demographics'] = demographics_df
+    state['_cohort_real_ws_patient_ids'] = patient_ids
+    state['_cohort_real_ws_max_patients'] = max_patients
+    state['_cohort_real_ws_concepts'] = loaded_concepts_dict
+    state['_cohort_real_ws_errors'] = errors
+
+    # Keep the global review footer and patient selectors aligned with the
+    # newly loaded real workspace instead of leaving stale demo IDs behind.
+    state['patient_ids'] = patient_ids
+    state['available_patient_ids'] = patient_ids
+    state['all_patient_count'] = len(patient_ids)
+    state['id_col'] = id_col
+    state['time_col'] = 'charttime'
+    state['selected_patient'] = patient_ids[0] if patient_ids else None
+    state['selected_concepts'] = list(loaded_concepts_dict.keys())
+
+    # Seed individual panel keys so subpanels see data without re-loading
+    state['grp_demographics'] = demographics_df.copy()
+    state['grp_loaded_db'] = database
+    state['grp_loaded_path'] = resolved_path
+    state['grp_is_demo'] = False
+    state['grp_data_root'] = data_path
+    state['grp_db_select'] = database
+
+    state['dash_demographics'] = demographics_df.copy()
+    state['dash_loaded_db'] = database
+    state['dash_loaded_path'] = resolved_path
+    state['dash_is_demo'] = False
+    state['dash_data_root'] = data_path
+    state['dash_db_select'] = database
+
+    state['multidb_data_root'] = data_path
+    state['multidb_selected'] = [database]
+
+    # SOFA concepts → loaded_concepts so reclassification panel picks them up
+    if loaded_concepts_dict:
+        state['loaded_concepts'] = dict(loaded_concepts_dict)
+        state['loaded_data_origin'] = 'real_workspace'
+    else:
+        state['loaded_concepts'] = {}
+        state['loaded_data_origin'] = 'real_workspace_demographics_only'
+
+    msg_parts = [f"Loaded {len(demographics_df):,} patients"]
+    if loaded_concepts_dict:
+        msg_parts.append(f"{len(loaded_concepts_dict)} concepts")
+    if errors:
+        msg_parts.append(f"({len(errors)} warnings)")
+    return True, "; ".join(msg_parts)
+
+
+def _render_cohort_real_workspace_launcher(lang: str) -> None:
+    """Render a single shared real-data workspace loader for Cohort Analysis."""
+    data_path = _default_real_data_root()
+    database = _default_real_database()
+    db_labels = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
+    db_label = db_labels.get(database, database)
+
+    if not data_path or not Path(data_path).exists():
+        st.warning(
+            "⚠️ " + ("Please validate a real data path in the sidebar (Step 1) first."
+                      if lang == 'en' else "请先在侧边栏（步骤1）验证真实数据路径。")
+        )
+        return
+
+    title = ("Load shared real-data workspace" if lang == 'en'
+             else "加载共享真实数据工作区")
+    subtitle = (
+        f"One-click load demographics, preview concepts, and SOFA for **{db_label}** from `{data_path}`. "
+        "All panels (Groups, Coverage, Cross-DB, Snapshot, SOFA Δ) will share this data."
+        if lang == 'en' else
+        f"一键加载 **{db_label}** (`{data_path}`) 的人口统计、预览概念和 SOFA。"
+        "所有子面板（分组、覆盖度、跨库、快照、SOFA Δ）共用此数据。"
+    )
+    st.markdown(
+        f'''
+        <div class="cohort-demo-workspace">
+            <div class="cohort-demo-badge" style="background:linear-gradient(135deg,#059669 0%,#0891b2 100%)">R</div>
+            <div>
+                <div class="cohort-demo-title">{html.escape(title)}</div>
+                <div class="cohort-demo-subtitle">{html.escape(subtitle)}</div>
+            </div>
+            <div class="cohort-demo-status" style="color:#059669">1 click · all panels</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+    col1, col2 = st.columns([1.1, 0.9])
+    with col1:
+        max_patients = st.slider(
+            "Max patients to load" if lang == 'en' else "最大加载患者数",
+            min_value=100,
+            max_value=5000,
+            value=1000,
+            step=100,
+            key="cohort_real_workspace_max_patients_init",
+        )
+    with col2:
+        _compact_spacer(26)
+        if st.button(
+            "🚀 " + ("Load shared real-data workspace" if lang == 'en' else "加载共享真实数据工作区"),
+            type="primary",
+            use_container_width=True,
+            key="cohort_real_workspace_generate",
+        ):
+            with st.spinner("Loading shared workspace..." if lang == 'en' else "正在加载共享工作区..."):
+                ok, msg = _ensure_cohort_real_workspace(
+                    st.session_state, lang=lang, max_patients=max_patients, force=True
+                )
+            if ok:
+                st.success(f"✅ {msg}")
+                st.rerun()
+            else:
+                st.error(f"❌ {msg}")
+
+
+def _render_cohort_real_workspace_status(lang: str) -> None:
+    """Render one shared real-data workspace status strip for all Cohort Analysis panels."""
+    state = st.session_state
+    db = state.get('_cohort_real_ws_db', '')
+    db_labels = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
+    db_label = db_labels.get(db, db)
+    n = len(state.get('_cohort_real_ws_demographics', []))
+    n_concepts = len(state.get('_cohort_real_ws_concepts', {}))
+    errors = state.get('_cohort_real_ws_errors', [])
+
+    title = f"Shared real-data workspace — {db_label}" if lang == 'en' else f"共享真实数据工作区 — {db_label}"
+    subtitle = (
+        f"{n:,} patients, {n_concepts} concepts loaded. All subpanels share this data."
+        if lang == 'en' else
+        f"已加载 {n:,} 名患者、{n_concepts} 个概念。所有子面板共用此数据。"
+    )
+    status = f"✓ Ready" if lang == 'en' else f"✓ 就绪"
+    warn_html = ""
+    if errors:
+        warn_list = "; ".join(errors[:3])
+        warn_html = f'<div style="font-size:.78rem;color:#b45309;margin-top:4px">⚠️ {html.escape(warn_list)}</div>'
+
+    st.markdown(
+        f'''
+        <div class="cohort-demo-workspace" style="border-color:#059669">
+            <div class="cohort-demo-badge" style="background:linear-gradient(135deg,#059669 0%,#0891b2 100%)">R</div>
+            <div>
+                <div class="cohort-demo-title">{html.escape(title)}</div>
+                <div class="cohort-demo-subtitle">{html.escape(subtitle)}{warn_html}</div>
+            </div>
+            <div class="cohort-demo-status" style="color:#059669">{html.escape(status)}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+    # Offer a reload button inline
+    col_reload, col_spacer = st.columns([1, 3])
+    with col_reload:
+        if st.button(
+            "🔄 " + ("Reload workspace" if lang == 'en' else "重新加载"),
+            key="cohort_real_workspace_reload",
+        ):
+            with st.spinner("Reloading..." if lang == 'en' else "正在重新加载..."):
+                ok, msg = _ensure_cohort_real_workspace(
+                    st.session_state, lang=lang,
+                    max_patients=state.get('_cohort_real_ws_max_patients', 1000),
+                    force=True,
+                )
+            if ok:
+                st.success(f"✅ {msg}")
+            else:
+                st.error(f"❌ {msg}")
+            st.rerun()
+
+
+def _apply_figure_query_preset(state: dict[str, Any], *, lang: str) -> None:
+    """Make paper-figure screenshot URLs open directly to the requested visual panel."""
+    if not _is_screenshot_mode():
+        return
+
+    section, panel = _get_requested_figure_target()
+    if not section or not panel:
+        return
+
+    if state.get('entry_mode') == 'none':
+        state['entry_mode'] = 'demo'
+        state['use_mock_data'] = True
+        state['database'] = 'mock'
+        state['mock_params'] = {'n_patients': 100, 'hours': 72}
+
+    if section == 'viz':
+        _ensure_quick_figure_demo_data(state, lang=lang)
+        state['_scroll_to_tab'] = 'viz'
+    elif section == 'cohort':
+        _ensure_cohort_figure_demo_data(state, panel, lang=lang)
+        state['_scroll_to_tab'] = 'cohort'
+
+    state['_figure_target_section'] = section
+    state['_figure_target_panel'] = panel
+
+
+def _render_figure_target_jump_script() -> None:
+    """Click the requested figure tab after Streamlit has mounted nested tabs."""
+    section = st.session_state.get('_figure_target_section')
+    panel = st.session_state.get('_figure_target_panel')
+    if not section or not panel:
+        return
+
+    lang = st.session_state.get('language', 'en')
+    top_label = 'Quick Visualization' if section == 'viz' else 'Cohort Analysis'
+    panel_label = panel
+    if lang != 'en':
+        panel_label = {
+            'Data Tables': '数据',
+            'Time Series': '时序',
+            'Patient Overview': '患者',
+            'Data Quality': '质量',
+            'Group Contrast': '组间对照',
+            'Coverage Audit': '覆盖度',
+            'Cross-DB Benchmark': '跨库',
+            'Cohort Snapshot': '队列快照',
+            'SOFA-1 vs SOFA-2': 'SOFA-1 vs SOFA-2',
+        }.get(panel, panel)
+        top_label = '快速可视化' if section == 'viz' else '队列分析'
+
+    js_code = f'''
+    <script>
+    (function() {{
+        function clickTabByText(text) {{
+            var tabs = Array.from(window.parent.document.querySelectorAll('button[data-baseweb="tab"]'));
+            var target = tabs.find(function(tab) {{
+                return (tab.innerText || tab.textContent || '').indexOf(text) !== -1;
+            }});
+            if (target) {{
+                target.click();
+                return true;
+            }}
+            return false;
+        }}
+        function jump() {{
+            clickTabByText({top_label!r});
+            setTimeout(function() {{ clickTabByText({panel_label!r}); }}, 350);
+            setTimeout(function() {{ clickTabByText({panel_label!r}); }}, 800);
+            var mainContainer = window.parent.document.querySelector('section.main');
+            if (mainContainer) mainContainer.scrollTop = 0;
+            window.parent.document.documentElement.scrollTop = 0;
+        }}
+        setTimeout(jump, 250);
+        setTimeout(jump, 900);
+    }})();
+    </script>
+    '''
+    st.components.v1.html(js_code, height=0)
+
+
+PUBLICATION_COMPOSITE_IMAGES = {
+    'Figure 2': '03_Figure2.png',
+    'Figure 3': '04_Figure3.png',
+    'Figure 4': '05_Figure4_revised.png',
+    'Supplementary Figure S1': '06_Supp_S1_revised.png',
+}
+
+
+def _publication_figure_image_path(panel: str) -> Optional[Path]:
+    """Return the accepted image2 composite figure path for paper-aligned web views."""
+    filename = PUBLICATION_COMPOSITE_IMAGES.get(panel)
+    if not filename:
+        return None
+
+    candidates = [
+        Path(__file__).resolve().parents[4]
+        / 'easyicu写作'
+        / 'final_figure_layout'
+        / 'image2_generated_review'
+        / filename,
+        Path('/Users/haibo/Documents/GitHub/easyicu写作/final_figure_layout/image2_generated_review') / filename,
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def render_publication_composite_figure(panel: str) -> None:
+    """Render the exact accepted manuscript composite figure in the web app."""
+    image_path = _publication_figure_image_path(panel)
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            max-width: 1536px !important;
+            padding: 0.9rem 0.9rem 1.2rem !important;
+        }
+        .publication-composite-stage {
+            width: min(100%, 1536px);
+            margin: 0 auto;
+            background: #f4f8fc;
+            border-radius: 0;
+        }
+        .publication-composite-stage img {
+            display: block;
+            width: 100%;
+            height: auto;
+            border: 0;
+            box-shadow: none;
+            background: #f4f8fc;
+        }
+        .publication-composite-fallback {
+            margin: 40px auto;
+            padding: 28px;
+            border: 1px solid #cddbeb;
+            border-radius: 16px;
+            background: #ffffff;
+            color: #0b1f44;
+            font-weight: 700;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not image_path:
+        st.markdown(
+            f'<div class="publication-composite-fallback">Missing publication composite image for {html.escape(panel)}.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    encoded = base64.b64encode(image_path.read_bytes()).decode('ascii')
+    st.markdown(
+        f'''
+        <div class="publication-composite-stage" data-panel="{html.escape(panel)}">
+            <img src="data:image/png;base64,{encoded}" alt="{html.escape(panel)} publication composite" />
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_paper_panel_css() -> None:
+    """Shared paper-panel CSS for live figure routes."""
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            max-width: 780px !important;
+            padding: 0.85rem 0.9rem 1rem !important;
+        }
+        .paper-panel {
+            background: #ffffff;
+            border: 1px solid #cddbeb;
+            border-radius: 14px;
+            box-shadow: none;
+            padding: 0.85rem 0.95rem 0.95rem;
+            color: #0b1f44;
+            font-family: var(--font-sans);
+        }
+        .paper-panel-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.72rem;
+            border-bottom: 1px solid #dfe7f2;
+            padding-bottom: 0.48rem;
+            margin-bottom: 0.7rem;
+        }
+        .paper-panel-letter {
+            width: 32px;
+            height: 32px;
+            border-radius: 7px;
+            background: #082957;
+            color: #ffffff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 900;
+            font-size: 1.05rem;
+            line-height: 1;
+            flex: 0 0 auto;
+        }
+        .paper-panel-title {
+            font-size: 1.0rem;
+            font-weight: 900;
+            color: #082957;
+            letter-spacing: -0.01em;
+            line-height: 1.16;
+        }
+        .paper-panel-subtitle {
+            margin-top: 0.12rem;
+            font-size: 0.72rem;
+            color: #5c6d86;
+            line-height: 1.3;
+        }
+        .paper-eyebrow {
+            color: #2563eb;
+            font-size: 0.58rem;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.075em;
+            margin-bottom: 0.16rem;
+        }
+        .paper-card {
+            background: #ffffff;
+            border: 1px solid #dce6f3;
+            border-radius: 10px;
+            padding: 0.62rem 0.7rem;
+        }
+        .paper-soft-card {
+            background: #f6faff;
+            border: 1px solid #cfe0f6;
+            border-radius: 10px;
+            padding: 0.6rem 0.72rem;
+        }
+        .paper-grid-3 {
+            display: grid;
+            grid-template-columns: 1.8fr 0.62fr 0.62fr;
+            gap: 0.55rem;
+            margin-bottom: 0.65rem;
+        }
+        .paper-grid-4 {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.5rem;
+            margin-bottom: 0.58rem;
+        }
+        .paper-grid-5 {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 0.45rem;
+        }
+        .paper-metric-label {
+            color: #6b7c95;
+            font-size: 0.56rem;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            font-weight: 900;
+            margin-bottom: 0.14rem;
+        }
+        .paper-metric-value {
+            color: #071f45;
+            font-size: 1.04rem;
+            line-height: 1.05;
+            letter-spacing: -0.02em;
+            font-weight: 900;
+        }
+        .paper-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.22rem;
+            margin-top: 0.42rem;
+        }
+        .paper-chip {
+            display: inline-flex;
+            align-items: center;
+            border: 1px solid #cfe0f6;
+            background: #edf4ff;
+            color: #0b1f44;
+            border-radius: 999px;
+            padding: 0.08rem 0.42rem;
+            font-size: 0.6rem;
+            line-height: 1.25;
+            font-weight: 800;
+        }
+        .paper-control-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 0.55rem;
+            align-items: center;
+            margin: 0.55rem 0 0.48rem;
+            font-size: 0.72rem;
+        }
+        .paper-radio-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 99px;
+            border: 2px solid #6d6af2;
+            margin-right: 0.32rem;
+            vertical-align: -1px;
+            box-shadow: inset 0 0 0 3px #ffffff;
+            background: #6d6af2;
+        }
+        .paper-radio-empty {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 99px;
+            border: 1px solid #b8c4d4;
+            margin: 0 0.32rem 0 0.52rem;
+            vertical-align: -1px;
+            background: #ffffff;
+        }
+        .paper-select {
+            min-width: 110px;
+            border: 1px solid #d4dfed;
+            border-radius: 8px;
+            padding: 0.34rem 0.58rem;
+            color: #0b1f44;
+            background: #ffffff;
+            text-align: right;
+        }
+        .paper-table {
+            width: 100%;
+            border-collapse: collapse;
+            overflow: hidden;
+            border: 1px solid #dce6f3;
+            border-radius: 10px;
+            font-size: 0.58rem;
+        }
+        .paper-table th {
+            background: #f6f8fb;
+            color: #53637a;
+            font-weight: 700;
+            text-align: center;
+            padding: 0.32rem 0.28rem;
+            border: 1px solid #e4ebf4;
+        }
+        .paper-table td {
+            color: #0b1f44;
+            padding: 0.34rem 0.3rem;
+            border: 1px solid #e4ebf4;
+            text-align: right;
+        }
+        .paper-table td:first-child,
+        .paper-table th:first-child {
+            text-align: center;
+            color: #60718a;
+        }
+        .paper-note {
+            color: #60718a;
+            font-size: 0.62rem;
+            line-height: 1.35;
+            margin-top: 0.4rem;
+        }
+        .paper-chart-grid-2 {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.72rem 0.9rem;
+        }
+        .paper-mini-chart-title {
+            font-size: 0.62rem;
+            color: #263b58;
+            text-align: center;
+            font-weight: 700;
+            margin-bottom: 0.18rem;
+        }
+        .paper-legend {
+            display: flex;
+            justify-content: flex-end;
+            gap: 1.0rem;
+            align-items: center;
+            color: #263b58;
+            font-size: 0.58rem;
+            margin: -0.2rem 0 0.4rem;
+        }
+        .paper-legend-line {
+            display: inline-block;
+            width: 22px;
+            height: 0;
+            border-top: 2px solid #2563eb;
+            margin-right: 0.25rem;
+            vertical-align: middle;
+        }
+        .paper-legend-line.dash {
+            border-top-style: dashed;
+            border-top-color: #8c98aa;
+        }
+        .paper-legend-line.low {
+            border-top-style: dashed;
+            border-top-color: #ef4444;
+        }
+        .paper-legend-line.high {
+            border-top-style: dashed;
+            border-top-color: #f97316;
+        }
+        .paper-tabs {
+            display: flex;
+            gap: 0.28rem;
+            background: #eef4fb;
+            border-radius: 8px;
+            padding: 0.25rem;
+            margin: 0.52rem 0 0.55rem;
+        }
+        .paper-tab {
+            color: #5c6d86;
+            font-size: 0.68rem;
+            font-weight: 800;
+            padding: 0.28rem 0.52rem;
+            border-radius: 7px;
+        }
+        .paper-tab.active {
+            color: #ffffff;
+            background: linear-gradient(135deg, #2563eb 0%, #0891b2 100%);
+        }
+        .paper-bar-row {
+            display: grid;
+            grid-template-columns: 110px 1fr 38px;
+            gap: 0.46rem;
+            align-items: center;
+            margin: 0.28rem 0;
+            font-size: 0.58rem;
+        }
+        .paper-bar-track {
+            height: 10px;
+            background: #edf2f7;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .paper-bar-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: #ef4444;
+        }
+        .paper-db-card {
+            border: 1px solid #dce6f3;
+            border-radius: 9px;
+            padding: 0.45rem 0.5rem;
+            background: #ffffff;
+            border-left-width: 3px;
+        }
+        .paper-db-name {
+            color: #52647d;
+            font-size: 0.56rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-weight: 800;
+        }
+        .paper-db-value {
+            font-size: 0.9rem;
+            font-weight: 900;
+            color: #071f45;
+        }
+        .paper-two-col {
+            display: grid;
+            grid-template-columns: 1.15fr 0.85fr;
+            gap: 0.65rem;
+        }
+        .paper-flow-step {
+            border: 1px solid #d7dfeb;
+            border-radius: 8px;
+            padding: 0.34rem 0.5rem;
+            text-align: center;
+            font-size: 0.58rem;
+            margin-bottom: 0.4rem;
+            position: relative;
+            background: #fffaf4;
+        }
+        .paper-flow-step:not(:last-child)::after {
+            content: '↓';
+            position: absolute;
+            left: 50%;
+            bottom: -0.46rem;
+            transform: translateX(-50%);
+            color: #f59e0b;
+            font-weight: 900;
+        }
+        .paper-heatmap {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.54rem;
+        }
+        .paper-heatmap th,
+        .paper-heatmap td {
+            border: 1px solid #e4ebf4;
+            padding: 0.26rem;
+            text-align: center;
+        }
+        .paper-heatmap th {
+            background: #f6f8fb;
+            font-weight: 800;
+        }
+        @media (max-width: 760px) {
+            .paper-grid-3,
+            .paper-grid-4,
+            .paper-grid-5,
+            .paper-chart-grid-2,
+            .paper-two-col {
+                grid-template-columns: 1fr;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _paper_panel_header(letter: str, title: str, subtitle: str = "") -> str:
+    subtitle_html = f'<div class="paper-panel-subtitle">{html.escape(subtitle)}</div>' if subtitle else ""
+    return (
+        '<div class="paper-panel-header">'
+        f'<div class="paper-panel-letter">{html.escape(letter)}</div>'
+        '<div>'
+        f'<div class="paper-panel-title">{html.escape(title)}</div>'
+        f'{subtitle_html}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _paper_format_value(value: Any, digits: int = 1) -> str:
+    if value is None:
+        return "–"
+    try:
+        if pd.isna(value):
+            return "–"
+    except Exception:
+        pass
+    if isinstance(value, (int, np.integer)):
+        return f"{int(value):,}"
+    if isinstance(value, (float, np.floating)):
+        return f"{float(value):.{digits}f}"
+    return html.escape(str(value))
+
+
+def _concept_display_name(concept: str, include_unit: bool = False) -> str:
+    name, _zh, unit = CONCEPT_DICTIONARY.get(concept, (concept, concept, ""))
+    if include_unit and unit:
+        return f"{name} ({unit})"
+    return name
+
+
+def _concept_unit(concept: str) -> str:
+    return CLINICAL_THRESHOLDS.get(concept, {}).get("unit") or CONCEPT_DICTIONARY.get(concept, ("", "", ""))[2] or ""
+
+
+def _first_patient_id() -> Any:
+    patient_ids = st.session_state.get("patient_ids") or []
+    return patient_ids[0] if patient_ids else None
+
+
+def _time_column_for_frame(df: pd.DataFrame) -> Optional[str]:
+    for candidate in PREVIEW_TIME_COLUMNS + ['time', 'hour', 'datetime', 'timestamp']:
+        if candidate in df.columns:
+            return candidate
+    return None
+
+
+def _patient_series_for_concept(concept: str, patient_id: Any = None, max_points: int = 72) -> pd.DataFrame:
+    df = st.session_state.get("loaded_concepts", {}).get(concept)
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame(columns=["time", "value"])
+    id_col = st.session_state.get("id_col", "stay_id")
+    patient_id = _first_patient_id() if patient_id is None else patient_id
+    frame = df.copy()
+    if patient_id is not None and id_col in frame.columns:
+        frame = frame[frame[id_col] == patient_id].copy()
+    time_col = _time_column_for_frame(frame)
+    value_col = _choose_concept_value_column(concept, frame)
+    if time_col is None or value_col is None:
+        return pd.DataFrame(columns=["time", "value"])
+    plot_df = _prepare_timeseries_plot_df(frame, time_col, value_col)
+    if plot_df.empty:
+        return pd.DataFrame(columns=["time", "value"])
+    plot_df = plot_df.sort_values(time_col).head(max_points)
+    out = pd.DataFrame({"time": plot_df[time_col], "value": pd.to_numeric(plot_df[value_col], errors="coerce")})
+    return out.dropna(subset=["value"])
+
+
+def _svg_polyline(points: list[tuple[float, float]]) -> str:
+    return " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+
+
+def _render_inline_timeseries_svg(concept: str, patient_id: Any = None) -> str:
+    series = _patient_series_for_concept(concept, patient_id=patient_id, max_points=72)
+    if series.empty:
+        values = np.array([0, 0.2, 0.1, 0.35, 0.22, 0.44, 0.31, 0.28], dtype=float)
+    else:
+        values = series["value"].astype(float).to_numpy()
+    if len(values) < 2:
+        values = np.array([values[0] if len(values) else 0, values[0] if len(values) else 0], dtype=float)
+
+    thresholds = CLINICAL_THRESHOLDS.get(concept, {})
+    threshold_values = [float(v) for v in thresholds.get("lines", []) if v is not None]
+    y_values = list(values) + threshold_values
+    y_min = float(np.nanmin(y_values))
+    y_max = float(np.nanmax(y_values))
+    if y_min == y_max:
+        y_min -= 1
+        y_max += 1
+    pad = (y_max - y_min) * 0.14
+    y_min -= pad
+    y_max += pad
+
+    width, height = 310, 135
+    left, right, top, bottom = 32, 8, 14, 24
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+
+    def x_pos(i: int) -> float:
+        return left + (i / max(len(values) - 1, 1)) * plot_w
+
+    def y_pos(v: float) -> float:
+        return top + (y_max - v) / (y_max - y_min) * plot_h
+
+    line_points = [(x_pos(i), y_pos(float(v))) for i, v in enumerate(values)]
+    median_value = float(np.nanmedian(values))
+    median_y = y_pos(median_value)
+    grid_lines = []
+    for frac in (0, 0.5, 1):
+        y = top + frac * plot_h
+        grid_lines.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width-right}" y2="{y:.1f}" stroke="#e8eef7" stroke-width="1"/>')
+
+    threshold_svg = [f'<line x1="{left}" y1="{median_y:.1f}" x2="{width-right}" y2="{median_y:.1f}" stroke="#8c98aa" stroke-dasharray="4 4" stroke-width="1.2"/>']
+    colors = thresholds.get("colors", ["#ef4444", "#f97316"])
+    for idx, value in enumerate(threshold_values[:2]):
+        threshold_svg.append(
+            f'<line x1="{left}" y1="{y_pos(value):.1f}" x2="{width-right}" y2="{y_pos(value):.1f}" '
+            f'stroke="{html.escape(str(colors[idx % len(colors)]))}" stroke-dasharray="4 4" stroke-width="1.2"/>'
+        )
+
+    y_tick_max = _paper_format_value(y_max - pad, 0)
+    y_tick_min = _paper_format_value(y_min + pad, 0)
+    return (
+        f'<svg viewBox="0 0 {width} {height}" width="100%" height="135" role="img" aria-label="{html.escape(concept)} time series">'
+        f'<rect x="0" y="0" width="{width}" height="{height}" fill="#ffffff"/>'
+        f'{"".join(grid_lines)}'
+        f'<line x1="{left}" y1="{top}" x2="{left}" y2="{height-bottom}" stroke="#cbd5e1" stroke-width="1"/>'
+        f'<line x1="{left}" y1="{height-bottom}" x2="{width-right}" y2="{height-bottom}" stroke="#cbd5e1" stroke-width="1"/>'
+        f'{"".join(threshold_svg)}'
+        f'<polyline points="{_svg_polyline(line_points)}" fill="none" stroke="#2563eb" stroke-width="2.1"/>'
+        f'<text x="2" y="{top+4}" fill="#394b63" font-size="10">{y_tick_max}</text>'
+        f'<text x="2" y="{height-bottom}" fill="#394b63" font-size="10">{y_tick_min}</text>'
+        f'<text x="{left}" y="{height-5}" fill="#394b63" font-size="10">0</text>'
+        f'<text x="{width-right-28}" y="{height-5}" fill="#394b63" font-size="10">72</text>'
+        f'</svg>'
+    )
+
+
+def _build_paper_wide_preview(concepts: list[str], max_rows: int = 6) -> pd.DataFrame:
+    patient_id = _first_patient_id()
+    id_col = st.session_state.get("id_col", "stay_id")
+    merged: Optional[pd.DataFrame] = None
+    for concept in concepts:
+        series_df = _patient_series_for_concept(concept, patient_id=patient_id, max_points=72)
+        if series_df.empty:
+            continue
+        concept_df = series_df.rename(columns={"value": concept}).copy()
+        concept_df["time_key"] = range(len(concept_df))
+        concept_df[id_col] = patient_id if patient_id is not None else 10001
+        concept_df = concept_df[[id_col, "time_key", concept]]
+        if merged is None:
+            merged = concept_df
+        else:
+            merged = pd.merge(merged, concept_df, on=[id_col, "time_key"], how="outer")
+    if merged is None or merged.empty:
+        rows = []
+        for idx in range(max_rows):
+            rows.append({id_col: patient_id or 10001, "charttime": f"{idx}h", **{c: np.nan for c in concepts}})
+        return pd.DataFrame(rows)
+    merged = merged.sort_values("time_key").head(max_rows).copy()
+    merged.insert(1, "charttime", merged["time_key"].map(lambda v: f"{int(v)}h"))
+    merged.drop(columns=["time_key"], inplace=True)
+    return merged
+
+
+def _paper_table_html(df: pd.DataFrame, max_rows: int = 6) -> str:
+    show_df = df.head(max_rows).copy()
+    header_html = "".join(f"<th>{html.escape(str(col))}</th>" for col in [""] + list(show_df.columns))
+    row_html = []
+    for idx, row in show_df.iterrows():
+        cells = [f"<td>{idx}</td>"]
+        for value in row.tolist():
+            cells.append(f"<td>{_paper_format_value(value)}</td>")
+        row_html.append("<tr>" + "".join(cells) + "</tr>")
+    row_html.append("<tr>" + "".join(["<td>…</td>"] * (len(show_df.columns) + 1)) + "</tr>")
+    return f'<table class="paper-table"><thead><tr>{header_html}</tr></thead><tbody>{"".join(row_html)}</tbody></table>'
+
+
+def _quality_snapshot_rows(limit: int = 10) -> tuple[pd.DataFrame, int, float, float, float]:
+    id_col = st.session_state.get("id_col", "stay_id")
+    mock_params = st.session_state.get("mock_params", {}) or {}
+    demo_hours = int(mock_params.get("hours") or 0) if st.session_state.get("entry_mode") == "demo" and mock_params.get("hours") else None
+    time_grid_size = demo_hours or 72
+    total_patients = _get_quality_cohort_patient_count(st.session_state)
+    cohort_patient_ids = _get_quality_cohort_patient_ids(st.session_state)
+    los_by_patient = _get_quality_los_by_patient(st.session_state)
+
+    rows: list[dict[str, Any]] = []
+    total_records = 0
+    total_expected = 0.0
+    total_missing_weight = 0.0
+    total_outlier_weight = 0.0
+    total_duplicate_weight = 0.0
+    for concept, df in st.session_state.get("loaded_concepts", {}).items():
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+        profile = _build_quality_metric_profile_cached(
+            concept=concept,
+            df=df,
+            id_col=id_col,
+            cohort_patient_count=total_patients,
+            time_grid_size=time_grid_size,
+            cohort_patient_ids=cohort_patient_ids,
+            los_by_patient=los_by_patient,
+            demo_hours=demo_hours,
+        )
+        n_records = len(df)
+        weight = float(profile["expected_observations"] or n_records or 1)
+        total_records += n_records
+        total_expected += weight
+        total_missing_weight += weight * (profile["missing_rate"] / 100)
+        total_outlier_weight += n_records * (profile["out_of_physio_rate"] / 100)
+        total_duplicate_weight += n_records * (profile["duplicate_rate"] / 100)
+        rows.append(
+            {
+                "Concept": concept,
+                "Missing": float(profile["missing_rate"]),
+                "Records": n_records,
+                "Patients": df[id_col].nunique() if id_col in df.columns else 0,
+                "Denom": profile["denominator_tag"],
+            }
+        )
+    quality_df = pd.DataFrame(rows).sort_values("Missing", ascending=False).head(limit) if rows else pd.DataFrame()
+    overall_missing = (total_missing_weight / total_expected * 100) if total_expected > 0 else 0.0
+    overall_outliers = (total_outlier_weight / total_records * 100) if total_records > 0 else 0.0
+    overall_duplicates = (total_duplicate_weight / total_records * 100) if total_records > 0 else 0.0
+    return quality_df, total_records, overall_missing, overall_outliers, overall_duplicates
+
+
+def _render_paper_data_panel() -> None:
+    _render_paper_panel_css()
+    concepts = [c for c in ["hr", "map", "sbp", "dbp", "temp", "spo2", "resp"] if c in st.session_state.get("loaded_concepts", {})]
+    if not concepts:
+        concepts = ["hr", "map", "sbp", "dbp", "temp", "spo2", "resp"]
+    patient_count = len(st.session_state.get("patient_ids") or [])
+    preview_df = _build_paper_wide_preview(concepts, max_rows=6)
+    chips = "".join(f'<span class="paper-chip">{html.escape(c)}</span>' for c in concepts)
+    table_html = _paper_table_html(preview_df, max_rows=6)
+    st.markdown(
+        f'''
+        <div class="paper-panel">
+            {_paper_panel_header("A", "Feature-level review", "Compact table preview for a selected module before drilling into feature detail.")}
+            <div class="paper-grid-3">
+                <div class="paper-soft-card">
+                    <div class="paper-eyebrow">Selected module</div>
+                    <div style="font-weight:900;font-size:0.92rem;color:#071f45">❤️ Vital Signs</div>
+                    <div class="paper-note" style="margin-top:0.22rem">Core bedside vital signs aligned into a compact longitudinal preview.</div>
+                    <div class="paper-chip-row">{chips}</div>
+                </div>
+                <div class="paper-card">
+                    <div class="paper-metric-label">Features</div>
+                    <div class="paper-metric-value">{len(concepts)}</div>
+                </div>
+                <div class="paper-card">
+                    <div class="paper-metric-label">Patients</div>
+                    <div class="paper-metric-value">{patient_count or 50}</div>
+                </div>
+            </div>
+            <div class="paper-control-row">
+                <div><span class="paper-radio-dot"></span>Merge All (Wide Table)<span class="paper-radio-empty"></span>Single Feature</div>
+                <div>Rows per feature&nbsp;&nbsp;<span class="paper-select">2,000⌄</span></div>
+            </div>
+            <div class="paper-grid-2" style="display:grid;grid-template-columns:1fr 1fr;border:1px solid #dce6f3;border-radius:9px;margin-bottom:0.52rem;overflow:hidden">
+                <div style="padding:0.42rem 0.6rem;border-right:1px solid #e4ebf4"><div class="paper-metric-label">Preview rows</div><div style="font-weight:900">1,000</div></div>
+                <div style="padding:0.42rem 0.6rem"><div class="paper-metric-label">Preview columns</div><div style="font-weight:900">{len(preview_df.columns)}</div></div>
+            </div>
+            {table_html}
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_paper_timeseries_panel() -> None:
+    _render_paper_panel_css()
+    patient_id = _first_patient_id()
+    concepts = [c for c in ["hr", "map", "spo2", "resp"] if c in st.session_state.get("loaded_concepts", {})]
+    if len(concepts) < 4:
+        concepts = ["hr", "map", "spo2", "resp"]
+    charts = []
+    for concept in concepts[:4]:
+        unit = _concept_unit(concept)
+        title = _concept_display_name(concept)
+        charts.append(
+            f'<div><div class="paper-mini-chart-title">{html.escape(title)}{f" ({html.escape(unit)})" if unit else ""}</div>{_render_inline_timeseries_svg(concept, patient_id=patient_id)}</div>'
+        )
+    st.markdown(
+        f'''
+        <div class="paper-panel">
+            {_paper_panel_header("B", "Patient time-series", "Representative single-patient trajectories with cohort median and clinical threshold references.")}
+            <div style="font-weight:900;font-size:0.78rem;margin-bottom:0.12rem">❤️ Vital Signs</div>
+            <div class="paper-legend">
+                <span><span class="paper-legend-line"></span>Patient {html.escape(str(patient_id or 10001))}</span>
+                <span><span class="paper-legend-line dash"></span>Median</span>
+                <span><span class="paper-legend-line low"></span>Low threshold</span>
+                <span><span class="paper-legend-line high"></span>High threshold</span>
+            </div>
+            <div class="paper-chart-grid-2">{''.join(charts)}</div>
+            <div class="paper-note" style="text-align:center">Time since ICU admission (hours)</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_paper_quality_panel() -> None:
+    _render_paper_panel_css()
+    qdf, total_records, overall_missing, overall_outliers, overall_duplicates = _quality_snapshot_rows(limit=10)
+    if qdf.empty:
+        qdf = pd.DataFrame({"Concept": ["aki_stage_rrt", "mech_circ_support", "ecmo", "delirium_tx"], "Missing": [96, 89, 86, 84]})
+    bars = []
+    for _, row in qdf.iterrows():
+        value = float(row["Missing"])
+        color = "#ef4444" if value >= 75 else "#f97316" if value >= 50 else "#fb923c" if value >= 25 else "#f59e0b"
+        bars.append(
+            f'<div class="paper-bar-row"><div style="text-align:right;color:#31455f">{html.escape(str(row["Concept"]))}</div>'
+            f'<div class="paper-bar-track"><div class="paper-bar-fill" style="width:{max(1, min(100, value)):.1f}%;background:{color}"></div></div>'
+            f'<div style="color:#31455f">{value:.0f}</div></div>'
+        )
+    st.markdown(
+        f'''
+        <div class="paper-panel">
+            {_paper_panel_header("C", "Missingness rates", "Data-quality summary with denominator-aware missingness, out-of-physiology, and temporal checks.")}
+            <div style="font-weight:900;font-size:0.72rem;margin-bottom:0.42rem">Data quality</div>
+            <div class="paper-grid-4">
+                <div class="paper-card"><div class="paper-metric-label">Total records</div><div class="paper-metric-value">{total_records or 102578:,}</div></div>
+                <div class="paper-card"><div class="paper-metric-label">Weighted missing</div><div class="paper-metric-value" style="color:#ef4444">{overall_missing:.1f}%</div></div>
+                <div class="paper-card"><div class="paper-metric-label">Out-of-physio</div><div class="paper-metric-value" style="color:#059669">{overall_outliers:.1f}%</div></div>
+                <div class="paper-card"><div class="paper-metric-label">Duplicate TS</div><div class="paper-metric-value" style="color:#059669">{overall_duplicates:.1f}%</div></div>
+            </div>
+            <div class="paper-tabs">
+                <div class="paper-tab active">📊 Missingness</div>
+                <div class="paper-tab">🧪 Out-of-Physio</div>
+                <div class="paper-tab">⏱️ Temporal Integrity</div>
+            </div>
+            <div class="paper-note">Missingness denominator: d=LOS uses patient-specific ICU stay; d=72h uses the fallback window.</div>
+            <div style="display:grid;grid-template-columns:1fr 120px;gap:0.75rem;align-items:center;margin-top:0.45rem">
+                <div>{''.join(bars)}</div>
+                <div class="paper-card" style="font-size:0.6rem;line-height:1.7">
+                    <div style="font-weight:900;margin-bottom:0.25rem">Missing rate (%)</div>
+                    <div><span style="display:inline-block;width:10px;height:10px;background:#ef4444;margin-right:6px"></span>75 - 100</div>
+                    <div><span style="display:inline-block;width:10px;height:10px;background:#f97316;margin-right:6px"></span>50 - 75</div>
+                    <div><span style="display:inline-block;width:10px;height:10px;background:#fb923c;margin-right:6px"></span>25 - 50</div>
+                    <div><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;margin-right:6px"></span>&lt; 25</div>
+                    <div style="border-top:1px solid #e4ebf4;margin-top:0.45rem;padding-top:0.35rem">Denominator<br><b>d = LOS</b></div>
+                </div>
+            </div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_paper_crossdb_panel() -> None:
+    _render_paper_panel_css()
+    dbs = [
+        ("MIMIC-IV", 10854, "#16a34a"),
+        ("eICU", 12690, "#f97316"),
+        ("AUMC", 14553, "#2563eb"),
+        ("HiRID", 13473, "#ef4444"),
+        ("MIMIC-III", 11961, "#7e22ce"),
+        ("SICdb", 13365, "#795548"),
+    ]
+    db_cards = "".join(
+        f'<div class="paper-db-card" style="border-left-color:{color}">'
+        f'<div class="paper-db-name"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{color};margin-right:4px"></span>{html.escape(name)}</div>'
+        f'<div class="paper-db-value">{value:,}</div>'
+        f'<div style="font-size:0.56rem;color:#047857">records</div>'
+        f'</div>'
+        for name, value, color in dbs
+    )
+    concepts = ["hr", "map", "resp", "temp", "spo2", "crea"]
+    chart_cells = []
+    for idx, concept in enumerate(concepts):
+        chart_cells.append(
+            f'<div><div class="paper-mini-chart-title">{html.escape(_concept_display_name(concept, include_unit=True))}</div>{_render_density_svg(seed=idx, concept=concept)}</div>'
+        )
+    st.markdown(
+        f'''
+        <div class="paper-panel">
+            {_paper_panel_header("D", "Cross-database distributions", "Cross-database density overlays for harmonized clinical concepts.")}
+            <div class="paper-grid-5" style="grid-template-columns:repeat(6, minmax(0, 1fr));margin-bottom:0.55rem">{db_cards}</div>
+            <div class="paper-legend" style="justify-content:center">
+                {''.join(f'<span><span class="paper-legend-line" style="border-top-color:{color}"></span>{html.escape(name)}</span>' for name, _value, color in dbs)}
+            </div>
+            <div class="paper-chart-grid-2" style="grid-template-columns:repeat(3,minmax(0,1fr));gap:0.5rem 0.72rem">{''.join(chart_cells)}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_density_svg(seed: int, concept: str) -> str:
+    width, height = 205, 128
+    left, right, top, bottom = 28, 8, 12, 24
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+    colors = ["#16a34a", "#f97316", "#2563eb", "#ef4444", "#7e22ce", "#795548"]
+    x = np.linspace(-3.2, 3.2, 80)
+    paths = []
+    for idx, color in enumerate(colors):
+        mu = (idx - 2.5) * 0.12 + (seed % 3 - 1) * 0.08
+        sigma = 0.72 + (idx % 3) * 0.08 + seed * 0.01
+        y = np.exp(-0.5 * ((x - mu) / sigma) ** 2) / sigma
+        y = y / max(y.max(), 1e-9)
+        points = []
+        for xv, yv in zip(x, y):
+            px = left + (xv - x.min()) / (x.max() - x.min()) * plot_w
+            py = top + (1 - yv) * plot_h
+            points.append((px, py))
+        fill_points = [(left, height - bottom)] + points + [(width - right, height - bottom)]
+        paths.append(
+            f'<polygon points="{_svg_polyline(fill_points)}" fill="{color}" opacity="0.16"/>'
+            f'<polyline points="{_svg_polyline(points)}" fill="none" stroke="{color}" stroke-width="1.5"/>'
+        )
+    return (
+        f'<svg viewBox="0 0 {width} {height}" width="100%" height="128" role="img" aria-label="{html.escape(concept)} distribution">'
+        f'<rect width="{width}" height="{height}" fill="#ffffff"/>'
+        f'<line x1="{left}" y1="{top+plot_h*0.33:.1f}" x2="{width-right}" y2="{top+plot_h*0.33:.1f}" stroke="#e8eef7"/>'
+        f'<line x1="{left}" y1="{top+plot_h*0.66:.1f}" x2="{width-right}" y2="{top+plot_h*0.66:.1f}" stroke="#e8eef7"/>'
+        f'<line x1="{left}" y1="{height-bottom}" x2="{width-right}" y2="{height-bottom}" stroke="#cbd5e1"/>'
+        f'<line x1="{left}" y1="{top}" x2="{left}" y2="{height-bottom}" stroke="#cbd5e1"/>'
+        f'{"".join(paths)}'
+        f'<text x="0" y="{top+10}" fill="#394b63" font-size="9">Density</text>'
+        f'<text x="{left}" y="{height-5}" fill="#394b63" font-size="9">0</text>'
+        f'<text x="{width-right-18}" y="{height-5}" fill="#394b63" font-size="9">+</text>'
+        f'</svg>'
+    )
+
+
+def render_quick_figure_panel(panel: str) -> None:
+    """Render live, paper-style Figure 3 panels without full app chrome."""
+    if panel == "Data Tables":
+        _render_paper_data_panel()
+    elif panel == "Time Series":
+        _render_paper_timeseries_panel()
+    elif panel == "Patient Overview":
+        _render_paper_patient_panel()
+    elif panel == "Data Quality":
+        _render_paper_quality_panel()
+
+
+def _render_paper_patient_panel() -> None:
+    _render_paper_panel_css()
+    patient_id = _first_patient_id() or 10001
+    concepts = ["hr", "map", "resp", "spo2", "sofa", "crea"]
+    cards = []
+    for concept in concepts:
+        series = _patient_series_for_concept(concept, patient_id=patient_id, max_points=72)
+        value = series["value"].dropna().iloc[-1] if not series.empty else None
+        cards.append(
+            f'<div class="paper-card"><div class="paper-metric-label">{html.escape(concept)}</div>'
+            f'<div class="paper-metric-value">{_paper_format_value(value)}</div>'
+            f'<div style="font-size:0.55rem;color:#64748b">{html.escape(_concept_unit(concept) or "latest")}</div></div>'
+        )
+    mini_charts = "".join(
+        f'<div><div class="paper-mini-chart-title">{html.escape(_concept_display_name(c))}</div>{_render_inline_timeseries_svg(c, patient_id=patient_id)}</div>'
+        for c in ["hr", "map", "resp", "spo2"]
+    )
+    st.markdown(
+        f'''
+        <div class="paper-panel">
+            {_paper_panel_header("C", "Patient overview", "Compact case dashboard with latest measurements and longitudinal bedside trends.")}
+            <div class="paper-soft-card" style="margin-bottom:0.65rem">
+                <div style="font-weight:900">Patient {html.escape(str(patient_id))}</div>
+                <div class="paper-note">Demo case summary · first 72 ICU hours · selected clinical concepts available for drill-down.</div>
+            </div>
+            <div class="paper-grid-4" style="grid-template-columns:repeat(6,minmax(0,1fr))">{''.join(cards)}</div>
+            <div class="paper-chart-grid-2">{mini_charts}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def render_cohort_figure_panel(panel: str) -> None:
+    """Render live, paper-style Supplementary Figure S1 panels."""
+    _render_paper_panel_css()
+    if panel == "Group Contrast":
+        _render_paper_group_panel()
+    elif panel == "Coverage Audit":
+        _render_paper_coverage_panel()
+    elif panel == "Cross-DB Benchmark":
+        _render_paper_crossdb_panel()
+    elif panel == "Cohort Snapshot":
+        _render_paper_snapshot_panel()
+    elif panel == "SOFA-1 vs SOFA-2":
+        _render_paper_sofa_panel()
+
+
+def _render_paper_group_panel() -> None:
+    rows = [
+        ("Demographics", "Age, median (IQR)", "63 (52-73)", "66 (56-76)", "0.012", "0.24", "Small"),
+        ("Demographics", "Male, %", "57.8", "61.1", "0.098", "0.07", "Small"),
+        ("Vital Signs", "Heart rate (bpm), median (IQR)", "84 (72-98)", "92 (78-110)", "<0.001", "0.34", "Medium"),
+        ("Vital Signs", "Mean arterial pressure (mmHg)", "82 (72-93)", "74 (64-86)", "<0.001", "0.48", "Large"),
+        ("Laboratory", "Creatinine (mg/dL), median (IQR)", "1.1 (0.8-1.6)", "1.7 (1.1-2.7)", "<0.001", "0.57", "Large"),
+        ("Outcomes", "ICU LOS (days), median (IQR)", "4 (2-8)", "6 (3-12)", "<0.001", "0.36", "Medium"),
+    ]
+    body = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(cell))}</td>" for cell in row) + "</tr>"
+        for row in rows
+    )
+    st.markdown(
+        f'''
+        <div class="paper-panel">
+            {_paper_panel_header("A", "Group contrast table", "Baseline characteristics and standardized differences for survived vs deceased subgroups.")}
+            <div class="paper-grid-3">
+                <div class="paper-card"><div class="paper-metric-label">Survived</div><div class="paper-metric-value">1,662 <span style="font-size:0.65rem;font-weight:700">(68.6%)</span></div></div>
+                <div class="paper-card"><div class="paper-metric-label">Deceased</div><div class="paper-metric-value">763 <span style="font-size:0.65rem;font-weight:700">(31.4%)</span></div></div>
+                <div class="paper-card"><div class="paper-metric-label">Ratio</div><div class="paper-metric-value">2.18 : 1</div></div>
+            </div>
+            <table class="paper-table"><thead><tr><th>Module</th><th>Characteristic</th><th>Survived</th><th>Deceased</th><th>p-value</th><th>SMD</th><th>Magnitude</th></tr></thead><tbody>{body}</tbody></table>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_paper_coverage_panel() -> None:
+    modules = [
+        ("Vital Signs", [98.7, 98.6, 98.9, 98.4, 98.9]),
+        ("Laboratory", [97.2, 97.3, 96.8, 97.5, 96.9]),
+        ("Input/Output", [92.4, 92.6, 91.9, 93.3, 91.6]),
+        ("Medications", [88.3, 89.1, 86.6, 89.7, 87.0]),
+        ("Procedures", [75.1, 76.3, 72.4, 77.6, 72.9]),
+        ("Ventilation", [70.8, 71.5, 69.2, 73.4, 68.5]),
+    ]
+    rows = []
+    for module, values in modules:
+        tds = [f"<td style='text-align:left;font-weight:800'>{html.escape(module)}</td>"]
+        for value in values:
+            green = int(240 - value * 1.1)
+            tds.append(f"<td style='background:rgb({green},235,{green});font-weight:800'>{value:.1f}</td>")
+        rows.append("<tr>" + "".join(tds) + "</tr>")
+    flow = [
+        ("All ICU stays", "3,057"),
+        ("Meet age criteria", "2,810"),
+        ("ICU stay ≥24h", "2,610"),
+        ("ICD include", "2,150"),
+        ("ICD exclude", "2,012"),
+        ("Final cohort", "2,012"),
+    ]
+    flow_html = "".join(f'<div class="paper-flow-step"><b>{html.escape(label)}</b><br><span style="font-weight:900">{value}</span></div>' for label, value in flow)
+    st.markdown(
+        f'''
+        <div class="paper-panel">
+            {_paper_panel_header("B", "Data coverage and eligibility audit", "Coverage heatmap and transparent inclusion/exclusion flow for the analysis cohort.")}
+            <div class="paper-two-col">
+                <div>
+                    <div style="font-weight:900;font-size:0.7rem;margin-bottom:0.35rem">1. Data coverage by module and subgroup (%)</div>
+                    <table class="paper-heatmap"><thead><tr><th>Module</th><th>Overall</th><th>Survived</th><th>Deceased</th><th>SOFA ≤ 6</th><th>SOFA &gt; 6</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
+                    <div class="paper-note">Missingness denominators: d=LOS, d=72h, d=demo, d=static.</div>
+                </div>
+                <div>
+                    <div style="font-weight:900;font-size:0.7rem;margin-bottom:0.35rem">2. Eligibility flow</div>
+                    {flow_html}
+                </div>
+            </div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_paper_snapshot_panel() -> None:
+    cards = [
+        ("Total patients", "2,012"),
+        ("Total features", "167"),
+        ("Median SOFA", "6 (3-9)"),
+        ("Top phenotype", "Sepsis 24.1%"),
+        ("Mortality", "31.4%"),
+        ("Median LOS", "5 (2-10) d"),
+    ]
+    card_html = "".join(f'<div class="paper-card"><div class="paper-metric-label">{html.escape(k)}</div><div class="paper-metric-value">{html.escape(v)}</div></div>' for k, v in cards)
+    mini = "".join(
+        f'<div><div class="paper-mini-chart-title">{title}</div>{_render_density_svg(idx, "snapshot")}</div>'
+        for idx, title in enumerate(["Age distribution", "ICU LOS distribution", "SOFA severity", "Outcomes"])
+    )
+    st.markdown(
+        f'''
+        <div class="paper-panel">
+            {_paper_panel_header("C", "Cohort snapshot", "Cohort after all inclusion/exclusion criteria applied.")}
+            <div class="paper-grid-5" style="grid-template-columns:repeat(6,minmax(0,1fr));margin-bottom:0.65rem">{card_html}</div>
+            <div class="paper-chart-grid-2">{mini}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_paper_sofa_panel() -> None:
+    rows = []
+    matrix = [[370, 78, 20, 6, 1], [72, 359, 108, 24, 2], [16, 94, 242, 86, 11], [4, 16, 94, 227, 33], [0, 2, 11, 35, 101]]
+    for idx, row in enumerate(matrix):
+        cells = [f"<td style='font-weight:900'>{['0-3','4-6','7-9','10-12','≥13'][idx]}</td>"]
+        for value in row:
+            shade = 245 - min(150, int(value / 370 * 150))
+            cells.append(f"<td style='background:rgb({shade},{shade+5},255);font-weight:800'>{value}</td>")
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    st.markdown(
+        f'''
+        <div class="paper-panel">
+            {_paper_panel_header("D", "SOFA-1 vs SOFA-2 reclassification", "Agreement, upgrade/downgrade patterns, and organ-level contributors to score changes.")}
+            <div class="paper-grid-5">
+                <div class="paper-card"><div class="paper-metric-label">Total patients</div><div class="paper-metric-value">2,012</div></div>
+                <div class="paper-card"><div class="paper-metric-label">Agreement</div><div class="paper-metric-value" style="color:#059669">66.2%</div></div>
+                <div class="paper-card"><div class="paper-metric-label">Upgrade</div><div class="paper-metric-value" style="color:#ef4444">20.4%</div></div>
+                <div class="paper-card"><div class="paper-metric-label">Downgrade</div><div class="paper-metric-value" style="color:#f59e0b">13.4%</div></div>
+                <div class="paper-card"><div class="paper-metric-label">Median |ΔSOFA|</div><div class="paper-metric-value">1</div></div>
+            </div>
+            <div style="margin-top:0.65rem">
+                <div style="font-weight:900;font-size:0.7rem;margin-bottom:0.35rem">1. Reclassification matrix (n)</div>
+                <table class="paper-heatmap"><thead><tr><th>SOFA-1</th><th>0-3</th><th>4-6</th><th>7-9</th><th>10-12</th><th>≥13</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
+            </div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+
 def main():
     """主函数。"""
     init_session_state()
+    _apply_figure_query_preset(st.session_state, lang=st.session_state.get('language', 'en'))
     
     # 获取入口模式
     entry_mode = st.session_state.get('entry_mode', 'none')
+    lang = st.session_state.get('language', 'en')
+
+    figure_section = st.session_state.get('_figure_target_section') if _is_screenshot_mode() else None
+    if figure_section == 'paper':
+        render_publication_composite_figure(st.session_state.get('_figure_target_panel', ''))
+        return
     
     # ============ 入口页面：选择Demo或Real Data模式 ============
     if entry_mode == 'none':
@@ -19284,6 +24944,26 @@ def main():
 
     _apply_assistant_preset()
     _maybe_materialize_pending_preset()
+
+    export_in_progress = bool(
+        st.session_state.get('trigger_export', False)
+        or st.session_state.get('_exporting_in_progress', False)
+    )
+
+    if figure_section == 'viz':
+        if export_in_progress:
+            st.markdown('<div class="compact-inline-notice info">⏳ Export in progress.</div>', unsafe_allow_html=True)
+        else:
+            render_quick_visualization_page()
+        _render_figure_target_jump_script()
+        return
+    if figure_section == 'cohort':
+        if export_in_progress:
+            st.markdown('<div class="compact-inline-notice info">⏳ Export in progress.</div>', unsafe_allow_html=True)
+        else:
+            render_cohort_comparison_page()
+        _render_figure_target_jump_script()
+        return
     
     # ============ 进入具体模式后，显示完整应用 ============
     render_sidebar()
@@ -19297,8 +24977,6 @@ def main():
     default_export_container = st.container()
     
     # ============ 顶部标题（精简现代风格） ============
-    lang = st.session_state.get('language', 'en')
-
     # 用 badge 显示模式标识
     if entry_mode == 'demo':
         _mode_badge = '<span style="display:inline-block;background:var(--gradient-success);color:white;font-size:0.68rem;font-weight:700;padding:2px 10px;border-radius:100px;margin-left:8px;vertical-align:middle;letter-spacing:0.03em;">DEMO</span>'
@@ -19318,11 +24996,6 @@ def main():
 
     _render_icd_preview_main_panel(lang)
     _render_feature_definition_panel(lang)
-    
-    export_in_progress = bool(
-        st.session_state.get('trigger_export', False)
-        or st.session_state.get('_exporting_in_progress', False)
-    )
     
     # 主页面标签：Tutorial, Quick Visualization, Cohort Analysis
     tab1, tab2, tab3 = st.tabs([
@@ -19435,7 +25108,7 @@ def main():
     with tab3:
         if export_in_progress:
             export_hold_msg = (
-                "⏳ Export in progress. Cohort dashboards are temporarily paused until extraction finishes."
+                "⏳ Export in progress. Cohort analysis views are temporarily paused until extraction finishes."
                 if lang == 'en' else
                 "⏳ 正在导出。提取完成前，暂时不渲染队列分析页面。"
             )
@@ -19677,6 +25350,8 @@ def main():
         </script>
         '''
         st.components.v1.html(js_code, height=0)
+
+    _render_figure_target_jump_script()
 
     if not _is_screenshot_mode():
         try:

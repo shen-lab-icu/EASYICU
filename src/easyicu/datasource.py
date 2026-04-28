@@ -1344,6 +1344,25 @@ class ICUDataSource:
     def _resolve_loader_from_disk(self, table_name: str) -> Optional[Callable[[], pd.DataFrame] | Path]:
         if not self.base_path:
             return None
+
+        def _case_insensitive_existing_path(path: Path) -> Optional[Path]:
+            """Resolve a file path even when the exported ICU table uses camelCase.
+
+            Some public eICU exports keep table names such as ``vitalPeriodic``
+            while EasyICU's concept dictionary normalizes table keys to
+            lowercase (``vitalperiodic``). On case-sensitive volumes this would
+            silently make valid real-data tables unavailable.
+            """
+            if path.exists():
+                return path
+            parent = path.parent
+            if not parent.is_dir():
+                return None
+            target = path.name.lower()
+            for child in parent.iterdir():
+                if child.name.lower() == target:
+                    return child
+            return None
         
         # 🚀 优先级最高：检查分桶目录（性能最优）
         # 分桶目录命名规则：{table_name}_bucket
@@ -1462,8 +1481,9 @@ class ICUDataSource:
                 self.base_path / "hosp" / f"{name}.parquet",  # MIIV hosp 子目录
             ]
             for parquet_candidate in possible_parquet_paths:
-                if parquet_candidate.exists():
-                    return parquet_candidate
+                resolved = _case_insensitive_existing_path(parquet_candidate)
+                if resolved is not None:
+                    return resolved
             
             # Try .pq extension (short form) - 同样检查子目录
             possible_pq_paths = [
@@ -1472,8 +1492,9 @@ class ICUDataSource:
                 self.base_path / "hosp" / f"{name}.pq",
             ]
             for pq_candidate in possible_pq_paths:
-                if pq_candidate.exists():
-                    return pq_candidate
+                resolved = _case_insensitive_existing_path(pq_candidate)
+                if resolved is not None:
+                    return resolved
         
         # Check subdirectory for partitioned parquet data (common in hirid observations)
         if self.base_path is not None:
