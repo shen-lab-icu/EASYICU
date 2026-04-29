@@ -967,44 +967,34 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                 st.markdown("---")
                 preview_title = "👁️ Quick Preview" if st.session_state.language == 'en' else "👁️ 快速预览"
                 st.markdown(f"**{preview_title}**")
-                preview_toggle_label = "Enable quick preview before export (optional)" if st.session_state.language == 'en' else "启用导出前快速预览（可选）"
-                preview_toggle_help = "Preview is optional. Turn this on only when you want to inspect a small sample first." if st.session_state.language == 'en' else "预览不是必需步骤。只有在你想先看一小部分样本时再开启。"
-                preview_enabled = st.toggle(
-                    preview_toggle_label,
-                    value=st.session_state.get('sidebar_preview_enabled', False),
-                    key="sidebar_preview_enabled",
-                    help=preview_toggle_help,
+                preview_desc = (
+                    "Load a small sample into Quick Visualization. This is optional and does not replace the final export."
+                    if st.session_state.language == 'en' else
+                    "将一小部分样本加载到快速可视化。此步骤可选，不会替代最终导出。"
+                )
+                st.caption(preview_desc)
+                preview_patient_options = [10, 20, 50, 100]
+                if st.session_state.get('preview_n_patients') not in preview_patient_options:
+                    st.session_state.pop('preview_n_patients', None)
+
+                preview_slider_kwargs = {
+                    'options': preview_patient_options,
+                    'key': "preview_n_patients",
+                }
+                if 'preview_n_patients' not in st.session_state:
+                    preview_slider_kwargs['value'] = 10
+
+                preview_n = st.select_slider(
+                    get_text('preview_patients'),
+                    **preview_slider_kwargs,
                 )
 
-                if preview_enabled:
-                    preview_desc = "Preview a small sample before full extraction" if st.session_state.language == 'en' else "在全量提取前预览一小部分患者数据"
-                    st.caption(preview_desc)
-                    if 'preview_n_patients' not in st.session_state:
-                        st.session_state.preview_n_patients = 10
-
-                    preview_n = st.select_slider(
-                        get_text('preview_patients'),
-                        options=[10, 20, 50, 100],
-                        value=10,
-                        key="preview_n_patients"
-                    )
-
-                    if st.session_state.get('_preview_requested', False):
-                        preview_loading_msg = (
-                            f"⏳ Preview request received. Loading {st.session_state.get('_preview_n', 10)} patients now..."
-                            if st.session_state.language == 'en' else
-                            f"⏳ 已收到预览请求，正在加载 {st.session_state.get('_preview_n', 10)} 位患者，请稍候..."
-                        )
-                        st.info(preview_loading_msg)
-
-                    if st.button(get_text('preview_btn'), key="sidebar_preview_btn", use_container_width=True):
-                        st.session_state['_preview_requested'] = True
-                        st.session_state['_preview_n'] = preview_n
-                        st.session_state['_scroll_to_tab'] = 'viz'
-                        st.rerun()
-                else:
-                    optional_msg = "Skip preview if you already know the configuration and want to export directly." if st.session_state.language == 'en' else "如果你已经确认配置无误，可以跳过预览，直接导出。"
-                    st.caption(optional_msg)
+                preview_btn_label = "👁️ Run Quick Preview" if st.session_state.language == 'en' else "👁️ 运行快速预览"
+                if st.button(preview_btn_label, key="sidebar_preview_btn", use_container_width=True):
+                    st.session_state['_preview_requested'] = True
+                    st.session_state['_preview_n'] = preview_n
+                    st.session_state['_scroll_to_tab'] = 'viz'
+                    st.rerun()
         else:
             # 如果没有选中任何概念，重置确认状态
             st.session_state.step3_confirmed = False

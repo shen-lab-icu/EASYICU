@@ -6,8 +6,17 @@ import types
 
 import easyicu
 import easyicu.webapp.app as app
+import easyicu.webapp.cohort_filters as cohort_filters
+import easyicu.webapp.cohort_workspace as cohort_workspace
+import easyicu.webapp.data_paths as data_paths
 import pandas as pd
 import pytest
+
+
+def test_concept_catalog_helpers_remain_available_to_workflow_context() -> None:
+    """Data workflow modules receive these names through app.globals()."""
+    assert app._get_patient_id_table_files("hirid")[0] == "general.parquet"
+    assert app._sample_patient_ids_random([3, 1, 2], 10) == [3, 1, 2]
 
 
 class _FakeExpander:
@@ -70,6 +79,50 @@ class _SessionStateStreamlit:
         self.session_state = session_state
 
 
+class _FakeColumn:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def test_directory_input_does_not_redeclare_widget_value_for_existing_state(monkeypatch) -> None:
+    class _DirectoryInputStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "language": "en",
+                "sidebar_export_path_input": "/tmp/export",
+            }
+            self.text_input_kwargs = None
+
+        def columns(self, _spec):
+            return [_FakeColumn(), _FakeColumn()]
+
+        def text_input(self, _label, **kwargs) -> str:
+            self.text_input_kwargs = kwargs
+            return self.session_state[kwargs["key"]]
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def button(self, *_args, **_kwargs) -> bool:
+            return False
+
+    streamlit_stub = _DirectoryInputStreamlit()
+    monkeypatch.setattr(data_paths, "st", streamlit_stub)
+
+    result = data_paths._directory_input(
+        "Export Path",
+        input_key="sidebar_export_path_input",
+        button_key="sidebar_export_path_browse",
+        value="/tmp/default",
+    )
+
+    assert result == "/tmp/export"
+    assert "value" not in streamlit_stub.text_input_kwargs
+
+
 def test_home_dictionary_avoids_nested_expanders(monkeypatch) -> None:
     streamlit_stub = _FakeStreamlit()
 
@@ -126,6 +179,239 @@ def test_button_compat_uses_width_instead_of_deprecated_container_flag(monkeypat
     assert streamlit_stub.kwargs == {"key": "run", "width": "stretch"}
 
 
+def test_cohort_query_tokens_expand_icd_ranges_and_mixed_separators() -> None:
+    assert app._split_query_tokens("J12-J14, I50; 428\nN17") == [
+        "J12",
+        "J13",
+        "J14",
+        "I50",
+        "428",
+        "N17",
+    ]
+    assert app._split_query_tokens("J12-K14") == ["J12-K14"]
+
+
+def test_supported_disease_cohorts_only_expose_icd_templates_for_icd_databases() -> None:
+    miiv_cohorts = set(app._get_supported_disease_cohorts("miiv"))
+    aumc_cohorts = set(app._get_supported_disease_cohorts("aumc"))
+
+    assert {"ards", "pneumonia", "heart_failure", "ami", "stroke"}.issubset(miiv_cohorts)
+    assert {"sepsis", "aki", "rrt"}.issubset(aumc_cohorts)
+    assert "ards" not in aumc_cohorts
+
+
+def test_death_stay_picker_assigns_multi_stay_death_to_matching_or_last_stay() -> None:
+    merged = pd.DataFrame(
+        {
+            "hadm_id": [10, 10, 20, 20],
+            "stay_id": [101, 102, 201, 202],
+            "hospital_expire_flag": [1, 1, 1, 1],
+            "deathtime": [
+                "2024-01-03 08:00",
+                "2024-01-03 08:00",
+                "2024-02-05 12:00",
+                "2024-02-05 12:00",
+            ],
+            "intime": [
+                "2024-01-01 00:00",
+                "2024-01-03 00:00",
+                "2024-02-01 00:00",
+                "2024-02-03 00:00",
+            ],
+            "outtime": [
+                "2024-01-02 00:00",
+                "2024-01-04 00:00",
+                "2024-02-02 00:00",
+                "2024-02-04 00:00",
+            ],
+        }
+    )
+
+    picked = app._pick_death_stay(
+        merged,
+        merged["hospital_expire_flag"] == 1,
+        "stay_id",
+        "deathtime",
+        "intime",
+        "outtime",
+    )
+
+    assert picked == {102, 202}
+
+
+def test_miiv_death_series_marks_only_the_attributed_icu_stay() -> None:
+    icu_df = pd.DataFrame(
+        {
+            "subject_id": [1, 1],
+            "hadm_id": [10, 10],
+            "stay_id": [101, 102],
+            "intime": ["2024-01-01 00:00", "2024-01-03 00:00"],
+            "outtime": ["2024-01-02 00:00", "2024-01-04 00:00"],
+        }
+    )
+    admission_df = pd.DataFrame(
+        {
+            "hadm_id": [10],
+            "hospital_expire_flag": [1],
+            "deathtime": ["2024-01-03 08:00"],
+        }
+    )
+
+    death = app._get_death_series(icu_df, "miiv", None, admission_df, "stay_id", "subject_id")
+
+    assert death.tolist() == [False, True]
+
+
+def test_eicu_death_series_prefers_hospital_status_over_unit_status() -> None:
+    icu_df = pd.DataFrame(
+        {
+            "patientunitstayid": [1, 2],
+            "hospitaldischargestatus": ["Alive", "Expired"],
+            "unitdischargestatus": ["Expired", "Alive"],
+        }
+    )
+
+    death = app._get_death_series(
+        icu_df,
+        "eicu",
+        None,
+        None,
+        "patientunitstayid",
+        "uniquepid",
+    )
+
+    assert death.tolist() == [False, True]
+
+
+def test_static_cohort_series_normalize_database_specific_age_los_and_sex() -> None:
+    mimic_icu = pd.DataFrame(
+        {
+            "subject_id": [1],
+            "icustay_id": [11],
+            "intime": ["2020-01-01"],
+        }
+    )
+    mimic_patients = pd.DataFrame({"subject_id": [1], "dob": ["1900-01-01"]})
+    sic_icu = pd.DataFrame({"CaseID": [1, 2], "TimeOfStay": [7200, 10800], "Sex": [735, 736]})
+
+    mimic_age = app._get_age_series(
+        mimic_icu,
+        "mimic",
+        mimic_patients,
+        None,
+        "icustay_id",
+        "subject_id",
+    )
+    sic_los = app._get_los_hours_series(sic_icu, "sic")
+    sic_sex = app._get_sex_series(sic_icu, "sic", None, "CaseID", "subject_id")
+
+    assert mimic_age.tolist() == [90.0]
+    assert sic_los.tolist() == [2.0, 3.0]
+    assert sic_sex.tolist() == ["M", "F"]
+
+
+def test_post_filter_cohort_data_applies_disease_concept_and_updates_stats(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit(
+        {
+            "language": "en",
+            "cohort_filter": {"disease_cohort": "aki"},
+            "_cohort_stats": {"before": 3, "after": 3, "excluded": 0, "filter_details": []},
+        }
+    )
+    data = {
+        "aki": pd.DataFrame({"stay_id": [1, 2, 3], "aki": [0, 1, 1]}),
+        "hr": pd.DataFrame({"stay_id": [1, 2, 3], "hr": [80, 90, 100]}),
+    }
+
+    monkeypatch.setattr(cohort_filters, "st", streamlit_stub)
+
+    filtered = app._post_filter_cohort_data(data, "miiv")
+
+    assert filtered["aki"]["stay_id"].tolist() == [2, 3]
+    assert filtered["hr"]["stay_id"].tolist() == [2, 3]
+    assert streamlit_stub.session_state["_cohort_stats"]["after"] == 2
+    assert streamlit_stub.session_state["_cohort_stats"]["excluded"] == 1
+
+
+def test_feature_definition_panel_defaults_to_collapsed(monkeypatch) -> None:
+    import easyicu.webapp.data_dictionary_page as data_dictionary_page
+
+    class _FeaturePanelStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "step3_confirmed": True,
+                "selected_concepts": ["hr"],
+                "database": "miiv",
+            }
+            self.expander_kwargs = None
+
+        def expander(self, label, **kwargs):
+            self.expander_kwargs = {"label": label, **kwargs}
+            return _FakeExpander(_FakeStreamlit())
+
+        def caption(self, *_args, **_kwargs) -> None:
+            pass
+
+        def info(self, *_args, **_kwargs) -> None:
+            pass
+
+        def download_button(self, *_args, **_kwargs) -> None:
+            pass
+
+        def dataframe(self, *_args, **_kwargs) -> None:
+            pass
+
+    streamlit_stub = _FeaturePanelStreamlit()
+
+    monkeypatch.setattr(data_dictionary_page, "st", streamlit_stub)
+    monkeypatch.setattr(
+        data_dictionary_page,
+        "_get_feature_definition_rows",
+        lambda *_args, **_kwargs: [{"Feature": "hr", "Table": "chartevents"}],
+    )
+
+    data_dictionary_page._render_feature_definition_panel("en")
+
+    assert streamlit_stub.expander_kwargs == {
+        "label": "🧬 Feature Definition Transparency",
+        "expanded": False,
+    }
+
+
+def test_preview_icd_match_counts_hadm_level_matches_across_icu_stays(tmp_path) -> None:
+    pd.DataFrame(
+        {
+            "stay_id": [101, 102, 201],
+            "hadm_id": [10, 10, 20],
+        }
+    ).to_parquet(tmp_path / "icustays.parquet")
+    pd.DataFrame(
+        {
+            "hadm_id": [10, 20],
+            "icd_code": ["J12.0", "I50.0"],
+            "icd_version": [10, 10],
+        }
+    ).to_parquet(tmp_path / "diagnoses_icd.parquet")
+    pd.DataFrame(
+        {
+            "icd_code": ["J120", "I500"],
+            "long_title": ["Viral pneumonia", "Heart failure"],
+        }
+    ).to_parquet(tmp_path / "d_icd_diagnoses.parquet")
+
+    result = app._preview_icd_match(tmp_path, "miiv", ["J12"])
+
+    assert result["error"] is None
+    assert result["total_patients"] == 3
+    assert result["matched_patients"] == 2
+    assert result["matched_ids"] == [101, 102]
+    assert result["top_codes"].iloc[0].to_dict() == {
+        "ICD Code": "J120",
+        "Count": 1,
+        "Description": "Viral pneumonia",
+    }
+
+
 def test_plotly_compat_keeps_plotly_specific_width_api_untouched(monkeypatch) -> None:
     class _PlotlyStub:
         def __init__(self) -> None:
@@ -157,6 +443,36 @@ def test_quick_visualization_demo_loads_after_entry_selection(tmp_path, monkeypa
     at.button(key="viz_load_demo").click().run(timeout=60)
 
     assert any("Data Ready" in markdown.value for markdown in at.markdown)
+
+
+def test_sidebar_quick_preview_is_one_click_after_feature_confirmation(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.run(timeout=60)
+    at.button(key="entry_demo_btn").click().run(timeout=60)
+    at.button(key="step1_confirm_demo").click().run(timeout=60)
+    at.button(key="step2_confirm_no_filter").click().run(timeout=60)
+    at.button(key="select_all_groups").click().run(timeout=60)
+    at.button(key="step3_confirm_selection").click().run(timeout=60)
+
+    warning_text = " ".join(getattr(warning, "value", "") for warning in at.warning)
+    assert "preview_n_patients" not in warning_text
+    assert "sidebar_preview_btn" in {button.key for button in at.button}
+
+    at.button(key="sidebar_preview_btn").click().run(timeout=60)
+
+    assert at.session_state["loaded_data_origin"] == "preview"
+    assert len(at.session_state["loaded_concepts"]) > 0
+    assert len(at.session_state["patient_ids"]) == at.session_state["_preview_n"]
+    assert at.session_state["_preview_requested"] is False
+    info_text = " ".join(getattr(info, "value", "") for info in at.info)
+    assert "Preview request received" not in info_text
 
 
 def test_real_data_mode_requires_data_path_before_validation(tmp_path, monkeypatch) -> None:
@@ -372,9 +688,21 @@ def test_ensure_cohort_real_workspace_syncs_global_review_state(tmp_path, monkey
         )
 
     monkeypatch.setattr(easyicu, "load_concepts", _fake_load_concepts)
-    monkeypatch.setattr(app, "_default_real_database", lambda: "miiv")
-    monkeypatch.setattr(app, "_default_real_data_root", lambda: str(tmp_path))
-    monkeypatch.setattr(app, "find_database_path", lambda data_path, _database: data_path)
+    monkeypatch.setattr(cohort_workspace, "_default_real_database", lambda: "miiv")
+    monkeypatch.setattr(cohort_workspace, "_default_real_data_root", lambda: str(tmp_path))
+    monkeypatch.setattr(cohort_workspace, "find_database_path", lambda data_path, _database: data_path)
+    monkeypatch.setattr(
+        cohort_filters,
+        "st",
+        _SessionStateStreamlit(
+            {
+                "sepsis_si_mode": "auto",
+                "sepsis_positive_cultures": False,
+                "sepsis_abx_win_hours": 24,
+                "sepsis_samp_win_hours": 72,
+            }
+        ),
+    )
 
     state = {
         "patient_ids": [10001],
@@ -393,6 +721,130 @@ def test_ensure_cohort_real_workspace_syncs_global_review_state(tmp_path, monkey
     assert state["selected_patient"] == 39553978
     assert state["loaded_data_origin"] == "real_workspace"
     assert set(state["loaded_concepts"]) == {"hr", "sofa"}
+
+
+def test_real_cohort_page_keeps_panel_import_paths_visible_before_shared_workspace(
+    tmp_path, monkeypatch
+) -> None:
+    class _FakePanel:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {"language": "en", "entry_mode": "real"}
+            self.tabs_labels: list[str] = []
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def warning(self, *_args, **_kwargs) -> None:
+            pass
+
+        def slider(self, *_args, **_kwargs) -> int:
+            return 1000
+
+        def button(self, *_args, **_kwargs) -> bool:
+            return False
+
+        def columns(self, spec):
+            return [_FakePanel() for _ in spec]
+
+        def tabs(self, labels):
+            self.tabs_labels = labels
+            return [_FakePanel() for _ in labels]
+
+    streamlit_stub = _FakeStreamlit()
+    rendered_panels: list[str] = []
+
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "_default_real_data_root", lambda: str(tmp_path))
+    monkeypatch.setattr(app, "_default_real_database", lambda: "miiv")
+    monkeypatch.setattr(app, "render_group_comparison_subtab", lambda _lang: rendered_panels.append("groups"))
+    monkeypatch.setattr(app, "render_data_coverage_audit_subtab", lambda _lang: rendered_panels.append("coverage"))
+    monkeypatch.setattr(app, "render_multidb_distribution_subtab", lambda _lang: rendered_panels.append("crossdb"))
+    monkeypatch.setattr(app, "render_cohort_dashboard_subtab", lambda _lang: rendered_panels.append("snapshot"))
+    monkeypatch.setattr(app, "render_severity_reclassification_subtab", lambda _lang: rendered_panels.append("sofa"))
+
+    app.render_cohort_comparison_page()
+
+    assert streamlit_stub.tabs_labels == [
+        "👥 Groups",
+        "🧾 Coverage",
+        "📈 Cross-DB",
+        "🎯 Snapshot",
+        "🧭 SOFA Δ",
+    ]
+    assert rendered_panels == ["groups", "coverage", "crossdb", "snapshot", "sofa"]
+
+
+def test_real_workspace_launcher_defaults_to_fast_import_preview(tmp_path, monkeypatch) -> None:
+    class _FakePanel:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeStreamlit:
+        def __init__(self) -> None:
+            self.markdown_calls: list[str] = []
+            self.slider_kwargs = None
+
+        def warning(self, *_args, **_kwargs) -> None:
+            pass
+
+        def markdown(self, body, *_args, **_kwargs) -> None:
+            self.markdown_calls.append(body)
+
+        def columns(self, spec):
+            return [_FakePanel() for _ in spec]
+
+        def slider(self, *_args, **kwargs) -> int:
+            self.slider_kwargs = kwargs
+            return kwargs["value"]
+
+        def button(self, *_args, **_kwargs) -> bool:
+            return False
+
+    streamlit_stub = _FakeStreamlit()
+
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "_default_real_data_root", lambda: str(tmp_path))
+    monkeypatch.setattr(app, "_default_real_database", lambda: "miiv")
+
+    app._render_cohort_real_workspace_launcher("en")
+
+    assert streamlit_stub.slider_kwargs["value"] == 100
+    assert "fast import check" in streamlit_stub.slider_kwargs["help"]
+    assert any("Quick preview" in call for call in streamlit_stub.markdown_calls)
+
+
+def test_validate_database_path_resolves_parent_root_with_bucketed_miiv(tmp_path) -> None:
+    db_path = tmp_path / "mimic-iv-3.1"
+    for subdir in ("hosp", "icu"):
+        (db_path / subdir).mkdir(parents=True)
+
+    flat_tables = {
+        "hosp": ["admissions", "patients", "prescriptions", "d_labitems"],
+        "icu": ["icustays", "outputevents", "ingredientevents", "procedureevents", "d_items"],
+    }
+    for subdir, tables in flat_tables.items():
+        for table in tables:
+            (db_path / subdir / f"{table}.parquet").touch()
+
+    for table in ("chartevents", "labevents", "inputevents"):
+        bucket_dir = db_path / f"{table}_bucket" / "bucket_id=0"
+        bucket_dir.mkdir(parents=True)
+        (bucket_dir / "data_0.parquet").touch()
+
+    result = app.validate_database_path(str(tmp_path), "miiv")
+
+    assert result["valid"] is True
+    assert "MIMIC-IV" in result["message"]
 
 
 def test_apply_quick_viz_screenshot_defaults_focuses_figure_friendly_views() -> None:

@@ -580,6 +580,15 @@ def validate_database_path(data_path: str, database: str, app_context: dict[str,
         _install_app_context(app_context)
     
     path = Path(data_path)
+    resolver = globals().get('find_database_path')
+    if callable(resolver):
+        try:
+            resolved_path = Path(resolver(str(path), database))
+            if resolved_path.exists():
+                path = resolved_path
+        except Exception:
+            pass
+
     lang = st.session_state.get('language', 'en')
     download_info = _get_database_download_info(database, lang)
 

@@ -431,6 +431,30 @@ def _init_chat_state():
             st.session_state[k] = v
 
 
+def _sync_llm_toggle_before_render() -> None:
+    """Synchronize the sidebar toggle before its widget is instantiated."""
+    if "_llm_toggle" not in st.session_state or st.session_state.pop("_llm_toggle_sync_pending", False):
+        st.session_state["_llm_toggle"] = bool(st.session_state.get("llm_enabled", False))
+
+
+def _apply_floating_ai_toggle(enabled: bool) -> None:
+    """Apply the user-facing Show floating AI assistant toggle."""
+    enabled = bool(enabled)
+    st.session_state.llm_enabled = enabled
+    st.session_state["_floating_ai_open"] = enabled
+    if not enabled:
+        st.session_state["_ai_pending_question"] = None
+
+
+def _close_floating_ai_panel(*, disable_assistant: bool = False) -> None:
+    """Close the floating panel, optionally turning off the sidebar toggle too."""
+    st.session_state["_floating_ai_open"] = False
+    st.session_state["_ai_pending_question"] = None
+    if disable_assistant:
+        st.session_state.llm_enabled = False
+        st.session_state["_llm_toggle_sync_pending"] = True
+
+
 def _repo_root() -> Path:
     """Return the project root based on this module location."""
     return Path(__file__).resolve().parents[3]
@@ -1084,6 +1108,7 @@ def _get_client():
 def render_llm_settings():
     """Render LLM configuration controls in the sidebar."""
     _init_chat_state()
+    _sync_llm_toggle_before_render()
     lang = st.session_state.get("language", "en")
 
     st.markdown(
@@ -1161,12 +1186,16 @@ def render_llm_settings():
     with st.expander(label, expanded=False):
         # On/off toggle. Keep the full settings collapsed so the sidebar does
         # not duplicate the main floating assistant UI.
+        previous_enabled = bool(st.session_state.llm_enabled)
         enabled = st.toggle(
             "Show floating AI assistant" if lang == "en" else "显示悬浮 AI 助手",
-            value=st.session_state.llm_enabled,
+            value=previous_enabled,
             key="_llm_toggle",
         )
-        st.session_state.llm_enabled = enabled
+        if bool(enabled) != previous_enabled:
+            _apply_floating_ai_toggle(enabled)
+        else:
+            st.session_state.llm_enabled = bool(enabled)
         if not enabled:
             hint = ("Enable this to reveal the bottom-right page-aware AI chat."
                     if lang == "en"
@@ -2101,12 +2130,11 @@ def render_floating_chat_dock():
                     st.rerun()
             with header_cols[4]:
                 if st.button("—", key="_floating_ai_minimize_btn", use_container_width=True, help="Minimize" if lang == "en" else "最小化", disabled=export_locked):
-                    st.session_state["_floating_ai_open"] = False
+                    _close_floating_ai_panel(disable_assistant=False)
                     st.rerun()
             with header_cols[5]:
                 if st.button("✕", key="_floating_ai_close_btn", use_container_width=True, help="Close" if lang == "en" else "关闭", disabled=export_locked):
-                    st.session_state["_floating_ai_open"] = False
-                    st.session_state["_ai_pending_question"] = None
+                    _close_floating_ai_panel(disable_assistant=True)
                     st.rerun()
 
             if not st.session_state.llm_enabled:

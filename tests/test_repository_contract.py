@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.9/3.10 test runtime
+    import tomli as tomllib
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -118,3 +122,192 @@ def test_webapp_buttons_do_not_use_stretch_width_keyword() -> None:
     )
 
     assert result.returncode == 1, result.stdout
+
+
+def test_webapp_concept_catalog_is_split_from_streamlit_app() -> None:
+    catalog_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "concept_catalog.py"
+    assert catalog_path.exists(), "Large concept metadata should live outside app.py."
+
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    catalog_content = catalog_path.read_text(encoding="utf-8")
+
+    assert "CONCEPT_DICTIONARY = {" not in app_content
+    assert "CONCEPT_DESCRIPTIONS = {" not in app_content
+    assert "CONCEPT_DICTIONARY = {" in catalog_content
+    assert "CONCEPT_DESCRIPTIONS = {" in catalog_content
+
+
+def test_webapp_global_styles_are_split_from_streamlit_app() -> None:
+    styles_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "styles.py"
+    assert styles_path.exists(), "Large global CSS blocks should live outside app.py."
+
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    styles_content = styles_path.read_text(encoding="utf-8")
+
+    assert "EasyICU paper-figure visual skin" not in app_content
+    assert "EasyICU paper-figure visual skin" in styles_content
+    assert "def render_global_styles" in styles_content
+
+
+def test_webapp_i18n_texts_are_split_from_streamlit_app() -> None:
+    i18n_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "i18n.py"
+    assert i18n_path.exists(), "Large language text dictionaries should live outside app.py."
+
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    i18n_content = i18n_path.read_text(encoding="utf-8")
+
+    assert "TEXTS = {" not in app_content
+    assert "TEXTS = {" in i18n_content
+    assert "def get_text" in i18n_content
+    assert "def strip_emoji" in i18n_content
+
+
+def test_webapp_data_path_helpers_are_split_from_streamlit_app() -> None:
+    data_paths_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "data_paths.py"
+    assert data_paths_path.exists(), "Real-data path and directory-browser helpers should live outside app.py."
+
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    data_paths_content = data_paths_path.read_text(encoding="utf-8")
+
+    assert "def find_database_path" not in app_content
+    assert "def _directory_input" not in app_content
+    assert "def render_directory_structure_guide" not in app_content
+    assert "def find_database_path" in data_paths_content
+    assert "def _directory_input" in data_paths_content
+    assert "def render_directory_structure_guide" in data_paths_content
+
+
+def test_directory_browser_dialog_decorator_stays_with_browser_dialog() -> None:
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    data_paths_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "data_paths.py").read_text(
+        encoding="utf-8"
+    )
+
+    decorator = '@st.dialog("Browse Server Folders / 浏览服务器目录", width="large")'
+    assert decorator not in app_content
+    assert f"{decorator}\ndef _render_directory_browser_dialog" in data_paths_content
+
+
+def test_webapp_demo_data_helpers_are_split_from_streamlit_app() -> None:
+    demo_data_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "demo_data.py"
+    assert demo_data_path.exists(), "Demo cohort data generation helpers should live outside app.py."
+
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    demo_data_content = demo_data_path.read_text(encoding="utf-8")
+
+    assert "def _generate_mock_cohort_dashboard_data" not in app_content
+    assert "def _generate_mock_multidb_data" not in app_content
+    assert "def _build_mock_group_feature_data" not in app_content
+    assert "def _generate_mock_cohort_dashboard_data" in demo_data_content
+    assert "def _generate_mock_multidb_data" in demo_data_content
+    assert "def _build_mock_group_feature_data" in demo_data_content
+
+
+def test_webapp_home_renderers_are_split_from_streamlit_app() -> None:
+    home_page_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "home_page.py"
+    assert home_page_path.exists(), "Home-page and data-overview renderers should live outside app.py."
+
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    home_page_content = home_page_path.read_text(encoding="utf-8")
+
+    assert "def render_data_overview" not in app_content
+    assert "def render_home_viz_mode" not in app_content
+    assert "def render_data_overview" in home_page_content
+    assert "def render_home_viz_mode" in home_page_content
+    assert "Start Exploring" in home_page_content
+
+
+def test_webapp_paper_figure_helpers_are_split_from_streamlit_app() -> None:
+    paper_figures_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "paper_figures.py"
+    paper_figures_content = paper_figures_path.read_text(encoding="utf-8")
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+
+    assert "def _render_inline_timeseries_svg" not in app_content
+    assert "def _quality_snapshot_rows" not in app_content
+    assert "def _render_paper_quality_panel" not in app_content
+    assert "def _render_inline_timeseries_svg" in paper_figures_content
+    assert "def _quality_snapshot_rows" in paper_figures_content
+    assert "def _render_paper_quality_panel" in paper_figures_content
+
+
+def test_webapp_cohort_filter_config_is_split_from_streamlit_app() -> None:
+    cohort_config_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "cohort_config.py"
+    assert cohort_config_path.exists(), "Cohort filter constants should live outside app.py."
+
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    cohort_config_content = cohort_config_path.read_text(encoding="utf-8")
+
+    assert "DISEASE_COHORT_CONFIG = {" not in app_content
+    assert "SEPSIS_MODE_CONFIG = {" not in app_content
+    assert "DISEASE_COHORT_CONFIG = {" in cohort_config_content
+    assert "SEPSIS_MODE_CONFIG = {" in cohort_config_content
+    assert "ICD_FILTER_DATABASES" in cohort_config_content
+
+
+def test_webapp_cohort_filter_helpers_are_split_from_streamlit_app() -> None:
+    cohort_filters_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "cohort_filters.py"
+    assert cohort_filters_path.exists(), "Cohort filtering helpers should live outside app.py."
+
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    cohort_filters_content = cohort_filters_path.read_text(encoding="utf-8")
+
+    helper_defs = [
+        "def _split_query_tokens",
+        "def _match_ids_by_icd_tokens",
+        "def _post_filter_cohort_data",
+        "def _get_age_series",
+        "def _get_los_hours_series",
+        "def _get_sex_series",
+        "def _pick_death_stay",
+        "def _get_death_series",
+    ]
+    for helper_def in helper_defs:
+        assert helper_def not in app_content
+        assert helper_def in cohort_filters_content
+
+
+def test_webapp_icd_preview_helpers_are_split_from_streamlit_app() -> None:
+    icd_preview_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "icd_preview.py"
+    assert icd_preview_path.exists(), "ICD preview rendering and matching should live outside app.py."
+
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    icd_preview_content = icd_preview_path.read_text(encoding="utf-8")
+
+    helper_defs = [
+        "def _clear_icd_preview_state",
+        "def _render_icd_preview_main_panel",
+        "def _preview_icd_match",
+    ]
+    for helper_def in helper_defs:
+        assert helper_def not in app_content
+        assert helper_def in icd_preview_content
+
+
+def test_webapp_cohort_workspace_state_helpers_are_split_from_streamlit_app() -> None:
+    cohort_workspace_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "cohort_workspace.py"
+    assert cohort_workspace_path.exists(), "Shared cohort workspace state helpers should live outside app.py."
+
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    cohort_workspace_content = cohort_workspace_path.read_text(encoding="utf-8")
+
+    helper_defs = [
+        "def _cohort_demo_workspace_ready",
+        "def _ensure_cohort_demo_workspace",
+        "def _ensure_cohort_figure_demo_data",
+        "def _cohort_real_workspace_ready",
+        "def _cohort_real_workspace_matches_sidebar",
+        "def _ensure_cohort_real_workspace",
+    ]
+    for helper_def in helper_defs:
+        assert helper_def not in app_content
+        assert helper_def in cohort_workspace_content
+
+
+def test_feature_definition_panel_lives_inside_tutorial_tab() -> None:
+    app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+
+    render_home_idx = app_content.index("        render_home()")
+    feature_panel_idx = app_content.index("        _render_feature_definition_panel(lang)")
+    quick_viz_tab_idx = app_content.index("    with tab2:")
+
+    assert render_home_idx < feature_panel_idx < quick_viz_tab_idx
