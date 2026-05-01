@@ -641,10 +641,11 @@ def _get_auto_chunk_strategy(
 ) -> Optional[Dict[str, int]]:
     """Return an auto-tuned chunk strategy for heavy large-scale extraction.
 
-    Default policy now targets a balanced speed/memory profile rather than the
-    most conservative low-memory path. On machines with about 10GB available RAM,
-    it will prefer larger chunks to reduce batch overhead while still keeping a
-    large safety margin.
+    The policy balances throughput and memory while preserving deterministic
+    score-window expansion for clinical scores. SOFA-family concepts currently
+    stay on the validated 2000-stay chunk profile even when more memory is
+    available, because larger chunks can change large-cohort window expansion
+    results.
     """
     if not _is_low_memory_chunk_candidate(
         concepts_list,
@@ -669,6 +670,12 @@ def _get_auto_chunk_strategy(
 
     if 'EASYICU_AUTO_CHUNK_SIZE' in os.environ:
         auto_chunk_size = max(250, int(os.getenv('EASYICU_AUTO_CHUNK_SIZE', '1000')))
+        if normalized.intersection(sofa_heavy_concepts) and auto_chunk_size > 2000:
+            logger.warning(
+                "Capping SOFA auto chunk size at 2000 because larger chunks can "
+                "change SOFA window expansion results in current large-cohort mode."
+            )
+            auto_chunk_size = 2000
     elif normalized.intersection(sepsis_heavy_concepts):
         # 复合 sepsis 链路更依赖批次数带来的并行度；过大 chunk 会明显拖慢速度
         auto_chunk_size = 1000
@@ -681,9 +688,9 @@ def _get_auto_chunk_strategy(
             auto_chunk_size = 1000
     elif normalized.intersection(sofa_heavy_concepts):
         if available_memory_mb >= 10 * 1024:
-            auto_chunk_size = 8000
+            auto_chunk_size = 2000
         elif available_memory_mb >= 6 * 1024:
-            auto_chunk_size = 4000
+            auto_chunk_size = 2000
         elif available_memory_mb >= 3 * 1024:
             auto_chunk_size = 2000
         else:
@@ -1109,7 +1116,14 @@ def load_concepts(
             logger.debug(f"获取患者ID以启用分批失败: {e}")
     
     # 自动检测：用户指定了 patient_ids 但未指定 batch_size
-    if (not auto_chunk_strategy) and effective_batch_size is None and _total_patients is not None and _total_patients > 5000:
+    if (
+        not auto_chunk_strategy
+        and merge
+        and effective_chunk_size is None
+        and effective_batch_size is None
+        and _total_patients is not None
+        and _total_patients > 5000
+    ):
         avail_mem = get_available_memory_mb()
         est_mem = estimate_memory_mb(concepts_list, loader.database, _total_patients)
         if est_mem > avail_mem * 0.6:
