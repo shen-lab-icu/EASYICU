@@ -19,6 +19,76 @@ import streamlit as st
 _PROTECTED_CONTEXT_NAMES = {"execute_sidebar_export", "_install_app_context"}
 
 
+def _terminate_process_tree(proc: Any, *, timeout: float = 2.0) -> None:
+    """Terminate a multiprocessing worker and any child processes it spawned."""
+    if proc is None:
+        return
+
+    pid = getattr(proc, "pid", None)
+    if pid:
+        try:
+            import psutil
+
+            parent = psutil.Process(pid)
+            children = parent.children(recursive=True)
+            for child in children:
+                try:
+                    child.terminate()
+                except psutil.Error:
+                    pass
+
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+            _, alive = psutil.wait_procs(children, timeout=timeout)
+            for child in alive:
+                try:
+                    child.kill()
+                except psutil.Error:
+                    pass
+
+            try:
+                parent.wait(timeout=timeout)
+            except psutil.TimeoutExpired:
+                try:
+                    parent.kill()
+                except psutil.Error:
+                    pass
+
+            try:
+                proc.join(timeout=timeout)
+            except Exception:
+                pass
+            return
+        except Exception:
+            pass
+
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.join(timeout=timeout)
+    except Exception:
+        pass
+    try:
+        is_alive = proc.is_alive()
+    except Exception:
+        is_alive = False
+    if is_alive:
+        kill = getattr(proc, "kill", None)
+        try:
+            if callable(kill):
+                kill()
+            else:
+                proc.terminate()
+            proc.join(timeout=timeout)
+        except Exception:
+            pass
+
+
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to the extracted workflow."""
     for name, value in app_context.items():
@@ -1321,17 +1391,10 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                             _keepalive_tick = 0
                             while _sub_proc.is_alive():
                                 if check_cancelled():
-                                    try:
-                                        _sub_proc.terminate()
-                                    except Exception:
-                                        pass
-                                    try:
-                                        _sub_proc.join(timeout=2)
-                                    except Exception:
-                                        pass
+                                    _terminate_process_tree(_sub_proc)
                                     _handle_export_cancel()
                                     return
-                                _sub_proc.join(timeout=2)
+                                _sub_proc.join(timeout=1)
                                 _keepalive_tick += 1
                                 _mod_elapsed = _time_mod.time() - mod_start
                                 _spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_keepalive_tick % 10]
@@ -1434,17 +1497,10 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                             _keepalive_tick = 0
                             while _sub_proc.is_alive():
                                 if check_cancelled():
-                                    try:
-                                        _sub_proc.terminate()
-                                    except Exception:
-                                        pass
-                                    try:
-                                        _sub_proc.join(timeout=2)
-                                    except Exception:
-                                        pass
+                                    _terminate_process_tree(_sub_proc)
                                     _handle_export_cancel()
                                     return
-                                _sub_proc.join(timeout=2)
+                                _sub_proc.join(timeout=1)
                                 _keepalive_tick += 1
                                 _mod_elapsed = _time_mod.time() - mod_start
                                 _spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_keepalive_tick % 10]
@@ -1557,17 +1613,10 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                         _sp_tick = 0
                         while _sp_proc.is_alive():
                             if check_cancelled():
-                                try:
-                                    _sp_proc.terminate()
-                                except Exception:
-                                    pass
-                                try:
-                                    _sp_proc.join(timeout=2)
-                                except Exception:
-                                    pass
+                                _terminate_process_tree(_sp_proc)
                                 _handle_export_cancel()
                                 return
-                            _sp_proc.join(timeout=2)
+                            _sp_proc.join(timeout=1)
                             _sp_tick += 1
                             _sp_elapsed = _time_mod.time() - _sp_start
                             _sp_spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_sp_tick % 10]

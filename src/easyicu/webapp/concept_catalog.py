@@ -316,7 +316,7 @@ def _get_patient_id_table_files(database: str) -> list:
     """返回数据库特定的患者ID表文件查找列表。
 
     不同数据库的患者ID存储在不同的表中：
-    - MIIV/MIMIC-III: icustays.parquet
+    - MIIV/MIMIC-III: icu/icustays.parquet or icustays.parquet
     - eICU: patient.parquet
     - AUMC: admissions.parquet
     - HiRID: general.parquet
@@ -326,6 +326,8 @@ def _get_patient_id_table_files(database: str) -> list:
     """
     # 数据库特定的主表
     db_specific = {
+        'miiv': ['icu/icustays.parquet'],
+        'mimic': ['icu/icustays.parquet'],
         'hirid': ['general.parquet'],
         'sic': ['cases.parquet'],
         'aumc': ['admissions.parquet'],

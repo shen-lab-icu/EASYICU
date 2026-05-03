@@ -23,6 +23,22 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
             globals()[name] = value
 
 
+def _ensure_default_directory_input_value(
+    *,
+    input_key: str,
+    default_key: str,
+    default_value: str,
+) -> None:
+    """Keep an empty/default directory input aligned without overwriting custom values."""
+    previous_default = st.session_state.get(default_key)
+    current_value = st.session_state.get(input_key)
+    if not current_value:
+        st.session_state[input_key] = default_value
+    elif previous_default is not None and current_value == previous_default and previous_default != default_value:
+        st.session_state[input_key] = default_value
+    st.session_state[default_key] = default_value
+
+
 def render_sidebar(app_context: dict[str, Any] | None = None):
     """渲染侧边栏 - 根据entry_mode显示不同内容。"""
     if app_context is not None:
@@ -1029,11 +1045,18 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
         if cohort_suffix:
             default_dir_name = f"{default_dir_name}_{cohort_suffix[:48]}"
         default_export_path = str(Path(base_export_path) / default_dir_name)
+        export_input_key = "sidebar_export_path_input"
+        export_default_key = "_sidebar_export_path_default"
+        _ensure_default_directory_input_value(
+            input_key=export_input_key,
+            default_key=export_default_key,
+            default_value=default_export_path,
+        )
 
         export_path = _directory_input(
             "Export Path" if st.session_state.language == 'en' else "导出路径",
             value=default_export_path,
-            input_key="sidebar_export_path_input",
+            input_key=export_input_key,
             button_key="sidebar_export_path_browse",
             placeholder="Select export directory" if st.session_state.language == 'en' else "选择导出目录",
             help=(f"Data will be exported to this directory (Current database: {db_name.upper()})" if st.session_state.language == 'en' else f"数据将导出到此目录（当前数据库: {db_name.upper()}）")

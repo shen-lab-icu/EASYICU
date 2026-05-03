@@ -6,6 +6,15 @@
 from __future__ import annotations
 
 import streamlit as st
+
+# Streamlit 1.45+ enforces that page config is the first Streamlit command.
+st.set_page_config(
+    page_title="EasyICU Data Explorer",
+    page_icon="🏥",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -285,13 +294,6 @@ try:
 except ImportError:
     HAS_EXTRAS = False
 
-# 页面配置
-st.set_page_config(
-    page_title="EasyICU Data Explorer",
-    page_icon="🏥",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
 # 初始化侧边栏展开状态
 if 'sidebar_expanded' not in st.session_state:
     st.session_state.sidebar_expanded = False
@@ -1452,9 +1454,15 @@ def load_preview_concepts(
 ):
     """为 Preview Sample 加载概念，支持普通概念与特殊概念混合。"""
     from easyicu import load_concepts
+    from easyicu.api import clear_global_loader
     from easyicu.concept import load_dictionary
+    from easyicu.memory_manager import release_memory
 
     concept_dict = load_dictionary(include_sofa2=True)
+    preview_load_kwargs = dict(extra_kwargs or {})
+    preview_load_kwargs.setdefault('memory_efficient', True)
+    preview_load_kwargs.setdefault('concept_workers', 1)
+    preview_load_kwargs.setdefault('parallel_workers', 1)
     normal_concepts = []
     special_concepts = []
     unsupported_concepts = []
@@ -1470,37 +1478,41 @@ def load_preview_concepts(
 
     loaded = {}
 
-    if normal_concepts:
-        normal_result = load_concepts(
-            normal_concepts,
-            database=database,
-            data_path=data_path,
-            max_patients=max_patients,
-            merge=False,
-            verbose=verbose,
-            **extra_kwargs,
-        )
-        if isinstance(normal_result, dict):
-            loaded.update({k: v.data if hasattr(v, 'data') else v for k, v in normal_result.items() if v is not None})
-        elif hasattr(normal_result, 'columns'):
-            for concept in normal_concepts:
-                if concept in normal_result.columns:
-                    loaded[concept] = normal_result
+    try:
+        if normal_concepts:
+            normal_result = load_concepts(
+                normal_concepts,
+                database=database,
+                data_path=data_path,
+                max_patients=max_patients,
+                merge=False,
+                verbose=verbose,
+                **preview_load_kwargs,
+            )
+            if isinstance(normal_result, dict):
+                loaded.update({k: v.data if hasattr(v, 'data') else v for k, v in normal_result.items() if v is not None})
+            elif hasattr(normal_result, 'columns'):
+                for concept in normal_concepts:
+                    if concept in normal_result.columns:
+                        loaded[concept] = normal_result
 
-    if special_concepts:
-        special_result = load_special_concepts(
-            concepts=special_concepts,
-            database=database,
-            data_path=data_path,
-            max_patients=max_patients,
-            verbose=verbose,
-            **extra_kwargs,
-        )
-        for concept, df in (special_result or {}).items():
-            if hasattr(df, 'data'):
-                df = df.data
-            if isinstance(df, pd.DataFrame) and not df.empty:
-                loaded[concept] = df
+        if special_concepts:
+            special_result = load_special_concepts(
+                concepts=special_concepts,
+                database=database,
+                data_path=data_path,
+                max_patients=max_patients,
+                verbose=verbose,
+                **extra_kwargs,
+            )
+            for concept, df in (special_result or {}).items():
+                if hasattr(df, 'data'):
+                    df = df.data
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    loaded[concept] = df
+    finally:
+        clear_global_loader()
+        release_memory(aggressive=True)
 
     return {
         'loaded_concepts': loaded,
@@ -2560,16 +2572,38 @@ def render_convert_dialog():
 
 
 
-def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
+def convert_csv_to_parquet(
+    source_dir: str,
+    target_dir: str,
+    overwrite: bool = False,
+    extraction_optimized_buckets: bool = False,
+) -> tuple:
     """将 CSV 数据转换为 Parquet。"""
-    return _convert_csv_to_parquet_impl(source_dir, target_dir, overwrite, globals())
+    return _convert_csv_to_parquet_impl(
+        source_dir,
+        target_dir,
+        overwrite,
+        globals(),
+        extraction_optimized_buckets=extraction_optimized_buckets,
+    )
 
 
 
 
-def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = False) -> tuple:
+def _convert_hirid_data(
+    source_dir: str,
+    target_dir: str,
+    overwrite: bool = False,
+    extraction_optimized_buckets: bool = False,
+) -> tuple:
     """转换 HiRID 数据。"""
-    return _convert_hirid_data_impl(source_dir, target_dir, overwrite, globals())
+    return _convert_hirid_data_impl(
+        source_dir,
+        target_dir,
+        overwrite,
+        globals(),
+        extraction_optimized_buckets=extraction_optimized_buckets,
+    )
 
 
 

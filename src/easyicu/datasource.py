@@ -377,6 +377,13 @@ class ICUDataSource:
         self._table_cache: dict = {}  # 缓存已加载的原始表数据
         self._preloaded_tables: dict = {}  # 🚀 预加载的完整表（用于多患者批处理）
         self._bucket_dir_logged: set = set()  # 🔧 已打印日志的分桶目录（避免重复日志）
+        self._bucket_dir_cache: dict = {}  # 缓存已发现的分桶目录（只缓存正结果）
+        self._flat_parquet_dir_cache: dict = {}  # 缓存已发现的扁平 parquet 目录（只缓存正结果）
+        self._bucket_hash_cache: dict = {}  # 缓存 itemid 集合 -> bucket 集合
+        self._bucket_hash_item_cache: dict = {}  # 缓存单个 itemid -> bucket
+        self._bucket_layout_cache: dict = {}  # 缓存 bucket_id 目录与 parquet 文件列表
+        self._parquet_columns_cache: dict = {}  # 缓存 parquet 文件集合的 schema 列名
+        self._parquet_file_columns_cache: dict = {}  # 缓存单个 parquet 文件 schema 列名
         self.format_priority = format_priority or self.get_format_priority()
         self._lock = RLock()
 
@@ -389,6 +396,13 @@ class ICUDataSource:
         with self._lock:
             self._table_cache.clear()
             self._preloaded_tables.clear()
+            self._bucket_dir_cache.clear()
+            self._flat_parquet_dir_cache.clear()
+            self._bucket_hash_cache.clear()
+            self._bucket_hash_item_cache.clear()
+            self._bucket_layout_cache.clear()
+            self._parquet_columns_cache.clear()
+            self._parquet_file_columns_cache.clear()
     
     def clear(self) -> None:
         """Alias for clear_cache, used by CacheManager."""
@@ -1067,6 +1081,9 @@ class ICUDataSource:
         # 🔍 调试日志：显示请求的列（仅在DEBUG级别显示）
         if columns:
             logger.debug(f"_load_raw_frame: table={table_name}, columns={list(columns)}")
+
+        if concept_itemid_filter is not None and not concept_itemid_filter[1]:
+            return pd.DataFrame(columns=list(columns) if columns else [])
         
         # 🚀 OPTIMIZATION: 缓存键不包含patient_ids_filter以实现跨概念共享
         # 对于同一批患者的多个概念加载,只在第一次读取表,后续从缓存中过滤
@@ -1301,6 +1318,12 @@ class ICUDataSource:
         """
         if not self.base_path:
             return None
+
+        cache_key = str(table_name).lower()
+        with self._lock:
+            cached_dir = self._bucket_dir_cache.get(cache_key)
+        if cached_dir is not None:
+            return cached_dir
         
         # 可能的表名变体
         name_variants = [table_name, table_name.lower()]
@@ -1322,6 +1345,8 @@ class ICUDataSource:
                         if bucket_key not in self._bucket_dir_logged:
                             self._bucket_dir_logged.add(bucket_key)
                             logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
+                        with self._lock:
+                            self._bucket_dir_cache[cache_key] = bucket_dir
                         return bucket_dir
         
         return None
@@ -1330,6 +1355,12 @@ class ICUDataSource:
         """检查扁平 parquet 目录（无 bucket_id 子目录结构）"""
         if not self.base_path:
             return None
+        cache_key = str(table_name).lower()
+        with self._lock:
+            cached_dir = self._flat_parquet_dir_cache.get(cache_key)
+        if cached_dir is not None:
+            return cached_dir
+
         name_variants = [table_name, table_name.lower()]
         for name in name_variants:
             for dir_path in [
@@ -1338,6 +1369,8 @@ class ICUDataSource:
                 self.base_path / "hosp" / name,
             ]:
                 if dir_path.is_dir() and list(dir_path.glob("*.parquet"))[:1]:
+                    with self._lock:
+                        self._flat_parquet_dir_cache[cache_key] = dir_path
                     return dir_path
         return None
 
@@ -1363,25 +1396,28 @@ class ICUDataSource:
                 if child.name.lower() == target:
                     return child
             return None
+
+        if self.config.name == 'mimic' and table_name == 'services':
+            # MIMIC-III services is a small hospital-level table used by the
+            # demographics ``adm`` concept. Prefer the original CSV when it is
+            # available because some user-side parquet conversions of this
+            # file can abort inside Arrow before Python can catch the error.
+            for candidate in [
+                self.base_path / "SERVICES.csv.gz",
+                self.base_path / "services.csv.gz",
+                self.base_path / "SERVICES.csv",
+                self.base_path / "services.csv",
+            ]:
+                resolved_csv = _case_insensitive_existing_path(candidate)
+                if resolved_csv is not None:
+                    return resolved_csv
         
         # 🚀 优先级最高：检查分桶目录（性能最优）
         # 分桶目录命名规则：{table_name}_bucket
         # 必须在检查配置文件之前，因为分桶目录是性能优化的关键
-        possible_bucket_dirs = [
-            self.base_path / f"{table_name}_bucket",  # 直接在 base_path 下
-            self.base_path / "icu" / f"{table_name}_bucket",  # MIIV icu 子目录
-            self.base_path / "hosp" / f"{table_name}_bucket",  # MIIV hosp 子目录
-        ]
-        for bucket_dir in possible_bucket_dirs:
-            if bucket_dir.is_dir():
-                bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
-                if bucket_subdirs:
-                    # 🔧 避免重复日志：只在首次发现时打印info
-                    bucket_key = str(bucket_dir)
-                    if bucket_key not in self._bucket_dir_logged:
-                        self._bucket_dir_logged.add(bucket_key)
-                        logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
-                    return bucket_dir
+        bucket_dir = self._resolve_bucket_directory(table_name)
+        if bucket_dir is not None:
+            return bucket_dir
         
         table_cfg = self.config.get_table(table_name)
         explicit = table_cfg.first_file()
@@ -1456,22 +1492,9 @@ class ICUDataSource:
             # 🚀 优先检查 bucket 目录（分桶格式，性能最优）
             # 必须在检查 .parquet 文件之前，因为分桶目录可能与表同名
             # 检查多个可能的位置：base_path 和子目录（如 icu/, hosp/）
-            possible_bucket_dirs = [
-                self.base_path / f"{name}_bucket",  # 直接在 base_path 下
-                self.base_path / "icu" / f"{name}_bucket",  # MIIV icu 子目录
-                self.base_path / "hosp" / f"{name}_bucket",  # MIIV hosp 子目录
-            ]
-            for bucket_dir in possible_bucket_dirs:
-                if bucket_dir.is_dir():
-                    # 检查是否有 bucket_id=* 子目录
-                    bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
-                    if bucket_subdirs:
-                        # 🔧 避免重复日志：只在首次发现时打印info
-                        bucket_key = str(bucket_dir)
-                        if bucket_key not in self._bucket_dir_logged:
-                            self._bucket_dir_logged.add(bucket_key)
-                            logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
-                        return bucket_dir
+            bucket_dir = self._resolve_bucket_directory(name)
+            if bucket_dir is not None:
+                return bucket_dir
             
             # Try .parquet extension - 检查多个可能的位置
             # MIMIC-IV 的表可能在 icu/ 或 hosp/ 子目录下
@@ -1581,9 +1604,67 @@ class ICUDataSource:
                 return self._read_partitioned_data_optimized(path, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
         
         suffix = path.suffix.lower()
+        lower_name = path.name.lower()
+
+        if suffix == ".csv" or lower_name.endswith(".csv.gz"):
+            read_columns = list(columns) if columns else None
+            filter_column = patient_ids_filter.column if patient_ids_filter else None
+
+            try:
+                header = pd.read_csv(path, nrows=0).columns.tolist()
+                name_by_lower = {
+                    str(name).lower(): name
+                    for name in header
+                    if isinstance(name, str)
+                }
+                if read_columns is not None:
+                    mapped_columns = []
+                    for col in read_columns:
+                        mapped = name_by_lower.get(str(col).lower(), col)
+                        if mapped not in mapped_columns:
+                            mapped_columns.append(mapped)
+                    read_columns = mapped_columns
+                if filter_column is not None:
+                    filter_column = name_by_lower.get(str(filter_column).lower(), filter_column)
+                    if read_columns is not None and filter_column not in read_columns:
+                        read_columns.append(filter_column)
+            except Exception:
+                pass
+
+            df = pd.read_csv(path, usecols=read_columns, low_memory=False)
+            if patient_ids_filter and patient_ids_filter.op == FilterOp.IN and filter_column in df.columns:
+                if filter_column != patient_ids_filter.column:
+                    df = df.rename(columns={filter_column: patient_ids_filter.column})
+                df = patient_ids_filter.apply(df)
+            return df
         
         # Preferred: Parquet format
         if suffix in {".parquet", ".pq"}:
+            def _resolve_parquet_columns_and_filter():
+                read_columns = list(columns) if columns else None
+                filter_column = patient_ids_filter.column if patient_ids_filter else None
+                if self.config.name not in ("mimic", "mimic_demo"):
+                    return read_columns, filter_column
+                try:
+                    import pyarrow.parquet as pq
+                    schema_names = list(pq.ParquetFile(path).schema_arrow.names)
+                except Exception:
+                    return read_columns, filter_column
+                name_by_lower = {
+                    str(name).lower(): name
+                    for name in schema_names
+                    if isinstance(name, str)
+                }
+                if read_columns is not None:
+                    read_columns = [
+                        name_by_lower.get(str(col).lower(), col)
+                        for col in read_columns
+                    ]
+                if filter_column is not None:
+                    filter_column = name_by_lower.get(str(filter_column).lower(), filter_column)
+                return read_columns, filter_column
+
+            read_columns, filter_column = _resolve_parquet_columns_and_filter()
             # 🚀 使用PyArrow过滤器优化大文件读取
             if patient_ids_filter and patient_ids_filter.op == FilterOp.IN:
                 try:
@@ -1595,22 +1676,24 @@ class ICUDataSource:
                     # 使用PyArrow读取并过滤 - 使用 DNF 格式
                     tbl = pq.read_table(
                         path,
-                        columns=list(columns) if columns else None,
-                        filters=[[(patient_ids_filter.column, 'in', target_ids)]]
+                        columns=read_columns,
+                        filters=[[(filter_column, 'in', target_ids)]]
                     )
                     df = _arrow_to_pandas_compat(tbl)
                     del tbl
                 except (ImportError, Exception):
                     # 如果PyArrow过滤失败，回退到pandas后过滤
                     import pyarrow.parquet as _pq2
-                    _tbl2 = _pq2.read_table(path, columns=list(columns) if columns else None)
+                    _tbl2 = _pq2.read_table(path, columns=read_columns)
                     df = _arrow_to_pandas_compat(_tbl2)
                     del _tbl2
-                    if patient_ids_filter.column in df.columns:
+                    if filter_column in df.columns:
+                        if filter_column != patient_ids_filter.column:
+                            df = df.rename(columns={filter_column: patient_ids_filter.column})
                         df = patient_ids_filter.apply(df)
             else:
                 import pyarrow.parquet as _pq3
-                _tbl3 = _pq3.read_table(path, columns=list(columns) if columns else None)
+                _tbl3 = _pq3.read_table(path, columns=read_columns)
                 df = _arrow_to_pandas_compat(_tbl3)
                 del _tbl3
             
@@ -1638,14 +1721,175 @@ class ICUDataSource:
         Returns:
             目标桶 ID 集合
         """
+        bucket_count = int(num_buckets)
+        itemid_list = sorted(itemids, key=lambda item: (type(item).__name__, str(item)))
+        normalized_items = tuple(self._bucket_item_cache_key(item) for item in itemid_list)
+        cache_key = (bucket_count, normalized_items)
+        with self._lock:
+            cached = self._bucket_hash_cache.get(cache_key)
+        if cached is not None:
+            return set(cached)
+
+        cached_buckets = set()
+        missing_items = []
+        with self._lock:
+            for item in itemid_list:
+                item_key = (bucket_count, self._bucket_item_cache_key(item))
+                cached_bucket = self._bucket_hash_item_cache.get(item_key)
+                if cached_bucket is None:
+                    missing_items.append(item)
+                else:
+                    cached_buckets.add(cached_bucket)
+
+        computed_buckets = set()
         conn = _get_duckdb_connection()
         try:
-            itemid_list = list(itemids)
-            conn.execute("CREATE OR REPLACE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
-            result = conn.execute(f"SELECT DISTINCT hash(itemid) % {int(num_buckets)} FROM items").fetchall()
-            return {row[0] for row in result}
+            if missing_items:
+                conn.execute(
+                    """
+                    CREATE OR REPLACE TEMP TABLE items AS
+                    SELECT row_number() OVER () - 1 AS _easyicu_ord, itemid
+                    FROM (SELECT UNNEST(?) AS itemid)
+                    """,
+                    [missing_items],
+                )
+                result = conn.execute(
+                    f"SELECT _easyicu_ord, hash(itemid) % {bucket_count} FROM items"
+                ).fetchall()
+                bucket_by_ord = {int(row[0]): row[1] for row in result}
+                with self._lock:
+                    for idx, item in enumerate(missing_items):
+                        bucket = bucket_by_ord[idx]
+                        computed_buckets.add(bucket)
+                        self._bucket_hash_item_cache[
+                            (bucket_count, self._bucket_item_cache_key(item))
+                        ] = bucket
+
+            buckets = frozenset(cached_buckets | computed_buckets)
+            with self._lock:
+                self._bucket_hash_cache[cache_key] = buckets
+            return set(buckets)
         except Exception:
             raise
+
+    @staticmethod
+    def _bucket_item_cache_key(item: object) -> Tuple[str, str, str, str]:
+        item_type = type(item)
+        return (item_type.__module__, item_type.__qualname__, str(item), repr(item))
+
+    def _get_bucket_layout(self, bucket_dir: Path) -> Tuple[int, Dict[int, Tuple[Path, ...]]]:
+        """Return bucket count and parquet files per bucket.
+
+        Bucketed datasets are immutable after conversion in normal EasyICU use.
+        When the converter writes a ``_COMPLETE`` marker we use it as a cheap
+        cache signature; directories without the marker are read live to avoid
+        stale partial-conversion metadata.
+        """
+        bucket_dir = Path(bucket_dir)
+        complete_marker = bucket_dir / "_COMPLETE"
+        cache_key = str(bucket_dir.resolve())
+        cache_signature = None
+        if complete_marker.exists():
+            stat = complete_marker.stat()
+            cache_signature = (stat.st_mtime_ns, stat.st_size)
+            with self._lock:
+                cached = self._bucket_layout_cache.get(cache_key)
+            if cached is not None and cached[0] == cache_signature:
+                return cached[1], dict(cached[2])
+
+        bucket_ids = set()
+        files_by_bucket: Dict[int, Tuple[Path, ...]] = {}
+        for bucket_subdir in bucket_dir.glob("bucket_id=*"):
+            if not bucket_subdir.is_dir():
+                continue
+            try:
+                bucket_id = int(bucket_subdir.name.split("=", 1)[1])
+            except (IndexError, ValueError):
+                continue
+            bucket_ids.add(bucket_id)
+            files = tuple(sorted(bucket_subdir.glob("*.parquet")))
+            if files:
+                files_by_bucket[bucket_id] = files
+
+        num_buckets = max(bucket_ids) + 1 if bucket_ids else 0
+
+        if cache_signature is not None:
+            with self._lock:
+                self._bucket_layout_cache[cache_key] = (
+                    cache_signature,
+                    num_buckets,
+                    files_by_bucket,
+                )
+
+        return num_buckets, files_by_bucket
+
+    def _get_bucket_files_for_ids(
+        self,
+        bucket_dir: Path,
+        itemids: Iterable[object],
+        duckdb_module,
+    ) -> Tuple[set, int, Tuple[Path, ...]]:
+        """Resolve the parquet files that can contain the requested bucket keys."""
+        num_buckets, files_by_bucket = self._get_bucket_layout(bucket_dir)
+        if num_buckets <= 0:
+            return set(), 0, tuple()
+
+        target_buckets = self._compute_target_buckets(set(itemids), num_buckets, duckdb_module)
+        target_files = tuple(
+            file_path
+            for bucket_id in sorted(target_buckets)
+            for file_path in files_by_bucket.get(bucket_id, tuple())
+        )
+        return target_buckets, num_buckets, target_files
+
+    def _get_parquet_columns_for_files(self, files: Iterable[Path]) -> set:
+        """Return the union of Parquet schema columns for an explicit file list."""
+        file_list = tuple(sorted((Path(file_path) for file_path in files), key=lambda path: str(path)))
+        if not file_list:
+            return set()
+
+        signature = []
+        for file_path in file_list:
+            try:
+                stat = file_path.stat()
+            except OSError:
+                return set()
+            signature.append((str(file_path.resolve()), stat.st_mtime_ns, stat.st_size))
+        cache_key = tuple(signature)
+
+        with self._lock:
+            cached = self._parquet_columns_cache.get(cache_key)
+        if cached is not None:
+            return set(cached)
+
+        try:
+            import pyarrow.parquet as pq
+        except Exception:
+            return set()
+
+        columns = set()
+        missing_files = []
+        with self._lock:
+            for file_path, file_signature in zip(file_list, signature):
+                cached_file_columns = self._parquet_file_columns_cache.get(file_signature)
+                if cached_file_columns is None:
+                    missing_files.append((file_path, file_signature))
+                else:
+                    columns.update(cached_file_columns)
+
+        for file_path, file_signature in missing_files:
+            try:
+                file_columns = frozenset(str(name) for name in pq.ParquetFile(file_path).schema_arrow.names)
+            except Exception:
+                return set()
+            columns.update(file_columns)
+            with self._lock:
+                self._parquet_file_columns_cache[file_signature] = file_columns
+
+        frozen = frozenset(columns)
+        with self._lock:
+            self._parquet_columns_cache[cache_key] = frozen
+        return set(frozen)
     
     def _read_mimic3_csv_fallback(
         self,
@@ -1739,13 +1983,13 @@ class ICUDataSource:
         # Without this, values like "4 Spontaneously" become NaN because DuckDB
         # incorrectly detects VALUE as DOUBLE from early numeric rows
         # NOTE: Do NOT use sample_size=-1 as it causes full file scan for type detection
+        chartevents_type_hint = ",\n                types={'VALUE': 'VARCHAR'}" if csv_path.name.upper().startswith("CHARTEVENTS") else ""
         query = f"""
             SELECT {columns_sql}
             FROM read_csv_auto(
                 '{_duckdb_path(csv_path)}',
                 ignore_errors=true,
-                null_padding=true,
-                types={{'VALUE': 'VARCHAR'}}
+                null_padding=true{chartevents_type_hint}
             )
             {where_clause}
         """
@@ -1769,8 +2013,8 @@ class ICUDataSource:
             logger.error(f"❌ MIMIC-III CSV 回退失败: {e}")
             return pd.DataFrame()
     
-    def _resolve_mimic3_chartevents_csv(self) -> Optional[Path]:
-        """Find MIMIC-III CHARTEVENTS.csv.gz file
+    def _resolve_mimic3_csv(self, table_name: str) -> Optional[Path]:
+        """Find an original MIMIC-III CSV/CSV.GZ file for a table.
         
         Returns:
             Path to CSV file if found, None otherwise
@@ -1778,12 +2022,13 @@ class ICUDataSource:
         if not self.base_path:
             return None
         
-        # Try different possible file names (MIMIC-III uses uppercase)
+        table_upper = table_name.upper()
+        table_lower = table_name.lower()
         possible_names = [
-            'CHARTEVENTS.csv.gz',
-            'chartevents.csv.gz', 
-            'CHARTEVENTS.csv',
-            'chartevents.csv',
+            f'{table_upper}.csv.gz',
+            f'{table_lower}.csv.gz',
+            f'{table_upper}.csv',
+            f'{table_lower}.csv',
         ]
         
         for name in possible_names:
@@ -1792,6 +2037,10 @@ class ICUDataSource:
                 return csv_path
         
         return None
+
+    def _resolve_mimic3_chartevents_csv(self) -> Optional[Path]:
+        """Find MIMIC-III CHARTEVENTS.csv.gz file."""
+        return self._resolve_mimic3_csv('chartevents')
 
     def _read_partitioned_data_duckdb(self, directory: Path, columns: Optional[Iterable[str]], patient_ids_filter: Optional[FilterSpec] = None, itemid_filter_config: Optional[tuple] = None, table_name: Optional[str] = None, wide_table_value_columns: Optional[List[str]] = None) -> pd.DataFrame:
         """使用 DuckDB 读取分区数据（高性能版本）
@@ -1815,14 +2064,8 @@ class ICUDataSource:
             return self._read_partitioned_data_optimized(directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config)
         
         # 🚀 检测目录结构：分桶格式 vs 普通分区
-        bucket_subdirs = list(directory.glob("bucket_id=*"))
-        if bucket_subdirs:
-            # 🔧 CRITICAL: 使用最大 bucket_id + 1 作为桶数
-            # 不能用 len(bucket_subdirs)，因为某些桶可能是空的（没有目录）
-            # 例如 HiRID 有 100 个桶但只有 81 个非空桶
-            max_bucket_id = max(int(d.name.split("=")[1]) for d in bucket_subdirs)
-            num_buckets = max_bucket_id + 1
-            
+        num_buckets, files_by_bucket = self._get_bucket_layout(directory)
+        if files_by_bucket:
             # 🚀 关键优化：如果有 itemid 过滤条件，计算目标桶，只扫描这些桶
             if itemid_filter_config:
                 filter_col, filter_ids = itemid_filter_config
@@ -1830,13 +2073,7 @@ class ICUDataSource:
                 numeric_ids = {int(x) for x in filter_ids if isinstance(x, (int, float)) and not isinstance(x, bool)}
                 if numeric_ids:
                     # 使用 DuckDB hash 计算目标桶（与分桶转换时一致）
-                    target_buckets = self._compute_target_buckets(numeric_ids, num_buckets, duckdb)
-                    # 构建只包含目标桶的文件列表
-                    target_files = []
-                    for bucket_id in target_buckets:
-                        bucket_dir = directory / f"bucket_id={bucket_id}"
-                        if bucket_dir.exists():
-                            target_files.extend(bucket_dir.glob("*.parquet"))
+                    target_buckets, _, target_files = self._get_bucket_files_for_ids(directory, numeric_ids, duckdb)
                     if target_files:
                         # 使用精确的文件列表而非全扫描
                         file_list_str = ", ".join(f"'{_duckdb_path(f)}'" for f in target_files)
@@ -1892,6 +2129,8 @@ class ICUDataSource:
         # 🚀 大表 itemid 预过滤优化
         if itemid_filter_config:
             filter_col, filter_ids = itemid_filter_config
+            if not filter_ids:
+                return pd.DataFrame(columns=list(columns) if columns else [])
             # 检查是否为字符串类型的 ID（如 eICU nursecharting）
             is_string_ids = any(isinstance(x, str) for x in filter_ids)
             if is_string_ids:
@@ -2397,34 +2636,12 @@ def load_bucketed_table_aggregated(
     
     # 🔧 直接查找分桶目录（不依赖_resolve_loader_from_disk）
     base_path = data_source.base_path
-    bucket_table_name = f"{table_name}_bucket"
-    
-    possible_bucket_dirs = [
-        base_path / bucket_table_name,
-        base_path / "icu" / bucket_table_name,
-        base_path / "hosp" / bucket_table_name,
-    ]
-    
-    bucket_dir = None
-    for dir_path in possible_bucket_dirs:
-        if dir_path.is_dir():
-            bucket_subdirs = list(dir_path.glob("bucket_id=*"))
-            if bucket_subdirs:
-                bucket_dir = dir_path
-                break
+    bucket_dir = data_source._resolve_bucket_directory(table_name)
     
     # 🚀 FIX 2026-03-13: 如果没有 bucket 目录，回退到扁平 parquet 目录
     flat_parquet_dir = None
     if bucket_dir is None:
-        possible_flat_dirs = [
-            base_path / table_name,
-            base_path / "icu" / table_name,
-            base_path / "hosp" / table_name,
-        ]
-        for dir_path in possible_flat_dirs:
-            if dir_path.is_dir() and list(dir_path.glob("*.parquet"))[:1]:
-                flat_parquet_dir = dir_path
-                break
+        flat_parquet_dir = data_source._resolve_flat_parquet_directory(table_name)
     
     if bucket_dir is None and flat_parquet_dir is None:
         raise ValueError(f"Cannot find bucketed or flat parquet directory for {table_name}")
@@ -2489,22 +2706,12 @@ def load_bucketed_table_aggregated(
     # 根据目录类型构建文件列表
     if bucket_dir is not None:
         # 分桶目录：通过 hash(itemid) 选择目标桶
-        bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
-        if not bucket_subdirs:
-            return pd.DataFrame()
-        
-        num_buckets = max(int(d.name.split('=')[1]) for d in bucket_subdirs) + 1
-        
         itemid_list = list(itemids)
-        conn.execute("CREATE OR REPLACE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [itemid_list])
-        result = conn.execute(f"SELECT DISTINCT hash(itemid) % {num_buckets} FROM items").fetchall()
-        target_buckets = [row[0] for row in result]
-        
-        target_files = []
-        for bucket_id in target_buckets:
-            bucket_subdir = bucket_dir / f"bucket_id={bucket_id}"
-            if bucket_subdir.exists():
-                target_files.extend(bucket_subdir.glob("*.parquet"))
+        _, _, target_files = data_source._get_bucket_files_for_ids(
+            bucket_dir,
+            itemid_list,
+            duckdb,
+        )
         
         if not target_files:
             return pd.DataFrame()
@@ -2513,18 +2720,20 @@ def load_bucketed_table_aggregated(
         glob_pattern = f"[{file_list_str}]"
     else:
         # 扁平 parquet 目录：扫描所有文件，依赖 WHERE 过滤
+        target_files = tuple(sorted(flat_parquet_dir.glob("*.parquet")))
         glob_pattern = f"'{_duckdb_path(flat_parquet_dir)}/*.parquet'"
 
-    raw_columns = set()
-    try:
-        raw_columns = {
-            col[0]
-            for col in conn.execute(
-                f"SELECT * FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
-            ).description
-        }
-    except Exception:
-        raw_columns = set()
+    raw_columns = data_source._get_parquet_columns_for_files(target_files)
+    if not raw_columns:
+        try:
+            raw_columns = {
+                col[0]
+                for col in conn.execute(
+                    f"SELECT * FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
+                ).description
+            }
+        except Exception:
+            raw_columns = set()
 
     patient_filter_col = id_col
     patient_filter_values = patient_ids
@@ -2568,6 +2777,7 @@ def load_bucketed_table_aggregated(
     else:
         ids_str = ", ".join(str(x) for x in itemids)
     where_conditions.append(f"{itemid_col} IN ({ids_str})")
+    where_conditions.append(f"{value_column} IS NOT NULL")
     
     # 患者过滤
     if patient_filter_values:
@@ -2612,32 +2822,23 @@ def load_bucketed_table_aggregated(
     # 🔧 FIX: 如果 convert_unit_filter 需要 unit 列但表没有该列，
     # 跳过 inline convert（匹配 R ricu 行为：无 unit 列时不转换）
     if _has_inline_convert and convert_unit_filter:
-        # 检查第一个 parquet 文件是否包含 unit 列
-        try:
-            _col_info = conn.execute(
-                f"SELECT * FROM read_parquet('{_duckdb_path(target_files[0])}') LIMIT 0"
-            ).description
-            _col_names = {col[0] for col in _col_info}
-            # 🔧 FIX: 查找实际的单位列名（eICU lab用labmeasurenameinterface，其他表用unit）
-            _unit_col_name = None
-            if 'unit' in _col_names:
-                _unit_col_name = 'unit'
-            else:
-                # 从表配置获取 unit_var
-                try:
-                    _table_cfg = data_source.config.get_table(table_name)
-                    _configured_unit = getattr(_table_cfg.defaults, 'unit_var', None)
-                    if _configured_unit and _configured_unit in _col_names:
-                        _unit_col_name = _configured_unit
-                except Exception:
-                    pass
-            if _unit_col_name is None:
-                import logging
-                logging.getLogger(__name__).info(
-                    f"⚠️ 表无 unit 列，跳过 inline convert_unit（filter={convert_unit_filter}）"
-                )
-                _has_inline_convert = False
-        except Exception:
+        # 查找实际的单位列名（eICU lab 用配置 unit_var，其他表常见为 unit）
+        _unit_col_name = None
+        if 'unit' in raw_columns:
+            _unit_col_name = 'unit'
+        else:
+            try:
+                _table_cfg = data_source.config.get_table(table_name)
+                _configured_unit = getattr(_table_cfg.defaults, 'unit_var', None)
+                if _configured_unit and _configured_unit in raw_columns:
+                    _unit_col_name = _configured_unit
+            except Exception:
+                pass
+        if _unit_col_name is None:
+            import logging
+            logging.getLogger(__name__).info(
+                f"⚠️ 表无 unit 列，跳过 inline convert_unit（filter={convert_unit_filter}）"
+            )
             _has_inline_convert = False
     
     if _has_inline_convert:
@@ -2727,7 +2928,7 @@ def load_bucketed_table_aggregated(
             _hirid_agg_expr = f"{duckdb_agg}({_hirid_value_expr}) as {value_column}"
         elif value_transform:
             # 🚀 通用值转换表达式 — post-agg filter_bounds 在 concept.py 中处理
-            _vt_aliased = value_transform.replace(f'"{ value_column}"', f'o."{value_column}"')
+            _vt_aliased = value_transform.replace(f'"{value_column}"', f'o."{value_column}"')
             _hirid_agg_expr = f"{duckdb_agg}({_vt_aliased}) as {value_column}"
         else:
             _hirid_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
@@ -2782,7 +2983,7 @@ def load_bucketed_table_aggregated(
             _mimic_agg_expr = f"{duckdb_agg}({_mimic_value_expr}) as {value_column}"
         elif value_transform:
             # 🚀 通用值转换表达式 — post-agg filter_bounds 在 concept.py 中处理
-            _vt_aliased = value_transform.replace(f'"{ value_column}"', f'o."{value_column}"')
+            _vt_aliased = value_transform.replace(f'"{value_column}"', f'o."{value_column}"')
             _mimic_agg_expr = f"{duckdb_agg}({_vt_aliased}) as {value_column}"
         else:
             _mimic_agg_expr = f"{duckdb_agg}(o.{value_column}) as {value_column}"
@@ -2794,6 +2995,7 @@ def load_bucketed_table_aggregated(
         # Also handle value_column filters
         _mimic_where = _mimic_where.replace(f'{value_column} >=', f'o.{value_column} >=')
         _mimic_where = _mimic_where.replace(f'{value_column} <=', f'o.{value_column} <=')
+        _mimic_where = _mimic_where.replace(f'{value_column} IS NOT NULL', f'o.{value_column} IS NOT NULL')
         
         _read_func = 'read_csv' if str(icustays_path).endswith('.csv.gz') else 'read_parquet'
         
@@ -3057,14 +3259,8 @@ def load_bucketed_table_multi_aggregated(
         all_itemids = sorted({int(x) for ids in concept_itemids.values() for x in ids})
 
     # ── Find parquet files ─────────────────────────────────────
-    bucket_dir = None
+    bucket_dir = data_source._resolve_bucket_directory(table_name)
     flat_parquet_dir = None
-    bucket_table_name = f"{table_name}_bucket"
-    for sub in ['', 'icu', 'hosp']:
-        d = base_path / sub / bucket_table_name if sub else base_path / bucket_table_name
-        if d.is_dir() and list(d.glob("bucket_id=*")):
-            bucket_dir = d
-            break
     if bucket_dir is None:
         flat_parquet_dir = data_source._resolve_flat_parquet_directory(table_name)
     if bucket_dir is None and flat_parquet_dir is None:
@@ -3074,25 +3270,17 @@ def load_bucketed_table_multi_aggregated(
 
     # ── Build glob pattern from bucket or flat dir ─────────
     if bucket_dir is not None:
-        bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
-        num_buckets = max(int(bd.name.split('=')[1]) for bd in bucket_subdirs) + 1
-        if ids_are_strings:
-            conn.execute("CREATE OR REPLACE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [all_itemids])
-        else:
-            conn.execute("CREATE OR REPLACE TEMP TABLE items AS SELECT UNNEST(?) as itemid", [all_itemids])
-        result = conn.execute(f"SELECT DISTINCT hash(itemid) % {num_buckets} FROM items").fetchall()
-        target_buckets = [row[0] for row in result]
-
-        target_files = []
-        for bid in target_buckets:
-            bucket_subdir = bucket_dir / f"bucket_id={bid}"
-            if bucket_subdir.exists():
-                target_files.extend(bucket_subdir.glob("*.parquet"))
+        _, _, target_files = data_source._get_bucket_files_for_ids(
+            bucket_dir,
+            all_itemids,
+            duckdb,
+        )
         if not target_files:
             return pd.DataFrame()
         file_list_str = ", ".join(f"'{_duckdb_path(f)}'" for f in target_files)
         glob_pattern = f"[{file_list_str}]"
     else:
+        target_files = tuple(sorted(flat_parquet_dir.glob("*.parquet")))
         glob_pattern = f"'{_duckdb_path(flat_parquet_dir)}/*.parquet'"
 
     # ── Aggregation ────────────────────────────────────────
@@ -3132,6 +3320,8 @@ def load_bucketed_table_multi_aggregated(
             return ""
         return f" AND o.{filter_col} IN ({', '.join(str(x) for x in values)})"
 
+    non_null_clause = f" AND o.{value_column} IS NOT NULL"
+
     # ── DB-specific query construction ─────────────────────
     if _base_db in ('miiv', 'mimic'):
         stay_col = 'icustay_id' if _base_db == 'mimic' else 'stay_id'
@@ -3143,13 +3333,14 @@ def load_bucketed_table_multi_aggregated(
         _read_func = 'read_csv' if str(icustays_path).endswith('.csv.gz') else 'read_parquet'
 
         # hadm_id mapping for hospital tables (labevents etc.)
-        raw_columns = set()
-        try:
-            raw_columns = {col[0] for col in conn.execute(
-                f"SELECT * FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
-            ).description}
-        except Exception:
-            pass
+        raw_columns = data_source._get_parquet_columns_for_files(target_files)
+        if not raw_columns:
+            try:
+                raw_columns = {col[0] for col in conn.execute(
+                    f"SELECT * FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
+                ).description}
+            except Exception:
+                pass
         patient_filter_col = id_col
         patient_filter_values = patient_ids
         join_left_col = id_col
@@ -3278,7 +3469,7 @@ def load_bucketed_table_multi_aggregated(
                 {select_sql}
             FROM read_parquet({glob_pattern}, union_by_name=true) o
             JOIN adm a ON {join_pred}
-            WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}
+            WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
             GROUP BY a.{output_id_col}, {time_round_expr}
             ORDER BY a.{output_id_col}, 2
             """
@@ -3306,7 +3497,7 @@ def load_bucketed_table_multi_aggregated(
             {select_sql}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
         JOIN adm a ON o.{id_col} = a.patientid
-        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}
+        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
         GROUP BY o.{id_col}, {time_round_expr}
         ORDER BY o.{id_col}, 2
         """
@@ -3318,7 +3509,7 @@ def load_bucketed_table_multi_aggregated(
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS measuredat_minutes,
             {select_sql}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
-        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}
+        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
         GROUP BY o.{id_col}, {time_round_expr}
         ORDER BY o.{id_col}, 2
         """
@@ -3331,7 +3522,7 @@ def load_bucketed_table_multi_aggregated(
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
             {select_sql}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
-        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}
+        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
         GROUP BY o.{id_col}, {time_round_expr}
         ORDER BY o.{id_col}, 2
         """
@@ -3345,7 +3536,7 @@ def load_bucketed_table_multi_aggregated(
         SELECT o.{id_col} AS {id_col}, {time_round_expr} AS charttime,
             {select_sql}
         FROM read_parquet({glob_pattern}, union_by_name=true) o
-        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}
+        WHERE o.{itemid_col} IN ({all_ids_sql}){p_clause}{non_null_clause}
         GROUP BY o.{id_col}, {time_round_expr}
         ORDER BY o.{id_col}, 2
         """
@@ -3353,7 +3544,12 @@ def load_bucketed_table_multi_aggregated(
     else:
         raise ValueError(f"Unsupported database for multi-concept batch: {db_name}")
 
-    df = conn.execute(query).df()
+    try:
+        arrow_table = conn.execute(query).fetch_arrow_table()
+        df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+        del arrow_table
+    except Exception:
+        df = conn.execute(query).fetchdf()
     logger.info(
         "🚀 分桶多概念DuckDB聚合完成: %s concepts=%d itemids=%d -> %d 行",
         table_name,

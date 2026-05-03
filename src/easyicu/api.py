@@ -298,11 +298,16 @@ def clear_global_loader():
     """清除全局加载器，强制下一次调用重新创建"""
     global _global_loader, _loader_config
     if _global_loader is not None:
-        # 清理加载器内部缓存
-        if hasattr(_global_loader, 'concept_resolver'):
-            _global_loader.concept_resolver.clear()
-        if hasattr(_global_loader, 'data_source'):
-            _global_loader.data_source.clear()
+        if hasattr(_global_loader, 'clear_cache'):
+            _global_loader.clear_cache()
+        else:
+            # 清理加载器内部缓存
+            if hasattr(_global_loader, 'concept_resolver'):
+                _global_loader.concept_resolver.clear()
+            for attr in ('datasource', 'data_source'):
+                data_source = getattr(_global_loader, attr, None)
+                if data_source is not None and hasattr(data_source, 'clear'):
+                    data_source.clear()
     _global_loader = None
     _loader_config = None
 
@@ -503,7 +508,11 @@ def _compress_dtypes(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
     
     可以节省约 50-60% 的内存
     """
-    if df.empty:
+    if hasattr(df, 'data') and isinstance(getattr(df, 'data'), pd.DataFrame):
+        df.data = _compress_dtypes(df.data, verbose=verbose)
+        return df
+
+    if not isinstance(df, pd.DataFrame) or df.empty:
         return df
     
     original_mem = df.memory_usage(deep=True).sum()
@@ -2860,12 +2869,29 @@ def get_all_patient_ids(
     
     # 尝试加载患者表
     try:
+        all_ids = None
         # 首选：直接加载 parquet 文件
         parquet_file = data_path / f'{table_name}.parquet'
         if parquet_file.exists():
-            df = pd.read_parquet(parquet_file, columns=[id_col])
-            all_ids = df[id_col].dropna().unique().tolist()
-        else:
+            try:
+                df = pd.read_parquet(parquet_file, columns=[id_col])
+                all_ids = df[id_col].dropna().unique().tolist()
+            except Exception as e:
+                logger.warning(f"读取患者表 parquet 失败，尝试 CSV 回退: {e}")
+
+        if all_ids is None:
+            for suffix in ('.csv', '.csv.gz'):
+                csv_file = data_path / f'{table_name}{suffix}'
+                if not csv_file.exists():
+                    continue
+                try:
+                    df = pd.read_csv(csv_file, usecols=[id_col])
+                    all_ids = df[id_col].dropna().unique().tolist()
+                    break
+                except Exception as e:
+                    logger.warning(f"读取患者表 CSV 回退失败 ({csv_file.name}): {e}")
+
+        if all_ids is None:
             # 备选：尝试分片目录
             shard_dir = data_path / table_name
             if shard_dir.exists() and shard_dir.is_dir():
@@ -2978,7 +3004,7 @@ def _build_default_db_paths() -> Dict[str, str]:
     if not _root:
         return {}
     try:
-        from easyicu.webapp.app import find_database_path
+        from easyicu.webapp.data_paths import find_database_path
         return {db: find_database_path(_root, db) for db in ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']}
     except ImportError:
         return {db: os.path.join(_root, db) for db in ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']}

@@ -33,6 +33,20 @@ def _duckdb_path(p) -> str:
     return str(p).replace('\\', '/')
 
 
+def _copy_row_count(copy_result) -> Optional[int]:
+    """Extract DuckDB COPY row count without scanning written parquet files."""
+    try:
+        row = copy_result.fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
 def _get_total_ram_gb() -> float:
     """获取系统总物理内存(GB)"""
     try:
@@ -80,6 +94,13 @@ def _auto_memory_limit() -> str:
     return '6GB'
 
 
+def _bucket_order_clause(partition_col: str, skip_sorting: bool) -> str:
+    """Return an ORDER BY clause for extraction-optimized bucket layouts."""
+    if skip_sorting:
+        return ""
+    return f"\n                            ORDER BY bucket_id, {partition_col}"
+
+
 @dataclass
 class BucketConfig:
     """分桶配置"""
@@ -109,6 +130,47 @@ class ConversionResult:
     elapsed_seconds: float
     output_dir: Optional[Path] = None
     error: Optional[str] = None
+
+
+def _read_complete_marker(output_dir: Path) -> Optional[tuple[int, int, int]]:
+    marker = Path(output_dir) / '_COMPLETE'
+    if not marker.exists():
+        return None
+    try:
+        row_count, actual_buckets, total_size = marker.read_text(encoding='utf-8').strip().split(',', 2)
+        return int(row_count), int(actual_buckets), int(total_size)
+    except (OSError, ValueError):
+        return None
+
+
+def _completed_bucket_result(
+    output_dir: Path,
+    start_time: float,
+    source_files: Optional[List[Path]] = None,
+) -> Optional[ConversionResult]:
+    output_dir = Path(output_dir)
+    marker = output_dir / '_COMPLETE'
+    marker_values = _read_complete_marker(output_dir)
+    if marker_values is None:
+        return None
+    if not any(output_dir.rglob('*.parquet')):
+        return None
+    try:
+        marker_mtime = marker.stat().st_mtime
+        for source_file in source_files or []:
+            if Path(source_file).stat().st_mtime > marker_mtime:
+                return None
+    except OSError:
+        return None
+    row_count, actual_buckets, total_size = marker_values
+    return ConversionResult(
+        success=True,
+        num_buckets=actual_buckets,
+        total_rows=row_count,
+        total_size_bytes=total_size,
+        elapsed_seconds=time.time() - start_time,
+        output_dir=output_dir,
+    )
 
 
 def _duckdb_hash(itemid: int, num_buckets: int = 100) -> int:
@@ -191,10 +253,14 @@ def convert_to_buckets(
             log(f"删除已存在的输出目录: {output_dir}")
             shutil.rmtree(output_dir)
         else:
+            completed = _completed_bucket_result(output_dir, start_time, [source_path])
+            if completed is not None:
+                log(f"分桶目录已完成，跳过转换: {output_dir}")
+                return completed
             return ConversionResult(
                 success=False, num_buckets=0, total_rows=0,
                 total_size_bytes=0, elapsed_seconds=0,
-                error=f"输出目录已存在: {output_dir}"
+                error=f"输出目录已存在但没有可复用的完成标记: {output_dir}"
             )
     
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -203,6 +269,8 @@ def convert_to_buckets(
         log(f"开始转换: {source_path.name}")
         log(f"分桶数: {config.num_buckets}, 分桶列: {config.partition_col}")
         log(f"内存限制: {config.memory_limit}, 临时目录: {config.temp_directory or '默认'}")
+        if not config.skip_sorting:
+            log("分桶内排序: 启用（提取更快，转换会更慢）")
         
         conn = duckdb.connect()
         # 并行线程数：0=自动检测CPU核心数
@@ -292,6 +360,7 @@ def convert_to_buckets(
         _TWO_STAGE_THRESHOLD = 1 * 1024 * 1024 * 1024  # 1GB
         use_two_stage = is_csv and source_path.stat().st_size > _TWO_STAGE_THRESHOLD
         temp_parquet = None
+        row_count_from_copy = None
         
         if use_two_stage:
             import tempfile
@@ -305,16 +374,17 @@ def convert_to_buckets(
             log(f"大文件两阶段转换 ({source_path.stat().st_size / 1e9:.1f}GB)...")
             log(f"  Stage 1/2: CSV → 单个 Parquet（顺序写入）...")
             t_s1 = time.time()
-            conn.execute(f"""
+            stage1_count = _copy_row_count(conn.execute(f"""
                 COPY (SELECT * FROM {csv_read_expr})
                 TO '{_duckdb_path(temp_parquet)}' (
                     FORMAT PARQUET, COMPRESSION 'SNAPPY',
                     ROW_GROUP_SIZE 1000000
                 )
-            """)
+            """))
             s1_time = time.time() - t_s1
             s1_size = os.path.getsize(temp_parquet) / 1e9
-            log(f"  Stage 1 完成: {s1_size:.2f}GB, {s1_time:.1f}s")
+            row_info = f", {stage1_count:,} rows" if stage1_count is not None else ""
+            log(f"  Stage 1 完成: {s1_size:.2f}GB{row_info}, {s1_time:.1f}s")
             
             read_expr = f"read_parquet('{_duckdb_path(temp_parquet)}')"
         else:
@@ -334,17 +404,22 @@ def convert_to_buckets(
                 
                 log(f"  Stage 2/2: Parquet → {config.num_buckets} 桶"
                     f"（{n_passes} 趟, 每趟 {buckets_per_pass} 桶）")
+                row_count_from_copy = 0
+                copy_counts_complete = True
                 for pi in range(n_passes):
                     s = pi * buckets_per_pass
                     e = min(s + buckets_per_pass - 1, config.num_buckets - 1)
                     log(f"    趟 {pi+1}/{n_passes}: bucket {s}-{e}")
-                    conn.execute(f"""
+                    pass_count = _copy_row_count(conn.execute(f"""
                         COPY (
-                            SELECT *,
-                                   hash({config.partition_col}) % {config.num_buckets} as bucket_id
-                            FROM {read_expr}
-                            WHERE hash({config.partition_col}) % {config.num_buckets}
-                                  BETWEEN {s} AND {e}
+                            SELECT *
+                            FROM (
+                                SELECT *,
+                                       hash({config.partition_col}) % {config.num_buckets} as bucket_id
+                                FROM {read_expr}
+                            )
+                            WHERE bucket_id BETWEEN {s} AND {e}
+                            {_bucket_order_clause(config.partition_col, config.skip_sorting)}
                         )
                         TO '{_duckdb_path(output_dir)}'
                         (FORMAT PARQUET,
@@ -352,7 +427,13 @@ def convert_to_buckets(
                          COMPRESSION {config.compression.upper()},
                          ROW_GROUP_SIZE {config.row_group_size},
                          OVERWRITE_OR_IGNORE)
-                    """)
+                    """))
+                    if pass_count is None:
+                        copy_counts_complete = False
+                    else:
+                        row_count_from_copy += pass_count
+                if not copy_counts_complete:
+                    row_count_from_copy = None
             else:
                 if use_two_stage:
                     log(f"  Stage 2/2: Parquet → {config.num_buckets} 个分桶...")
@@ -361,6 +442,7 @@ def convert_to_buckets(
                         SELECT *,
                                hash({config.partition_col}) % {config.num_buckets} as bucket_id
                         FROM {read_expr}
+                        {_bucket_order_clause(config.partition_col, config.skip_sorting)}
                     )
                     TO '{_duckdb_path(output_dir)}'
                     (FORMAT PARQUET,
@@ -369,7 +451,7 @@ def convert_to_buckets(
                      ROW_GROUP_SIZE {config.row_group_size},
                      OVERWRITE_OR_IGNORE)
                 """
-                conn.execute(sql)
+                row_count_from_copy = _copy_row_count(conn.execute(sql))
         finally:
             # 清理临时 Parquet 文件
             if temp_parquet and os.path.exists(temp_parquet):
@@ -381,11 +463,13 @@ def convert_to_buckets(
         # 统计结果
         elapsed = time.time() - start_time
         
-        # 🚀 优化: 从已写出的parquet桶计数，避免重新扫描源文件（对80GB CSV节省10-30分钟）
-        try:
-            row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{_duckdb_path(output_dir)}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
-        except Exception:
-            row_count = 0  # 如果计数失败，不影响转换结果
+        if row_count_from_copy is not None:
+            row_count = row_count_from_copy
+        else:
+            try:
+                row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{_duckdb_path(output_dir)}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
+            except Exception:
+                row_count = 0  # 如果计数失败，不影响转换结果
         
         # 计算总大小
         total_size = sum(f.stat().st_size for f in output_dir.rglob('*.parquet'))
@@ -649,7 +733,8 @@ def convert_parquet_directory_to_buckets(
     partition_col: str,
     num_buckets: int = 100,
     overwrite: bool = False,
-    progress_callback: Optional[Callable[[str], None]] = None
+    progress_callback: Optional[Callable[[str], None]] = None,
+    skip_sorting: bool = True,
 ) -> ConversionResult:
     """
     将已有的 Parquet 目录（如 HiRID observations）转换为分桶格式
@@ -712,10 +797,14 @@ def convert_parquet_directory_to_buckets(
             log(f"删除已存在的输出目录: {output_dir}")
             shutil.rmtree(output_dir)
         else:
+            completed = _completed_bucket_result(output_dir, start_time, parquet_files)
+            if completed is not None:
+                log(f"分桶目录已完成，跳过转换: {output_dir}")
+                return completed
             return ConversionResult(
                 success=False, num_buckets=0, total_rows=0,
                 total_size_bytes=0, elapsed_seconds=0,
-                error=f"输出目录已存在: {output_dir}"
+                error=f"输出目录已存在但没有可复用的完成标记: {output_dir}"
             )
     
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -723,6 +812,8 @@ def convert_parquet_directory_to_buckets(
     try:
         log(f"开始转换: {source_dir.name} → {output_dir.name}")
         log(f"分桶数: {num_buckets}, 分桶列: {partition_col}")
+        if not skip_sorting:
+            log("分桶内排序: 启用（提取更快，转换会更慢）")
         
         conn = duckdb.connect()
         conn.execute("SET threads=16")
@@ -746,6 +837,7 @@ def convert_parquet_directory_to_buckets(
                 SELECT *,
                        hash({partition_col}) % {num_buckets} as bucket_id
                 FROM {read_expr}
+                {_bucket_order_clause(partition_col, skip_sorting)}
             )
             TO '{_duckdb_path(output_dir)}'
             (FORMAT PARQUET,
@@ -755,16 +847,18 @@ def convert_parquet_directory_to_buckets(
              OVERWRITE_OR_IGNORE)
         """
         
-        conn.execute(sql)
+        row_count_from_copy = _copy_row_count(conn.execute(sql))
         
         # 统计结果
         elapsed = time.time() - start_time
         
-        # 🚀 优化: 从已写出的parquet桶计数，避免重新扫描源parquet分片
-        try:
-            row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{_duckdb_path(output_dir)}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
-        except Exception:
-            row_count = 0
+        if row_count_from_copy is not None:
+            row_count = row_count_from_copy
+        else:
+            try:
+                row_count = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{_duckdb_path(output_dir)}/**/*.parquet', hive_partitioning=true)").fetchone()[0]
+            except Exception:
+                row_count = 0
         
         # 计算总大小
         total_size = sum(f.stat().st_size for f in output_dir.rglob('*.parquet'))
@@ -775,6 +869,10 @@ def convert_parquet_directory_to_buckets(
         # 清理临时目录
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+        # 写入完成标记文件，读取端用它作为安全的布局缓存签名。
+        sentinel = output_dir / '_COMPLETE'
+        sentinel.write_text(f"{row_count},{actual_buckets},{total_size}")
         
         log(f"转换完成! 耗时: {elapsed:.1f}秒")
         log(f"总行数: {row_count:,}")

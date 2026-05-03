@@ -629,9 +629,15 @@ def sofa2_resp(
     safi = None
     if spo2 is not None and fio2 is not None:
         s = pd.to_numeric(spo2, errors="coerce")
-        f = pd.to_numeric(fio2, errors="coerce")
+        f = pd.to_numeric(fio2, errors="coerce").astype(float)
+        # SOFA-2 uses the S/F ratio with FiO2 expressed as a fraction.
+        # EasyICU stores FiO2 concepts as percentages for compatibility, so
+        # convert 21-100 style values to 0.21-1.00 before computing SaFi.
+        f_adj = f.copy()
+        percent_mask = (f_adj > 1.0) & (f_adj <= 100.0)
+        f_adj[percent_mask] = f_adj[percent_mask] / 100.0
         # Only use SaFi when SpO2 < 98% (per SOFA-2 footnote f)
-        safi = s / f
+        safi = s / f_adj
         safi[s >= 98] = np.nan
     
     # Use SaFi if PaFi unavailable (with adjusted cutoffs per footnote f)
@@ -837,6 +843,17 @@ def sofa2_cns(
     
     idx = g.index
     score = pd.Series(0, index=idx, dtype=int)
+
+    if motor_response is not None:
+        m = pd.to_numeric(motor_response, errors="coerce")
+        motor_score = pd.Series(0, index=idx, dtype=int)
+        motor_score[m == 5] = 1
+        motor_score[m == 4] = 2
+        motor_score[m == 3] = 3
+        motor_score[m <= 2] = 4
+
+        g_missing = g.isna()
+        score[g_missing] = motor_score[g_missing]
     
     valid = g.notna()
     score[valid & (g >= 13) & (g <= 14)] = 1

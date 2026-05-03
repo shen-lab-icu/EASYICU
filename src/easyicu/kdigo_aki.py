@@ -400,9 +400,18 @@ def _calculate_uo_rates_simple(
         wt = urine['_wt'].values[_idx_sorted[0]]
         n = len(times_min)
         
-        # Replace NaN with 0 for cumsum, track NaN positions
+        # Replicate MIT-LCP's hours_since_previous_row logic:
+        # first row defaults to 1 hour, subsequent rows use the elapsed time
+        # from the previous urine charting row.
+        hours_prev = np.empty(n, dtype=np.float64)
+        hours_prev[0] = 1.0
+        if n > 1:
+            hours_prev[1:] = np.maximum(np.diff(times_min) / 60.0, 0.0)
+
+        # Replace NaN with 0 for cumsum
         u_clean = np.where(np.isnan(u_vals), 0.0, u_vals)
-        cum = np.concatenate([[0.0], np.cumsum(u_clean)])
+        cum_u = np.concatenate([[0.0], np.cumsum(u_clean)])
+        cum_h = np.concatenate([[0.0], np.cumsum(hours_prev)])
         idx_arr = np.arange(n)
         
         for w_idx in range(3):
@@ -411,11 +420,24 @@ def _calculate_uo_rates_simple(
             lefts = np.searchsorted(times_min, times_min - window, side='left')
             # Clip: only look at j <= i (backward looking)
             lefts = np.minimum(lefts, idx_arr)
-            # Windowed sum via prefix sum
-            total = cum[idx_arr + 1] - cum[lefts]
-            # Time span in hours (max with 1.0)
-            span_hrs = np.maximum((times_min - times_min[lefts]) / 60.0, 1.0)
-            rates = total / (wt * span_hrs)
+            # Windowed sums via prefix sums
+            total_u = cum_u[idx_arr + 1] - cum_u[lefts]
+            total_h = cum_h[idx_arr + 1] - cum_h[lefts]
+
+            if w_idx == 0:
+                valid = (total_h >= 6.0) & (total_h < 12.0)
+            elif w_idx == 1:
+                valid = total_h >= 12.0
+            else:
+                valid = total_h >= 24.0
+
+            rates = np.full(n, np.nan, dtype=np.float64)
+            np.divide(
+                total_u,
+                wt * total_h,
+                out=rates,
+                where=valid & (total_h > 0),
+            )
             
             if w_idx == 0:
                 uo_6h[_idx_sorted] = rates

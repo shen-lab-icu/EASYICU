@@ -9,14 +9,114 @@ import easyicu.webapp.app as app
 import easyicu.webapp.cohort_filters as cohort_filters
 import easyicu.webapp.cohort_workspace as cohort_workspace
 import easyicu.webapp.data_paths as data_paths
+import easyicu.webapp.export_workflow as export_workflow
+import easyicu.webapp.sidebar as sidebar
 import pandas as pd
 import pytest
 
 
 def test_concept_catalog_helpers_remain_available_to_workflow_context() -> None:
     """Data workflow modules receive these names through app.globals()."""
+    assert app._get_patient_id_table_files("miiv")[:2] == [
+        "icu/icustays.parquet",
+        "icustays.parquet",
+    ]
     assert app._get_patient_id_table_files("hirid")[0] == "general.parquet"
     assert app._sample_patient_ids_random([3, 1, 2], 10) == [3, 1, 2]
+
+
+def test_terminate_process_tree_terminates_descendants(monkeypatch) -> None:
+    class _FakePsutilError(Exception):
+        pass
+
+    class _FakeTimeoutExpired(_FakePsutilError):
+        pass
+
+    class _FakeChild:
+        def __init__(self) -> None:
+            self.terminated = False
+            self.killed = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+
+    class _FakeParent(_FakeChild):
+        def __init__(self, child) -> None:
+            super().__init__()
+            self._child = child
+
+        def children(self, recursive=False):
+            assert recursive is True
+            return [self._child]
+
+        def wait(self, timeout=None) -> None:
+            raise _FakeTimeoutExpired()
+
+    class _FakeProcess:
+        pid = 123
+
+        def __init__(self) -> None:
+            self.terminated = False
+            self.joined = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def join(self, timeout=None) -> None:
+            self.joined = True
+
+    child = _FakeChild()
+    parent = _FakeParent(child)
+    fake_psutil = types.SimpleNamespace(
+        Process=lambda _pid: parent,
+        wait_procs=lambda children, timeout=None: ([], children),
+        Error=_FakePsutilError,
+        TimeoutExpired=_FakeTimeoutExpired,
+    )
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    proc = _FakeProcess()
+
+    export_workflow._terminate_process_tree(proc, timeout=0.01)
+
+    assert child.terminated is True
+    assert child.killed is True
+    assert proc.terminated is True
+    assert proc.joined is True
+    assert parent.killed is True
+
+
+def test_terminate_process_tree_falls_back_to_process_kill(monkeypatch) -> None:
+    class _FakeProcess:
+        pid = 123
+
+        def __init__(self) -> None:
+            self.terminated = False
+            self.killed = False
+            self.join_count = 0
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def join(self, timeout=None) -> None:
+            self.join_count += 1
+
+        def is_alive(self) -> bool:
+            return not self.killed
+
+        def kill(self) -> None:
+            self.killed = True
+
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    proc = _FakeProcess()
+
+    export_workflow._terminate_process_tree(proc, timeout=0.01)
+
+    assert proc.terminated is True
+    assert proc.killed is True
+    assert proc.join_count == 2
 
 
 class _FakeExpander:
@@ -123,6 +223,47 @@ def test_directory_input_does_not_redeclare_widget_value_for_existing_state(monk
     assert "value" not in streamlit_stub.text_input_kwargs
 
 
+def test_export_path_default_reseeds_empty_without_overwriting_custom(monkeypatch) -> None:
+    class _SidebarStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "sidebar_export_path_input": "",
+            }
+
+    streamlit_stub = _SidebarStreamlit()
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+
+    sidebar._ensure_default_directory_input_value(
+        input_key="sidebar_export_path_input",
+        default_key="_sidebar_export_path_default",
+        default_value="/tmp/default-a",
+    )
+    assert streamlit_stub.session_state["sidebar_export_path_input"] == "/tmp/default-a"
+
+    streamlit_stub.session_state["sidebar_export_path_input"] = ""
+    sidebar._ensure_default_directory_input_value(
+        input_key="sidebar_export_path_input",
+        default_key="_sidebar_export_path_default",
+        default_value="/tmp/default-a",
+    )
+    assert streamlit_stub.session_state["sidebar_export_path_input"] == "/tmp/default-a"
+
+    sidebar._ensure_default_directory_input_value(
+        input_key="sidebar_export_path_input",
+        default_key="_sidebar_export_path_default",
+        default_value="/tmp/default-b",
+    )
+    assert streamlit_stub.session_state["sidebar_export_path_input"] == "/tmp/default-b"
+
+    streamlit_stub.session_state["sidebar_export_path_input"] = "/tmp/custom"
+    sidebar._ensure_default_directory_input_value(
+        input_key="sidebar_export_path_input",
+        default_key="_sidebar_export_path_default",
+        default_value="/tmp/default-c",
+    )
+    assert streamlit_stub.session_state["sidebar_export_path_input"] == "/tmp/custom"
+
+
 def test_home_dictionary_avoids_nested_expanders(monkeypatch) -> None:
     streamlit_stub = _FakeStreamlit()
 
@@ -177,6 +318,66 @@ def test_button_compat_uses_width_instead_of_deprecated_container_flag(monkeypat
     app._button_compat("Run", use_container_width=True, key="run")
 
     assert streamlit_stub.kwargs == {"key": "run", "width": "stretch"}
+
+
+def test_conversion_wrapper_passes_extraction_optimized_bucket_flag(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_convert(source_dir, target_dir, overwrite=False, app_context=None, extraction_optimized_buckets=False):
+        called.update(
+            source_dir=source_dir,
+            target_dir=target_dir,
+            overwrite=overwrite,
+            app_context=app_context,
+            extraction_optimized_buckets=extraction_optimized_buckets,
+        )
+        return 1, 0
+
+    monkeypatch.setattr(app, "_convert_csv_to_parquet_impl", _fake_convert)
+
+    result = app.convert_csv_to_parquet(
+        "/tmp/source",
+        "/tmp/target",
+        overwrite=True,
+        extraction_optimized_buckets=True,
+    )
+
+    assert result == (1, 0)
+    assert called["source_dir"] == "/tmp/source"
+    assert called["target_dir"] == "/tmp/target"
+    assert called["overwrite"] is True
+    assert called["extraction_optimized_buckets"] is True
+    assert isinstance(called["app_context"], dict)
+
+
+def test_hirid_conversion_wrapper_passes_extraction_optimized_bucket_flag(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_hirid(source_dir, target_dir, overwrite=False, app_context=None, extraction_optimized_buckets=False):
+        called.update(
+            source_dir=source_dir,
+            target_dir=target_dir,
+            overwrite=overwrite,
+            app_context=app_context,
+            extraction_optimized_buckets=extraction_optimized_buckets,
+        )
+        return 2, 0
+
+    monkeypatch.setattr(app, "_convert_hirid_data_impl", _fake_hirid)
+
+    result = app._convert_hirid_data(
+        "/tmp/source",
+        "/tmp/target",
+        overwrite=True,
+        extraction_optimized_buckets=True,
+    )
+
+    assert result == (2, 0)
+    assert called["source_dir"] == "/tmp/source"
+    assert called["target_dir"] == "/tmp/target"
+    assert called["overwrite"] is True
+    assert called["extraction_optimized_buckets"] is True
+    assert isinstance(called["app_context"], dict)
 
 
 def test_cohort_query_tokens_expand_icd_ranges_and_mixed_separators() -> None:
