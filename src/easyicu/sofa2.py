@@ -430,13 +430,14 @@ def sofa2_cns(
     if motor_response is not None:
         m = pd.to_numeric(motor_response, errors="coerce")
         # Map motor response to equivalent GCS scores
-        # 6=localizing (~GCS 13-14), 5=withdrawal (~GCS 9-12), 4=flexion (~GCS 6-8),
-        # 3=extension (~GCS 3-5), 2=no response (~GCS 3-5)
+        # 6=obeys commands / behavioral command response (~GCS 15),
+        # 5=localizing (~GCS 13-14), 4=withdrawal (~GCS 9-12),
+        # 3=flexion (~GCS 6-8), 2/1=extension or no response (~GCS 3-5).
         motor_score = pd.Series(0, index=m.index, dtype=int)
-        motor_score[m == 6] = 1  # Localizing to pain
-        motor_score[m == 5] = 2  # Withdrawal to pain
-        motor_score[m == 4] = 3  # Flexion to pain
-        motor_score[m <= 3] = 4  # Extension/no response/myoclonus
+        motor_score[m == 5] = 1  # Localizing to pain
+        motor_score[m == 4] = 2  # Withdrawal to pain
+        motor_score[m == 3] = 3  # Flexion to pain
+        motor_score[m <= 2] = 4  # Extension/no response/myoclonus
 
         # Use motor response when GCS is missing or cannot be assessed
         gcs_available = ~g.isna()

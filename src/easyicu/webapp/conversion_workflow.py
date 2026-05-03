@@ -45,6 +45,19 @@ def render_convert_dialog(app_context: dict[str, Any] | None = None):
         # 转换选项
         overwrite_label = "Overwrite existing Parquet files" if lang == 'en' else "覆盖已存在的Parquet文件"
         overwrite = st.checkbox(overwrite_label, value=False)
+        optimize_label = "Optimize buckets for repeated extraction" if lang == 'en' else "优化分桶以便反复提取"
+        optimize_help = (
+            "Keeps the default conversion fast when off. When on, bucketed large tables are sorted by source id, "
+            "which can improve repeated feature extraction but may make conversion slower."
+            if lang == 'en'
+            else
+            "关闭时保持默认快速转换；开启后会按来源ID整理大表分桶，可能降低转换速度，但更利于后续反复提取。"
+        )
+        extraction_optimized_buckets = st.checkbox(
+            optimize_label,
+            value=False,
+            help=optimize_help,
+        )
 
     # 扫描可转换文件
     if source_path and Path(source_path).exists():
@@ -72,7 +85,12 @@ def render_convert_dialog(app_context: dict[str, Any] | None = None):
             else:
                 spinner_msg = "Converting..." if lang == 'en' else "正在转换..."
                 with st.spinner(spinner_msg):
-                    success, failed = convert_csv_to_parquet(source_path, target_path, overwrite)
+                    success, failed = convert_csv_to_parquet(
+                        source_path,
+                        target_path,
+                        overwrite,
+                        extraction_optimized_buckets=extraction_optimized_buckets,
+                    )
 
                 # 转换完成后自动重新验证
                 _database = st.session_state.get('database', 'miiv')
@@ -119,7 +137,13 @@ def render_convert_dialog(app_context: dict[str, Any] | None = None):
             st.rerun()
 
 
-def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = False, app_context: dict[str, Any] | None = None) -> tuple:
+def convert_csv_to_parquet(
+    source_dir: str,
+    target_dir: str,
+    overwrite: bool = False,
+    app_context: dict[str, Any] | None = None,
+    extraction_optimized_buckets: bool = False,
+) -> tuple:
     """将目录下的CSV文件转换为Parquet格式。
 
     大表自动使用分桶转换，普通表使用 DuckDB 直接转换。
@@ -136,7 +160,12 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
 
     # HiRID 特殊处理：数据已经是 parquet 格式，只需分桶
     if database == 'hirid':
-        return _convert_hirid_data(source_dir, target_dir, overwrite)
+        return _convert_hirid_data(
+            source_dir,
+            target_dir,
+            overwrite,
+            extraction_optimized_buckets=extraction_optimized_buckets,
+        )
 
     # 定义需要分桶转换的大表
     BUCKET_TABLES = {
@@ -325,7 +354,15 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
 
             status_text.markdown(f"**Bucketing**: `{csv_file.name}` ({file_size_mb:.1f}MB) → {num_buckets} buckets [{current}/{total}]")
 
-            # 使用优化配置：跳过排序可加速2-3倍
+            skip_sorting = not extraction_optimized_buckets
+            if extraction_optimized_buckets:
+                with details:
+                    st.caption(
+                        "🔎 Bucket extraction profile enabled: sorting rows by source id"
+                        if lang == 'en'
+                        else "🔎 已启用提取优化分桶：按来源ID整理分桶内数据"
+                    )
+
             config = BucketConfig(
                 num_buckets=num_buckets,
                 partition_col=partition_col,
@@ -333,7 +370,7 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
                 threads=0,  # 自动检测CPU核心数
                 row_group_size=1_000_000,
                 compression='zstd',
-                skip_sorting=True  # 跳过排序，大幅加速
+                skip_sorting=skip_sorting,
             )
             result = convert_to_buckets(
                 source_path=csv_file,
@@ -380,7 +417,13 @@ def convert_csv_to_parquet(source_dir: str, target_dir: str, overwrite: bool = F
     return success, failed
 
 
-def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = False, app_context: dict[str, Any] | None = None) -> tuple:
+def _convert_hirid_data(
+    source_dir: str,
+    target_dir: str,
+    overwrite: bool = False,
+    app_context: dict[str, Any] | None = None,
+    extraction_optimized_buckets: bool = False,
+) -> tuple:
     """HiRID 一站式转换：解压 → 重命名 parquet shards → CSV→parquet → 分桶。
 
     完整处理流程（用户只需点一次）：
@@ -579,18 +622,42 @@ def _convert_hirid_data(source_dir: str, target_dir: str, overwrite: bool = Fals
         status_text.markdown(f"**Phase 3/4**: Bucketing `{name}` → {num_buckets} buckets..." if lang == 'en' else f"**阶段 3/4**: 分桶 `{name}` → {num_buckets} 个桶...")
 
         try:
-            if bucket_dir.exists() and list(bucket_dir.rglob('*.parquet')) and not overwrite:
+            sentinel = bucket_dir / '_COMPLETE'
+            source_newer = False
+            if sentinel.exists():
+                try:
+                    sentinel_mtime = sentinel.stat().st_mtime
+                    source_newer = any(p.stat().st_mtime > sentinel_mtime for p in src_dir.glob('*.parquet'))
+                except OSError:
+                    source_newer = True
+            if bucket_dir.exists() and sentinel.exists() and not source_newer and not overwrite:
                 with details:
-                    st.caption(f"⏭️ {name} (bucket exists, skipped)" if lang == 'en' else f"⏭️ {name} (分桶已存在，跳过)")
+                    st.caption(f"⏭️ {name} (bucket complete, skipped)" if lang == 'en' else f"⏭️ {name} (分桶已完成，跳过)")
                 success += 1
                 continue
+            if bucket_dir.exists() and not overwrite:
+                import shutil
+                with details:
+                    reason = "source updated" if source_newer else "incomplete"
+                    st.caption(f"🔄 {name} ({reason}, re-converting...)" if lang == 'en' else f"🔄 {name} (分桶未完成或源已更新，重新转换...)")
+                shutil.rmtree(bucket_dir)
+
+            skip_sorting = not extraction_optimized_buckets
+            if extraction_optimized_buckets:
+                with details:
+                    st.caption(
+                        f"🔎 {name}: extraction-optimized bucket sorting enabled"
+                        if lang == 'en'
+                        else f"🔎 {name}: 已启用提取优化分桶排序"
+                    )
 
             result = convert_parquet_directory_to_buckets(
                 source_dir=src_dir,
                 output_dir=bucket_dir,
                 partition_col=partition_col,
                 num_buckets=num_buckets,
-                overwrite=overwrite
+                overwrite=overwrite,
+                skip_sorting=skip_sorting,
             )
 
             if result.success:

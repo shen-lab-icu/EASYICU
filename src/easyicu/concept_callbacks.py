@@ -2296,6 +2296,9 @@ def _callback_sofa_component(
             if col_name in data.columns:
                 # Extract the column as a Series
                 col_data = data[col_name]
+                if ctx.concept_name == "sofa2_resp" and name == "ecmo_indication":
+                    kwargs[name] = col_data if isinstance(col_data, pd.Series) else pd.Series(col_data)
+                    continue
                 # Ensure it's a Series before converting to numeric
                 if isinstance(col_data, pd.Series):
                     kwargs[name] = pd.to_numeric(col_data, errors="coerce")
@@ -6903,4 +6906,3 @@ def _callback_miiv_icu_patients_filter(
 # Note: _apply_convert_unit_post_agg was removed (dead code).
 # Unit conversion is now handled inline in DuckDB via CASE WHEN + regexp_matches
 # in datasource.py's load_bucketed_table_aggregated().
-
