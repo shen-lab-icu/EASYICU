@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from easyicu.webapp.services import normalize_column_name
+
 
 _PROTECTED_CONTEXT_NAMES = {"execute_sidebar_export", "_install_app_context"}
 

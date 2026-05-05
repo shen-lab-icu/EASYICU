@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.services import count_unique_concepts, normalize_column_name
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to extracted data workflows."""

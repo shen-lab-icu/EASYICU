@@ -8,6 +8,20 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from easyicu.webapp.i18n import get_text
+from easyicu.webapp.page_header import render_page_header
+from easyicu.webapp.services import count_unique_concepts
+from easyicu.webapp.ui_helpers import (
+    FeatureCard,
+    StatCard,
+    render_feature_grid,
+    render_inline_heading,
+    render_kicker,
+    render_stat_grid,
+    render_status_banner,
+    render_steps,
+)
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to extracted home renderers."""
@@ -21,7 +35,12 @@ def render_data_overview():
     """渲染已加载数据的概览页面。"""
     lang = st.session_state.language
 
-    # 标题已经在main()中渲染，这里不再重复
+    render_page_header(
+        get_text('page_data_overview_title'),
+        get_text('page_data_overview_subtitle'),
+        icon="📊",
+        kicker=get_text('page_data_overview_kicker'),
+    )
 
     # 准备就绪提示 - 使用成功横幅
     db_display = "DEMO" if st.session_state.get('use_mock_data', False) else st.session_state.get('database', 'N/A').upper()
@@ -47,39 +66,17 @@ def render_data_overview():
     _lbl_status = "Status" if lang == 'en' else "状态"
     _status_val = "Ready" if lang == 'en' else "就绪"
 
-    st.markdown(f'''
-    <div style="background:linear-gradient(135deg,#ecfdf5 0%,#d1fae5 100%);border:1px solid #a7f3d0;border-radius:16px;padding:24px 28px;margin-bottom:24px;display:flex;align-items:center;gap:16px">
-        <div style="width:48px;height:48px;border-radius:12px;background:#10b981;display:flex;align-items:center;justify-content:center;flex-shrink:0">
-            <span style="color:#fff;font-size:1.4rem">✓</span>
-        </div>
-        <div>
-            <div style="font-weight:700;font-size:1.15rem;color:#065f46">{_ready_title}</div>
-            <div style="color:#047857;font-size:0.92rem;margin-top:2px">{_ready_sub}</div>
-        </div>
-    </div>
-    ''', unsafe_allow_html=True)
+    render_status_banner(_ready_title, _ready_sub, tone="success")
 
     # 状态概览 - 4 个统计卡片
-    st.markdown(f'''
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(10px,.5rem + .5vw,20px);margin-bottom:28px">
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 18px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
-            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:8px">{_lbl_db}</div>
-            <div style="font-size:1.5rem;font-weight:800;color:#6366f1">{db_display}</div>
-        </div>
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 18px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
-            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:8px">{_lbl_feat}</div>
-            <div style="font-size:1.5rem;font-weight:800;color:#111827">{n_concepts}</div>
-        </div>
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 18px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
-            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:8px">{_lbl_pat}</div>
-            <div style="font-size:1.5rem;font-weight:800;color:#111827">{n_patients:,}</div>
-        </div>
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px 18px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)">
-            <div style="font-size:0.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;margin-bottom:8px">{_lbl_status}</div>
-            <div style="font-size:1.2rem;font-weight:700;color:#10b981">● {_status_val}</div>
-        </div>
-    </div>
-    ''', unsafe_allow_html=True)
+    render_stat_grid(
+        [
+            StatCard(_lbl_db, db_display, "primary"),
+            StatCard(_lbl_feat, str(n_concepts)),
+            StatCard(_lbl_pat, f"{n_patients:,}"),
+            StatCard(_lbl_status, f"● {_status_val}", "success"),
+        ]
+    )
 
     # 快捷导航卡片
     if lang == 'en':
@@ -97,29 +94,12 @@ def render_data_overview():
 
     _nav_title = "Start Exploring" if lang == 'en' else "开始探索"
     _nav_hint = "Select a tab above to begin:" if lang == 'en' else "选择上方标签页开始："
-    st.markdown(f'''
-    <div style="margin-bottom:8px">
-        <span style="font-size:1.1rem;font-weight:700;color:#111827">{_nav_title}</span>
-        <span style="color:#9ca3af;font-size:0.88rem;margin-left:8px">{_nav_hint}</span>
-    </div>
-    ''', unsafe_allow_html=True)
-
-    _cards_html = ''
-    for icon, title, desc in features:
-        _cards_html += f'''
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:22px 20px;
-                     transition:all .2s ease;box-shadow:0 1px 3px rgba(0,0,0,.04)">
-            <div style="font-size:2rem;margin-bottom:10px">{icon}</div>
-            <div style="font-weight:700;color:#111827;font-size:1rem;margin-bottom:6px">{title}</div>
-            <div style="font-size:0.85rem;color:#6b7280;line-height:1.55">{desc}</div>
-        </div>'''
-    st.markdown(f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:28px">{_cards_html}</div>', unsafe_allow_html=True)
+    render_inline_heading(_nav_title, _nav_hint)
+    render_feature_grid([FeatureCard(icon, title, desc) for icon, title, desc in features])
 
     # 数据摘要
     summary_label = "Data Summary" if lang == 'en' else "数据摘要"
-    st.markdown(f'''
-    <div style="font-size:1.05rem;font-weight:700;color:#111827;margin-bottom:12px">{summary_label}</div>
-    ''', unsafe_allow_html=True)
+    render_inline_heading(summary_label)
 
     concept_stats = []
     for name, df in st.session_state.loaded_concepts.items():
@@ -148,8 +128,12 @@ def render_home(app_context: dict[str, Any] | None = None):
         render_data_overview()
         return
 
-    # 标题已经在main()中渲染，这里不再重复
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    render_page_header(
+        get_text('page_tutorial_title'),
+        get_text('page_tutorial_subtitle'),
+        icon="📚",
+        kicker=get_text('page_tutorial_kicker'),
+    )
 
     # 获取当前模式 - 使用app_mode（'extract'或'viz'）
     current_mode = st.session_state.get('app_mode', 'extract')
@@ -182,16 +166,7 @@ def render_home_viz_mode(lang):
     ]
     _cur_viz = 2 if step2_done else (1 if step1_done else 0)
 
-    _steps_html = ''
-    for idx, (title, desc) in enumerate(_steps_viz):
-        if idx < _cur_viz:
-            _dot = '<div class="step-dot done">✓</div>'
-        elif idx == _cur_viz:
-            _dot = f'<div class="step-dot active">{idx+1}</div>'
-        else:
-            _dot = f'<div class="step-dot">{idx+1}</div>'
-        _steps_html += f'<div class="step-indicator"><div style="display:flex;align-items:center;gap:10px">{_dot}<div class="step-text"><div>{title}</div><small>{desc}</small></div></div></div>'
-    st.markdown(f'<div style="display:flex;gap:32px;margin-bottom:28px">{_steps_html}</div>', unsafe_allow_html=True)
+    render_steps(_steps_viz, current_index=_cur_viz)
 
     # 教程内容 - 使用更干净的卡片样式
     if not step1_done:
@@ -272,16 +247,5 @@ def render_home_viz_mode(lang):
             ("📊", "数据质量", "缺失率分析"),
         ]
 
-    st.markdown(f'''
-    <div style="font-size:0.88rem;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">{_preview_title}</div>
-    ''', unsafe_allow_html=True)
-    _cards = ''
-    for icon, title, desc in features:
-        _cards += f'''
-        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:18px 14px;text-align:center">
-            <div style="font-size:1.6rem;margin-bottom:6px">{icon}</div>
-            <div style="font-weight:600;color:#111827;font-size:.9rem">{title}</div>
-            <div style="font-size:.78rem;color:#9ca3af;margin-top:3px">{desc}</div>
-        </div>'''
-    st.markdown(f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(8px,.4rem + .4vw,16px)">{_cards}</div>', unsafe_allow_html=True)
-
+    render_kicker(_preview_title)
+    render_feature_grid([FeatureCard(icon, title, desc) for icon, title, desc in features], columns=4, muted=True)

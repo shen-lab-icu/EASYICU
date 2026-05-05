@@ -1,0 +1,109 @@
+EasyICU Web UX rearchitecture list
+
+Purpose: after introducing the Research Agent and changing the product flow from "extract and visualize data" to "extract/prepare data -> review analysis -> optionally draft manuscript", the web UI needs a coordinated narrative and interaction refresh. This file is a handoff list for future agents.
+
+Core product decision:
+
+- Demo Mode should be a guided product tour and safe preview. It should not run the full Research Agent or expose token/API/workdir controls.
+- Real Data Mode should be the execution workspace. It can expose Research Agent configuration, but only after the user has clear data-source and cohort-building choices.
+- The Research Agent should default to analysis-first output: tables, figures, model diagnostics, findings, then optional manuscript drafting.
+- Manuscript drafting is a second-stage action after user review, not the default first run.
+
+Areas that need web updates:
+
+- [x] Entry page positioning
+  - Current framing: "Extract, Visualize, Export".
+  - New framing should include "Extract, Review, Analyze, Draft".
+  - The two mode cards should be clearer:
+    - Demo Mode: safe tour with simulated data and static Research Agent preview.
+    - Real Data Mode: local ICU data, module export folders, no-data extraction, full Research Agent.
+  - The overview cards should mention analysis-first and optional manuscript generation.
+
+- [x] Tutorial workflow figure
+  - Current Tutorial figure shows data source -> cohort -> concept selection -> export summary.
+  - Product decision after browser review: keep the Tutorial figure focused on data preparation only.
+  - Do not put the full Research Agent lane inside the Tutorial figure; it made the page feel overloaded.
+  - The figure is currently code-rendered in `src/easyicu/webapp/workflow_figure.py`, so small layout/text changes should be done in code.
+  - If a polished static figure is needed for the paper/product hero, generate it separately with image2 and keep the live Tutorial figure as an interactive, state-aware version.
+
+- [x] Research Agent demo page
+  - Current status: guide-only page exists and no longer exposes LLM/API/workdir/run controls in Demo Mode.
+  - Needs richer visual storytelling:
+    - static mock output gallery: Table 1, ROC/calibration, feature effects, findings card, manuscript excerpt.
+    - a visual "review gate" showing analysis first, manuscript later.
+    - sepsis mortality prediction as the default concrete story.
+  - image2 is appropriate for a polished hero/overview illustration here, because the goal is comprehension rather than live data inspection.
+  - Do not use image2 for actual analysis outputs; those should be generated from real data or deterministic demo artifacts.
+
+- [x] Research Agent real-data page
+  - Current status: module-folder mode, no-data path, progress callback, analysis-first stop, explicit module-folder build button, shared LLM settings, localized labels, and compact step expanders are in place.
+  - The default Real Data entry is now lightweight:
+    - no-data guided extraction first,
+    - module-folder mode second,
+    - upload/workspace/synthetic fallbacks after that.
+  - Module-folder mode now avoids mixing several export batches by preferring concrete export subfolders over a parent export root.
+  - Module-folder file selection no longer auto-selects every parquet; it caps the default to high-priority files relevant to demographics, outcomes, SOFA/sepsis, vitals, and lactate.
+  - Remaining future enhancement: add a plan-review step before executing the LLM pipeline.
+
+- [x] Cohort/Quick Viz/Tutorial -> Research Agent handoff
+  - A reusable handoff helper now appears once above the main tabs when `loaded_concepts` is available.
+  - The helper builds a stay-level frame, writes `research_agent_inbound_cohort` and `research_agent_inbound_cohort_label`, and activates the Research Agent session-prepared cohort path.
+  - The helper records an inbound cohort signature so the same cohort is not repeatedly advertised after it has already been sent.
+  - Remaining future enhancement: show richer diagnostics such as outcome availability and common question templates before handoff.
+
+- [x] AI assistant / LLM configuration integration
+  - Sidebar AI settings and Research Agent now share the same LLM config store.
+  - Research Agent defaults to "Use sidebar AI settings", with offline mock and per-run override as explicit alternatives.
+  - Session-state cleanup is centralized so mode switches do not leave stale agent/cohort caches behind.
+
+- [x] Main-page routing and state cleanup
+  - Top-level tab labels now come from `src/easyicu/webapp/page_registry.py` instead of being hard-coded inside `main()`.
+  - Session-state defaults and cleanup helpers live in `src/easyicu/webapp/session_state.py`, reducing the responsibility of the large `app.py` entry file.
+  - Remaining future enhancement: split the remaining cohort, export, and preview rendering blocks out of `app.py` in smaller PR-sized steps.
+
+- [x] Top-level tab typography
+  - Tutorial, Quick Visualization, Cohort Analysis, and Research Agent now share one compact page-header component.
+  - Research Agent no longer uses the global `main-header` scale inside the tab, so switching from other modules no longer feels like a separate homepage.
+  - The shared header lives in `src/easyicu/webapp/page_header.py`; styles live under `.app-page-*` in `styles.py`.
+
+- [ ] Visual asset strategy
+  - Use code-rendered components for live workflow status, real data tables, and actual output artifacts.
+  - Use image2 for high-level explanatory graphics:
+    - entry page product map,
+    - Research Agent capability overview,
+    - optional paper-aligned static figure.
+  - Store generated assets under a versioned local asset folder, e.g. `src/easyicu/webapp/assets/research_agent/`, with source prompts documented.
+
+Suggested image2 prompts:
+
+1. Research Agent overview hero
+
+   Create a clean editorial product illustration for an ICU data research platform. Show a left-to-right workflow: local ICU data modules, cohort builder, AI research agent, analysis review dashboard, optional manuscript draft. Use realistic dashboard panels, medical data tables, calibration/ROC charts, and a clear review gate before manuscript. Style: modern clinical analytics UI, white background, restrained blue/teal accents, no cartoon characters, no decorative blobs, no text-heavy labels. Aspect ratio 16:9.
+
+2. Tutorial two-lane workflow figure
+
+   Create a polished scientific workflow diagram for EasyICU. Two horizontal lanes: data preparation lane and research agent lane. Data lane: database source, cohort filters, concept selection, module export folder. Research lane: research question, cohort assembly, statistical analysis outputs, human review, manuscript draft. Use publication-quality flat UI panels, clean arrows, minimal labels, blue/teal/gray palette, suitable for a web tutorial and manuscript figure. Aspect ratio 16:9.
+
+3. Sepsis mortality demo output gallery
+
+   Create a realistic dashboard mockup for a sepsis mortality prediction study in ICU data. Include compact panels for cohort summary, Table 1, missingness, ROC curve, calibration curve, model findings, and an optional manuscript preview card. Style: clinical research analytics, dense but readable, white canvas, restrained color, no fake patient identifiers. Aspect ratio 16:9.
+
+Implementation order:
+
+- [x] Update entry-page copy and overview cards to reflect the new end-to-end research workflow.
+- [x] Simplify the live Tutorial workflow figure back to a data-preparation-only view.
+- [x] Add Research Agent demo output gallery using deterministic mock artifacts first.
+- [ ] Generate one image2 overview asset only after the page structure is stable.
+- [x] Add in-app copy explaining "Analysis first, manuscript later".
+- [x] Add browser verification for entry page, Real Data Research Agent, LLM settings, and module-folder mode after changes.
+- [x] Remove duplicated handoff banners from individual tabs and keep one global handoff call.
+- [x] Localize Research Agent boundary/error states and manuscript placeholder notices.
+- [x] Normalize the four main tab page headers so switching modules keeps the same typographic rhythm.
+
+Acceptance checks:
+
+- Demo Mode Research Agent has no API key, LLM picker, workdir, or Run Agent button.
+- Real Data Research Agent starts with real data/module/no-data options before synthetic demo.
+- Large module-folder merges only happen after an explicit Build button click.
+- Tutorial stays focused on data preparation; Research Agent workflow is explained on the Research Agent page.
+- Entry page makes it obvious that EasyICU is now a local-first ICU research workflow, not only an export tool.

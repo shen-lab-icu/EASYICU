@@ -11,6 +11,71 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
+
+def _quote_ident(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _sql_literal(value) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _duckdb_where(filters: Optional[List[Tuple]]) -> str:
+    """Render a tiny subset of PyArrow-style filters for fallback reads."""
+    if not filters:
+        return ""
+    clauses = []
+    for filt in filters:
+        if not isinstance(filt, tuple) or len(filt) != 3:
+            raise ValueError("DuckDB parquet fallback supports only (column, op, value) filters")
+        col, op, value = filt
+        op_l = str(op).lower()
+        if op_l in {"=", "=="}:
+            clauses.append(f"{_quote_ident(col)} = {_sql_literal(value)}")
+        elif op_l in {"!=", "<>"}:
+            clauses.append(f"{_quote_ident(col)} <> {_sql_literal(value)}")
+        elif op_l in {">", ">=", "<", "<="}:
+            clauses.append(f"{_quote_ident(col)} {op_l} {_sql_literal(value)}")
+        elif op_l == "in":
+            values = list(value)
+            if not values:
+                clauses.append("FALSE")
+            else:
+                clauses.append(
+                    f"{_quote_ident(col)} IN ("
+                    + ", ".join(_sql_literal(v) for v in values)
+                    + ")"
+                )
+        else:
+            raise ValueError(f"Unsupported DuckDB parquet fallback filter op: {op!r}")
+    return " WHERE " + " AND ".join(clauses)
+
+
+def _read_parquet_duckdb(
+    file_path: Union[str, Path],
+    columns: Optional[List[str]] = None,
+    filters: Optional[List[Tuple]] = None,
+) -> pd.DataFrame:
+    """Fallback reader for parquet files pyarrow can inspect but not decode."""
+    try:
+        import duckdb
+    except Exception as exc:  # pragma: no cover - only hit without duckdb installed
+        raise RuntimeError(
+            "pyarrow failed to read parquet and duckdb is not available for fallback"
+        ) from exc
+
+    path = str(Path(file_path)).replace("'", "''")
+    select_cols = "*" if columns is None else ", ".join(_quote_ident(c) for c in columns)
+    query = f"SELECT {select_cols} FROM read_parquet('{path}', union_by_name=true)"
+    query += _duckdb_where(filters)
+    return duckdb.connect().execute(query).fetchdf()
+
 def read_parquet(
     file_path: Union[str, Path],
     columns: Optional[List[str]] = None,
@@ -49,13 +114,24 @@ def read_parquet(
             filters=[('stay_id', 'in', patient_ids)]  # 只读取这些患者！
         )
     """
-    return pd.read_parquet(
-        file_path,
-        engine='pyarrow',
-        columns=columns,
-        filters=filters,
-        use_threads=use_threads
-    )
+    try:
+        return pd.read_parquet(
+            file_path,
+            engine='pyarrow',
+            columns=columns,
+            filters=filters,
+            use_threads=use_threads
+        )
+    except Exception as exc:
+        message = str(exc)
+        if "Repetition level histogram size mismatch" not in message:
+            raise
+        logger.warning(
+            "pyarrow could not decode %s (%s); falling back to DuckDB",
+            file_path,
+            message,
+        )
+        return _read_parquet_duckdb(file_path, columns=columns, filters=filters)
 
 def read_parquet_parallel(
     file_paths: List[Union[str, Path]],
@@ -135,7 +211,7 @@ def parquet_metadata(file_path: Union[str, Path]) -> dict:
         'columns': parquet_file.schema.names,
         'num_row_groups': parquet_file.num_row_groups,
         'size_bytes': Path(file_path).stat().st_size,
-        'schema': parquet_file.schema.to_string()
+        'schema': str(parquet_file.schema)
     }
 
 def parquet_peek(
@@ -156,13 +232,17 @@ def parquet_peek(
     Returns:
         前 n 行 DataFrame
     """
-    parquet_file = pq.ParquetFile(file_path)
-    
-    # 只读取第一个 row group
-    first_batch = parquet_file.read_row_group(0, columns=columns)
-    df = first_batch.to_pandas()
-    
-    return df.head(n)
+    try:
+        parquet_file = pq.ParquetFile(file_path)
+
+        # 只读取第一个 row group
+        first_batch = parquet_file.read_row_group(0, columns=columns)
+        df = first_batch.to_pandas()
+        return df.head(n)
+    except Exception as exc:
+        if "Repetition level histogram size mismatch" not in str(exc):
+            raise
+        return read_parquet(file_path, columns=columns).head(n)
 
 def optimize_parquet_for_filtering(
     input_path: Union[str, Path],
@@ -221,4 +301,3 @@ __all__ = [
     'optimize_parquet_for_filtering',
     'read_table_parquet'
 ]
-

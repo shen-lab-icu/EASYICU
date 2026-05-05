@@ -1,0 +1,59 @@
+name: research_agent CI
+
+on:
+  push:
+    paths:
+      - "src/easyicu/research_agent/**"
+      - "tests/research_agent/**"
+      - "examples/research_agent_*.py"
+      - ".github/workflows/research_agent_ci.yml"
+  pull_request:
+    paths:
+      - "src/easyicu/research_agent/**"
+      - "tests/research_agent/**"
+      - "examples/research_agent_*.py"
+      - ".github/workflows/research_agent_ci.yml"
+
+# T1.1 — research_agent has its own CI gate so a regression in the
+# Python 3.9 wheel of pydantic / pyarrow shows up before it lands in
+# the main suite. The job stays slim: we install only what
+# research_agent imports (pandas, pydantic, pyarrow, matplotlib,
+# numpy, scipy, pytest) plus the package itself in editable mode.
+jobs:
+  test:
+    name: research_agent tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install minimal research_agent dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Only what research_agent itself needs — keep this slim so a
+          # regression in an unrelated extra (webapp, llmserver) does
+          # not block the agent CI.
+          pip install \
+            "pandas>=1.5" \
+            "pyarrow>=14.0.0" \
+            "numpy>=1.23" \
+            "pydantic>=2.0" \
+            "matplotlib>=3.7" \
+            "scipy>=1.10" \
+            "pytest>=7.0"
+          # Editable install of the easyicu package without extras so
+          # ``import easyicu.research_agent`` succeeds.
+          pip install --no-deps -e .
+
+      - name: Run research_agent test suite
+        run: |
+          pytest tests/research_agent -q

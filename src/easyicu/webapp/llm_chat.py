@@ -24,6 +24,12 @@ from pathlib import Path
 
 import requests
 import streamlit as st
+from easyicu.webapp.llm_config import (
+    PROVIDERS,
+    ensure_llm_config_state,
+    is_configured as _shared_is_configured,
+    needs_api_key as _shared_needs_api_key,
+)
 
 # ---------------------------------------------------------------------------
 # System prompt — enriched with EasyICU documentation & concept catalogue
@@ -301,11 +307,6 @@ def _build_workflow_status_context(lang: str) -> str:
     return "\n".join(lines)
 
 
-def _hosted_base_url() -> str:
-    """Return the hosted relay URL exposed to end users."""
-    return os.getenv("EASYICU_HOSTED_BASE_URL", "http://47.241.42.236/v1").strip()
-
-
 def _repo_blob_base() -> str:
     """Return the GitHub blob base used for clickable file links."""
     return os.getenv(
@@ -313,112 +314,15 @@ def _repo_blob_base() -> str:
         "https://github.com/shen-lab-icu/easyicu/blob/main",
     ).rstrip("/")
 
-
-def _default_provider_key() -> str:
-    """Prefer hosted mode when a hosted relay URL is configured."""
-    return "easyicu_hosted" if _hosted_base_url() else "openrouter"
-
-# ---------------------------------------------------------------------------
-# Provider registry: (display, default_base_url, default_model, needs_key, description_en, description_zh)
-# ---------------------------------------------------------------------------
-PROVIDERS = {
-    "easyicu_hosted": (
-        "EasyICU Hosted",
-        _hosted_base_url(),
-        "hosted-default",
-        False,
-        "Use the EasyICU managed relay. No user API key required.",
-        "使用 EasyICU 托管代理，无需用户自己填写 API Key。",
-    ),
-    "huggingface_free": (
-        "HuggingFace",
-        "https://router.huggingface.co/v1",
-        "deepseek-ai/DeepSeek-R1:fastest",
-        True,
-        "Requires your own Hugging Face token.",
-        "需要用户自己提供 Hugging Face token。",
-    ),
-    "openai": (
-        "OpenAI",
-        "https://api.openai.com/v1",
-        "gpt-4o",
-        True,
-        "GPT-4o, GPT-4o-mini, o1, etc.",
-        "GPT-4o、GPT-4o-mini、o1 等。",
-    ),
-    "deepseek": (
-        "DeepSeek",
-        "https://api.deepseek.com",
-        "deepseek-chat",
-        True,
-        "DeepSeek-V3, DeepSeek-R1. Very affordable.",
-        "DeepSeek-V3、DeepSeek-R1，价格极低。",
-    ),
-    "anthropic": (
-        "Anthropic",
-        "https://api.anthropic.com/v1",
-        "claude-sonnet-4-20250514",
-        True,
-        "Claude Sonnet, Opus, Haiku.",
-        "Claude Sonnet、Opus、Haiku。",
-    ),
-    "openrouter": (
-        "OpenRouter",
-        "https://openrouter.ai/api/v1",
-        "deepseek/deepseek-chat-v3-0324:free",
-        True,
-        "Aggregator with free & paid models. Get key at openrouter.ai",
-        "模型聚合平台，有免费和付费模型。在 openrouter.ai 获取 Key。",
-    ),
-    "together": (
-        "Together AI",
-        "https://api.together.xyz/v1",
-        "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        True,
-        "Llama, Mistral, Qwen. Free tier available (signup).",
-        "Llama、Mistral、Qwen。注册即有免费额度。",
-    ),
-    "groq": (
-        "Groq",
-        "https://api.groq.com/openai/v1",
-        "llama-3.3-70b-versatile",
-        True,
-        "Ultra-fast inference. Free tier with rate limits.",
-        "超低延迟推理。免费套餐有速率限制。",
-    ),
-    "siliconflow": (
-        "SiliconFlow (硅基流动)",
-        "https://api.siliconflow.cn/v1",
-        "deepseek-ai/DeepSeek-V3",
-        True,
-        "China-based, DeepSeek/Qwen. Free tier available.",
-        "国内平台，DeepSeek/Qwen 等模型，注册赠送额度。",
-    ),
-    "custom": (
-        "⚙️ Custom / Compatible",
-        "",
-        "",
-        True,
-        "Any OpenAI-compatible endpoint.",
-        "任意 OpenAI 兼容接口。",
-    ),
-}
-
 # ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------
 
 def _init_chat_state():
     """Ensure all chat-related session keys exist."""
-    default_provider = _default_provider_key()
+    ensure_llm_config_state()
     defaults = {
-        "llm_enabled": False,
-        "llm_provider": default_provider,
-        "llm_api_key": "",
-        "llm_model": "",
-        "llm_base_url": "",
         "llm_messages": [],
-        "llm_configured": False,
         "llm_last_tool_events": [],
         "llm_last_verification": None,
         # Background response tracking
@@ -1061,16 +965,12 @@ def _verify_response(client, messages: list[dict[str, str]], draft: str, lang: s
 
 
 def _needs_api_key(provider: str) -> bool:
-    return PROVIDERS.get(provider, PROVIDERS["custom"])[3]
+    return _shared_needs_api_key(provider)
 
 
 def _is_configured() -> bool:
     """Return True when the provider is ready to use."""
-    provider = st.session_state.get("llm_provider", "openrouter")
-    if not _needs_api_key(provider):
-        default_url = PROVIDERS.get(provider, PROVIDERS["custom"])[1]
-        return bool((st.session_state.get("llm_base_url", "") or default_url).strip())
-    return bool(st.session_state.get("llm_api_key", "").strip())
+    return _shared_is_configured()
 
 
 def _get_client():

@@ -58,6 +58,8 @@ all = [
 easyicu = "easyicu.scripts.extract_features:main"
 easyicu-webapp = "easyicu.webapp.__main__:main"
 easyicu-llm-server = "easyicu.hosted_llm_server:main"
+easyicu-research-agent = "easyicu.research_agent.cli:main"
+easyicu-research-replication = "easyicu.research_agent.replication_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/shen-lab-icu/easyicu"
