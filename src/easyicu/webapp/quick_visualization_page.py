@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.page_header import render_page_header
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
@@ -36,21 +38,11 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
     if not direct_figure_panel:
         header_cols = st.columns([3.1, 1.3])
         with header_cols[0]:
-            _viz_title = get_text('quick_viz')
-            hint_text = (
-                "Generate demo data or load previously exported result files for interactive analysis"
-                if entry_mode == 'demo'
-                else "Load previously exported result files for interactive analysis"
-            )
-            if lang != 'en':
-                hint_text = "生成模拟数据或从之前导出的结果文件中加载，进行交互式分析" if entry_mode == 'demo' else "从之前导出的结果文件中加载，进行交互式分析"
-
-            st.markdown(
-                f'''
-                <div class="compact-section-title">{_viz_title}</div>
-                <div class="compact-section-desc">{hint_text}</div>
-                ''',
-                unsafe_allow_html=True,
+            render_page_header(
+                get_text('page_quick_viz_title'),
+                get_text('page_quick_viz_subtitle_demo' if entry_mode == 'demo' else 'page_quick_viz_subtitle_real'),
+                icon="📊",
+                kicker=get_text('page_quick_viz_kicker'),
             )
         with header_cols[1]:
             if not _is_screenshot_mode():

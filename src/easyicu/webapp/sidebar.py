@@ -11,6 +11,7 @@ from pathlib import Path
 import os
 
 import streamlit as st
+from easyicu.webapp.session_state import clear_run_state
 
 
 _PROTECTED_CONTEXT_NAMES = {"render_sidebar", "_install_app_context"}
@@ -72,17 +73,9 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
         if entry_mode != 'none':
             back_label = "🔙 Back to Mode Selection" if st.session_state.language == 'en' else "🔙 返回模式选择"
             if st.button(back_label, key="back_to_entry", use_container_width=True):
+                clear_run_state("all")
                 st.session_state.entry_mode = 'none'
-                # 清空所有数据
-                st.session_state.loaded_concepts = {}
-                st.session_state.loaded_data_origin = 'none'
-                st.session_state.patient_ids = []
                 st.session_state.use_mock_data = False
-                # 清理Cohort相关缓存
-                for key in ['group_a_data', 'group_b_data', 'multidb_data', 'dash_demographics',
-                            'multidb_is_demo', 'dash_is_demo', 'cohort_is_demo']:
-                    if key in st.session_state:
-                        del st.session_state[key]
                 st.rerun()
             st.markdown("---")
 

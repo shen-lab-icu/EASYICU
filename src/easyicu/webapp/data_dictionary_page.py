@@ -8,6 +8,9 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from easyicu.webapp.components.constants import get_concept_groups
+from easyicu.webapp.concept_catalog import CONCEPT_DESCRIPTIONS, CONCEPT_DICTIONARY
+
 _PROTECTED_NAMES = {
     'render_data_dictionary',
     '_render_category_table',
@@ -524,7 +527,7 @@ def render_home_data_dictionary(lang, app_context: dict[str, Any] | None = None)
             n = len(matched_rows)
             result_text = f"Found **{n}** matching feature(s)" if lang == 'en' else f"找到 **{n}** 个匹配特征"
             st.success(result_text)
-            _dataframe_compat(
+            st.dataframe(
                 pd.DataFrame(matched_rows),
                 width="stretch",
                 hide_index=True,
@@ -540,8 +543,7 @@ def render_home_data_dictionary(lang, app_context: dict[str, Any] | None = None)
         for group_name in concept_groups.keys():
             feat_text = "features" if lang == 'en' else "个特征"
             with st.expander(f"{group_name} ({len(concept_groups[group_name])} {feat_text})"):
-                table_renderer = _APP_CONTEXT.get('_render_home_dict_table', _render_home_dict_table)
-                table_renderer(concept_groups[group_name], lang)
+                _render_home_dict_table(concept_groups[group_name], lang)
 
 
 def _render_home_dict_table(concepts, lang, app_context: dict[str, Any] | None = None):
@@ -576,4 +578,4 @@ def _render_home_dict_table(concepts, lang, app_context: dict[str, Any] | None =
 
     if rows:
         df = pd.DataFrame(rows)
-        _dataframe_compat(df, width="stretch", hide_index=True, height=300)
+        st.dataframe(df, width="stretch", hide_index=True, height=300)

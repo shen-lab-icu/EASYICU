@@ -6,14 +6,16 @@
 from __future__ import annotations
 
 import streamlit as st
+from easyicu.webapp.bootstrap import (
+    configure_page,
+    configure_runtime_env,
+    render_runtime_shell_styles,
+    sync_screenshot_mode,
+)
+from easyicu.webapp.compat import apply_streamlit_compat, query_param_value
 
 # Streamlit 1.45+ enforces that page config is the first Streamlit command.
-st.set_page_config(
-    page_title="EasyICU Data Explorer",
-    page_icon="🏥",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+configure_page(st)
 
 from pathlib import Path
 import pandas as pd
@@ -83,6 +85,18 @@ from easyicu.webapp.paper_figures import (
 from easyicu.webapp.workflow_figure import _render_extraction_pipeline_figure as _render_extraction_pipeline_figure_impl
 from easyicu.webapp.styles import render_global_styles
 from easyicu.webapp.i18n import get_text, strip_emoji
+from easyicu.webapp.page_registry import build_main_page_registry
+from easyicu.webapp.page_header import render_page_header
+from easyicu.webapp.session_state import get_state, init_session_state
+from easyicu.webapp.services import (
+    COLUMN_NORMALIZATION_MAP,
+    NORMALIZED_TO_ORIGINAL_MAP,
+    count_unique_columns,
+    count_unique_concepts,
+    get_unique_concepts,
+    map_column_to_concept,
+    normalize_column_name,
+)
 from easyicu.webapp.demo_data import (
     _build_group_feature_data_from_loaded_concepts,
     _build_mock_group_feature_data,
@@ -168,124 +182,8 @@ from easyicu.webapp.concept_catalog import (
 )
 
 
-def _normalize_width_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Translate deprecated Streamlit width flags to the newer width API."""
-    if "use_container_width" in kwargs and kwargs.get("use_container_width") is not None and "width" not in kwargs:
-        use_container_width = kwargs.pop("use_container_width")
-        kwargs["width"] = "stretch" if use_container_width else "content"
-    else:
-        kwargs.pop("use_container_width", None)
-    return kwargs
-
-
-def _legacy_width_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Fallback for older Streamlit builds that do not accept width='stretch'."""
-    width = kwargs.pop("width", None)
-    if width == "stretch":
-        kwargs["use_container_width"] = True
-    elif width == "content":
-        kwargs["use_container_width"] = False
-    return kwargs
-
-
-def _dataframe_compat(data, **kwargs):
-    """Render dataframes across Streamlit versions.
-
-    Newer releases accept `width="stretch"`, while older builds expect an
-    integer width. Fall back to `use_container_width=True` when needed.
-    """
-    dataframe_fn = getattr(st, "_easyicu_original_dataframe", st.dataframe)
-    kwargs = _normalize_width_kwargs(dict(kwargs))
-    try:
-        return dataframe_fn(data, **kwargs)
-    except TypeError:
-        if kwargs.get("width") != "stretch":
-            raise
-        return dataframe_fn(data, **_legacy_width_kwargs(dict(kwargs)))
-
-
-def _button_compat(label, *args, **kwargs):
-    button_fn = getattr(st, "_easyicu_original_button", st.button)
-    kwargs = _normalize_width_kwargs(dict(kwargs))
-    try:
-        return button_fn(label, *args, **kwargs)
-    except TypeError:
-        return button_fn(label, *args, **_legacy_width_kwargs(dict(kwargs)))
-
-
-def _download_button_compat(label, data, *args, **kwargs):
-    download_button_fn = getattr(st, "_easyicu_original_download_button", st.download_button)
-    kwargs = _normalize_width_kwargs(dict(kwargs))
-    try:
-        return download_button_fn(label, data, *args, **kwargs)
-    except TypeError:
-        return download_button_fn(label, data, *args, **_legacy_width_kwargs(dict(kwargs)))
-
-
-def _form_submit_button_compat(label="Submit", *args, **kwargs):
-    submit_fn = getattr(st, "_easyicu_original_form_submit_button", st.form_submit_button)
-    kwargs = _normalize_width_kwargs(dict(kwargs))
-    try:
-        return submit_fn(label, *args, **kwargs)
-    except TypeError:
-        return submit_fn(label, *args, **_legacy_width_kwargs(dict(kwargs)))
-
-
-def _plotly_chart_compat(figure_or_data, *args, **kwargs):
-    plotly_chart_fn = getattr(st, "_easyicu_original_plotly_chart", st.plotly_chart)
-    return plotly_chart_fn(figure_or_data, *args, **kwargs)
-
-
-if not hasattr(st, "_easyicu_original_dataframe"):
-    st._easyicu_original_dataframe = st.dataframe
-    st.dataframe = _dataframe_compat
-if not hasattr(st, "_easyicu_original_button"):
-    st._easyicu_original_button = st.button
-    st.button = _button_compat
-if not hasattr(st, "_easyicu_original_download_button"):
-    st._easyicu_original_download_button = st.download_button
-    st.download_button = _download_button_compat
-if not hasattr(st, "_easyicu_original_form_submit_button"):
-    st._easyicu_original_form_submit_button = st.form_submit_button
-    st.form_submit_button = _form_submit_button_compat
-if not hasattr(st, "_easyicu_original_plotly_chart"):
-    st._easyicu_original_plotly_chart = st.plotly_chart
-    st.plotly_chart = _plotly_chart_compat
-
-
-def _query_param_exists(key: str) -> bool:
-    """Return whether a query parameter is present across Streamlit versions."""
-    try:
-        params = getattr(st, "query_params", {})
-        return key in params
-    except Exception:
-        return False
-
-
-def _query_param_value(key: str, default: str = "") -> str:
-    """Read a Streamlit query parameter without depending on a specific API version."""
-    try:
-        params = getattr(st, "query_params", {})
-        value = params.get(key, default)
-    except Exception:
-        value = default
-    if isinstance(value, list):
-        value = value[0] if value else default
-    return str(value).strip()
-
-
-def _query_flag_enabled(key: str) -> bool:
-    """Read a truthy/present Streamlit query flag without depending on a specific API version."""
-    if not _query_param_exists(key):
-        return False
-    value = _query_param_value(key)
-    return value.lower() not in {"0", "false", "no", "off", "none"}
-
-
-
-
-# 🚀 性能优化：禁用自动缓存清除，保持表缓存在多次加载间复用
-os.environ['EASYICU_AUTO_CLEAR_CACHE'] = 'False'
+apply_streamlit_compat(st)
+configure_runtime_env()
 
 # 尝试导入美化组件
 try:
@@ -294,226 +192,10 @@ try:
 except ImportError:
     HAS_EXTRAS = False
 
-# 初始化侧边栏展开状态
-if 'sidebar_expanded' not in st.session_state:
-    st.session_state.sidebar_expanded = False
-env_screenshot = os.environ.get("EASYICU_SCREENSHOT_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-query_screenshot = _query_flag_enabled("figure") or _query_flag_enabled("screenshot")
-if env_screenshot:
-    st.session_state.screenshot_mode = True
-    st.session_state['_screenshot_mode_source'] = 'env'
-elif query_screenshot:
-    st.session_state.screenshot_mode = True
-    st.session_state['_screenshot_mode_source'] = 'query'
-elif st.session_state.get('_screenshot_mode_source') in {'query', 'env'}:
-    # URL-triggered screenshot mode should not leak back into the normal app.
-    st.session_state.screenshot_mode = False
-    st.session_state['_screenshot_mode_source'] = 'manual'
-    st.session_state.pop('_figure_target_section', None)
-    st.session_state.pop('_figure_target_panel', None)
-elif 'screenshot_mode' not in st.session_state:
-    st.session_state.screenshot_mode = False
-    st.session_state['_screenshot_mode_source'] = 'manual'
-
-# 侧边栏宽度设置 - 根据展开状态动态调整
-screenshot_mode_enabled = bool(st.session_state.get('screenshot_mode', False))
-sidebar_width = "100vw" if st.session_state.sidebar_expanded else "clamp(420px, 31vw, 720px)"
-sidebar_min_width = "100vw" if st.session_state.sidebar_expanded else "clamp(400px, 29vw, 680px)"
-sidebar_display = "none" if screenshot_mode_enabled else "block"
-main_display = "block" if screenshot_mode_enabled else ("none" if st.session_state.sidebar_expanded else "block")
-floating_ai_display = "none" if screenshot_mode_enabled else "block"
-st.markdown(f"""
-<style>
-    [data-testid="stSidebar"] {{
-        display: {sidebar_display} !important;
-        min-width: {sidebar_min_width};
-        max-width: {sidebar_width};
-        width: {sidebar_width} !important;
-    }}
-    [data-testid="stSidebar"] > div {{
-        width: 100% !important;
-    }}
-    /* 隐藏侧边栏折叠按钮 */
-    button[kind="headerNoPadding"] {{
-        display: none !important;
-    }}
-    [data-testid="stSidebarCollapseButton"] {{
-        display: none !important;
-    }}
-    header,
-    [data-testid="stToolbar"],
-    [data-testid="stDecoration"],
-    [data-testid="stStatusWidget"],
-    [data-testid="stDeployButton"],
-    [data-testid="manage-app-button"],
-    .stDeployButton,
-    .stAppDeployButton,
-    button[title="Deploy"],
-    a[href*="share.streamlit.io"] {{
-        display: none !important;
-        visibility: hidden !important;
-        pointer-events: none !important;
-    }}
-    .block-container {{
-        padding-top: {'1.1rem' if screenshot_mode_enabled else '2rem'} !important;
-        max-width: {'1500px' if screenshot_mode_enabled else 'initial'} !important;
-    }}
-    .compact-inline-notice {{
-        display: {'none' if screenshot_mode_enabled else 'block'} !important;
-    }}
-    .viz-demo-load-card {{
-        border: 1px solid #cfe0f3;
-        border-radius: 16px;
-        background:
-            radial-gradient(circle at 100% 0%, rgba(37, 99, 235, 0.08), transparent 36%),
-            linear-gradient(135deg, #ffffff 0%, #f5f9ff 100%);
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.055);
-        padding: 1rem 1.1rem;
-        margin: 0.55rem 0 0.75rem;
-    }}
-    .viz-demo-load-kicker {{
-        color: #2563eb;
-        font-size: 0.68rem;
-        font-weight: 900;
-        letter-spacing: 0.11em;
-        text-transform: uppercase;
-        margin-bottom: 0.24rem;
-    }}
-    .viz-demo-load-title {{
-        color: #0b1f44;
-        font-size: 1.08rem;
-        font-weight: 900;
-        letter-spacing: -0.025em;
-        margin-bottom: 0.22rem;
-    }}
-    .viz-demo-load-subtitle {{
-        color: #60718a;
-        font-size: 0.84rem;
-        line-height: 1.55;
-    }}
-    .viz-empty-state {{
-        text-align: center;
-        padding: 2.35rem 1.4rem;
-        background:
-            radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.08), transparent 34%),
-            linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
-        border: 1px solid #dbeafe;
-        border-radius: 18px;
-        margin: 1rem 0;
-        box-shadow: 0 14px 34px rgba(15, 23, 42, 0.055);
-    }}
-    .viz-empty-icon {{
-        width: 3.2rem;
-        height: 3.2rem;
-        margin: 0 auto 0.8rem;
-        border-radius: 16px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: #ffffff;
-        font-size: 1.55rem;
-        background: linear-gradient(135deg, #2f7cf6 0%, #0b65d8 100%);
-        box-shadow: 0 12px 26px rgba(37, 99, 235, 0.22);
-    }}
-    .viz-empty-title {{
-        color: #0b1f44;
-        font-size: 1.22rem;
-        font-weight: 900;
-        letter-spacing: -0.03em;
-        margin-bottom: 0.3rem;
-    }}
-    .viz-empty-subtitle {{
-        color: #60718a;
-        font-size: 0.9rem;
-        line-height: 1.55;
-    }}
-    details[data-testid="stExpander"],
-    div[data-testid="stExpander"] {{
-        display: {'none' if screenshot_mode_enabled else 'block'} !important;
-    }}
-    .figure-table {{
-        border: 1px solid #dbeafe;
-        border-radius: 14px;
-        overflow: hidden;
-        background: #ffffff;
-        box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
-    }}
-    .figure-table table {{
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.78rem;
-        color: #0f172a;
-    }}
-    .figure-table th {{
-        background: #f8fafc;
-        color: #475569;
-        text-transform: uppercase;
-        letter-spacing: 0.045em;
-        font-size: 0.68rem;
-        font-weight: 800;
-        padding: 9px 10px;
-        border-bottom: 1px solid #dbeafe;
-    }}
-    .figure-table td {{
-        padding: 8px 10px;
-        border-bottom: 1px solid #eef2f7;
-        vertical-align: middle;
-    }}
-    .figure-table tr:last-child td {{
-        border-bottom: 0;
-    }}
-    .figure-table td:first-child,
-    .figure-table th:first-child {{
-        color: #2563eb;
-        font-weight: 700;
-    }}
-    /* 展开时隐藏右侧主内容 */
-    [data-testid="stMain"] {{
-        display: {main_display} !important;
-        overflow-y: auto !important;
-    }}
-    [data-testid="stAppViewContainer"],
-    [data-testid="stAppViewBlockContainer"],
-    section.main {{
-        overflow-y: auto !important;
-        height: auto !important;
-        min-height: 100vh !important;
-    }}
-    div.st-key-floating_ai_launcher,
-    div.st-key-floating_ai_panel {{
-        display: {floating_ai_display} !important;
-    }}
-    iframe[title*="streamlit_shadcn_ui"],
-    iframe[title^="streamlit_shadcn_ui"] {{
-        display: {floating_ai_display} !important;
-        visibility: {'hidden' if screenshot_mode_enabled else 'visible'} !important;
-    }}
-    html, body {{
-        overflow-y: auto !important;
-        height: auto !important;
-        background: #f4f8fc !important;
-    }}
-    [data-testid="stAppViewContainer"] {{
-        overflow-y: auto !important;
-        background:
-            radial-gradient(circle at 15% -6%, rgba(37, 99, 235, 0.075), transparent 30%),
-            radial-gradient(circle at 92% 4%, rgba(14, 165, 233, 0.08), transparent 34%),
-            linear-gradient(180deg, #f7fbff 0%, #f4f8fc 42%, #f8fafc 100%) !important;
-    }}
-    [data-testid="stMain"] {{
-        display: {main_display} !important;
-        overflow-y: visible !important;
-    }}
-    [data-testid="stAppViewBlockContainer"],
-    section.main {{
-        overflow-y: visible !important;
-        height: auto !important;
-        min-height: 100vh !important;
-    }}
-</style>
-""", unsafe_allow_html=True)
-
-# 🎨 现代化 CSS 样式系统 — Premium Design System v1
+# Runtime UI shell styles are dynamic because screenshot mode and sidebar width
+# live in session state. The static design system remains in styles.py.
+sync_screenshot_mode(st)
+render_runtime_shell_styles(st)
 render_global_styles(st)
 
 
@@ -1091,99 +773,7 @@ def _apply_assistant_preset():
     st.session_state['_scroll_to_top'] = True
 
 
-# 🔧 列名规范化映射：将重复的展开列名统一为简短的规范名称
-# 这些列来自 kdigo_aki, kdigo_creat, kdigo_uo 等复合概念的展开
-# 规范化后每个唯一的数据列只保留一份，避免重复
-COLUMN_NORMALIZATION_MAP = {
-    # kdigo_aki_ 前缀的列 -> 规范名
-    'kdigo_aki_aki': 'aki',
-    'kdigo_aki_aki_stage': 'aki_stage',
-    'kdigo_aki_aki_stage_creat': 'aki_stage_creat',
-    'kdigo_aki_aki_stage_uo': 'aki_stage_uo',
-    'kdigo_aki_crea': 'crea',  # 注意：crea 在 chemistry 模块也有，需要区分
-    'kdigo_aki_creat_low_past_48hr': 'creat_low_past_48hr',
-    'kdigo_aki_creat_low_past_7day': 'creat_low_past_7day',
-    'kdigo_aki_rrt': 'rrt',
-    'kdigo_aki_uo_rt_6hr': 'uo_rt_6hr',
-    'kdigo_aki_uo_rt_12hr': 'uo_rt_12hr',
-    'kdigo_aki_uo_rt_24hr': 'uo_rt_24hr',
-    # kdigo_creat_ 前缀的列 -> 规范名（与 kdigo_aki_ 重复）
-    'kdigo_creat_aki_stage_creat': 'aki_stage_creat',
-    'kdigo_creat_crea': 'crea',
-    'kdigo_creat_creat_low_past_48hr': 'creat_low_past_48hr',
-    'kdigo_creat_creat_low_past_7day': 'creat_low_past_7day',
-    # kdigo_uo_ 前缀的列 -> 规范名（与 kdigo_aki_ 重复）
-    'kdigo_uo_aki_stage_uo': 'aki_stage_uo',
-    'kdigo_uo_uo_rt_6hr': 'uo_rt_6hr',
-    'kdigo_uo_uo_rt_12hr': 'uo_rt_12hr',
-    'kdigo_uo_uo_rt_24hr': 'uo_rt_24hr',
-}
-
-# 🔧 反向映射：规范名 -> 所有原始列名（用于查找数据）
-NORMALIZED_TO_ORIGINAL_MAP = {}
-for orig, norm in COLUMN_NORMALIZATION_MAP.items():
-    if norm not in NORMALIZED_TO_ORIGINAL_MAP:
-        NORMALIZED_TO_ORIGINAL_MAP[norm] = []
-    NORMALIZED_TO_ORIGINAL_MAP[norm].append(orig)
-
-
-def normalize_column_name(col_name: str) -> str:
-    """将列名规范化为统一的简短名称。
-
-    对于重复的展开列（如 kdigo_aki_aki, kdigo_creat_crea），返回规范名（如 aki, crea）。
-    对于普通列名，直接返回原名。
-
-    Args:
-        col_name: 原始列名
-
-    Returns:
-        规范化后的列名
-    """
-    return COLUMN_NORMALIZATION_MAP.get(col_name, col_name)
-
-
-def count_unique_columns(column_names: list) -> int:
-    """统计唯一列数量（规范化后去重）。
-
-    每个唯一的数据列算作一个 concept。
-
-    Args:
-        column_names: 列名列表
-
-    Returns:
-        唯一列数量
-    """
-    normalized = set()
-    for col in column_names:
-        normalized.add(normalize_column_name(col))
-    return len(normalized)
-
-
-# 🔧 保持向后兼容：旧函数名指向新实现
-def map_column_to_concept(col_name: str) -> str:
-    """将列名映射到概念名（向后兼容，现在使用规范化）。"""
-    return normalize_column_name(col_name)
-
-
-def count_unique_concepts(column_names: list) -> int:
-    """统计唯一概念数量（向后兼容，现在使用规范化）。"""
-    return count_unique_columns(column_names)
-
-
-def get_unique_concepts(column_names: list) -> set:
-    """获取唯一概念集合（规范化后去重）。
-
-    Args:
-        column_names: 列名列表
-
-    Returns:
-        唯一概念集合
-    """
-    concepts = set()
-    for col in column_names:
-        concept = normalize_column_name(col)
-        concepts.add(concept)
-    return concepts
+# Column normalization services are imported from easyicu.webapp.services.
 
 # 保持向后兼容的CONCEPT_GROUPS（默认中文）
 CONCEPT_GROUPS = {
@@ -1646,84 +1236,6 @@ def get_optimal_parallel_config(num_patients: int = None, task_type: str = 'load
     return workers, backend
 
 
-def init_session_state():
-    """初始化 session state。"""
-    # 🆕 入口模式：'none' (入口页), 'demo' (演示模式), 'real' (真实数据模式)
-    if 'entry_mode' not in st.session_state:
-        st.session_state.entry_mode = 'none'
-    if 'data_path' not in st.session_state:
-        st.session_state.data_path = None
-    if 'database' not in st.session_state:
-        st.session_state.database = 'miiv'
-    if 'loaded_concepts' not in st.session_state:
-        st.session_state.loaded_concepts = {}
-    if 'loaded_data_origin' not in st.session_state:
-        st.session_state.loaded_data_origin = 'none'
-    if 'patient_ids' not in st.session_state:
-        st.session_state.patient_ids = []
-    if 'all_patient_count' not in st.session_state:
-        st.session_state.all_patient_count = 0
-    if 'selected_patient' not in st.session_state:
-        st.session_state.selected_patient = None
-    if 'use_mock_data' not in st.session_state:
-        st.session_state.use_mock_data = False
-    if 'id_col' not in st.session_state:
-        st.session_state.id_col = 'stay_id'
-    # 新增：用于简化流程的状态
-    if 'selected_concepts' not in st.session_state:
-        st.session_state.selected_concepts = []
-    if 'export_completed' not in st.session_state:
-        st.session_state.export_completed = False
-    if 'mock_params' not in st.session_state:
-        st.session_state.mock_params = {'n_patients': 100, 'hours': 72}
-    if 'trigger_export' not in st.session_state:
-        st.session_state.trigger_export = False
-    if 'export_format' not in st.session_state:
-        st.session_state.export_format = 'Parquet'  # 默认Parquet
-    if 'export_path' not in st.session_state:
-        st.session_state.export_path = os.path.expanduser('~/easyicu_export')
-    if 'path_validated' not in st.session_state:
-        st.session_state.path_validated = False
-    if 'language' not in st.session_state:
-        st.session_state.language = 'en'  # 默认英文
-    if 'entry_lang_select' not in st.session_state:
-        st.session_state.entry_lang_select = 'EN' if st.session_state.language == 'en' else 'ZH'
-    # 🚀 性能优化：患者数量限制
-    # 全量 MIIV 约 5万患者/4000万行，加载需 ~50s；100患者约2s
-    # 🔧 FIX 2025-01-28: 默认全量加载（0=不限制），满足大多数用户需求
-    if 'patient_limit' not in st.session_state:
-        st.session_state.patient_limit = 0  # 默认全量加载
-    if 'available_patient_ids' not in st.session_state:
-        st.session_state.available_patient_ids = None
-    # 🆕 步骤确认状态
-    if 'step1_confirmed' not in st.session_state:
-        st.session_state.step1_confirmed = False
-    if 'step2_confirmed' not in st.session_state:
-        st.session_state.step2_confirmed = False
-    if 'sidebar_expanded' not in st.session_state:
-        st.session_state.sidebar_expanded = False
-    if 'sidebar_preview_enabled' not in st.session_state:
-        st.session_state.sidebar_preview_enabled = False
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _render_sepsis_ai_button(lang: str) -> None:
     """Offer a contextual AI explanation button for Sepsis settings."""
     button_label = "🤖 Ask AI about Sepsis settings" if lang == 'en' else "🤖 问 AI 解释脓毒症设置"
@@ -1931,6 +1443,50 @@ def load_data_for_preview(max_patients: int = 50):
 def render_home():
     """渲染首页 - 引导式教程，根据用户进度动态显示。"""
     return _render_home_impl(globals())
+
+
+def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) -> None:
+    """Offer a one-click handoff from loaded concepts to Research Agent."""
+    loaded_concepts = st.session_state.get("loaded_concepts") or {}
+    if not loaded_concepts:
+        return
+    concept_count = len(loaded_concepts)
+    patient_count = len(st.session_state.get("patient_ids") or [])
+    signature = (
+        tuple(sorted(str(k) for k in loaded_concepts.keys())),
+        patient_count,
+        st.session_state.get("id_col", "stay_id"),
+    )
+    if st.session_state.get("research_agent_inbound_signature") == signature:
+        return
+
+    left, right = st.columns([3.2, 1.35])
+    with left:
+        st.info(get_text("ra_handoff_hint").format(
+            concepts=concept_count,
+            patients=patient_count,
+        ))
+    with right:
+        if st.button(get_text("ra_handoff_button"), key=f"ra_handoff_{key_suffix}", use_container_width=True):
+            try:
+                from easyicu.webapp.research_agent import _stay_level_from_loaded_concepts
+
+                df = _stay_level_from_loaded_concepts(
+                    loaded_concepts,
+                    id_col=st.session_state.get("id_col", "stay_id"),
+                )
+            except Exception as exc:
+                st.error(f"{get_text('ra_handoff_error')} ({type(exc).__name__}: {exc})")
+                return
+            if df is None or df.empty:
+                st.error(get_text("ra_handoff_error"))
+                return
+            st.session_state["research_agent_inbound_cohort"] = df
+            st.session_state["research_agent_inbound_cohort_label"] = label
+            st.session_state["research_agent_inbound_signature"] = signature
+            message = get_text("ra_handoff_success").format(rows=len(df))
+            st.session_state["_assistant_notice"] = message
+            st.success(message)
 
 
 
@@ -2376,18 +1932,12 @@ def render_cohort_comparison_page():
         render_cohort_figure_panel(figure_panel)
         return
 
-    _coh_title = "Cohort Analysis" if lang == 'en' else "队列分析"
-    _coh_sub = (
-        "Subgroup contrast, coverage audit, cross-database benchmark, cohort snapshot, and SOFA-1/SOFA-2 definition sensitivity"
-        if lang == 'en' else
-        "亚组对照、覆盖度审计、跨库基准、队列快照与 SOFA-1/SOFA-2 定义敏感性"
+    render_page_header(
+        get_text('page_cohort_title'),
+        get_text('page_cohort_subtitle'),
+        icon="📊",
+        kicker=get_text('page_cohort_kicker'),
     )
-    st.markdown(f'''
-    <div style="margin-bottom:16px">
-        <div style="font-size:1.4rem;font-weight:800;color:#111827">{_coh_title}</div>
-        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_coh_sub}</div>
-    </div>
-    ''', unsafe_allow_html=True)
 
     if st.session_state.get('entry_mode') == 'demo':
         if not _cohort_demo_workspace_ready(st.session_state):
@@ -2454,7 +2004,7 @@ def _render_demo_generation_card(icon: str, title: str, desc: str):
                     border:1px solid #bfdbfe;border-radius:18px;margin:16px 0 18px;box-shadow:0 10px 28px rgba(37,99,235,0.08)">
             <div style="width:64px;height:64px;margin:0 auto 14px;border-radius:18px;background:linear-gradient(135deg,#2563eb 0%,#0891b2 100%);
                         display:flex;align-items:center;justify-content:center;font-size:1.9rem;box-shadow:0 10px 24px rgba(37,99,235,0.18)">{icon}</div>
-            <div style="font-weight:800;color:#0f172a;font-size:1.4rem;letter-spacing:-0.02em">{title}</div>
+            <div style="font-weight:800;color:#0f172a;font-size:1.4rem;letter-spacing:0">{title}</div>
             <div style="color:#475569;font-size:.95rem;margin-top:8px;line-height:1.65">{desc}</div>
         </div>
         ''',
@@ -2704,12 +2254,12 @@ def render_export_page():
 
 def _get_requested_figure_target() -> tuple[str, str]:
     """Resolve `?figure=...`, `?panel=...`, or `?page=...` into a screenshot target."""
-    raw_target = _query_param_value("figure")
+    raw_target = query_param_value(st, "figure")
     section, panel = _normalize_figure_target(raw_target)
     if section and panel:
         return section, panel
     for key in ("panel", "page", "view"):
-        section, panel = _normalize_figure_target(_query_param_value(key))
+        section, panel = _normalize_figure_target(query_param_value(st, key))
         if section and panel:
             return section, panel
     return '', ''
@@ -3060,6 +2610,7 @@ def render_cohort_figure_panel(panel: str) -> None:
 def main():
     """主函数。"""
     init_session_state()
+    app_state = get_state()
     _apply_figure_query_preset(st.session_state, lang=st.session_state.get('language', 'en'))
 
     # 获取入口模式
@@ -3130,12 +2681,21 @@ def main():
 
     _render_icd_preview_main_panel(lang)
 
-    # 主页面标签：Tutorial, Quick Visualization, Cohort Analysis
-    tab1, tab2, tab3 = st.tabs([
-        get_text('home'),
-        get_text('quick_visualization'),
-        get_text('cohort_compare'),
-    ])
+    _render_research_agent_handoff(
+        "Loaded concepts" if lang == "en" else "已加载概念",
+        lang,
+        key_suffix="global",
+    )
+
+    page_registry = build_main_page_registry(get_text)
+    page_tabs = dict(zip(
+        [page["key"] for page in page_registry],
+        st.tabs([page["label"] for page in page_registry]),
+    ))
+    tab1 = page_tabs["tutorial"]
+    tab2 = page_tabs["quick_viz"]
+    tab3 = page_tabs["cohort"]
+    tab_research_agent = page_tabs["research_agent"]
 
     with tab1:
         render_home()
@@ -3250,6 +2810,34 @@ def main():
         else:
             render_cohort_comparison_page()
 
+    with tab_research_agent:
+        # T1.7 — embed the ICU-aware research-agent page so reviewers can
+        # run the full pipeline end-to-end (cohort → plan → code → run →
+        # validators → bound manuscript) from the webapp without a
+        # separate Streamlit process.
+        if export_in_progress:
+            ra_hold_msg = (
+                "⏳ Export in progress. The research-agent page is paused until extraction finishes."
+                if lang == 'en' else
+                "⏳ 正在导出。提取完成前，研究智能体页面暂停加载。"
+            )
+            st.markdown(f'<div class="compact-inline-notice info">{ra_hold_msg}</div>', unsafe_allow_html=True)
+        else:
+            try:
+                from easyicu.webapp.research_agent import (
+                    render_research_agent_demo_page,
+                    render_research_agent_page,
+                )
+                if st.session_state.get('entry_mode') == 'demo':
+                    render_research_agent_demo_page()
+                else:
+                    render_research_agent_page()
+            except Exception as _ra_exc:  # pragma: no cover - defensive
+                st.error(get_text("ra_page_load_failed").format(
+                    error=f"{type(_ra_exc).__name__}: {_ra_exc}",
+                ))
+                st.caption(get_text("ra_optional_deps_hint"))
+
     # 🔧 处理侧边栏触发的导出（在标签页渲染后执行，确保 Guide: Complete 中的 container 已创建）
     if st.session_state.get('trigger_export', False):
         st.session_state.trigger_export = False
@@ -3316,8 +2904,7 @@ def main():
             st.session_state['_exporting_in_progress'] = False
 
     # 🆕 处理页面跳转请求 - 在渲染完成后执行 JavaScript
-    scroll_to_tab = st.session_state.pop('_scroll_to_tab', None)
-    scroll_to_top = st.session_state.pop('_scroll_to_top', None)
+    scroll_to_tab, scroll_to_top = app_state.clear_navigation_request()
 
     if scroll_to_tab == 'viz':
         # 跳转到 Quick Visualization 标签页（第2个标签，索引1）并滚动到顶部
@@ -3511,7 +3098,7 @@ def main():
             n_concepts = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
             n_patients = len(st.session_state.patient_ids) if st.session_state.patient_ids else 0
             st.markdown(
-                f"<small style='color:#888'>{data_status} | 📋 {n_concepts} Concepts | 👥 {n_patients} {patients_label}</small>",
+                f'<small class="app-footer-status">{data_status} | 📋 {n_concepts} Concepts | 👥 {n_patients} {patients_label}</small>',
                 unsafe_allow_html=True
             )
 
@@ -3519,7 +3106,7 @@ def main():
             if st.session_state.get('selected_patient'):
                 patient_label = "Current Patient" if st.session_state.language == 'en' else "当前患者"
                 st.markdown(
-                    f"<small style='color:#888'>🎯 {patient_label}: {st.session_state.selected_patient}</small>",
+                    f'<small class="app-footer-status">🎯 {patient_label}: {st.session_state.selected_patient}</small>',
                     unsafe_allow_html=True
                 )
 

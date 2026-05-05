@@ -140,11 +140,11 @@ def _render_extraction_pipeline_figure(
     if len(export_files) > 4:
         export_files_html += f'<div style="text-align:center;color:#60718a">… ({len(export_files) - 4} more files)</div>'
 
-    title = "EasyICU Data Extraction Pipeline" if is_en else "EasyICU 数据抽取流程"
+    title = "EasyICU Data Preparation Workflow" if is_en else "EasyICU 数据准备流程"
     subtitle = (
-        "The live workflow mirrors the manuscript figure: configure data, define cohort, select concepts, export files, then review the summary."
+        "Configure the data source, define a cohort, choose clinical concepts, export module files, then review the export summary."
         if is_en else
-        "网页端与论文图保持同一逻辑：配置数据源、定义队列、选择概念、导出文件，并在最后复核摘要。"
+        "配置数据源、定义队列、选择临床概念、导出模块文件，并在最后复核导出摘要。"
     )
     summary_title = "Export summary" if is_en else "导出摘要"
     summary_status = (
