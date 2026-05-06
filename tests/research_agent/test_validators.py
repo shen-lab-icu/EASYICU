@@ -133,6 +133,70 @@ def test_statistical_validator_flags_sofa_zero_anomaly(ra, tmp_path: Path):
     assert any(f.severity == "warning" for f in findings)
 
 
+def test_statistical_validator_accepts_real_llm_stratum_audit_shape(ra, tmp_path: Path):
+    ctx = _ctx_with_sofa(ra)
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({
+        "stay_id": [1, 2, 3, 4],
+        "age": [60, 61, 62, 63],
+        "sofa2": [0, 0, 1, 1],
+        "death": [1, 0, 0, 0],
+    }).to_parquet(cohort_path, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    pd.DataFrame({
+        "sofa2_score": [0, 1],
+        "n_total": [2, 2],
+        "n_death": [1, 0],
+        "mortality_rate": [0.5, 0.0],
+        "mortality_rate_ci_low": [0.1, 0.0],
+        "mortality_rate_ci_high": [0.9, 0.7],
+    }).to_csv(out_dir / "stratum_audit.csv", index=False)
+
+    step = ra.schema.AnalysisStep(step_id="05_stratum_level_audit", intent="audit")
+    findings = ra.StatisticalValidator().audit(
+        context=ctx, cohort_path=cohort_path, step=step,
+        out_dir=out_dir, step_summary={},
+    )
+    assert any("stratum_audit.csv" in str(f.detail) for f in findings), findings
+    assert any("non-monotonic" in f.message.lower() for f in findings), findings
+
+
+def test_statistical_validator_recomputes_sofa_zero_when_audit_omits_mortality(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra)
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({
+        "stay_id": [1, 2, 3, 4],
+        "age": [60, 61, 62, 63],
+        "sofa2": [0, 0, 1, 1],
+        "death": [1, 0, 0, 0],
+        "lact": [2.0, 2.2, 1.5, 1.7],
+    }).to_parquet(cohort_path, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    pd.DataFrame({
+        "variable": ["lact"],
+        "sofa2_0_median": [2.1],
+        "sofa2_1_median": [1.6],
+    }).to_csv(out_dir / "table:sofa2_stratum_audit.csv", index=False)
+
+    step = ra.schema.AnalysisStep(
+        step_id="05_stratum_level_audit",
+        intent="Audit SOFA-2 score==0 vs score==1.",
+    )
+    findings = ra.StatisticalValidator().audit(
+        context=ctx, cohort_path=cohort_path, step=step,
+        out_dir=out_dir, step_summary={},
+    )
+    assert any(
+        f.detail and f.detail.get("source") == "cohort_recompute"
+        for f in findings
+    ), findings
+    assert any("non-monotonic" in f.message.lower() for f in findings), findings
+
+
 def test_statistical_validator_no_artefacts_is_error(ra, tmp_path: Path):
     ctx = _ctx_with_sofa(ra)
     cohort_path = tmp_path / "cohort.parquet"
@@ -201,3 +265,16 @@ def test_cohort_auditor_row_count_mismatch(ra, tmp_path: Path):
     findings = ra.CohortAuditor().audit(context=ctx, cohort_path=cohort_path)
     assert any(f.severity == "error" and "row count mismatch" in f.message.lower()
                for f in findings)
+
+
+def test_llm_concept_auditor_parses_findings(ra):
+    from easyicu.research_agent.validators import parse_llm_concept_audit_response
+
+    raw = """```json
+{"findings":[{"severity":"warning","message":"ICU mortality may be confused with hospital mortality.","detail":{"column":"death_hosp"}}]}
+```"""
+    findings = parse_llm_concept_audit_response(raw, step_id="04_primary")
+    assert len(findings) == 1
+    assert findings[0].validator == "llm_concept_auditor"
+    assert findings[0].severity == "warning"
+    assert findings[0].detail["step_id"] == "04_primary"

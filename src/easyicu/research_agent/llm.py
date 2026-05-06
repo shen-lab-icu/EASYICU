@@ -20,11 +20,14 @@ method. The pipeline never imports a specific provider.
 
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 import os
 import re
 import textwrap
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Sequence
 
 from .schema import (
@@ -106,7 +109,11 @@ class MockLLMClient:
                 or "MANUSCRIPT SCAFFOLD" in upper
                 or "WRITE METHODS" in upper
             ):
-                response = _mock_manuscript_scaffold(ctx)
+                language = "zh" if (
+                    "OUTPUT LANGUAGE: ZH" in upper
+                    or "SIMPLIFIED CHINESE" in upper
+                ) else "en"
+                response = _mock_manuscript_scaffold(ctx, language=language)
             elif (
                 "ICU-AWARE RESEARCH PLAN" in upper
                 or "RESEARCH PLAN AS JSON" in upper
@@ -781,7 +788,7 @@ def _mock_interpretation(ctx: ResearchContext, prompt: str) -> str:
     return " ".join(parts)
 
 
-def _mock_manuscript_scaffold(ctx: ResearchContext) -> str:
+def _mock_manuscript_scaffold(ctx: ResearchContext, *, language: str = "en") -> str:
     """Return a minimal manuscript scaffold in markdown.
 
     The scaffold is deliberately *thin*: title, methods, results
@@ -792,6 +799,39 @@ def _mock_manuscript_scaffold(ctx: ResearchContext) -> str:
     sofa_var = _pick_sofa_score(ctx)
     outcome = ctx.target_outcome or _pick_outcome(ctx) or "the primary outcome"
     cross_db = ", ".join(ctx.cross_database_validation) if ctx.cross_database_validation else "(none planned)"
+    if language == "zh":
+        return textwrap.dedent(f"""
+        # 手稿脚手架
+
+        > 由 easyicu.research_agent 生成。以下每个数值性主张都必须带有
+        > `{{evidence:<id>}}` 证据占位符；未绑定证据的句子会被后处理拦截。
+
+        ## 标题
+        {ctx.cohort.database} ICU 患者中 {sofa_var or "主要预测变量"} 与 {outcome} 的关系：
+        一项可追溯的 agent 辅助分析。
+
+        ## 方法
+        队列由 {{evidence:table_one}} 描述，包含来自 {ctx.cohort.database} 的
+        {ctx.cohort.n_stays:,} 次 ICU 住院。纳入标准：
+        {", ".join(ctx.cohort.inclusion_criteria) or "见 cohort_config.json"}。
+        排除标准：{", ".join(ctx.cohort.exclusion_criteria) or "见 cohort_config.json"}。
+
+        变量处理遵循 EasyICU 概念字典和 {{evidence:research_context}} 中的
+        ICU-aware 聚合规则：有序评分在窗口内取最大值；右偏实验室指标以中位数
+        (IQR) 描述；时间窗分析使用 {{evidence:research_context}} 中定义的
+        {", ".join(w.name for w in ctx.time_windows)} 窗口。
+
+        跨数据库复现计划：{cross_db}。
+
+        ## 结果
+        结局发生率：{{evidence:outcome_rate}}。
+        缺失情况：{{evidence:missingness}}。
+        主要关联：{{evidence:primary_association}}。
+        {sofa_var + " 分层审计：{evidence:sofa_strata}。" if sofa_var else ""}
+
+        ## 讨论
+        *(留给人类作者；writer agent 不在没有人工确认的情况下生成临床主张或建议。)*
+        """).strip() + "\n"
     return textwrap.dedent(f"""
     # Manuscript scaffold
 
@@ -996,6 +1036,57 @@ class OpenAIClient:
                 pass
 
         return content
+
+    def complete_with_images(
+        self,
+        *,
+        prompt: str,
+        image_paths: Sequence[Path],
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+    ) -> str:
+        """Run a multimodal chat-completions request against image files.
+
+        This method is intentionally optional: normal agents continue
+        to use ``complete(...)``. ``VLMVisualQAAdapter`` checks for the
+        method with ``hasattr`` and falls back to text-only review when
+        a provider does not support image inputs.
+        """
+        content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for path in image_paths:
+            p = Path(path)
+            mime = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
+            data = base64.b64encode(p.read_bytes()).decode("ascii")
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{data}"},
+            })
+        create_kwargs: Dict[str, Any] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "timeout": self._timeout,
+        }
+        if self._extra_body:
+            create_kwargs["extra_body"] = self._extra_body
+        resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
+        try:
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                self.last_usage = {
+                    "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                    "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+                }
+            else:
+                self.last_usage = None
+        except Exception:
+            self.last_usage = None
+        choice = resp.choices[0]
+        self.last_finish_reason = getattr(choice, "finish_reason", None)
+        msg = choice.message
+        return (getattr(msg, "content", None) or "").strip()
 
 
 # ---------------------------------------------------------------------------

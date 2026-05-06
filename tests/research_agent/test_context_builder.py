@@ -112,3 +112,37 @@ def test_n_patients_distinct_from_n_stays(ra):
     )
     assert ctx.cohort.n_stays == 6
     assert ctx.cohort.n_patients == 3
+
+
+def test_retrieved_context_keeps_relevant_and_outcome_variables(ra):
+    schema = ra.schema
+    variables = [
+        schema.ConceptDescriptor(name="stay_id", role="id", dtype="int64"),
+        schema.ConceptDescriptor(name="age", role="demographic", dtype="float64"),
+        schema.ConceptDescriptor(
+            name="sofa2", role="composite_score", dtype="int64",
+            pitfalls=["SOFA2 zero can indicate missingness"],
+        ),
+        schema.ConceptDescriptor(name="lact", role="lab", dtype="float64"),
+        schema.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        schema.ConceptDescriptor(name="map", role="vital", dtype="float64"),
+    ]
+    ctx = schema.ResearchContext(
+        research_question="Is SOFA-2 associated with ICU mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1,
+            id_columns=["stay_id"], outcome_columns=["death"],
+        ),
+        variables=variables,
+        target_outcome="death",
+    )
+
+    from easyicu.research_agent.context import build_retrieved_research_context
+
+    compact = build_retrieved_research_context(ctx, top_k=2)
+    names = [v.name for v in compact.variables]
+    assert "sofa2" in names
+    assert "death" in names
+    assert "stay_id" in names
+    assert len(names) < len(variables)
+    assert "Context retrieval active" in compact.notes

@@ -59,3 +59,35 @@ def test_relevance_ranking_prefers_same_database(ra, tmp_path: Path):
         database="miiv", target_outcome="death",
     )
     assert ranked[0].run_id == "run_miiv_a"
+
+
+def test_meta_planner_digest_ranks_skill_keys(ra, tmp_path: Path):
+    mem = ra.RunMemory(root=tmp_path)
+    mem.record(
+        run_id="run_sofa",
+        research_question="Is admission SOFA-2 associated with ICU mortality?",
+        database="miiv",
+        target_outcome="death",
+        findings=[
+            ra.schema.ValidationFinding(
+                validator="statistical_validator",
+                severity="warning",
+                message="sofa2 zero missingness anomaly",
+            )
+        ],
+        workdir=tmp_path / "run_sofa",
+    )
+    ranking = mem.rank_skill_keys(
+        skill_keys=["sofa_mortality", "aki_kdigo_mortality"],
+        research_question="SOFA mortality",
+        database="miiv",
+        target_outcome="death",
+    )
+    assert ranking[0][0] == "sofa_mortality"
+    digest = mem.meta_planner_digest(
+        skill_keys=["sofa_mortality", "aki_kdigo_mortality"],
+        research_question="SOFA mortality",
+        database="miiv",
+        target_outcome="death",
+    )
+    assert "Meta-planner skill ranking" in digest

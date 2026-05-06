@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .schema import ValidationFinding
 
@@ -179,6 +179,68 @@ class RunMemory:
             for nf in r.notable_findings[:3]:
                 lines.append(f"    • {nf['severity']} [{nf['validator']}] {nf['message']}")
         return "\n".join(lines)
+
+    def rank_skill_keys(
+        self,
+        *,
+        skill_keys: Sequence[str],
+        research_question: str,
+        database: str,
+        target_outcome: Optional[str],
+    ) -> List[Tuple[str, float]]:
+        """HealthFlow-style meta-planner signal for ClinicalSkill order.
+
+        Scores skills by how often relevant past runs mention the skill
+        key or its tokens, lightly penalising runs that ended with
+        errors. The ranking is advisory: the pipeline feeds it to the
+        planner but never auto-selects a skill without user intent.
+        """
+        relevant = self.relevant_to(
+            research_question=research_question,
+            database=database,
+            target_outcome=target_outcome,
+            limit=20,
+        )
+        q_tokens = _tokenise(research_question)
+        out: List[Tuple[str, float]] = []
+        for key in skill_keys:
+            key_tokens = _tokenise(key.replace("_", " "))
+            score = 0.0
+            if key_tokens & q_tokens:
+                score += 1.5
+            for rec in relevant:
+                blob = " ".join([
+                    rec.research_question,
+                    " ".join(f.get("message", "") for f in rec.notable_findings),
+                ])
+                toks = _tokenise(blob)
+                if key_tokens & toks:
+                    score += 1.0
+                score += max(0.0, rec.warning_count * 0.05 - rec.error_count * 0.2)
+            out.append((key, round(score, 3)))
+        return sorted(out, key=lambda x: x[1], reverse=True)
+
+    def meta_planner_digest(
+        self,
+        *,
+        skill_keys: Sequence[str],
+        research_question: str,
+        database: str,
+        target_outcome: Optional[str],
+    ) -> str:
+        ranking = self.rank_skill_keys(
+            skill_keys=skill_keys,
+            research_question=research_question,
+            database=database,
+            target_outcome=target_outcome,
+        )
+        if not ranking:
+            return "(no ClinicalSkill registry available for meta-planning)"
+        bits = [f"{key}={score:.2f}" for key, score in ranking[:8]]
+        return (
+            "Meta-planner skill ranking from RunMemory (advisory only): "
+            + ", ".join(bits)
+        )
 
 
 def _tokenise(text: str) -> set:

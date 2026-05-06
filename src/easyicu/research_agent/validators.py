@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
 
@@ -41,6 +41,7 @@ from .schema import (
     ValidationFinding,
     VariableRole,
 )
+from .llm import LLMClient, LLMMessage
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +219,156 @@ class ConceptUsageAuditor:
         return findings
 
 
+class LLMConceptAuditor:
+    """Optional LLM-based semantic review after deterministic checks.
+
+    Static rules remain authoritative and run first. This auditor is a
+    conservative final sweep for issues that are hard to encode as
+    regexes, such as confusing ICU vs hospital mortality or describing
+    a missingness-driven stratum as clinically low risk.
+    """
+
+    name = "llm_concept_auditor"
+
+    def __init__(self, llm: LLMClient, *, max_tokens: int = 1024) -> None:
+        self.llm = llm
+        self.max_tokens = int(max_tokens)
+
+    def audit(
+        self,
+        *,
+        context: ResearchContext,
+        script_text: str,
+        step: Optional[AnalysisStep] = None,
+    ) -> List[ValidationFinding]:
+        prompt = self._prompt(context=context, script_text=script_text, step=step)
+        try:
+            raw = self.llm.complete(
+                [
+                    LLMMessage(
+                        role="system",
+                        content=(
+                            "You are a conservative ICU concept-use auditor. "
+                            "Return only JSON. Do not invent findings."
+                        ),
+                    ),
+                    LLMMessage(role="user", content=prompt),
+                ],
+                max_tokens=self.max_tokens,
+                temperature=0.0,
+            )
+        except Exception as exc:
+            return [ValidationFinding(
+                validator=self.name,
+                severity="warning",
+                message=f"LLM concept auditor failed: {exc}",
+            )]
+        return parse_llm_concept_audit_response(
+            raw,
+            validator=self.name,
+            step_id=step.step_id if step else None,
+        )
+
+    def _prompt(
+        self,
+        *,
+        context: ResearchContext,
+        script_text: str,
+        step: Optional[AnalysisStep],
+    ) -> str:
+        variables = [
+            {
+                "name": v.name,
+                "role": v.role.value,
+                "allowed_aggregations": [a.value for a in v.allowed_aggregations],
+                "pitfalls": v.pitfalls,
+                "missingness": (
+                    v.missingness.model_dump(mode="json")
+                    if v.missingness is not None else None
+                ),
+            }
+            for v in context.variables[:80]
+        ]
+        return (
+            "Review this generated analysis script for ICU concept-use risks "
+            "that deterministic regex checks may miss. Focus only on: ordinal "
+            "scores treated as continuous, silent missingness assumptions, "
+            "PaO2/FiO2 or GCS/SOFA/KDIGO misuse, ICU vs hospital mortality "
+            "confusion, and causal/clinical treatment claims in analysis code.\n\n"
+            "Return JSON only: "
+            '{"findings":[{"severity":"info|warning|error",'
+            '"message":"short finding","detail":{"optional":"context"}}]}. '
+            "Use an empty findings list if no issue is visible.\n\n"
+            f"Step: {step.step_id if step else '(unknown)'}\n"
+            f"Step intent: {step.intent if step else '(unknown)'}\n"
+            f"Target outcome: {context.target_outcome}\n"
+            "Variables:\n"
+            + json.dumps(variables, ensure_ascii=False, default=str)
+            + "\n\nScript:\n"
+            + script_text[:12000]
+        )
+
+
+def parse_llm_concept_audit_response(
+    raw: str,
+    *,
+    validator: str = "llm_concept_auditor",
+    step_id: Optional[str] = None,
+) -> List[ValidationFinding]:
+    text = _strip_jsonish(raw)
+    try:
+        payload = json.loads(text)
+    except Exception:
+        head = (raw or "").strip().replace("\n", " ")[:300]
+        return [ValidationFinding(
+            validator=validator,
+            severity="warning",
+            message=f"LLM concept auditor returned unparsable output: {head}",
+            detail={"step_id": step_id} if step_id else None,
+        )]
+    items = payload.get("findings", []) if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
+        return []
+    findings: List[ValidationFinding] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        msg = str(item.get("message") or "").strip()
+        if not msg:
+            continue
+        sev = str(item.get("severity") or "warning").lower()
+        if sev not in {"info", "warning", "error"}:
+            sev = "warning"
+        detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+        if step_id:
+            detail = dict(detail)
+            detail.setdefault("step_id", step_id)
+        findings.append(ValidationFinding(
+            validator=validator,
+            severity=sev,  # type: ignore[arg-type]
+            message=msg,
+            detail=detail or None,
+        ))
+    return findings
+
+
+def _strip_jsonish(text: str) -> str:
+    text = (text or "").strip()
+    if "```" not in text:
+        return text
+    start = text.find("```")
+    rest = text[start + 3:]
+    nl = rest.find("\n")
+    if nl >= 0:
+        tag = rest[:nl].strip().lower()
+        if tag in {"json", "js", "javascript"} or not tag:
+            rest = rest[nl + 1:]
+    end = rest.find("```")
+    if end >= 0:
+        rest = rest[:end]
+    return rest.strip()
+
+
 # ---------------------------------------------------------------------------
 # StatisticalValidator
 # ---------------------------------------------------------------------------
@@ -264,38 +415,167 @@ class StatisticalValidator:
                     message=f"Could not recompute outcome rate: {exc}",
                 ))
 
-        # 2. SOFA-zero anomaly cross-check.
-        sofa_csv = out_dir / "sofa_strata.csv"
-        if sofa_csv.exists():
+        # 2. SOFA-zero anomaly cross-check. Mock code writes
+        #    ``sofa_strata.csv``; real LLMs often choose names such as
+        #    ``stratum_audit.csv`` with ``mortality_rate`` columns. Accept
+        #    both shapes so the deterministic guard stays active.
+        sofa_anomaly_seen = False
+        for sofa_csv in (
+            out_dir / "sofa_strata.csv",
+            out_dir / "stratum_audit.csv",
+            out_dir / "sofa2_mortality.csv",
+        ):
+            if not sofa_csv.exists():
+                continue
             try:
                 strata = pd.read_csv(sofa_csv)
-                if {"outcome_rate", "n"}.issubset(strata.columns):
-                    # the score column is whichever isn't outcome_rate or n
-                    score_cols = [c for c in strata.columns if c not in {"outcome_rate", "n"}]
-                    if score_cols:
-                        sc = score_cols[0]
-                        try:
-                            r0 = float(strata.loc[strata[sc] == 0, "outcome_rate"].iloc[0])
-                            r1 = float(strata.loc[strata[sc] == 1, "outcome_rate"].iloc[0])
-                            if r0 > r1:
-                                findings.append(ValidationFinding(
-                                    validator=self.name, severity="warning",
-                                    message=(
-                                        f"{sc}==0 outcome rate ({r0:.3f}) exceeds {sc}==1 "
-                                        f"({r1:.3f}). This is non-monotonic and is a known "
-                                        "signature of component-level missingness rather than "
-                                        "absent organ dysfunction. Verify component "
-                                        "availability before interpreting clinically."
-                                    ),
-                                    detail={"score": sc, "rate_at_zero": r0, "rate_at_one": r1},
-                                ))
-                        except (IndexError, KeyError):
-                            pass
+                rate_col = next(
+                    (
+                        c for c in (
+                            "outcome_rate",
+                            "mortality_rate",
+                            "death_rate",
+                            "icu_mortality_rate",
+                        )
+                        if c in strata.columns
+                    ),
+                    None,
+                )
+                if rate_col is None:
+                    continue
+                excluded = {
+                    rate_col,
+                    "n", "count", "total", "n_total", "n_death",
+                    "death", "deaths", "sum",
+                    "outcome_ci_low", "outcome_ci_high",
+                    "mortality_ci_low", "mortality_ci_high",
+                    "mortality_rate_ci_low", "mortality_rate_ci_high",
+                }
+                score_cols = [
+                    c for c in strata.columns
+                    if c not in excluded
+                    and pd.api.types.is_numeric_dtype(strata[c])
+                ]
+                score_cols.sort(key=lambda c: (0 if "sofa" in c.lower() else 1, c))
+                if not score_cols:
+                    continue
+                sc = score_cols[0]
+                scores = pd.to_numeric(strata[sc], errors="coerce")
+                rates = pd.to_numeric(strata[rate_col], errors="coerce")
+                r0_values = rates.loc[scores == 0].dropna()
+                r1_values = rates.loc[scores == 1].dropna()
+                if r0_values.empty or r1_values.empty:
+                    continue
+                r0 = float(r0_values.iloc[0])
+                r1 = float(r1_values.iloc[0])
+                if r0 > r1:
+                    findings.append(ValidationFinding(
+                        validator=self.name, severity="warning",
+                        message=(
+                            f"{sc}==0 outcome rate ({r0:.3f}) exceeds {sc}==1 "
+                            f"({r1:.3f}). This is non-monotonic and is a known "
+                            "signature of component-level missingness rather than "
+                            "absent organ dysfunction. Verify component "
+                            "availability before interpreting clinically."
+                        ),
+                        detail={
+                            "score": sc,
+                            "rate_at_zero": r0,
+                            "rate_at_one": r1,
+                            "source_file": sofa_csv.name,
+                        },
+                    ))
+                    sofa_anomaly_seen = True
+                    break
             except Exception as exc:
                 findings.append(ValidationFinding(
                     validator=self.name, severity="warning",
-                    message=f"Could not parse sofa_strata.csv: {exc}",
+                    message=f"Could not parse {sofa_csv.name}: {exc}",
                 ))
+
+        if not sofa_anomaly_seen:
+            try:
+                zero_one_pairs = (
+                    ("sofa2_zero_rate", "sofa2_one_rate"),
+                    ("mortality_sofa0", "mortality_sofa1"),
+                    ("sofa0_mortality_rate", "sofa1_mortality_rate"),
+                )
+                for zero_key, one_key in zero_one_pairs:
+                    if zero_key not in step_summary or one_key not in step_summary:
+                        continue
+                    r0 = float(step_summary[zero_key])
+                    r1 = float(step_summary[one_key])
+                    if r0 > r1:
+                        findings.append(ValidationFinding(
+                            validator=self.name, severity="warning",
+                            message=(
+                                f"SOFA score==0 outcome rate ({r0:.3f}) exceeds "
+                                f"score==1 ({r1:.3f}). This is non-monotonic and "
+                                "is a known signature of component-level missingness."
+                            ),
+                            detail={
+                                "score": "sofa",
+                                "rate_at_zero": r0,
+                                "rate_at_one": r1,
+                                "source": "step_summary",
+                            },
+                        ))
+                        sofa_anomaly_seen = True
+                        break
+            except (TypeError, ValueError):
+                pass
+
+        if not sofa_anomaly_seen and outcome:
+            step_text = f"{step.step_id} {step.intent}".lower()
+            if (
+                "stratum" in step_text
+                or "score==0" in step_text
+                or "sofa_zero" in step_text
+            ):
+                try:
+                    df = pd.read_parquet(cohort_path)
+                    score_candidates = [
+                        v.name for v in context.variables
+                        if "sofa" in v.name.lower()
+                    ]
+                    for sc in score_candidates:
+                        if sc not in df.columns or outcome not in df.columns:
+                            continue
+                        sub = df[[sc, outcome]].dropna().copy()
+                        if sub.empty:
+                            continue
+                        sub[sc] = pd.to_numeric(sub[sc], errors="coerce")
+                        sub[outcome] = pd.to_numeric(sub[outcome], errors="coerce")
+                        sub = sub.dropna(subset=[sc, outcome])
+                        grouped = sub.groupby(sc)[outcome].mean()
+                        if 0 not in grouped.index or 1 not in grouped.index:
+                            continue
+                        r0 = float(grouped.loc[0])
+                        r1 = float(grouped.loc[1])
+                        if r0 > r1:
+                            findings.append(ValidationFinding(
+                                validator=self.name, severity="warning",
+                                message=(
+                                    f"{sc}==0 outcome rate ({r0:.3f}) exceeds "
+                                    f"{sc}==1 ({r1:.3f}). This is non-monotonic "
+                                    "and was recomputed directly from the cohort "
+                                    "because the stratum audit artefact omitted "
+                                    "mortality rates."
+                                ),
+                                detail={
+                                    "score": sc,
+                                    "rate_at_zero": r0,
+                                    "rate_at_one": r1,
+                                    "source": "cohort_recompute",
+                                },
+                            ))
+                            sofa_anomaly_seen = True
+                            break
+                except Exception as exc:
+                    findings.append(ValidationFinding(
+                        validator=self.name, severity="warning",
+                        message=f"Could not recompute SOFA-zero anomaly: {exc}",
+                    ))
 
         # 3. Primary-association OR cross-check (T1.6).
         #    The mock pipeline writes ``primary_association.csv`` with one
@@ -419,5 +699,7 @@ class StatisticalValidator:
 __all__ = [
     "CohortAuditor",
     "ConceptUsageAuditor",
+    "LLMConceptAuditor",
+    "parse_llm_concept_audit_response",
     "StatisticalValidator",
 ]

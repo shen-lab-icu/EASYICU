@@ -12,7 +12,7 @@ dependency:
 
 | Source | What we borrowed | Where it lives |
 |---|---|---|
-| **OpenLens-AI** [^1] | Five-agent pipeline shape (planner / coder / analyzer / writer / supervisor); LaTeX export; visual QA | `agents.py`, `latex.py`, `visual_qa.py`, `literature.py` |
+| **OpenLens-AI** [^1] | Five-agent pipeline shape (planner / coder / analyzer / writer / supervisor); LaTeX export; deterministic visual QA plus optional VLM review; PubMed/Tavily literature hooks | `agents.py`, `latex.py`, `visual_qa.py`, `literature.py` |
 | **M4** [^2] | MCP-style tool exposure; reusable clinical-skill recipes that short-circuit free-form planning | `mcp_server.py`, `skills.py` |
 | **HealthFlow** [^3] | Self-evolving meta-planning by feeding past lessons back into the planner | `memory.py` |
 | **nature-skills** [^4] | Claim-first publication figure contract; editable SVG/PDF/PNG/TIFF export; panel-level evidence logic | `publication_figures.py` |
@@ -60,23 +60,28 @@ question + cohort  ────────────►  optional: ClinicalSk
         │                           missingness profile, ICU pitfalls)
         ▼
    RunMemory.digest_for_prompt   → memory_digest.md           (HealthFlow)
-        │   past runs' notable findings fed to the planner
+        │   past lessons + meta-planner skill ranking
+        ▼
+   optional concept retrieval    → research_context_agent_prompt.json
+        │   top-K variables to agents; full context retained for validators
         ▼
    PlannerAgent  (skipped when a ClinicalSkill is selected)
+        │   deterministic fallback if hosted model returns invalid JSON
         │   → analysis_plan.json
         │     (Table 1 / outcome / missingness / association /
         │      SOFA-stratum audit / cross-database)
         ▼
    ┌────── per step ──────┐
    │ CoderAgent → script  │
-   │ ConceptUsageAuditor  │  ← static checks (no mean-of-ordinal etc.)
+   │ ConceptUsageAuditor  │  ← static checks; repair before execution
    │ CodeRunner           │  ← subprocess sandbox, captures everything
+   │ deterministic code fallback for bad/no-output hosted scripts
    │ StatisticalValidator │  ← cross-checks reported numbers vs cohort
    │ AnalyzerAgent        │  ← short interpretation, evidence-bound
    └──────────────────────┘
         ▼
-   LiteratureAgent               → literature_bundle.json     (OpenLens)
-   VisualQAAuditor               → findings on figures        (OpenLens)
+   LiteratureAgent               → literature_bundle.json     (OpenLens; curated + optional PubMed/Tavily)
+   VisualQAAuditor               → findings on figures        (OpenLens; deterministic + optional VLM)
    PublicationFigureContract     → claim-first SVG/PDF/TIFF   (nature-skills)
         ▼
    WriterAgent                   → manuscript_scaffold.md
@@ -135,10 +140,10 @@ result = pipeline.run(
 )
 ```
 
-### MCP server (for Claude Desktop / Continue / etc.)
+### MCP server (for Claude Desktop / Continue / Cursor / etc.)
 
 ```bash
-python -m easyicu.research_agent.mcp_server   # stdin/stdout JSON-RPC stub
+python -m easyicu.research_agent.mcp_server --transport stdio
 ```
 
 ```python
@@ -150,6 +155,13 @@ mcp_dispatch("research_agent.run", {
     "database": "miiv",
     "target_outcome": "death",
 })
+```
+
+The server answers MCP JSON-RPC methods `initialize`, `tools/list` and
+`tools/call` over stdio. A minimal legacy SSE bridge is also available:
+
+```bash
+python -m easyicu.research_agent.mcp_server --transport sse --port 8765
 ```
 
 The pipeline runs offline by default with the deterministic
@@ -165,6 +177,107 @@ pipeline = ResearchAgentPipeline(
 )
 ```
 
+For a cheap OpenRouter smoke run:
+
+```bash
+export OPENROUTER_API_KEY="..."
+export OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
+python examples/research_agent_real_llm_smoke.py \
+  --provider openrouter \
+  --model openrouter/free \
+  --temperature 0.1
+```
+
+The smoke harness is strict: it fails on missing deliverables, any
+error-severity finding, unresolved evidence placeholders, or a missing
+SOFA-zero anomaly finding.
+
+### Optional VLM figure review
+
+Deterministic figure checks are always available and remain the default.
+To add an OpenLens-style vision-language-model review pass, opt in
+explicitly:
+
+```python
+from easyicu.research_agent import OpenAIClient, ResearchAgentPipeline
+
+vision = OpenAIClient(model="gpt-4o-mini")
+pipeline = ResearchAgentPipeline(
+    workdir="./research_output",
+    llm=OpenAIClient(model="gpt-4o-mini"),
+    enable_vlm_visual_qa=True,
+    vlm_client=vision,
+)
+```
+
+### Optional Tavily literature search
+
+The literature bundle is curated and offline by default. PubMed and
+Tavily are opt-in enrichment layers:
+
+```python
+pipeline = ResearchAgentPipeline(
+    workdir="./research_output",
+    enable_pubmed=True,
+    pubmed_email="you@example.org",
+    enable_tavily=True,  # reads TAVILY_API_KEY unless tavily_api_key=... is passed
+)
+```
+
+Tavily is intended for material PubMed can miss, such as preprints,
+guideline pages, trial registries and PDFs.
+
+### Chinese manuscript scaffold
+
+```python
+pipeline = ResearchAgentPipeline(
+    workdir="./research_output",
+    manuscript_language="zh",
+)
+```
+
+Evidence placeholders stay ASCII (`{evidence:table_one}`), so the
+same binder and SHA-256 provenance checks apply in English and Chinese.
+
+### Prompt-sized context retrieval
+
+```python
+pipeline = ResearchAgentPipeline(
+    workdir="./research_output",
+    context_top_k=40,
+)
+```
+
+Agents see only the retrieved concept slice plus required id/time/outcome
+variables. Validators, manifests and cohort audits still use the full
+research context.
+
+### LaTeX venue templates and editable PPTX figures
+
+```python
+pipeline = ResearchAgentPipeline(
+    workdir="./research_output",
+    latex_venue_template="npj",  # article, nature, npj, lancet
+)
+```
+
+Publication figures can also be exported as PowerPoint decks:
+
+```python
+from easyicu.research_agent import save_publication_figure
+
+paths = save_publication_figure(contract, output_dir, export_formats=["svg", "pptx"])
+```
+
+### OpenHands / Docker runner demo
+
+```bash
+python examples/research_agent_openhands.py --pull
+```
+
+The demo uses `runner_kind="docker"` with an OpenHands-compatible
+runtime image; the rest of the research-agent contract is unchanged.
+
 There is also a CLI:
 
 ```bash
@@ -173,6 +286,8 @@ easyicu-research-agent \
     --cohort path/to/cohort.parquet \
     --database miiv \
     --target-outcome death \
+    --manuscript-language zh \
+    --enable-tavily \
     --workdir ./research_output
 ```
 
@@ -334,14 +449,32 @@ the **hero ablation**: run the same generated cohort with a generic
 agent (no context) and with EasyICU's context layer, and contrast
 their handling of the SOFA2==0 stratum.
 
+For the paper-facing four-quadrant version:
+
+```bash
+python examples/research_agent_real_llm_ablation.py \
+  --provider openrouter \
+  --model openrouter/free \
+  --out-root research_output/ablation_openrouter_free_4q
+```
+
+The output includes mock/real × naive/aware summaries in
+`ablation_4q_summary.json` and `.md`. The paper-facing table reports
+evidence count, step coverage and a full-context post-hoc
+`forbidden_aggregation_count`, so the main figure can separate
+planner/context quality from the downstream statistical safety net.
+`--reuse-existing` resumes a partially completed arm set.
+
 ## What's intentionally out of scope (v1)
 
 - **No Discussion / clinical claims by the writer agent.** The
   scaffold ends with a one-line stub deferring Discussion to the
   human author. This is policy, enforced by the prompt, and is what
   lets the layer be safely published.
-- **No Docker / OpenHands sandbox.** The runner is a plain
-  subprocess with a wall-clock timeout. Replacing it is one class.
+- **No default Docker requirement.** The default runner remains a plain
+  subprocess with a wall-clock timeout so local demos and CI stay
+  simple. Docker/OpenHands is opt-in via `runner_kind="docker"` or a
+  user-supplied `runner_factory`.
 - **No unbounded automatic cross-database execution.** v1 can build
   deterministic replication packages from supplied EasyICU exports or
   local raw database paths, but long-running targets such as HiRID are

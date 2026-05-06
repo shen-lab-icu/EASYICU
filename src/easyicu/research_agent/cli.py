@@ -50,6 +50,25 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Model name when --llm openai (default: gpt-4o-mini).")
     p.add_argument("--timeout", type=float, default=300.0,
                    help="Per-step subprocess timeout in seconds (default: 300).")
+    p.add_argument("--manuscript-language", choices=["en", "zh"], default="en",
+                   help="Manuscript scaffold language (default: en).")
+    p.add_argument("--context-top-k", type=int, default=None,
+                   help="Optional top-K concept retrieval for long-context prompts.")
+    p.add_argument("--latex-venue-template", default="article",
+                   choices=["article", "nature", "npj", "lancet"],
+                   help="LaTeX scaffold template (default: article).")
+    p.add_argument("--enable-pubmed", action="store_true",
+                   help="Augment curated citations with live PubMed E-utilities hits.")
+    p.add_argument("--pubmed-email", default=None,
+                   help="Optional NCBI E-utilities email for --enable-pubmed.")
+    p.add_argument("--enable-tavily", action="store_true",
+                   help="Augment citations with Tavily web/preprint/guideline search.")
+    p.add_argument("--tavily-retmax", type=int, default=5,
+                   help="Maximum Tavily results when --enable-tavily (default: 5).")
+    p.add_argument("--enable-vlm-visual-qa", action="store_true",
+                   help="Run optional VLM figure review using the configured LLM.")
+    p.add_argument("--enable-llm-concept-audit", action="store_true",
+                   help="Run optional LLM semantic concept-use audit after static checks.")
     return p
 
 
@@ -69,6 +88,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         workdir=args.workdir,
         llm=llm,
         timeout_seconds=args.timeout,
+        manuscript_language=args.manuscript_language,
+        context_top_k=args.context_top_k,
+        latex_venue_template=args.latex_venue_template,
+        enable_pubmed=args.enable_pubmed,
+        pubmed_email=args.pubmed_email,
+        enable_tavily=args.enable_tavily,
+        tavily_retmax=args.tavily_retmax,
+        enable_vlm_visual_qa=args.enable_vlm_visual_qa,
+        enable_llm_concept_audit=args.enable_llm_concept_audit,
     )
 
     cross_db: List[str] = (
