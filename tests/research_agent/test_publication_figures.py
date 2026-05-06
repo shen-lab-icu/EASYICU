@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import zipfile
 
 import pytest
 
@@ -81,3 +82,21 @@ def test_svg_audit_flags_pathified_text(tmp_path: Path):
     svg.write_text("<svg><path d='M0 0L1 1'/></svg>", encoding="utf-8")
     findings = audit_publication_exports([svg], min_bytes=1)
     assert any("editable <text>" in f.message for f in findings)
+
+
+def test_publication_export_writes_pptx(tmp_path: Path):
+    plt = pytest.importorskip("matplotlib.pyplot")
+    fig, ax = plt.subplots(figsize=(3, 2))
+    ax.plot([0, 1], [0, 1])
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+
+    paths = save_publication_figure(fig, tmp_path / "figure_pptx", formats=["pptx"])
+    plt.close(fig)
+
+    pptx = paths["pptx"]
+    assert pptx.exists()
+    with zipfile.ZipFile(pptx) as z:
+        names = set(z.namelist())
+    assert "ppt/slides/slide1.xml" in names
+    assert "ppt/media/image1.png" in names

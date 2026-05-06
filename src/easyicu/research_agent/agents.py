@@ -229,6 +229,7 @@ class PlannerAgent:
             data = json.loads(match)
         if "research_question" not in data:
             data["research_question"] = context.research_question
+        data = _normalise_plan_payload(data)
         return AnalysisPlan.model_validate(data)
 
 
@@ -266,6 +267,65 @@ class CoderAgent:
             ),
         ]
         raw = self.llm.complete(messages, max_tokens=4096, temperature=0.1)
+        return _strip_code_fence(raw.strip())
+
+    def repair(
+        self,
+        *,
+        context: ResearchContext,
+        step: AnalysisStep,
+        code: str,
+        run_log: str,
+        attempt: int = 1,
+    ) -> str:
+        """Ask the coder model for a minimal executable repair.
+
+        Real hosted/free-tier models often produce scripts that are
+        logically fine but brittle around pandas/matplotlib edge cases.
+        The pipeline keeps the first failure as evidence, then gives
+        the coder the traceback once and asks for a complete replacement
+        script.
+        """
+        messages = [
+            LLMMessage(role="system", content=_SYSTEM_GUIDE + _CODER_GUIDE),
+            LLMMessage(
+                role="user",
+                content=(
+                    f"REPAIR THE PYTHON CODE FOR STEP {step.step_id}.\n"
+                    f"Repair attempt: {attempt}\n"
+                    f"Step intent: {step.intent}\n"
+                    f"Step inputs: {step.inputs}\n"
+                    f"Expected outputs: {step.expected_outputs}\n"
+                    f"Method: {step.method or '(unspecified)'}\n\n"
+                    "The previous script failed at execution time. Return "
+                    "only a complete replacement Python script that follows "
+	                    "the original code contract and writes the same expected "
+	                    "artefacts when possible. Make the smallest robust fix; "
+	                    "do not add prose, markdown, or an explanation.\n\n"
+	                    "TRACEBACK-SPECIFIC REQUIREMENTS:\n"
+	                    "- If statsmodels reports `Pandas data cast to numpy dtype of object`, "
+	                    "`exog contains inf or nans`, or any Logit/OLS dtype/missing-data "
+	                    "error, rebuild the modelling dataframe from scratch. After dummy "
+	                    "encoding categorical predictors, coerce the entire design matrix "
+	                    "with `X = X.apply(pd.to_numeric, errors=\"coerce\").astype(float)`, "
+	                    "coerce `y = pd.to_numeric(y, errors=\"coerce\").astype(float)`, "
+	                    "replace +/-inf with NaN, align y/X on the finite complete-case "
+	                    "index, and only then call `sm.add_constant(..., has_constant=\"add\")` "
+	                    "and `sm.Logit(y, X)`. For `pd.get_dummies`, pass `dtype=float` so "
+	                    "dummy columns are not boolean/object. Assert or explicitly check "
+	                    "`np.isfinite(X.to_numpy()).all()` and `np.isfinite(y.to_numpy()).all()` "
+	                    "before fitting.\n\n"
+	                    "PREVIOUS SCRIPT:\n```python\n"
+                    + code[-12000:]
+                    + "\n```\n\n"
+                    "RUN LOG / TRACEBACK:\n```\n"
+                    + run_log[-8000:]
+                    + "\n```\n\n"
+                    "RESEARCH CONTEXT:\n" + _format_context(context)
+                ),
+            ),
+        ]
+        raw = self.llm.complete(messages, max_tokens=4096, temperature=0.05)
         return _strip_code_fence(raw.strip())
 
 
@@ -329,6 +389,16 @@ _CODER_GUIDE = textwrap.dedent(
       after `pd.get_dummies(...)`, call
       `X = X.apply(pd.to_numeric, errors="coerce").astype(float)`,
       drop rows with missing y/X, and add a constant after coercion.
+      The safe pattern is:
+      `model_df = df[[y_col] + x_cols].copy()`;
+      `model_df = model_df.apply(pd.to_numeric, errors="coerce")`;
+      `model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()`;
+      `y = model_df[y_col].astype(float)`;
+      `X = sm.add_constant(model_df[x_cols].astype(float), has_constant="add")`.
+      Never call `sm.Logit(y, X)` until `np.isfinite(X.to_numpy()).all()`
+      and `np.isfinite(y.to_numpy()).all()` are true. If lactate is
+      missing-indicator imputed, still drop missing non-lactate covariates
+      such as MAP after creating the lactate indicator/imputed column.
 
     PYTHON HYGIENE:
     - Python collection constructors must be syntactically valid:
@@ -346,6 +416,17 @@ _CODER_GUIDE = textwrap.dedent(
     - If a column the prompt asks about is absent from the cohort,
       gracefully skip it and record the omission in step_summary.json
       under a `"skipped"` key — do not crash the step.
+    - Do not let optional plotting break a completed table/statistic
+      step. If a plot is secondary, wrap only the plotting block in a
+      narrow `try/except Exception as exc` and record the skipped plot
+      in step_summary.json.
+    - Never assume every category or stratum exists. Before `.iloc[0]`
+      on filtered rows, check `.empty`; before indexing category
+      columns, check membership in `df.columns`.
+    - Matplotlib error bars must be non-negative. Build yerr values
+      with `np.maximum(0, upper - estimate)` and
+      `np.maximum(0, estimate - lower)`, and replace missing bounds
+      with zero-width intervals.
     - Do not delete or modify the cohort parquet.
     - Print step_summary.json contents to stdout at the end.
     '''
@@ -406,8 +487,10 @@ class WriterAgent:
     human author).
     """
 
-    def __init__(self, llm: LLMClient) -> None:
+    def __init__(self, llm: LLMClient, *, language: str = "en") -> None:
         self.llm = llm
+        lang = (language or "en").lower()
+        self.language = "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
 
     def run(
         self,
@@ -424,6 +507,8 @@ class WriterAgent:
                     "Title, Abstract (one paragraph), Methods, Results. "
                     "Leave Discussion as a one-line stub: "
                     "'(left to the human author)'.\n\n"
+                    + _writer_language_instruction(self.language)
+                    + "\n\n"
                     "CITATION RULE — VERY IMPORTANT:\n"
                     "`{evidence:<id>}` is a *citation*, not a value. It "
                     "binds to a markdown link in the rendered manuscript. "
@@ -478,6 +563,20 @@ _WRITER_GUIDE = textwrap.dedent(
     - Do not invent confidence intervals, p-values, or hazard ratios.
     """
 ).strip()
+
+
+def _writer_language_instruction(language: str) -> str:
+    if language == "zh":
+        return (
+            "OUTPUT LANGUAGE: zh / Simplified Chinese. Keep section headings "
+            "as markdown headings. Preserve every `{evidence:<id>}` placeholder "
+            "exactly as ASCII; do not translate evidence ids, filenames, variable "
+            "names, or code-like tokens."
+        )
+    return (
+        "OUTPUT LANGUAGE: en / English. Preserve every `{evidence:<id>}` "
+        "placeholder exactly as ASCII."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +656,26 @@ def _first_json_block(text: str) -> Optional[str]:
             if depth == 0:
                 return text[start : i + 1]
     return None
+
+
+def _normalise_plan_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop hosted-model extras before validating the strict schema."""
+    allowed_plan = {"research_question", "steps", "rationale", "revision"}
+    allowed_step = {
+        "step_id",
+        "intent",
+        "inputs",
+        "expected_outputs",
+        "method",
+        "icu_rule_refs",
+    }
+    out = {k: v for k, v in data.items() if k in allowed_plan}
+    steps = []
+    for raw_step in out.get("steps", []) or []:
+        if isinstance(raw_step, dict):
+            steps.append({k: v for k, v in raw_step.items() if k in allowed_step})
+    out["steps"] = steps
+    return out
 
 
 __all__ = [

@@ -322,6 +322,13 @@ class AnalysisManifest(BaseModel):
     plan_path: Optional[str] = None
     evidence: List[EvidenceRecord] = Field(default_factory=list)
     findings: List[ValidationFinding] = Field(default_factory=list)
+    per_step_records: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Execution records for planner steps, sorted in plan order. "
+            "The same records are streamed to manifest_partial.json during a run."
+        ),
+    )
     cost_records: List[CostRecord] = Field(default_factory=list)
     report_path: Optional[str] = None
     manuscript_path: Optional[str] = None

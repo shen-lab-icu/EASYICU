@@ -196,6 +196,19 @@ def test_scaffold_to_latex_no_bibliography(ra):
     assert r"\begin{thebibliography}" not in tex
 
 
+def test_latex_template_preamble_supports_venues(ra):
+    from easyicu.research_agent.latex import latex_template_preamble, scaffold_to_latex
+
+    assert r"\documentclass{nature}" in latex_template_preamble("nature")
+    assert "sn-jnl" in latex_template_preamble("npj")
+    assert "elsarticle" in latex_template_preamble("lancet")
+    tex = scaffold_to_latex(
+        markdown="# Title\n\n## Methods\n\nBody",
+        venue_template="npj",
+    )
+    assert "sn-jnl" in tex
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: pipeline writes .tex AND .bib
 # ---------------------------------------------------------------------------

@@ -69,6 +69,8 @@ __all__ = [
     # Context builder
     "build_research_context",
     "build_naive_research_context",
+    "retrieve_context_variables",
+    "build_retrieved_research_context",
     "build_lactate_map_vaso_research_context",
     "build_lactate_map_vaso_context_ablation_table",
     "context_information_summary",
@@ -94,7 +96,9 @@ __all__ = [
     "CohortAuditor",
     "StatisticalValidator",
     "ConceptUsageAuditor",
+    "LLMConceptAuditor",
     "VisualQAAuditor",
+    "VLMVisualQAAdapter",
     "FigureContract",
     "PanelSpec",
     "make_figure_contract",
@@ -124,12 +128,15 @@ __all__ = [
     "RunMemory",
     # LaTeX (OpenLens-inspired)
     "scaffold_to_latex",
+    "latex_template_preamble",
     # BibTeX export (T3.4)
     "render_bibtex",
     "render_thebibliography_block",
     # Literature (OpenLens-inspired)
     "CitationRecord",
     "LiteratureBundle",
+    "PubMedLiteratureClient",
+    "TavilyLiteratureClient",
     # MCP server (M4-inspired)
     "mcp_dispatch",
     "MCP_TOOLS",
@@ -165,12 +172,14 @@ def __getattr__(name: str):
     the module installed does not pull in pandas-heavy code paths or
     optional LLM SDKs unless the user actually uses them.
     """
-    if name == "build_research_context":
-        from .context import build_research_context
-        return build_research_context
-    if name == "build_naive_research_context":
-        from .context import build_naive_research_context
-        return build_naive_research_context
+    if name in {
+        "build_research_context",
+        "build_naive_research_context",
+        "retrieve_context_variables",
+        "build_retrieved_research_context",
+    }:
+        from . import context as _context
+        return getattr(_context, name)
     if name in {
         "build_lactate_map_vaso_research_context",
         "build_lactate_map_vaso_context_ablation_table",
@@ -188,18 +197,28 @@ def __getattr__(name: str):
     if name == "LiteratureAgent":
         from .literature import LiteratureAgent
         return LiteratureAgent
-    if name in {"CitationRecord", "LiteratureBundle"}:
+    if name in {
+        "CitationRecord",
+        "LiteratureBundle",
+        "PubMedLiteratureClient",
+        "TavilyLiteratureClient",
+    }:
         from . import literature as _lit
         return getattr(_lit, name)
     if name in {"CodeRunner", "DockerRunner", "RunResult"}:
         from . import runner as _runner
         return getattr(_runner, name)
-    if name in {"CohortAuditor", "StatisticalValidator", "ConceptUsageAuditor"}:
+    if name in {
+        "CohortAuditor",
+        "StatisticalValidator",
+        "ConceptUsageAuditor",
+        "LLMConceptAuditor",
+    }:
         from . import validators as _validators
         return getattr(_validators, name)
-    if name == "VisualQAAuditor":
-        from .visual_qa import VisualQAAuditor
-        return VisualQAAuditor
+    if name in {"VisualQAAuditor", "VLMVisualQAAdapter"}:
+        from . import visual_qa as _visual_qa
+        return getattr(_visual_qa, name)
     if name in {
         "FigureContract",
         "PanelSpec",
@@ -240,9 +259,9 @@ def __getattr__(name: str):
     if name == "RunMemory":
         from .memory import RunMemory
         return RunMemory
-    if name == "scaffold_to_latex":
-        from .latex import scaffold_to_latex
-        return scaffold_to_latex
+    if name in {"scaffold_to_latex", "latex_template_preamble"}:
+        from . import latex as _latex
+        return getattr(_latex, name)
     if name in {"render_bibtex", "render_thebibliography_block"}:
         from . import bibtex as _bibtex
         return getattr(_bibtex, name)

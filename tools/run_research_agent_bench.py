@@ -343,7 +343,17 @@ def main() -> int:
                         help="Synthetic-cohort seed (deterministic).")
     parser.add_argument("--out-root",
                         default=str((Path.cwd() / "research_output" / "bench").resolve()))
+    parser.add_argument("--ehrflowbench-jsonl", default=None,
+                        help="Optional EHRFlowBench-style JSONL export. Each row may include "
+                             "key, question, cohort_path, target_outcome, expected_or_direction.")
     args = parser.parse_args()
+
+    if args.ehrflowbench_jsonl:
+        return _run_ehrflowbench_jsonl(
+            jsonl_path=Path(args.ehrflowbench_jsonl).resolve(),
+            out_root=Path(args.out_root).resolve(),
+            seed=args.seed,
+        )
 
     if args.items:
         items = [it for it in BENCH_ITEMS if it.key in set(args.items)]
@@ -389,6 +399,119 @@ def main() -> int:
     print(f"  Evidence missing   — naive: {totals['naive']['evidence_missing_in_manuscripts']} ; "
           f"aware: {totals['aware']['evidence_missing_in_manuscripts']}")
     return 0
+
+
+def _run_ehrflowbench_jsonl(*, jsonl_path: Path, out_root: Path, seed: int) -> int:
+    """Run an external EHRFlowBench-style JSONL export when available."""
+    from types import SimpleNamespace
+    import pandas as pd
+
+    if not jsonl_path.exists():
+        print(f"EHRFlowBench JSONL not found: {jsonl_path}")
+        return 2
+    out_root.mkdir(parents=True, exist_ok=True)
+    rows: List[Dict[str, Any]] = []
+    for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            rows.append({"status": "invalid_json", "error": str(exc), "raw": line[:200]})
+
+    scores: List[Dict[str, Any]] = []
+    pending: List[Dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        key = str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
+        cohort_path = row.get("cohort_path") or row.get("cohort")
+        question = row.get("question") or row.get("research_question")
+        target = row.get("target_outcome") or row.get("outcome")
+        if not cohort_path or not question or not target:
+            pending.append({
+                "key": key,
+                "status": "pending_missing_fields",
+                "required": ["question", "cohort_path", "target_outcome"],
+            })
+            continue
+        path = Path(str(cohort_path)).expanduser().resolve()
+        if not path.exists():
+            pending.append({"key": key, "status": "pending_missing_cohort", "cohort_path": str(path)})
+            continue
+        if path.suffix.lower() in {".parquet", ".pq"}:
+            cohort = pd.read_parquet(path)
+        elif path.suffix.lower() in {".csv", ".tsv"}:
+            cohort = pd.read_csv(path, sep=("\t" if path.suffix.lower() == ".tsv" else ","))
+        else:
+            pending.append({"key": key, "status": "unsupported_cohort_format", "cohort_path": str(path)})
+            continue
+        item = SimpleNamespace(
+            key=key,
+            name=str(row.get("name") or key),
+            research_question=str(question),
+            target_outcome=str(target),
+            primary_predictor=str(row.get("primary_predictor") or ""),
+            expected_or_direction=int(row.get("expected_or_direction") or 0),
+            expected_finding_substrings=list(row.get("expected_finding_substrings") or []),
+            inclusion_criteria=list(row.get("inclusion_criteria") or []),
+        )
+        scores.append(_run_one_item_from_cohort(item=item, cohort=cohort, out_root=out_root))
+
+    totals = _aggregate(scores) if scores else {"naive": {}, "aware": {}}
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": str(jsonl_path),
+        "seed": seed,
+        "scores": scores,
+        "pending": pending,
+        "totals": totals,
+    }
+    (out_root / "ehrflowbench_results.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    md = [
+        "# EHRFlowBench external import",
+        "",
+        f"Source: `{jsonl_path}`",
+        f"Runnable items: {len(scores)}",
+        f"Pending items: {len(pending)}",
+        "",
+    ]
+    if scores:
+        md.append(_render_markdown(scores=scores, totals=totals, seed=seed))
+    if pending:
+        md.extend(["", "## Pending", ""])
+        for p in pending:
+            md.append(f"- `{p['key']}` — {p['status']}")
+    (out_root / "ehrflowbench_results.md").write_text("\n".join(md), encoding="utf-8")
+    print(f"  -> {out_root / 'ehrflowbench_results.json'}")
+    print(f"  -> {out_root / 'ehrflowbench_results.md'}")
+    return 0
+
+
+def _run_one_item_from_cohort(*, item, cohort, out_root: Path) -> Dict[str, Any]:
+    item_root = out_root / item.key
+    naive = _run_one_arm(
+        item=item, cohort=cohort.copy(),
+        workdir=item_root / "naive",
+        disable_icu_context=True, label="naive",
+    )
+    aware = _run_one_arm(
+        item=item, cohort=cohort.copy(),
+        workdir=item_root / "aware",
+        disable_icu_context=False, label="aware",
+    )
+    return {
+        "item_key": item.key,
+        "name": item.name,
+        "research_question": item.research_question,
+        "expected_predictor": item.primary_predictor,
+        "expected_or_direction": item.expected_or_direction,
+        "cohort_size": int(len(cohort)),
+        "naive": naive,
+        "aware": aware,
+    }
 
 
 if __name__ == "__main__":  # pragma: no cover

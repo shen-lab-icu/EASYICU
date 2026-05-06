@@ -16,6 +16,9 @@ designed to fit the EasyICU traceability story:
   with live PubMed hits. All three sources merge into the same
   ``CitationRecord`` shape so the manuscript binder treats them
   uniformly.
+* O5 — when ``enable_tavily=True`` and ``TAVILY_API_KEY`` is set,
+  :class:`TavilyLiteratureClient` adds web/preprint/guideline hits
+  that may not be indexed in PubMed.
 
 References
 ----------
@@ -26,9 +29,11 @@ References
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
+from hashlib import sha1
 from typing import Any, Dict, List, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -455,6 +460,157 @@ def parse_pubmed_esummary(payload: Dict[str, Any]) -> List[CitationRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Tavily live client (O5)
+# ---------------------------------------------------------------------------
+
+
+_TAVILY_BASE = "https://api.tavily.com"
+
+
+class TavilyLiteratureClient:
+    """Tavily Search client for non-PubMed literature discovery.
+
+    Tavily's current Search API is a JSON ``POST /search`` endpoint
+    authenticated by ``Authorization: Bearer <api_key>``. The request
+    must set ``include_answer``, ``include_raw_content`` and
+    ``max_results`` explicitly to control response size. We use only
+    the stdlib so Tavily remains an optional runtime feature, not an
+    install dependency.
+
+    As with PubMed, network and parse errors return an empty list.
+    """
+
+    name = "tavily"
+
+    def __init__(
+        self,
+        *,
+        api_key: Optional[str] = None,
+        timeout: float = 20.0,
+        base_url: str = _TAVILY_BASE,
+        search_depth: str = "basic",
+        include_domains: Optional[Sequence[str]] = None,
+        exclude_domains: Optional[Sequence[str]] = None,
+    ) -> None:
+        self.api_key = api_key or os.environ.get("TAVILY_API_KEY")
+        self.timeout = float(timeout)
+        self.base_url = base_url.rstrip("/")
+        self.search_depth = search_depth
+        self.include_domains = list(include_domains or [])
+        self.exclude_domains = list(exclude_domains or [])
+
+    def search(self, query: str, *, max_results: int = 5) -> List[CitationRecord]:
+        if not query or not self.api_key:
+            return []
+        payload: Dict[str, Any] = {
+            "query": query,
+            "search_depth": self.search_depth,
+            "include_answer": False,
+            "include_raw_content": False,
+            "max_results": int(max_results),
+            "topic": "general",
+        }
+        if self.include_domains:
+            payload["include_domains"] = self.include_domains
+        if self.exclude_domains:
+            payload["exclude_domains"] = self.exclude_domains
+        body = self._http_post("search", payload)
+        if body is None:
+            return []
+        try:
+            data = json.loads(body)
+        except Exception:
+            return []
+        return parse_tavily_search_response(data)
+
+    def search_for_context(
+        self,
+        context: ResearchContext,
+        *,
+        max_results: int = 5,
+    ) -> List[CitationRecord]:
+        return self.search(build_tavily_query_for_context(context), max_results=max_results)
+
+    def _http_post(self, path: str, payload: Dict[str, Any]) -> Optional[bytes]:
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.read()
+        except Exception:
+            return None
+
+
+def build_tavily_query_for_context(context: ResearchContext) -> str:
+    """Compose a web-search query for guidelines/preprints/registries."""
+    pieces = [context.research_question.strip()]
+    db = (context.cohort.database or "").strip()
+    if db:
+        pieces.append(db)
+    role_terms = [
+        v.name for v in context.variables
+        if v.role in _QUERY_ROLES and len(v.name) >= 3
+    ]
+    pieces.extend(role_terms[:4])
+    pieces.extend([
+        "critical care",
+        "guideline OR preprint OR clinical trial OR registry",
+    ])
+    return " ".join(p for p in pieces if p)
+
+
+def parse_tavily_search_response(payload: Dict[str, Any]) -> List[CitationRecord]:
+    """Parse Tavily ``/search`` JSON into ``CitationRecord`` objects."""
+    results = payload.get("results", [])
+    if not isinstance(results, list):
+        return []
+    out: List[CitationRecord] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        url = str(item.get("url") or "").strip()
+        if not title or not url:
+            continue
+        content = str(item.get("content") or "").strip()
+        year = _year_from_pubdate(" ".join([title, content, url]))
+        slug = _slug_from_title(title) or "web"
+        digest = sha1(url.encode("utf-8")).hexdigest()[:8]
+        key = f"tavily_{slug}_{year if year != 'n/a' else 'undated'}_{digest}"
+        try:
+            out.append(CitationRecord(
+                key=key,
+                title=title.rstrip(" ."),
+                year=year,
+                venue=_venue_from_url(url),
+                relevance=content[:500] or "Tavily web-search result for this ICU question.",
+                url=url,
+            ))
+        except Exception:
+            continue
+    return out
+
+
+def _venue_from_url(url: str) -> Optional[str]:
+    try:
+        host = urllib.parse.urlparse(url).netloc.lower()
+    except Exception:
+        return None
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
+
+
+# ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
 
@@ -462,7 +618,7 @@ def parse_pubmed_esummary(payload: Dict[str, Any]) -> List[CitationRecord]:
 class LiteratureAgent:
     """Produce a :class:`LiteratureBundle` for a research context.
 
-    Three composable sources:
+    Four composable sources:
 
     1. **Curated offline registry** (default) — a small, hand-vetted
        list of canonical ICU references filtered by the concepts in
@@ -472,7 +628,11 @@ class LiteratureAgent:
        implicitly), the agent issues an esearch + esummary query
        built from the research question and the variables in scope,
        and merges the hits into the bundle.
-    3. **LLM extension** — when given a real :class:`LLMClient`, asks
+    3. **Tavily live** — when ``enable_tavily=True`` AND a
+       :class:`TavilyLiteratureClient` is supplied (or constructed
+       implicitly), the agent adds web/preprint/guideline hits that
+       PubMed may miss.
+    4. **LLM extension** — when given a real :class:`LLMClient`, asks
        the model to extend the merged list with extra recent
        references. Output is parsed back into ``CitationRecord``
        objects; anything that fails parsing is silently dropped,
@@ -491,17 +651,24 @@ class LiteratureAgent:
         enable_pubmed: bool = False,
         pubmed_client: Optional["PubMedLiteratureClient"] = None,
         pubmed_retmax: int = 8,
+        enable_tavily: bool = False,
+        tavily_client: Optional["TavilyLiteratureClient"] = None,
+        tavily_retmax: int = 5,
     ) -> None:
         self.llm = llm
         self.enable_pubmed = bool(enable_pubmed)
         self.pubmed_client = pubmed_client
         self.pubmed_retmax = int(pubmed_retmax)
+        self.enable_tavily = bool(enable_tavily)
+        self.tavily_client = tavily_client
+        self.tavily_retmax = int(tavily_retmax)
 
     def run(self, context: ResearchContext) -> LiteratureBundle:
         baseline = _curated_for(context)
         merged = list(baseline)
         seen_keys = {c.key for c in merged}
         seen_pmids = {c.pmid for c in merged if c.pmid}
+        seen_urls = {c.url for c in merged if c.url}
 
         # 2) PubMed live (T2.2). Errors are swallowed: the bundle is
         #    still useful even if the network is unreachable.
@@ -517,9 +684,30 @@ class LiteratureAgent:
                 seen_keys.add(rec.key)
                 if rec.pmid:
                     seen_pmids.add(rec.pmid)
+                if rec.url:
+                    seen_urls.add(rec.url)
                 merged.append(rec)
 
-        # 3) LLM extension (only when a real client is provided).
+        # 3) Tavily live (O5) for non-PubMed-indexed material. Errors
+        #    are swallowed for the same reason as PubMed: literature
+        #    enrichment must never break an otherwise valid analysis.
+        if self.enable_tavily:
+            client = self.tavily_client or TavilyLiteratureClient()
+            try:
+                hits = client.search_for_context(context, max_results=self.tavily_retmax)
+            except Exception:
+                hits = []
+            for rec in hits:
+                if rec.key in seen_keys or (rec.url and rec.url in seen_urls):
+                    continue
+                seen_keys.add(rec.key)
+                if rec.url:
+                    seen_urls.add(rec.url)
+                if rec.pmid:
+                    seen_pmids.add(rec.pmid)
+                merged.append(rec)
+
+        # 4) LLM extension (only when a real client is provided).
         if self.llm is not None and not isinstance(self.llm, MockLLMClient):
             existing_keys = ", ".join(c.key for c in merged)
             msgs = [
@@ -552,6 +740,8 @@ class LiteratureAgent:
                 seen_keys.add(rec.key)
                 if rec.pmid:
                     seen_pmids.add(rec.pmid)
+                if rec.url:
+                    seen_urls.add(rec.url)
                 merged.append(rec)
 
         return LiteratureBundle(
@@ -586,6 +776,9 @@ __all__ = [
     "LiteratureBundle",
     "LiteratureAgent",
     "PubMedLiteratureClient",
+    "TavilyLiteratureClient",
     "build_pubmed_query_for_context",
+    "build_tavily_query_for_context",
     "parse_pubmed_esummary",
+    "parse_tavily_search_response",
 ]

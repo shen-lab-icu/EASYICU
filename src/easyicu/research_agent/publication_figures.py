@@ -19,6 +19,7 @@ dashboards with no reviewable scientific logic.
 from __future__ import annotations
 
 from pathlib import Path
+import zipfile
 from typing import Dict, Iterable, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -32,6 +33,8 @@ FigureArchetype = Literal[
     "image_plate_plus_quant",
     "asymmetric_mixed_modality",
 ]
+
+ExportFormat = Literal["svg", "pdf", "png", "tiff", "pptx"]
 
 PanelRole = Literal[
     "overview",
@@ -81,7 +84,7 @@ class FigureContract(BaseModel):
     core_claim: str = Field(..., description="The one-sentence claim the figure defends.")
     archetype: FigureArchetype = "asymmetric_mixed_modality"
     panels: List[PanelSpec] = Field(default_factory=list)
-    export_formats: List[Literal["svg", "pdf", "png", "tiff"]] = Field(
+    export_formats: List[ExportFormat] = Field(
         default_factory=lambda: ["svg", "pdf", "png"],
     )
     width_mm: float = Field(default=183.0, gt=0)
@@ -174,7 +177,7 @@ def make_figure_contract(
     core_claim: str,
     panels: Sequence[PanelSpec | Mapping[str, object]],
     archetype: FigureArchetype = "asymmetric_mixed_modality",
-    export_formats: Sequence[Literal["svg", "pdf", "png", "tiff"]] = ("svg", "pdf", "png"),
+    export_formats: Sequence[ExportFormat] = ("svg", "pdf", "png"),
     width_mm: float = 183.0,
     height_mm: float = 120.0,
     source_data: Optional[Sequence[str]] = None,
@@ -308,7 +311,7 @@ def save_publication_figure(
     output_stem: str | Path,
     *,
     contract: Optional[FigureContract] = None,
-    formats: Optional[Sequence[Literal["svg", "pdf", "png", "tiff"]]] = None,
+    formats: Optional[Sequence[ExportFormat]] = None,
     dpi: int = 600,
 ) -> Dict[str, Path]:
     """Save a matplotlib figure in journal-friendly formats.
@@ -335,6 +338,25 @@ def save_publication_figure(
     saved: Dict[str, Path] = {}
     for fmt in requested:
         path = stem.with_suffix(f".{fmt}")
+        if fmt == "pptx":
+            png_path = saved.get("png")
+            cleanup_png = False
+            if png_path is None:
+                png_path = stem.with_suffix(".pptx_source.png")
+                fig.savefig(png_path, dpi=dpi, bbox_inches="tight")  # type: ignore[attr-defined]
+                cleanup_png = True
+            _write_single_image_pptx(
+                image_path=png_path,
+                pptx_path=path,
+                title=contract.figure_id if contract else stem.name,
+            )
+            if cleanup_png:
+                try:
+                    png_path.unlink()
+                except Exception:
+                    pass
+            saved[fmt] = path
+            continue
         kwargs = {"bbox_inches": "tight"}
         if fmt in {"png", "tiff"}:
             kwargs["dpi"] = dpi
@@ -350,6 +372,100 @@ def save_publication_figure(
     return saved
 
 
+def _write_single_image_pptx(*, image_path: Path, pptx_path: Path, title: str) -> None:
+    """Write a minimal one-slide PPTX with ``image_path`` centred.
+
+    This avoids adding ``python-pptx`` as a hard dependency while still
+    giving clinical collaborators an editable PowerPoint container.
+    """
+    pptx_path.parent.mkdir(parents=True, exist_ok=True)
+    image_bytes = image_path.read_bytes()
+    slide_w = 12192000
+    slide_h = 6858000
+    margin = 457200
+    img_w = slide_w - margin * 2
+    img_h = slide_h - margin * 2
+    image_name = "image1.png"
+    with zipfile.ZipFile(pptx_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", _pptx_content_types())
+        z.writestr("_rels/.rels", _pptx_root_rels())
+        z.writestr("ppt/presentation.xml", _pptx_presentation(slide_w, slide_h))
+        z.writestr("ppt/_rels/presentation.xml.rels", _pptx_presentation_rels())
+        z.writestr("ppt/slides/slide1.xml", _pptx_slide(title, margin, margin, img_w, img_h))
+        z.writestr("ppt/slides/_rels/slide1.xml.rels", _pptx_slide_rels(image_name))
+        z.writestr(f"ppt/media/{image_name}", image_bytes)
+
+
+def _pptx_content_types() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+  <Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+</Types>"""
+
+
+def _pptx_root_rels() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+</Relationships>"""
+
+
+def _pptx_presentation(slide_w: int, slide_h: int) -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+  <p:sldSz cx="{slide_w}" cy="{slide_h}" type="wide"/>
+  <p:notesSz cx="6858000" cy="9144000"/>
+</p:presentation>"""
+
+
+def _pptx_presentation_rels() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+</Relationships>"""
+
+
+def _pptx_slide(title: str, x: int, y: int, cx: int, cy: int) -> str:
+    safe_title = _xml_escape(title)
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+      <p:pic>
+        <p:nvPicPr><p:cNvPr id="2" name="{safe_title}"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>
+        <p:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+        <p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+      </p:pic>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sld>"""
+
+
+def _pptx_slide_rels(image_name: str) -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/{image_name}"/>
+</Relationships>"""
+
+
+def _xml_escape(text: str) -> str:
+    return (
+        (text or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
 def audit_publication_exports(
     paths: Mapping[str, Path] | Iterable[Path],
     *,
@@ -357,7 +473,7 @@ def audit_publication_exports(
     require_svg_text: bool = True,
 ) -> List[ValidationFinding]:
     """Audit exported figure files for basic journal-readiness."""
-    figure_suffixes = {".svg", ".pdf", ".png", ".tiff", ".tif"}
+    figure_suffixes = {".svg", ".pdf", ".png", ".tiff", ".tif", ".pptx"}
     if isinstance(paths, Mapping):
         path_list = [
             Path(p) for p in paths.values()
@@ -403,6 +519,7 @@ def audit_publication_exports(
 
 __all__ = [
     "FigureArchetype",
+    "ExportFormat",
     "PanelRole",
     "PanelSpec",
     "FigureContract",

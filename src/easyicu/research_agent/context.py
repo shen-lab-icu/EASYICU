@@ -15,7 +15,8 @@ concept dictionary.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+import re
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
@@ -408,4 +409,108 @@ def build_naive_research_context(
     )
 
 
-__all__ = ["build_research_context", "build_naive_research_context"]
+def retrieve_context_variables(
+    context: ResearchContext,
+    *,
+    query: str,
+    top_k: int = 40,
+) -> List[ConceptDescriptor]:
+    """Return the most relevant concept descriptors for a question.
+
+    O6 — long-context guard. This is deliberately dependency-free: it
+    uses lexical overlap across variable name, description, role and
+    pitfall text, with small boosts for target outcomes and explicitly
+    question-mentioned variables. If a future install has an embedding
+    index, it can replace this scorer without changing the pipeline
+    contract.
+    """
+    if top_k <= 0 or top_k >= len(context.variables):
+        return list(context.variables)
+    q_tokens = _tokens(query or context.research_question)
+    scored: List[Tuple[float, int, ConceptDescriptor]] = []
+    for i, v in enumerate(context.variables):
+        haystack = " ".join([
+            v.name,
+            v.description or "",
+            v.role.value,
+            v.dtype,
+            " ".join(v.pitfalls),
+            v.missingness_semantics or "",
+            " ".join(v.forbidden_transformations),
+            " ".join(v.cross_database_notes),
+        ])
+        v_tokens = _tokens(haystack)
+        overlap = len(q_tokens & v_tokens)
+        score = float(overlap)
+        name_norm = re.sub(r"[^a-z0-9]+", "", v.name.lower())
+        q_norm = re.sub(r"[^a-z0-9]+", "", (query or context.research_question).lower())
+        if name_norm and name_norm in q_norm:
+            score += 4.0
+        if context.target_outcome and v.name == context.target_outcome:
+            score += 3.0
+        if v.role in {VariableRole.OUTCOME, VariableRole.COMPOSITE_SCORE, VariableRole.ORDINAL_SCORE}:
+            score += 1.0
+        if v.pitfalls:
+            score += 0.5
+        scored.append((score, -i, v))
+    ranked = sorted(scored, key=lambda t: (t[0], t[1]), reverse=True)
+    selected = [v for score, _, v in ranked[:top_k] if score > 0]
+    if not selected:
+        selected = [v for _, _, v in ranked[:top_k]]
+
+    # Always preserve declared id/time/outcome columns even if the
+    # natural-language query did not mention them.
+    required = set(context.cohort.id_columns + context.cohort.time_columns + context.cohort.outcome_columns)
+    if context.target_outcome:
+        required.add(context.target_outcome)
+    by_name = {v.name: v for v in context.variables}
+    selected_names = {v.name for v in selected}
+    for name in required:
+        if name in by_name and name not in selected_names:
+            selected.append(by_name[name])
+            selected_names.add(name)
+    return selected
+
+
+def build_retrieved_research_context(
+    context: ResearchContext,
+    *,
+    query: Optional[str] = None,
+    top_k: Optional[int] = None,
+) -> ResearchContext:
+    """Return a prompt-sized context with only top-K variables.
+
+    The full :class:`ResearchContext` should still be used by validators
+    and manifest writing. This helper is for agent prompts only.
+    """
+    if top_k is None or top_k <= 0 or top_k >= len(context.variables):
+        return context
+    selected = retrieve_context_variables(
+        context,
+        query=query or context.research_question,
+        top_k=top_k,
+    )
+    selected_names = ", ".join(v.name for v in selected)
+    retrieval_note = (
+        f"Context retrieval active: showing {len(selected)}/"
+        f"{len(context.variables)} variables selected for this question. "
+        f"Selected variables: {selected_names}."
+    )
+    notes = f"{context.notes}\n\n{retrieval_note}" if context.notes else retrieval_note
+    return context.model_copy(update={"variables": selected, "notes": notes})
+
+
+def _tokens(text: str) -> set:
+    return {
+        t.lower()
+        for t in re.findall(r"[A-Za-z0-9_]+", text or "")
+        if len(t) >= 2
+    }
+
+
+__all__ = [
+    "build_research_context",
+    "build_naive_research_context",
+    "retrieve_context_variables",
+    "build_retrieved_research_context",
+]

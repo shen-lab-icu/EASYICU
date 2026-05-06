@@ -108,6 +108,31 @@ def test_planner_parse_recovers_fenced_json(ra):
     assert plan.steps and plan.steps[0].step_id == "01_table_one"
 
 
+def test_planner_parse_drops_extra_step_fields(ra):
+    raw = (
+        '{"research_question": "Is sofa2 -> death?", "extra": "drop me", "steps":'
+        ' [{"step_id":"06_cross_database","intent":"protocol","inputs":[],'
+        '"expected_outputs":[],"note":"external cohort unavailable"}]}'
+    )
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Is sofa2 -> death?",
+        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        variables=[],
+    )
+
+    class _DummyLLM:
+        name = "dummy"
+
+        def complete(self, messages, **kwargs):
+            return raw
+
+    from easyicu.research_agent.agents import PlannerAgent
+    plan = PlannerAgent(_DummyLLM())._parse(raw, ctx)
+    assert plan.steps[0].step_id == "06_cross_database"
+    assert not hasattr(plan.steps[0], "note")
+
+
 def test_planner_uses_enough_completion_budget(ra):
     """Reasoning models can spend part of max_tokens before final JSON."""
     schema = ra.schema
@@ -196,3 +221,32 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
     # The fence must be stripped so the binder regex matches.
     assert "{evidence:table_one}" in out
     assert "```markdown" not in out
+
+
+def test_writer_language_prompt_preserves_evidence_ids(ra):
+    """The Chinese writer mode should ask for zh prose but keep evidence ids ASCII."""
+    captured = {}
+
+    class _DummyLLM:
+        name = "dummy"
+
+        def complete(self, messages, **kwargs):
+            captured["prompt"] = messages[-1].content
+            return "# 标题\n\n结果：12 例 {evidence:table_one}。\n"
+
+    from easyicu.research_agent.agents import WriterAgent
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="x",
+        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        variables=[],
+    )
+
+    out = WriterAgent(_DummyLLM(), language="zh").run(
+        context=ctx,
+        evidence_ids=["table_one"],
+    )
+
+    assert "Simplified Chinese" in captured["prompt"]
+    assert "do not translate evidence ids" in captured["prompt"]
+    assert "{evidence:table_one}" in out

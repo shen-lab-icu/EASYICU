@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
+
 
 def _run_full(ra, synthetic_cohort, workdir: Path):
     pipeline = ra.ResearchAgentPipeline(workdir=workdir, llm=ra.MockLLMClient())
@@ -130,3 +132,86 @@ def test_resume_to_nonexistent_run_id_starts_fresh_directory(ra, synthetic_cohor
     assert result.run_id == "run_does_not_exist_yet"
     assert (Path(result.workdir) / "manifest.json").exists()
     assert (Path(result.workdir) / "manifest_partial.json").exists()
+
+
+def test_final_manifest_keeps_step_records_for_metered_hosted_stub(ra, tmp_path: Path):
+    """The final manifest must keep per-step resume records outside Mock paths.
+
+    The real hosted path is wrapped in ``MeteredClient`` when cost
+    tracking is enabled. This stub exercises that routing without a
+    network call and pins the final ``manifest.json`` contract that
+    paper/provenance tooling reads.
+    """
+
+    class HostedStubLLM:
+        name = "hosted-stub"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps({
+                    "research_question": "Is SOFA associated with ICU mortality?",
+                    "steps": [{
+                        "step_id": "04_primary_association",
+                        "intent": "Estimate SOFA and ICU mortality association.",
+                        "inputs": ["sofa2", "death"],
+                        "expected_outputs": ["table:primary_association"],
+                        "method": "descriptive",
+                        "icu_rule_refs": ["aggregation_rule_for"],
+                    }],
+                    "rationale": "single-step hosted-stub resume test",
+                })
+            if "WRITE THE PYTHON CODE" in upper:
+                return """
+import json
+import os
+import pandas as pd
+
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+out = os.environ["STEP_OUT_DIR"]
+summary = {
+    "predictor": "sofa2",
+    "n": int(len(df)),
+    "sofa2_median": float(df["sofa2"].median()),
+    "mortality_rate": float(df["death"].mean()),
+}
+pd.DataFrame([summary]).to_csv(os.path.join(out, "primary_association.csv"), index=False)
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+"""
+            if "INTERPRET THE RESULTS" in upper:
+                return "The primary association table is available {evidence:primary_association}."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return "# Title\n\n## Results\n\nThe table is available {evidence:primary_association}."
+            return "{}"
+
+    cohort = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4],
+        "sofa2": [0, 1, 3, 6],
+        "death": [1, 0, 0, 1],
+    })
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=HostedStubLLM(),
+        enable_cost_tracking=True,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+    )
+    result = pipeline.run(
+        question="Is SOFA associated with ICU mortality?",
+        cohort=cohort,
+        cohort_name="hosted_stub_resume_test",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    run_dir = Path(result.workdir)
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    partial = json.loads((run_dir / "manifest_partial.json").read_text(encoding="utf-8"))
+
+    assert manifest["per_step_records"], "final manifest dropped per-step records"
+    assert manifest["per_step_records"] == partial["per_step_records"]
+    assert manifest["per_step_records"][0]["status"] == "ok"
+    assert manifest["cost_records"], "hosted-stub path should be metered"

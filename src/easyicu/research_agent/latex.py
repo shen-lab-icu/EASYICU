@@ -71,6 +71,7 @@ def scaffold_to_latex(
     bibliography_basename: str = "manuscript_scaffold",
     bibliography_style: str = "plain",
     inline_bibliography: bool = False,
+    venue_template: str = "article",
 ) -> str:
     """Convert the markdown manuscript scaffold into a LaTeX document.
 
@@ -105,16 +106,7 @@ def scaffold_to_latex(
 
     # Rebuild as LaTeX
     parts: List[str] = []
-    parts.append(textwrap.dedent(r"""
-        \documentclass[11pt]{article}
-        \usepackage[a4paper,margin=1in]{geometry}
-        \usepackage{graphicx}
-        \usepackage{hyperref}
-        \usepackage{booktabs}
-        \usepackage{longtable}
-        \usepackage{xcolor}
-        \usepackage[hang,small,bf]{caption}
-    """).strip())
+    parts.append(latex_template_preamble(venue_template))
     parts.append("")
     parts.append(r"\title{" + _escape_latex(title) + "}")
     parts.append(r"\author{" + r" \and ".join(_escape_latex(a) for a in authors) + "}")
@@ -172,6 +164,33 @@ def scaffold_to_latex(
     return "\n".join(parts)
 
 
+def latex_template_preamble(venue_template: str = "article") -> str:
+    """Return a venue-specific LaTeX preamble.
+
+    ``article`` is the dependency-light default. ``nature``, ``npj``
+    and ``lancet`` emit journal-style class scaffolds for authors who
+    have the matching class files installed locally.
+    """
+    key = (venue_template or "article").strip().lower()
+    common = r"""
+        \usepackage{graphicx}
+        \usepackage{hyperref}
+        \usepackage{booktabs}
+        \usepackage{longtable}
+        \usepackage{xcolor}
+        \usepackage[hang,small,bf]{caption}
+    """
+    if key == "nature":
+        head = r"\documentclass{nature}"
+    elif key == "npj":
+        head = r"\documentclass[pdflatex,sn-basic]{sn-jnl}"
+    elif key == "lancet":
+        head = r"\documentclass[review]{elsarticle}"
+    else:
+        head = r"\documentclass[11pt]{article}" + "\n" + r"\usepackage[a4paper,margin=1in]{geometry}"
+    return (head + "\n" + textwrap.dedent(common).strip()).strip()
+
+
 def _render_body(body: str) -> str:
     """Render a section body: bullets become itemize, paragraphs stay as-is."""
     lines = body.splitlines()
@@ -216,4 +235,4 @@ def _format_citation_inline(c: CitationRecord) -> str:
     return _escape_latex(" ".join(parts))
 
 
-__all__ = ["scaffold_to_latex"]
+__all__ = ["scaffold_to_latex", "latex_template_preamble"]

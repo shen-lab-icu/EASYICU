@@ -298,3 +298,99 @@ def test_literature_agent_pubmed_failure_is_silent(ra):
     ).run(ctx)
     # Curated baseline is intact.
     assert any(c.key == "vincent_sofa_1996" for c in bundle.citations)
+
+
+# ---------------------------------------------------------------------------
+# Tavily live client (O5) — offline transport stubs
+# ---------------------------------------------------------------------------
+
+
+def test_parse_tavily_search_response_extracts_web_records(ra):
+    from easyicu.research_agent.literature import parse_tavily_search_response
+
+    payload = {
+        "results": [
+            {
+                "title": "Surviving Sepsis Campaign Guidelines 2021",
+                "url": "https://www.sccm.org/guidelines/sepsis-guidelines",
+                "content": "International guideline for sepsis and septic shock.",
+                "score": 0.9,
+            }
+        ]
+    }
+    records = parse_tavily_search_response(payload)
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.year == "2021"
+    assert rec.venue == "sccm.org"
+    assert rec.url == "https://www.sccm.org/guidelines/sepsis-guidelines"
+    assert rec.key.startswith("tavily_surviving_2021_")
+
+
+def test_tavily_client_posts_required_search_knobs(ra):
+    from easyicu.research_agent.literature import TavilyLiteratureClient
+
+    calls = []
+    client = TavilyLiteratureClient(api_key="tvly-test", timeout=1.0)
+
+    def _http_post(path, payload):
+        calls.append({"path": path, "payload": dict(payload)})
+        return json.dumps({
+            "results": [
+                {
+                    "title": "Trial registry entry for ICU vasopressors",
+                    "url": "https://clinicaltrials.gov/study/NCT00000000",
+                    "content": "A registry record.",
+                }
+            ]
+        }).encode()
+
+    client._http_post = _http_post  # type: ignore[attr-defined]
+    out = client.search("vasopressor ICU trial", max_results=3)
+
+    assert len(out) == 1
+    assert calls[0]["path"] == "search"
+    payload = calls[0]["payload"]
+    assert payload["include_answer"] is False
+    assert payload["include_raw_content"] is False
+    assert payload["max_results"] == 3
+    assert payload["search_depth"] == "basic"
+
+
+def test_literature_agent_merges_tavily_with_curated(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=10, n_stays=10),
+        variables=[
+            schema.ConceptDescriptor(name="sofa2", role="composite_score", dtype="int64"),
+            schema.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        target_outcome="death",
+    )
+
+    class _Tavily:
+        def search_for_context(self, context, *, max_results=5):
+            from easyicu.research_agent.literature import CitationRecord
+            return [
+                CitationRecord(
+                    key="tavily_guideline_2021_deadbeef",
+                    title="ICU guideline outside PubMed",
+                    year="2021",
+                    venue="guidelines.example",
+                    url="https://guidelines.example/icu",
+                )
+            ]
+
+    from easyicu.research_agent.literature import LiteratureAgent
+
+    bundle = LiteratureAgent(
+        llm=None,
+        enable_tavily=True,
+        tavily_client=_Tavily(),
+        tavily_retmax=2,
+    ).run(ctx)
+    keys = {c.key for c in bundle.citations}
+    assert "vincent_sofa_1996" in keys
+    assert "tavily_guideline_2021_deadbeef" in keys

@@ -43,7 +43,11 @@ import pandas as pd
 
 from .agents import AnalyzerAgent, CoderAgent, PlannerAgent, WriterAgent
 from .cost import CostMeter, metered_role_resolver
-from .context import build_naive_research_context, build_research_context
+from .context import (
+    build_naive_research_context,
+    build_research_context,
+    build_retrieved_research_context,
+)
 from .evidence import EvidenceStore
 from .bibtex import render_bibtex
 from .latex import scaffold_to_latex
@@ -61,9 +65,14 @@ from .schema import (
     TimeWindow,
     ValidationFinding,
 )
-from .skills import ClinicalSkill, get_skill
-from .validators import CohortAuditor, ConceptUsageAuditor, StatisticalValidator
-from .visual_qa import VisualQAAuditor
+from .skills import ClinicalSkill, get_skill, list_skills
+from .validators import (
+    CohortAuditor,
+    ConceptUsageAuditor,
+    LLMConceptAuditor,
+    StatisticalValidator,
+)
+from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 
 class ResearchAgentPipeline:
@@ -78,12 +87,28 @@ class ResearchAgentPipeline:
         python_executable: Optional[str] = None,
         enable_literature: bool = True,
         enable_visual_qa: bool = True,
+        enable_vlm_visual_qa: bool = False,
+        vlm_client: Optional[LLMClient] = None,
+        visual_qa_adapter: Optional[VLMVisualQAAdapter] = None,
+        enable_llm_concept_audit: bool = False,
+        llm_concept_auditor_client: Optional[LLMClient] = None,
         enable_memory: bool = True,
         enable_latex: bool = True,
+        latex_venue_template: str = "article",
+        manuscript_language: str = "en",
         disable_icu_context: bool = False,
+        context_top_k: Optional[int] = None,
+        max_code_repair_attempts: int = 1,
+        enable_deterministic_code_fallback: bool = True,
+        enable_deterministic_planner_fallback: bool = True,
         enable_pubmed: bool = False,
         pubmed_email: Optional[str] = None,
         pubmed_api_key: Optional[str] = None,
+        enable_tavily: bool = False,
+        tavily_api_key: Optional[str] = None,
+        tavily_retmax: int = 5,
+        tavily_include_domains: Optional[Sequence[str]] = None,
+        tavily_exclude_domains: Optional[Sequence[str]] = None,
         enable_cache: bool = False,
         cache_dir: Optional[Union[str, Path]] = None,
         enable_cost_tracking: bool = False,
@@ -103,13 +128,25 @@ class ResearchAgentPipeline:
         self._python_executable = python_executable
         self._enable_literature = enable_literature
         self._enable_visual_qa = enable_visual_qa
+        self._enable_vlm_visual_qa = bool(enable_vlm_visual_qa)
+        self._vlm_client = vlm_client
+        self._visual_qa_adapter = visual_qa_adapter
+        self._enable_llm_concept_audit = bool(enable_llm_concept_audit)
+        self._llm_concept_auditor_client = llm_concept_auditor_client
         self._enable_memory = enable_memory
         self._enable_latex = enable_latex
+        self._latex_venue_template = latex_venue_template or "article"
+        lang = (manuscript_language or "en").lower()
+        self._manuscript_language = "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
         # T1.4 — when set, the pipeline strips the ICU rules out of the
         # context that drives planning, coding and validation. This is
         # the "naive" arm of the hero ablation: a generic data agent
         # sees only column names + dtypes + ANY-aggregation.
         self._disable_icu_context = bool(disable_icu_context)
+        self._context_top_k = int(context_top_k) if context_top_k else None
+        self._max_code_repair_attempts = max(0, int(max_code_repair_attempts))
+        self._enable_deterministic_code_fallback = bool(enable_deterministic_code_fallback)
+        self._enable_deterministic_planner_fallback = bool(enable_deterministic_planner_fallback)
         # T2.2 — opt-in PubMed live search. Off by default so CI and
         # the offline demo stay deterministic; the LiteratureAgent
         # handles network failure gracefully (empty list → curated
@@ -117,6 +154,14 @@ class ResearchAgentPipeline:
         self._enable_pubmed = bool(enable_pubmed)
         self._pubmed_email = pubmed_email
         self._pubmed_api_key = pubmed_api_key
+        # O5 — opt-in Tavily web search for preprints/guidelines/trial
+        # registries that PubMed may not index. Off by default so CI
+        # and offline demos remain deterministic.
+        self._enable_tavily = bool(enable_tavily)
+        self._tavily_api_key = tavily_api_key
+        self._tavily_retmax = int(tavily_retmax)
+        self._tavily_include_domains = list(tavily_include_domains or [])
+        self._tavily_exclude_domains = list(tavily_exclude_domains or [])
         # T3.5 — cohort cache. When enabled, identical re-runs (same
         # cohort hash + same skill/question/llm signature) short-circuit
         # to the prior run_dir's PipelineResult instead of repeating
@@ -225,6 +270,7 @@ class ResearchAgentPipeline:
         skill: Optional[Union[str, ClinicalSkill]] = None,
         manuscript_title: Optional[str] = None,
         manuscript_authors: Optional[Sequence[str]] = None,
+        manuscript_language: Optional[str] = None,
         resume_run_id: Optional[str] = None,
         stop_after_analysis: bool = False,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -241,6 +287,9 @@ class ResearchAgentPipeline:
                 time_windows = skill_obj.time_windows or None
         if question is None:
             raise ValueError("`question` is required (or pass `skill=...` to derive one).")
+        run_language = self._normalise_manuscript_language(
+            manuscript_language or self._manuscript_language
+        )
 
         def _emit_progress(stage: str, message: str, **extra: Any) -> None:
             """Best-effort progress callback for web / CLI frontends.
@@ -308,6 +357,7 @@ class ResearchAgentPipeline:
                 database=database,
                 llm=self._llm,
                 stop_after_analysis=stop_after_analysis,
+                manuscript_language=run_language,
             )
             cached = self._lookup_cache(cache_key)
             if cached is not None:
@@ -389,14 +439,27 @@ class ResearchAgentPipeline:
         )
 
         # 4b) Memory digest (HealthFlow-style) — feed past lessons to the planner.
+        memory_digest_text: Optional[str] = None
         if self._memory is not None:
             digest = self._memory.digest_for_prompt(
                 research_question=question,
                 database=database,
                 target_outcome=target_outcome,
             )
+            memory_digest_text = digest
+            if skill_obj is None:
+                try:
+                    meta_digest = self._memory.meta_planner_digest(
+                        skill_keys=[s.key for s in list_skills()],
+                        research_question=question,
+                        database=database,
+                        target_outcome=target_outcome,
+                    )
+                    memory_digest_text = digest + "\n\n" + meta_digest
+                except Exception:
+                    pass
             digest_path = run_dir / "memory_digest.md"
-            digest_path.write_text(digest, encoding="utf-8")
+            digest_path.write_text(memory_digest_text, encoding="utf-8")
             evidence.register_file(
                 kind="log",
                 description="Cross-run memory digest fed to the planner.",
@@ -404,14 +467,40 @@ class ResearchAgentPipeline:
                 evidence_id="memory_digest",
             )
 
+        # O6/O10 — build the context that agents see. The full context
+        # still drives validators and manifests; this prompt context can
+        # be retrieval-trimmed and can include the RunMemory digest.
+        agent_context = context
+        if memory_digest_text:
+            note = "RunMemory digest for planner:\n" + memory_digest_text
+            agent_notes = f"{context.notes}\n\n{note}" if context.notes else note
+            agent_context = agent_context.model_copy(update={"notes": agent_notes})
+        if self._context_top_k and skill_obj is None:
+            agent_context = build_retrieved_research_context(
+                agent_context,
+                query=question,
+                top_k=self._context_top_k,
+            )
+            agent_context_path = run_dir / "research_context_agent_prompt.json"
+            agent_context_path.write_text(
+                agent_context.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            evidence.register_file(
+                kind="log",
+                description="Prompt-sized ResearchContext after concept retrieval (O6).",
+                source_path=agent_context_path,
+                evidence_id="research_context_agent_prompt",
+            )
+
         # 5) Plan — either from a ClinicalSkill (deterministic) or PlannerAgent.
-        llm = self._llm or MockLLMClient(context=context)
+        llm = self._llm or MockLLMClient(context=agent_context)
         # T2.3 — bind ``ResearchContext`` onto every MockLLMClient
         # reachable through the supplied client/router so the canned
         # responses use the cohort that's actually being analysed.
         for client in self._iter_mock_clients(llm):
             if client.context is None:
-                client.context = context
+                client.context = agent_context
 
         # T3.2 — set up a per-role resolver. Without tracking it is the
         # plain ``resolve_role_client`` (preserving previous behaviour);
@@ -438,7 +527,20 @@ class ResearchAgentPipeline:
             plan = skill_obj.plan(context)
         else:
             planner = PlannerAgent(role_resolver("planner"))
-            plan = planner.run(context)
+            try:
+                plan = planner.run(agent_context)
+            except Exception as exc:
+                if not self._enable_deterministic_planner_fallback:
+                    raise
+                findings.append(ValidationFinding(
+                    validator="planner",
+                    severity="warning",
+                    message=(
+                        "Planner agent failed; using deterministic fallback plan: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                ))
+                plan = PlannerAgent(MockLLMClient(context=agent_context)).run(agent_context)
         plan_path = run_dir / "analysis_plan.json"
         plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         evidence.register_file(
@@ -596,7 +698,7 @@ class ResearchAgentPipeline:
                     current_step=step_current,
                     total_steps=total_steps,
                 )
-                code = coder.run(context=context, step=step)
+                code = coder.run(context=agent_context, step=step)
             except Exception as exc:
                 with shared_lock:
                     findings.append(ValidationFinding(
@@ -616,84 +718,278 @@ class ResearchAgentPipeline:
                     total_steps=total_steps,
                 )
                 return step_record
+            deterministic_fallback_used = False
 
-            # 6b) Static audit before running.
-            usage_findings = usage_auditor.audit(
-                context=context, script_text=code, step=step,
-            )
-            with shared_lock:
-                findings.extend(usage_findings)
-            step_record["usage_findings"] = [f.model_dump() for f in usage_findings]
-            if any(f.severity == "error" for f in usage_findings):
-                # Block this step but let other workers keep going.
-                step_record["status"] = "blocked_by_concept_audit"
-                with shared_lock:
-                    per_step_records.append(step_record)
-                    _flush_partial_manifest()
+            def _deterministic_fallback_code(reason: str) -> Optional[str]:
+                nonlocal deterministic_fallback_used
+                if (
+                    deterministic_fallback_used
+                    or not self._enable_deterministic_code_fallback
+                ):
+                    return None
+                deterministic_fallback_used = True
+                step_record["deterministic_code_fallback"] = reason
                 _emit_progress(
-                    "audit",
-                    f"Concept audit blocked {step.step_id}.",
-                    status="error",
+                    "coder",
+                    f"Using deterministic fallback script for {step.step_id}.",
                     run_id=run_id,
                     step_id=step.step_id,
                     current_step=step_current,
                     total_steps=total_steps,
+                    fallback_reason=reason,
                 )
-                return step_record
+                fallback_coder = CoderAgent(MockLLMClient(context=agent_context))
+                return fallback_coder.run(context=agent_context, step=step)
 
-            # 6c) Execute.
-            _emit_progress(
-                "runner",
-                f"Running generated script for {step.step_id}.",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-            )
-            run_result = runner.run(step_id=step.step_id, code=code)
-            step_record["returncode"] = run_result.returncode
-            step_record["timed_out"] = run_result.timed_out
-
-            # Register the script + run log immediately so they're visible
-            # even on failure.
-            script_record = evidence.register_file(
-                kind="code",
-                description=f"Generated analysis script for step {step.step_id}.",
-                source_path=run_result.script_path,
-                produced_by_step=step.step_id,
-            )
-            log_path = run_result.cwd / "run.log"
-            if log_path.exists():
-                evidence.register_file(
-                    kind="log",
-                    description=f"stdout/stderr log for step {step.step_id}.",
-                    source_path=log_path,
-                    produced_by_step=step.step_id,
-                    script_evidence_id=script_record.evidence_id,
+            # 6b) Static audit before running. If a real LLM emits code
+            #     that violates ICU rules (for example averaging SOFA),
+            #     repair it before the runner ever sees it.
+            concept_repair_attempts = 0
+            concept_audit_error_count = 0
+            while True:
+                usage_findings = usage_auditor.audit(
+                    context=context, script_text=code, step=step,
                 )
+                if self._enable_llm_concept_audit:
+                    llm_audit_client = (
+                        self._llm_concept_auditor_client
+                        or role_resolver("analyzer")
+                    )
+                    if llm_audit_client is not None:
+                        usage_findings.extend(
+                            LLMConceptAuditor(llm_audit_client).audit(
+                                context=context,
+                                script_text=code,
+                                step=step,
+                            )
+                        )
+                step_record["usage_findings"] = [
+                    f.model_dump() for f in usage_findings
+                ]
+                concept_audit_error_count += sum(
+                    1 for f in usage_findings
+                    if f.validator == usage_auditor.name and f.severity == "error"
+                )
+                step_record["concept_audit_error_count"] = concept_audit_error_count
+                step_record["concept_repair_attempts"] = concept_repair_attempts
+                if not any(f.severity == "error" for f in usage_findings):
+                    with shared_lock:
+                        findings.extend(usage_findings)
+                    break
 
-            if not run_result.succeeded:
-                with shared_lock:
-                    findings.append(ValidationFinding(
-                        validator="runner", severity="error",
-                        message=(
-                            f"Step {step.step_id} {'timed out' if run_result.timed_out else 'failed'} "
-                            f"with returncode {run_result.returncode}."
+                if concept_repair_attempts >= self._max_code_repair_attempts:
+                    fallback_code = _deterministic_fallback_code("concept_audit")
+                    if fallback_code is not None:
+                        code = fallback_code
+                        continue
+                    # Block this step but let other workers keep going.
+                    step_record["status"] = "blocked_by_concept_audit"
+                    with shared_lock:
+                        findings.extend(usage_findings)
+                        per_step_records.append(step_record)
+                        _flush_partial_manifest()
+                    _emit_progress(
+                        "audit",
+                        f"Concept audit blocked {step.step_id}.",
+                        status="error",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    return step_record
+
+                concept_repair_attempts += 1
+                step_record["concept_repair_attempts"] = concept_repair_attempts
+                _emit_progress(
+                    "coder",
+                    f"Repairing concept-audit violation for {step.step_id}.",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                    repair_attempts=concept_repair_attempts,
+                )
+                audit_log = "\n".join(
+                    f"{f.severity.upper()}: {f.message}"
+                    for f in usage_findings
+                )
+                try:
+                    code = coder.repair(
+                        context=agent_context,
+                        step=step,
+                        code=code,
+                        run_log=(
+                            "Static concept audit blocked this script before "
+                            "execution. Fix all ICU-rule violations.\n\n"
+                            + audit_log
                         ),
-                    ))
-                    step_record["status"] = "execution_failed"
-                    per_step_records.append(step_record)
-                    _flush_partial_manifest()
+                        attempt=concept_repair_attempts,
+                    )
+                except Exception as exc:
+                    fallback_code = _deterministic_fallback_code("concept_repair_failed")
+                    if fallback_code is not None:
+                        code = fallback_code
+                        continue
+                    with shared_lock:
+                        findings.extend(usage_findings)
+                        findings.append(ValidationFinding(
+                            validator="coder", severity="error",
+                            message=(
+                                f"Coder repair failed after concept audit for "
+                                f"step {step.step_id}: {exc}"
+                            ),
+                        ))
+                        step_record["status"] = "repair_failed"
+                        per_step_records.append(step_record)
+                        _flush_partial_manifest()
+                    _emit_progress(
+                        "coder",
+                        f"Concept-audit repair failed for {step.step_id}.",
+                        status="error",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    return step_record
+
+            # 6c) Execute, with one optional traceback-grounded repair
+            #     pass for real LLM brittleness.
+            repair_attempts = 0
+            while True:
+                run_label = (
+                    "repaired script" if repair_attempts else "generated script"
+                )
                 _emit_progress(
                     "runner",
-                    f"Execution failed for {step.step_id}.",
-                    status="error",
+                    f"Running {run_label} for {step.step_id}.",
                     run_id=run_id,
                     step_id=step.step_id,
                     current_step=step_current,
                     total_steps=total_steps,
+                    repair_attempts=repair_attempts,
                 )
-                return step_record
+                run_result = runner.run(step_id=step.step_id, code=code)
+                step_record["returncode"] = run_result.returncode
+                step_record["timed_out"] = run_result.timed_out
+                step_record["code_repair_attempts"] = repair_attempts
+
+                # Register the script + run log immediately so they're visible
+                # even on failure.
+                script_description = (
+                    f"Generated analysis script for step {step.step_id}."
+                    if repair_attempts == 0
+                    else (
+                        f"Repaired analysis script for step {step.step_id} "
+                        f"(attempt {repair_attempts})."
+                    )
+                )
+                script_record = evidence.register_file(
+                    kind="code",
+                    description=script_description,
+                    source_path=run_result.script_path,
+                    produced_by_step=step.step_id,
+                )
+                log_path = run_result.cwd / "run.log"
+                if log_path.exists():
+                    evidence.register_file(
+                        kind="log",
+                        description=f"stdout/stderr log for step {step.step_id}.",
+                        source_path=log_path,
+                        produced_by_step=step.step_id,
+                        script_evidence_id=script_record.evidence_id,
+                    )
+
+                if run_result.succeeded:
+                    if not run_result.artefacts:
+                        fallback_code = _deterministic_fallback_code("no_artefacts")
+                        if fallback_code is not None:
+                            code = fallback_code
+                            _clear_output_dir(run_result.out_dir)
+                            continue
+                    break
+
+                if repair_attempts >= self._max_code_repair_attempts:
+                    fallback_code = _deterministic_fallback_code("execution_failure")
+                    if fallback_code is not None:
+                        code = fallback_code
+                        _clear_output_dir(run_result.out_dir)
+                        continue
+                    with shared_lock:
+                        findings.append(ValidationFinding(
+                            validator="runner", severity="error",
+                            message=(
+                                f"Step {step.step_id} "
+                                f"{'timed out' if run_result.timed_out else 'failed'} "
+                                f"with returncode {run_result.returncode}."
+                            ),
+                        ))
+                        step_record["status"] = "execution_failed"
+                        per_step_records.append(step_record)
+                        _flush_partial_manifest()
+                    _emit_progress(
+                        "runner",
+                        f"Execution failed for {step.step_id}.",
+                        status="error",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    return step_record
+
+                repair_attempts += 1
+                step_record["code_repair_attempts"] = repair_attempts
+                _emit_progress(
+                    "coder",
+                    f"Repairing failed script for {step.step_id}.",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                    repair_attempts=repair_attempts,
+                )
+                try:
+                    run_log = ""
+                    if log_path.exists():
+                        run_log = log_path.read_text(encoding="utf-8", errors="replace")
+                    else:
+                        run_log = (run_result.stdout or "") + "\n" + (run_result.stderr or "")
+                    code = coder.repair(
+                        context=agent_context,
+                        step=step,
+                        code=code,
+                        run_log=run_log,
+                        attempt=repair_attempts,
+                    )
+                    _clear_output_dir(run_result.out_dir)
+                except Exception as exc:
+                    fallback_code = _deterministic_fallback_code("repair_failed")
+                    if fallback_code is not None:
+                        code = fallback_code
+                        _clear_output_dir(run_result.out_dir)
+                        continue
+                    with shared_lock:
+                        findings.append(ValidationFinding(
+                            validator="coder", severity="error",
+                            message=(
+                                f"Coder repair failed for step {step.step_id}: {exc}"
+                            ),
+                        ))
+                        step_record["status"] = "repair_failed"
+                        per_step_records.append(step_record)
+                        _flush_partial_manifest()
+                    _emit_progress(
+                        "coder",
+                        f"Repair failed for {step.step_id}.",
+                        status="error",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    return step_record
 
             # 6d) Register all artefacts. Aliases give the writer stable,
             #     human-readable names so manuscript placeholders resolve
@@ -759,7 +1055,7 @@ class ResearchAgentPipeline:
             # 6f) Analyzer interpretation.
             try:
                 interpretation = analyzer.run(
-                    context=context, step=step,
+                    context=agent_context, step=step,
                     step_summary=step_summary,
                     evidence_ids=evidence_ids_for_step,
                 )
@@ -840,7 +1136,14 @@ class ResearchAgentPipeline:
                 run_dir / r.relative_path
                 for r in evidence.records() if r.kind == "figure"
             ]
-            findings += VisualQAAuditor().audit(figure_paths=fig_paths)
+            vlm_adapter = self._visual_qa_adapter
+            if vlm_adapter is None and self._enable_vlm_visual_qa:
+                client = self._vlm_client or role_resolver("analyzer")
+                if client is not None:
+                    vlm_adapter = VLMVisualQAAdapter(client)
+            findings += VisualQAAuditor(vlm_adapter=vlm_adapter).audit(
+                figure_paths=fig_paths
+            )
 
         literature: Optional[LiteratureBundle] = None
         if stop_after_analysis:
@@ -889,11 +1192,22 @@ class ResearchAgentPipeline:
                         email=self._pubmed_email,
                         api_key=self._pubmed_api_key,
                     )
+                tavily_client = None
+                if self._enable_tavily:
+                    from .literature import TavilyLiteratureClient
+                    tavily_client = TavilyLiteratureClient(
+                        api_key=self._tavily_api_key,
+                        include_domains=self._tavily_include_domains,
+                        exclude_domains=self._tavily_exclude_domains,
+                    )
                 literature = LiteratureAgent(
                     lit_client,
                     enable_pubmed=self._enable_pubmed,
                     pubmed_client=pubmed_client,
-                ).run(context)
+                    enable_tavily=self._enable_tavily,
+                    tavily_client=tavily_client,
+                    tavily_retmax=self._tavily_retmax,
+                ).run(agent_context)
                 lit_path = run_dir / "literature_bundle.json"
                 lit_path.write_text(literature.model_dump_json(indent=2), encoding="utf-8")
                 evidence.register_file(
@@ -918,10 +1232,10 @@ class ResearchAgentPipeline:
                 "Drafting manuscript scaffold.",
                 run_id=run_id,
             )
-            writer = WriterAgent(role_resolver("writer"))
+            writer = WriterAgent(role_resolver("writer"), language=run_language)
             try:
                 scaffold = writer.run(
-                    context=context, evidence_ids=evidence.resolvable_names(),
+                    context=agent_context, evidence_ids=evidence.resolvable_names(),
                 )
             except Exception as exc:
                 scaffold = f"(writer failed: {exc})"
@@ -959,6 +1273,7 @@ class ResearchAgentPipeline:
                         authors=manuscript_authors or ["EasyICU research-agent"],
                         bibliography=literature,
                         bibliography_basename=bib_basename,
+                        venue_template=self._latex_venue_template,
                     )
                     tex_path = run_dir / f"{bib_basename}.tex"
                     tex_path.write_text(tex, encoding="utf-8")
@@ -1053,6 +1368,7 @@ class ResearchAgentPipeline:
             plan_path=str(plan_path.relative_to(run_dir)),
             evidence=evidence.records(),
             findings=findings,
+            per_step_records=per_step_records,
             cost_records=cost_records_for_manifest,
             report_path=str(report_path.relative_to(run_dir)),
             manuscript_path=str(bound_path.relative_to(run_dir)),
@@ -1106,6 +1422,11 @@ class ResearchAgentPipeline:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalise_manuscript_language(language: str) -> str:
+        lang = (language or "en").lower()
+        return "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
 
     def _materialise_cohort(
         self,
@@ -1181,6 +1502,7 @@ class ResearchAgentPipeline:
         database: Optional[str],
         llm: Any,
         stop_after_analysis: bool,
+        manuscript_language: str,
     ) -> str:
         """Compose the deterministic cache key for this run.
 
@@ -1198,7 +1520,15 @@ class ResearchAgentPipeline:
             "database": (database or "").strip(),
             "disable_icu_context": bool(self._disable_icu_context),
             "enable_pubmed": bool(self._enable_pubmed),
+            "enable_tavily": bool(self._enable_tavily),
+            "context_top_k": self._context_top_k,
+            "enable_llm_concept_audit": bool(self._enable_llm_concept_audit),
+            "max_code_repair_attempts": self._max_code_repair_attempts,
+            "enable_deterministic_code_fallback": bool(self._enable_deterministic_code_fallback),
+            "enable_deterministic_planner_fallback": bool(self._enable_deterministic_planner_fallback),
+            "latex_venue_template": self._latex_venue_template,
             "stop_after_analysis": bool(stop_after_analysis),
+            "manuscript_language": manuscript_language,
             "llm": self._llm_signature(llm),
         }
         blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
@@ -1455,13 +1785,23 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
     # The primary-association step_summary doubles as the OR / model
     # statistic the writer points at.
     ("primary_association", "step_summary.json"): ("primary_association",),
+    # Some hosted models name the association/safety step
+    # "composite_audit" while still emitting the SOFA stratum mortality
+    # and score-0-vs-1 association summary that the manuscript cites as
+    # the primary association.
+    ("composite", "step_summary.json"): ("primary_association", "stratum_audit"),
     # Generic table outputs from any step.
     ("", "table_one.csv"): ("table_one",),
     ("", "missingness.csv"): ("missingness",),
     ("", "sofa_strata.csv"): ("sofa_strata",),
+    ("", "stratum_audit.csv"): ("stratum_audit", "table_stratum_audit", "sofa_strata"),
+    ("", "sofa2_stratum_balance.csv"): (
+        "primary_association_table", "stratum_audit", "sofa_strata",
+    ),
     ("", "primary_association.csv"): ("primary_association_table",),
     # Figures.
     ("", "sofa_strata.png"): ("sofa_strata_figure",),
+    ("", "stratum_audit.png"): ("stratum_audit_figure", "sofa_strata_figure"),
     ("", "missingness_heatmap.png"): ("missingness_heatmap",),
     ("", "primary_association_curve.png"): ("primary_association_figure",),
 }
@@ -1483,6 +1823,20 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
             continue
         out.extend(aliases)
     return out
+
+
+def _clear_output_dir(out_dir: Path) -> None:
+    """Remove stale artefacts before rerunning a repaired step script."""
+    if not out_dir.exists():
+        return
+    for child in out_dir.iterdir():
+        try:
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
