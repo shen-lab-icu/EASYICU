@@ -1,10 +1,9 @@
-"""Figure quality checks (OpenLens-AI inspired).
+"""Figure quality checks.
 
-OpenLens-AI [1] uses a vision-language model to review generated
-figures. We adopt the *idea* — figures are evidence and deserve a
-review pass — but keep the default implementation deterministic so
-it can run in CI without an API key. A pluggable VLM adapter is
-available for users that want richer visual feedback.
+Figures are evidence and deserve a review pass, but the default
+implementation stays deterministic so it can run in CI without an API
+key. A pluggable VLM adapter is available for users that want richer
+visual feedback.
 
 What we check:
 
@@ -17,11 +16,6 @@ What we check:
 
 If Pillow is not installed we degrade gracefully — the only check
 left is "file exists and is non-trivially sized".
-
-References
-----------
-[1] OpenLens-AI: Fully Autonomous Research Agent for Health Informatics.
-    https://github.com/jarrycyx/openlens-ai
 """
 
 from __future__ import annotations
@@ -50,7 +44,7 @@ class VisualQAAuditor:
     The deterministic checks always run. If ``vlm_adapter`` is provided,
     its findings are appended after the deterministic pass. This keeps
     the default pipeline offline and reproducible while letting a
-    paper run opt into OpenLens-style model feedback.
+    paper run opt into model-based visual feedback.
     """
 
     name = "visual_qa"

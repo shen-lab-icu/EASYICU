@@ -2,9 +2,7 @@
 
 This module is EasyICU's default Nature-compatible figure path for the
 research agent. It exposes a small, auditable figure-making surface
-inspired by the MIT-licensed ``nature-figure`` skill from
-Yuan1z0825/nature-skills. We do not vendor that project; instead we
-encode the parts that matter for EasyICU:
+with the pieces that matter for EasyICU:
 
 * every figure starts from a claim and a panel-level evidence chain;
 * each panel must carry a distinct role in the argument;

@@ -1,10 +1,9 @@
-"""RunMemory — cross-run lessons (HealthFlow-inspired).
+"""RunMemory — cross-run lessons.
 
-HealthFlow [1] argues that an autonomous research agent should
-*learn from its failures*: a successful run, a buggy script, a
-spurious finding all become training data for the next run's
-planner. We adopt the same idea but make the storage trivial,
-inspectable and entirely off the LLM:
+An autonomous research agent should learn from its failures: a
+successful run, a buggy script, a spurious finding all become
+training data for the next run's planner. Here the storage stays
+trivial, inspectable and entirely off the LLM:
 
 * every run writes a small ``run_summary`` to ``<workdir>/.memory/runs/``;
 * before planning, the planner is fed a digest of past runs ranked by
@@ -15,11 +14,6 @@ inspectable and entirely off the LLM:
 The memory is *additive only*; it does not delete past lessons. We
 prefer a slow accumulation of ICU-specific gotchas over an opaque
 self-modifying agent.
-
-References
-----------
-[1] HealthFlow: A Self-Evolving AI Agent with Meta-Planning for
-    Autonomous Healthcare Research.
 """
 
 from __future__ import annotations
@@ -188,7 +182,7 @@ class RunMemory:
         database: str,
         target_outcome: Optional[str],
     ) -> List[Tuple[str, float]]:
-        """HealthFlow-style meta-planner signal for ClinicalSkill order.
+        """Advisory meta-planner signal for ClinicalSkill order.
 
         Scores skills by how often relevant past runs mention the skill
         key or its tokens, lightly penalising runs that ended with

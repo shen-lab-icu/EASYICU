@@ -1,7 +1,6 @@
 """LiteratureAgent — ground the manuscript in prior work.
 
-Inspired by the literature-review module of OpenLens-AI [1] but
-designed to fit the EasyICU traceability story:
+This module is designed to fit the EasyICU traceability story:
 
 * every citation becomes a registered :class:`EvidenceRecord`, so
   manuscript sentences cite literature the same way they cite tables;
@@ -19,11 +18,6 @@ designed to fit the EasyICU traceability story:
 * O5 — when ``enable_tavily=True`` and ``TAVILY_API_KEY`` is set,
   :class:`TavilyLiteratureClient` adds web/preprint/guideline hits
   that may not be indexed in PubMed.
-
-References
-----------
-[1] OpenLens-AI: Fully Autonomous Research Agent for Health Informatics.
-    https://github.com/jarrycyx/openlens-ai
 """
 
 from __future__ import annotations
@@ -118,27 +112,6 @@ _CURATED: List[CitationRecord] = [
         year="2020", venue="Nature Medicine",
         relevance="Source paper for HiRID and circEWS-style circulatory-failure definitions.",
     ),
-    CitationRecord(
-        key="openlens_ai_2025",
-        title="OpenLens-AI: Fully Autonomous Research Agent for Health Informatics.",
-        year="2025", venue="Software",
-        relevance=("Referenced as a baseline general medical research agent. EasyICU's research-agent layer "
-                   "differs by injecting ICU-aware concept context and routing every artefact through a "
-                   "hashed evidence store."),
-        url="https://github.com/jarrycyx/openlens-ai",
-    ),
-    CitationRecord(
-        key="m4_clinical_research_2025",
-        title="M4: Infrastructure for AI-Assisted Clinical Research (MCP + clinical-skills tooling).",
-        year="2025", venue="Software",
-        relevance="Inspires the clinical-skills registry and MCP server in this layer.",
-    ),
-    CitationRecord(
-        key="healthflow_2025",
-        title="HealthFlow: A Self-Evolving AI Agent with Meta-Planning for Autonomous Healthcare Research.",
-        year="2025", venue="Preprint",
-        relevance="Inspires the run-memory module and the self-improving planner story.",
-    ),
 ]
 
 
@@ -176,10 +149,6 @@ def _curated_for(ctx: ResearchContext) -> List[CitationRecord]:
         _add(_CURATED[5])
     if db.startswith("hirid"):
         _add(_CURATED[6])
-    # Always cite related agent work for transparency.
-    _add(_CURATED[7])  # OpenLens
-    _add(_CURATED[8])  # M4
-    _add(_CURATED[9])  # HealthFlow
     return out
 
 

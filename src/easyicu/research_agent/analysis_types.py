@@ -2,16 +2,9 @@
 
 The research-agent layer needs a task-family abstraction that is more
 stable than free-form prompts but less rigid than a single fixed
-step list. Adjacent projects point in the same direction:
+step list.
 
-* OpenLens AI organises work by cooperating research modules rather
-  than a universal statistical checklist.
-* HealthFlow benchmarks task families derived from literature instead
-  of one static analysis recipe.
-* M4 frames clinical research as hypothesis screening, cohort
-  characterisation, survival analysis, and related work modes.
-
-This module turns that idea into an explicit registry the planner can
+This module turns that need into an explicit registry the planner can
 inspect. Each analysis type exposes:
 
 * trigger terms for lightweight inference from a research question;

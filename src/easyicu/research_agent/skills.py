@@ -1,8 +1,7 @@
-"""ClinicalSkill registry — composable ICU recipes (M4-inspired).
+"""ClinicalSkill registry — composable ICU recipes.
 
-M4 [1] frames clinical-research workflows as composable "skills" that
-agents can invoke. We adopt the same idea but specialise it to the
-EasyICU shape:
+The research-agent layer exposes reusable "skills" that agents can
+invoke. Here they are specialised to the EasyICU shape:
 
 A :class:`ClinicalSkill` is a small object that, given a cohort
 DataFrame, declares:
@@ -23,11 +22,6 @@ the pipeline runs unchanged. The outer research loop is stable, but
 the inner analysis steps are now assembled dynamically from the
 research question and context instead of forcing the same descriptive
 checks for every task.
-
-References
-----------
-[1] M4: Infrastructure for AI-Assisted Clinical Research (MCP +
-    clinical-skills tooling).
 """
 
 from __future__ import annotations

@@ -123,7 +123,7 @@ __all__ = [
     "shock_strata",
     "summarize_lactate_map_vaso_cohort",
     "run_lactate_map_vaso_replication",
-    # Skills (M4-inspired)
+    # Skills
     "ClinicalSkill",
     "register_skill",
     "get_skill",
@@ -134,20 +134,20 @@ __all__ = [
     "infer_analysis_type",
     "planner_analysis_type_guide",
     "analysis_type_catalog_markdown",
-    # Memory (HealthFlow-inspired)
+    # Memory
     "RunMemory",
-    # LaTeX (OpenLens-inspired)
+    # LaTeX
     "scaffold_to_latex",
     "latex_template_preamble",
     # BibTeX export (T3.4)
     "render_bibtex",
     "render_thebibliography_block",
-    # Literature (OpenLens-inspired)
+    # Literature
     "CitationRecord",
     "LiteratureBundle",
     "PubMedLiteratureClient",
     "TavilyLiteratureClient",
-    # MCP server (M4-inspired)
+    # MCP server
     "mcp_dispatch",
     "MCP_TOOLS",
     "MCP_TOOL_SCHEMAS",
