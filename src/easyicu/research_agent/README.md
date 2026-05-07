@@ -48,8 +48,10 @@ question + cohort  ────────────►  optional: ClinicalSk
    PlannerAgent  (skipped when a ClinicalSkill is selected)
         │   deterministic fallback if hosted model returns invalid JSON
         │   → analysis_plan.json
-        │     (Table 1 / outcome / missingness / association /
-        │      SOFA-stratum audit / cross-database)
+        │     (task-family-specific modules chosen from cohort summary,
+        │      outcome incidence, missingness audit, primary association,
+        │      advanced-analysis protocol, score-specific QC, or
+        │      cross-database protocol)
         ▼
    ┌────── per step ──────┐
    │ CoderAgent → script  │
@@ -80,6 +82,14 @@ question + cohort  ────────────►  optional: ClinicalSk
 The deterministic gates (auditor, validator, evidence store) sit
 between every LLM step and the next, so the LLM has wide creative
 latitude but cannot push unverified numbers into the manuscript.
+
+The plan is intentionally dynamic. Table 1, outcome incidence,
+missingness, score-specific audits and cross-database steps are
+included only when the question, analysis type and available context
+justify them. For example, SOFA-specific quality control appears as a
+`sofa_zero_audit` step only when SOFA is central to the question, and
+cross-database work defaults to a replication protocol unless an
+external cohort is actually available.
 
 ## Quick start
 
@@ -401,9 +411,9 @@ Hard rules currently encoded:
   script also documents the imputation.
 - Lab columns summarised by mean with no `median(...)` reference in
   the same script trigger a warning.
-- A SOFA-stratum table with `score==0` outcome rate exceeding
-  `score==1` triggers a warning citing the missingness-vs-severity
-  ambiguity.
+- A `sofa_zero_audit` / stratum-audit output with `score==0` outcome
+  rate exceeding `score==1` triggers a warning citing the
+  missingness-vs-severity ambiguity.
 - Reported `outcome_rate` that disagrees with a cohort recompute by
   more than 0.001 is an error.
 

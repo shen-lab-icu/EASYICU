@@ -32,6 +32,7 @@ PYPROJECT_FILE = PROJECT_ROOT / "pyproject.toml"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8501
 DEFAULT_PYPI_INDEX = "https://pypi.org/simple"
+MIN_PYTHON = (3, 10)
 
 
 def _is_port_in_use(port: int) -> bool:
@@ -133,6 +134,10 @@ def _wait_for_health(port: int, timeout: int = 60) -> bool:
         except Exception:
             time.sleep(1)
     return False
+
+
+def _python_is_supported(version_info: tuple[int, int]) -> bool:
+    return version_info >= MIN_PYTHON
 
 
 def _current_install_state() -> dict[str, object]:
@@ -652,8 +657,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.pip_index_url:
         os.environ["PIP_INDEX_URL"] = args.pip_index_url.strip()
 
-    if sys.version_info < (3, 9):
-        print("EasyICU requires Python 3.9 or newer.", file=sys.stderr)
+    if not _python_is_supported((sys.version_info.major, sys.version_info.minor)):
+        print(
+            f"EasyICU requires Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} or newer.",
+            file=sys.stderr,
+        )
         return 1
 
     if args.command == "install":

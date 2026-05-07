@@ -7,7 +7,7 @@ name = "easyicu"
 version = "1.0.0"
 description = "Python toolkit for working with ICU datasets inspired by the R ricu package."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
   { name = "Haibo Zhu and EasyICU contributors" }
 ]
