@@ -28,7 +28,7 @@ into one will not luck into all six.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 
 @dataclass
@@ -52,6 +52,17 @@ class BenchItem:
 
     # Optional: the inclusion-criteria phrasing for the manuscript.
     inclusion_criteria: List[str] = field(default_factory=list)
+
+    # Optional richer metadata for paper-grade analysis benchmarks.
+    benchmark_family: str = "rule"
+    difficulty: str = "basic"
+    evidence_basis: str = "internal_synthetic"
+    claim_scope: str = "internal_benchmark_only"
+    candidate_variables: List[str] = field(default_factory=list)
+    expected_step_substrings: List[str] = field(default_factory=list)
+    expected_artifact_substrings: List[str] = field(default_factory=list)
+    notes: Optional[str] = None
+    interpretation_note: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -269,5 +280,7 @@ BENCH_ITEMS: List[BenchItem] = [
     ),
 ]
 
+RULE_BENCH_ITEMS: List[BenchItem] = BENCH_ITEMS
 
-__all__ = ["BENCH_ITEMS", "BenchItem"]
+
+__all__ = ["BENCH_ITEMS", "RULE_BENCH_ITEMS", "BenchItem"]

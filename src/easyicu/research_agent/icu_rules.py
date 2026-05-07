@@ -353,13 +353,21 @@ def _lookup_hint(name: str) -> Optional[ConceptHint]:
         return _CONCEPT_HINTS[key]
     # longest prefix match second
     candidates = sorted(
-        (k for k in _CONCEPT_HINTS if key.startswith(k)),
+        (k for k in _CONCEPT_HINTS if _matches_concept_prefix(key, k)),
         key=len,
         reverse=True,
     )
     if candidates:
         return _CONCEPT_HINTS[candidates[0]]
     return None
+
+
+def _matches_concept_prefix(name: str, prefix: str) -> bool:
+    if not name.startswith(prefix):
+        return False
+    if len(name) == len(prefix):
+        return True
+    return name[len(prefix)] == "_"
 
 
 def classify_variable(

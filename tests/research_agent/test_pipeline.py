@@ -11,6 +11,14 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
+
+
+def _step_record_by_id(records, step_id: str):
+    for record in records:
+        if record.get("step_id") == step_id:
+            return record
+    raise AssertionError(f"step record {step_id!r} not found in {records!r}")
 
 
 def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Path):
@@ -33,6 +41,9 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     # 2) Manifest and evidence were written.
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["evidence"], "manifest has no registered evidence"
+    assert manifest["used_mock_llm"] is True
+    assert manifest["prompt_pack_version"].startswith("easyicu-research-agent-prompts/")
+    assert manifest["prompt_pack_files"]
     kinds = {e["kind"] for e in manifest["evidence"]}
     assert {"code", "log", "table", "figure", "statistic"} <= kinds, (
         f"evidence kinds incomplete: {kinds}"
@@ -91,7 +102,11 @@ def test_pipeline_falls_back_when_planner_returns_empty(ra, synthetic_cohort, tm
             return ""
 
     router = ra.LLMRouter(default=ra.MockLLMClient(), planner=EmptyPlanner())
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=router)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=router,
+        enable_deterministic_planner_fallback=True,
+    )
     result = pipeline.run(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
@@ -164,8 +179,9 @@ print(json.dumps(summary))
 
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     partial = json.loads((Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8"))
-    assert partial["per_step_records"][0]["status"] == "ok"
-    assert partial["per_step_records"][0]["code_repair_attempts"] == 1
+    record = _step_record_by_id(partial["per_step_records"], "01_table_one")
+    assert record["status"] == "ok"
+    assert record["code_repair_attempts"] == 1
     assert not [
         f for f in manifest["findings"]
         if f["severity"] == "error" and f["validator"] == "runner"
@@ -241,8 +257,9 @@ pd.DataFrame({"bad": [bad]}).to_csv(os.path.join(os.environ["STEP_OUT_DIR"], "pr
 
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     partial = json.loads((Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8"))
-    assert partial["per_step_records"][0]["status"] == "ok"
-    assert partial["per_step_records"][0]["concept_repair_attempts"] == 1
+    record = _step_record_by_id(partial["per_step_records"], "04_primary_association")
+    assert record["status"] == "ok"
+    assert record["concept_repair_attempts"] == 1
     assert not [
         f for f in manifest["findings"]
         if f["severity"] == "error" and f["validator"] == "concept_usage_auditor"
@@ -286,6 +303,7 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
         workdir=tmp_path,
         llm=FallbackLLM(),
         enable_literature=False,
+        enable_deterministic_code_fallback=True,
     )
     result = pipeline.run(
         question="Is SOFA associated with ICU mortality?",
@@ -296,7 +314,7 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
     )
 
     partial = json.loads((Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8"))
-    record = partial["per_step_records"][0]
+    record = _step_record_by_id(partial["per_step_records"], "01_table_one")
     assert record["status"] == "ok"
     assert record["deterministic_code_fallback"] == "execution_failure"
 
@@ -338,6 +356,7 @@ def test_pipeline_falls_back_when_repair_model_call_fails(ra, tmp_path: Path):
         workdir=tmp_path,
         llm=RepairRaisesLLM(),
         enable_literature=False,
+        enable_deterministic_code_fallback=True,
     )
     result = pipeline.run(
         question="Is SOFA associated with ICU mortality?",
@@ -348,7 +367,7 @@ def test_pipeline_falls_back_when_repair_model_call_fails(ra, tmp_path: Path):
     )
 
     partial = json.loads((Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8"))
-    record = partial["per_step_records"][0]
+    record = _step_record_by_id(partial["per_step_records"], "01_table_one")
     assert record["status"] == "ok"
     assert record["deterministic_code_fallback"] == "repair_failed"
 
@@ -390,6 +409,7 @@ def test_pipeline_falls_back_when_successful_script_writes_no_artefacts(
         workdir=tmp_path,
         llm=NoArtefactLLM(),
         enable_literature=False,
+        enable_deterministic_code_fallback=True,
     )
     result = pipeline.run(
         question="Is SOFA associated with ICU mortality?",
@@ -400,7 +420,7 @@ def test_pipeline_falls_back_when_successful_script_writes_no_artefacts(
     )
 
     partial = json.loads((Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8"))
-    record = partial["per_step_records"][0]
+    record = _step_record_by_id(partial["per_step_records"], "01_table_one")
     assert record["status"] == "ok"
     assert record["deterministic_code_fallback"] == "no_artefacts"
 
@@ -462,6 +482,21 @@ def test_mock_planner_honours_sofa2_when_sofa_is_also_present(ra, synthetic_coho
     assert by_id["05_sofa_zero_audit"]["inputs"][:2] == ["sofa2", "death"]
 
 
+def test_pipeline_run_requires_explicit_llm(tmp_path: Path):
+    import easyicu.research_agent as ra
+
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path)
+    cohort = pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]})
+    with pytest.raises(ValueError, match="requires an explicit `llm=`"):
+        pipeline.run(
+            question="Does death exist?",
+            cohort=cohort,
+            cohort_name="missing_llm",
+            database="synthetic",
+            target_outcome="death",
+        )
+
+
 def test_mock_planner_maps_clinical_phrases_to_expected_predictors(ra, tmp_path: Path):
     """Clinical wording such as KDIGO stage / vasopressor should not fall back to age."""
     cases = [
@@ -500,3 +535,200 @@ def test_mock_planner_maps_clinical_phrases_to_expected_predictors(ra, tmp_path:
         plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
         by_id = {step["step_id"]: step for step in plan["steps"]}
         assert by_id["04_primary_association"]["inputs"][:2] == [predictor, "death"]
+
+
+def test_mock_planner_skips_table_one_for_minimal_association_question(ra, tmp_path: Path):
+    """A narrow association question should not force a cohort-summary step."""
+    cohort = pd.DataFrame({
+        "stay_id": range(1, 81),
+        "gcs": [15 - (i % 6) for i in range(80)],
+        "death": [1 if i % 7 == 0 else 0 for i in range(80)],
+    })
+
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    result = pipeline.run(
+        question="Is GCS associated with ICU mortality?",
+        cohort=cohort,
+        cohort_name="minimal_gcs_mortality",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
+    step_ids = [step["step_id"] for step in plan["steps"]]
+    assert "01_table_one" not in step_ids
+    assert "04_primary_association" in step_ids
+
+
+def test_mock_planner_uses_quality_only_plan_when_question_is_data_audit(ra, tmp_path: Path):
+    """Data-quality questions should not silently expand into effect-estimation steps."""
+    cohort = pd.DataFrame({
+        "stay_id": range(1, 61),
+        "bili": [None if i % 5 == 0 else 0.8 + 0.1 * (i % 4) for i in range(60)],
+        "vaso": [None if i % 4 == 0 else int(i % 3 == 0) for i in range(60)],
+        "death": [1 if i % 6 == 0 else 0 for i in range(60)],
+    })
+
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    result = pipeline.run(
+        question="Audit bilirubin and vasopressor measurement completeness in this ICU cohort.",
+        cohort=cohort,
+        cohort_name="quality_only_audit",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
+    step_ids = [step["step_id"] for step in plan["steps"]]
+    assert step_ids == ["03_missingness_audit"], step_ids
+
+
+def test_pipeline_replicate_writes_cross_database_comparison(ra, tmp_path: Path):
+    cohorts = {
+        "miiv": pd.DataFrame({
+            "stay_id": range(1, 31),
+            "age": [60 + (i % 8) for i in range(30)],
+            "sofa2": [i % 6 for i in range(30)],
+            "death": [1 if i % 5 == 0 else 0 for i in range(30)],
+        }),
+        "eicu": pd.DataFrame({
+            "stay_id": range(1, 31),
+            "age": [58 + (i % 9) for i in range(30)],
+            "sofa2": [i % 5 for i in range(30)],
+            "death": [1 if i % 6 == 0 else 0 for i in range(30)],
+        }),
+    }
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    result = pipeline.replicate(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohorts=cohorts,
+        target_outcome="death",
+    )
+    csv_path = Path(result["comparison_csv"])
+    md_path = Path(result["comparison_md"])
+    assert csv_path.exists()
+    assert md_path.exists()
+    df = pd.read_csv(csv_path)
+    assert set(df["database"]) == {"miiv", "eicu"}
+
+
+def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path):
+    class ReplanningLLM:
+        name = "replanning-llm"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            upper = user.upper()
+            if "REVISE THE ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps({
+                    "research_question": "Audit then model mortality.",
+                    "steps": [
+                        {
+                            "step_id": "03_missingness_audit",
+                            "intent": "Audit missingness before modelling.",
+                            "inputs": ["lact", "death"],
+                            "expected_outputs": ["table:missingness"],
+                            "method": "missingness_audit",
+                            "icu_rule_refs": ["aggregation_rule_for"],
+                        },
+                        {
+                            "step_id": "04_primary_association",
+                            "intent": "Model lactate and mortality.",
+                            "inputs": ["lact", "death"],
+                            "expected_outputs": ["table:primary_association"],
+                            "method": "regression",
+                            "icu_rule_refs": ["aggregation_rule_for"],
+                        },
+                    ],
+                    "rationale": "Probe revealed substantial missingness; audit first.",
+                    "revision": 2,
+                })
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps({
+                    "research_question": "Audit then model mortality.",
+                    "steps": [
+                        {
+                            "step_id": "04_primary_association",
+                            "intent": "Model lactate and mortality.",
+                            "inputs": ["lact", "death"],
+                            "expected_outputs": ["table:primary_association"],
+                            "method": "regression",
+                            "icu_rule_refs": ["aggregation_rule_for"],
+                        }
+                    ],
+                    "rationale": "Initial one-step plan.",
+                    "revision": 1,
+                })
+            if "WRITE THE PYTHON CODE" in upper:
+                if "03_missingness_audit" in upper:
+                    return """
+import json, os, pandas as pd
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+out = os.environ["STEP_OUT_DIR"]
+pd.DataFrame({"variable": ["lact"], "fraction_missing": [float(df["lact"].isna().mean())]}).to_csv(os.path.join(out, "missingness.csv"), index=False)
+summary = {"variable": "lact", "fraction_missing": float(df["lact"].isna().mean())}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+"""
+                return """
+import json, os, pandas as pd
+df = pd.read_parquet(os.environ["COHORT_PARQUET"]).dropna(subset=["lact", "death"])
+out = os.environ["STEP_OUT_DIR"]
+pd.DataFrame({"variable": ["lact"], "odds_ratio": [1.2]}).to_csv(os.path.join(out, "primary_association.csv"), index=False)
+summary = {"predictor": "lact", "primary_or": 1.2}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+"""
+            if "INTERPRET THE RESULTS" in upper:
+                return "See {evidence:primary_association}."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return "# Title\n\n## Results\n\nSee {evidence:primary_association}.\n\n(left to the human author)"
+            return "{}"
+
+    cohort = pd.DataFrame({
+        "stay_id": range(1, 41),
+        "lact": [None if i % 3 == 0 else 1.0 + (i % 5) for i in range(40)],
+        "death": [1 if i % 7 == 0 else 0 for i in range(40)],
+    })
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ReplanningLLM(),
+        enable_literature=False,
+        enable_probe_step=True,
+        enable_replanning=True,
+    )
+    result = pipeline.run(
+        question="Audit then model mortality.",
+        cohort=cohort,
+        cohort_name="replan_case",
+        database="synthetic",
+        target_outcome="death",
+    )
+    run_dir = Path(result.workdir)
+    partial = json.loads((run_dir / "manifest_partial.json").read_text(encoding="utf-8"))
+    step_ids = [rec["step_id"] for rec in partial["per_step_records"]]
+    assert "00_probe" in step_ids
+    assert "03_missingness_audit" in step_ids
+    assert (run_dir / "analysis_plan_revision_2.json").exists()
+
+
+def test_deterministic_runner_repair_patches_statsmodels_dtype_failure(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+X = pd.DataFrame({"age": ["50", "60"], "sex_M": [True, False]})
+y = pd.Series([0, 1])
+res = sm.Logit(y, X).fit(disp=0)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="Pandas data cast to numpy dtype of object",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "dtype_coerce_v1"
+    assert "_easyicu_runner_repair_v1" in patched
+    assert "sm.Logit(*_easyicu_runner_repair_v1(X, y))" in patched

@@ -80,8 +80,26 @@ def test_missingness_profile_is_populated(ra):
     assert lact.missingness.n_missing == 6
     assert lact.missingness.n_total == 10
     assert abs(lact.missingness.fraction_missing - 0.6) < 1e-6
-    # 60% missing should bucket into MNAR_likely per builder heuristic.
-    assert lact.missingness.missingness_kind == "MNAR_likely"
+    assert lact.missingness.missingness_severity == "high"
+    assert lact.missingness.missingness_test in {"little_mcar_em", "not_run"}
+
+
+def test_missingness_test_is_not_run_when_panel_is_too_small(ra):
+    df = pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "lact": [1.0, np.nan, 2.0],
+        "creat": [0.8, 1.1, 1.0],
+    })
+    ctx = ra.build_research_context(
+        research_question="x",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+    )
+    lact = ctx.variable("lact")
+    assert lact is not None
+    assert lact.missingness is not None
+    assert lact.missingness.missingness_test == "not_run"
 
 
 def test_default_time_windows_attached(ra):

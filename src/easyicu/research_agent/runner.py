@@ -72,6 +72,7 @@ class CodeRunner:
         timeout_seconds: float = 300.0,
         python_executable: Optional[str] = None,
         extra_env: Optional[Dict[str, str]] = None,
+        network_policy: str = "none",
     ) -> None:
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -81,6 +82,28 @@ class CodeRunner:
         self.timeout_seconds = timeout_seconds
         self.python_executable = python_executable or sys.executable
         self.extra_env = dict(extra_env or {})
+        self.network_policy = (network_policy or "none").lower()
+
+    def build_command(self, *, script_path: Path) -> List[str]:
+        base = [self.python_executable, str(script_path)]
+        if self.network_policy not in {"none", "disabled"}:
+            return base
+        sandbox_exec = shutil.which("sandbox-exec")
+        if sandbox_exec and sys.platform == "darwin":
+            profile = (
+                "(version 1)\n"
+                "(deny default)\n"
+                "(allow process*)\n"
+                "(allow sysctl-read)\n"
+                "(allow file-read*)\n"
+                "(allow file-write*)\n"
+                "(deny network*)\n"
+            )
+            return [sandbox_exec, "-p", profile, *base]
+        unshare = shutil.which("unshare")
+        if unshare and sys.platform.startswith("linux"):
+            return [unshare, "-n", "--", *base]
+        return base
 
     def run(self, *, step_id: str, code: str) -> RunResult:
         step_dir = self.workdir / "steps" / step_id
@@ -103,9 +126,10 @@ class CodeRunner:
 
         timed_out = False
         started = time.monotonic()
+        cmd = self.build_command(script_path=script_path)
         try:
             proc = subprocess.run(  # noqa: S603 - intentional, generated script
-                [self.python_executable, str(script_path)],
+                cmd,
                 cwd=str(step_dir),
                 env=env,
                 capture_output=True,
@@ -127,9 +151,10 @@ class CodeRunner:
             textwrap.dedent(
                 f"""
                 === step {step_id} ===
-                cmd: {self.python_executable} {script_path}
+                cmd: {' '.join(cmd)}
                 cwd: {step_dir}
                 cohort: {self.cohort_parquet}
+                network_policy: {self.network_policy}
                 returncode: {returncode}
                 timed_out: {timed_out}
                 duration_seconds: {duration:.3f}

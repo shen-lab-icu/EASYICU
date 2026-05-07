@@ -68,6 +68,43 @@ def test_concept_usage_flags_fillna_zero(ra):
                for f in findings)
 
 
+def test_concept_usage_fillna_zero_ignores_env_string_subscripts(ra):
+    ctx = _ctx_with_sofa(ra)
+    findings = ra.ConceptUsageAuditor().audit(
+        context=ctx,
+        script_text='import os\npath = os.environ["COHORT_PARQUET"]',
+    )
+    assert not any("fillna" in f.message.lower() or "imputation" in f.message.lower()
+                   for f in findings)
+
+
+def test_concept_usage_flags_agg_mean_of_sofa(ra):
+    ctx = _ctx_with_sofa(ra)
+    findings = ra.ConceptUsageAuditor().audit(
+        context=ctx,
+        script_text='x = df["sofa2"].agg("mean")',
+    )
+    assert any(f.severity == "error" and "sofa" in f.message.lower() for f in findings)
+
+
+def test_concept_usage_flags_numpy_mean_of_sofa(ra):
+    ctx = _ctx_with_sofa(ra)
+    findings = ra.ConceptUsageAuditor().audit(
+        context=ctx,
+        script_text='import numpy as np\nx = np.mean(df["sofa2"])',
+    )
+    assert any(f.severity == "error" and "sofa" in f.message.lower() for f in findings)
+
+
+def test_concept_usage_flags_rolling_mean_of_sofa(ra):
+    ctx = _ctx_with_sofa(ra)
+    findings = ra.ConceptUsageAuditor().audit(
+        context=ctx,
+        script_text='x = df["sofa2"].rolling(3).mean()',
+    )
+    assert any(f.severity == "error" and "sofa" in f.message.lower() for f in findings)
+
+
 def test_statistical_validator_flags_outcome_mismatch(ra, tmp_path: Path):
     ctx = _ctx_with_sofa(ra)
     cohort_path = tmp_path / "cohort.parquet"

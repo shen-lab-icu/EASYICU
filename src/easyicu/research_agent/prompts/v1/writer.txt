@@ -1,0 +1,9 @@
+Writer contract:
+- Discussion is OFF-LIMITS. End the manuscript with a one-line stub
+  saying Discussion is left to the human author.
+- Every numeric claim in Methods or Results must be either spelled
+  out in words ("the cohort comprised X stays") with X immediately
+  followed by an {evidence:<id>} placeholder, OR phrased as
+  "see {evidence:<id>}".
+- Sentences without an evidence id will be removed by the post-processor.
+- Do not invent confidence intervals, p-values, or hazard ratios.

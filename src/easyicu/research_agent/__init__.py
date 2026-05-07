@@ -31,9 +31,12 @@ Public API
 ----------
 ``ResearchAgentPipeline`` is the single end-to-end entry point::
 
-    from easyicu.research_agent import ResearchAgentPipeline
+    from easyicu.research_agent import ResearchAgentPipeline, MockLLMClient
 
-    pipeline = ResearchAgentPipeline(workdir="./research_output")
+    pipeline = ResearchAgentPipeline(
+        workdir="./research_output",
+        llm=MockLLMClient(),  # tests/demo only; use a real client for research runs
+    )
     result = pipeline.run(
         question="Is admission SOFA score associated with ICU mortality?",
         cohort_parquet="cohort.parquet",
@@ -85,6 +88,7 @@ __all__ = [
     "LLMRouter",
     # Agents
     "PlannerAgent",
+    "ReplannerAgent",
     "CoderAgent",
     "AnalyzerAgent",
     "WriterAgent",
@@ -124,6 +128,12 @@ __all__ = [
     "register_skill",
     "get_skill",
     "list_skills",
+    "AnalysisTypeSpec",
+    "get_analysis_type",
+    "list_analysis_types",
+    "infer_analysis_type",
+    "planner_analysis_type_guide",
+    "analysis_type_catalog_markdown",
     # Memory (HealthFlow-inspired)
     "RunMemory",
     # LaTeX (OpenLens-inspired)
@@ -147,6 +157,9 @@ __all__ = [
     "CostRecord",
     # Pipeline
     "ResearchAgentPipeline",
+    # Prompt pack provenance
+    "PROMPT_PACK_VERSION",
+    "prompt_pack_files",
 ]
 
 # Schemas are dependency-free, safe to import eagerly.
@@ -191,9 +204,12 @@ def __getattr__(name: str):
     if name in {"LLMClient", "MockLLMClient", "OpenAIClient", "LLMRouter"}:
         from . import llm as _llm
         return getattr(_llm, name)
-    if name in {"PlannerAgent", "CoderAgent", "AnalyzerAgent", "WriterAgent"}:
+    if name in {"PlannerAgent", "ReplannerAgent", "CoderAgent", "AnalyzerAgent", "WriterAgent"}:
         from . import agents as _agents
         return getattr(_agents, name)
+    if name in {"PROMPT_PACK_VERSION", "prompt_pack_files"}:
+        from . import prompts as _prompts
+        return getattr(_prompts, name)
     if name == "LiteratureAgent":
         from .literature import LiteratureAgent
         return LiteratureAgent
@@ -256,6 +272,16 @@ def __getattr__(name: str):
     if name in {"ClinicalSkill", "register_skill", "get_skill", "list_skills"}:
         from . import skills as _skills
         return getattr(_skills, name)
+    if name in {
+        "AnalysisTypeSpec",
+        "get_analysis_type",
+        "list_analysis_types",
+        "infer_analysis_type",
+        "planner_analysis_type_guide",
+        "analysis_type_catalog_markdown",
+    }:
+        from . import analysis_types as _analysis_types
+        return getattr(_analysis_types, name)
     if name == "RunMemory":
         from .memory import RunMemory
         return RunMemory

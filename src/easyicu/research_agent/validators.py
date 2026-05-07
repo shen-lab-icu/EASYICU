@@ -25,10 +25,11 @@ manuscript generation; ``warning`` is surfaced but does not block.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 import pandas as pd
 
@@ -161,10 +162,30 @@ class ConceptUsageAuditor:
         findings: List[ValidationFinding] = []
 
         var_by_name = {v.name: v for v in context.variables}
+        try:
+            tree = ast.parse(script_text)
+        except SyntaxError:
+            return self._regex_fallback(
+                var_by_name=var_by_name,
+                script_text=script_text,
+                step=step,
+            )
 
-        # Find calls of the form df['col'].FN() or df.col.FN() for FN in {mean, std}
-        pat_bracket = re.compile(r"""\[(['"])(?P<col>[^'"]+)\1\]\s*\.\s*(?P<fn>mean|std)\s*\(""")
-        pat_attr = re.compile(r"""\.(?P<col>[a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*(?P<fn>mean|std)\s*\(""")
+        alias_map: Dict[str, Set[str]] = {}
+        mean_columns: Set[str] = set()
+        median_columns: Set[str] = set()
+        fillna_zero_columns: Set[str] = set()
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                cols = _extract_column_names(node.value, alias_map)
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and cols:
+                        alias_map[target.id] = set(cols)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                cols = _extract_column_names(node.value, alias_map) if node.value else set()
+                if cols:
+                    alias_map[node.target.id] = set(cols)
 
         def _check(col: str, fn: str) -> None:
             v = var_by_name.get(col)
@@ -179,44 +200,242 @@ class ConceptUsageAuditor:
                     detail={"column": col, "function": fn, "step_id": step.step_id if step else None},
                 ))
                 return
-            # GCS special case
             if v.name.lower() == "gcs" and fn == "mean":
                 findings.append(ValidationFinding(
                     validator=self.name, severity="error",
                     message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[("ordinal_score_gcs", "mean")],
                     detail={"column": col, "function": fn},
                 ))
-                return
-            # Skewed lab + mean (no median nearby) → warning
-            if v.role == VariableRole.LAB and fn == "mean":
-                # If 'median' appears anywhere in the script, downgrade to info.
-                if "median" not in script_text:
-                    findings.append(ValidationFinding(
-                        validator=self.name, severity="warning",
-                        message=(
-                            f"Lab variable '{col}' summarised by mean() with no median() in "
-                            "the same script. Right-skewed labs are conventionally reported "
-                            "as median (IQR)."
-                        ),
-                        detail={"column": col, "function": fn},
-                    ))
 
-        for m in pat_bracket.finditer(script_text):
-            _check(m.group("col"), m.group("fn"))
-        for m in pat_attr.finditer(script_text):
-            _check(m.group("col"), m.group("fn"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func_name = _call_function_name(node)
+            if func_name is None:
+                continue
 
-        # Imputation-without-flag pattern
-        if re.search(r"\.fillna\s*\(\s*0\s*\)", script_text):
+            referenced_cols = _extract_column_names(node, alias_map)
+            if func_name in {"mean", "std"}:
+                for col in referenced_cols:
+                    _check(col, func_name)
+                    if func_name == "mean":
+                        mean_columns.add(col)
+            elif func_name == "median":
+                median_columns.update(referenced_cols)
+            elif func_name in {"agg", "aggregate"}:
+                agg_names = _aggregation_names_from_call(node)
+                for agg_name in agg_names:
+                    if agg_name in {"mean", "std"}:
+                        for col in referenced_cols:
+                            _check(col, agg_name)
+                            if agg_name == "mean":
+                                mean_columns.add(col)
+                    elif agg_name == "median":
+                        median_columns.update(referenced_cols)
+            elif func_name == "fillna" and _call_has_zero(node):
+                fillna_zero_columns.update(
+                    col for col in referenced_cols if col in var_by_name
+                )
+            elif func_name == "eval":
+                for expr in _string_literals(node):
+                    if ".mean(" in expr or '.agg("mean")' in expr or ".agg('mean')" in expr:
+                        findings.append(ValidationFinding(
+                            validator=self.name,
+                            severity="warning",
+                            message=(
+                                "Detected DataFrame.eval() expression containing mean-style "
+                                "aggregation. Review this script manually because string-eval "
+                                "can bypass column-level ICU aggregation checks."
+                            ),
+                            detail={"expression": expr[:200]},
+                        ))
+
+        for col in sorted(mean_columns):
+            v = var_by_name.get(col)
+            if v is None:
+                continue
+            if v.role == VariableRole.LAB and col not in median_columns:
+                findings.append(ValidationFinding(
+                    validator=self.name, severity="warning",
+                    message=(
+                        f"Lab variable '{col}' summarised by mean() with no median() in "
+                        "the same script. Right-skewed labs are conventionally reported "
+                        "as median (IQR)."
+                    ),
+                    detail={"column": col, "function": "mean"},
+                ))
+
+        if fillna_zero_columns:
             findings.append(ValidationFinding(
                 validator=self.name, severity="warning",
                 message=(
                     "Detected fillna(0) — silent imputation to zero is rarely correct for "
                     "ICU variables. Use a missing-indicator or document the imputation explicitly."
                 ),
+                detail={"columns": sorted(fillna_zero_columns)},
             ))
-
         return findings
+
+    def _regex_fallback(
+        self,
+        *,
+        var_by_name: Dict[str, ConceptDescriptor],
+        script_text: str,
+        step: Optional[AnalysisStep] = None,
+    ) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        pat_bracket = re.compile(r"""\[(['"])(?P<col>[^'"]+)\1\]\s*\.\s*(?P<fn>mean|std)\s*\(""")
+        pat_attr = re.compile(r"""\.(?P<col>[a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*(?P<fn>mean|std)\s*\(""")
+        for match in list(pat_bracket.finditer(script_text)) + list(pat_attr.finditer(script_text)):
+            col = match.group("col")
+            fn = match.group("fn")
+            var = var_by_name.get(col)
+            if var is None:
+                continue
+            key = (var.role.value, fn)
+            if key in _FORBIDDEN_AGG_PATTERNS_BY_KIND:
+                findings.append(ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[key],
+                    detail={"column": col, "function": fn, "fallback": "regex"},
+                ))
+        if re.search(r"\.fillna\s*\(\s*0\s*\)", script_text):
+            findings.append(ValidationFinding(
+                validator=self.name,
+                severity="warning",
+                message=(
+                    "Detected fillna(0) — silent imputation to zero is rarely correct for "
+                    "ICU variables. Use a missing-indicator or document the imputation explicitly."
+                ),
+                detail={"fallback": "regex"},
+            ))
+        return findings
+
+
+def _call_function_name(node: ast.Call) -> Optional[str]:
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
+
+
+def _extract_column_names(
+    node: Optional[ast.AST],
+    alias_map: Dict[str, Set[str]],
+) -> Set[str]:
+    if node is None:
+        return set()
+    if isinstance(node, ast.Name):
+        return set(alias_map.get(node.id, set()))
+    if isinstance(node, ast.Constant):
+        return set()
+    if isinstance(node, ast.Attribute):
+        if isinstance(node.value, ast.Name):
+            base = node.value.id.lower()
+            if base in {"df", "data", "cohort", "frame", "table"} or base.endswith("df"):
+                return {node.attr}
+            return set(alias_map.get(node.value.id, set()))
+        return _extract_column_names(node.value, alias_map)
+    if isinstance(node, ast.Subscript):
+        cols: Set[str] = set()
+        key = _subscript_key(node.slice)
+        if isinstance(key, str):
+            cols.add(key)
+        cols.update(_extract_column_names(node.value, alias_map))
+        return cols
+    if isinstance(node, ast.Call):
+        cols: Set[str] = set()
+        cols.update(_extract_column_names(node.func, alias_map))
+        for arg in node.args:
+            cols.update(_extract_column_names(arg, alias_map))
+        for kw in node.keywords:
+            cols.update(_extract_column_names(kw.value, alias_map))
+        return cols
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        cols: Set[str] = set()
+        for elt in node.elts:
+            cols.update(_extract_column_names(elt, alias_map))
+        return cols
+    if isinstance(node, ast.Dict):
+        cols: Set[str] = set()
+        for key in node.keys:
+            cols.update(_extract_column_names(key, alias_map))
+        for value in node.values:
+            cols.update(_extract_column_names(value, alias_map))
+        return cols
+    if isinstance(node, ast.BinOp):
+        return _extract_column_names(node.left, alias_map) | _extract_column_names(node.right, alias_map)
+    if isinstance(node, ast.UnaryOp):
+        return _extract_column_names(node.operand, alias_map)
+    if isinstance(node, ast.Compare):
+        cols = _extract_column_names(node.left, alias_map)
+        for comparator in node.comparators:
+            cols.update(_extract_column_names(comparator, alias_map))
+        return cols
+    if isinstance(node, ast.BoolOp):
+        cols: Set[str] = set()
+        for value in node.values:
+            cols.update(_extract_column_names(value, alias_map))
+        return cols
+    return set()
+
+
+def _subscript_key(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Index):  # pragma: no cover - py<3.9 compatibility
+        return _subscript_key(node.value)
+    return None
+
+
+def _aggregation_names_from_call(node: ast.Call) -> Set[str]:
+    names: Set[str] = set()
+    for arg in node.args[:1]:
+        names.update(_strings_from_node(arg))
+    for kw in node.keywords:
+        if kw.arg in {"func", "aggfunc"}:
+            names.update(_strings_from_node(kw.value))
+    return {name.lower() for name in names}
+
+
+def _strings_from_node(node: ast.AST) -> Set[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {node.value}
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        out: Set[str] = set()
+        for elt in node.elts:
+            out.update(_strings_from_node(elt))
+        return out
+    if isinstance(node, ast.Dict):
+        out: Set[str] = set()
+        for key in node.keys:
+            out.update(_strings_from_node(key))
+        for value in node.values:
+            out.update(_strings_from_node(value))
+        return out
+    return set()
+
+
+def _call_has_zero(node: ast.Call) -> bool:
+    args = list(node.args) + [kw.value for kw in node.keywords]
+    for arg in args:
+        if isinstance(arg, ast.Constant) and arg.value in {0, 0.0}:
+            return True
+    return False
+
+
+def _string_literals(node: ast.Call) -> List[str]:
+    out: List[str] = []
+    for arg in node.args:
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            out.append(arg.value)
+    for kw in node.keywords:
+        if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+            out.append(kw.value.value)
+    return out
 
 
 class LLMConceptAuditor:

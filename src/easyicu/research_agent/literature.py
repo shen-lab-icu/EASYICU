@@ -159,7 +159,7 @@ def _curated_for(ctx: ResearchContext) -> List[CitationRecord]:
             out.append(c)
 
     def _matches_prefix(prefixes: Sequence[str]) -> bool:
-        return any(n.startswith(tuple(prefixes)) for n in names)
+        return any(_matches_concept_prefix(n, prefix) for n in names for prefix in prefixes)
 
     if _matches_prefix(("sofa", "sofa2")):
         _add(_CURATED[0])  # Vincent 1996
@@ -181,6 +181,14 @@ def _curated_for(ctx: ResearchContext) -> List[CitationRecord]:
     _add(_CURATED[8])  # M4
     _add(_CURATED[9])  # HealthFlow
     return out
+
+
+def _matches_concept_prefix(name: str, prefix: str) -> bool:
+    if not name.startswith(prefix):
+        return False
+    if len(name) == len(prefix):
+        return True
+    return name[len(prefix)] == "_"
 
 
 # ---------------------------------------------------------------------------

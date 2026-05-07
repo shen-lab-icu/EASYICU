@@ -23,13 +23,14 @@ from __future__ import annotations
 import json
 import os
 import re
-import textwrap
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .analysis_types import planner_analysis_type_guide
 from .icu_rules import VariableKind, default_time_windows
 from .llm import LLMClient, LLMMessage
+from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .schema import (
     AggregationRule,
     AnalysisPlan,
@@ -66,36 +67,11 @@ def _dump_raw(text: str, tag: str) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 
-_SYSTEM_GUIDE = textwrap.dedent(
-    """
-    You are an analysis agent inside the EasyICU research-agent layer.
-
-    Hard rules (the validators enforce them; violating them wastes tokens):
-    1. Never average an ordinal column. SOFA components and totals,
-       GCS, KDIGO stages and any column with role "ordinal_score" or
-       "composite_score" are aggregated by max-within-window or
-       reported as median(IQR), never as mean(SD).
-    2. Never silently impute missing values. If a column has high
-       missingness, it should be reported alongside the analysis or
-       handled explicitly (e.g. "complete-case", "missing-indicator
-       variables").
-    3. Never invent variables, concepts, or time windows. You may
-       only refer to variables that appear in the ResearchContext you
-       are given; if you need something else, return a question rather
-       than fabricating.
-    4. Right-skewed laboratory variables (creatinine, lactate,
-       bilirubin, ...) are reported as median (IQR), not mean (SD).
-    5. ICU mortality, hospital mortality and 28-day mortality are NOT
-       interchangeable. Use the column the ResearchContext designates
-       as ``target_outcome``.
-    6. Cross-database validation is executable only when an external
-       cohort file is explicitly available to the script. If the context
-       names eICU, HiRID, or another database but the script only receives
-       `COHORT_PARQUET`, write a replication protocol / harmonisation
-       checklist instead of fabricating prefixed columns or fitting a
-       model on unavailable data.
-    """
-).strip()
+_PROMPT_PACK = load_prompt_pack()
+_SYSTEM_GUIDE = _PROMPT_PACK["system"]
+_CODER_GUIDE = _PROMPT_PACK["coder"]
+_REPLANNER_GUIDE = _PROMPT_PACK["replanner"]
+_WRITER_GUIDE = _PROMPT_PACK["writer"]
 
 
 def _format_variable(v: ConceptDescriptor) -> str:
@@ -103,7 +79,7 @@ def _format_variable(v: ConceptDescriptor) -> str:
     if v.missingness is not None:
         miss = (
             f" missing={v.missingness.fraction_missing:.1%} "
-            f"({v.missingness.missingness_kind})"
+            f"(severity={v.missingness.missingness_severity})"
         )
     pit = f" pitfalls={v.pitfalls!r}" if v.pitfalls else ""
     rng = f" range={v.valid_range}" if v.valid_range else ""
@@ -155,6 +131,10 @@ class PlannerAgent:
 
     def __init__(self, llm: LLMClient) -> None:
         self.llm = llm
+        self.last_dropped_plan_keys: Dict[str, List[str]] = {
+            "top_level": [],
+            "steps": [],
+        }
 
     def run(self, context: ResearchContext) -> AnalysisPlan:
         messages = [
@@ -163,17 +143,19 @@ class PlannerAgent:
                 role="user",
                 content=(
                     "Produce an ICU-AWARE RESEARCH PLAN as JSON matching the "
-                    "AnalysisPlan schema. The plan must include: a Table 1 "
-                    "step, an outcome-incidence step, a missingness audit "
-                    "step, a primary-association step, and — if any "
-                    "composite ordinal score is in scope — a stratum-level "
-                    "audit step (specifically checking score==0 against "
-                    "score==1 to detect component-missingness artefacts). "
-                    "If cross-database replication is requested, include a "
-                    "cross-database step, but mark it as a feasibility / "
-                    "protocol step unless the ResearchContext explicitly "
-                    "provides external cohort files. Do not put invented "
+                    "AnalysisPlan schema. First infer the EHR analysis type, "
+                    "then choose only the steps justified by that family and "
+                    "the available context. The plan must not assume that "
+                    "every task needs Table 1, outcome incidence, missingness, "
+                    "or a primary association model. If cross-database "
+                    "replication is requested, include a cross-database step, "
+                    "but mark it as a feasibility / protocol step unless the "
+                    "ResearchContext explicitly provides external cohort files. "
+                    "Use score-specific QC steps only when a relevant score is "
+                    "actually central to the question. Do not put invented "
                     "prefixed variables such as eicu:age in `inputs`.\n\n"
+                    + planner_analysis_type_guide()
+                    + "\n\n"
                     "OUTPUT FORMAT — VERY IMPORTANT:\n"
                     "Return *only* a single JSON object matching the "
                     "AnalysisPlan schema. No prose, no markdown headings, no "
@@ -229,8 +211,44 @@ class PlannerAgent:
             data = json.loads(match)
         if "research_question" not in data:
             data["research_question"] = context.research_question
-        data = _normalise_plan_payload(data)
+        data, dropped = _normalise_plan_payload(data)
+        self.last_dropped_plan_keys = dropped
         return AnalysisPlan.model_validate(data)
+
+
+class ReplannerAgent(PlannerAgent):
+    """Revise an existing plan after probe outputs or executed steps."""
+
+    def run(
+        self,
+        *,
+        context: ResearchContext,
+        current_plan: AnalysisPlan,
+        probe_summary: Optional[Dict[str, Any]] = None,
+        completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> AnalysisPlan:
+        completed = list(completed_step_records or [])
+        messages = [
+            LLMMessage(role="system", content=_SYSTEM_GUIDE + "\n\n" + _REPLANNER_GUIDE),
+            LLMMessage(
+                role="user",
+                content=(
+                    "Revise the ICU-AWARE RESEARCH PLAN as JSON matching the "
+                    "AnalysisPlan schema. Keep completed steps unchanged and "
+                    "revise only the remaining steps when the probe summary or "
+                    "completed step outputs justify it.\n\n"
+                    f"CURRENT PLAN:\n{current_plan.model_dump_json(indent=2)}\n\n"
+                    f"PROBE SUMMARY:\n{json.dumps(probe_summary or {}, ensure_ascii=False, default=str)}\n\n"
+                    f"COMPLETED STEP RECORDS:\n{json.dumps(completed, ensure_ascii=False, default=str)}\n\n"
+                    "RESEARCH CONTEXT:\n" + _format_context(context)
+                ),
+            ),
+        ]
+        raw = self.llm.complete(messages, max_tokens=4096, temperature=0.1)
+        revised = self._parse(raw, context)
+        if revised.revision <= current_plan.revision:
+            revised = revised.model_copy(update={"revision": current_plan.revision + 1})
+        return revised
 
 
 # ---------------------------------------------------------------------------
@@ -302,19 +320,6 @@ class CoderAgent:
 	                    "the original code contract and writes the same expected "
 	                    "artefacts when possible. Make the smallest robust fix; "
 	                    "do not add prose, markdown, or an explanation.\n\n"
-	                    "TRACEBACK-SPECIFIC REQUIREMENTS:\n"
-	                    "- If statsmodels reports `Pandas data cast to numpy dtype of object`, "
-	                    "`exog contains inf or nans`, or any Logit/OLS dtype/missing-data "
-	                    "error, rebuild the modelling dataframe from scratch. After dummy "
-	                    "encoding categorical predictors, coerce the entire design matrix "
-	                    "with `X = X.apply(pd.to_numeric, errors=\"coerce\").astype(float)`, "
-	                    "coerce `y = pd.to_numeric(y, errors=\"coerce\").astype(float)`, "
-	                    "replace +/-inf with NaN, align y/X on the finite complete-case "
-	                    "index, and only then call `sm.add_constant(..., has_constant=\"add\")` "
-	                    "and `sm.Logit(y, X)`. For `pd.get_dummies`, pass `dtype=float` so "
-	                    "dummy columns are not boolean/object. Assert or explicitly check "
-	                    "`np.isfinite(X.to_numpy()).all()` and `np.isfinite(y.to_numpy()).all()` "
-	                    "before fitting.\n\n"
 	                    "PREVIOUS SCRIPT:\n```python\n"
                     + code[-12000:]
                     + "\n```\n\n"
@@ -327,110 +332,6 @@ class CoderAgent:
         ]
         raw = self.llm.complete(messages, max_tokens=4096, temperature=0.05)
         return _strip_code_fence(raw.strip())
-
-
-_CODER_GUIDE = textwrap.dedent(
-    '''
-
-    Code contract:
-    - Read the cohort from os.environ["COHORT_PARQUET"].
-    - Write any artefact (CSV, PNG, JSON) to os.environ["STEP_OUT_DIR"].
-    - Use matplotlib's "Agg" backend; do not call plt.show().
-    - Save a machine-readable summary to step_summary.json containing
-      every numeric statistic that downstream agents may quote.
-
-    JSON SERIALISATION — MANDATORY (free-tier models trip this):
-    - Every dict you write to disk must contain only Python primitives
-      (int, float, str, bool, list, dict, None). numpy scalars and
-      pandas missing values are NOT JSON-serialisable.
-    - Define this helper near the top of EVERY script that writes JSON,
-      and ALWAYS pass it as `default=to_jsonable`:
-
-        def to_jsonable(x):
-            import math
-            import numpy as np
-            import pandas as pd
-            if isinstance(x, (np.integer,)):
-                return int(x)
-            if isinstance(x, (np.floating,)):
-                v = float(x)
-                return v if math.isfinite(v) else None
-            if isinstance(x, (np.bool_,)):
-                return bool(x)
-            if isinstance(x, np.ndarray):
-                return x.tolist()
-            try:
-                if pd.isna(x):
-                    return None
-            except (TypeError, ValueError):
-                pass
-            return str(x)
-
-      Then call ALWAYS: `json.dump(payload, f, indent=2,
-      default=to_jsonable, ensure_ascii=False)`.
-
-    CSV CELL VALUES — MANDATORY:
-    - Every CSV cell must be a SCALAR (one number or one short string).
-      Do NOT put tuples, lists, numpy reprs, or "(median, q25, q75)"
-      strings into a single cell. If you want median + IQR per group,
-      emit THREE columns: `<var>_median`, `<var>_q25`, `<var>_q75`.
-      The downstream binder treats each cell as a citable value;
-      tuples-as-strings break every downstream consumer.
-    - For categorical summaries write one row per category, not a
-      single cell with `(n, pct)` tuples.
-
-    STATISTICS APIs:
-    - For binomial confidence intervals use
-      `statsmodels.stats.proportion.proportion_confint` or compute the
-      normal/Wilson interval directly. Do not use the non-existent
-      `scipy.stats.proportion.proportion_confint`, and do not import
-      deprecated `scipy.stats.binom_test`.
-    - For statsmodels regressions, build a numeric design matrix:
-      after `pd.get_dummies(...)`, call
-      `X = X.apply(pd.to_numeric, errors="coerce").astype(float)`,
-      drop rows with missing y/X, and add a constant after coercion.
-      The safe pattern is:
-      `model_df = df[[y_col] + x_cols].copy()`;
-      `model_df = model_df.apply(pd.to_numeric, errors="coerce")`;
-      `model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()`;
-      `y = model_df[y_col].astype(float)`;
-      `X = sm.add_constant(model_df[x_cols].astype(float), has_constant="add")`.
-      Never call `sm.Logit(y, X)` until `np.isfinite(X.to_numpy()).all()`
-      and `np.isfinite(y.to_numpy()).all()` are true. If lactate is
-      missing-indicator imputed, still drop missing non-lactate covariates
-      such as MAP after creating the lactate indicator/imputed column.
-
-    PYTHON HYGIENE:
-    - Python collection constructors must be syntactically valid:
-      write `set(["a", "b"])` or `{"a", "b"}`, never `set("a", "b")`.
-    - Only import from the standard library, pandas, numpy, scipy,
-      matplotlib, and statsmodels. No network access.
-
-    ROBUSTNESS:
-    - If the step is cross-database validation but only `COHORT_PARQUET`
-      is available, do not fit models for unavailable databases. Write
-      a CSV/JSON protocol listing target databases, required variables,
-      harmonisation notes, and reproducibility checks. Wrap any value
-      that came from the cohort (n, mortality rate, sha256) in
-      `int(...)` / `float(...)` before putting it in the protocol dict.
-    - If a column the prompt asks about is absent from the cohort,
-      gracefully skip it and record the omission in step_summary.json
-      under a `"skipped"` key — do not crash the step.
-    - Do not let optional plotting break a completed table/statistic
-      step. If a plot is secondary, wrap only the plotting block in a
-      narrow `try/except Exception as exc` and record the skipped plot
-      in step_summary.json.
-    - Never assume every category or stratum exists. Before `.iloc[0]`
-      on filtered rows, check `.empty`; before indexing category
-      columns, check membership in `df.columns`.
-    - Matplotlib error bars must be non-negative. Build yerr values
-      with `np.maximum(0, upper - estimate)` and
-      `np.maximum(0, estimate - lower)`, and replace missing bounds
-      with zero-width intervals.
-    - Do not delete or modify the cohort parquet.
-    - Print step_summary.json contents to stdout at the end.
-    '''
-).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -549,22 +450,6 @@ class WriterAgent:
         return _strip_code_fence(raw)
 
 
-_WRITER_GUIDE = textwrap.dedent(
-    """
-
-    Writer contract:
-    - Discussion is OFF-LIMITS. End the manuscript with a one-line stub
-      saying Discussion is left to the human author.
-    - Every numeric claim in Methods or Results must be either spelled
-      out in words ("the cohort comprised X stays") with X immediately
-      followed by an {evidence:<id>} placeholder, OR phrased as
-      "see {evidence:<id>}".
-    - Sentences without an evidence id will be removed by the post-processor.
-    - Do not invent confidence intervals, p-values, or hazard ratios.
-    """
-).strip()
-
-
 def _writer_language_instruction(language: str) -> str:
     if language == "zh":
         return (
@@ -658,8 +543,15 @@ def _first_json_block(text: str) -> Optional[str]:
     return None
 
 
-def _normalise_plan_payload(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Drop hosted-model extras before validating the strict schema."""
+def _normalise_plan_payload(
+    data: Dict[str, Any]
+) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
+    """Drop hosted-model extras before validating the strict schema.
+
+    Returns both the normalized payload and a structured summary of the
+    keys that were discarded so the pipeline can surface them in the
+    manifest instead of silently suppressing them.
+    """
     allowed_plan = {"research_question", "steps", "rationale", "revision"}
     allowed_step = {
         "step_id",
@@ -669,18 +561,33 @@ def _normalise_plan_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         "method",
         "icu_rule_refs",
     }
-    out = {k: v for k, v in data.items() if k in allowed_plan}
+    dropped: Dict[str, List[str]] = {"top_level": [], "steps": []}
+    out = {}
+    for key, value in data.items():
+        if key in allowed_plan:
+            out[key] = value
+        else:
+            dropped["top_level"].append(str(key))
     steps = []
-    for raw_step in out.get("steps", []) or []:
+    for idx, raw_step in enumerate(out.get("steps", []) or []):
         if isinstance(raw_step, dict):
-            steps.append({k: v for k, v in raw_step.items() if k in allowed_step})
+            step_payload = {}
+            for key, value in raw_step.items():
+                if key in allowed_step:
+                    step_payload[key] = value
+                else:
+                    step_id = raw_step.get("step_id") or f"step[{idx}]"
+                    dropped["steps"].append(f"{step_id}:{key}")
+            steps.append(step_payload)
     out["steps"] = steps
-    return out
+    return out, dropped
 
 
 __all__ = [
     "PlannerAgent",
+    "ReplannerAgent",
     "CoderAgent",
     "AnalyzerAgent",
     "WriterAgent",
+    "PROMPT_PACK_VERSION",
 ]

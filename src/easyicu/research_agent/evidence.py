@@ -41,7 +41,6 @@ import hashlib
 import json
 import shutil
 import threading
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -143,10 +142,70 @@ class EvidenceStore:
     # Registration
     # ------------------------------------------------------------------
 
-    def _make_id(self, prefix: str) -> str:
-        # Deterministic-ish: short uuid suffix; avoid collisions on retries.
-        suffix = uuid.uuid4().hex[:8]
-        return f"{prefix}_{suffix}"
+    def _record_by_id(self, evidence_id: str) -> Optional[EvidenceRecord]:
+        for record in self._records:
+            if record.evidence_id == evidence_id:
+                return record
+        return None
+
+    def _make_id(self, prefix: str, digest: str) -> str:
+        return f"{prefix}_{digest[:8]}"
+
+    def _register_target(
+        self,
+        *,
+        evidence_id: str,
+        kind: str,
+        description: str,
+        target: Path,
+        sha256: str,
+        produced_by_step: Optional[str],
+        inputs: Optional[Sequence[str]],
+        script_evidence_id: Optional[str],
+        aliases: Optional[Sequence[str]],
+        producer: Optional[str],
+        generation_mode: Optional[str],
+        prompt_pack_version: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+    ) -> EvidenceRecord:
+        existing = self._record_by_id(evidence_id)
+        if existing is not None:
+            if existing.sha256 != sha256:
+                raise ValueError(
+                    f"Evidence id collision for {evidence_id}: "
+                    f"existing sha256={existing.sha256[:8]} new sha256={sha256[:8]}"
+                )
+            for alias in (aliases or []):
+                self._add_alias(alias, evidence_id)
+            self._add_alias(target.stem.split("__", 1)[-1], evidence_id)
+            self._save()
+            return existing
+
+        record = EvidenceRecord(
+            evidence_id=evidence_id,
+            kind=kind,  # type: ignore[arg-type]
+            description=description,
+            relative_path=str(target.relative_to(self.root)),
+            sha256=sha256,
+            produced_by_step=produced_by_step,
+            inputs=list(inputs or []),
+            script_evidence_id=script_evidence_id,
+            producer=producer,
+            generation_mode=generation_mode,
+            prompt_pack_version=prompt_pack_version,
+            metadata=dict(metadata or {}),
+            created_at=datetime.now(timezone.utc),
+        )
+        self._records.append(record)
+
+        for alias in (aliases or []):
+            self._add_alias(alias, evidence_id)
+        basename = target.name.split("__", 1)[-1]
+        self._add_alias(Path(basename).stem, evidence_id)
+        self._add_alias(evidence_id, evidence_id)
+
+        self._save()
+        return record
 
     def register_file(
         self,
@@ -159,6 +218,10 @@ class EvidenceStore:
         script_evidence_id: Optional[str] = None,
         evidence_id: Optional[str] = None,
         aliases: Optional[Sequence[str]] = None,
+        producer: Optional[str] = None,
+        generation_mode: Optional[str] = None,
+        prompt_pack_version: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> EvidenceRecord:
         if not source_path.exists():
             raise FileNotFoundError(f"Cannot register missing file: {source_path}")
@@ -167,38 +230,29 @@ class EvidenceStore:
         # The lock is reentrant so register_text → register_file
         # composition stays deadlock-free.
         with self._lock:
-            eid = evidence_id or self._make_id(_id_prefix(kind, source_path.stem))
+            source_digest = sha256_of_file(source_path)
+            eid = evidence_id or self._make_id(
+                _id_prefix(kind, source_path.stem), source_digest
+            )
             target = self.dir / f"{eid}__{source_path.name}"
             if target.resolve() != source_path.resolve():
                 shutil.copy2(source_path, target)
             digest = sha256_of_file(target)
-            record = EvidenceRecord(
+            return self._register_target(
                 evidence_id=eid,
-                kind=kind,  # type: ignore[arg-type]
+                kind=kind,
                 description=description,
-                relative_path=str(target.relative_to(self.root)),
+                target=target,
                 sha256=digest,
                 produced_by_step=produced_by_step,
-                inputs=list(inputs or []),
+                inputs=inputs,
                 script_evidence_id=script_evidence_id,
-                created_at=datetime.now(timezone.utc),
+                aliases=aliases,
+                producer=producer,
+                generation_mode=generation_mode,
+                prompt_pack_version=prompt_pack_version,
+                metadata=metadata,
             )
-            self._records.append(record)
-
-            # Register aliases. The filename stem is auto-aliased so that
-            # writer placeholders like {evidence:table_one} resolve without
-            # the pipeline having to know every possible alias upfront. An
-            # explicit ``evidence_id`` (passed by the pipeline for stable
-            # ids like ``research_context``) is also indexed as an alias of
-            # itself so the binder treats them uniformly.
-            for alias in (aliases or []):
-                self._add_alias(alias, eid)
-            self._add_alias(source_path.stem, eid)
-            if evidence_id:
-                self._add_alias(evidence_id, eid)
-
-            self._save()
-            return record
 
     def register_text(
         self,
@@ -212,20 +266,32 @@ class EvidenceStore:
         script_evidence_id: Optional[str] = None,
         evidence_id: Optional[str] = None,
         aliases: Optional[Sequence[str]] = None,
+        producer: Optional[str] = None,
+        generation_mode: Optional[str] = None,
+        prompt_pack_version: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> EvidenceRecord:
-        eid = evidence_id or self._make_id(_id_prefix(kind, Path(filename).stem))
+        payload = text.encode("utf-8")
+        digest = sha256_of_bytes(payload)
+        eid = evidence_id or self._make_id(_id_prefix(kind, Path(filename).stem), digest)
         target = self.dir / f"{eid}__{filename}"
-        target.write_text(text, encoding="utf-8")
-        return self.register_file(
-            kind=kind,
-            description=description,
-            source_path=target,
-            produced_by_step=produced_by_step,
-            inputs=inputs,
-            script_evidence_id=script_evidence_id,
-            evidence_id=eid,
-            aliases=aliases,
-        )
+        target.write_bytes(payload)
+        with self._lock:
+            return self._register_target(
+                evidence_id=eid,
+                kind=kind,
+                description=description,
+                target=target,
+                sha256=digest,
+                produced_by_step=produced_by_step,
+                inputs=inputs,
+                script_evidence_id=script_evidence_id,
+                aliases=aliases,
+                producer=producer,
+                generation_mode=generation_mode,
+                prompt_pack_version=prompt_pack_version,
+                metadata=metadata,
+            )
 
     def register_json(
         self,
@@ -238,6 +304,10 @@ class EvidenceStore:
         inputs: Optional[Sequence[str]] = None,
         evidence_id: Optional[str] = None,
         aliases: Optional[Sequence[str]] = None,
+        producer: Optional[str] = None,
+        generation_mode: Optional[str] = None,
+        prompt_pack_version: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> EvidenceRecord:
         text = json.dumps(payload, indent=2, ensure_ascii=False, default=str)
         return self.register_text(
@@ -249,7 +319,43 @@ class EvidenceStore:
             inputs=inputs,
             evidence_id=evidence_id,
             aliases=aliases,
+            producer=producer,
+            generation_mode=generation_mode,
+            prompt_pack_version=prompt_pack_version,
+            metadata=metadata,
         )
+
+    def update_record(
+        self,
+        evidence_id: str,
+        *,
+        finding_severity: Optional[str] = None,
+        finding_messages: Optional[Sequence[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        producer: Optional[str] = None,
+        generation_mode: Optional[str] = None,
+        prompt_pack_version: Optional[str] = None,
+    ) -> Optional[EvidenceRecord]:
+        with self._lock:
+            record = self.get(evidence_id)
+            if record is None:
+                return None
+            if finding_severity is not None:
+                record.finding_severity = finding_severity
+            if finding_messages is not None:
+                record.finding_messages = list(finding_messages)
+            if metadata:
+                merged = dict(record.metadata)
+                merged.update(metadata)
+                record.metadata = merged
+            if producer is not None:
+                record.producer = producer
+            if generation_mode is not None:
+                record.generation_mode = generation_mode
+            if prompt_pack_version is not None:
+                record.prompt_pack_version = prompt_pack_version
+            self._save()
+            return record
 
     # ------------------------------------------------------------------
     # Lookup
@@ -323,7 +429,10 @@ class EvidenceStore:
             if rec is None:
                 out.append(f"[evidence missing: {eid}]")
             elif verbose:
-                out.append(f"[{rec.description} | {rec.relative_path} | sha256={rec.sha256[:8]}]")
+                suffix = _binding_caveat(rec)
+                out.append(
+                    f"[{rec.description} | {rec.relative_path} | sha256={rec.sha256[:8]}]{suffix}"
+                )
             else:
                 # Compact in-line citation: link uses the requested
                 # placeholder text (so the writer's own naming survives)
@@ -331,6 +440,7 @@ class EvidenceStore:
                 # 8-char sha256 sits in the link title for hover.
                 out.append(
                     f"[{eid}]({rec.relative_path} \"sha256={rec.sha256[:8]}\")"
+                    f"{_binding_caveat(rec)}"
                 )
             i = k + 1
         return "".join(out)
@@ -339,6 +449,13 @@ class EvidenceStore:
 def _id_prefix(kind: str, stem: str) -> str:
     safe = "".join(c for c in stem if c.isalnum() or c in "_-").strip("_")[:32]
     return f"{kind}_{safe}" if safe else kind
+
+
+def _binding_caveat(record: EvidenceRecord) -> str:
+    severity = record.finding_severity
+    if severity in {"warning", "error"}:
+        return f" ({severity}: see manifest)"
+    return ""
 
 
 __all__ = ["EvidenceStore", "sha256_of_file", "sha256_of_bytes"]
