@@ -235,16 +235,16 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
     if ctx.cross_database_validation:
         steps.append(
             AnalysisStep(
-                step_id="06_cross_database_plan",
+                step_id="06_cross_database_protocol",
                 intent=(
-                    "Document a replication plan for: "
+                    "Document a replication protocol for: "
                     + ", ".join(ctx.cross_database_validation)
                     + ". Run the same pipeline with the same research_context schema; "
                     "compare cohort sizes, missingness profiles and primary-association "
                     "effect estimates."
                 ),
                 inputs=[],
-                expected_outputs=["log:cross_database_plan"],
+                expected_outputs=["log:cross_database_protocol"],
                 method="replication_protocol",
             )
         )

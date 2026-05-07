@@ -4,7 +4,7 @@
 
 > A reproducible infrastructure for cross-database ICU research, with standardized concept extraction, clinician-friendly web workflows, and scriptable Python APIs.
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
@@ -36,6 +36,10 @@ Recommended entry:
 - Double-click `start_easyicu.command` on macOS
 - Run `./start_easyicu.sh` on Linux
 
+First launch will create a local runtime under `.easyicu-runtime/` and
+install the web dependencies automatically. Use Python 3.10+ for this
+path.
+
 Default local URL:
 
 ```text
@@ -50,6 +54,8 @@ Choose this path if you want to:
 - build reproducible cohort pipelines in code
 
 Minimal install:
+
+Python 3.10+ is recommended for the current packaged dependencies.
 
 ```bash
 git clone "https://github.com/shen-lab-icu/easyicu.git"
@@ -133,11 +139,22 @@ EasyICU includes interactive tools for:
 
 <img width="3051" height="1823" alt="Quick Visualization Example" src="https://github.com/user-attachments/assets/09c64137-9c6a-401e-a1d0-fe358ea458de" />
 
+## Optional Research-Agent Layer
+
+For advanced users, EasyICU also includes an optional
+`easyicu.research_agent` layer for ICU-aware analysis planning,
+evidence-bound reporting, and manuscript scaffold generation. It is
+not required for the standard web workflow or Python extraction APIs.
+See [src/easyicu/research_agent/README.md](src/easyicu/research_agent/README.md)
+for details.
+
 ## 🚀 Going Further (Developers / Advanced Users)
 
 ## Development & Testing
 
 Create a local development environment and run the current automated checks:
+
+Use Python 3.10+ for the development environment.
 
 ```bash
 python -m venv .venv
