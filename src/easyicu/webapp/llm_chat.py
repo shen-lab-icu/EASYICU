@@ -26,9 +26,14 @@ import requests
 import streamlit as st
 from easyicu.webapp.llm_config import (
     PROVIDERS,
+    coerce_public_provider,
     ensure_llm_config_state,
     is_configured as _shared_is_configured,
+    is_internal_provider,
     needs_api_key as _shared_needs_api_key,
+    public_default_provider_key,
+    public_provider_defaults,
+    public_provider_keys,
 )
 
 # ---------------------------------------------------------------------------
@@ -947,7 +952,7 @@ def _verify_response(client, messages: list[dict[str, str]], draft: str, lang: s
     try:
         response = client.chat.completions.create(
             model=st.session_state.get("llm_model", "").strip()
-            or PROVIDERS.get(st.session_state.get("llm_provider", "custom"), PROVIDERS["custom"])[2],
+            or public_provider_defaults(st.session_state.get("llm_provider", public_default_provider_key()))[2],
             messages=verify_messages,
             stream=False,
         )
@@ -973,6 +978,9 @@ def _needs_api_key(provider: str) -> bool:
 
 def _is_configured() -> bool:
     """Return True when the provider is ready to use."""
+    provider = st.session_state.get("llm_provider", public_default_provider_key())
+    if is_internal_provider(provider):
+        return False
     return _shared_is_configured()
 
 
@@ -984,7 +992,7 @@ def _get_client():
     except ImportError:
         return None
 
-    provider = st.session_state.get("llm_provider", "openrouter")
+    provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
     api_key = st.session_state.get("llm_api_key", "").strip()
     base_url = st.session_state.get("llm_base_url", "").strip() or None
 
@@ -1107,20 +1115,26 @@ def render_llm_settings():
             return
 
         # Provider
-        provider_keys = list(PROVIDERS.keys())
-        idx = provider_keys.index(st.session_state.llm_provider) \
-            if st.session_state.llm_provider in provider_keys else 0
+        original_provider = st.session_state.get("llm_provider", public_default_provider_key())
+        if is_internal_provider(original_provider):
+            st.session_state.llm_provider = public_default_provider_key()
+            st.session_state.llm_base_url = ""
+            st.session_state.llm_model = ""
+            st.session_state.llm_configured = False
+        provider_keys = public_provider_keys()
+        current_provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
+        idx = provider_keys.index(current_provider) if current_provider in provider_keys else 0
         provider = st.selectbox(
             "Provider" if lang == "en" else "服务商",
             options=provider_keys,
             index=idx,
-            format_func=lambda k: PROVIDERS[k][0],
+            format_func=lambda k: public_provider_defaults(k)[0],
             key="_llm_provider_sel",
         )
         st.session_state.llm_provider = provider
 
         # Provider description
-        p_info = PROVIDERS[provider]
+        p_info = public_provider_defaults(provider)
         desc = p_info[4] if lang == "en" else p_info[5]
         st.caption(desc)
 
@@ -1232,11 +1246,9 @@ def render_chat_tab():
         return
 
     # ---- Header --------------------------------------------------------------
-    provider_name = PROVIDERS.get(
-        st.session_state.llm_provider, PROVIDERS["custom"])[0]
+    provider_name = public_provider_defaults(st.session_state.get("llm_provider", public_default_provider_key()))[0]
     model_name = (st.session_state.get("llm_model", "").strip()
-                  or PROVIDERS.get(st.session_state.llm_provider,
-                                   PROVIDERS["custom"])[2]
+                  or public_provider_defaults(st.session_state.get("llm_provider", public_default_provider_key()))[2]
                   or "—")
     st.markdown(
         "##### " + ("💬 Chat with AI Assistant" if lang == "en"
@@ -2242,8 +2254,8 @@ def _start_bg_response(prompt: str, lang: str) -> str | None:
     except Exception:
         return None
     st.session_state.llm_last_tool_events = tool_events
-    provider = st.session_state.get("llm_provider", "openrouter")
-    p_info = PROVIDERS.get(provider, PROVIDERS["custom"])
+    provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
+    p_info = public_provider_defaults(provider)
     model = (st.session_state.get("llm_model", "").strip() or p_info[2])
     base_url = st.session_state.get("llm_base_url", "").strip() or p_info[1]
     api_key = st.session_state.get("llm_api_key", "")
@@ -2280,9 +2292,9 @@ def _stream_response(messages: list, lang: str):
         st.error(err)
         return
 
-    provider = st.session_state.get("llm_provider", "openrouter")
+    provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
     model = (st.session_state.get("llm_model", "").strip()
-             or PROVIDERS.get(provider, PROVIDERS["custom"])[2])
+             or public_provider_defaults(provider)[2])
     if not model:
         st.error("⚠️ " + ("No model specified." if lang == "en" else "未指定模型名称。"))
         return

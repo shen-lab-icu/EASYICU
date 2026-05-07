@@ -29,6 +29,7 @@ Loop shape::
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio
 import hashlib
 import json
 import re
@@ -43,7 +44,20 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import pandas as pd
 
-from .agents import AnalyzerAgent, CoderAgent, PlannerAgent, ReplannerAgent, WriterAgent
+from .agents import (
+    AnalyzerAgent,
+    ClinicalSemanticsAgent,
+    CoderAgent,
+    CriticAgent,
+    DataExtractionAgent,
+    ManuscriptAgent,
+    PlannerAgent,
+    ReplannerAgent,
+    RuntimeSupervisor,
+    StatisticalAnalysisAgent,
+    VisualizationAgent,
+)
+from .architecture import architecture_profile_markdown, default_architecture_profile
 from .cost import CostMeter, metered_role_resolver
 from .context import (
     build_naive_research_context,
@@ -51,6 +65,7 @@ from .context import (
     build_retrieved_research_context,
 )
 from .evidence import EvidenceStore
+from .experiment_spec import ExperimentSpec, dump_experiment_spec
 from .bibtex import render_bibtex
 from .latex import scaffold_to_latex
 from .literature import LiteratureAgent, LiteratureBundle
@@ -59,10 +74,14 @@ from .memory import RunMemory
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runner import CodeRunner, DockerRunner, RunResult
 from .schema import (
+    AgentRuntimeState,
     AnalysisManifest,
     AnalysisPlan,
     AnalysisStep,
+    CritiqueReport,
     EvidenceRecord,
+    EvidenceRef,
+    ManuscriptDraftPacket,
     PipelineResult,
     ResearchContext,
     TimeWindow,
@@ -70,10 +89,19 @@ from .schema import (
     VariableRole,
 )
 from .skills import ClinicalSkill, get_skill, list_skills
+from .runtime_artifacts import (
+    AuditLogger,
+    build_execution_replay,
+    build_workflow_graph,
+    render_workflow_graph_mermaid,
+    write_json_artifact,
+)
 from .validators import (
+    ClinicalConstraintValidator,
     CohortAuditor,
     ConceptUsageAuditor,
     LLMConceptAuditor,
+    StatisticalGuard,
     StatisticalValidator,
 )
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
@@ -104,6 +132,7 @@ class _ExecutePhaseResult:
     plan: AnalysisPlan
     per_step_records: List[Dict[str, Any]]
     probe_summary: Dict[str, Any]
+    runtime_state: AgentRuntimeState
     flush_partial_manifest: Callable[[Optional[Dict[str, Any]]], None]
 
 
@@ -111,6 +140,8 @@ class _ExecutePhaseResult:
 class _WritePhaseResult:
     literature: Optional[LiteratureBundle]
     bound_path: Path
+    manuscript_packet: Optional[ManuscriptDraftPacket] = None
+    manuscript_critique: Optional[CritiqueReport] = None
 
 
 class ResearchAgentPipeline:
@@ -303,12 +334,14 @@ class ResearchAgentPipeline:
         outcome_columns: Optional[Sequence[str]],
         time_windows: Optional[Sequence[TimeWindow]],
         concept_descriptions: Optional[Dict[str, str]],
+        user_preferences: Optional[Dict[str, Any]],
         notes: Optional[str],
         skill_obj: Optional[ClinicalSkill],
         llm: LLMClient,
         run_dir: Path,
         run_id: str,
         run_language: str,
+        experiment_spec_path: Optional[Path],
         resume_state: Optional[Dict[str, Any]],
         emit_progress: Callable[..., None],
     ) -> _PlanPhaseResult:
@@ -328,6 +361,7 @@ class ResearchAgentPipeline:
             outcome_columns=outcome_columns,
             concept_descriptions=concept_descriptions,
             time_windows=time_windows,
+            user_preferences=user_preferences,
             notes=notes,
         )
         context_path = run_dir / "research_context.json"
@@ -350,6 +384,41 @@ class ResearchAgentPipeline:
                 description="ResearchContext (frozen at run time).",
                 source_path=context_path,
                 evidence_id="research_context",
+                producer="pipeline",
+                generation_mode="system",
+            )
+        if experiment_spec_path is not None and experiment_spec_path.exists() and evidence.get("experiment_spec") is None:
+            evidence.register_file(
+                kind="log",
+                description="Config-driven YAML/JSON experiment specification for this run.",
+                source_path=experiment_spec_path,
+                evidence_id="experiment_spec",
+                producer="pipeline",
+                generation_mode="system",
+            )
+        architecture_profile = default_architecture_profile()
+        architecture_json = run_dir / "architecture_profile.json"
+        architecture_md = run_dir / "architecture_profile.md"
+        write_json_artifact(architecture_json, architecture_profile)
+        architecture_md.write_text(
+            architecture_profile_markdown(architecture_profile),
+            encoding="utf-8",
+        )
+        if evidence.get("architecture_profile") is None:
+            evidence.register_file(
+                kind="log",
+                description="Declared four-layer architecture profile for this runtime.",
+                source_path=architecture_json,
+                evidence_id="architecture_profile",
+                producer="pipeline",
+                generation_mode="system",
+            )
+        if evidence.get("architecture_profile_markdown") is None:
+            evidence.register_file(
+                kind="log",
+                description="Human-readable architecture profile for this runtime.",
+                source_path=architecture_md,
+                evidence_id="architecture_profile_markdown",
                 producer="pipeline",
                 generation_mode="system",
             )
@@ -455,8 +524,7 @@ class ResearchAgentPipeline:
                 )
 
         for client in self._iter_mock_clients(llm):
-            if client.context is None:
-                client.context = agent_context
+            client.context = agent_context
         llm_signature = self._llm_signature(llm)
         used_mock_llm = any(True for _ in self._iter_mock_clients(llm))
         prompt_version = PROMPT_PACK_VERSION
@@ -589,9 +657,19 @@ class ResearchAgentPipeline:
 
         coder = CoderAgent(role_resolver("coder"))
         analyzer = AnalyzerAgent(role_resolver("analyzer"))
+        supervisor = RuntimeSupervisor(
+            clinical_semantics=ClinicalSemanticsAgent(),
+            data_extraction=DataExtractionAgent(),
+            statistical_analysis=StatisticalAnalysisAgent(),
+            visualization=VisualizationAgent(),
+            critic=CriticAgent(role_resolver("analyzer")),
+        )
         runner = self._build_runner(run_dir=run_dir, cohort_path=cohort_path)
         usage_auditor = ConceptUsageAuditor()
         stat_validator = StatisticalValidator()
+        clinical_validator = ClinicalConstraintValidator()
+        statistical_guard = StatisticalGuard()
+        runtime_state = supervisor.bootstrap_state(run_id=run_id, context=context)
 
         per_step_records: List[Dict[str, Any]] = []
         probe_summary: Dict[str, Any] = {}
@@ -649,12 +727,34 @@ class ResearchAgentPipeline:
                 "prompt_pack_version": prompt_version,
                 "prompt_pack_files": prompt_files,
                 "notes": notes,
+                "runtime_state": runtime_state.model_dump(mode="json"),
             }
             if extra:
                 payload.update(extra)
             (run_dir / "manifest_partial.json").write_text(
                 json.dumps(payload, indent=2, ensure_ascii=False, default=str),
                 encoding="utf-8",
+            )
+
+        runtime_packets = {
+            "clinical_semantics_resolution": runtime_state.semantics,
+            "data_extraction_request": runtime_state.extraction_request,
+            "data_extraction_result": runtime_state.extraction_result,
+        }
+        for alias, packet in runtime_packets.items():
+            if packet is None or evidence.get(alias) is not None:
+                continue
+            evidence.register_json(
+                kind="log",
+                description=f"Typed runtime packet: {alias}.",
+                payload=packet.model_dump(mode="json"),
+                filename=f"{alias}.json",
+                evidence_id=alias,
+                aliases=[alias],
+                producer="runtime_supervisor",
+                generation_mode="system",
+                prompt_pack_version=prompt_version,
+                metadata={"run_id": run_id},
             )
 
         _flush_partial_manifest()
@@ -795,7 +895,34 @@ class ResearchAgentPipeline:
                     metadata=metadata,
                 )
 
+        def _evidence_refs_for_names(names: Sequence[str]) -> List[EvidenceRef]:
+            refs: List[EvidenceRef] = []
+            seen: set[str] = set()
+            for name in names:
+                rec = evidence.get(str(name))
+                if rec is None or rec.evidence_id in seen:
+                    continue
+                refs.append(
+                    EvidenceRef(
+                        evidence_id=rec.evidence_id,
+                        kind=rec.kind,
+                        description=rec.description,
+                        relative_path=rec.relative_path,
+                    )
+                )
+                seen.add(rec.evidence_id)
+            return refs
+
+        def _validator_messages(*finding_groups: Sequence[ValidationFinding]) -> List[str]:
+            messages: List[str] = []
+            for group in finding_groups:
+                for finding in group:
+                    if finding.message:
+                        messages.append(finding.message)
+            return messages
+
         def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
+            nonlocal runtime_state
             step_record: Dict[str, Any] = {"step_id": step.step_id, "intent": step.intent}
             step_current = step_order.get(step.step_id, 0) + 1
             emit_progress(
@@ -806,6 +933,22 @@ class ResearchAgentPipeline:
                 current_step=step_current,
                 total_steps=total_steps,
             )
+            existing_refs = _evidence_refs_for_names(step.inputs)
+            local_runtime_state = supervisor.prepare_step_state(
+                state=runtime_state,
+                context=context,
+                step=step,
+                evidence_refs=existing_refs,
+            )
+            step_record["analysis_request"] = (
+                local_runtime_state.analysis_request.model_dump(mode="json")
+                if local_runtime_state.analysis_request is not None else None
+            )
+            step_record["visualization_request"] = (
+                local_runtime_state.visualization_request.model_dump(mode="json")
+                if local_runtime_state.visualization_request is not None else None
+            )
+            step_record["semantics_family"] = local_runtime_state.analysis_family
 
             try:
                 emit_progress(
@@ -1314,15 +1457,78 @@ class ResearchAgentPipeline:
                 out_dir=run_result.out_dir,
                 step_summary=step_summary,
             )
+            clinical_findings = clinical_validator.audit(
+                context=context,
+                step=step,
+                out_dir=run_result.out_dir,
+                step_summary=step_summary,
+            )
+            guard_findings = statistical_guard.audit(
+                context=context,
+                cohort_path=cohort_path,
+                step=step,
+                out_dir=run_result.out_dir,
+                step_summary=step_summary,
+            )
             with shared_lock:
                 findings.extend(stat_findings)
+                findings.extend(clinical_findings)
+                findings.extend(guard_findings)
             step_record["stat_findings"] = [f.model_dump() for f in stat_findings]
+            step_record["clinical_findings"] = [f.model_dump() for f in clinical_findings]
+            step_record["guard_findings"] = [f.model_dump() for f in guard_findings]
             step_record["generation_mode"] = _script_generation_mode(
                 repair_attempts=repair_attempts,
                 fallback_used=deterministic_fallback_used,
                 runner_repair_name=runner_repair_name,
             )
             step_record["step_summary"] = step_summary
+            evidence_refs_for_step = _evidence_refs_for_names(evidence_ids_for_step)
+            validator_messages = _validator_messages(
+                usage_findings,
+                stat_findings,
+                clinical_findings,
+                guard_findings,
+            )
+            local_runtime_state = supervisor.critique_step(
+                state=local_runtime_state,
+                step_summary=step_summary,
+                evidence_refs=evidence_refs_for_step,
+                findings=validator_messages,
+            )
+            critique = local_runtime_state.critique
+            if critique is not None:
+                critique_path = run_result.out_dir / "critique_report.json"
+                critique_path.write_text(
+                    critique.model_dump_json(indent=2),
+                    encoding="utf-8",
+                )
+                critique_record = evidence.register_file(
+                    kind="log",
+                    description=f"Structured critique report for step {step.step_id}.",
+                    source_path=critique_path,
+                    produced_by_step=step.step_id,
+                    script_evidence_id=script_record.evidence_id,
+                    aliases=[f"{step.step_id}_critique"],
+                    producer="critic",
+                    generation_mode="system",
+                    metadata={"script_evidence_id": script_record.evidence_id},
+                )
+                evidence_ids_for_step.append(critique_record.evidence_id)
+                step_record["critique_report"] = critique.model_dump(mode="json")
+                if critique.status in {"needs_revision", "blocked"}:
+                    with shared_lock:
+                        findings.append(
+                            ValidationFinding(
+                                validator="critic_agent",
+                                severity="warning" if critique.status == "needs_revision" else "error",
+                                message=(
+                                    f"CriticAgent marked {step.step_id} as {critique.status}: "
+                                    + "; ".join(critique.concerns or critique.suggested_repairs or ["review required"])
+                                ),
+                                evidence_ids=[critique_record.evidence_id],
+                            )
+                        )
 
             try:
                 interpretation = analyzer.run(
@@ -1347,12 +1553,14 @@ class ResearchAgentPipeline:
             step_record["interpretation_evidence_id"] = interp_record.evidence_id
             _propagate_findings_to_evidence(
                 evidence_ids_for_step + [interp_record.evidence_id],
-                usage_findings + stat_findings,
+                usage_findings + stat_findings + clinical_findings + guard_findings,
                 metadata={
                     "step_id": step.step_id,
                     "generation_mode": step_record["generation_mode"],
                 },
             )
+            with shared_lock:
+                runtime_state = local_runtime_state
             step_record["status"] = "ok"
             with shared_lock:
                 per_step_records.append(step_record)
@@ -1438,6 +1646,7 @@ class ResearchAgentPipeline:
             plan=plan,
             per_step_records=per_step_records,
             probe_summary=probe_summary,
+            runtime_state=runtime_state,
             flush_partial_manifest=_flush_partial_manifest,
         )
 
@@ -1461,6 +1670,8 @@ class ResearchAgentPipeline:
         findings = plan_result.findings
         role_resolver = plan_result.role_resolver
         prompt_version = plan_result.prompt_version
+        runtime_state = execute_result.runtime_state
+        critic = CriticAgent(role_resolver("analyzer"))
 
         literature: Optional[LiteratureBundle] = None
         if stop_after_analysis:
@@ -1545,7 +1756,39 @@ class ResearchAgentPipeline:
             "Drafting manuscript scaffold.",
             run_id=run_id,
         )
-        writer = WriterAgent(role_resolver("writer"), language=run_language)
+        writer = ManuscriptAgent(role_resolver("writer"), language=run_language)
+        manuscript_packet: Optional[ManuscriptDraftPacket] = None
+        if runtime_state.semantics is not None:
+            manuscript_packet = writer.build_packet(
+                context=context,
+                semantics=runtime_state.semantics,
+                evidence_refs=[
+                    EvidenceRef(
+                        evidence_id=record.evidence_id,
+                        kind=record.kind,
+                        description=record.description,
+                        relative_path=record.relative_path,
+                    )
+                    for record in evidence.records()
+                ],
+                findings=[f.message for f in findings if f.severity in {"warning", "error"}],
+                caveats=list(runtime_state.semantics.safety_guardrails),
+            )
+            packet_path = run_dir / "manuscript_packet.json"
+            packet_path.write_text(
+                manuscript_packet.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            if evidence.get("manuscript_packet") is None:
+                evidence.register_file(
+                    kind="log",
+                    description="Typed manuscript draft packet passed into the manuscript agent.",
+                    source_path=packet_path,
+                    evidence_id="manuscript_packet",
+                    producer="manuscript_agent",
+                    generation_mode="system",
+                    prompt_pack_version=prompt_version,
+                )
         try:
             scaffold = writer.run(
                 context=agent_context,
@@ -1566,7 +1809,31 @@ class ResearchAgentPipeline:
                 prompt_pack_version=prompt_version,
             )
 
-        bound = evidence.bind_manuscript(scaffold)
+        evidence_bound_scaffold, removed_sentences = evidence.enforce_evidence_bound_scaffold(scaffold)
+        if removed_sentences:
+            findings.append(
+                ValidationFinding(
+                    validator="evidence_bound_writer",
+                    severity="warning",
+                    message=(
+                        f"Filtered {len(removed_sentences)} result-like sentence(s) without evidence placeholders before manuscript binding."
+                    ),
+                    detail={"removed_sentences": removed_sentences},
+                )
+            )
+            filtered_path = run_dir / "manuscript_scaffold_filtered.md"
+            filtered_path.write_text(evidence_bound_scaffold, encoding="utf-8")
+            if evidence.get("manuscript_scaffold_filtered") is None:
+                evidence.register_file(
+                    kind="log",
+                    description="Manuscript scaffold after evidence-bound filtering.",
+                    source_path=filtered_path,
+                    evidence_id="manuscript_scaffold_filtered",
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+
+        bound = evidence.bind_manuscript(evidence_bound_scaffold)
         bound_path = run_dir / "manuscript_scaffold_bound.md"
         bound_path.write_text(bound, encoding="utf-8")
         if evidence.get("manuscript_scaffold_bound") is None:
@@ -1577,6 +1844,47 @@ class ResearchAgentPipeline:
                 evidence_id="manuscript_scaffold_bound",
                 producer="pipeline",
                 generation_mode="system",
+            )
+
+        manuscript_critique = critic.review_manuscript(
+            scaffold=bound,
+            available_evidence_ids=evidence.resolvable_names(),
+        )
+        if removed_sentences:
+            manuscript_critique = manuscript_critique.model_copy(
+                update={
+                    "status": "needs_revision" if manuscript_critique.status == "pass" else manuscript_critique.status,
+                    "unsupported_claims": list(manuscript_critique.unsupported_claims) + removed_sentences,
+                    "concerns": list(manuscript_critique.concerns) + [
+                        "Pipeline removed result-like sentences that lacked evidence placeholders."
+                    ],
+                }
+            )
+        critique_path = run_dir / "manuscript_critique.json"
+        critique_path.write_text(
+            manuscript_critique.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        if evidence.get("manuscript_critique") is None:
+            evidence.register_file(
+                kind="log",
+                description="Structured manuscript critique after evidence binding.",
+                source_path=critique_path,
+                evidence_id="manuscript_critique",
+                producer="critic",
+                generation_mode="system",
+            )
+        if manuscript_critique.status in {"needs_revision", "blocked"}:
+            findings.append(
+                ValidationFinding(
+                    validator="critic_agent",
+                    severity="warning" if manuscript_critique.status == "needs_revision" else "error",
+                    message=(
+                        f"CriticAgent marked manuscript as {manuscript_critique.status}: "
+                        + "; ".join(manuscript_critique.concerns or manuscript_critique.suggested_repairs or ["review required"])
+                    ),
+                    evidence_ids=["manuscript_critique"],
+                )
             )
 
         if self._enable_latex:
@@ -1625,7 +1933,12 @@ class ResearchAgentPipeline:
                     message=f"LaTeX export failed: {exc}",
                 ))
 
-        return _WritePhaseResult(literature=literature, bound_path=bound_path)
+        return _WritePhaseResult(
+            literature=literature,
+            bound_path=bound_path,
+            manuscript_packet=manuscript_packet,
+            manuscript_critique=manuscript_critique,
+        )
 
     def _finalise_success(
         self,
@@ -1635,11 +1948,14 @@ class ResearchAgentPipeline:
         write_result: _WritePhaseResult,
         run_id: str,
         run_dir: Path,
+        cohort_path: Path,
         notes: Optional[str],
         database: str,
         target_outcome: Optional[str],
         stop_after_analysis: bool,
         cache_key: Optional[str],
+        experiment_spec_path: Optional[Path],
+        audit_logger: Optional[AuditLogger],
         emit_progress: Callable[..., None],
     ) -> PipelineResult:
         """Write reports/manifests and persist run memory after all phases finish."""
@@ -1665,6 +1981,75 @@ class ResearchAgentPipeline:
             ),
             encoding="utf-8",
         )
+
+        workflow_graph = build_workflow_graph(
+            run_id=run_id,
+            context=context,
+            plan=plan,
+            per_step_records=per_step_records,
+            paused_after_analysis=stop_after_analysis,
+        )
+        workflow_graph_path = write_json_artifact(
+            run_dir / "workflow_graph.json",
+            workflow_graph,
+        )
+        workflow_mermaid_path = run_dir / "workflow_graph.md"
+        workflow_mermaid_path.write_text(
+            render_workflow_graph_mermaid(workflow_graph),
+            encoding="utf-8",
+        )
+        evidence.register_file(
+            kind="log",
+            description="Workflow graph JSON for this run.",
+            source_path=workflow_graph_path,
+            aliases=["workflow_graph"],
+            producer="pipeline",
+            generation_mode="system",
+        )
+        evidence.register_file(
+            kind="log",
+            description="Mermaid workflow graph for this run.",
+            source_path=workflow_mermaid_path,
+            aliases=["workflow_graph_mermaid"],
+            producer="pipeline",
+            generation_mode="system",
+        )
+
+        replay_bundle = build_execution_replay(
+            run_id=run_id,
+            cohort_path=cohort_path,
+            context_path=str(plan_result.context_path.relative_to(run_dir)),
+            plan_path=str(plan_result.plan_path.relative_to(run_dir)),
+            llm_signature=plan_result.llm_signature,
+            prompt_pack_version=plan_result.prompt_version,
+            per_step_records=per_step_records,
+            findings=findings,
+            evidence_ids=[r.evidence_id for r in evidence.records()],
+        )
+        replay_path = write_json_artifact(
+            run_dir / "execution_replay.json",
+            replay_bundle,
+        )
+        evidence.register_file(
+            kind="log",
+            description="Deterministic execution replay bundle for this run.",
+            source_path=replay_path,
+            aliases=["execution_replay"],
+            producer="pipeline",
+            generation_mode="system",
+        )
+
+        audit_log_rel: Optional[str] = None
+        if audit_logger is not None and audit_logger.path.exists():
+            evidence.register_file(
+                kind="log",
+                description="RuntimeSupervisor audit log (JSONL).",
+                source_path=audit_logger.path,
+                aliases=["audit_log"],
+                producer="pipeline",
+                generation_mode="system",
+            )
+            audit_log_rel = str(audit_logger.path.relative_to(run_dir))
 
         cost_records_for_manifest = []
         if plan_result.cost_meter is not None:
@@ -1712,6 +2097,18 @@ class ResearchAgentPipeline:
             if manifest_notes else literature_provenance
         )
 
+        report_path.write_text(
+            _render_report(
+                context=context,
+                plan=plan,
+                findings=findings,
+                per_step_records=per_step_records,
+                evidence=evidence,
+                paused_after_analysis=stop_after_analysis,
+            ),
+            encoding="utf-8",
+        )
+
         manifest = AnalysisManifest(
             run_id=run_id,
             research_question=context.research_question,
@@ -1725,6 +2122,14 @@ class ResearchAgentPipeline:
             cost_records=cost_records_for_manifest,
             report_path=str(report_path.relative_to(run_dir)),
             manuscript_path=str(write_result.bound_path.relative_to(run_dir)),
+            audit_log_path=audit_log_rel,
+            workflow_graph_path=str(workflow_graph_path.relative_to(run_dir)),
+            execution_replay_path=str(replay_path.relative_to(run_dir)),
+            experiment_spec_path=(
+                str(experiment_spec_path.relative_to(run_dir))
+                if experiment_spec_path is not None and experiment_spec_path.exists()
+                else None
+            ),
             llm_signature=plan_result.llm_signature,
             used_mock_llm=plan_result.used_mock_llm,
             prompt_pack_version=plan_result.prompt_version,
@@ -1790,6 +2195,7 @@ class ResearchAgentPipeline:
         outcome_columns: Optional[Sequence[str]] = None,
         time_windows: Optional[Sequence[TimeWindow]] = None,
         concept_descriptions: Optional[Dict[str, str]] = None,
+        user_preferences: Optional[Dict[str, Any]] = None,
         notes: Optional[str] = None,
         skill: Optional[Union[str, ClinicalSkill]] = None,
         manuscript_title: Optional[str] = None,
@@ -1797,6 +2203,7 @@ class ResearchAgentPipeline:
         manuscript_language: Optional[str] = None,
         resume_run_id: Optional[str] = None,
         stop_after_analysis: bool = False,
+        experiment_spec: Optional[Union[ExperimentSpec, Dict[str, Any]]] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> PipelineResult:
         """Run the explicit Plan → Execute → Write phases for one cohort."""
@@ -1820,8 +2227,20 @@ class ResearchAgentPipeline:
         run_language = self._normalise_manuscript_language(
             manuscript_language or self._manuscript_language
         )
+        audit_logger: Optional[AuditLogger] = None
     
         def _emit_progress(stage: str, message: str, **extra: Any) -> None:
+            if audit_logger is not None:
+                try:
+                    audit_logger.emit(
+                        phase=stage,
+                        event=message,
+                        status=str(extra.get("status", "running")),
+                        step_id=(str(extra.get("step_id")) if extra.get("step_id") else None),
+                        detail={k: v for k, v in extra.items() if k not in {"status", "step_id"}},
+                    )
+                except Exception:
+                    pass
             if progress_callback is None:
                 return
             payload = {
@@ -1853,6 +2272,19 @@ class ResearchAgentPipeline:
             run_id = "run_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex[:6]
             run_dir = self.workdir / run_id
             run_dir.mkdir(parents=True, exist_ok=True)
+        audit_logger = AuditLogger(run_dir / "audit_log.jsonl")
+
+        experiment_spec_path: Optional[Path] = None
+        if experiment_spec is not None:
+            spec_obj = (
+                experiment_spec
+                if isinstance(experiment_spec, ExperimentSpec)
+                else ExperimentSpec.model_validate(experiment_spec)
+            )
+            experiment_spec_path = dump_experiment_spec(
+                spec_obj,
+                run_dir / "experiment_spec.yaml",
+            )
     
         cohort_path = self._materialise_cohort(cohort, run_dir)
         _emit_progress(
@@ -1903,12 +2335,14 @@ class ResearchAgentPipeline:
             outcome_columns=outcome_columns,
             time_windows=time_windows,
             concept_descriptions=concept_descriptions,
+            user_preferences=user_preferences,
             notes=notes,
             skill_obj=skill_obj,
             llm=llm,
             run_dir=run_dir,
             run_id=run_id,
             run_language=run_language,
+            experiment_spec_path=experiment_spec_path,
             resume_state=resume_state,
             emit_progress=_emit_progress,
         )
@@ -1941,13 +2375,33 @@ class ResearchAgentPipeline:
             write_result=write_result,
             run_id=run_id,
             run_dir=run_dir,
+            cohort_path=cohort_path,
             notes=notes,
             database=database,
             target_outcome=target_outcome,
             stop_after_analysis=stop_after_analysis,
             cache_key=cache_key,
+            experiment_spec_path=experiment_spec_path,
+            audit_logger=audit_logger,
             emit_progress=_emit_progress,
         )
+
+    def run_from_spec(
+        self,
+        spec: Union[ExperimentSpec, Dict[str, Any]],
+        *,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> PipelineResult:
+        """Run the pipeline from a typed YAML/JSON experiment specification."""
+        spec_obj = spec if isinstance(spec, ExperimentSpec) else ExperimentSpec.model_validate(spec)
+        kwargs = spec_obj.run_kwargs()
+        kwargs["experiment_spec"] = spec_obj
+        kwargs["progress_callback"] = progress_callback
+        return self.run(**kwargs)
+
+    async def run_async(self, **kwargs: Any) -> PipelineResult:
+        """Async wrapper for UI/API runtimes that need non-blocking orchestration."""
+        return await asyncio.to_thread(self.run, **kwargs)
     
     def replicate(
         self,
@@ -1965,6 +2419,7 @@ class ResearchAgentPipeline:
         outcome_columns: Optional[Sequence[str]] = None,
         time_windows: Optional[Sequence[TimeWindow]] = None,
         concept_descriptions: Optional[Dict[str, str]] = None,
+        user_preferences: Optional[Dict[str, Any]] = None,
         notes: Optional[str] = None,
         manuscript_language: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -1996,6 +2451,7 @@ class ResearchAgentPipeline:
                     outcome_columns=outcome_columns,
                     time_windows=time_windows,
                     concept_descriptions=concept_descriptions,
+                    user_preferences=user_preferences,
                     notes=notes,
                     skill=skill,
                     manuscript_language=manuscript_language,
@@ -2048,6 +2504,10 @@ class ResearchAgentPipeline:
                 "summary_json": str(summary_path),
                 "runs": run_results,
             }
+
+    async def replicate_async(self, **kwargs: Any) -> Dict[str, Any]:
+        """Async wrapper for cross-database replication."""
+        return await asyncio.to_thread(self.replicate, **kwargs)
     
     # ------------------------------------------------------------------
     # Helpers

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import threading
 from datetime import datetime, timezone
@@ -398,6 +399,36 @@ class EvidenceStore:
     # Manuscript binding
     # ------------------------------------------------------------------
 
+    def enforce_evidence_bound_scaffold(self, scaffold: str) -> tuple[str, List[str]]:
+        """Drop result-like sentences that lack an explicit evidence placeholder.
+
+        The writer is allowed to draft prose freely, but anything that looks like
+        a numerical result or analytical claim must cite ``{evidence:<id>}``
+        before it can enter the final manuscript. We keep headings, list items,
+        and non-result narrative intact, and return the filtered scaffold plus a
+        list of sentences that were removed.
+        """
+        removed: List[str] = []
+        filtered_lines: List[str] = []
+        for raw_line in scaffold.splitlines():
+            line = raw_line.rstrip()
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", "```", "-", "*", ">")):
+                filtered_lines.append(line)
+                continue
+            sentences = _split_sentences(line)
+            if len(sentences) == 1 and not _looks_result_like_sentence(sentences[0]):
+                filtered_lines.append(line)
+                continue
+            kept: List[str] = []
+            for sentence in sentences:
+                if _looks_result_like_sentence(sentence) and "{evidence:" not in sentence:
+                    removed.append(sentence.strip())
+                    continue
+                kept.append(sentence.strip())
+            filtered_lines.append(" ".join(part for part in kept if part).strip())
+        return "\n".join(filtered_lines).strip() + "\n", removed
+
     def bind_manuscript(self, scaffold: str, *, verbose: bool = False) -> str:
         """Replace ``{evidence:<id>}`` placeholders with provenance links.
 
@@ -456,6 +487,25 @@ def _binding_caveat(record: EvidenceRecord) -> str:
     if severity in {"warning", "error"}:
         return f" ({severity}: see manifest)"
     return ""
+
+
+_RESULT_TOKEN_RE = re.compile(
+    r"(\bOR\b|\bHR\b|\bRR\b|\bAUC\b|\bAUROC\b|\bBrier\b|\bcalibration\b|"
+    r"\bmedian\b|\bmean\b|\bincidence\b|\bmortality\b|\bhazard\b|"
+    r"\bconfidence interval\b|\bCI\b|\bp\s*[<=>]|%|\d)",
+    re.I,
+)
+
+
+def _split_sentences(text: str) -> List[str]:
+    parts = [part.strip() for part in re.split(r"(?<=[.!?。！？])\s+", text.strip()) if part.strip()]
+    return parts or ([text.strip()] if text.strip() else [])
+
+
+def _looks_result_like_sentence(sentence: str) -> bool:
+    if "{evidence:" in sentence:
+        return False
+    return bool(_RESULT_TOKEN_RE.search(sentence))
 
 
 __all__ = ["EvidenceStore", "sha256_of_file", "sha256_of_bytes"]

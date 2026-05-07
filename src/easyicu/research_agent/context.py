@@ -35,7 +35,13 @@ from .schema import (
     MissingnessProfile,
     ResearchContext,
     TimeWindow,
+    UserPreferences,
     VariableRole,
+)
+from .temporal_semantics import (
+    ConceptValidationLayer,
+    ICUEpisodeResolver,
+    TemporalAlignmentEngine,
 )
 
 
@@ -223,6 +229,7 @@ def build_research_context(
     outcome_columns: Optional[Sequence[str]] = None,
     concept_descriptions: Optional[Dict[str, str]] = None,
     time_windows: Optional[Sequence[TimeWindow]] = None,
+    user_preferences: Optional[Union[UserPreferences, Dict[str, Any]]] = None,
     notes: Optional[str] = None,
 ) -> ResearchContext:
     """Build a :class:`ResearchContext` from a cohort dataframe.
@@ -270,8 +277,18 @@ def build_research_context(
     id_columns = list(id_columns) if id_columns else _guess_id_columns(df)
     time_columns = list(time_columns) if time_columns else _guess_time_columns(df)
     outcome_columns = list(outcome_columns) if outcome_columns else _guess_outcome_columns(df)
+    cohort_path_str = str(Path(cohort).resolve()) if isinstance(cohort, (str, Path)) else None
+    episode = ICUEpisodeResolver().resolve(
+        df=df,
+        database=database,
+        id_columns=id_columns,
+        time_columns=time_columns,
+        outcome_columns=outcome_columns,
+        target_outcome=target_outcome,
+        cohort_path=cohort_path_str,
+    )
 
-    n_patients = _count_unique(df, id_columns[:1]) if id_columns else int(len(df))
+    n_patients = _count_unique(df, episode.id_columns[:1]) if episode.id_columns else int(len(df))
     n_stays = int(len(df))
 
     cohort_desc = CohortDescriptor(
@@ -281,9 +298,14 @@ def build_research_context(
         n_stays=n_stays,
         inclusion_criteria=list(inclusion_criteria or []),
         exclusion_criteria=list(exclusion_criteria or []),
-        id_columns=id_columns,
-        time_columns=time_columns,
-        outcome_columns=outcome_columns,
+        id_columns=episode.id_columns,
+        time_columns=episode.time_columns,
+        outcome_columns=episode.outcome_columns,
+        provenance={
+            **episode.provenance,
+            "inclusion_criteria": list(inclusion_criteria or []),
+            "exclusion_criteria": list(exclusion_criteria or []),
+        },
     )
 
     # --- per-column descriptors
@@ -296,24 +318,37 @@ def build_research_context(
                 df=df,
                 col=col,
                 user_descriptions=user_descriptions,
-                id_columns=id_columns,
-                time_columns=time_columns,
-                outcome_columns=outcome_columns,
+                id_columns=episode.id_columns,
+                time_columns=episode.time_columns,
+                outcome_columns=episode.outcome_columns,
                 missingness_test_meta=missingness_test_meta,
             )
         )
 
-    # --- time windows: provided or default
-    windows = list(time_windows) if time_windows else default_time_windows()
+    prefs_obj = (
+        user_preferences
+        if isinstance(user_preferences, UserPreferences)
+        else (UserPreferences.model_validate(user_preferences) if user_preferences else None)
+    )
+
+    # --- time windows + deterministic temporal semantics
+    inferred_windows, temporal_constraints = TemporalAlignmentEngine().infer(
+        research_question=research_question,
+        timing_and_design=(prefs_obj.timing_and_design if prefs_obj else None),
+        explicit_windows=time_windows,
+    )
+    windows = list(time_windows) if time_windows else inferred_windows or default_time_windows()
 
     return ResearchContext(
         research_question=research_question,
         cohort=cohort_desc,
         variables=descriptors,
         time_windows=windows,
+        temporal_constraints=temporal_constraints,
         target_outcome=target_outcome,
         cross_database_validation=list(cross_database_validation or []),
         cohort_parquet=cohort_path,
+        user_preferences=prefs_obj,
         notes=notes,
     )
 
@@ -350,16 +385,33 @@ def _describe_column(
     description = user_descriptions.get(col)
     source_concept = None
     source_databases: List[str] = []
+    concept_validation = ConceptValidationLayer()
+    source_tables: List[str] = []
+    item_ids: List[str] = []
+    unit_normalization: Optional[str] = None
+    temporal_resolution: Optional[str] = None
+    clinical_caveats: List[str] = []
+    missingness_semantics: Optional[str] = None
     if description is None:
         info = _safe_get_concept_info(col)
         if info is not None:
             description = info.get("description") or None
-            source_concept = info.get("name") or col
+            meta = concept_validation.validate_descriptor_payload(
+                source_info=info,
+                column_name=col,
+            )
+            source_concept = meta.get("source_concept") or col
             srcs = info.get("sources") or info.get("source_databases") or []
             if isinstance(srcs, dict):
                 source_databases = sorted(map(str, srcs.keys()))
             else:
                 source_databases = [str(s) for s in srcs]
+            source_tables = meta.get("source_tables") or []
+            item_ids = meta.get("item_ids") or []
+            unit_normalization = meta.get("unit_normalization")
+            temporal_resolution = meta.get("temporal_resolution")
+            clinical_caveats = meta.get("clinical_caveats") or []
+            missingness_semantics = meta.get("missingness_semantics")
 
     allowed = _allowed_aggregations(role, hint.kind)
     miss = _profile_missingness(series)
@@ -383,7 +435,13 @@ def _describe_column(
         ordinal_levels=list(hint.ordinal_levels) if hint.ordinal_levels else None,
         source_concept=source_concept,
         source_databases=source_databases,
+        source_tables=source_tables,
+        item_ids=item_ids,
+        unit_normalization=unit_normalization,
+        temporal_resolution=temporal_resolution,
         pitfalls=list(hint.pitfalls),
+        clinical_caveats=clinical_caveats or list(hint.pitfalls),
+        missingness_semantics=missingness_semantics,
         missingness=miss,
     )
 
@@ -451,6 +509,7 @@ def build_naive_research_context(
     outcome_columns: Optional[Sequence[str]] = None,
     concept_descriptions: Optional[Dict[str, str]] = None,
     time_windows: Optional[Sequence[TimeWindow]] = None,
+    user_preferences: Optional[Union[UserPreferences, Dict[str, Any]]] = None,
     notes: Optional[str] = None,
 ) -> ResearchContext:
     """Hero-ablation "naive" builder.
@@ -529,6 +588,11 @@ def build_naive_research_context(
         target_outcome=target_outcome,
         cross_database_validation=list(cross_database_validation or []),
         cohort_parquet=cohort_path,
+        user_preferences=(
+            user_preferences
+            if isinstance(user_preferences, UserPreferences)
+            else (UserPreferences.model_validate(user_preferences) if user_preferences else None)
+        ),
         notes=notes,
     )
 

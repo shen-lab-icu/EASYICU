@@ -30,6 +30,13 @@ are blocked.
 
 ## Architecture
 
+The runtime now makes a four-layer design explicit:
+
+- **Layer 1 — ICU Data Foundation**: unified concept abstraction, cohort provenance, deterministic temporal semantics, and ICU episode resolution.
+- **Layer 2 — Safe Analytical Runtime**: evidence store, audit log, validators, execution replay, and workflow graph artifacts.
+- **Layer 3 — Agent Orchestration**: planner / replanner / coder / analyzer / writer coordinated through a runtime supervisor pattern.
+- **Layer 4 — Scientific Discovery**: future-facing hooks for iterative hypothesis refinement, without weakening the safety contract of Layers 1–2.
+
 ```
 question + cohort  ────────────►  optional: ClinicalSkill
         │                              │ deterministic plan
@@ -75,6 +82,9 @@ question + cohort  ────────────►  optional: ClinicalSk
         ▼
    scaffold_to_latex             → manuscript_scaffold.tex
         ▼
+   audit_log.jsonl               → runtime supervision trace
+   workflow_graph.json/.md       → execution graph + Mermaid view
+   execution_replay.json         → deterministic replay bundle
    RunMemory.record              → .memory/runs/<run_id>.json
    manifest.json + results_report.md
 ```
@@ -96,9 +106,12 @@ external cohort is actually available.
 ### Free-form research question
 
 ```python
-from easyicu.research_agent import ResearchAgentPipeline
+from easyicu.research_agent import ResearchAgentPipeline, MockLLMClient
 
-pipeline = ResearchAgentPipeline(workdir="./research_output")
+pipeline = ResearchAgentPipeline(
+    workdir="./research_output",
+    llm=MockLLMClient(),  # tests/demo only; pass a real client for research runs
+)
 result = pipeline.run(
     question="Is admission SOFA-2 score associated with ICU mortality?",
     cohort="path/to/easyicu_cohort.parquet",
@@ -114,13 +127,13 @@ print(result.manuscript_path)
 ### Pre-canned ClinicalSkill
 
 ```python
-from easyicu.research_agent import ResearchAgentPipeline, list_skills
+from easyicu.research_agent import ResearchAgentPipeline, MockLLMClient, list_skills
 
 print([s.key for s in list_skills()])
 # → ['sofa_mortality', 'aki_kdigo_mortality',
 #    'vaso_exposure_mortality', 'lactate_trajectory_mortality']
 
-pipeline = ResearchAgentPipeline(workdir="./research_output")
+pipeline = ResearchAgentPipeline(workdir="./research_output", llm=MockLLMClient())
 result = pipeline.run(
     skill="sofa_mortality",                 # short-circuits the planner
     cohort="path/to/cohort.parquet",
@@ -128,6 +141,34 @@ result = pipeline.run(
     cross_database_validation=["eicu", "hirid"],
     manuscript_authors=["A. Researcher", "B. Clinician"],
 )
+```
+
+### Config-driven experiment spec
+
+```python
+from easyicu.research_agent import (
+    CohortInputSpec,
+    ExperimentSpec,
+    MockLLMClient,
+    ResearchAgentPipeline,
+    RuntimeSpec,
+)
+
+spec = ExperimentSpec(
+    question="Is admission SOFA-2 score associated with ICU mortality?",
+    cohort=CohortInputSpec(
+        cohort="path/to/easyicu_cohort.parquet",
+        cohort_name="MIMIC-IV first ICU admissions",
+        database="miiv",
+        target_outcome="death",
+        user_preferences={"inferred_analysis_family": "association_study"},
+    ),
+    runtime=RuntimeSpec(workdir="./research_output", stop_after_analysis=True),
+)
+
+pipeline = ResearchAgentPipeline(workdir=spec.runtime.workdir, llm=MockLLMClient())
+result = pipeline.run_from_spec(spec)
+print(result.manifest_path)
 ```
 
 ### MCP server (for Claude Desktop / Continue / Cursor / etc.)

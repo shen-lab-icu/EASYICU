@@ -126,3 +126,18 @@ def test_bind_manuscript_propagates_warning_caveat(ra, tmp_path: Path):
     )
     bound = store.bind_manuscript("See {evidence:table_one}.")
     assert "(warning: see manifest)" in bound
+
+
+def test_enforce_evidence_bound_scaffold_filters_unsupported_result_sentences(ra, tmp_path: Path):
+    store = ra.EvidenceStore(root=tmp_path)
+    scaffold = (
+        "# Results\n\n"
+        "The cohort comprised 10 stays.\n"
+        "This study describes baseline characteristics.\n"
+        "Median age was 65 years {evidence:table_one}.\n"
+    )
+    filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
+    assert "The cohort comprised 10 stays." not in filtered
+    assert "This study describes baseline characteristics." in filtered
+    assert "Median age was 65 years {evidence:table_one}." in filtered
+    assert removed == ["The cohort comprised 10 stays."]

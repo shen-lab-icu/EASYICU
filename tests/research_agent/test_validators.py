@@ -315,3 +315,60 @@ def test_llm_concept_auditor_parses_findings(ra):
     assert findings[0].validator == "llm_concept_auditor"
     assert findings[0].severity == "warning"
     assert findings[0].detail["step_id"] == "04_primary"
+
+
+def test_clinical_constraint_validator_warns_on_missing_time_zero(ra, tmp_path: Path):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "research_question": "Estimate the effect of early vasopressor treatment on death.",
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="causal_inference"
+            ),
+        }
+    )
+    step = ra.schema.AnalysisStep(step_id="04_causal_protocol", intent="Target-trial style causal analysis")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    findings = ra.ClinicalConstraintValidator().audit(
+        context=ctx,
+        step=step,
+        out_dir=out_dir,
+        step_summary={},
+    )
+    assert any("immortal time bias" in f.message.lower() for f in findings), findings
+
+
+def test_statistical_guard_warns_when_prediction_outputs_lack_split_metadata(ra, tmp_path: Path):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="prediction_model",
+                covariates=["age", "sex", "sofa2"],
+            ),
+        }
+    )
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({
+        "stay_id": list(range(1, 11)),
+        "age": [60] * 10,
+        "sofa2": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        "death": [0, 1, 0, 1, 0, 1, 0, 0, 0, 1],
+    }).to_parquet(cohort_path, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    pd.DataFrame({
+        "model": ["logit"],
+        "auc": [0.76],
+        "brier": [0.18],
+    }).to_csv(out_dir / "model_performance_train_test.csv", index=False)
+    step = ra.schema.AnalysisStep(step_id="04_prediction", intent="prediction model analysis")
+    findings = ra.StatisticalGuard().audit(
+        context=ctx,
+        cohort_path=cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary={},
+    )
+    messages = " ".join(f.message.lower() for f in findings)
+    assert "train/test split" in messages
+    assert "calibration_slope" in messages

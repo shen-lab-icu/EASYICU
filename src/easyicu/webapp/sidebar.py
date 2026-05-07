@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 from pathlib import Path
 import os
+import re
 
 import streamlit as st
 from easyicu.webapp.session_state import clear_run_state
@@ -38,6 +39,16 @@ def _ensure_default_directory_input_value(
     elif previous_default is not None and current_value == previous_default and previous_default != default_value:
         st.session_state[input_key] = default_value
     st.session_state[default_key] = default_value
+
+
+def _hide_prefilled_directory_text(input_key: str, mirrored_value: str) -> None:
+    pending_key = f"{input_key}__pending_value"
+    current = str(st.session_state.get(input_key, "") or "")
+    if pending_key in st.session_state:
+        return
+    looks_like_abs = current.startswith("/") or bool(re.match(r"^[A-Za-z]:[\\/]", current)) or current.startswith("~")
+    if looks_like_abs or (mirrored_value and current == str(mirrored_value)):
+        st.session_state[input_key] = ""
 
 
 def render_sidebar(app_context: dict[str, Any] | None = None):
@@ -334,6 +345,7 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
             _hint = f"Enter the path to your {_db_display} data directory" if st.session_state.language == 'en' else f"请输入 {_db_display} 数据目录的路径"
 
             path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
+            _hide_prefilled_directory_text("sidebar_data_path_input", st.session_state.data_path or "")
             data_path = _directory_input(
                 path_label,
                 value=st.session_state.data_path or "",
@@ -341,34 +353,36 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                 button_key="sidebar_data_path_browse",
                 placeholder=_placeholder,
                 help=_hint,
+                show_value=False,
             )
+            effective_data_path = data_path or st.session_state.get("data_path", "")
 
             # 🔧 当路径变化时自动检测并更新数据库
-            if data_path and data_path != st.session_state.get('_last_data_path', ''):
-                detected_db = detect_database_from_path(data_path)
+            if effective_data_path and effective_data_path != st.session_state.get('_last_data_path', ''):
+                detected_db = detect_database_from_path(effective_data_path)
                 if detected_db != database:
                     st.session_state.database = detected_db
-                    st.session_state._last_data_path = data_path
+                    st.session_state._last_data_path = effective_data_path
                     st.rerun()
-                st.session_state._last_data_path = data_path
+                st.session_state._last_data_path = effective_data_path
 
             # 验证按钮
             validate_btn = "🔍 Validate Data Path" if st.session_state.language == 'en' else "🔍 验证数据路径"
             if st.button(validate_btn, use_container_width=True, key="validate_path"):
-                if not data_path:
+                if not effective_data_path:
                     err_msg = "❌ Please enter data path" if st.session_state.language == 'en' else "❌ 请输入数据路径"
                     st.error(err_msg)
-                elif not Path(data_path).exists():
+                elif not Path(effective_data_path).exists():
                     err_msg = "❌ Path does not exist" if st.session_state.language == 'en' else "❌ 路径不存在"
                     st.error(err_msg)
                 else:
                     # 检查数据库所需文件
-                    validation_result = validate_database_path(data_path, database)
+                    validation_result = validate_database_path(effective_data_path, database)
                     st.session_state.last_validation = validation_result
-                    st.session_state.last_validated_path = data_path
+                    st.session_state.last_validated_path = effective_data_path
 
                     if validation_result['valid']:
-                        st.session_state.data_path = data_path
+                        st.session_state.data_path = effective_data_path
                         st.session_state.path_validated = True
                         st.success(validation_result['message'])
                     else:
@@ -1040,11 +1054,8 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
         default_export_path = str(Path(base_export_path) / default_dir_name)
         export_input_key = "sidebar_export_path_input"
         export_default_key = "_sidebar_export_path_default"
-        _ensure_default_directory_input_value(
-            input_key=export_input_key,
-            default_key=export_default_key,
-            default_value=default_export_path,
-        )
+        st.session_state[export_default_key] = default_export_path
+        _hide_prefilled_directory_text(export_input_key, st.session_state.get("export_path", default_export_path))
 
         export_path = _directory_input(
             "Export Path" if st.session_state.language == 'en' else "导出路径",
@@ -1052,8 +1063,10 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
             input_key=export_input_key,
             button_key="sidebar_export_path_browse",
             placeholder="Select export directory" if st.session_state.language == 'en' else "选择导出目录",
-            help=(f"Data will be exported to this directory (Current database: {db_name.upper()})" if st.session_state.language == 'en' else f"数据将导出到此目录（当前数据库: {db_name.upper()}）")
+            help=(f"Data will be exported to this directory (Current database: {db_name.upper()})" if st.session_state.language == 'en' else f"数据将导出到此目录（当前数据库: {db_name.upper()}）"),
+            show_value=False,
         )
+        export_path = export_path or st.session_state.get("export_path", default_export_path)
         st.session_state.export_path = export_path
 
         # 检查路径并提供创建选项

@@ -7,6 +7,7 @@ clicking "run") gets a broken artefact.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -50,6 +51,13 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     )
     # at least 6 artefacts as required by the roadmap
     assert len(manifest["evidence"]) >= 6, manifest["evidence"]
+    evidence_ids = {e["evidence_id"] for e in manifest["evidence"]}
+    assert {
+        "clinical_semantics_resolution",
+        "data_extraction_request",
+        "data_extraction_result",
+        "manuscript_critique",
+    } <= evidence_ids
 
     # 3) The bound manuscript should have ZERO ``[evidence missing: …]``
     #    lines (T1.2 acceptance criterion).
@@ -57,6 +65,8 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     assert "[evidence missing:" not in bound, (
         "bound manuscript contains unresolved evidence placeholders:\n" + bound
     )
+    partial = json.loads((run_dir / "manifest_partial.json").read_text(encoding="utf-8"))
+    assert partial["runtime_state"]["analysis_family"]
 
     # 4) The SOFA-zero anomaly should appear in at least one step_summary.json.
     summaries = list(run_dir.rglob("step_summary.json"))
@@ -92,6 +102,22 @@ def test_pipeline_with_clinical_skill(ra, synthetic_cohort, tmp_path: Path):
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
     step_ids = [s["step_id"] for s in plan["steps"]]
     assert any("sofa_zero" in sid for sid in step_ids)
+
+
+def test_pipeline_run_async(ra, synthetic_cohort, tmp_path: Path):
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+
+    async def _run():
+        return await pipeline.run_async(
+            question="Is admission SOFA-2 associated with ICU mortality?",
+            cohort=synthetic_cohort,
+            cohort_name="synthetic_async_cohort",
+            database="synthetic",
+            target_outcome="death",
+        )
+
+    result = asyncio.run(_run())
+    assert Path(result.manifest_path).exists()
 
 
 def test_pipeline_falls_back_when_planner_returns_empty(ra, synthetic_cohort, tmp_path: Path):
@@ -732,3 +758,44 @@ res = sm.Logit(y, X).fit(disp=0)
     assert name == "dtype_coerce_v1"
     assert "_easyicu_runner_repair_v1" in patched
     assert "sm.Logit(*_easyicu_runner_repair_v1(X, y))" in patched
+
+
+def test_pipeline_run_from_spec_writes_runtime_artifacts(ra, tmp_path: Path):
+    df = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4],
+        "age": [60.0, 72.0, 55.0, 80.0],
+        "sofa2": [0, 1, 5, 8],
+        "death": [0, 0, 1, 1],
+    })
+    cohort_path = tmp_path / "cohort.parquet"
+    df.to_parquet(cohort_path, index=False)
+    spec = ra.ExperimentSpec(
+        question="Analyze whether admission SOFA-2 is associated with ICU mortality.",
+        cohort=ra.CohortInputSpec(
+            cohort=str(cohort_path),
+            cohort_name="demo",
+            database="synthetic",
+            target_outcome="death",
+            user_preferences={"inferred_analysis_family": "association_study"},
+        ),
+        runtime=ra.RuntimeSpec(
+            workdir=str(tmp_path / "runs"),
+            stop_after_analysis=True,
+            enable_literature=False,
+            enable_visual_qa=False,
+            enable_latex=False,
+        ),
+    )
+    pipe = ra.ResearchAgentPipeline(
+        workdir=spec.runtime.workdir,
+        llm=ra.MockLLMClient(),
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+    )
+    result = pipe.run_from_spec(spec)
+    run_dir = Path(result.workdir)
+    assert (run_dir / "experiment_spec.yaml").exists()
+    assert (run_dir / "workflow_graph.json").exists()
+    assert (run_dir / "execution_replay.json").exists()
+    assert (run_dir / "audit_log.jsonl").exists()

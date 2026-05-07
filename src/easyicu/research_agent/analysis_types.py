@@ -16,6 +16,7 @@ inspect. Each analysis type exposes:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from .schema import ResearchContext, VariableRole
@@ -100,6 +101,52 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Explicitly define the prediction horizon and anti-leakage rules.",
         ),
     ),
+    "survival": AnalysisTypeSpec(
+        key="survival",
+        name="Survival / time-to-event analysis",
+        description=(
+            "Model time-to-event outcomes with explicit time zero, censoring, "
+            "and event definitions instead of collapsing them into a binary endpoint."
+        ),
+        trigger_terms=(
+            "survival", "time-to-event", "time to event", "cox", "kaplan", "kaplan-meier",
+            "hazard", "competing risk", "censoring", "follow-up",
+        ),
+        candidate_steps=(
+            "define time zero and follow-up window",
+            "event / censoring audit",
+            "Kaplan-Meier or cumulative-incidence summaries",
+            "Cox or other time-to-event model",
+            "sensitivity checks for censoring and competing risks",
+        ),
+        guardrails=(
+            "Do not reduce a time-to-event question to a fixed binary outcome unless the user explicitly asks for that simplification.",
+            "Make the event definition, censoring mechanism, and follow-up horizon explicit.",
+        ),
+    ),
+    "dynamic_prediction": AnalysisTypeSpec(
+        key="dynamic_prediction",
+        name="Dynamic prediction / early warning",
+        description=(
+            "Update risk estimates over time using longitudinal ICU data, with "
+            "explicit prediction windows and refresh frequency."
+        ),
+        trigger_terms=(
+            "dynamic prediction", "time-updated", "time updated", "early warning",
+            "deterioration", "rolling risk", "horizon", "update frequency",
+        ),
+        candidate_steps=(
+            "define prediction horizon and update cadence",
+            "construct longitudinal feature slices",
+            "anti-leakage audit for time-updated features",
+            "dynamic discrimination and calibration evaluation",
+            "temporal subgroup and drift checks",
+        ),
+        guardrails=(
+            "Do not treat longitudinal forecasting as a static prediction problem.",
+            "Keep prediction time, observation window, and target horizon distinct.",
+        ),
+    ),
     "trajectory_clustering": AnalysisTypeSpec(
         key="trajectory_clustering",
         name="Trajectory clustering / phenotype discovery",
@@ -121,6 +168,52 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
         guardrails=(
             "Do not treat clusters as validated biology without robustness checks.",
             "Make time alignment explicit before comparing trajectories.",
+        ),
+    ),
+    "multimodal": AnalysisTypeSpec(
+        key="multimodal",
+        name="Multimodal clinical modeling",
+        description=(
+            "Combine structured ICU data with notes, waveforms, or imaging while "
+            "making modality alignment and missingness explicit."
+        ),
+        trigger_terms=(
+            "multimodal", "notes", "waveform", "imaging", "image", "text modality",
+            "clinical notes", "fusion", "modality",
+        ),
+        candidate_steps=(
+            "define available modalities and alignment unit",
+            "modality-specific preprocessing audit",
+            "fusion strategy and ablation plan",
+            "missingness and modality-dropout audit",
+            "internal and external evaluation plan",
+        ),
+        guardrails=(
+            "Do not claim multimodal support if only one modality is actually available in the cohort.",
+            "Separate true multimodal modeling from structured-EHR-only baselines.",
+        ),
+    ),
+    "validation": AnalysisTypeSpec(
+        key="validation",
+        name="External validation / score benchmarking",
+        description=(
+            "Validate an existing score or model, compare performance across cohorts, "
+            "and quantify transportability."
+        ),
+        trigger_terms=(
+            "external validation", "externally validate", "validate score", "benchmark", "compare score",
+            "score comparison", "transportability", "reclassification", "net benefit",
+        ),
+        candidate_steps=(
+            "define candidate scores / models and target cohort",
+            "harmonize predictors and outcome definitions",
+            "discrimination / calibration / reclassification evaluation",
+            "subgroup transportability checks",
+            "cross-database or temporal validation summary",
+        ),
+        guardrails=(
+            "Do not present internal training performance as external validation.",
+            "State clearly whether validation is temporal, geographic, or cross-database.",
         ),
     ),
     "treatment_response": AnalysisTypeSpec(
@@ -236,6 +329,30 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
 }
 
 
+_FAMILY_ALIASES: Dict[str, str] = {
+    "prediction": "prediction_model",
+    "prediction_model": "prediction_model",
+    "clustering": "trajectory_clustering",
+    "trajectory_clustering": "trajectory_clustering",
+    "phenotyping": "trajectory_clustering",
+    "association": "association_study",
+    "association_study": "association_study",
+    "survival": "survival",
+    "dynamic_prediction": "dynamic_prediction",
+    "treatment_response": "treatment_response",
+    "causal": "causal_inference",
+    "causal_inference": "causal_inference",
+    "reinforcement_learning": "reinforcement_learning",
+    "rl": "reinforcement_learning",
+    "multimodal": "multimodal",
+    "validation": "validation",
+    "external_validation": "validation",
+    "data_quality": "data_quality_audit",
+    "data_quality_audit": "data_quality_audit",
+    "cross_database_replication": "cross_database_replication",
+}
+
+
 def list_analysis_types() -> List[AnalysisTypeSpec]:
     return list(_REGISTRY.values())
 
@@ -245,7 +362,50 @@ def get_analysis_type(key: str) -> AnalysisTypeSpec:
 
 
 def _question_text(context: ResearchContext) -> str:
-    return (context.research_question or "").lower()
+    parts = [(context.research_question or "").lower()]
+    prefs = context.user_preferences
+    if prefs is not None:
+        parts.extend(
+            [
+                prefs.preferred_methods or "",
+                prefs.evaluation_focus or "",
+                prefs.subgroup_sensitivity or "",
+                prefs.timing_and_design or "",
+                prefs.data_constraints or "",
+                prefs.must_have_outputs or "",
+                prefs.extra_notes or "",
+                " ".join(prefs.covariates or []),
+            ]
+        )
+    return " ".join(part.lower() for part in parts if part).strip()
+
+
+def _keyword_present(text: str, keyword: str) -> bool:
+    kw = (keyword or "").strip().lower()
+    if not kw:
+        return False
+    if any("\u4e00" <= ch <= "\u9fff" for ch in kw):
+        return kw in text
+    flexible = re.escape(kw).replace(r"\ ", r"[\s_-]+")
+    pattern = rf"(?<![a-z0-9]){flexible}(?![a-z0-9])"
+    return re.search(pattern, text) is not None
+
+
+def _preferred_family_key(context: ResearchContext) -> Optional[str]:
+    prefs = context.user_preferences
+    if prefs is None:
+        return None
+    candidates = [
+        prefs.inferred_analysis_family,
+        prefs.starter_template_key,
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        key = _FAMILY_ALIASES.get(candidate.strip().lower())
+        if key and key in _REGISTRY:
+            return key
+    return None
 
 
 def infer_analysis_type(
@@ -254,11 +414,14 @@ def infer_analysis_type(
     primary_predictor: Optional[str] = None,
     target_outcome: Optional[str] = None,
 ) -> AnalysisTypeSpec:
+    preferred = _preferred_family_key(context)
+    if preferred is not None:
+        return _REGISTRY[preferred]
     text = _question_text(context)
 
     def _has_any(key: str, extras: Iterable[str] = ()) -> bool:
         terms = list(_REGISTRY[key].trigger_terms) + list(extras)
-        return any(term in text for term in terms)
+        return any(_keyword_present(text, term) for term in terms)
 
     # Strong, explicit task-family cues should win before softer scoring.
     if _has_any("reinforcement_learning"):
@@ -267,7 +430,15 @@ def infer_analysis_type(
         return _REGISTRY["causal_inference"]
     if _has_any("trajectory_clustering"):
         return _REGISTRY["trajectory_clustering"]
-    if _has_any("prediction_model", extras=("model", "evaluation metric", "evaluation metrics", "validate")):
+    if _has_any("survival"):
+        return _REGISTRY["survival"]
+    if _has_any("dynamic_prediction"):
+        return _REGISTRY["dynamic_prediction"]
+    if _has_any("multimodal"):
+        return _REGISTRY["multimodal"]
+    if _has_any("validation"):
+        return _REGISTRY["validation"]
+    if _has_any("prediction_model", extras=("model", "evaluation metric", "evaluation metrics")):
         return _REGISTRY["prediction_model"]
     if _has_any("data_quality_audit") and not any(
         _has_any(key)
@@ -280,20 +451,30 @@ def infer_analysis_type(
     scores: Dict[str, int] = {key: 0 for key in _REGISTRY}
     for key, spec in _REGISTRY.items():
         for term in spec.trigger_terms:
-            if term in text:
+            if _keyword_present(text, term):
                 scores[key] += 1
 
     if target_outcome and any(v.role == VariableRole.TIME for v in context.variables):
-        scores["prediction_model"] += 1 if "predict" in text or "forecast" in text else 0
-        scores["trajectory_clustering"] += 1 if "trajectory" in text else 0
+        scores["prediction_model"] += 1 if any(_keyword_present(text, term) for term in ("predict", "forecast")) else 0
+        scores["trajectory_clustering"] += 1 if _keyword_present(text, "trajectory") else 0
+        scores["dynamic_prediction"] += 1 if any(_keyword_present(text, term) for term in ("dynamic", "rolling", "updated", "over time")) else 0
+
+    if any(v.role == VariableRole.TIME for v in context.variables):
+        scores["survival"] += 1 if any(_keyword_present(text, term) for term in ("survival", "kaplan", "cox", "censor", "time-to-event")) else 0
+    if any(
+        token in ((v.name or "") + " " + (v.description or "")).lower()
+        for v in context.variables
+        for token in ("note", "text", "waveform", "ecg", "image", "cxr", "ct", "mri")
+    ):
+        scores["multimodal"] += 2
+    if context.cross_database_validation:
+        scores["validation"] += 1
+        scores["cross_database_replication"] += 2
 
     if primary_predictor and target_outcome:
         scores["association_study"] += 2
     elif target_outcome:
         scores["descriptive_epidemiology"] += 1
-
-    if context.cross_database_validation:
-        scores["cross_database_replication"] += 2
 
     best_key = max(scores, key=scores.get)
     if scores[best_key] == 0:
