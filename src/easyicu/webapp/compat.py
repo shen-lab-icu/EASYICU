@@ -25,46 +25,88 @@ def _legacy_width_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+def _dataframe_compat(st_obj: Any, data, **kwargs):
+    """Render a dataframe across Streamlit width API variants."""
+    dataframe_fn = getattr(st_obj, "_easyicu_original_dataframe", st_obj.dataframe)
+    kwargs = _normalize_width_kwargs(dict(kwargs))
+    try:
+        return dataframe_fn(data, **kwargs)
+    except TypeError:
+        if kwargs.get("width") != "stretch":
+            raise
+        return dataframe_fn(data, **_legacy_width_kwargs(dict(kwargs)))
+
+
+def _button_compat(st_obj: Any, label, *args, **kwargs):
+    """Render a button across Streamlit width API variants."""
+    button_fn = getattr(st_obj, "_easyicu_original_button", st_obj.button)
+    kwargs = _normalize_width_kwargs(dict(kwargs))
+    try:
+        return button_fn(label, *args, **kwargs)
+    except TypeError:
+        return button_fn(label, *args, **_legacy_width_kwargs(dict(kwargs)))
+
+
+def _download_button_compat(st_obj: Any, label, data, *args, **kwargs):
+    """Render a download button across Streamlit width API variants."""
+    download_button_fn = getattr(
+        st_obj,
+        "_easyicu_original_download_button",
+        st_obj.download_button,
+    )
+    kwargs = _normalize_width_kwargs(dict(kwargs))
+    try:
+        return download_button_fn(label, data, *args, **kwargs)
+    except TypeError:
+        return download_button_fn(
+            label,
+            data,
+            *args,
+            **_legacy_width_kwargs(dict(kwargs)),
+        )
+
+
+def _form_submit_button_compat(st_obj: Any, label="Submit", *args, **kwargs):
+    """Render a form submit button across Streamlit width API variants."""
+    submit_fn = getattr(
+        st_obj,
+        "_easyicu_original_form_submit_button",
+        st_obj.form_submit_button,
+    )
+    kwargs = _normalize_width_kwargs(dict(kwargs))
+    try:
+        return submit_fn(label, *args, **kwargs)
+    except TypeError:
+        return submit_fn(label, *args, **_legacy_width_kwargs(dict(kwargs)))
+
+
+def _plotly_chart_compat(st_obj: Any, figure_or_data, *args, **kwargs):
+    """Keep Plotly-specific width kwargs untouched."""
+    plotly_chart_fn = getattr(
+        st_obj,
+        "_easyicu_original_plotly_chart",
+        st_obj.plotly_chart,
+    )
+    return plotly_chart_fn(figure_or_data, *args, **kwargs)
+
+
 def apply_streamlit_compat(st: Any) -> None:
     """Apply idempotent Streamlit API shims used by legacy EasyICU pages."""
 
     def dataframe_compat(data, **kwargs):
-        dataframe_fn = getattr(st, "_easyicu_original_dataframe", st.dataframe)
-        kwargs = _normalize_width_kwargs(dict(kwargs))
-        try:
-            return dataframe_fn(data, **kwargs)
-        except TypeError:
-            if kwargs.get("width") != "stretch":
-                raise
-            return dataframe_fn(data, **_legacy_width_kwargs(dict(kwargs)))
+        return _dataframe_compat(st, data, **kwargs)
 
     def button_compat(label, *args, **kwargs):
-        button_fn = getattr(st, "_easyicu_original_button", st.button)
-        kwargs = _normalize_width_kwargs(dict(kwargs))
-        try:
-            return button_fn(label, *args, **kwargs)
-        except TypeError:
-            return button_fn(label, *args, **_legacy_width_kwargs(dict(kwargs)))
+        return _button_compat(st, label, *args, **kwargs)
 
     def download_button_compat(label, data, *args, **kwargs):
-        download_button_fn = getattr(st, "_easyicu_original_download_button", st.download_button)
-        kwargs = _normalize_width_kwargs(dict(kwargs))
-        try:
-            return download_button_fn(label, data, *args, **kwargs)
-        except TypeError:
-            return download_button_fn(label, data, *args, **_legacy_width_kwargs(dict(kwargs)))
+        return _download_button_compat(st, label, data, *args, **kwargs)
 
     def form_submit_button_compat(label="Submit", *args, **kwargs):
-        submit_fn = getattr(st, "_easyicu_original_form_submit_button", st.form_submit_button)
-        kwargs = _normalize_width_kwargs(dict(kwargs))
-        try:
-            return submit_fn(label, *args, **kwargs)
-        except TypeError:
-            return submit_fn(label, *args, **_legacy_width_kwargs(dict(kwargs)))
+        return _form_submit_button_compat(st, label, *args, **kwargs)
 
     def plotly_chart_compat(figure_or_data, *args, **kwargs):
-        plotly_chart_fn = getattr(st, "_easyicu_original_plotly_chart", st.plotly_chart)
-        return plotly_chart_fn(figure_or_data, *args, **kwargs)
+        return _plotly_chart_compat(st, figure_or_data, *args, **kwargs)
 
     if not hasattr(st, "_easyicu_original_dataframe"):
         st._easyicu_original_dataframe = st.dataframe

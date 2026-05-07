@@ -322,9 +322,12 @@ def _init_chat_state():
     """Ensure all chat-related session keys exist."""
     ensure_llm_config_state()
     defaults = {
+        "llm_enabled": False,
         "llm_messages": [],
         "llm_last_tool_events": [],
         "llm_last_verification": None,
+        "_floating_ai_open": False,
+        "_ai_pending_question": None,
         # Background response tracking
         "_ai_bg_responding": False,        # True while LLM is generating in background
         "_ai_bg_response_ready": False,    # True when background response finished

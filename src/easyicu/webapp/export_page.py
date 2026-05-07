@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
@@ -301,7 +303,12 @@ def render_export_page(app_context: dict[str, Any] | None = None):
             select_preview_label = "Select Preview" if lang == 'en' else "选择预览"
             preview_concept = st.selectbox(select_preview_label, concepts_to_export)
             if preview_concept in preview_data:
-                st.dataframe(preview_data[preview_concept].head(20), width="stretch", hide_index=True)
+                _st_dataframe_compat(
+                    st,
+                    preview_data[preview_concept].head(20),
+                    width="stretch",
+                    hide_index=True,
+                )
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 

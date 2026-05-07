@@ -15,8 +15,8 @@ on:
       - ".github/workflows/research_agent_ci.yml"
 
 # T1.1 — research_agent has its own CI gate so a regression in the
-# Python 3.9 wheel of pydantic / pyarrow shows up before it lands in
-# the main suite. The job stays slim: we install only what
+# minimum supported Python/runtime dependency stack shows up before it
+# lands in the main suite. The job stays slim: we install only what
 # research_agent imports (pandas, pydantic, pyarrow, matplotlib,
 # numpy, scipy, pytest) plus the package itself in editable mode.
 jobs:
@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.11"]
+        python-version: ["3.10", "3.11"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

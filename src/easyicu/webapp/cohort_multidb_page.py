@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
@@ -200,7 +202,8 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
                     st.plotly_chart(fig_single, use_container_width=True, config=_get_plotly_chart_config())
                 with col2:
                     st.markdown("**Statistics**" if lang == 'en' else "**统计信息**")
-                    st.dataframe(
+                    _st_dataframe_compat(
+                        st,
                         stats_df.style.format({
                             'Mean': '{:.2f}',
                             'Std': '{:.2f}',

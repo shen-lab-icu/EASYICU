@@ -127,6 +127,7 @@ class CodeRunner:
         timed_out = False
         started = time.monotonic()
         cmd = self.build_command(script_path=script_path)
+        original_cmd = list(cmd)
         try:
             proc = subprocess.run(  # noqa: S603 - intentional, generated script
                 cmd,
@@ -139,6 +140,34 @@ class CodeRunner:
                 errors="replace",
             )
             stdout, stderr, returncode = proc.stdout, proc.stderr, proc.returncode
+            if (
+                returncode != 0
+                and original_cmd
+                and Path(original_cmd[0]).name == "unshare"
+                and sys.platform.startswith("linux")
+                and "unshare failed" in stderr.lower()
+            ):
+                retry_cmd = [self.python_executable, str(script_path)]
+                retry_timeout = max(self.timeout_seconds - (time.monotonic() - started), 1.0)
+                retry_proc = subprocess.run(  # noqa: S603 - intentional, generated script
+                    retry_cmd,
+                    cwd=str(step_dir),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=retry_timeout,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                stdout = retry_proc.stdout
+                stderr = (
+                    "[CodeRunner] unshare network isolation unavailable; "
+                    "retrying without Linux network namespace isolation.\n"
+                    f"[CodeRunner] original stderr:\n{stderr}\n"
+                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
+                )
+                returncode = retry_proc.returncode
+                cmd = retry_cmd
             duration = time.monotonic() - started
         except subprocess.TimeoutExpired as exc:
             stdout = exc.stdout or ""
@@ -152,6 +181,7 @@ class CodeRunner:
                 f"""
                 === step {step_id} ===
                 cmd: {' '.join(cmd)}
+                original_cmd: {' '.join(original_cmd)}
                 cwd: {step_dir}
                 cohort: {self.cohort_parquet}
                 network_policy: {self.network_policy}
