@@ -71,14 +71,16 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
             # 数据库选择
             db_options = ['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic']
             db_labels = {'miiv': 'MIMIC-IV 🟢', 'eicu': 'eICU 🟠', 'aumc': 'Amsterdam 🔵', 'hirid': 'HiRID 🔴', 'mimic': 'MIMIC-III 🟣', 'sic': 'SICdb ⚫'}
-            default_dbs = st.session_state.get('multidb_selected') or [_default_real_database()]
-            selected_dbs = st.multiselect(
-                "🏥 " + ("Databases" if lang == 'en' else "数据库"),
-                options=db_options,
-                default=[db for db in default_dbs if db in db_options] or ['miiv'],
-                format_func=lambda x: db_labels.get(x, x),
-                key="multidb_selected"
-            )
+            multiselect_kwargs = {
+                "label": "🏥 " + ("Databases" if lang == 'en' else "数据库"),
+                "options": db_options,
+                "format_func": lambda x: db_labels.get(x, x),
+                "key": "multidb_selected",
+            }
+            if 'multidb_selected' not in st.session_state:
+                default_dbs = [_default_real_database()]
+                multiselect_kwargs["default"] = [db for db in default_dbs if db in db_options] or ['miiv']
+            selected_dbs = st.multiselect(**multiselect_kwargs)
 
         with col3:
             max_patients = st.number_input(
