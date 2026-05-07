@@ -243,34 +243,34 @@ def convert_to_buckets(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"源文件不存在: {source_path}"
+            error=f"Source file does not exist: {source_path}"
         )
     
     # 准备输出目录
     output_dir = Path(output_dir)
     if output_dir.exists():
         if overwrite:
-            log(f"删除已存在的输出目录: {output_dir}")
+            log(f"Removing existing output directory: {output_dir}")
             shutil.rmtree(output_dir)
         else:
             completed = _completed_bucket_result(output_dir, start_time, [source_path])
             if completed is not None:
-                log(f"分桶目录已完成，跳过转换: {output_dir}")
+                log(f"Bucket directory is complete; skipping conversion: {output_dir}")
                 return completed
             return ConversionResult(
                 success=False, num_buckets=0, total_rows=0,
                 total_size_bytes=0, elapsed_seconds=0,
-                error=f"输出目录已存在但没有可复用的完成标记: {output_dir}"
+                error=f"Output directory exists but has no reusable completion marker: {output_dir}"
             )
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
     try:
-        log(f"开始转换: {source_path.name}")
-        log(f"分桶数: {config.num_buckets}, 分桶列: {config.partition_col}")
-        log(f"内存限制: {config.memory_limit}, 临时目录: {config.temp_directory or '默认'}")
+        log(f"Starting conversion: {source_path.name}")
+        log(f"Buckets: {config.num_buckets}, partition column: {config.partition_col}")
+        log(f"Memory limit: {config.memory_limit}, temp directory: {config.temp_directory or 'default'}")
         if not config.skip_sorting:
-            log("分桶内排序: 启用（提取更快，转换会更慢）")
+            log("In-bucket sorting: enabled (faster extraction, slower conversion)")
         
         conn = duckdb.connect()
         # 并行线程数：0=自动检测CPU核心数
@@ -287,7 +287,7 @@ def convert_to_buckets(
         if config.temp_directory:
             os.makedirs(config.temp_directory, exist_ok=True)
             conn.execute(f"SET temp_directory='{_duckdb_path(config.temp_directory)}'")
-            log(f"临时目录设置为: {config.temp_directory}")
+            log(f"Temp directory set to: {config.temp_directory}")
         
         # 低内存检测：<32GB RAM 时启用保守策略
         total_ram_gb = _get_total_ram_gb()
@@ -298,7 +298,7 @@ def convert_to_buckets(
             duck_mem = f'{max(1, int(total_ram_gb * 0.15))}GB'
             conn.execute(f"SET memory_limit='{duck_mem}'")
             conn.execute(f'SET threads={min(4, os.cpu_count() or 4)}')
-            log(f"低内存模式: {total_ram_gb:.0f}GB RAM, DuckDB {duck_mem}")
+            log(f"Low-memory mode: {total_ram_gb:.0f}GB RAM, DuckDB {duck_mem}")
             
             # 确保设置 temp_directory（DuckDB 溢出用）
             if not config.temp_directory:
@@ -315,7 +315,7 @@ def convert_to_buckets(
             if config.column_types:
                 types_str = ", ".join(f"'{k}': '{v}'" for k, v in config.column_types.items())
                 types_arg = f", types={{{types_str}}}"
-                log(f"强制列类型: {config.column_types}")
+                log(f"Forced column types: {config.column_types}")
             
             # 检测是否需要 latin-1 编码（AUMC 包含 µmol 等特殊字符）
             encoding_arg = ""
@@ -337,14 +337,14 @@ def convert_to_buckets(
                 f"read_csv_auto('{_duckdb_path(source_path)}', "
                 f"ignore_errors=true, null_padding=true{types_arg}{encoding_arg}{parallel_arg})"
             )
-            log(f"源文件类型: CSV{'（gzip压缩）' if source_name.endswith('.gz') else ''}")
+            log(f"Source file type: CSV{' (gzip-compressed)' if source_name.endswith('.gz') else ''}")
         elif source_name.endswith('.parquet'):
-            log("源文件类型: Parquet")
+            log("Source file type: Parquet")
         else:
             return ConversionResult(
                 success=False, num_buckets=0, total_rows=0,
                 total_size_bytes=0, elapsed_seconds=0,
-                error=f"不支持的文件格式: {source_path.suffix}，仅支持 .csv, .csv.gz, .parquet"
+                error=f"Unsupported file format: {source_path.suffix}; supported formats are .csv, .csv.gz, .parquet"
             )
         
         # 🚀 大 CSV 文件两阶段转换优化
@@ -371,8 +371,8 @@ def convert_to_buckets(
             )
             os.close(temp_fd)
             
-            log(f"大文件两阶段转换 ({source_path.stat().st_size / 1e9:.1f}GB)...")
-            log(f"  Stage 1/2: CSV → 单个 Parquet（顺序写入）...")
+            log(f"Large-file two-stage conversion ({source_path.stat().st_size / 1e9:.1f}GB)...")
+            log("  Stage 1/2: CSV -> single Parquet (sequential write)...")
             t_s1 = time.time()
             stage1_count = _copy_row_count(conn.execute(f"""
                 COPY (SELECT * FROM {csv_read_expr})
@@ -384,7 +384,7 @@ def convert_to_buckets(
             s1_time = time.time() - t_s1
             s1_size = os.path.getsize(temp_parquet) / 1e9
             row_info = f", {stage1_count:,} rows" if stage1_count is not None else ""
-            log(f"  Stage 1 完成: {s1_size:.2f}GB{row_info}, {s1_time:.1f}s")
+            log(f"  Stage 1 complete: {s1_size:.2f}GB{row_info}, {s1_time:.1f}s")
             
             read_expr = f"read_parquet('{_duckdb_path(temp_parquet)}')"
         else:
@@ -392,7 +392,7 @@ def convert_to_buckets(
                 read_expr = csv_read_expr
             else:
                 read_expr = f"read_parquet('{_duckdb_path(source_path)}')"
-            log("执行分桶转换...")
+            log("Running bucket conversion...")
         
         try:
             # 计算多趟参数
@@ -402,14 +402,14 @@ def convert_to_buckets(
                 buckets_per_pass = max(5, min(config.num_buckets, int(total_ram_gb * 2)))
                 n_passes = (config.num_buckets + buckets_per_pass - 1) // buckets_per_pass
                 
-                log(f"  Stage 2/2: Parquet → {config.num_buckets} 桶"
-                    f"（{n_passes} 趟, 每趟 {buckets_per_pass} 桶）")
+                log(f"  Stage 2/2: Parquet -> {config.num_buckets} buckets"
+                    f" ({n_passes} passes, {buckets_per_pass} buckets per pass)")
                 row_count_from_copy = 0
                 copy_counts_complete = True
                 for pi in range(n_passes):
                     s = pi * buckets_per_pass
                     e = min(s + buckets_per_pass - 1, config.num_buckets - 1)
-                    log(f"    趟 {pi+1}/{n_passes}: bucket {s}-{e}")
+                    log(f"    Pass {pi+1}/{n_passes}: bucket {s}-{e}")
                     pass_count = _copy_row_count(conn.execute(f"""
                         COPY (
                             SELECT *
@@ -436,7 +436,7 @@ def convert_to_buckets(
                     row_count_from_copy = None
             else:
                 if use_two_stage:
-                    log(f"  Stage 2/2: Parquet → {config.num_buckets} 个分桶...")
+                    log(f"  Stage 2/2: Parquet -> {config.num_buckets} buckets...")
                 sql = f"""
                     COPY (
                         SELECT *,
@@ -481,11 +481,11 @@ def convert_to_buckets(
         sentinel = output_dir / '_COMPLETE'
         sentinel.write_text(f"{row_count},{actual_buckets},{total_size}")
         
-        log(f"转换完成! 耗时: {elapsed:.1f}秒")
-        log(f"总行数: {row_count:,}")
-        log(f"分桶数: {actual_buckets}")
-        log(f"总大小: {total_size / 1024**3:.2f} GB")
-        log(f"平均桶大小: {total_size / max(actual_buckets, 1) / 1024**2:.1f} MB")
+        log(f"Conversion complete. Elapsed: {elapsed:.1f}s")
+        log(f"Total rows: {row_count:,}")
+        log(f"Buckets: {actual_buckets}")
+        log(f"Total size: {total_size / 1024**3:.2f} GB")
+        log(f"Average bucket size: {total_size / max(actual_buckets, 1) / 1024**2:.1f} MB")
         
         return ConversionResult(
             success=True,
@@ -498,7 +498,7 @@ def convert_to_buckets(
         
     except Exception as e:
         elapsed = time.time() - start_time
-        logger.exception("转换失败")
+        logger.exception("Bucket conversion failed")
         try:
             conn.close()
         except Exception:
@@ -548,7 +548,7 @@ def read_from_buckets(
     if itemids:
         # 使用DuckDB hash计算目标桶（与转换时一致）
         target_buckets = _duckdb_hash_batch(itemids, num_buckets)
-        logger.info(f"目标itemid: {len(itemids)}个, 定位到{len(target_buckets)}个桶")
+        logger.info("Target itemids: %d, mapped to %d buckets", len(itemids), len(target_buckets))
         
         # 只读取目标桶
         parquet_files = []
@@ -778,7 +778,7 @@ def convert_parquet_directory_to_buckets(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"源目录不存在: {source_dir}"
+            error=f"Source directory does not exist: {source_dir}"
         )
     
     parquet_files = list(source_dir.glob("*.parquet"))
@@ -786,34 +786,34 @@ def convert_parquet_directory_to_buckets(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"源目录没有 parquet 文件: {source_dir}"
+            error=f"Source directory has no parquet files: {source_dir}"
         )
     
-    log(f"发现 {len(parquet_files)} 个 parquet 文件")
+    log(f"Found {len(parquet_files)} parquet files")
     
     # 准备输出目录
     if output_dir.exists():
         if overwrite:
-            log(f"删除已存在的输出目录: {output_dir}")
+            log(f"Removing existing output directory: {output_dir}")
             shutil.rmtree(output_dir)
         else:
             completed = _completed_bucket_result(output_dir, start_time, parquet_files)
             if completed is not None:
-                log(f"分桶目录已完成，跳过转换: {output_dir}")
+                log(f"Bucket directory is complete; skipping conversion: {output_dir}")
                 return completed
             return ConversionResult(
                 success=False, num_buckets=0, total_rows=0,
                 total_size_bytes=0, elapsed_seconds=0,
-                error=f"输出目录已存在但没有可复用的完成标记: {output_dir}"
+                error=f"Output directory exists but has no reusable completion marker: {output_dir}"
             )
     
     output_dir.mkdir(parents=True, exist_ok=True)
     
     try:
-        log(f"开始转换: {source_dir.name} → {output_dir.name}")
-        log(f"分桶数: {num_buckets}, 分桶列: {partition_col}")
+        log(f"Starting conversion: {source_dir.name} -> {output_dir.name}")
+        log(f"Buckets: {num_buckets}, partition column: {partition_col}")
         if not skip_sorting:
-            log("分桶内排序: 启用（提取更快，转换会更慢）")
+            log("In-bucket sorting: enabled (faster extraction, slower conversion)")
         
         conn = duckdb.connect()
         conn.execute("SET threads=16")
@@ -823,14 +823,14 @@ def convert_parquet_directory_to_buckets(
         temp_dir = output_dir.parent / f".{output_dir.name}_temp"
         temp_dir.mkdir(exist_ok=True)
         conn.execute(f"SET temp_directory='{_duckdb_path(temp_dir)}'")
-        log(f"临时目录: {temp_dir}")
+        log(f"Temp directory: {temp_dir}")
         
         # 使用 glob 读取所有 parquet，union_by_name 处理 schema 差异
         glob_pattern = _duckdb_path(source_dir / "*.parquet")
         read_expr = f"read_parquet('{glob_pattern}', union_by_name=true)"
         
         # 分桶转换
-        log("执行分桶转换 (读取 → 分桶)...")
+        log("Running bucket conversion (read -> bucket)...")
         
         sql = f"""
             COPY (
@@ -874,10 +874,10 @@ def convert_parquet_directory_to_buckets(
         sentinel = output_dir / '_COMPLETE'
         sentinel.write_text(f"{row_count},{actual_buckets},{total_size}")
         
-        log(f"转换完成! 耗时: {elapsed:.1f}秒")
-        log(f"总行数: {row_count:,}")
-        log(f"分桶数: {actual_buckets}")
-        log(f"总大小: {total_size / 1024**3:.2f} GB")
+        log(f"Conversion complete. Elapsed: {elapsed:.1f}s")
+        log(f"Total rows: {row_count:,}")
+        log(f"Buckets: {actual_buckets}")
+        log(f"Total size: {total_size / 1024**3:.2f} GB")
         
         return ConversionResult(
             success=True,
@@ -890,7 +890,7 @@ def convert_parquet_directory_to_buckets(
         
     except Exception as e:
         elapsed = time.time() - start_time
-        logger.exception("转换失败")
+        logger.exception("Bucket conversion failed")
         try:
             conn.close()
         except Exception:
@@ -969,7 +969,7 @@ def convert_miiv_chartevents(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"未找到 chartevents 源文件，已检查:\n  - {csv_gz}\n  - {parquet}"
+            error=f"chartevents source file not found; checked:\n  - {csv_gz}\n  - {parquet}"
         )
     
     # 输出到同级目录的 _bucket 目录
@@ -1033,7 +1033,7 @@ def convert_eicu_nursecharting(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"未找到 nursecharting 源文件，已检查:\n  - {csv_gz}\n  - {parquet_dir}/"
+            error=f"nursecharting source file not found; checked:\n  - {csv_gz}\n  - {parquet_dir}/"
         )
 
 
@@ -1078,7 +1078,7 @@ def convert_miiv_labevents(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"未找到 labevents 源文件，已检查:\n  - {csv_gz}\n  - {parquet}\n  - {parquet_dir}/"
+            error=f"labevents source file not found; checked:\n  - {csv_gz}\n  - {parquet}\n  - {parquet_dir}/"
         )
     
     output = data_path / 'labevents_bucket'
@@ -1136,7 +1136,7 @@ def convert_eicu_lab(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"未找到 lab 源文件，已检查:\n  - {csv_gz}\n  - {parquet}\n  - {parquet_dir}/"
+            error=f"lab source file not found; checked:\n  - {csv_gz}\n  - {parquet}\n  - {parquet_dir}/"
         )
     
     config = BucketConfig(
@@ -1182,7 +1182,7 @@ def convert_miiv_inputevents(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"未找到 inputevents 源文件，已检查:\n  - {csv_gz}\n  - {parquet}"
+            error=f"inputevents source file not found; checked:\n  - {csv_gz}\n  - {parquet}"
         )
     
     config = BucketConfig(
@@ -1220,7 +1220,7 @@ def convert_hirid_pharma(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"pharma 目录不存在: {source}"
+            error=f"pharma directory does not exist: {source}"
         )
     
     return convert_parquet_directory_to_buckets(
@@ -1262,7 +1262,7 @@ def convert_mimic3_chartevents(
         return ConversionResult(
             success=True, num_buckets=num_buckets, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"分桶目录已存在: {bucket_dir}"
+            error=f"Bucket directory already exists: {bucket_dir}"
         )
     
     # 查找源文件
@@ -1277,7 +1277,7 @@ def convert_mimic3_chartevents(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"chartevents 不存在于 {data_path}"
+            error=f"chartevents does not exist in {data_path}"
         )
     
     # 🔧 关键修复: 强制 VALUE 列为 VARCHAR
@@ -1314,7 +1314,7 @@ def convert_mimic3_labevents(
         return ConversionResult(
             success=True, num_buckets=num_buckets, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"分桶目录已存在: {bucket_dir}"
+            error=f"Bucket directory already exists: {bucket_dir}"
         )
     
     source = None
@@ -1328,7 +1328,7 @@ def convert_mimic3_labevents(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"labevents 不存在于 {data_path}"
+            error=f"labevents does not exist in {data_path}"
         )
     
     config = BucketConfig(
@@ -1364,7 +1364,7 @@ def convert_sic_data_float_h(
         return ConversionResult(
             success=True, num_buckets=num_buckets, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"分桶目录已存在: {bucket_dir}"
+            error=f"Bucket directory already exists: {bucket_dir}"
         )
     
     source = None
@@ -1378,7 +1378,7 @@ def convert_sic_data_float_h(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"data_float_h 不存在于 {data_path}"
+            error=f"data_float_h does not exist in {data_path}"
         )
     
     config = BucketConfig(
@@ -1412,7 +1412,7 @@ def convert_sic_laboratory(
         return ConversionResult(
             success=True, num_buckets=num_buckets, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"分桶目录已存在: {bucket_dir}"
+            error=f"Bucket directory already exists: {bucket_dir}"
         )
     
     source = None
@@ -1426,7 +1426,7 @@ def convert_sic_laboratory(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"laboratory 不存在于 {data_path}"
+            error=f"laboratory does not exist in {data_path}"
         )
     
     config = BucketConfig(
@@ -1460,7 +1460,7 @@ def convert_sic_medication(
         return ConversionResult(
             success=True, num_buckets=num_buckets, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"分桶目录已存在: {bucket_dir}"
+            error=f"Bucket directory already exists: {bucket_dir}"
         )
     
     source = None
@@ -1474,7 +1474,7 @@ def convert_sic_medication(
         return ConversionResult(
             success=False, num_buckets=0, total_rows=0,
             total_size_bytes=0, elapsed_seconds=0,
-            error=f"medication 不存在于 {data_path}"
+            error=f"medication does not exist in {data_path}"
         )
     
     config = BucketConfig(

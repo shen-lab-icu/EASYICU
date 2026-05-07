@@ -150,7 +150,7 @@ def test_completed_single_file_bucket_conversion_is_not_reused_when_source_is_ne
     )
 
     assert not second.success
-    assert "没有可复用的完成标记" in (second.error or "")
+    assert "no reusable completion marker" in (second.error or "")
 
 
 def test_large_csv_low_memory_two_stage_conversion_uses_copy_counts(
