@@ -555,6 +555,10 @@ def _run_suite(
     reuse_existing: bool = False,
 ) -> Dict[str, Any]:
     llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
+    from easyicu.research_agent import (  # type: ignore
+        default_icu_agent_bench_suite,
+        icu_agent_bench_markdown,
+    )
     scores: List[Dict[str, Any]] = []
     for item in items:
         scores.append(
@@ -578,6 +582,7 @@ def _run_suite(
         "items": [it.key for it in items],
         "scores": scores,
         "totals": totals,
+        "icu_agent_bench_suite": default_icu_agent_bench_suite().model_dump(mode="json"),
     }
     (out_root / "bench_results.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
@@ -588,6 +593,15 @@ def _run_suite(
         "",
     ]
     (out_root / "bench_results.md").write_text("\n".join(header) + md, encoding="utf-8")
+    suite = default_icu_agent_bench_suite()
+    (out_root / "icu_agent_bench_suite.json").write_text(
+        suite.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    (out_root / "icu_agent_bench_suite.md").write_text(
+        icu_agent_bench_markdown(suite),
+        encoding="utf-8",
+    )
     return payload
 
 

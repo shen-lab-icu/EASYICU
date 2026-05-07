@@ -10,6 +10,7 @@ import streamlit as st
 
 
 ProviderInfo = tuple[str, str, str, bool, str, str]
+INTERNAL_PROVIDER_KEYS = {"easyicu_hosted"}
 
 
 def hosted_base_url() -> str:
@@ -24,6 +25,11 @@ def hosted_base_url() -> str:
 def default_provider_key() -> str:
     """Prefer hosted mode when a hosted relay URL is configured."""
     return "easyicu_hosted" if hosted_base_url() else "openrouter"
+
+
+def public_default_provider_key() -> str:
+    """Default provider exposed in end-user UI surfaces."""
+    return "openrouter"
 
 
 PROVIDERS: Dict[str, ProviderInfo] = {
@@ -131,6 +137,24 @@ def needs_api_key(provider: str) -> bool:
 
 def provider_defaults(provider: str) -> ProviderInfo:
     return PROVIDERS.get(provider, PROVIDERS["custom"])
+
+
+def is_internal_provider(provider: str) -> bool:
+    return provider in INTERNAL_PROVIDER_KEYS
+
+
+def public_provider_keys() -> list[str]:
+    return [key for key in PROVIDERS.keys() if key not in INTERNAL_PROVIDER_KEYS]
+
+
+def coerce_public_provider(provider: str) -> str:
+    if is_internal_provider(provider):
+        return public_default_provider_key()
+    return provider if provider in PROVIDERS else "custom"
+
+
+def public_provider_defaults(provider: str) -> ProviderInfo:
+    return provider_defaults(coerce_public_provider(provider))
 
 
 def is_configured() -> bool:

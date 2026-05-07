@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -61,6 +62,7 @@ from easyicu.webapp.llm_config import (
     is_configured as is_shared_llm_configured,
     provider_defaults as shared_llm_provider_defaults,
 )
+from easyicu.webapp.data_paths import _directory_input
 from easyicu.webapp.page_header import render_page_header
 from easyicu.webapp.session_state import clear_run_state
 
@@ -221,6 +223,22 @@ def _display_path(path: Path) -> str:
         return str(path.relative_to(Path.cwd()))
     except Exception:
         return str(path)
+
+
+def _placeholder_path(name: str) -> str:
+    if sys.platform.startswith("win"):
+        return f"D:\\path\\to\\{name.replace('/', '\\\\')}"
+    return f"/path/to/{name}"
+
+
+def _hide_prefilled_directory_text(input_key: str, mirrored_value: str) -> None:
+    pending_key = f"{input_key}__pending_value"
+    current = str(st.session_state.get(input_key, "") or "")
+    if pending_key in st.session_state:
+        return
+    looks_like_abs = current.startswith("/") or bool(re.match(r"^[A-Za-z]:[\\/]", current)) or current.startswith("~")
+    if looks_like_abs or (mirrored_value and current == str(mirrored_value)):
+        st.session_state[input_key] = ""
 
 
 def _detect_id_columns(columns: Sequence[str]) -> List[str]:
@@ -628,6 +646,7 @@ def _run_pipeline(
     workdir: Path,
     llm,
     disable_icu_context: bool,
+    user_preferences: Optional[Dict[str, Any]] = None,
     notes: Optional[str] = None,
     stop_after_analysis: bool = False,
     resume_run_id: Optional[str] = None,
@@ -650,6 +669,8 @@ def _run_pipeline(
         kwargs["target_outcome"] = target_outcome
     if notes:
         kwargs["notes"] = notes
+    if user_preferences:
+        kwargs["user_preferences"] = user_preferences
     if resume_run_id:
         kwargs["resume_run_id"] = resume_run_id
     kwargs["stop_after_analysis"] = stop_after_analysis
@@ -709,6 +730,7 @@ def _render_figures(run_dir: Path, manifest: Dict[str, Any]) -> None:
     if not figs:
         st.info(_ra_text("no_figures"))
         return
+    raster_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
     cols = st.columns(2)
     for i, rec in enumerate(figs):
         path = run_dir / rec.get("relative_path", "")
@@ -716,10 +738,14 @@ def _render_figures(run_dir: Path, manifest: Dict[str, Any]) -> None:
             continue
         caption = f"{rec.get('description', '')} — sha256: {rec.get('sha256', '')[:8]}"
         with cols[i % 2]:
-            try:
-                st.image(str(path), caption=caption, use_container_width=True)
-            except Exception:
-                st.image(str(path), caption=caption)
+            if path.suffix.lower() in raster_exts:
+                try:
+                    st.image(str(path), caption=caption, use_container_width=True)
+                except Exception:
+                    st.image(str(path), caption=caption)
+            else:
+                st.markdown(f"**{caption}**")
+                st.caption(str(path))
 
 
 def _render_run_outputs(result, run_dir: Path) -> None:
@@ -985,12 +1011,22 @@ def _section_cohort_picker(
                 index=1,
                 key="research_agent_module_dir_pick",
             )
-        folder_text = st.text_input(
-            _ra_text("module_folder"),
-            value=manual_default if picked_label in {"", _ra_text("manual_path")} else str(dirs[dir_labels.index(picked_label)]),
-            key="research_agent_module_dir_text",
-            help=_ra_text("module_folder_help"),
+        selected_folder_value = (
+            str(dirs[dir_labels.index(picked_label)])
+            if dir_labels and picked_label not in {"", _ra_text("manual_path")}
+            else manual_default
         )
+        _hide_prefilled_directory_text("research_agent_module_dir_text", selected_folder_value)
+        folder_text = _directory_input(
+            _ra_text("module_folder"),
+            value=selected_folder_value,
+            input_key="research_agent_module_dir_text",
+            button_key="research_agent_module_dir_browse",
+            placeholder=_placeholder_path("easyicu_export/miiv"),
+            help=_ra_text("module_folder_help"),
+            show_value=False,
+        )
+        folder_text = folder_text or selected_folder_value
         folder = Path(folder_text).expanduser().resolve() if folder_text else None
         if folder is None or not folder.exists() or not folder.is_dir():
             st.info(_ra_text("choose_module_folder"))
@@ -1179,16 +1215,26 @@ def _section_cohort_picker(
             index=0,
             key="research_agent_extract_db",
         )
-        data_path = st.text_input(
+        _hide_prefilled_directory_text("research_agent_extract_data_path", st.session_state.get("data_path", ""))
+        default_output_dir = st.session_state.get("export_path", str(Path.home() / "easyicu_export" / f"{db}_research_agent"))
+        _hide_prefilled_directory_text("research_agent_extract_output_dir", default_output_dir)
+        data_path = _directory_input(
             _ra_text("raw_path"),
             value=st.session_state.get("data_path", ""),
-            key="research_agent_extract_data_path",
-        )
-        output_dir = st.text_input(
+            input_key="research_agent_extract_data_path",
+            button_key="research_agent_extract_data_path_browse",
+            placeholder=_placeholder_path(db),
+            show_value=False,
+        ) or st.session_state.get("data_path", "")
+        output_dir = _directory_input(
             _ra_text("output_folder"),
-            value=st.session_state.get("export_path", str(Path.home() / "easyicu_export" / f"{db}_research_agent")),
-            key="research_agent_extract_output_dir",
+            value=default_output_dir,
+            input_key="research_agent_extract_output_dir",
+            button_key="research_agent_extract_output_dir_browse",
+            placeholder=_placeholder_path("easyicu_export"),
+            show_value=False,
         )
+        output_dir = output_dir or default_output_dir
         default_modules = [
             m for m in ["demographics", "outcome", "sofa2_score", "sepsis3_sofa2", "vitals", "blood_gas"]
             if m in modules
@@ -1263,71 +1309,461 @@ def _section_cohort_picker(
     return df, f"workspace:{chosen}"
 
 
-def _section_skill_picker(handles: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Render the skill / question / outcome inputs.
-
-    Returns ``(skill_key, free_form_question, target_outcome)``. At
-    most one of ``skill_key`` and ``free_form_question`` will be set.
-    """
-    skills = handles["list_skills"]()
-    free_choice = _ra_text("free_question_choice")
-    skill_choices = [free_choice] + [
-        f"{s.key} — {s.description}" for s in skills
+def _request_examples() -> List[Dict[str, str]]:
+    """Detailed request templates shown in the unified request box."""
+    lang = st.session_state.get("language", "en")
+    if lang == "zh":
+        return [
+            {
+                "key": "prediction",
+                "label": "预测模型",
+                "summary": "风险预测、早期预警、死亡/并发症/LOS 预测",
+                "outcome": "death",
+                "prompt": (
+                    "请基于年龄、性别、SOFA-2、乳酸、MAP、血管活性药物使用和肌酐构建 ICU 死亡预测模型；"
+                    "使用训练/测试集划分，报告 AUROC、Brier score、校准情况和主要变量系数，"
+                    "并输出可发表的多面板图。"
+                ),
+            },
+            {
+                "key": "clustering",
+                "label": "表型/聚类分析",
+                "summary": "患者分群、亚型发现、stay-level 聚类",
+                "outcome": "death",
+                "prompt": (
+                    "请根据 SOFA-2、乳酸、MAP、心率、肌酐和血管活性药物使用对 ICU 患者做聚类分析，"
+                    "总结每个簇的人数、主要生理特征和死亡率差异，并输出可发表的聚类结果图。"
+                ),
+            },
+            {
+                "key": "association",
+                "label": "相关性分析",
+                "summary": "危险因素、预后因素、暴露-结局关联",
+                "outcome": "death",
+                "prompt": (
+                    "请分析入 ICU 时 SOFA-2 与 ICU 死亡的关系；先做队列描述、结局发生率和缺失值审计，"
+                    "再做多变量 logistic 回归，报告 OR、95% CI 和可发表图。"
+                ),
+            },
+            {
+                "key": "survival",
+                "label": "生存/时间到事件分析",
+                "summary": "时间到死亡、时间到拔机、时间到出 ICU",
+                "outcome": "death",
+                "prompt": (
+                    "请针对 ICU 患者开展时间到事件分析，研究入 ICU 时 SOFA-2、乳酸和血流动力学指标与 28 天死亡的关系；"
+                    "明确 time zero、删失处理、Kaplan-Meier/累计发生率展示和 Cox 或其他合适模型。"
+                ),
+            },
+            {
+                "key": "dynamic_prediction",
+                "label": "动态预测/早期预警",
+                "summary": "基于时序数据的持续风险更新",
+                "outcome": "death",
+                "prompt": (
+                    "请设计一个 ICU 动态预测分析，基于生命体征、实验室和支持治疗的时序变化，"
+                    "持续预测未来 24 小时内病情恶化或死亡风险，并说明时间窗、更新频率和评估指标。"
+                ),
+            },
+            {
+                "key": "treatment",
+                "label": "治疗反应/比较效果",
+                "summary": "用药、通气、RRT、输血等干预效果研究",
+                "outcome": "death",
+                "prompt": (
+                    "请评估血管活性药物使用与 ICU 死亡和乳酸清除的关系，明确时间对齐、潜在混杂、"
+                    "亚组差异和稳健性分析方案，并给出推荐的分析流程。"
+                ),
+            },
+            {
+                "key": "causal",
+                "label": "因果分析",
+                "summary": "目标试验模拟、ATE/CATE、倾向评分/加权",
+                "outcome": "death",
+                "prompt": (
+                    "请把早期使用血管活性药物对 ICU 死亡的影响表述成目标试验框架，定义纳入标准、time zero、"
+                    "治疗策略、混杂因素、positivity 检查和主要效应估计方案。"
+                ),
+            },
+            {
+                "key": "rl",
+                "label": "强化学习",
+                "summary": "序贯治疗策略、液体/升压药/呼吸机决策优化",
+                "outcome": "death",
+                "prompt": (
+                    "请设计一个用于 ICU 血流动力学管理的强化学习分析方案，明确 state、action、reward、"
+                    "轨迹构建、离策略评估和安全约束，并输出推荐的研究流程。"
+                ),
+            },
+            {
+                "key": "multimodal",
+                "label": "多模态建模",
+                "summary": "结构化 EHR + 病历文本 + 波形/影像",
+                "outcome": "death",
+                "prompt": (
+                    "请设计一个 ICU 多模态分析，融合结构化 EHR、病历文本以及可用波形或影像信息，"
+                    "用于死亡或恶化风险预测，并明确各模态的数据准备、对齐、缺失处理和评估方案。"
+                ),
+            },
+            {
+                "key": "validation",
+                "label": "外部验证/评分比较",
+                "summary": "模型外部验证、校准、跨库可迁移性、评分比较",
+                "outcome": "death",
+                "prompt": (
+                    "请比较 SOFA-2、qSOFA、SAPS-II 或自建模型在 ICU 死亡预测中的表现，"
+                    "重点评估区分度、校准、亚组表现和跨数据库外部验证方案。"
+                ),
+            },
+            {
+                "key": "data_quality",
+                "label": "数据质量/缺失值/映射审计",
+                "summary": "概念覆盖、缺失、单位、时间对齐、跨库一致性",
+                "outcome": "death",
+                "prompt": (
+                    "请先把这批 ICU 数据作为数据质量审计任务处理，系统评估缺失值、变量覆盖、单位范围、"
+                    "时间戳一致性以及跨模块映射问题，并输出适合研究前复核的图表和结论。"
+                ),
+            },
+        ]
+    return [
+        {
+            "key": "prediction",
+            "label": "Prediction model",
+            "summary": "Risk prediction, early warning, mortality/LOS/complication prediction",
+            "outcome": "death",
+            "prompt": (
+                "Build an ICU mortality prediction model using age, sex, SOFA-2, lactate, MAP, vasopressor use, "
+                "and creatinine; use an explicit train/test split, report AUROC, Brier score, calibration, "
+                "key coefficients, and generate a publication-ready multi-panel figure."
+            ),
+        },
+        {
+            "key": "clustering",
+            "label": "Phenotyping / clustering",
+            "summary": "Patient grouping, subphenotypes, stay-level clustering",
+            "outcome": "death",
+            "prompt": (
+                "Cluster ICU patients using SOFA-2, lactate, MAP, heart rate, creatinine, and vasopressor use; "
+                "summarize cluster size, physiologic profiles, and mortality differences, and generate a "
+                "publication-ready clustering figure."
+            ),
+        },
+        {
+            "key": "association",
+            "label": "Association",
+            "summary": "Risk factors, prognosis, exposure-outcome association",
+            "outcome": "death",
+            "prompt": (
+                "Analyze whether admission SOFA-2 is associated with ICU mortality; include cohort summary, "
+                "outcome incidence, missingness audit, multivariable logistic regression, odds ratios with "
+                "95% confidence intervals, and a publication-ready figure."
+            ),
+        },
+        {
+            "key": "survival",
+            "label": "Survival / time-to-event",
+            "summary": "Time to death, extubation, discharge, or other event",
+            "outcome": "death",
+            "prompt": (
+                "Run a time-to-event analysis in ICU patients to study how admission SOFA-2, lactate, and hemodynamic variables "
+                "relate to 28-day mortality, making time zero, censoring, Kaplan-Meier or cumulative-incidence plots, and Cox-style "
+                "or other appropriate models explicit."
+            ),
+        },
+        {
+            "key": "dynamic_prediction",
+            "label": "Dynamic prediction / early warning",
+            "summary": "Time-updated risk estimation from longitudinal ICU data",
+            "outcome": "death",
+            "prompt": (
+                "Design a dynamic ICU prediction analysis that updates the risk of deterioration or death over the next 24 hours "
+                "using longitudinal vital signs, laboratory values, and support therapies, and specify the time window, update "
+                "frequency, and evaluation metrics."
+            ),
+        },
+        {
+            "key": "treatment",
+            "label": "Treatment response / comparative effectiveness",
+            "summary": "Drug, ventilation, RRT, transfusion, or other intervention effects",
+            "outcome": "death",
+            "prompt": (
+                "Evaluate the relationship between vasopressor use and ICU mortality plus lactate clearance, "
+                "making timing alignment, confounding, subgroup heterogeneity, and robustness checks explicit, "
+                "then recommend the analysis workflow."
+            ),
+        },
+        {
+            "key": "causal",
+            "label": "Causal inference",
+            "summary": "Target-trial emulation, ATE/CATE, weighting, and bias checks",
+            "outcome": "death",
+            "prompt": (
+                "Frame early vasopressor use versus no early vasopressor use as a target-trial emulation for ICU mortality, "
+                "defining eligibility, time zero, treatment strategies, confounders, positivity diagnostics, and the main "
+                "effect-estimation strategy."
+            ),
+        },
+        {
+            "key": "rl",
+            "label": "Reinforcement learning",
+            "summary": "Sequential treatment policy optimization",
+            "outcome": "death",
+            "prompt": (
+                "Design a reinforcement-learning analysis for ICU hemodynamic management, specifying state, action, reward, "
+                "trajectory assembly, off-policy evaluation, and safety constraints, and return the recommended study workflow."
+            ),
+        },
+        {
+            "key": "multimodal",
+            "label": "Multimodal modeling",
+            "summary": "Structured EHR + notes + waveforms/imaging",
+            "outcome": "death",
+            "prompt": (
+                "Design a multimodal ICU analysis that combines structured EHR data, clinical notes, and any available waveforms "
+                "or imaging to predict mortality or deterioration, explicitly covering preprocessing, modality alignment, missingness, "
+                "and evaluation."
+            ),
+        },
+        {
+            "key": "validation",
+            "label": "External validation / score benchmarking",
+            "summary": "Transportability, calibration, and score comparison across cohorts",
+            "outcome": "death",
+            "prompt": (
+                "Compare SOFA-2, qSOFA, SAPS-II, or a custom model for ICU mortality prediction, focusing on discrimination, "
+                "calibration, subgroup performance, and an external-validation plan across databases."
+            ),
+        },
+        {
+            "key": "data_quality",
+            "label": "Data-quality / missingness / harmonization audit",
+            "summary": "Coverage, missingness, units, timing, and cross-database consistency",
+            "outcome": "death",
+            "prompt": (
+                "Treat this as an ICU data-quality audit first: assess missingness, concept coverage, unit/range issues, temporal "
+                "consistency, and cross-module mapping problems, then generate review-ready tables and figures."
+            ),
+        },
     ]
-    pick = st.selectbox(_ra_text("skill_pick"), skill_choices, index=1 if skills else 0,
-                        key="research_agent_skill_pick")
-    if pick == free_choice:
-        question = st.text_area(
-            _ra_text("question"),
-            value="Is admission SOFA-2 score associated with ICU mortality?",
-            help=_ra_text("question_help"),
-            key="research_agent_question",
-        )
-        target_outcome = st.text_input(
-            _ra_text("target_outcome"), value="death",
-            help=_ra_text("target_outcome_help"),
-            key="research_agent_target_outcome",
-        )
-        return None, question.strip() or None, target_outcome.strip() or None
-
-    skill_key = pick.split(" — ", 1)[0]
-    skill = handles["get_skill"](skill_key)
-    st.caption(_ra_text(
-        "skill_caption",
-        skill=skill.key,
-        outcome=skill.target_outcome,
-        predictor=skill.primary_predictor,
-        variables=", ".join(skill.expected_variables),
-    ))
-    return skill_key, None, None
 
 
-def _section_method_preferences() -> str:
+def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
+    """Render one unified request box with detailed example prompts."""
+    examples = _request_examples()
+    st.caption(_ra_text("request_intro"))
+    st.markdown(_ra_text("request_capabilities"))
+
+    choice_labels = [_ra_text("starter_none")] + [f"{ex['label']} — {ex['summary']}" for ex in examples]
+    selected = st.selectbox(
+        _ra_text("starter_template"),
+        choice_labels,
+        index=0,
+        key="research_agent_template_pick",
+        help=_ra_text("starter_template_help"),
+    )
+    selected_example = None
+    if selected != choice_labels[0]:
+        selected_example = examples[choice_labels.index(selected) - 1]
+        st.session_state["research_agent_template_current"] = selected_example["key"]
+        c1, c2 = st.columns([5, 1.4])
+        with c1:
+            st.caption(_ra_text("starter_selected", label=selected_example["label"], summary=selected_example["summary"]))
+        with c2:
+            if st.button(_ra_text("use_template"), key=f"research_agent_apply_{selected_example['key']}", use_container_width=True):
+                st.session_state["research_agent_question"] = selected_example["prompt"]
+                st.session_state["research_agent_target_outcome"] = selected_example.get("outcome", "")
+                st.session_state["research_agent_example_active"] = selected_example["label"]
+                st.session_state["research_agent_example_key"] = selected_example["key"]
+                st.rerun()
+    else:
+        st.session_state["research_agent_template_current"] = None
+
+    question = st.text_area(
+        _ra_text("question"),
+        value=st.session_state.get("research_agent_question", ""),
+        help=_ra_text("question_help"),
+        key="research_agent_question",
+        height=180,
+    )
+    target_outcome = st.text_input(
+        _ra_text("target_outcome_optional"),
+        value=st.session_state.get("research_agent_target_outcome", ""),
+        help=_ra_text("target_outcome_optional_help"),
+        key="research_agent_target_outcome",
+    )
+    active = st.session_state.get("research_agent_example_active")
+    if active:
+        st.info(_ra_text("example_loaded", example=active))
+    return question.strip() or None, target_outcome.strip() or None
+
+
+def _infer_request_family(question: Optional[str]) -> str:
+    text = (question or "").strip().lower()
+    if not text:
+        return "general"
+
+    def _keyword_present(keyword: str) -> bool:
+        kw = (keyword or "").strip().lower()
+        if not kw:
+            return False
+        if any("\u4e00" <= ch <= "\u9fff" for ch in kw):
+            return kw in text
+        flexible = re.escape(kw).replace(r"\ ", r"[\s_-]+")
+        pattern = rf"(?<![a-z0-9]){flexible}(?![a-z0-9])"
+        return re.search(pattern, text) is not None
+
+    keyword_map = [
+        ("reinforcement_learning", ["reinforcement learning", "rl", "policy", "state", "action", "reward", "强化学习", "策略学习"]),
+        ("causal_inference", ["target trial", "causal", "ate", "cate", "iptw", "propensity", "因果", "目标试验", "倾向评分"]),
+        ("trajectory_clustering", ["cluster", "clustering", "phenotype", "subphenotype", "latent class", "亚型", "分群", "聚类", "表型"]),
+        ("dynamic_prediction", ["dynamic", "time-updated", "early warning", "deterioration", "未来", "动态预测", "早期预警", "恶化"]),
+        ("survival", ["survival", "time-to-event", "cox", "kaplan", "competing risk", "生存", "时间到事件", "删失"]),
+        ("validation", ["external validation", "externally validate", "validate score", "score comparison", "benchmark", "transportability", "外部验证", "评分比较", "跨库验证"]),
+        ("prediction_model", ["predict", "prediction", "auc", "auroc", "calibration", "brier", "预测", "风险评分", "预警模型"]),
+        ("treatment_response", ["treatment", "therapy", "vasopressor", "ventilation", "rrt", "drug", "response", "治疗", "药物", "通气", "升压药"]),
+        ("multimodal", ["multimodal", "notes", "waveform", "imaging", "text", "多模态", "病历文本", "波形", "影像"]),
+        ("data_quality", ["missingness", "harmonization", "mapping", "coverage", "unit", "quality", "缺失值", "映射", "覆盖", "数据质量"]),
+        ("association", ["associate", "association", "odds ratio", "hazard ratio", "risk factor", "prognostic", "相关", "关联", "危险因素", "预后"]),
+    ]
+    for family, keywords in keyword_map:
+        if any(_keyword_present(k) for k in keywords):
+            return family
+    return "general"
+
+
+def _template_family_hint() -> Optional[str]:
+    key = st.session_state.get("research_agent_template_current") or st.session_state.get("research_agent_example_key")
+    if not key:
+        return None
+    mapping = {
+        "prediction": "prediction_model",
+        "clustering": "trajectory_clustering",
+        "association": "association",
+        "survival": "survival",
+        "dynamic_prediction": "dynamic_prediction",
+        "treatment_response": "treatment_response",
+        "causal": "causal_inference",
+        "rl": "reinforcement_learning",
+        "multimodal": "multimodal",
+        "validation": "validation",
+        "data_quality": "data_quality",
+    }
+    return mapping.get(str(key))
+
+
+def _section_method_preferences(
+    question: Optional[str],
+    target_outcome: Optional[str],
+) -> Tuple[str, Dict[str, Any]]:
     """Collect optional analysis preferences and render them as run notes."""
-    method_options = [
-        "Logistic regression",
-        "Train/test split + AUC + Brier + calibration",
-        "Random forest",
-        "Cox PH",
-        "Propensity score",
-        "Missingness audit",
-    ]
-    methods = st.multiselect(
-        _ra_text("methods"),
-        method_options,
-        default=[
-            "Logistic regression",
-            "Train/test split + AUC + Brier + calibration",
-            "Missingness audit",
-        ],
-        key="research_agent_method_preferences",
+    lang = st.session_state.get("language", "en")
+    family = _infer_request_family(question) if (question or "").strip() else (_template_family_hint() or "general")
+    family_text = {
+        "zh": {
+            "general": ("当前问题的方法空间可能较宽。", "例如：限定主要结局、指定是否需要分层分析、敏感性分析、外部验证、或只先出 protocol。"),
+            "prediction_model": ("当前更像预测模型问题。", "例如：train/test split 或 bootstrap、AUROC、Brier score、calibration、decision curve、SHAP。"),
+            "trajectory_clustering": ("当前更像聚类/表型问题。", "例如：标准化方式、聚类算法、簇数选择、稳定性评估、簇间结局比较。"),
+            "association": ("当前更像相关性/预后问题。", "例如：主要暴露、主要模型、协变量调整、亚组分析、稳健性分析。"),
+            "survival": ("当前更像生存/时间到事件问题。", "例如：time zero、删失规则、Kaplan-Meier、Cox、竞争风险。"),
+            "dynamic_prediction": ("当前更像动态预测/早期预警问题。", "例如：预测时间窗、更新频率、时间切片、时序特征工程、动态校准。"),
+            "treatment_response": ("当前更像治疗反应/比较效果问题。", "例如：暴露定义、治疗时间对齐、混杂控制、异质性分析、稳健性检查。"),
+            "causal_inference": ("当前更像因果分析问题。", "例如：target trial、纳入标准、time zero、倾向评分/加权、balance、敏感性分析。"),
+            "reinforcement_learning": ("当前更像强化学习问题。", "例如：state/action/reward、轨迹构建、离策略评估、安全约束。"),
+            "multimodal": ("当前更像多模态建模问题。", "例如：各模态对齐、缺失处理、融合策略、模态消融和外部验证。"),
+            "validation": ("当前更像外部验证/评分比较问题。", "例如：判别度、校准、重分类、亚组表现、跨库迁移。"),
+            "data_quality": ("当前更像数据质量/缺失值审计问题。", "例如：缺失模式、单位与范围检查、时间戳一致性、概念映射和跨库 harmonization。"),
+        },
+        "en": {
+            "general": ("This request could map to several study families.", "For example: constrain the primary outcome, ask for subgroup analyses, sensitivity analyses, external validation, or protocol-first planning."),
+            "prediction_model": ("This looks like a prediction-model request.", "For example: train/test split or bootstrap, AUROC, Brier score, calibration, decision curve, SHAP."),
+            "trajectory_clustering": ("This looks like a clustering / phenotyping request.", "For example: scaling strategy, clustering algorithm, number-of-clusters rule, stability assessment, outcome comparison across clusters."),
+            "association": ("This looks like an association / prognosis request.", "For example: primary exposure, main model, covariate adjustment, subgroup analysis, robustness checks."),
+            "survival": ("This looks like a survival / time-to-event request.", "For example: time zero, censoring rules, Kaplan-Meier, Cox, competing risks."),
+            "dynamic_prediction": ("This looks like a dynamic-prediction request.", "For example: prediction horizon, update frequency, temporal slicing, longitudinal feature engineering, dynamic calibration."),
+            "treatment_response": ("This looks like a treatment-response / comparative-effectiveness request.", "For example: exposure definition, treatment timing alignment, confounding control, heterogeneity analysis, robustness checks."),
+            "causal_inference": ("This looks like a causal-inference request.", "For example: target-trial framing, eligibility, time zero, propensity/weighting, balance, sensitivity analyses."),
+            "reinforcement_learning": ("This looks like a reinforcement-learning request.", "For example: state/action/reward, trajectory assembly, off-policy evaluation, safety constraints."),
+            "multimodal": ("This looks like a multimodal-modeling request.", "For example: modality alignment, missing-data handling, fusion strategy, modality ablation, external validation."),
+            "validation": ("This looks like an external-validation / score-benchmarking request.", "For example: discrimination, calibration, reclassification, subgroup performance, transportability."),
+            "data_quality": ("This looks like a data-quality / missingness audit request.", "For example: missingness patterns, unit/range checks, timestamp consistency, concept mapping, and harmonization."),
+        },
+    }
+    headline, hint = family_text["zh" if lang == "zh" else "en"].get(
+        family,
+        family_text["zh" if lang == "zh" else "en"]["general"],
+    )
+    st.caption(headline)
+    st.info(hint)
+
+    method_pref = st.text_area(
+        _ra_text("methods_freeform"),
+        value=st.session_state.get("research_agent_method_preferences_text", ""),
+        height=90,
+        key="research_agent_method_preferences_text",
         help=_ra_text("methods_help"),
+        placeholder=hint,
     )
-    covariates = st.text_input(
-        _ra_text("covariates"),
-        value=st.session_state.get("research_agent_covariates", "age, sex"),
-        key="research_agent_covariates",
+    evaluation_focus = st.text_area(
+        _ra_text("evaluation_focus"),
+        value=st.session_state.get("research_agent_evaluation_focus", ""),
+        height=80,
+        key="research_agent_evaluation_focus",
+        help=_ra_text("evaluation_focus_help"),
     )
+    subgroup_sensitivity = st.text_area(
+        _ra_text("subgroup_sensitivity"),
+        value=st.session_state.get("research_agent_subgroup_sensitivity", ""),
+        height=80,
+        key="research_agent_subgroup_sensitivity",
+        help=_ra_text("subgroup_sensitivity_help"),
+    )
+    timing_design = st.text_area(
+        _ra_text("timing_design"),
+        value=st.session_state.get("research_agent_timing_design", ""),
+        height=80,
+        key="research_agent_timing_design",
+        help=_ra_text("timing_design_help"),
+    )
+    data_constraints = st.text_area(
+        _ra_text("data_constraints"),
+        value=st.session_state.get("research_agent_data_constraints", ""),
+        height=70,
+        key="research_agent_data_constraints",
+        help=_ra_text("data_constraints_help"),
+    )
+    must_have_outputs = st.text_area(
+        _ra_text("must_have_outputs"),
+        value=st.session_state.get("research_agent_must_have_outputs", ""),
+        height=70,
+        key="research_agent_must_have_outputs",
+        help=_ra_text("must_have_outputs_help"),
+    )
+
+    covariate_families = {
+        "association",
+        "survival",
+        "prediction_model",
+        "treatment_response",
+        "causal_inference",
+        "validation",
+    }
+    covariate_placeholders = {
+        "association": "e.g. age, sex, baseline severity, comorbidity burden",
+        "survival": "e.g. age, sex, baseline severity, treatment status",
+        "prediction_model": "Optional if you want to force certain predictors or adjustment variables",
+        "treatment_response": "e.g. age, sex, indication severity, prior organ support",
+        "causal_inference": "e.g. confounders measured before treatment assignment",
+        "validation": "Optional if score recalibration or subgroup adjustment is needed",
+    }
+    covariates = ""
+    if family in covariate_families:
+        covariates = st.text_input(
+            _ra_text("covariates"),
+            value=st.session_state.get("research_agent_covariates", ""),
+            key="research_agent_covariates",
+            placeholder=covariate_placeholders.get(family, ""),
+        )
     extra = st.text_area(
         _ra_text("extra_notes"),
         value="",
@@ -1335,13 +1771,37 @@ def _section_method_preferences() -> str:
         key="research_agent_extra_notes",
     )
     notes: List[str] = []
-    if methods:
-        notes.append("User method preferences: " + "; ".join(methods))
+    if method_pref.strip():
+        notes.append("User method preferences: " + method_pref.strip())
+    if evaluation_focus.strip():
+        notes.append("User evaluation focus: " + evaluation_focus.strip())
+    if subgroup_sensitivity.strip():
+        notes.append("User subgroup/sensitivity preferences: " + subgroup_sensitivity.strip())
+    if timing_design.strip():
+        notes.append("User timing/design constraints: " + timing_design.strip())
+    if data_constraints.strip():
+        notes.append("User data constraints: " + data_constraints.strip())
+    if must_have_outputs.strip():
+        notes.append("User must-have outputs: " + must_have_outputs.strip())
+    if target_outcome and target_outcome.strip():
+        notes.append("User target outcome override: " + target_outcome.strip())
     if covariates.strip():
         notes.append("User requested covariates: " + covariates.strip())
     if extra.strip():
         notes.append("User notes: " + extra.strip())
-    return "\n".join(notes)
+    prefs: Dict[str, Any] = {
+        "inferred_analysis_family": family,
+        "starter_template_key": st.session_state.get("research_agent_template_current") or st.session_state.get("research_agent_example_key"),
+        "preferred_methods": method_pref.strip() or None,
+        "evaluation_focus": evaluation_focus.strip() or None,
+        "subgroup_sensitivity": subgroup_sensitivity.strip() or None,
+        "timing_and_design": timing_design.strip() or None,
+        "data_constraints": data_constraints.strip() or None,
+        "must_have_outputs": must_have_outputs.strip() or None,
+        "covariates": [c.strip() for c in covariates.split(",") if c.strip()],
+        "extra_notes": extra.strip() or None,
+    }
+    return "\n".join(notes), prefs
 
 
 def _section_llm_picker(handles: Dict[str, Any]) -> Tuple[str, str, str, Optional[str], Optional[Dict[str, str]]]:
@@ -1364,21 +1824,30 @@ def _section_llm_picker(handles: Dict[str, Any]) -> Tuple[str, str, str, Optiona
     mock_choice = _ra_text("llm_mock")
     sidebar_choice = _ra_text("llm_sidebar")
     override_choice = _ra_text("llm_override")
+    shared_provider = st.session_state.get("llm_provider", "")
+    sidebar_hosted_blocked = shared_provider == "easyicu_hosted"
     options = [mock_choice]
     sdk_ok = handles["OpenAIClient"] is not None
     if sdk_ok:
-        options = [sidebar_choice, mock_choice, override_choice]
+        options = [mock_choice, override_choice] if sidebar_hosted_blocked else [sidebar_choice, mock_choice, override_choice]
     else:
         st.caption(_ra_text("sdk_missing"))
     if st.session_state.get("research_agent_llm_choice") not in (None, *options):
         st.session_state.pop("research_agent_llm_choice", None)
-    default_index = 0 if sdk_ok and is_shared_llm_configured() else options.index(mock_choice)
+    default_index = (
+        options.index(sidebar_choice)
+        if sdk_ok and not sidebar_hosted_blocked and is_shared_llm_configured()
+        else options.index(mock_choice)
+    )
     choice = st.radio(
         _ra_text("llm_client"),
         options,
         index=default_index,
         key="research_agent_llm_choice",
     )
+
+    if sidebar_hosted_blocked:
+        st.info(_ra_text("hosted_blocked"))
 
     if choice == mock_choice:
         return "MockLLMClient (offline, deterministic)", "", "", None, None
@@ -1510,6 +1979,8 @@ def _section_llm_picker(handles: Dict[str, Any]) -> Tuple[str, str, str, Optiona
 
 def _section_options() -> Tuple[bool, str, bool]:
     cols = st.columns(3)
+    default_workdir = str((Path.cwd() / "research_output" / "webapp").resolve())
+    _hide_prefilled_directory_text("research_agent_workdir", default_workdir)
     with cols[0]:
         disable_icu_context = st.checkbox(
             _ra_text("disable_context"),
@@ -1528,12 +1999,15 @@ def _section_options() -> Tuple[bool, str, bool]:
             key="research_agent_stop_after",
         )
     with cols[2]:
-        workdir_text = st.text_input(
+        workdir_text = _directory_input(
             _ra_text("workdir"),
-            value=str((Path.cwd() / "research_output" / "webapp").resolve()),
-            key="research_agent_workdir",
+            value=default_workdir,
+            input_key="research_agent_workdir",
+            button_key="research_agent_workdir_browse",
+            placeholder=_placeholder_path("research_output/webapp"),
+            show_value=False,
         )
-    return disable_icu_context, workdir_text, stop_choice == stop_options[0]
+    return disable_icu_context, (workdir_text or default_workdir), stop_choice == stop_options[0]
 
 
 def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
@@ -1558,9 +2032,9 @@ def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
         (
             "03",
             "Analysis pack" if is_en else "分析包",
-            "Table 1, missingness audit, AUROC, Brier, calibration, findings"
+            "Family-specific tables, figures, diagnostics, and findings"
             if is_en else
-            "表 1、缺失审计、AUROC、Brier、校准、结果发现",
+            "按研究类型生成表格、图、诊断指标和结果发现",
             "",
         ),
         (
@@ -1600,10 +2074,10 @@ def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
         for row in table_rows
     )
     manuscript = (
-        "Among Sepsis-3 ICU stays, the analysis pack suggested clinically meaningful mortality risk separation. "
+        "In this prediction-style example, the analysis pack suggested clinically meaningful mortality risk separation. "
         "The draft is only generated after reviewing cohort balance, missingness, discrimination, and calibration."
         if is_en else
-        "在 Sepsis-3 ICU 队列中，分析包显示死亡风险存在具有临床意义的分层。只有在复核队列构成、缺失、区分度和校准后，才进入文章生成。"
+        "在这个“预测型”示例中，分析包显示死亡风险存在具有临床意义的分层。只有在复核队列构成、缺失、区分度和校准后，才进入文章生成。"
     )
     st.markdown(
         f"""
@@ -1694,9 +2168,9 @@ def render_research_agent_demo_page() -> None:
     overview_items = [
         (
             "Study plan" if is_en else "研究方案",
-            "Question -> cohort, exposure, outcome, covariates, and analysis steps."
+            "Question -> study family, cohort, design constraints, target variables, outputs, and analysis steps."
             if is_en else
-            "把问题转成队列、暴露、结局、协变量和分析步骤。"
+            "把问题转成研究类型、队列、设计约束、目标变量、输出要求和分析步骤。"
         ),
         (
             "Data recipe" if is_en else "数据配方",
@@ -1706,9 +2180,9 @@ def render_research_agent_demo_page() -> None:
         ),
         (
             "Analysis pack" if is_en else "分析包",
-            "Tables, figures, missingness audit, model metrics, calibration, and findings."
+            "Tables, figures, family-specific diagnostics, and findings."
             if is_en else
-            "表格、图、缺失审计、模型指标、校准曲线和结果摘要。"
+            "表格、图、与研究类型相匹配的诊断指标和结果摘要。"
         ),
         (
             "Manuscript draft" if is_en else "文章初稿",
@@ -1725,9 +2199,9 @@ def render_research_agent_demo_page() -> None:
 
     st.divider()
     example_title = (
-        "Example: sepsis mortality prediction"
+        "Example workflow (prediction use case)"
         if is_en else
-        "示例：脓毒症患者死亡预测"
+        "示例工作流（预测型用例）"
     )
     st.markdown(f"### {example_title}")
 
@@ -1780,7 +2254,7 @@ def render_research_agent_demo_page() -> None:
             "1. 选择已有 stay-level 文件、EasyICU 模块导出文件夹，或走“尚未准备数据”的提取路径。",
             "2. Customize methods, covariates, cohort filters, and output stopping point."
             if is_en else
-            "2. 定制方法、协变量、队列筛选和停止点。",
+            "2. 定制方法、评估重点、时间设计、数据约束、队列筛选和停止点。",
             "3. Run analysis first, review tables and figures, then decide whether to draft a manuscript."
             if is_en else
             "3. 先跑分析并查看表格/图，再决定是否生成文章。"
@@ -1819,15 +2293,11 @@ def render_research_agent_page() -> None:
         return
 
     with st.expander(_ra_text("step1_title"), expanded=True):
-        skill_key, free_question, target_outcome = _section_skill_picker(handles)
+        free_question, target_outcome = _section_request_picker()
+        skill_key = None
     with st.expander(_ra_text("step2_title"), expanded=False):
-        method_notes = _section_method_preferences()
+        method_notes, user_preferences = _section_method_preferences(free_question, target_outcome)
     question_hint = free_question
-    if skill_key and question_hint is None:
-        try:
-            question_hint = handles["get_skill"](skill_key).question_for(database="webapp")
-        except Exception:
-            question_hint = None
     with st.expander(_ra_text("step3_title"), expanded=True):
         cohort, cohort_label = _section_cohort_picker(research_question=question_hint)
     with st.expander(_ra_text("step4_title"), expanded=False):
@@ -1911,6 +2381,7 @@ def render_research_agent_page() -> None:
                 workdir=workdir,
                 llm=llm,
                 disable_icu_context=disable_icu_context,
+                user_preferences=user_preferences,
                 notes=method_notes,
                 stop_after_analysis=stop_after_analysis,
                 resume_run_id=resume_run_id if force_manuscript else None,

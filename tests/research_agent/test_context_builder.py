@@ -117,6 +117,25 @@ def test_default_time_windows_attached(ra):
     assert {"first_24h", "first_6h", "full_stay"} <= names
 
 
+def test_temporal_constraints_and_provenance_are_attached(ra):
+    df = pd.DataFrame({
+        "stay_id": [1, 2],
+        "age": [60.0, 70.0],
+        "death": [0, 1],
+        "lact": [2.0, 4.5],
+    })
+    ctx = ra.build_research_context(
+        research_question="Assess AKI within 48h after ICU admission and worst lactate before vasopressor.",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="death",
+    )
+    assert ctx.temporal_constraints, "temporal semantics should be parsed into deterministic constraints"
+    assert any(c.relation == "within_after" for c in ctx.temporal_constraints)
+    assert "resolver" in ctx.cohort.provenance
+
+
 def test_n_patients_distinct_from_n_stays(ra):
     """If two rows share the same stay_id, n_patients < n_stays."""
     df = pd.DataFrame({

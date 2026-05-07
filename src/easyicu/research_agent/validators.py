@@ -915,10 +915,200 @@ class StatisticalValidator:
         return findings
 
 
+class ClinicalConstraintValidator:
+    """ICU-specific semantic warnings over planned and executed analyses."""
+
+    name = "clinical_constraint_validator"
+
+    def audit(
+        self,
+        *,
+        context: ResearchContext,
+        step: AnalysisStep,
+        out_dir: Path,
+        step_summary: Dict[str, Any],
+    ) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        family = (
+            (context.user_preferences.inferred_analysis_family or "").lower()
+            if context.user_preferences else ""
+        )
+        question = (context.research_question or "").lower()
+        timing = (
+            (context.user_preferences.timing_and_design or "").lower()
+            if context.user_preferences and context.user_preferences.timing_and_design
+            else ""
+        )
+        combined = " ".join(
+            filter(
+                None,
+                [question, timing, (step.intent or "").lower(), json.dumps(step_summary, ensure_ascii=False).lower()],
+            )
+        )
+
+        if (
+            family in {"causal_inference", "treatment_response", "reinforcement_learning"}
+            or any(term in combined for term in ("target trial", "treatment", "vasopressor", "intervention"))
+        ):
+            if not any(term in combined for term in ("time zero", "time-zero", "eligibility", "anchor", "alignment")):
+                findings.append(ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        "Treatment-effect style analysis without an explicit time-zero or alignment description "
+                        "risks immortal time bias. Document eligibility, anchor time, and treatment assignment timing."
+                    ),
+                    detail={"analysis_family": family or "unspecified"},
+                ))
+            if "post-treatment" in combined:
+                findings.append(ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        "A post-treatment variable appears in the analysis description. "
+                        "Confirm this is not conditioning on a mediator or downstream treatment effect."
+                    ),
+                ))
+
+        if family == "survival" or any(term in combined for term in ("survival", "cox", "kaplan", "hazard")):
+            if any(term in combined for term in ("length of stay", "los", "discharge")) and "competing" not in combined:
+                findings.append(ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        "Length-of-stay or discharge-oriented survival analyses often require a competing-risks framing. "
+                        "Consider discharge/death competition explicitly rather than a single-event survival model."
+                    ),
+                ))
+            if "time-varying" in combined and "landmark" not in combined and "time updated" not in combined:
+                findings.append(ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        "Time-varying covariates are mentioned without an explicit handling strategy. "
+                        "Specify landmarking, time-updated modeling, or another deterministic design."
+                    ),
+                ))
+
+        return findings
+
+
+class StatisticalGuard:
+    """Broader statistical QA checks beyond per-step numerical consistency."""
+
+    name = "statistical_guard"
+
+    def audit(
+        self,
+        *,
+        context: ResearchContext,
+        cohort_path: Path,
+        step: AnalysisStep,
+        out_dir: Path,
+        step_summary: Dict[str, Any],
+    ) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        family = (
+            (context.user_preferences.inferred_analysis_family or "").lower()
+            if context.user_preferences else ""
+        )
+        df = pd.read_parquet(cohort_path)
+
+        if family == "prediction_model" or (out_dir / "model_performance_train_test.csv").exists():
+            perf_csv = out_dir / "model_performance_train_test.csv"
+            if not perf_csv.exists():
+                findings.append(ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        "Prediction-model style analysis did not emit held-out performance artefacts. "
+                        "Report train/test (or equivalent validation) performance before publication."
+                    ),
+                ))
+            else:
+                try:
+                    perf = pd.read_csv(perf_csv)
+                    if "calibration_slope" not in perf.columns:
+                        findings.append(ValidationFinding(
+                            validator=self.name,
+                            severity="warning",
+                            message="Prediction model performance is missing calibration_slope.",
+                        ))
+                except Exception as exc:
+                    findings.append(ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=f"Could not parse {perf_csv.name}: {exc}",
+                    ))
+            if not any(k in step_summary for k in ("n_train", "n_test", "split_strategy")):
+                findings.append(ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        "Prediction analysis did not document a train/test split or equivalent validation scheme. "
+                        "Guard against leakage by recording split_strategy, n_train, and n_test."
+                    ),
+                ))
+            if context.target_outcome and context.target_outcome in df.columns:
+                try:
+                    events = int(pd.to_numeric(df[context.target_outcome], errors="coerce").fillna(0).astype(int).sum())
+                except Exception:
+                    events = 0
+                requested_covariates = len(getattr(context.user_preferences, "covariates", []) or [])
+                if requested_covariates > 0 and events < max(10, 10 * requested_covariates):
+                    findings.append(ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=(
+                            f"Only {events} events were available for {requested_covariates} requested adjustment covariates. "
+                            "This may be an events-per-variable problem for a stable prediction model."
+                        ),
+                        detail={"events": events, "requested_covariates": requested_covariates},
+                    ))
+
+        if family == "survival" or any(term in (step.intent or "").lower() for term in ("survival", "cox", "kaplan", "hazard")):
+            step_text = json.dumps(step_summary, ensure_ascii=False).lower()
+            if "cox" in step_text or "cox" in (step.method or "").lower():
+                documented = any(
+                    token in step_text
+                    for token in ("ph_assumption", "proportional hazards", "schoenfeld")
+                )
+                documented = documented or any("ph" in p.name.lower() and p.suffix.lower() in {".csv", ".json", ".txt"} for p in out_dir.iterdir())
+                if not documented:
+                    findings.append(ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message="Cox-style survival analysis did not document a proportional-hazards assumption check.",
+                    ))
+
+        for csv_path in [p for p in out_dir.iterdir() if p.suffix.lower() == ".csv"]:
+            try:
+                tab = pd.read_csv(csv_path)
+            except Exception:
+                continue
+            pval_cols = [c for c in tab.columns if c.lower() in {"p", "p_value", "pvalue", "pval"}]
+            adjust_cols = [c for c in tab.columns if c.lower() in {"q_value", "adjusted_p", "p_adj", "padj", "fdr"}]
+            if pval_cols and len(tab) > 1 and not adjust_cols:
+                findings.append(ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        f"Table '{csv_path.name}' contains multiple p-values without an adjusted-p / q-value column. "
+                        "If this is a family of simultaneous tests, control multiplicity explicitly."
+                    ),
+                    detail={"table": csv_path.name, "p_value_columns": pval_cols},
+                ))
+                break
+
+        return findings
+
+
 __all__ = [
     "CohortAuditor",
     "ConceptUsageAuditor",
     "LLMConceptAuditor",
     "parse_llm_concept_audit_response",
     "StatisticalValidator",
+    "ClinicalConstraintValidator",
+    "StatisticalGuard",
 ]

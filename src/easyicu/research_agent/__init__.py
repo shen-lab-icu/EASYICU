@@ -64,8 +64,22 @@ __all__ = [
     "ConceptDescriptor",
     "CohortDescriptor",
     "TimeWindow",
+    "TemporalConstraint",
     "AnalysisStep",
     "AnalysisPlan",
+    "EvidenceRef",
+    "ConceptRef",
+    "ClinicalSemanticsResolution",
+    "DataExtractionRequest",
+    "DataExtractionResult",
+    "StatisticalAnalysisRequest",
+    "StatisticalAnalysisResult",
+    "VisualizationRequest",
+    "VisualizationResult",
+    "ManuscriptDraftPacket",
+    "CritiqueReport",
+    "ReflectionMemoryEntry",
+    "AgentRuntimeState",
     "EvidenceRecord",
     "AnalysisManifest",
     "PipelineResult",
@@ -81,6 +95,23 @@ __all__ = [
     # ICU rules
     "ICU_RULES",
     "VariableKind",
+    # Architecture / temporal semantics / experiment specs
+    "SystemLayer",
+    "AgentRole",
+    "ArchitectureProfile",
+    "default_architecture_profile",
+    "architecture_profile_markdown",
+    "ConceptValidationLayer",
+    "TemporalAlignmentEngine",
+    "ICUEpisodeResolver",
+    "EpisodeResolution",
+    "TimeWindowSemanticParser",
+    "ExperimentSpec",
+    "CohortInputSpec",
+    "RuntimeSpec",
+    "load_experiment_spec",
+    "dump_experiment_spec",
+    "build_pipeline_from_spec",
     # LLM
     "LLMClient",
     "MockLLMClient",
@@ -89,6 +120,13 @@ __all__ = [
     # Agents
     "PlannerAgent",
     "ReplannerAgent",
+    "ClinicalSemanticsAgent",
+    "DataExtractionAgent",
+    "StatisticalAnalysisAgent",
+    "VisualizationAgent",
+    "ManuscriptAgent",
+    "CriticAgent",
+    "RuntimeSupervisor",
     "CoderAgent",
     "AnalyzerAgent",
     "WriterAgent",
@@ -99,6 +137,8 @@ __all__ = [
     "RunResult",
     "CohortAuditor",
     "StatisticalValidator",
+    "ClinicalConstraintValidator",
+    "StatisticalGuard",
     "ConceptUsageAuditor",
     "LLMConceptAuditor",
     "VisualQAAuditor",
@@ -134,6 +174,13 @@ __all__ = [
     "infer_analysis_type",
     "planner_analysis_type_guide",
     "analysis_type_catalog_markdown",
+    "ICUAgentBenchMetricSpec",
+    "ICUAgentBenchTask",
+    "ICUAgentBenchSuite",
+    "ICUAgentBenchTaskResult",
+    "ICUAgentBenchReport",
+    "default_icu_agent_bench_suite",
+    "icu_agent_bench_markdown",
     # Memory
     "RunMemory",
     # LaTeX
@@ -155,6 +202,15 @@ __all__ = [
     "CostMeter",
     "MeteredClient",
     "CostRecord",
+    "AuditEvent",
+    "AuditLogger",
+    "WorkflowGraph",
+    "WorkflowNode",
+    "WorkflowEdge",
+    "ExecutionReplayBundle",
+    "build_workflow_graph",
+    "render_workflow_graph_mermaid",
+    "build_execution_replay",
     # Pipeline
     "ResearchAgentPipeline",
     # Prompt pack provenance
@@ -168,8 +224,22 @@ from .schema import (
     ConceptDescriptor,
     CohortDescriptor,
     TimeWindow,
+    TemporalConstraint,
     AnalysisStep,
     AnalysisPlan,
+    EvidenceRef,
+    ConceptRef,
+    ClinicalSemanticsResolution,
+    DataExtractionRequest,
+    DataExtractionResult,
+    StatisticalAnalysisRequest,
+    StatisticalAnalysisResult,
+    VisualizationRequest,
+    VisualizationResult,
+    ManuscriptDraftPacket,
+    CritiqueReport,
+    ReflectionMemoryEntry,
+    AgentRuntimeState,
     EvidenceRecord,
     AnalysisManifest,
     PipelineResult,
@@ -185,6 +255,34 @@ def __getattr__(name: str):
     the module installed does not pull in pandas-heavy code paths or
     optional LLM SDKs unless the user actually uses them.
     """
+    if name in {
+        "SystemLayer",
+        "AgentRole",
+        "ArchitectureProfile",
+        "default_architecture_profile",
+        "architecture_profile_markdown",
+    }:
+        from . import architecture as _architecture
+        return getattr(_architecture, name)
+    if name in {
+        "ConceptValidationLayer",
+        "TemporalAlignmentEngine",
+        "ICUEpisodeResolver",
+        "EpisodeResolution",
+        "TimeWindowSemanticParser",
+    }:
+        from . import temporal_semantics as _temporal
+        return getattr(_temporal, name)
+    if name in {
+        "ExperimentSpec",
+        "CohortInputSpec",
+        "RuntimeSpec",
+        "load_experiment_spec",
+        "dump_experiment_spec",
+        "build_pipeline_from_spec",
+    }:
+        from . import experiment_spec as _spec
+        return getattr(_spec, name)
     if name in {
         "build_research_context",
         "build_naive_research_context",
@@ -204,7 +302,20 @@ def __getattr__(name: str):
     if name in {"LLMClient", "MockLLMClient", "OpenAIClient", "LLMRouter"}:
         from . import llm as _llm
         return getattr(_llm, name)
-    if name in {"PlannerAgent", "ReplannerAgent", "CoderAgent", "AnalyzerAgent", "WriterAgent"}:
+    if name in {
+        "PlannerAgent",
+        "ReplannerAgent",
+        "ClinicalSemanticsAgent",
+        "DataExtractionAgent",
+        "StatisticalAnalysisAgent",
+        "VisualizationAgent",
+        "ManuscriptAgent",
+        "CriticAgent",
+        "RuntimeSupervisor",
+        "CoderAgent",
+        "AnalyzerAgent",
+        "WriterAgent",
+    }:
         from . import agents as _agents
         return getattr(_agents, name)
     if name in {"PROMPT_PACK_VERSION", "prompt_pack_files"}:
@@ -227,11 +338,26 @@ def __getattr__(name: str):
     if name in {
         "CohortAuditor",
         "StatisticalValidator",
+        "ClinicalConstraintValidator",
+        "StatisticalGuard",
         "ConceptUsageAuditor",
         "LLMConceptAuditor",
     }:
         from . import validators as _validators
         return getattr(_validators, name)
+    if name in {
+        "AuditEvent",
+        "AuditLogger",
+        "WorkflowGraph",
+        "WorkflowNode",
+        "WorkflowEdge",
+        "ExecutionReplayBundle",
+        "build_workflow_graph",
+        "render_workflow_graph_mermaid",
+        "build_execution_replay",
+    }:
+        from . import runtime_artifacts as _runtime_artifacts
+        return getattr(_runtime_artifacts, name)
     if name in {"VisualQAAuditor", "VLMVisualQAAdapter"}:
         from . import visual_qa as _visual_qa
         return getattr(_visual_qa, name)
@@ -282,6 +408,17 @@ def __getattr__(name: str):
     }:
         from . import analysis_types as _analysis_types
         return getattr(_analysis_types, name)
+    if name in {
+        "ICUAgentBenchMetricSpec",
+        "ICUAgentBenchTask",
+        "ICUAgentBenchSuite",
+        "ICUAgentBenchTaskResult",
+        "ICUAgentBenchReport",
+        "default_icu_agent_bench_suite",
+        "icu_agent_bench_markdown",
+    }:
+        from . import icu_agent_bench as _icu_agent_bench
+        return getattr(_icu_agent_bench, name)
     if name == "RunMemory":
         from .memory import RunMemory
         return RunMemory

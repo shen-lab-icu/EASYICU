@@ -27,6 +27,7 @@ checks for every task.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Callable, Dict, List, Optional, Sequence
 
 import pandas as pd
@@ -154,8 +155,42 @@ def _question_text(context: ResearchContext) -> str:
     return (context.research_question or "").lower()
 
 
+def _preference_rationale_note(context: ResearchContext) -> Optional[str]:
+    prefs = context.user_preferences
+    if prefs is None:
+        return None
+    fragments: List[str] = []
+    if prefs.preferred_methods:
+        fragments.append(f"Respect stated methods: {prefs.preferred_methods}.")
+    if prefs.evaluation_focus:
+        fragments.append(f"Prioritize evaluation focus: {prefs.evaluation_focus}.")
+    if prefs.subgroup_sensitivity:
+        fragments.append(f"Include subgroup/sensitivity requests: {prefs.subgroup_sensitivity}.")
+    if prefs.timing_and_design:
+        fragments.append(f"Honor timing/design constraints: {prefs.timing_and_design}.")
+    if prefs.data_constraints:
+        fragments.append(f"Honor data constraints: {prefs.data_constraints}.")
+    if prefs.must_have_outputs:
+        fragments.append(f"Must-have outputs: {prefs.must_have_outputs}.")
+    if prefs.covariates:
+        fragments.append("User-specified covariates: " + ", ".join(prefs.covariates) + ".")
+    if prefs.extra_notes:
+        fragments.append(f"Additional user notes: {prefs.extra_notes}.")
+    return " ".join(fragments) or None
+
+
 def _contains_hint(text: str, hints: Sequence[str]) -> bool:
-    return any(hint in text for hint in hints)
+    def _present(hint: str) -> bool:
+        token = (hint or "").strip().lower()
+        if not token:
+            return False
+        if any("\u4e00" <= ch <= "\u9fff" for ch in token):
+            return token in text
+        flexible = re.escape(token).replace(r"\ ", r"[\s_-]+")
+        pattern = rf"(?<![a-z0-9]){flexible}(?![a-z0-9])"
+        return re.search(pattern, text) is not None
+
+    return any(_present(hint) for hint in hints)
 
 
 def _candidate_descriptors(
@@ -343,6 +378,8 @@ def build_dynamic_core_plan_steps(
 ) -> List[AnalysisStep]:
     variables = list(candidate_variables or [v.name for v in context.variables if v.role != VariableRole.ID])
     steps: List[AnalysisStep] = []
+    preference_note = _preference_rationale_note(context)
+    combined_rationale = " ".join(part for part in (rationale_note, preference_note) if part)
     analysis_type = (
         get_analysis_type(analysis_type_key)
         if analysis_type_key
@@ -412,12 +449,140 @@ def build_dynamic_core_plan_steps(
             )
         return steps
 
+    if analysis_type.key in {"prediction_model", "trajectory_clustering"}:
+        if should_include_table_one(
+            context,
+            primary_predictor=primary_predictor,
+            target_outcome=target_outcome,
+            candidate_variables=variables,
+        ):
+            steps.append(
+                AnalysisStep(
+                    step_id="01_table_one",
+                    intent=(
+                        f"Cohort summary (Table 1) for the {scope_label} to document the analytic population."
+                    ),
+                    inputs=variables,
+                    expected_outputs=["table:table_one"],
+                    method="descriptive",
+                    icu_rule_refs=["aggregation_rule_for"],
+                )
+            )
+        if target_outcome and should_include_outcome_incidence(
+            context,
+            primary_predictor=primary_predictor,
+            target_outcome=target_outcome,
+        ):
+            steps.append(
+                AnalysisStep(
+                    step_id="02_outcome_incidence",
+                    intent=f"Outcome incidence for {target_outcome} before the advanced {analysis_type.name.lower()} workflow.",
+                    inputs=[target_outcome],
+                    expected_outputs=["table:outcome_incidence", "statistic:outcome_rate"],
+                    method="incidence",
+                )
+            )
+        if should_include_missingness_audit(
+            context,
+            primary_predictor=primary_predictor,
+            target_outcome=target_outcome,
+            candidate_variables=variables,
+        ):
+            steps.append(
+                AnalysisStep(
+                    step_id="03_missingness_audit",
+                    intent=(
+                        f"Missingness audit before the advanced {analysis_type.name.lower()} workflow."
+                    ),
+                    inputs=variables,
+                    expected_outputs=["table:missingness", "figure:missingness_heatmap"],
+                    method="missingness",
+                    icu_rule_refs=["missingness_kind"],
+                )
+            )
+        if analysis_type.key == "prediction_model":
+            steps.append(
+                AnalysisStep(
+                    step_id="04_prediction_model_analysis",
+                    intent=(
+                        "Develop and evaluate a deterministic ICU mortality prediction model with "
+                        "explicit train/test separation, leakage safeguards, discrimination, and calibration."
+                        + (f" {combined_rationale}" if combined_rationale else "")
+                    ),
+                    inputs=variables,
+                    expected_outputs=[
+                        "table:model_performance_train_test",
+                        "table:model_coefficients",
+                        "table:risk_predictions_test",
+                        "figure:roc_curve",
+                        "figure:calibration_curve",
+                        "statistic:auc",
+                    ],
+                    method="prediction_model_analysis",
+                    icu_rule_refs=["aggregation_rule_for", "missingness_kind"],
+                )
+            )
+            steps.append(
+                AnalysisStep(
+                    step_id="05_publication_figure_generation",
+                    intent=(
+                        "Generate a claim-first, manuscript-ready publication figure for the "
+                        "prediction-model analysis using easyicu.research_agent.publication_figures."
+                    ),
+                    inputs=variables,
+                    expected_outputs=[
+                        "figure:publication_figure",
+                        "log:figure_contract",
+                    ],
+                    method="publication_figure_generation",
+                )
+            )
+        else:
+            steps.append(
+                AnalysisStep(
+                    step_id="04_trajectory_clustering_analysis",
+                    intent=(
+                        "Cluster patients by longitudinal physiology trajectories, summarise cluster stability "
+                        "and compare mortality across clusters without collapsing the task into a simple association model."
+                        + (f" {combined_rationale}" if combined_rationale else "")
+                    ),
+                    inputs=variables,
+                    expected_outputs=[
+                        "table:cluster_assignments",
+                        "table:cluster_summary",
+                        "table:cluster_outcomes",
+                        "figure:trajectory_clusters",
+                        "statistic:n_clusters",
+                    ],
+                    method="trajectory_clustering_analysis",
+                    icu_rule_refs=["aggregation_rule_for", "missingness_kind"],
+                )
+            )
+            steps.append(
+                AnalysisStep(
+                    step_id="05_publication_figure_generation",
+                    intent=(
+                        "Generate a claim-first, manuscript-ready publication figure for the "
+                        "trajectory clustering analysis using easyicu.research_agent.publication_figures."
+                    ),
+                    inputs=variables,
+                    expected_outputs=[
+                        "figure:publication_figure",
+                        "log:figure_contract",
+                    ],
+                    method="publication_figure_generation",
+                )
+            )
+        return steps
+
     if analysis_type.key in {
-        "prediction_model",
-        "trajectory_clustering",
+        "survival",
+        "dynamic_prediction",
         "treatment_response",
         "causal_inference",
         "reinforcement_learning",
+        "multimodal",
+        "validation",
     }:
         if should_include_table_one(
             context,
@@ -475,7 +640,7 @@ def build_dynamic_core_plan_steps(
                 intent=(
                     f"Define the executable protocol for the {analysis_type.name.lower()} task, "
                     f"including only the candidate modules justified by the research question. "
-                    + (f"{rationale_note} " if rationale_note else "")
+                    + (f"{combined_rationale} " if combined_rationale else "")
                     + "Do not substitute a simple association model for this analysis family."
                 ),
                 inputs=variables,
@@ -550,7 +715,7 @@ def build_dynamic_core_plan_steps(
                 intent=(
                     f"Estimate the association between {primary_predictor} and "
                     f"{target_outcome} using ICU-aware aggregation and time-window defaults."
-                    + (f" {rationale_note}" if rationale_note else "")
+                    + (f" {combined_rationale}" if combined_rationale else "")
                 ),
                 inputs=[primary_predictor, target_outcome],
                 expected_outputs=[

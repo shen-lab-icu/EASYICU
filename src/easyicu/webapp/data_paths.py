@@ -255,6 +255,7 @@ def _directory_input(
     placeholder: str = "",
     help: str | None = None,
     label_visibility: str = "visible",
+    show_value: bool = True,
 ) -> str:
     """Text input with a modal server-side directory browser."""
     lang = st.session_state.get("language", "en")
@@ -277,7 +278,7 @@ def _directory_input(
             "help": help,
             "label_visibility": label_visibility,
         }
-        if not input_has_state:
+        if not input_has_state and show_value:
             text_input_kwargs["value"] = value or ""
         typed_value = st.text_input(
             label,

@@ -10,9 +10,10 @@ writing Python::
         --target-outcome death \\
         --workdir ./research_output
 
-By default the CLI uses :class:`MockLLMClient`, so the command can run
-offline. Pass ``--llm openai`` (and an ``OPENAI_API_KEY`` env var) to
-use a real model.
+The CLI requires an explicit ``--llm`` choice so main-path runs never
+silently fall back to :class:`MockLLMClient`. Use ``--llm mock`` only
+for tests or deterministic demos; use ``--llm openai`` (and an
+``OPENAI_API_KEY`` env var) for real runs.
 """
 
 from __future__ import annotations
@@ -28,8 +29,10 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="easyicu-research-agent",
         description="Run an ICU-aware analysis agent over an EasyICU cohort parquet.",
     )
-    p.add_argument("--question", required=True, help="Plain-language research question.")
-    p.add_argument("--cohort", required=True, help="Path to cohort parquet (or CSV).")
+    p.add_argument("--question", required=False, help="Plain-language research question.")
+    p.add_argument("--cohort", required=False, help="Path to cohort parquet (or CSV).")
+    p.add_argument("--spec", default=None,
+                   help="Optional YAML/JSON experiment spec. When set, it can provide question/cohort/runtime settings.")
     p.add_argument("--workdir", default="./research_output",
                    help="Output directory (default: ./research_output).")
     p.add_argument("--cohort-name", default="cohort")
@@ -44,8 +47,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Inclusion criterion (repeatable).")
     p.add_argument("--exclusion", action="append", default=[],
                    help="Exclusion criterion (repeatable).")
-    p.add_argument("--llm", choices=["mock", "openai"], default="mock",
-                   help="LLM backend (default: mock — runs offline).")
+    p.add_argument("--llm", choices=["mock", "openai"], default=None,
+                   help="LLM backend. Required: choose mock for offline tests or openai for real runs.")
     p.add_argument("--openai-model", default="gpt-4o-mini",
                    help="Model name when --llm openai (default: gpt-4o-mini).")
     p.add_argument("--timeout", type=float, default=300.0,
@@ -78,42 +81,66 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # Lazy imports so --help works without pandas / openai installed.
     from .llm import MockLLMClient, OpenAIClient
     from .pipeline import ResearchAgentPipeline
+    from .experiment_spec import load_experiment_spec
 
+    if args.llm is None:
+        raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`).")
     if args.llm == "openai":
         llm = OpenAIClient(model=args.openai_model)
     else:
         llm = MockLLMClient()
 
-    pipeline = ResearchAgentPipeline(
-        workdir=args.workdir,
-        llm=llm,
-        timeout_seconds=args.timeout,
-        manuscript_language=args.manuscript_language,
-        context_top_k=args.context_top_k,
-        latex_venue_template=args.latex_venue_template,
-        enable_pubmed=args.enable_pubmed,
-        pubmed_email=args.pubmed_email,
-        enable_tavily=args.enable_tavily,
-        tavily_retmax=args.tavily_retmax,
-        enable_vlm_visual_qa=args.enable_vlm_visual_qa,
-        enable_llm_concept_audit=args.enable_llm_concept_audit,
-    )
+    if args.spec:
+        spec = load_experiment_spec(args.spec)
+        runtime_kwargs = spec.pipeline_kwargs()
+        runtime_kwargs.update(
+            {
+                "llm": llm,
+                "latex_venue_template": args.latex_venue_template,
+                "enable_pubmed": args.enable_pubmed,
+                "pubmed_email": args.pubmed_email,
+                "enable_tavily": args.enable_tavily,
+                "tavily_retmax": args.tavily_retmax,
+                "enable_vlm_visual_qa": args.enable_vlm_visual_qa,
+                "enable_llm_concept_audit": args.enable_llm_concept_audit,
+            }
+        )
+        pipeline = ResearchAgentPipeline(**runtime_kwargs)
+        result = pipeline.run_from_spec(spec)
+    else:
+        if not args.question or not args.cohort:
+            raise SystemExit("--question and --cohort are required unless --spec is provided.")
 
-    cross_db: List[str] = (
-        [s.strip() for s in args.cross_database.split(",") if s.strip()]
-        if args.cross_database else []
-    )
+        pipeline = ResearchAgentPipeline(
+            workdir=args.workdir,
+            llm=llm,
+            timeout_seconds=args.timeout,
+            manuscript_language=args.manuscript_language,
+            context_top_k=args.context_top_k,
+            latex_venue_template=args.latex_venue_template,
+            enable_pubmed=args.enable_pubmed,
+            pubmed_email=args.pubmed_email,
+            enable_tavily=args.enable_tavily,
+            tavily_retmax=args.tavily_retmax,
+            enable_vlm_visual_qa=args.enable_vlm_visual_qa,
+            enable_llm_concept_audit=args.enable_llm_concept_audit,
+        )
 
-    result = pipeline.run(
-        question=args.question,
-        cohort=args.cohort,
-        cohort_name=args.cohort_name,
-        database=args.database,
-        target_outcome=args.target_outcome,
-        cross_database_validation=cross_db,
-        inclusion_criteria=args.inclusion,
-        exclusion_criteria=args.exclusion,
-    )
+        cross_db: List[str] = (
+            [s.strip() for s in args.cross_database.split(",") if s.strip()]
+            if args.cross_database else []
+        )
+
+        result = pipeline.run(
+            question=args.question,
+            cohort=args.cohort,
+            cohort_name=args.cohort_name,
+            database=args.database,
+            target_outcome=args.target_outcome,
+            cross_database_validation=cross_db,
+            inclusion_criteria=args.inclusion,
+            exclusion_criteria=args.exclusion,
+        )
 
     print(f"run_id:       {result.run_id}")
     print(f"workdir:      {result.workdir}")

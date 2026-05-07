@@ -86,6 +86,46 @@ class TimeWindow(BaseModel):
     )
 
 
+class TemporalConstraint(BaseModel):
+    """Deterministic representation of time semantics parsed from the request.
+
+    Unlike ``TimeWindow``, which is a reusable cohort-level window definition,
+    this model captures richer query fragments such as "worst lactate before
+    vasopressor" or "AKI within 48h after ICU admission" so the runtime can
+    reason about anchor events, ordering, and aggregation hints explicitly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    raw_text: str
+    relation: Literal[
+        "first_window",
+        "within_after",
+        "before_event",
+        "worst_before_event",
+        "after_event",
+        "unspecified",
+    ] = "unspecified"
+    anchor_event: str = Field(
+        default="icu_admission",
+        description="The anchor used to interpret the temporal phrase deterministically.",
+    )
+    target_concept: Optional[str] = Field(
+        default=None,
+        description="Concept explicitly mentioned in the phrase, e.g. lactate or AKI.",
+    )
+    start_hours: Optional[float] = None
+    end_hours: Optional[float] = None
+    aggregation_hint: Optional[str] = Field(
+        default=None,
+        description="Derived analytical hint, e.g. worst, first, last, max, min.",
+    )
+    executable_repr: str = Field(
+        ...,
+        description="Stable, deterministic string form suitable for provenance and replay.",
+    )
+
+
 class MissingnessProfile(BaseModel):
     """Per-variable missingness summary computed at context build time."""
 
@@ -142,14 +182,34 @@ class ConceptDescriptor(BaseModel):
         default_factory=list,
         description="EasyICU concept-export files that support this variable.",
     )
+    source_tables: List[str] = Field(
+        default_factory=list,
+        description="Underlying raw ICU tables contributing to this concept when known.",
+    )
+    item_ids: List[str] = Field(
+        default_factory=list,
+        description="Item ids / concept ids associated with this variable when available.",
+    )
+    unit_normalization: Optional[str] = Field(
+        default=None,
+        description="How units were harmonized before this variable reached the cohort.",
+    )
     analysis_window: Optional[str] = Field(
         default=None,
         description="Named time window used to derive this variable, e.g. 'first_24h'.",
+    )
+    temporal_resolution: Optional[str] = Field(
+        default=None,
+        description="Sampling granularity or windowing resolution, e.g. hourly, stay-level, event-level.",
     )
     source_databases: List[str] = Field(default_factory=list)
     pitfalls: List[str] = Field(
         default_factory=list,
         description="Known traps for this variable, e.g. 'sofa==0 row may indicate missing components, not absence of dysfunction'.",
+    )
+    clinical_caveats: List[str] = Field(
+        default_factory=list,
+        description="Clinical interpretation caveats that should travel with the variable into planning and validation.",
     )
     missingness_semantics: Optional[str] = Field(
         default=None,
@@ -185,7 +245,32 @@ class CohortDescriptor(BaseModel):
     id_columns: List[str] = Field(default_factory=list)
     time_columns: List[str] = Field(default_factory=list)
     outcome_columns: List[str] = Field(default_factory=list)
+    provenance: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Deterministic cohort-definition provenance including source path, criteria, and resolver metadata.",
+    )
     notes: Optional[str] = None
+
+
+class UserPreferences(BaseModel):
+    """Structured user-requested analysis preferences.
+
+    Free-form notes remain useful, but the planner/coder layer benefits from
+    seeing stable preference fields instead of a single blob of prose.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    inferred_analysis_family: Optional[str] = None
+    starter_template_key: Optional[str] = None
+    preferred_methods: Optional[str] = None
+    evaluation_focus: Optional[str] = None
+    subgroup_sensitivity: Optional[str] = None
+    timing_and_design: Optional[str] = None
+    data_constraints: Optional[str] = None
+    must_have_outputs: Optional[str] = None
+    covariates: List[str] = Field(default_factory=list)
+    extra_notes: Optional[str] = None
 
 
 class ResearchContext(BaseModel):
@@ -205,6 +290,7 @@ class ResearchContext(BaseModel):
     cohort: CohortDescriptor
     variables: List[ConceptDescriptor]
     time_windows: List[TimeWindow] = Field(default_factory=list)
+    temporal_constraints: List[TemporalConstraint] = Field(default_factory=list)
     target_outcome: Optional[str] = Field(
         default=None,
         description="Name of the primary outcome column.",
@@ -214,6 +300,7 @@ class ResearchContext(BaseModel):
         description="Other databases (e.g. eicu, hirid) where this analysis should be replicated.",
     )
     cohort_parquet: Optional[str] = None
+    user_preferences: Optional[UserPreferences] = None
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -252,6 +339,184 @@ class AnalysisPlan(BaseModel):
     steps: List[AnalysisStep]
     rationale: Optional[str] = None
     revision: int = 1
+
+
+class EvidenceRef(BaseModel):
+    """Typed reference to a registered evidence artifact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: str
+    kind: Optional[str] = None
+    description: Optional[str] = None
+    relative_path: Optional[str] = None
+
+
+class ConceptRef(BaseModel):
+    """Stable reference to an ICU concept or analysis variable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    role: Optional[VariableRole] = None
+    source_concept: Optional[str] = None
+    analysis_window: Optional[str] = None
+
+
+class ClinicalSemanticsResolution(BaseModel):
+    """Structured ICU-semantic interpretation for planning/execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    analysis_family: str
+    target_outcome: Optional[str] = None
+    temporal_constraints: List[TemporalConstraint] = Field(default_factory=list)
+    recommended_time_windows: List[TimeWindow] = Field(default_factory=list)
+    target_concepts: List[ConceptRef] = Field(default_factory=list)
+    ambiguity_notes: List[str] = Field(default_factory=list)
+    safety_guardrails: List[str] = Field(default_factory=list)
+    provenance_notes: List[str] = Field(default_factory=list)
+
+
+class DataExtractionRequest(BaseModel):
+    """Typed request for deterministic cohort/concept retrieval."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cohort_name: str
+    database: str
+    concept_refs: List[ConceptRef] = Field(default_factory=list)
+    time_windows: List[TimeWindow] = Field(default_factory=list)
+    temporal_constraints: List[TemporalConstraint] = Field(default_factory=list)
+    cohort_provenance: Dict[str, Any] = Field(default_factory=dict)
+    notes: List[str] = Field(default_factory=list)
+
+
+class DataExtractionResult(BaseModel):
+    """Typed result from the constrained data extraction layer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cohort_path: str
+    n_rows: int = Field(ge=0, default=0)
+    concept_refs: List[ConceptRef] = Field(default_factory=list)
+    provenance: Dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: List[EvidenceRef] = Field(default_factory=list)
+
+
+class StatisticalAnalysisRequest(BaseModel):
+    """Typed handoff from planner/runtime into the analysis agent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step: AnalysisStep
+    analysis_family: str
+    target_outcome: Optional[str] = None
+    covariates: List[str] = Field(default_factory=list)
+    evaluation_focus: Optional[str] = None
+    must_have_outputs: Optional[str] = None
+    evidence_refs: List[EvidenceRef] = Field(default_factory=list)
+    notes: List[str] = Field(default_factory=list)
+
+
+class StatisticalAnalysisResult(BaseModel):
+    """Structured analysis summary returned after a step executes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str
+    method_family: str
+    primary_estimate: Optional[float] = None
+    estimate_label: Optional[str] = None
+    estimate_interval: Optional[List[float]] = None
+    summary_metrics: Dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: List[EvidenceRef] = Field(default_factory=list)
+    validator_messages: List[str] = Field(default_factory=list)
+
+
+class VisualizationRequest(BaseModel):
+    """Typed request for figure-generation agents and publication exporters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step: AnalysisStep
+    analysis_family: str
+    evidence_refs: List[EvidenceRef] = Field(default_factory=list)
+    required_formats: List[str] = Field(default_factory=lambda: ["png", "svg", "pdf", "tiff"])
+    must_have_outputs: Optional[str] = None
+    notes: List[str] = Field(default_factory=list)
+
+
+class VisualizationResult(BaseModel):
+    """Structured description of generated figures."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step_id: str
+    figure_titles: List[str] = Field(default_factory=list)
+    evidence_refs: List[EvidenceRef] = Field(default_factory=list)
+    qa_messages: List[str] = Field(default_factory=list)
+
+
+class ManuscriptDraftPacket(BaseModel):
+    """Typed packet sent into manuscript drafting/binding."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = None
+    abstract_focus: Optional[str] = None
+    analysis_family: Optional[str] = None
+    evidence_refs: List[EvidenceRef] = Field(default_factory=list)
+    findings: List[str] = Field(default_factory=list)
+    caveats: List[str] = Field(default_factory=list)
+
+
+class CritiqueReport(BaseModel):
+    """Structured critique used in execute→critique→revise loops."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["pass", "needs_revision", "blocked"] = "pass"
+    reviewer: str
+    concerns: List[str] = Field(default_factory=list)
+    unsupported_claims: List[str] = Field(default_factory=list)
+    missing_evidence_refs: List[str] = Field(default_factory=list)
+    suggested_repairs: List[str] = Field(default_factory=list)
+    related_evidence_refs: List[EvidenceRef] = Field(default_factory=list)
+
+
+class ReflectionMemoryEntry(BaseModel):
+    """Persistable run-level reflection record without raw PHI."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: Literal["successful_workflow", "failed_pattern", "reusable_template"]
+    summary: str
+    analysis_family: Optional[str] = None
+    trigger: Optional[str] = None
+    recommendation: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentRuntimeState(BaseModel):
+    """Shared, typed state exchanged between supervisor and worker agents."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    analysis_family: Optional[str] = None
+    semantics: Optional[ClinicalSemanticsResolution] = None
+    extraction_request: Optional[DataExtractionRequest] = None
+    extraction_result: Optional[DataExtractionResult] = None
+    current_step: Optional[AnalysisStep] = None
+    analysis_request: Optional[StatisticalAnalysisRequest] = None
+    analysis_result: Optional[StatisticalAnalysisResult] = None
+    visualization_request: Optional[VisualizationRequest] = None
+    visualization_result: Optional[VisualizationResult] = None
+    manuscript_packet: Optional[ManuscriptDraftPacket] = None
+    critique: Optional[CritiqueReport] = None
+    reflection_memory: List[ReflectionMemoryEntry] = Field(default_factory=list)
+    evidence_refs: List[EvidenceRef] = Field(default_factory=list)
 
 
 class EvidenceRecord(BaseModel):
@@ -353,6 +618,10 @@ class AnalysisManifest(BaseModel):
     cost_records: List[CostRecord] = Field(default_factory=list)
     report_path: Optional[str] = None
     manuscript_path: Optional[str] = None
+    audit_log_path: Optional[str] = None
+    workflow_graph_path: Optional[str] = None
+    execution_replay_path: Optional[str] = None
+    experiment_spec_path: Optional[str] = None
     llm_signature: Optional[str] = None
     used_mock_llm: bool = False
     prompt_pack_version: Optional[str] = None
@@ -389,12 +658,26 @@ __all__ = [
     "VariableRole",
     "AggregationRule",
     "TimeWindow",
+    "TemporalConstraint",
     "MissingnessProfile",
     "ConceptDescriptor",
     "CohortDescriptor",
     "ResearchContext",
     "AnalysisStep",
     "AnalysisPlan",
+    "EvidenceRef",
+    "ConceptRef",
+    "ClinicalSemanticsResolution",
+    "DataExtractionRequest",
+    "DataExtractionResult",
+    "StatisticalAnalysisRequest",
+    "StatisticalAnalysisResult",
+    "VisualizationRequest",
+    "VisualizationResult",
+    "ManuscriptDraftPacket",
+    "CritiqueReport",
+    "ReflectionMemoryEntry",
+    "AgentRuntimeState",
     "EvidenceRecord",
     "ValidationFinding",
     "CostRecord",
