@@ -298,11 +298,16 @@ def clear_global_loader():
     """清除全局加载器，强制下一次调用重新创建"""
     global _global_loader, _loader_config
     if _global_loader is not None:
-        # 清理加载器内部缓存
-        if hasattr(_global_loader, 'concept_resolver'):
-            _global_loader.concept_resolver.clear()
-        if hasattr(_global_loader, 'data_source'):
-            _global_loader.data_source.clear()
+        if hasattr(_global_loader, 'clear_cache'):
+            _global_loader.clear_cache()
+        else:
+            # 清理加载器内部缓存
+            if hasattr(_global_loader, 'concept_resolver'):
+                _global_loader.concept_resolver.clear()
+            for attr in ('datasource', 'data_source'):
+                data_source = getattr(_global_loader, attr, None)
+                if data_source is not None and hasattr(data_source, 'clear'):
+                    data_source.clear()
     _global_loader = None
     _loader_config = None
 
@@ -503,7 +508,11 @@ def _compress_dtypes(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
     
     可以节省约 50-60% 的内存
     """
-    if df.empty:
+    if hasattr(df, 'data') and isinstance(getattr(df, 'data'), pd.DataFrame):
+        df.data = _compress_dtypes(df.data, verbose=verbose)
+        return df
+
+    if not isinstance(df, pd.DataFrame) or df.empty:
         return df
     
     original_mem = df.memory_usage(deep=True).sum()
@@ -641,10 +650,11 @@ def _get_auto_chunk_strategy(
 ) -> Optional[Dict[str, int]]:
     """Return an auto-tuned chunk strategy for heavy large-scale extraction.
 
-    Default policy now targets a balanced speed/memory profile rather than the
-    most conservative low-memory path. On machines with about 10GB available RAM,
-    it will prefer larger chunks to reduce batch overhead while still keeping a
-    large safety margin.
+    The policy balances throughput and memory while preserving deterministic
+    score-window expansion for clinical scores. SOFA-family concepts currently
+    stay on the validated 2000-stay chunk profile even when more memory is
+    available, because larger chunks can change large-cohort window expansion
+    results.
     """
     if not _is_low_memory_chunk_candidate(
         concepts_list,
@@ -669,6 +679,12 @@ def _get_auto_chunk_strategy(
 
     if 'EASYICU_AUTO_CHUNK_SIZE' in os.environ:
         auto_chunk_size = max(250, int(os.getenv('EASYICU_AUTO_CHUNK_SIZE', '1000')))
+        if normalized.intersection(sofa_heavy_concepts) and auto_chunk_size > 2000:
+            logger.warning(
+                "Capping SOFA auto chunk size at 2000 because larger chunks can "
+                "change SOFA window expansion results in current large-cohort mode."
+            )
+            auto_chunk_size = 2000
     elif normalized.intersection(sepsis_heavy_concepts):
         # 复合 sepsis 链路更依赖批次数带来的并行度；过大 chunk 会明显拖慢速度
         auto_chunk_size = 1000
@@ -681,9 +697,9 @@ def _get_auto_chunk_strategy(
             auto_chunk_size = 1000
     elif normalized.intersection(sofa_heavy_concepts):
         if available_memory_mb >= 10 * 1024:
-            auto_chunk_size = 8000
+            auto_chunk_size = 2000
         elif available_memory_mb >= 6 * 1024:
-            auto_chunk_size = 4000
+            auto_chunk_size = 2000
         elif available_memory_mb >= 3 * 1024:
             auto_chunk_size = 2000
         else:
@@ -1109,7 +1125,14 @@ def load_concepts(
             logger.debug(f"获取患者ID以启用分批失败: {e}")
     
     # 自动检测：用户指定了 patient_ids 但未指定 batch_size
-    if (not auto_chunk_strategy) and effective_batch_size is None and _total_patients is not None and _total_patients > 5000:
+    if (
+        not auto_chunk_strategy
+        and merge
+        and effective_chunk_size is None
+        and effective_batch_size is None
+        and _total_patients is not None
+        and _total_patients > 5000
+    ):
         avail_mem = get_available_memory_mb()
         est_mem = estimate_memory_mb(concepts_list, loader.database, _total_patients)
         if est_mem > avail_mem * 0.6:
@@ -2846,12 +2869,29 @@ def get_all_patient_ids(
     
     # 尝试加载患者表
     try:
+        all_ids = None
         # 首选：直接加载 parquet 文件
         parquet_file = data_path / f'{table_name}.parquet'
         if parquet_file.exists():
-            df = pd.read_parquet(parquet_file, columns=[id_col])
-            all_ids = df[id_col].dropna().unique().tolist()
-        else:
+            try:
+                df = pd.read_parquet(parquet_file, columns=[id_col])
+                all_ids = df[id_col].dropna().unique().tolist()
+            except Exception as e:
+                logger.warning(f"读取患者表 parquet 失败，尝试 CSV 回退: {e}")
+
+        if all_ids is None:
+            for suffix in ('.csv', '.csv.gz'):
+                csv_file = data_path / f'{table_name}{suffix}'
+                if not csv_file.exists():
+                    continue
+                try:
+                    df = pd.read_csv(csv_file, usecols=[id_col])
+                    all_ids = df[id_col].dropna().unique().tolist()
+                    break
+                except Exception as e:
+                    logger.warning(f"读取患者表 CSV 回退失败 ({csv_file.name}): {e}")
+
+        if all_ids is None:
             # 备选：尝试分片目录
             shard_dir = data_path / table_name
             if shard_dir.exists() and shard_dir.is_dir():
@@ -2964,7 +3004,7 @@ def _build_default_db_paths() -> Dict[str, str]:
     if not _root:
         return {}
     try:
-        from easyicu.webapp.app import find_database_path
+        from easyicu.webapp.data_paths import find_database_path
         return {db: find_database_path(_root, db) for db in ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']}
     except ImportError:
         return {db: os.path.join(_root, db) for db in ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']}

@@ -4,7 +4,7 @@
 
 > 面向跨公开 ICU 数据库研究的可复现基础设施，提供标准化临床概念提取、面向临床用户的 Web 工作流，以及可编程的 Python API。
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
@@ -36,6 +36,9 @@ EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包�
 - **macOS**：双击 `start_easyicu.command`
 - **Linux**：运行 `./start_easyicu.sh`
 
+首次启动会在 `.easyicu-runtime/` 下自动创建本地运行环境，并安
+装 Web 所需依赖。当前这条路径建议使用 Python 3.10+。
+
 默认本地地址：
 
 ```text
@@ -50,6 +53,8 @@ http://127.0.0.1:8501
 - 在代码里构建可复现的队列管线
 
 最小安装方式：
+
+当前打包依赖建议使用 Python 3.10+。
 
 ```bash
 git clone "https://github.com/shen-lab-icu/easyicu.git"
@@ -129,15 +134,25 @@ EasyICU 可以自动校验原始数据库目录，并将其准备成可直接提
 EasyICU 提供以下交互式工具：
 
 - **快速可视化**：数据表浏览、时间序列审阅、单患者概览、数据质量评估
-- **队列分析**：分组比较、跨数据库分布对比、队列仪表盘
+- **队列分析**：组间对照表、跨数据库分布对比、队列快照，以及 SOFA-1/SOFA-2 敏感性分析
 
 <img width="3051" height="1823" alt="快速可视化示例" src="https://github.com/user-attachments/assets/09c64137-9c6a-401e-a1d0-fe358ea458de" />
+
+## 可选的 Research-Agent 层
+
+对于高级用户，EasyICU 还提供一个可选的
+`easyicu.research_agent` 层，用于 ICU 语义感知的分析规划、
+证据绑定式结果整理，以及 manuscript scaffold 生成。它不是
+标准 Web 工作流或 Python 提取 API 的必需部分。详情见
+[src/easyicu/research_agent/README.md](src/easyicu/research_agent/README.md)。
 
 ## 🚀 进阶使用（开发者 / 高级用户）
 
 ## 开发与测试
 
 建议为本项目创建独立开发环境，并运行当前自动化检查：
+
+开发环境建议使用 Python 3.10+。
 
 ```bash
 python -m venv .venv

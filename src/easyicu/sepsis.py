@@ -13,6 +13,7 @@ from typing import Optional, Callable, Literal, List
 import pandas as pd
 import numpy as np
 
+
 def delta_cummin(x: pd.Series) -> pd.Series:
     """Calculate delta from cumulative minimum (R ricu delta_cummin).
     
@@ -252,8 +253,13 @@ def _si_and(
     keep_components: bool,
 ) -> pd.DataFrame:
     """Detect SI when both antibiotic AND sampling occur.
-    
+
     Vectorized merge implementation: O(n log n) instead of O(n²).
+
+    Time unit contract: when ``index_col`` is numeric, it is assumed to be in
+    HOURS since ICU admission (the post-``_align_time_to_admission`` invariant
+    used everywhere else in EasyICU, including ``sep3_sofa2``). The 24h/72h
+    windows are converted to hours accordingly.
     """
     if abx.empty or samp.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'susp_inf'])
@@ -276,7 +282,7 @@ def _si_and(
     
     # Determine time type and window values
     time_is_numeric = pd.api.types.is_numeric_dtype(abx[index_col])
-    
+
     if not time_is_numeric:
         if not pd.api.types.is_datetime64_any_dtype(abx[index_col]):
             abx = abx.copy()
@@ -287,6 +293,7 @@ def _si_and(
         abx_win_val = abx_win
         samp_win_val = samp_win
     else:
+        # Numeric time axis is in hours (post _align_time_to_admission).
         abx_win_val = abx_win.total_seconds() / 3600.0
         samp_win_val = samp_win.total_seconds() / 3600.0
     

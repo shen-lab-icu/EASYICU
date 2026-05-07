@@ -1,0 +1,289 @@
+"""LLM cost tracking (T3.2).
+
+A small, opt-in metering layer that wraps any :class:`LLMClient` and
+records prompt/completion token counts and (when a price table is
+available) an estimated USD cost into a :class:`CostMeter`. The
+pipeline appends these records to ``AnalysisManifest.cost_records``
+so the paper can quote per-role spend without trusting an LLM-emitted
+number.
+
+Design constraints:
+
+* **Opt-in.** Default pipeline behaviour is unchanged. Cost tracking
+  activates only when ``ResearchAgentPipeline(enable_cost_tracking=True)``.
+* **Provider-agnostic.** Real clients (OpenAI / OpenRouter) report
+  usage on the SDK response; we expose that through
+  ``client.last_usage``. Clients that don't expose usage fall back to
+  a transparent ``chars / 4`` heuristic — and the record is marked
+  ``is_heuristic=True`` so reviewers can tell.
+* **No SDK creep.** This module never imports ``openai`` or any
+  provider SDK. It only cares about whether the inner client sets a
+  ``last_usage`` dict on itself.
+* **Cheap to test.** ``MeteredClient`` is a plain ``LLMClient``
+  proxy; tests can exercise it with the mock client.
+
+Built-in price table is conservative — populated only with
+publicly-listed prices from major providers as of 2025; adding more
+models should be a one-line PR. Numbers are USD per **million** input/
+output tokens.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from .schema import CostRecord
+
+
+# Approx 4 chars per token for English / code mix (OpenAI's own rule of
+# thumb). Used only when the inner client does not report usage.
+_CHARS_PER_TOKEN = 4
+
+# (prompt USD/1M tokens, completion USD/1M tokens) — order matters.
+_DEFAULT_PRICES: Dict[str, Tuple[float, float]] = {
+    # OpenAI (cached as of mid-2025; treat as approximate).
+    "gpt-4o":            (2.50, 10.00),
+    "gpt-4o-mini":       (0.15, 0.60),
+    "gpt-4.1":           (2.00, 8.00),
+    "gpt-4.1-mini":      (0.40, 1.60),
+    "gpt-4.1-nano":      (0.10, 0.40),
+    "o3-mini":           (1.10, 4.40),
+    # Anthropic via API gateway (configured providers).
+    "claude-3-5-sonnet-latest":   (3.00, 15.00),
+    "claude-3-5-haiku-latest":    (0.80, 4.00),
+    "claude-3-opus-latest":       (15.00, 75.00),
+    # Common OpenRouter free / cheap aliases (zero-cost rows kept so
+    # the meter still records a row even when cost is exactly $0).
+    "google/gemini-2.0-flash-exp:free": (0.0, 0.0),
+    "meta-llama/llama-3.1-8b-instruct:free": (0.0, 0.0),
+}
+
+
+# ---------------------------------------------------------------------------
+# Meter
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CostMeter:
+    """Append-only sink for :class:`CostRecord` rows.
+
+    Construct one per pipeline run; pass it to any
+    :class:`MeteredClient` you create. After the run finishes, read
+    ``meter.records`` and ``meter.summary()`` to populate the manifest
+    and the run report.
+    """
+
+    price_table: Dict[str, Tuple[float, float]] = field(
+        default_factory=lambda: dict(_DEFAULT_PRICES)
+    )
+    records: List[CostRecord] = field(default_factory=list)
+
+    def estimate_cost(
+        self, model: str, prompt_tokens: int, completion_tokens: int,
+    ) -> Optional[float]:
+        """Return USD cost or ``None`` if the model is not in the price table."""
+        prices = self.price_table.get(model)
+        if not prices:
+            return None
+        p_per_1m, c_per_1m = prices
+        return (prompt_tokens * p_per_1m + completion_tokens * c_per_1m) / 1_000_000.0
+
+    def record(
+        self,
+        *,
+        role: Optional[str],
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        is_heuristic: bool = False,
+    ) -> CostRecord:
+        rec = CostRecord(
+            role=role,
+            model=model,
+            prompt_tokens=int(prompt_tokens),
+            completion_tokens=int(completion_tokens),
+            total_tokens=int(prompt_tokens) + int(completion_tokens),
+            estimated_cost_usd=self.estimate_cost(model, prompt_tokens, completion_tokens),
+            is_heuristic=is_heuristic,
+        )
+        self.records.append(rec)
+        return rec
+
+    # ------------------------------------------------------------------
+    # Aggregation
+    # ------------------------------------------------------------------
+
+    def summary(self) -> Dict[str, Any]:
+        if not self.records:
+            return {
+                "n_calls": 0,
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "total_tokens": 0,
+                "total_cost_usd": 0.0,
+                "by_role": {},
+                "by_model": {},
+                "any_heuristic": False,
+            }
+        by_role: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"n_calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                     "total_tokens": 0, "cost_usd": 0.0}
+        )
+        by_model: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"n_calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                     "total_tokens": 0, "cost_usd": 0.0}
+        )
+        any_heuristic = False
+        for r in self.records:
+            for bucket in (by_role[r.role or "unrouted"], by_model[r.model]):
+                bucket["n_calls"] += 1
+                bucket["prompt_tokens"] += r.prompt_tokens
+                bucket["completion_tokens"] += r.completion_tokens
+                bucket["total_tokens"] += r.total_tokens
+                if r.estimated_cost_usd is not None:
+                    bucket["cost_usd"] += r.estimated_cost_usd
+            if r.is_heuristic:
+                any_heuristic = True
+        return {
+            "n_calls": len(self.records),
+            "total_prompt_tokens": sum(r.prompt_tokens for r in self.records),
+            "total_completion_tokens": sum(r.completion_tokens for r in self.records),
+            "total_tokens": sum(r.total_tokens for r in self.records),
+            "total_cost_usd": sum(
+                (r.estimated_cost_usd or 0.0) for r in self.records
+            ),
+            "by_role": {k: dict(v) for k, v in by_role.items()},
+            "by_model": {k: dict(v) for k, v in by_model.items()},
+            "any_heuristic": any_heuristic,
+        }
+
+
+# ---------------------------------------------------------------------------
+# MeteredClient — a transparent proxy that records cost on every call
+# ---------------------------------------------------------------------------
+
+
+class MeteredClient:
+    """Wraps an :class:`LLMClient` to record token usage to a :class:`CostMeter`.
+
+    The wrapper preserves the ``LLMClient`` protocol so any agent that
+    already accepts an LLMClient continues to work unchanged. Token
+    counts come from ``inner.last_usage`` when present; otherwise we
+    fall back to a transparent ``chars/4`` heuristic and mark the
+    record so reviewers can tell.
+    """
+
+    name = "metered"
+
+    def __init__(
+        self,
+        inner: Any,
+        *,
+        role: Optional[str],
+        meter: CostMeter,
+        model_override: Optional[str] = None,
+    ) -> None:
+        self._inner = inner
+        self._role = role
+        self._meter = meter
+        self._model_override = model_override
+
+    # The protocol methods the agents call.
+
+    def complete(self, messages, *, max_tokens: int = 2048,
+                 temperature: float = 0.2) -> str:
+        # Reset any previous reading; if the inner client doesn't set
+        # last_usage on this call, we won't accidentally double-count
+        # an earlier one.
+        try:
+            self._inner.last_usage = None  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        result = self._inner.complete(
+            messages, max_tokens=max_tokens, temperature=temperature,
+        )
+
+        usage = getattr(self._inner, "last_usage", None)
+        if isinstance(usage, dict) and usage.get("prompt_tokens") is not None:
+            prompt_tokens = int(usage.get("prompt_tokens", 0))
+            completion_tokens = int(usage.get("completion_tokens", 0))
+            is_heuristic = False
+        else:
+            prompt_chars = sum(len(m.content or "") for m in messages)
+            completion_chars = len(result or "")
+            prompt_tokens = max(1, prompt_chars // _CHARS_PER_TOKEN)
+            completion_tokens = max(1, completion_chars // _CHARS_PER_TOKEN)
+            is_heuristic = True
+
+        model = self._model_override or _identify_model(self._inner)
+        self._meter.record(
+            role=self._role,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            is_heuristic=is_heuristic,
+        )
+        return result
+
+    # Mirror commonly-touched attributes so existing duck-typing keeps
+    # working (e.g. MockLLMClient.context).
+
+    @property
+    def context(self):  # pragma: no cover - delegating attribute
+        return getattr(self._inner, "context", None)
+
+    @context.setter
+    def context(self, value) -> None:  # pragma: no cover - delegating attribute
+        try:
+            self._inner.context = value
+        except Exception:
+            pass
+
+    def __getattr__(self, item):  # pragma: no cover - delegating attribute
+        return getattr(self._inner, item)
+
+
+def _identify_model(client: Any) -> str:
+    """Best-effort 'what model is this?' for the cost record."""
+    for attr in ("_model", "model", "name"):
+        v = getattr(client, attr, None)
+        if isinstance(v, str) and v:
+            return v
+    return type(client).__name__
+
+
+# ---------------------------------------------------------------------------
+# Convenience: wrap a router's role lookups with the meter in one go
+# ---------------------------------------------------------------------------
+
+
+def metered_role_resolver(llm: Any, meter: CostMeter):
+    """Return a callable ``resolver(role) → MeteredClient`` for the pipeline.
+
+    The resolver delegates to the existing ``resolve_role_client`` so
+    a single :class:`LLMClient`, an :class:`LLMRouter`, or a mock all
+    work — every returned client is a :class:`MeteredClient` that
+    records to the same meter.
+    """
+    from .llm import resolve_role_client
+
+    def resolver(role: str):
+        base = resolve_role_client(llm, role)
+        if base is None:
+            return None
+        if isinstance(base, MeteredClient):
+            # Don't stack meters on top of each other.
+            return base
+        return MeteredClient(base, role=role, meter=meter)
+
+    return resolver
+
+
+__all__ = [
+    "CostMeter",
+    "MeteredClient",
+    "metered_role_resolver",
+]

@@ -448,7 +448,7 @@
           "sub_var": "itemid",
           "ids": [229326, 228337, 228300],
           "val_var": "value",
-          "regex": "^Yes$|Positive|Acute",
+          "regex": "^Yes|Positive|Acute",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "229326=CAM-ICU MS Change (46961), 228337=CAM-ICU MS Change (23703), 228300=CAM-ICU MS change (1665) - Yes indicates positive"
@@ -494,7 +494,7 @@
           "sub_var": "itemid",
           "ids": [228300],
           "val_var": "value",
-          "regex": "^Yes$|Positive|Acute",
+          "regex": "^Yes|Positive|Acute",
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))",
           "_comment": "228300=CAM-ICU MS Change (MetaVision)"
@@ -814,6 +814,16 @@
     "class_name": "lgl_cncpt",
     "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+\u22656.0 OR acidosis pH\u22647.20+HCO3\u226412)",
     "category": "renal",
+    "concepts": [
+      "crea",
+      "uo_6h",
+      "uo_12h",
+      "uo_24h",
+      "potassium",
+      "ph",
+      "bicarb",
+      "rrt"
+    ],
     "sources": {
       "miiv": [],
       "eicu": [],

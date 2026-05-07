@@ -1,0 +1,15 @@
+"""Main page registry for the EasyICU Streamlit app."""
+
+from __future__ import annotations
+
+from typing import Callable
+
+
+def build_main_page_registry(get_text: Callable[[str], str]) -> list[dict[str, str]]:
+    """Return the ordered top-level pages shown in the main tab bar."""
+    return [
+        {"key": "tutorial", "label": get_text("home")},
+        {"key": "quick_viz", "label": get_text("quick_visualization")},
+        {"key": "cohort", "label": get_text("cohort_compare")},
+        {"key": "research_agent", "label": get_text("research_agent")},
+    ]

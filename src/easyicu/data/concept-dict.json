@@ -214,7 +214,7 @@
           "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifampin|sulfadiazine|timentin|trimethoprim|(amika|gentami|vanco)cin|(amoxi|ampi|dicloxa|naf|oxa|peni|pipera)cillin|(azithro|clarithro|erythro|clinda|strepto|tobra|vanco)mycin|cef(azolin|tazidime|adroxil|epime|otetan|otaxime|podoxime|uroxime)|(doxy|mino|tetra)cycline|(levofl|moxifl|ofl)oxacin|macro(bid|dantin)|(una|zo)syn",
           "table": "prescriptions",
           "sub_var": "drug",
-          "val_var": "drugname",
+          "val_var": "drug",
           "callback": "transform_fun(set_val(TRUE))",
           "class_name": "rgx_itm"
         },
@@ -2952,7 +2952,7 @@
       ],
       "eicu": [
         {
-          "regex": "^epi( |n)",
+          "regex": "(?i)^epi(?:\\s|nephrine|nepherine)",
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_duration(gap_length = hours(5L))",
@@ -2961,7 +2961,7 @@
       ],
       "eicu_demo": [
         {
-          "regex": "^epi( |n)",
+          "regex": "(?i)^epi(?:\\s|nephrine|nepherine)",
           "table": "infusiondrug",
           "sub_var": "drugname",
           "callback": "eicu_duration(gap_length = hours(5L))",
@@ -3085,7 +3085,7 @@
       ],
       "eicu": [
         {
-          "regex": "^epi( |n).*\\(.+\\)$",
+          "regex": "(?i)^epi(?:\\s|nephrine|nepherine).*\\(.+\\)$",
           "table": "infusiondrug",
           "sub_var": "drugname",
           "weight_var": "patientweight",
@@ -3095,7 +3095,7 @@
       ],
       "eicu_demo": [
         {
-          "regex": "^epi( |n).*\\(.+\\)$",
+          "regex": "(?i)^epi(?:\\s|nephrine|nepherine).*\\(.+\\)$",
           "table": "infusiondrug",
           "sub_var": "drugname",
           "weight_var": "patientweight",
@@ -3844,7 +3844,7 @@
     "sources": {
       "aumc": [
         {
-          "val_var": "lengthgroup",
+          "val_var": "heightgroup",
           "table": "admissions",
           "callback": "apply_map(c(`159-` = 150, `160-169` = 165, `170-179` = 175, `180-189` = 185, `190+` = 200))",
           "class_name": "col_itm"
@@ -3967,7 +3967,7 @@
           ],
           "table": "observations",
           "sub_var": "variableid",
-          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL', 'g/l')",
           "class_name": "hrd_itm"
         }
       ],
@@ -4083,7 +4083,8 @@
   },
   "infection_icd": {
     "class_name": "lgl_cncpt",
-    "description": "ICD infection diagnosis for suspected infection in eICU (based on Angus 2001 criteria)",
+    "description": "eICU-only diagnosis-text infection proxy for suspected infection when microbiology sampling evidence is insufficient (based on Angus 2001 criteria)",
+    "_comment": "Intentionally limited to eICU/eICU_demo. MIMIC-III and MIMIC-IV should use microbiology sampling plus antibiotics for suspected infection; do not add ICD infection proxies without a separately validated definition.",
     "category": "outcome",
     "sources": {
       "eicu": [
@@ -4417,7 +4418,8 @@
         {
           "ids": [
             657,
-            454
+            454,
+            465
           ],
           "table": "laboratory",
           "sub_var": "LaboratoryID"
@@ -4507,9 +4509,9 @@
       ],
       "miiv": [
         {
-          "table": "icustays",
-          "val_var": "los",
-          "class_name": "col_itm"
+          "callback": "los_callback",
+          "win_type": "icustay",
+          "class_name": "fun_itm"
         }
       ],
       "mimic": [
@@ -5943,7 +5945,7 @@
     "sources": {
       "eicu": [
         {
-          "regex": "^phenylephrine.*\\(.+\\)$",
+          "regex": "(?i)^(phenylephrine|neo[- ]?synephrine|neosynephrine|neosynsprine).*\\(.+\\)$",
           "table": "infusiondrug",
           "sub_var": "drugname",
           "weight_var": "patientweight",
@@ -5953,7 +5955,7 @@
       ],
       "eicu_demo": [
         {
-          "regex": "^phenylephrine.*\\(.+\\)$",
+          "regex": "(?i)^(phenylephrine|neo[- ]?synephrine|neosynephrine|neosynsprine).*\\(.+\\)$",
           "table": "infusiondrug",
           "sub_var": "drugname",
           "weight_var": "patientweight",
@@ -6558,7 +6560,10 @@
       ],
       "sic": [
         {
-          "ids": 3319,
+          "ids": [
+            3319,
+            3119
+          ],
           "table": "laboratory",
           "sub_var": "LaboratoryID"
         }
@@ -6731,7 +6736,7 @@
           "table": "microbiologyevents",
           "id_var": "subject_id",
           "val_var": "org_itemid",
-          "callback": "transform_fun(comp_na())",
+          "callback": "mimic_sampling",
           "aux_time": "charttime",
           "class_name": "col_itm"
         }
@@ -6741,7 +6746,7 @@
           "table": "microbiologyevents",
           "id_var": "subject_id",
           "val_var": "org_itemid",
-          "callback": "transform_fun(comp_na())",
+          "callback": "mimic_sampling",
           "aux_time": "charttime",
           "class_name": "col_itm"
         }
@@ -7003,6 +7008,7 @@
         {
           "table": "patients",
           "val_var": "gender",
+          "callback": "apply_map(c(M = 'Male', F = 'Female'))",
           "class_name": "col_itm"
         }
       ],
@@ -7661,7 +7667,7 @@
           "sub_var": "celllabel"
         },
         {
-          "regex": "catheter.+output|output.+catheter",
+          "regex": "(?i)catheter.+output|output.+catheter",
           "table": "intakeoutput",
           "sub_var": "celllabel",
           "class_name": "rgx_itm"
@@ -7677,7 +7683,7 @@
           "sub_var": "celllabel"
         },
         {
-          "regex": "catheter.+output|output.+catheter",
+          "regex": "(?i)catheter.+output|output.+catheter",
           "table": "intakeoutput",
           "sub_var": "celllabel",
           "class_name": "rgx_itm"
@@ -7947,13 +7953,18 @@
           "class_name": "col_itm"
         },
         {
-          "ids": [
-            "Start",
-            "Continued",
-            "respFlowPtVentData"
-          ],
+          "ids": "respFlowPtVentData",
           "table": "respiratorycharting",
           "sub_var": "respcharttypecat",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            "Start",
+            "Continued"
+          ],
+          "table": "respiratorycharting",
+          "sub_var": "respchartvalue",
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
@@ -7971,13 +7982,18 @@
           "class_name": "col_itm"
         },
         {
-          "ids": [
-            "Start",
-            "Continued",
-            "respFlowPtVentData"
-          ],
+          "ids": "respFlowPtVentData",
           "table": "respiratorycharting",
           "sub_var": "respcharttypecat",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            "Start",
+            "Continued"
+          ],
+          "table": "respiratorycharting",
+          "sub_var": "respchartvalue",
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
@@ -8601,6 +8617,16 @@
     "class_name": "lgl_cncpt",
     "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+≥6.0 OR acidosis pH≤7.20+HCO3≤12)",
     "category": "renal",
+    "concepts": [
+      "crea",
+      "uo_6h",
+      "uo_12h",
+      "uo_24h",
+      "potassium",
+      "ph",
+      "bicarb",
+      "rrt"
+    ],
     "sources": {
       "miiv": [],
       "eicu": [],
@@ -9085,7 +9111,8 @@
           "ids": [
             "Tidal Volume (set)",
             "Set Vt (Servo,LTV)",
-            "Adult Con Setting Set Vt"
+            "Adult Con Setting Set Vt",
+            "Set Vt (Drager)"
           ]
         }
       ],
