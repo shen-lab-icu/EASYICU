@@ -689,7 +689,7 @@ def test_real_data_mode_requires_data_path_before_validation(tmp_path, monkeypat
     at.button(key="entry_real_btn").click().run(timeout=60)
     at.button(key="validate_path").click().run(timeout=60)
 
-    assert any("Please enter data path" in error.value for error in at.error)
+    assert any(error.value == "❌ Please enter data path" for error in at.error)
 
 
 def test_module_preview_metadata_highlights_renal_story() -> None:
