@@ -183,14 +183,16 @@ def convert_data_with_progress(data_path: str, database: str, app_context: dict[
             if parquet_path.exists():
                 skipped += 1
                 with details_container:
-                    st.caption(f"⏭️ {file_name} (exists)")
+                    exists_msg = "exists" if lang == 'en' else "已存在"
+                    st.caption(f"⏭️ {file_name} ({exists_msg})")
             else:
                 try:
                     result = converter.convert_file(csv_file)
                     if result['status'] == 'success':
                         converted += 1
                         with details_container:
-                            st.caption(f"✅ {file_name}: {result['row_count']:,} rows")
+                            rows_label = "rows" if lang == 'en' else "行"
+                            st.caption(f"✅ {file_name}: {result['row_count']:,} {rows_label}")
                     else:
                         failed += 1
                         with details_container:
@@ -218,7 +220,8 @@ def convert_data_with_progress(data_path: str, database: str, app_context: dict[
             if bucket_dir.exists() and list(bucket_dir.glob('bucket_id=*')):
                 skipped += 1
                 with details_container:
-                    st.caption(f"⏭️ {file_name} (bucket exists)")
+                    bucket_exists_msg = "bucket exists" if lang == 'en' else "分桶目录已存在"
+                    st.caption(f"⏭️ {file_name} ({bucket_exists_msg})")
             else:
                 try:
                     # AUMC 使用 latin-1 编码（µmol 等特殊字符）
@@ -238,7 +241,9 @@ def convert_data_with_progress(data_path: str, database: str, app_context: dict[
                     if result.success:
                         converted += 1
                         with details_container:
-                            st.caption(f"✅ {file_name} → {result.num_buckets} buckets, {result.total_rows:,} rows")
+                            bucket_label = "buckets" if lang == 'en' else "个桶"
+                            rows_label = "rows" if lang == 'en' else "行"
+                            st.caption(f"✅ {file_name} → {result.num_buckets} {bucket_label}, {result.total_rows:,} {rows_label}")
                     else:
                         failed += 1
                         with details_container:

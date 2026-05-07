@@ -20,6 +20,9 @@ import pandas as pd
 
 # Allow override via environment variables
 ENV_PROD_DATA = os.getenv('EASYICU_PROD_DATA')
+ENV_PROD_DATA_EICU = os.getenv('EASYICU_PROD_DATA_EICU')
+ENV_PROD_DATA_AUMC = os.getenv('EASYICU_PROD_DATA_AUMC')
+ENV_PROD_DATA_HIRID = os.getenv('EASYICU_PROD_DATA_HIRID')
 ENV_PROJECT_ROOT = os.getenv('EASYICU_PROJECT_ROOT')
 
 # ============================================================================
@@ -39,9 +42,9 @@ if ENV_PROD_DATA:
 else:
     PRODUCTION_DATA_PATH = Path("/home/1_publicData/icu_databases/mimiciv/3.1")
 
-PRODUCTION_DATA_EICU = Path("/home/1_publicData/icu_databases/eicu/2.0.1")
-PRODUCTION_DATA_AUMC = Path("/home/1_publicData/icu_databases/aumc/1.0.2")
-PRODUCTION_DATA_HIRID = Path("/home/1_publicData/icu_databases/hirid/1.1.1")
+PRODUCTION_DATA_EICU = Path(ENV_PROD_DATA_EICU or "/home/1_publicData/icu_databases/eicu/2.0.1")
+PRODUCTION_DATA_AUMC = Path(ENV_PROD_DATA_AUMC or "/home/1_publicData/icu_databases/aumc/1.0.2")
+PRODUCTION_DATA_HIRID = Path(ENV_PROD_DATA_HIRID or "/home/1_publicData/icu_databases/hirid/1.1.1")
 
 # Output directories
 OUTPUT_DIR = PROJECT_ROOT / "output"
@@ -160,6 +163,10 @@ LOG_LEVEL = os.getenv('EASYICU_LOG_LEVEL', 'INFO')
 
 # Enable verbose output
 VERBOSE = os.getenv('EASYICU_VERBOSE', 'True').lower() in ('true', '1', 'yes')
+
+# Validate fixed production paths only when explicitly requested. Most local
+# workflows pass data paths through the web UI/API and should stay quiet on import.
+AUTO_VALIDATE_PRODUCTION_PATHS = os.getenv('EASYICU_AUTO_VALIDATE_PROD_PATHS', 'False').lower() in ('true', '1', 'yes')
 
 # Enable progress bars
 SHOW_PROGRESS = os.getenv('EASYICU_PROGRESS', 'True').lower() in ('true', '1', 'yes')
@@ -360,7 +367,7 @@ def print_config() -> None:
 # Validation
 # ============================================================================
 
-def validate_paths() -> bool:
+def validate_paths(verbose: bool | None = None) -> bool:
     """Validate that production data paths exist.
     
     Returns:
@@ -371,6 +378,8 @@ def validate_paths() -> bool:
         ...     print("Production paths available")
     """
     valid = False
+    if verbose is None:
+        verbose = VERBOSE
     
     # Check production data paths
     for db_name, db_path in [
@@ -381,13 +390,14 @@ def validate_paths() -> bool:
     ]:
         if db_path.exists():
             valid = True
-        elif VERBOSE:
+        elif verbose:
             print(f"Info: {db_name} production data path not found: {db_path}")
     
     return valid
 
-# Auto-validate on import
-if VERBOSE:
+# Auto-validation is opt-in so importing easyicu does not print irrelevant
+# production-server path warnings in local/UI extraction workflows.
+if AUTO_VALIDATE_PRODUCTION_PATHS:
     validate_paths()
 
 # ============================================================================
@@ -436,6 +446,7 @@ __all__ = [
     # Logging
     'LOG_LEVEL',
     'VERBOSE',
+    'AUTO_VALIDATE_PRODUCTION_PATHS',
     'SHOW_PROGRESS',
     
     # Performance

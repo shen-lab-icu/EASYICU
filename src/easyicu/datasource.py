@@ -1200,7 +1200,7 @@ class ICUDataSource:
                 csv_path = self._resolve_mimic3_chartevents_csv()
                 if csv_path is not None and concept_itemid_filter is not None:
                     # Use CSV fallback only when we have itemid filter (for performance)
-                    logger.info(f"🔄 MIMIC-III chartevents: 分桶目录不存在，使用 CSV 回退模式")
+                    logger.info("MIMIC-III chartevents: bucket directory not found; using CSV fallback mode")
                     frame = self._read_mimic3_csv_fallback(
                         csv_path=csv_path,
                         columns=columns,
@@ -1344,7 +1344,7 @@ class ICUDataSource:
                         bucket_key = str(bucket_dir)
                         if bucket_key not in self._bucket_dir_logged:
                             self._bucket_dir_logged.add(bucket_key)
-                            logger.info(f"🪣 使用分桶目录: {bucket_dir} ({len(bucket_subdirs)} 个桶)")
+                            logger.info("Using bucket directory: %s (%d buckets)", bucket_dir, len(bucket_subdirs))
                         with self._lock:
                             self._bucket_dir_cache[cache_key] = bucket_dir
                         return bucket_dir
@@ -1922,7 +1922,7 @@ class ICUDataSource:
             logger.warning("DuckDB not installed, cannot use MIMIC-III CSV fallback")
             return pd.DataFrame()
         
-        logger.info(f"📄 MIMIC-III CSV 回退模式: 从 {csv_path.name} 读取 (VALUE 列保持为字符串)")
+        logger.info("MIMIC-III CSV fallback mode: reading from %s (keeping VALUE as string)", csv_path.name)
         
         # Build column selection - MIMIC-III uses UPPERCASE column names in CSV
         if columns:
@@ -2006,11 +2006,11 @@ class ICUDataSource:
             # Normalize column names to lowercase (MIMIC-III CSV uses uppercase)
             df.columns = [c.lower() for c in df.columns]
             
-            logger.info(f"✅ CSV 回退成功: 加载 {len(df)} 行")
+            logger.info("CSV fallback succeeded: loaded %d rows", len(df))
             return df
             
         except Exception as e:
-            logger.error(f"❌ MIMIC-III CSV 回退失败: {e}")
+            logger.error("MIMIC-III CSV fallback failed: %s", e)
             return pd.DataFrame()
     
     def _resolve_mimic3_csv(self, table_name: str) -> Optional[Path]:
@@ -2078,19 +2078,24 @@ class ICUDataSource:
                         # 使用精确的文件列表而非全扫描
                         file_list_str = ", ".join(f"'{_duckdb_path(f)}'" for f in target_files)
                         glob_pattern = f"[{file_list_str}]"
-                        logger.debug(f"🪣 分桶精准读取: {len(target_buckets)}/{num_buckets} 个桶, {len(target_files)} 个文件")
+                        logger.debug(
+                            "Bucket targeted read: %d/%d buckets, %d files",
+                            len(target_buckets),
+                            num_buckets,
+                            len(target_files),
+                        )
                     else:
                         # 目标桶不存在，可能是空数据
-                        logger.warning(f"⚠️ 目标桶不存在: bucket_id in {target_buckets}")
+                        logger.warning("Target bucket does not exist: bucket_id in %s", target_buckets)
                         glob_pattern = _duckdb_path(directory / "**/*.parquet")
                 else:
                     # 字符串型 ID，无法使用 hash 分桶优化
                     glob_pattern = _duckdb_path(directory / "**/*.parquet")
-                    logger.debug(f"🪣 使用分桶模式读取(全扫描): {directory.name}")
+                    logger.debug("Using bucket read mode (full scan): %s", directory.name)
             else:
                 # 没有 itemid 过滤，全扫描
                 glob_pattern = _duckdb_path(directory / "**/*.parquet")
-                logger.debug(f"🪣 使用分桶模式读取(无过滤): {directory.name}")
+                logger.debug("Using bucket read mode (no filter): %s", directory.name)
         else:
             # 普通分区: directory/*.parquet
             glob_pattern = _duckdb_path(directory / "*.parquet")
@@ -2141,7 +2146,7 @@ class ICUDataSource:
                 id_str = ", ".join(map(str, sorted(filter_ids)))
             where_conditions.append(f"{filter_col} IN ({id_str})")
             if DEBUG_MODE:
-                logger.info(f"🚀 大表优化: {filter_col} 过滤 {len(filter_ids)} 个 ID")
+                logger.info("Large-table optimization: filtering %s to %d IDs", filter_col, len(filter_ids))
         
         # 🚀 宽表NULL过滤优化：跳过value列为NULL的行
         # 这对于eICU vitalperiodic等宽表非常重要
@@ -2259,7 +2264,7 @@ class ICUDataSource:
                     filter_col, filter_ids = itemid_filter_config
                     filter_exprs.append(ds.field(filter_col).isin(list(filter_ids)))
                     if DEBUG_MODE:
-                        logger.info(f"🚀 大表优化 (PyArrow): {filter_col} 过滤 {len(filter_ids)} 个 ID")
+                        logger.info("Large-table optimization (PyArrow): filtering %s to %d IDs", filter_col, len(filter_ids))
                 except Exception:
                     pass
             
@@ -3195,10 +3200,10 @@ def load_bucketed_table_aggregated(
         for c in df.columns:
             if c not in _skip_cols and df[c].dtype == np.float64:
                 df[c] = df[c].astype(np.float32)
-        logger.info(f"🚀 分桶表DuckDB聚合完成: {table_name} itemids={len(itemids)} -> {len(df):,} 行")
+        logger.info("Bucketed DuckDB aggregation complete: %s itemids=%d -> %d rows", table_name, len(itemids), len(df))
         return df
     except Exception as e:
-        logger.warning(f"DuckDB聚合失败: {e}")
+        logger.warning("DuckDB aggregation failed: %s", e)
         raise
 
 
@@ -3551,7 +3556,7 @@ def load_bucketed_table_multi_aggregated(
     except Exception:
         df = conn.execute(query).fetchdf()
     logger.info(
-        "🚀 分桶多概念DuckDB聚合完成: %s concepts=%d itemids=%d -> %d 行",
+        "Bucketed multi-concept DuckDB aggregation complete: %s concepts=%d itemids=%d -> %d rows",
         table_name,
         len(concept_itemids),
         len(all_itemids),
@@ -3695,5 +3700,5 @@ def load_wide_table_aggregated(
     for c in df.columns:
         if c not in _skip_cols and df[c].dtype == np.float64:
             df[c] = df[c].astype(np.float32)
-    logger.info(f"🚀 宽表批量加载完成: {table_name} {value_columns} -> {len(df):,} 行")
+    logger.info("Wide-table batch load complete: %s %s -> %d rows", table_name, value_columns, len(df))
     return df
