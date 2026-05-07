@@ -458,8 +458,8 @@ def build_naive_research_context(
     Emits the *minimum* viable context: every column gets only its
     name, dtype, and a single allowed aggregation ``ANY``. No
     ICU-specific role inference, no pitfalls, no missingness profile
-    hints, no ordinal flags. This is what a generic
-    OpenLens-style agent would synthesise from a CSV.
+    hints, no ordinal flags. This approximates what a generic
+    analysis agent would synthesise from a CSV.
 
     The returned :class:`ResearchContext` is structurally identical to
     the ICU-aware one — same schema, same fields — so downstream code

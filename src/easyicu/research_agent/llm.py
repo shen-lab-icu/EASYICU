@@ -1134,7 +1134,7 @@ class OpenAIClient:
 
 
 # ---------------------------------------------------------------------------
-# Per-agent LLM router (T2.3 — M4-style "different tool, different brain")
+# Per-agent LLM router (T2.3 — different tool, different brain)
 # ---------------------------------------------------------------------------
 
 

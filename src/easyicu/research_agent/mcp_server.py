@@ -1,7 +1,6 @@
-"""MCP-compatible tool server (M4-inspired).
+"""MCP-compatible tool server.
 
-M4 [1] exposes its clinical-research toolkit through Model Context
-Protocol (MCP), which lets Claude Desktop, Continue and other MCP
+Model Context Protocol (MCP) lets Claude Desktop, Continue and other
 clients invoke server-side tools as if they were local functions.
 
 This module exposes three EasyICU research-agent tools:
@@ -17,10 +16,6 @@ but ``main()`` now speaks the MCP JSON-RPC methods used by desktop
 clients: ``initialize``, ``tools/list`` and ``tools/call`` over stdio.
 An optional no-dependency SSE transport is provided for clients that
 still expect the older MCP SSE shape.
-
-References
-----------
-[1] M4: Infrastructure for AI-Assisted Clinical Research.
 """
 
 from __future__ import annotations

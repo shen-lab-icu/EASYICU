@@ -1,7 +1,7 @@
-"""LaTeX export for the manuscript scaffold (OpenLens-AI inspired).
+"""LaTeX export for the manuscript scaffold.
 
-OpenLens-AI [1] emits a ready-to-compile LaTeX paper. We do the
-same — but only for the *scaffold*. The Discussion section is
+This module emits a ready-to-compile LaTeX paper scaffold. The
+Discussion section is
 deliberately left as a TODO so the human author cannot accidentally
 publish LLM-generated clinical claims.
 
@@ -14,10 +14,6 @@ Usage::
         authors=["A. Researcher", "B. Clinician"],
     )
     Path("manuscript_scaffold.tex").write_text(tex)
-
-References
-----------
-[1] OpenLens-AI: Fully Autonomous Research Agent for Health Informatics.
 """
 
 from __future__ import annotations

@@ -4,18 +4,7 @@ A traceable, ICU-aware analysis-agent layer that extends EasyICU from
 "data extraction and visualisation" to "data extraction → analysis →
 manuscript scaffold" — without giving up provenance.
 
-## Related work this layer builds on
-
-This module deliberately fuses three complementary lines of recent
-work and keeps each as a citable inspiration rather than a
-dependency:
-
-| Source | What we borrowed | Where it lives |
-|---|---|---|
-| **OpenLens-AI** [^1] | Five-agent pipeline shape (planner / coder / analyzer / writer / supervisor); LaTeX export; deterministic visual QA plus optional VLM review; PubMed/Tavily literature hooks | `agents.py`, `latex.py`, `visual_qa.py`, `literature.py` |
-| **M4** [^2] | MCP-style tool exposure; reusable clinical-skill recipes that short-circuit free-form planning | `mcp_server.py`, `skills.py` |
-| **HealthFlow** [^3] | Self-evolving meta-planning by feeding past lessons back into the planner | `memory.py` |
-| **nature-skills** [^4] | Claim-first publication figure contract; editable SVG/PDF/PNG/TIFF export; panel-level evidence logic | `publication_figures.py` |
+## What this layer adds
 
 EasyICU's distinct contribution is the **ICU-aware research context**
 (`schema.py`, `icu_rules.py`, `context.py`, `case_contexts.py`) and
@@ -23,25 +12,16 @@ the **deterministic hashed evidence store** (`evidence.py`,
 `validators.py`) that every agent output must pass through before it
 can affect the manuscript.
 
-[^1]: OpenLens-AI: Fully Autonomous Research Agent for Health Informatics. <https://github.com/jarrycyx/openlens-ai>
-[^2]: M4: Infrastructure for AI-Assisted Clinical Research (MCP + clinical-skills tooling).
-[^3]: HealthFlow: A Self-Evolving AI Agent with Meta-Planning for Autonomous Healthcare Research.
-[^4]: Yuan1z0825/nature-skills: Nature-style scientific figure-making skill. <https://github.com/Yuan1z0825/nature-skills>
-
 ## Why this exists
 
-Generic data-analysis agents (OpenLens-AI, AutoAnalyst, AI Scientist,
-DataMind …) are improving fast at the *engineering* of a science
-pipeline — planning, code generation, sandboxed execution, paper
-writing — but they are uniformly weak on the *medical* part: they
-treat ordinal SOFA components as continuous, average GCS values,
-silently impute missing PaO₂ to 0.21, fall for the SOFA==0 high-
-mortality artefact, and confuse ICU mortality with hospital
-mortality.
+Many general-purpose analysis pipelines are strong at orchestration
+but weak on ICU semantics: they treat ordinal SOFA components as
+continuous, average GCS values, silently impute missing PaO₂ to 0.21,
+fall for the SOFA==0 high-mortality artefact, and confuse ICU
+mortality with hospital mortality.
 
-`easyicu.research_agent` does not try to outdo those projects on
-agent architecture. It does one thing they don't: it injects an
-ICU-aware **research context** — the EasyICU concept dictionary plus
+`easyicu.research_agent` addresses that gap by injecting an ICU-aware
+**research context** — the EasyICU concept dictionary plus
 explicit aggregation rules, time windows, missingness semantics and
 known pitfalls — into the agent loop, and it routes every produced
 artefact through a SHA-256-hashed evidence store that the manuscript
@@ -51,7 +31,7 @@ are blocked.
 ## Architecture
 
 ```
-question + cohort  ────────────►  optional: ClinicalSkill (M4)
+question + cohort  ────────────►  optional: ClinicalSkill
         │                              │ deterministic plan
         ▼                              ▼
    build_research_context        → research_context.json
@@ -59,7 +39,7 @@ question + cohort  ────────────►  optional: ClinicalSk
         │                           ordinal levels, allowed aggregations,
         │                           missingness profile, ICU pitfalls)
         ▼
-   RunMemory.digest_for_prompt   → memory_digest.md           (HealthFlow)
+   RunMemory.digest_for_prompt   → memory_digest.md
         │   past lessons + meta-planner skill ranking
         ▼
    optional concept retrieval    → research_context_agent_prompt.json
@@ -80,9 +60,9 @@ question + cohort  ────────────►  optional: ClinicalSk
    │ AnalyzerAgent        │  ← short interpretation, evidence-bound
    └──────────────────────┘
         ▼
-   LiteratureAgent               → literature_bundle.json     (OpenLens; curated + optional PubMed/Tavily)
-   VisualQAAuditor               → findings on figures        (OpenLens; deterministic + optional VLM)
-   PublicationFigureContract     → claim-first SVG/PDF/TIFF   (nature-skills)
+   LiteratureAgent               → literature_bundle.json     (curated + optional PubMed/Tavily)
+   VisualQAAuditor               → findings on figures        (deterministic + optional VLM)
+   PublicationFigureContract     → claim-first SVG/PDF/TIFF
         ▼
    WriterAgent                   → manuscript_scaffold.md
         │   (Methods + Results sentences with {evidence:<id>}
@@ -91,9 +71,9 @@ question + cohort  ────────────►  optional: ClinicalSk
    EvidenceStore.bind_manuscript → manuscript_scaffold_bound.md
                                    (placeholders → file links + sha256)
         ▼
-   scaffold_to_latex             → manuscript_scaffold.tex    (OpenLens)
+   scaffold_to_latex             → manuscript_scaffold.tex
         ▼
-   RunMemory.record              → .memory/runs/<run_id>.json (HealthFlow)
+   RunMemory.record              → .memory/runs/<run_id>.json
    manifest.json + results_report.md
 ```
 
@@ -121,7 +101,7 @@ print(result.report_path)
 print(result.manuscript_path)
 ```
 
-### Pre-canned ClinicalSkill (M4-style)
+### Pre-canned ClinicalSkill
 
 ```python
 from easyicu.research_agent import ResearchAgentPipeline, list_skills
@@ -195,8 +175,7 @@ SOFA-zero anomaly finding.
 ### Optional VLM figure review
 
 Deterministic figure checks are always available and remain the default.
-To add an OpenLens-style vision-language-model review pass, opt in
-explicitly:
+To add a vision-language-model review pass, opt in explicitly:
 
 ```python
 from easyicu.research_agent import OpenAIClient, ResearchAgentPipeline
