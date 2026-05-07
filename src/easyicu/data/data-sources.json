@@ -10026,7 +10026,7 @@
       "patient": {
         "id": "patientid",
         "position": 1,
-        "start": "firstadmittedat",
+        "start": "admittedat",
         "end": "dateofdeath",
         "table": "admissions"
       },
@@ -10050,40 +10050,93 @@
     ],
     "tables": {
       "admissions": {
-        "files": "aumc_demo.csv",
+        "files": "admissions.parquet",
         "defaults": {
-          "val_var": "age",
-          "time_vars": []
+          "id_var": "admissionid",
+          "val_var": "agegroup",
+          "time_vars": [
+            "admittedat",
+            "dischargedat",
+            "dateofdeath"
+          ]
         },
         "num_rows": 23106,
         "cols": {
+          "patientid": {
+            "name": "patientid",
+            "spec": "col_integer"
+          },
           "admissionid": {
             "name": "admissionid",
             "spec": "col_integer"
           },
-          "adm": {
-            "name": "adm",
-            "spec": "col_character"
-          },
-          "age": {
-            "name": "age",
+          "admissioncount": {
+            "name": "admissioncount",
             "spec": "col_integer"
           },
-          "bmi": {
-            "name": "bmi",
-            "spec": "col_double"
-          },
-          "height": {
-            "name": "height",
-            "spec": "col_double"
-          },
-          "sex": {
-            "name": "sex",
+          "location": {
+            "name": "location",
             "spec": "col_character"
           },
-          "weight": {
-            "name": "weight",
-            "spec": "col_double"
+          "urgency": {
+            "name": "urgency",
+            "spec": "col_integer"
+          },
+          "origin": {
+            "name": "origin",
+            "spec": "col_character"
+          },
+          "admittedat": {
+            "name": "admittedat",
+            "spec": "col_integer"
+          },
+          "admissionyeargroup": {
+            "name": "admissionyeargroup",
+            "spec": "col_character"
+          },
+          "dischargedat": {
+            "name": "dischargedat",
+            "spec": "col_integer"
+          },
+          "lengthofstay": {
+            "name": "lengthofstay",
+            "spec": "col_integer"
+          },
+          "destination": {
+            "name": "destination",
+            "spec": "col_character"
+          },
+          "gender": {
+            "name": "gender",
+            "spec": "col_character"
+          },
+          "agegroup": {
+            "name": "agegroup",
+            "spec": "col_character"
+          },
+          "dateofdeath": {
+            "name": "dateofdeath",
+            "spec": "col_integer"
+          },
+          "weightgroup": {
+            "name": "weightgroup",
+            "spec": "col_character"
+          },
+          "weightsource": {
+            "name": "weightsource",
+            "spec": "col_character"
+          },
+          "heightgroup": {
+            "name": "heightgroup",
+            "spec": "col_character"
+          },
+          "heightsource": {
+            "name": "heightsource",
+            "spec": "col_character"
+          },
+          "specialty": {
+            "name": "specialty",
+            "spec": "col_character"
           }
         }
       },

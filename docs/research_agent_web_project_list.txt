@@ -1,0 +1,44 @@
+EasyICU Research Agent Web project list
+
+Purpose: let future agents continue this project without re-deriving the four product problems. The workflow should move from "single stay-level parquet -> full manuscript" to "choose data source -> customize analysis -> produce tables/figures first -> draft manuscript only after review".
+
+Implemented in phase 1:
+
+- [x] Research Agent page supports selecting an EasyICU module export folder.
+- [x] Module folders may be flat parquet files or nested as module/concept.parquet.
+- [x] The UI lists each parquet file's row count, id columns, leading columns, and read errors.
+- [x] Users can choose which module/concept parquet files to merge.
+- [x] Users can filter the cohort before merging, e.g. keep only stays where sep3/sepsis/susp_inf is true.
+- [x] Multiple concept files are reduced to one row per stay and merged into a stay-level cohort.
+- [x] Pipeline supports stop_after_analysis=True so it can stop before literature, manuscript, LaTeX, and BibTeX.
+- [x] Pipeline supports progress_callback events for stage/step progress in the web UI.
+- [x] Web UI defaults to analysis-first output so users can review tables, figures, findings, and manifest before manuscript drafting.
+- [x] Web UI collects method preferences, covariates, and extra run constraints into ResearchContext notes.
+- [x] Web UI includes a no-data path that writes database/path/modules/patient-limit settings into the existing EasyICU export state machine.
+- [x] Demo Mode Research Agent is guide-only: it explains expected outputs and does not expose LLM/API/workdir/run controls.
+- [x] Real Data Mode prioritizes module-folder and no-data extraction sources over the synthetic cohort in the Research Agent data picker.
+- [x] Module-folder merging is explicit: the web UI no longer auto-builds a large stay-level cohort just by rendering the page.
+- [x] Research Agent boundary states and manuscript placeholder notices are localized in English and Chinese.
+- [x] Loaded concept handoff is a single global prompt rather than repeated banners inside Tutorial, Quick Visualization, and Cohort tabs.
+- [x] Top-level page registry and session-state defaults were split out of app.py for easier follow-up work by other agents.
+- [x] Research Agent now uses the shared top-level tab page header, matching Tutorial, Quick Visualization, and Cohort Analysis typography.
+
+Recommended next phase:
+
+- [ ] Build a real DataAcquisitionAgent that chooses EasyICU modules/concepts from the research question.
+- [ ] Wrap easyicu.extract_database() and easyicu.filter_patients() as callable Research Agent tools.
+- [ ] Add a richer demo artifact gallery with static sample Table 1, ROC/calibration plots, and a manuscript excerpt.
+- [ ] Make manuscript generation reuse the exact completed analysis plan/context instead of re-planning and relying on resume to skip same-named steps.
+- [ ] Add per-variable aggregation policies for module-folder merging: binary -> any, ordinal score -> max/last, continuous -> first-24h median/max.
+- [ ] Add templates for common questions: sepsis mortality prediction, SOFA mortality association, vasopressor shock phenotype, AKI mortality.
+- [ ] Add a plan review page where the user can edit steps, methods, and covariates before execution.
+- [ ] Persist progress events to manifest_partial.json so refreshes can recover the latest visible progress.
+- [ ] Add a dedicated API for "draft manuscript from existing analysis run" so the web layer does not manage resume details.
+
+Acceptance scenarios:
+
+- A user with only ~/easyicu_export/mimiciv_YYYYMMDD/ can choose that folder in Research Agent and build a sepsis mortality cohort.
+- If the question mentions sepsis, the UI can identify sep3/sepsis/susp_inf files and offer them as the cohort filter.
+- During a run, the user sees step-level progress rather than a single spinner.
+- The default run produces results_report.md, tables, figures, manifest, and findings without manuscript/LaTeX/BibTeX.
+- After reviewing analysis output, the user can trigger manuscript drafting.

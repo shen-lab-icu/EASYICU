@@ -46,6 +46,7 @@ htmlcov/
 .hypothesis/
 .mypy_cache/
 .tmp/
+.playwright-cli/
 
 # Root-level ad hoc test/benchmark scripts and outputs
 test_*
@@ -75,6 +76,12 @@ hl_sepsis_newborn/
 hl_sepsis_newborn_model/
 tools/archived
 output
+
+# Audit / 校验报告产物 - 这些是脚本产出的中间文件，不入库
+audit_reports/
+research_output/
+recycle_*/
+**/recycle_*/
 # 测试文件 - 不上传测试代码
 # test_main.py
 TEST_SUMMARY.md
@@ -82,8 +89,7 @@ CLEANUP_PLAN.md
 tests/
 !tests/
 !tests/**/*.py
-scripts/
-!scripts/
+scripts/*
 !scripts/launch_easyicu.py
 
 # 环境文件

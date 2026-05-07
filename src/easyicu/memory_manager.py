@@ -111,7 +111,11 @@ def get_rss_mb() -> float:
     # fallback: resource module
     try:
         import resource
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+        rss = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        # Linux reports ru_maxrss in KiB; macOS/BSD reports bytes.
+        if os.name == 'posix' and hasattr(os, 'uname') and os.uname().sysname == 'Darwin':
+            return rss / (1024.0 ** 2)
+        return rss / 1024.0
     except Exception:
         return 0.0
 

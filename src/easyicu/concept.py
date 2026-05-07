@@ -6248,30 +6248,75 @@ class ConceptResolver:
                 # 新方案：DuckDB SELECT MAX(datetime) GROUP BY patientid → ~100MB内存, <2s
                 if hasattr(data_source, 'base_path') and data_source.base_path is not None:
                     base_path = Path(data_source.base_path)
-                    # 优先使用 observations_bucket（分桶目录）
                     bucket_path = base_path / 'observations_bucket'
                     obs_path = base_path / 'observations'
-                    
-                    glob_pattern = None
-                    if bucket_path.is_dir():
-                        glob_pattern = _duckdb_path(bucket_path / '**' / '*.parquet')
-                    elif obs_path.is_dir():
-                        glob_pattern = _duckdb_path(obs_path / '*.parquet')
-                    
-                    if glob_pattern:
+
+                    read_expr = None
+                    index_path = base_path / 'observation_tables' / 'observation_tables_index.csv'
+                    if index_path.is_file() and obs_path.is_dir():
+                        try:
+                            obs_index = pd.read_csv(index_path, usecols=['patientid', 'part'])
+                            target_set = set(target_patients)
+                            target_parts = (
+                                obs_index.loc[obs_index['patientid'].isin(target_set), 'part']
+                                .dropna()
+                                .astype(int)
+                                .unique()
+                                .tolist()
+                            )
+                            target_files = []
+                            seen_files = set()
+                            for part in target_parts:
+                                candidates = [
+                                    obs_path / f"{part + 1}.parquet",
+                                    obs_path / f"{part}.parquet",
+                                ]
+                                for candidate in candidates:
+                                    if candidate.is_file() and candidate not in seen_files:
+                                        target_files.append(candidate)
+                                        seen_files.add(candidate)
+                                        break
+                            if target_files:
+                                file_list = ", ".join(f"'{_duckdb_path(file)}'" for file in target_files)
+                                read_expr = f"read_parquet([{file_list}], union_by_name=true)"
+                        except Exception as index_error:
+                            logger.debug("HiRID observation part index lookup failed: %s", index_error)
+
+                    if read_expr is None:
+                        if bucket_path.is_dir():
+                            glob_pattern = _duckdb_path(bucket_path / '**' / '*.parquet')
+                            read_expr = f"read_parquet('{glob_pattern}', hive_partitioning=true)"
+                        elif obs_path.is_dir():
+                            glob_pattern = _duckdb_path(obs_path / '*.parquet')
+                            read_expr = f"read_parquet('{glob_pattern}', union_by_name=true)"
+
+                    if read_expr:
                         con = duckdb.connect()
                         con.execute("SET memory_limit = '2GB'")
                         try:
-                            # 将患者ID列表注册为 DuckDB 表以支持 IN 过滤
-                            pid_df = pd.DataFrame({'patientid': target_patients})
-                            con.register('target_pids', pid_df)
-                            
-                            result = con.execute(f"""
-                                SELECT o.patientid, MAX(o.datetime) as end_time
-                                FROM read_parquet('{glob_pattern}', hive_partitioning=true) o
-                                INNER JOIN target_pids t ON o.patientid = t.patientid
-                                GROUP BY o.patientid
-                            """).fetchdf()
+                            numeric_target_patients = [
+                                int(pid)
+                                for pid in target_patients
+                                if pd.notna(pid)
+                            ]
+                            if numeric_target_patients and len(numeric_target_patients) <= 1000:
+                                patient_filter_sql = ", ".join(str(pid) for pid in sorted(set(numeric_target_patients)))
+                                result = con.execute(f"""
+                                    SELECT o.patientid, MAX(o.datetime) as end_time
+                                    FROM {read_expr} o
+                                    WHERE o.patientid IN ({patient_filter_sql})
+                                    GROUP BY o.patientid
+                                """).fetchdf()
+                            else:
+                                # 将患者ID列表注册为 DuckDB 表以支持大队列过滤
+                                pid_df = pd.DataFrame({'patientid': target_patients})
+                                con.register('target_pids', pid_df)
+                                result = con.execute(f"""
+                                    SELECT o.patientid, MAX(o.datetime) as end_time
+                                    FROM {read_expr} o
+                                    INNER JOIN target_pids t ON o.patientid = t.patientid
+                                    GROUP BY o.patientid
+                                """).fetchdf()
                             
                             if len(result) > 0:
                                 # 与 frame 合并（保持原始索引）

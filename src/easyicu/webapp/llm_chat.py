@@ -24,6 +24,12 @@ from pathlib import Path
 
 import requests
 import streamlit as st
+from easyicu.webapp.llm_config import (
+    PROVIDERS,
+    ensure_llm_config_state,
+    is_configured as _shared_is_configured,
+    needs_api_key as _shared_needs_api_key,
+)
 
 # ---------------------------------------------------------------------------
 # System prompt — enriched with EasyICU documentation & concept catalogue
@@ -301,11 +307,6 @@ def _build_workflow_status_context(lang: str) -> str:
     return "\n".join(lines)
 
 
-def _hosted_base_url() -> str:
-    """Return the hosted relay URL exposed to end users."""
-    return os.getenv("EASYICU_HOSTED_BASE_URL", "http://47.241.42.236/v1").strip()
-
-
 def _repo_blob_base() -> str:
     """Return the GitHub blob base used for clickable file links."""
     return os.getenv(
@@ -313,114 +314,20 @@ def _repo_blob_base() -> str:
         "https://github.com/shen-lab-icu/easyicu/blob/main",
     ).rstrip("/")
 
-
-def _default_provider_key() -> str:
-    """Prefer hosted mode when a hosted relay URL is configured."""
-    return "easyicu_hosted" if _hosted_base_url() else "openrouter"
-
-# ---------------------------------------------------------------------------
-# Provider registry: (display, default_base_url, default_model, needs_key, description_en, description_zh)
-# ---------------------------------------------------------------------------
-PROVIDERS = {
-    "easyicu_hosted": (
-        "EasyICU Hosted",
-        _hosted_base_url(),
-        "hosted-default",
-        False,
-        "Use the EasyICU managed relay. No user API key required.",
-        "使用 EasyICU 托管代理，无需用户自己填写 API Key。",
-    ),
-    "huggingface_free": (
-        "HuggingFace",
-        "https://router.huggingface.co/v1",
-        "deepseek-ai/DeepSeek-R1:fastest",
-        True,
-        "Requires your own Hugging Face token.",
-        "需要用户自己提供 Hugging Face token。",
-    ),
-    "openai": (
-        "OpenAI",
-        "https://api.openai.com/v1",
-        "gpt-4o",
-        True,
-        "GPT-4o, GPT-4o-mini, o1, etc.",
-        "GPT-4o、GPT-4o-mini、o1 等。",
-    ),
-    "deepseek": (
-        "DeepSeek",
-        "https://api.deepseek.com",
-        "deepseek-chat",
-        True,
-        "DeepSeek-V3, DeepSeek-R1. Very affordable.",
-        "DeepSeek-V3、DeepSeek-R1，价格极低。",
-    ),
-    "anthropic": (
-        "Anthropic",
-        "https://api.anthropic.com/v1",
-        "claude-sonnet-4-20250514",
-        True,
-        "Claude Sonnet, Opus, Haiku.",
-        "Claude Sonnet、Opus、Haiku。",
-    ),
-    "openrouter": (
-        "OpenRouter",
-        "https://openrouter.ai/api/v1",
-        "deepseek/deepseek-chat-v3-0324:free",
-        True,
-        "Aggregator with free & paid models. Get key at openrouter.ai",
-        "模型聚合平台，有免费和付费模型。在 openrouter.ai 获取 Key。",
-    ),
-    "together": (
-        "Together AI",
-        "https://api.together.xyz/v1",
-        "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        True,
-        "Llama, Mistral, Qwen. Free tier available (signup).",
-        "Llama、Mistral、Qwen。注册即有免费额度。",
-    ),
-    "groq": (
-        "Groq",
-        "https://api.groq.com/openai/v1",
-        "llama-3.3-70b-versatile",
-        True,
-        "Ultra-fast inference. Free tier with rate limits.",
-        "超低延迟推理。免费套餐有速率限制。",
-    ),
-    "siliconflow": (
-        "SiliconFlow (硅基流动)",
-        "https://api.siliconflow.cn/v1",
-        "deepseek-ai/DeepSeek-V3",
-        True,
-        "China-based, DeepSeek/Qwen. Free tier available.",
-        "国内平台，DeepSeek/Qwen 等模型，注册赠送额度。",
-    ),
-    "custom": (
-        "⚙️ Custom / Compatible",
-        "",
-        "",
-        True,
-        "Any OpenAI-compatible endpoint.",
-        "任意 OpenAI 兼容接口。",
-    ),
-}
-
 # ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------
 
 def _init_chat_state():
     """Ensure all chat-related session keys exist."""
-    default_provider = _default_provider_key()
+    ensure_llm_config_state()
     defaults = {
         "llm_enabled": False,
-        "llm_provider": default_provider,
-        "llm_api_key": "",
-        "llm_model": "",
-        "llm_base_url": "",
         "llm_messages": [],
-        "llm_configured": False,
         "llm_last_tool_events": [],
         "llm_last_verification": None,
+        "_floating_ai_open": False,
+        "_ai_pending_question": None,
         # Background response tracking
         "_ai_bg_responding": False,        # True while LLM is generating in background
         "_ai_bg_response_ready": False,    # True when background response finished
@@ -429,6 +336,30 @@ def _init_chat_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+
+def _sync_llm_toggle_before_render() -> None:
+    """Synchronize the sidebar toggle before its widget is instantiated."""
+    if "_llm_toggle" not in st.session_state or st.session_state.pop("_llm_toggle_sync_pending", False):
+        st.session_state["_llm_toggle"] = bool(st.session_state.get("llm_enabled", False))
+
+
+def _apply_floating_ai_toggle(enabled: bool) -> None:
+    """Apply the user-facing Show floating AI assistant toggle."""
+    enabled = bool(enabled)
+    st.session_state.llm_enabled = enabled
+    st.session_state["_floating_ai_open"] = enabled
+    if not enabled:
+        st.session_state["_ai_pending_question"] = None
+
+
+def _close_floating_ai_panel(*, disable_assistant: bool = False) -> None:
+    """Close the floating panel, optionally turning off the sidebar toggle too."""
+    st.session_state["_floating_ai_open"] = False
+    st.session_state["_ai_pending_question"] = None
+    if disable_assistant:
+        st.session_state.llm_enabled = False
+        st.session_state["_llm_toggle_sync_pending"] = True
 
 
 def _repo_root() -> Path:
@@ -1037,16 +968,12 @@ def _verify_response(client, messages: list[dict[str, str]], draft: str, lang: s
 
 
 def _needs_api_key(provider: str) -> bool:
-    return PROVIDERS.get(provider, PROVIDERS["custom"])[3]
+    return _shared_needs_api_key(provider)
 
 
 def _is_configured() -> bool:
     """Return True when the provider is ready to use."""
-    provider = st.session_state.get("llm_provider", "openrouter")
-    if not _needs_api_key(provider):
-        default_url = PROVIDERS.get(provider, PROVIDERS["custom"])[1]
-        return bool((st.session_state.get("llm_base_url", "") or default_url).strip())
-    return bool(st.session_state.get("llm_api_key", "").strip())
+    return _shared_is_configured()
 
 
 def _get_client():
@@ -1084,21 +1011,98 @@ def _get_client():
 def render_llm_settings():
     """Render LLM configuration controls in the sidebar."""
     _init_chat_state()
+    _sync_llm_toggle_before_render()
     lang = st.session_state.get("language", "en")
 
-    label = "🤖 AI Assistant" if lang == "en" else "🤖 AI 助手"
-    with st.expander(label, expanded=True):
-        # On/off toggle
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] .easyicu-ai-sidebar-card {
+            display: grid;
+            grid-template-columns: 2.2rem 1fr;
+            gap: 0.62rem;
+            align-items: center;
+            padding: 0.72rem 0.82rem;
+            border-radius: 14px;
+            border: 1px solid #cfe0f3;
+            background: linear-gradient(135deg, #ffffff 0%, #f5f9ff 100%);
+            box-shadow: 0 9px 22px rgba(15, 23, 42, 0.05);
+            margin: 0.24rem 0 0.18rem;
+        }
+        [data-testid="stSidebar"] .easyicu-ai-sidebar-avatar {
+            width: 2.15rem;
+            height: 2.15rem;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            background: linear-gradient(135deg, #f59e0b 0%, #f97316 68%, #2563eb 100%);
+            box-shadow: 0 9px 18px rgba(249, 115, 22, 0.2);
+            font-size: 1rem;
+        }
+        [data-testid="stSidebar"] .easyicu-ai-sidebar-title {
+            color: #0b1f44;
+            font-size: 0.9rem;
+            font-weight: 900;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+        }
+        [data-testid="stSidebar"] .easyicu-ai-sidebar-subtitle {
+            color: #64748b;
+            font-size: 0.72rem;
+            line-height: 1.38;
+            margin-top: 0.12rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    enabled = bool(st.session_state.llm_enabled)
+    status_title = "AI Assistant" if lang == "en" else "AI 助手"
+    status_subtitle = (
+        "Floating page-aware chat is ready after enabling."
+        if lang == "en" else
+        "开启后使用右下角页面感知式浮窗。"
+    )
+    if enabled and _is_configured():
+        status_subtitle = (
+            "Page-aware floating chat is ready."
+            if lang == "en" else
+            "页面感知式浮窗已就绪。"
+        )
+    st.markdown(
+        f"""
+        <div class="easyicu-ai-sidebar-card">
+            <div class="easyicu-ai-sidebar-avatar">🤖</div>
+            <div>
+                <div class="easyicu-ai-sidebar-title">{status_title}</div>
+                <div class="easyicu-ai-sidebar-subtitle">{status_subtitle}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    label = "⚙️ AI settings" if lang == "en" else "⚙️ AI 设置"
+    with st.expander(label, expanded=False):
+        # On/off toggle. Keep the full settings collapsed so the sidebar does
+        # not duplicate the main floating assistant UI.
+        previous_enabled = bool(st.session_state.llm_enabled)
         enabled = st.toggle(
-            "Enable AI Assistant" if lang == "en" else "启用 AI 助手",
-            value=st.session_state.llm_enabled,
+            "Show floating AI assistant" if lang == "en" else "显示悬浮 AI 助手",
+            value=previous_enabled,
             key="_llm_toggle",
         )
-        st.session_state.llm_enabled = enabled
+        if bool(enabled) != previous_enabled:
+            _apply_floating_ai_toggle(enabled)
+        else:
+            st.session_state.llm_enabled = bool(enabled)
         if not enabled:
-            hint = ("Enable the toggle, then switch to the 🤖 AI Assistant tab."
+            hint = ("Enable this to reveal the bottom-right page-aware AI chat."
                     if lang == "en"
-                    else "开启开关后，切换到 🤖 AI 助手 标签页即可使用。")
+                    else "开启后会显示右下角页面感知式 AI 对话。")
             st.caption(hint)
             return
 
@@ -1162,10 +1166,11 @@ def render_llm_settings():
                                  if lang == 'en' else "请输入 API Key"))
             st.session_state.llm_configured = False
 
-        jump_label = "💬 Open Floating AI Chat" if lang == "en" else "💬 打开悬浮 AI 对话"
-        if st.button(jump_label, use_container_width=True, key="_goto_ai_assistant"):
-            st.session_state["_floating_ai_open"] = True
-            st.rerun()
+        st.caption(
+            "Use the bottom-right chat button to open the page-aware assistant."
+            if lang == "en" else
+            "请使用右下角聊天按钮打开页面感知式助手。"
+        )
 
 
 def _build_chat_export_text() -> str:
@@ -1406,11 +1411,11 @@ def _starter_prompts(lang: str) -> list[str]:
 
 
 def _render_chat_welcome(*, lang: str, panel_key: str, history_container, show_starters: bool = True) -> None:
-    title = "Hi, I am the EasyICU AI Assistant" if lang == "en" else "你好，我是 EasyICU AI 助手"
+    title = "Page-aware assistant guidance" if lang == "en" else "页面感知式 AI 引导"
     subtitle = (
-        "Start with your research task. I can map it to the right cohort filters, concepts, scores, and web workflow."
+        "Grounded in your current page, selected database, cohort filters, and feature modules."
         if lang == "en" else
-        "先告诉我你的研究任务。我会把它映射成合适的队列筛选、特征、评分和网页操作流程。"
+        "基于当前页面、数据库、队列筛选和特征模块给出下一步建议。"
     )
     prompt_hint = (
         "Try one of these questions:" if lang == "en" else "你可以直接点下面这些问题："
@@ -1419,12 +1424,36 @@ def _render_chat_welcome(*, lang: str, panel_key: str, history_container, show_s
         if lang == "en" else
         "可以直接询问当前流程、队列筛选或导出设置。"
     )
+    sample_q = (
+        "Which setting should I check before exporting SOFA features?"
+        if lang == "en" else
+        "导出 SOFA 特征前，我应该重点检查哪个设置？"
+    )
+    sample_a = (
+        "Check that the cohort is confirmed, SOFA-1/SOFA-2 concepts are selected, and the export path is writable."
+        if lang == "en" else
+        "请确认队列已经锁定、SOFA-1/SOFA-2 概念已选择，并且导出路径可写。"
+    )
+    rec_label = "Recommended next step" if lang == "en" else "推荐下一步"
+    rec_text = (
+        "Open feature selection and verify score modules before export."
+        if lang == "en" else
+        "进入特征选择页，在导出前检查评分模块。"
+    )
 
     st.markdown(
         f'''
         <div class="floating-ai-welcome">
             <div class="floating-ai-welcome-title">{title}</div>
             <div class="floating-ai-welcome-subtitle">{subtitle}</div>
+            <div class="floating-ai-sample">
+                <div class="floating-ai-user-bubble">{sample_q}</div>
+                <div class="floating-ai-answer-card">{sample_a}</div>
+                <div class="floating-ai-recommendation">
+                    <span>{rec_label}</span>
+                    <strong>{rec_text}</strong>
+                </div>
+            </div>
             <div class="floating-ai-welcome-hint">{prompt_hint}</div>
         </div>
         ''',
@@ -1542,8 +1571,15 @@ def render_floating_chat_dock():
     """Render a fixed bottom-right floating AI chat dock."""
     _init_chat_state()
     lang = st.session_state.get("language", "en")
+    has_pending_prompt = bool(
+        st.session_state.get("_ai_pending_question")
+        or st.session_state.get("_ai_bg_unread_count", 0)
+        or st.session_state.get("_ai_bg_responding", False)
+    )
+    if not st.session_state.get("llm_enabled", False) and not has_pending_prompt:
+        return
     if "_floating_ai_open" not in st.session_state:
-        st.session_state["_floating_ai_open"] = True
+        st.session_state["_floating_ai_open"] = False
     if "_floating_ai_size" not in st.session_state:
         st.session_state["_floating_ai_size"] = "m"
     if st.session_state.get("_ai_pending_question"):
@@ -1558,7 +1594,7 @@ def render_floating_chat_dock():
         "m": {
             "panel_width": "clamp(360px, 34vw, 620px)",
             "panel_max_height": "min(84vh, 860px)",
-            "history_height": 400,
+            "history_height": 390,
         },
         "l": {
             "panel_width": "clamp(460px, 44vw, 860px)",
@@ -1657,28 +1693,28 @@ def render_floating_chat_dock():
             min-width: var(--easyicu-ai-launcher-size);
             height: var(--easyicu-ai-launcher-size);
             border-radius: 999px;
-            border: 1px solid rgba(15, 23, 42, 0.08);
-            background: linear-gradient(135deg, #0f766e 0%, #0f172a 100%);
+            border: 1px solid rgba(251, 146, 60, 0.32);
+            background: linear-gradient(135deg, #fb923c 0%, #f97316 48%, #2563eb 100%);
             color: #ffffff;
             font-size: clamp(1.12rem, 1vw + 0.88rem, 1.55rem);
-            box-shadow: 0 18px 44px rgba(15, 23, 42, 0.28);
+            box-shadow: 0 18px 44px rgba(249, 115, 22, 0.28);
         }
 
 
         div.st-key-floating_ai_panel {
             right: clamp(12px, 1.25vw, 20px);
-            bottom: calc(var(--easyicu-ai-launcher-size) + clamp(14px, 1.6vw, 24px));
+            bottom: clamp(12px, 1.25vw, 20px);
             width: min(var(--easyicu-ai-panel-width), calc(100vw - 24px));
             max-width: calc(100vw - 24px);
             max-height: var(--easyicu-ai-panel-max-height);
-            border-radius: 18px;
-            border: 1px solid rgba(15, 23, 42, 0.08);
+            border-radius: 16px;
+            border: 1px solid #cbdff2;
             background:
-                radial-gradient(circle at top right, rgba(13, 148, 136, 0.12), transparent 32%),
-                linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
-            box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
-            backdrop-filter: blur(12px);
-            padding: 0.32rem 0.32rem 0.4rem 0.32rem;
+                radial-gradient(circle at 100% 0%, rgba(251, 146, 60, 0.13), transparent 34%),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(247, 250, 255, 0.99));
+            box-shadow: 0 24px 58px rgba(15, 23, 42, 0.2);
+            backdrop-filter: blur(14px);
+            padding: 0.48rem 0.5rem 0.56rem 0.5rem;
             overflow-x: hidden;
             overflow-y: auto;
             animation: easyicuPanelSlideIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -1688,31 +1724,53 @@ def render_floating_chat_dock():
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0.2rem 0.15rem 0.4rem 0.15rem;
+            padding: 0.18rem 0.12rem 0.36rem 0.12rem;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-title-row {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-avatar {
+            width: 2.1rem;
+            height: 2.1rem;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            background: linear-gradient(135deg, #fb923c 0%, #f97316 72%, #ea580c 100%);
+            box-shadow: 0 10px 20px rgba(249, 115, 22, 0.24);
+            font-size: 1.05rem;
+            flex: 0 0 auto;
         }
 
         div.st-key-floating_ai_panel .floating-ai-title {
             font-size: var(--easyicu-ai-title-size);
-            font-weight: 700;
+            font-weight: 900;
             color: #0f172a;
-            letter-spacing: 0.01em;
+            letter-spacing: -0.02em;
         }
 
         div.st-key-floating_ai_panel .floating-ai-subtitle {
             font-size: var(--easyicu-ai-subtitle-size);
-            color: #475569;
-            margin-top: 0.08rem;
+            color: #64748b;
+            margin-top: 0.04rem;
             line-height: 1.45;
         }
 
         div.st-key-floating_ai_panel .floating-ai-welcome {
             background:
-                radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 30%),
-                linear-gradient(135deg, rgba(240, 249, 255, 0.95), rgba(248, 250, 252, 0.95));
-            border: 1px solid rgba(14, 165, 233, 0.14);
-            border-radius: 18px;
+                radial-gradient(circle at top right, rgba(251, 146, 60, 0.13), transparent 28%),
+                linear-gradient(135deg, rgba(255,255,255,0.98), rgba(248,250,252,0.98));
+            border: 1px solid #d5e3f3;
+            border-left: 4px solid #fb923c;
+            border-radius: 15px;
             padding: 0.95rem 1rem;
             margin-bottom: 0.75rem;
+            box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
         }
 
         div.st-key-floating_ai_panel .floating-ai-welcome-title {
@@ -1729,9 +1787,64 @@ def render_floating_chat_dock():
             margin-bottom: 0.55rem;
         }
 
+        div.st-key-floating_ai_panel .floating-ai-sample {
+            display: grid;
+            gap: 0.52rem;
+            margin: 0.58rem 0 0.72rem;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-user-bubble {
+            justify-self: end;
+            max-width: 88%;
+            color: #0f172a;
+            background: #eaf3ff;
+            border: 1px solid #bfdbfe;
+            border-radius: 16px 16px 4px 16px;
+            padding: 0.56rem 0.72rem;
+            font-size: var(--easyicu-ai-body-size);
+            line-height: 1.45;
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.08);
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-answer-card {
+            color: #0f172a;
+            background: #ffffff;
+            border: 1px solid #dbeafe;
+            border-radius: 16px 16px 16px 4px;
+            padding: 0.62rem 0.76rem;
+            font-size: var(--easyicu-ai-body-size);
+            line-height: 1.55;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.045);
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-recommendation {
+            display: grid;
+            gap: 0.18rem;
+            color: #1e3a8a;
+            background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
+            border: 1px solid #bfdbfe;
+            border-radius: 14px;
+            padding: 0.58rem 0.7rem;
+            font-size: clamp(0.72rem, 0.12vw + 0.69rem, 0.8rem);
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-recommendation span {
+            color: #64748b;
+            font-size: 0.66rem;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.09em;
+        }
+
+        div.st-key-floating_ai_panel .floating-ai-recommendation strong {
+            color: #0f172a;
+            font-weight: 800;
+            line-height: 1.42;
+        }
+
         div.st-key-floating_ai_panel .floating-ai-welcome-hint {
             font-size: clamp(0.68rem, 0.12vw + 0.65rem, 0.76rem);
-            color: #0f766e;
+            color: #2563eb;
             font-weight: 700;
             letter-spacing: 0.02em;
             text-transform: uppercase;
@@ -1773,6 +1886,29 @@ def render_floating_chat_dock():
             font-size: clamp(0.8rem, 0.12vw + 0.77rem, 0.9rem);
             padding-top: 0.38rem;
             padding-bottom: 0.38rem;
+            border-color: #cbdff2 !important;
+            color: #1f3b63 !important;
+            background: linear-gradient(180deg, #ffffff 0%, #f5f9ff 100%) !important;
+        }
+
+        div.st-key-floating_ai_panel .stButton > button[kind="primary"],
+        div.st-key-floating_ai_panel .stButton > button[data-testid="stBaseButton-primary"],
+        div.st-key-floating_ai_panel form button,
+        div.st-key-floating_ai_panel div[data-testid="stFormSubmitButton"] button,
+        div.st-key-floating_ai_panel .stButton > button:hover {
+            color: #ffffff !important;
+            border-color: #1d7ef2 !important;
+            background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%) !important;
+            box-shadow: 0 8px 20px rgba(37, 99, 235, 0.18);
+        }
+
+        div.st-key-floating_ai_panel .stButton > button[kind="primary"] *,
+        div.st-key-floating_ai_panel .stButton > button[data-testid="stBaseButton-primary"] *,
+        div.st-key-floating_ai_panel form button *,
+        div.st-key-floating_ai_panel div[data-testid="stFormSubmitButton"] button *,
+        div.st-key-floating_ai_panel .stButton > button:hover * {
+            color: #ffffff !important;
+            fill: #ffffff !important;
         }
 
         div.st-key-floating_ai_launcher .stButton > button:hover {
@@ -1842,7 +1978,7 @@ def render_floating_chat_dock():
     # Check for unread background responses
     _unread = st.session_state.get("_ai_bg_unread_count", 0)
     _responding = st.session_state.get("_ai_bg_responding", False)
-    if not st.session_state.get("_floating_ai_open", True):
+    if not st.session_state.get("_floating_ai_open", False):
         with st.container(key="floating_ai_launcher"):
             if _unread > 0:
                 _badge_class = "ai-notif-badge pulse" if _responding else "ai-notif-badge"
@@ -1859,18 +1995,28 @@ def render_floating_chat_dock():
                 st.session_state["_floating_ai_open"] = True
                 st.rerun()
 
-    if st.session_state.get("_floating_ai_open", True):
+    if st.session_state.get("_floating_ai_open", False):
         with st.container(key="floating_ai_panel"):
             dock_title = "AI Assistant" if lang == "en" else "AI 助手"
             dock_subtitle = (
-                "Describe your research task first, then I will map it to EasyICU."
+                "Grounded in your current page and selections."
                 if lang == "en" else
-                "先描述你的研究任务，我再帮你映射到 EasyICU 的具体步骤。"
+                "基于当前页面和已选配置给出建议。"
             )
             header_cols = st.columns([4.8, 0.8, 0.8, 0.8, 1, 1])
             with header_cols[0]:
                 st.markdown(
-                    f'<div class="floating-ai-header"><div><div class="floating-ai-title">💬 {dock_title}</div><div class="floating-ai-subtitle">{dock_subtitle}</div></div></div>',
+                    f'''
+                    <div class="floating-ai-header">
+                        <div class="floating-ai-title-row">
+                            <span class="floating-ai-avatar">🤖</span>
+                            <div>
+                                <div class="floating-ai-title">{dock_title}</div>
+                                <div class="floating-ai-subtitle">{dock_subtitle}</div>
+                            </div>
+                        </div>
+                    </div>
+                    ''',
                     unsafe_allow_html=True,
                 )
             with header_cols[1]:
@@ -1887,12 +2033,11 @@ def render_floating_chat_dock():
                     st.rerun()
             with header_cols[4]:
                 if st.button("—", key="_floating_ai_minimize_btn", use_container_width=True, help="Minimize" if lang == "en" else "最小化", disabled=export_locked):
-                    st.session_state["_floating_ai_open"] = False
+                    _close_floating_ai_panel(disable_assistant=False)
                     st.rerun()
             with header_cols[5]:
                 if st.button("✕", key="_floating_ai_close_btn", use_container_width=True, help="Close" if lang == "en" else "关闭", disabled=export_locked):
-                    st.session_state["_floating_ai_open"] = False
-                    st.session_state["_ai_pending_question"] = None
+                    _close_floating_ai_panel(disable_assistant=True)
                     st.rerun()
 
             if not st.session_state.llm_enabled:
@@ -1912,7 +2057,7 @@ def render_floating_chat_dock():
                     lang=lang,
                     panel_key="_llm_floating",
                     history_height=size_cfg["history_height"],
-                    show_starters=True,
+                    show_starters=False,
                 )
 
 

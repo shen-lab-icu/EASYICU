@@ -1477,6 +1477,58 @@ def slide(
         # Fallback to loop-based version for forward windows
         return _slide_loop(data, id_cols, index_col, before, after, agg_func, full_window)
 
+
+def _infer_numeric_time_unit(values: pd.Series, index_col: str | None = None) -> str:
+    """Infer the unit of numeric time axes used by sliding windows.
+
+    EasyICU normalizes public concept time columns such as ``charttime`` to
+    hours relative to ICU admission.  The previous heuristic used the maximum
+    timestamp and therefore misclassified long MIMIC-IV stays as minute-based,
+    which inflated 24-hour rolling windows in large-cohort SOFA extraction.
+    Prefer semantic column names, then fall back to the observed grid spacing.
+    """
+    name = (index_col or "").lower()
+    hour_like = {
+        "charttime",
+        "time",
+        "starttime",
+        "endtime",
+        "itemtime",
+        "datetime",
+        "measuredat",
+        "givenat",
+        "enteredentryat",
+    }
+    minute_like = {
+        "offset",
+        "observationoffset",
+        "nursingchartoffset",
+        "labresultoffset",
+        "respchartoffset",
+        "intakeoutputoffset",
+        "intakeoutputentryoffset",
+        "measuredat_minutes",
+    }
+    if name in hour_like:
+        return "h"
+    if name in minute_like or name.endswith("offset"):
+        return "min"
+
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if len(numeric) >= 2:
+        diffs = numeric.sort_values().diff().dropna()
+        positive = diffs[diffs > 0]
+        if len(positive):
+            step = float(positive.median())
+            if step >= 900:
+                return "s"
+            if step >= 15:
+                return "min"
+            return "h"
+
+    return "h"
+
+
 def _slide_vectorized(
     data: pd.DataFrame,
     id_cols: list,
@@ -1572,16 +1624,7 @@ def _slide_vectorized(
         
         # Set time as index for rolling
         if is_numeric_time:
-            # Auto-detect time unit (SICdb uses seconds, others use hours)
-            time_vals = group[index_col].dropna()
-            max_val = time_vals.abs().max() if len(time_vals) > 0 else 0
-            if max_val > 8760:
-                if max_val > 525600:
-                    time_unit = 's'
-                else:
-                    time_unit = 'min'
-            else:
-                time_unit = 'h'
+            time_unit = _infer_numeric_time_unit(group[index_col], index_col)
             group_with_td = group.copy()
             group_with_td['__temp_time__'] = pd.to_timedelta(group[index_col], unit=time_unit)
             group_indexed = group_with_td.set_index('__temp_time__')
@@ -1683,15 +1726,7 @@ def _slide_vectorized_bulk(
     
     # Convert time to TimedeltaIndex for pandas rolling
     if is_numeric_time:
-        # Auto-detect time unit
-        time_vals = data[index_col].dropna()
-        max_val = time_vals.abs().max() if len(time_vals) > 0 else 0
-        if max_val > 525600:
-            time_unit = 's'
-        elif max_val > 8760:
-            time_unit = 'min'
-        else:
-            time_unit = 'h'
+        time_unit = _infer_numeric_time_unit(data[index_col], index_col)
         td_index = pd.to_timedelta(data[index_col], unit=time_unit)
     else:
         td_index = pd.to_datetime(data[index_col])
@@ -1747,9 +1782,9 @@ def _slide_vectorized_bulk(
         group_min = data.groupby(id_cols, sort=False)[index_col].transform('min')
         time_diff = data[index_col] - group_min
         if is_numeric_time:
-            if max_val > 525600:
+            if time_unit == 's':
                 threshold = window_size_hours * 3600
-            elif max_val > 8760:
+            elif time_unit == 'min':
                 threshold = window_size_hours * 60
             else:
                 threshold = window_size_hours
