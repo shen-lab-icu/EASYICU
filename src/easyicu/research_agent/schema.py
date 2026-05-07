@@ -94,7 +94,16 @@ class MissingnessProfile(BaseModel):
     fraction_missing: float = Field(ge=0.0, le=1.0)
     n_missing: int = Field(ge=0)
     n_total: int = Field(ge=0)
-    missingness_kind: Literal["MCAR_likely", "MAR_likely", "MNAR_likely", "unknown"] = "unknown"
+    missingness_severity: Literal["low", "medium", "high", "unknown"] = "unknown"
+    missingness_kind: Optional[str] = Field(
+        default=None,
+        description="Deprecated heuristic label retained for backward compatibility.",
+    )
+    missingness_test: Optional[str] = Field(
+        default=None,
+        description="Name of a formal missingness test if one was run, e.g. Little's MCAR test.",
+    )
+    missingness_test_p_value: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     notes: Optional[str] = None
 
 
@@ -263,6 +272,18 @@ class EvidenceRecord(BaseModel):
     produced_by_step: Optional[str] = None
     inputs: List[str] = Field(default_factory=list)
     script_evidence_id: Optional[str] = None
+    producer: Optional[str] = Field(
+        default=None,
+        description="Which subsystem produced this artefact, e.g. planner/coder/writer/pipeline.",
+    )
+    generation_mode: Optional[str] = Field(
+        default=None,
+        description="Provenance mode such as llm, repaired, fallback, deterministic_skill, or system.",
+    )
+    prompt_pack_version: Optional[str] = None
+    finding_severity: Optional[Literal["info", "warning", "error"]] = None
+    finding_messages: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -332,6 +353,10 @@ class AnalysisManifest(BaseModel):
     cost_records: List[CostRecord] = Field(default_factory=list)
     report_path: Optional[str] = None
     manuscript_path: Optional[str] = None
+    llm_signature: Optional[str] = None
+    used_mock_llm: bool = False
+    prompt_pack_version: Optional[str] = None
+    prompt_pack_files: Dict[str, str] = Field(default_factory=dict)
     notes: Optional[str] = None
 
 

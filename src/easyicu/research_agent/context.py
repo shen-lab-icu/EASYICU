@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import pandas as pd
 
 from .icu_rules import (
@@ -55,21 +56,20 @@ def _safe_get_concept_info(name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _missingness_kind(fraction: float) -> str:
-    """Crude heuristic — over-conservative on purpose.
+def _missingness_severity(fraction: float) -> str:
+    """Operational severity label for missingness.
 
-    The point of this field is *not* to authoritatively classify
-    missingness mechanism (that needs domain reasoning) — it is to
-    nudge the agent into checking when missingness is high enough
-    that ignoring it is risky.
+    Unlike MCAR/MAR/MNAR, this label intentionally avoids claiming a
+    mechanism from the fraction missing alone. It only communicates
+    how disruptive the observed missingness burden is likely to be.
     """
     if fraction == 0.0:
-        return "MCAR_likely"
+        return "low"
     if fraction < 0.05:
-        return "MCAR_likely"
+        return "low"
     if fraction < 0.30:
-        return "MAR_likely"
-    return "MNAR_likely"
+        return "medium"
+    return "high"
 
 
 def _profile_missingness(series: pd.Series) -> MissingnessProfile:
@@ -80,8 +80,123 @@ def _profile_missingness(series: pd.Series) -> MissingnessProfile:
         fraction_missing=fraction,
         n_missing=n_missing,
         n_total=n_total,
-        missingness_kind=_missingness_kind(fraction),  # type: ignore[arg-type]
+        missingness_severity=_missingness_severity(fraction),  # type: ignore[arg-type]
+        missingness_test="not_run",
     )
+
+
+def _compute_missingness_test_metadata(df: pd.DataFrame) -> Dict[str, Any]:
+    """Best-effort global Little's MCAR test over a small numeric panel."""
+    numeric = df.select_dtypes(include=["number", "bool"]).replace([np.inf, -np.inf], np.nan)
+    if numeric.empty:
+        return {"name": "not_run", "p_value": None, "note": "no_numeric_variables"}
+    numeric = numeric.loc[:, numeric.isna().any()]
+    if numeric.shape[1] < 2:
+        return {"name": "not_run", "p_value": None, "note": "fewer_than_two_incomplete_numeric_variables"}
+    cols = [
+        col for col in numeric.columns
+        if numeric[col].notna().sum() >= max(10, int(len(numeric) * 0.2))
+    ]
+    if len(cols) < 2:
+        return {"name": "not_run", "p_value": None, "note": "insufficient_complete_support"}
+    panel = numeric[cols[: min(len(cols), 8)]]
+    complete = panel.dropna()
+    if len(complete) < max(10, panel.shape[1] + 2):
+        return {"name": "not_run", "p_value": None, "note": "too_few_complete_cases_for_mcar_screen"}
+    try:
+        from scipy.stats import chi2  # type: ignore
+    except Exception:
+        return {"name": "not_run", "p_value": None, "note": "scipy_unavailable"}
+
+    mu, cov = _estimate_mvn_with_em(panel.to_numpy(dtype=float))
+
+    pattern_df = panel.isna().astype(int)
+    patterns = pattern_df.astype(str).agg("".join, axis=1)
+    stat = 0.0
+    dof = 0
+    for pattern, idx in patterns.groupby(patterns).groups.items():
+        observed = [i for i, marker in enumerate(pattern) if marker == "0"]
+        if not observed:
+            continue
+        sub = panel.iloc[list(idx), observed].dropna()
+        if sub.empty:
+            continue
+        mu_obs = mu[observed]
+        cov_obs = np.asarray(cov)[np.ix_(observed, observed)]
+        try:
+            inv = np.linalg.pinv(cov_obs)
+        except Exception:
+            continue
+        diff = sub.mean().to_numpy(dtype=float) - mu_obs
+        stat += float(len(sub) * (diff.T @ inv @ diff))
+        dof += len(observed)
+    dof = max(dof - panel.shape[1], 1)
+    p_value = float(chi2.sf(stat, dof))
+    return {
+        "name": "little_mcar_em",
+        "p_value": p_value,
+        "note": f"panel={panel.shape[1]}vars/{len(panel)}rows complete_cases={len(complete)}",
+    }
+
+
+def _estimate_mvn_with_em(
+    data: np.ndarray,
+    *,
+    max_iter: int = 100,
+    tol: float = 1e-6,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Estimate MVN mean/covariance under missingness via a simple EM loop."""
+    x = np.asarray(data, dtype=float)
+    if x.ndim != 2:
+        raise ValueError("data must be a 2D array")
+    n, p = x.shape
+    mu = np.nanmean(x, axis=0)
+    mu = np.where(np.isfinite(mu), mu, 0.0)
+    filled = np.where(np.isnan(x), mu, x)
+    cov = np.cov(filled, rowvar=False)
+    if np.ndim(cov) == 0:
+        cov = np.array([[float(cov)]], dtype=float)
+    cov = np.asarray(cov, dtype=float)
+    cov += np.eye(p) * 1e-6
+
+    for _ in range(max_iter):
+        expected_rows: List[np.ndarray] = []
+        second_moments: List[np.ndarray] = []
+        for row in x:
+            obs = np.flatnonzero(~np.isnan(row))
+            mis = np.flatnonzero(np.isnan(row))
+            if len(mis) == 0:
+                row_expectation = row.astype(float)
+                second = np.outer(row_expectation, row_expectation)
+            elif len(obs) == 0:
+                row_expectation = mu.copy()
+                second = cov + np.outer(mu, mu)
+            else:
+                sigma_oo = cov[np.ix_(obs, obs)] + np.eye(len(obs)) * 1e-8
+                sigma_mo = cov[np.ix_(mis, obs)]
+                sigma_om = cov[np.ix_(obs, mis)]
+                sigma_mm = cov[np.ix_(mis, mis)]
+                inv_oo = np.linalg.pinv(sigma_oo)
+                row_expectation = row.copy().astype(float)
+                cond_mean = mu[mis] + sigma_mo @ inv_oo @ (row[obs] - mu[obs])
+                cond_cov = sigma_mm - sigma_mo @ inv_oo @ sigma_om
+                row_expectation[mis] = cond_mean
+                second = np.outer(row_expectation, row_expectation)
+                second[np.ix_(mis, mis)] += cond_cov
+            expected_rows.append(row_expectation)
+            second_moments.append(second)
+
+        expected = np.vstack(expected_rows)
+        mu_new = expected.mean(axis=0)
+        cov_new = np.mean(second_moments, axis=0) - np.outer(mu_new, mu_new)
+        cov_new = (cov_new + cov_new.T) / 2.0
+        cov_new += np.eye(p) * 1e-6
+
+        if np.max(np.abs(mu_new - mu)) < tol and np.max(np.abs(cov_new - cov)) < tol:
+            mu, cov = mu_new, cov_new
+            break
+        mu, cov = mu_new, cov_new
+    return mu, cov
 
 
 def _allowed_aggregations(role: VariableRole, kind: VariableKind) -> List[AggregationRule]:
@@ -174,6 +289,7 @@ def build_research_context(
     # --- per-column descriptors
     descriptors: List[ConceptDescriptor] = []
     user_descriptions = dict(concept_descriptions or {})
+    missingness_test_meta = _compute_missingness_test_metadata(df)
     for col in df.columns:
         descriptors.append(
             _describe_column(
@@ -183,6 +299,7 @@ def build_research_context(
                 id_columns=id_columns,
                 time_columns=time_columns,
                 outcome_columns=outcome_columns,
+                missingness_test_meta=missingness_test_meta,
             )
         )
 
@@ -214,6 +331,7 @@ def _describe_column(
     id_columns: Sequence[str],
     time_columns: Sequence[str],
     outcome_columns: Sequence[str],
+    missingness_test_meta: Dict[str, Any],
 ) -> ConceptDescriptor:
     series = df[col]
     sample = series.dropna().head(50).tolist() if len(series) else []
@@ -245,6 +363,12 @@ def _describe_column(
 
     allowed = _allowed_aggregations(role, hint.kind)
     miss = _profile_missingness(series)
+    if miss.fraction_missing > 0 and missingness_test_meta.get("name") != "not_run":
+        miss.missingness_test = str(missingness_test_meta.get("name"))
+        miss.missingness_test_p_value = missingness_test_meta.get("p_value")
+        note = missingness_test_meta.get("note")
+        if note:
+            miss.notes = str(note)
 
     return ConceptDescriptor(
         name=col,

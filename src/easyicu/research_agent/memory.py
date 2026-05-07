@@ -83,7 +83,7 @@ class RunMemory:
                 notable.append({
                     "validator": f.validator,
                     "severity": f.severity,
-                    "message": f.message[:200],
+                    "message": f.message,
                 })
         record = RunMemoryRecord(
             run_id=run_id,

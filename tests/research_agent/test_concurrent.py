@@ -151,9 +151,11 @@ def test_concurrent_pipeline_records_sorted_by_plan_order(ra, synthetic_cohort, 
         "the pipeline sorted per_step_records before rendering."
     )
 
-    # Sanity: the partial manifest contains every step (status=ok or skipped).
+    # Sanity: the partial manifest contains every planned step, plus the
+    # optional probe pre-step when probe mode is enabled.
     seen = {r["step_id"] for r in partial.get("per_step_records", [])}
-    assert seen == set(plan_step_ids)
+    assert set(plan_step_ids) <= seen
+    assert seen - set(plan_step_ids) <= {"00_probe"}
 
 
 def test_concurrent_default_one_worker_keeps_sequential_path(ra, synthetic_cohort, tmp_path):

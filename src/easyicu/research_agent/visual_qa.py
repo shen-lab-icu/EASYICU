@@ -27,11 +27,21 @@ References
 from __future__ import annotations
 
 import json
+import math
+import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+import xml.etree.ElementTree as ET
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 from .llm import LLMClient, LLMMessage
 from .schema import ValidationFinding
+
+
+class _TextBox(NamedTuple):
+    text: str
+    bbox: Tuple[float, float, float, float]
+    area: float
+    group_id: str
 
 
 class VisualQAAuditor:
@@ -55,6 +65,14 @@ class VisualQAAuditor:
         self.vlm_adapter = vlm_adapter
 
     def audit(self, *, figure_paths: List[Path]) -> List[ValidationFinding]:
+        return self.audit_with_expected(figure_paths=figure_paths, expected_numeric_by_path=None)
+
+    def audit_with_expected(
+        self,
+        *,
+        figure_paths: List[Path],
+        expected_numeric_by_path: Optional[Dict[str, Dict[str, float]]] = None,
+    ) -> List[ValidationFinding]:
         findings: List[ValidationFinding] = []
         try:
             from PIL import Image  # type: ignore
@@ -63,6 +81,8 @@ class VisualQAAuditor:
             _has_pil = False
 
         for p in figure_paths:
+            if p.suffix.lower() not in {".png", ".jpg", ".jpeg", ".svg", ".tiff", ".tif"}:
+                continue
             if not p.exists():
                 findings.append(ValidationFinding(
                     validator=self.name, severity="error",
@@ -82,6 +102,40 @@ class VisualQAAuditor:
                 continue
 
             if not _has_pil:
+                if p.suffix.lower() == ".svg":
+                    findings.extend(_audit_svg_text_layout(p, validator=self.name))
+                continue
+
+            if p.suffix.lower() == ".svg":
+                findings.extend(_audit_svg_text_layout(p, validator=self.name))
+                expected_numeric = None
+                if expected_numeric_by_path:
+                    expected_numeric = (
+                        expected_numeric_by_path.get(str(p))
+                        or expected_numeric_by_path.get(str(p.resolve()))
+                    )
+                if expected_numeric:
+                    findings.extend(
+                        _audit_svg_numeric_consistency(
+                            p,
+                            validator=self.name,
+                            expected_numeric=expected_numeric,
+                        )
+                    )
+                try:
+                    view_box = _svg_view_box(ET.parse(p).getroot())
+                except Exception:
+                    view_box = None
+                if view_box is not None:
+                    w = int(round(view_box[2] - view_box[0]))
+                    h = int(round(view_box[3] - view_box[1]))
+                    if w < 200 or h < 150:
+                        findings.append(ValidationFinding(
+                            validator=self.name,
+                            severity="warning",
+                            message=f"Figure '{p.name}' is unusually small for publication ({w}x{h}).",
+                            detail={"path": str(p), "size": [w, h]},
+                        ))
                 continue
 
             try:
@@ -89,7 +143,6 @@ class VisualQAAuditor:
                     im.load()
                     w, h = im.size
                     extrema = im.getextrema() if im.mode != "P" else None
-                    mode = im.mode
             except Exception as exc:
                 findings.append(ValidationFinding(
                     validator=self.name, severity="error",
@@ -123,12 +176,367 @@ class VisualQAAuditor:
                         validator=self.name, severity="warning",
                         message=f"Figure '{p.name}' appears to be solid-colour (likely empty plot).",
                         detail={"path": str(p), "extrema": list(extrema)},
-                        ))
+                    ))
+
+            if p.suffix.lower() in {".png", ".pdf"} and not p.with_suffix(".svg").exists():
+                findings.append(ValidationFinding(
+                    validator=self.name,
+                    severity="info",
+                    message=(
+                        f"Figure '{p.name}' has no same-stem SVG export; "
+                        "deterministic text-layout QA is limited."
+                    ),
+                    detail={"path": str(p), "expected_svg": str(p.with_suffix(".svg"))},
+                ))
 
         if self.vlm_adapter is not None:
             findings.extend(self.vlm_adapter.audit(figure_paths=figure_paths))
 
         return findings
+
+
+def _audit_svg_text_layout(
+    path: Path,
+    *,
+    validator: str,
+    overlap_fraction: float = 0.08,
+    edge_tolerance: float = 1.5,
+) -> List[ValidationFinding]:
+    """Best-effort offline layout QA for editable matplotlib SVG exports.
+
+    The check intentionally stays conservative. It estimates text extents
+    from SVG text nodes and flags only obvious collisions or cropped labels,
+    which are the failure mode most likely to slip past file-size/blank-image
+    checks in agent-generated multi-panel figures.
+    """
+    try:
+        root = ET.parse(path).getroot()
+    except Exception as exc:
+        return [
+            ValidationFinding(
+                validator=validator,
+                severity="error",
+                message=f"Could not parse SVG figure '{path.name}' for text-layout QA: {exc}",
+                detail={"path": str(path)},
+            )
+        ]
+
+    view_box = _svg_view_box(root)
+    boxes = list(_svg_text_boxes(root))
+    findings: List[ValidationFinding] = []
+
+    if view_box is not None:
+        vx0, vy0, vx1, vy1 = view_box
+        cropped = []
+        for box in boxes:
+            x0, y0, x1, y1 = box.bbox
+            if (
+                x0 < vx0 - edge_tolerance
+                or y0 < vy0 - edge_tolerance
+                or x1 > vx1 + edge_tolerance
+                or y1 > vy1 + edge_tolerance
+            ):
+                cropped.append(box)
+        if cropped:
+            sample = cropped[:4]
+            findings.append(ValidationFinding(
+                validator=validator,
+                severity="warning",
+                message=(
+                    f"SVG figure '{path.name}' has text outside the canvas; "
+                    "labels may be cropped or pushed into the export margin."
+                ),
+                detail={
+                    "path": str(path),
+                    "count": len(cropped),
+                    "examples": [b.text[:80] for b in sample],
+                },
+            ))
+
+    overlaps = []
+    for i, left in enumerate(boxes):
+        for right in boxes[i + 1:]:
+            if left.group_id and left.group_id == right.group_id:
+                # Tick-label fragments and multiline labels from the same
+                # matplotlib text group can share a conservative estimate.
+                continue
+            inter = _intersection_area(left.bbox, right.bbox)
+            if inter <= 0:
+                continue
+            denom = max(min(left.area, right.area), 1e-6)
+            frac = inter / denom
+            if frac >= overlap_fraction:
+                overlaps.append((left, right, frac))
+
+    if overlaps:
+        overlaps.sort(key=lambda item: item[2], reverse=True)
+        sample = overlaps[:5]
+        findings.append(ValidationFinding(
+            validator=validator,
+            severity="error",
+            message=(
+                f"SVG figure '{path.name}' has overlapping text elements; "
+                "multi-panel labels, annotations or axis text need more spacing."
+            ),
+            detail={
+                "path": str(path),
+                "count": len(overlaps),
+                "examples": [
+                    {
+                        "text_a": a.text[:80],
+                        "text_b": b.text[:80],
+                        "overlap_fraction": round(frac, 3),
+                    }
+                    for a, b, frac in sample
+                ],
+            },
+        ))
+
+    return findings
+
+
+def _audit_svg_numeric_consistency(
+    path: Path,
+    *,
+    validator: str,
+    expected_numeric: Dict[str, float],
+) -> List[ValidationFinding]:
+    """Check whether expected step-summary values appear in the editable SVG text.
+
+    This is intentionally conservative and non-blocking. It only verifies that
+    numeric values the agent typically annotates in manuscript figures are
+    visibly present in the SVG text layer; if none are, the user still needs a
+    manual check, but we at least flag the gap.
+    """
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return []
+    boxes = list(_svg_text_boxes(root))
+    text_blob = " ".join(box.text for box in boxes)
+    if not text_blob.strip():
+        return []
+    present_tokens = set(re.findall(r"[-+]?\d+(?:\.\d+)?", text_blob))
+    if not present_tokens:
+        return []
+    missing = []
+    for label, value in expected_numeric.items():
+        variants = _format_expected_numeric_variants(float(value))
+        if not any(v in present_tokens for v in variants):
+            missing.append({"label": label, "value": float(value), "accepted": sorted(variants)})
+    if not missing:
+        return []
+    return [
+        ValidationFinding(
+            validator=validator,
+            severity="warning",
+            message=(
+                f"SVG figure '{path.name}' does not visibly contain one or more "
+                "expected summary values from step_summary.json. Check figure-to-evidence "
+                "numeric consistency before manuscript use."
+            ),
+            detail={"path": str(path), "missing_expected_values": missing[:8]},
+        )
+    ]
+
+
+def audit_svg_text_layout(
+    path: Path,
+    *,
+    validator: str = "visual_qa",
+) -> List[ValidationFinding]:
+    """Public wrapper for deterministic SVG text-collision QA."""
+    return _audit_svg_text_layout(Path(path), validator=validator)
+
+
+def _svg_view_box(root: ET.Element) -> Optional[Tuple[float, float, float, float]]:
+    raw = root.attrib.get("viewBox") or root.attrib.get("viewbox")
+    if raw:
+        parts = [_to_float(p) for p in re.split(r"[\s,]+", raw.strip()) if p]
+        if len(parts) == 4 and all(p is not None for p in parts):
+            x, y, w, h = [float(p) for p in parts if p is not None]
+            return (x, y, x + w, y + h)
+    width = _to_float(root.attrib.get("width", ""))
+    height = _to_float(root.attrib.get("height", ""))
+    if width is not None and height is not None:
+        return (0.0, 0.0, width, height)
+    return None
+
+
+def _svg_text_boxes(root: ET.Element) -> Iterable[_TextBox]:
+    counter = 0
+
+    def visit(node: ET.Element, inherited_group: str) -> Iterable[_TextBox]:
+        nonlocal counter
+        tag = _strip_ns(node.tag)
+        group_id = inherited_group
+        node_id = node.attrib.get("id", "")
+        if tag == "g" and node_id:
+            group_id = node_id
+        if tag == "text":
+            text = "".join(node.itertext()).strip()
+            if text:
+                counter += 1
+                bbox = _estimate_svg_text_bbox(node, text)
+                if bbox is not None:
+                    x0, y0, x1, y1 = bbox
+                    area = max((x1 - x0) * (y1 - y0), 0.0)
+                    yield _TextBox(
+                        text=text,
+                        bbox=bbox,
+                        area=area,
+                        group_id=group_id or f"text_{counter}",
+                    )
+        for child in list(node):
+            yield from visit(child, group_id)
+
+    yield from visit(root, "")
+
+
+def _estimate_svg_text_bbox(
+    node: ET.Element,
+    text: str,
+) -> Optional[Tuple[float, float, float, float]]:
+    x = _to_float(node.attrib.get("x", ""))
+    y = _to_float(node.attrib.get("y", ""))
+    if x is None or y is None:
+        return None
+
+    style = node.attrib.get("style", "")
+    font_size = (
+        _style_float(style, "font-size")
+        or _to_float(node.attrib.get("font-size", ""))
+        or 10.0
+    )
+    anchor = _style_value(style, "text-anchor") or node.attrib.get("text-anchor", "start")
+    width = max(_estimated_text_width(text, font_size), font_size * 0.5)
+    height = max(font_size * 1.15, 1.0)
+
+    if anchor == "middle":
+        left = x - width / 2.0
+    elif anchor == "end":
+        left = x - width
+    else:
+        left = x
+    # SVG text y is the baseline. This is intentionally a little taller
+    # than the nominal glyph box so obvious line collisions are caught.
+    top = y - height * 0.82
+    right = left + width
+    bottom = top + height
+
+    angle, cx, cy = _rotation(node.attrib.get("transform", ""), x, y)
+    if abs(angle) < 1e-6:
+        return (left, top, right, bottom)
+
+    corners = [
+        _rotate_point(left, top, angle, cx, cy),
+        _rotate_point(right, top, angle, cx, cy),
+        _rotate_point(right, bottom, angle, cx, cy),
+        _rotate_point(left, bottom, angle, cx, cy),
+    ]
+    xs = [p[0] for p in corners]
+    ys = [p[1] for p in corners]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _estimated_text_width(text: str, font_size: float) -> float:
+    width = 0.0
+    for ch in text:
+        if ch.isspace():
+            width += 0.32
+        elif ord(ch) > 127:
+            width += 0.95
+        elif ch in ".,:;|!ilI[]()'`":
+            width += 0.28
+        elif ch in "MW@%#":
+            width += 0.82
+        else:
+            width += 0.56
+    return width * font_size
+
+
+def _rotation(
+    transform: str,
+    default_x: float,
+    default_y: float,
+) -> Tuple[float, float, float]:
+    match = re.search(
+        r"rotate\(\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)"
+        r"(?:[\s,]+([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)[\s,]+([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?))?",
+        transform or "",
+    )
+    if not match:
+        return (0.0, default_x, default_y)
+    angle = float(match.group(1))
+    cx = float(match.group(2)) if match.group(2) is not None else default_x
+    cy = float(match.group(3)) if match.group(3) is not None else default_y
+    return (angle, cx, cy)
+
+
+def _format_expected_numeric_variants(value: float) -> Set[str]:
+    variants = {
+        str(int(value)) if float(value).is_integer() else None,
+        f"{value:.1f}",
+        f"{value:.2f}",
+        f"{value:.3f}",
+    }
+    cleaned = {v for v in variants if v is not None}
+    cleaned.add(str(value))
+    return cleaned
+
+
+def _rotate_point(
+    x: float,
+    y: float,
+    angle_deg: float,
+    cx: float,
+    cy: float,
+) -> Tuple[float, float]:
+    theta = math.radians(angle_deg)
+    cos_t = math.cos(theta)
+    sin_t = math.sin(theta)
+    dx = x - cx
+    dy = y - cy
+    return (cx + dx * cos_t - dy * sin_t, cy + dx * sin_t + dy * cos_t)
+
+
+def _intersection_area(
+    a: Tuple[float, float, float, float],
+    b: Tuple[float, float, float, float],
+) -> float:
+    x0 = max(a[0], b[0])
+    y0 = max(a[1], b[1])
+    x1 = min(a[2], b[2])
+    y1 = min(a[3], b[3])
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    return (x1 - x0) * (y1 - y0)
+
+
+def _style_value(style: str, key: str) -> Optional[str]:
+    for part in (style or "").split(";"):
+        if ":" not in part:
+            continue
+        k, v = part.split(":", 1)
+        if k.strip() == key:
+            return v.strip()
+    return None
+
+
+def _style_float(style: str, key: str) -> Optional[float]:
+    value = _style_value(style, key)
+    return _to_float(value or "")
+
+
+def _to_float(value: str) -> Optional[float]:
+    match = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", value or "")
+    if not match:
+        return None
+    return float(match.group(0))
+
+
+def _strip_ns(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
 class VLMVisualQAAdapter:
@@ -307,5 +715,6 @@ def parse_vlm_visual_qa_response(
 __all__ = [
     "VisualQAAuditor",
     "VLMVisualQAAdapter",
+    "audit_svg_text_layout",
     "parse_vlm_visual_qa_response",
 ]

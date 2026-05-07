@@ -98,3 +98,31 @@ def test_aliases_are_persisted(ra, tmp_path: Path):
     store2 = ra.EvidenceStore(root=tmp_path)
     got = store2.get("table_one")
     assert got is not None and got.evidence_id == rec.evidence_id
+
+
+def test_evidence_id_is_stable_for_same_content(ra, tmp_path: Path):
+    src = tmp_path / "stable.csv"
+    src.write_text("a\n1\n", encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    first = store.register_file(kind="table", description="stable", source_path=src)
+
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    same = other_dir / "stable.csv"
+    same.write_text("a\n1\n", encoding="utf-8")
+    second = store.register_file(kind="table", description="stable copy", source_path=same)
+    assert first.evidence_id == second.evidence_id
+
+
+def test_bind_manuscript_propagates_warning_caveat(ra, tmp_path: Path):
+    src = tmp_path / "table_one.csv"
+    src.write_text("a,b\n1,2\n", encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    rec = store.register_file(kind="table", description="t1", source_path=src)
+    store.update_record(
+        rec.evidence_id,
+        finding_severity="warning",
+        finding_messages=["example warning"],
+    )
+    bound = store.bind_manuscript("See {evidence:table_one}.")
+    assert "(warning: see manifest)" in bound

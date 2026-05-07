@@ -25,3 +25,18 @@ def test_runner_records_real_duration(ra, tmp_path: Path):
     assert 0 <= result.duration_seconds < 10
     log_text = (result.cwd / "run.log").read_text(encoding="utf-8")
     assert "duration_seconds:" in log_text
+
+
+def test_runner_build_command_defaults_to_network_isolation(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+    )
+    cmd = runner.build_command(script_path=Path("/tmp/demo.py"))
+    joined = " ".join(cmd)
+    assert "demo.py" in joined
+    if "sandbox-exec" in joined:
+        assert "deny network" in joined

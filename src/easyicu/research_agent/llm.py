@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Sequence
 
+from .analysis_types import infer_analysis_type
+from .skills import build_dynamic_core_plan_steps
 from .schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -100,7 +102,12 @@ class MockLLMClient:
             # intents that mention the word 'plan' (e.g. 'cross-database
             # replication plan'), so plan matching must come last.
             upper = last_user.upper()
-            if "WRITE THE PYTHON CODE FOR STEP" in upper or "WRITE THE PYTHON CODE" in upper:
+            if (
+                "WRITE THE PYTHON CODE FOR STEP" in upper
+                or "WRITE THE PYTHON CODE" in upper
+                or "REPAIR THE PYTHON CODE FOR STEP" in upper
+                or "REPAIR THE PYTHON CODE" in upper
+            ):
                 response = _mock_code_for_step(ctx, last_user)
             elif "INTERPRET THE RESULTS OF STEP" in upper or "INTERPRET THE RESULTS" in upper:
                 response = _mock_interpretation(ctx, last_user)
@@ -114,6 +121,12 @@ class MockLLMClient:
                     or "SIMPLIFIED CHINESE" in upper
                 ) else "en"
                 response = _mock_manuscript_scaffold(ctx, language=language)
+            elif (
+                "REVISE THE ICU-AWARE RESEARCH PLAN" in upper
+                or "REVISE THE RESEARCH PLAN" in upper
+                or "COMPLETED STEP RECORDS" in upper and "CURRENT PLAN" in upper
+            ):
+                response = _mock_replan_json(ctx, last_user)
             elif (
                 "ICU-AWARE RESEARCH PLAN" in upper
                 or "RESEARCH PLAN AS JSON" in upper
@@ -197,89 +210,27 @@ def _mock_literature(ctx: ResearchContext) -> str:
 def _mock_plan_json(ctx: ResearchContext) -> str:
     """Compose a minimal but valid AnalysisPlan as JSON.
 
-    The mock plan always includes:
-
-    * a cohort summary table (Table 1),
-    * outcome incidence,
-    * primary association (target_outcome ~ key predictor) with the
-      ICU-aware aggregation defaults,
-    * a missingness audit step,
-    * a stratum-level sanity check (specifically detects sofa==0 / sofa2==0
-      anomaly when the score is in scope),
-    * cross-database notes if requested.
+    The mock plan keeps the outer research loop deterministic while
+    selecting inner analysis steps dynamically from the question and
+    context. This mirrors the default ClinicalSkill behaviour: keep
+    the governance structure stable, but avoid forcing the same
+    descriptive checks for every research question.
     """
     outcome = ctx.target_outcome or _pick_outcome(ctx)
     primary_pred = _pick_primary_predictor(ctx, outcome=outcome)
-
-    steps: List[AnalysisStep] = [
-        AnalysisStep(
-            step_id="01_table_one",
-            intent="Produce a Table 1 cohort summary respecting variable kinds (median/IQR for skewed labs, n/% for binary, max for ordinal scores).",
-            inputs=[v.name for v in ctx.variables if v.role != VariableRole.ID],
-            expected_outputs=["table:table_one"],
-            method="descriptive",
-            icu_rule_refs=["aggregation_rule_for", "default_time_windows"],
-        ),
-        AnalysisStep(
-            step_id="02_outcome_incidence",
-            intent=f"Report incidence of {outcome} overall and by relevant strata.",
-            inputs=[outcome] if outcome else [],
-            expected_outputs=["table:outcome_incidence", "statistic:outcome_rate"],
-            method="incidence",
-        ),
-        AnalysisStep(
-            step_id="03_missingness_audit",
-            intent="Compute missingness fraction per variable and flag variables with >30% missing or component-level missingness suggesting MNAR.",
-            inputs=[v.name for v in ctx.variables],
-            expected_outputs=["table:missingness", "figure:missingness_heatmap"],
-            method="missingness",
-            icu_rule_refs=["missingness_kind"],
-        ),
-    ]
-
-    if primary_pred is not None and outcome is not None:
-        steps.append(
-            AnalysisStep(
-                step_id="04_primary_association",
-                intent=(
-                    f"Estimate the association between {primary_pred} and {outcome} "
-                    "using the predictor's ICU-aware aggregation default and the "
-                    "first_24h time-window anchor."
-                ),
-                inputs=[primary_pred, outcome],
-                expected_outputs=[
-                    "table:primary_association",
-                    "figure:primary_association_curve",
-                    "statistic:primary_or",
-                ],
-                method="logistic_regression_or_kaplan_meier",
-                icu_rule_refs=["aggregation_rule_for", "default_time_windows"],
-            )
-        )
-
-    # Role-aware SOFA detection: only treat the column as a score if
-    # the context says so. This is what makes the T1.4 hero ablation
-    # meaningful — a naive context strips role info, the planner stops
-    # planning the audit, and the missing audit shows up in the bound
-    # manuscript as ``[evidence missing: sofa_strata]``.
-    sofa_var = _pick_sofa_score(ctx)
-    if sofa_var and outcome:
-        steps.append(
-            AnalysisStep(
-                step_id="05_sofa_zero_audit",
-                intent=(
-                    f"Stratum-level audit: report incidence of {outcome} within each "
-                    f"{sofa_var} integer level. Flag {sofa_var}==0 if its outcome rate "
-                    "is out of monotonic order — likely indicates component-level "
-                    "missingness rather than 'no organ dysfunction'."
-                ),
-                inputs=[sofa_var, outcome],
-                expected_outputs=["table:sofa_strata", "figure:sofa_strata_curve",
-                                  "statistic:sofa_zero_anomaly"],
-                method="stratified_incidence",
-                icu_rule_refs=["sofa_pitfalls"],
-            )
-        )
+    analysis_type = infer_analysis_type(
+        ctx,
+        primary_predictor=primary_pred,
+        target_outcome=outcome,
+    )
+    steps = build_dynamic_core_plan_steps(
+        ctx,
+        primary_predictor=primary_pred,
+        target_outcome=outcome,
+        scope_label="current ICU research question",
+        rationale_note="Use the predictor's ICU-aware aggregation default and the first_24h anchor when applicable.",
+        analysis_type_key=analysis_type.key,
+    )
 
     if ctx.cross_database_validation:
         steps.append(
@@ -302,12 +253,54 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
         research_question=ctx.research_question,
         steps=steps,
         rationale=(
-            "Mock plan generated from ResearchContext. Each step references the "
-            "ICU rule that constrains it; a real LLM would produce richer prose "
-            "but the structural constraints would be the same."
+            f"Mock plan generated from ResearchContext for analysis type "
+            f"'{analysis_type.key}'. The outer loop stays stable, while inner "
+            "analysis steps are selected from the task family, variable roles "
+            "and missingness metadata instead of being forced as a one-size-fits-all checklist."
         ),
     )
     return plan.model_dump_json(indent=2)
+
+
+def _mock_replan_json(ctx: ResearchContext, prompt: str) -> str:
+    """Deterministic replan: preserve completed steps, adjust remaining plan conservatively."""
+    plan = AnalysisPlan.model_validate_json(_mock_plan_json(ctx))
+    try:
+        current_match = re.search(r"CURRENT PLAN:\n(\{.*?\})\n\nPROBE SUMMARY:", prompt, flags=re.DOTALL)
+        if current_match:
+            current = AnalysisPlan.model_validate_json(current_match.group(1))
+            plan = current
+    except Exception:
+        pass
+    outcome = ctx.target_outcome or _pick_outcome(ctx) or "outcome"
+    analysis_type = infer_analysis_type(
+        ctx,
+        primary_predictor=_pick_primary_predictor(ctx, outcome=outcome),
+        target_outcome=outcome,
+    )
+    probe_text = prompt.lower()
+    allows_score_audit = analysis_type.key in {
+        "association_study",
+        "descriptive_epidemiology",
+        "cross_database_replication",
+    }
+    if (
+        allows_score_audit
+        and "sofa_zero_anomaly" in probe_text
+        and not any("sofa_zero" in s.step_id for s in plan.steps)
+    ):
+        score = _pick_primary_predictor(ctx, outcome=outcome) or "sofa2"
+        plan.steps.append(
+            AnalysisStep(
+                step_id="05_sofa_zero_audit",
+                intent=f"Audit whether {score}==0 behaves anomalously relative to adjacent strata.",
+                inputs=[score, outcome],
+                expected_outputs=["table:sofa_strata", "statistic:stratum_audit"],
+                method="stratum_audit",
+                icu_rule_refs=["aggregation_rule_for"],
+            )
+        )
+    return plan.model_copy(update={"revision": plan.revision + 1}).model_dump_json(indent=2)
 
 
 def _pick_outcome(ctx: ResearchContext) -> Optional[str]:
@@ -453,71 +446,122 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         df = pd.read_parquet(cohort_path)
+        step_kind = {step_id!r}.lower()
+        do_table_one = "table_one" in step_kind
+        do_outcome_incidence = "outcome_incidence" in step_kind
+        do_missingness = "missingness" in step_kind
+        do_sofa_audit = any(token in step_kind for token in ("sofa_zero_audit", "stratum_audit", "composite"))
+        do_protocol_only = any(token in step_kind for token in ("protocol", "plan"))
+
         outcome_col = {outcome!r} if {outcome!r} in df.columns else None
         sofa_col = {sofa_var!r} if {sofa_var!r} else None
         if sofa_col and sofa_col not in df.columns:
             sofa_col = None
+        if not any((do_table_one, do_outcome_incidence, do_missingness, do_sofa_audit)):
+            if do_protocol_only:
+                do_table_one = False
+                do_outcome_incidence = False
+                do_missingness = False
+                do_sofa_audit = False
+            else:
+                do_table_one = True
+                do_outcome_incidence = True
+                do_missingness = True
+                do_sofa_audit = sofa_col is not None and outcome_col is not None
 
         summary = {{}}
 
+        if do_protocol_only:
+            protocol_lines = [
+                f"# Protocol note for {{step_kind}}",
+                f"- Research question: {ctx.research_question}",
+                "- Available variables: " + ", ".join(df.columns.astype(str).tolist()),
+                "- This is a task-family planning/protocol step rather than a finished effect estimate.",
+            ]
+            (out_dir / "protocol_notes.md").write_text("\\n".join(protocol_lines), encoding="utf-8")
+            summary["protocol_notes_path"] = "protocol_notes.md"
+
         # ---- Table 1: cohort summary, ICU-aware ----
-        rows = []
-        for col in df.columns:
-            s = df[col]
-            n = int(len(s))
-            n_miss = int(s.isna().sum())
-            row = {{
-                "variable": col,
-                "n": n,
-                "n_missing": n_miss,
-                "frac_missing": (n_miss / n) if n else 0.0,
-            }}
-            if pd.api.types.is_numeric_dtype(s):
-                if sofa_col is not None and col == sofa_col:
-                    # ordinal: report mode + range, never mean
-                    s_int = s.dropna().astype("Int64")
-                    if len(s_int) > 0:
-                        mode_val = int(s_int.mode().iloc[0])
+        if do_table_one:
+            rows = []
+            for col in df.columns:
+                s = df[col]
+                n = int(len(s))
+                n_miss = int(s.isna().sum())
+                row = {{
+                    "variable": col,
+                    "n": n,
+                    "n_missing": n_miss,
+                    "frac_missing": (n_miss / n) if n else 0.0,
+                }}
+                if pd.api.types.is_numeric_dtype(s):
+                    if sofa_col is not None and col == sofa_col:
+                        # ordinal: report mode + range, never mean
+                        s_int = s.dropna().astype("Int64")
+                        if len(s_int) > 0:
+                            mode_val = int(s_int.mode().iloc[0])
+                        else:
+                            mode_val = None
+                        row["mode"] = mode_val
+                        row["min"] = (None if s.dropna().empty else float(s.min()))
+                        row["max"] = (None if s.dropna().empty else float(s.max()))
                     else:
-                        mode_val = None
-                    row["mode"] = mode_val
-                    row["min"] = (None if s.dropna().empty else float(s.min()))
-                    row["max"] = (None if s.dropna().empty else float(s.max()))
-                else:
-                    s_clean = s.dropna()
-                    if len(s_clean) > 0:
-                        row["median"] = float(s_clean.median())
-                        row["q25"] = float(s_clean.quantile(0.25))
-                        row["q75"] = float(s_clean.quantile(0.75))
-            elif s.dtype == bool or set(s.dropna().unique()) <= {{0, 1}}:
-                pos = int(s.fillna(0).astype(int).sum())
-                row["n_positive"] = pos
-                row["pct_positive"] = (pos / n) if n else 0.0
-            rows.append(row)
-        table_one = pd.DataFrame(rows)
-        table_one.to_csv(out_dir / "table_one.csv", index=False)
-        summary["table_one_path"] = "table_one.csv"
+                        s_clean = s.dropna()
+                        if len(s_clean) > 0:
+                            row["median"] = float(s_clean.median())
+                            row["q25"] = float(s_clean.quantile(0.25))
+                            row["q75"] = float(s_clean.quantile(0.75))
+                elif s.dtype == bool or set(s.dropna().unique()) <= {{0, 1}}:
+                    pos = int(s.fillna(0).astype(int).sum())
+                    row["n_positive"] = pos
+                    row["pct_positive"] = (pos / n) if n else 0.0
+                rows.append(row)
+            table_one = pd.DataFrame(rows)
+            table_one.to_csv(out_dir / "table_one.csv", index=False)
+            summary["table_one_path"] = "table_one.csv"
 
         # ---- Outcome incidence ----
-        if outcome_col is not None:
+        if do_outcome_incidence and outcome_col is not None:
             inc = float(df[outcome_col].dropna().astype(int).mean())
             summary["outcome_col"] = outcome_col
             summary["outcome_rate"] = inc
+            pd.DataFrame([{{
+                "outcome": outcome_col,
+                "n_total": int(df[outcome_col].notna().sum()),
+                "n_events": int(df[outcome_col].dropna().astype(int).sum()),
+                "outcome_rate": inc,
+            }}]).to_csv(out_dir / "outcome_incidence.csv", index=False)
+            summary["outcome_incidence_path"] = "outcome_incidence.csv"
 
         # ---- Missingness audit ----
-        miss = pd.DataFrame({{
-            "variable": df.columns,
-            "n_missing": [int(df[c].isna().sum()) for c in df.columns],
-            "n_total": [int(len(df))] * len(df.columns),
-            "frac_missing": [
-                (int(df[c].isna().sum()) / max(len(df), 1)) for c in df.columns
-            ],
-        }})
-        miss.to_csv(out_dir / "missingness.csv", index=False)
-        summary["missingness_path"] = "missingness.csv"
+        if do_missingness:
+            miss = pd.DataFrame({{
+                "variable": df.columns,
+                "n_missing": [int(df[c].isna().sum()) for c in df.columns],
+                "n_total": [int(len(df))] * len(df.columns),
+                "frac_missing": [
+                    (int(df[c].isna().sum()) / max(len(df), 1)) for c in df.columns
+                ],
+            }})
+            miss.to_csv(out_dir / "missingness.csv", index=False)
+            summary["missingness_path"] = "missingness.csv"
+            try:
+                miss_plot = miss.sort_values("frac_missing", ascending=False).head(12)
+                fig, ax = plt.subplots(figsize=(5.2, max(2.8, 0.35 * len(miss_plot))))
+                ax.barh(miss_plot["variable"], miss_plot["frac_missing"], color="#7aa6d1")
+                ax.invert_yaxis()
+                ax.set_xlabel("Fraction missing")
+                ax.set_ylabel("Variable")
+                ax.set_title("Missingness audit")
+                fig.tight_layout()
+                fig.savefig(out_dir / "missingness_heatmap.png", dpi=160)
+                plt.close(fig)
+                summary["missingness_figure_path"] = "missingness_heatmap.png"
+            except Exception:
+                pass
 
         # ---- SOFA stratum audit (the key sofa==0 / sofa2==0 check) ----
-        if sofa_col is not None and outcome_col is not None:
+        if do_sofa_audit and sofa_col is not None and outcome_col is not None:
             sub = df[[sofa_col, outcome_col]].dropna()
             sub[sofa_col] = sub[sofa_col].astype(int)
             grp = sub.groupby(sofa_col)[outcome_col].agg(["count", "mean"]).reset_index()

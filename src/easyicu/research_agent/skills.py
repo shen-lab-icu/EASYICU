@@ -19,7 +19,10 @@ Skills make the user-facing API substantially cheaper — a researcher
 who wants the canonical "admission-SOFA → ICU mortality" analysis
 shouldn't need to spend tokens prompting a planner agent for it.
 The skill emits a deterministic, reviewable plan and the rest of
-the pipeline runs unchanged.
+the pipeline runs unchanged. The outer research loop is stable, but
+the inner analysis steps are now assembled dynamically from the
+research question and context instead of forcing the same descriptive
+checks for every task.
 
 References
 ----------
@@ -34,11 +37,14 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 import pandas as pd
 
+from .analysis_types import get_analysis_type, infer_analysis_type
 from .schema import (
     AnalysisPlan,
     AnalysisStep,
+    ConceptDescriptor,
     ResearchContext,
     TimeWindow,
+    VariableRole,
 )
 
 
@@ -78,69 +84,534 @@ class ClinicalSkill:
 
 
 # ---------------------------------------------------------------------------
-# Default plan factory — same skeleton as MockLLMClient's plan
+# Shared dynamic step-selection helpers
 # ---------------------------------------------------------------------------
 
 
-def _default_skill_plan(skill: ClinicalSkill, context: ResearchContext) -> AnalysisPlan:
-    steps = [
-        AnalysisStep(
-            step_id="01_table_one",
-            intent=f"Cohort summary (Table 1) using ICU-aware aggregation rules for skill '{skill.key}'.",
-            inputs=skill.expected_variables,
-            expected_outputs=["table:table_one"],
-            method="descriptive",
-            icu_rule_refs=["aggregation_rule_for"],
-        ),
-        AnalysisStep(
-            step_id="02_outcome_incidence",
-            intent=f"Incidence of {skill.target_outcome} in the {skill.name} cohort.",
-            inputs=[skill.target_outcome],
-            expected_outputs=["table:outcome_incidence", "statistic:outcome_rate"],
-            method="incidence",
-        ),
-        AnalysisStep(
-            step_id="03_missingness_audit",
-            intent=f"Missingness audit for the variables in skill '{skill.key}'.",
-            inputs=skill.expected_variables,
-            expected_outputs=["table:missingness", "figure:missingness_heatmap"],
-            method="missingness",
-        ),
-        AnalysisStep(
-            step_id="04_primary_association",
-            intent=(
-                f"Estimate the association between {skill.primary_predictor} and "
-                f"{skill.target_outcome} within the skill's declared time window(s)."
-            ),
-            inputs=[skill.primary_predictor, skill.target_outcome],
-            expected_outputs=[
-                "table:primary_association",
-                "figure:primary_association_curve",
-                "statistic:primary_or",
-            ],
-            method="logistic_regression_or_kaplan_meier",
-            icu_rule_refs=["aggregation_rule_for"],
-        ),
+_COHORT_SUMMARY_HINTS = (
+    "table 1",
+    "table1",
+    "baseline",
+    "characteristics",
+    "describe",
+    "description",
+    "descriptive",
+    "summary",
+    "summarise",
+    "summarize",
+    "demographic",
+    "phenotype",
+    "profile",
+)
+
+_OUTCOME_RATE_HINTS = (
+    "incidence",
+    "rate",
+    "risk",
+    "mortality",
+    "death rate",
+    "event rate",
+    "frequency",
+    "prevalence",
+)
+
+_ASSOCIATION_HINTS = (
+    "associate",
+    "association",
+    "associated",
+    "effect",
+    "effects",
+    "predict",
+    "predicts",
+    "prediction",
+    "odds",
+    "hazard",
+    "risk factor",
+    "linked",
+    "relationship",
+    "correlat",
+)
+
+_QUALITY_HINTS = (
+    "missing",
+    "missingness",
+    "completeness",
+    "data quality",
+    "quality audit",
+    "audit",
+    "availability",
+    "coverage",
+    "provenance",
+    "harmon",
+    "mapping",
+    "measurement",
+)
+
+_BINARY_OUTCOME_NAME_HINTS = (
+    "death",
+    "mortality",
+    "readmission",
+    "event",
+    "failure",
+)
+
+
+def _question_text(context: ResearchContext) -> str:
+    return (context.research_question or "").lower()
+
+
+def _contains_hint(text: str, hints: Sequence[str]) -> bool:
+    return any(hint in text for hint in hints)
+
+
+def _candidate_descriptors(
+    context: ResearchContext,
+    candidate_variables: Optional[Sequence[str]] = None,
+) -> List[ConceptDescriptor]:
+    if candidate_variables:
+        names = set(candidate_variables)
+        return [v for v in context.variables if v.name in names]
+    return list(context.variables)
+
+
+def _looks_like_quality_only_question(
+    context: ResearchContext,
+    *,
+    primary_predictor: Optional[str],
+    target_outcome: Optional[str],
+) -> bool:
+    text = _question_text(context)
+    if not _contains_hint(text, _QUALITY_HINTS):
+        return False
+    if _contains_hint(text, _ASSOCIATION_HINTS) or _contains_hint(text, _OUTCOME_RATE_HINTS):
+        return False
+    if primary_predictor and target_outcome:
+        explicit_no_effect = (
+            "do not estimate outcome effects" in text
+            or "without estimating effects" in text
+            or "without modelling outcomes" in text
+        )
+        if explicit_no_effect:
+            return True
+    return True
+
+
+def _has_covariate_context(
+    context: ResearchContext,
+    *,
+    primary_predictor: Optional[str],
+    target_outcome: Optional[str],
+    candidate_variables: Optional[Sequence[str]] = None,
+) -> bool:
+    descriptive_roles = {
+        VariableRole.DEMOGRAPHIC,
+        VariableRole.VITAL,
+        VariableRole.LAB,
+        VariableRole.INTERVENTION,
+        VariableRole.ORDINAL_SCORE,
+        VariableRole.COMPOSITE_SCORE,
+        VariableRole.OUTCOME,
+    }
+    descriptors = _candidate_descriptors(context, candidate_variables)
+    others = [
+        v for v in descriptors
+        if v.name not in {primary_predictor, target_outcome}
+        and v.role in descriptive_roles
     ]
-    if skill.primary_predictor.lower() in {"sofa", "sofa2"}:
+    return len(others) >= 2
+
+
+def should_include_table_one(
+    context: ResearchContext,
+    *,
+    primary_predictor: Optional[str],
+    target_outcome: Optional[str],
+    candidate_variables: Optional[Sequence[str]] = None,
+) -> bool:
+    text = _question_text(context)
+    if _looks_like_quality_only_question(
+        context,
+        primary_predictor=primary_predictor,
+        target_outcome=target_outcome,
+    ):
+        return False
+    if _contains_hint(text, _COHORT_SUMMARY_HINTS):
+        return True
+    return bool(
+        primary_predictor
+        and target_outcome
+        and _has_covariate_context(
+            context,
+            primary_predictor=primary_predictor,
+            target_outcome=target_outcome,
+            candidate_variables=candidate_variables,
+        )
+    )
+
+
+def should_include_outcome_incidence(
+    context: ResearchContext,
+    *,
+    primary_predictor: Optional[str],
+    target_outcome: Optional[str],
+) -> bool:
+    if not target_outcome:
+        return False
+    if _looks_like_quality_only_question(
+        context,
+        primary_predictor=primary_predictor,
+        target_outcome=target_outcome,
+    ):
+        return False
+    text = _question_text(context)
+    if _contains_hint(text, _OUTCOME_RATE_HINTS):
+        return True
+    outcome_name = target_outcome.lower()
+    return bool(
+        primary_predictor
+        and any(hint in outcome_name for hint in _BINARY_OUTCOME_NAME_HINTS)
+    )
+
+
+def should_include_missingness_audit(
+    context: ResearchContext,
+    *,
+    primary_predictor: Optional[str],
+    target_outcome: Optional[str],
+    candidate_variables: Optional[Sequence[str]] = None,
+) -> bool:
+    text = _question_text(context)
+    if _contains_hint(text, _QUALITY_HINTS):
+        return True
+    for descriptor in _candidate_descriptors(context, candidate_variables):
+        if descriptor.name in {None, ""}:
+            continue
+        miss = descriptor.missingness
+        if miss and (
+            miss.fraction_missing >= 0.20
+            or miss.missingness_severity in {"medium", "high"}
+        ):
+            return True
+        if descriptor.missingness_semantics and "missing" in descriptor.missingness_semantics.lower():
+            return True
+        joined_pitfalls = " ".join(descriptor.pitfalls).lower()
+        if any(token in joined_pitfalls for token in ("missing", "unmeasured", "measured", "mnar")):
+            return True
+    return False
+
+
+def should_include_primary_association(
+    context: ResearchContext,
+    *,
+    primary_predictor: Optional[str],
+    target_outcome: Optional[str],
+) -> bool:
+    if not primary_predictor or not target_outcome:
+        return False
+    return not _looks_like_quality_only_question(
+        context,
+        primary_predictor=primary_predictor,
+        target_outcome=target_outcome,
+    )
+
+
+def sofa_audit_variable(
+    context: ResearchContext,
+    *,
+    primary_predictor: Optional[str],
+) -> Optional[str]:
+    if primary_predictor and primary_predictor.lower() in {"sofa", "sofa2"}:
+        return primary_predictor
+    sofa_names = [v.name for v in context.variables if v.name.lower() in {"sofa", "sofa2"}]
+    if len(sofa_names) == 1:
+        return sofa_names[0]
+    text = _question_text(context)
+    if "sofa-2" in text or "sofa2" in text:
+        for name in sofa_names:
+            if name.lower() == "sofa2":
+                return name
+    if "sofa" in text:
+        for name in sofa_names:
+            if name.lower() == "sofa":
+                return name
+    return None
+
+
+def build_dynamic_core_plan_steps(
+    context: ResearchContext,
+    *,
+    primary_predictor: Optional[str],
+    target_outcome: Optional[str],
+    candidate_variables: Optional[Sequence[str]] = None,
+    scope_label: str = "analysis",
+    rationale_note: Optional[str] = None,
+    analysis_type_key: Optional[str] = None,
+) -> List[AnalysisStep]:
+    variables = list(candidate_variables or [v.name for v in context.variables if v.role != VariableRole.ID])
+    steps: List[AnalysisStep] = []
+    analysis_type = (
+        get_analysis_type(analysis_type_key)
+        if analysis_type_key
+        else infer_analysis_type(
+            context,
+            primary_predictor=primary_predictor,
+            target_outcome=target_outcome,
+        )
+    )
+
+    if analysis_type.key == "data_quality_audit":
+        return [
+            AnalysisStep(
+                step_id="03_missingness_audit",
+                intent=(
+                    f"Data-quality and completeness audit for variables relevant to the {scope_label}. "
+                    "Keep this as an audit task; do not escalate it into an outcome-effect model."
+                ),
+                inputs=variables,
+                expected_outputs=["table:missingness", "figure:missingness_heatmap"],
+                method="missingness",
+                icu_rule_refs=["missingness_kind"],
+            )
+        ]
+
+    if analysis_type.key == "descriptive_epidemiology":
+        steps.append(
+            AnalysisStep(
+                step_id="01_table_one",
+                intent=(
+                    f"Cohort summary (Table 1) for the {scope_label}, restricted to variables "
+                    "that are relevant to the descriptive question."
+                ),
+                inputs=variables,
+                expected_outputs=["table:table_one"],
+                method="descriptive",
+                icu_rule_refs=["aggregation_rule_for"],
+            )
+        )
+        if target_outcome:
+            steps.append(
+                AnalysisStep(
+                    step_id="02_outcome_incidence",
+                    intent=f"Incidence of {target_outcome} in the {scope_label}.",
+                    inputs=[target_outcome],
+                    expected_outputs=["table:outcome_incidence", "statistic:outcome_rate"],
+                    method="incidence",
+                )
+            )
+        if should_include_missingness_audit(
+            context,
+            primary_predictor=primary_predictor,
+            target_outcome=target_outcome,
+            candidate_variables=variables,
+        ):
+            steps.append(
+                AnalysisStep(
+                    step_id="03_missingness_audit",
+                    intent=(
+                        f"Missingness audit for the descriptive dataset used in the {scope_label}."
+                    ),
+                    inputs=variables,
+                    expected_outputs=["table:missingness", "figure:missingness_heatmap"],
+                    method="missingness",
+                    icu_rule_refs=["missingness_kind"],
+                )
+            )
+        return steps
+
+    if analysis_type.key in {
+        "prediction_model",
+        "trajectory_clustering",
+        "treatment_response",
+        "causal_inference",
+        "reinforcement_learning",
+    }:
+        if should_include_table_one(
+            context,
+            primary_predictor=primary_predictor,
+            target_outcome=target_outcome,
+            candidate_variables=variables,
+        ):
+            steps.append(
+                AnalysisStep(
+                    step_id="01_table_one",
+                    intent=(
+                        f"Cohort summary (Table 1) for the {scope_label} to document the analytic population."
+                    ),
+                    inputs=variables,
+                    expected_outputs=["table:table_one"],
+                    method="descriptive",
+                    icu_rule_refs=["aggregation_rule_for"],
+                )
+            )
+        if target_outcome and should_include_outcome_incidence(
+            context,
+            primary_predictor=primary_predictor,
+            target_outcome=target_outcome,
+        ):
+            steps.append(
+                AnalysisStep(
+                    step_id="02_outcome_incidence",
+                    intent=f"Outcome incidence for {target_outcome} before the advanced {analysis_type.name.lower()} workflow.",
+                    inputs=[target_outcome],
+                    expected_outputs=["table:outcome_incidence", "statistic:outcome_rate"],
+                    method="incidence",
+                )
+            )
+        if should_include_missingness_audit(
+            context,
+            primary_predictor=primary_predictor,
+            target_outcome=target_outcome,
+            candidate_variables=variables,
+        ):
+            steps.append(
+                AnalysisStep(
+                    step_id="03_missingness_audit",
+                    intent=(
+                        f"Missingness audit before the advanced {analysis_type.name.lower()} workflow."
+                    ),
+                    inputs=variables,
+                    expected_outputs=["table:missingness", "figure:missingness_heatmap"],
+                    method="missingness",
+                    icu_rule_refs=["missingness_kind"],
+                )
+            )
+        steps.append(
+            AnalysisStep(
+                step_id=f"04_{analysis_type.key}_protocol",
+                intent=(
+                    f"Define the executable protocol for the {analysis_type.name.lower()} task, "
+                    f"including only the candidate modules justified by the research question. "
+                    + (f"{rationale_note} " if rationale_note else "")
+                    + "Do not substitute a simple association model for this analysis family."
+                ),
+                inputs=variables,
+                expected_outputs=[f"log:{analysis_type.key}_protocol"],
+                method=f"{analysis_type.key}_protocol",
+            )
+        )
+        return steps
+
+    if should_include_table_one(
+        context,
+        primary_predictor=primary_predictor,
+        target_outcome=target_outcome,
+        candidate_variables=variables,
+    ):
+        steps.append(
+            AnalysisStep(
+                step_id="01_table_one",
+                intent=(
+                    f"Cohort summary (Table 1) for the {scope_label}, restricted to variables "
+                    "that are relevant to the stated question and ICU-aware aggregation rules."
+                ),
+                inputs=variables,
+                expected_outputs=["table:table_one"],
+                method="descriptive",
+                icu_rule_refs=["aggregation_rule_for"],
+            )
+        )
+
+    if should_include_outcome_incidence(
+        context,
+        primary_predictor=primary_predictor,
+        target_outcome=target_outcome,
+    ):
+        steps.append(
+            AnalysisStep(
+                step_id="02_outcome_incidence",
+                intent=f"Incidence of {target_outcome} in the {scope_label}.",
+                inputs=[target_outcome] if target_outcome else [],
+                expected_outputs=["table:outcome_incidence", "statistic:outcome_rate"],
+                method="incidence",
+            )
+        )
+
+    if should_include_missingness_audit(
+        context,
+        primary_predictor=primary_predictor,
+        target_outcome=target_outcome,
+        candidate_variables=variables,
+    ):
+        steps.append(
+            AnalysisStep(
+                step_id="03_missingness_audit",
+                intent=(
+                    f"Missingness and data-quality audit for variables relevant to the {scope_label}. "
+                    "Only run this audit when the question or the context suggests it matters."
+                ),
+                inputs=variables,
+                expected_outputs=["table:missingness", "figure:missingness_heatmap"],
+                method="missingness",
+            )
+        )
+
+    if should_include_primary_association(
+        context,
+        primary_predictor=primary_predictor,
+        target_outcome=target_outcome,
+    ):
+        steps.append(
+            AnalysisStep(
+                step_id="04_primary_association",
+                intent=(
+                    f"Estimate the association between {primary_predictor} and "
+                    f"{target_outcome} using ICU-aware aggregation and time-window defaults."
+                    + (f" {rationale_note}" if rationale_note else "")
+                ),
+                inputs=[primary_predictor, target_outcome],
+                expected_outputs=[
+                    "table:primary_association",
+                    "figure:primary_association_curve",
+                    "statistic:primary_or",
+                ],
+                method="logistic_regression_or_kaplan_meier",
+                icu_rule_refs=["aggregation_rule_for"],
+            )
+        )
+
+    sofa_var = sofa_audit_variable(context, primary_predictor=primary_predictor)
+    if sofa_var and target_outcome:
         steps.append(
             AnalysisStep(
                 step_id="05_sofa_zero_audit",
                 intent=(
-                    f"Stratum-level audit of {skill.primary_predictor}; flag the score==0 stratum "
+                    f"Stratum-level audit of {sofa_var}; flag the score==0 stratum "
                     "if its outcome rate exceeds the score==1 stratum (component-missingness signature)."
                 ),
-                inputs=[skill.primary_predictor, skill.target_outcome],
+                inputs=[sofa_var, target_outcome],
                 expected_outputs=["table:sofa_strata", "figure:sofa_strata_curve",
                                   "statistic:sofa_zero_anomaly"],
                 method="stratified_incidence",
                 icu_rule_refs=["sofa_pitfalls"],
             )
         )
+
+    return steps
+
+
+# ---------------------------------------------------------------------------
+# Default plan factory — same heuristics as MockLLMClient's fallback planner
+# ---------------------------------------------------------------------------
+
+
+def _default_skill_plan(skill: ClinicalSkill, context: ResearchContext) -> AnalysisPlan:
+    steps = build_dynamic_core_plan_steps(
+        context,
+        primary_predictor=skill.primary_predictor,
+        target_outcome=skill.target_outcome,
+        candidate_variables=skill.expected_variables,
+        scope_label=f"skill '{skill.key}'",
+        rationale_note="Respect the skill's declared time window(s) and expected variable set.",
+        analysis_type_key="association_study",
+    )
     return AnalysisPlan(
         research_question=context.research_question,
         steps=steps,
-        rationale=f"Pre-canned plan for ClinicalSkill '{skill.key}'.",
+        rationale=(
+            f"Dynamically assembled plan for ClinicalSkill '{skill.key}'. "
+            "The outer research loop stays fixed, but descriptive and audit "
+            "steps are included only when the question or context justifies them."
+        ),
     )
 
 
