@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
 from easyicu.webapp.components.constants import get_concept_groups
 from easyicu.webapp.concept_catalog import CONCEPT_DESCRIPTIONS, CONCEPT_DICTIONARY
 
@@ -21,7 +22,6 @@ _PROTECTED_NAMES = {
     '_get_feature_definition_rows',
     '_render_feature_definition_panel',
     'render_home_data_dictionary',
-    '_render_home_dict_table',
     '_APP_CONTEXT',
     '_PROTECTED_NAMES',
     '_install_app_context',
@@ -102,7 +102,13 @@ def render_data_dictionary(app_context: dict[str, Any] | None = None):
             n = len(matched_rows)
             result_text = f"Found **{n}** matching feature(s)" if lang == 'en' else f"找到 **{n}** 个匹配特征"
             st.success(result_text)
-            st.dataframe(pd.DataFrame(matched_rows), width="stretch", hide_index=True, height=min(400, 50 + 35 * n))
+            _st_dataframe_compat(
+                st,
+                pd.DataFrame(matched_rows),
+                width="stretch",
+                hide_index=True,
+                height=min(400, 50 + 35 * n),
+            )
         else:
             no_result = "No matching features found." if lang == 'en' else "未找到匹配的特征。"
             st.warning(no_result)
@@ -160,7 +166,8 @@ def _render_category_table(concepts, lang='en'):
     if rows:
         df = pd.DataFrame(rows)
         if lang == 'en':
-            st.dataframe(
+            _st_dataframe_compat(
+                st,
                 df,
                 width="stretch",
                 hide_index=True,
@@ -172,7 +179,8 @@ def _render_category_table(concepts, lang='en'):
                 }
             )
         else:
-            st.dataframe(
+            _st_dataframe_compat(
+                st,
                 df,
                 width="stretch",
                 hide_index=True,
@@ -527,7 +535,8 @@ def render_home_data_dictionary(lang, app_context: dict[str, Any] | None = None)
             n = len(matched_rows)
             result_text = f"Found **{n}** matching feature(s)" if lang == 'en' else f"找到 **{n}** 个匹配特征"
             st.success(result_text)
-            st.dataframe(
+            _st_dataframe_compat(
+                st,
                 pd.DataFrame(matched_rows),
                 width="stretch",
                 hide_index=True,
@@ -578,4 +587,10 @@ def _render_home_dict_table(concepts, lang, app_context: dict[str, Any] | None =
 
     if rows:
         df = pd.DataFrame(rows)
-        st.dataframe(df, width="stretch", hide_index=True, height=300)
+        _st_dataframe_compat(
+            st,
+            df,
+            width="stretch",
+            hide_index=True,
+            height=300,
+        )

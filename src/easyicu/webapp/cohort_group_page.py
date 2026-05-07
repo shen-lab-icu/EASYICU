@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to the extracted cohort group page."""
@@ -940,7 +942,8 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             )
         else:
             # 使用 Streamlit 表格并应用样式
-            st.dataframe(
+            _st_dataframe_compat(
+                st,
                 result_df,
                 width='stretch',
                 hide_index=True,

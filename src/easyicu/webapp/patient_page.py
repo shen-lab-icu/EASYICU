@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to the extracted patient page."""
@@ -598,7 +600,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
 
                             diff_df = pd.DataFrame(diff_data)
                             if not screenshot_mode:
-                                st.dataframe(diff_df, width="stretch", hide_index=True)
+                                _st_dataframe_compat(st, diff_df, width="stretch", hide_index=True)
                     else:
                         no_compare = "ℹ️ Need both SOFA-1 and SOFA-2 data for comparison" if lang == 'en' else "ℹ️ 需要同时有 SOFA-1 和 SOFA-2 数据才能对比"
                         st.info(no_compare)
@@ -1057,4 +1059,4 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                 if len(patient_df) > 0:
                     records_label = "records" if lang == 'en' else "条记录"
                     with st.expander(f"{concept} ({len(patient_df)} {records_label})", expanded=False):
-                        st.dataframe(patient_df, width="stretch")
+                        _st_dataframe_compat(st, patient_df, width="stretch")

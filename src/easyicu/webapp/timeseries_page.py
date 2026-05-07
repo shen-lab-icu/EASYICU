@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
@@ -368,7 +370,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                                 val = patient_df[value_col].iloc[0]
                                 st.metric(label=value_col.upper(), value=f"{val}")
                             else:
-                                st.dataframe(patient_df[[value_col]], width="stretch")
+                                _st_dataframe_compat(st, patient_df[[value_col]], width="stretch")
 
                         # 显示统计信息
                         if show_stats:
@@ -442,7 +444,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                         id_col = st.session_state.id_col
                         if id_col in df.columns:
                             df = df[df[id_col] == patient_id]
-                    st.dataframe(df.head(50), width="stretch", hide_index=True)  # 🔧 FIX: use width instead of use_container_width
+                    _st_dataframe_compat(st, df.head(50), width="stretch", hide_index=True)
                 else:
                     format_msg = "Data format does not support preview" if lang == 'en' else "数据格式不支持预览"
                     st.info(format_msg)
@@ -573,56 +575,57 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                         time_col = tc
                         break
 
-                if value_cols and time_col and id_col in df.columns:
+                has_trend_data = bool(value_cols and time_col and id_col in df.columns)
+                if has_trend_data:
                     value_col = compare_value_col if compare_value_col in value_cols else _choose_concept_value_column(selected_concept, df)
 
                     fig = go.Figure()
                     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-
                     comparison_stats = []
 
                     for i, pid in enumerate(compare_patients):
                         patient_df = df[df[id_col] == pid].sort_values(time_col)
+                        if len(patient_df) == 0:
+                            continue
 
-                        if len(patient_df) > 0:
-                            y_values = patient_df[value_col].values
+                        y_values = patient_df[value_col].values
+                        if normalize and len(y_values) > 0:
+                            y_min, y_max = y_values.min(), y_values.max()
+                            if y_max > y_min:
+                                y_values = (y_values - y_min) / (y_max - y_min)
 
-                            # 归一化
-                            if normalize and len(y_values) > 0:
-                                y_min, y_max = y_values.min(), y_values.max()
-                                if y_max > y_min:
-                                    y_values = (y_values - y_min) / (y_max - y_min)
+                        patient_label = f"Patient {pid}" if lang == 'en' else f"患者 {pid}"
+                        fig.add_trace(go.Scatter(
+                            x=patient_df[time_col],
+                            y=y_values,
+                            mode='lines+markers',
+                            name=patient_label,
+                            line=dict(color=colors[i % len(colors)], width=2),
+                            marker=dict(size=4),
+                        ))
 
-                            patient_label = f"Patient {pid}" if lang == 'en' else f"患者 {pid}"
-                            fig.add_trace(go.Scatter(
-                                x=patient_df[time_col],
-                                y=y_values,
-                                mode='lines+markers',
-                                name=patient_label,
-                                line=dict(color=colors[i % len(colors)], width=2),
-                                marker=dict(size=4)
-                            ))
+                        if lang == 'en':
+                            comparison_stats.append({
+                                'Patient': pid,
+                                'Mean': f"{patient_df[value_col].mean():.2f}",
+                                'Max': f"{patient_df[value_col].max():.2f}",
+                                'Min': f"{patient_df[value_col].min():.2f}",
+                                'Records': len(patient_df),
+                            })
+                        else:
+                            comparison_stats.append({
+                                '患者': pid,
+                                '平均值': f"{patient_df[value_col].mean():.2f}",
+                                '最大值': f"{patient_df[value_col].max():.2f}",
+                                '最小值': f"{patient_df[value_col].min():.2f}",
+                                '记录数': len(patient_df),
+                            })
 
-                            # Build stats with language-aware column names
-                            if lang == 'en':
-                                comparison_stats.append({
-                                    'Patient': pid,
-                                    'Mean': f"{patient_df[value_col].mean():.2f}",
-                                    'Max': f"{patient_df[value_col].max():.2f}",
-                                    'Min': f"{patient_df[value_col].min():.2f}",
-                                    'Records': len(patient_df)
-                                })
-                            else:
-                                comparison_stats.append({
-                                    '患者': pid,
-                                    '平均值': f"{patient_df[value_col].mean():.2f}",
-                                    '最大值': f"{patient_df[value_col].max():.2f}",
-                                    '最小值': f"{patient_df[value_col].min():.2f}",
-                                    '记录数': len(patient_df)
-                                })
-
-                    # Language-aware chart labels
-                    chart_title = f"📊 {selected_concept.upper()} Multi-Patient Comparison" if lang == 'en' else f"📊 {selected_concept.upper()} 多患者比较"
+                    chart_title = (
+                        f"📊 {selected_concept.upper()} Multi-Patient Comparison"
+                        if lang == 'en'
+                        else f"📊 {selected_concept.upper()} 多患者比较"
+                    )
                     x_axis_label = "Time (hours)" if lang == 'en' else "时间 (小时)"
                     y_suffix = " (Normalized)" if lang == 'en' else " (归一化)"
                     fig.update_layout(
@@ -637,14 +640,17 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                     )
                     fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
                     fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-
                     st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
 
-                    # 比较统计表
                     if comparison_stats:
                         compare_stats_title = "#### 📊 Comparison Statistics" if lang == 'en' else "#### 📊 比较统计"
                         st.markdown(compare_stats_title)
-                        st.dataframe(pd.DataFrame(comparison_stats), width="stretch", hide_index=True)
+                        _st_dataframe_compat(
+                            st,
+                            pd.DataFrame(comparison_stats),
+                            width="stretch",
+                            hide_index=True,
+                        )
                 else:
                     # 🔧 FIX: 检测是否有布尔列（包括pandas boolean和numpy bool）
                     bool_cols = []

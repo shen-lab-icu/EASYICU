@@ -12,7 +12,14 @@ from easyicu.webapp.bootstrap import (
     render_runtime_shell_styles,
     sync_screenshot_mode,
 )
-from easyicu.webapp.compat import apply_streamlit_compat, query_param_value
+from easyicu.webapp.compat import (
+    _button_compat as _button_compat_impl,
+    _dataframe_compat as _dataframe_compat_impl,
+    _normalize_width_kwargs,
+    _plotly_chart_compat as _plotly_chart_compat_impl,
+    apply_streamlit_compat,
+    query_param_value,
+)
 
 # Streamlit 1.45+ enforces that page config is the first Streamlit command.
 configure_page(st)
@@ -197,6 +204,21 @@ except ImportError:
 sync_screenshot_mode(st)
 render_runtime_shell_styles(st)
 render_global_styles(st)
+
+
+def _dataframe_compat(data, **kwargs):
+    """Module-level wrapper so tests and extracted pages can share the shim."""
+    return _dataframe_compat_impl(st, data, **kwargs)
+
+
+def _button_compat(label, *args, **kwargs):
+    """Module-level wrapper so tests and extracted pages can share the shim."""
+    return _button_compat_impl(st, label, *args, **kwargs)
+
+
+def _plotly_chart_compat(figure_or_data, *args, **kwargs):
+    """Module-level wrapper so tests and extracted pages can share the shim."""
+    return _plotly_chart_compat_impl(st, figure_or_data, *args, **kwargs)
 
 
 def _build_module_preview_metadata(
@@ -1528,9 +1550,13 @@ def render_home_data_dictionary(lang):
     return _render_home_data_dictionary_impl(lang, globals())
 
 
-def _render_home_dict_table(concepts, lang):
+def _render_home_dict_table(concepts, lang, app_context=None):
     """为首页数据字典渲染表格。"""
-    return _render_home_dict_table_impl(concepts, lang, app_context=globals())
+    return _render_home_dict_table_impl(
+        concepts,
+        lang,
+        app_context=app_context or globals(),
+    )
 
 
 def _add_clinical_thresholds(fig, concept_name: str, show: bool = True):

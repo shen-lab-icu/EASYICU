@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
 from easyicu.webapp.i18n import get_text
 from easyicu.webapp.page_header import render_page_header
 from easyicu.webapp.services import count_unique_concepts
@@ -113,7 +114,7 @@ def render_data_overview():
             })
 
     if concept_stats:
-        st.dataframe(pd.DataFrame(concept_stats), width="stretch", hide_index=True)
+        _st_dataframe_compat(st, pd.DataFrame(concept_stats), width="stretch", hide_index=True)
 
 
 def render_home(app_context: dict[str, Any] | None = None):

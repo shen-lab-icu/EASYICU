@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
@@ -181,7 +183,8 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
         if quality_df.empty:
             return
         display_cols = ['Concept', records_col, patients_col, missing_col, denom_col, out_col, dup_col, density_col, coverage_col, cause_col]
-        st.dataframe(
+        _st_dataframe_compat(
+            st,
             quality_df[display_cols],
             width="stretch",
             hide_index=True,

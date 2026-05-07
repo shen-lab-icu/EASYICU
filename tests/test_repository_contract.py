@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+import shutil
 import subprocess
 
 try:
@@ -109,19 +111,26 @@ def test_repository_does_not_ignore_tests_or_contributing_guide() -> None:
 
 
 def test_webapp_buttons_do_not_use_stretch_width_keyword() -> None:
-    result = subprocess.run(
-        [
-            "rg",
-            "-n",
-            "-U",
-            r"st\.(button|download_button)\([\s\S]{0,200}?width\s*=\s*['\"]stretch['\"]",
-            str(REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py"),
-        ],
-        capture_output=True,
-        text=True,
-    )
+    pattern = r"st\.(button|download_button)\([\s\S]{0,200}?width\s*=\s*['\"]stretch['\"]"
+    app_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py"
+    rg = shutil.which("rg")
+    if rg is not None:
+        result = subprocess.run(
+            [
+                rg,
+                "-n",
+                "-U",
+                pattern,
+                str(app_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1, result.stdout
+        return
 
-    assert result.returncode == 1, result.stdout
+    app_content = app_path.read_text(encoding="utf-8")
+    assert re.search(pattern, app_content, flags=re.MULTILINE) is None
 
 
 def test_webapp_concept_catalog_is_split_from_streamlit_app() -> None:
