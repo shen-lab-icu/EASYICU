@@ -10,6 +10,9 @@ trivial, inspectable and entirely off the LLM:
   relevance to the current research question;
 * the digest is a plain markdown chunk — reviewers can read it and
   compare it to the model's resulting plan.
+* repeated run outcomes are distilled into small ``StrategyCard``
+  files. These are not executable code; they are reusable planning
+  skeletons and guardrails that the planner can inspect.
 
 The memory is *additive only*; it does not delete past lessons. We
 prefer a slow accumulation of ICU-specific gotchas over an opaque
@@ -20,11 +23,16 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .concept_availability import (
+    default_public_databases,
+    hypothesis_cross_database_feasibility,
+    normalize_database_name,
+)
 from .schema import ValidationFinding
 
 
@@ -49,6 +57,29 @@ class RunMemoryRecord:
         return cls(**data)
 
 
+@dataclass
+class StrategyCard:
+    """Reusable procedural knowledge distilled from prior runs."""
+
+    strategy_id: str
+    task_family: str
+    trigger_tokens: List[str]
+    recommended_plan: List[str]
+    guardrails: List[str]
+    supporting_run_ids: List[str]
+    updated_at: str
+    applicable_databases: List[str] = field(default_factory=list)
+    contraindicated_databases: List[str] = field(default_factory=list)
+    concept_dependencies: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.__dict__.copy()
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "StrategyCard":
+        return cls(**data)
+
+
 class RunMemory:
     """Append-only persistent memory of past runs."""
 
@@ -57,6 +88,8 @@ class RunMemory:
         self.root.mkdir(parents=True, exist_ok=True)
         self.runs_dir = self.root / "runs"
         self.runs_dir.mkdir(exist_ok=True)
+        self.strategies_dir = self.root / "strategies"
+        self.strategies_dir.mkdir(exist_ok=True)
 
     # ------------------------------------------------------------------
 
@@ -96,6 +129,8 @@ class RunMemory:
             json.dumps(record.to_dict(), indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+        for card in self.distill_strategy_cards(record):
+            self._upsert_strategy_card(card)
         return record
 
     # ------------------------------------------------------------------
@@ -109,6 +144,215 @@ class RunMemory:
             except Exception:
                 continue
         return out
+
+    def all_strategy_cards(self) -> List[StrategyCard]:
+        out: List[StrategyCard] = []
+        for p in sorted(self.strategies_dir.glob("*.json")):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                out.append(StrategyCard.from_dict(data))
+            except Exception:
+                continue
+        return out
+
+    def distill_strategy_cards(self, record: RunMemoryRecord) -> List[StrategyCard]:
+        """Distill one run record into reusable strategy cards.
+
+        This is deliberately deterministic. It is the "strategy layer" above
+        raw run logs, but remains inspectable and additive.
+        """
+        family = _task_family_for_record(record)
+        cards: List[StrategyCard] = []
+        blob = " ".join(
+            [record.research_question]
+            + [f.get("message", "") for f in record.notable_findings]
+        ).lower()
+        now = datetime.now(timezone.utc).isoformat()
+
+        if _mentions_any(blob, {"sofa", "sofa2", "ordinal", "gcs"}) and _mentions_any(
+            blob, {"missing", "zero", "component", "stratum", "strata"}
+        ):
+            cards.append(
+                StrategyCard(
+                    strategy_id="ordinal_score_missingness_audit",
+                    task_family="ordinal_score_outcome_association",
+                    trigger_tokens=[
+                        "sofa",
+                        "sofa2",
+                        "gcs",
+                        "ordinal",
+                        "mortality",
+                        "missingness",
+                    ],
+                    recommended_plan=[
+                        "Audit component availability and score-zero strata "
+                        "before association modeling.",
+                        "Report score-level outcome rates and denominator "
+                        "counts before adjusted estimates.",
+                        "Use median/IQR or level distributions for ordinal "
+                        "scores; avoid mean-based claims.",
+                    ],
+                    guardrails=[
+                        "A zero score can encode missing components, not "
+                        "absence of organ dysfunction.",
+                        "Do not let manuscript claims use score strata unless "
+                        "the stratum audit is registered evidence.",
+                    ],
+                    supporting_run_ids=[record.run_id],
+                    updated_at=now,
+                    applicable_databases=[record.database],
+                    concept_dependencies=["sofa2"],
+                )
+            )
+
+        if _mentions_any(blob, {"aki", "kdigo", "creat", "creatinine"}):
+            cards.append(
+                StrategyCard(
+                    strategy_id="aki_kdigo_window_first",
+                    task_family="aki_outcome_association",
+                    trigger_tokens=[
+                        "aki",
+                        "kdigo",
+                        "creat",
+                        "creatinine",
+                        "mortality",
+                    ],
+                    recommended_plan=[
+                        "Define KDIGO stage and creatinine baseline/window "
+                        "semantics before modeling.",
+                        "Audit urine-output availability separately from creatinine-only staging.",
+                        "Report AKI stage distribution and outcome rates by stage.",
+                    ],
+                    guardrails=[
+                        "Creatinine-only AKI can under-detect events when "
+                        "urine output is unavailable.",
+                        "Do not mix admission AKI and incident AKI windows "
+                        "without a temporal note.",
+                    ],
+                    supporting_run_ids=[record.run_id],
+                    updated_at=now,
+                    applicable_databases=[record.database],
+                    concept_dependencies=["kdigo_aki", "crea", "urine"],
+                )
+            )
+
+        if _mentions_any(blob, {"auc", "calibration", "brier", "prediction", "model"}):
+            cards.append(
+                StrategyCard(
+                    strategy_id="prediction_model_calibration_bundle",
+                    task_family="icu_prediction_model",
+                    trigger_tokens=[
+                        "prediction",
+                        "model",
+                        "auc",
+                        "calibration",
+                        "brier",
+                    ],
+                    recommended_plan=[
+                        "Predefine discrimination, calibration, and clinical "
+                        "utility outputs together.",
+                        "Validate event count per candidate predictor before "
+                        "fitting adjusted models.",
+                        "Generate calibration evidence before manuscript performance claims.",
+                    ],
+                    guardrails=[
+                        "AUC alone is insufficient for ICU prediction-model reporting.",
+                        "Sparse events require simpler models or feasibility framing.",
+                    ],
+                    supporting_run_ids=[record.run_id],
+                    updated_at=now,
+                    applicable_databases=[record.database],
+                )
+            )
+
+        if not cards and record.error_count == 0:
+            cards.append(
+                StrategyCard(
+                    strategy_id=f"{family}_successful_skeleton",
+                    task_family=family,
+                    trigger_tokens=sorted(_tokenise(record.research_question))[:12],
+                    recommended_plan=[
+                        "Start with cohort/variable feasibility, then primary "
+                        "analysis, then validator-bound claim writing.",
+                        "Keep every table, figure, statistic, and manuscript "
+                        "claim bound to evidence ids.",
+                    ],
+                    guardrails=[
+                        "Do not broaden a narrow user question into a full "
+                        "manuscript checklist unless requested.",
+                    ],
+                    supporting_run_ids=[record.run_id],
+                    updated_at=now,
+                    applicable_databases=[record.database],
+                )
+            )
+
+        return cards
+
+    def relevant_strategy_cards(
+        self,
+        *,
+        research_question: str,
+        database: str,
+        target_outcome: Optional[str],
+        limit: int = 4,
+    ) -> List[StrategyCard]:
+        q_tokens = _tokenise(" ".join([research_question, database, target_outcome or ""]))
+
+        def score(card: StrategyCard) -> float:
+            card_tokens = set(card.trigger_tokens) | _tokenise(card.task_family)
+            s = float(len(q_tokens & card_tokens))
+            s += min(2.0, len(card.supporting_run_ids) * 0.25)
+            db = database.lower()
+            dependency_status = _strategy_dependency_status(card, database)
+            if dependency_status == "blocked":
+                return float("-inf")
+            if dependency_status == "full":
+                s += 0.5
+            elif dependency_status == "degraded":
+                s -= 0.75
+            if db in {d.lower() for d in card.applicable_databases}:
+                s += 1.0
+            if db in {d.lower() for d in card.contraindicated_databases}:
+                s -= 2.0
+            if target_outcome and target_outcome.lower() in card_tokens:
+                s += 0.5
+            return s
+
+        ranked = sorted(self.all_strategy_cards(), key=score, reverse=True)
+        return [card for card in ranked if score(card) > 0.0][:limit]
+
+    def strategy_digest_for_prompt(
+        self,
+        *,
+        research_question: str,
+        database: str,
+        target_outcome: Optional[str],
+        limit: int = 4,
+    ) -> str:
+        cards = self.relevant_strategy_cards(
+            research_question=research_question,
+            database=database,
+            target_outcome=target_outcome,
+            limit=limit,
+        )
+        if not cards:
+            return "(no reusable StrategyCards matched this request)"
+        lines = ["Reusable StrategyCards distilled from prior runs:"]
+        for card in cards:
+            lines.append(
+                f"- [{card.strategy_id}] family={card.task_family} "
+                f"support={len(card.supporting_run_ids)} run(s)"
+            )
+            if card.applicable_databases:
+                lines.append("    databases: " + ", ".join(card.applicable_databases))
+            if card.concept_dependencies:
+                lines.append("    concepts: " + ", ".join(card.concept_dependencies))
+            for step in card.recommended_plan[:3]:
+                lines.append(f"    plan: {step}")
+            for guardrail in card.guardrails[:2]:
+                lines.append(f"    guardrail: {guardrail}")
+        return "\n".join(lines)
 
     def relevant_to(
         self,
@@ -172,6 +416,15 @@ class RunMemory:
             )
             for nf in r.notable_findings[:3]:
                 lines.append(f"    • {nf['severity']} [{nf['validator']}] {nf['message']}")
+        strategy_digest = self.strategy_digest_for_prompt(
+            research_question=research_question,
+            database=database,
+            target_outcome=target_outcome,
+            limit=3,
+        )
+        if not strategy_digest.startswith("(no reusable"):
+            lines.append("")
+            lines.append(strategy_digest)
         return "\n".join(lines)
 
     def rank_skill_keys(
@@ -236,9 +489,107 @@ class RunMemory:
             + ", ".join(bits)
         )
 
+    def _upsert_strategy_card(self, card: StrategyCard) -> None:
+        path = self.strategies_dir / f"{card.strategy_id}.json"
+        if path.exists():
+            try:
+                existing = StrategyCard.from_dict(
+                    json.loads(path.read_text(encoding="utf-8"))
+                )
+                run_ids = sorted(
+                    set(existing.supporting_run_ids) | set(card.supporting_run_ids)
+                )
+                merged = StrategyCard(
+                    strategy_id=existing.strategy_id,
+                    task_family=existing.task_family,
+                    trigger_tokens=sorted(
+                        set(existing.trigger_tokens) | set(card.trigger_tokens)
+                    ),
+                    recommended_plan=_merge_unique(
+                        existing.recommended_plan,
+                        card.recommended_plan,
+                    ),
+                    guardrails=_merge_unique(existing.guardrails, card.guardrails),
+                    supporting_run_ids=run_ids,
+                    updated_at=card.updated_at,
+                    applicable_databases=_merge_unique(
+                        existing.applicable_databases,
+                        card.applicable_databases,
+                    ),
+                    contraindicated_databases=_merge_unique(
+                        existing.contraindicated_databases,
+                        card.contraindicated_databases,
+                    ),
+                    concept_dependencies=_merge_unique(
+                        existing.concept_dependencies,
+                        card.concept_dependencies,
+                    ),
+                )
+                card = merged
+            except Exception:
+                pass
+        path.write_text(
+            json.dumps(card.to_dict(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
 
 def _tokenise(text: str) -> set:
     return {w.lower() for w in re.findall(r"[A-Za-z0-9_]+", text or "") if len(w) > 2}
 
 
-__all__ = ["RunMemory", "RunMemoryRecord"]
+def _mentions_any(text: str, tokens: set) -> bool:
+    hay = _tokenise(text)
+    return bool(hay & {str(t).lower() for t in tokens})
+
+
+def _task_family_for_record(record: RunMemoryRecord) -> str:
+    blob = " ".join(
+        [record.research_question, record.target_outcome or ""]
+        + [f.get("message", "") for f in record.notable_findings]
+    ).lower()
+    if _mentions_any(blob, {"sofa", "sofa2", "gcs", "ordinal"}):
+        return "ordinal_score_outcome_association"
+    if _mentions_any(blob, {"aki", "kdigo", "creat", "creatinine"}):
+        return "aki_outcome_association"
+    if _mentions_any(blob, {"prediction", "auc", "calibration", "model"}):
+        return "icu_prediction_model"
+    if _mentions_any(blob, {"mortality", "death"}):
+        return "icu_mortality_association"
+    return "generic_icu_analysis"
+
+
+def _merge_unique(left: Sequence[str], right: Sequence[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for item in list(left) + list(right):
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _strategy_dependency_status(card: StrategyCard, database: str) -> str:
+    """Return full/degraded/blocked for a card's concept dependencies."""
+
+    if not card.concept_dependencies:
+        return "none"
+    db = normalize_database_name(database)
+    if db not in set(default_public_databases()):
+        return "unknown"
+    try:
+        summary = hypothesis_cross_database_feasibility(
+            concepts=card.concept_dependencies,
+            databases=[db],
+        )
+        statuses = summary.get("cross_database_feasibility", {})
+        status = statuses.get(db)
+        if status in {"full", "degraded", "blocked"}:
+            return str(status)
+    except Exception:
+        return "unknown"
+    return "unknown"
+
+
+__all__ = ["RunMemory", "RunMemoryRecord", "StrategyCard"]

@@ -35,7 +35,18 @@ The runtime now makes a four-layer design explicit:
 - **Layer 1 — ICU Data Foundation**: unified concept abstraction, cohort provenance, deterministic temporal semantics, and ICU episode resolution.
 - **Layer 2 — Safe Analytical Runtime**: evidence store, audit log, validators, execution replay, and workflow graph artifacts.
 - **Layer 3 — Agent Orchestration**: planner / replanner / coder / analyzer / writer coordinated through a runtime supervisor pattern.
-- **Layer 4 — Scientific Discovery**: future-facing hooks for iterative hypothesis refinement, without weakening the safety contract of Layers 1–2.
+- **Layer 4 — Scientific Discovery**: a pre-plan hypothesis blueprint that distills literature, feasibility, self-critique and ICU domain gates before the planner executes, without weakening the safety contract of Layers 1–2.
+
+Current scope note: the Scientific Discovery layer is bounded. It now
+creates an auditable `hypothesis_blueprint.json` before planning, but
+it should not yet be described as a complete CellVoyager-style
+autonomous notebook scientist.
+
+Current benchmark note: ICUAgentBench is presently a **prototype
+evaluation framework / planned benchmark suite**. The typed task schema,
+metrics, and runner hooks are in place, but a frozen public benchmark
+release with gold answers and adjudicated scoring should be described as
+future work.
 
 ```
 question + cohort  ────────────►  optional: ClinicalSkill
@@ -47,10 +58,15 @@ question + cohort  ────────────►  optional: ClinicalSk
         │                           missingness profile, ICU pitfalls)
         ▼
    RunMemory.digest_for_prompt   → memory_digest.md
-        │   past lessons + meta-planner skill ranking
+        │   past lessons + StrategyCards + meta-planner skill ranking
         ▼
    optional concept retrieval    → research_context_agent_prompt.json
         │   top-K variables to agents; full context retained for validators
+        ▼
+   LiteratureAgent + HypothesisBlueprintAgent
+        │   → preplan_literature_bundle.json + hypothesis_blueprint.json
+        │     literature-grounded hypothesis, step skeleton, self-critique,
+        │     cross-DB concept feasibility, and ICU domain gates
         ▼
    PlannerAgent  (skipped when a ClinicalSkill is selected)
         │   deterministic fallback if hosted model returns invalid JSON
@@ -86,6 +102,7 @@ question + cohort  ────────────►  optional: ClinicalSk
    workflow_graph.json/.md       → execution graph + Mermaid view
    execution_replay.json         → deterministic replay bundle
    RunMemory.record              → .memory/runs/<run_id>.json
+   RunMemory StrategyCards        → .memory/strategies/<strategy_id>.json
    manifest.json + results_report.md
 ```
 
@@ -180,6 +197,8 @@ python -m easyicu.research_agent.mcp_server --transport stdio
 ```python
 from easyicu.research_agent import mcp_dispatch
 mcp_dispatch("research_agent.list_skills")
+mcp_dispatch("research_agent.list_concepts", {"cohort_path": "cohort.parquet"})
+mcp_dispatch("research_agent.audit_cohort", {"cohort_path": "cohort.parquet"})
 mcp_dispatch("research_agent.run", {
     "question": "Is admission SOFA-2 associated with ICU mortality?",
     "cohort_path": "cohort.parquet",
@@ -189,7 +208,18 @@ mcp_dispatch("research_agent.run", {
 ```
 
 The server answers MCP JSON-RPC methods `initialize`, `tools/list` and
-`tools/call` over stdio. A minimal legacy SSE bridge is also available:
+`tools/call` over stdio. In addition to the end-to-end
+`research_agent.run`, it exposes atomic tools for external agents:
+`build_context`, `list_concepts`, `describe_concept`, `load_concepts`,
+`audit_cohort`, `run_validator`, `cross_database_concept_availability`,
+and `bind_evidence`. These are standardized extraction and evidence
+tools, not raw SQL tools: external agents can call EasyICU's existing
+`load_concepts` API for any supported concept set (vitals, labs,
+therapies, outcomes, scores, sepsis definitions, SOFA/SOFA-2 components,
+etc.), check cross-database derivability before extraction, and register
+the resulting table/figure/log outputs into the SHA-256 EvidenceStore for
+downstream manuscript binding. A minimal legacy SSE bridge is also
+available:
 
 ```bash
 python -m easyicu.research_agent.mcp_server --transport sse --port 8765
@@ -225,8 +255,10 @@ SOFA-zero anomaly finding.
 
 ### Optional VLM figure review
 
-Deterministic figure checks are always available and remain the default.
-To add a vision-language-model review pass, opt in explicitly:
+Deterministic figure checks are always available. A vision-language
+review pass is enabled automatically when `vlm_client` or
+`visual_qa_adapter` is configured, or explicitly through
+`enable_vlm_visual_qa=True`:
 
 ```python
 from easyicu.research_agent import OpenAIClient, ResearchAgentPipeline
@@ -235,7 +267,6 @@ vision = OpenAIClient(model="gpt-4o-mini")
 pipeline = ResearchAgentPipeline(
     workdir="./research_output",
     llm=OpenAIClient(model="gpt-4o-mini"),
-    enable_vlm_visual_qa=True,
     vlm_client=vision,
 )
 ```

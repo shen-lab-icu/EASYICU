@@ -52,7 +52,11 @@ from .schema import (
     VisualizationRequest,
     VisualizationResult,
 )
-from .temporal_semantics import ConceptValidationLayer, ICUEpisodeResolver, TemporalAlignmentEngine
+from .temporal_semantics import (
+    ConceptValidationLayer,
+    ICUEpisodeResolver,
+    TemporalAlignmentEngine,
+)
 
 
 def _dump_raw(text: str, tag: str) -> Optional[Path]:
@@ -64,8 +68,7 @@ def _dump_raw(text: str, tag: str) -> Optional[Path]:
     """
     try:
         log_dir = Path(
-            os.environ.get("EASYICU_LLM_DEBUG_DIR")
-            or "./research_output/llm_debug"
+            os.environ.get("EASYICU_LLM_DEBUG_DIR") or "./research_output/llm_debug"
         )
         log_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
@@ -124,12 +127,17 @@ def _format_context(ctx: ResearchContext) -> str:
     for v in ctx.variables:
         lines.append(_format_variable(v))
     if ctx.cross_database_validation:
-        lines.append("Cross-database replication planned: " + ", ".join(ctx.cross_database_validation))
+        lines.append(
+            "Cross-database replication planned: "
+            + ", ".join(ctx.cross_database_validation)
+        )
     if ctx.user_preferences is not None:
         prefs = ctx.user_preferences
         lines.append("User preferences:")
         if prefs.inferred_analysis_family:
-            lines.append(f"  - inferred_analysis_family: {prefs.inferred_analysis_family}")
+            lines.append(
+                f"  - inferred_analysis_family: {prefs.inferred_analysis_family}"
+            )
         if prefs.starter_template_key:
             lines.append(f"  - starter_template_key: {prefs.starter_template_key}")
         if prefs.preferred_methods:
@@ -268,7 +276,9 @@ class ReplannerAgent(PlannerAgent):
     ) -> AnalysisPlan:
         completed = list(completed_step_records or [])
         messages = [
-            LLMMessage(role="system", content=_SYSTEM_GUIDE + "\n\n" + _REPLANNER_GUIDE),
+            LLMMessage(
+                role="system", content=_SYSTEM_GUIDE + "\n\n" + _REPLANNER_GUIDE
+            ),
             LLMMessage(
                 role="user",
                 content=(
@@ -312,7 +322,11 @@ class ClinicalSemanticsAgent:
         family = infer_analysis_type(context).key
         windows, constraints = self._alignment.infer(
             research_question=context.research_question,
-            timing_and_design=(context.user_preferences.timing_and_design if context.user_preferences else None),
+            timing_and_design=(
+                context.user_preferences.timing_and_design
+                if context.user_preferences
+                else None
+            ),
             explicit_windows=context.time_windows,
         )
         concept_refs: List[ConceptRef] = []
@@ -340,7 +354,11 @@ class ClinicalSemanticsAgent:
             if payload.get("clinical_caveats"):
                 caveats.extend(str(x) for x in payload["clinical_caveats"])
         ambiguity_notes: List[str] = []
-        if not constraints and context.user_preferences and context.user_preferences.timing_and_design:
+        if (
+            not constraints
+            and context.user_preferences
+            and context.user_preferences.timing_and_design
+        ):
             ambiguity_notes.append(
                 "Timing/design preferences were provided but no deterministic temporal constraint could be parsed."
             )
@@ -348,7 +366,12 @@ class ClinicalSemanticsAgent:
             {
                 caveat
                 for variable in context.variables
-                for caveat in ([*(variable.pitfalls or []), *(variable.forbidden_transformations or [])])
+                for caveat in (
+                    [
+                        *(variable.pitfalls or []),
+                        *(variable.forbidden_transformations or []),
+                    ]
+                )
                 if caveat
             }
         )
@@ -379,7 +402,9 @@ class DataExtractionAgent:
     def __init__(self) -> None:
         self._resolver = ICUEpisodeResolver()
 
-    def build_request(self, *, context: ResearchContext, semantics: ClinicalSemanticsResolution) -> DataExtractionRequest:
+    def build_request(
+        self, *, context: ResearchContext, semantics: ClinicalSemanticsResolution
+    ) -> DataExtractionRequest:
         return DataExtractionRequest(
             cohort_name=context.cohort.cohort_name,
             database=context.cohort.database,
@@ -491,7 +516,11 @@ class VisualizationAgent:
         evidence_refs: Sequence[EvidenceRef],
         qa_messages: Sequence[str],
     ) -> VisualizationResult:
-        titles = [ref.description or ref.evidence_id for ref in evidence_refs if ref.kind == "figure"]
+        titles = [
+            ref.description or ref.evidence_id
+            for ref in evidence_refs
+            if ref.kind == "figure"
+        ]
         return VisualizationResult(
             step_id=step.step_id,
             figure_titles=titles,
@@ -585,7 +614,9 @@ class CriticAgent:
             concerns.append("Manuscript contains unresolved evidence placeholders.")
         unsupported = _sentences_missing_evidence_tokens(scaffold)
         if unsupported:
-            concerns.append("Some result-like sentences were filtered or remain unsupported.")
+            concerns.append(
+                "Some result-like sentences were filtered or remain unsupported."
+            )
         status: str = "pass"
         if missing:
             status = "blocked"
@@ -633,10 +664,16 @@ class RuntimeSupervisor:
         self.visualization = visualization or VisualizationAgent()
         self.critic = critic or CriticAgent()
 
-    def bootstrap_state(self, *, run_id: str, context: ResearchContext) -> AgentRuntimeState:
+    def bootstrap_state(
+        self, *, run_id: str, context: ResearchContext
+    ) -> AgentRuntimeState:
         semantics = self.clinical_semantics.run(context=context)
-        extraction_request = self.data_extraction.build_request(context=context, semantics=semantics)
-        extraction_result = self.data_extraction.materialize(context=context, request=extraction_request)
+        extraction_request = self.data_extraction.build_request(
+            context=context, semantics=semantics
+        )
+        extraction_result = self.data_extraction.materialize(
+            context=context, request=extraction_request
+        )
         reflections = _initial_reflection_memory(context=context, semantics=semantics)
         return AgentRuntimeState(
             run_id=run_id,
@@ -685,20 +722,23 @@ class RuntimeSupervisor:
         findings: Sequence[str],
     ) -> AgentRuntimeState:
         critique = self.critic.review_step(
-            step=state.current_step or AnalysisStep(step_id="unknown", intent="unknown"),
+            step=state.current_step
+            or AnalysisStep(step_id="unknown", intent="unknown"),
             step_summary=step_summary,
             evidence_refs=evidence_refs,
             findings=findings,
         )
         analysis_result = self.statistical_analysis.summarize_result(
-            step=state.current_step or AnalysisStep(step_id="unknown", intent="unknown"),
+            step=state.current_step
+            or AnalysisStep(step_id="unknown", intent="unknown"),
             step_summary=step_summary,
             evidence_refs=evidence_refs,
             validator_messages=findings,
             analysis_family=state.analysis_family or "unknown",
         )
         visualization_result = self.visualization.summarize_result(
-            step=state.current_step or AnalysisStep(step_id="unknown", intent="unknown"),
+            step=state.current_step
+            or AnalysisStep(step_id="unknown", intent="unknown"),
             evidence_refs=evidence_refs,
             qa_messages=[msg for msg in findings if "visual" in msg.lower()],
         )
@@ -802,17 +842,13 @@ class CoderAgent:
                     f"Method: {step.method or '(unspecified)'}\n\n"
                     "The previous script failed at execution time. Return "
                     "only a complete replacement Python script that follows "
-	                    "the original code contract and writes the same expected "
-	                    "artefacts when possible. Make the smallest robust fix; "
-	                    "do not add prose, markdown, or an explanation. Keep "
-                        "honoring explicit user preferences recorded in the "
-                        "ResearchContext.\n\n"
-	                    "PREVIOUS SCRIPT:\n```python\n"
-                    + code[-12000:]
-                    + "\n```\n\n"
-                    "RUN LOG / TRACEBACK:\n```\n"
-                    + run_log[-8000:]
-                    + "\n```\n\n"
+                    "the original code contract and writes the same expected "
+                    "artefacts when possible. Make the smallest robust fix; "
+                    "do not add prose, markdown, or an explanation. Keep "
+                    "honoring explicit user preferences recorded in the "
+                    "ResearchContext.\n\n"
+                    "PREVIOUS SCRIPT:\n```python\n" + code[-12000:] + "\n```\n\n"
+                    "RUN LOG / TRACEBACK:\n```\n" + run_log[-8000:] + "\n```\n\n"
                     "RESEARCH CONTEXT:\n" + _format_context(context)
                 ),
             ),
@@ -981,11 +1017,11 @@ def _strip_code_fence(text: str) -> str:
         # Stripped of the language tag but no closing fence — fall back to
         # everything after the first fence.
         idx = text.find("```")
-        rest = text[idx + 3:]
+        rest = text[idx + 3 :]
         # drop a leading language tag (json, python, etc.) on the same line
         nl = rest.find("\n")
         if nl >= 0 and rest[:nl].strip().isalnum():
-            rest = rest[nl + 1:]
+            rest = rest[nl + 1 :]
         # if there's still a trailing fence, cut at it
         end = rest.find("```")
         if end >= 0:
@@ -1095,31 +1131,49 @@ def _coerce_primary_estimate(
     if isinstance(model_results, dict):
         for label, payload in model_results.items():
             if isinstance(payload, dict):
-                estimate = payload.get("estimate") or payload.get("value") or payload.get("or")
+                estimate = (
+                    payload.get("estimate") or payload.get("value") or payload.get("or")
+                )
                 if isinstance(estimate, (int, float)):
                     interval = payload.get("ci") or payload.get("interval")
                     if isinstance(interval, list) and len(interval) == 2:
                         try:
-                            return float(estimate), str(label), [float(interval[0]), float(interval[1])]
+                            return (
+                                float(estimate),
+                                str(label),
+                                [float(interval[0]), float(interval[1])],
+                            )
                         except Exception:
                             pass
                     return float(estimate), str(label), None
     return None, None, None
 
 
-def _suggest_repairs_for(step_summary: Dict[str, Any], findings: Sequence[str]) -> List[str]:
+def _suggest_repairs_for(
+    step_summary: Dict[str, Any], findings: Sequence[str]
+) -> List[str]:
     repairs: List[str] = []
     text = " ".join(findings).lower()
     if "calibration" in text:
-        repairs.append("Add or surface calibration diagnostics before accepting the result.")
+        repairs.append(
+            "Add or surface calibration diagnostics before accepting the result."
+        )
     if "leakage" in text:
-        repairs.append("Revisit train/test split and feature timing to eliminate data leakage.")
+        repairs.append(
+            "Revisit train/test split and feature timing to eliminate data leakage."
+        )
     if "competing risk" in text:
-        repairs.append("Use a competing-risks aware analysis plan rather than a simple binary endpoint.")
+        repairs.append(
+            "Use a competing-risks aware analysis plan rather than a simple binary endpoint."
+        )
     if "evidence" in text:
-        repairs.append("Register missing artifacts and bind them through evidence_id before drafting results.")
+        repairs.append(
+            "Register missing artifacts and bind them through evidence_id before drafting results."
+        )
     if not repairs and step_summary:
-        repairs.append("Review the step summary and regenerate the step with explicit guardrails.")
+        repairs.append(
+            "Review the step summary and regenerate the step with explicit guardrails."
+        )
     return repairs
 
 

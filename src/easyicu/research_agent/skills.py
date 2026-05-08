@@ -877,12 +877,37 @@ def _lactate_map_vaso_plan(context: ResearchContext) -> AnalysisPlan:
             method="logistic_regression_complete_case_or_missing_indicator",
             icu_rule_refs=["lactate_right_skew", "outcome_definition", "confounding_by_indication"],
         ),
+    ]
+    if context.cross_database_validation:
+        steps.append(
+            AnalysisStep(
+                step_id="06_cross_database_protocol",
+                intent=(
+                    "Emit a cross-database replication protocol for eICU/HiRID: "
+                    "concept mapping, time-window harmonisation, lactate/MAP/vaso "
+                    "aggregation rules and required audit checks."
+                ),
+                inputs=[
+                    "lactate_max_24h",
+                    "map_min_24h",
+                    "vaso_any_24h",
+                    target_outcome,
+                ],
+                expected_outputs=["table:cross_database_protocol", "log:replication_checklist"],
+                method="replication_protocol",
+                icu_rule_refs=["cross_database_validation"],
+            )
+        )
+    steps.append(
         AnalysisStep(
-            step_id="06_cross_database_protocol",
+            step_id=(
+                "07_publication_figure_generation"
+                if context.cross_database_validation
+                else "06_publication_figure_generation"
+            ),
             intent=(
-                "Emit a cross-database replication protocol for eICU/HiRID: "
-                "concept mapping, time-window harmonisation, lactate/MAP/vaso "
-                "aggregation rules and required audit checks."
+                "Generate a claim-first, manuscript-ready publication figure for the "
+                "shock-physiology analysis using easyicu.research_agent.publication_figures."
             ),
             inputs=[
                 "lactate_max_24h",
@@ -890,11 +915,13 @@ def _lactate_map_vaso_plan(context: ResearchContext) -> AnalysisPlan:
                 "vaso_any_24h",
                 target_outcome,
             ],
-            expected_outputs=["table:cross_database_protocol", "log:replication_checklist"],
-            method="replication_protocol",
-            icu_rule_refs=["cross_database_validation"],
-        ),
-    ]
+            expected_outputs=[
+                "figure:publication_figure",
+                "log:figure_contract",
+            ],
+            method="publication_figure_generation",
+        )
+    )
     return AnalysisPlan(
         research_question=context.research_question,
         steps=steps,

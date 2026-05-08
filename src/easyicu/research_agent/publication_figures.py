@@ -64,6 +64,36 @@ class PanelSpec(BaseModel):
         default=None,
         description="What a reviewer might challenge about this panel.",
     )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Compatibility bucket for legacy/generated extra panel fields.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_legacy_panel_fields(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping):
+            return data
+        raw = dict(data)
+        if "panel_id" not in raw and "panel" in raw:
+            raw["panel_id"] = raw.pop("panel")
+        if "evidence_ids" not in raw and "source_evidence" in raw:
+            source = raw.pop("source_evidence")
+            if isinstance(source, (list, tuple)):
+                raw["evidence_ids"] = [str(item) for item in source]
+            elif source in (None, ""):
+                raw["evidence_ids"] = []
+            else:
+                raw["evidence_ids"] = [str(source)]
+        raw["role"] = _canonical_panel_role(raw.get("role"), 0, raw)
+        allowed = set(cls.model_fields)
+        metadata = dict(raw.get("metadata") or {})
+        for key in list(raw):
+            if key not in allowed:
+                metadata[key] = raw.pop(key)
+        if metadata:
+            raw["metadata"] = metadata
+        return raw
 
     @field_validator("panel_id")
     @classmethod
@@ -92,6 +122,19 @@ class FigureContract(BaseModel):
     statistics_note: Optional[str] = None
     image_integrity_note: Optional[str] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_legacy_contract_fields(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping):
+            return data
+        raw = dict(data)
+        source_data = raw.get("source_data")
+        if source_data is not None and not isinstance(source_data, (list, tuple)):
+            raw["source_data"] = [str(source_data)]
+        elif isinstance(source_data, (list, tuple)):
+            raw["source_data"] = [str(item) for item in source_data]
+        return raw
+
     @model_validator(mode="after")
     def _validate_panels(self) -> "FigureContract":
         panel_ids = [p.panel_id for p in self.panels]
@@ -104,6 +147,47 @@ class FigureContract(BaseModel):
     def evidence_chain(self) -> Dict[str, List[str]]:
         """Return panel_id -> evidence ids for provenance rendering."""
         return {p.panel_id: list(p.evidence_ids) for p in self.panels}
+
+    # Compatibility helpers for agent-generated code that still uses a
+    # light dict-like API on top of the Pydantic model.
+    def to_dict(self) -> Dict[str, Any]:
+        return self.model_dump()
+
+    def to_json(self, *, indent: int = 2) -> str:
+        return self.model_dump_json(indent=indent)
+
+
+class AuditFindingList(list[ValidationFinding]):
+    """List-like findings container that tolerates ad hoc metadata writes.
+
+    Some generated scripts still treat the audit return value as a dict
+    and attach extra keys such as ``audit_results["figure_contract"]``.
+    We keep the list semantics for existing callers while swallowing
+    those metadata writes instead of crashing the whole step.
+    """
+
+    def __init__(
+        self,
+        iterable: Iterable[ValidationFinding] = (),
+        *,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(iterable)
+        self.metadata: Dict[str, Any] = dict(metadata or {})
+
+    def __getitem__(self, key: object) -> Any:
+        if isinstance(key, str):
+            return self.metadata[key]
+        return super().__getitem__(key)
+
+    def __setitem__(self, key: object, value: Any) -> None:
+        if isinstance(key, str):
+            self.metadata[key] = value
+            return
+        super().__setitem__(key, value)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.metadata.get(key, default)
 
 
 PALETTE_CLINICAL: Dict[str, str] = {
@@ -227,6 +311,13 @@ def _canonical_panel_role(value: object, index: int, panel: Mapping[str, Any]) -
             "distributional_context": "validation",
             "association_forest": "robustness",
             "quality_audit": "audit",
+            "main": "overview",
+            "forest_plot": "relationship",
+            "missingness_summary": "audit",
+            "cluster_distribution": "overview",
+            "mortality_comparison": "relationship",
+            "discrimination": "validation",
+            "calibration": "validation",
         }
         if role in aliases:
             return aliases[role]  # type: ignore[return-value]
@@ -253,13 +344,20 @@ def _normalise_panels(
             else:
                 raw["evidence_ids"] = [str(source)]
         raw["role"] = _canonical_panel_role(raw.get("role"), idx, raw)
+        allowed = set(PanelSpec.model_fields)
+        metadata = dict(raw.get("metadata") or {})
+        for key in list(raw):
+            if key not in allowed:
+                metadata[key] = raw.pop(key)
+        if metadata:
+            raw["metadata"] = metadata
         parsed.append(PanelSpec.model_validate(raw))
     return parsed
 
 
 def make_figure_contract(
-    payload: Optional[Mapping[str, Any]] = None,
-    *,
+    payload: Optional[Mapping[str, Any] | str] = None,
+    *legacy_args: object,
     figure_id: Optional[str] = None,
     core_claim: Optional[str] = None,
     panels: Optional[Sequence[PanelSpec | Mapping[str, object]]] = None,
@@ -286,6 +384,25 @@ def make_figure_contract(
     ``cohort`` is ignored here on purpose; it belongs in step summaries,
     not in the strict figure contract model.
     """
+    if not isinstance(payload, Mapping) and payload is not None and legacy_args:
+        # Legacy positional form such as:
+        # make_figure_contract("fig_id", "Title", df, "x", "y")
+        legacy_figure_id = str(payload)
+        legacy_title = str(legacy_args[0]) if legacy_args else legacy_figure_id
+        payload = {
+            "figure_id": legacy_figure_id,
+            "core_claim": legacy_title,
+            "panels": [{
+                "panel_id": "A",
+                "title": legacy_title,
+                "role": "overview",
+                "claim": legacy_title,
+                "evidence_ids": [],
+            }],
+        }
+        if len(legacy_args) >= 2:
+            payload["source_data"] = ["inline_source_data"]
+
     merged: Dict[str, Any] = dict(payload or {})
     explicit = {
         "figure_id": figure_id,
@@ -320,7 +437,11 @@ def make_figure_contract(
         raise ValueError("panels are required")
 
     if merged.get("source_data") is not None:
-        raw_source_data = list(merged["source_data"])
+        raw_source = merged["source_data"]
+        if isinstance(raw_source, (str, bytes, Path)):
+            raw_source_data = [raw_source]
+        else:
+            raw_source_data = list(raw_source)
         source_data_value = []
         for item in raw_source_data:
             if isinstance(item, Mapping):
@@ -407,6 +528,7 @@ def audit_figure_contract(contract: FigureContract) -> List[ValidationFinding]:
 
 
 def apply_publication_style(
+    fig: Optional[object] = None,
     *,
     font_size: float = 7.5,
     axes_linewidth: float = 0.8,
@@ -436,6 +558,7 @@ def apply_publication_style(
         "figure.facecolor": "white",
         "savefig.facecolor": "white",
     })
+    _ = fig
     return dict(palette or PALETTE_CLINICAL)
 
 
@@ -462,7 +585,7 @@ def add_panel_label(
 
 def save_publication_figure(
     fig: object,
-    output_stem: str | Path | FigureContract | Mapping[str, Any],
+    output_stem: Optional[str | Path | FigureContract | Mapping[str, Any]] = None,
     *legacy_args: object,
     contract: Optional[FigureContract] = None,
     figure_contract: Optional[FigureContract] = None,
@@ -473,6 +596,9 @@ def save_publication_figure(
     basename: Optional[str] = None,
     formats: Optional[Sequence[ExportFormat]] = None,
     dpi: int = 300,
+    output_path: Optional[str | Path] = None,
+    step_out_dir: Optional[str | Path] = None,
+    **legacy_kwargs: object,
 ) -> Dict[str, Path]:
     """Save a matplotlib figure in journal-friendly formats.
 
@@ -495,6 +621,55 @@ def save_publication_figure(
     stem_path: Path
     resolved_contract = figure_contract or contract
 
+    # Older generated code sometimes passes the contract in place of the
+    # figure and expects this helper to merely write contract/export
+    # metadata into an output directory. Support that contract-only mode.
+    contract_only = isinstance(fig, (FigureContract, Mapping))
+    if contract_only:
+        resolved_contract = (
+            fig
+            if isinstance(fig, FigureContract)
+            else FigureContract.model_validate(fig)
+        )
+
+    if output_path is not None and output_dir is None and out_dir is None:
+        path_value = Path(output_path)
+        output_dir = path_value.parent
+        if stem is None and filename is None and basename is None:
+            stem = path_value.stem
+
+    if step_out_dir is not None and output_dir is None and out_dir is None:
+        out_dir = step_out_dir
+
+    if (
+        not contract_only
+        and output_stem is not None
+        and isinstance(output_stem, (str, Path))
+        and legacy_args
+        and not any(v is not None for v in (output_dir, out_dir, stem, filename, basename))
+    ):
+        figure_suffixes = {".svg", ".pdf", ".png", ".tiff", ".tif", ".pptx"}
+        maybe_dir = None
+        maybe_contract = None
+        for arg in legacy_args:
+            if isinstance(arg, (FigureContract, Mapping)):
+                maybe_contract = arg
+            elif isinstance(arg, (str, Path)):
+                arg_path = Path(arg)
+                token = str(arg)
+                if arg_path.suffix.lower() in figure_suffixes:
+                    continue
+                if "/" in token or "\\" in token or token.endswith(("figures", "figure", "output", "outputs")):
+                    maybe_dir = arg
+        if maybe_dir is not None:
+            out_dir = maybe_dir
+        if maybe_contract is not None and resolved_contract is None:
+            resolved_contract = (
+                maybe_contract
+                if isinstance(maybe_contract, FigureContract)
+                else FigureContract.model_validate(maybe_contract)
+            )
+
     if output_dir is not None or out_dir is not None or stem is not None or filename is not None or basename is not None:
         if isinstance(output_stem, (FigureContract, Mapping)):
             resolved_contract = (
@@ -508,8 +683,20 @@ def save_publication_figure(
             )
             stem_path = directory / stem_name
         else:
-            directory = Path(output_dir or out_dir or Path(output_stem).parent)
-            stem_name = stem or filename or basename or Path(output_stem).stem
+            base_path = Path(output_stem) if output_stem is not None else Path(".")
+            directory = Path(output_dir or out_dir or base_path.parent)
+            stem_name = (
+                stem
+                or filename
+                or basename
+                or (
+                    resolved_contract.figure_id
+                    if contract_only and isinstance(resolved_contract, FigureContract)
+                    else None
+                )
+                or base_path.stem
+                or "publication_figure"
+            )
             stem_path = directory / stem_name
     elif isinstance(output_stem, (FigureContract, Mapping)):
         resolved_contract = (
@@ -535,6 +722,31 @@ def save_publication_figure(
     stem_path.parent.mkdir(parents=True, exist_ok=True)
     requested = list(formats or (resolved_contract.export_formats if resolved_contract else ["svg", "pdf", "png"]))
     saved: Dict[str, Path] = {}
+
+    if contract_only:
+        base_dir = stem_path if stem_path.exists() and stem_path.is_dir() else stem_path.parent
+        base_name = (
+            resolved_contract.figure_id
+            if resolved_contract is not None
+            else (stem_path.stem or "publication_figure")
+        )
+        for suffix in (".svg", ".pdf", ".png", ".tiff", ".tif", ".pptx"):
+            candidate = base_dir / f"{base_name}{suffix}"
+            if not candidate.exists():
+                fallback = base_dir / f"{stem_path.stem or stem_path.name}{suffix}"
+                candidate = fallback
+            if candidate.exists():
+                key = "tiff" if suffix == ".tif" else suffix.lstrip(".")
+                saved[key] = candidate
+        if resolved_contract is not None:
+            contract_path = base_dir / f"{base_name}.figure_contract.json"
+            contract_path.write_text(
+                resolved_contract.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            saved["contract"] = contract_path
+        return saved
+
     for fmt in requested:
         path = stem_path.with_suffix(f".{fmt}")
         if fmt == "pptx":
@@ -670,14 +882,31 @@ def _xml_escape(text: str) -> str:
 
 def audit_publication_exports(
     paths: Mapping[str, Path] | Iterable[Path] | str | Path | None = None,
-    *,
+    *legacy_args: str | Path,
     output_dir: Optional[str | Path] = None,
     stem: Optional[str] = None,
     min_bytes: int = 1024,
     require_svg_text: bool = True,
-) -> List[ValidationFinding]:
+) -> AuditFindingList:
     """Audit exported figure files for basic journal-readiness."""
     figure_suffixes = {".svg", ".pdf", ".png", ".tiff", ".tif", ".pptx"}
+    if legacy_args:
+        if output_dir is None:
+            output_dir = legacy_args[0]
+        if len(legacy_args) > 1 and stem is None:
+            stem = str(legacy_args[1])
+
+    contract_like = isinstance(paths, FigureContract) or (
+        paths is not None
+        and not isinstance(paths, (str, Path, Mapping))
+        and hasattr(paths, "figure_id")
+        and hasattr(paths, "panels")
+    )
+    if contract_like:
+        if stem is None:
+            stem = str(getattr(paths, "figure_id", "") or "publication_figure")
+        paths = output_dir
+
     if paths is None and output_dir is not None:
         paths = output_dir
     if isinstance(paths, (str, Path)):
@@ -688,6 +917,16 @@ def audit_publication_exports(
                 stem_path.with_suffix(suffix)
                 for suffix in [".svg", ".pdf", ".png", ".tiff", ".tif", ".pptx"]
                 if stem_path.with_suffix(suffix).exists()
+            ]
+            if not path_list and base.is_dir():
+                path_list = [
+                    p for p in sorted(base.iterdir())
+                    if p.suffix.lower() in figure_suffixes
+                ]
+        elif base.is_dir():
+            path_list = [
+                p for p in sorted(base.iterdir())
+                if p.suffix.lower() in figure_suffixes
             ]
         else:
             path_list = [base]
@@ -702,7 +941,7 @@ def audit_publication_exports(
             if Path(p).suffix.lower() in figure_suffixes
         ]
 
-    findings: List[ValidationFinding] = []
+    findings: AuditFindingList = AuditFindingList()
     for path in path_list:
         if not path.exists():
             findings.append(ValidationFinding(

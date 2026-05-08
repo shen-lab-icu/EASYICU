@@ -33,6 +33,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _is_hidden_sidecar(path: Path) -> bool:
+    """Return True for macOS AppleDouble or other hidden sidecar files."""
+    name = path.name
+    return name.startswith("._") or name.startswith(".")
+
+
 # Partitioning configuration for large tables (matching ricu's data-sources.json)
 # Format: {database: {table_name: {"col": partition_column, "breaks": [breakpoints]}}}
 PARTITIONING_CONFIG = {
@@ -366,6 +372,8 @@ class DataConverter:
         for search_path in search_paths:
             for pattern in ['*.csv', '*.csv.gz', '*.CSV', '*.CSV.GZ']:
                 for f in search_path.rglob(pattern):
+                    if _is_hidden_sidecar(f):
+                        continue
                     # Check if any parent directory is in the excluded list
                     try:
                         parts_lower = [p.lower() for p in f.relative_to(self.data_path).parts[:-1]]
@@ -1658,6 +1666,8 @@ class DataConverter:
         
         # Check parquet files
         for pq_path in self.data_path.glob('*.parquet'):
+            if _is_hidden_sidecar(pq_path):
+                continue
             name = pq_path.stem
             try:
                 # Read just the metadata

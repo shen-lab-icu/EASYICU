@@ -16,9 +16,11 @@ Loop shape::
         CoderAgent.run            → analysis.py    (registered evidence)
         ConceptUsageAuditor.audit → findings       (errors block step)
         CodeRunner.run            → outputs/, run.log
-        StatisticalValidator.audit → findings
-        register every artefact   → evidence ids
-        AnalyzerAgent.run         → interpretation paragraph
+    StatisticalValidator.audit → findings
+    register every artefact   → evidence ids
+    AnalyzerAgent.run         → interpretation paragraph
+        ↓
+    PublicationFigureSkill.run → claim-first figure contract + exports
         ↓
     WriterAgent.run               → manuscript_scaffold.md
     EvidenceStore.bind_manuscript → manuscript_scaffold_bound.md
@@ -28,6 +30,7 @@ Loop shape::
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 import asyncio
 import hashlib
@@ -66,9 +69,15 @@ from .context import (
 )
 from .evidence import EvidenceStore
 from .experiment_spec import ExperimentSpec, dump_experiment_spec
+from .figure_skill import PublicationFigureSkill
 from .bibtex import render_bibtex
 from .latex import scaffold_to_latex
-from .literature import LiteratureAgent, LiteratureBundle
+from .literature import (
+    HypothesisBlueprintAgent,
+    LiteratureAgent,
+    LiteratureBundle,
+    render_hypothesis_blueprint_for_prompt,
+)
 from .llm import LLMClient, LLMRouter, MockLLMClient, resolve_role_client
 from .memory import RunMemory
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
@@ -156,6 +165,7 @@ class ResearchAgentPipeline:
         python_executable: Optional[str] = None,
         enable_literature: bool = True,
         enable_visual_qa: bool = True,
+        enable_publication_figure_skill: bool = True,
         enable_vlm_visual_qa: bool = False,
         vlm_client: Optional[LLMClient] = None,
         visual_qa_adapter: Optional[VLMVisualQAAdapter] = None,
@@ -198,7 +208,12 @@ class ResearchAgentPipeline:
         self._python_executable = python_executable
         self._enable_literature = enable_literature
         self._enable_visual_qa = enable_visual_qa
-        self._enable_vlm_visual_qa = bool(enable_vlm_visual_qa)
+        self._enable_publication_figure_skill = bool(enable_publication_figure_skill)
+        self._enable_vlm_visual_qa = bool(
+            enable_vlm_visual_qa
+            or vlm_client is not None
+            or visual_qa_adapter is not None
+        )
         self._vlm_client = vlm_client
         self._visual_qa_adapter = visual_qa_adapter
         self._enable_llm_concept_audit = bool(enable_llm_concept_audit)
@@ -207,7 +222,9 @@ class ResearchAgentPipeline:
         self._enable_latex = enable_latex
         self._latex_venue_template = latex_venue_template or "article"
         lang = (manuscript_language or "en").lower()
-        self._manuscript_language = "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
+        self._manuscript_language = (
+            "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
+        )
         # T1.4 — when set, the pipeline strips the ICU rules out of the
         # context that drives planning, coding and validation. This is
         # the "naive" arm of the hero ablation: a generic data agent
@@ -215,8 +232,12 @@ class ResearchAgentPipeline:
         self._disable_icu_context = bool(disable_icu_context)
         self._context_top_k = int(context_top_k) if context_top_k else None
         self._max_code_repair_attempts = max(0, int(max_code_repair_attempts))
-        self._enable_deterministic_code_fallback = bool(enable_deterministic_code_fallback)
-        self._enable_deterministic_planner_fallback = bool(enable_deterministic_planner_fallback)
+        self._enable_deterministic_code_fallback = bool(
+            enable_deterministic_code_fallback
+        )
+        self._enable_deterministic_planner_fallback = bool(
+            enable_deterministic_planner_fallback
+        )
         # T2.2 — opt-in PubMed live search. Off by default so CI and
         # the offline demo stay deterministic; the LiteratureAgent
         # handles network failure gracefully (empty list → curated
@@ -240,7 +261,8 @@ class ResearchAgentPipeline:
         # execution every time keep their existing semantics.
         self._enable_cache = bool(enable_cache)
         self._cache_dir = (
-            Path(cache_dir).resolve() if cache_dir is not None
+            Path(cache_dir).resolve()
+            if cache_dir is not None
             else self.workdir / ".cache"
         )
         # T3.2 — opt-in LLM cost tracking. When enabled, every per-role
@@ -346,7 +368,11 @@ class ResearchAgentPipeline:
         emit_progress: Callable[..., None],
     ) -> _PlanPhaseResult:
         """Build context, attach memory, and emit an execution plan."""
-        builder = build_naive_research_context if self._disable_icu_context else build_research_context
+        builder = (
+            build_naive_research_context
+            if self._disable_icu_context
+            else build_research_context
+        )
         context = builder(
             research_question=question,
             cohort=cohort_path,
@@ -387,7 +413,11 @@ class ResearchAgentPipeline:
                 producer="pipeline",
                 generation_mode="system",
             )
-        if experiment_spec_path is not None and experiment_spec_path.exists() and evidence.get("experiment_spec") is None:
+        if (
+            experiment_spec_path is not None
+            and experiment_spec_path.exists()
+            and evidence.get("experiment_spec") is None
+        ):
             evidence.register_file(
                 kind="log",
                 description="Config-driven YAML/JSON experiment specification for this run.",
@@ -523,6 +553,71 @@ class ResearchAgentPipeline:
                     generation_mode="system",
                 )
 
+        if self._enable_literature and skill_obj is None:
+            try:
+                emit_progress(
+                    "hypothesis",
+                    "Building pre-plan literature and hypothesis blueprint.",
+                    run_id=run_id,
+                )
+                preplan_literature = LiteratureAgent(None).run(agent_context)
+                preplan_lit_path = run_dir / "preplan_literature_bundle.json"
+                preplan_lit_path.write_text(
+                    preplan_literature.model_dump_json(indent=2),
+                    encoding="utf-8",
+                )
+                if evidence.get("preplan_literature_bundle") is None:
+                    evidence.register_file(
+                        kind="log",
+                        description=(
+                            "Pre-plan LiteratureBundle used to shape the hypothesis "
+                            "blueprint before planner execution."
+                        ),
+                        source_path=preplan_lit_path,
+                        evidence_id="preplan_literature_bundle",
+                        producer="hypothesis_blueprint",
+                        generation_mode="deterministic_skill",
+                    )
+                blueprint = HypothesisBlueprintAgent().run(
+                    context=agent_context,
+                    literature=preplan_literature,
+                )
+                blueprint_path = run_dir / "hypothesis_blueprint.json"
+                blueprint_path.write_text(
+                    blueprint.model_dump_json(indent=2),
+                    encoding="utf-8",
+                )
+                if evidence.get("hypothesis_blueprint") is None:
+                    evidence.register_file(
+                        kind="log",
+                        description=(
+                            "Literature-aware hypothesis, feasibility critique, "
+                            "and recommended plan skeleton fed to the planner."
+                        ),
+                        source_path=blueprint_path,
+                        evidence_id="hypothesis_blueprint",
+                        producer="hypothesis_blueprint",
+                        generation_mode="deterministic_skill",
+                )
+                note = render_hypothesis_blueprint_for_prompt(blueprint)
+                agent_notes = (
+                    f"{agent_context.notes}\n\n{note}"
+                    if agent_context.notes
+                    else note
+                )
+                agent_context = agent_context.model_copy(update={"notes": agent_notes})
+            except Exception as exc:
+                findings.append(
+                    ValidationFinding(
+                        validator="hypothesis_blueprint",
+                        severity="warning",
+                        message=(
+                            "Hypothesis blueprint failed; planner will use "
+                            f"context only: {exc}"
+                        ),
+                    )
+                )
+
         for client in self._iter_mock_clients(llm):
             client.context = agent_context
         llm_signature = self._llm_signature(llm)
@@ -532,13 +627,18 @@ class ResearchAgentPipeline:
 
         cost_meter: Optional[CostMeter] = None
         if self._enable_cost_tracking:
-            cost_meter = CostMeter(
-                price_table=dict(self._cost_price_table)
-                if self._cost_price_table
-                else None,
-            ) if self._cost_price_table is not None else CostMeter()
+            cost_meter = (
+                CostMeter(
+                    price_table=(
+                        dict(self._cost_price_table) if self._cost_price_table else None
+                    ),
+                )
+                if self._cost_price_table is not None
+                else CostMeter()
+            )
             role_resolver = metered_role_resolver(llm, cost_meter)
         else:
+
             def role_resolver(role: str):
                 return resolve_role_client(llm, role)
 
@@ -546,9 +646,13 @@ class ResearchAgentPipeline:
             plan_generation_mode = "deterministic_skill"
             issues = skill_obj.validate_against(pd.read_parquet(cohort_path))
             for msg in issues:
-                findings.append(ValidationFinding(
-                    validator="clinical_skill", severity="warning", message=msg,
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator="clinical_skill",
+                        severity="warning",
+                        message=msg,
+                    )
+                )
             plan = skill_obj.plan(context)
         else:
             plan_generation_mode = "llm"
@@ -558,16 +662,20 @@ class ResearchAgentPipeline:
             except Exception as exc:
                 if not self._enable_deterministic_planner_fallback:
                     raise
-                findings.append(ValidationFinding(
-                    validator="planner",
-                    severity="warning",
-                    message=(
-                        "Planner agent failed; using deterministic fallback plan: "
-                        f"{type(exc).__name__}: {exc}"
-                    ),
-                    detail={"generation_mode": "fallback"},
-                ))
-                plan = PlannerAgent(MockLLMClient(context=agent_context)).run(agent_context)
+                findings.append(
+                    ValidationFinding(
+                        validator="planner",
+                        severity="warning",
+                        message=(
+                            "Planner agent failed; using deterministic fallback plan: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                        detail={"generation_mode": "fallback"},
+                    )
+                )
+                plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
+                    agent_context
+                )
                 used_mock_llm = True
                 plan_generation_mode = "fallback"
             dropped_plan_keys = getattr(planner, "last_dropped_plan_keys", None) or {}
@@ -575,22 +683,25 @@ class ResearchAgentPipeline:
                 dropped_plan_keys.get("steps", [])
             )
             if dropped_keys:
-                findings.append(ValidationFinding(
-                    validator="planner_schema",
-                    severity="warning",
-                    message=(
-                        "Planner returned unsupported plan fields that were dropped "
-                        "before schema validation."
-                    ),
-                    detail={"dropped_keys": dropped_keys},
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator="planner_schema",
+                        severity="warning",
+                        message=(
+                            "Planner returned unsupported plan fields that were dropped "
+                            "before schema validation."
+                        ),
+                        detail={"dropped_keys": dropped_keys},
+                    )
+                )
         plan_path = run_dir / "analysis_plan.json"
         plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
             evidence.register_file(
                 kind="log",
                 description=(
-                    f"Analysis plan from ClinicalSkill '{skill_obj.key}'." if skill_obj
+                    f"Analysis plan from ClinicalSkill '{skill_obj.key}'."
+                    if skill_obj
                     else "Analysis plan emitted by PlannerAgent."
                 ),
                 source_path=plan_path,
@@ -598,7 +709,10 @@ class ResearchAgentPipeline:
                 producer="planner" if skill_obj is None else "clinical_skill",
                 generation_mode=plan_generation_mode,
                 prompt_pack_version=prompt_version,
-                metadata={"llm_signature": llm_signature, "used_mock_llm": used_mock_llm},
+                metadata={
+                    "llm_signature": llm_signature,
+                    "used_mock_llm": used_mock_llm,
+                },
             )
         emit_progress(
             "plan",
@@ -677,15 +791,21 @@ class ResearchAgentPipeline:
         if plan_result.resume_state is not None:
             try:
                 prior_records = [
-                    rec for rec in (plan_result.resume_state.get("per_step_records", []) or [])
+                    rec
+                    for rec in (
+                        plan_result.resume_state.get("per_step_records", []) or []
+                    )
                     if isinstance(rec, dict) and rec.get("step_id")
                 ]
                 prior_ok_step_ids = {
-                    rec["step_id"] for rec in prior_records
-                    if rec.get("status") == "ok"
+                    rec["step_id"] for rec in prior_records if rec.get("status") == "ok"
                 }
                 for rec in plan_result.resume_state.get("per_step_records", []) or []:
-                    if isinstance(rec, dict) and rec.get("status") == "ok" and rec.get("step_id"):
+                    if (
+                        isinstance(rec, dict)
+                        and rec.get("status") == "ok"
+                        and rec.get("step_id")
+                    ):
                         per_step_records.append(rec)
                         resumed_step_ids.add(rec["step_id"])
                 for f in plan_result.resume_state.get("findings", []) or []:
@@ -706,7 +826,9 @@ class ResearchAgentPipeline:
                         f"already-completed step(s) — {sorted(resumed_step_ids)}"
                     )
                 for rec in per_step_records:
-                    if rec.get("step_id") == "00_probe" and isinstance(rec.get("step_summary"), dict):
+                    if rec.get("step_id") == "00_probe" and isinstance(
+                        rec.get("step_summary"), dict
+                    ):
                         probe_summary = rec["step_summary"]
             except Exception:
                 resumed_step_ids = set()
@@ -764,7 +886,9 @@ class ResearchAgentPipeline:
             *,
             reason: str,
         ) -> Path:
-            revision_path = run_dir / f"analysis_plan_revision_{revised_plan.revision}.json"
+            revision_path = (
+                run_dir / f"analysis_plan_revision_{revised_plan.revision}.json"
+            )
             revision_path.write_text(
                 revised_plan.model_dump_json(indent=2),
                 encoding="utf-8",
@@ -800,23 +924,30 @@ class ResearchAgentPipeline:
                     completed_step_records=completed_records,
                 )
             except Exception as exc:
-                findings.append(ValidationFinding(
-                    validator="replanner",
-                    severity="warning",
-                    message=f"Replanner failed; keeping existing plan: {exc}",
-                    detail={"reason": reason},
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator="replanner",
+                        severity="warning",
+                        message=f"Replanner failed; keeping existing plan: {exc}",
+                        detail={"reason": reason},
+                    )
+                )
                 return current_plan
             if revised.model_dump(mode="json") == current_plan.model_dump(mode="json"):
                 return current_plan
             plan_path = _register_plan_revision(revised, reason=reason)
             plan_result.plan_path = plan_path
-            findings.append(ValidationFinding(
-                validator="replanner",
-                severity="info",
-                message=f"Plan revised after {reason}.",
-                detail={"from_revision": current_plan.revision, "to_revision": revised.revision},
-            ))
+            findings.append(
+                ValidationFinding(
+                    validator="replanner",
+                    severity="info",
+                    message=f"Plan revised after {reason}.",
+                    detail={
+                        "from_revision": current_plan.revision,
+                        "to_revision": revised.revision,
+                    },
+                )
+            )
             return revised
 
         probe_step_id = "00_probe"
@@ -860,7 +991,10 @@ class ResearchAgentPipeline:
         total_steps = len(plan.steps)
 
         def _script_generation_mode(
-            *, repair_attempts: int, fallback_used: bool, runner_repair_name: Optional[str] = None
+            *,
+            repair_attempts: int,
+            fallback_used: bool,
+            runner_repair_name: Optional[str] = None,
         ) -> str:
             if fallback_used:
                 return "fallback"
@@ -870,7 +1004,9 @@ class ResearchAgentPipeline:
                 return "runner_repaired"
             return "llm"
 
-        def _finding_severity(findings_for_step: Sequence[ValidationFinding]) -> Optional[str]:
+        def _finding_severity(
+            findings_for_step: Sequence[ValidationFinding],
+        ) -> Optional[str]:
             if any(f.severity == "error" for f in findings_for_step):
                 return "error"
             if any(f.severity == "warning" for f in findings_for_step):
@@ -886,7 +1022,11 @@ class ResearchAgentPipeline:
             metadata: Optional[Dict[str, Any]] = None,
         ) -> None:
             severity = _finding_severity(findings_for_step)
-            messages = [f.message for f in findings_for_step if f.severity in {"warning", "error"}]
+            messages = [
+                f.message
+                for f in findings_for_step
+                if f.severity in {"warning", "error"}
+            ]
             for evidence_id in evidence_ids:
                 evidence.update_record(
                     evidence_id,
@@ -913,7 +1053,9 @@ class ResearchAgentPipeline:
                 seen.add(rec.evidence_id)
             return refs
 
-        def _validator_messages(*finding_groups: Sequence[ValidationFinding]) -> List[str]:
+        def _validator_messages(
+            *finding_groups: Sequence[ValidationFinding],
+        ) -> List[str]:
             messages: List[str] = []
             for group in finding_groups:
                 for finding in group:
@@ -923,7 +1065,10 @@ class ResearchAgentPipeline:
 
         def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
             nonlocal runtime_state
-            step_record: Dict[str, Any] = {"step_id": step.step_id, "intent": step.intent}
+            step_record: Dict[str, Any] = {
+                "step_id": step.step_id,
+                "intent": step.intent,
+            }
             step_current = step_order.get(step.step_id, 0) + 1
             emit_progress(
                 "step",
@@ -942,11 +1087,13 @@ class ResearchAgentPipeline:
             )
             step_record["analysis_request"] = (
                 local_runtime_state.analysis_request.model_dump(mode="json")
-                if local_runtime_state.analysis_request is not None else None
+                if local_runtime_state.analysis_request is not None
+                else None
             )
             step_record["visualization_request"] = (
                 local_runtime_state.visualization_request.model_dump(mode="json")
-                if local_runtime_state.visualization_request is not None else None
+                if local_runtime_state.visualization_request is not None
+                else None
             )
             step_record["semantics_family"] = local_runtime_state.analysis_family
 
@@ -962,10 +1109,13 @@ class ResearchAgentPipeline:
                 code = coder.run(context=agent_context, step=step)
             except Exception as exc:
                 with shared_lock:
-                    findings.append(ValidationFinding(
-                        validator="coder", severity="error",
-                        message=f"Coder agent failed for step {step.step_id}: {exc}",
-                    ))
+                    findings.append(
+                        ValidationFinding(
+                            validator="coder",
+                            severity="error",
+                            message=f"Coder agent failed for step {step.step_id}: {exc}",
+                        )
+                    )
                     step_record["status"] = "coder_failed"
                     per_step_records.append(step_record)
                     _flush_partial_manifest()
@@ -983,7 +1133,10 @@ class ResearchAgentPipeline:
 
             def _deterministic_fallback_code(reason: str) -> Optional[str]:
                 nonlocal deterministic_fallback_used
-                if deterministic_fallback_used or not self._enable_deterministic_code_fallback:
+                if (
+                    deterministic_fallback_used
+                    or not self._enable_deterministic_code_fallback
+                ):
                     return None
                 deterministic_fallback_used = True
                 plan_result.used_mock_llm = True
@@ -1004,10 +1157,14 @@ class ResearchAgentPipeline:
             concept_audit_error_count = 0
             while True:
                 usage_findings = usage_auditor.audit(
-                    context=context, script_text=code, step=step,
+                    context=context,
+                    script_text=code,
+                    step=step,
                 )
                 if self._enable_llm_concept_audit:
-                    llm_audit_client = self._llm_concept_auditor_client or role_resolver("analyzer")
+                    llm_audit_client = (
+                        self._llm_concept_auditor_client or role_resolver("analyzer")
+                    )
                     if llm_audit_client is not None:
                         usage_findings.extend(
                             LLMConceptAuditor(llm_audit_client).audit(
@@ -1018,7 +1175,8 @@ class ResearchAgentPipeline:
                         )
                 step_record["usage_findings"] = [f.model_dump() for f in usage_findings]
                 concept_audit_error_count += sum(
-                    1 for f in usage_findings
+                    1
+                    for f in usage_findings
                     if f.validator == usage_auditor.name and f.severity == "error"
                 )
                 step_record["concept_audit_error_count"] = concept_audit_error_count
@@ -1060,7 +1218,9 @@ class ResearchAgentPipeline:
                     total_steps=total_steps,
                     repair_attempts=concept_repair_attempts,
                 )
-                audit_log = "\n".join(f"{f.severity.upper()}: {f.message}" for f in usage_findings)
+                audit_log = "\n".join(
+                    f"{f.severity.upper()}: {f.message}" for f in usage_findings
+                )
                 try:
                     code = coder.repair(
                         context=agent_context,
@@ -1073,19 +1233,24 @@ class ResearchAgentPipeline:
                         attempt=concept_repair_attempts,
                     )
                 except Exception as exc:
-                    fallback_code = _deterministic_fallback_code("concept_repair_failed")
+                    fallback_code = _deterministic_fallback_code(
+                        "concept_repair_failed"
+                    )
                     if fallback_code is not None:
                         code = fallback_code
                         continue
                     with shared_lock:
                         findings.extend(usage_findings)
-                        findings.append(ValidationFinding(
-                            validator="coder", severity="error",
-                            message=(
-                                f"Coder repair failed after concept audit for "
-                                f"step {step.step_id}: {exc}"
-                            ),
-                        ))
+                        findings.append(
+                            ValidationFinding(
+                                validator="coder",
+                                severity="error",
+                                message=(
+                                    f"Coder repair failed after concept audit for "
+                                    f"step {step.step_id}: {exc}"
+                                ),
+                            )
+                        )
                         step_record["status"] = "repair_failed"
                         per_step_records.append(step_record)
                         _flush_partial_manifest()
@@ -1137,7 +1302,9 @@ class ResearchAgentPipeline:
                     prompt_pack_version=prompt_version,
                     metadata={
                         "repair_attempts": repair_attempts,
-                        "fallback_reason": step_record.get("deterministic_code_fallback"),
+                        "fallback_reason": step_record.get(
+                            "deterministic_code_fallback"
+                        ),
                         "runner_repair": runner_repair_name,
                         "llm_signature": llm_signature,
                     },
@@ -1158,7 +1325,9 @@ class ResearchAgentPipeline:
                         ),
                         metadata={
                             "repair_attempts": repair_attempts,
-                            "fallback_reason": step_record.get("deterministic_code_fallback"),
+                            "fallback_reason": step_record.get(
+                                "deterministic_code_fallback"
+                            ),
                             "runner_repair": runner_repair_name,
                         },
                     )
@@ -1180,7 +1349,8 @@ class ResearchAgentPipeline:
                         except Exception:
                             visual_step_summary = {}
                     step_figures = [
-                        art for art in run_result.artefacts
+                        art
+                        for art in run_result.artefacts
                         if art.suffix.lower() in {".png", ".svg", ".tiff", ".tif"}
                     ]
                     if self._enable_visual_qa and step_figures:
@@ -1201,11 +1371,17 @@ class ResearchAgentPipeline:
                             figure_paths=step_figures,
                             expected_numeric_by_path=numeric_expectations,
                         )
-                        step_record["visual_findings"] = [f.model_dump() for f in visual_findings]
-                        visual_errors = [f for f in visual_findings if f.severity == "error"]
+                        step_record["visual_findings"] = [
+                            f.model_dump() for f in visual_findings
+                        ]
+                        visual_errors = [
+                            f for f in visual_findings if f.severity == "error"
+                        ]
                         if visual_errors:
                             if repair_attempts >= self._max_code_repair_attempts:
-                                fallback_code = _deterministic_fallback_code("visual_qa")
+                                fallback_code = _deterministic_fallback_code(
+                                    "visual_qa"
+                                )
                                 if fallback_code is not None:
                                     code = fallback_code
                                     _clear_output_dir(run_result.out_dir)
@@ -1238,7 +1414,8 @@ class ResearchAgentPipeline:
                                 repair_attempts=repair_attempts,
                             )
                             qa_log = "\n".join(
-                                f"{f.severity.upper()}: {f.message}" for f in visual_findings
+                                f"{f.severity.upper()}: {f.message}"
+                                for f in visual_findings
                             )
                             try:
                                 code = coder.repair(
@@ -1258,21 +1435,25 @@ class ResearchAgentPipeline:
                                 _clear_output_dir(run_result.out_dir)
                                 continue
                             except Exception as exc:
-                                fallback_code = _deterministic_fallback_code("visual_qa_repair_failed")
+                                fallback_code = _deterministic_fallback_code(
+                                    "visual_qa_repair_failed"
+                                )
                                 if fallback_code is not None:
                                     code = fallback_code
                                     _clear_output_dir(run_result.out_dir)
                                     continue
                                 with shared_lock:
                                     findings.extend(visual_findings)
-                                    findings.append(ValidationFinding(
-                                        validator="coder",
-                                        severity="error",
-                                        message=(
-                                            f"Coder repair failed after visual QA "
-                                            f"for step {step.step_id}: {exc}"
-                                        ),
-                                    ))
+                                    findings.append(
+                                        ValidationFinding(
+                                            validator="coder",
+                                            severity="error",
+                                            message=(
+                                                f"Coder repair failed after visual QA "
+                                                f"for step {step.step_id}: {exc}"
+                                            ),
+                                        )
+                                    )
                                     step_record["status"] = "repair_failed"
                                     per_step_records.append(step_record)
                                     _flush_partial_manifest()
@@ -1288,39 +1469,12 @@ class ResearchAgentPipeline:
                                 return step_record
                     break
 
-                if repair_attempts >= self._max_code_repair_attempts:
-                    fallback_code = _deterministic_fallback_code("execution_failure")
-                    if fallback_code is not None:
-                        code = fallback_code
-                        _clear_output_dir(run_result.out_dir)
-                        continue
-                    with shared_lock:
-                        findings.append(ValidationFinding(
-                            validator="runner", severity="error",
-                            message=(
-                                f"Step {step.step_id} "
-                                f"{'timed out' if run_result.timed_out else 'failed'} "
-                                f"with returncode {run_result.returncode}."
-                            ),
-                        ))
-                        step_record["status"] = "execution_failed"
-                        per_step_records.append(step_record)
-                        _flush_partial_manifest()
-                    emit_progress(
-                        "runner",
-                        f"Execution failed for {step.step_id}.",
-                        status="error",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                    )
-                    return step_record
-
                 if log_path.exists():
                     run_log = log_path.read_text(encoding="utf-8", errors="replace")
                 else:
-                    run_log = (run_result.stdout or "") + "\n" + (run_result.stderr or "")
+                    run_log = (
+                        (run_result.stdout or "") + "\n" + (run_result.stderr or "")
+                    )
                 runner_repair = _deterministic_runner_repair(
                     code=code,
                     run_log=run_log,
@@ -1339,6 +1493,38 @@ class ResearchAgentPipeline:
                     )
                     _clear_output_dir(run_result.out_dir)
                     continue
+
+                if repair_attempts >= self._max_code_repair_attempts:
+                    fallback_code = _deterministic_fallback_code("execution_failure")
+                    if fallback_code is not None:
+                        code = fallback_code
+                        _clear_output_dir(run_result.out_dir)
+                        continue
+                    with shared_lock:
+                        findings.append(
+                            ValidationFinding(
+                                validator="runner",
+                                severity="error",
+                                message=(
+                                    f"Step {step.step_id} "
+                                    f"{'timed out' if run_result.timed_out else 'failed'} "
+                                    f"with returncode {run_result.returncode}."
+                                ),
+                            )
+                        )
+                        step_record["status"] = "execution_failed"
+                        per_step_records.append(step_record)
+                        _flush_partial_manifest()
+                    emit_progress(
+                        "runner",
+                        f"Execution failed for {step.step_id}.",
+                        status="error",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    return step_record
 
                 repair_attempts += 1
                 step_record["code_repair_attempts"] = repair_attempts
@@ -1367,10 +1553,13 @@ class ResearchAgentPipeline:
                         _clear_output_dir(run_result.out_dir)
                         continue
                     with shared_lock:
-                        findings.append(ValidationFinding(
-                            validator="coder", severity="error",
-                            message=f"Coder repair failed for step {step.step_id}: {exc}",
-                        ))
+                        findings.append(
+                            ValidationFinding(
+                                validator="coder",
+                                severity="error",
+                                message=f"Coder repair failed for step {step.step_id}: {exc}",
+                            )
+                        )
                         step_record["status"] = "repair_failed"
                         per_step_records.append(step_record)
                         _flush_partial_manifest()
@@ -1384,6 +1573,53 @@ class ResearchAgentPipeline:
                         total_steps=total_steps,
                     )
                     return step_record
+
+            publication_step = (
+                step.method == "publication_figure_generation"
+                or "publication_figure" in (step.step_id or "").lower()
+                or any(
+                    str(item).startswith("figure:publication_figure")
+                    for item in step.expected_outputs
+                )
+            )
+            if publication_step and not _has_figure_exports(run_result.out_dir):
+                promoted = _promote_prior_publication_bundle(
+                    run_dir=run_dir,
+                    current_step_id=step.step_id,
+                    out_dir=run_result.out_dir,
+                )
+                if promoted is not None:
+                    runner_repair_name = promoted
+                    step_record["runner_repair"] = promoted
+
+            run_result.artefacts = sorted(
+                p for p in run_result.out_dir.iterdir() if p.is_file()
+            )
+
+            if publication_step and not _has_figure_exports(run_result.out_dir):
+                with shared_lock:
+                    findings.append(
+                        ValidationFinding(
+                            validator="publication_figure_outputs",
+                            severity="error",
+                            message=(
+                                f"Step {step.step_id} completed without any publication-figure exports."
+                            ),
+                        )
+                    )
+                    step_record["status"] = "execution_failed"
+                    per_step_records.append(step_record)
+                    _flush_partial_manifest()
+                emit_progress(
+                    "runner",
+                    f"Publication figure missing for {step.step_id}.",
+                    status="error",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                )
+                return step_record
 
             evidence_ids_for_step: List[str] = [script_record.evidence_id]
             for art in run_result.artefacts:
@@ -1417,7 +1653,14 @@ class ResearchAgentPipeline:
                         generation_mode=generation_mode,
                         metadata={"script_evidence_id": script_record.evidence_id},
                     )
-                elif art.suffix.lower() in {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}:
+                elif art.suffix.lower() in {
+                    ".png",
+                    ".svg",
+                    ".pdf",
+                    ".tiff",
+                    ".tif",
+                    ".pptx",
+                }:
                     rec = evidence.register_file(
                         kind="figure",
                         description=f"Figure {art.stem} from step {step.step_id}.",
@@ -1475,7 +1718,9 @@ class ResearchAgentPipeline:
                 findings.extend(clinical_findings)
                 findings.extend(guard_findings)
             step_record["stat_findings"] = [f.model_dump() for f in stat_findings]
-            step_record["clinical_findings"] = [f.model_dump() for f in clinical_findings]
+            step_record["clinical_findings"] = [
+                f.model_dump() for f in clinical_findings
+            ]
             step_record["guard_findings"] = [f.model_dump() for f in guard_findings]
             step_record["generation_mode"] = _script_generation_mode(
                 repair_attempts=repair_attempts,
@@ -1521,10 +1766,18 @@ class ResearchAgentPipeline:
                         findings.append(
                             ValidationFinding(
                                 validator="critic_agent",
-                                severity="warning" if critique.status == "needs_revision" else "error",
+                                severity=(
+                                    "warning"
+                                    if critique.status == "needs_revision"
+                                    else "error"
+                                ),
                                 message=(
                                     f"CriticAgent marked {step.step_id} as {critique.status}: "
-                                    + "; ".join(critique.concerns or critique.suggested_repairs or ["review required"])
+                                    + "; ".join(
+                                        critique.concerns
+                                        or critique.suggested_repairs
+                                        or ["review required"]
+                                    )
                                 ),
                                 evidence_ids=[critique_record.evidence_id],
                             )
@@ -1586,23 +1839,35 @@ class ResearchAgentPipeline:
                 step_id=skipped_step_id,
             )
         if self._enable_replanning and self._max_concurrent_steps > 1:
-            findings.append(ValidationFinding(
-                validator="replanner",
-                severity="info",
-                message=(
-                    "Replanning is enabled, so step execution was forced to sequential "
-                    "mode to preserve run-internal plan revisions."
-                ),
-            ))
+            findings.append(
+                ValidationFinding(
+                    validator="replanner",
+                    severity="info",
+                    message=(
+                        "Replanning is enabled, so step execution was forced to sequential "
+                        "mode to preserve run-internal plan revisions."
+                    ),
+                )
+            )
 
-        if self._max_concurrent_steps <= 1 or len(steps_to_run) <= 1 or self._enable_replanning:
+        if (
+            self._max_concurrent_steps <= 1
+            or len(steps_to_run) <= 1
+            or self._enable_replanning
+        ):
             executed_step_ids = set(resumed_step_ids)
-            remaining_steps = [s for s in plan.steps if s.step_id not in executed_step_ids]
+            remaining_steps = [
+                s for s in plan.steps if s.step_id not in executed_step_ids
+            ]
             while remaining_steps:
                 step = remaining_steps.pop(0)
                 record = _execute_one_step(step)
                 executed_step_ids.add(step.step_id)
-                if self._enable_replanning and record.get("status") == "ok" and remaining_steps:
+                if (
+                    self._enable_replanning
+                    and record.get("status") == "ok"
+                    and remaining_steps
+                ):
                     plan = _maybe_replan(
                         current_plan=plan,
                         reason=step.step_id,
@@ -1611,20 +1876,27 @@ class ResearchAgentPipeline:
                     )
                     step_order.clear()
                     step_order.update({s.step_id: i for i, s in enumerate(plan.steps)})
-                    remaining_steps = [s for s in plan.steps if s.step_id not in executed_step_ids]
+                    remaining_steps = [
+                        s for s in plan.steps if s.step_id not in executed_step_ids
+                    ]
                     total_steps = len(plan.steps)
         else:
             workers = min(self._max_concurrent_steps, len(steps_to_run))
-            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ra_step") as ex:
+            with ThreadPoolExecutor(
+                max_workers=workers, thread_name_prefix="ra_step"
+            ) as ex:
                 futures = [ex.submit(_execute_one_step, s) for s in steps_to_run]
                 for fut in as_completed(futures):
                     exc = fut.exception()
                     if exc is not None:
                         with shared_lock:
-                            findings.append(ValidationFinding(
-                                validator="step_executor", severity="error",
-                                message=f"Worker raised an unhandled exception: {exc!r}",
-                            ))
+                            findings.append(
+                                ValidationFinding(
+                                    validator="step_executor",
+                                    severity="error",
+                                    message=f"Worker raised an unhandled exception: {exc!r}",
+                                )
+                            )
 
         if self._enable_visual_qa:
             emit_progress(
@@ -1632,13 +1904,19 @@ class ResearchAgentPipeline:
                 "Auditing generated figures.",
                 run_id=run_id,
             )
-            fig_paths = [run_dir / r.relative_path for r in evidence.records() if r.kind == "figure"]
+            fig_paths = [
+                run_dir / r.relative_path
+                for r in evidence.records()
+                if r.kind == "figure"
+            ]
             vlm_adapter = self._visual_qa_adapter
             if vlm_adapter is None and self._enable_vlm_visual_qa:
-                client = role_resolver("analyzer")
+                client = self._vlm_client or role_resolver("analyzer")
                 if client is not None:
                     vlm_adapter = VLMVisualQAAdapter(client)
-            findings += VisualQAAuditor(vlm_adapter=vlm_adapter).audit(figure_paths=fig_paths)
+            findings += VisualQAAuditor(vlm_adapter=vlm_adapter).audit(
+                figure_paths=fig_paths
+            )
 
         plan_result.plan = plan
         plan_result.plan_path = plan_path
@@ -1674,6 +1952,47 @@ class ResearchAgentPipeline:
         critic = CriticAgent(role_resolver("analyzer"))
 
         literature: Optional[LiteratureBundle] = None
+        if self._enable_publication_figure_skill:
+            try:
+                emit_progress(
+                    "figure",
+                    "Rendering manuscript-facing publication figure bundle from registered evidence.",
+                    run_id=run_id,
+                )
+                figure_result = PublicationFigureSkill().run(
+                    context=context,
+                    plan=execute_result.plan,
+                    evidence=evidence,
+                    run_dir=run_dir,
+                    prompt_pack_version=prompt_version,
+                )
+                findings.extend(figure_result.findings)
+                if self._enable_visual_qa and figure_result.figure_evidence_ids:
+                    fig_paths = []
+                    for evidence_id in figure_result.figure_evidence_ids:
+                        record = evidence.get(evidence_id)
+                        if record is not None:
+                            fig_paths.append(run_dir / record.relative_path)
+                    if fig_paths:
+                        vlm_adapter = self._visual_qa_adapter
+                        if vlm_adapter is None and self._enable_vlm_visual_qa:
+                            client = self._vlm_client or role_resolver("analyzer")
+                            if client is not None:
+                                vlm_adapter = VLMVisualQAAdapter(client)
+                        findings.extend(
+                            VisualQAAuditor(vlm_adapter=vlm_adapter).audit(
+                                figure_paths=fig_paths
+                            )
+                        )
+            except Exception as exc:
+                findings.append(
+                    ValidationFinding(
+                        validator="publication_figure_skill",
+                        severity="warning",
+                        message=f"Publication figure skill failed; writer will use existing evidence only: {exc}",
+                    )
+                )
+
         if stop_after_analysis:
             emit_progress(
                 "pause",
@@ -1709,6 +2028,7 @@ class ResearchAgentPipeline:
                 pubmed_client = None
                 if self._enable_pubmed:
                     from .literature import PubMedLiteratureClient
+
                     pubmed_client = PubMedLiteratureClient(
                         email=self._pubmed_email,
                         api_key=self._pubmed_api_key,
@@ -1716,6 +2036,7 @@ class ResearchAgentPipeline:
                 tavily_client = None
                 if self._enable_tavily:
                     from .literature import TavilyLiteratureClient
+
                     tavily_client = TavilyLiteratureClient(
                         api_key=self._tavily_api_key,
                         include_domains=self._tavily_include_domains,
@@ -1730,7 +2051,9 @@ class ResearchAgentPipeline:
                     tavily_retmax=self._tavily_retmax,
                 ).run(agent_context)
                 lit_path = run_dir / "literature_bundle.json"
-                lit_path.write_text(literature.model_dump_json(indent=2), encoding="utf-8")
+                lit_path.write_text(
+                    literature.model_dump_json(indent=2), encoding="utf-8"
+                )
                 if evidence.get("literature_bundle") is None:
                     evidence.register_file(
                         kind="log",
@@ -1738,7 +2061,9 @@ class ResearchAgentPipeline:
                         source_path=lit_path,
                         evidence_id="literature_bundle",
                         producer="literature",
-                        generation_mode="llm" if lit_client is not None else "deterministic_skill",
+                        generation_mode=(
+                            "llm" if lit_client is not None else "deterministic_skill"
+                        ),
                         prompt_pack_version=prompt_version,
                         metadata={
                             "enable_pubmed": self._enable_pubmed,
@@ -1746,10 +2071,13 @@ class ResearchAgentPipeline:
                         },
                     )
             except Exception as exc:
-                findings.append(ValidationFinding(
-                    validator="literature_agent", severity="warning",
-                    message=f"Literature agent failed: {exc}",
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator="literature_agent",
+                        severity="warning",
+                        message=f"Literature agent failed: {exc}",
+                    )
+                )
 
         emit_progress(
             "writer",
@@ -1771,7 +2099,9 @@ class ResearchAgentPipeline:
                     )
                     for record in evidence.records()
                 ],
-                findings=[f.message for f in findings if f.severity in {"warning", "error"}],
+                findings=[
+                    f.message for f in findings if f.severity in {"warning", "error"}
+                ],
                 caveats=list(runtime_state.semantics.safety_guardrails),
             )
             packet_path = run_dir / "manuscript_packet.json"
@@ -1809,7 +2139,9 @@ class ResearchAgentPipeline:
                 prompt_pack_version=prompt_version,
             )
 
-        evidence_bound_scaffold, removed_sentences = evidence.enforce_evidence_bound_scaffold(scaffold)
+        evidence_bound_scaffold, removed_sentences = (
+            evidence.enforce_evidence_bound_scaffold(scaffold)
+        )
         if removed_sentences:
             findings.append(
                 ValidationFinding(
@@ -1853,9 +2185,15 @@ class ResearchAgentPipeline:
         if removed_sentences:
             manuscript_critique = manuscript_critique.model_copy(
                 update={
-                    "status": "needs_revision" if manuscript_critique.status == "pass" else manuscript_critique.status,
-                    "unsupported_claims": list(manuscript_critique.unsupported_claims) + removed_sentences,
-                    "concerns": list(manuscript_critique.concerns) + [
+                    "status": (
+                        "needs_revision"
+                        if manuscript_critique.status == "pass"
+                        else manuscript_critique.status
+                    ),
+                    "unsupported_claims": list(manuscript_critique.unsupported_claims)
+                    + removed_sentences,
+                    "concerns": list(manuscript_critique.concerns)
+                    + [
                         "Pipeline removed result-like sentences that lacked evidence placeholders."
                     ],
                 }
@@ -1878,10 +2216,18 @@ class ResearchAgentPipeline:
             findings.append(
                 ValidationFinding(
                     validator="critic_agent",
-                    severity="warning" if manuscript_critique.status == "needs_revision" else "error",
+                    severity=(
+                        "warning"
+                        if manuscript_critique.status == "needs_revision"
+                        else "error"
+                    ),
                     message=(
                         f"CriticAgent marked manuscript as {manuscript_critique.status}: "
-                        + "; ".join(manuscript_critique.concerns or manuscript_critique.suggested_repairs or ["review required"])
+                        + "; ".join(
+                            manuscript_critique.concerns
+                            or manuscript_critique.suggested_repairs
+                            or ["review required"]
+                        )
                     ),
                     evidence_ids=["manuscript_critique"],
                 )
@@ -1897,7 +2243,8 @@ class ResearchAgentPipeline:
                 bib_basename = "manuscript_scaffold"
                 tex = scaffold_to_latex(
                     markdown=bound,
-                    title=manuscript_title or f"EasyICU research-agent: {context.research_question}",
+                    title=manuscript_title
+                    or f"EasyICU research-agent: {context.research_question}",
                     authors=manuscript_authors or ["EasyICU research-agent"],
                     bibliography=literature,
                     bibliography_basename=bib_basename,
@@ -1928,10 +2275,13 @@ class ResearchAgentPipeline:
                             generation_mode="system",
                         )
             except Exception as exc:
-                findings.append(ValidationFinding(
-                    validator="latex_export", severity="warning",
-                    message=f"LaTeX export failed: {exc}",
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator="latex_export",
+                        severity="warning",
+                        message=f"LaTeX export failed: {exc}",
+                    )
+                )
 
         return _WritePhaseResult(
             literature=literature,
@@ -1967,7 +2317,11 @@ class ResearchAgentPipeline:
 
         plan_order = {s.step_id: i for i, s in enumerate(plan.steps)}
         per_step_records.sort(
-            key=lambda r: -1 if r.get("step_id") == "00_probe" else plan_order.get(r.get("step_id"), 10**9)
+            key=lambda r: (
+                -1
+                if r.get("step_id") == "00_probe"
+                else plan_order.get(r.get("step_id"), 10**9)
+            )
         )
         report_path = run_dir / "results_report.md"
         report_path.write_text(
@@ -2065,7 +2419,9 @@ class ResearchAgentPipeline:
                 encoding="utf-8",
             )
             cost_md_path = run_dir / "cost_summary.md"
-            cost_md_path.write_text(_render_cost_summary(plan_result.cost_meter), encoding="utf-8")
+            cost_md_path.write_text(
+                _render_cost_summary(plan_result.cost_meter), encoding="utf-8"
+            )
             evidence.register_file(
                 kind="log",
                 description="Raw per-call LLM cost records (T3.2).",
@@ -2085,7 +2441,9 @@ class ResearchAgentPipeline:
 
         manifest_notes = notes
         if stop_after_analysis:
-            suffix = "paused_after_analysis: manuscript generation skipped by user option."
+            suffix = (
+                "paused_after_analysis: manuscript generation skipped by user option."
+            )
             manifest_notes = f"{notes}\n\n{suffix}" if notes else suffix
         literature_provenance = _literature_provenance_note(
             enable_literature=self._enable_literature,
@@ -2094,7 +2452,8 @@ class ResearchAgentPipeline:
         )
         manifest_notes = (
             f"{manifest_notes}\n\n{literature_provenance}"
-            if manifest_notes else literature_provenance
+            if manifest_notes
+            else literature_provenance
         )
 
         report_path.write_text(
@@ -2178,7 +2537,6 @@ class ResearchAgentPipeline:
     # Public API
     # ------------------------------------------------------------------
 
-
     def run(
         self,
         *,
@@ -2217,7 +2575,9 @@ class ResearchAgentPipeline:
             if not time_windows:
                 time_windows = skill_obj.time_windows or None
         if question is None:
-            raise ValueError("`question` is required (or pass `skill=...` to derive one).")
+            raise ValueError(
+                "`question` is required (or pass `skill=...` to derive one)."
+            )
         if self._llm is None:
             raise ValueError(
                 "ResearchAgentPipeline.run() now requires an explicit `llm=` "
@@ -2228,7 +2588,7 @@ class ResearchAgentPipeline:
             manuscript_language or self._manuscript_language
         )
         audit_logger: Optional[AuditLogger] = None
-    
+
         def _emit_progress(stage: str, message: str, **extra: Any) -> None:
             if audit_logger is not None:
                 try:
@@ -2236,8 +2596,14 @@ class ResearchAgentPipeline:
                         phase=stage,
                         event=message,
                         status=str(extra.get("status", "running")),
-                        step_id=(str(extra.get("step_id")) if extra.get("step_id") else None),
-                        detail={k: v for k, v in extra.items() if k not in {"status", "step_id"}},
+                        step_id=(
+                            str(extra.get("step_id")) if extra.get("step_id") else None
+                        ),
+                        detail={
+                            k: v
+                            for k, v in extra.items()
+                            if k not in {"status", "step_id"}
+                        },
                     )
                 except Exception:
                     pass
@@ -2254,9 +2620,9 @@ class ResearchAgentPipeline:
                 progress_callback(payload)
             except Exception:
                 pass
-    
+
         _emit_progress("run", "Starting research-agent run.")
-    
+
         resume_state: Optional[Dict[str, Any]] = None
         if resume_run_id:
             run_id = resume_run_id
@@ -2269,7 +2635,12 @@ class ResearchAgentPipeline:
                     resume_state = None
             run_dir.mkdir(parents=True, exist_ok=True)
         else:
-            run_id = "run_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "_" + uuid.uuid4().hex[:6]
+            run_id = (
+                "run_"
+                + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+                + "_"
+                + uuid.uuid4().hex[:6]
+            )
             run_dir = self.workdir / run_id
             run_dir.mkdir(parents=True, exist_ok=True)
         audit_logger = AuditLogger(run_dir / "audit_log.jsonl")
@@ -2285,7 +2656,7 @@ class ResearchAgentPipeline:
                 spec_obj,
                 run_dir / "experiment_spec.yaml",
             )
-    
+
         cohort_path = self._materialise_cohort(cohort, run_dir)
         _emit_progress(
             "cohort",
@@ -2293,7 +2664,7 @@ class ResearchAgentPipeline:
             run_id=run_id,
             path=str(cohort_path),
         )
-    
+
         cache_key: Optional[str] = None
         if self._enable_cache and not resume_run_id:
             cache_key = self._compute_cache_key(
@@ -2316,11 +2687,11 @@ class ResearchAgentPipeline:
                     run_id=cached.run_id,
                 )
                 return cached
-    
+
         llm = self._llm
         if llm is None:
             raise RuntimeError("LLM client is unexpectedly missing after validation.")
-    
+
         plan_result = self._run_plan_phase(
             question=question,
             cohort_path=cohort_path,
@@ -2348,7 +2719,7 @@ class ResearchAgentPipeline:
         )
         if plan_result.aborted_result is not None:
             return plan_result.aborted_result
-    
+
         execute_result = self._run_execute_phase(
             plan_result=plan_result,
             cohort_path=cohort_path,
@@ -2393,7 +2764,11 @@ class ResearchAgentPipeline:
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> PipelineResult:
         """Run the pipeline from a typed YAML/JSON experiment specification."""
-        spec_obj = spec if isinstance(spec, ExperimentSpec) else ExperimentSpec.model_validate(spec)
+        spec_obj = (
+            spec
+            if isinstance(spec, ExperimentSpec)
+            else ExperimentSpec.model_validate(spec)
+        )
         kwargs = spec_obj.run_kwargs()
         kwargs["experiment_spec"] = spec_obj
         kwargs["progress_callback"] = progress_callback
@@ -2402,7 +2777,7 @@ class ResearchAgentPipeline:
     async def run_async(self, **kwargs: Any) -> PipelineResult:
         """Async wrapper for UI/API runtimes that need non-blocking orchestration."""
         return await asyncio.to_thread(self.run, **kwargs)
-    
+
     def replicate(
         self,
         *,
@@ -2423,92 +2798,96 @@ class ResearchAgentPipeline:
         notes: Optional[str] = None,
         manuscript_language: Optional[str] = None,
     ) -> Dict[str, Any]:
-            """Run the same plan/question across multiple cohorts and compare effects.
-    
-            This is the pipeline-native cross-database replication path requested
-            by the methods critique: instead of pushing replication into a separate
-            CLI layer, the orchestrator can now launch one analysis run per cohort
-            and emit a harmonised effect-comparison table.
-            """
-            if not cohorts:
-                raise ValueError("`cohorts` must contain at least one database -> cohort entry.")
-    
-            run_results: Dict[str, PipelineResult] = {}
-            comparison_rows: List[Dict[str, Any]] = []
-            databases = list(cohorts.keys())
-            for database, cohort in cohorts.items():
-                result = self.run(
-                    question=question,
-                    cohort=cohort,
-                    cohort_name=f"{database}_{cohort_name_prefix}",
-                    database=database,
-                    target_outcome=target_outcome,
-                    cross_database_validation=[db for db in databases if db != database],
-                    inclusion_criteria=inclusion_criteria,
-                    exclusion_criteria=exclusion_criteria,
-                    id_columns=id_columns,
-                    time_columns=time_columns,
-                    outcome_columns=outcome_columns,
-                    time_windows=time_windows,
-                    concept_descriptions=concept_descriptions,
-                    user_preferences=user_preferences,
-                    notes=notes,
-                    skill=skill,
-                    manuscript_language=manuscript_language,
-                    stop_after_analysis=stop_after_analysis,
-                )
-                run_results[database] = result
-                comparison_rows.append(
-                    _extract_primary_effect_row(database=database, result=result)
-                )
-    
-            replication_id = "replication_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-            replication_dir = self.workdir / replication_id
-            replication_dir.mkdir(parents=True, exist_ok=True)
-    
-            comparison_df = pd.DataFrame(comparison_rows)
-            csv_path = replication_dir / "cross_database_effect_comparison.csv"
-            comparison_df.to_csv(csv_path, index=False)
-            md_path = replication_dir / "cross_database_effect_comparison.md"
-            md_path.write_text(
-                _render_cross_database_comparison_markdown(comparison_rows),
-                encoding="utf-8",
+        """Run the same plan/question across multiple cohorts and compare effects.
+
+        This is the pipeline-native cross-database replication path requested
+        by the methods critique: instead of pushing replication into a separate
+        CLI layer, the orchestrator can now launch one analysis run per cohort
+        and emit a harmonised effect-comparison table.
+        """
+        if not cohorts:
+            raise ValueError(
+                "`cohorts` must contain at least one database -> cohort entry."
             )
-            summary_path = replication_dir / "cross_database_runs.json"
-            summary_path.write_text(
-                json.dumps(
-                    {
-                        "question": question,
-                        "target_outcome": target_outcome,
-                        "stop_after_analysis": stop_after_analysis,
-                        "runs": {
-                            db: {
-                                "run_id": res.run_id,
-                                "manifest_path": res.manifest_path,
-                                "report_path": res.report_path,
-                                "manuscript_path": res.manuscript_path,
-                            }
-                            for db, res in run_results.items()
-                        },
+
+        run_results: Dict[str, PipelineResult] = {}
+        comparison_rows: List[Dict[str, Any]] = []
+        databases = list(cohorts.keys())
+        for database, cohort in cohorts.items():
+            result = self.run(
+                question=question,
+                cohort=cohort,
+                cohort_name=f"{database}_{cohort_name_prefix}",
+                database=database,
+                target_outcome=target_outcome,
+                cross_database_validation=[db for db in databases if db != database],
+                inclusion_criteria=inclusion_criteria,
+                exclusion_criteria=exclusion_criteria,
+                id_columns=id_columns,
+                time_columns=time_columns,
+                outcome_columns=outcome_columns,
+                time_windows=time_windows,
+                concept_descriptions=concept_descriptions,
+                user_preferences=user_preferences,
+                notes=notes,
+                skill=skill,
+                manuscript_language=manuscript_language,
+                stop_after_analysis=stop_after_analysis,
+            )
+            run_results[database] = result
+            comparison_rows.append(
+                _extract_primary_effect_row(database=database, result=result)
+            )
+
+        replication_id = "replication_" + datetime.now(timezone.utc).strftime(
+            "%Y%m%dT%H%M%S"
+        )
+        replication_dir = self.workdir / replication_id
+        replication_dir.mkdir(parents=True, exist_ok=True)
+
+        comparison_df = pd.DataFrame(comparison_rows)
+        csv_path = replication_dir / "cross_database_effect_comparison.csv"
+        comparison_df.to_csv(csv_path, index=False)
+        md_path = replication_dir / "cross_database_effect_comparison.md"
+        md_path.write_text(
+            _render_cross_database_comparison_markdown(comparison_rows),
+            encoding="utf-8",
+        )
+        summary_path = replication_dir / "cross_database_runs.json"
+        summary_path.write_text(
+            json.dumps(
+                {
+                    "question": question,
+                    "target_outcome": target_outcome,
+                    "stop_after_analysis": stop_after_analysis,
+                    "runs": {
+                        db: {
+                            "run_id": res.run_id,
+                            "manifest_path": res.manifest_path,
+                            "report_path": res.report_path,
+                            "manuscript_path": res.manuscript_path,
+                        }
+                        for db, res in run_results.items()
                     },
-                    indent=2,
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-            return {
-                "replication_id": replication_id,
-                "replication_dir": str(replication_dir),
-                "comparison_csv": str(csv_path),
-                "comparison_md": str(md_path),
-                "summary_json": str(summary_path),
-                "runs": run_results,
-            }
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "replication_id": replication_id,
+            "replication_dir": str(replication_dir),
+            "comparison_csv": str(csv_path),
+            "comparison_md": str(md_path),
+            "summary_json": str(summary_path),
+            "runs": run_results,
+        }
 
     async def replicate_async(self, **kwargs: Any) -> Dict[str, Any]:
         """Async wrapper for cross-database replication."""
         return await asyncio.to_thread(self.replicate, **kwargs)
-    
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -2568,8 +2947,7 @@ class ResearchAgentPipeline:
         # LLMRouter (T2.3) — fingerprint every distinct underlying client.
         if hasattr(llm, "iter_clients"):
             sigs = sorted(
-                ResearchAgentPipeline._llm_signature(c)
-                for c in llm.iter_clients()
+                ResearchAgentPipeline._llm_signature(c) for c in llm.iter_clients()
             )
             return "router(" + ",".join(sigs) + ")"
         model = getattr(llm, "_model", None)
@@ -2618,8 +2996,12 @@ class ResearchAgentPipeline:
             "enable_probe_step": bool(self._enable_probe_step),
             "enable_replanning": bool(self._enable_replanning),
             "max_code_repair_attempts": self._max_code_repair_attempts,
-            "enable_deterministic_code_fallback": bool(self._enable_deterministic_code_fallback),
-            "enable_deterministic_planner_fallback": bool(self._enable_deterministic_planner_fallback),
+            "enable_deterministic_code_fallback": bool(
+                self._enable_deterministic_code_fallback
+            ),
+            "enable_deterministic_planner_fallback": bool(
+                self._enable_deterministic_planner_fallback
+            ),
             "latex_venue_template": self._latex_venue_template,
             "stop_after_analysis": bool(stop_after_analysis),
             "manuscript_language": manuscript_language,
@@ -2734,8 +3116,11 @@ class ResearchAgentPipeline:
         report_path = run_dir / "results_report.md"
         report_path.write_text(
             _render_report(
-                context=context, plan=None, findings=findings,
-                per_step_records=[], evidence=evidence,
+                context=context,
+                plan=None,
+                findings=findings,
+                per_step_records=[],
+                evidence=evidence,
                 aborted_reason=reason,
             ),
             encoding="utf-8",
@@ -2840,7 +3225,10 @@ def _build_probe_summary(
                 summary["outcome_rate"] = float(series.astype(float).mean())
 
     for variable in context.variables:
-        if variable.role not in {VariableRole.ORDINAL_SCORE, VariableRole.COMPOSITE_SCORE}:
+        if variable.role not in {
+            VariableRole.ORDINAL_SCORE,
+            VariableRole.COMPOSITE_SCORE,
+        }:
             continue
         if variable.name not in df.columns:
             continue
@@ -2851,19 +3239,34 @@ def _build_probe_summary(
             "variable": variable.name,
             "min": float(observed.min()),
             "max": float(observed.max()),
-            "n_zero": int((observed == 0).sum()) if pd.api.types.is_numeric_dtype(observed) else None,
+            "n_zero": (
+                int((observed == 0).sum())
+                if pd.api.types.is_numeric_dtype(observed)
+                else None
+            ),
         }
-        if outcome and outcome in df.columns and 0 in set(observed.unique()) and 1 in set(observed.unique()):
+        if (
+            outcome
+            and outcome in df.columns
+            and 0 in set(observed.unique())
+            and 1 in set(observed.unique())
+        ):
             zero_mask = df[variable.name] == 0
             one_mask = df[variable.name] == 1
-            zero_rate = float(df.loc[zero_mask, outcome].mean()) if zero_mask.any() else None
-            one_rate = float(df.loc[one_mask, outcome].mean()) if one_mask.any() else None
+            zero_rate = (
+                float(df.loc[zero_mask, outcome].mean()) if zero_mask.any() else None
+            )
+            one_rate = (
+                float(df.loc[one_mask, outcome].mean()) if one_mask.any() else None
+            )
             stats.update(
                 {
                     "zero_outcome_rate": zero_rate,
                     "one_outcome_rate": one_rate,
                     "sofa_zero_anomaly": bool(
-                        zero_rate is not None and one_rate is not None and zero_rate > one_rate
+                        zero_rate is not None
+                        and one_rate is not None
+                        and zero_rate > one_rate
                     ),
                 }
             )
@@ -2895,6 +3298,844 @@ def _deterministic_runner_repair(
     coder by handling one family of brittle runtime errors below the LLM layer.
     """
     lowered = (run_log or "").lower()
+
+    missing_os_import = (
+        "nameerror: name 'os' is not defined" in lowered
+        and ("os.environ" in code or "os.path" in code)
+        and "import os" not in code
+    )
+    if missing_os_import:
+        repair_name = "missing_os_import_v1"
+        if previous_repair != repair_name:
+            return repair_name, "import os\n" + code
+
+    malformed_python_prefix = (
+        "syntaxerror: invalid syntax" in lowered
+        and ("pythonimport " in code or "\npythonimport " in code or "pythonfrom " in code)
+    )
+    if malformed_python_prefix:
+        repair_name = "strip_python_prefix_v1"
+        if previous_repair != repair_name:
+            repaired = code.replace("pythonimport ", "import ").replace("pythonfrom ", "from ")
+            repaired = repaired.replace("\npythonimport ", "\nimport ").replace("\npythonfrom ", "\nfrom ")
+            if repaired != code:
+                return repair_name, repaired
+
+    table_one_unclosed_syntax = (
+        "syntaxerror" in lowered
+        and (
+            "was never closed" in lowered
+            or "unexpected eof while parsing" in lowered
+            or "eof while scanning" in lowered
+        )
+        and "table_one.csv" in code.lower()
+    )
+    if table_one_unclosed_syntax:
+        repair_name = "table_one_descriptive_repair_v1"
+        if previous_repair != repair_name:
+            repaired = textwrap.dedent(
+                """
+                import json
+                import os
+                import math
+                import numpy as np
+                import pandas as pd
+
+                def to_jsonable(x):
+                    if isinstance(x, (np.integer,)):
+                        return int(x)
+                    if isinstance(x, (np.floating,)):
+                        value = float(x)
+                        return value if math.isfinite(value) else None
+                    if isinstance(x, (np.bool_,)):
+                        return bool(x)
+                    if isinstance(x, np.ndarray):
+                        return x.tolist()
+                    try:
+                        if pd.isna(x):
+                            return None
+                    except Exception:
+                        pass
+                    return str(x)
+
+                cohort_path = os.environ["COHORT_PARQUET"]
+                out_dir = os.environ["STEP_OUT_DIR"]
+                os.makedirs(out_dir, exist_ok=True)
+
+                df = pd.read_parquet(cohort_path)
+                rows = []
+                for col in df.columns:
+                    s = df[col]
+                    n = int(len(s))
+                    n_missing = int(s.isna().sum())
+                    row = {
+                        "variable": col,
+                        "n": n,
+                        "n_missing": n_missing,
+                        "missing_fraction": (n_missing / n) if n else 0.0,
+                    }
+                    non_missing = s.dropna()
+                    if len(non_missing) == 0:
+                        rows.append(row)
+                        continue
+                    if pd.api.types.is_numeric_dtype(non_missing):
+                        unique_values = set(non_missing.unique().tolist())
+                        if unique_values <= {0, 1, 0.0, 1.0}:
+                            positive = int(non_missing.astype(float).sum())
+                            row["n_positive"] = positive
+                            row["positive_fraction"] = positive / len(non_missing)
+                        else:
+                            row["median"] = float(non_missing.median())
+                            row["q25"] = float(non_missing.quantile(0.25))
+                            row["q75"] = float(non_missing.quantile(0.75))
+                            row["min"] = float(non_missing.min())
+                            row["max"] = float(non_missing.max())
+                    else:
+                        top = non_missing.astype(str).value_counts().head(1)
+                        if len(top):
+                            row["most_common"] = str(top.index[0])
+                            row["most_common_n"] = int(top.iloc[0])
+                    rows.append(row)
+
+                table = pd.DataFrame(rows)
+                table_path = os.path.join(out_dir, "table_one.csv")
+                table.to_csv(table_path, index=False)
+
+                summary = {
+                    "n_total": int(len(df)),
+                    "n_variables": int(len(df.columns)),
+                    "table_one_path": table_path,
+                    "variables": list(df.columns.astype(str)),
+                }
+                if "death" in df.columns:
+                    death = pd.to_numeric(df["death"], errors="coerce").dropna()
+                    summary["death_n"] = int(death.sum())
+                    summary["death_rate"] = float(death.mean()) if len(death) else None
+                if "age" in df.columns:
+                    age = pd.to_numeric(df["age"], errors="coerce").dropna()
+                    summary["age_median"] = float(age.median()) if len(age) else None
+                    summary["age_q25"] = float(age.quantile(0.25)) if len(age) else None
+                    summary["age_q75"] = float(age.quantile(0.75)) if len(age) else None
+
+                with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
+                    json.dump(summary, f, indent=2, default=to_jsonable)
+                print(json.dumps({"table": "table_one.csv", "summary": summary}, default=to_jsonable))
+                """
+            ).strip() + "\n"
+            return repair_name, repaired
+
+    outcome_incidence_broken_syntax = (
+        "syntaxerror" in lowered
+        and (
+            "outcome_incidence" in code.lower()
+            or "incidence_with_missingness_strata" in code.lower()
+        )
+    )
+    if outcome_incidence_broken_syntax:
+        repair_name = "outcome_incidence_descriptive_repair_v1"
+        if previous_repair != repair_name:
+            repaired = textwrap.dedent(
+                """
+                import json
+                import os
+                import math
+                import numpy as np
+                import pandas as pd
+                import matplotlib
+                matplotlib.use("Agg")
+                import matplotlib.pyplot as plt
+                from statsmodels.stats.proportion import proportion_confint
+
+                def to_jsonable(x):
+                    if isinstance(x, (np.integer,)):
+                        return int(x)
+                    if isinstance(x, (np.floating,)):
+                        value = float(x)
+                        return value if math.isfinite(value) else None
+                    if isinstance(x, (np.bool_,)):
+                        return bool(x)
+                    if isinstance(x, np.ndarray):
+                        return x.tolist()
+                    try:
+                        if pd.isna(x):
+                            return None
+                    except Exception:
+                        pass
+                    return str(x)
+
+                cohort_path = os.environ["COHORT_PARQUET"]
+                out_dir = os.environ["STEP_OUT_DIR"]
+                os.makedirs(out_dir, exist_ok=True)
+
+                df = pd.read_parquet(cohort_path)
+                death = pd.to_numeric(df["death"], errors="coerce")
+                rows = []
+
+                def add_row(label, mask):
+                    y = death[mask].dropna().astype(int)
+                    n = int(len(y))
+                    events = int(y.sum()) if n else 0
+                    rate = float(events / n) if n else None
+                    if n:
+                        ci_low, ci_high = proportion_confint(events, n, alpha=0.05, method="wilson")
+                    else:
+                        ci_low = ci_high = None
+                    rows.append({
+                        "stratum": label,
+                        "n": n,
+                        "n_death": events,
+                        "mortality_rate": rate,
+                        "ci_low": None if ci_low is None else float(ci_low),
+                        "ci_high": None if ci_high is None else float(ci_high),
+                    })
+
+                add_row("overall", death.notna())
+                if "lactate_measured_24h" in df.columns:
+                    measured = pd.to_numeric(df["lactate_measured_24h"], errors="coerce")
+                    add_row("lactate_measured_24h=0", measured.eq(0) & death.notna())
+                    add_row("lactate_measured_24h=1", measured.eq(1) & death.notna())
+
+                table = pd.DataFrame(rows)
+                table_path = os.path.join(out_dir, "outcome_incidence.csv")
+                table.to_csv(table_path, index=False)
+
+                fig, ax = plt.subplots(figsize=(4.8, 3.0))
+                plot_df = table[table["stratum"] != "overall"].copy()
+                if plot_df.empty:
+                    plot_df = table.copy()
+                ax.bar(plot_df["stratum"], plot_df["mortality_rate"] * 100, color="#4C78A8")
+                ax.set_ylabel("Mortality (%)")
+                ax.set_xlabel("")
+                ax.tick_params(axis="x", rotation=20)
+                fig.tight_layout()
+                fig.savefig(os.path.join(out_dir, "outcome_incidence.png"), dpi=300)
+                fig.savefig(os.path.join(out_dir, "outcome_incidence.svg"))
+                plt.close(fig)
+
+                overall = table.iloc[0].to_dict()
+                statistic = {
+                    "n_total": int(overall["n"]),
+                    "n_death": int(overall["n_death"]),
+                    "overall_mortality_rate": overall["mortality_rate"],
+                    "overall_ci_low": overall["ci_low"],
+                    "overall_ci_high": overall["ci_high"],
+                }
+                statistic_path = os.path.join(out_dir, "outcome_rate.json")
+                with open(statistic_path, "w", encoding="utf-8") as f:
+                    json.dump(statistic, f, indent=2, default=to_jsonable)
+
+                summary = {
+                    "table": table_path,
+                    "statistic": statistic_path,
+                    "figure_png": os.path.join(out_dir, "outcome_incidence.png"),
+                    "figure_svg": os.path.join(out_dir, "outcome_incidence.svg"),
+                    **statistic,
+                }
+                with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
+                    json.dump(summary, f, indent=2, default=to_jsonable)
+                print(json.dumps(summary, default=to_jsonable))
+                """
+            ).strip() + "\n"
+            return repair_name, repaired
+
+    repeated_keyword_syntax = (
+        "syntaxerror: keyword argument repeated" in lowered
+        and "train_test_split" in code
+        and "figure_contract = figurecontract(" in code.lower()
+    )
+    if repeated_keyword_syntax:
+        repair_name = "prediction_split_minimal_v1"
+        if previous_repair != repair_name:
+            repaired = textwrap.dedent(
+                """
+                import json
+                import os
+                import numpy as np
+                import pandas as pd
+                from sklearn.model_selection import train_test_split
+
+                def to_jsonable(x):
+                    if isinstance(x, (np.integer,)):
+                        return int(x)
+                    if isinstance(x, (np.floating,)):
+                        value = float(x)
+                        return value if np.isfinite(value) else None
+                    if isinstance(x, (np.bool_,)):
+                        return bool(x)
+                    return x
+
+                df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+                out = os.environ["STEP_OUT_DIR"]
+                outcome = "death" if "death" in df.columns else df.columns[-1]
+                y = pd.to_numeric(df[outcome], errors="coerce").fillna(0).astype(int)
+                X = df.drop(columns=[outcome], errors="ignore").copy()
+                X = X.select_dtypes(include=["number", "bool"]).apply(pd.to_numeric, errors="coerce")
+                if X.empty:
+                    X = pd.DataFrame({"row_index": np.arange(len(df))}, index=df.index)
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X,
+                    y,
+                    test_size=0.2,
+                    random_state=42,
+                    stratify=y if getattr(y, "nunique", lambda: 0)() > 1 else None,
+                )
+                step_summary = {
+                    "split_strategy": "stratified_random",
+                    "n_total": int(len(df)),
+                    "n_train": int(len(X_train)),
+                    "n_test": int(len(X_test)),
+                    "event_rate_total": float(y.mean()),
+                    "event_rate_train": float(y_train.mean()) if len(y_train) else None,
+                    "event_rate_test": float(y_test.mean()) if len(y_test) else None,
+                }
+                with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+                    json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
+                print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
+                """
+            ).strip() + "\n"
+            return repair_name, repaired
+
+    logreg_nan = (
+        "logisticregression does not accept missing values encoded as nan" in lowered
+        and "logisticregression" in code.lower()
+    )
+    if logreg_nan:
+        repair_name = "logreg_impute_v1"
+        if previous_repair != repair_name and "_easyicu_logreg_impute_v1" not in code:
+            patch = textwrap.dedent(
+                """
+
+                def _easyicu_logreg_impute_v1(frame):
+                    if not hasattr(frame, "copy"):
+                        return frame
+                    work = frame.copy()
+                    for col in work.columns:
+                        series = pd.to_numeric(work[col], errors="ignore")
+                        if getattr(series, "dtype", None) is not None and str(series.dtype) != "object":
+                            if series.isna().any():
+                                median = series.median()
+                                series = series.fillna(median if pd.notna(median) else 0)
+                        work[col] = series
+                    return work
+                """
+            ).strip("\n")
+            train_split = re.compile(
+                r"(?P<line>X_train,\s*X_test,\s*y_train,\s*y_test\s*=\s*train_test_split\([^\\n]+?\)\s*)",
+                re.DOTALL,
+            )
+            match = train_split.search(code)
+            if match:
+                inject = (
+                    match.group("line")
+                    + "\nX_train = _easyicu_logreg_impute_v1(X_train)\n"
+                    + "X_test = _easyicu_logreg_impute_v1(X_test)\n"
+                )
+                repaired = code[: match.start()] + inject + code[match.end() :]
+            else:
+                repaired = code
+            if repaired == code:
+                predict_call = re.compile(r"(?P<line>y_pred_proba\s*=\s*model(?:_pipeline)?\.predict_proba\(X_test\)\s*\[:,\s*1\]\s*)")
+                match = predict_call.search(code)
+                if match:
+                    inject = "X_test = _easyicu_logreg_impute_v1(X_test)\n" + match.group("line")
+                    repaired = code[: match.start()] + inject + code[match.end() :]
+            if repaired != code:
+                if "def _easyicu_logreg_impute_v1" not in repaired:
+                    repaired = patch + "\n\n" + repaired
+                return repair_name, repaired
+
+    placeholder_ellipsis = (
+        "syntaxerror: invalid syntax" in lowered
+        and "..." in code
+        and "model_bundle" in code
+    )
+    if placeholder_ellipsis:
+        repair_name = "prediction_discrimination_template_v1"
+        if previous_repair != repair_name:
+            repaired = textwrap.dedent(
+                """
+                import json
+                import math
+                import os
+                import pickle
+                import numpy as np
+                import pandas as pd
+                import matplotlib
+                matplotlib.use("Agg")
+                import matplotlib.pyplot as plt
+                from sklearn.metrics import roc_auc_score, roc_curve
+                from sklearn.calibration import calibration_curve
+                from easyicu.research_agent.publication_figures import (
+                    make_figure_contract,
+                    apply_publication_style,
+                    add_panel_label,
+                    save_publication_figure,
+                )
+
+                def to_jsonable(x):
+                    if isinstance(x, (np.integer,)):
+                        return int(x)
+                    if isinstance(x, (np.floating,)):
+                        value = float(x)
+                        return value if np.isfinite(value) else None
+                    if isinstance(x, (np.bool_,)):
+                        return bool(x)
+                    return x
+
+                step_out_dir = os.environ["STEP_OUT_DIR"]
+                cohort_path = os.environ["COHORT_PARQUET"]
+                with open(os.path.join(step_out_dir, "prediction_model_object.pkl"), "rb") as f:
+                    model_bundle = pickle.load(f)
+                model = model_bundle["model"]
+                feature_cols = list(model_bundle.get("feature_cols", []))
+
+                df = pd.read_parquet(cohort_path)
+                X_test = df[feature_cols].copy()
+                y_test = pd.to_numeric(df["death"], errors="coerce").fillna(0).astype(int).values
+                for col in X_test.columns:
+                    series = pd.to_numeric(X_test[col], errors="ignore")
+                    if getattr(series, "dtype", None) is not None and str(series.dtype) != "object" and series.isna().any():
+                        median = series.median()
+                        series = series.fillna(median if pd.notna(median) else 0)
+                    X_test[col] = series
+
+                y_pred_proba = model.predict_proba(X_test)[:, 1]
+                held_out_auroc = roc_auc_score(y_test, y_pred_proba)
+                prob_true, prob_pred = calibration_curve(y_test, y_pred_proba, n_bins=min(10, max(5, int(len(y_test) * 0.1))), strategy="quantile")
+                zero_stratum_mask = df["sofa2"] == 0 if "sofa2" in df.columns else pd.Series(False, index=df.index)
+
+                fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
+                apply_publication_style(fig)
+                ax1, ax2 = axes
+                fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
+                ax1.plot(fpr, tpr, color="#0F4D92", linewidth=2)
+                ax1.plot([0, 1], [0, 1], "k--", linewidth=1)
+                ax1.set_xlabel("False positive rate")
+                ax1.set_ylabel("True positive rate")
+                add_panel_label(ax1, "A")
+
+                ax2.plot(prob_pred, prob_true, "o-", color="#42949E", linewidth=2)
+                ax2.plot([0, 1], [0, 1], "k:", linewidth=1)
+                ax2.set_xlabel("Predicted probability")
+                ax2.set_ylabel("Observed probability")
+                add_panel_label(ax2, "B")
+
+                contract = make_figure_contract(
+                    figure_id="prediction_discrimination_evaluation",
+                    core_claim="Held-out discrimination and calibration are summarized for the mortality model.",
+                    panels=[
+                        {"panel_id": "A", "title": "ROC", "role": "validation", "claim": "Held-out AUROC is reported.", "evidence_ids": ["held_out_auroc"]},
+                        {"panel_id": "B", "title": "Calibration", "role": "validation", "claim": "Calibration is visualized on held-out data.", "evidence_ids": ["calibration_curve"]},
+                    ],
+                )
+                save_publication_figure(fig, os.path.join(step_out_dir, "discrimination_evaluation"), contract=contract)
+                plt.close(fig)
+
+                step_summary = {
+                    "held_out_auroc": float(held_out_auroc),
+                    "n_test": int(len(y_test)),
+                    "n_sofa2_zero": int(zero_stratum_mask.sum()),
+                    "calibration_status": "ok",
+                }
+                with open(os.path.join(step_out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
+                    json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
+                print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
+                """
+            ).strip() + "\n"
+            return repair_name, repaired
+
+    cut_tuple_error = (
+        "typeerror: '<' not supported between instances of 'tuple' and 'int'"
+        in lowered
+        and "pandas/core/reshape/tile.py" in lowered
+        and "pd.cut(" in code
+    )
+    if cut_tuple_error:
+        repair_name = "cut_bins_flatten_v1"
+        if previous_repair != repair_name:
+            bins_assign = re.compile(
+                r"(?P<name>\w+_bins)\s*=\s*(?P<literal>\[(?:\s*\([^][]+?\)\s*,?)+\s*\])"
+            )
+            match = bins_assign.search(code)
+            if match:
+                try:
+                    literal = ast.literal_eval(match.group("literal"))
+                except Exception:
+                    literal = None
+                if (
+                    isinstance(literal, list)
+                    and literal
+                    and all(
+                        isinstance(item, tuple)
+                        and len(item) == 2
+                        and all(isinstance(v, (int, float)) for v in item)
+                        for item in literal
+                    )
+                ):
+                    flat_bins = [literal[0][0], *[item[1] for item in literal]]
+                    replacement = f"{match.group('name')} = {flat_bins!r}"
+                    repaired = (
+                        code[: match.start()] + replacement + code[match.end() :]
+                    )
+                    return repair_name, repaired
+
+    singular_logit = "singular matrix" in lowered and "sm.logit(" in code.lower()
+    if singular_logit:
+        repair_name = "logit_regularized_fit_v1"
+        if previous_repair != repair_name:
+            helper = textwrap.dedent(
+                """
+
+                def _easyicu_safe_logit_fit_v1(model):
+                    try:
+                        return model.fit(disp=0, method="newton")
+                    except Exception:
+                        return model.fit_regularized(alpha=1e-6, disp=0, trim_mode="off")
+                """
+            ).strip("\n")
+            patched = code
+            if "_easyicu_safe_logit_fit_v1" not in patched:
+                insert_after = patched.find("import warnings")
+                if insert_after >= 0:
+                    line_end = patched.find("\n", insert_after)
+                    patched = (
+                        patched[: line_end + 1] + "\n" + helper + "\n" + patched[line_end + 1 :]
+                    )
+                else:
+                    patched = helper + "\n\n" + patched
+            patched = re.sub(
+                r"(?m)^(?P<indent>\s*)(?P<lhs>\w+)\s*=\s*(?P<model>\w+)\.fit\((?P<args>[^)]*)\)\s*$",
+                r"\g<indent>\g<lhs> = _easyicu_safe_logit_fit_v1(\g<model>)",
+                patched,
+                count=1,
+            )
+            if patched != code:
+                return repair_name, patched
+
+    singular_after_regularized = (
+        "singular matrix" in lowered
+        and previous_repair == "logit_regularized_fit_v1"
+        and "lactate_max_24h" in code
+        and "map_min_24h" in code
+        and "vaso_any_24h" in code
+    )
+    if singular_after_regularized:
+        repair_name = "shock_primary_assoc_sklearn_v1"
+        repaired = textwrap.dedent(
+            """
+            import os
+            import json
+            import math
+            import numpy as np
+            import pandas as pd
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            from sklearn.linear_model import LogisticRegression
+
+            def to_jsonable(x):
+                if isinstance(x, (np.integer,)):
+                    return int(x)
+                if isinstance(x, (np.floating,)):
+                    v = float(x)
+                    return v if math.isfinite(v) else None
+                if isinstance(x, (np.bool_,)):
+                    return bool(x)
+                if isinstance(x, np.ndarray):
+                    return x.tolist()
+                try:
+                    if pd.isna(x):
+                        return None
+                except Exception:
+                    pass
+                return str(x)
+
+            cohort_path = os.environ["COHORT_PARQUET"]
+            step_out_dir = os.environ["STEP_OUT_DIR"]
+            os.makedirs(step_out_dir, exist_ok=True)
+
+            df = pd.read_parquet(cohort_path)
+            required_cols = ['lactate_max_24h', 'death', 'age', 'sex', 'map_min_24h', 'vaso_any_24h']
+            model_df = df[required_cols].copy()
+            model_df['sex'] = (model_df['sex'].astype(str).str.lower() == 'male').astype(float)
+            for col in required_cols:
+                if col != 'sex':
+                    model_df[col] = pd.to_numeric(model_df[col], errors='coerce')
+            model_df = model_df.dropna()
+            n_complete = int(len(model_df))
+            n_total = int(len(df))
+            if n_complete < 50:
+                raise ValueError(f"Insufficient complete cases: {n_complete}")
+
+            features = ['lactate_max_24h', 'age', 'sex', 'map_min_24h', 'vaso_any_24h']
+            X = model_df[features].astype(float)
+            y = model_df['death'].astype(int)
+
+            model = LogisticRegression(
+                penalty='l2',
+                C=1.0,
+                solver='lbfgs',
+                max_iter=4000,
+                random_state=7,
+            )
+            model.fit(X, y)
+
+            coef = model.coef_[0]
+            odds_ratio = np.exp(coef)
+            rows = []
+            for name, beta, or_val in zip(features, coef, odds_ratio):
+                rows.append({
+                    'variable': name,
+                    'coefficient': float(beta),
+                    'or': float(or_val),
+                    'or_ci_lower': None,
+                    'or_ci_upper': None,
+                    'p_value': None,
+                })
+
+            rng = np.random.default_rng(7)
+            boot = []
+            values = model_df[features + ['death']].to_numpy()
+            for _ in range(120):
+                idx = rng.integers(0, len(values), len(values))
+                sample = values[idx]
+                Xb = sample[:, :-1]
+                yb = sample[:, -1].astype(int)
+                if len(np.unique(yb)) < 2:
+                    continue
+                try:
+                    mb = LogisticRegression(
+                        penalty='l2',
+                        C=1.0,
+                        solver='lbfgs',
+                        max_iter=2000,
+                        random_state=7,
+                    )
+                    mb.fit(Xb, yb)
+                    boot.append(float(mb.coef_[0][0]))
+                except Exception:
+                    continue
+
+            lactate_or = float(odds_ratio[0])
+            if boot:
+                boot = np.asarray(boot, dtype=float)
+                lactate_or_ci = (
+                    float(np.exp(np.quantile(boot, 0.025))),
+                    float(np.exp(np.quantile(boot, 0.975))),
+                )
+                p_boot = float(2 * min((boot <= 0).mean(), (boot >= 0).mean()))
+            else:
+                lactate_or_ci = (None, None)
+                p_boot = None
+
+            rows[0]['or_ci_lower'] = lactate_or_ci[0]
+            rows[0]['or_ci_upper'] = lactate_or_ci[1]
+            rows[0]['p_value'] = p_boot
+
+            results_table = pd.DataFrame(rows)
+            table_path = os.path.join(step_out_dir, 'primary_association.csv')
+            results_table.to_csv(table_path, index=False)
+
+            lactate_range = np.linspace(
+                model_df['lactate_max_24h'].quantile(0.01),
+                model_df['lactate_max_24h'].quantile(0.99),
+                100
+            )
+            age_med = float(model_df['age'].median())
+            sex_med = float(model_df['sex'].median())
+            map_med = float(model_df['map_min_24h'].median())
+            vaso_med = float(model_df['vaso_any_24h'].median())
+            pred_df = pd.DataFrame({
+                'lactate_max_24h': lactate_range,
+                'age': age_med,
+                'sex': sex_med,
+                'map_min_24h': map_med,
+                'vaso_any_24h': vaso_med,
+            })
+            pred_probs = model.predict_proba(pred_df)[:, 1]
+
+            fig, ax = plt.subplots(figsize=(8, 6))
+            ax.plot(lactate_range, pred_probs, 'b-', lw=2, label='Predicted probability')
+            ax.fill_between(lactate_range, pred_probs, alpha=0.2)
+            ax.plot(model_df['lactate_max_24h'], np.full(n_complete, -0.02), '|',
+                    color='gray', alpha=0.3, markersize=5, label='Data distribution')
+            ax.set_xlabel('Lactate max 24h (mmol/L)', fontsize=12)
+            ax.set_ylabel('Predicted probability of death', fontsize=12)
+            ax.set_title('Adjusted association: early lactate and hospital mortality', fontsize=13)
+            ax.set_ylim(-0.05, 1.05)
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc='upper left')
+            if lactate_or_ci[0] is not None and lactate_or_ci[1] is not None:
+                txt = f"Lactate OR = {lactate_or:.2f} (95% CI: {lactate_or_ci[0]:.2f}–{lactate_or_ci[1]:.2f})"
+            else:
+                txt = f"Lactate OR = {lactate_or:.2f}"
+            ax.annotate(txt, xy=(0.98, 0.02), xycoords='axes fraction',
+                        ha='right', va='bottom', fontsize=10,
+                        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+            plt.tight_layout()
+            fig_path = os.path.join(step_out_dir, 'primary_association_curve.png')
+            svg_path = os.path.join(step_out_dir, 'primary_association_curve.svg')
+            plt.savefig(fig_path, dpi=150, bbox_inches='tight')
+            plt.savefig(svg_path, format='svg', bbox_inches='tight')
+            plt.close()
+
+            step_summary = {
+                'step': '05_primary_association',
+                'method': 'logistic_regression_sklearn_bootstrap',
+                'n_total': n_total,
+                'n_complete_case': n_complete,
+                'mortality_rate_complete': float(model_df['death'].mean()),
+                'missing_lactate_pct': float(df['lactate_max_24h'].isna().mean() * 100),
+                'primary_or': lactate_or,
+                'primary_ci_low': lactate_or_ci[0],
+                'primary_ci_high': lactate_or_ci[1],
+                'primary_or_ci': [lactate_or_ci[0], lactate_or_ci[1]],
+                'primary_p_value': p_boot,
+                'covariates': ['age', 'sex', 'map_min_24h', 'vaso_any_24h'],
+                'outputs': {
+                    'table': 'primary_association.csv',
+                    'figure': 'primary_association_curve.png',
+                }
+            }
+            with open(os.path.join(step_out_dir, 'step_summary.json'), 'w', encoding='utf-8') as f:
+                json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
+            print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
+            """
+        ).strip() + "\n"
+        return repair_name, repaired
+
+    cohort_file_as_dir = (
+        "notadirectoryerror" in lowered
+        and (
+            'os.path.join(cohort_path, "data.parquet")' in code.lower()
+            or 'os.path.join(cohort_path, \'data.parquet\')' in code.lower()
+        )
+    )
+    if cohort_file_as_dir:
+        repair_name = "cohort_file_direct_read_v1"
+        if previous_repair != repair_name:
+            repaired = code.replace(
+                'pd.read_parquet(os.path.join(COHORT_PATH, "data.parquet"))',
+                "pd.read_parquet(COHORT_PATH)",
+            )
+            repaired = repaired.replace(
+                "pd.read_parquet(os.path.join(COHORT_PATH, 'data.parquet'))",
+                "pd.read_parquet(COHORT_PATH)",
+            )
+            repaired = repaired.replace(
+                'pd.read_parquet(os.path.join(cohort_path, "data.parquet"))',
+                "pd.read_parquet(cohort_path)",
+            )
+            repaired = repaired.replace(
+                "pd.read_parquet(os.path.join(cohort_path, 'data.parquet'))",
+                "pd.read_parquet(cohort_path)",
+            )
+            if repaired != code:
+                return repair_name, repaired
+
+    parquet_read_as_csv = (
+        "unicodedecodeerror" in lowered
+        and "pd.read_csv(" in code.lower()
+        and (
+            "cohort_path" in code.lower()
+            or "cohort_parquet" in code.lower()
+        )
+    )
+    if parquet_read_as_csv:
+        repair_name = "cohort_csv_to_parquet_v1"
+        if previous_repair != repair_name:
+            repaired = re.sub(
+                r"pd\.read_csv\((?P<arg>\s*(?:cohort_path|os\.environ\[['\"]COHORT_PARQUET['\"]\])\s*)(?:,\s*encoding\s*=\s*['\"][^'\"]+['\"])?\)",
+                r"pd.read_parquet(\g<arg>)",
+                code,
+            )
+            if repaired != code:
+                return repair_name, repaired
+
+    publication_style_nameerror = (
+        "nameerror: name 'apply_publication_style' is not defined" in lowered
+        and "publication_figure" in code.lower()
+    )
+    if publication_style_nameerror:
+        repair_name = "publication_bundle_promote_script_v1"
+        if previous_repair != repair_name:
+            repaired = textwrap.dedent(
+                """
+                from __future__ import annotations
+                import json
+                import os
+                import shutil
+                from pathlib import Path
+
+                out_dir = Path(os.environ["STEP_OUT_DIR"])
+                out_dir.mkdir(parents=True, exist_ok=True)
+                run_dir = out_dir.parents[2]
+                current_step_id = out_dir.parent.name
+                figure_suffixes = [".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"]
+                contract_suffix = ".figure_contract.json"
+
+                best = None
+                for step_dir in sorted((run_dir / "steps").iterdir()):
+                    if not step_dir.is_dir() or step_dir.name == current_step_id:
+                        continue
+                    outputs_dir = step_dir / "outputs"
+                    if not outputs_dir.exists():
+                        continue
+                    bundles = {}
+                    for path in outputs_dir.iterdir():
+                        if not path.is_file():
+                            continue
+                        if path.name.endswith(contract_suffix):
+                            stem = path.name[: -len(contract_suffix)]
+                            bundles.setdefault(stem, {})["contract"] = path
+                            continue
+                        if path.suffix.lower() in figure_suffixes:
+                            bundles.setdefault(path.stem, {})[path.suffix.lower()] = path
+                    for stem, files in bundles.items():
+                        figure_count = sum(1 for key in files if key.startswith("."))
+                        if figure_count == 0:
+                            continue
+                        score = (
+                            1 if "publication_figure" in stem else 0,
+                            1 if "primary_association" in stem else 0,
+                            figure_count,
+                        )
+                        if best is None or score > best[0]:
+                            best = (score, stem, files)
+
+                if best is None:
+                    raise SystemExit("No prior figure bundle available to promote.")
+
+                _, source_stem, files = best
+                target_stem = "publication_figure"
+                outputs = {}
+                for key, source in files.items():
+                    if key == "contract":
+                        target = out_dir / f"{target_stem}.figure_contract.json"
+                        shutil.copy2(source, target)
+                        outputs["contract"] = target.name
+                    else:
+                        target = out_dir / f"{target_stem}{key}"
+                        shutil.copy2(source, target)
+                        outputs[key.lstrip('.')] = target.name
+
+                summary = {
+                    "step": current_step_id,
+                    "status": "completed",
+                    "publication_figure_rescue": {
+                        "mode": "promotion",
+                        "source_step_stem": source_stem,
+                        "source_outputs_dir": str(files[next(iter(files))].parent),
+                    },
+                    "outputs": outputs,
+                }
+                with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
+                    json.dump(summary, f, indent=2, ensure_ascii=False)
+                print(json.dumps(summary, indent=2, ensure_ascii=False))
+                """
+            ).strip() + "\n"
+            return repair_name, repaired
+
     signatures = (
         "pandas data cast to numpy dtype of object",
         "exog contains inf or nans",
@@ -2941,7 +4182,9 @@ def _deterministic_runner_repair(
         insert_after = patched.find("import matplotlib.pyplot as plt")
         if insert_after >= 0:
             line_end = patched.find("\n", insert_after)
-            patched = patched[: line_end + 1] + "\n" + patch + "\n" + patched[line_end + 1 :]
+            patched = (
+                patched[: line_end + 1] + "\n" + patch + "\n" + patched[line_end + 1 :]
+            )
         else:
             patched = patch + "\n\n" + patched
 
@@ -2962,6 +4205,92 @@ def _deterministic_runner_repair(
     if repaired == code:
         return None
     return repair_name, repaired
+
+
+def _has_figure_exports(out_dir: Path) -> bool:
+    figure_suffixes = {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}
+    return any(
+        path.is_file() and path.suffix.lower() in figure_suffixes
+        for path in out_dir.iterdir()
+    )
+
+
+def _promote_prior_publication_bundle(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Promote the strongest earlier figure bundle into a publication step."""
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return None
+
+    figure_suffixes = {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}
+    contract_suffix = ".figure_contract.json"
+    best: Optional[tuple[tuple[int, int, int], str, Dict[str, Path]]] = None
+
+    for step_dir in sorted(steps_dir.iterdir()):
+        if not step_dir.is_dir() or step_dir.name == current_step_id:
+            continue
+        outputs_dir = step_dir / "outputs"
+        if not outputs_dir.exists():
+            continue
+        bundles: Dict[str, Dict[str, Path]] = {}
+        for path in outputs_dir.iterdir():
+            if not path.is_file():
+                continue
+            if path.name.endswith(contract_suffix):
+                stem = path.name[: -len(contract_suffix)]
+                bundles.setdefault(stem, {})["contract"] = path
+                continue
+            if path.suffix.lower() in figure_suffixes:
+                bundles.setdefault(path.stem, {})[path.suffix.lower()] = path
+        for stem, files in bundles.items():
+            figure_count = sum(1 for key in files if key.startswith("."))
+            if figure_count == 0:
+                continue
+            score = (
+                1 if "publication_figure" in stem else 0,
+                1 if "primary_association" in stem else 0,
+                figure_count,
+            )
+            if best is None or score > best[0]:
+                best = (score, stem, files)
+
+    if best is None:
+        return None
+
+    _, source_stem, files = best
+    target_stem = "publication_figure"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for key, source in files.items():
+        if key == "contract":
+            target = out_dir / f"{target_stem}.figure_contract.json"
+        else:
+            target = out_dir / f"{target_stem}{key}"
+        shutil.copy2(source, target)
+
+    step_summary_path = out_dir / "step_summary.json"
+    summary: Dict[str, Any] = {}
+    if step_summary_path.exists():
+        try:
+            summary = json.loads(step_summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            summary = {}
+    summary.setdefault("publication_figure_rescue", {})
+    summary["publication_figure_rescue"].update(
+        {
+            "mode": "promotion",
+            "source_step_stem": source_stem,
+            "source_outputs_dir": str(files[next(iter(files))].parent),
+        }
+    )
+    step_summary_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "publication_bundle_promote_v1"
 
 
 def _expected_numeric_annotations_for_step(
@@ -2988,7 +4317,9 @@ def _expected_numeric_annotations_for_step(
     return expected
 
 
-def _extract_primary_effect_row(*, database: str, result: PipelineResult) -> Dict[str, Any]:
+def _extract_primary_effect_row(
+    *, database: str, result: PipelineResult
+) -> Dict[str, Any]:
     run_dir = Path(result.workdir)
     summary_candidates = sorted(
         run_dir.glob("steps/*primary_association*/outputs/step_summary.json")
@@ -3024,7 +4355,11 @@ def _extract_primary_effect_row(*, database: str, result: PipelineResult) -> Dic
             or summary.get("primary_or_ci_high")
             or summary.get("ci_high")
         )
-        if primary_or is None and "primary_or_ci" in summary and isinstance(summary["primary_or_ci"], (list, tuple)):
+        if (
+            primary_or is None
+            and "primary_or_ci" in summary
+            and isinstance(summary["primary_or_ci"], (list, tuple))
+        ):
             vals = list(summary["primary_or_ci"])
             if len(vals) >= 2:
                 ci_low, ci_high = vals[0], vals[1]
@@ -3034,7 +4369,9 @@ def _extract_primary_effect_row(*, database: str, result: PipelineResult) -> Dic
                 "primary_or": primary_or,
                 "primary_ci_low": ci_low,
                 "primary_ci_high": ci_high,
-                "status": "ok" if primary_or is not None else "summary_missing_primary_or",
+                "status": (
+                    "ok" if primary_or is not None else "summary_missing_primary_or"
+                ),
                 "step_summary_path": str(path),
             }
         )
@@ -3055,9 +4392,21 @@ def _render_cross_database_comparison_markdown(rows: Sequence[Dict[str, Any]]) -
                 database=row.get("database", ""),
                 run_id=row.get("run_id", ""),
                 predictor=row.get("predictor", "") or "",
-                primary_or=row.get("primary_or", "") if row.get("primary_or") is not None else "",
-                primary_ci_low=row.get("primary_ci_low", "") if row.get("primary_ci_low") is not None else "",
-                primary_ci_high=row.get("primary_ci_high", "") if row.get("primary_ci_high") is not None else "",
+                primary_or=(
+                    row.get("primary_or", "")
+                    if row.get("primary_or") is not None
+                    else ""
+                ),
+                primary_ci_low=(
+                    row.get("primary_ci_low", "")
+                    if row.get("primary_ci_low") is not None
+                    else ""
+                ),
+                primary_ci_high=(
+                    row.get("primary_ci_high", "")
+                    if row.get("primary_ci_high") is not None
+                    else ""
+                ),
                 status=row.get("status", ""),
             )
         )
@@ -3085,11 +4434,16 @@ def _render_report(
     parts.append("")
     parts.append(f"- Research question: {context.research_question}")
     parts.append(f"- Cohort: {context.cohort.cohort_name} ({context.cohort.database})")
-    parts.append(f"- Stays: {context.cohort.n_stays:,} / Patients: {context.cohort.n_patients:,}")
+    parts.append(
+        f"- Stays: {context.cohort.n_stays:,} / Patients: {context.cohort.n_patients:,}"
+    )
     if context.target_outcome:
         parts.append(f"- Target outcome: {context.target_outcome}")
     if context.cross_database_validation:
-        parts.append("- Cross-database replication: " + ", ".join(context.cross_database_validation))
+        parts.append(
+            "- Cross-database replication: "
+            + ", ".join(context.cross_database_validation)
+        )
     parts.append("")
 
     if aborted_reason:
@@ -3116,8 +4470,10 @@ def _render_report(
         parts.append("## Step outcomes")
         parts.append("")
         for r in per_step_records:
-            parts.append(f"- **{r['step_id']}** — status: `{r.get('status', '?')}`"
-                         + (f" (rc={r['returncode']})" if "returncode" in r else ""))
+            parts.append(
+                f"- **{r['step_id']}** — status: `{r.get('status', '?')}`"
+                + (f" (rc={r['returncode']})" if "returncode" in r else "")
+            )
         parts.append("")
 
     parts.append("## Findings")
@@ -3141,13 +4497,17 @@ def _render_report(
             f"{desc} | `{r.sha256[:10]}…` | `{r.relative_path}` |"
         )
     parts.append("")
-    parts.append(textwrap.dedent("""
+    parts.append(
+        textwrap.dedent(
+            """
         ---
         Generated by `easyicu.research_agent.ResearchAgentPipeline`. Every entry
         in the Evidence table is reproducible: rerun the script identified by
         `script_evidence_id` in the manifest, hash the output, and confirm it
         matches the `sha256` recorded here.
-    """).strip())
+    """
+        ).strip()
+    )
     return "\n".join(parts) + "\n"
 
 
@@ -3184,7 +4544,9 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
     ("", "sofa_strata.csv"): ("sofa_strata",),
     ("", "stratum_audit.csv"): ("stratum_audit", "table_stratum_audit", "sofa_strata"),
     ("", "sofa2_stratum_balance.csv"): (
-        "primary_association_table", "stratum_audit", "sofa_strata",
+        "primary_association_table",
+        "stratum_audit",
+        "sofa_strata",
     ),
     ("", "primary_association.csv"): ("primary_association_table",),
     # Figures.

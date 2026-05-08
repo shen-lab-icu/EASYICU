@@ -75,9 +75,15 @@ class TimeWindowSemanticParser:
                     relation=relation,  # type: ignore[arg-type]
                     anchor_event=anchor,
                     target_concept=(concept.lower() if concept else None),
-                    start_hours=0.0 if relation in {"first_window", "within_after"} else None,
-                    end_hours=hours if relation in {"first_window", "within_after"} else 0.0,
-                    aggregation_hint="worst" if relation == "worst_before_event" else None,
+                    start_hours=(
+                        0.0 if relation in {"first_window", "within_after"} else None
+                    ),
+                    end_hours=(
+                        hours if relation in {"first_window", "within_after"} else 0.0
+                    ),
+                    aggregation_hint=(
+                        "worst" if relation == "worst_before_event" else None
+                    ),
                     executable_repr=_render_constraint_repr(
                         relation=relation,
                         anchor=anchor,
@@ -104,7 +110,9 @@ def _render_constraint_repr(
     return "|".join(parts)
 
 
-def _deduplicate_constraints(items: Sequence[TemporalConstraint]) -> List[TemporalConstraint]:
+def _deduplicate_constraints(
+    items: Sequence[TemporalConstraint],
+) -> List[TemporalConstraint]:
     seen = set()
     out: List[TemporalConstraint] = []
     for item in items:
@@ -134,7 +142,10 @@ class TemporalAlignmentEngine:
         windows = list(explicit_windows or [])
         if not windows:
             for constraint in constraints:
-                if constraint.relation == "first_window" and constraint.end_hours is not None:
+                if (
+                    constraint.relation == "first_window"
+                    and constraint.end_hours is not None
+                ):
                     windows.append(
                         TimeWindow(
                             name=f"first_{int(constraint.end_hours)}h",
@@ -147,7 +158,8 @@ class TemporalAlignmentEngine:
                 elif (
                     constraint.relation == "within_after"
                     and constraint.end_hours is not None
-                    and constraint.anchor_event in {"icu_admission", "hospital_admission"}
+                    and constraint.anchor_event
+                    in {"icu_admission", "hospital_admission"}
                 ):
                     windows.append(
                         TimeWindow(
@@ -212,11 +224,21 @@ class ConceptValidationLayer:
     ) -> Dict[str, Any]:
         info = dict(source_info or {})
         return {
-            "source_tables": _coerce_str_list(info.get("source_tables") or info.get("tables")),
-            "item_ids": _coerce_str_list(info.get("item_ids") or info.get("itemid") or info.get("itemid_list")),
-            "unit_normalization": _coerce_str(info.get("unit_normalization") or info.get("unit_harmonization")),
-            "temporal_resolution": _coerce_str(info.get("temporal_resolution") or info.get("resolution")),
-            "clinical_caveats": _coerce_str_list(info.get("clinical_caveats") or info.get("pitfalls")),
+            "source_tables": _coerce_str_list(
+                info.get("source_tables") or info.get("tables")
+            ),
+            "item_ids": _coerce_str_list(
+                info.get("item_ids") or info.get("itemid") or info.get("itemid_list")
+            ),
+            "unit_normalization": _coerce_str(
+                info.get("unit_normalization") or info.get("unit_harmonization")
+            ),
+            "temporal_resolution": _coerce_str(
+                info.get("temporal_resolution") or info.get("resolution")
+            ),
+            "clinical_caveats": _coerce_str_list(
+                info.get("clinical_caveats") or info.get("pitfalls")
+            ),
             "missingness_semantics": _coerce_str(info.get("missingness_semantics")),
             "source_concept": _coerce_str(info.get("name")) or column_name,
         }
