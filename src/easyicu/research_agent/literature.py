@@ -32,8 +32,12 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .concept_availability import (
+    hypothesis_cross_database_feasibility,
+    normalize_concept_name,
+)
 from .llm import LLMClient, LLMMessage, MockLLMClient
-from .schema import ResearchContext, VariableRole
+from .schema import HypothesisBlueprint, ResearchContext, VariableRole
 
 
 class CitationRecord(BaseModel):
@@ -58,6 +62,143 @@ class LiteratureBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
     research_question: str
     citations: List[CitationRecord]
+
+
+class HypothesisBlueprintAgent:
+    """Build a literature-aware hypothesis scaffold before planning.
+
+    The default implementation is deterministic: it combines curated/live
+    citation keys with the ResearchContext variable semantics, then emits a
+    reviewable blueprint. This makes the discovery step auditable and keeps
+    it inside the same evidence-binding story as the rest of the pipeline.
+    """
+
+    name = "hypothesis_blueprint"
+
+    def run(
+        self,
+        *,
+        context: ResearchContext,
+        literature: LiteratureBundle,
+    ) -> HypothesisBlueprint:
+        predictor = _pick_blueprint_predictor(context)
+        outcome = context.target_outcome or _pick_blueprint_outcome(context)
+        missing_variables: List[str] = []
+        if predictor is None:
+            missing_variables.append("primary_predictor")
+        if outcome is None:
+            missing_variables.append("target_outcome")
+
+        feasible_variables = [
+            v.name
+            for v in context.variables
+            if v.name not in set(missing_variables)
+            and v.role
+            not in {
+                VariableRole.ID,
+                VariableRole.TIME,
+                VariableRole.META,
+            }
+        ]
+        prior_keys = [c.key for c in literature.citations]
+        concept_dependencies = _blueprint_concept_dependencies(
+            context=context,
+            predictor=predictor,
+            outcome=outcome,
+        )
+        db_targets = _blueprint_database_targets(context)
+        db_feasibility = hypothesis_cross_database_feasibility(
+            concepts=concept_dependencies,
+            databases=db_targets,
+        )
+        hypothesis = _render_hypothesis(
+            context=context,
+            predictor=predictor,
+            outcome=outcome,
+        )
+        domain_gate_notes = _domain_gate_notes(context, predictor=predictor)
+        domain_gate_notes.extend(
+            _cross_database_gate_notes(db_feasibility["degraded_reason"])
+        )
+        stepwise_plan = _blueprint_steps(
+            predictor=predictor,
+            outcome=outcome,
+            has_literature=bool(prior_keys),
+            has_cross_db=bool(context.cross_database_validation),
+            cross_database_feasibility=db_feasibility["cross_database_feasibility"],
+            degraded_reason=db_feasibility["degraded_reason"],
+        )
+        critique = _blueprint_self_critique(
+            context=context,
+            predictor=predictor,
+            outcome=outcome,
+            literature=literature,
+        )
+        status = "ready"
+        if missing_variables:
+            status = (
+                "blocked"
+                if "target_outcome" in missing_variables
+                else "needs_data"
+            )
+
+        return HypothesisBlueprint(
+            research_question=context.research_question,
+            hypothesis=hypothesis,
+            hypothesis_type="confirmatory" if prior_keys else "exploratory",
+            prior_literature_keys=prior_keys,
+            novelty_rationale=_novelty_rationale(literature),
+            feasible_variables=feasible_variables,
+            missing_variables=missing_variables,
+            concept_dependencies=db_feasibility["concept_dependencies"],
+            cross_database_feasibility=db_feasibility["cross_database_feasibility"],
+            degraded_reason=db_feasibility["degraded_reason"],
+            stepwise_plan=stepwise_plan,
+            self_critique=critique,
+            feasibility_status=status,
+            domain_gate_notes=domain_gate_notes,
+        )
+
+
+def render_hypothesis_blueprint_for_prompt(blueprint: HypothesisBlueprint) -> str:
+    """Render a compact prompt fragment from a HypothesisBlueprint."""
+    lines = [
+        "Hypothesis blueprint for planner:",
+        f"- hypothesis: {blueprint.hypothesis}",
+        f"- feasibility_status: {blueprint.feasibility_status}",
+    ]
+    if blueprint.prior_literature_keys:
+        lines.append(
+            "- prior_literature_keys: "
+            + ", ".join(blueprint.prior_literature_keys[:8])
+        )
+    if blueprint.missing_variables:
+        lines.append(
+            "- missing_variables: " + ", ".join(blueprint.missing_variables)
+        )
+    if blueprint.cross_database_feasibility:
+        bits = [
+            f"{db}={status}"
+            for db, status in sorted(blueprint.cross_database_feasibility.items())
+        ]
+        lines.append("- cross_database_feasibility: " + ", ".join(bits))
+    if blueprint.degraded_reason:
+        lines.append("- cross_database_limits:")
+        for db, reason in sorted(blueprint.degraded_reason.items()):
+            lines.append(f"  - {db}: {reason}")
+    if blueprint.stepwise_plan:
+        lines.append("- recommended_step_skeleton:")
+        for step in blueprint.stepwise_plan[:8]:
+            lines.append(f"  - {step}")
+    if blueprint.domain_gate_notes:
+        lines.append("- domain_gates:")
+        for note in blueprint.domain_gate_notes[:8]:
+            lines.append(f"  - {note}")
+    if blueprint.self_critique:
+        lines.append("- self_critique:")
+        for item in blueprint.self_critique[:6]:
+            lines.append(f"  - {item}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -748,12 +889,276 @@ def _parse_citation_json(raw: str) -> List[Dict]:
     return [d for d in items if isinstance(d, dict)]
 
 
+def _pick_blueprint_predictor(context: ResearchContext) -> Optional[str]:
+    outcome = context.target_outcome
+    role_priority = {
+        VariableRole.COMPOSITE_SCORE: 0,
+        VariableRole.ORDINAL_SCORE: 1,
+        VariableRole.LAB: 2,
+        VariableRole.INTERVENTION: 3,
+        VariableRole.DEMOGRAPHIC: 4,
+        VariableRole.OUTCOME: 9,
+        VariableRole.ID: 9,
+        VariableRole.TIME: 9,
+        VariableRole.INDEX: 9,
+        VariableRole.META: 9,
+        VariableRole.OTHER: 5,
+    }
+    candidates = [
+        v
+        for v in context.variables
+        if v.name != outcome
+        and v.role
+        not in {
+            VariableRole.OUTCOME,
+            VariableRole.ID,
+            VariableRole.TIME,
+            VariableRole.INDEX,
+            VariableRole.META,
+        }
+    ]
+    if not candidates:
+        return None
+    q = context.research_question.lower()
+    scored = []
+    for idx, v in enumerate(candidates):
+        score = role_priority.get(v.role, 5)
+        if v.name.lower() in q:
+            score -= 5
+        if any(token in q for token in v.name.lower().replace("_", " ").split()):
+            score -= 1
+        scored.append((score, idx, v.name))
+    scored.sort()
+    return scored[0][2]
+
+
+def _pick_blueprint_outcome(context: ResearchContext) -> Optional[str]:
+    for v in context.variables:
+        if v.role == VariableRole.OUTCOME:
+            return v.name
+    return None
+
+
+def _blueprint_concept_dependencies(
+    *,
+    context: ResearchContext,
+    predictor: Optional[str],
+    outcome: Optional[str],
+) -> List[str]:
+    names: List[str] = []
+    for name in [predictor, outcome]:
+        if not name:
+            continue
+        variable = context.variable(name)
+        if variable is not None:
+            names.extend(variable.derived_from_concepts)
+            if variable.source_concept:
+                names.append(variable.source_concept)
+        names.append(name)
+
+    q = context.research_question.lower()
+    if "kdigo" in q or "aki" in q:
+        names.append("kdigo_aki")
+    if "sofa-2" in q or "sofa2" in q:
+        names.append("sofa2")
+    return _dedupe(normalize_concept_name(name) for name in names if name)
+
+
+def _blueprint_database_targets(context: ResearchContext) -> List[str]:
+    return _dedupe(
+        [
+            context.cohort.database,
+            *list(context.cross_database_validation or []),
+        ]
+    )
+
+
+def _render_hypothesis(
+    *,
+    context: ResearchContext,
+    predictor: Optional[str],
+    outcome: Optional[str],
+) -> str:
+    if predictor and outcome:
+        return (
+            f"In {context.cohort.cohort_name}, {predictor} is associated with "
+            f"{outcome} after ICU-aware missingness, temporal-window, and "
+            "concept-use checks."
+        )
+    if predictor:
+        return (
+            f"In {context.cohort.cohort_name}, {predictor} has an ICU-relevant "
+            "signal, but the target outcome must be specified before a causal or "
+            "prognostic claim is planned."
+        )
+    return (
+        "The requested question needs a feasible primary predictor and target "
+        "outcome before the planner should emit executable analysis steps."
+    )
+
+
+def _domain_gate_notes(
+    context: ResearchContext,
+    *,
+    predictor: Optional[str],
+) -> List[str]:
+    notes: List[str] = []
+    for v in context.variables:
+        include = v.name == predictor or bool(v.pitfalls) or bool(v.clinical_caveats)
+        if not include:
+            continue
+        if v.is_ordinal or v.role in {
+            VariableRole.ORDINAL_SCORE,
+            VariableRole.COMPOSITE_SCORE,
+        }:
+            notes.append(
+                f"{v.name}: treat as ordinal/integer score; audit strata "
+                "and avoid mean-based interpretation."
+            )
+        if v.missingness and v.missingness.fraction_missing >= 0.05:
+            notes.append(
+                f"{v.name}: missingness {v.missingness.fraction_missing:.0%}; "
+                "plan explicit missingness/sensitivity checks."
+            )
+        for pitfall in v.pitfalls[:2]:
+            notes.append(f"{v.name}: {pitfall}")
+        for caveat in v.clinical_caveats[:2]:
+            notes.append(f"{v.name}: {caveat}")
+    if context.cross_database_validation:
+        notes.append(
+            "Cross-database replication requested; compare concept availability "
+            "and missingness before effect estimates."
+        )
+    return _dedupe(notes)
+
+
+def _cross_database_gate_notes(degraded_reason: Dict[str, str]) -> List[str]:
+    notes: List[str] = []
+    for db, reason in sorted(degraded_reason.items()):
+        if reason:
+            notes.append(f"{db}: cross-database concept feasibility is limited: {reason}")
+    return notes
+
+
+def _blueprint_steps(
+    *,
+    predictor: Optional[str],
+    outcome: Optional[str],
+    has_literature: bool,
+    has_cross_db: bool,
+    cross_database_feasibility: Optional[Dict[str, str]] = None,
+    degraded_reason: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    steps: List[str] = []
+    if has_literature:
+        steps.append("Map prior literature claims to the available EasyICU concepts.")
+    steps.append("Freeze cohort definition and variable/time-window semantics.")
+    feasibility = cross_database_feasibility or {}
+    blocked_dbs = sorted(db for db, status in feasibility.items() if status == "blocked")
+    degraded_dbs = sorted(db for db, status in feasibility.items() if status == "degraded")
+    if blocked_dbs:
+        steps.append(
+            "Drop blocked databases from the replication scope before analysis: "
+            + ", ".join(blocked_dbs)
+            + "."
+        )
+    if degraded_dbs:
+        reason_bits = []
+        for db in degraded_dbs:
+            reason = (degraded_reason or {}).get(db)
+            reason_bits.append(f"{db} ({reason})" if reason else db)
+        steps.append(
+            "For degraded databases, run a sensitivity analysis with the reduced "
+            "concept set: "
+            + "; ".join(reason_bits)
+            + "."
+        )
+    if predictor:
+        steps.append(
+            f"Audit {predictor} distribution, missingness, and invalid transformations."
+        )
+    if predictor and outcome:
+        steps.append(
+            f"Estimate the {predictor}-{outcome} association with prespecified "
+            "covariates or a justified unadjusted model."
+        )
+        steps.append("Run stratum-level and sensitivity checks before drafting claims.")
+    if has_cross_db:
+        steps.append("Emit a replication protocol for requested external ICU databases.")
+    steps.append("Bind every reported result to registered evidence ids.")
+    return steps
+
+
+def _blueprint_self_critique(
+    *,
+    context: ResearchContext,
+    predictor: Optional[str],
+    outcome: Optional[str],
+    literature: LiteratureBundle,
+) -> List[str]:
+    critique: List[str] = []
+    if not literature.citations:
+        critique.append(
+            "No supporting literature keys were available; treat the hypothesis "
+            "as exploratory."
+        )
+    if predictor is None:
+        critique.append("No primary predictor could be inferred from context variables.")
+    if outcome is None:
+        critique.append(
+            "No target outcome is available, so the planner should not emit "
+            "outcome-association claims."
+        )
+    if context.cohort.n_stays < 100:
+        critique.append(
+            "Small cohort size may make effect estimates unstable; prefer "
+            "descriptive or feasibility framing."
+        )
+    if context.target_outcome:
+        outcome_var = context.variable(context.target_outcome)
+        if (
+            outcome_var
+            and outcome_var.missingness
+            and outcome_var.missingness.fraction_missing > 0
+        ):
+            critique.append(
+                "Target outcome has missing values; plan a transparent denominator audit."
+            )
+    return critique or [
+        "Feasible as a bounded ICU observational analysis, pending validator checks."
+    ]
+
+
+def _novelty_rationale(literature: LiteratureBundle) -> Optional[str]:
+    if not literature.citations:
+        return None
+    keys = ", ".join(c.key for c in literature.citations[:4])
+    return (
+        "Use prior work as methodological grounding while asking the planner "
+        f"to test the exact EasyICU cohort/concept instantiation ({keys})."
+    )
+
+
+def _dedupe(items: Sequence[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for item in items:
+        key = item.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
 __all__ = [
     "CitationRecord",
     "LiteratureBundle",
+    "HypothesisBlueprintAgent",
     "LiteratureAgent",
     "PubMedLiteratureClient",
     "TavilyLiteratureClient",
+    "render_hypothesis_blueprint_for_prompt",
     "build_pubmed_query_for_context",
     "build_tavily_query_for_context",
     "parse_pubmed_esummary",

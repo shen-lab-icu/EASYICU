@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import zipfile
 
+import pandas as pd
 import pytest
 
 from easyicu.research_agent.publication_figures import (
@@ -118,6 +119,37 @@ def test_make_figure_contract_accepts_agent_role_aliases_and_source_dicts():
     assert contract.source_data == ["incidence.csv", "assoc.csv"]
 
 
+def test_make_figure_contract_accepts_legacy_positional_signature():
+    contract = make_figure_contract(
+        "missingness_summary",
+        "Missingness Summary",
+        [{"variable": "vaso", "missing_pct": 77.5}],
+        "Variable",
+        "Missingness (%)",
+    )
+
+    assert contract.figure_id == "missingness_summary"
+    assert contract.core_claim == "Missingness Summary"
+    assert len(contract.panels) == 1
+    assert contract.panels[0].title == "Missingness Summary"
+
+
+def test_make_figure_contract_wraps_string_source_data():
+    contract = make_figure_contract(
+        figure_id="FigureStringSource",
+        core_claim="Single-string source data should stay a single entry.",
+        panels=[{
+            "panel_id": "a",
+            "title": "Overview",
+            "role": "main",
+            "claim": "Overview exists.",
+        }],
+        source_data="Cohort Data",
+    )
+
+    assert contract.source_data == ["Cohort Data"]
+
+
 def test_figure_contract_defaults_include_tiff():
     contract = make_figure_contract(
         figure_id="FigureDefault",
@@ -168,6 +200,14 @@ def test_publication_export_keeps_svg_text_editable(tmp_path: Path):
     assert "<text" in svg
     assert paths["contract"].exists()
     assert audit_publication_exports(paths) == []
+
+
+def test_apply_publication_style_accepts_legacy_fig_argument():
+    plt = pytest.importorskip("matplotlib.pyplot")
+    fig, _ax = plt.subplots(figsize=(2.5, 1.8))
+    palette = apply_publication_style(fig)
+    plt.close(fig)
+    assert "blue" in palette
 
 
 def test_publication_export_caps_and_compresses_tiff(tmp_path: Path):
@@ -285,3 +325,116 @@ def test_save_publication_figure_accepts_legacy_contract_and_output_dir_call(tmp
 
     assert {"svg", "png", "contract"} <= set(paths)
     assert paths["svg"].name == "legacy_figure.svg"
+
+
+def test_save_publication_figure_accepts_contract_only_output_dir_call(tmp_path: Path):
+    contract = make_figure_contract(
+        figure_id="FigureContractOnly",
+        core_claim="Contract-only save should still persist contract JSON.",
+        panels=[{
+            "panel_id": "a",
+            "title": "Overview",
+            "role": "overview",
+            "claim": "Line exists.",
+        }],
+    )
+
+    paths = save_publication_figure(contract, tmp_path)
+
+    assert "contract" in paths
+    assert paths["contract"].exists()
+
+
+def test_audit_publication_exports_tolerates_metadata_assignment(tmp_path: Path):
+    svg = tmp_path / "ok.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="10">ok</text></svg>',
+        encoding="utf-8",
+    )
+    findings = audit_publication_exports([svg], min_bytes=1)
+    findings["figure_contract"] = {"figure_id": "Figure1"}
+    assert findings["figure_contract"]["figure_id"] == "Figure1"
+
+
+def test_audit_publication_exports_accepts_legacy_contract_and_output_dir_call(tmp_path: Path):
+    svg = tmp_path / "primary_association_curve.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="10">ok</text></svg>',
+        encoding="utf-8",
+    )
+    contract = make_figure_contract(
+        figure_id="primary_association_curve",
+        core_claim="Legacy audit call should inspect exported files.",
+        panels=[{
+            "panel_id": "a",
+            "title": "Association",
+            "role": "association",
+            "claim": "Association figure exists.",
+            "evidence_ids": ["primary_association"],
+        }],
+    )
+
+    findings = audit_publication_exports(contract, tmp_path, min_bytes=1)
+
+    assert findings == []
+
+
+def test_publication_figure_skill_renders_from_registered_association_table(ra, tmp_path: Path):
+    run_dir = tmp_path / "run"
+    source = tmp_path / "primary_association.csv"
+    pd.DataFrame({
+        "variable": ["lactate", "MAP"],
+        "odds_ratio": [1.35, 0.82],
+        "or_lower": [1.10, 0.70],
+        "or_upper": [1.66, 0.96],
+    }).to_csv(source, index=False)
+
+    evidence = ra.EvidenceStore(run_dir)
+    evidence.register_file(
+        kind="table",
+        description="Primary association table.",
+        source_path=source,
+        evidence_id="primary_association",
+        aliases=["primary_association_table"],
+    )
+    context = ra.ResearchContext(
+        research_question="Are hemodynamic variables associated with mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=2,
+            n_stays=2,
+        ),
+        variables=[
+            ra.ConceptDescriptor(name="lactate", role="lab", dtype="float64"),
+            ra.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="04_primary_association",
+                intent="Estimate primary associations.",
+                inputs=["lactate", "death"],
+                expected_outputs=[
+                    "table:primary_association",
+                    "figure:primary_association_curve",
+                ],
+            )
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+    )
+
+    assert result.generated is True
+    assert evidence.get("publication_figure") is not None
+    assert evidence.get("publication_figure_contract") is not None
+    assert evidence.get("publication_figure_skill_summary") is not None
+    assert (run_dir / "publication_figures" / "easyicu_publication_figure.svg").exists()

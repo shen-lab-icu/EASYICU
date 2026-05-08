@@ -300,6 +300,110 @@ def test_literature_agent_pubmed_failure_is_silent(ra):
     assert any(c.key == "vincent_sofa_1996" for c in bundle.citations)
 
 
+def test_hypothesis_blueprint_agent_uses_literature_and_domain_gates(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="sofa2",
+                role="composite_score",
+                dtype="int64",
+                is_ordinal=True,
+                pitfalls=["score zero may reflect missing components"],
+            ),
+            schema.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        target_outcome="death",
+        cross_database_validation=["eicu", "hirid"],
+    )
+
+    from easyicu.research_agent.literature import (
+        HypothesisBlueprintAgent,
+        LiteratureAgent,
+        render_hypothesis_blueprint_for_prompt,
+    )
+
+    literature = LiteratureAgent().run(ctx)
+    blueprint = HypothesisBlueprintAgent().run(
+        context=ctx,
+        literature=literature,
+    )
+
+    assert blueprint.feasibility_status == "ready"
+    assert "vincent_sofa_1996" in blueprint.prior_literature_keys
+    assert "sofa2" in blueprint.concept_dependencies
+    assert set(blueprint.cross_database_feasibility) >= {"miiv", "eicu", "hirid"}
+    assert any("ordinal" in note for note in blueprint.domain_gate_notes)
+    prompt = render_hypothesis_blueprint_for_prompt(blueprint)
+    assert "Hypothesis blueprint" in prompt
+    assert "cross_database_feasibility" in prompt
+    assert "recommended_step_skeleton" in prompt
+
+
+def test_hypothesis_blueprint_adds_deterministic_cross_db_steps(ra, monkeypatch):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Is KDIGO AKI associated with ICU mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c",
+            database="miiv",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[
+            schema.ConceptDescriptor(name="kdigo_aki", role="ordinal_score", dtype="int64"),
+            schema.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        target_outcome="death",
+        cross_database_validation=["hirid", "sic"],
+    )
+
+    from easyicu.research_agent import literature as literature_module
+    from easyicu.research_agent.literature import (
+        HypothesisBlueprintAgent,
+        LiteratureAgent,
+    )
+
+    def fake_feasibility(*, concepts, databases):
+        return {
+            "concept_dependencies": list(concepts),
+            "cross_database_feasibility": {
+                "miiv": "full",
+                "hirid": "degraded",
+                "sic": "blocked",
+            },
+            "degraded_reason": {
+                "hirid": "urine output unavailable; creatinine-only fallback required.",
+                "sic": "kdigo_aki dependency unavailable.",
+            },
+            "availability": {},
+        }
+
+    monkeypatch.setattr(
+        literature_module,
+        "hypothesis_cross_database_feasibility",
+        fake_feasibility,
+    )
+
+    blueprint = HypothesisBlueprintAgent().run(
+        context=ctx,
+        literature=LiteratureAgent().run(ctx),
+    )
+
+    assert any("Drop blocked databases" in step and "sic" in step for step in blueprint.stepwise_plan)
+    assert any(
+        "reduced concept set" in step and "hirid" in step
+        for step in blueprint.stepwise_plan
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tavily live client (O5) — offline transport stubs
 # ---------------------------------------------------------------------------

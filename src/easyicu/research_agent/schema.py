@@ -311,6 +311,41 @@ class ResearchContext(BaseModel):
         return None
 
 
+class HypothesisBlueprint(BaseModel):
+    """Pre-plan hypothesis and feasibility scaffold.
+
+    This is the explicit "discovery" handoff: literature and ICU concept
+    metadata are distilled before planning, then the planner receives a
+    hypothesis, a step skeleton, self-critique, and domain gates instead of
+    inventing a plan from the user question alone.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "easyicu.hypothesis_blueprint/1"
+    research_question: str
+    hypothesis: str
+    hypothesis_type: Literal[
+        "confirmatory",
+        "exploratory",
+        "feasibility",
+    ] = "exploratory"
+    prior_literature_keys: List[str] = Field(default_factory=list)
+    novelty_rationale: Optional[str] = None
+    feasible_variables: List[str] = Field(default_factory=list)
+    missing_variables: List[str] = Field(default_factory=list)
+    concept_dependencies: List[str] = Field(default_factory=list)
+    cross_database_feasibility: Dict[
+        str,
+        Literal["full", "degraded", "blocked"],
+    ] = Field(default_factory=dict)
+    degraded_reason: Dict[str, str] = Field(default_factory=dict)
+    stepwise_plan: List[str] = Field(default_factory=list)
+    self_critique: List[str] = Field(default_factory=list)
+    feasibility_status: Literal["ready", "needs_data", "blocked"] = "ready"
+    domain_gate_notes: List[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Plans, evidence, manifests
 # ---------------------------------------------------------------------------
@@ -663,6 +698,7 @@ __all__ = [
     "ConceptDescriptor",
     "CohortDescriptor",
     "ResearchContext",
+    "HypothesisBlueprint",
     "AnalysisStep",
     "AnalysisPlan",
     "EvidenceRef",

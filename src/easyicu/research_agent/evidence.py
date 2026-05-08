@@ -176,7 +176,7 @@ class EvidenceStore:
                     f"Evidence id collision for {evidence_id}: "
                     f"existing sha256={existing.sha256[:8]} new sha256={sha256[:8]}"
                 )
-            for alias in (aliases or []):
+            for alias in aliases or []:
                 self._add_alias(alias, evidence_id)
             self._add_alias(target.stem.split("__", 1)[-1], evidence_id)
             self._save()
@@ -199,7 +199,7 @@ class EvidenceStore:
         )
         self._records.append(record)
 
-        for alias in (aliases or []):
+        for alias in aliases or []:
             self._add_alias(alias, evidence_id)
         basename = target.name.split("__", 1)[-1]
         self._add_alias(Path(basename).stem, evidence_id)
@@ -274,7 +274,9 @@ class EvidenceStore:
     ) -> EvidenceRecord:
         payload = text.encode("utf-8")
         digest = sha256_of_bytes(payload)
-        eid = evidence_id or self._make_id(_id_prefix(kind, Path(filename).stem), digest)
+        eid = evidence_id or self._make_id(
+            _id_prefix(kind, Path(filename).stem), digest
+        )
         target = self.dir / f"{eid}__{filename}"
         target.write_bytes(payload)
         with self._lock:
@@ -393,7 +395,9 @@ class EvidenceStore:
     def resolvable_names(self) -> List[str]:
         """Every name the binder will accept (evidence_ids + aliases)."""
         with self._lock:
-            return sorted(set(r.evidence_id for r in self._records) | set(self._aliases))
+            return sorted(
+                set(r.evidence_id for r in self._records) | set(self._aliases)
+            )
 
     # ------------------------------------------------------------------
     # Manuscript binding
@@ -422,7 +426,10 @@ class EvidenceStore:
                 continue
             kept: List[str] = []
             for sentence in sentences:
-                if _looks_result_like_sentence(sentence) and "{evidence:" not in sentence:
+                if (
+                    _looks_result_like_sentence(sentence)
+                    and "{evidence:" not in sentence
+                ):
                     removed.append(sentence.strip())
                     continue
                 kept.append(sentence.strip())
@@ -455,7 +462,7 @@ class EvidenceStore:
             if k < 0:
                 out.append(scaffold[j:])
                 break
-            eid = scaffold[j + len("{evidence:"):k]
+            eid = scaffold[j + len("{evidence:") : k]
             rec = self.get(eid)
             if rec is None:
                 out.append(f"[evidence missing: {eid}]")
@@ -470,7 +477,7 @@ class EvidenceStore:
                 # and the URL points at the registered file. Trailing
                 # 8-char sha256 sits in the link title for hover.
                 out.append(
-                    f"[{eid}]({rec.relative_path} \"sha256={rec.sha256[:8]}\")"
+                    f'[{eid}]({rec.relative_path} "sha256={rec.sha256[:8]}")'
                     f"{_binding_caveat(rec)}"
                 )
             i = k + 1
@@ -498,7 +505,11 @@ _RESULT_TOKEN_RE = re.compile(
 
 
 def _split_sentences(text: str) -> List[str]:
-    parts = [part.strip() for part in re.split(r"(?<=[.!?。！？])\s+", text.strip()) if part.strip()]
+    parts = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?。！？])\s+", text.strip())
+        if part.strip()
+    ]
     return parts or ([text.strip()] if text.strip() else [])
 
 

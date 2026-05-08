@@ -56,8 +56,14 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
         "clinical_semantics_resolution",
         "data_extraction_request",
         "data_extraction_result",
+        "hypothesis_blueprint",
+        "preplan_literature_bundle",
+        "publication_figure_contract",
+        "publication_figure_skill_summary",
+        "publication_figure_svg",
         "manuscript_critique",
     } <= evidence_ids
+    assert (run_dir / "hypothesis_blueprint.json").exists()
 
     # 3) The bound manuscript should have ZERO ``[evidence missing: …]``
     #    lines (T1.2 acceptance criterion).
@@ -212,6 +218,40 @@ print(json.dumps(summary))
         f for f in manifest["findings"]
         if f["severity"] == "error" and f["validator"] == "runner"
     ]
+
+
+def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: Path):
+    from easyicu.research_agent.pipeline import _promote_prior_publication_bundle
+
+    run_dir = tmp_path / "run"
+    source_dir = run_dir / "steps" / "05_primary_association" / "outputs"
+    target_dir = run_dir / "steps" / "06_publication_figure_generation" / "outputs"
+    source_dir.mkdir(parents=True)
+    target_dir.mkdir(parents=True)
+
+    (source_dir / "primary_association_curve.png").write_bytes(b"png")
+    (source_dir / "primary_association_curve.svg").write_text("<svg><text>A</text></svg>", encoding="utf-8")
+    (source_dir / "primary_association_curve.pdf").write_bytes(b"%PDF-1.4")
+    (source_dir / "primary_association_curve.tiff").write_bytes(b"TIFF")
+    (source_dir / "primary_association_curve.figure_contract.json").write_text(
+        json.dumps({"figure_id": "primary_association_curve"}),
+        encoding="utf-8",
+    )
+
+    repair = _promote_prior_publication_bundle(
+        run_dir=run_dir,
+        current_step_id="06_publication_figure_generation",
+        out_dir=target_dir,
+    )
+
+    assert repair == "publication_bundle_promote_v1"
+    assert (target_dir / "publication_figure.png").exists()
+    assert (target_dir / "publication_figure.svg").exists()
+    assert (target_dir / "publication_figure.pdf").exists()
+    assert (target_dir / "publication_figure.tiff").exists()
+    assert (target_dir / "publication_figure.figure_contract.json").exists()
+    summary = json.loads((target_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["publication_figure_rescue"]["mode"] == "promotion"
 
 
 def test_pipeline_repairs_concept_audit_violation(ra, tmp_path: Path):
@@ -758,6 +798,215 @@ res = sm.Logit(y, X).fit(disp=0)
     assert name == "dtype_coerce_v1"
     assert "_easyicu_runner_repair_v1" in patched
     assert "sm.Logit(*_easyicu_runner_repair_v1(X, y))" in patched
+
+
+def test_deterministic_runner_repair_adds_missing_os_import(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+value = os.environ["COHORT_PARQUET"]
+print(value)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="NameError: name 'os' is not defined",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "missing_os_import_v1"
+    assert patched.startswith("import os\n")
+
+
+def test_deterministic_runner_repair_strips_python_prefix(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = "pythonimport os\nvalue = os.environ['COHORT_PARQUET']\n"
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="SyntaxError: invalid syntax",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "strip_python_prefix_v1"
+    assert patched.startswith("import os\n")
+
+
+def test_deterministic_runner_repair_replaces_unclosed_table_one(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import pandas as pd
+df = pd.read_parquet(cohort_path)
+df.to_csv("table_one.csv")
+summary = {
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="SyntaxError: '{' was never closed",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "table_one_descriptive_repair_v1"
+    assert "table_one.csv" in patched
+    assert "step_summary.json" in patched
+    assert 'os.environ["COHORT_PARQUET"]' in patched
+
+
+def test_deterministic_runner_repair_replaces_broken_outcome_incidence(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+STEP_NAME = "outcome_incidence"
+final_model = ols("logit(" + 
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="SyntaxError: invalid syntax. Perhaps you forgot a comma?",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "outcome_incidence_descriptive_repair_v1"
+    assert "outcome_incidence.csv" in patched
+    assert "outcome_rate.json" in patched
+    assert "proportion_confint" in patched
+
+
+def test_deterministic_runner_repair_rewrites_broken_prediction_split_script(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from sklearn.model_selection import train_test_split
+figure_contract = FigureContract(
+    figure_id=1,
+    panels=1,
+    panels=['split'],
+    figure_id=1,
+)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="SyntaxError: keyword argument repeated: figure_id",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "prediction_split_minimal_v1"
+    assert "train_test_split(" in patched
+    assert '"split_strategy": "stratified_random"' in patched
+
+
+def test_deterministic_runner_repair_injects_logreg_imputation(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+model = LogisticRegression(max_iter=1000)
+model.fit(X_train, y_train)
+y_pred_proba = model.predict_proba(X_test)[:, 1]
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="ValueError: Input X contains NaN. LogisticRegression does not accept missing values encoded as NaN natively.",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "logreg_impute_v1"
+    assert "_easyicu_logreg_impute_v1" in patched
+    assert "X_test = _easyicu_logreg_impute_v1(X_test)" in patched
+
+
+def test_deterministic_runner_repair_regularizes_singular_logit(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import statsmodels.api as sm
+model = sm.Logit(y, X)
+result = model.fit(disp=0, method='newton')
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="numpy.linalg.LinAlgError: Singular matrix",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "logit_regularized_fit_v1"
+    assert "_easyicu_safe_logit_fit_v1" in patched
+    assert "result = _easyicu_safe_logit_fit_v1(model)" in patched
+
+
+def test_deterministic_runner_repair_falls_back_to_sklearn_after_regularized_singular(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+required_cols = ['lactate_max_24h', 'death', 'age', 'sex', 'map_min_24h', 'vaso_any_24h']
+model = sm.Logit(y, X)
+result = _easyicu_safe_logit_fit_v1(model)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="numpy.linalg.LinAlgError: Singular matrix",
+        previous_repair="logit_regularized_fit_v1",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "shock_primary_assoc_sklearn_v1"
+    assert "LogisticRegression(" in patched
+    assert "logistic_regression_sklearn_bootstrap" in patched
+
+
+def test_deterministic_runner_repair_promotes_publication_bundle_script(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from easyicu.research_agent.publication_figures import make_figure_contract
+pub_style = apply_publication_style()
+save_publication_figure(figure_contract, fig)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="NameError: name 'apply_publication_style' is not defined",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "publication_bundle_promote_script_v1"
+    assert 'target_stem = "publication_figure"' in patched
+    assert "publication_figure_rescue" in patched
+
+
+def test_deterministic_runner_repair_swaps_csv_reader_for_parquet(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import pandas as pd
+df = pd.read_csv(cohort_path, encoding='utf-8')
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 7",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "cohort_csv_to_parquet_v1"
+    assert "pd.read_parquet(cohort_path)" in patched
+
+
+def test_deterministic_runner_repair_swaps_env_csv_reader_for_parquet(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import os
+import pandas as pd
+cohort = pd.read_csv(os.environ['COHORT_PARQUET'])
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 7",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "cohort_csv_to_parquet_v1"
+    assert "pd.read_parquet(os.environ['COHORT_PARQUET'])" in patched
 
 
 def test_pipeline_run_from_spec_writes_runtime_artifacts(ra, tmp_path: Path):

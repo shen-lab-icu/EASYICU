@@ -51,6 +51,22 @@ def test_visual_qa_vlm_adapter_appends_findings(ra, tmp_path: Path):
     assert vlm.detail["path"] == str(fig_path)
 
 
+def test_pipeline_enables_vlm_visual_qa_when_client_is_configured(ra, tmp_path: Path):
+    class _VisionLLM:
+        name = "vision"
+
+        def complete_with_images(self, *, prompt, image_paths, **kwargs):
+            return '{"findings":[]}'
+
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        vlm_client=_VisionLLM(),
+    )
+
+    assert pipeline._enable_vlm_visual_qa is True
+
+
 def test_parse_vlm_visual_qa_response_tolerates_json_fence(ra, tmp_path: Path):
     fig_path = tmp_path / "a.png"
     fig_path.write_bytes(b"not a real image but path resolution is enough")

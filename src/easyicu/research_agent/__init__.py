@@ -58,6 +58,12 @@ not break the rest.
 
 from __future__ import annotations
 
+import os
+
+from .step_summary import step_summary
+
+os_environ = os.environ
+
 __all__ = [
     # Schemas
     "ResearchContext",
@@ -77,6 +83,7 @@ __all__ = [
     "VisualizationRequest",
     "VisualizationResult",
     "ManuscriptDraftPacket",
+    "HypothesisBlueprint",
     "CritiqueReport",
     "ReflectionMemoryEntry",
     "AgentRuntimeState",
@@ -106,6 +113,11 @@ __all__ = [
     "ICUEpisodeResolver",
     "EpisodeResolution",
     "TimeWindowSemanticParser",
+    "ConceptDatabaseAvailability",
+    "cross_database_concept_availability",
+    "default_public_databases",
+    "explain_concept_availability",
+    "hypothesis_cross_database_feasibility",
     "ExperimentSpec",
     "CohortInputSpec",
     "RuntimeSpec",
@@ -131,6 +143,7 @@ __all__ = [
     "AnalyzerAgent",
     "WriterAgent",
     "LiteratureAgent",
+    "HypothesisBlueprintAgent",
     # Validators / runtime components
     "CodeRunner",
     "DockerRunner",
@@ -143,6 +156,8 @@ __all__ = [
     "LLMConceptAuditor",
     "VisualQAAuditor",
     "VLMVisualQAAdapter",
+    "PublicationFigureSkill",
+    "PublicationFigureSkillResult",
     "FigureContract",
     "PanelSpec",
     "make_figure_contract",
@@ -183,6 +198,7 @@ __all__ = [
     "icu_agent_bench_markdown",
     # Memory
     "RunMemory",
+    "StrategyCard",
     # LaTeX
     "scaffold_to_latex",
     "latex_template_preamble",
@@ -194,6 +210,7 @@ __all__ = [
     "LiteratureBundle",
     "PubMedLiteratureClient",
     "TavilyLiteratureClient",
+    "render_hypothesis_blueprint_for_prompt",
     # MCP server
     "mcp_dispatch",
     "MCP_TOOLS",
@@ -216,6 +233,9 @@ __all__ = [
     # Prompt pack provenance
     "PROMPT_PACK_VERSION",
     "prompt_pack_files",
+    # Compatibility exports used by generated scripts
+    "step_summary",
+    "os_environ",
 ]
 
 # Schemas are dependency-free, safe to import eagerly.
@@ -237,6 +257,7 @@ from .schema import (
     VisualizationRequest,
     VisualizationResult,
     ManuscriptDraftPacket,
+    HypothesisBlueprint,
     CritiqueReport,
     ReflectionMemoryEntry,
     AgentRuntimeState,
@@ -263,6 +284,7 @@ def __getattr__(name: str):
         "architecture_profile_markdown",
     }:
         from . import architecture as _architecture
+
         return getattr(_architecture, name)
     if name in {
         "ConceptValidationLayer",
@@ -272,7 +294,18 @@ def __getattr__(name: str):
         "TimeWindowSemanticParser",
     }:
         from . import temporal_semantics as _temporal
+
         return getattr(_temporal, name)
+    if name in {
+        "ConceptDatabaseAvailability",
+        "cross_database_concept_availability",
+        "default_public_databases",
+        "explain_concept_availability",
+        "hypothesis_cross_database_feasibility",
+    }:
+        from . import concept_availability as _availability
+
+        return getattr(_availability, name)
     if name in {
         "ExperimentSpec",
         "CohortInputSpec",
@@ -282,6 +315,7 @@ def __getattr__(name: str):
         "build_pipeline_from_spec",
     }:
         from . import experiment_spec as _spec
+
         return getattr(_spec, name)
     if name in {
         "build_research_context",
@@ -290,6 +324,7 @@ def __getattr__(name: str):
         "build_retrieved_research_context",
     }:
         from . import context as _context
+
         return getattr(_context, name)
     if name in {
         "build_lactate_map_vaso_research_context",
@@ -298,9 +333,11 @@ def __getattr__(name: str):
         "write_research_context",
     }:
         from . import case_contexts as _case_contexts
+
         return getattr(_case_contexts, name)
     if name in {"LLMClient", "MockLLMClient", "OpenAIClient", "LLMRouter"}:
         from . import llm as _llm
+
         return getattr(_llm, name)
     if name in {
         "PlannerAgent",
@@ -317,23 +354,29 @@ def __getattr__(name: str):
         "WriterAgent",
     }:
         from . import agents as _agents
+
         return getattr(_agents, name)
     if name in {"PROMPT_PACK_VERSION", "prompt_pack_files"}:
         from . import prompts as _prompts
+
         return getattr(_prompts, name)
-    if name == "LiteratureAgent":
-        from .literature import LiteratureAgent
-        return LiteratureAgent
+    if name in {"LiteratureAgent", "HypothesisBlueprintAgent"}:
+        from . import literature as _lit
+
+        return getattr(_lit, name)
     if name in {
         "CitationRecord",
         "LiteratureBundle",
         "PubMedLiteratureClient",
         "TavilyLiteratureClient",
+        "render_hypothesis_blueprint_for_prompt",
     }:
         from . import literature as _lit
+
         return getattr(_lit, name)
     if name in {"CodeRunner", "DockerRunner", "RunResult"}:
         from . import runner as _runner
+
         return getattr(_runner, name)
     if name in {
         "CohortAuditor",
@@ -344,6 +387,7 @@ def __getattr__(name: str):
         "LLMConceptAuditor",
     }:
         from . import validators as _validators
+
         return getattr(_validators, name)
     if name in {
         "AuditEvent",
@@ -357,10 +401,16 @@ def __getattr__(name: str):
         "build_execution_replay",
     }:
         from . import runtime_artifacts as _runtime_artifacts
+
         return getattr(_runtime_artifacts, name)
     if name in {"VisualQAAuditor", "VLMVisualQAAdapter"}:
         from . import visual_qa as _visual_qa
+
         return getattr(_visual_qa, name)
+    if name in {"PublicationFigureSkill", "PublicationFigureSkillResult"}:
+        from . import figure_skill as _figure_skill
+
+        return getattr(_figure_skill, name)
     if name in {
         "FigureContract",
         "PanelSpec",
@@ -371,9 +421,11 @@ def __getattr__(name: str):
         "audit_publication_exports",
     }:
         from . import publication_figures as _pubfig
+
         return getattr(_pubfig, name)
     if name == "EvidenceStore":
         from .evidence import EvidenceStore
+
         return EvidenceStore
     if name in {
         "EasyICUCasePackage",
@@ -382,6 +434,7 @@ def __getattr__(name: str):
         "build_lactate_map_vaso_cohort_from_export",
     }:
         from . import easyicu_case_builder as _case_builder
+
         return getattr(_case_builder, name)
     if name in {
         "ReplicationTarget",
@@ -394,9 +447,11 @@ def __getattr__(name: str):
         "run_lactate_map_vaso_replication",
     }:
         from . import replication as _replication
+
         return getattr(_replication, name)
     if name in {"ClinicalSkill", "register_skill", "get_skill", "list_skills"}:
         from . import skills as _skills
+
         return getattr(_skills, name)
     if name in {
         "AnalysisTypeSpec",
@@ -407,6 +462,7 @@ def __getattr__(name: str):
         "analysis_type_catalog_markdown",
     }:
         from . import analysis_types as _analysis_types
+
         return getattr(_analysis_types, name)
     if name in {
         "ICUAgentBenchMetricSpec",
@@ -418,21 +474,27 @@ def __getattr__(name: str):
         "icu_agent_bench_markdown",
     }:
         from . import icu_agent_bench as _icu_agent_bench
+
         return getattr(_icu_agent_bench, name)
-    if name == "RunMemory":
-        from .memory import RunMemory
-        return RunMemory
+    if name in {"RunMemory", "StrategyCard"}:
+        from . import memory as _memory
+
+        return getattr(_memory, name)
     if name in {"scaffold_to_latex", "latex_template_preamble"}:
         from . import latex as _latex
+
         return getattr(_latex, name)
     if name in {"render_bibtex", "render_thebibliography_block"}:
         from . import bibtex as _bibtex
+
         return getattr(_bibtex, name)
     if name in {"CostMeter", "MeteredClient"}:
         from . import cost as _cost
+
         return getattr(_cost, name)
     if name in {"mcp_dispatch", "MCP_TOOLS", "MCP_TOOL_SCHEMAS"}:
         from . import mcp_server as _mcp
+
         mapping = {
             "mcp_dispatch": _mcp.dispatch,
             "MCP_TOOLS": _mcp.TOOLS,
@@ -441,5 +503,6 @@ def __getattr__(name: str):
         return mapping[name]
     if name == "ResearchAgentPipeline":
         from .pipeline import ResearchAgentPipeline
+
         return ResearchAgentPipeline
     raise AttributeError(f"module 'easyicu.research_agent' has no attribute {name!r}")

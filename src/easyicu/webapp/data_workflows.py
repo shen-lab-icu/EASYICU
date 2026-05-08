@@ -33,7 +33,7 @@ def check_data_status(data_path: str, database: str, app_context: dict[str, Any]
     }
 
     # 统计 parquet 文件（包括分片目录）
-    parquet_files = list(path.glob('*.parquet'))
+    parquet_files = [f for f in path.glob('*.parquet') if not f.name.startswith('.')]
     # 检查分片目录（如 chartevents/1.parquet）
     for subdir in path.iterdir():
         if subdir.is_dir():
@@ -46,7 +46,7 @@ def check_data_status(data_path: str, database: str, app_context: dict[str, Any]
     result['parquet_files'].extend([f.stem for f in parquet_files])
 
     # 统计 CSV 文件
-    csv_files = list(path.glob('*.csv')) + list(path.glob('*.csv.gz'))
+    csv_files = [f for f in list(path.glob('*.csv')) + list(path.glob('*.csv.gz')) if not f.name.startswith('.')]
     result['csv_count'] = len(csv_files)
     result['csv_files'] = [f.name for f in csv_files]
 
