@@ -1015,8 +1015,47 @@ class StatisticalGuard:
         df = pd.read_parquet(cohort_path)
 
         if family == "prediction_model" or (out_dir / "model_performance_train_test.csv").exists():
+            summary_text = json.dumps(step_summary or {}, ensure_ascii=False).lower()
+
+            def _summary_has_any(tokens: Sequence[str]) -> bool:
+                return any(token in summary_text for token in tokens)
+
             perf_csv = out_dir / "model_performance_train_test.csv"
-            if not perf_csv.exists():
+            perf_candidates = [perf_csv] if perf_csv.exists() else []
+            if not perf_candidates:
+                for candidate in out_dir.glob("*.csv"):
+                    name = candidate.name.lower()
+                    if any(token in name for token in ("performance", "prediction", "model")):
+                        perf_candidates.append(candidate)
+            has_performance_metric = _summary_has_any(
+                (
+                    "auroc",
+                    "auc",
+                    "brier",
+                    "calibration",
+                    "cv_auroc",
+                    "held_out_auroc",
+                    "cv_brier",
+                )
+            )
+            perf_columns: Set[str] = set()
+            for candidate in perf_candidates:
+                try:
+                    perf_columns.update(str(c).lower() for c in pd.read_csv(candidate, nrows=5).columns)
+                except Exception:
+                    continue
+            has_performance_metric = has_performance_metric or any(
+                token in perf_columns
+                for token in (
+                    "auroc",
+                    "auc",
+                    "brier",
+                    "brier_score",
+                    "cv_auroc_mean",
+                    "held_out_auroc",
+                )
+            )
+            if not has_performance_metric:
                 findings.append(ValidationFinding(
                     validator=self.name,
                     severity="warning",
@@ -1026,21 +1065,31 @@ class StatisticalGuard:
                     ),
                 ))
             else:
-                try:
-                    perf = pd.read_csv(perf_csv)
-                    if "calibration_slope" not in perf.columns:
-                        findings.append(ValidationFinding(
-                            validator=self.name,
-                            severity="warning",
-                            message="Prediction model performance is missing calibration_slope.",
-                        ))
-                except Exception as exc:
+                has_calibration = (
+                    "calibration_slope" in perf_columns
+                    or "calibration_intercept" in perf_columns
+                    or "brier" in summary_text
+                    or "brier_score" in summary_text
+                    or "calibration" in summary_text
+                )
+                if not has_calibration:
                     findings.append(ValidationFinding(
                         validator=self.name,
                         severity="warning",
-                        message=f"Could not parse {perf_csv.name}: {exc}",
+                        message="Prediction model performance is missing calibration_slope or Brier/calibration metadata.",
                     ))
-            if not any(k in step_summary for k in ("n_train", "n_test", "split_strategy")):
+            has_split_metadata = any(
+                k in (step_summary or {})
+                for k in (
+                    "n_train",
+                    "n_test",
+                    "split_strategy",
+                    "cv_folds",
+                    "validation_scheme",
+                    "cross_validation",
+                )
+            ) or _summary_has_any(("5-fold", "cross-validation", "cv_folds", "split_strategy"))
+            if not has_split_metadata:
                 findings.append(ValidationFinding(
                     validator=self.name,
                     severity="warning",

@@ -304,6 +304,27 @@ def test_cohort_auditor_row_count_mismatch(ra, tmp_path: Path):
                for f in findings)
 
 
+def test_cohort_auditor_allows_correlation_context_without_target_outcome(ra, tmp_path: Path):
+    df = pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "sofa2_max_24h": [1, 3, 5],
+        "sofa2_resp_max_24h": [0, 1, 2],
+    })
+    cohort_path = tmp_path / "cohort.parquet"
+    df.to_parquet(cohort_path, index=False)
+    ctx = ra.build_research_context(
+        research_question="Correlate SOFA components.",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+        target_outcome=None,
+    )
+
+    findings = ra.CohortAuditor().audit(context=ctx, cohort_path=cohort_path)
+
+    assert not any("Target outcome" in f.message for f in findings)
+
+
 def test_llm_concept_auditor_parses_findings(ra):
     from easyicu.research_agent.validators import parse_llm_concept_audit_response
 
@@ -372,3 +393,42 @@ def test_statistical_guard_warns_when_prediction_outputs_lack_split_metadata(ra,
     messages = " ".join(f.message.lower() for f in findings)
     assert "train/test split" in messages
     assert "calibration_slope" in messages
+
+
+def test_statistical_guard_accepts_v14_cv_prediction_summary(ra, tmp_path: Path):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="prediction_model",
+                covariates=["age", "sex", "sofa2"],
+            ),
+        }
+    )
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({
+        "stay_id": list(range(1, 41)),
+        "age": [60] * 40,
+        "sofa2": list(range(10)) * 4,
+        "death": [0, 1] * 20,
+    }).to_parquet(cohort_path, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    step = ra.schema.AnalysisStep(step_id="01_model_training", intent="prediction model analysis")
+
+    findings = ra.StatisticalGuard().audit(
+        context=ctx,
+        cohort_path=cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary={
+            "statistic:cv_auroc_mean": 0.74,
+            "statistic:cv_brier_mean": 0.18,
+            "cv_folds": 5,
+            "split_strategy": "5-fold cross-validation",
+        },
+    )
+
+    messages = " ".join(f.message.lower() for f in findings)
+    assert "held-out performance" not in messages
+    assert "train/test split" not in messages
+    assert "calibration_slope" not in messages

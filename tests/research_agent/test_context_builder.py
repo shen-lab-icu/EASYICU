@@ -117,6 +117,41 @@ def test_default_time_windows_attached(ra):
     assert {"first_24h", "first_6h", "full_stay"} <= names
 
 
+def test_naive_context_strips_icu_metadata_and_preferences(ra):
+    df = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4],
+        "lact": [1.2, 3.4, np.nan, 2.0],
+        "vaso_any_24h": [0, 1, 0, 1],
+        "death": [0, 1, 0, 1],
+    })
+    ctx = ra.build_naive_research_context(
+        research_question="Does lactate predict death?",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="death",
+        concept_descriptions={"lact": "Lactate with a clinical description."},
+        user_preferences={"preferred_methods": "Use logistic regression."},
+    )
+
+    assert ctx.time_windows == []
+    assert ctx.temporal_constraints == []
+    assert ctx.user_preferences is None
+    lact = ctx.variable("lact")
+    death = ctx.variable("death")
+    vaso = ctx.variable("vaso_any_24h")
+    assert lact is not None and death is not None and vaso is not None
+    assert lact.description is None
+    assert lact.role.value == "other"
+    assert lact.allowed_aggregations == []
+    assert lact.missingness is None
+    assert lact.pitfalls == []
+    assert lact.clinical_caveats == []
+    assert lact.source_concept is None
+    assert vaso.role.value == "other"
+    assert death.role.value == "outcome"
+
+
 def test_temporal_constraints_and_provenance_are_attached(ra):
     df = pd.DataFrame({
         "stay_id": [1, 2],

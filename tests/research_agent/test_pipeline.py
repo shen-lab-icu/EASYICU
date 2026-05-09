@@ -110,6 +110,57 @@ def test_pipeline_with_clinical_skill(ra, synthetic_cohort, tmp_path: Path):
     assert any("sofa_zero" in sid for sid in step_ids)
 
 
+def test_pipeline_stops_when_hypothesis_blueprint_is_blocked(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    cohort_path = tmp_path / "cohort_no_outcome.parquet"
+    pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "sofa2": [0, 2, 5],
+    }).to_parquet(cohort_path)
+
+    import easyicu.research_agent.pipeline as pipeline_module
+
+    class BlockedBlueprintAgent:
+        def run(self, *, context, literature):
+            return ra.schema.HypothesisBlueprint(
+                research_question=context.research_question,
+                hypothesis="Target outcome is unavailable.",
+                hypothesis_type="feasibility",
+                feasible_variables=["sofa2"],
+                missing_variables=["target_outcome"],
+                stepwise_plan=["Resolve target outcome before modeling."],
+                feasibility_status="blocked",
+                domain_gate_notes=["No target outcome is available."],
+            )
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "HypothesisBlueprintAgent",
+        BlockedBlueprintAgent,
+    )
+
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    result = pipeline.run(
+        question="Describe admission SOFA-2 signal in this ICU cohort.",
+        cohort=cohort_path,
+        cohort_name="blocked_blueprint_cohort",
+        database="synthetic",
+    )
+
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    assert manifest["notes"] == "aborted: hypothesis_blueprint_blocked"
+    assert result.plan_path == ""
+    assert any(
+        finding["validator"] == "hypothesis_blueprint"
+        and finding["severity"] == "error"
+        for finding in manifest["findings"]
+    )
+    assert any(e["evidence_id"] == "hypothesis_blueprint" for e in manifest["evidence"])
+
+
 def test_pipeline_run_async(ra, synthetic_cohort, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
 
@@ -288,7 +339,11 @@ pd.DataFrame({
     "variable": ["sofa2"],
     "median": [float(df["sofa2"].median())],
 }).to_csv(os.path.join(out, "primary_association.csv"), index=False)
-summary = {"predictor": "sofa2", "sofa2_median": float(df["sofa2"].median())}
+summary = {
+    "predictor": "sofa2",
+    "sofa2_median": float(df["sofa2"].median()),
+    "primary_or": 1.0,
+}
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 print(json.dumps(summary))
@@ -500,6 +555,81 @@ def test_composite_audit_outputs_get_primary_association_alias(ra):
     )
     aliases = _semantic_aliases_for(step, Path("step_summary.json"))
     assert "primary_association" in aliases
+
+
+def test_association_model_outputs_get_primary_association_alias(ra):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.schema.AnalysisStep(
+        step_id="03_association_model",
+        intent="Fit adjusted association model.",
+    )
+    aliases = _semantic_aliases_for(step, Path("step_summary.json"))
+    assert "primary_association" in aliases
+    assert "association_model" in aliases
+
+
+def test_stratified_mortality_outputs_get_outcome_rate_alias(ra):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.schema.AnalysisStep(
+        step_id="01_stratified_mortality",
+        intent="Estimate mortality across severity strata.",
+    )
+    aliases = _semantic_aliases_for(step, Path("step_summary.json"))
+    assert "stratified_mortality" in aliases
+    assert "outcome_rate" in aliases
+    assert "primary_association" in aliases
+
+
+def test_stratified_incidence_outputs_get_outcome_rate_alias(ra):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.schema.AnalysisStep(
+        step_id="01_stratified_incidence",
+        intent="Estimate mortality across SOFA-2 strata.",
+    )
+    aliases = _semantic_aliases_for(step, Path("step_summary.json"))
+    assert "stratified_mortality" in aliases
+    assert "outcome_rate" in aliases
+    assert "primary_association" in aliases
+
+
+def test_sofa2_mortality_figure_gets_base_alias(ra):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.schema.AnalysisStep(
+        step_id="02_mortality_figure",
+        intent="Plot mortality by SOFA-2 stratum.",
+    )
+    aliases = _semantic_aliases_for(step, Path("mortality_by_sofa2_stratum.png"))
+    assert "mortality_by_sofa2_stratum" in aliases
+    assert "figure_mortality_by_sofa2_stratum" in aliases
+
+
+def test_correlation_analysis_outputs_get_primary_association_alias(ra):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.schema.AnalysisStep(
+        step_id="02_correlation_analysis",
+        intent="Compute Spearman component-total correlations.",
+    )
+    aliases = _semantic_aliases_for(step, Path("step_summary.json"))
+    assert "primary_association" in aliases
+    assert "correlation_summary" in aliases
+    assert "spearman_correlation" in aliases
+
+
+def test_correlation_heatmap_gets_base_alias(ra):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.schema.AnalysisStep(
+        step_id="03_visualization",
+        intent="Render correlation heatmap.",
+    )
+    aliases = _semantic_aliases_for(step, Path("sofa2_correlation_heatmap.png"))
+    assert "sofa2_correlation_heatmap" in aliases
+    assert "correlation_figure" in aliases
 
 
 def test_pipeline_can_pause_after_analysis_phase(ra, synthetic_cohort, tmp_path: Path):
@@ -852,6 +982,303 @@ summary = {
     assert 'os.environ["COHORT_PARQUET"]' in patched
 
 
+def test_deterministic_runner_repair_updates_proportion_confint_nobs(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from statsmodels.stats.proportion import proportion_confint
+ci_lower, ci_upper = proportion_confint(count=events, n=len(df), method="wilson")
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="TypeError: proportion_confint() got an unexpected keyword argument 'n'",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "proportion_confint_nobs_keyword_v1"
+    assert "nobs=len(df)" in patched
+
+
+def test_deterministic_runner_repair_flattens_matplotlib_xerr(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+xerr_lower = np.array([or_estimate - or_lower])
+xerr_upper = np.array([or_upper - or_estimate])
+ax.errorbar([or_estimate], [0], xerr=np.array([[xerr_lower], [xerr_upper]]), fmt='o')
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log=(
+            "ValueError: 'xerr' (shape: (2, 1, 1)) must be a scalar "
+            "or a 1D or (2, n) array-like whose shape matches 'x'"
+        ),
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "matplotlib_errorbar_xerr_shape_v1"
+    assert "xerr=np.vstack([np.ravel(xerr_lower), np.ravel(xerr_upper)])" in patched
+
+
+def test_deterministic_runner_repair_downgrades_bad_publication_contract(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+# Create figure contract with panels
+figure_contract = make_figure_contract(
+    figure_id="robustness_analysis",
+    core_claim="Comparison of missing-data strategies"
+)
+
+# Add panel to the contract
+figure_contract["panels"].append({
+    "panel_id": "forest_plot",
+    "title": "Odds Ratio by Missing Data Strategy",
+    "role": "main",
+    "claim": "Lactate odds ratio estimates are stable",
+    "evidence_ids": ["robustness_summary"]
+})
+
+# Create main panel (forest plot of odds ratios)
+fig, ax = plt.subplots()
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="ValueError: panels are required",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "publication_contract_optional_v1"
+    assert "figure_contract = None" in patched
+    assert 'figure_contract["panels"]' not in patched
+    assert "# Create main panel" in patched
+
+
+def test_deterministic_runner_repair_filters_x_cols_after_dummy_encoding(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+model_df = pd.get_dummies(model_df, columns=["sex"], drop_first=True)
+x_cols = ["lactate_max_24h", "age", "sex", "map_min_24h"]
+dummy_cols = [col for col in model_df.columns if col.startswith("sex_")]
+x_cols.extend(dummy_cols)
+X = model_df[x_cols].copy()
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="KeyError: \"['sex'] not in index\"",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "filter_x_cols_after_dummy_encoding_v1"
+    assert "x_cols = [col for col in x_cols if col in model_df.columns]" in patched
+
+
+def test_deterministic_runner_repair_filters_x_cols_before_dropna_after_dummy_encoding(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+sex_dummies = pd.get_dummies(model_df["sex"], prefix="sex", drop_first=True)
+model_df = pd.concat([model_df.drop("sex", axis=1), sex_dummies], axis=1)
+x_cols = [primary_predictor] + covariates.copy()
+model_df = model_df.dropna(subset=x_cols + [outcome])
+X = model_df[x_cols].astype(float)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="KeyError: ['sex']",
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "filter_x_cols_before_dropna_after_dummy_encoding_v1"
+    assert "x_cols = [col for col in x_cols if col in model_df.columns]" in patched
+    assert patched.index("x_cols = [col for col in x_cols if col in model_df.columns]") < patched.index("dropna")
+
+
+def test_deterministic_runner_repair_filters_generic_dropna_after_dummy_encoding(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+model_df = pd.get_dummies(model_df, columns=['sex'], drop_first=True)
+x_cols = [primary_predictor] + covariates
+dummy_cols = [col for col in model_df.columns if col.startswith('sex_')]
+x_cols.extend(dummy_cols)
+model_df = model_df.apply(pd.to_numeric, errors="coerce")
+model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna(subset=[outcome_col] + x_cols)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="KeyError: ['sex']",
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "filter_x_cols_before_dropna_after_dummy_encoding_v1"
+    assert "x_cols = [col for col in x_cols if col in model_df.columns]" in patched
+    assert patched.index("x_cols = [col for col in x_cols if col in model_df.columns]") < patched.index("dropna")
+
+
+def test_deterministic_runner_repair_uses_df_for_missing_indicator_source(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+df = pd.read_parquet(cohort_path)
+model_df = df[all_vars].copy()
+creat_missing = [col for col in creat_cols if col in df.columns]
+model_df['creat_missing'] = model_df[creat_missing].isnull().any(axis=1).astype(int)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log='KeyError: "None of [Index([\'creat_max_24h\', \'creat_median_24h\'], dtype=\'object\')] are in the [columns]"',
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "missing_indicator_source_df_v1"
+    assert "model_df['creat_missing'] = df[creat_missing].isnull().any(axis=1).astype(int)" in patched
+
+
+def test_deterministic_runner_repair_restores_outcome_in_all_vars_subset(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+outcome_col = 'death'
+primary_predictor = 'kdigo_stage_max_24h'
+covariates = ['age', 'sex', 'sofa2_renal_max_24h', 'vaso_any_24h']
+all_vars = [primary_predictor] + covariates
+cc_df = df[all_vars].dropna()
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log='KeyError: "[\'death\'] not in index"',
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "include_outcome_in_all_vars_v1"
+    assert "all_vars = [outcome_col, primary_predictor] + covariates" in patched
+
+
+def test_deterministic_runner_repair_restores_predictor_and_sex_in_robustness_script(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+predictor_col = lactate_col
+covariates = ["age", "sex", "sofa2_max_24h"]
+def fit_logistic_model(X, y):
+    return None
+model_df = df[all_vars].copy()
+cc_X = cc_df[covariates]
+mi_X = mi_df[covariates + ['lactate_missing']]
+rv_X = rv_df[covariates]
+ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'",
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "robustness_predictor_design_and_plot_v1"
+    assert "model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)" in patched
+    assert "cc_X = cc_df[[predictor_col] + covariates]" in patched
+    assert "mi_X = mi_df[[predictor_col] + covariates + ['lactate_missing']]" in patched
+    assert "rv_X = rv_df[[predictor_col] + covariates]" in patched
+    assert "plot_rows = [" in patched
+
+
+def test_deterministic_runner_repair_stabilizes_predictor_col_robustness_template(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+outcome_col = "death"
+predictor_col = lactate_col
+covariates = ["age", "sex", "los_icu", "sofa2_max_24h", "map_min_24h", "vaso_any_24h", "bili_max_24h", "bili_n_24h", "creat_max_24h"]
+model_df = df[[outcome_col, predictor_col] + covariates].copy()
+model_df["lactate_missing"] = model_df[predictor_col].isnull().astype(int)
+complete_case_df = model_df.dropna(subset=[predictor_col])
+missing_indicator_df = model_df.copy()
+reduced_variable_df = model_df.drop(columns=[predictor_col]).copy()
+X_cc = sm.add_constant(complete_case_df[covariates], has_constant="add")
+X_mi = sm.add_constant(missing_indicator_df[covariates + ["lactate_missing"]], has_constant="add")
+X_rv = sm.add_constant(reduced_variable_df[covariates], has_constant="add")
+X_rv = X_rv.drop(columns=[predictor_col])
+lci = [row_cc["or_lower"], row_mi["or_lower"], row_rv["or_lower"]]
+uci = [row_cc["or_upper"], row_mi["or_upper"], row_rv["or_upper"]]
+ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'",
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "robustness_predictor_design_and_plot_v1"
+    assert "model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)" in patched
+    assert "reduced_covariates = [c for c in covariates if model_df[c].isna().mean() <= 0.2]" in patched
+    assert "complete_case_df = model_df.dropna(subset=[outcome_col, predictor_col] + covariates)" in patched
+    assert "missing_indicator_df[predictor_col] = missing_indicator_df[predictor_col].fillna(0)" in patched
+    assert "missing_indicator_df = missing_indicator_df.dropna(subset=[outcome_col] + covariates)" in patched
+    assert "reduced_variable_df = model_df[[outcome_col, predictor_col] + reduced_covariates].dropna().copy()" in patched
+    assert 'X_cc = sm.add_constant(complete_case_df[[predictor_col] + covariates], has_constant="add")' in patched
+    assert 'X_mi = sm.add_constant(missing_indicator_df[[predictor_col] + covariates + ["lactate_missing"]], has_constant="add")' in patched
+    assert 'X_rv = sm.add_constant(reduced_variable_df[[predictor_col] + reduced_covariates], has_constant="add")' in patched
+    assert "plot_rows = [" in patched
+    assert "if len(x_pos):" in patched
+
+
+def test_deterministic_runner_repair_preserves_indentation_for_robustness_patch(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+def main():
+    outcome_col = "death"
+    predictor_col = lactate_col
+    covariates = ["age", "sex"]
+    model_df = df[[outcome_col, predictor_col] + covariates].copy()
+    model_df["lactate_missing"] = model_df[predictor_col].isnull().astype(int)
+    complete_case_df = model_df.dropna(subset=[predictor_col])
+    missing_indicator_df = model_df.copy()
+    reduced_variable_df = model_df.drop(columns=[predictor_col]).copy()
+    X_cc = sm.add_constant(complete_case_df[covariates], has_constant="add")
+    X_mi = sm.add_constant(missing_indicator_df[covariates + ["lactate_missing"]], has_constant="add")
+    X_rv = sm.add_constant(reduced_variable_df[covariates], has_constant="add")
+    X_rv = X_rv.drop(columns=[predictor_col])
+    ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="TypeError: unsupported operand type(s) for +: 'NoneType' and 'int'",
+    )
+
+    assert repaired is not None
+    _name, patched = repaired
+    assert "\n    if 'sex' in model_df.columns:" in patched
+    assert "\n    reduced_covariates = [c for c in covariates if model_df[c].isna().mean() <= 0.2]" in patched
+
+
+def test_deterministic_runner_repair_handles_undefined_primary_predictor_summary(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+summary = {
+    "primary_predictor": primary_predictor if primary_predictor else None,
+}
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="NameError: name 'primary_predictor' is not defined",
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "primary_predictor_safe_summary_lookup_v1"
+    assert "locals().get('predictor_col')" in patched
+
+
 def test_deterministic_runner_repair_replaces_broken_outcome_incidence(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
@@ -1007,6 +1434,1243 @@ cohort = pd.read_csv(os.environ['COHORT_PARQUET'])
     name, patched = repaired
     assert name == "cohort_csv_to_parquet_v1"
     assert "pd.read_parquet(os.environ['COHORT_PARQUET'])" in patched
+
+
+def test_deterministic_runner_repair_restores_primary_predictor_in_logit_design(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import pandas as pd
+import statsmodels.api as sm
+df = pd.read_parquet(cohort_path)
+model_df = df[['lactate_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'death']].copy()
+model_df = pd.get_dummies(model_df, columns=['sex'], drop_first=True)
+y = model_df['death'].astype(float)
+X = model_df[['map_min_24h', 'vaso_any_24h', 'age'] + [col for col in model_df.columns if col.startswith('sex_')]].astype(float)
+X = sm.add_constant(X, has_constant='add')
+try:
+    logit_model = sm.Logit(y, X)
+    result = logit_model.fit(disp=0)
+    coef_table = result.conf_int()
+    lactate_or = coef_table.loc['lactate_max_24h', 'or']
+except Exception as e:
+    print(f"Error fitting logistic regression: {e}")
+step_summary = {"n_total_stays": int(n_total), "odds_ratio": lactate_or}
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log=(
+            "Error fitting logistic regression: 'lactate_max_24h'\n"
+            "NameError: name 'n_total' is not defined"
+        ),
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "primary_predictor_omitted_from_design_v1"
+    assert "X = model_df[['lactate_max_24h'," in patched
+    assert "n_total = int(len(df))" in patched
+    assert "lactate_or = None" in patched
+
+
+def test_deterministic_runner_repair_restores_primary_predictor_with_indented_x_line(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+def main():
+    model_df = df[['lactate_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'death']].copy()
+    y = model_df['death'].astype(float)
+    X = model_df[['map_min_24h', 'vaso_any_24h', 'age', 'sex']].copy()
+    X = sm.add_constant(X, has_constant='add')
+    coef_table = result.conf_int()
+    lactate_or = coef_table.loc['lactate_max_24h', 'or']
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="Error fitting logistic regression: 'lactate_max_24h'",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "primary_predictor_omitted_from_design_v1"
+    assert "X = model_df[['lactate_max_24h'," in patched
+
+
+def test_deterministic_runner_repair_fixes_stringified_binary_outcome_key(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+table_one_data.append({"variable": "In-hospital Mortality", "type": "binary", "count": summary["outcomes"]["death"]["counts"][1],
+                      "pct": summary["outcomes"]["death"]["pct"][1]})
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="KeyError: 1",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "table_one_binary_key_string_v1"
+    assert '.get("1", summary["outcomes"]["death"]["counts"].get(1, 0))' in patched
+    assert '.get("1", summary["outcomes"]["death"]["pct"].get(1, 0.0))' in patched
+
+
+def test_step_contract_findings_flag_missing_primary_association_estimate(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_primary_association_model",
+        intent="Estimate the adjusted association between lactate and mortality.",
+        expected_outputs=["statistic:adjusted_or_ci"],
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "primary_predictor": "lactate_max_24h",
+            "sample_size": 785,
+            "estimate": None,
+            "ci_lower": None,
+            "ci_upper": None,
+            "p_value": None,
+            "skipped": "No valid lactate_max_24h data",
+        },
+    )
+    assert findings
+    assert findings[0].validator == "step_contract"
+    assert findings[0].severity == "error"
+    assert "primary association estimate" in findings[0].message
+
+
+def test_step_contract_findings_accepts_nested_primary_association_estimate(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_primary_association_model",
+        intent="Estimate the adjusted association between lactate and mortality.",
+        expected_outputs=["statistic:adjusted_or_ci"],
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "primary_predictor": "lactate_max_24h",
+            "statistic": {
+                "adjusted_or_ci": {
+                    "estimate": 1.21,
+                    "ci_lower": 1.10,
+                    "ci_upper": 1.33,
+                }
+            },
+        },
+    )
+    assert findings == []
+
+
+def test_step_contract_findings_accepts_nested_primary_association_or(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_association_model",
+        intent="Estimate the adjusted association between lactate and mortality.",
+        expected_outputs=["statistic:adjusted_or_ci"],
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "predictor": "lactate_max_24h",
+            "statistic": {
+                "adjusted_or_ci": {
+                    "or": 1.21,
+                    "ci_lower": 1.10,
+                    "ci_upper": 1.33,
+                }
+            },
+        },
+    )
+    assert findings == []
+
+
+def test_step_contract_findings_accepts_predictor_named_or_key(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_association_model",
+        intent="Fit lactate mortality model.",
+        expected_outputs=["odds_ratio", "confidence_interval"],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={"lactate_max_24h_or": 1.21},
+    )
+
+    assert findings == []
+
+
+def test_step_contract_findings_accepts_primary_association_estimate_key(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="02_lactate_map_vaso_mortality_association",
+        intent="Estimate a lactate/MAP/vasopressor mortality association.",
+        expected_outputs=["statistic:primary_association"],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={"primary_association_estimate": 1.42},
+    )
+
+    assert findings == []
+
+
+def test_step_contract_findings_does_not_require_or_for_data_quality_association_table(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="01_sofa_zero_audit",
+        intent="Audit SOFA-zero co-occurrence and missingness.",
+        expected_outputs=[
+            "table:sofa_zero_component_distribution",
+            "table:sofa_zero_associations",
+            "log:missingness_summary",
+        ],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "sofa_zero_count": 41,
+            "guardrail_warning": True,
+            "primary_association_estimate": None,
+        },
+    )
+
+    assert findings == []
+
+
+def test_step_contract_findings_does_not_treat_association_calibration_as_prediction(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_association_model",
+        intent="Estimate adjusted vasopressor association with mortality.",
+        expected_outputs=["statistic:adjusted_or_ci", "figure:association_model_calibration"],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={"statistic": {"adjusted_or": 1.68}},
+    )
+
+    assert findings == []
+
+
+def test_render_writer_evidence_digest_prefers_machine_scalars(ra):
+    from easyicu.research_agent.pipeline import _render_writer_evidence_digest
+
+    digest = _render_writer_evidence_digest(
+        [
+            {
+                "step_id": "03_primary_association_model",
+                "status": "contract_failed",
+                "step_summary": {
+                    "primary_predictor": "lactate_max_24h",
+                    "target_outcome": "death",
+                    "sample_size": 785,
+                    "estimate": None,
+                    "ci_lower": None,
+                    "ci_upper": None,
+                    "skipped": "No valid lactate_max_24h data",
+                    "missingness": {"lactate_max_24h": {"count": 335}},
+                },
+            }
+        ]
+    )
+    assert "- 03_primary_association_model [contract_failed]" in digest
+    assert '"sample_size": 785' in digest
+    assert '"primary_predictor": "lactate_max_24h"' in digest
+    assert '"skipped": "No valid lactate_max_24h data"' in digest
+    assert "missingness" not in digest
+
+
+def test_render_writer_evidence_digest_flattens_nested_statistics(ra):
+    from easyicu.research_agent.pipeline import _render_writer_evidence_digest
+
+    digest = _render_writer_evidence_digest(
+        [
+            {
+                "step_id": "03_primary_association_model",
+                "status": "ok",
+                "step_summary": {
+                    "primary_predictor": "lactate_max_24h",
+                    "statistic": {
+                        "adjusted_or_ci": {
+                            "estimate": 1.216,
+                            "ci_lower": 1.109,
+                            "ci_upper": 1.333,
+                            "p_value": 2.9e-05,
+                        }
+                    },
+                },
+            }
+        ]
+    )
+    assert '"estimate": 1.216' in digest
+    assert '"ci_lower": 1.109' in digest
+    assert '"ci_upper": 1.333' in digest
+    assert '"p_value": 2.9e-05' in digest
+
+
+def test_step_contract_repair_guidance_flags_missing_primary_predictor_in_x(ra):
+    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+
+    step = ra.AnalysisStep(
+        step_id="04_primary_association_model",
+        intent="Estimate lactate association.",
+        expected_outputs=["statistic:adjusted_or_ci"],
+    )
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={
+            "predictor": "lactate_max_24h",
+            "statistic": {"adjusted_or_ci": {"estimate": None}},
+            "notes": "Model fitting failed: 'lactate_max_24h'",
+        },
+        code="""
+X = model_df[['age', 'map_min_24h']].astype(float)
+result = sm.Logit(y, X).fit()
+coef = result.params['lactate_max_24h']
+""",
+    )
+    assert "lactate_max_24h" in guidance
+    assert "X.columns" in guidance
+
+
+def test_step_contract_findings_accepts_cv_prediction_metrics(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_model_training",
+        intent="Train and evaluate mortality prediction model.",
+        expected_outputs=["statistic:cv_auroc_mean", "statistic:brier_score"],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={"statistic:cv_auroc_mean": 0.71, "statistic:brier_score": 0.09},
+    )
+
+    assert findings == []
+
+
+def test_step_contract_findings_accepts_suffixed_prediction_metrics(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_model_evaluation",
+        intent="Evaluate mortality prediction robustness.",
+        expected_outputs=["statistic:auroc", "statistic:brier_score"],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "statistic:auroc_complete_case": 0.61,
+            "statistic:auroc_missing_indicator": 0.73,
+            "statistic:brier_score_complete_case": 0.11,
+            "statistic:calibration_slope_missing_indicator": 0.94,
+        },
+    )
+
+    assert findings == []
+
+
+def test_step_contract_findings_requires_metrics_for_prediction_training_intent(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_model_training",
+        intent="Train a mortality prediction model with 5-fold cross-validation.",
+        expected_outputs=["model:trained_prediction_model"],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "cv_auroc_mean": None,
+            "brier_score": None,
+            "error": "could not convert string to float: 'M'",
+        },
+    )
+
+    assert any("AUROC" in finding.message for finding in findings)
+    assert any("Brier" in finding.message for finding in findings)
+
+
+def test_step_contract_findings_accepts_prefixed_clustering_metrics(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="01_trajectory_clustering",
+        intent="Cluster shock physiology.",
+        expected_outputs=[
+            "statistic:silhouette_score",
+            "statistic:cluster_count",
+            "table:cluster_characteristics",
+            "log:clustering_process",
+        ],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "statistic:silhouette_score": 0.46,
+            "statistic:cluster_count": 2,
+        },
+    )
+
+    assert findings == []
+
+
+def test_step_contract_findings_requires_figure_path_for_figure_output(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_association_model",
+        intent="Estimate lactate association with a publication-ready figure.",
+        expected_outputs=["table:adjusted_association", "figure:lactate_mortality_plot"],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "estimate": 1.21,
+            "ci_lower": 1.10,
+            "ci_upper": 1.33,
+        },
+    )
+
+    assert any("figure artifact" in finding.message for finding in findings)
+
+
+def test_step_contract_findings_accepts_figure_path_for_figure_output(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_association_model",
+        intent="Estimate lactate association with a publication-ready figure.",
+        expected_outputs=["table:adjusted_association", "figure:lactate_mortality_plot"],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "estimate": 1.21,
+            "ci_lower": 1.10,
+            "ci_upper": 1.33,
+            "figure_path": "outputs/lactate_mortality_plot.png",
+        },
+    )
+
+    assert findings == []
+
+
+def test_step_contract_repair_guidance_for_prediction_categorical_passthrough(ra):
+    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+
+    step = ra.AnalysisStep(
+        step_id="03_model_training",
+        intent="Train mortality prediction model.",
+        expected_outputs=["statistic:auroc", "statistic:brier_score"],
+    )
+
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={
+            "auroc": None,
+            "brier_score": None,
+            "error": "could not convert string to float: 'M'",
+        },
+        code="categorical_transformer = Pipeline([('onehot', 'passthrough')])",
+    )
+
+    assert "OneHotEncoder" in guidance
+    assert "categorical variable reached a numeric estimator" in guidance
+
+
+def test_step_contract_repair_guidance_for_empty_sex_coercion(ra):
+    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+
+    step = ra.AnalysisStep(
+        step_id="03_association_model",
+        intent="Fit lactate mortality model.",
+        expected_outputs=["odds_ratio"],
+    )
+
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={
+            "n_total": 0,
+            "primary_predictor": "lactate_max_24h",
+            "odds_ratio": None,
+            "skipped": "zero-size array to reduction operation maximum which has no identity",
+        },
+        code="model_df = model_df.apply(pd.to_numeric, errors='coerce')\nmodel_df = pd.get_dummies(model_df, columns=['sex'])",
+    )
+
+    assert "dummy-encoding `sex` first" in guidance
+    assert "numeric odds ratio" in guidance
+
+
+def test_step_contract_repair_guidance_for_object_dtype_logit(ra):
+    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+
+    step = ra.AnalysisStep(
+        step_id="04_primary_association_model",
+        intent="Fit lactate mortality model with figure output.",
+        expected_outputs=["figure:lactate_mortality_plot", "odds_ratio"],
+    )
+
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={
+            "primary_predictor": "lactate_max_24h",
+            "or_estimate": None,
+            "model_notes": "Model fitting failed: Pandas data cast to numpy dtype of object.",
+        },
+        code="X = pd.get_dummies(X, columns=['sex'], drop_first=True)\nmodel = sm.Logit(y, X)",
+    )
+
+    assert "object-dtype design matrix" in guidance
+    assert "X.astype(float)" in guidance
+    assert "non-null odds ratio" in guidance
+
+
+def test_step_contract_repair_guidance_requires_figure_recording(ra):
+    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+
+    step = ra.AnalysisStep(
+        step_id="03_association_model",
+        intent="Estimate lactate association.",
+        expected_outputs=["table:adjusted_association", "figure:lactate_mortality_plot"],
+    )
+
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={"estimate": 1.21, "ci_lower": 1.10, "ci_upper": 1.33},
+        code="fig.savefig('lactate.png')",
+    )
+
+    assert "figure output" in guidance
+    assert "figure_path" in guidance
+
+
+def test_step_contract_repair_guidance_for_clustering_contract(ra):
+    from easyicu.research_agent.pipeline import _step_contract_repair_guidance
+
+    step = ra.AnalysisStep(
+        step_id="01_trajectory_clustering",
+        intent="Cluster shock physiology.",
+        expected_outputs=["statistic:silhouette_score", "table:cluster_characteristics"],
+    )
+
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={"error": "silhouette_score missing"},
+        code="labels = kmeans.fit_predict(X)",
+    )
+
+    assert "silhouette_score" in guidance
+    assert "cluster_characteristics.csv" in guidance
+    assert "self-contained" in guidance
+
+
+def test_semantic_aliases_include_step_id_and_prediction_aliases(ra, tmp_path: Path):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="01_model_training",
+        intent="Train mortality prediction model.",
+        expected_outputs=["statistic:auroc", "statistic:brier_score"],
+    )
+
+    aliases = _semantic_aliases_for(step, tmp_path / "step_summary.json")
+
+    assert "01_model_training" in aliases
+    assert "model_training" in aliases
+    assert "model_performance" in aliases
+    assert "prediction_performance" in aliases
+
+
+def test_semantic_aliases_bind_cohort_summary_outcome_rate(ra, tmp_path: Path):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="01_cohort_summary",
+        intent="Summarize cohort mortality and missingness.",
+        expected_outputs=["table:table_one", "statistic:mortality_rate"],
+    )
+
+    aliases = _semantic_aliases_for(step, tmp_path / "step_summary.json")
+
+    assert "cohort_summary" in aliases
+    assert "outcome_rate" in aliases
+    assert "mortality_rate" in aliases
+
+
+def test_semantic_aliases_bind_t10_missing_data_audit_outcome_rate(ra, tmp_path: Path):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="01_missing_data_audit",
+        intent="Audit missingness and event rate.",
+        expected_outputs=["table:missingness_summary", "statistic:event_rate"],
+    )
+
+    aliases = _semantic_aliases_for(step, tmp_path / "step_summary.json")
+
+    assert "missingness" in aliases
+    assert "outcome_rate" in aliases
+
+
+def test_semantic_aliases_include_clustering_aliases(ra, tmp_path: Path):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="01_trajectory_clustering",
+        intent="Cluster shock physiology.",
+        expected_outputs=["table:cluster_characteristics", "statistic:silhouette_score"],
+    )
+
+    aliases = _semantic_aliases_for(step, tmp_path / "step_summary.json")
+
+    assert "table_one" in aliases
+    assert "cluster_summary" in aliases
+    assert "cluster_characteristics" in aliases
+    assert "cluster_mortality" in aliases
+
+
+def test_semantic_aliases_bind_kdigo_sensitivity_to_primary_association(ra, tmp_path: Path):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="06_sensitivity_reduced_vars",
+        intent="Fit reduced-variable KDIGO sensitivity model.",
+        expected_outputs=["statistic:adjusted_or_ci"],
+    )
+
+    aliases = _semantic_aliases_for(step, tmp_path / "step_summary.json")
+
+    assert "primary_association" in aliases
+    assert "kdigo_sensitivity" in aliases
+
+
+def test_semantic_aliases_bind_sofa_zero_audit_outcome_rate(ra, tmp_path: Path):
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    step = ra.AnalysisStep(
+        step_id="01_sofa_zero_audit",
+        intent="Audit SOFA-zero mortality and missingness.",
+        expected_outputs=["statistic:sofa_zero_count", "statistic:mortality_rate"],
+    )
+
+    aliases = _semantic_aliases_for(step, tmp_path / "step_summary.json")
+
+    assert "sofa_zero_count" in aliases
+    assert "outcome_rate" in aliases
+
+
+def test_advanced_plan_contract_collapses_prediction_to_one_step(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.schema import UserPreferences
+
+    ctx = ra.ResearchContext(
+        research_question="Build a mortality prediction model.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+        user_preferences=UserPreferences(inferred_analysis_family="prediction_model"),
+    )
+    plan = ra.AnalysisPlan(
+        research_question=ctx.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_train_model",
+                intent="Train model.",
+                inputs=["age", "sex"],
+                expected_outputs=["model:trained_model"],
+            ),
+            ra.AnalysisStep(
+                step_id="02_evaluate_auroc",
+                intent="Evaluate AUROC from prior predictions.",
+                inputs=["01_train_model"],
+                expected_outputs=["statistic:auroc"],
+            ),
+        ],
+    )
+
+    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=ctx)
+
+    assert [step.step_id for step in revised.steps] == ["01_model_training"]
+    assert "statistic:auroc" in revised.steps[0].expected_outputs
+    assert "statistic:brier_score" in revised.steps[0].expected_outputs
+    assert findings and findings[0].validator == "plan_contract"
+
+
+def test_deterministic_summary_repair_restores_primary_predictor_after_soft_failure(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+import pandas as pd
+import statsmodels.api as sm
+df = pd.read_parquet(cohort_path)
+model_df = df[['lactate_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'death']].copy()
+y = model_df['death'].astype(float)
+X = model_df[['map_min_24h', 'vaso_any_24h', 'age', 'sex']].astype(float)
+X = sm.add_constant(X, has_constant='add')
+try:
+    model = sm.Logit(y, X)
+    result = model.fit(disp=0)
+    coef = result.params['lactate_max_24h']
+    conf_int = result.conf_int().loc['lactate_max_24h']
+    p_value = result.pvalues['lactate_max_24h']
+except Exception as e:
+    step_summary = {'error': str(e)}
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "primary_predictor": "lactate_max_24h",
+            "estimate": None,
+            "error": "'lactate_max_24h'",
+        },
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "primary_predictor_omitted_from_design_v1"
+    assert "X = model_df[['lactate_max_24h'," in patched
+
+
+def test_deterministic_summary_repair_dedupes_predictor_design_matrix(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+model_df = pd.get_dummies(model_df, columns=categorical_cols, drop_first=True)
+x_cols = [predictor_col] + [col for col in model_df.columns if col != outcome_col]
+X = model_df[x_cols]
+X = sm.add_constant(X, has_constant="add")
+try:
+    model = sm.Logit(y, X)
+except Exception as e:
+    pass
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "predictor": "lactate_max_24h",
+            "statistic": {"adjusted_or_ci": {"or": None}},
+        },
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "dedupe_predictor_numeric_design_v1"
+    assert "col not in [outcome_col, predictor_col]" in patched
+    assert '.apply(pd.to_numeric, errors="coerce").astype(float)' in patched
+
+
+def test_deterministic_summary_repair_preserves_categorical_sex_before_dropna(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+model_df = df[required_cols].copy()
+model_df = model_df.apply(pd.to_numeric, errors="coerce")
+model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
+model_df = model_df.dropna(subset=['lactate_max_24h'])
+X = model_df[['lactate_max_24h', 'age', 'sex', 'map_min_24h', 'vaso_any_24h']].astype(float)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "primary_predictor": "lactate_max_24h",
+            "statistic:adjusted_or": None,
+            "skipped": "No valid data after dropping lactate missing rows",
+        },
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "sex_numeric_coercion_before_dropna_v1"
+    assert "model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)" in patched
+    assert "if col != 'sex':" in patched
+
+
+def test_deterministic_summary_repair_handles_insufficient_data_message(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+model_df = df[['lactate_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'death']].copy()
+model_df = model_df.apply(pd.to_numeric, errors="coerce")
+model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "primary_predictor": "lactate_max_24h",
+            "estimate": None,
+            "skipped": "Insufficient data for regression analysis",
+        },
+        previous_repair="primary_predictor_omitted_from_design_v1",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "sex_numeric_coercion_before_dropna_v1"
+    assert "isin(['m', 'male'])" in patched
+
+
+def test_deterministic_summary_repair_handles_null_model_summary_with_sex(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+covariates = ['age', 'sex']
+model_df = df[[outcome_col, primary_predictor] + covariates].copy()
+model_df = model_df.apply(pd.to_numeric, errors="coerce")
+model_df = model_df.replace([np.inf, -np.inf], np.nan)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "primary_predictor": "lactate_max_24h",
+            "complete_case_n": None,
+            "lactate_or": None,
+        },
+        previous_repair="primary_predictor_omitted_from_design_v1",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "sex_numeric_coercion_before_dropna_v1"
+    assert "model_df['sex'] = model_df['sex'].astype(str)" in patched
+    assert "if col != 'sex':" in patched
+
+
+def test_deterministic_summary_repair_infers_predictor_from_code_for_sex_coercion(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+primary_predictor = 'kdigo_stage_max_24h'
+covariates = ['age', 'sex', 'sofa2_renal_max_24h', 'vaso_any_24h']
+all_vars = [primary_predictor] + covariates + [outcome_col]
+model_df = df[all_vars].copy()
+model_df = model_df.apply(pd.to_numeric, errors="coerce")
+model_df = model_df.replace([np.inf, -np.inf], np.nan)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "statistic:primary_or": None,
+            "statistic:complete_case_n": 0,
+        },
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "sex_numeric_coercion_before_dropna_v1"
+    assert "model_df['sex'] = model_df['sex'].astype(str)" in patched
+    assert "if col != 'sex':" in patched
+
+
+def test_deterministic_summary_repair_encodes_raw_sex_for_logit_without_predictor(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+outcome_col = "death"
+lactate_col = "lactate_max_24h"
+predictor_col = lactate_col
+covariates = ["age", "sex", "los_icu"]
+model_df = df[[outcome_col, predictor_col] + covariates].copy()
+y_complete = model_df[outcome_col]
+X_complete = sm.add_constant(model_df[covariates + [predictor_col]], has_constant="add")
+complete_case_model = sm.Logit(y_complete, X_complete).fit(disp=0)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "statistic:primary_or": None,
+            "statistic:complete_case_n": 217,
+            "model:complete_case_model": None,
+        },
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "sex_binary_encode_for_logit_v1"
+    assert "model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)" in patched
+    assert "model_df[col] = pd.to_numeric(model_df[col], errors=\"coerce\")" in patched
+
+
+def test_deterministic_summary_repair_reuses_dtype_repair_for_soft_failure(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+import statsmodels.api as sm
+X = model_df[x_cols]
+y = model_df[outcome_col]
+model = sm.Logit(y, X)
+result = model.fit(disp=0)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "primary_predictor": "lactate_max_24h",
+            "results": {
+                "complete-case": {
+                    "or_estimate": None,
+                    "error": "Pandas data cast to numpy dtype of object. Check input data with np.asarray(data).",
+                }
+            },
+        },
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "dtype_coerce_v1"
+    assert "_easyicu_runner_repair_v1" in patched
+
+
+def test_deterministic_summary_repair_casts_dummy_design_for_null_logit(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+X_encoded = pd.get_dummies(X, columns=categorical_cols, drop_first=True)
+X_final = sm.add_constant(X_encoded, has_constant="add")
+model = sm.Logit(y, X_final)
+result = model.fit(disp=0)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "predictor": "lactate_max_24h",
+            "estimate": None,
+            "error_message": "Unknown error",
+        },
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "statsmodels_dummy_design_float_v1"
+    assert 'X_encoded.apply(pd.to_numeric, errors="coerce").astype(float)' in patched
+
+
+def test_deterministic_summary_repair_restores_predictor_in_helper_design(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+def compute_or_ci(df, predictor, outcome_col, covariates):
+    model_df = df[[predictor] + covariates + [outcome_col]].copy()
+    model_df = model_df.dropna()
+    y = model_df[outcome_col].astype(float)
+    X = model_df[covariates].astype(float)
+    X = sm.add_constant(X, has_constant="add")
+    logit_model = sm.Logit(y, X)
+    result = logit_model.fit(disp=0)
+    if predictor in result.params.index:
+        return np.exp(result.params[predictor]), result.conf_int().loc[predictor, 0], result.conf_int().loc[predictor, 1]
+    return None, None, None
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "statistic:primary_or": None,
+            "manifest:robustness_analysis_manifest": {
+                "primary_predictor": "lactate_max_24h"
+            },
+        },
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "primary_predictor_omitted_from_design_v1"
+    assert "design_cols = [predictor] + [col for col in covariates if col != predictor]" in patched
+    assert 'model_df[design_cols].apply(pd.to_numeric, errors="coerce").astype(float)' in patched
+
+
+def test_deterministic_summary_repair_stabilizes_robustness_missingness_models(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+outcome_col = 'death'
+primary_predictor = 'lactate_max_24h'
+covariates = ['age', 'sex', 'los_icu', 'sofa2_max_24h', 'map_min_24h', 'vaso_any_24h', 'bili_max_24h', 'bili_n_24h', 'creat_max_24h']
+model_df = df[[outcome_col, primary_predictor] + covariates].copy()
+if 'sex' in model_df.columns:
+    model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
+for col in model_df.columns:
+    if col != 'sex':
+        model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
+model_df = model_df.replace([np.inf, -np.inf], np.nan)
+cc_df = model_df.dropna(subset=[primary_predictor])
+mi_df = model_df.copy()
+mi_df['lactate_missing'] = mi_df[primary_predictor].isna().astype(int)
+rv_df = model_df.dropna(subset=[primary_predictor])
+cc_X = sm.add_constant(cc_df[[primary_predictor] + covariates], has_constant="add")
+mi_X = sm.add_constant(mi_df[[primary_predictor, 'lactate_missing'] + covariates], has_constant="add")
+rv_X = sm.add_constant(rv_df[covariates], has_constant="add")
+cc_result = sm.Logit(cc_df[outcome_col], cc_X).fit(disp=0)
+mi_result = sm.Logit(mi_df[outcome_col], mi_X).fit(disp=0)
+rv_result = sm.Logit(rv_df[outcome_col], rv_X).fit(disp=0)
+for strategy, or_est, or_lower, or_upper, n, event_rate in [
+    ('Complete-case', cc_or, cc_or_lower, cc_or_upper, cc_n, cc_event_rate),
+    ('Missing-indicator', mi_or, mi_or_lower, mi_or_upper, len(mi_df), mi_df[outcome_col].mean()),
+    ('Reduced-variable', rv_or, rv_or_lower, rv_or_upper, len(rv_df), rv_df[outcome_col].mean())
+]:
+    pass
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "statistic:primary_or": None,
+            "statistic:complete_case_n": 450,
+            "model:complete_case_model": None,
+            "model:missing_indicator_model": None,
+            "model:reduced_variable_model": None,
+        },
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "robustness_missingness_contract_v1"
+    assert "reduced_covariates = [c for c in covariates if model_df[c].isna().mean() <= 0.2]" in patched
+    assert "cc_df = model_df.dropna(subset=[outcome_col, primary_predictor] + covariates)" in patched
+    assert "mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)" in patched
+    assert "mi_df = mi_df.dropna(subset=[outcome_col] + covariates)" in patched
+    assert "rv_df = model_df[[outcome_col, primary_predictor] + reduced_covariates].dropna()" in patched
+    assert 'rv_X = sm.add_constant(rv_df[[primary_predictor] + reduced_covariates], has_constant="add")' in patched
+
+
+def test_deterministic_summary_repair_allows_generic_unknown_error(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+X_encoded = pd.get_dummies(X, columns=categorical_cols, drop_first=True)
+X_final = sm.add_constant(X_encoded, has_constant="add")
+model = sm.Logit(y, X_final)
+result = model.fit(disp=0)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "predictor": "lactate_max_24h",
+            "estimate": None,
+            "error_message": "Unknown error",
+        },
+    )
+
+    assert repaired is not None
+    name, _patched = repaired
+    assert name == "statsmodels_dummy_design_float_v1"
+
+
+def test_deterministic_summary_repair_casts_bool_before_simple_imputer(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+X_sklearn = model_df[x_cols].copy()
+pipeline.fit(X_sklearn, y_sklearn)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "statistic": {"adjusted_or": None},
+            "skipped": [
+                "SimpleImputer does not support data with dtype bool. Please provide numeric data."
+            ],
+        },
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "sklearn_bool_imputer_cast_v1"
+    assert "select_dtypes(include=['bool'])" in patched
+    assert "astype(int)" in patched
+
+
+def test_deterministic_runner_repair_filters_missing_dummy_columns(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+model_df = pd.get_dummies(model_df, columns=["sex"], drop_first=True)
+x_cols = [predictor_col] + ["age", "sex"]
+model_df_subset = model_df[[outcome_col] + x_cols].copy()
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="KeyError: \"['sex'] not in index\"",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "filter_x_cols_after_dummy_encoding_v1"
+    assert "x_cols = [col for col in x_cols if col in model_df.columns]" in patched
+
+
+def test_step_contract_findings_accepts_textual_or_summary(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+    from easyicu.research_agent.schema import AnalysisStep
+
+    step = AnalysisStep(
+        step_id="04_primary_association_model",
+        intent="Fit logistic regression for lactate association.",
+        expected_outputs=["summary:primary_association"],
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "summary": {
+                "notes": [
+                    "Association estimate with lactate: OR=1.219 (95% CI 1.116-1.332)."
+                ]
+            }
+        },
+    )
+    assert [f for f in findings if f.severity == "error"] == []
+
+
+def test_advanced_plan_contract_normalizes_robustness_steps(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        CohortDescriptor,
+        ResearchContext,
+        UserPreferences,
+    )
+
+    plan = AnalysisPlan(
+        research_question="Compare lactate missing-data strategies.",
+        steps=[
+            AnalysisStep(
+                step_id="01_missingness",
+                intent="Summarize missingness.",
+                expected_outputs=["table:missingness"],
+            ),
+            AnalysisStep(
+                step_id="03_model_fitting_complete_case",
+                intent="Fit complete-case logistic regression.",
+                expected_outputs=["model:complete_case_model"],
+            ),
+            AnalysisStep(
+                step_id="04_robustness_figure",
+                intent="Generate robustness figure from model outputs.",
+                expected_outputs=["figure:robustness_plot"],
+            ),
+        ],
+    )
+    context = ResearchContext(
+        research_question="Compare lactate missing-data strategies.",
+        cohort=CohortDescriptor(
+            cohort_name="cohort",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+        target_outcome="death",
+        user_preferences=UserPreferences(inferred_analysis_family="robustness"),
+    )
+
+    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    step_ids = [step.step_id for step in revised.steps]
+    assert step_ids == ["01_missingness", "03_complete_case_robustness"]
+    assert any("statistic:primary_or" in step.expected_outputs for step in revised.steps)
+    assert findings and findings[0].validator == "plan_contract"
+
+
+def test_advanced_plan_contract_infers_robustness_without_user_preferences(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        CohortDescriptor,
+        ResearchContext,
+    )
+
+    plan = AnalysisPlan(
+        research_question="Compare complete-case, missing-indicator, and reduced-variable lactate models.",
+        steps=[
+            AnalysisStep(
+                step_id="01_robustness_analysis",
+                intent="Compare complete-case and missing-indicator robustness strategies.",
+                expected_outputs=["table:robustness_summary", "figure:robustness_figure"],
+            ),
+        ],
+    )
+    context = ResearchContext(
+        research_question="Compare complete-case, missing-indicator, and reduced-variable lactate models.",
+        cohort=CohortDescriptor(
+            cohort_name="cohort",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+        target_outcome="death",
+        user_preferences=None,
+    )
+
+    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    assert [step.step_id for step in revised.steps] == ["03_complete_case_robustness"]
+    assert "statistic:primary_or" in revised.steps[0].expected_outputs
+    assert "statistic:complete_case_n" in revised.steps[0].expected_outputs
+    assert findings and findings[0].validator == "plan_contract"
+
+
+def test_salvage_stdout_json_step_summary(ra, tmp_path: Path):
+    from easyicu.research_agent.pipeline import _salvage_stdout_json_step_summary
+    from easyicu.research_agent.runner import RunResult
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    result = RunResult(
+        step_id="01_outcome_incidence",
+        script_path=tmp_path / "analysis.py",
+        cwd=tmp_path,
+        out_dir=out_dir,
+        stdout='prefix\n{"statistic:outcome_incidence": 0.096, "sample_size": 1000}\n',
+        stderr="",
+        returncode=0,
+        duration_seconds=0.1,
+    )
+
+    assert _salvage_stdout_json_step_summary(result) is True
+    saved = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert saved["statistic:outcome_incidence"] == 0.096
+
+
+def test_salvage_named_json_step_summary(ra, tmp_path: Path):
+    from easyicu.research_agent.pipeline import _salvage_named_json_step_summary
+    from easyicu.research_agent.runner import RunResult
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    summary_json = out_dir / "sofa_zero_artefact_audit_summary.json"
+    summary_json.write_text(
+        json.dumps({"sofa_zero_count": 41, "guardrail_warning": True}),
+        encoding="utf-8",
+    )
+    result = RunResult(
+        step_id="01_sofa_zero_audit",
+        script_path=tmp_path / "analysis.py",
+        cwd=tmp_path,
+        out_dir=out_dir,
+        stdout="",
+        stderr="",
+        returncode=0,
+        duration_seconds=0.1,
+        artefacts=[summary_json],
+    )
+
+    assert _salvage_named_json_step_summary(result) is True
+    saved = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert saved["sofa_zero_count"] == 41
+    assert saved["guardrail_warning"] is True
 
 
 def test_pipeline_run_from_spec_writes_runtime_artifacts(ra, tmp_path: Path):

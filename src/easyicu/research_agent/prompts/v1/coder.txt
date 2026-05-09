@@ -43,6 +43,19 @@ Code contract:
   axis limit or outside the saved canvas.
 - Save a machine-readable summary to step_summary.json containing
   every numeric statistic that downstream agents may quote.
+- For association / prediction steps, if the step asks for a named
+  primary predictor or exposure, that variable MUST remain in the
+  fitted design matrix. Do not accidentally drop it when building `X`
+  after dummy encoding or covariate selection.
+- Before any model-fitting `try/except`, initialise every variable
+  that step_summary.json depends on. If fitting fails, still write
+  step_summary.json with null estimate fields, sample sizes, the
+  named predictor, and a short `"skipped"` / `"error"` note instead
+  of crashing while building the summary.
+- Define `out_dir = os.environ["STEP_OUT_DIR"]` (or
+  `step_out_dir = ...`) before any `try/except` block that may need
+  to write outputs. Never define the output directory only inside the
+  successful fit branch and then use it after the exception handler.
 
 JSON SERIALISATION — MANDATORY:
 - Every dict you write to disk must contain only Python primitives
@@ -84,6 +97,25 @@ CSV CELL VALUES — MANDATORY:
 - For categorical summaries write one row per category, not a
   single cell with `(n, pct)` tuples.
 
+TABLE-ONE / DESCRIPTIVE SUMMARIES:
+- For table-one or descriptive steps, build the output table as a
+  list of flat row dictionaries from the start. Do not create a
+  deeply nested dict and then infer whether a variable is continuous
+  or categorical by inspecting `next(iter(...))`; mixed float and
+  dict values commonly crash on repair attempts.
+- Use explicit helper functions that append rows:
+  `add_continuous(variable, series)` writes `n_nonmissing`,
+  `missing_n`, `missing_pct`, `median`, `q25`, `q75`, `mean`, `sd`;
+  `add_categorical(variable, series)` writes one row per category
+  with `category`, `count`, `percentage`, `missing_n`, `missing_pct`.
+- For binary variables, never assume keys are integer `1` or string
+  `"1"`. Convert observed categories to strings for CSV output and
+  use membership checks or `.get(...)` when extracting counts for
+  step_summary.json.
+- A descriptive step expected to write `table:table_one` must save
+  `table_one.csv` and `step_summary.json` even if some requested
+  columns are missing; record missing variables under `"skipped"`.
+
 STATISTICS APIs:
 - For binomial confidence intervals use
   `statsmodels.stats.proportion.proportion_confint` or compute the
@@ -94,22 +126,73 @@ STATISTICS APIs:
   after `pd.get_dummies(...)`, call
   `X = X.apply(pd.to_numeric, errors="coerce").astype(float)`,
   drop rows with missing y/X, and add a constant after coercion.
-  The safe pattern is:
+  The safe pattern for numeric-only predictors is:
   `model_df = df[[y_col] + x_cols].copy()`;
   `model_df = model_df.apply(pd.to_numeric, errors="coerce")`;
   `model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()`;
   `y = model_df[y_col].astype(float)`;
   `X = sm.add_constant(model_df[x_cols].astype(float), has_constant="add")`.
+  If any predictor is categorical, encode it before numeric coercion and
+  rebuild `x_cols` explicitly. Example:
+  `model_df = pd.get_dummies(model_df, columns=["sex"], drop_first=True)`;
+  `x_cols = [primary_predictor, "age", "map_min_24h", "vaso_any_24h"] + [c for c in model_df.columns if c.startswith("sex_")]`.
+  The primary predictor must appear in `x_cols` and therefore in `X.columns`;
+  if you later read `result.params[primary_predictor]`, assert that
+  `primary_predictor in X.columns` before fitting.
+  Never run `pd.to_numeric(..., errors="coerce")` on a string
+  categorical covariate such as `sex` before dummy encoding it; that
+  turns every non-numeric category into NaN and can drop the entire
+  cohort. Drop missingness using the rebuilt `[y_col] + x_cols` list,
+  not the old covariate list that still contains the removed
+  categorical column.
   Never call `sm.Logit(y, X)` until `np.isfinite(X.to_numpy()).all()`
   and `np.isfinite(y.to_numpy()).all()` are true. If lactate is
   missing-indicator imputed, still drop missing non-lactate covariates
   such as MAP after creating the lactate indicator/imputed column.
+- If a model fit fails inside `except`, write `step_summary.json`
+  with null estimate fields and the error message, then exit normally.
+  Do NOT `raise`, `raise e`, or call `sys.exit(1)` after writing the
+  failure summary; otherwise the pipeline cannot preserve the machine
+  readable failure as evidence.
 
 PYTHON HYGIENE:
 - Python collection constructors must be syntactically valid:
   write `set(["a", "b"])` or `{"a", "b"}`, never `set("a", "b")`.
 - Only import from the standard library, pandas, numpy, scipy,
-  matplotlib, and statsmodels. No network access.
+  matplotlib, statsmodels, and scikit-learn (`sklearn`). No network
+  access.
+
+PREDICTION / CLUSTERING APIs:
+- For mortality prediction tasks, prefer scikit-learn Pipelines with
+  `ColumnTransformer`, `SimpleImputer`, `StandardScaler`,
+  `OneHotEncoder(handle_unknown="ignore")`, and
+  `LogisticRegression(max_iter=1000, class_weight="balanced")` or a
+  small RandomForest. Use `StratifiedKFold` when reporting 5-fold CV
+  AUROC. Always write `auroc` or `cv_auroc_mean`, and write
+  `brier_score` or another calibration metric to step_summary.json.
+  Keep categorical columns as strings/objects until they reach the
+  categorical transformer; do not run `df[predictor_cols].apply(
+  pd.to_numeric, errors="coerce")` over mixed numeric + categorical
+  inputs. A safe pattern is `X = df[feature_cols].copy()`, define
+  `numeric_features` and `categorical_features`, then let the
+  ColumnTransformer handle each group separately.
+  The categorical transformer should be
+  `Pipeline([("imputer", SimpleImputer(strategy="most_frequent")),
+  ("onehot", OneHotEncoder(handle_unknown="ignore"))])`; do not use
+  `SimpleImputer(fill_value="missing")` on columns that have already
+  been coerced to float.
+  Never write `("onehot", "passthrough")` for a categorical branch
+  feeding LogisticRegression, KMeans, or any numeric estimator; string
+  values such as `"M"`/`"F"` must be encoded before the estimator.
+  The repair-safe categorical branch is exactly:
+  `from sklearn.preprocessing import OneHotEncoder`;
+  `categorical_transformer = Pipeline([("imputer", SimpleImputer(strategy="most_frequent")),
+  ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False))])`.
+- For clustering tasks, use numeric physiologic features, impute
+  medians, scale before KMeans/AgglomerativeClustering, and write
+  `n_clusters`/`cluster_count` plus `silhouette_score` when at least
+  two non-empty clusters exist. If clustering is not feasible, write
+  a null silhouette with a precise skipped reason and exit normally.
 
 ROBUSTNESS:
 - If the step is cross-database validation but only `COHORT_PARQUET`
@@ -125,6 +208,12 @@ ROBUSTNESS:
   step. If a plot is secondary, wrap only the plotting block in a
   narrow `try/except Exception as exc` and record the skipped plot
   in step_summary.json.
+- Do not let optional publication-figure helper APIs break completed
+  prediction metrics. For AUROC/Brier steps, write step_summary.json
+  immediately after metrics are computed. If
+  `save_publication_figure(...)` or a FigureContract helper raises a
+  TypeError, fall back to plain matplotlib PNG+SVG export and record
+  `"publication_helper_skipped": str(exc)`; do not exit non-zero.
 - Never assume every category or stratum exists. Before `.iloc[0]`
   on filtered rows, check `.empty`; before indexing category
   columns, check membership in `df.columns`.

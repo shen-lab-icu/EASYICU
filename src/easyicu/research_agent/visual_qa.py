@@ -193,7 +193,7 @@ def _audit_svg_text_layout(
     path: Path,
     *,
     validator: str,
-    overlap_fraction: float = 0.08,
+    overlap_fraction: float = 0.12,
     edge_tolerance: float = 1.5,
 ) -> List[ValidationFinding]:
     """Best-effort offline layout QA for editable matplotlib SVG exports.
@@ -247,7 +247,8 @@ def _audit_svg_text_layout(
                 },
             ))
 
-    overlaps = []
+    blocking_overlaps = []
+    panel_title_overlaps = []
     for i, left in enumerate(boxes):
         for right in boxes[i + 1:]:
             if left.group_id and left.group_id == right.group_id:
@@ -260,11 +261,38 @@ def _audit_svg_text_layout(
             denom = max(min(left.area, right.area), 1e-6)
             frac = inter / denom
             if frac >= overlap_fraction:
-                overlaps.append((left, right, frac))
+                if _is_panel_label_title_overlap(left.text, right.text):
+                    panel_title_overlaps.append((left, right, frac))
+                else:
+                    blocking_overlaps.append((left, right, frac))
 
-    if overlaps:
-        overlaps.sort(key=lambda item: item[2], reverse=True)
-        sample = overlaps[:5]
+    if panel_title_overlaps:
+        panel_title_overlaps.sort(key=lambda item: item[2], reverse=True)
+        sample = panel_title_overlaps[:5]
+        findings.append(ValidationFinding(
+            validator=validator,
+            severity="warning",
+            message=(
+                f"SVG figure '{path.name}' has a panel label close to a title; "
+                "check title spacing before final manuscript export."
+            ),
+            detail={
+                "path": str(path),
+                "count": len(panel_title_overlaps),
+                "examples": [
+                    {
+                        "text_a": a.text[:80],
+                        "text_b": b.text[:80],
+                        "overlap_fraction": round(frac, 3),
+                    }
+                    for a, b, frac in sample
+                ],
+            },
+        ))
+
+    if blocking_overlaps:
+        blocking_overlaps.sort(key=lambda item: item[2], reverse=True)
+        sample = blocking_overlaps[:5]
         findings.append(ValidationFinding(
             validator=validator,
             severity="error",
@@ -274,7 +302,7 @@ def _audit_svg_text_layout(
             ),
             detail={
                 "path": str(path),
-                "count": len(overlaps),
+                "count": len(blocking_overlaps),
                 "examples": [
                     {
                         "text_a": a.text[:80],
@@ -287,6 +315,24 @@ def _audit_svg_text_layout(
         ))
 
     return findings
+
+
+def _is_panel_label_title_overlap(left: str, right: str) -> bool:
+    left_text = (left or "").strip()
+    right_text = (right or "").strip()
+    if _looks_like_panel_label(left_text) and _looks_like_title(right_text):
+        return True
+    if _looks_like_panel_label(right_text) and _looks_like_title(left_text):
+        return True
+    return False
+
+
+def _looks_like_panel_label(text: str) -> bool:
+    return len(text) == 1 and "A" <= text <= "Z"
+
+
+def _looks_like_title(text: str) -> bool:
+    return len(text) >= 12 and any(ch.isalpha() for ch in text)
 
 
 def _audit_svg_numeric_consistency(

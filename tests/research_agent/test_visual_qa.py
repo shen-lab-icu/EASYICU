@@ -106,6 +106,31 @@ def test_visual_qa_flags_svg_text_overlap(ra, tmp_path: Path):
     assert any(f.severity == "error" and "overlapping text" in f.message for f in findings)
 
 
+def test_visual_qa_downgrades_panel_label_title_overlap(ra, tmp_path: Path):
+    fig_path = tmp_path / "panel_title.svg"
+    fig_path.write_text(
+        """
+        <svg width="420pt" height="240pt" viewBox="0 0 420 240" xmlns="http://www.w3.org/2000/svg">
+          <rect width="420" height="240" fill="white"/>
+          <g id="panel_label">
+            <text x="10" y="24" style="font-size: 18px">A</text>
+          </g>
+          <g id="title">
+            <text x="11" y="24" style="font-size: 16px">Spearman Correlation Matrix: SOFA-2 Components vs Total SOFA-2</text>
+          </g>
+        </svg>
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    from easyicu.research_agent.visual_qa import VisualQAAuditor
+
+    findings = VisualQAAuditor(min_bytes=1).audit(figure_paths=[fig_path])
+
+    assert any(f.severity == "warning" and "panel label close to a title" in f.message for f in findings)
+    assert not any(f.severity == "error" and "overlapping text" in f.message for f in findings)
+
+
 def test_visual_qa_flags_svg_cropped_text(ra, tmp_path: Path):
     fig_path = tmp_path / "cropped.svg"
     fig_path.write_text(

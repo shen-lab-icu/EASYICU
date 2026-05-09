@@ -180,6 +180,7 @@ class ResearchAgentPipeline:
         max_code_repair_attempts: int = 1,
         enable_deterministic_code_fallback: bool = False,
         enable_deterministic_planner_fallback: bool = False,
+        enable_deterministic_runner_repair: bool = True,
         enable_pubmed: bool = False,
         pubmed_email: Optional[str] = None,
         pubmed_api_key: Optional[str] = None,
@@ -237,6 +238,9 @@ class ResearchAgentPipeline:
         )
         self._enable_deterministic_planner_fallback = bool(
             enable_deterministic_planner_fallback
+        )
+        self._enable_deterministic_runner_repair = bool(
+            enable_deterministic_runner_repair
         )
         # T2.2 — opt-in PubMed live search. Off by default so CI and
         # the offline demo stay deterministic; the LiteratureAgent
@@ -477,7 +481,10 @@ class ResearchAgentPipeline:
                 context_path=context_path,
                 evidence=evidence,
                 findings=findings,
-                plan=AnalysisPlan(steps=[]),
+                plan=AnalysisPlan(
+                    research_question=context.research_question,
+                    steps=[],
+                ),
                 plan_path=run_dir / "analysis_plan.json",
                 llm_signature=self._llm_signature(llm),
                 used_mock_llm=any(True for _ in self._iter_mock_clients(llm)),
@@ -598,7 +605,55 @@ class ResearchAgentPipeline:
                         evidence_id="hypothesis_blueprint",
                         producer="hypothesis_blueprint",
                         generation_mode="deterministic_skill",
-                )
+                    )
+                if blueprint.feasibility_status == "blocked":
+                    findings.append(
+                        ValidationFinding(
+                            validator="hypothesis_blueprint",
+                            severity="error",
+                            message=(
+                                "Hypothesis blueprint marked this request as blocked; "
+                                "pipeline stopped before planning executable analysis steps."
+                            ),
+                            evidence_ids=["hypothesis_blueprint"],
+                        )
+                    )
+                    emit_progress(
+                        "hypothesis",
+                        "Hypothesis blueprint is blocked; aborting before planner execution.",
+                        status="error",
+                        run_id=run_id,
+                    )
+                    aborted = self._finalise_aborted(
+                        run_id=run_id,
+                        run_dir=run_dir,
+                        context=context,
+                        context_path=context_path,
+                        evidence=evidence,
+                        findings=findings,
+                        reason="hypothesis_blueprint_blocked",
+                    )
+                    return _PlanPhaseResult(
+                        context=context,
+                        agent_context=agent_context,
+                        context_path=context_path,
+                        evidence=evidence,
+                        findings=findings,
+                        plan=AnalysisPlan(
+                            research_question=context.research_question,
+                            steps=[],
+                        ),
+                        plan_path=run_dir / "analysis_plan.json",
+                        llm_signature=self._llm_signature(llm),
+                        used_mock_llm=any(True for _ in self._iter_mock_clients(llm)),
+                        prompt_version=PROMPT_PACK_VERSION,
+                        prompt_files=prompt_pack_files(),
+                        role_resolver=lambda _role: resolve_role_client(llm, _role),
+                        cost_meter=None,
+                        started_at=datetime.now(timezone.utc),
+                        resume_state=resume_state,
+                        aborted_result=aborted,
+                    )
                 note = render_hypothesis_blueprint_for_prompt(blueprint)
                 agent_notes = (
                     f"{agent_context.notes}\n\n{note}"
@@ -694,6 +749,11 @@ class ResearchAgentPipeline:
                         detail={"dropped_keys": dropped_keys},
                     )
                 )
+        plan, plan_contract_findings = _enforce_advanced_plan_contract(
+            plan=plan,
+            context=context,
+        )
+        findings.extend(plan_contract_findings)
         plan_path = run_dir / "analysis_plan.json"
         plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
@@ -960,6 +1020,16 @@ class ResearchAgentPipeline:
             probe_evidence_ids: List[str] = []
             for probe_file in probe_files:
                 kind = "statistic" if probe_file.name.endswith(".json") else "table"
+                aliases = [probe_step_id]
+                if probe_file.name == "probe_summary.json":
+                    aliases.extend(
+                        [
+                            "probe_summary",
+                            "cohort_probe",
+                            "outcome_rate",
+                            "mortality_rate",
+                        ]
+                    )
                 rec = evidence.register_file(
                     kind=kind,
                     description=f"Probe artefact {probe_file.name}.",
@@ -967,6 +1037,7 @@ class ResearchAgentPipeline:
                     produced_by_step=probe_step_id,
                     producer="pipeline",
                     generation_mode="deterministic_probe",
+                    aliases=aliases,
                 )
                 probe_evidence_ids.append(rec.evidence_id)
             probe_record = {
@@ -1333,6 +1404,14 @@ class ResearchAgentPipeline:
                     )
 
                 if run_result.succeeded:
+                    if not (run_result.out_dir / "step_summary.json").exists():
+                        salvaged = _salvage_stdout_json_step_summary(
+                            run_result
+                        ) or _salvage_named_json_step_summary(run_result)
+                        if salvaged:
+                            run_result.artefacts = sorted(
+                                p for p in run_result.out_dir.iterdir() if p.is_file()
+                            )
                     if not run_result.artefacts:
                         fallback_code = _deterministic_fallback_code("no_artefacts")
                         if fallback_code is not None:
@@ -1467,6 +1546,116 @@ class ResearchAgentPipeline:
                                     total_steps=total_steps,
                                 )
                                 return step_record
+                    early_contract_findings = _step_contract_findings(
+                        step=step,
+                        step_summary=visual_step_summary,
+                    )
+                    early_contract_errors = [
+                        f for f in early_contract_findings if f.severity == "error"
+                    ]
+                    if early_contract_errors and repair_attempts < self._max_code_repair_attempts:
+                        repair_attempts += 1
+                        step_record["code_repair_attempts"] = repair_attempts
+                        emit_progress(
+                            "coder",
+                            f"Repairing contract violation for {step.step_id}.",
+                            run_id=run_id,
+                            step_id=step.step_id,
+                            current_step=step_current,
+                            total_steps=total_steps,
+                            repair_attempts=repair_attempts,
+                        )
+                        contract_log = "\n".join(
+                            f"{f.severity.upper()}: {f.message}"
+                            for f in early_contract_findings
+                            if f.message
+                        )
+                        repair_guidance = _step_contract_repair_guidance(
+                            step=step,
+                            step_summary=visual_step_summary,
+                            code=code,
+                        )
+                        try:
+                            code = coder.repair(
+                                context=agent_context,
+                                step=step,
+                                code=code,
+                                run_log=(
+                                    "The script executed but failed the machine-readable "
+                                    "step contract. Revise the analysis code; do not change "
+                                    "the research question. Ensure required primary metrics "
+                                    "are computed and written to step_summary.json with "
+                                    "explicit numeric keys or nested statistic fields.\n\n"
+                                    "STEP SUMMARY:\n"
+                                    + json.dumps(
+                                        visual_step_summary,
+                                        indent=2,
+                                        ensure_ascii=False,
+                                        default=str,
+                                    )
+                                    + "\n\nCONTRACT FINDINGS:\n"
+                                    + contract_log
+                                    + "\n\nREPAIR GUIDANCE:\n"
+                                    + repair_guidance
+                                ),
+                                attempt=repair_attempts,
+                            )
+                            _clear_output_dir(run_result.out_dir)
+                            continue
+                        except Exception as exc:
+                            fallback_code = _deterministic_fallback_code(
+                                "contract_repair_failed"
+                            )
+                            if fallback_code is not None:
+                                code = fallback_code
+                                _clear_output_dir(run_result.out_dir)
+                                continue
+                            with shared_lock:
+                                findings.extend(early_contract_findings)
+                                findings.append(
+                                    ValidationFinding(
+                                        validator="coder",
+                                        severity="error",
+                                        message=(
+                                            f"Coder repair failed after contract check "
+                                            f"for step {step.step_id}: {exc}"
+                                        ),
+                                    )
+                                )
+                                step_record["status"] = "repair_failed"
+                                per_step_records.append(step_record)
+                                _flush_partial_manifest()
+                            emit_progress(
+                                "coder",
+                                f"Contract repair failed for {step.step_id}.",
+                                status="error",
+                                run_id=run_id,
+                                step_id=step.step_id,
+                                current_step=step_current,
+                                total_steps=total_steps,
+                            )
+                            return step_record
+                    if self._enable_deterministic_runner_repair:
+                        summary_repair = _deterministic_summary_repair(
+                            code=code,
+                            step_summary=visual_step_summary,
+                            previous_repair=runner_repair_name,
+                        )
+                    else:
+                        summary_repair = None
+                    if summary_repair is not None:
+                        runner_repair_name, code = summary_repair
+                        step_record["runner_repair"] = runner_repair_name
+                        emit_progress(
+                            "runner_repair",
+                            f"Applied deterministic summary repair for {step.step_id}: {runner_repair_name}.",
+                            run_id=run_id,
+                            step_id=step.step_id,
+                            current_step=step_current,
+                            total_steps=total_steps,
+                        )
+                        _clear_output_dir(run_result.out_dir)
+                        continue
                     break
 
                 if log_path.exists():
@@ -1475,11 +1664,14 @@ class ResearchAgentPipeline:
                     run_log = (
                         (run_result.stdout or "") + "\n" + (run_result.stderr or "")
                     )
-                runner_repair = _deterministic_runner_repair(
-                    code=code,
-                    run_log=run_log,
-                    previous_repair=runner_repair_name,
-                )
+                if self._enable_deterministic_runner_repair:
+                    runner_repair = _deterministic_runner_repair(
+                        code=code,
+                        run_log=run_log,
+                        previous_repair=runner_repair_name,
+                    )
+                else:
+                    runner_repair = None
                 if runner_repair is not None:
                     runner_repair_name, code = runner_repair
                     step_record["runner_repair"] = runner_repair_name
@@ -1713,15 +1905,23 @@ class ResearchAgentPipeline:
                 out_dir=run_result.out_dir,
                 step_summary=step_summary,
             )
+            contract_findings = _step_contract_findings(
+                step=step,
+                step_summary=step_summary,
+            )
             with shared_lock:
                 findings.extend(stat_findings)
                 findings.extend(clinical_findings)
                 findings.extend(guard_findings)
+                findings.extend(contract_findings)
             step_record["stat_findings"] = [f.model_dump() for f in stat_findings]
             step_record["clinical_findings"] = [
                 f.model_dump() for f in clinical_findings
             ]
             step_record["guard_findings"] = [f.model_dump() for f in guard_findings]
+            step_record["contract_findings"] = [
+                f.model_dump() for f in contract_findings
+            ]
             step_record["generation_mode"] = _script_generation_mode(
                 repair_attempts=repair_attempts,
                 fallback_used=deterministic_fallback_used,
@@ -1734,6 +1934,7 @@ class ResearchAgentPipeline:
                 stat_findings,
                 clinical_findings,
                 guard_findings,
+                contract_findings,
             )
             local_runtime_state = supervisor.critique_step(
                 state=local_runtime_state,
@@ -1806,7 +2007,11 @@ class ResearchAgentPipeline:
             step_record["interpretation_evidence_id"] = interp_record.evidence_id
             _propagate_findings_to_evidence(
                 evidence_ids_for_step + [interp_record.evidence_id],
-                usage_findings + stat_findings + clinical_findings + guard_findings,
+                usage_findings
+                + stat_findings
+                + clinical_findings
+                + guard_findings
+                + contract_findings,
                 metadata={
                     "step_id": step.step_id,
                     "generation_mode": step_record["generation_mode"],
@@ -1814,14 +2019,22 @@ class ResearchAgentPipeline:
             )
             with shared_lock:
                 runtime_state = local_runtime_state
-            step_record["status"] = "ok"
+            has_contract_error = any(
+                finding.severity == "error" for finding in contract_findings
+            )
+            step_record["status"] = "contract_failed" if has_contract_error else "ok"
             with shared_lock:
                 per_step_records.append(step_record)
                 _flush_partial_manifest()
             emit_progress(
                 "step",
-                f"Step {step_current}/{total_steps} complete: {step.step_id}.",
-                status="complete",
+                (
+                    f"Step {step_current}/{total_steps} failed contract checks: "
+                    f"{step.step_id}."
+                    if has_contract_error
+                    else f"Step {step_current}/{total_steps} complete: {step.step_id}."
+                ),
+                status="error" if has_contract_error else "complete",
                 run_id=run_id,
                 step_id=step.step_id,
                 current_step=step_current,
@@ -1949,6 +2162,7 @@ class ResearchAgentPipeline:
         role_resolver = plan_result.role_resolver
         prompt_version = plan_result.prompt_version
         runtime_state = execute_result.runtime_state
+        per_step_records = execute_result.per_step_records
         critic = CriticAgent(role_resolver("analyzer"))
 
         literature: Optional[LiteratureBundle] = None
@@ -2120,9 +2334,11 @@ class ResearchAgentPipeline:
                     prompt_pack_version=prompt_version,
                 )
         try:
+            writer_evidence_digest = _render_writer_evidence_digest(per_step_records)
             scaffold = writer.run(
                 context=agent_context,
                 evidence_ids=evidence.resolvable_names(),
+                evidence_digest=writer_evidence_digest,
             )
         except Exception as exc:
             scaffold = f"(writer failed: {exc})"
@@ -3002,6 +3218,9 @@ class ResearchAgentPipeline:
             "enable_deterministic_planner_fallback": bool(
                 self._enable_deterministic_planner_fallback
             ),
+            "enable_deterministic_runner_repair": bool(
+                self._enable_deterministic_runner_repair
+            ),
             "latex_venue_template": self._latex_venue_template,
             "stop_after_analysis": bool(stop_after_analysis),
             "manuscript_language": manuscript_language,
@@ -3284,6 +3503,431 @@ def _build_probe_summary(
     return summary, files
 
 
+def _patch_primary_predictor_into_design_matrix(
+    *,
+    code: str,
+    predictor: str,
+) -> Optional[str]:
+    function_design_markers = (
+        "    X = model_df[covariates].astype(float)",
+        "    X = model_df[covariates].apply(pd.to_numeric, errors=\"coerce\").astype(float)",
+        "    X = model_df[covariates].copy()",
+    )
+    if (
+        "def compute_or_ci" in code
+        and "if predictor in result.params.index" in code
+        and (
+            "result.params[predictor]" in code
+            or "result.conf_int().loc[predictor" in code
+        )
+    ):
+        for marker in function_design_markers:
+            if marker not in code:
+                continue
+            replacement = (
+                "    design_cols = [predictor] + [col for col in covariates if col != predictor]\n"
+                "    X = model_df[design_cols].apply(pd.to_numeric, errors=\"coerce\").astype(float)"
+            )
+            repaired = code.replace(marker, replacement, 1)
+            if repaired != code:
+                return repaired
+
+    x_assign = re.search(r"(?m)^\s*X\s*=\s*model_df\[\[", code)
+    if x_assign is None:
+        return None
+    line_end = code.find("\n", x_assign.start())
+    if line_end < 0:
+        line_end = len(code)
+    x_line = code[x_assign.start():line_end]
+    if predictor in x_line:
+        return None
+    predictor_lookup_patterns = (
+        f"result.params['{predictor}'",
+        f'result.params["{predictor}"',
+        f"result.conf_int().loc['{predictor}'",
+        f'result.conf_int().loc["{predictor}"',
+        f"result.pvalues['{predictor}'",
+        f'result.pvalues["{predictor}"',
+        f"coef_table.loc['{predictor}'",
+        f'coef_table.loc["{predictor}"',
+    )
+    if not any(pattern in code for pattern in predictor_lookup_patterns):
+        return None
+    repaired = code.replace(
+        "X = model_df[[",
+        f"X = model_df[['{predictor}', ",
+        1,
+    )
+    summary_defaults = textwrap.dedent(
+        f"""
+        n_total = int(len(df))
+        n_complete = int(len(model_df))
+        n_missing_lactate = (
+            int(df['lactate_max_24h'].isna().sum())
+            if 'lactate_max_24h' in df.columns
+            else None
+        )
+        lactate_or = None
+        lactate_or_lower = None
+        lactate_or_upper = None
+        """
+    ).strip("\n")
+    if "# Fit logistic regression model" in repaired:
+        repaired = repaired.replace(
+            "# Fit logistic regression model",
+            summary_defaults + "\n\n# Fit logistic regression model",
+            1,
+        )
+    elif "# Fit logistic regression" in repaired:
+        repaired = repaired.replace(
+            "# Fit logistic regression",
+            summary_defaults + "\n\n# Fit logistic regression",
+            1,
+        )
+    elif "\ntry:\n" in repaired:
+        repaired = repaired.replace(
+            "\ntry:\n",
+            "\n" + summary_defaults + "\n\ntry:\n",
+            1,
+        )
+    return repaired
+
+
+def _deterministic_summary_repair(
+    *,
+    code: str,
+    step_summary: Dict[str, Any],
+    previous_repair: Optional[str] = None,
+) -> Optional[tuple[str, str]]:
+    if not isinstance(step_summary, dict) or not step_summary:
+        return None
+    summary_text = json.dumps(step_summary, ensure_ascii=False, default=str).lower()
+    simple_imputer_bool = (
+        "simpleimputer does not support data with dtype bool" in summary_text
+        and "X_sklearn = model_df[x_cols].copy()" in code
+    )
+    if simple_imputer_bool:
+        repair_name = "sklearn_bool_imputer_cast_v1"
+        if previous_repair != repair_name:
+            marker = "X_sklearn = model_df[x_cols].copy()"
+            patch = (
+                marker
+                + "\nfor col in X_sklearn.select_dtypes(include=['bool']).columns:"
+                + "\n    X_sklearn[col] = X_sklearn[col].astype(int)"
+            )
+            repaired = code.replace(marker, patch, 1)
+            if repaired != code:
+                return repair_name, repaired
+    manifest = (
+        step_summary.get("manifest:robustness_analysis_manifest")
+        or step_summary.get("robustness_analysis_manifest")
+        or {}
+    )
+    if not isinstance(manifest, dict):
+        manifest = {}
+    predictor_match = re.search(
+        r"(?:primary_predictor|predictor_col)\s*=\s*['\"]([^'\"]+)['\"]",
+        code,
+    )
+    predictor = str(
+        step_summary.get("primary_predictor")
+        or step_summary.get("predictor")
+        or manifest.get("primary_predictor")
+        or (predictor_match.group(1) if predictor_match else "")
+        or ""
+    ).strip()
+    estimate = _first_present_scalar(
+        step_summary,
+        ("estimate", "primary_or", "odds_ratio", "adjusted_or", "lactate_or", "or"),
+    )
+    if estimate is not None:
+        return None
+    error_text = str(
+        step_summary.get("error")
+        or step_summary.get("error_message")
+        or step_summary.get("note")
+        or ""
+    )
+    generic_soft_failure = "unknown error" in error_text.lower()
+    dtype_soft_failure = "pandas data cast to numpy dtype of object" in error_text.lower()
+    if (
+        predictor
+        and error_text
+        and predictor not in error_text
+        and not (generic_soft_failure or dtype_soft_failure)
+    ):
+        return None
+    duplicate_predictor_design = predictor and (
+        "x_cols = [predictor_col] + [col for col in model_df.columns if col != outcome_col]"
+        in code
+        and "X = model_df[x_cols]" in code
+    )
+    if duplicate_predictor_design:
+        repair_name = "dedupe_predictor_numeric_design_v1"
+        if previous_repair != repair_name:
+            repaired = code.replace(
+                "x_cols = [predictor_col] + [col for col in model_df.columns if col != outcome_col]",
+                "x_cols = [predictor_col] + [col for col in model_df.columns if col not in [outcome_col, predictor_col]]",
+                1,
+            )
+            repaired = repaired.replace(
+                "X = model_df[x_cols]\n",
+                "X = model_df[x_cols].apply(pd.to_numeric, errors=\"coerce\").astype(float)\n",
+                1,
+            )
+            if repaired != code:
+                return repair_name, repaired
+    repaired = None
+    if predictor:
+        repair_name = "primary_predictor_omitted_from_design_v1"
+        repaired = _patch_primary_predictor_into_design_matrix(
+            code=code,
+            predictor=predictor,
+        )
+        if repaired is not None and repaired != code:
+            if previous_repair == repair_name:
+                return None
+            return repair_name, repaired
+    if repaired is None or repaired == code:
+        skipped = str(step_summary.get("skipped") or "").lower()
+        null_model_summary = (
+            '"complete_case_n": null' in summary_text
+            or '"statistic:complete_case_n": null' in summary_text
+            or '"lactate_or": null' in summary_text
+            or '"statistic:lactate_or_stability": null' in summary_text
+            or '"or_estimate": null' in summary_text
+            or '"odds_ratio": null' in summary_text
+            or '"primary_or": null' in summary_text
+            or '"statistic:primary_or": null' in summary_text
+            or '"estimate": null' in summary_text
+        )
+        dtype_summary_failure = "pandas data cast to numpy dtype of object" in summary_text
+        if dtype_summary_failure:
+            repaired = _deterministic_runner_repair(
+                code=code,
+                run_log=summary_text,
+                previous_repair=previous_repair,
+            )
+            if repaired is not None:
+                return repaired
+        dummy_logit_null_summary = (
+            null_model_summary
+            and "pd.get_dummies" in code
+            and "sm.Logit" in code
+            and "X_final = sm.add_constant(X_encoded" in code
+        )
+        if dummy_logit_null_summary:
+            repair_name = "statsmodels_dummy_design_float_v1"
+            if previous_repair != repair_name:
+                marker = "X_final = sm.add_constant(X_encoded, has_constant=\"add\")"
+                patch = (
+                    "X_encoded = X_encoded.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n"
+                    + marker
+                )
+                repaired = code.replace(marker, patch, 1)
+                if repaired != code:
+                    return repair_name, repaired
+        raw_categorical_sex_logit = (
+            null_model_summary
+            and "sm.logit" in code.lower()
+            and "sex" in code
+            and "pd.get_dummies" not in code
+            and ".str.lower().isin(['m', 'male'])" not in code
+        )
+        if raw_categorical_sex_logit:
+            repair_name = "sex_binary_encode_for_logit_v1"
+            if previous_repair != repair_name:
+                model_df_assign = re.search(
+                    r"(^model_df\s*=\s*df\[[^\n]+?\.copy\(\)\s*$)",
+                    code,
+                    flags=re.MULTILINE,
+                )
+                if model_df_assign:
+                    patch = textwrap.dedent(
+                        """
+                        if 'sex' in model_df.columns:
+                            model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
+                        for col in model_df.columns:
+                            if col != 'sex':
+                                model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
+                        """
+                    ).strip("\n")
+                    repaired = code.replace(
+                        model_df_assign.group(1),
+                        model_df_assign.group(1) + "\n" + patch,
+                        1,
+                    )
+                    if repaired != code:
+                        return repair_name, repaired
+        categorical_sex_dropna = (
+            (
+                "no valid data after dropping lactate missing rows" in skipped
+                or "insufficient data" in skipped
+                or "no valid observations" in skipped
+                or null_model_summary
+                or dtype_summary_failure
+            )
+            and "model_df = model_df.apply(pd.to_numeric, errors=\"coerce\")" in code
+            and "sex" in code
+        )
+        if categorical_sex_dropna:
+            repair_name = "sex_numeric_coercion_before_dropna_v1"
+            if previous_repair == repair_name:
+                return None
+            repaired = code.replace(
+                'model_df = model_df.apply(pd.to_numeric, errors="coerce")',
+                textwrap.dedent(
+                    """
+                    if 'sex' in model_df.columns:
+                        model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
+                    for col in model_df.columns:
+                        if col != 'sex':
+                            model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
+                    """
+                ).strip("\n"),
+                1,
+            )
+            if repaired != code:
+                return repair_name, repaired
+        robustness_null_summary = (
+            null_model_summary
+            and "sm.Logit" in code
+            and "primary_predictor" in code
+            and "Missing-indicator" in code
+            and "Reduced-variable" in code
+        )
+        if robustness_null_summary:
+            repair_name = "robustness_missingness_contract_v1"
+            if previous_repair != repair_name:
+                repaired = code
+                reduction_marker = "model_df = model_df.replace([np.inf, -np.inf], np.nan)"
+                reduction_patch = (
+                    reduction_marker
+                    + "\n"
+                    + "reduced_covariates = [c for c in covariates if model_df[c].isna().mean() <= 0.2]"
+                )
+                if reduction_marker in repaired and "reduced_covariates =" not in repaired:
+                    repaired = repaired.replace(reduction_marker, reduction_patch, 1)
+                cc_replacements = {
+                    "cc_df = model_df.dropna(subset=[primary_predictor])": (
+                        "cc_df = model_df.dropna(subset=[outcome_col, primary_predictor] + covariates)"
+                    ),
+                    "complete_case_df = model_df.dropna(subset=[predictor_col])": (
+                        "complete_case_df = model_df.dropna(subset=[outcome_col, predictor_col] + covariates)"
+                    ),
+                }
+                for old, new in cc_replacements.items():
+                    repaired = repaired.replace(old, new)
+                mi_replacements = {
+                    "mi_df['lactate_missing'] = mi_df[primary_predictor].isna().astype(int)": (
+                        "mi_df['lactate_missing'] = mi_df[primary_predictor].isna().astype(int)\n"
+                        "mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n"
+                        "mi_df = mi_df.dropna(subset=[outcome_col] + covariates)"
+                    ),
+                    'mi_df["lactate_missing"] = mi_df[primary_predictor].isna().astype(int)': (
+                        'mi_df["lactate_missing"] = mi_df[primary_predictor].isna().astype(int)\n'
+                        'mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n'
+                        "mi_df = mi_df.dropna(subset=[outcome_col] + covariates)"
+                    ),
+                }
+                for old, new in mi_replacements.items():
+                    if old in repaired and "fillna(0)" not in repaired:
+                        repaired = repaired.replace(old, new, 1)
+                rv_replacements = {
+                    "rv_df = model_df.dropna(subset=[primary_predictor])": (
+                        "rv_df = model_df[[outcome_col, primary_predictor] + reduced_covariates].dropna()"
+                    ),
+                    "rv_X = sm.add_constant(rv_df[covariates], has_constant=\"add\")": (
+                        "rv_X = sm.add_constant(rv_df[[primary_predictor] + reduced_covariates], has_constant=\"add\")"
+                    ),
+                    "rv_X = sm.add_constant(rv_df[covariates], has_constant='add')": (
+                        "rv_X = sm.add_constant(rv_df[[primary_predictor] + reduced_covariates], has_constant='add')"
+                    ),
+                }
+                for old, new in rv_replacements.items():
+                    repaired = repaired.replace(old, new)
+                if repaired != code:
+                    return repair_name, repaired
+        return None
+    return None
+
+
+def _salvage_stdout_json_step_summary(run_result: RunResult) -> bool:
+    """Persist a JSON object printed to stdout as step_summary.json.
+
+    Hosted coder models sometimes compute the right summary and print it,
+    but forget to write artefacts into ``STEP_OUT_DIR``. This preserves the
+    agent-generated result without replacing the analysis with fixed code.
+    """
+
+    out_dir = run_result.out_dir
+    summary_path = out_dir / "step_summary.json"
+    if summary_path.exists():
+        return False
+    data = _extract_last_json_object(run_result.stdout or "")
+    if not isinstance(data, dict) or not data:
+        return False
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _salvage_named_json_step_summary(run_result: RunResult) -> bool:
+    """Promote an agent-written summary JSON artefact to step_summary.json."""
+
+    out_dir = run_result.out_dir
+    summary_path = out_dir / "step_summary.json"
+    if summary_path.exists():
+        return False
+    excluded = {
+        "critique_report.json",
+        "visual_qa.json",
+        "figure_contract.json",
+    }
+    candidates = sorted(
+        path
+        for path in out_dir.glob("*.json")
+        if "summary" in path.name.lower() and path.name.lower() not in excluded
+    )
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict) or not data:
+            continue
+        try:
+            summary_path.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+        except Exception:
+            return False
+        return True
+    return False
+
+
+def _extract_last_json_object(text: str) -> Optional[Dict[str, Any]]:
+    decoder = json.JSONDecoder()
+    latest: Optional[Dict[str, Any]] = None
+    for idx, char in enumerate(text or ""):
+        if char != "{":
+            continue
+        try:
+            value, _end = decoder.raw_decode(text[idx:])
+        except Exception:
+            continue
+        if isinstance(value, dict):
+            latest = value
+    return latest
+
+
 def _deterministic_runner_repair(
     *,
     code: str,
@@ -3318,6 +3962,376 @@ def _deterministic_runner_repair(
         if previous_repair != repair_name:
             repaired = code.replace("pythonimport ", "import ").replace("pythonfrom ", "from ")
             repaired = repaired.replace("\npythonimport ", "\nimport ").replace("\npythonfrom ", "\nfrom ")
+            if repaired != code:
+                return repair_name, repaired
+
+    proportion_confint_n_keyword = (
+        "proportion_confint() got an unexpected keyword argument 'n'" in lowered
+        and "proportion_confint" in code
+    )
+    if proportion_confint_n_keyword:
+        repair_name = "proportion_confint_nobs_keyword_v1"
+        if previous_repair != repair_name:
+            repaired = re.sub(
+                r"(proportion_confint\s*\([^)]*?)\bn\s*=",
+                r"\1nobs=",
+                code,
+                flags=re.DOTALL,
+            )
+            if repaired != code:
+                return repair_name, repaired
+
+    malformed_matplotlib_xerr = (
+        "valueerror: 'xerr'" in lowered
+        and "must be a scalar or a 1d or (2, n) array-like" in lowered
+        and "np.array([[" in code
+        and "errorbar(" in code
+    )
+    if malformed_matplotlib_xerr:
+        repair_name = "matplotlib_errorbar_xerr_shape_v1"
+        if previous_repair != repair_name:
+            repaired = re.sub(
+                r"xerr\s*=\s*np\.array\(\[\[([A-Za-z_]\w*)\],\s*\[([A-Za-z_]\w*)\]\]\)",
+                r"xerr=np.vstack([np.ravel(\1), np.ravel(\2)])",
+                code,
+            )
+            if repaired != code:
+                return repair_name, repaired
+
+    malformed_publication_contract = (
+        (
+            "valueerror: panels are required" in lowered
+            or "figurecontract' object is not subscriptable" in lowered
+            or '"figurecontract" object is not subscriptable' in lowered
+        )
+        and "make_figure_contract(" in code
+        and 'figure_contract["panels"]' in code
+    )
+    if malformed_publication_contract:
+        repair_name = "publication_contract_optional_v1"
+        if previous_repair != repair_name:
+            repaired = re.sub(
+                r"# Create figure contract with panels\s*"
+                r"figure_contract\s*=\s*make_figure_contract\([\s\S]*?"
+                r"figure_contract\[[\"']panels[\"']\]\.append\(\{[\s\S]*?\}\)\s*",
+                (
+                    "# Create figure contract with panels\n"
+                    "# Publication helper API mismatch; keep the statistical output and fall back to direct figure export.\n"
+                    "figure_contract = None\n\n"
+                ),
+                code,
+                count=1,
+            )
+            if repaired != code:
+                return repair_name, repaired
+
+    missing_dummy_encoded_column = (
+        "keyerror" in lowered
+        and "not in index" in lowered
+        and "pd.get_dummies" in code
+        and (
+            "model_df[x_cols]" in code
+            or "model_df[[outcome_col] + x_cols]" in code
+        )
+    )
+    if missing_dummy_encoded_column:
+        repair_name = "filter_x_cols_after_dummy_encoding_v1"
+        if previous_repair != repair_name:
+            marker = "X = model_df[x_cols].copy()"
+            guard = "x_cols = [col for col in x_cols if col in model_df.columns]"
+            if marker in code and guard not in code:
+                repaired = code.replace(marker, guard + "\n    " + marker, 1)
+                return repair_name, repaired
+            marker = "model_df_subset = model_df[[outcome_col] + x_cols].copy()"
+            guard = "x_cols = [col for col in x_cols if col in model_df.columns]"
+            if marker in code and guard not in code:
+                repaired = code.replace(marker, guard + "\n" + marker, 1)
+                return repair_name, repaired
+
+    missing_dummy_encoded_dropna_column = (
+        "keyerror" in lowered
+        and "get_dummies" in code
+        and "dropna(" in code
+        and ("subset=x_cols" in code or " + x_cols" in code or "_x_cols" in code)
+    )
+    if missing_dummy_encoded_dropna_column:
+        repair_name = "filter_x_cols_before_dropna_after_dummy_encoding_v1"
+        if previous_repair != repair_name:
+            marker = "model_df = model_df.dropna(subset=x_cols + [outcome])"
+            guard = "x_cols = [col for col in x_cols if col in model_df.columns]"
+            if marker in code and guard not in code:
+                repaired = code.replace(marker, guard + "\n" + marker, 1)
+                return repair_name, repaired
+            generic_dropna = re.compile(
+                r"(?P<line>^(?P<frame>\w+)\s*=\s*(?P=frame)\.replace\(\[np\.inf,\s*-np\.inf\],\s*np\.nan\)\.dropna\(subset=\[(?P<outcome>\w+)\]\s*\+\s*(?P<xcols>\w+)\)\s*$)",
+                flags=re.MULTILINE,
+            )
+            match = generic_dropna.search(code)
+            if match:
+                xcols = match.group("xcols")
+                frame = match.group("frame")
+                guard = f"{xcols} = [col for col in {xcols} if col in {frame}.columns]"
+                if guard not in code:
+                    repaired = code.replace(match.group("line"), guard + "\n" + match.group("line"), 1)
+                    return repair_name, repaired
+
+    missing_indicator_source_frame = (
+        "keyerror" in lowered
+        and "are in the [columns]" in lowered
+        and "df = pd.read_parquet" in code
+        and ".isnull().any(axis=1).astype(int)" in code
+        and "_missing" in code
+    )
+    if missing_indicator_source_frame:
+        repair_name = "missing_indicator_source_df_v1"
+        if previous_repair != repair_name:
+            repaired = re.sub(
+                r"(?P<lhs>\w+\[['\"][^'\"]+_missing['\"]\]\s*=\s*)(?P<frame>\w+)\[(?P<colsvar>\w+)\](?P<rhs>\.isnull\(\)\.any\(axis=1\)\.astype\(int\))",
+                r"\g<lhs>df[\g<colsvar>]\g<rhs>",
+                code,
+                count=1,
+            )
+            if repaired != code:
+                return repair_name, repaired
+
+    missing_outcome_from_subset = (
+        "keyerror" in lowered
+        and "death" in lowered
+        and "not in index" in lowered
+        and "all_vars = [primary_predictor] + covariates" in code
+    )
+    if missing_outcome_from_subset:
+        repair_name = "include_outcome_in_all_vars_v1"
+        if previous_repair != repair_name:
+            repaired = code.replace(
+                "all_vars = [primary_predictor] + covariates",
+                "all_vars = [outcome_col, primary_predictor] + covariates",
+                1,
+            )
+            if repaired != code:
+                return repair_name, repaired
+
+    robustness_none_plot = (
+        "unsupported operand type(s)" in lowered
+        and "none" in lowered
+        and "ax.errorbar(" in code
+        and ("predictor_col" in code or "primary_predictor" in code)
+        and (
+            "lactate_missing" in code
+            or "Missing-indicator" in code
+            or "missing_indicator" in code.lower()
+        )
+    )
+    if robustness_none_plot:
+        repair_name = "robustness_predictor_design_and_plot_v1"
+        if previous_repair != repair_name:
+            repaired = code
+            predictor_var = (
+                "predictor_col" if "predictor_col" in code else "primary_predictor"
+            )
+            model_df_assign = re.search(
+                r"^(?P<indent>\s*)(?P<line>model_df\s*=\s*df\[[^\n]+?\.copy\(\)\s*)$",
+                repaired,
+                flags=re.MULTILINE,
+            )
+            sex_numeric_patch = textwrap.dedent(
+                """
+                if 'sex' in model_df.columns:
+                    model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
+                for col in model_df.columns:
+                    if col != 'sex':
+                        model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
+                model_df = model_df.replace([np.inf, -np.inf], np.nan)
+                reduced_covariates = [c for c in covariates if model_df[c].isna().mean() <= 0.2]
+                """
+            ).strip("\n")
+            if model_df_assign and "reduced_covariates =" not in repaired:
+                indent = model_df_assign.group("indent")
+                patch = "\n".join(
+                    indent + line if line else line
+                    for line in sex_numeric_patch.splitlines()
+                )
+                repaired = repaired.replace(
+                    model_df_assign.group(0),
+                    model_df_assign.group(0) + "\n" + patch,
+                    1,
+                )
+            replacements = {
+                "cc_X = cc_df[covariates]": "cc_X = cc_df[[predictor_col] + covariates]",
+                "cc_X = complete_case_df[covariates]": "cc_X = complete_case_df[[predictor_col] + covariates]",
+                "mi_X = mi_df[covariates + ['lactate_missing']]": "mi_X = mi_df[[predictor_col] + covariates + ['lactate_missing']]",
+                "mi_X = model_df[covariates + ['lactate_missing']]": "mi_X = model_df[[predictor_col] + covariates + ['lactate_missing']]",
+                "rv_X = rv_df[covariates]": "rv_X = rv_df[[predictor_col] + covariates]",
+                "rv_X = rv_df[reduced_covariates]": "rv_X = rv_df[[predictor_col] + reduced_covariates]",
+                "X_cc = sm.add_constant(complete_case_df[covariates], has_constant=\"add\")": (
+                    f"X_cc = sm.add_constant(complete_case_df[[{predictor_var}] + covariates], has_constant=\"add\")"
+                ),
+                "X_cc = sm.add_constant(cc_df[covariates], has_constant=\"add\")": (
+                    f"X_cc = sm.add_constant(cc_df[[{predictor_var}] + covariates], has_constant=\"add\")"
+                ),
+                "X_mi = sm.add_constant(missing_indicator_df[covariates + [\"lactate_missing\"]], has_constant=\"add\")": (
+                    f"X_mi = sm.add_constant(missing_indicator_df[[{predictor_var}] + covariates + [\"lactate_missing\"]], has_constant=\"add\")"
+                ),
+                "X_mi = sm.add_constant(mi_df[covariates + [\"lactate_missing\"]], has_constant=\"add\")": (
+                    f"X_mi = sm.add_constant(mi_df[[{predictor_var}] + covariates + [\"lactate_missing\"]], has_constant=\"add\")"
+                ),
+                "X_rv = sm.add_constant(reduced_variable_df[covariates], has_constant=\"add\")": (
+                    f"X_rv = sm.add_constant(reduced_variable_df[[{predictor_var}] + reduced_covariates], has_constant=\"add\")"
+                ),
+                "X_rv = sm.add_constant(rv_df[covariates], has_constant=\"add\")": (
+                    f"X_rv = sm.add_constant(rv_df[[{predictor_var}] + reduced_covariates], has_constant=\"add\")"
+                ),
+            }
+            for old, new in replacements.items():
+                repaired = repaired.replace(old, new)
+            subset_replacements = {
+                f"complete_case_df = model_df.dropna(subset=[{predictor_var}])": (
+                    f"complete_case_df = model_df.dropna(subset=[outcome_col, {predictor_var}] + covariates)"
+                ),
+                f"cc_df = model_df.dropna(subset=[{predictor_var}])": (
+                    f"cc_df = model_df.dropna(subset=[outcome_col, {predictor_var}] + covariates)"
+                ),
+                f"rv_df = model_df.dropna(subset=[{predictor_var}])": (
+                    f"rv_df = model_df[[outcome_col, {predictor_var}] + reduced_covariates].dropna()"
+                ),
+                f"reduced_variable_df = model_df.drop(columns=[{predictor_var}]).copy()": (
+                    f"reduced_variable_df = model_df[[outcome_col, {predictor_var}] + reduced_covariates].dropna().copy()"
+                ),
+            }
+            for old, new in subset_replacements.items():
+                repaired = repaired.replace(old, new)
+            mi_copy_patterns = {
+                "mi_df = model_df.copy()": (
+                    f"mi_df = model_df.copy()\n"
+                    f"    mi_df[{predictor_var}] = mi_df[{predictor_var}].fillna(0)\n"
+                    "    mi_df = mi_df.dropna(subset=[outcome_col] + covariates)"
+                ),
+                "missing_indicator_df = model_df.copy()": (
+                    "missing_indicator_df = model_df.copy()\n"
+                    f"    missing_indicator_df[{predictor_var}] = missing_indicator_df[{predictor_var}].fillna(0)\n"
+                    "    missing_indicator_df = missing_indicator_df.dropna(subset=[outcome_col] + covariates)"
+                ),
+            }
+            for old, new in mi_copy_patterns.items():
+                if old in repaired and "fillna(0)" not in repaired:
+                    repaired = repaired.replace(old, new, 1)
+            repaired = repaired.replace(
+                f"X_rv = X_rv.drop(columns=[{predictor_var}])\n",
+                "",
+            )
+            finite_patches = {
+                "X_cc = X_cc.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n    y_cc = y_cc.astype(float)": (
+                    "X_cc = X_cc.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n"
+                    "    y_cc = y_cc.astype(float)\n"
+                    "    cc_mask = np.isfinite(X_cc.to_numpy()).all(axis=1) & np.isfinite(y_cc.to_numpy())\n"
+                    "    X_cc = X_cc.loc[cc_mask]\n"
+                    "    y_cc = y_cc.loc[cc_mask]"
+                ),
+                "X_mi = X_mi.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n    y_mi = y_mi.astype(float)": (
+                    "X_mi = X_mi.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n"
+                    "    y_mi = y_mi.astype(float)\n"
+                    "    mi_mask = np.isfinite(X_mi.to_numpy()).all(axis=1) & np.isfinite(y_mi.to_numpy())\n"
+                    "    X_mi = X_mi.loc[mi_mask]\n"
+                    "    y_mi = y_mi.loc[mi_mask]"
+                ),
+                "X_rv = X_rv.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n    y_rv = y_rv.astype(float)": (
+                    "X_rv = X_rv.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n"
+                    "    y_rv = y_rv.astype(float)\n"
+                    "    rv_mask = np.isfinite(X_rv.to_numpy()).all(axis=1) & np.isfinite(y_rv.to_numpy())\n"
+                    "    X_rv = X_rv.loc[rv_mask]\n"
+                    "    y_rv = y_rv.loc[rv_mask]"
+                ),
+            }
+            for old, new in finite_patches.items():
+                repaired = repaired.replace(old, new)
+            lower_var = "ci_lowers"
+            upper_var = "ci_uppers"
+            if "lci = [" in repaired and "uci = [" in repaired:
+                lower_var = "lci"
+                upper_var = "uci"
+            elif "or_lowers = [" in repaired and "or_uppers = [" in repaired:
+                lower_var = "or_lowers"
+                upper_var = "or_uppers"
+            plot_marker = "ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper],"
+            plot_guard = textwrap.dedent(
+                f"""
+                plot_rows = [
+                    (s, o, lo, hi)
+                    for s, o, lo, hi in zip(strategies, ors, {lower_var}, {upper_var})
+                    if o is not None and lo is not None and hi is not None
+                ]
+                if plot_rows:
+                    strategies, ors, {lower_var}, {upper_var} = map(list, zip(*plot_rows))
+                    x_pos = np.arange(len(strategies))
+                else:
+                    strategies, ors, {lower_var}, {upper_var} = [], [], [], []
+                    x_pos = np.array([])
+                """
+            ).strip("\n")
+            if plot_marker in repaired and "plot_rows = [" not in repaired:
+                repaired = repaired.replace(
+                    plot_marker,
+                    plot_guard + "\n\n    if len(x_pos):\n        " + plot_marker,
+                    1,
+                )
+            if repaired != code:
+                return repair_name, repaired
+
+    missing_internal_utils = (
+        "modulenotfounderror: no module named 'easyicu.research_agent.utils'" in lowered
+        and "from easyicu.research_agent.utils import to_jsonable" in code
+    )
+    if missing_internal_utils:
+        repair_name = "inline_missing_to_jsonable_utils_v1"
+        if previous_repair != repair_name:
+            helper = textwrap.dedent(
+                """
+                def to_jsonable(x):
+                    import math
+                    import numpy as np
+                    import pandas as pd
+                    if isinstance(x, (np.integer,)):
+                        return int(x)
+                    if isinstance(x, (np.floating,)):
+                        value = float(x)
+                        return value if math.isfinite(value) else None
+                    if isinstance(x, (np.bool_,)):
+                        return bool(x)
+                    if isinstance(x, np.ndarray):
+                        return x.tolist()
+                    try:
+                        if pd.isna(x):
+                            return None
+                    except Exception:
+                        pass
+                    return str(x)
+                """
+            ).strip()
+            repaired = code.replace(
+                "from easyicu.research_agent.utils import to_jsonable",
+                helper,
+                1,
+            )
+            if repaired != code:
+                return repair_name, repaired
+
+    undefined_primary_predictor = (
+        "name 'primary_predictor' is not defined" in lowered
+        and "primary_predictor if primary_predictor else None" in code
+    )
+    if undefined_primary_predictor:
+        repair_name = "primary_predictor_safe_summary_lookup_v1"
+        if previous_repair != repair_name:
+            repaired = code.replace(
+                "primary_predictor if primary_predictor else None",
+                (
+                    "locals().get('primary_predictor') or "
+                    "locals().get('predictor_col') or "
+                    "locals().get('primary_predictor_col') or "
+                    "locals().get('predictor') or None"
+                ),
+                1,
+            )
             if repaired != code:
                 return repair_name, repaired
 
@@ -3744,6 +4758,22 @@ def _deterministic_runner_repair(
             ).strip() + "\n"
             return repair_name, repaired
 
+    omitted_primary_predictor = re.search(
+        r"Error fitting logistic regression:\s*'([^']+)'",
+        run_log or "",
+        flags=re.IGNORECASE,
+    )
+    if omitted_primary_predictor and "X = model_df[[" in code:
+        predictor = omitted_primary_predictor.group(1)
+        repair_name = "primary_predictor_omitted_from_design_v1"
+        if previous_repair != repair_name:
+            repaired = _patch_primary_predictor_into_design_matrix(
+                code=code,
+                predictor=predictor,
+            )
+            if repaired is not None and repaired != code:
+                return repair_name, repaired
+
     cut_tuple_error = (
         "typeerror: '<' not supported between instances of 'tuple' and 'int'"
         in lowered
@@ -3857,7 +4887,7 @@ def _deterministic_runner_repair(
             df = pd.read_parquet(cohort_path)
             required_cols = ['lactate_max_24h', 'death', 'age', 'sex', 'map_min_24h', 'vaso_any_24h']
             model_df = df[required_cols].copy()
-            model_df['sex'] = (model_df['sex'].astype(str).str.lower() == 'male').astype(float)
+            model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
             for col in required_cols:
                 if col != 'sex':
                     model_df[col] = pd.to_numeric(model_df[col], errors='coerce')
@@ -4003,6 +5033,25 @@ def _deterministic_runner_repair(
             """
         ).strip() + "\n"
         return repair_name, repaired
+
+    table_one_binary_keyerror = (
+        "keyerror: 1" in lowered
+        and "in-hospital mortality" in code.lower()
+        and '"counts"][1]' in code
+    )
+    if table_one_binary_keyerror:
+        repair_name = "table_one_binary_key_string_v1"
+        if previous_repair != repair_name:
+            repaired = code.replace(
+                'summary["outcomes"]["death"]["counts"][1]',
+                'summary["outcomes"]["death"]["counts"].get("1", summary["outcomes"]["death"]["counts"].get(1, 0))',
+            )
+            repaired = repaired.replace(
+                'summary["outcomes"]["death"]["pct"][1]',
+                'summary["outcomes"]["death"]["pct"].get("1", summary["outcomes"]["death"]["pct"].get(1, 0.0))',
+            )
+            if repaired != code:
+                return repair_name, repaired
 
     cohort_file_as_dir = (
         "notadirectoryerror" in lowered
@@ -4317,6 +5366,819 @@ def _expected_numeric_annotations_for_step(
     return expected
 
 
+def _coerce_scalar(value: Any) -> Optional[Union[int, float, str, bool]]:
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        return text if text else None
+    return None
+
+
+def _first_present_scalar(
+    payload: Dict[str, Any], keys: Sequence[str]
+) -> Optional[Union[int, float, str, bool]]:
+    flat = _flatten_scalar_dict(payload)
+    for key in keys:
+        if key not in payload:
+            for flat_key, flat_value in flat.items():
+                if flat_key.endswith(f".{key}"):
+                    value = _coerce_scalar(flat_value)
+                    if value is not None:
+                        return value
+            continue
+        value = _coerce_scalar(payload.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _first_numeric_scalar_with_key_fragment(
+    payload: Dict[str, Any], fragments: Sequence[str]
+) -> Optional[float]:
+    """Return the first numeric scalar whose flattened key contains a fragment."""
+
+    lowered_fragments = tuple(fragment.lower() for fragment in fragments if fragment)
+    if not lowered_fragments:
+        return None
+    for key, value in _flatten_scalar_dict(payload).items():
+        lowered = key.lower()
+        if not any(fragment in lowered for fragment in lowered_fragments):
+            continue
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value.strip())
+            except ValueError:
+                continue
+    return None
+
+
+def _flatten_scalar_dict(
+    payload: Any,
+    *,
+    prefix: str = "",
+) -> Dict[str, Union[int, float, str, bool]]:
+    flat: Dict[str, Union[int, float, str, bool]] = {}
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            flat.update(_flatten_scalar_dict(value, prefix=child_prefix))
+        return flat
+    if isinstance(payload, list):
+        return flat
+    scalar = _coerce_scalar(payload)
+    if scalar is not None and prefix:
+        flat[prefix] = scalar
+    return flat
+
+
+def _first_numeric_effect_from_text(payload: Any) -> Optional[float]:
+    text = json.dumps(payload, ensure_ascii=False, default=str)
+    patterns = (
+        r"\b(?:OR|odds\s+ratio)\b\s*(?:=|:|of)?\s*([0-9]+(?:\.[0-9]+)?)",
+        r"\b(?:adjusted\s+OR|adjusted\s+odds\s+ratio)\b\s*(?:=|:|of)?\s*([0-9]+(?:\.[0-9]+)?)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            value = float(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
+def _enforce_advanced_plan_contract(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+) -> tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Constrain advanced plan shape while leaving analysis code to the agent."""
+
+    family = (
+        (context.user_preferences.inferred_analysis_family or "").lower()
+        if context.user_preferences
+        else ""
+    )
+    if not family:
+        plan_blob = " ".join(
+            [
+                context.research_question or "",
+                " ".join(
+                    " ".join(
+                        [
+                            step.step_id or "",
+                            step.intent or "",
+                            step.method or "",
+                            " ".join(step.expected_outputs or []),
+                        ]
+                    )
+                    for step in (plan.steps or [])
+                ),
+            ]
+        ).lower()
+        if any(
+            marker in plan_blob
+            for marker in (
+                "complete-case",
+                "complete case",
+                "missing-indicator",
+                "missing indicator",
+                "reduced-variable",
+                "reduced variable",
+                "robustness",
+            )
+        ):
+            family = "robustness"
+        elif any(
+            marker in plan_blob
+            for marker in (
+                "cluster",
+                "clustering",
+                "phenotype",
+                "trajectory",
+                "silhouette",
+            )
+        ):
+            family = "clustering"
+        elif any(
+            marker in plan_blob
+            for marker in (
+                "prediction",
+                "auroc",
+                "auc",
+                "brier",
+                "calibration",
+                "cross-validation",
+                "cross validation",
+                "held-out",
+                "held out",
+            )
+        ):
+            family = "prediction_model"
+    if family not in {"prediction_model", "clustering", "robustness"}:
+        return plan, []
+
+    if family == "prediction_model":
+        markers = (
+            "prediction",
+            "model",
+            "training",
+            "performance",
+            "auroc",
+            "auc",
+            "brier",
+            "calibration",
+            "discrimination",
+        )
+        canonical_step_id = "01_model_training"
+        canonical_method = "prediction_model"
+        canonical_intent = (
+            "Train and validate the mortality prediction model in one "
+            "self-contained executable step."
+        )
+        required_outputs = [
+            "statistic:auroc",
+            "statistic:brier_score",
+            "statistic:baseline_prevalence",
+            "statistic:split_strategy",
+            "table:model_performance",
+            "figure:discrimination_calibration",
+        ]
+    elif family == "clustering":
+        markers = (
+            "cluster",
+            "clustering",
+            "phenotype",
+            "trajectory",
+            "silhouette",
+            "mortality_by_cluster",
+        )
+        canonical_step_id = "01_trajectory_clustering"
+        canonical_method = "clustering"
+        canonical_intent = (
+            "Generate shock-physiology clusters, cluster summaries, post-hoc "
+            "mortality by cluster, validation metrics, and a figure in one "
+            "self-contained executable step."
+        )
+        required_outputs = [
+            "statistic:silhouette_score",
+            "statistic:cluster_count",
+            "table:cluster_characteristics",
+            "table:cluster_mortality",
+            "figure:clustering_visualization",
+            "log:clustering_algorithm_details",
+            "manifest:clustering_methodology",
+        ]
+    else:
+        markers = (
+            "complete-case",
+            "complete case",
+            "missing-indicator",
+            "missing indicator",
+            "reduced-variable",
+            "reduced variable",
+            "robustness",
+            "odds ratio",
+            "logistic",
+            "model",
+            "figure",
+            "performance",
+        )
+        canonical_step_id = "03_complete_case_robustness"
+        canonical_method = "association_robustness"
+        canonical_intent = (
+            "Fit complete-case, missing-indicator, and reduced-variable mortality "
+            "association models; extract lactate odds ratios and complete-case "
+            "sample size; write the summary table and robustness figure in one "
+            "self-contained executable step."
+        )
+        required_outputs = [
+            "statistic:primary_or",
+            "statistic:complete_case_n",
+            "table:robustness_summary",
+            "figure:robustness_plot",
+            "log:missingness_strategy_notes",
+        ]
+
+    def _is_relevant(step: AnalysisStep) -> bool:
+        text = " ".join(
+            [
+                step.step_id or "",
+                step.intent or "",
+                step.method or "",
+                " ".join(step.expected_outputs or []),
+            ]
+        ).lower()
+        return any(marker in text for marker in markers)
+
+    relevant_indexes = [idx for idx, step in enumerate(plan.steps) if _is_relevant(step)]
+    if not relevant_indexes:
+        return plan, []
+
+    first_index = relevant_indexes[0]
+    relevant_steps = [plan.steps[idx] for idx in relevant_indexes]
+    combined_inputs: List[str] = []
+    for step in relevant_steps:
+        for item in step.inputs or []:
+            if item not in combined_inputs:
+                combined_inputs.append(item)
+    combined_outputs = list(required_outputs)
+    for step in relevant_steps:
+        for item in step.expected_outputs or []:
+            if item not in combined_outputs:
+                combined_outputs.append(item)
+
+    current = relevant_steps[0]
+    missing_outputs = [item for item in required_outputs if item not in current.expected_outputs]
+    needs_normalisation = (
+        len(relevant_indexes) != 1
+        or bool(missing_outputs)
+        or current.step_id != canonical_step_id
+    )
+    if not needs_normalisation:
+        return plan, []
+
+    canonical_step = current.model_copy(
+        update={
+            "step_id": canonical_step_id,
+            "intent": canonical_intent,
+            "inputs": combined_inputs or current.inputs,
+            "expected_outputs": combined_outputs,
+            "method": canonical_method,
+        }
+    )
+    new_steps: List[AnalysisStep] = []
+    inserted = False
+    relevant_set = set(relevant_indexes)
+    for idx, step in enumerate(plan.steps):
+        if idx in relevant_set:
+            if not inserted:
+                new_steps.append(canonical_step)
+                inserted = True
+            continue
+        new_steps.append(step)
+
+    revised = plan.model_copy(
+        update={"steps": new_steps, "revision": max(1, plan.revision) + 1}
+    )
+    finding = ValidationFinding(
+        validator="plan_contract",
+        severity="warning",
+        message=(
+            f"Planner output for {family} was normalized to a single "
+            "self-contained advanced-analysis step with explicit v14 metric "
+            "and artefact contracts."
+        ),
+        detail={
+            "family": family,
+            "original_step_ids": [step.step_id for step in relevant_steps],
+            "canonical_step_id": canonical_step_id,
+            "canonical_insert_index": first_index,
+            "required_outputs": required_outputs,
+        },
+    )
+    return revised, [finding]
+
+
+def _step_contract_findings(
+    *,
+    step: AnalysisStep,
+    step_summary: Dict[str, Any],
+) -> List[ValidationFinding]:
+    if not isinstance(step_summary, dict) or not step_summary:
+        return [
+            ValidationFinding(
+                validator="step_contract",
+                severity="error",
+                message=(
+                    f"Step {step.step_id} did not produce a readable step_summary.json, "
+                    "so required outputs cannot be verified."
+                ),
+                detail={"step_id": step.step_id},
+            )
+        ]
+
+    findings: List[ValidationFinding] = []
+    expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
+    step_id = (step.step_id or "").lower()
+    intent = (step.intent or "").lower()
+
+    def _append_missing(message: str, keys: Sequence[str]) -> None:
+        findings.append(
+            ValidationFinding(
+                validator="step_contract",
+                severity="error",
+                message=message,
+                detail={
+                    "step_id": step.step_id,
+                    "expected_outputs": list(step.expected_outputs or []),
+                    "summary_keys": sorted(step_summary.keys()),
+                    "skipped": step_summary.get("skipped"),
+                    "error": step_summary.get("error"),
+                    "required_keys": list(keys),
+                },
+            )
+        )
+
+    effect_required = any(
+        token in expected
+        for token in (
+            "adjusted_or_ci",
+            "primary_association",
+            "odds_ratio",
+            "primary_or",
+            "adjusted_or",
+        )
+    ) or "primary_association" in step_id
+    if not effect_required and "association" in expected:
+        effect_required = (
+            "model" in step_id
+            or "regression" in intent
+            or "estimate" in intent
+            or "odds" in expected
+        )
+    if not effect_required and (
+        ("logistic" in expected or "logistic" in intent or "odds" in intent)
+        and ("model" in step_id or "model" in expected or "regression" in intent)
+    ):
+        effect_required = True
+    if effect_required:
+        effect_value = _first_present_scalar(
+            step_summary,
+            (
+                "estimate",
+                "statistic:estimate",
+                "primary_or",
+                "statistic:primary_or",
+                "odds_ratio",
+                "statistic:odds_ratio",
+                "adjusted_or",
+                "statistic:adjusted_or",
+                "lactate_or",
+                "lactate_max_24h_or",
+                "primary_association_estimate",
+                "statistic:primary_association_estimate",
+                "association_estimate",
+                "statistic:association_estimate",
+                "or",
+            ),
+        )
+        if effect_value is None:
+            for key, value in _flatten_scalar_dict(step_summary).items():
+                lowered = key.lower()
+                if (
+                    lowered.endswith("_or")
+                    or lowered.endswith("_odds_ratio")
+                    or lowered.endswith("_estimate")
+                ):
+                    effect_value = _coerce_scalar(value)
+                    if effect_value is not None:
+                        break
+        if effect_value is None:
+            effect_value = _first_numeric_effect_from_text(step_summary)
+        if effect_value is None:
+            _append_missing(
+                (
+                    f"Step {step.step_id} was expected to report a primary association "
+                    "estimate, but no numeric effect size was recorded."
+                ),
+                ("estimate", "primary_or", "odds_ratio", "adjusted_or", "lactate_or"),
+            )
+
+    prediction_step = (
+        "training_and_evaluation" in step_id
+        or "model_training" in step_id
+        or "prediction" in step_id
+        or "prediction" in intent
+    )
+    prediction_required = (
+        any(token in expected for token in ("auroc", "auc", "brier", "discrimination"))
+        or ("calibration" in expected and prediction_step)
+        or prediction_step
+    )
+    if prediction_required:
+        auroc_value = _first_present_scalar(
+            step_summary,
+            (
+                "auroc",
+                "statistic:auroc",
+                "auc",
+                "statistic:auc",
+                "held_out_auroc",
+                "statistic:held_out_auroc",
+                "cv_auroc",
+                "statistic:cv_auroc",
+                "cv_auroc_mean",
+                "statistic:cv_auroc_mean",
+                "mean_auroc",
+                "auroc_mean",
+                "auroc_median",
+            ),
+        )
+        if auroc_value is None:
+            auroc_value = _first_numeric_scalar_with_key_fragment(
+                step_summary,
+                ("auroc", "auc"),
+            )
+        if auroc_value is None:
+            _append_missing(
+                (
+                    f"Step {step.step_id} was expected to report AUROC-style discrimination, "
+                    "but no AUROC metric was recorded."
+                ),
+                ("auroc", "cv_auroc", "mean_auroc", "auroc_median"),
+            )
+        calibration_value = _first_present_scalar(
+            step_summary,
+            (
+                "brier_score",
+                "statistic:brier_score",
+                "cv_brier_mean",
+                "statistic:cv_brier_mean",
+                "brier_mean",
+                "held_out_brier",
+                "statistic:held_out_brier",
+                "brier_median",
+                "calibration_slope",
+                "statistic:calibration_slope",
+                "calibration_slope_median",
+                "calibration_intercept",
+                "statistic:calibration_intercept",
+                "calibration_intercept_median",
+            ),
+        )
+        if calibration_value is None:
+            calibration_value = _first_numeric_scalar_with_key_fragment(
+                step_summary,
+                ("brier", "calibration_slope", "calibration_intercept"),
+            )
+        if calibration_value is None:
+            _append_missing(
+                (
+                    f"Step {step.step_id} was expected to report calibration or Brier-style "
+                    "evaluation metrics, but none were recorded."
+                ),
+                (
+                    "brier_score",
+                    "cv_brier_mean",
+                    "held_out_brier",
+                    "calibration_slope",
+                    "calibration_intercept",
+                ),
+            )
+
+    clustering_required = any(
+        token in expected for token in ("cluster", "silhouette")
+    ) or "cluster" in step_id or "clustering" in intent
+    if clustering_required:
+        cluster_value = _first_present_scalar(
+            step_summary,
+            (
+                "silhouette_score",
+                "statistic:silhouette_score",
+                "silhouette",
+                "statistic:silhouette",
+                "n_clusters",
+                "statistic:n_clusters",
+                "cluster_count",
+                "statistic:cluster_count",
+            ),
+        )
+        if cluster_value is None:
+            cluster_value = _first_numeric_scalar_with_key_fragment(
+                step_summary,
+                ("silhouette", "cluster_count", "n_clusters"),
+            )
+        if cluster_value is None:
+            _append_missing(
+                (
+                    f"Step {step.step_id} was expected to report a clustering summary, "
+                    "but no cluster metric or cluster count was recorded."
+                ),
+                ("silhouette_score", "silhouette", "n_clusters", "cluster_count"),
+            )
+
+    figure_required = "figure:" in expected or "publication-ready figure" in intent
+    if figure_required:
+        figure_value = None
+        for key, value in _flatten_scalar_dict(step_summary).items():
+            lowered_key = key.lower()
+            lowered_value = str(value).lower()
+            if (
+                "figure" in lowered_key
+                or "plot" in lowered_key
+                or lowered_value.endswith((".png", ".svg", ".pdf", ".tiff", ".tif"))
+                or ".png" in lowered_value
+                or ".svg" in lowered_value
+                or ".pdf" in lowered_value
+                or ".tiff" in lowered_value
+                or ".tif" in lowered_value
+            ):
+                figure_value = value
+                break
+        if figure_value is None:
+            _append_missing(
+                (
+                    f"Step {step.step_id} was expected to produce a figure artifact, "
+                    "but the step summary did not record any figure path or figure output."
+                ),
+                ("figure_path", "figure", "plot_path", "png", "svg"),
+            )
+
+    return findings
+
+
+def _step_contract_repair_guidance(
+    *,
+    step: AnalysisStep,
+    step_summary: Dict[str, Any],
+    code: str,
+) -> str:
+    guidance: List[str] = []
+    predictor = str(
+        (step_summary or {}).get("primary_predictor")
+        or (step_summary or {}).get("predictor")
+        or ""
+    ).strip()
+    summary_text = json.dumps(step_summary or {}, ensure_ascii=False, default=str)
+    if predictor and predictor in summary_text:
+        guidance.append(
+            f"The machine summary identifies `{predictor}` as the primary predictor. "
+            f"The repaired script must include `{predictor}` in the fitted design matrix."
+        )
+        lookup_patterns = (
+            f"result.params['{predictor}'",
+            f'result.params["{predictor}"',
+            f"result.conf_int().loc['{predictor}'",
+            f'result.conf_int().loc["{predictor}"',
+            f"result.pvalues['{predictor}'",
+            f'result.pvalues["{predictor}"',
+            f"coef_table.loc['{predictor}'",
+            f'coef_table.loc["{predictor}"',
+        )
+        if any(pattern in code for pattern in lookup_patterns):
+            guidance.append(
+                f"The previous script read model results for `{predictor}`. "
+                f"Before fitting, build `x_cols` so `{predictor}` is present in `X.columns`; "
+                "otherwise statsmodels will fit a model that cannot report the requested coefficient."
+            )
+    if "pd.get_dummies" in code and "drop_first" in code:
+        guidance.append(
+            "The previous script used dummy encoding. Rebuild the predictor list after "
+            "dummy encoding: primary predictor + numeric covariates + generated dummy columns."
+        )
+    if (
+        (
+            (step_summary or {}).get("n_total") == 0
+            or "zero-size array" in summary_text.lower()
+            or "empty" in summary_text.lower()
+        )
+        and "pd.to_numeric" in code
+        and "sex" in code
+    ):
+        guidance.append(
+            "The previous script appears to have dropped the entire cohort by applying "
+            "`pd.to_numeric(..., errors='coerce')` to `sex` before dummy encoding. "
+            "Repair preprocessing by dummy-encoding `sex` first, rebuilding `x_cols`, "
+            "then numeric-coercing only `[outcome] + x_cols` and dropping missing rows "
+            "with that rebuilt list."
+        )
+        guidance.append(
+            "Do not keep a null estimate summary for this contract failure. The repair "
+            "should produce a numeric odds ratio when enough non-missing rows/events exist."
+        )
+    if (
+        "pandas data cast to numpy dtype of object" in summary_text.lower()
+        or "dtype of object" in summary_text.lower()
+    ) and ("sm.logit(" in code.lower() or "pd.get_dummies" in code):
+        guidance.append(
+            "The prior script passed an object-dtype design matrix into statsmodels. "
+            "After `pd.get_dummies(...)`, rebuild the predictor frame and convert every "
+            "column in `X` with `pd.to_numeric(..., errors='coerce')`, cast boolean "
+            "dummy columns to int when needed, and fit `sm.Logit(y, X.astype(float))`."
+        )
+        guidance.append(
+            "Check the final design matrix dtypes before fitting and keep only rows with "
+            "non-missing numeric predictors/outcome so the repaired script writes a "
+            "non-null odds ratio."
+        )
+    expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
+    step_id = (step.step_id or "").lower()
+    intent = (step.intent or "").lower()
+    effect_required = any(
+        token in expected
+        for token in (
+            "adjusted_or_ci",
+            "primary_association",
+            "odds_ratio",
+            "primary_or",
+            "adjusted_or",
+        )
+    ) or "primary_association" in step_id
+    if not effect_required and "association" in expected:
+        effect_required = (
+            "model" in step_id
+            or "regression" in intent
+            or "estimate" in intent
+            or "odds" in expected
+        )
+    if not effect_required and (
+        ("logistic" in expected or "logistic" in intent or "odds" in intent)
+        and ("model" in step_id or "model" in expected or "regression" in intent)
+    ):
+        effect_required = True
+    if effect_required:
+        guidance.append(
+            "This association step must write a non-null numeric primary effect "
+            "estimate in step_summary.json, such as `adjusted_or`, `primary_or`, "
+            "`odds_ratio`, or `primary_association_estimate`. Do not satisfy the "
+            "contract by leaving association fields null."
+        )
+    prediction_step = (
+        any(token in step_id for token in ("prediction", "model_training", "training_and_evaluation", "performance"))
+        or "prediction" in intent
+    )
+    prediction_required = (
+        any(token in expected for token in ("auroc", "auc", "brier", "discrimination"))
+        or ("calibration" in expected and prediction_step)
+        or prediction_step
+    )
+    if prediction_required:
+        guidance.append(
+            "This prediction step must produce numeric AUROC and Brier/calibration metrics "
+            "in step_summary.json (for example `cv_auroc_mean` and `brier_score`). "
+            "Do not return only null metrics unless validation is truly impossible."
+        )
+        if "could not convert string to float" in summary_text.lower() or (
+            "passthrough" in code and "onehot" in code.lower()
+        ):
+            guidance.append(
+                "The failure indicates a categorical variable reached a numeric estimator. "
+                "Use a scikit-learn ColumnTransformer with numeric features in a median-impute/"
+                "scale branch and categorical features in a most-frequent-impute + "
+                "OneHotEncoder(handle_unknown='ignore', sparse_output=False) branch. "
+                "Never use `('onehot', 'passthrough')` for the categorical branch."
+            )
+        if "pd.to_numeric" in code and "categorical" in code.lower():
+            guidance.append(
+                "Do not numeric-coerce the full mixed feature frame. Keep categorical "
+                "columns such as sex as object/string until the categorical transformer "
+                "encodes them."
+            )
+    if "simpleimputer does not support data with dtype bool" in summary_text.lower():
+        guidance.append(
+            "A boolean dummy column reached SimpleImputer. Cast boolean dummy columns "
+            "to int before fitting scikit-learn pipelines, or route them through a "
+            "numeric branch with median imputation after conversion."
+        )
+    clustering_required = any(
+        token in expected for token in ("cluster", "silhouette")
+    ) or any(token in step_id for token in ("cluster", "trajectory")) or "clustering" in intent
+    if clustering_required:
+        guidance.append(
+            "This clustering step must write machine-readable clustering metrics "
+            "in step_summary.json. Use keys such as `silhouette_score` or "
+            "`statistic:silhouette_score`, plus `cluster_count` or "
+            "`statistic:cluster_count`."
+        )
+        guidance.append(
+            "Keep clustering self-contained: create labels, cluster characteristics, "
+            "post-hoc mortality by cluster, method metadata, and the clustering "
+            "figure inside this script. Do not rely on labels saved by another step."
+        )
+        guidance.append(
+            "Also save table artefacts named `cluster_characteristics.csv` and "
+            "`cluster_mortality.csv` when feasible so manuscript evidence aliases bind."
+        )
+    if "figure:" in expected:
+        guidance.append(
+            "This step declares a figure output. Save a real figure file such as PNG/SVG/"
+            "PDF/TIFF and record its path in step_summary.json using a key such as "
+            "`figure_path`, `figure_file`, or `figure_files`."
+        )
+    if not guidance:
+        guidance.append(
+            "Repair the script so each expected output is written as machine-readable "
+            "numbers in step_summary.json, or write a precise skipped/error reason."
+        )
+    return "\n".join(f"- {item}" for item in guidance)
+
+
+def _render_writer_evidence_digest(per_step_records: Sequence[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    preferred_keys = (
+        "sample_size",
+        "n_total",
+        "n_total_stays",
+        "n_complete",
+        "n_complete_case",
+        "complete_case_n",
+        "outcome_rate",
+        "mortality_rate",
+        "median_age",
+        "estimate",
+        "primary_or",
+        "odds_ratio",
+        "adjusted_or",
+        "ci_lower",
+        "ci_upper",
+        "primary_ci_low",
+        "primary_ci_high",
+        "p_value",
+        "auroc",
+        "cv_auroc",
+        "mean_auroc",
+        "auroc_median",
+        "brier_score",
+        "held_out_brier",
+        "brier_median",
+        "calibration_slope",
+        "calibration_slope_median",
+        "calibration_intercept",
+        "calibration_intercept_median",
+        "baseline_prevalence",
+        "silhouette_score",
+        "silhouette",
+        "n_clusters",
+        "cluster_count",
+        "spearman_rho",
+        "rho",
+        "skipped",
+        "error",
+    )
+    for record in per_step_records:
+        step_id = str(record.get("step_id") or "unknown_step")
+        status = str(record.get("status") or "unknown")
+        lines.append(f"- {step_id} [{status}]")
+        summary = record.get("step_summary")
+        if not isinstance(summary, dict) or not summary:
+            lines.append("  {}")
+            continue
+        digest_row: Dict[str, Any] = {}
+        for key in preferred_keys:
+            scalar = _first_present_scalar(summary, (key,))
+            if scalar is not None:
+                digest_row[key] = scalar
+        if "primary_predictor" in summary:
+            digest_row["primary_predictor"] = str(summary["primary_predictor"])
+        if "target_outcome" in summary:
+            digest_row["target_outcome"] = str(summary["target_outcome"])
+        lines.append(
+            "  " + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
+        )
+    return "\n".join(lines)
+
+
 def _extract_primary_effect_row(
     *, database: str, result: PipelineResult
 ) -> Dict[str, Any]:
@@ -4344,16 +6206,17 @@ def _extract_primary_effect_row(
         if not isinstance(summary, dict):
             continue
         predictor = summary.get("predictor") or summary.get("variable")
-        primary_or = summary.get("primary_or") or summary.get("odds_ratio")
-        ci_low = (
-            summary.get("primary_ci_low")
-            or summary.get("primary_or_ci_low")
-            or summary.get("ci_low")
+        primary_or = _first_present_scalar(
+            summary,
+            ("primary_or", "odds_ratio", "estimate", "adjusted_or", "lactate_or"),
         )
-        ci_high = (
-            summary.get("primary_ci_high")
-            or summary.get("primary_or_ci_high")
-            or summary.get("ci_high")
+        ci_low = _first_present_scalar(
+            summary,
+            ("primary_ci_low", "primary_or_ci_low", "ci_low", "ci_lower", "lower"),
+        )
+        ci_high = _first_present_scalar(
+            summary,
+            ("primary_ci_high", "primary_or_ci_high", "ci_high", "ci_upper", "upper"),
         )
         if (
             primary_or is None
@@ -4528,16 +6391,108 @@ def _render_report(
 # "02_outcome_incidence", "04_primary_association", "05_sofa_zero_audit")
 # all resolve correctly.
 _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
+    # Cohort/table-one summaries often carry the same mortality
+    # incidence statistic that manuscript scaffolds cite as outcome_rate.
+    ("cohort_summary", "step_summary.json"): (
+        "cohort_summary",
+        "outcome_rate",
+        "mortality_rate",
+        "outcome_incidence",
+    ),
+    ("table_one", "step_summary.json"): (
+        "table_one",
+        "cohort_summary",
+        "outcome_rate",
+        "mortality_rate",
+    ),
     # Outcome incidence summary should also answer to "outcome_rate".
     ("outcome_incidence", "step_summary.json"): ("outcome_rate", "outcome_incidence"),
+    ("stratified_incidence", "step_summary.json"): (
+        "stratified_mortality",
+        "outcome_rate",
+        "mortality_rate",
+        "primary_association",
+    ),
+    ("stratified_mortality", "step_summary.json"): (
+        "stratified_mortality",
+        "outcome_rate",
+        "mortality_rate",
+        "primary_association",
+    ),
+    ("correlation_analysis", "step_summary.json"): (
+        "primary_association",
+        "correlation_summary",
+        "spearman_correlation",
+        "model_performance",
+    ),
+    ("visualization", "step_summary.json"): (
+        "correlation_summary",
+        "spearman_correlation",
+    ),
+    ("missing_data_audit", "step_summary.json"): (
+        "missingness",
+        "outcome_rate",
+        "mortality_rate",
+    ),
     # The primary-association step_summary doubles as the OR / model
     # statistic the writer points at.
     ("primary_association", "step_summary.json"): ("primary_association",),
+    ("association_model", "step_summary.json"): (
+        "primary_association",
+        "association_model",
+        "primary_association_table",
+    ),
+    ("sensitivity_complete_case", "step_summary.json"): (
+        "primary_association",
+        "complete_case_model",
+        "kdigo_sensitivity",
+    ),
+    ("sensitivity_reduced_vars", "step_summary.json"): (
+        "primary_association",
+        "association_model",
+        "reduced_model",
+        "kdigo_sensitivity",
+    ),
+    ("sensitivity_reduced", "step_summary.json"): (
+        "primary_association",
+        "association_model",
+        "reduced_model",
+        "kdigo_sensitivity",
+    ),
+    ("model_fitting_complete_case", "step_summary.json"): (
+        "primary_association",
+        "complete_case_model",
+    ),
+    ("model_fitting_missing_indicator", "step_summary.json"): (
+        "primary_association",
+        "missing_indicator_model",
+    ),
+    ("model_fitting_reduced_variables", "step_summary.json"): (
+        "primary_association",
+        "reduced_variable_model",
+    ),
+    ("complete_case_robustness", "step_summary.json"): (
+        "primary_association",
+        "outcome_rate",
+        "mortality_rate",
+        "robustness_summary",
+    ),
     # Some hosted models name the association/safety step
     # "composite_audit" while still emitting the SOFA stratum mortality
     # and score-0-vs-1 association summary that the manuscript cites as
     # the primary association.
     ("composite", "step_summary.json"): ("primary_association", "stratum_audit"),
+    ("sofa_zero_audit", "step_summary.json"): (
+        "sofa_zero_audit",
+        "sofa_zero_count",
+        "outcome_rate",
+        "mortality_rate",
+    ),
+    ("mortality_association", "step_summary.json"): (
+        "primary_association",
+        "outcome_rate",
+        "mortality_rate",
+    ),
     # Generic table outputs from any step.
     ("", "table_one.csv"): ("table_one",),
     ("", "missingness.csv"): ("missingness",),
@@ -4548,12 +6503,57 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
         "stratum_audit",
         "sofa_strata",
     ),
+    ("", "stratified_mortality_incidence.csv"): (
+        "stratified_mortality_incidence",
+        "stratified_mortality",
+        "outcome_rate",
+        "mortality_rate",
+        "sofa_strata",
+    ),
     ("", "primary_association.csv"): ("primary_association_table",),
+    ("", "correlation_matrix.csv"): (
+        "correlation_matrix",
+        "correlation_summary",
+        "primary_association_table",
+    ),
+    ("", "cluster_characteristics.csv"): (
+        "cluster_characteristics",
+        "cluster_summary",
+        "table_one",
+    ),
+    ("", "cluster_mortality.csv"): ("cluster_mortality", "outcome_rate"),
+    ("", "clustering_algorithm_details.json"): (
+        "clustering_algorithm_details",
+        "clustering_methodology",
+    ),
+    ("", "clustering_methodology.json"): (
+        "clustering_methodology",
+        "cluster_summary",
+    ),
     # Figures.
     ("", "sofa_strata.png"): ("sofa_strata_figure",),
+    ("", "mortality_by_sofa2_stratum.png"): (
+        "mortality_by_sofa2_stratum",
+        "figure_mortality_by_sofa2_stratum",
+        "sofa_strata_figure",
+    ),
     ("", "stratum_audit.png"): ("stratum_audit_figure", "sofa_strata_figure"),
     ("", "missingness_heatmap.png"): ("missingness_heatmap",),
     ("", "primary_association_curve.png"): ("primary_association_figure",),
+    ("", "sofa2_correlation_heatmap.png"): (
+        "sofa2_correlation_heatmap",
+        "correlation_heatmap",
+        "correlation_figure",
+    ),
+    ("", "correlation_heatmap.png"): (
+        "correlation_heatmap",
+        "sofa2_correlation_heatmap",
+        "correlation_figure",
+    ),
+    ("", "clustering_visualization.png"): (
+        "clustering_visualization",
+        "clustering_figure",
+    ),
 }
 
 
@@ -4566,10 +6566,61 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
     Methods/Results scaffold cites Table 1 once.
     """
     out: List[str] = []
+    if artefact.name == "step_summary.json":
+        step_id = step.step_id or ""
+        if step_id:
+            out.append(step_id)
+            stripped = re.sub(r"^\d+[_-]+", "", step_id)
+            if stripped and stripped != step_id:
+                out.append(stripped)
+        expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
+        intent = (step.intent or "").lower()
+        prediction_step = "prediction" in intent or "model_training" in step_id.lower()
+        if any(token in expected for token in ("auroc", "brier")) or (
+            "calibration" in expected and prediction_step
+        ) or prediction_step:
+            out.extend(
+                [
+                    "model_performance",
+                    "prediction_performance",
+                    "primary_association",
+                    "outcome_rate",
+                ]
+            )
+        if any(token in expected for token in ("cluster", "silhouette")) or (
+            "cluster" in intent
+            or "cluster" in step_id.lower()
+            or "trajectory" in step_id.lower()
+        ):
+            out.extend(
+                [
+                    "cluster_summary",
+                    "cluster_characteristics",
+                    "cluster_mortality",
+                    "clustering_performance",
+                    "clustering_methodology",
+                    "table_one",
+                ]
+            )
+        if (
+            "robustness" in expected
+            or "robustness" in intent
+            or "complete_case_robustness" in step_id.lower()
+        ):
+            out.extend(
+                [
+                    "primary_association",
+                    "outcome_rate",
+                    "mortality_rate",
+                    "robustness_summary",
+                ]
+            )
+        if not (artefact.parent / "table_one.csv").exists():
+            out.append("table_one")
     for (step_substr, basename), aliases in _SEMANTIC_ALIAS_MAP.items():
         if basename != artefact.name:
             continue
-        if step_substr and step_substr not in step.step_id:
+        if step_substr and step_substr not in (step.step_id or "").lower():
             continue
         out.extend(aliases)
     return out
