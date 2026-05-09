@@ -537,6 +537,8 @@ def build_naive_research_context(
     id_cols = list(id_columns) if id_columns else _guess_id_columns(df)
     time_cols = list(time_columns) if time_columns else _guess_time_columns(df)
     out_cols = list(outcome_columns) if outcome_columns else _guess_outcome_columns(df)
+    if target_outcome and target_outcome in df.columns and target_outcome not in out_cols:
+        out_cols.append(target_outcome)
 
     n_patients = _count_unique(df, id_cols[:1]) if id_cols else int(len(df))
     n_stays = int(len(df))
@@ -548,7 +550,6 @@ def build_naive_research_context(
         id_columns=id_cols, time_columns=time_cols, outcome_columns=out_cols,
     )
 
-    user_descriptions = dict(concept_descriptions or {})
     descriptors: List[ConceptDescriptor] = []
     for col in df.columns:
         # role = OTHER for everything except declared id / time / outcome.
@@ -562,13 +563,13 @@ def build_naive_research_context(
             role = VariableRole.OTHER
         descriptors.append(ConceptDescriptor(
             name=col,
-            description=user_descriptions.get(col),
+            description=None,
             role=role,
             dtype=str(df[col].dtype),
             unit=None,
             valid_range=None,
-            allowed_aggregations=[AggregationRule.ANY],
-            aggregation_default=AggregationRule.ANY,
+            allowed_aggregations=[],
+            aggregation_default=None,
             is_ordinal=False,
             ordinal_levels=None,
             source_concept=None,
@@ -588,11 +589,7 @@ def build_naive_research_context(
         target_outcome=target_outcome,
         cross_database_validation=list(cross_database_validation or []),
         cohort_parquet=cohort_path,
-        user_preferences=(
-            user_preferences
-            if isinstance(user_preferences, UserPreferences)
-            else (UserPreferences.model_validate(user_preferences) if user_preferences else None)
-        ),
+        user_preferences=None,
         notes=notes,
     )
 

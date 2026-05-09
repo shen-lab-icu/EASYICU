@@ -122,6 +122,20 @@ class CodeRunner:
         env["STEP_OUT_DIR"] = str(out_dir)
         env["MPLBACKEND"] = "Agg"
         env["PYTHONIOENCODING"] = "utf-8"
+        # macOS sandbox-exec can block shared-memory paths used by threaded
+        # BLAS/OpenMP runtimes. Single-thread defaults keep generated ICU
+        # analyses deterministic and avoid OMP SHM crashes inside the sandbox.
+        # Force, rather than default, because users' shells often export
+        # multi-threaded BLAS/OpenMP settings. Under macOS sandbox-exec those
+        # inherited settings can abort before Python reaches user code
+        # (for example: ``OMP: Error #179: Can't open SHM2``).
+        env["OMP_NUM_THREADS"] = "1"
+        env["MKL_NUM_THREADS"] = "1"
+        env["OPENBLAS_NUM_THREADS"] = "1"
+        env["VECLIB_MAXIMUM_THREADS"] = "1"
+        env["NUMEXPR_NUM_THREADS"] = "1"
+        env["JOBLIB_MULTIPROCESSING"] = "0"
+        env["KMP_INIT_AT_FORK"] = "FALSE"
         env.update(self.extra_env)
 
         timed_out = False
@@ -163,6 +177,36 @@ class CodeRunner:
                 stderr = (
                     "[CodeRunner] unshare network isolation unavailable; "
                     "retrying without Linux network namespace isolation.\n"
+                    f"[CodeRunner] original stderr:\n{stderr}\n"
+                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
+                )
+                returncode = retry_proc.returncode
+                cmd = retry_cmd
+            if (
+                returncode != 0
+                and original_cmd
+                and Path(original_cmd[0]).name == "sandbox-exec"
+                and sys.platform == "darwin"
+                and "omp: error #179" in stderr.lower()
+                and "shm" in stderr.lower()
+            ):
+                retry_cmd = [self.python_executable, str(script_path)]
+                retry_timeout = max(self.timeout_seconds - (time.monotonic() - started), 1.0)
+                retry_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                    retry_cmd,
+                    cwd=str(step_dir),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=retry_timeout,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                stdout = retry_proc.stdout
+                stderr = (
+                    "[CodeRunner] macOS sandbox-exec blocked numeric runtime shared memory; "
+                    "retrying without sandbox-exec while keeping network-free generated code "
+                    "under captured provenance.\n"
                     f"[CodeRunner] original stderr:\n{stderr}\n"
                     f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
                 )

@@ -178,7 +178,7 @@ class EvidenceStore:
                 )
             for alias in aliases or []:
                 self._add_alias(alias, evidence_id)
-            self._add_alias(target.stem.split("__", 1)[-1], evidence_id)
+            self._add_alias(_target_basename_stem(target, evidence_id), evidence_id)
             self._save()
             return existing
 
@@ -201,8 +201,7 @@ class EvidenceStore:
 
         for alias in aliases or []:
             self._add_alias(alias, evidence_id)
-        basename = target.name.split("__", 1)[-1]
-        self._add_alias(Path(basename).stem, evidence_id)
+        self._add_alias(_target_basename_stem(target, evidence_id), evidence_id)
         self._add_alias(evidence_id, evidence_id)
 
         self._save()
@@ -390,6 +389,22 @@ class EvidenceStore:
                 for r in self._records:
                     if r.evidence_id == eid:
                         return r
+            # Hosted writers sometimes cite the stable basename of a
+            # hash-suffixed artefact, e.g. ``figure_mortality`` for
+            # ``figure_mortality_ab12cd34``. Accept this only when the
+            # prefix is unique so we do not silently bind an ambiguous claim.
+            prefix = f"{evidence_id_or_alias}_"
+            candidate_ids = {
+                r.evidence_id for r in self._records if r.evidence_id.startswith(prefix)
+            }
+            candidate_ids.update(
+                eid for alias, eid in self._aliases.items() if alias.startswith(prefix)
+            )
+            if len(candidate_ids) == 1:
+                only = next(iter(candidate_ids))
+                for r in self._records:
+                    if r.evidence_id == only:
+                        return r
         return None
 
     def resolvable_names(self) -> List[str]:
@@ -463,25 +478,66 @@ class EvidenceStore:
                 out.append(scaffold[j:])
                 break
             eid = scaffold[j + len("{evidence:") : k]
-            rec = self.get(eid)
-            if rec is None:
-                out.append(f"[evidence missing: {eid}]")
+            requested_ids = [
+                _normalize_requested_evidence_id(item)
+                for item in eid.split(",")
+                if _normalize_requested_evidence_id(item)
+            ]
+            if not requested_ids:
+                requested_ids = [eid]
+            bound_parts: List[str] = []
+            missing: List[str] = []
+            for requested_id in requested_ids:
+                rec = self.get(requested_id)
+                if rec is None:
+                    missing.append(requested_id)
+                    continue
+                if verbose:
+                    suffix = _binding_caveat(rec)
+                    bound_parts.append(
+                        f"[{rec.description} | {rec.relative_path} | sha256={rec.sha256[:8]}]{suffix}"
+                    )
+                else:
+                    bound_parts.append(
+                        f'[{requested_id}]({rec.relative_path} "sha256={rec.sha256[:8]}")'
+                        f"{_binding_caveat(rec)}"
+                    )
+            if missing:
+                bound_parts.extend(f"[evidence missing: {item}]" for item in missing)
+            if bound_parts:
+                out.append("; ".join(bound_parts))
             elif verbose:
-                suffix = _binding_caveat(rec)
-                out.append(
-                    f"[{rec.description} | {rec.relative_path} | sha256={rec.sha256[:8]}]{suffix}"
-                )
-            else:
-                # Compact in-line citation: link uses the requested
-                # placeholder text (so the writer's own naming survives)
-                # and the URL points at the registered file. Trailing
-                # 8-char sha256 sits in the link title for hover.
-                out.append(
-                    f'[{eid}]({rec.relative_path} "sha256={rec.sha256[:8]}")'
-                    f"{_binding_caveat(rec)}"
-                )
+                out.append(f"[evidence missing: {eid}]")
             i = k + 1
         return "".join(out)
+
+
+def _normalize_requested_evidence_id(value: str) -> str:
+    """Normalize a manuscript placeholder item before alias lookup.
+
+    Some writer models emit comma placeholders as
+    ``{evidence:a, evidence:b}`` rather than ``{evidence:a, b}``.
+    Treat the repeated prefix as harmless syntax noise.
+    """
+
+    item = (value or "").strip()
+    if item.lower().startswith("evidence:"):
+        item = item.split(":", 1)[1].strip()
+    return item
+
+
+def _target_basename_stem(target: Path, evidence_id: str) -> str:
+    """Return the original filename stem from ``<evidence_id>__<filename>``.
+
+    Evidence ids themselves may contain a doubled underscore when the id prefix
+    ends with ``_``. Splitting on the first ``__`` then corrupts the alias.
+    """
+
+    prefix = f"{evidence_id}__"
+    name = target.name
+    if name.startswith(prefix):
+        return Path(name[len(prefix) :]).stem
+    return Path(name.split("__", 1)[-1]).stem
 
 
 def _id_prefix(kind: str, stem: str) -> str:

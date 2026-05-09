@@ -200,7 +200,19 @@ class PlannerAgent:
                     "actually central to the question. Do not put invented "
                     "prefixed variables such as eicu:age in `inputs`. Honor "
                     "explicit user preferences and requested outputs when they "
-                    "are compatible with the cohort and analysis family.\n\n"
+                    "are compatible with the cohort and analysis family.\n"
+                    "For prediction_model tasks, keep the executable plan compact: "
+                    "use one self-contained model training/evaluation step that reads "
+                    "the cohort and writes AUROC, Brier/calibration, baseline prevalence, "
+                    "model metadata, and the discrimination/calibration figure. Do not "
+                    "split training, performance evaluation, figure generation, and "
+                    "baseline comparison into separate code steps unless those later "
+                    "steps can be completed directly from COHORT_PARQUET without reading "
+                    "prior step outputs. For clustering tasks, likewise keep cluster-label "
+                    "generation, cluster characteristics, silhouette/stability metrics, "
+                    "post-hoc mortality by cluster, and the clustering figure in one "
+                    "self-contained clustering step; do not create later mortality-by-cluster "
+                    "steps that require cluster labels from prior outputs.\n\n"
                     + planner_analysis_type_guide()
                     + "\n\n"
                     "OUTPUT FORMAT — VERY IMPORTANT:\n"
@@ -559,10 +571,12 @@ class ManuscriptAgent:
         *,
         context: ResearchContext,
         evidence_ids: Sequence[str],
+        evidence_digest: Optional[str] = None,
     ) -> str:
         return WriterAgent(self.llm, language=self.language).run(
             context=context,
             evidence_ids=evidence_ids,
+            evidence_digest=evidence_digest,
         )
 
 
@@ -847,6 +861,43 @@ class CoderAgent:
                     "do not add prose, markdown, or an explanation. Keep "
                     "honoring explicit user preferences recorded in the "
                     "ResearchContext.\n\n"
+                    "REPAIR CHECKLIST:\n"
+                    "- If this is an association or prediction step, keep every named "
+                    "primary predictor/exposure in the fitted design matrix.\n"
+                    "- If you read `result.params[name]`, `result.conf_int().loc[name]`, "
+                    "or `result.pvalues[name]`, ensure `name` is present in `X.columns` "
+                    "before fitting.\n"
+                    "- If categorical variables are dummy-encoded, rebuild `x_cols` after "
+                    "encoding and include the primary predictor plus dummy columns.\n"
+                    "- Do not numeric-coerce string categorical variables such as `sex` "
+                    "before dummy encoding; this converts all categories to NaN. After "
+                    "dummy encoding, drop missing rows using the rebuilt `[outcome] + x_cols` "
+                    "list, not the old covariate list containing removed categorical columns.\n"
+                    "- If this is a prediction step, use a scikit-learn Pipeline or an "
+                    "equivalent leak-free split/CV workflow and write AUROC plus Brier or "
+                    "calibration metrics to step_summary.json. Keep categorical columns "
+                    "as objects until a ColumnTransformer categorical branch handles them; "
+                    "do not coerce mixed numeric + categorical feature frames all at once. "
+                    "Never use `('onehot', 'passthrough')` for a categorical branch feeding "
+                    "a numeric estimator; import OneHotEncoder and use "
+                    "`OneHotEncoder(handle_unknown='ignore', sparse_output=False)`.\n"
+                    "- If this is a clustering step, impute/scale numeric features before "
+                    "clustering and write cluster_count/n_clusters plus silhouette_score "
+                    "when at least two clusters are present.\n"
+                    "- If this is a table-one or descriptive step, rebuild the table as "
+                    "flat row dictionaries with explicit continuous/categorical helper "
+                    "functions. Do not infer table shape with `next(iter(...))`, and do "
+                    "not assume binary category keys are int 1 or string '1'.\n"
+                    "- Define `out_dir = os.environ['STEP_OUT_DIR']` before any model "
+                    "fitting `try/except`; exception paths must still be able to write "
+                    "step_summary.json and any diagnostic tables.\n"
+                    "- Optional plotting or publication figure helpers must not make a "
+                    "completed metric step fail. Write step_summary.json after computing "
+                    "metrics, wrap figure-helper calls, and fall back to plain PNG/SVG if "
+                    "a helper signature is wrong.\n"
+                    "- If fitting cannot be completed, write a step_summary.json with null "
+                    "numeric fields and a precise error, then exit normally. Do not `raise` "
+                    "again after writing the failure summary.\n\n"
                     "PREVIOUS SCRIPT:\n```python\n" + code[-12000:] + "\n```\n\n"
                     "RUN LOG / TRACEBACK:\n```\n" + run_log[-8000:] + "\n```\n\n"
                     "RESEARCH CONTEXT:\n" + _format_context(context)
@@ -921,6 +972,7 @@ class WriterAgent:
         *,
         context: ResearchContext,
         evidence_ids: Sequence[str],
+        evidence_digest: Optional[str] = None,
     ) -> str:
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _WRITER_GUIDE),
@@ -957,12 +1009,23 @@ class WriterAgent:
                     "Use only ids from the list below; anything else "
                     "renders as `[evidence missing: …]`. Prefer short "
                     "semantic aliases (`table_one`, `outcome_rate`, "
-                    "`sofa_strata`, `primary_association`) when available.\n\n"
+                    "`sofa_strata`, `primary_association`) when available. "
+                    "For prediction-model tasks, prefer `model_performance` "
+                    "or `prediction_performance` for AUROC/Brier/calibration "
+                    "claims instead of inventing a primary-association citation.\n\n"
                     "OUTPUT FORMAT:\n"
                     "Return *only* the markdown manuscript. No commentary "
                     "before or after. A leading ```markdown … ``` fence is "
                     "acceptable and will be stripped.\n\n"
                     f"Available evidence ids and aliases: {list(evidence_ids)}\n\n"
+                    "MACHINE EVIDENCE DIGEST:\n"
+                    + (evidence_digest or "(no machine digest available)")
+                    + "\n\n"
+                    "DIGEST RULES:\n"
+                    "- Use numeric values only if they appear in the MACHINE EVIDENCE DIGEST.\n"
+                    "- If a digest entry says a result is null, skipped, unavailable, or error, "
+                    "do not write a numeric effect estimate for that result.\n"
+                    "- If the digest and free-form context disagree, trust the digest.\n\n"
                     "RESEARCH CONTEXT:\n" + _format_context(context)
                 ),
             ),

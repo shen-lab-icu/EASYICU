@@ -20,10 +20,12 @@ from __future__ import annotations
 import os
 import tarfile
 import logging
+import hashlib
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -37,6 +39,25 @@ def _is_hidden_sidecar(path: Path) -> bool:
     """Return True for macOS AppleDouble or other hidden sidecar files."""
     name = path.name
     return name.startswith("._") or name.startswith(".")
+
+
+def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
 
 
 # Partitioning configuration for large tables (matching ricu's data-sources.json)
@@ -123,6 +144,7 @@ class DataConverter:
     
     # Status file name to track conversion progress
     STATUS_FILE = ".easyicu_conversion_status.json"
+    CONVERSION_MANIFEST_FILE = "conversion_manifest.json"
     
     # Common encodings to try
     ENCODINGS = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
@@ -1520,12 +1542,21 @@ class DataConverter:
         
         return status
     
-    def convert_all(self, force: bool = False) -> Dict[str, Dict[str, Any]]:
+    def convert_all(
+        self,
+        force: bool = False,
+        *,
+        write_manifest: bool = True,
+        evidence_root: Optional[str | Path] = None,
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Convert all CSV files to Parquet.
         
         Args:
             force: Force reconversion even if parquet exists
+            write_manifest: Write ``conversion_manifest.json`` after status resolution
+            evidence_root: Optional research-agent run/work directory. When provided,
+                the manifest is also registered in an EvidenceStore.
             
         Returns:
             Dictionary of conversion results
@@ -1535,6 +1566,8 @@ class DataConverter:
         if not csv_files:
             if self.verbose:
                 logger.info(f"No CSV files found in {self.data_path}")
+            if write_manifest:
+                self.write_conversion_manifest({}, evidence_root=evidence_root)
             return {}
         
         # Filter files that need conversion
@@ -1550,7 +1583,10 @@ class DataConverter:
         if not files_to_convert:
             if self.verbose:
                 logger.info(f"All {len(csv_files)} files are already converted")
-            return self.get_conversion_status()
+            results = self.get_conversion_status()
+            if write_manifest:
+                self.write_conversion_manifest(results, evidence_root=evidence_root)
+            return results
         
         if self.verbose:
             logger.info(f"Converting {len(files_to_convert)} of {len(csv_files)} files...")
@@ -1580,7 +1616,8 @@ class DataConverter:
             for csv_path in files_to_convert:
                 result = self._convert_file(csv_path)
                 results[csv_path.name] = result
-        
+        if write_manifest:
+            self.write_conversion_manifest(results, evidence_root=evidence_root)
         return results
     
     def is_ready(self) -> Tuple[bool, List[str]]:
@@ -1600,7 +1637,12 @@ class DataConverter:
         
         return len(missing_or_failed) == 0, missing_or_failed
     
-    def ensure_parquet_ready(self, auto_convert: bool = True) -> bool:
+    def ensure_parquet_ready(
+        self,
+        auto_convert: bool = True,
+        *,
+        evidence_root: Optional[str | Path] = None,
+    ) -> bool:
         """
         Ensure all parquet files are ready for loading.
         
@@ -1624,6 +1666,10 @@ class DataConverter:
         if is_ready:
             if self.verbose:
                 logger.info(f"✅ All data files are ready in {self.data_path}")
+            self.write_conversion_manifest(
+                self.get_conversion_status(),
+                evidence_root=evidence_root,
+            )
             return True
         
         if not auto_convert:
@@ -1638,7 +1684,7 @@ class DataConverter:
         if self.verbose:
             logger.info(f"🔄 Converting {len(missing)} files to parquet...")
         
-        results = self.convert_all()
+        results = self.convert_all(evidence_root=evidence_root)
         
         # Check results
         failed = [name for name, r in results.items() if r.get('status') == ConversionStatus.FAILED]
@@ -1654,6 +1700,133 @@ class DataConverter:
             logger.info("✅ Successfully converted all files")
         
         return True
+
+    def write_conversion_manifest(
+        self,
+        results: Optional[Dict[str, Dict[str, Any]]] = None,
+        *,
+        evidence_root: Optional[str | Path] = None,
+    ) -> Path:
+        """Write and optionally evidence-bind a conversion manifest.
+
+        The manifest links raw CSV inputs, parquet outputs, status metadata,
+        and SHA-256 hashes so downstream research-agent runs can cite the
+        upstream standardisation step without exposing database-specific SQL.
+        """
+
+        results = dict(results or self.get_conversion_status())
+        manifest = {
+            "schema_version": "easyicu.conversion_manifest/1",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "database": self.database,
+            "data_path": str(self.data_path),
+            "converter": {
+                "chunk_size": self.chunk_size,
+                "parallel_workers": self.parallel_workers,
+                "status_file": self.STATUS_FILE,
+                "partitioning_tables": sorted(PARTITIONING_CONFIG.get(self.database, {})),
+            },
+            "quirks": {
+                "hidden_sidecar_files_ignored": True,
+                "large_tables_may_be_sharded": True,
+            },
+            "tables": [
+                self._conversion_manifest_entry(file_name, result)
+                for file_name, result in sorted(results.items())
+            ],
+        }
+        path = self.data_path / self.CONVERSION_MANIFEST_FILE
+        path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+        if evidence_root is not None:
+            try:
+                from easyicu.research_agent.evidence import EvidenceStore
+
+                store = EvidenceStore(Path(evidence_root))
+                store.register_file(
+                    kind="log",
+                    description=(
+                        "EasyICU data conversion manifest linking raw inputs, "
+                        "parquet outputs, conversion status, and SHA-256 hashes."
+                    ),
+                    source_path=path,
+                    aliases=["conversion_manifest", f"conversion_manifest_{self.database}"],
+                    producer="easyicu.data_converter",
+                    generation_mode="deterministic_conversion_manifest",
+                    metadata={
+                        "database": self.database,
+                        "data_path": str(self.data_path),
+                    },
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to register conversion manifest evidence: {exc}")
+        return path
+
+    def _conversion_manifest_entry(
+        self,
+        file_name: str,
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        csv_path = self._find_csv_by_name(file_name)
+        outputs = self._converted_outputs_for_result(csv_path, result)
+        return {
+            "file": file_name,
+            "table": result.get("table") or (self._get_table_name(csv_path) if csv_path else None),
+            "status": result.get("status"),
+            "reason": result.get("reason"),
+            "error": result.get("error"),
+            "row_count": result.get("row_count"),
+            "shards": result.get("shards"),
+            "partition_col": result.get("partition_col"),
+            "partition_breaks": result.get("partition_breaks"),
+            "input": self._file_manifest_record(csv_path) if csv_path else None,
+            "outputs": [self._file_manifest_record(path) for path in outputs],
+        }
+
+    def _find_csv_by_name(self, file_name: str) -> Optional[Path]:
+        for csv_path in self._get_csv_files():
+            if csv_path.name == file_name:
+                return csv_path
+        candidate = self.data_path / file_name
+        return candidate if candidate.exists() else None
+
+    def _converted_outputs_for_result(
+        self,
+        csv_path: Optional[Path],
+        result: Dict[str, Any],
+    ) -> List[Path]:
+        shard_dir = result.get("shard_dir")
+        if shard_dir:
+            path = Path(str(shard_dir))
+            if path.exists():
+                return sorted(path.glob("*.parquet"))
+        if csv_path is None:
+            return []
+        candidates = [
+            self._get_parquet_path(csv_path),
+            self._get_parquet_path_with_subdir(csv_path),
+        ]
+        return [path for path in candidates if path.exists()]
+
+    def _file_manifest_record(self, path: Optional[Path]) -> Dict[str, Any]:
+        if path is None:
+            return {"path": None, "exists": False}
+        exists = path.exists()
+        record: Dict[str, Any] = {
+            "path": str(path),
+            "relative_path": (
+                str(path.relative_to(self.data_path))
+                if exists and _is_relative_to(path, self.data_path)
+                else str(path)
+            ),
+            "exists": exists,
+        }
+        if exists and path.is_file():
+            stat = path.stat()
+            record.update({
+                "size_bytes": stat.st_size,
+                "sha256": _sha256_file(path),
+            })
+        return record
     
     def get_table_info(self) -> Dict[str, Dict[str, Any]]:
         """

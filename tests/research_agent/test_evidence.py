@@ -38,6 +38,23 @@ def test_alias_resolves_via_filename_stem(ra, tmp_path: Path):
     assert via_alias.evidence_id == rec.evidence_id
 
 
+def test_unique_hash_suffixed_evidence_resolves_by_stable_prefix(ra, tmp_path: Path):
+    src = tmp_path / "mortality_by_sofa2_stratum.png"
+    src.write_text("fake image", encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    rec = store.register_file(
+        kind="figure",
+        description="mortality figure",
+        source_path=src,
+        evidence_id="figure_mortality_by_sofa2_stratum_abc12345",
+    )
+
+    via_prefix = store.get("figure_mortality_by_sofa2_stratum")
+
+    assert via_prefix is not None
+    assert via_prefix.evidence_id == rec.evidence_id
+
+
 def test_explicit_aliases(ra, tmp_path: Path):
     src = tmp_path / "step_summary.json"
     src.write_text("{\"x\":1}", encoding="utf-8")
@@ -75,6 +92,79 @@ def test_bind_manuscript_replaces_known_placeholders(ra, tmp_path: Path):
     assert "[evidence missing: does_not_exist]" in bound
     # Ensure the resolved placeholder embeds the relative path + sha
     assert "sha256=" in bound
+
+
+def test_bind_manuscript_supports_comma_separated_placeholders(ra, tmp_path: Path):
+    first = tmp_path / "cluster_characteristics.csv"
+    second = tmp_path / "cluster_mortality.csv"
+    first.write_text("cluster,n\n0,10\n", encoding="utf-8")
+    second.write_text("cluster,mortality\n0,0.1\n", encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    store.register_file(
+        kind="table",
+        description="cluster characteristics",
+        source_path=first,
+        aliases=["cluster_characteristics"],
+    )
+    store.register_file(
+        kind="table",
+        description="cluster mortality",
+        source_path=second,
+        aliases=["cluster_mortality"],
+    )
+
+    bound = store.bind_manuscript(
+        "Tables: {evidence:cluster_characteristics, cluster_mortality}."
+    )
+
+    assert "cluster_characteristics" in bound
+    assert "cluster_mortality" in bound
+    assert "evidence missing" not in bound
+
+
+def test_bind_manuscript_strips_repeated_evidence_prefix_in_comma_items(ra, tmp_path: Path):
+    first = tmp_path / "cluster_characteristics.csv"
+    second = tmp_path / "cluster_mortality.csv"
+    first.write_text("cluster,n\n0,10\n", encoding="utf-8")
+    second.write_text("cluster,mortality\n0,0.1\n", encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    store.register_file(
+        kind="table",
+        description="cluster characteristics",
+        source_path=first,
+        aliases=["cluster_characteristics"],
+    )
+    store.register_file(
+        kind="table",
+        description="cluster mortality",
+        source_path=second,
+        aliases=["cluster_mortality"],
+    )
+
+    bound = store.bind_manuscript(
+        "Tables: {evidence:cluster_characteristics, evidence:cluster_mortality}."
+    )
+
+    assert "cluster_characteristics" in bound
+    assert "cluster_mortality" in bound
+    assert "evidence missing" not in bound
+
+
+def test_register_text_alias_survives_evidence_id_with_double_underscore(ra, tmp_path: Path):
+    store = ra.EvidenceStore(root=tmp_path)
+    rec = store.register_text(
+        kind="log",
+        description="interpretation",
+        text="A long-step interpretation.",
+        filename="interpretation_04_model_fitting_reduced_variable.md",
+    )
+
+    assert "__" in rec.evidence_id
+    assert store.get("interpretation_04_model_fitting_reduced_variable") is not None
+    bound = store.bind_manuscript(
+        "See {evidence:interpretation_04_model_fitting_reduced_variable}."
+    )
+    assert "evidence missing" not in bound
 
 
 def test_resolvable_names_includes_aliases_and_ids(ra, tmp_path: Path):
