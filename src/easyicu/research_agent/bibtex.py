@@ -1,4 +1,4 @@
-"""BibTeX export for the manuscript scaffold (T3.4).
+r"""BibTeX export for the manuscript scaffold (T3.4).
 
 The default LaTeX export used to render references as a plain
 ``itemize`` list — fine for inspection, useless for a real journal
@@ -49,7 +49,7 @@ _KEY_VALID_PATTERN = re.compile(r"[^A-Za-z0-9_]")
 
 
 def sanitise_bibtex_key(raw: str) -> str:
-    """Coerce ``raw`` into a BibTeX-safe citation key.
+    r"""Coerce ``raw`` into a BibTeX-safe citation key.
 
     BibTeX keys allow alphanumerics and a small set of punctuation;
     different bibliography styles disagree on the exact set, so we

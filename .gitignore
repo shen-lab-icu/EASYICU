@@ -103,3 +103,10 @@ scripts/*
 !README_zh.md
 !CONTRIBUTING.md
 .easyicu-runtime/
+
+# Root-level run debris (analysis scripts that mistakenly use cwd)
+/nohup.out
+/robustness_analysis.png
+/robustness_analysis.svg
+/robustness_summary.csv
+/step_summary.json

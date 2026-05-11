@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from .code_hygiene import reorder_forward_references
+
 
 @dataclass
 class RunResult:
@@ -113,6 +115,14 @@ class CodeRunner:
         out_dir.mkdir(parents=True, exist_ok=True)
         log_path = step_dir / "run.log"
 
+        # Hoist any top-level `def` / `class` that is referenced before it is
+        # defined. Small coder models (notably qwen3-coder-30b) occasionally
+        # emit helpers at the bottom of the file and reference them from the
+        # top, which would otherwise fail with NameError and stall the
+        # self-repair loop. No-op when the agent's code is already well-
+        # ordered, so well-behaved models pay zero cost.
+        code = reorder_forward_references(code)
+
         # Persist the script BEFORE running so it is hashable as evidence
         # even if execution crashes.
         script_path.write_text(code, encoding="utf-8")
@@ -120,6 +130,29 @@ class CodeRunner:
         env = os.environ.copy()
         env["COHORT_PARQUET"] = str(self.cohort_parquet)
         env["STEP_OUT_DIR"] = str(out_dir)
+        # Defensive aliases: agent-emitted scripts frequently invent
+        # alternative env-var names for the canonical inputs (e.g.
+        # ``STEP_OUTPUT_DIR``, ``EASYICU_OUTPUT_DIR``, ``OUT_DIR``,
+        # ``COHORT_PATH``, ``EASYICU_COHORT_PATH``). Exposing every
+        # observed variant under the same value prevents a hallucinated
+        # name from silently writing artefacts to the wrong directory
+        # (and later being missed by the evidence registrar) or aborting
+        # with ``KeyError``/``FileNotFoundError``.
+        for cohort_alias in (
+            "COHORT_PATH",
+            "EASYICU_COHORT_PATH",
+            "EASYICU_COHORT_PARQUET",
+        ):
+            env[cohort_alias] = str(self.cohort_parquet)
+        for out_alias in (
+            "STEP_OUTPUT_DIR",
+            "STEP_OUTPUT",
+            "OUT_DIR",
+            "OUTPUT_DIR",
+            "EASYICU_OUTPUT_DIR",
+            "EASYICU_STEP_OUT_DIR",
+        ):
+            env[out_alias] = str(out_dir)
         env["MPLBACKEND"] = "Agg"
         env["PYTHONIOENCODING"] = "utf-8"
         # macOS sandbox-exec can block shared-memory paths used by threaded
@@ -441,6 +474,9 @@ class DockerRunner:
     # ------------------------------------------------------------------
 
     def run(self, *, step_id: str, code: str) -> RunResult:
+        # Same forward-reference hoisting as CodeRunner; see code_hygiene
+        # docstring for the qwen3-coder-30b regression that motivates it.
+        code = reorder_forward_references(code)
         step_dir, script_path, out_dir = self.prepare_step_dir(step_id)
         log_path = step_dir / "run.log"
         script_path.write_text(code, encoding="utf-8")

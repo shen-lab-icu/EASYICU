@@ -2155,7 +2155,7 @@ class ConceptResolver:
                                     if _bm:
                                         _convert_unit_op = _bm.group(1)
                                         try: _convert_unit_factor = float(_bm.group(2))
-                                        except: pass
+                                        except Exception: pass
                                     # 🚀 检测 set_val(NA) 和 fahr_to_cels
                                     elif _args:
                                         _first_arg = _args[0].strip()
@@ -4655,51 +4655,12 @@ class ConceptResolver:
                 # 没有有效的时间列，设为None
                 index_column = None
         
-        # CRITICAL: Check if target is 'win_tbl', and convert to WinTbl if needed
-        # For concepts like mech_vent that have target='win_tbl' but no concept-level callback
-        # DISABLED for now - WinTbl conversion has issues with endtime handling
-        # Return raw ICUTable and let expansion happen in _ensure_concept_loaded
-        if False and definition.target == 'win_tbl' and interval is not None:
-            from .table import WinTbl
-            # WinTbl needs: index_var (time), dur_var (duration), id_vars (IDs)
-            # Check if we have endtime or duration columns
-            has_endtime = any(col in combined.columns for col in ['endtime', 'end_time', 'stop'])
-            has_duration = any(col in combined.columns for col in ['duration', 'dur', concept_name + '_dur'])
-            
-            if has_endtime or has_duration:
-                # Find the appropriate columns
-                endtime_col = next((col for col in ['endtime', 'end_time', 'stop'] if col in combined.columns), None)
-                duration_col = next((col for col in ['duration', 'dur', concept_name + '_dur'] if col in combined.columns), None)
-                
-                # If we have endtime, calculate duration
-                if endtime_col and index_column:
-                    # Ensure both are numeric (hours)
-                    # endtime might still be datetime if it wasn't properly aligned
-                    if pd.api.types.is_datetime64_any_dtype(combined[endtime_col]):
-                        # Skip endtime conversion for now - has issues
-                        # TODO: Fix endtime handling for procedureevents
-                        pass
-                    
-                    # Now both should be numeric
-                    if pd.api.types.is_numeric_dtype(combined[endtime_col]) and pd.api.types.is_numeric_dtype(combined[index_column]):
-                        # Calculate duration as endtime - starttime
-                        combined[concept_name + '_dur'] = combined[endtime_col] - combined[index_column]
-                        duration_col = concept_name + '_dur'
-                        # Remove endtime column (WinTbl uses duration, not endtime)
-                        combined = combined.drop(columns=[endtime_col], errors='ignore')
-                    else:
-                        # Can't calculate duration, skip WinTbl conversion
-                        duration_col = None
-                
-                if duration_col and index_column:
-                    # Create WinTbl
-                    return WinTbl(
-                        data=combined,
-                        id_vars=id_columns,
-                        index_var=index_column,
-                        dur_var=duration_col,
-                    )
-        
+        # NOTE: An earlier WinTbl conversion path keyed on `definition.target == 'win_tbl'`
+        # was permanently gated behind `if False`; it had unresolved endtime handling
+        # and is fully superseded by the `_any_win_tbl` block below (which uses the
+        # `dur_var` column produced by upstream expansion). Removed to keep this
+        # function unambiguous. See git history for the original draft if needed.
+
         if concept_name == "infusionoffset" and index_column and index_column in combined.columns:
             combined[concept_name] = combined[index_column]
             combined = combined.drop(columns=["drugrate"], errors="ignore")
@@ -9298,7 +9259,7 @@ def _apply_callback(
                         frame = frame.merge(icustays[['icustay_id', 'intime']], on=merge_col, how='left')
                         
                         if len(frame) == 0:
-                            print(f"⚠️ [mimic_age] MERGE PRODUCED 0 ROWS!")
+                            print("⚠️ [mimic_age] MERGE PRODUCED 0 ROWS!")
                             return frame
                         
                         # Calculate age using actual_dob_col

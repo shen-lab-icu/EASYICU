@@ -28,7 +28,6 @@ from easyicu.webapp.llm_config import (
     PROVIDERS,
     coerce_public_provider,
     ensure_llm_config_state,
-    is_configured as _shared_is_configured,
     is_internal_provider,
     needs_api_key as _shared_needs_api_key,
     public_default_provider_key,
@@ -328,6 +327,11 @@ def _init_chat_state():
     ensure_llm_config_state()
     defaults = {
         "llm_enabled": False,
+        "llm_provider": public_default_provider_key(),
+        "llm_api_key": "",
+        "llm_model": "",
+        "llm_base_url": "",
+        "llm_configured": False,
         "llm_messages": [],
         "llm_last_tool_events": [],
         "llm_last_verification": None,
@@ -981,7 +985,10 @@ def _is_configured() -> bool:
     provider = st.session_state.get("llm_provider", public_default_provider_key())
     if is_internal_provider(provider):
         return False
-    return _shared_is_configured()
+    _, default_url, _default_model, _needs_key, _desc_en, _desc_zh = public_provider_defaults(provider)
+    if _needs_api_key(provider) and not st.session_state.get("llm_api_key", "").strip():
+        return False
+    return bool((st.session_state.get("llm_base_url", "") or default_url).strip())
 
 
 def _get_client():

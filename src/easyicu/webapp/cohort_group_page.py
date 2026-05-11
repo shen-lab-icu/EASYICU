@@ -758,7 +758,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             try:
                 stat, p = stats.mannwhitneyu(v1, v2, alternative='two-sided')
                 return f"{p:.3f}" if p >= 0.001 else "<0.001"
-            except:
+            except Exception:
                 return '-'
 
         def calc_pvalue_categorical(s1, s2, categories):
@@ -773,7 +773,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                 table = [[obs1[i], obs2[i]] for i in valid_idx]
                 chi2, p, dof, expected = stats.chi2_contingency(table)
                 return f"{p:.3f}" if p >= 0.001 else "<0.001"
-            except:
+            except Exception:
                 return '-'
 
         def calc_smd_continuous(s1, s2):

@@ -1173,20 +1173,67 @@ class ConceptLoader:
         
         return data
     
-    def _convert_units(self, data: pd.DataFrame, target_unit: str) -> pd.DataFrame:
+    def _convert_units(
+        self,
+        data: pd.DataFrame,
+        target_unit: str,
+        substance: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """Convert each row's ``value`` from its ``unit`` column to ``target_unit``.
+
+        Uses :class:`easyicu.unit_conversion.UnitConverter`. Rows whose unit
+        cannot be converted are left unchanged (with a debug log) so we never
+        silently drop data; previously this was a no-op pass-through that
+        ignored ``target_unit`` entirely.
         """
-        单位转换
-        
-        Args:
-            data: 数据
-            target_unit: 目标单位
-            
-        Returns:
-            转换后的数据
-        """
-        # TODO: 实现完整的单位转换系统
-        # 这里先做简单处理
-        return data
+        if not target_unit or 'value' not in data.columns or 'unit' not in data.columns:
+            return data
+        try:
+            from .unit_conversion import UnitConverter
+        except ImportError:
+            logger.debug("unit_conversion module unavailable; skipping conversion")
+            return data
+
+        target_norm = UnitConverter.normalize_unit(target_unit)
+        out = data.copy()
+        values = pd.to_numeric(out['value'], errors='coerce')
+        units = out['unit'].astype(str)
+
+        # Group by source unit so we call convert once per unique unit.
+        unique_units = units.dropna().unique()
+        unconvertible: list[str] = []
+        for unit_value in unique_units:
+            try:
+                src_norm = UnitConverter.normalize_unit(unit_value)
+            except Exception:
+                unconvertible.append(unit_value)
+                continue
+            if src_norm == target_norm:
+                continue
+            if not UnitConverter.can_convert(unit_value, target_unit, substance):
+                unconvertible.append(unit_value)
+                continue
+            mask = units == unit_value
+            try:
+                converted = UnitConverter.convert(
+                    values[mask].to_numpy(), unit_value, target_unit, substance
+                )
+            except Exception as exc:
+                logger.debug(
+                    "unit conversion %r -> %r failed: %s", unit_value, target_unit, exc
+                )
+                unconvertible.append(unit_value)
+                continue
+            values.loc[mask] = converted
+            out.loc[mask, 'unit'] = target_unit
+
+        if unconvertible:
+            logger.debug(
+                "skipped unit conversion to %s for unsupported units: %s",
+                target_unit, sorted(set(unconvertible)),
+            )
+        out['value'] = values
+        return out
     
     def _aggregate_concept(
         self,
