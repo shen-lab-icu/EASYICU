@@ -47,6 +47,33 @@ DEFAULT_FREE_MODELS = [
     "deepseek/deepseek-chat-v3-0324:free",
 ]
 
+# 2x2 factorial arm design: (disable_icu_context, include_user_preferences).
+# - aware           : ICU context on,  user preferences on  (legacy aware semantics)
+# - aware_no_pref   : ICU context on,  user preferences off (isolates user-pref effect)
+# - naive_with_pref : ICU context off, user preferences on  (isolates ICU-context effect)
+# - naive           : ICU context off, user preferences off (legacy naive semantics)
+#
+# Legacy two-arm runs (aware vs naive) remain bit-identical; the two new arms
+# are opt-in via --arms and let downstream analyses decompose what was
+# previously a joint effect into ICU-domain knowledge vs user intent.
+ARM_CONFIG: Dict[str, Dict[str, bool]] = {
+    "aware":           {"disable_icu_context": False, "include_user_preferences": True},
+    "aware_no_pref":   {"disable_icu_context": False, "include_user_preferences": False},
+    "naive_with_pref": {"disable_icu_context": True,  "include_user_preferences": True},
+    "naive":           {"disable_icu_context": True,  "include_user_preferences": False},
+}
+ARM_CHOICES = list(ARM_CONFIG.keys())
+DEFAULT_ARMS = list(ARM_CHOICES)  # full 2x2 factorial by default
+
+
+def _arm_config(arm: str) -> Dict[str, bool]:
+    cfg = ARM_CONFIG.get(arm)
+    if cfg is None:
+        raise ValueError(
+            f"Unknown arm {arm!r}; expected one of {ARM_CHOICES}"
+        )
+    return cfg
+
 
 def _bootstrap_imports() -> Path:
     here = Path(__file__).resolve().parent
@@ -344,6 +371,83 @@ def _load_task_specs_from_builder() -> List[V14Task]:
             "expected_metrics": ["primary_or", "complete_case_n", "missingness"],
             "required_artifacts": ["manifest", "bound_manuscript", "step_summary", "table", "statistic", "figure"],
         },
+        # ------------------------------------------------------------------
+        # v15 ladder extension: 5 additional tasks (t11-t15) — basic and
+        # intermediate; rounds out the ladder to 5+5+5 = 15.
+        # ------------------------------------------------------------------
+        "t11_los_distribution_descriptive": {
+            "family": "descriptive",
+            "difficulty": "basic",
+            "question": (
+                "Describe ICU and hospital length-of-stay (los_icu, los_hosp) for "
+                "adult first ICU stays. Report median (IQR), 25th/75th/95th "
+                "percentiles, distributional summary stratified by survival status, "
+                "and a publication-ready overlay histogram. Do not model survival; "
+                "this is a one-step descriptive pre-modelling exercise."
+            ),
+            "primary_predictor": None,
+            "expected_metrics": ["n_rows", "missingness"],
+            "required_artifacts": ["manifest", "bound_manuscript", "step_summary", "table", "figure"],
+        },
+        "t12_age_stratified_mortality": {
+            "family": "descriptive_stratified",
+            "difficulty": "basic",
+            "question": (
+                "Stratify in-hospital mortality by age tertile in adult first ICU "
+                "stays. Report deaths/n, proportion, and Wilson 95% confidence "
+                "interval per stratum, plus a publication-ready stratified-mortality "
+                "figure. Do not run a regression; keep the analysis to per-stratum "
+                "descriptive aggregation."
+            ),
+            "primary_predictor": "age",
+            "expected_metrics": ["mortality_rate", "n_rows"],
+            "required_artifacts": ["manifest", "bound_manuscript", "step_summary", "table", "statistic", "figure"],
+        },
+        "t13_admission_vital_summary": {
+            "family": "descriptive",
+            "difficulty": "basic",
+            "question": (
+                "Summarise first-24h admission vital signs (HR max/median, SBP "
+                "min/median, MAP min/median) by survival status for adult first ICU "
+                "stays. Report median (IQR), missingness counts, and a publication-"
+                "ready paired-vital-sign figure (e.g. MAP_min versus HR_max). Do not "
+                "model survival; descriptive only."
+            ),
+            "primary_predictor": None,
+            "expected_metrics": ["n_rows", "missingness"],
+            "required_artifacts": ["manifest", "bound_manuscript", "step_summary", "table", "figure"],
+        },
+        "t14_creatinine_trajectory_kdigo": {
+            "family": "association_sensitivity",
+            "difficulty": "intermediate",
+            "question": (
+                "Within first 24 hours, examine the creatinine trajectory (max "
+                "versus median) and its relationship with KDIGO stage. Report the "
+                "creatinine max/median ratio distribution per KDIGO stage, the "
+                "Spearman correlation between the ratio and SOFA-2 renal component, "
+                "and a publication-ready figure. Treat KDIGO stage as ordinal; do "
+                "not infer causal direction."
+            ),
+            "primary_predictor": "creat_max_24h",
+            "expected_metrics": ["spearman_rho", "n_rows", "missingness"],
+            "required_artifacts": ["manifest", "bound_manuscript", "step_summary", "table", "statistic", "figure"],
+        },
+        "t15_norepinephrine_dose_response": {
+            "family": "association_dose_response",
+            "difficulty": "intermediate",
+            "question": (
+                "Among vasopressor-exposed adult first ICU stays, examine the "
+                "norepinephrine-equivalent dose-response on in-hospital mortality. "
+                "Report mortality by norepinephrine-equivalent quartile with Wilson "
+                "95% CI, an adjusted dose-response logistic-regression OR per unit "
+                "dose with confidence interval, and a publication-ready dose-"
+                "response figure. Use complete-case for the adjusted analysis and "
+                "report the missingness profile explicitly."
+            ),
+            "primary_predictor": "norepi_equiv_max_24h",
+            "expected_metrics": ["primary_or", "mortality_rate", "missingness"],
+            "required_artifacts": ["manifest", "bound_manuscript", "step_summary", "table", "statistic", "figure"],
+        },
     }
 
     tasks: List[V14Task] = []
@@ -586,6 +690,23 @@ def _first_float(values: Iterable[Any]) -> Optional[float]:
                 return float(value)
             except ValueError:
                 continue
+    return None
+
+
+def _first_sofa_total_component_rho(summaries: Sequence[Dict[str, Any]]) -> Optional[float]:
+    for summary in summaries:
+        matrix = summary.get("correlation_matrix")
+        if not isinstance(matrix, dict):
+            continue
+        row = matrix.get("sofa2_max_24h")
+        if not isinstance(row, dict):
+            continue
+        for key, value in row.items():
+            if key == "sofa2_max_24h" or not str(key).startswith("sofa2_"):
+                continue
+            rho = _first_float([value])
+            if rho is not None:
+                return rho
     return None
 
 
@@ -859,7 +980,21 @@ def _first_effect_estimate(
 def _extract_selection_bias_warning(
     manifest: Dict[str, Any],
     summaries: Sequence[Dict[str, Any]],
+    *,
+    expects_warning: bool = False,
 ) -> Tuple[bool, Optional[str]]:
+    """Detect a selection-bias warning for a v14 run.
+
+    The explicit step-summary keys (``selection_bias_warning`` and friends)
+    always trigger because they are a direct contract from the analyst.
+    The broader findings/summaries text scan is only performed when the
+    caller flags ``expects_warning=True`` (i.e. the task family is
+    ``bias_audit`` or the task lists ``selection_bias_warning`` among
+    its expected metrics). Without that gate, an unrelated guardrail
+    finding that happens to mention "selection bias" — for example a
+    SOFA-zero audit warning that recites multiple guardrail concerns —
+    would falsely tag prediction_model / clustering runs as biased.
+    """
     explicit_warning_keys = [
         "selection_bias_warning",
         "statistic:selection_bias_warning",
@@ -867,6 +1002,12 @@ def _extract_selection_bias_warning(
         "clinical_constraint_warning",
     ]
     targeted_phrases = [
+        "selection bias",
+        "selection-bias",
+        "clinical-constraint warning",
+        "clinical constraint warning",
+        "severity confounding",
+        "immortal time bias",
         "confounded by indication",
         "confounding by indication",
         "avoid causal treatment-effect language",
@@ -887,6 +1028,9 @@ def _extract_selection_bias_warning(
         text = str(raw).lower()
         if any(phrase in text for phrase in targeted_phrases):
             return True, _normalized_source_path(source)
+
+    if not expects_warning:
+        return False, None
 
     findings = manifest.get("findings") or []
     for idx, finding in enumerate(findings):
@@ -1035,8 +1179,10 @@ def _extract_metrics(run_dir: Path, task: V14Task) -> Dict[str, Any]:
             keys=[
                 "silhouette_score",
                 "statistic:silhouette_score",
+                "metric:silhouette_score",
                 "silhouette",
                 "statistic:silhouette",
+                "metric:silhouette",
             ],
         )
     )
@@ -1063,6 +1209,8 @@ def _extract_metrics(run_dir: Path, task: V14Task) -> Dict[str, Any]:
             ],
         )
     )
+    if metrics["spearman_rho"] is None and task.family == "correlation":
+        metrics["spearman_rho"] = _first_sofa_total_component_rho(metric_summaries)
     metrics["n_rows"] = _first_float(
         _nested_values(
             metric_summaries,
@@ -1078,6 +1226,23 @@ def _extract_metrics(run_dir: Path, task: V14Task) -> Dict[str, Any]:
                 "outcome_rate",
                 "event_rate",
                 "baseline_prevalence",
+                # Percentage-style aliases agents commonly emit when
+                # building stratified mortality / incidence tables. We
+                # surface them so the runner contract can detect that a
+                # mortality-like metric *was* produced even when the agent
+                # used a percentage scale.
+                "mortality_pct",
+                "mortality_percent",
+                "mortality_percentage",
+                "death_pct",
+                "death_percent",
+                "death_percentage",
+                "event_pct",
+                "event_percent",
+                "event_percentage",
+                "outcome_pct",
+                "outcome_percent",
+                "outcome_percentage",
             ],
         )
     )
@@ -1109,14 +1274,25 @@ def _extract_metrics(run_dir: Path, task: V14Task) -> Dict[str, Any]:
             metric_summaries,
             keys=[
                 "n_sofa2_zero",
+                "n_sofa_zero",
+                "n_patients_sofa_zero",
+                "total_stays_sofa_zero",
                 "sofa_zero_count",
+                "sofa2_zero_count",
+                "sofa2_zero_n",
+                "n_zero",
                 "sofa2_max_24h_zero_count",
             ],
         )
     )
+    expects_bias_warning = (
+        task.family == "bias_audit"
+        or "selection_bias_warning" in (task.expected_metrics or [])
+    )
     selection_bias_warning, warning_source = _extract_selection_bias_warning(
         manifest,
         metric_summaries,
+        expects_warning=expects_bias_warning,
     )
     metrics["selection_bias_warning"] = selection_bias_warning
     metrics["warning_source"] = warning_source
@@ -1126,22 +1302,23 @@ def _extract_metrics(run_dir: Path, task: V14Task) -> Dict[str, Any]:
         or _contains_text(manifest, metric_summaries, "artifact")
         or _contains_text(manifest, metric_summaries, "artefact")
     )
-    metrics["baseline_prevalence"] = _first_float(
-        _nested_values(
-            metric_summaries,
-            keys=[
-                "baseline_prevalence",
-                "statistic:baseline_prevalence",
-                "prevalence_baseline",
-                "statistic:prevalence_baseline",
-                "event_rate",
-                "statistic:event_rate",
-                "outcome_rate",
-                "statistic:outcome_rate",
-                "mortality_rate",
-                "statistic:mortality_rate",
-            ],
-        )
+    # Use priority-ordered extraction so that probe-summary top-level fields
+    # (outcome_rate, event_rate) are preferred over per-stratum mortality_rate
+    # values that may be buried inside stratified analysis output tables.
+    metrics["baseline_prevalence"], _ = _first_float_by_priority(
+        metric_summaries,
+        keys=[
+            "baseline_prevalence",
+            "statistic:baseline_prevalence",
+            "prevalence_baseline",
+            "statistic:prevalence_baseline",
+            "outcome_rate",
+            "statistic:outcome_rate",
+            "event_rate",
+            "statistic:event_rate",
+            "mortality_rate",
+            "statistic:mortality_rate",
+        ],
     )
     metrics["split_or_cv"] = (
         _contains_text(manifest, metric_summaries, "cross-validation")
@@ -1339,6 +1516,10 @@ def _run_task_arm(
     experiment_mode: str,
     repo_root: Path,
     log_path: Path,
+    enable_replanning: bool = True,
+    enable_literature: bool = False,
+    enable_memory: bool = False,
+    enable_vlm_visual_qa: bool = False,
 ) -> Tuple[Dict[str, Any], bool]:
     import pandas as pd
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
@@ -1361,25 +1542,36 @@ def _run_task_arm(
         enable_deterministic_code_fallback = False
     else:
         raise ValueError(f"Unknown experiment_mode: {experiment_mode}")
+    arm_cfg = _arm_config(arm)
+    disable_icu_context = bool(arm_cfg["disable_icu_context"])
+    include_user_preferences = bool(arm_cfg["include_user_preferences"])
     pipeline = ResearchAgentPipeline(
         workdir=arm_root,
         llm=llm,
         timeout_seconds=float(request_timeout),
-        enable_literature=False,
+        enable_literature=bool(enable_literature),
         enable_visual_qa=True,
-        enable_memory=False,
+        enable_vlm_visual_qa=bool(enable_vlm_visual_qa),
+        enable_memory=bool(enable_memory),
         enable_latex=True,
         enable_probe_step=True,
-        enable_replanning=False,
+        enable_replanning=bool(enable_replanning),
         max_code_repair_attempts=max_code_repair_attempts,
         enable_deterministic_code_fallback=enable_deterministic_code_fallback,
         enable_deterministic_planner_fallback=False,
         enable_deterministic_runner_repair=enable_deterministic_runner_repair,
-        disable_icu_context=(arm == "naive"),
+        disable_icu_context=disable_icu_context,
     )
     _append_log(
         log_path,
-        f"[{_utc_now()}] RUN model={model} task={task.key} arm={arm} mode={experiment_mode}",
+        (
+            f"[{_utc_now()}] RUN model={model} task={task.key} arm={arm} "
+            f"mode={experiment_mode} replanning={bool(enable_replanning)} "
+            f"literature={bool(enable_literature)} memory={bool(enable_memory)} "
+            f"vlm_visual_qa={bool(enable_vlm_visual_qa)} "
+            f"disable_icu_context={disable_icu_context} "
+            f"include_user_preferences={include_user_preferences}"
+        ),
     )
     result = pipeline.run(
         question=task.question,
@@ -1391,11 +1583,13 @@ def _run_task_arm(
             "EasyICU v14 real-cohort agent experiment. "
             f"task_key={task.key}; family={task.family}; difficulty={task.difficulty}; "
             f"arm={arm}; experiment_mode={experiment_mode}; "
-            f"disable_icu_context={arm == 'naive'}; "
+            f"disable_icu_context={disable_icu_context}; "
+            f"include_user_preferences={include_user_preferences}; "
+            f"enable_replanning={bool(enable_replanning)}; "
             f"cohort_sha256={_sha256_file(cohort_path)}; git_commit={_git_commit(repo_root)}. "
             "The task is designed for agent evaluation and manuscript evidence provenance."
         ),
-        user_preferences=None if arm == "naive" else task.user_preferences,
+        user_preferences=task.user_preferences if include_user_preferences else None,
     )
     run_dir = Path(result.workdir)
     _write_json(
@@ -1407,7 +1601,11 @@ def _run_task_arm(
             "required_artifacts": task.required_artifacts,
             "allowed_warnings": task.allowed_warnings,
             "fatal_conditions": task.fatal_conditions,
-            "naive_user_preferences_stripped": arm == "naive",
+            "disable_icu_context": disable_icu_context,
+            "include_user_preferences": include_user_preferences,
+            "enable_replanning": bool(enable_replanning),
+            # Backward-compat field used by older context_ablation_audit consumers.
+            "naive_user_preferences_stripped": not include_user_preferences,
         },
     )
     metrics = _extract_metrics(run_dir, task)
@@ -1418,6 +1616,12 @@ def _run_task_arm(
         "provider": provider,
         "model": model,
         "experiment_mode": experiment_mode,
+        "enable_replanning": bool(enable_replanning),
+        "enable_literature": bool(enable_literature),
+        "enable_memory": bool(enable_memory),
+        "enable_vlm_visual_qa": bool(enable_vlm_visual_qa),
+        "disable_icu_context": disable_icu_context,
+        "include_user_preferences": include_user_preferences,
         "cohort_path": str(cohort_path),
         "cohort_sha256": _sha256_file(cohort_path),
         "run_dir": str(run_dir),
@@ -1521,6 +1725,10 @@ def _run_task_arm_with_watchdog(
     log_path: Path,
     task_timeout: float,
     heartbeat_interval: int,
+    enable_replanning: bool = True,
+    enable_literature: bool = False,
+    enable_memory: bool = False,
+    enable_vlm_visual_qa: bool = False,
 ) -> Tuple[Dict[str, Any], bool]:
     heartbeat_path = (
         out_root
@@ -1541,6 +1749,10 @@ def _run_task_arm_with_watchdog(
         "experiment_mode": experiment_mode,
         "repo_root": repo_root,
         "log_path": log_path,
+        "enable_replanning": bool(enable_replanning),
+        "enable_literature": bool(enable_literature),
+        "enable_memory": bool(enable_memory),
+        "enable_vlm_visual_qa": bool(enable_vlm_visual_qa),
     }
     timeout = float(task_timeout or 0)
     if timeout <= 0:
@@ -2152,7 +2364,16 @@ def main() -> int:
     parser.add_argument("--model", default=os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", DEFAULT_FREE_MODELS[0]))
     parser.add_argument("--models", nargs="+", default=None)
     parser.add_argument("--items", nargs="+", default=None)
-    parser.add_argument("--arms", nargs="+", choices=["aware", "naive"], default=["aware", "naive"])
+    parser.add_argument(
+        "--arms",
+        nargs="+",
+        choices=ARM_CHOICES,
+        default=DEFAULT_ARMS,
+        help=(
+            "2x2 factorial arms over (disable_icu_context, include_user_preferences). "
+            "Default runs all four; use --arms aware naive for the legacy two-arm setup."
+        ),
+    )
     parser.add_argument(
         "--experiment-mode",
         choices=["native", "self_repair", "guardrails"],
@@ -2162,6 +2383,71 @@ def main() -> int:
             "guardrails also enables deterministic runner repairs."
         ),
     )
+    replanning_group = parser.add_mutually_exclusive_group()
+    replanning_group.add_argument(
+        "--enable-replanning",
+        dest="enable_replanning",
+        action="store_true",
+        help="Enable mid-pipeline replanning by the planner agent (default).",
+    )
+    replanning_group.add_argument(
+        "--no-replanning",
+        dest="enable_replanning",
+        action="store_false",
+        help="Disable replanning to reproduce the legacy v14 manuscript-ready setup.",
+    )
+    parser.set_defaults(enable_replanning=True)
+
+    literature_group = parser.add_mutually_exclusive_group()
+    literature_group.add_argument(
+        "--enable-literature",
+        dest="enable_literature",
+        action="store_true",
+        help=(
+            "Enable LiteratureAgent + HypothesisBlueprintAgent before planning, "
+            "matching CellVoyager-style hypothesis-driven exploration."
+        ),
+    )
+    literature_group.add_argument(
+        "--no-literature",
+        dest="enable_literature",
+        action="store_false",
+        help="Disable literature/hypothesis-blueprint pre-planning (default; v14 baseline).",
+    )
+    parser.set_defaults(enable_literature=False)
+
+    memory_group = parser.add_mutually_exclusive_group()
+    memory_group.add_argument(
+        "--enable-memory",
+        dest="enable_memory",
+        action="store_true",
+        help="Enable RunMemory so the agent can recall earlier steps within a run.",
+    )
+    memory_group.add_argument(
+        "--no-memory",
+        dest="enable_memory",
+        action="store_false",
+        help="Disable RunMemory (default; v14 baseline).",
+    )
+    parser.set_defaults(enable_memory=False)
+
+    vlm_group = parser.add_mutually_exclusive_group()
+    vlm_group.add_argument(
+        "--enable-vlm-visual-qa",
+        dest="enable_vlm_visual_qa",
+        action="store_true",
+        help=(
+            "Send generated figures to a vision-language model for caption/critique "
+            "(needs a multimodal LLM; off by default for text-only models)."
+        ),
+    )
+    vlm_group.add_argument(
+        "--no-vlm-visual-qa",
+        dest="enable_vlm_visual_qa",
+        action="store_false",
+        help="Disable VLM-based visual QA (default).",
+    )
+    parser.set_defaults(enable_vlm_visual_qa=False)
     parser.add_argument("--request-timeout", type=float, default=300.0)
     parser.add_argument(
         "--task-timeout",
@@ -2208,6 +2494,11 @@ def main() -> int:
         "provider": args.provider,
         "provider_base_url": _provider_base_url(args.provider),
         "experiment_mode": args.experiment_mode,
+        "enable_replanning": bool(args.enable_replanning),
+        "enable_literature": bool(args.enable_literature),
+        "enable_memory": bool(args.enable_memory),
+        "enable_vlm_visual_qa": bool(args.enable_vlm_visual_qa),
+        "arm_design": {arm: ARM_CONFIG[arm] for arm in arms},
         "models": models,
         "arms": arms,
         "request_timeout": float(args.request_timeout),
@@ -2333,6 +2624,10 @@ def main() -> int:
                             log_path=log_path,
                             task_timeout=task_timeout,
                             heartbeat_interval=int(args.heartbeat_interval),
+                            enable_replanning=bool(args.enable_replanning),
+                            enable_literature=bool(args.enable_literature),
+                            enable_memory=bool(args.enable_memory),
+                            enable_vlm_visual_qa=bool(args.enable_vlm_visual_qa),
                         )
                         attempt.run_id = last_record.get("run_id")
                         attempt.run_dir = last_record.get("run_dir")
@@ -2407,6 +2702,11 @@ def main() -> int:
         "provider_base_url": _provider_base_url(args.provider),
         "models": models,
         "arms": arms,
+        "arm_design": {arm: ARM_CONFIG[arm] for arm in arms},
+        "enable_replanning": bool(args.enable_replanning),
+        "enable_literature": bool(args.enable_literature),
+        "enable_memory": bool(args.enable_memory),
+        "enable_vlm_visual_qa": bool(args.enable_vlm_visual_qa),
         "cohort_dir": str(cohort_dir),
         "results": results,
         "n_results": len(results),

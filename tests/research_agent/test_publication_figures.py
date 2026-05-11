@@ -89,6 +89,28 @@ def test_make_figure_contract_accepts_agent_style_aliases():
     assert "Ordinal scores are not averaged." in (contract.statistics_note or "")
 
 
+def test_make_figure_contract_accepts_deferred_agent_panel_append(tmp_path: Path):
+    contract = make_figure_contract(
+        figure_id="fig_trajectory_clustering",
+        core_claim="ICU shock physiology clusters have distinct outcomes.",
+    )
+    contract["panels"].append({
+        "panel_id": "A",
+        "title": "Cluster Profiles",
+        "role": "profile_plot",
+        "claim": "Profiles differ across shock physiology clusters.",
+        "evidence_ids": ["cluster_profile_data"],
+    })
+
+    findings = audit_figure_contract(contract)
+    assert not any(f.severity == "error" for f in findings)
+    saved = save_publication_figure(contract, tmp_path)
+
+    assert saved["contract"].exists()
+    assert contract.panels[0].panel_id == "A"
+    assert contract.panels[0].role == "overview"
+
+
 def test_make_figure_contract_accepts_agent_role_aliases_and_source_dicts():
     contract = make_figure_contract(
         figure_id="FigureAgent",

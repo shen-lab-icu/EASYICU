@@ -79,8 +79,13 @@ def test_mock_planner_emits_prediction_analysis_and_publication_for_prediction_q
 
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
     step_ids = [step["step_id"] for step in plan["steps"]]
-    assert "04_prediction_model_analysis" in step_ids, step_ids
-    assert "05_publication_figure_generation" in step_ids, step_ids
+    # The planner emits ``04_prediction_model_analysis`` +
+    # ``05_publication_figure_generation``, then the pipeline normalises
+    # them to the canonical ``01_model_training`` step and splits the
+    # figure outputs into ``01_model_training_figure`` (see
+    # ``_normalise_plan_for_family`` and ``_split_table_and_figure_outputs_in_plan``).
+    assert "01_model_training" in step_ids, step_ids
+    assert "01_model_training_figure" in step_ids, step_ids
     assert "04_primary_association" not in step_ids
 
 
@@ -120,8 +125,11 @@ def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clusterin
     first_step_ids = [step["step_id"] for step in first_plan["steps"]]
     second_step_ids = [step["step_id"] for step in second_plan["steps"]]
 
-    assert "04_prediction_model_analysis" in first_step_ids, first_step_ids
-    assert "04_trajectory_clustering_analysis" in second_step_ids, second_step_ids
+    # Post-normalisation canonical step ids: prediction collapses to
+    # ``01_model_training`` and clustering collapses to
+    # ``01_trajectory_clustering`` (see ``_normalise_plan_for_family``).
+    assert "01_model_training" in first_step_ids, first_step_ids
+    assert "01_trajectory_clustering" in second_step_ids, second_step_ids
 
 
 def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_preferences(ra, tmp_path: Path):

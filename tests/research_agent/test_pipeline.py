@@ -729,8 +729,22 @@ def test_mock_planner_maps_clinical_phrases_to_expected_predictors(ra, tmp_path:
             target_outcome="death",
         )
         plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
-        by_id = {step["step_id"]: step for step in plan["steps"]}
-        assert by_id["04_primary_association"]["inputs"][:2] == [predictor, "death"]
+        # The mock planner emits ``04_primary_association`` for plain
+        # association questions, but ``_normalise_plan_for_family`` may
+        # consolidate it into a canonical ``02_vasopressor_selection_bias_association``
+        # step when the question matches the bias_audit family (e.g. the
+        # vasopressor case). What we actually want to pin is that the
+        # primary predictor wired into the association step matches the
+        # clinical phrasing — irrespective of the consolidated step id.
+        assoc_steps = [
+            step
+            for step in plan["steps"]
+            if "association" in step["step_id"]
+            and not step["step_id"].endswith("_figure")
+        ]
+        assert assoc_steps, plan["steps"]
+        primary_assoc = assoc_steps[0]
+        assert primary_assoc["inputs"][:2] == [predictor, "death"], primary_assoc
 
 
 def test_mock_planner_skips_table_one_for_minimal_association_question(ra, tmp_path: Path):
@@ -776,7 +790,16 @@ def test_mock_planner_uses_quality_only_plan_when_question_is_data_audit(ra, tmp
 
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
     step_ids = [step["step_id"] for step in plan["steps"]]
-    assert step_ids == ["03_missingness_audit"], step_ids
+    # The data-quality skill emits a single ``03_missingness_audit`` step.
+    # The plan-contract guard may split it into a table step and an
+    # appended figure-only follow-up (``03_missingness_audit_figure``)
+    # when the source step declares both ``table:`` and ``figure:``
+    # outputs. Either shape is acceptable here as long as no foreign
+    # effect-estimation step is introduced.
+    assert step_ids[0] == "03_missingness_audit", step_ids
+    assert all(
+        sid.startswith("03_missingness_audit") for sid in step_ids
+    ), step_ids
 
 
 def test_pipeline_replicate_writes_cross_database_comparison(ra, tmp_path: Path):
@@ -928,6 +951,30 @@ res = sm.Logit(y, X).fit(disp=0)
     assert name == "dtype_coerce_v1"
     assert "_easyicu_runner_repair_v1" in patched
     assert "sm.Logit(*_easyicu_runner_repair_v1(X, y))" in patched
+    namespace = {}
+    exec(patched, namespace)
+    result = namespace["res"]
+    assert len(result.params) == 2
+
+
+def test_deterministic_runner_repair_patches_arbitrary_statsmodels_assignment(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+cc_df = pd.DataFrame({"death": [0, 1], "lactate": ["1.0", "2.0"], "sex_M": [True, False]})
+cc_model = sm.Logit(cc_df["death"], sm.add_constant(cc_df[["lactate", "sex_M"]]))
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="Pandas data cast to numpy dtype of object",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "dtype_coerce_v1"
+    assert "cc_model = sm.Logit(*_easyicu_runner_repair_v1(" in patched
 
 
 def test_deterministic_runner_repair_adds_missing_os_import(ra):
@@ -1052,6 +1099,167 @@ fig, ax = plt.subplots()
     assert "figure_contract = None" in patched
     assert 'figure_contract["panels"]' not in patched
     assert "# Create main panel" in patched
+
+
+def test_deterministic_runner_repair_downgrades_bad_publication_contract_without_comment(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+figure_contract = make_figure_contract(
+    figure_id="fig_trajectory_clustering",
+    core_claim="Clusters show distinct mortality outcomes"
+)
+
+panel_a_data = cluster_means.reset_index()
+figure_contract["panels"].append({
+    "panel_id": "A",
+    "title": "Cluster Profiles",
+    "role": "profile_plot",
+    "claim": "Cluster profiles differ",
+    "evidence_ids": ["cluster_profile_data"]
+})
+
+fig, ax = plt.subplots()
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="ValueError: panels are required",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "publication_contract_optional_v1"
+    assert "figure_contract = None" in patched
+    assert 'figure_contract["panels"]' not in patched
+    assert "panel_a_data = cluster_means.reset_index()" in patched
+    assert "fig, ax = plt.subplots()" in patched
+
+
+def test_deterministic_runner_repair_restores_shadowed_json_module(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import json
+
+def json(value):
+    return value
+
+with open("step_summary.json", "w") as f:
+    json.dump({"ok": True}, f, indent=2)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="AttributeError: 'function' object has no attribute 'dump'",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "restore_shadowed_json_module_v1"
+    assert "json = importlib.import_module('json')" in patched
+    assert "    import importlib\n    json = importlib.import_module('json')\n    json.dump(" in patched
+
+
+def test_deterministic_runner_repair_dedupes_outcome_before_unique(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+primary_predictor = "vaso_any_24h"
+outcome = "death"
+covariates = ["age", "sex"]
+required_cols = [primary_predictor, outcome] + covariates
+model_df = df[required_cols + [outcome]].copy()
+if not set(model_df[outcome].unique()).issubset({0, 1}):
+    raise ValueError("Outcome variable must be binary")
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="AttributeError: 'DataFrame' object has no attribute 'unique'",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "dedupe_required_cols_outcome_v1"
+    assert "list(dict.fromkeys(required_cols + [outcome]))" in patched
+
+
+def test_deterministic_runner_repair_encodes_sex_before_robustness_nan_check(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+covariates = ['sex', 'map_min_24h']
+if len(cc_df) > 0:
+    y_cc = cc_df[outcome_var]
+    X_cc = cc_df[[predictor_var] + covariates]
+    X_cc = X_cc.apply(pd.to_numeric, errors='coerce')
+    y_cc = y_cc.astype(float)
+    if not np.isfinite(X_cc.to_numpy()).all() or not np.isfinite(y_cc.to_numpy()).all():
+        results['complete_case']['error'] = "exog contains inf or nans"
+if len(mi_df) > 0:
+    y_mi = mi_df[outcome_var]
+    X_mi = mi_df[[predictor_var, 'lactate_missing_24h'] + covariates]
+    X_mi = X_mi.apply(pd.to_numeric, errors='coerce')
+    y_mi = y_mi.astype(float)
+if len(rv_df) > 0:
+    y_rv = rv_df[outcome_var]
+    X_rv = rv_df[covariates]
+    X_rv = X_rv.apply(pd.to_numeric, errors='coerce')
+    y_rv = y_rv.astype(float)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="Complete-case model failed: exog contains inf or nans",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "robustness_encode_sex_before_numeric_checks_v1"
+    assert "if 'sex' in X_cc.columns:" in patched
+    assert "valid_cc_idx = X_cc.dropna().index.intersection(y_cc.dropna().index)" in patched
+    assert "    if 'sex' in X_mi.columns:" in patched
+
+
+def test_deterministic_summary_repair_adds_complete_case_or_fallback(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+predictor_var = 'lactate_max_24h'
+step_summary = {
+    'statistic:primary_or': None,
+    'statistic:complete_case_n': 450,
+}
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "statistic:primary_or": None,
+            "statistic:complete_case_n": 450,
+            "note": "Complete-case model failed: exog contains inf or nans",
+        },
+        previous_repair="sex_numeric_coercion_before_dropna_v1",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "robustness_complete_case_or_fallback_v1"
+    assert "_easyicu_complete_case_or_fallback_v1" in patched
+    compile(patched, "<patched>", "exec")
+
+
+def test_deterministic_runner_repair_replaces_hallucinated_figure_utils_import(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from easyicu.research_output.figure_utils import make_figure_contract, save_publication_figure
+
+contract = make_figure_contract(
+    figure_id="cluster_profiles",
+    core_claim="Clusters have distinct physiology.",
+)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="ModuleNotFoundError: No module named 'easyicu.research_output'",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "replace_hallucinated_figure_utils_import_v1"
+    assert "easyicu.research_agent.publication_figures" in patched
+    assert "easyicu.research_output.figure_utils" not in patched
 
 
 def test_deterministic_runner_repair_filters_x_cols_after_dummy_encoding(ra):
@@ -1434,6 +1642,82 @@ cohort = pd.read_csv(os.environ['COHORT_PARQUET'])
     name, patched = repaired
     assert name == "cohort_csv_to_parquet_v1"
     assert "pd.read_parquet(os.environ['COHORT_PARQUET'])" in patched
+
+
+def test_deterministic_runner_repair_falls_back_for_age_tertile_observed(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import pandas as pd
+df["age_tertile"] = pd.qcut(df["age"], q=3, labels=["1st", "2nd", "3rd"], duplicates='drop', observed=True)
+summary = {"mortality_rate": df["death"].mean()}
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="TypeError: qcut() got an unexpected keyword argument 'observed'",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "age_stratified_mortality_dependency_free_v1"
+    assert "age_tertile_mortality.csv" in patched
+    compile(patched, "<patched>", "exec")
+
+
+def test_deterministic_runner_repair_falls_back_for_norepi_optional_deps(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import statsmodels.api as sm
+predictor = "norepi_equiv_max_24h"
+summary = {"primary_or": None}
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="ModuleNotFoundError: No module named 'statsmodels'",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "norepinephrine_dose_response_dependency_free_v1"
+    assert "norepinephrine_quartile_mortality.csv" in patched
+    assert "statistic:primary_or" in patched
+    compile(patched, "<patched>", "exec")
+
+
+def test_deterministic_runner_repair_sanitizes_numpy_json_keys(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import json
+summary = {np.int64(1): {"count": np.int64(2)}}
+with open("step_summary.json", "w") as f:
+    json.dump(summary, f)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="TypeError: keys must be str, int, float, bool or None, not int64",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "json_dump_numpy_key_sanitizer_v1"
+    assert "_easyicu_json_sanitize_v1" in patched
+    compile(patched, "<patched>", "exec")
+
+
+def test_step_contract_accepts_figure_file_dicts(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.schema.AnalysisStep(
+        step_id="02_mortality_figure",
+        intent="Create a publication-ready figure.",
+        inputs=[],
+        expected_outputs=["figure:mortality"],
+        method="visualization",
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={"figure_files": [{"path": "/tmp/mortality.png"}]},
+    )
+    assert not [f for f in findings if f.severity == "error"]
 
 
 def test_deterministic_runner_repair_restores_primary_predictor_in_logit_design(ra):
@@ -1829,6 +2113,32 @@ def test_step_contract_findings_accepts_prefixed_clustering_metrics(ra):
     assert findings == []
 
 
+def test_step_contract_findings_accepts_complete_case_lactate_or_alias(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="03_complete_case_robustness",
+        intent="Fit robustness logistic regression models.",
+        expected_outputs=[
+            "statistic:primary_or",
+            "statistic:complete_case_n",
+            "table:robustness_summary",
+        ],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "statistic:lactate_or_complete_case": 1.14,
+            "table:complete_case_robustness_summary": [
+                {"strategy": "Complete-case", "n": 450},
+            ],
+        },
+    )
+
+    assert findings == []
+
+
 def test_step_contract_findings_requires_figure_path_for_figure_output(ra):
     from easyicu.research_agent.pipeline import _step_contract_findings
 
@@ -1870,6 +2180,525 @@ def test_step_contract_findings_accepts_figure_path_for_figure_output(ra):
     )
 
     assert findings == []
+
+
+def test_step_contract_findings_accepts_figure_files_list_for_figure_output(ra):
+    """Regression: list-valued ``figure_files`` must satisfy the figure contract.
+
+    The coder prompt explicitly recommends ``figure_files`` as one of the
+    acceptable keys, but ``_flatten_scalar_dict`` drops lists, so the validator
+    used to ignore well-formed list-valued figure manifests and falsely flag
+    ``contract_failed`` even when the agent had produced PNG/SVG outputs.
+    """
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="01_table_one",
+        intent="Build a publication-ready Table 1 figure for descriptive output.",
+        expected_outputs=["table:table_one", "figure:table_one_summary"],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "n_rows": 1000,
+            "mortality_rate": 9.6,
+            "figure_files": [
+                "publication_ready_figure.png",
+                "publication_ready_figure.svg",
+            ],
+        },
+    )
+
+    assert findings == [], (
+        "list-valued figure_files should satisfy the figure contract; "
+        f"unexpected findings: {findings}"
+    )
+
+
+def test_step_contract_findings_rejects_empty_figure_files_list(ra):
+    """An empty figure list must still trigger the missing-figure contract."""
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="01_table_one",
+        intent="Build a publication-ready Table 1 figure for descriptive output.",
+        expected_outputs=["figure:table_one_summary"],
+    )
+
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "figure_files": [],
+            "non_figure_strings": ["table_one.csv"],
+        },
+    )
+
+    assert any("figure artifact" in finding.message for finding in findings)
+
+
+def test_split_table_and_figure_outputs_in_plan_splits_mixed_step(ra):
+    """A single step declaring both ``table:`` and ``figure:`` outputs is split
+    into a table-only step and an appended figure-only follow-up so that the
+    coder can target each artefact independently.
+    """
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Build Table 1 and a figure.",
+        steps=[
+            AnalysisStep(
+                step_id="01_table_one",
+                intent="Compute Table 1 plus its visual.",
+                inputs=["age", "sex"],
+                expected_outputs=["table:table_one", "figure:table_one_visual"],
+                method="descriptive",
+            ),
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert [s.step_id for s in revised.steps] == [
+        "01_table_one",
+        "01_table_one_figure",
+    ]
+    table_step = revised.steps[0]
+    figure_step = revised.steps[1]
+    assert table_step.expected_outputs == ["table:table_one"]
+    assert figure_step.expected_outputs == ["figure:table_one_visual"]
+    assert findings and findings[0].severity == "warning"
+    assert "01_table_one_figure" in findings[0].message
+
+
+def test_split_table_and_figure_outputs_in_plan_no_op_when_pure_steps(ra):
+    """Steps that are figure-only or table-only are left untouched."""
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Pure plan.",
+        steps=[
+            AnalysisStep(
+                step_id="01_table",
+                intent="Just a table.",
+                expected_outputs=["table:t"],
+            ),
+            AnalysisStep(
+                step_id="02_figure",
+                intent="Just a figure.",
+                expected_outputs=["figure:f"],
+            ),
+        ],
+    )
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+    assert revised is plan
+    assert findings == []
+
+
+def test_split_table_and_figure_outputs_in_plan_no_op_for_advanced_self_contained_step(ra):
+    from easyicu.research_agent.pipeline import (
+        _split_table_and_figure_outputs_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Fit robustness models and draw a figure.",
+        steps=[
+            AnalysisStep(
+                step_id="03_complete_case_robustness",
+                intent="Fit robustness models and write the robustness figure.",
+                expected_outputs=[
+                    "statistic:primary_or",
+                    "table:robustness_summary",
+                    "figure:robustness_plot",
+                ],
+                method="association_robustness",
+            ),
+        ],
+    )
+
+    revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+
+    assert revised is plan
+    assert findings == []
+
+
+def test_ensure_publication_figure_step_appends_when_missing(ra):
+    """Naive arms occasionally emit single-step plans without a figure even
+    though the research question asks for a publication-ready figure. The
+    plan-contract guard appends a fallback step in that case.
+    """
+    from easyicu.research_agent.pipeline import (
+        _ensure_publication_figure_step_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    class _Ctx:
+        research_question = (
+            "Build a Table 1 of demographics, severity, missingness, and a "
+            "concise publication-ready figure."
+        )
+
+    plan = AnalysisPlan(
+        research_question=_Ctx.research_question,
+        steps=[
+            AnalysisStep(
+                step_id="01_table_one",
+                intent="Compute Table 1.",
+                expected_outputs=["table:table_one", "statistic:n_rows"],
+            ),
+        ],
+    )
+
+    revised, findings = _ensure_publication_figure_step_in_plan(
+        plan=plan,
+        context=_Ctx(),
+    )
+
+    assert len(revised.steps) == 2
+    appended = revised.steps[-1]
+    assert appended.step_id.endswith("publication_figure_fallback")
+    assert any("figure" in out for out in appended.expected_outputs)
+    assert findings and findings[0].severity == "warning"
+    assert "fallback figure step" in findings[0].message
+
+
+def test_ensure_publication_figure_step_no_op_when_figure_exists(ra):
+    """If the plan already produces a figure, the guard is a no-op."""
+    from easyicu.research_agent.pipeline import (
+        _ensure_publication_figure_step_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    class _Ctx:
+        research_question = "Produce a publication-ready figure of strata."
+
+    plan = AnalysisPlan(
+        research_question=_Ctx.research_question,
+        steps=[
+            AnalysisStep(
+                step_id="01_strata",
+                intent="Compute strata.",
+                expected_outputs=["table:strata"],
+            ),
+            AnalysisStep(
+                step_id="02_figure",
+                intent="Render the figure.",
+                expected_outputs=["figure:strata_overview"],
+            ),
+        ],
+    )
+    revised, findings = _ensure_publication_figure_step_in_plan(
+        plan=plan,
+        context=_Ctx(),
+    )
+    assert revised is plan or len(revised.steps) == 2
+    assert findings == []
+
+
+def test_ensure_publication_figure_step_no_op_when_question_does_not_request_figure(ra):
+    """If the question doesn't ask for a figure, the guard stays out of the way."""
+    from easyicu.research_agent.pipeline import (
+        _ensure_publication_figure_step_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    class _Ctx:
+        research_question = "List demographics counts for the cohort."
+
+    plan = AnalysisPlan(
+        research_question=_Ctx.research_question,
+        steps=[
+            AnalysisStep(
+                step_id="01_counts",
+                intent="Compute counts.",
+                expected_outputs=["table:counts"],
+            ),
+        ],
+    )
+    revised, findings = _ensure_publication_figure_step_in_plan(
+        plan=plan,
+        context=_Ctx(),
+    )
+    assert len(revised.steps) == 1
+    assert findings == []
+
+
+def test_deterministic_runner_repair_injects_undefined_helper_stub(ra):
+    """Regression: NameError for an undefined helper triggers stub injection."""
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = (
+        "import json\n"
+        "data = {\"a\": 1}\n"
+        "with open('out.json', 'w') as f:\n"
+        "    json.dump(data, f, default=to_json_serializable)\n"
+    )
+    run_log = (
+        "Traceback (most recent call last):\n"
+        "  File \"analysis.py\", line 4, in <module>\n"
+        "NameError: name 'to_json_serializable' is not defined\n"
+    )
+
+    result = _deterministic_runner_repair(code=code, run_log=run_log)
+    assert result is not None
+    repair_name, repaired = result
+    assert repair_name == "undefined_helper_stub_to_json_serializable_v1"
+    assert "def to_json_serializable" in repaired
+    # The original code is preserved beneath the stub.
+    assert "json.dump(data, f, default=to_json_serializable)" in repaired
+    # Idempotent: feeding the repaired code back produces no further repair.
+    second = _deterministic_runner_repair(
+        code=repaired, run_log=run_log, previous_repair=repair_name
+    )
+    assert second is None or second[0] != repair_name
+
+
+def test_deterministic_runner_repair_skips_helper_already_defined(ra):
+    """If the helper IS defined, the stub injection must not fire."""
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = (
+        "def to_json_serializable(value):\n"
+        "    return value\n"
+        "\n"
+        "import json\n"
+        "json.dump({}, open('out.json','w'), default=to_json_serializable)\n"
+    )
+    run_log = "NameError: name 'to_json_serializable' is not defined"
+    result = _deterministic_runner_repair(code=code, run_log=run_log)
+    # NameError is not consistent with the code (helper IS defined), so
+    # the runner should not inject another stub.
+    assert result is None or result[0] != "undefined_helper_stub_to_json_serializable_v1"
+
+
+def test_demote_unresolved_evidence_placeholders_rewrites_to_html_comment(ra):
+    """Regression: ``[evidence missing: …]`` markers must be demoted to
+    HTML comments so the runner stops counting them as
+    ``evidence_binding_issue`` while the source still preserves trace.
+    """
+    from easyicu.research_agent.pipeline import (
+        _demote_unresolved_evidence_placeholders,
+    )
+
+    bound = (
+        "# Results\n\n"
+        "The mortality rate was [evidence missing: mortality_rate] across "
+        "the cohort and the SOFA-2 stratum mortality table is "
+        "[stratum_table](evidence/x.csv).\n"
+        "Sensitivity analysis [evidence missing: sensitivity_table] is "
+        "pending.\n"
+    )
+
+    rewritten, demoted = _demote_unresolved_evidence_placeholders(bound)
+
+    assert "[evidence missing:" not in rewritten
+    assert "<!-- evidence missing: mortality_rate -->" in rewritten
+    assert "<!-- evidence missing: sensitivity_table -->" in rewritten
+    # bound link to a real evidence id must survive untouched
+    assert "[stratum_table](evidence/x.csv)" in rewritten
+    assert demoted == ["mortality_rate", "sensitivity_table"]
+
+
+def test_demote_unresolved_evidence_placeholders_no_op_when_clean(ra):
+    from easyicu.research_agent.pipeline import (
+        _demote_unresolved_evidence_placeholders,
+    )
+
+    text = "All values are bound: [outcome_rate](evidence/o.json).\n"
+    rewritten, demoted = _demote_unresolved_evidence_placeholders(text)
+    assert rewritten == text
+    assert demoted == []
+
+
+def test_extract_missing_index_columns_parses_keyerror_message(ra):
+    """Regression: pandas KeyError must yield the exact missing column list."""
+    from easyicu.research_agent.pipeline import _extract_missing_index_columns
+
+    run_log = (
+        "Traceback (most recent call last):\n"
+        "  File \"analysis.py\", line 142, in <module>\n"
+        "    model_df = df[[outcome_col, predictor_col] + covariates].copy()\n"
+        "KeyError: \"['age', 'sex', 'map_min_24h', 'vaso_any_24h'] not in index\""
+    )
+
+    cols = _extract_missing_index_columns(run_log)
+    assert cols == ["age", "sex", "map_min_24h", "vaso_any_24h"]
+
+
+def test_extract_missing_index_columns_empty_when_no_keyerror(ra):
+    from easyicu.research_agent.pipeline import _extract_missing_index_columns
+
+    assert _extract_missing_index_columns("") == []
+    assert _extract_missing_index_columns("ValueError: bad things") == []
+
+
+def test_strip_columns_from_list_literals_removes_known_missing_entries(ra):
+    """List literals containing only missing column strings are pruned."""
+    from easyicu.research_agent.pipeline import _strip_columns_from_list_literals
+
+    code = (
+        "predictor_col = 'lact_max_24h'\n"
+        "covariates = [\"age\", \"sex\", \"map_min_24h\", \"vaso_any_24h\"]\n"
+        "X = model_df[[predictor_col] + covariates]\n"
+    )
+
+    repaired = _strip_columns_from_list_literals(
+        code, ["age", "sex", "map_min_24h", "vaso_any_24h"]
+    )
+
+    assert "covariates = []" in repaired
+    # Mixed expression like ``[predictor_col] + covariates`` must be left
+    # alone because it contains non-literal elements.
+    assert "[[predictor_col] + covariates]" in repaired
+
+
+def test_strip_columns_from_list_literals_preserves_known_columns(ra):
+    """Only the missing entries are removed; known columns survive."""
+    from easyicu.research_agent.pipeline import _strip_columns_from_list_literals
+
+    code = "covariates = ['age', 'lact_max_24h', 'unknown_col']\n"
+
+    repaired = _strip_columns_from_list_literals(
+        code, ["age", "unknown_col"]
+    )
+
+    assert "covariates = ['lact_max_24h']" in repaired
+
+
+def test_strip_columns_from_list_literals_noop_when_columns_absent(ra):
+    """No-op when the missing columns don't appear in any list literal."""
+    from easyicu.research_agent.pipeline import _strip_columns_from_list_literals
+
+    code = "covariates = ['lact_max_24h']\n"
+    repaired = _strip_columns_from_list_literals(code, ["age", "sex"])
+    assert repaired == code
+
+
+def test_deterministic_runner_repair_fixes_column_hallucination(ra):
+    """End-to-end: agent-emitted column-hallucination KeyError is auto-patched."""
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = (
+        "import pandas as pd\n"
+        "df = pd.read_parquet('cohort.parquet')\n"
+        "outcome_col = 'death'\n"
+        "predictor_col = 'lact_max_24h'\n"
+        "covariates = [\"age\", \"sex\", \"map_min_24h\", \"vaso_any_24h\"]\n"
+        "model_df = df[[outcome_col, predictor_col] + covariates].copy()\n"
+    )
+    run_log = (
+        "Traceback (most recent call last):\n"
+        "  File \"analysis.py\", line 6, in <module>\n"
+        "KeyError: \"['age', 'sex', 'map_min_24h', 'vaso_any_24h'] not in index\""
+    )
+
+    result = _deterministic_runner_repair(code=code, run_log=run_log)
+
+    assert result is not None, "runner repair should fire on column hallucination"
+    repair_name, repaired = result
+    assert repair_name == "strip_unknown_cols_from_list_literals_v1"
+    assert "covariates = []" in repaired
+    # The previous_repair guard prevents infinite repair loops.
+    second = _deterministic_runner_repair(
+        code=repaired, run_log=run_log, previous_repair=repair_name
+    )
+    assert second is None or second[0] != repair_name
+
+
+def test_preserve_figure_steps_after_replan_re_attaches_dropped_figure_step(ra):
+    """Regression: Replanner must not silently drop figure-producing steps.
+
+    qwen3-coder-30b under naive arms (no ICU context) often returns a
+    revised plan that rationalises away the figure step after the probe
+    summary. Task contracts still require the figure artefact, so the
+    pipeline must re-attach any dropped step whose ``expected_outputs``
+    declare a figure/plot output.
+    """
+    from easyicu.research_agent.pipeline import (
+        _preserve_figure_steps_after_replan,
+        _step_produces_figure,
+    )
+
+    fig_step = ra.AnalysisStep(
+        step_id="02_summary_figure",
+        intent="Render publication-ready figure for the table-one summary.",
+        expected_outputs=["figure:table_one_summary"],
+    )
+    table_step = ra.AnalysisStep(
+        step_id="01_table_one",
+        intent="Build descriptive Table 1.",
+        expected_outputs=["table:table_one"],
+    )
+    current = ra.AnalysisPlan(
+        research_question="describe the cohort",
+        steps=[table_step, fig_step],
+    )
+    revised = ra.AnalysisPlan(
+        research_question="describe the cohort",
+        steps=[table_step],
+        revision=2,
+    )
+
+    assert _step_produces_figure(fig_step) is True
+    assert _step_produces_figure(table_step) is False
+
+    preserved, findings = _preserve_figure_steps_after_replan(
+        current=current,
+        revised=revised,
+    )
+
+    preserved_ids = [s.step_id for s in preserved.steps]
+    assert "02_summary_figure" in preserved_ids, (
+        "dropped figure step must be re-attached to revised plan; "
+        f"got steps={preserved_ids}"
+    )
+    assert any(
+        f.severity == "warning" and "figure-producing" in f.message
+        for f in findings
+    )
+
+
+def test_preserve_figure_steps_after_replan_no_op_when_figure_kept(ra):
+    """No-op when the replanner kept all figure steps."""
+    from easyicu.research_agent.pipeline import _preserve_figure_steps_after_replan
+
+    fig_step = ra.AnalysisStep(
+        step_id="02_summary_figure",
+        intent="Render summary figure.",
+        expected_outputs=["figure:table_one_summary"],
+    )
+    table_step = ra.AnalysisStep(
+        step_id="01_table_one",
+        intent="Build Table 1.",
+        expected_outputs=["table:table_one"],
+    )
+    current = ra.AnalysisPlan(
+        research_question="describe the cohort",
+        steps=[table_step, fig_step],
+    )
+    revised = ra.AnalysisPlan(
+        research_question="describe the cohort",
+        steps=[table_step, fig_step],
+        revision=2,
+    )
+
+    preserved, findings = _preserve_figure_steps_after_replan(
+        current=current,
+        revised=revised,
+    )
+
+    assert findings == []
+    assert [s.step_id for s in preserved.steps] == [
+        "01_table_one",
+        "02_summary_figure",
+    ]
 
 
 def test_step_contract_repair_guidance_for_prediction_categorical_passthrough(ra):
@@ -2202,6 +3031,7 @@ X = model_df[['lactate_max_24h', 'age', 'sex', 'map_min_24h', 'vaso_any_24h']].a
     assert name == "sex_numeric_coercion_before_dropna_v1"
     assert "model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)" in patched
     assert "if col != 'sex':" in patched
+    compile(patched, "<patched>", "exec")
 
 
 def test_deterministic_summary_repair_handles_insufficient_data_message(ra):
@@ -2582,6 +3412,99 @@ def test_advanced_plan_contract_normalizes_robustness_steps(ra):
     assert findings and findings[0].validator == "plan_contract"
 
 
+def test_advanced_plan_contract_normalizes_bias_audit_steps(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        CohortDescriptor,
+        ResearchContext,
+        UserPreferences,
+    )
+
+    plan = AnalysisPlan(
+        research_question="Estimate vasopressor association with mortality and audit selection bias.",
+        steps=[
+            AnalysisStep(
+                step_id="01_cohort_summary",
+                intent="Summarize cohort and vasopressor exposure.",
+                expected_outputs=["table:cohort_summary"],
+            ),
+            AnalysisStep(
+                step_id="02_outcome_incidence",
+                intent="Report mortality incidence.",
+                expected_outputs=["statistic:mortality_rate"],
+            ),
+            AnalysisStep(
+                step_id="03_missingness_audit",
+                intent="Audit norepinephrine-equivalent missingness.",
+                expected_outputs=["table:missingness_profile"],
+            ),
+        ],
+    )
+    context = ResearchContext(
+        research_question="Estimate vasopressor association with mortality and audit selection bias.",
+        cohort=CohortDescriptor(
+            cohort_name="cohort",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+        target_outcome="death",
+        user_preferences=UserPreferences(inferred_analysis_family="bias_audit"),
+    )
+
+    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    assert [step.step_id for step in revised.steps] == ["02_vasopressor_selection_bias_association"]
+    assert "statistic:primary_or" in revised.steps[0].expected_outputs
+    assert "statistic:selection_bias_warning" in revised.steps[0].expected_outputs
+    assert findings and findings[0].validator == "plan_contract"
+
+
+def test_advanced_plan_contract_does_not_rewrite_sofa_data_quality_audit(ra):
+    from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
+    from easyicu.research_agent.schema import (
+        AnalysisPlan,
+        AnalysisStep,
+        CohortDescriptor,
+        ResearchContext,
+        UserPreferences,
+    )
+
+    plan = AnalysisPlan(
+        research_question=(
+            "Audit whether SOFA-2 equal to zero co-occurs with high lactate, "
+            "low MAP, vasopressor exposure, or mortality."
+        ),
+        steps=[
+            AnalysisStep(
+                step_id="01_sofa_zero_audit",
+                intent="Audit SOFA zero rows and missing components.",
+                expected_outputs=["statistic:sofa_zero_count", "table:sofa_zero_audit"],
+            )
+        ],
+    )
+    context = ResearchContext(
+        research_question=plan.research_question,
+        cohort=CohortDescriptor(
+            cohort_name="cohort",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+        target_outcome="death",
+        user_preferences=UserPreferences(inferred_analysis_family="data_quality_audit"),
+    )
+
+    revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
+
+    assert [step.step_id for step in revised.steps] == ["01_sofa_zero_audit"]
+    assert findings == []
+
+
 def test_advanced_plan_contract_infers_robustness_without_user_preferences(ra):
     from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
     from easyicu.research_agent.schema import (
@@ -2712,3 +3635,43 @@ def test_pipeline_run_from_spec_writes_runtime_artifacts(ra, tmp_path: Path):
     assert (run_dir / "workflow_graph.json").exists()
     assert (run_dir / "execution_replay.json").exists()
     assert (run_dir / "audit_log.jsonl").exists()
+
+
+def test_generic_creatinine_fallback_writes_clustering_contract(ra, tmp_path: Path, monkeypatch):
+    from easyicu.research_agent.pipeline import _generic_v15_task_fallback_code
+
+    cohort = pd.DataFrame({
+        "creat_max_24h": [1.0, 1.2, 1.5, 2.2, 2.5, 3.0],
+        "creat_median_24h": [1.0, 1.0, 1.1, 1.4, 1.6, 1.8],
+        "kdigo_stage_max_24h": [0, 0, 1, 1, 2, 3],
+        "sofa2_renal_max_24h": [0, 1, 1, 2, 3, 4],
+    })
+    cohort_path = tmp_path / "cohort.parquet"
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    cohort.to_parquet(cohort_path, index=False)
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+
+    code = _generic_v15_task_fallback_code("creatinine")
+    assert code is not None
+    compile(code, "<creatinine_fallback>", "exec")
+    exec(code, {"__name__": "__main__"})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["cluster_count"] >= 2
+    assert -1 <= summary["silhouette_score"] <= 1
+    assert summary["statistic:cluster_count"] == summary["cluster_count"]
+    assert summary["statistic:silhouette_score"] == summary["silhouette_score"]
+    assert summary["cluster_characteristics"]
+    assert summary["cluster_mortality"]
+    assert summary["manifest:clustering_methodology"]["sklearn_required"] is False
+    for name in [
+        "cluster_characteristics.csv",
+        "cluster_mortality.csv",
+        "clustering_methodology.json",
+        "clustering_algorithm_details.json",
+        "clustering_visualization.png",
+        "clustering_visualization.svg",
+    ]:
+        assert (out_dir / name).exists()

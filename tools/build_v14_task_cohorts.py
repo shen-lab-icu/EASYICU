@@ -446,6 +446,63 @@ def task_specs() -> List[TaskSpec]:
             ],
             filter_fn=_filter_los_24h,
         ),
+        # ------------------------------------------------------------------
+        # v15 ladder extension: 5 additional tasks (t11-t15) covering basic
+        # descriptive ground (t11-t13) and intermediate clinical-association
+        # studies (t14-t15) so the benchmark spans 5 basic + 5 intermediate +
+        # 5 advanced tasks. All columns reuse the v14 master cohort and do
+        # not require new EasyICU concept dictionaries or master rebuilds.
+        # ------------------------------------------------------------------
+        TaskSpec(
+            key="t11_los_distribution_descriptive",
+            description="ICU and hospital length-of-stay distribution by survival status; basic descriptive.",
+            columns=[
+                ID_COL, "age", "sex", "los_icu", "los_hosp", "death",
+            ],
+            filter_fn=None,
+        ),
+        TaskSpec(
+            key="t12_age_stratified_mortality",
+            description="Age-tertile stratified in-hospital mortality with proportions and 95% CI; basic descriptive.",
+            columns=[
+                ID_COL, "age", "sex", "los_icu", "death",
+            ],
+            filter_fn=None,
+        ),
+        TaskSpec(
+            key="t13_admission_vital_summary",
+            description="First-24-hour vital-sign distribution (HR, SBP, MAP) by survival status; basic descriptive.",
+            columns=[
+                ID_COL, "age", "sex",
+                "hr_max_24h", "hr_median_24h",
+                "sbp_min_24h", "sbp_median_24h",
+                "map_min_24h", "map_median_24h",
+                "death",
+            ],
+            filter_fn=_filter_los_24h,
+        ),
+        TaskSpec(
+            key="t14_creatinine_trajectory_kdigo",
+            description="Within-24-hour creatinine trajectory (max/median ratio) and KDIGO stage; intermediate association.",
+            columns=[
+                ID_COL, "age", "sex",
+                "creat_max_24h", "creat_median_24h",
+                "kdigo_stage_max_24h", "sofa2_renal_max_24h",
+                "vaso_any_24h", "death",
+            ],
+            filter_fn=None,
+        ),
+        TaskSpec(
+            key="t15_norepinephrine_dose_response",
+            description="Norepinephrine-equivalent dose quartile -> mortality among vasopressor-exposed stays; intermediate dose-response.",
+            columns=[
+                ID_COL, "age", "sex",
+                "vaso_any_24h", "norepi_equiv_max_24h",
+                "map_min_24h", "lactate_max_24h",
+                "sofa2_cardio_max_24h", "death",
+            ],
+            filter_fn=_filter_vaso_eligible,
+        ),
     ]
 
 
