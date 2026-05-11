@@ -17,15 +17,23 @@ sys.modules[_SPEC.name] = v14
 _SPEC.loader.exec_module(v14)
 
 
-def test_v14_task_registry_has_ten_real_cohort_tasks():
+def test_v14_task_registry_has_fifteen_real_cohort_tasks():
     v14._bootstrap_imports()
     tasks = v14._load_task_specs_from_builder()
 
-    assert len(tasks) == 10
+    # v15 ladder: 5 basic + 5 intermediate + 5 advanced.
+    assert len(tasks) == 15
     keys = {task.key for task in tasks}
+    # Anchor tasks (preserved from v14):
     assert "t04_lactate_mortality_association" in keys
     assert "t06_shock_phenotype_clustering" in keys
     assert "t07_mortality_prediction_auroc" in keys
+    # New v15 ladder tasks (basic + intermediate):
+    assert "t11_los_distribution_descriptive" in keys
+    assert "t12_age_stratified_mortality" in keys
+    assert "t13_admission_vital_summary" in keys
+    assert "t14_creatinine_trajectory_kdigo" in keys
+    assert "t15_norepinephrine_dose_response" in keys
     assert all(task.cohort_file.endswith(".parquet") for task in tasks)
     task_by_key = {task.key: task for task in tasks}
     assert task_by_key["t03_severity_score_correlation"].target_outcome is None
@@ -313,6 +321,64 @@ def test_metric_extractor_accepts_sofa_zero_count_alias(tmp_path: Path):
     assert metrics["expected_metric_hits"]["sofa_zero_count"] is True
 
 
+def test_metric_extractor_accepts_sofa2_zero_count_alias(tmp_path: Path):
+    run_dir = tmp_path / "run_20260508T000000_sofa2_zero_alias"
+    step_dir = run_dir / "steps" / "03_mortality_by_sofa_zero" / "outputs"
+    step_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "run_20260508T000000_sofa2_zero_alias", "evidence": [], "findings": []}),
+        encoding="utf-8",
+    )
+    (run_dir / "manuscript_scaffold_bound.md").write_text("ok", encoding="utf-8")
+    (step_dir / "step_summary.json").write_text(
+        json.dumps({"sofa2_zero_count": 41, "guardrail_warning": True}),
+        encoding="utf-8",
+    )
+    task = v14.V14Task(
+        key="t09_sofa_zero_artefact_audit",
+        title="SOFA zero audit",
+        family="data_quality_audit",
+        difficulty="advanced",
+        cohort_file="t09_sofa_zero_artefact_audit.parquet",
+        question="Audit SOFA zero artefacts.",
+        expected_metrics=["sofa_zero_count", "guardrail_warning"],
+    )
+
+    metrics = v14._extract_metrics(run_dir, task)
+
+    assert metrics["sofa_zero_count"] == 41
+    assert metrics["expected_metric_hits"]["sofa_zero_count"] is True
+
+
+def test_metric_extractor_accepts_total_stays_sofa_zero_alias(tmp_path: Path):
+    run_dir = tmp_path / "run_20260508T000000_total_sofa_zero_alias"
+    step_dir = run_dir / "steps" / "02_sofa_zero_cooccurrence" / "outputs"
+    step_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "run_20260508T000000_total_sofa_zero_alias", "evidence": [], "findings": []}),
+        encoding="utf-8",
+    )
+    (run_dir / "manuscript_scaffold_bound.md").write_text("ok", encoding="utf-8")
+    (step_dir / "step_summary.json").write_text(
+        json.dumps({"total_stays_sofa_zero": 41, "guardrail_warning": True}),
+        encoding="utf-8",
+    )
+    task = v14.V14Task(
+        key="t09_sofa_zero_artefact_audit",
+        title="SOFA zero audit",
+        family="data_quality_audit",
+        difficulty="advanced",
+        cohort_file="t09_sofa_zero_artefact_audit.parquet",
+        question="Audit SOFA zero artefacts.",
+        expected_metrics=["sofa_zero_count", "guardrail_warning"],
+    )
+
+    metrics = v14._extract_metrics(run_dir, task)
+
+    assert metrics["sofa_zero_count"] == 41
+    assert metrics["expected_metric_hits"]["sofa_zero_count"] is True
+
+
 def test_metric_extractor_uses_probe_summary_without_masking_step_count(tmp_path: Path):
     run_dir = tmp_path / "run_20260508T000000_table_one"
     probe_dir = run_dir / "steps" / "00_probe" / "outputs"
@@ -361,6 +427,54 @@ def test_metric_extractor_uses_probe_summary_without_masking_step_count(tmp_path
     }
 
 
+def test_metric_extractor_accepts_mortality_pct_in_stratified_table(tmp_path: Path):
+    """Regression: agent-emitted ``mortality_pct`` / ``mortality_percentage``
+    inside a stratified table must satisfy the ``mortality_rate`` contract.
+
+    qwen3-coder-30b on t02 (outcome_incidence_strata) emits stratified rows
+    keyed by ``mortality_pct`` / ``mortality_percentage`` rather than the
+    canonical ``mortality_rate``. Without aliasing those keys the runner
+    flags ``metric_contract_failure`` even when the analytic step succeeded.
+    """
+    run_dir = tmp_path / "run_20260509T000000_strata"
+    step_dir = run_dir / "steps" / "01_stratified_mortality_table" / "outputs"
+    step_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "run_20260509T000000_strata", "evidence": [], "findings": []}),
+        encoding="utf-8",
+    )
+    (run_dir / "manuscript_scaffold_bound.md").write_text("ok", encoding="utf-8")
+    (step_dir / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "table": "stratum_table",
+                "strata": [
+                    {"stratum": "0", "denominator": 41, "deaths": 1, "mortality_pct": 2.44},
+                    {"stratum": "7+", "denominator": 344, "deaths": 70, "mortality_percentage": 20.35},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    task = v14.V14Task(
+        key="t02_outcome_incidence_strata",
+        title="Outcome incidence by strata",
+        family="descriptive",
+        difficulty="basic",
+        cohort_file="t02_outcome_incidence_strata.parquet",
+        question="Stratified mortality.",
+        expected_metrics=["mortality_rate"],
+    )
+
+    metrics = v14._extract_metrics(run_dir, task)
+
+    assert metrics["mortality_rate"] is not None, (
+        "mortality_rate must be extracted from mortality_pct alias; "
+        f"metrics={metrics}"
+    )
+    assert metrics["expected_metric_hits"]["mortality_rate"] is True
+
+
 def test_metric_extractor_accepts_spearman_correlation_dict(tmp_path: Path):
     run_dir = tmp_path / "run_20260508T000000_corr"
     step_dir = run_dir / "steps" / "02_correlation_analysis" / "outputs"
@@ -387,6 +501,42 @@ def test_metric_extractor_accepts_spearman_correlation_dict(tmp_path: Path):
     metrics = v14._extract_metrics(run_dir, task)
 
     assert metrics["spearman_rho"] == 0.71
+    assert metrics["expected_metric_hits"]["spearman_rho"] is True
+
+
+def test_metric_extractor_accepts_nested_sofa_component_correlation_matrix(tmp_path: Path):
+    run_dir = tmp_path / "run_20260510T000000_corr_matrix"
+    step_dir = run_dir / "steps" / "02_correlation_analysis" / "outputs"
+    step_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"run_id": "run_20260510T000000_corr_matrix", "evidence": [], "findings": []}),
+        encoding="utf-8",
+    )
+    (run_dir / "manuscript_scaffold_bound.md").write_text("ok", encoding="utf-8")
+    (step_dir / "step_summary.json").write_text(
+        json.dumps({
+            "correlation_matrix": {
+                "sofa2_max_24h": {
+                    "sofa2_resp_max_24h": 0.64,
+                    "sofa2_renal_max_24h": 0.58,
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+    task = v14.V14Task(
+        key="t03_severity_score_correlation",
+        title="Correlation",
+        family="correlation",
+        difficulty="intermediate",
+        cohort_file="t03_severity_score_correlation.parquet",
+        question="Estimate correlations.",
+        expected_metrics=["spearman_rho"],
+    )
+
+    metrics = v14._extract_metrics(run_dir, task)
+
+    assert metrics["spearman_rho"] == 0.64
     assert metrics["expected_metric_hits"]["spearman_rho"] is True
 
 
@@ -536,6 +686,46 @@ def test_selection_bias_warning_requires_explicit_bias_language(tmp_path: Path):
 
     assert metrics["selection_bias_warning"] is False
     assert metrics["warning_source"] is None
+
+
+def test_metric_extractor_accepts_clinical_constraint_warning_for_bias_audit(tmp_path: Path):
+    run_dir = tmp_path / "run_20260508T000000_bias_warning"
+    step_dir = run_dir / "steps" / "01_bias_audit" / "outputs"
+    step_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run_20260508T000000_bias_warning",
+                "evidence": [],
+                "findings": [
+                    {
+                        "severity": "warning",
+                        "message": "Treatment-effect style analysis risks immortal time bias.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "manuscript_scaffold_bound.md").write_text("ok", encoding="utf-8")
+    (step_dir / "step_summary.json").write_text(
+        json.dumps({"adjusted_or": 1.34}),
+        encoding="utf-8",
+    )
+    task = v14.V14Task(
+        key="t08_vaso_selection_bias_audit",
+        title="Bias audit",
+        family="bias_audit",
+        difficulty="advanced",
+        cohort_file="t08_vaso_selection_bias_audit.parquet",
+        question="Audit vasopressor selection bias.",
+        expected_metrics=["primary_or", "selection_bias_warning"],
+    )
+
+    metrics = v14._extract_metrics(run_dir, task)
+
+    assert metrics["selection_bias_warning"] is True
+    assert metrics["warning_source"] == "findings[0]"
 
 
 def test_acceptance_status_requires_expected_metrics_and_artifacts(tmp_path: Path):
@@ -775,3 +965,90 @@ def test_reuse_selects_best_run_not_latest(tmp_path: Path):
     assert record is not None
     assert record["run_id"] == older.name
     assert record["acceptance_status"] == "clean_ok"
+
+
+def test_arm_config_legacy_two_arms_unchanged():
+    """`aware` / `naive` retain pre-2026-05 semantics so old runs stay comparable."""
+    aware = v14._arm_config("aware")
+    naive = v14._arm_config("naive")
+
+    assert aware == {"disable_icu_context": False, "include_user_preferences": True}
+    assert naive == {"disable_icu_context": True, "include_user_preferences": False}
+
+
+def test_arm_config_decomposes_icu_context_and_user_preferences():
+    """The 2x2 factorial arms isolate the two previously-confounded factors."""
+    assert v14._arm_config("aware_no_pref") == {
+        "disable_icu_context": False,
+        "include_user_preferences": False,
+    }
+    assert v14._arm_config("naive_with_pref") == {
+        "disable_icu_context": True,
+        "include_user_preferences": True,
+    }
+    assert set(v14.ARM_CHOICES) == {
+        "aware",
+        "aware_no_pref",
+        "naive_with_pref",
+        "naive",
+    }
+
+
+def test_arm_config_rejects_unknown_arm():
+    with pytest.raises(ValueError):
+        v14._arm_config("unknown_arm")
+
+
+def test_default_arms_run_full_factorial_design():
+    """Default --arms must enumerate all four cells of the 2x2 design."""
+    assert sorted(v14.DEFAULT_ARMS) == sorted(v14.ARM_CHOICES)
+    assert len(v14.DEFAULT_ARMS) == 4
+
+
+def test_runner_kwargs_propagate_enable_replanning(monkeypatch, tmp_path: Path):
+    """The watchdog must forward enable_replanning so the spawned child sees it."""
+    captured: dict = {}
+
+    def fake_run_task_arm(**kwargs):
+        captured.update(kwargs)
+        record = {
+            "task": {"key": kwargs["task"].key},
+            "arm": kwargs["arm"],
+            "run_dir": str(tmp_path / "run_dir"),
+            "run_id": "run_test",
+            "metrics": {},
+            "failure_class": None,
+        }
+        return v14._with_status_fields(record), True
+
+    monkeypatch.setattr(v14, "_run_task_arm", fake_run_task_arm)
+
+    cohort_path = tmp_path / "cohort.parquet"
+    cohort_path.write_bytes(b"cohort")
+    task = v14.V14Task(
+        key="t04_lactate_mortality_association",
+        title="Lactate",
+        family="association_study",
+        difficulty="intermediate",
+        cohort_file="t04_lactate_mortality_association.parquet",
+        question="q",
+    )
+
+    v14._run_task_arm_with_watchdog(
+        task=task,
+        arm="aware_no_pref",
+        model="qwen3-coder-30b",
+        provider="openai",
+        cohort_path=cohort_path,
+        out_root=tmp_path,
+        request_timeout=10.0,
+        experiment_mode="self_repair",
+        repo_root=tmp_path,
+        log_path=tmp_path / "log.txt",
+        task_timeout=0,  # disable watchdog -> in-process call so we can inspect kwargs
+        heartbeat_interval=15,
+        enable_replanning=False,
+    )
+
+    assert captured["arm"] == "aware_no_pref"
+    assert captured["enable_replanning"] is False
