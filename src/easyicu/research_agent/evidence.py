@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import shutil
 import threading
@@ -47,6 +48,34 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .schema import EvidenceRecord
+
+logger = logging.getLogger(__name__)
+
+
+def _quarantine_corrupt_index(path: Path, exc: Exception, kind: str) -> None:
+    """Rename a corrupted index file aside and log a warning.
+
+    Silently returning empty would erase the audit trail the writer agent
+    relies on; instead we keep the broken bytes for forensic inspection
+    and emit a warning so the operator knows evidence was lost.
+    """
+    if not path.exists():
+        logger.warning("evidence %s missing; starting fresh: %s", kind, exc)
+        return
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup = path.with_suffix(path.suffix + f".broken-{timestamp}")
+    try:
+        path.replace(backup)
+    except OSError as rename_err:
+        logger.warning(
+            "evidence %s at %s is corrupt (%s); also failed to back up: %s",
+            kind, path, exc, rename_err,
+        )
+        return
+    logger.warning(
+        "evidence %s at %s is corrupt (%s); moved to %s and starting fresh",
+        kind, path, exc, backup,
+    )
 
 
 def sha256_of_file(path: Path, chunk: int = 1024 * 1024) -> str:
@@ -99,7 +128,8 @@ class EvidenceStore:
         try:
             data = json.loads(self.index_path.read_text(encoding="utf-8"))
             return [EvidenceRecord.model_validate(r) for r in data]
-        except Exception:
+        except Exception as exc:
+            _quarantine_corrupt_index(self.index_path, exc, kind="index")
             return []
 
     def _load_aliases(self) -> Dict[str, str]:
@@ -107,10 +137,20 @@ class EvidenceStore:
             return {}
         try:
             data = json.loads(self.aliases_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return {str(k): str(v) for k, v in data.items()}
-        except Exception:
-            pass
+        except Exception as exc:
+            _quarantine_corrupt_index(self.aliases_path, exc, kind="aliases")
+            return {}
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+        logger.warning(
+            "evidence aliases at %s is not a JSON object (got %s); ignoring",
+            self.aliases_path, type(data).__name__,
+        )
+        _quarantine_corrupt_index(
+            self.aliases_path,
+            ValueError(f"unexpected type {type(data).__name__}"),
+            kind="aliases",
+        )
         return {}
 
     def _save(self) -> None:

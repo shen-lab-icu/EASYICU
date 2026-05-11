@@ -791,9 +791,10 @@ def _mock_code_primary_association(
             fig.tight_layout()
             fig.savefig(out_dir / "primary_association_curve.png", dpi=160)
             plt.close(fig)
+            _figure_saved = True
         except Exception:
             # Plot is decorative; never fail the step over it.
-            pass
+            _figure_saved = False
 
         # ---- Outcome incidence (cheap and the validator cross-checks it) ----
         outcome_rate = float(df[outcome_col].dropna().astype(int).mean()) if outcome_col in df.columns else None
@@ -809,6 +810,9 @@ def _mock_code_primary_association(
             "primary_or_ci": [primary_or_lo, primary_or_hi],
             "primary_association_path": "primary_association.csv",
         }}
+        if _figure_saved:
+            summary["figure_files"] = ["primary_association_curve.png"]
+            summary["figure_path"] = "primary_association_curve.png"
         with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False, default=str)
         print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))

@@ -146,14 +146,35 @@ class FigureContract(BaseModel):
 
     def evidence_chain(self) -> Dict[str, List[str]]:
         """Return panel_id -> evidence ids for provenance rendering."""
+        self._coerce_runtime_panels()
         return {p.panel_id: list(p.evidence_ids) for p in self.panels}
 
     # Compatibility helpers for agent-generated code that still uses a
     # light dict-like API on top of the Pydantic model.
+    def _coerce_runtime_panels(self) -> None:
+        self.panels = _normalise_panels(self.panels)
+
+    def __getitem__(self, key: str) -> Any:
+        if key in self.model_fields:
+            return getattr(self, key)
+        raise KeyError(key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if key not in self.model_fields:
+            raise KeyError(key)
+        if key == "panels":
+            value = _normalise_panels(value)
+        setattr(self, key, value)
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and key in self.model_fields
+
     def to_dict(self) -> Dict[str, Any]:
+        self._coerce_runtime_panels()
         return self.model_dump()
 
     def to_json(self, *, indent: int = 2) -> str:
+        self._coerce_runtime_panels()
         return self.model_dump_json(indent=indent)
 
 
@@ -432,9 +453,7 @@ def make_figure_contract(
         raise ValueError("figure_id is required")
     if not core_claim_value:
         raise ValueError("core_claim is required")
-    raw_panels = merged.get("panels")
-    if not raw_panels:
-        raise ValueError("panels are required")
+    raw_panels = merged.get("panels") or []
 
     if merged.get("source_data") is not None:
         raw_source = merged["source_data"]
@@ -480,6 +499,7 @@ def make_figure_contract(
 
 def audit_figure_contract(contract: FigureContract) -> List[ValidationFinding]:
     """Check whether a contract is strong enough for manuscript use."""
+    contract._coerce_runtime_panels()
     findings: List[ValidationFinding] = []
     if not contract.core_claim.strip():
         findings.append(ValidationFinding(
@@ -739,6 +759,7 @@ def save_publication_figure(
                 key = "tiff" if suffix == ".tif" else suffix.lstrip(".")
                 saved[key] = candidate
         if resolved_contract is not None:
+            resolved_contract._coerce_runtime_panels()
             contract_path = base_dir / f"{base_name}.figure_contract.json"
             contract_path.write_text(
                 resolved_contract.model_dump_json(indent=2),
@@ -777,6 +798,7 @@ def save_publication_figure(
         fig.savefig(path, **kwargs)  # type: ignore[attr-defined]
         saved[fmt] = path
     if resolved_contract is not None:
+        resolved_contract._coerce_runtime_panels()
         contract_path = stem_path.with_suffix(".figure_contract.json")
         contract_path.write_text(
             resolved_contract.model_dump_json(indent=2),

@@ -1190,7 +1190,7 @@ def get_system_resources():
             mem_info = psutil.virtual_memory()
             total_memory_gb = mem_info.total / (1024 ** 3)
             available_memory_gb = mem_info.available / (1024 ** 3)
-        except:
+        except Exception:
             total_memory_gb = 8
             available_memory_gb = 4
 

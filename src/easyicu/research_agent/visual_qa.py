@@ -25,7 +25,7 @@ import math
 import re
 from pathlib import Path
 import xml.etree.ElementTree as ET
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from .llm import LLMClient, LLMMessage
 from .schema import ValidationFinding

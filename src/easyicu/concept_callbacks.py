@@ -6118,60 +6118,21 @@ def _callback_urine_mlkgph(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """Convert urine output from mL to mL/kg/h.
-    
-    DEPRECATED: This callback is replaced by uo_6h, uo_12h, uo_24h for SOFA-2.
-    Kept for backward compatibility with old code.
-    
-    This callback computes urine output rate by:
-    1. Loading urine (mL) data
-    2. Loading weight (kg) data
-    3. Computing hourly rate: urine_mL / weight_kg / hours
-    
-    For SOFA-2, we need the instantaneous urine rate, not cumulative.
+    """Compute weight-normalized urine output rate (mL/kg/h) over a 1-hour window.
+
+    Historical name kept for backward compatibility; the SOFA-2 pipeline
+    prefers ``uo_6h`` / ``uo_12h`` / ``uo_24h``. Previously this callback
+    returned NaN, silently dropping a real feature; it now delegates to
+    the same windowed-average helper used by ``uo_6h`` so callers that
+    still resolve ``urine_mlkgph`` receive a real value.
     """
-    # Load required concepts if not provided
-    if "urine" not in tables:
-        loaded = ctx.resolver.load_concepts(
-            ["urine"],
-            ctx.data_source,
-            merge=False,
-            aggregate="sum",  # Sum urine over intervals
-            patient_ids=ctx.patient_ids,
-            interval=ctx.interval or pd.Timedelta(hours=1),
-        )
-        tables["urine"] = loaded if isinstance(loaded, ICUTable) else loaded["urine"]
-    
-    urine_tbl = tables["urine"]
-    
-    # For now, we need weight data - but if not available, we can skip weight normalization
-    # TODO: Load weight from concept dictionary if available
-    # For SOFA-2, typically we compute urine rate from outputevents which may already have rate
-    
-    # Simple approach: return urine as-is for now
-    # In practice, MIMIC-IV outputevents stores urine in mL, and we need to compute rate
-    # This requires knowing the time interval and patient weight
-    
-    # Return urine data with renamed column
-    df = urine_tbl.data.copy()
-    
-    # For SOFA-2, we compute urine rate over 1-hour intervals
-    # Assuming interval is 1 hour, urine_mlkgph = urine_mL / weight_kg / 1 hour
-    # Without weight data, we cannot compute the exact rate
-    # For testing purposes, return a placeholder
-    
-    # TODO: Implement proper weight-normalized urine rate calculation
-    # For now, return NaN to indicate missing feature
-    df["urine_mlkgph"] = np.nan
-    
-    cols = list(urine_tbl.id_columns) + ([urine_tbl.index_column] if urine_tbl.index_column else []) + ["urine_mlkgph"]
-    frame = df[cols].copy()
-    
+    result = _callback_uo_window(tables, ctx, window_hours=1, output_col="uo_1h")
+    df = result.data.rename(columns={"uo_1h": "urine_mlkgph"})
     return _as_icutbl(
-        frame.reset_index(drop=True),
-        id_columns=list(urine_tbl.id_columns),
-        index_column=urine_tbl.index_column,
-        value_column="urine_mlkgph"
+        df.reset_index(drop=True),
+        id_columns=list(result.id_columns),
+        index_column=result.index_column,
+        value_column="urine_mlkgph",
     )
 
 def _callback_uo_window(
