@@ -64,34 +64,87 @@ def _get_total_ram_gb() -> float:
     return 16.0  # 保守默认值
 
 
-def _auto_memory_limit() -> str:
-    """根据系统可用内存自动设置 DuckDB memory_limit。
-    
-    低内存系统 (<32GB) 使用基于总内存的保守限制，防止与 PARTITION_BY 的
-    100 个同时分区写入器组合导致内存爆炸。
+def _memory_tier(total_gb: Optional[float] = None) -> dict:
+    """Compute a tier-based budget for bucket conversion on this machine.
+
+    Returns a dict with:
+      - ``tier``: short label ('xs' | 's' | 'm' | 'l' | 'xl')
+      - ``duckdb_mem_gb``: int, recommended DuckDB ``memory_limit`` in GB
+      - ``threads``: int, recommended DuckDB ``threads`` setting (0 = auto)
+      - ``low_memory``: bool, whether to enable multi-pass + parallel=false CSV
+      - ``buckets_per_pass``: int, hint for the multi-pass branch
+      - ``row_group_size``: int, recommended PARTITION_BY row group size
+
+    The previous code used a single ``< 32GB`` cliff which forced 16/24GB
+    desktops onto the same multi-pass + ~2GB DuckDB path as a true 8GB server.
+    The tiered policy below scales smoothly while still preventing the
+    ``PARTITION_BY (bucket_id)`` writer × row-group buffer blow-up that hits
+    12GB machines hard at the default 100 buckets × 1M row group.
     """
-    total_gb = _get_total_ram_gb()
+    if total_gb is None:
+        total_gb = _get_total_ram_gb()
+
+    if total_gb < 12:
+        # 真低内存（8GB 服务器、旧笔记本）：极保守
+        return {
+            'tier': 'xs',
+            'duckdb_mem_gb': max(1, int(total_gb * 0.2)),  # 8GB→1GB
+            'threads': min(4, os.cpu_count() or 4),
+            'low_memory': True,
+            'buckets_per_pass': 15,
+            'row_group_size': 200_000,
+        }
+    if total_gb < 24:
+        # 主流 12/16GB 桌面：多趟分桶 + 两阶段
+        # 4GB DuckDB 不够以 PARTITION_BY 多分区写入器（宽表 string 列 dict encoding会累计）
+        # 16GB 机器上提到 ~6GB，给 OS/Python/macFUSE 这里还有 ~10GB
+        # buckets_per_pass=15 × row_group=100K × 30 列 + dict overhead 适合 6GB 预算
+        return {
+            'tier': 's',
+            'duckdb_mem_gb': max(4, int(total_gb * 0.40)),  # 12GB→4GB, 16GB→6GB
+            'threads': min(4, os.cpu_count() or 4),
+            'low_memory': True,
+            'buckets_per_pass': 15,
+            'row_group_size': 100_000,
+        }
     if total_gb < 32:
-        # 低内存：基于总量的保守限制（而非可用量，避免页面文件虚高）
-        limit_gb = max(1, int(total_gb * 0.15))  # 12GB→1GB, 16GB→2GB, 24GB→3GB
-        return f'{limit_gb}GB'
+        # 中端 24/30GB 工作站：单趟分桶足够，DuckDB 8GB
+        return {
+            'tier': 'm',
+            'duckdb_mem_gb': max(6, int(total_gb * 0.30)),  # 24GB→8GB
+            'threads': 0,  # 自动
+            'low_memory': False,
+            'buckets_per_pass': 100,  # 单趟
+            'row_group_size': 500_000,
+        }
+    # 32GB+：大内存服务器，按可用内存动态给（保留 4GB 给 OS）
+    avail_gb: float = total_gb
     try:
         with open('/proc/meminfo') as f:
             for line in f:
                 if line.startswith('MemAvailable:'):
-                    avail_mb = int(line.split()[1]) / 1024.0
-                    limit_gb = max(2, int(avail_mb / 1024) - 3)
-                    return f'{limit_gb}GB'
+                    avail_gb = int(line.split()[1]) / 1024 / 1024
+                    break
     except (OSError, ValueError):
-        pass
-    try:
-        import psutil
-        avail_gb = psutil.virtual_memory().available / (1024 ** 3)
-        limit_gb = max(2, int(avail_gb) - 3)
-        return f'{limit_gb}GB'
-    except ImportError:
-        pass
-    return '6GB'
+        try:
+            import psutil
+            avail_gb = psutil.virtual_memory().available / (1024 ** 3)
+        except ImportError:
+            avail_gb = total_gb * 0.6
+    duck = max(8, min(int(avail_gb) - 4, 32))
+    return {
+        'tier': 'xl' if total_gb >= 64 else 'l',
+        'duckdb_mem_gb': duck,
+        'threads': 0,
+        'low_memory': False,
+        'buckets_per_pass': 100,
+        'row_group_size': 1_000_000,
+    }
+
+
+def _auto_memory_limit() -> str:
+    """Back-compat shim: return DuckDB ``memory_limit`` string from the tier."""
+    return f"{_memory_tier()['duckdb_mem_gb']}GB"
 
 
 def _bucket_order_clause(partition_col: str, skip_sorting: bool) -> str:
@@ -289,27 +342,68 @@ def convert_to_buckets(
             conn.execute(f"SET temp_directory='{_duckdb_path(config.temp_directory)}'")
             log(f"Temp directory set to: {config.temp_directory}")
         
-        # 低内存检测：<32GB RAM 时启用保守策略
+        # 按内存档位调优 (xs/s/m/l/xl)，不再用单一 <32GB 悬崖
         total_ram_gb = _get_total_ram_gb()
-        low_memory = total_ram_gb < 32
-        
-        if low_memory:
-            # 低内存模式：限制 DuckDB 资源
-            duck_mem = f'{max(1, int(total_ram_gb * 0.15))}GB'
-            conn.execute(f"SET memory_limit='{duck_mem}'")
-            conn.execute(f'SET threads={min(4, os.cpu_count() or 4)}')
-            log(f"Low-memory mode: {total_ram_gb:.0f}GB RAM, DuckDB {duck_mem}")
-            
+        tier = _memory_tier(total_ram_gb)
+        low_memory = tier['low_memory']
+        # 用 tier 覆盖 BucketConfig 默认值（除非调用方显式给了非默认值）
+        duck_mem = f"{tier['duckdb_mem_gb']}GB"
+        conn.execute(f"SET memory_limit='{duck_mem}'")
+        if tier['threads'] > 0:
+            conn.execute(f"SET threads={tier['threads']}")
+        log(
+            f"Memory tier '{tier['tier']}': {total_ram_gb:.0f}GB RAM -> "
+            f"DuckDB {duck_mem}, threads={tier['threads'] or 'auto'}, "
+            f"multi_pass={'on' if low_memory else 'off'}"
+        )
+
+        # 低内存档位下，缩小 PARTITION_BY 的 row_group_size 以压住
+        # 同时打开的分区写入器各自的内存缓冲（buckets_per_pass × rg_size × cols × bytes）
+        effective_row_group_size = config.row_group_size
+        if low_memory and effective_row_group_size > tier['row_group_size']:
+            effective_row_group_size = tier['row_group_size']
+            log(
+                f"  Row group size reduced to {effective_row_group_size:,} "
+                f"to fit tier '{tier['tier']}' partition-writer buffers"
+            )
+
+        if low_memory and not config.temp_directory:
             # 确保设置 temp_directory（DuckDB 溢出用）
-            if not config.temp_directory:
-                import tempfile as _tmpmod
-                _tmp_dir = _tmpmod.gettempdir()
-                conn.execute(f"SET temp_directory='{_duckdb_path(_tmp_dir)}'")
+            import tempfile as _tmpmod
+            _tmp_dir = _tmpmod.gettempdir()
+            conn.execute(f"SET temp_directory='{_duckdb_path(_tmp_dir)}'")
         
         # 确定读取方式
         source_name = source_path.name.lower()
         is_csv = source_name.endswith('.csv.gz') or source_name.endswith('.csv')
-        
+        is_gz = source_name.endswith('.csv.gz')
+
+        # ⚠️ 低内存档 + 大 .csv.gz 预警
+        # 实测：在慢盘文件系统（macFUSE/NTFS、网络挂载、HDD）上，
+        # DuckDB 流式读取 ≥1GB 的 .csv.gz 时，gzip 解压管道会无限累积 buffer，
+        # 即使 DuckDB memory_limit=6GB 也会被 buffer manager 吃满而 OOM
+        # （4GB→3.7GB 爆，6GB→5.5GB 爆，按比例增长）。
+        # 此场景下推荐先解压到本地 SSD，再用未压缩 .csv 进入转换。
+        if is_gz and low_memory:
+            try:
+                gz_size = source_path.stat().st_size
+            except Exception:
+                gz_size = 0
+            if gz_size >= 1 * 1024 * 1024 * 1024:  # >= 1GB compressed
+                warn_msg = (
+                    f"\n[WARN] 在低内存档（tier={tier['tier']}，DuckDB={tier['duckdb_mem_gb']}GB）下"
+                    f"\n转换 {gz_size/1e9:.2f}GB .csv.gz 文件容易 OOM"
+                    f"（DuckDB gzip 解压管道在慢盘 I/O 上 buffer 失控）。"
+                    f"\n推荐先解压到本地 SSD：\n"
+                    f"    gunzip -k '{source_path}'  # -k 保留原文件\n"
+                    f"或：\n"
+                    f"    gzcat '{source_path}' > /tmp/{source_path.stem}\n"
+                    f"然后将 .csv 路径传给 convert_to_buckets。"
+                    f"\n如确认你的环境（本地 NVMe、≥32GB RAM）能跑，可忽略本警告。"
+                )
+                log(warn_msg)
+                logger.warning(warn_msg)
+
         if is_csv:
             types_arg = ""
             if config.column_types:
@@ -348,15 +442,20 @@ def convert_to_buckets(
             )
         
         # 🚀 大 CSV 文件两阶段转换优化
-        # 对 HDD 上的大文件（>1GB CSV），直接 CSV→100 桶会触发大量随机写，
+        # 对 HDD 上的大文件（>1GB CSV），直接 CSV→分桶会触发大量随机写，
         # 导致 HDD 寻道风暴（75GB CSV 可能耗时 1 小时+）。
-        # 两阶段策略：先 CSV→单 Parquet（纯顺序写），再 Parquet→100 桶（内存/缓存读取极快）。
+        # 两阶段策略：先 CSV→单 Parquet（纯顺序写），再 Parquet→分桶（内存/缓存读取极快）。
         # 实测 75GB AUMC numericitems: 1h+ → 2 分钟（大内存服务器）。
         #
-        # 低内存优化（<32GB RAM）：
-        # DuckDB PARTITION_BY 同时打开 N 个分区写入器，每个缓冲 ROW_GROUP_SIZE 行。
-        # 100 分区 × 大 ROW_GROUP_SIZE → 内存爆炸（12GB PC 上实测 24GB commit）。
-        # 解决：多趟分桶 — 每趟只写 20 个桶，RSS 稳定 <1GB。
+        # 低内存优化：
+        # 1) PARTITION_BY 同时打开 N 个分区写入器，每个缓冲 ROW_GROUP_SIZE 行。
+        #    100 分区 × 大 ROW_GROUP_SIZE → 内存爆炸。解决：多趟分桶，每趟写 N 个桶。
+        # 2) 但 stage 1（CSV→单个大 Parquet）本身也吃 ~3GB（gzip 解压管道 + parquet writer。
+        #    1M 行 row group × 宽表 30 列），与 DuckDB 低内存配额冲突。
+        # 策略：对低内存档上的中大文件（压缩 CSV >= 1GB）依然开 stage 1。
+        # 重点：stage 1 只有一个写入器，避免 N 分区并发写入在宽 string 列上的 dictionary
+        # 累积。走多趟直读 CSV 则 N 个写入器 × dict 会越过 4-6GB 限额。
+        # stage 1 后 read_expr 是中间 parquet，stage 2 多趟不再重复解压。
         _TWO_STAGE_THRESHOLD = 1 * 1024 * 1024 * 1024  # 1GB
         use_two_stage = is_csv and source_path.stat().st_size > _TWO_STAGE_THRESHOLD
         temp_parquet = None
@@ -372,15 +471,33 @@ def convert_to_buckets(
             os.close(temp_fd)
             
             log(f"Large-file two-stage conversion ({source_path.stat().st_size / 1e9:.1f}GB)...")
-            log("  Stage 1/2: CSV -> single Parquet (sequential write)...")
+            # 低内存档：stage 1 用极保守资源
+            # - row group 跟 effective_row_group_size（避免宽表缓冲爆）
+            # - 单线程：gzip 解压本身单线程，多线程只增加 buffer
+            # - 临时压低 memory_limit 到 ~3GB，让 DuckDB 在慢盘 I/O 时尽早 backpressure
+            #   （实测 macFUSE/NTFS 上 6GB 配额下 buffer manager 会吃满 5.5GB OOM）
+            stage1_rg = effective_row_group_size if low_memory else 1_000_000
+            if low_memory:
+                conn.execute("SET threads=1")
+                stage1_mem = max(3, min(tier['duckdb_mem_gb'], 4))
+                conn.execute(f"SET memory_limit='{stage1_mem}GB'")
+                log(f"  Stage 1/2: CSV -> single Parquet (sequential write, "
+                    f"row_group={stage1_rg:,}, threads=1, memory={stage1_mem}GB)...")
+            else:
+                log("  Stage 1/2: CSV -> single Parquet (sequential write)...")
             t_s1 = time.time()
             stage1_count = _copy_row_count(conn.execute(f"""
                 COPY (SELECT * FROM {csv_read_expr})
                 TO '{_duckdb_path(temp_parquet)}' (
                     FORMAT PARQUET, COMPRESSION 'SNAPPY',
-                    ROW_GROUP_SIZE 1000000
+                    ROW_GROUP_SIZE {stage1_rg}
                 )
             """))
+            # stage 1 完成后恢复 tier 线程数+内存配额给 stage 2（分桶阶段可多线程）
+            if low_memory:
+                conn.execute(f"SET memory_limit='{tier['duckdb_mem_gb']}GB'")
+                if tier['threads'] > 0:
+                    conn.execute(f"SET threads={tier['threads']}")
             s1_time = time.time() - t_s1
             s1_size = os.path.getsize(temp_parquet) / 1e9
             row_info = f", {stage1_count:,} rows" if stage1_count is not None else ""
@@ -396,14 +513,20 @@ def convert_to_buckets(
         
         try:
             # 计算多趟参数
-            # 低内存 + 大文件: 多趟分桶，每趟处理部分桶以限制同时打开的分区写入器
-            if low_memory and use_two_stage:
-                # 每趟 20 个桶：实测每趟 RSS < 1GB，5 趟合计 ~200s（服务器）
-                buckets_per_pass = max(5, min(config.num_buckets, int(total_ram_gb * 2)))
+            # 低内存档位总是多趟分桶（不论是否上 stage 1），避免同时打开 100 个分区写入器
+            # （tier 'xs' = 15 桶/趟; 'tier 's' = 33 桶/趟，分别面向 8GB / 12-16GB 桌面）
+            # 如果不走 stage 1，read_expr=csv_read_expr，每趟会重读译 CSV—“重复解压换内存稳定”。
+            if low_memory and config.num_buckets > tier['buckets_per_pass']:
+                buckets_per_pass = max(5, min(config.num_buckets, tier['buckets_per_pass']))
                 n_passes = (config.num_buckets + buckets_per_pass - 1) // buckets_per_pass
-                
-                log(f"  Stage 2/2: Parquet -> {config.num_buckets} buckets"
-                    f" ({n_passes} passes, {buckets_per_pass} buckets per pass)")
+
+                source_label = "Parquet" if use_two_stage else (
+                    "CSV (re-decompress per pass)" if is_csv else "Parquet input"
+                )
+                stage_prefix = "  Stage 2/2: " if use_two_stage else "  "
+                log(f"{stage_prefix}{source_label} -> {config.num_buckets} buckets"
+                    f" ({n_passes} passes, {buckets_per_pass} buckets per pass,"
+                    f" row_group={effective_row_group_size:,})")
                 row_count_from_copy = 0
                 copy_counts_complete = True
                 for pi in range(n_passes):
@@ -425,7 +548,7 @@ def convert_to_buckets(
                         (FORMAT PARQUET,
                          PARTITION_BY (bucket_id),
                          COMPRESSION {config.compression.upper()},
-                         ROW_GROUP_SIZE {config.row_group_size},
+                         ROW_GROUP_SIZE {effective_row_group_size},
                          OVERWRITE_OR_IGNORE)
                     """))
                     if pass_count is None:
@@ -448,7 +571,7 @@ def convert_to_buckets(
                     (FORMAT PARQUET,
                      PARTITION_BY (bucket_id),
                      COMPRESSION {config.compression.upper()},
-                     ROW_GROUP_SIZE {config.row_group_size},
+                     ROW_GROUP_SIZE {effective_row_group_size},
                      OVERWRITE_OR_IGNORE)
                 """
                 row_count_from_copy = _copy_row_count(conn.execute(sql))
@@ -816,38 +939,91 @@ def convert_parquet_directory_to_buckets(
             log("In-bucket sorting: enabled (faster extraction, slower conversion)")
         
         conn = duckdb.connect()
-        conn.execute("SET threads=16")
-        conn.execute("SET memory_limit='10GB'")
-        
+        # 按内存档位自适应配置：避免在 12GB 桌面上硬上 16 线程 + 10GB DuckDB（旧硬编码会爆）
+        total_ram_gb = _get_total_ram_gb()
+        tier = _memory_tier(total_ram_gb)
+        low_memory = tier['low_memory']
+        duck_mem = f"{tier['duckdb_mem_gb']}GB"
+        conn.execute(f"SET memory_limit='{duck_mem}'")
+        if tier['threads'] > 0:
+            conn.execute(f"SET threads={tier['threads']}")
+        conn.execute("SET preserve_insertion_order=false")
+        log(
+            f"Memory tier '{tier['tier']}': {total_ram_gb:.0f}GB RAM -> "
+            f"DuckDB {duck_mem}, threads={tier['threads'] or 'auto'}, "
+            f"multi_pass={'on' if low_memory else 'off'}"
+        )
+
         # 使用临时目录防止内存溢出
         temp_dir = output_dir.parent / f".{output_dir.name}_temp"
         temp_dir.mkdir(exist_ok=True)
         conn.execute(f"SET temp_directory='{_duckdb_path(temp_dir)}'")
         log(f"Temp directory: {temp_dir}")
-        
+
         # 使用 glob 读取所有 parquet，union_by_name 处理 schema 差异
         glob_pattern = _duckdb_path(source_dir / "*.parquet")
         read_expr = f"read_parquet('{glob_pattern}', union_by_name=true)"
-        
-        # 分桶转换
-        log("Running bucket conversion (read -> bucket)...")
-        
-        sql = f"""
-            COPY (
-                SELECT *,
-                       hash({partition_col}) % {num_buckets} as bucket_id
-                FROM {read_expr}
-                {_bucket_order_clause(partition_col, skip_sorting)}
+
+        # 低内存档位下，row_group_size 跟随 tier，并启用多趟分桶以限制
+        # 同时打开的分区写入器数量（HiRID observations × 100 桶在 12GB 上会爆）
+        effective_row_group_size = min(100_000, tier['row_group_size']) if low_memory else 100_000
+
+        row_count_from_copy: Optional[int] = None
+        if low_memory and num_buckets > tier['buckets_per_pass']:
+            buckets_per_pass = max(5, min(num_buckets, tier['buckets_per_pass']))
+            n_passes = (num_buckets + buckets_per_pass - 1) // buckets_per_pass
+            log(
+                f"Running bucket conversion (read -> bucket): {n_passes} passes, "
+                f"{buckets_per_pass} buckets per pass, row_group={effective_row_group_size:,}"
             )
-            TO '{_duckdb_path(output_dir)}'
-            (FORMAT PARQUET,
-             PARTITION_BY (bucket_id),
-             COMPRESSION SNAPPY,
-             ROW_GROUP_SIZE 100000,
-             OVERWRITE_OR_IGNORE)
-        """
-        
-        row_count_from_copy = _copy_row_count(conn.execute(sql))
+            row_count_from_copy = 0
+            copy_counts_complete = True
+            for pi in range(n_passes):
+                s = pi * buckets_per_pass
+                e = min(s + buckets_per_pass - 1, num_buckets - 1)
+                log(f"    Pass {pi+1}/{n_passes}: bucket {s}-{e}")
+                pass_sql = f"""
+                    COPY (
+                        SELECT *
+                        FROM (
+                            SELECT *,
+                                   hash({partition_col}) % {num_buckets} as bucket_id
+                            FROM {read_expr}
+                        )
+                        WHERE bucket_id BETWEEN {s} AND {e}
+                        {_bucket_order_clause(partition_col, skip_sorting)}
+                    )
+                    TO '{_duckdb_path(output_dir)}'
+                    (FORMAT PARQUET,
+                     PARTITION_BY (bucket_id),
+                     COMPRESSION SNAPPY,
+                     ROW_GROUP_SIZE {effective_row_group_size},
+                     OVERWRITE_OR_IGNORE)
+                """
+                pass_count = _copy_row_count(conn.execute(pass_sql))
+                if pass_count is None:
+                    copy_counts_complete = False
+                else:
+                    row_count_from_copy += pass_count
+            if not copy_counts_complete:
+                row_count_from_copy = None
+        else:
+            log("Running bucket conversion (read -> bucket)...")
+            sql = f"""
+                COPY (
+                    SELECT *,
+                           hash({partition_col}) % {num_buckets} as bucket_id
+                    FROM {read_expr}
+                    {_bucket_order_clause(partition_col, skip_sorting)}
+                )
+                TO '{_duckdb_path(output_dir)}'
+                (FORMAT PARQUET,
+                 PARTITION_BY (bucket_id),
+                 COMPRESSION SNAPPY,
+                 ROW_GROUP_SIZE {effective_row_group_size},
+                 OVERWRITE_OR_IGNORE)
+            """
+            row_count_from_copy = _copy_row_count(conn.execute(sql))
         
         # 统计结果
         elapsed = time.time() - start_time

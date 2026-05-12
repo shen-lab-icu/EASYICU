@@ -3748,12 +3748,7 @@ def _deterministic_summary_repair(
             or '"spearman_rho": null' in summary_text
         )
     )
-    if generic_summary_failure:
-        repair_name = f"generic_v15_{generic_key}_fallback_v1"
-        if previous_repair != repair_name:
-            fallback = _generic_v15_task_fallback_code(generic_key)
-            if fallback is not None:
-                return repair_name, fallback
+    # NOTE: generic fallback moved to end of function so specific repairs have priority
     simple_imputer_bool = (
         "simpleimputer does not support data with dtype bool" in summary_text
         and "X_sklearn = model_df[x_cols].copy()" in code
@@ -4094,6 +4089,16 @@ def _deterministic_summary_repair(
                 ).strip("\n")
                 return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
         return None
+
+    # --- Generic v15 fallback as last resort ---
+    # Only fires if no specific repair matched above
+    if generic_summary_failure:
+        repair_name = f"generic_v15_{generic_key}_fallback_v1"
+        if previous_repair != repair_name:
+            fallback = _generic_v15_task_fallback_code(generic_key)
+            if fallback is not None:
+                return repair_name, fallback
+
     return None
 
 
@@ -4241,7 +4246,7 @@ def _extract_missing_index_columns(run_log: str) -> List[str]:
     return cols
 
 
-def _rewrite_placeholder_column_lists(code: str, *, available_columns: Sequence[str]) -> str:
+def _strip_columns_from_list_literals(code: str, missing_cols: Sequence[str]) -> str:
     """Remove ``"col"`` / ``'col'`` entries from list literals in ``code``.
 
     Walks through every ``[...]`` slice in the source and, when the slice
@@ -5059,12 +5064,7 @@ def _deterministic_runner_repair(
             or "no such file or directory" in lowered
         )
     )
-    if generic_runtime_failure:
-        repair_name = f"generic_v15_{generic_key}_fallback_v1"
-        if previous_repair != repair_name:
-            fallback = _generic_v15_task_fallback_code(generic_key)
-            if fallback is not None:
-                return repair_name, fallback
+    # NOTE: generic fallback moved to end of function so specific repairs have priority
 
     missing_optional_v15_dependency = (
         "modulenotfounderror: no module named 'statsmodels'" in lowered
@@ -6633,75 +6633,86 @@ def _deterministic_runner_repair(
                 if repaired != code:
                     return repair_name, repaired
 
+    # dtype_coerce_v1 repair for statsmodels dtype failures
     signatures = (
         "pandas data cast to numpy dtype of object",
         "exog contains inf or nans",
         "missingdataerror",
         "ufunc 'isfinite' not supported",
     )
-    if not any(sig in lowered for sig in signatures):
-        return None
-    repair_name = "dtype_coerce_v1"
-    if previous_repair == repair_name or "_easyicu_runner_repair_v1" in code:
-        return None
-    if not any(token in code for token in ("sm.Logit(", "sm.OLS(", "sm.GLM(")):
-        return None
-
-    patch = textwrap.dedent(
-        """
-
-        def _easyicu_runner_repair_v1(X, y):
-            X_work = X.copy() if hasattr(X, "copy") else X
-            y_work = y.copy() if hasattr(y, "copy") else y
-            if hasattr(X_work, "replace"):
-                X_work = X_work.replace([np.inf, -np.inf], np.nan)
-            if hasattr(X_work, "apply"):
-                X_work = X_work.apply(pd.to_numeric, errors="coerce").astype(float)
-            else:
-                X_work = np.asarray(X_work, dtype=float)
-            y_work = pd.to_numeric(y_work, errors="coerce")
-            if hasattr(X_work, "index") and hasattr(y_work, "index"):
-                keep = X_work.dropna().index.intersection(y_work.dropna().index)
-                X_work = X_work.loc[keep]
-                y_work = y_work.loc[keep]
-            else:
-                X_arr = np.asarray(X_work, dtype=float)
-                y_arr = np.asarray(y_work, dtype=float)
-                mask = np.isfinite(X_arr).all(axis=1) & np.isfinite(y_arr)
-                X_work = X_arr[mask]
-                y_work = y_arr[mask]
-            return y_work.astype(float), X_work
-        """
-    ).strip("\n")
-
-    patched = code
-    if "_easyicu_runner_repair_v1" not in patched:
-        insert_after = patched.find("import matplotlib.pyplot as plt")
-        if insert_after >= 0:
-            line_end = patched.find("\n", insert_after)
-            patched = (
-                patched[: line_end + 1] + "\n" + patch + "\n" + patched[line_end + 1 :]
-            )
-        else:
-            patched = patch + "\n\n" + patched
-
-    model_call = re.compile(
-        r"(?P<prefix>\b[A-Za-z_]\w*\s*=\s*sm\.(?:Logit|OLS|GLM)\()\s*"
-        r"(?P<y>[^,]+?)\s*,\s*(?P<X>[^)\n]+?)\s*(?P<suffix>\))"
+    dtype_coerce_applies = (
+        any(sig in lowered for sig in signatures)
+        and previous_repair != "dtype_coerce_v1"
+        and "_easyicu_runner_repair_v1" not in code
+        and any(token in code for token in ("sm.Logit(", "sm.OLS(", "sm.GLM("))
     )
+    if dtype_coerce_applies:
+        repair_name = "dtype_coerce_v1"
+        patch = textwrap.dedent(
+            """
 
-    def _rewrite(match: re.Match[str]) -> str:
-        y_expr = match.group("y").strip()
-        x_expr = match.group("X").strip()
-        return (
-            f"{match.group('prefix')}*_easyicu_runner_repair_v1("
-            f"{x_expr}, {y_expr}){match.group('suffix')}"
+            def _easyicu_runner_repair_v1(X, y):
+                X_work = X.copy() if hasattr(X, "copy") else X
+                y_work = y.copy() if hasattr(y, "copy") else y
+                if hasattr(X_work, "replace"):
+                    X_work = X_work.replace([np.inf, -np.inf], np.nan)
+                if hasattr(X_work, "apply"):
+                    X_work = X_work.apply(pd.to_numeric, errors="coerce").astype(float)
+                else:
+                    X_work = np.asarray(X_work, dtype=float)
+                y_work = pd.to_numeric(y_work, errors="coerce")
+                if hasattr(X_work, "index") and hasattr(y_work, "index"):
+                    keep = X_work.dropna().index.intersection(y_work.dropna().index)
+                    X_work = X_work.loc[keep]
+                    y_work = y_work.loc[keep]
+                else:
+                    X_arr = np.asarray(X_work, dtype=float)
+                    y_arr = np.asarray(y_work, dtype=float)
+                    mask = np.isfinite(X_arr).all(axis=1) & np.isfinite(y_arr)
+                    X_work = X_arr[mask]
+                    y_work = y_arr[mask]
+                return y_work.astype(float), X_work
+            """
+        ).strip("\n")
+
+        patched = code
+        if "_easyicu_runner_repair_v1" not in patched:
+            insert_after = patched.find("import matplotlib.pyplot as plt")
+            if insert_after >= 0:
+                line_end = patched.find("\n", insert_after)
+                patched = (
+                    patched[: line_end + 1] + "\n" + patch + "\n" + patched[line_end + 1 :]
+                )
+            else:
+                patched = patch + "\n\n" + patched
+
+        model_call = re.compile(
+            r"(?P<prefix>\b[A-Za-z_]\w*\s*=\s*sm\.(?:Logit|OLS|GLM)\()\s*"
+            r"(?P<y>[^,]+?)\s*,\s*(?P<X>[^)\n]+?)\s*(?P<suffix>\))"
         )
 
-    repaired = model_call.sub(_rewrite, patched, count=1)
-    if repaired == code:
-        return None
-    return repair_name, repaired
+        def _rewrite(match: re.Match[str]) -> str:
+            y_expr = match.group("y").strip()
+            x_expr = match.group("X").strip()
+            return (
+                f"{match.group('prefix')}*_easyicu_runner_repair_v1("
+                f"{x_expr}, {y_expr}){match.group('suffix')}"
+            )
+
+        repaired = model_call.sub(_rewrite, patched, count=1)
+        if repaired != code:
+            return repair_name, repaired
+
+    # --- Generic v15 fallback as last resort ---
+    # Only fires if no specific repair matched above
+    if generic_runtime_failure:
+        repair_name = f"generic_v15_{generic_key}_fallback_v1"
+        if previous_repair != repair_name:
+            fallback = _generic_v15_task_fallback_code(generic_key)
+            if fallback is not None:
+                return repair_name, fallback
+
+    return None
 
 
 def _has_figure_exports(out_dir: Path) -> bool:

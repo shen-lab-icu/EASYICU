@@ -251,6 +251,8 @@ print(json.dumps(summary))
         workdir=tmp_path,
         llm=RepairLLM(),
         enable_literature=False,
+        # Disable deterministic runner repair so LLM repair path is exercised
+        enable_deterministic_runner_repair=False,
     )
     result = pipeline.run(
         question="Does age describe ICU mortality?",
@@ -425,6 +427,8 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
         llm=FallbackLLM(),
         enable_literature=False,
         enable_deterministic_code_fallback=True,
+        # Disable deterministic runner repair so code fallback path is exercised
+        enable_deterministic_runner_repair=False,
     )
     result = pipeline.run(
         question="Is SOFA associated with ICU mortality?",
@@ -478,6 +482,8 @@ def test_pipeline_falls_back_when_repair_model_call_fails(ra, tmp_path: Path):
         llm=RepairRaisesLLM(),
         enable_literature=False,
         enable_deterministic_code_fallback=True,
+        # Disable deterministic runner repair so the code fallback path is exercised
+        enable_deterministic_runner_repair=False,
     )
     result = pipeline.run(
         question="Is SOFA associated with ICU mortality?",

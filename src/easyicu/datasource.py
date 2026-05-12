@@ -23,6 +23,100 @@ def _duckdb_path(p) -> str:
     return str(p).replace('\\', '/')
 
 
+def _is_valid_parquet_name(name: str) -> bool:
+    """Whether a filename should be treated as a real parquet file.
+
+    Filters macOS AppleDouble sidecars (._foo.parquet) and other hidden dotfiles
+    that may be auto-created on NTFS/exFAT/FUSE mounts. DuckDB's read_parquet
+    glob would otherwise pick them up and crash with 'No magic bytes found'.
+    """
+    return name.endswith('.parquet') and not name.startswith('.')
+
+
+def _enumerate_bucket_parquet_files(directory) -> List[str]:
+    """Return a sorted list of valid parquet file paths under a bucket-style dir.
+
+    Supports both layouts:
+    - directory/bucket_id=N/*.parquet  (canonical EasyICU bucket dir)
+    - directory/*.parquet              (flat parquet dir)
+    Always filters out AppleDouble / hidden sidecar files so DuckDB
+    read_parquet([...]) never sees garbage. Returns DuckDB-safe forward-slash
+    paths (suitable for embedding in SQL literals).
+
+    ⚡ 性能：在 macFUSE/NTFS 等慢盘上直接 glob 82 个目录每次 ~12s。
+    若目录里存在 ``_BUCKET_MANIFEST.json``（与 ``_COMPLETE`` mtime 绑定），
+    直接读 manifest，跳过所有 listdir。
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    base = _Path(directory)
+    files: List[str] = []
+    if not base.exists():
+        return files
+
+    # Fast path: 跨进程持久化 manifest（由 ICUDataSource._get_bucket_layout 写入）
+    complete_marker = base / "_COMPLETE"
+    manifest_path = base / "_BUCKET_MANIFEST.json"
+    if complete_marker.exists() and manifest_path.exists():
+        try:
+            stat = complete_marker.stat()
+            with manifest_path.open('r', encoding='utf-8') as fh:
+                m = _json.load(fh)
+            if (
+                isinstance(m, dict)
+                and m.get('complete_mtime_ns') == stat.st_mtime_ns
+                and m.get('complete_size') == stat.st_size
+                and isinstance(m.get('files_by_bucket'), dict)
+            ):
+                for rels in m['files_by_bucket'].values():
+                    for rel in rels:
+                        name = _Path(rel).name
+                        if _is_valid_parquet_name(name):
+                            files.append(_duckdb_path(base / rel))
+                files.sort()
+                return files
+        except Exception:
+            pass  # manifest unreadable → live scan below
+
+    # bucket layout first (cheap glob)
+    bucket_dirs = [d for d in base.glob('bucket_id=*') if d.is_dir()]
+    if bucket_dirs:
+        for sub in bucket_dirs:
+            for p in sub.glob('*.parquet'):
+                if _is_valid_parquet_name(p.name):
+                    files.append(_duckdb_path(p))
+    else:
+        # flat or hive_partitioning=false case
+        for p in base.rglob('*.parquet'):
+            if _is_valid_parquet_name(p.name):
+                files.append(_duckdb_path(p))
+    files.sort()
+    return files
+
+
+def _duckdb_read_parquet_clause(directory, *, union_by_name: bool = True,
+                                 hive_partitioning: Optional[bool] = None) -> str:
+    """Build a DuckDB ``read_parquet([...])`` SQL fragment from a directory.
+
+    Returns a SQL clause like ``read_parquet(['a','b'], union_by_name=true)``.
+    Filters out AppleDouble / hidden sidecar files at enumeration time so
+    no garbage path enters DuckDB. Falls back to a glob pattern only when the
+    directory is empty (DuckDB will still error, but with a clearer message).
+    """
+    files = _enumerate_bucket_parquet_files(directory)
+    opts: List[str] = []
+    if union_by_name:
+        opts.append('union_by_name=true')
+    if hive_partitioning is not None:
+        opts.append(f"hive_partitioning={'true' if hive_partitioning else 'false'}")
+    opt_str = (', ' + ', '.join(opts)) if opts else ''
+    if not files:
+        # Fall back to glob (will most likely error downstream but preserves prior behaviour)
+        return f"read_parquet('{_duckdb_path(directory)}/**/*.parquet'{opt_str})"
+    files_sql = '[' + ', '.join(f"'{f}'" for f in files) + ']'
+    return f"read_parquet({files_sql}{opt_str})"
+
+
 def _coerce_string_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     """Convert pandas StringDtype columns to object dtype for pandas 3.0 compatibility.
 
@@ -1427,8 +1521,14 @@ class ICUDataSource:
             if explicit_path.exists():
                 # Accept directories (partitioned datasets) and Parquet files immediately
                 if explicit_path.is_dir():
-                    return explicit_path
-                if explicit_path.suffix.lower() in {".parquet", ".pq"}:
+                    # 🔧 2026-05-11: 必须验证目录里真的有 parquet 文件再返回。
+                    # 否则 eICU 等数据库会因为同名目录残留旧的 .fst 文件而被误认为
+                    # parquet 分区数据集，导致 read_parquet('{dir}/*.parquet') 找不到文件
+                    # 然后回退到 fst 路径，丢失大量数据（实测 vitalperiodic 5M → 357k 行）。
+                    if list(explicit_path.glob("*.parquet"))[:1] or list(explicit_path.glob("*.pq"))[:1]:
+                        return explicit_path
+                    # 否则继续搜索同级 / 子目录的单文件 parquet（下方逻辑）
+                elif explicit_path.suffix.lower() in {".parquet", ".pq"}:
                     return explicit_path
                 # Otherwise continue searching for a Parquet counterpart below
         
@@ -1588,10 +1688,22 @@ class ICUDataSource:
             use_duckdb = True
             if patient_ids_filter and patient_ids_filter.value:
                 values = patient_ids_filter.value
-                if isinstance(values, (list, tuple, set)):
-                    use_duckdb = len(values) <= 100
-                elif isinstance(values, pd.Series):
-                    use_duckdb = len(values) <= 100
+                if isinstance(values, (list, tuple, set, pd.Series)):
+                    n_patients = len(values)
+                    if n_patients > 100:
+                        # 🔧 FIX 2026-05-11: 对于 itemid 分桶的目录（如 HiRID observations_bucket），
+                        # DuckDB 路径支持按 itemid→bucket 精准选择文件，只读 1-2 个桶；
+                        # 而 PyArrow 的 `_read_partitioned_data_optimized` 会扫描所有桶。
+                        # 对 HiRID 200-patient 呼吸模块，这导致 ~500s → ~10s 的差距。
+                        # 因此仅对「非桶化且带 itemid 过滤不强」的情况才回退 PyArrow。
+                        has_bucket_layout = False
+                        if itemid_filter_config:
+                            try:
+                                _nb, _files_by_bucket = self._get_bucket_layout(path)
+                                has_bucket_layout = bool(_files_by_bucket)
+                            except Exception:
+                                has_bucket_layout = False
+                        use_duckdb = has_bucket_layout
             
             if use_duckdb:
                 return self._read_partitioned_data_duckdb(
@@ -1784,9 +1896,18 @@ class ICUDataSource:
         When the converter writes a ``_COMPLETE`` marker we use it as a cheap
         cache signature; directories without the marker are read live to avoid
         stale partial-conversion metadata.
+
+        ⚡ 性能：在 macFUSE/NTFS 等慢盘上，``glob('bucket_id=*')`` + 每个子目录
+        ``glob('*.parquet')`` 一次就要 10+s。我们在磁盘上缓存一份
+        ``_BUCKET_MANIFEST.json``：第一次扫描后写入，后续进程（包括子进程）
+        直接读 manifest，跳过 82 次 listdir。manifest 与 ``_COMPLETE`` mtime
+        绑定校验，转换器重写时自动失效。
         """
+        import json as _json
+
         bucket_dir = Path(bucket_dir)
         complete_marker = bucket_dir / "_COMPLETE"
+        manifest_path = bucket_dir / "_BUCKET_MANIFEST.json"
         cache_key = str(bucket_dir.resolve())
         cache_signature = None
         if complete_marker.exists():
@@ -1796,6 +1917,30 @@ class ICUDataSource:
                 cached = self._bucket_layout_cache.get(cache_key)
             if cached is not None and cached[0] == cache_signature:
                 return cached[1], dict(cached[2])
+
+            # 进程级 cache miss → 尝试磁盘 manifest（跨进程加速）
+            if manifest_path.exists():
+                try:
+                    with manifest_path.open('r', encoding='utf-8') as fh:
+                        m = _json.load(fh)
+                    if (
+                        isinstance(m, dict)
+                        and m.get('complete_mtime_ns') == stat.st_mtime_ns
+                        and m.get('complete_size') == stat.st_size
+                        and isinstance(m.get('files_by_bucket'), dict)
+                    ):
+                        files_by_bucket = {
+                            int(bid): tuple(bucket_dir / rel for rel in rels)
+                            for bid, rels in m['files_by_bucket'].items()
+                        }
+                        num_buckets = int(m.get('num_buckets', 0))
+                        with self._lock:
+                            self._bucket_layout_cache[cache_key] = (
+                                cache_signature, num_buckets, files_by_bucket,
+                            )
+                        return num_buckets, files_by_bucket
+                except Exception:
+                    pass  # manifest corrupt → fall through to live scan
 
         bucket_ids = set()
         files_by_bucket: Dict[int, Tuple[Path, ...]] = {}
@@ -1807,7 +1952,14 @@ class ICUDataSource:
             except (IndexError, ValueError):
                 continue
             bucket_ids.add(bucket_id)
-            files = tuple(sorted(bucket_subdir.glob("*.parquet")))
+            # 过滤 macOS AppleDouble 元数据（NTFS/exFAT 等非 Apple 文件系统上自动产生 ._*.parquet）
+            # DuckDB read_parquet 会把它们当真 parquet 读，触发 'No magic bytes found' 错误
+            files = tuple(
+                sorted(
+                    p for p in bucket_subdir.glob("*.parquet")
+                    if not p.name.startswith(".")
+                )
+            )
             if files:
                 files_by_bucket[bucket_id] = files
 
@@ -1820,6 +1972,23 @@ class ICUDataSource:
                     num_buckets,
                     files_by_bucket,
                 )
+            # 写入磁盘 manifest 让后续进程跳过 listdir（best-effort，写失败忽略）
+            try:
+                rels = {
+                    str(bid): [str(p.relative_to(bucket_dir)) for p in files]
+                    for bid, files in files_by_bucket.items()
+                }
+                tmp = manifest_path.with_suffix('.json.tmp')
+                with tmp.open('w', encoding='utf-8') as fh:
+                    _json.dump({
+                        'complete_mtime_ns': cache_signature[0],
+                        'complete_size': cache_signature[1],
+                        'num_buckets': num_buckets,
+                        'files_by_bucket': rels,
+                    }, fh)
+                tmp.replace(manifest_path)
+            except Exception:
+                pass
 
         return num_buckets, files_by_bucket
 
@@ -2085,20 +2254,24 @@ class ICUDataSource:
                             len(target_files),
                         )
                     else:
-                        # 目标桶不存在，可能是空数据
+                        # 目标桶不存在，可能是空数据 — 退化为全扫描但过滤 AppleDouble
                         logger.warning("Target bucket does not exist: bucket_id in %s", target_buckets)
-                        glob_pattern = _duckdb_path(directory / "**/*.parquet")
+                        _full = _enumerate_bucket_parquet_files(directory)
+                        glob_pattern = ("[" + ", ".join(f"'{f}'" for f in _full) + "]") if _full else _duckdb_path(directory / "**/*.parquet")
                 else:
-                    # 字符串型 ID，无法使用 hash 分桶优化
-                    glob_pattern = _duckdb_path(directory / "**/*.parquet")
-                    logger.debug("Using bucket read mode (full scan): %s", directory.name)
+                    # 字符串型 ID，无法使用 hash 分桶优化 — 列出所有有效 parquet。
+                    _full = _enumerate_bucket_parquet_files(directory)
+                    glob_pattern = ("[" + ", ".join(f"'{f}'" for f in _full) + "]") if _full else _duckdb_path(directory / "**/*.parquet")
+                    logger.debug("Using bucket read mode (full scan, %d files): %s", len(_full), directory.name)
             else:
-                # 没有 itemid 过滤，全扫描
-                glob_pattern = _duckdb_path(directory / "**/*.parquet")
-                logger.debug("Using bucket read mode (no filter): %s", directory.name)
+                # 没有 itemid 过滤，全扫描 — 同样走显式文件列表
+                _full = _enumerate_bucket_parquet_files(directory)
+                glob_pattern = ("[" + ", ".join(f"'{f}'" for f in _full) + "]") if _full else _duckdb_path(directory / "**/*.parquet")
+                logger.debug("Using bucket read mode (no filter, %d files): %s", len(_full), directory.name)
         else:
-            # 普通分区: directory/*.parquet
-            glob_pattern = _duckdb_path(directory / "*.parquet")
+            # 普通分区: directory/*.parquet — 同样走显式文件列表过滤 AppleDouble
+            _flat = _enumerate_bucket_parquet_files(directory)
+            glob_pattern = ("[" + ", ".join(f"'{f}'" for f in _flat) + "]") if _flat else _duckdb_path(directory / "*.parquet")
         
         # 列选择
         if columns:
@@ -2740,6 +2913,9 @@ def load_bucketed_table_aggregated(
         except Exception:
             raw_columns = set()
 
+    # 🔧 FIX 2026-05-11: case-insensitive 列存在性检查（同 multi-concept 路径，应对 MIMIC-III 1.4 大写列名）
+    raw_columns_lower = {str(c).lower() for c in raw_columns}
+
     patient_filter_col = id_col
     patient_filter_values = patient_ids
     join_left_col = id_col
@@ -2749,8 +2925,8 @@ def load_bucketed_table_aggregated(
     if (
         db_name in ('miiv', 'miiv_demo', 'mimic', 'mimic_demo')
         and table_name in hospital_tables
-        and id_col not in raw_columns
-        and 'hadm_id' in raw_columns
+        and id_col not in raw_columns_lower
+        and 'hadm_id' in raw_columns_lower
     ):
         stay_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
         source_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
@@ -2825,9 +3001,10 @@ def load_bucketed_table_aggregated(
     _has_inline_convert = (convert_unit_op is not None and convert_unit_factor is not None)
     
     # 🔧 FIX: 如果 convert_unit_filter 需要 unit 列但表没有该列，
-    # 跳过 inline convert（匹配 R ricu 行为：无 unit 列时不转换）
+    # 仍然应用转换（匹配 R ricu 行为：无 unit 列时按 item ID 的隐含单位转换）。
+    # 例如 HiRID hgb 三个 variableid 已知为 g/L，filter='g/l' 在表上无 unit 列时
+    # 应当无条件应用 *0.1 转换为 g/dL，否则后续 filter_bounds 会丢掉所有行。
     if _has_inline_convert and convert_unit_filter:
-        # 查找实际的单位列名（eICU lab 用配置 unit_var，其他表常见为 unit）
         _unit_col_name = None
         if 'unit' in raw_columns:
             _unit_col_name = 'unit'
@@ -2840,11 +3017,12 @@ def load_bucketed_table_aggregated(
             except Exception:
                 pass
         if _unit_col_name is None:
+            # 表无 unit 列：按 item ID 隐含单位，filter 视为"应用此转换"提示
             import logging
             logging.getLogger(__name__).info(
-                f"⚠️ 表无 unit 列，跳过 inline convert_unit（filter={convert_unit_filter}）"
+                f"ℹ️ 表无 unit 列，按隐含单位应用 convert_unit（filter={convert_unit_filter}）"
             )
-            _has_inline_convert = False
+            convert_unit_filter = None  # 清空 filter，使后续直接走无条件转换分支
     
     if _has_inline_convert:
         # 构建 CASE WHEN 表达式做单位转换
@@ -2881,6 +3059,7 @@ def load_bucketed_table_aggregated(
     
     if db_name == 'aumc':
         # AUMC measuredat是Unix毫秒时间戳，转换为分钟后再取整
+        # NOTE: 这里输出的是分钟，与ricu(小时)不匹配。修复需要在concept.py中处理时间单位转换。
         time_round_expr = f"FLOOR(({time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
         # 输出时间列为分钟偏移量（相对于admittedat）
         output_time_expr = f"{time_round_expr} as measuredat_minutes"
@@ -3034,7 +3213,7 @@ def load_bucketed_table_aggregated(
             if patient_ids:
                 # Targeted patient loading: filter hadm_ids by target stay_ids
                 _hadm_filter = f"WHERE {stay_col} IN ({_target_stay_ids_str})"
-                _hadm_scope_filter = f"AND o.hadm_id IN (SELECT hadm_id FROM target_hadms)"
+                _hadm_scope_filter = "AND o.hadm_id IN (SELECT hadm_id FROM target_hadms)"
                 _final_stay_filter = f"AND {stay_col} IN ({_target_stay_ids_str})"
                 
                 query = f"""
@@ -3346,13 +3525,17 @@ def load_bucketed_table_multi_aggregated(
                 ).description}
             except Exception:
                 pass
+        # 🔧 FIX 2026-05-11: MIMIC-III 1.4 早期转换的 parquet 列名为大写 (HADM_ID/ICUSTAY_ID)，
+        # 而 Python 端 `in` 判断区分大小写，会错判 hospital_tables 是否需要 hadm_id rolling join。
+        # DuckDB 本身 case-insensitive，所以 SQL 端无需改动，只需要这里小写化比较。
+        raw_columns_lower = {str(c).lower() for c in raw_columns}
         patient_filter_col = id_col
         patient_filter_values = patient_ids
         join_left_col = id_col
         output_id_col = stay_col
         hospital_tables = {'prescriptions', 'labevents', 'microbiologyevents', 'emar', 'pharmacy', 'services'}
         _needs_hadm_join = (table_name in hospital_tables
-                and id_col not in raw_columns and 'hadm_id' in raw_columns)
+                and id_col not in raw_columns_lower and 'hadm_id' in raw_columns_lower)
         if _needs_hadm_join:
             join_left_col = 'hadm_id'
             patient_filter_col = 'hadm_id'

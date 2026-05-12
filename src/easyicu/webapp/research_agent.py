@@ -2079,36 +2079,106 @@ def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
         if is_en else
         "在这个“预测型”示例中，分析包显示死亡风险存在具有临床意义的分层。只有在复核队列构成、缺失、区分度和校准后，才进入文章生成。"
     )
+    synthetic_banner = (
+        "Synthetic illustration — these numbers, plots and finding cards are static demo content. "
+        "They are not produced by a real EasyICU research-agent run and must not be cited as results."
+        if is_en else
+        "演示示意 — 下方的数字、图表和发现卡片均为静态示例，并非真实的 EasyICU 研究智能体运行结果，"
+        "不可作为研究结论引用。"
+    )
+    synthetic_chip = "Synthetic" if is_en else "演示数据"
+    finding_card_title = (
+        "Example findings before manuscript (illustrative wording only)"
+        if is_en else
+        "文章前的结果复核示例（仅为示例文案）"
+    )
+    finding_card_note = (
+        "In a real run the agent stops here so users can catch wrong cohorts, weak signal or bad calibration "
+        "before spending writing tokens. The text below is sample wording, not a real finding."
+        if is_en else
+        "真实运行中智能体会停在这里，让用户在消耗写作 token 前发现队列错误、信号不足或校准较差。"
+        "下面只是示例文案，不是真实发现。"
+    )
+    finding_text_1 = (
+        "Example wording: SOFA-2 and lactate could carry most of the risk signal; calibration should be checked in the high-risk decile."
+        if is_en else
+        "示例文案：SOFA-2 和乳酸可能贡献主要风险信号；高风险分位的校准需要重点复核。"
+    )
+    finding_text_2 = (
+        "Example wording: missingness acceptable for core predictors; manuscript drafting can be considered after sensitivity review."
+        if is_en else
+        "示例文案：核心预测变量缺失可接受；完成敏感性复核后可考虑生成文章。"
+    )
+    table_caption = (
+        "Illustrative values only — these numbers are static demo content, not from a real run."
+        if is_en else
+        "仅为示意值 — 这些数字是静态演示内容，并非真实运行产生。"
+    )
+    disc_caption = (
+        "Example AUROC / Brier values for layout only — not a real metric."
+        if is_en else
+        "AUROC / Brier 数值仅用于版面示意 — 并非真实指标。"
+    )
+    calib_caption = (
+        "Example calibration curve — illustrative only."
+        if is_en else
+        "示例校准曲线 — 仅为示意。"
+    )
+    manuscript_caption = (
+        "Example manuscript preview wording only."
+        if is_en else
+        "示例文章预览文案。"
+    )
     st.markdown(
         f"""
         <div class="ra-demo-hero">
             <div class="ra-demo-flow">{flow_html}</div>
         </div>
+        <div style="margin:0.6rem 0 0.4rem 0;padding:0.55rem 0.8rem;border:1px solid #f59e0b;
+                    background:#fef3c7;color:#7c2d12;border-radius:8px;font-weight:600;
+                    display:flex;gap:0.55rem;align-items:flex-start;">
+            <span aria-hidden="true">⚠️</span>
+            <span>{html.escape(synthetic_banner)}</span>
+        </div>
         <div class="ra-output-grid">
             <div class="ra-output-card">
-                <div class="ra-output-title">{"Table 1 preview" if is_en else "表 1 预览"}</div>
-                <div class="ra-output-note">{"Illustrative values only. Real runs bind tables to evidence files." if is_en else "仅为示意值；真实运行会绑定证据文件。"}</div>
+                <div class="ra-output-title">{"Table 1 preview" if is_en else "表 1 预览"}
+                    <span style="margin-left:0.4rem;padding:0.05rem 0.4rem;border:1px solid #f59e0b;
+                                 background:#fef3c7;color:#7c2d12;border-radius:999px;
+                                 font-size:0.72rem;font-weight:700;">{html.escape(synthetic_chip)}</span>
+                </div>
+                <div class="ra-output-note">{html.escape(table_caption)}</div>
                 <table class="ra-mini-table">
                     <thead><tr><th>{"Feature" if is_en else "变量"}</th><th>{"Alive" if is_en else "存活"}</th><th>{"Died" if is_en else "死亡"}</th><th>Δ</th></tr></thead>
                     <tbody>{table_html}</tbody>
                 </table>
             </div>
             <div class="ra-output-card">
-                <div class="ra-output-title">{"Discrimination" if is_en else "区分度"}</div>
-                <div class="ra-output-note">AUROC 0.82 · Brier 0.14</div>
-                <svg viewBox="0 0 220 128" width="100%" height="128" role="img" aria-label="ROC curve">
+                <div class="ra-output-title">{"Discrimination" if is_en else "区分度"}
+                    <span style="margin-left:0.4rem;padding:0.05rem 0.4rem;border:1px solid #f59e0b;
+                                 background:#fef3c7;color:#7c2d12;border-radius:999px;
+                                 font-size:0.72rem;font-weight:700;">{html.escape(synthetic_chip)}</span>
+                </div>
+                <div class="ra-output-note">AUROC 0.82 · Brier 0.14 · {html.escape(disc_caption)}</div>
+                <svg viewBox="0 0 220 128" width="100%" height="128" role="img" aria-label="Synthetic ROC curve (illustrative only)">
                     <rect x="0" y="0" width="220" height="128" rx="10" fill="#f8fbff"/>
                     <line x1="28" y1="102" x2="196" y2="102" stroke="#cbd5e1" stroke-width="1.5"/>
                     <line x1="28" y1="102" x2="28" y2="18" stroke="#cbd5e1" stroke-width="1.5"/>
                     <line x1="28" y1="102" x2="196" y2="18" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"/>
                     <polyline points="28,102 44,76 61,58 83,42 113,31 150,24 196,18" fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round"/>
                     <text x="36" y="26" fill="#082957" font-size="12" font-weight="700">ROC</text>
+                    <text x="196" y="120" fill="#b45309" font-size="10" font-weight="700"
+                          text-anchor="end" opacity="0.85">{html.escape(synthetic_chip).upper()}</text>
                 </svg>
             </div>
             <div class="ra-output-card">
-                <div class="ra-output-title">{"Calibration" if is_en else "校准"}</div>
-                <div class="ra-output-note">{"Review predicted vs observed risk." if is_en else "复核预测风险与实际风险。"}</div>
-                <svg viewBox="0 0 220 128" width="100%" height="128" role="img" aria-label="Calibration curve">
+                <div class="ra-output-title">{"Calibration" if is_en else "校准"}
+                    <span style="margin-left:0.4rem;padding:0.05rem 0.4rem;border:1px solid #f59e0b;
+                                 background:#fef3c7;color:#7c2d12;border-radius:999px;
+                                 font-size:0.72rem;font-weight:700;">{html.escape(synthetic_chip)}</span>
+                </div>
+                <div class="ra-output-note">{html.escape(calib_caption)}</div>
+                <svg viewBox="0 0 220 128" width="100%" height="128" role="img" aria-label="Synthetic calibration curve (illustrative only)">
                     <rect x="0" y="0" width="220" height="128" rx="10" fill="#f8fbff"/>
                     <line x1="28" y1="102" x2="196" y2="18" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"/>
                     <polyline points="28,98 57,82 87,68 117,54 151,38 196,24" fill="none" stroke="#0f766e" stroke-width="4" stroke-linecap="round"/>
@@ -2116,16 +2186,27 @@ def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
                     <circle cx="117" cy="54" r="4" fill="#0f766e"/>
                     <circle cx="196" cy="24" r="4" fill="#0f766e"/>
                     <text x="36" y="26" fill="#082957" font-size="12" font-weight="700">calibration</text>
+                    <text x="196" y="120" fill="#b45309" font-size="10" font-weight="700"
+                          text-anchor="end" opacity="0.85">{html.escape(synthetic_chip).upper()}</text>
                 </svg>
             </div>
             <div class="ra-output-card wide">
-                <div class="ra-output-title">{"Findings before manuscript" if is_en else "文章前的结果复核"}</div>
-                <div class="ra-output-note">{"The agent stops here by default so users can catch wrong cohorts, weak signal, or bad calibration before spending writing tokens." if is_en else "智能体默认停在这里，便于用户在消耗写作 token 前发现队列错误、信号不足或校准较差。"}</div>
-                <div class="ra-finding">{"Finding: SOFA-2 and lactate carry most of the risk signal; calibration should be checked in the high-risk decile." if is_en else "发现：SOFA-2 和乳酸贡献了主要风险信号；高风险分位的校准需要重点复核。"}</div>
-                <div class="ra-finding">{"Validator: missingness acceptable for core predictors; manuscript drafting can be considered after sensitivity review." if is_en else "验证器：核心预测变量缺失可接受；完成敏感性复核后可考虑生成文章。"}</div>
+                <div class="ra-output-title">{html.escape(finding_card_title)}
+                    <span style="margin-left:0.4rem;padding:0.05rem 0.4rem;border:1px solid #f59e0b;
+                                 background:#fef3c7;color:#7c2d12;border-radius:999px;
+                                 font-size:0.72rem;font-weight:700;">{html.escape(synthetic_chip)}</span>
+                </div>
+                <div class="ra-output-note">{html.escape(finding_card_note)}</div>
+                <div class="ra-finding">{html.escape(finding_text_1)}</div>
+                <div class="ra-finding">{html.escape(finding_text_2)}</div>
             </div>
             <div class="ra-output-card">
-                <div class="ra-output-title">{"Optional manuscript preview" if is_en else "可选文章预览"}</div>
+                <div class="ra-output-title">{"Optional manuscript preview" if is_en else "可选文章预览"}
+                    <span style="margin-left:0.4rem;padding:0.05rem 0.4rem;border:1px solid #f59e0b;
+                                 background:#fef3c7;color:#7c2d12;border-radius:999px;
+                                 font-size:0.72rem;font-weight:700;">{html.escape(synthetic_chip)}</span>
+                </div>
+                <div class="ra-output-note">{html.escape(manuscript_caption)}</div>
                 <div class="ra-manuscript-preview">{html.escape(manuscript)}</div>
             </div>
         </div>
@@ -2292,17 +2373,55 @@ def render_research_agent_page() -> None:
         st.code(traceback.format_exc())
         return
 
-    with st.expander(_ra_text("step1_title"), expanded=True):
+    _lang = st.session_state.get("language", "en")
+    _is_en = _lang == "en"
+    _step_titles = [
+        _ra_text("step1_title"),
+        _ra_text("step2_title"),
+        _ra_text("step3_title"),
+        _ra_text("step4_title"),
+        _ra_text("step5_title"),
+    ]
+    _step_required = [True, False, True, True, False]
+    _required_label = "required" if _is_en else "必填"
+    _optional_label = "optional" if _is_en else "可选"
+    _stepper_legend = (
+        "Suggested order. Steps 1, 3 and 4 are required to run the agent; steps 2 and 5 are optional."
+        if _is_en else
+        "推荐顺序。第 1、3、4 步为必填，第 2、5 步为可选。"
+    )
+    _stepper_items = "".join(
+        f'<div style="display:flex;align-items:center;gap:0.45rem;padding:0.3rem 0.55rem;'
+        f'border:1px solid {"#2563eb" if req else "#cbd5e1"};border-radius:999px;'
+        f'background:{"#eff6ff" if req else "#f8fafc"};color:#0f172a;font-size:0.78rem;'
+        f'font-weight:600;white-space:nowrap;">'
+        f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+        f'width:1.35rem;height:1.35rem;border-radius:999px;background:{"#2563eb" if req else "#94a3b8"};'
+        f'color:white;font-size:0.72rem;">{idx + 1}</span>'
+        f'<span>{html.escape(title)}</span>'
+        f'<span style="font-size:0.66rem;color:{"#2563eb" if req else "#64748b"};'
+        f'text-transform:uppercase;letter-spacing:0.04em;">'
+        f'{_required_label if req else _optional_label}</span>'
+        f'</div>'
+        for idx, (title, req) in enumerate(zip(_step_titles, _step_required))
+    )
+    st.markdown(
+        f'<div style="display:flex;flex-wrap:wrap;gap:0.45rem;margin:0.4rem 0 0.25rem 0;">{_stepper_items}</div>'
+        f'<div style="font-size:0.78rem;color:#475569;margin-bottom:0.55rem;">{html.escape(_stepper_legend)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander(f"1 · {_step_titles[0]}", expanded=True):
         free_question, target_outcome = _section_request_picker()
         skill_key = None
-    with st.expander(_ra_text("step2_title"), expanded=False):
+    with st.expander(f"2 · {_step_titles[1]} ({_optional_label})", expanded=False):
         method_notes, user_preferences = _section_method_preferences(free_question, target_outcome)
     question_hint = free_question
-    with st.expander(_ra_text("step3_title"), expanded=True):
+    with st.expander(f"3 · {_step_titles[2]}", expanded=True):
         cohort, cohort_label = _section_cohort_picker(research_question=question_hint)
-    with st.expander(_ra_text("step4_title"), expanded=False):
+    with st.expander(f"4 · {_step_titles[3]}", expanded=False):
         llm_choice, api_key, model, base_url, extra_headers = _section_llm_picker(handles)
-    with st.expander(_ra_text("step5_title"), expanded=False):
+    with st.expander(f"5 · {_step_titles[4]} ({_optional_label})", expanded=False):
         disable_icu_context, workdir_text, stop_after_analysis = _section_options()
     resume_run_id = st.session_state.get("research_agent_resume_run_id")
     force_manuscript = bool(st.session_state.get("research_agent_force_manuscript"))

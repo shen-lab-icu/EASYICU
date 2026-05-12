@@ -1099,8 +1099,8 @@ def news_score(
     temp_score = pd.Series(0, index=temp.index, dtype=int)
     temp_score[temp <= 35] = 3
     temp_score[(temp > 35) & (temp <= 36)] = 1
-    temp_score[(temp > 36) & (temp <= 38.4)] = 0
-    temp_score[(temp > 38.4) & (temp <= 39)] = 1
+    temp_score[(temp > 36) & (temp <= 38)] = 0
+    temp_score[(temp > 38) & (temp <= 39)] = 1
     temp_score[temp > 39] = 2
     
     sbp_score = pd.Series(0, index=sbp.index, dtype=int)

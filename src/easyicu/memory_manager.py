@@ -23,10 +23,8 @@ import time
 import ctypes
 import logging
 import tempfile
-import warnings
 from pathlib import Path
-from typing import Optional, List, Union, Dict, Any, Tuple
-from dataclasses import dataclass
+from typing import Optional, List, Union, Dict
 
 import pandas as pd
 
@@ -37,6 +35,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 _libc = None
+_pa_pool = None  # 懒加载 pyarrow default_memory_pool
 _last_gc_time: float = 0.0
 _GC_MIN_INTERVAL: float = 30.0  # 最小gc间隔（秒），避免高频gc浪费CPU
 
@@ -51,11 +50,31 @@ def _get_libc():
     return _libc if _libc is not False else None
 
 
+def _get_pyarrow_pool():
+    """懒加载 pyarrow default_memory_pool。若 pyarrow 不可用或 pool 无
+    release_unused，则缓存 False，后续直接跳过。"""
+    global _pa_pool
+    if _pa_pool is None:
+        try:
+            import pyarrow as pa
+            pool = pa.default_memory_pool()
+            if hasattr(pool, 'release_unused'):
+                _pa_pool = pool
+            else:
+                _pa_pool = False  # 老版本 pyarrow 不支持
+        except Exception:
+            _pa_pool = False
+    return _pa_pool if _pa_pool is not False else None
+
+
 def release_memory(aggressive: bool = False) -> int:
     """
     释放碎片内存，返回回收的 MB 数。
     
     调用 gc.collect() + malloc_trim(0) 将碎片化的堆内存归还操作系统。
+    另外调用 pyarrow.default_memory_pool().release_unused() 释放 Arrow
+    缓冲区未使用部分（DuckDB→Arrow→pandas 路径会留下大量 Arrow buffer，
+    EasyICU profile 显示 pool.max_memory 单次可达 1.2 GB）。
     对于 pandas/numpy 密集操作后效果显著（可回收 10-30%）。
     
     🚀 性能优化：添加时间节流，避免高频gc.collect()浪费CPU。
@@ -84,6 +103,14 @@ def release_memory(aggressive: bool = False) -> int:
             gc.collect()
     else:
         gc.collect()
+    
+    # 释放 pyarrow 默认 pool 中未被引用的 Arrow buffer（DuckDB 路径累积）
+    pa_pool = _get_pyarrow_pool()
+    if pa_pool is not None:
+        try:
+            pa_pool.release_unused()
+        except Exception:
+            pass
     
     libc = _get_libc()
     if libc is not None and hasattr(libc, 'malloc_trim'):
@@ -143,43 +170,68 @@ def get_available_memory_mb() -> float:
 
 # 每概念内存模型: (fixed_mb, marginal_mb_per_patient)
 # 内存消耗 ≈ fixed + marginal × num_patients
-# 实测校准：
-#   SOFA 10K pts → 2454 MB, 94K pts → 4142 MB
-#   拟合: 2000 + 0.022 * N  (回验: 10K→2220, 94K→4078, 误差<5%)
-#   hr 10K pts → ~400 MB  → 拟合: 200 + 0.02 * N
+#
+# 🔧 2026-05-11 重新校准（基于 MIMIC-IV 实测，data on /Volumes/新加卷）：
+#   分桶+DuckDB pushdown 让重概念的 peak 主要由"内部 hash join 工作集"决定，
+#   而不是患者数。轻概念的 peak 由 output DataFrame 行数决定 (~0.16 KB/row)。
+#
+#   实测样本：
+#     hr 单概念：    N=10k →  669 MB,  N=30k → 1034 MB  → (300, 0.020)
+#     vitals 7个：   N=10k →  830 MB,  N=30k → 1552 MB  → 每概念约 (50, 0.0036)
+#     chemistry 21个: N=10k →  599 MB                   → 每概念约 (15, 0.0019)
+#     sofa1_full 7个: N=3k → 1602 MB, N=10k → 1670 MB   → 几乎不随 N 增长！
+#     sep3 单概念：   N=3k → 2025 MB                    → 大固定开销
+#
+#   结论：重概念用大固定成本+几乎零边际；轻概念用小固定成本+小边际。
 _MEMORY_COEFFICIENTS = {
     # (fixed_mb, marginal_mb_per_patient)
-    # 复杂计算概念（含子概念递归加载 + DuckDB 工作内存）
-    'sofa':        (2000, 0.022),     # 实测 10K→2.5G, 94K→4.1G
-    'sofa2':       (2200, 0.025),     # sofa2 略多
+    # 重概念：DuckDB 内部 hash join + 递归子概念加载，peak 几乎不随 N 增长
+    'sofa':        (1700, 0.005),     # 实测 N=3k→1602, N=10k→1670（基本平）
+    'sofa2':       (1800, 0.006),     # 比 sofa 略重
+    'sep3':        (2000, 0.005),     # 实测 N=3k→2025
+    'sep3_sofa1':  (2000, 0.005),
+    'sep3_sofa2':  (2100, 0.006),
+    'kdigo_aki':   (1500, 0.008),     # 时间窗口计算
+    'aki_stage':   (1500, 0.008),
     # SOFA 子分数（共享 DuckDB 开销较低）
-    'sofa_resp':   (500, 0.008),
-    'sofa_coag':   (200, 0.003),
+    'sofa_resp':   (400, 0.003),
+    'sofa_coag':   (200, 0.002),
     'sofa_liver':  (150, 0.002),
-    'sofa_cardio': (400, 0.008),
-    'sofa_cns':    (300, 0.005),
-    'sofa_renal':  (600, 0.012),
-    # 基础概念（单表读取，固定成本 = DuckDB扫描 + 后处理）
-    'hr':    (200, 0.008),
-    'sbp':   (200, 0.008),
-    'dbp':   (200, 0.008),
-    'map':   (250, 0.010),
-    'resp':  (200, 0.006),
-    'temp':  (150, 0.004),
-    'spo2':  (200, 0.008),
-    # Lab 概念
-    'bili':  (150, 0.003),
-    'crea':  (200, 0.005),
-    'plt':   (200, 0.005),
-    'glu':   (200, 0.005),
-    # 尿量（outputevents 大表，高固定成本）
-    'urine':   (600, 0.010),
-    'urine24': (500, 0.015),
-    # 其他复杂概念
-    'pafi':      (300, 0.006),
-    'gcs':       (300, 0.008),
-    'sep3':      (1500, 0.020),
-    'kdigo_aki': (1800, 0.022),
+    'sofa_cardio': (400, 0.004),
+    'sofa_cns':    (250, 0.003),
+    'sofa_renal':  (500, 0.005),
+    'sofa2_resp':  (400, 0.003),
+    'sofa2_coag':  (200, 0.002),
+    'sofa2_liver': (150, 0.002),
+    'sofa2_cardio':(400, 0.004),
+    'sofa2_cns':   (250, 0.003),
+    'sofa2_renal': (500, 0.005),
+    # 高密度 vitals（chartevents，~500 rows/patient）
+    'hr':    (300, 0.020),     # 实测 N=10k→669, N=30k→1034
+    'sbp':   (250, 0.018),
+    'dbp':   (250, 0.018),
+    'map':   (250, 0.020),
+    'resp':  (200, 0.015),
+    'temp':  (200, 0.010),
+    'spo2':  (250, 0.018),
+    'etco2': (250, 0.015),
+    # Lab 概念（labevents，~50-150 rows/patient，稀疏）
+    'bili':  (100, 0.003),
+    'crea':  (150, 0.005),
+    'plt':   (150, 0.005),
+    'glu':   (150, 0.005),
+    'lact':  (200, 0.006),
+    'k':     (100, 0.004),
+    'na':    (100, 0.004),
+    # 尿量
+    'urine':   (400, 0.008),
+    'urine24': (400, 0.010),
+    # 其他
+    'pafi':      (250, 0.005),
+    'safi':      (250, 0.005),
+    'gcs':       (250, 0.006),
+    'mech_vent': (300, 0.005),
+    'vent_ind':  (250, 0.004),
 }
 
 # 默认系数（未列出的概念）
@@ -300,11 +352,24 @@ def auto_batch_size(
     else:
         max_batch = total_patients
     
-    # 确保 batch_size 合理
-    batch_size = max(500, min(max_batch, total_patients))
+    # 🔧 2026-05-11: 保底从 500 提升到 10000。
+    # 实测（hr/vitals/sofa1_full 在 N=3k/10k/30k）显示，分桶+pushdown 让 DuckDB
+    # 工作集（pool_max ~20-60 MB）几乎不随患者数变化，峰值由 output DataFrame 决定。
+    # batch_size=500 没有内存意义，反而导致 ~190 次 subprocess fork 的巨大开销。
+    # 即使在低内存系统上，10000 一批的单次峰值（实测 vitals 7-concept @ 10k = 830 MB）
+    # 也远低于 12GB 系统的可用预算。
+    MIN_BATCH = 10000
+    batch_size = max(MIN_BATCH, min(max_batch, total_patients))
     
     # 取整到 1000 的倍数（更整洁）
-    batch_size = max(500, (batch_size // 1000) * 1000)
+    batch_size = max(MIN_BATCH, (batch_size // 1000) * 1000)
+    
+    # 极端情况：若全量已经小于保底批，则不分批
+    if batch_size >= total_patients:
+        logger.debug(
+            f"📊 内存估算: batch_size ({batch_size}) >= total ({total_patients}), 不分批"
+        )
+        return None
     
     logger.info(
         f"📊 自动分批: {total_patients} patients, "
@@ -743,7 +808,7 @@ def subprocess_batch_load(
                     print(f" ✅ ({file_mb:.1f}MB)")
             else:
                 if verbose:
-                    print(f" ⚠️ (no output)")
+                    print(" ⚠️ (no output)")
         
         # 合并所有 batch 的结果
         produced_files = list(Path(temp_dir).glob('batch_*.parquet')) + list(Path(temp_dir).glob('batch_*.*.parquet'))
@@ -751,7 +816,7 @@ def subprocess_batch_load(
             return pd.DataFrame()
         
         if verbose:
-            print(f"   📋 合并批次结果...")
+            print("   📋 合并批次结果...")
 
         result = _merge_parquet_batches(temp_dir)
         
@@ -855,7 +920,7 @@ def inprocess_batch_load(
                         non_empty += len(_df)
                 print(f" ✅ ({non_empty} rows / {len(batch_result)} concepts)", end='')
         elif verbose:
-            print(f" ⚪ (empty)", end='')
+            print(" ⚪ (empty)", end='')
 
         if spill_dir is None and _should_spill_inprocess_batches(
             memory_efficient=memory_efficient,

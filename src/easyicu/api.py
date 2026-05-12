@@ -204,6 +204,17 @@ def _build_fast_scan_expr(loader: 'BaseICULoader', table_name: str) -> Optional[
         return path.replace("'", "''").replace('\\', '/')
 
     if source.is_dir():
+        # 显式文件列表，过滤 AppleDouble (._*.parquet) — 见 datasource._enumerate_bucket_parquet_files
+        try:
+            from .datasource import _enumerate_bucket_parquet_files as _enum
+        except Exception:
+            _enum = None
+        if _enum is not None:
+            files = _enum(source)
+            if files:
+                files_sql = '[' + ', '.join(f"'{_escape(f)}'" for f in files) + ']'
+                return f"read_parquet({files_sql}, union_by_name=true)"
+        # Fallback: 旧的 glob 路径（仅在 helper 不可用或空目录时）
         bucket_dirs = list(source.glob('bucket_id=*'))
         if bucket_dirs:
             pattern = str(source / 'bucket_id=*' / '*.parquet').replace('\\', '/')
@@ -1052,8 +1063,8 @@ def load_concepts(
     # ====================================================================
     
     from .memory_manager import (
-        auto_batch_size, estimate_memory_mb, release_memory,
-        get_available_memory_mb, get_rss_mb, inprocess_batch_load,
+        auto_batch_size, estimate_memory_mb,
+        get_available_memory_mb, inprocess_batch_load,
         inprocess_batch_load_streaming, subprocess_batch_load,
     )
     
@@ -1073,6 +1084,15 @@ def load_concepts(
     else:
         _total_patients = None
     
+    # 🔧 2026-05-11: 默认不分批，追求合理内存下的最优速度。
+    # 实测（MIMIC-IV 94k 患者 167 特征）：单模块 peak ≤ 8 GB（vitals 最高 ~5GB，
+    # sofa/sep3 系列 peak 几乎不随 N 增长——DuckDB 内部 hash 工作集主导）。
+    # 触发自动分批的条件（同时满足）：
+    #   1. 可用内存 < 6 GB（低内存系统才需要保守路径）
+    #   2. 估算峰值 > 可用内存（否则一次跑完最快）
+    # 12 GB+ 系统：默认全跑，速度最优。
+    LOW_MEM_THRESHOLD_MB = 6 * 1024
+    
     # 自动检测全量加载场景
     if (not auto_chunk_strategy) and _total_patients is None and patient_ids is None and effective_batch_size is None:
         # 全量加载：查询总患者数来决定是否需要分批
@@ -1083,20 +1103,23 @@ def load_concepts(
                 est_mem = estimate_memory_mb(concepts_list, loader.database, _total_patients_in_db)
                 avail_mem = get_available_memory_mb()
                 
-                if est_mem > avail_mem * 0.6:
+                # 仅低内存系统 + 估算超预算时才分批
+                if avail_mem < LOW_MEM_THRESHOLD_MB and est_mem > avail_mem:
                     _total_patients = _total_patients_in_db
                     effective_batch_size = auto_batch_size(
                         concepts_list, loader.database, _total_patients, avail_mem
                     )
 
                     if verbose and effective_batch_size:
-                        print(f"📊 全量加载 {_total_patients} patients, "
-                              f"估算峰值 {est_mem:.0f}MB > 可用 {avail_mem:.0f}MB×60%, "
-                              f"自动分批: batch_size={effective_batch_size}")
+                        print(f"⚠️  低内存模式 ({avail_mem:.0f}MB < 6GB), "
+                              f"全量加载 {_total_patients} patients 分批 (batch_size={effective_batch_size})")
 
-                    # 小内存环境使用子进程隔离；进程内路径优先走流式 patient batch
-                    use_subprocess = avail_mem < 16 * 1024
+                    # 低内存：始终用子进程隔离；进程内路径优先走流式 patient batch
+                    use_subprocess = True
                     use_streaming_patient_batches = effective_batch_size is not None
+                elif verbose:
+                    print(f"🚀 全量加载 {_total_patients_in_db} patients, "
+                          f"可用内存 {avail_mem:.0f}MB, 不分批（最优速度）")
         except Exception as e:
             logger.debug(f"自动分批检测失败: {e}")
     
@@ -1125,6 +1148,7 @@ def load_concepts(
             logger.debug(f"获取患者ID以启用分批失败: {e}")
     
     # 自动检测：用户指定了 patient_ids 但未指定 batch_size
+    # 🔧 2026-05-11: 同样默认不分批，仅低内存系统才触发
     if (
         not auto_chunk_strategy
         and merge
@@ -1135,15 +1159,14 @@ def load_concepts(
     ):
         avail_mem = get_available_memory_mb()
         est_mem = estimate_memory_mb(concepts_list, loader.database, _total_patients)
-        if est_mem > avail_mem * 0.6:
+        if avail_mem < LOW_MEM_THRESHOLD_MB and est_mem > avail_mem:
             effective_batch_size = auto_batch_size(
                 concepts_list, loader.database, _total_patients, avail_mem
             )
             if verbose and effective_batch_size:
-                print(f"📊 自动分批: {_total_patients} patients, "
-                      f"估算 {est_mem:.0f}MB > budget {avail_mem*0.6:.0f}MB, "
-                      f"batch_size={effective_batch_size}")
-            use_subprocess = avail_mem < 16 * 1024
+                print(f"⚠️  低内存模式 ({avail_mem:.0f}MB < 6GB): {_total_patients} patients, "
+                      f"估算 {est_mem:.0f}MB > 可用, batch_size={effective_batch_size}")
+            use_subprocess = True
 
     if auto_chunk_strategy and verbose and effective_batch_size is None:
         print("   🧠 已跳过自动 batch 分批，优先采用已验证的平衡 chunk 路径")
@@ -1152,13 +1175,20 @@ def load_concepts(
     # inprocess_batch_load 每批次泄漏 0.5-1.5GB 碎片（pymalloc arena 不归还 OS），
     # N 批次后 RSS = N * 碎片 + 结果数据。MIIV 94K patients: 15G RSS for 1.4G data.
     # subprocess 隔离: 每批在子进程中运行，子进程退出后 OS 完整回收内存，零碎片。
-    if (
-        not use_subprocess
-        and _total_patients is not None
-        and _total_patients > 30000
-        and effective_batch_size is not None
-    ):
-        use_subprocess = True
+    #
+    # 🔧 2026-05-11: 阈值改成内存自适应（实测 12GB 系统跑 167 特征单模块峰值 ≤ 5GB）：
+    #   <16GB 可用内存：始终启用 subprocess（macOS/Windows 上 pymalloc 不归还）
+    #   16-32GB：cohort > 30k 才启用
+    #   ≥32GB：不启用（开销大于收益，主进程足够装下碎片）
+    if not use_subprocess and effective_batch_size is not None:
+        _avail_mb = get_available_memory_mb()
+        if _avail_mb < 16 * 1024:
+            use_subprocess = True
+        elif _avail_mb < 32 * 1024 and _total_patients is not None and _total_patients > 30000:
+            use_subprocess = True
+        elif _total_patients is not None and _total_patients > 60000:
+            # 32GB+ 系统也只对超大 cohort 启用，避免序列化开销
+            use_subprocess = True
     
     # 🔧 FIX Bug 54/63: daemon 子进程的分批隔离
     # Webapp 用 daemon=True 启动模块子进程以隔离内存碎片。
@@ -3177,7 +3207,13 @@ def _extract_special_worker(
             if not id_col: missing.append('id_col')
             if not time_col: missing.append('time_col')
             if 'susp_inf' not in merged.columns: missing.append('susp_inf')
-            errors.append(f"Missing columns: {missing}, available: {list(merged.columns)[:10]}")
+            # 🔧 FIX 2026-05-11: 对于 sic/hirid 等不支持 susp_inf 的数据库，
+            # sep3_sofa1/sep3_sofa2 无法计算属正常情况，不应记为错误。
+            # 只有当 id/time 列也缺失时才认为是真正的错误。
+            if missing == ['susp_inf']:
+                pass  # 静默跳过：数据库不支持 susp_inf，sep3 概念不适用
+            else:
+                errors.append(f"Missing columns: {missing}, available: {list(merged.columns)[:10]}")
 
     elapsed = time.time() - t0
     manifest = {

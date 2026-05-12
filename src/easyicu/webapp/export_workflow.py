@@ -709,32 +709,42 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                 _n_load_patients = _actual_n_patients if _actual_n_patients is not None else (
                     len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
                 )
+                # 🔧 2026-05-11: 默认不分批，追求合理内存下的最优速度。
+                # 实测 12GB+ 系统跑单模块 167 特征 peak ≤ 8GB；外层 module-per-subprocess
+                # 已经隔离了内存碎片，patient-级再分批反而降低速度（多次 DuckDB
+                # initialize、多次 buckets 扫描）。
+                # 仅在可用内存 < 6 GB（8GB 以下系统或被占用严重）才启用 patient-级分批。
+                _LOW_MEM_THRESHOLD_MB = 6 * 1024
                 if _n_load_patients is not None and _n_load_patients > 5000:
                     try:
                         from easyicu.memory_manager import get_available_memory_mb
                         _avail_mb = get_available_memory_mb()
-                        # 流式导出: 每批峰值 ~0.05-0.2 MB/patient, 无需严格上限
-                        _frag_safe_max = max(10000, int(_avail_mb * 0.5))
-                        if _n_load_patients > _frag_safe_max:
-                            _auto_batch_size = _frag_safe_max
-                            _n_batches = (_n_load_patients + _auto_batch_size - 1) // _auto_batch_size
-                            if lang == 'en':
-                                st.info(f"🧠 Loading {_n_load_patients} patients (batch={_auto_batch_size}, "
-                                        f"{_n_batches} batches/module), available memory {_avail_mb:.0f}MB")
-                            else:
-                                st.info(f"🧠 加载 {_n_load_patients} 患者 (分批={_auto_batch_size}, "
-                                        f"每模块{_n_batches}批), 可用内存 {_avail_mb:.0f}MB")
+                        if _avail_mb < _LOW_MEM_THRESHOLD_MB:
+                            # 低内存：分批保守
+                            _frag_safe_max = max(10000, int(_avail_mb * 0.4))
+                            if _n_load_patients > _frag_safe_max:
+                                _auto_batch_size = _frag_safe_max
+                                _n_batches = (_n_load_patients + _auto_batch_size - 1) // _auto_batch_size
+                                if lang == 'en':
+                                    st.warning(f"⚠️ Low memory ({_avail_mb:.0f}MB < 6GB): "
+                                            f"batching {_n_load_patients} patients into {_n_batches} batches "
+                                            f"of {_auto_batch_size}/module. Consider freeing RAM for faster export.")
+                                else:
+                                    st.warning(f"⚠️ 低内存 ({_avail_mb:.0f}MB < 6GB): "
+                                            f"{_n_load_patients} 患者分 {_n_batches} 批 ({_auto_batch_size}/模块)。"
+                                            f"释放内存可加速。")
                         else:
+                            # ≥ 6GB: 默认不分批，最快路径
                             if lang == 'en':
-                                st.info(f"🧠 Loading {_n_load_patients} patients, "
-                                        f"available memory {_avail_mb:.0f}MB, no batching needed.")
+                                st.info(f"🚀 Loading {_n_load_patients} patients per module (no batching, "
+                                        f"available memory {_avail_mb:.0f}MB — fastest path).")
                             else:
-                                st.info(f"🧠 加载 {_n_load_patients} 患者, "
-                                        f"可用内存 {_avail_mb:.0f}MB, 无需分批。")
+                                st.info(f"🚀 每模块加载 {_n_load_patients} 患者 (不分批, "
+                                        f"可用内存 {_avail_mb:.0f}MB — 最优速度)。")
                     except Exception:
-                        # 无法检测内存时，使用保守默认值
+                        # 无法检测内存时，保守起见仍然分批
                         if _n_load_patients > 5000:
-                            _auto_batch_size = 5000
+                            _auto_batch_size = 10000
 
                 # 🚀 FIX: 全模块批量加载 + 改善进度提示
                 # 测试结果：逐概念加载比批量慢 3-10x（etco2: 873s 逐概念 vs <100s 批量）

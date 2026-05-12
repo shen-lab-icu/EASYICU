@@ -147,6 +147,15 @@ POINT_EVENT_CONCEPTS = {
     "abx", "samp", "cort", "dobu60", "susp_inf", "sep3", "avpu",
     "rrt",  # Renal replacement therapy: uses set_val(TRUE), point events from chartevents + procedureevents
     "vent_end", "vent_start",  # Ventilation events: uses set_val(TRUE), point events
+    "furosemide",  # Loop diuretic: lgl_cncpt with set_val(TRUE), point events from drug administration tables
+    # New medication lgl_cncpt concepts (2026-05-12)
+    "propofol", "midazolam", "dexmedetomidine",  # Sedation
+    "fentanyl", "morphine",                       # Analgesia
+    "heparin",                                    # Anticoagulation
+    "mannitol",                                   # Osmotic diuretic
+    "amiodarone",                                 # Antiarrhythmic
+    "milrinone",                                  # Inotrope
+    "rocuronium",                                 # Neuromuscular blocker
 }
 
 # 时长概念（已编码持续时间，不需要展开）
