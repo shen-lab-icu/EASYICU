@@ -889,6 +889,27 @@
       ]
     }
   },
+  "anion_gap": {
+    "unit": [
+      "mEq/L",
+      "mmol/l"
+    ],
+    "min": -10,
+    "max": 50,
+    "description": "serum anion gap (Na - Cl - HCO3)",
+    "category": "chemistry",
+    "concepts": [
+      "na",
+      "cl",
+      "bicar"
+    ],
+    "aggregate": [
+      "min",
+      "max"
+    ],
+    "callback": "anion_gap",
+    "class_name": "rec_cncpt"
+  },
   "ast": {
     "unit": [
       "IU/L",
@@ -1400,6 +1421,15 @@
           "ids": 51144,
           "table": "labevents",
           "sub_var": "itemid"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            240
+          ],
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
         }
       ]
     }
@@ -2026,6 +2056,17 @@
           "table": "labevents",
           "sub_var": "itemid",
           "callback": "convert_unit(binary_op(`*`, 10), 'mg/L', 'mg/dl')"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            341,
+            351
+          ],
+          "table": "laboratory",
+          "sub_var": "LaboratoryID",
+          "callback": "transform_fun(binary_op(`*`, 10))"
         }
       ]
     }
@@ -3231,6 +3272,15 @@
           "table": "labevents",
           "sub_var": "itemid"
         }
+      ],
+      "sic": [
+        {
+          "ids": [
+            442
+          ],
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
       ]
     }
   },
@@ -3298,6 +3348,24 @@
           "ids": 716,
           "table": "data_float_h",
           "sub_var": "DataID"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "(?i)etco2$",
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?i)etco2$",
+          "table": "respiratorycharting",
+          "sub_var": "respchartvaluelabel",
+          "val_var": "respchartvalue",
+          "class_name": "rgx_itm"
         }
       ]
     }
@@ -3567,6 +3635,131 @@
           "ids": 2283,
           "table": "data_float_h",
           "sub_var": "DataID"
+        }
+      ]
+    }
+  },
+  "furosemide": {
+    "class_name": "lgl_cncpt",
+    "description": "furosemide (Lasix) administration — IV bolus or continuous infusion",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            7244
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "furosem|lasix",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "furosem|lasix",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "furosem|lasix",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "furosem|lasix",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            482,
+            1000232,
+            1000747
+          ],
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            221794,
+            228340
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            30123
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            221794,
+            228340
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            30123
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            221794,
+            228340
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1417
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -6373,6 +6566,26 @@
       ]
     }
   },
+  "pulse_pressure": {
+    "unit": [
+      "mmHg",
+      "mm Hg"
+    ],
+    "min": 0,
+    "max": 200,
+    "description": "arterial pulse pressure (SBP - DBP)",
+    "category": "vitals",
+    "concepts": [
+      "sbp",
+      "dbp"
+    ],
+    "aggregate": [
+      "min",
+      "max"
+    ],
+    "callback": "pulse_pressure",
+    "class_name": "rec_cncpt"
+  },
   "qsofa": {
     "concepts": [
       "gcs",
@@ -8715,13 +8928,7 @@
           "class_name": "rgx_itm"
         }
       ],
-      "hirid": [
-        {
-          "table": "observations",
-          "sub_var": "variableid",
-          "ids": []
-        }
-      ]
+      "hirid": []
     }
   },
   "potassium": {
@@ -9625,6 +9832,1172 @@
           "ids": 2284,
           "table": "data_float_h",
           "sub_var": "DataID"
+        }
+      ]
+    }
+  },
+  "propofol": {
+    "class_name": "lgl_cncpt",
+    "description": "propofol (Diprivan) administration — IV sedation",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            7480
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "propofol|diprivan",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "propofol|diprivan",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "propofol|diprivan",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "propofol|diprivan",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            222168
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            30131
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            222168
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            30131
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            222168
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1499,
+            1549
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "midazolam": {
+    "class_name": "lgl_cncpt",
+    "description": "midazolam (Versed/Dormicum) administration — IV sedation",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            7194
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "midazolam|versed",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "midazolam|versed",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "midazolam|versed",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "midazolam|versed",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            251,
+            252,
+            1000700,
+            1001051,
+            1001054
+          ],
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            221668
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            30124
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            221668
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            30124
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            221668
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1495
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "dexmedetomidine": {
+    "class_name": "lgl_cncpt",
+    "description": "dexmedetomidine (Precedex/Dexdor) administration — IV sedation",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "eicu": [
+        {
+          "regex": "dexmedetomidine|precedex",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "dexmedetomidine|precedex",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "dexmedetomidine|precedex",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "dexmedetomidine|precedex",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            1001049,
+            1000847
+          ],
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            225150,
+            229420
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            225150
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            225150
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "fentanyl": {
+    "class_name": "lgl_cncpt",
+    "description": "fentanyl administration — IV analgesia (excludes sufentanil)",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            7219
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "(?<!su)fentanyl",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "(?<!su)fentanyl",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?<!su)fentanyl",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "(?<!su)fentanyl",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            1000251,
+            1000692,
+            1000741
+          ],
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            221744,
+            225942,
+            225972
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            30118,
+            30149,
+            30150,
+            30308
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            221744,
+            225942,
+            225972
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            30118,
+            30149,
+            30150,
+            30308
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            221744,
+            225942,
+            225972
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1480
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "morphine": {
+    "class_name": "lgl_cncpt",
+    "description": "morphine administration — IV analgesia",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            7225
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "morphine",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "morphine",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "morphine",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "morphine",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            1000862,
+            1000659,
+            1000932
+          ],
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            225154
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            30153,
+            30126
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            225154
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            30153,
+            30126
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            225154
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1520,
+            1896
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "heparin": {
+    "class_name": "lgl_cncpt",
+    "description": "heparin administration — IV anticoagulation (therapeutic + prophylaxis)",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            7930
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "heparin",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "heparin",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "heparin",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "heparin",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            1000373
+          ],
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            225152,
+            225975
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            30025
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            225152,
+            225975
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            30025
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            225152,
+            225975
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1558
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "mannitol": {
+    "class_name": "lgl_cncpt",
+    "description": "mannitol administration — IV osmotic diuretic",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            7360,
+            20174
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "mannitol",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "mannitol",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "mannitol",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "mannitol",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            227531,
+            220988,
+            220989,
+            220990,
+            220991,
+            220992
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            40030,
+            40327,
+            41408,
+            41632,
+            41732,
+            42743,
+            42895
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            227531,
+            220988,
+            220989,
+            220990,
+            220991,
+            220992
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            40030,
+            40327,
+            41408,
+            41632,
+            41732,
+            42743,
+            42895
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            227531,
+            220988,
+            220989,
+            220990,
+            220991,
+            220992
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            2050,
+            2091,
+            2135,
+            2171
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "amiodarone": {
+    "class_name": "lgl_cncpt",
+    "description": "amiodarone (Cordarone) administration — IV antiarrhythmic",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            6844,
+            9015,
+            16113
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "amiodarone|cordarone",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "amiodarone|cordarone",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "amiodarone|cordarone",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "amiodarone|cordarone",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            431,
+            1000821
+          ],
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            221347,
+            228339,
+            229654,
+            230034
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            30112
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            221347,
+            228339
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            30112
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            221347,
+            228339
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1437
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "milrinone": {
+    "class_name": "lgl_cncpt",
+    "description": "milrinone (Primacor/Corotrop) administration — IV inotrope",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "eicu": [
+        {
+          "regex": "milrinone|primacor",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "milrinone|primacor",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "milrinone|primacor",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "milrinone|primacor",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            1000441
+          ],
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            221986
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            30125
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            221986
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            30125
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            221986
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1560
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "rocuronium": {
+    "class_name": "lgl_cncpt",
+    "description": "rocuronium (Esmeron) administration — IV neuromuscular blocker",
+    "category": "medications",
+    "aggregate": "max",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            6960
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "rocuronium|esmeron",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "rocuronium|esmeron",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "rocuronium|esmeron",
+          "table": "medication",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        },
+        {
+          "regex": "rocuronium|esmeron",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "val_var": "drugname",
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            1000498
+          ],
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            229233
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1479
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }

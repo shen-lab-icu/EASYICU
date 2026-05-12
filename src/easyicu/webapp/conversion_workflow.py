@@ -233,6 +233,15 @@ def convert_csv_to_parquet(
         else:
             normal_files.append(csv_file)
 
+    # 按文件大小升序处理：先快速完成小文件给用户早期反馈，把整段大文件留到最后
+    def _size_key(p):
+        try:
+            return p.stat().st_size
+        except OSError:
+            return 0
+    normal_files.sort(key=_size_key)
+    bucket_files.sort(key=lambda pair: _size_key(pair[0]))
+
     success = 0
     failed = 0
     total = len(normal_files) + len(bucket_files)

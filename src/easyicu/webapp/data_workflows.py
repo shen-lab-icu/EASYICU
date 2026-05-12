@@ -156,6 +156,15 @@ def convert_data_with_progress(data_path: str, database: str, app_context: dict[
             else:
                 normal_files.append(csv_file)
 
+        # 按文件大小升序处理：先快速完成小文件给用户反馈，把整段大文件留到最后单独跑
+        def _size_key(p):
+            try:
+                return p.stat().st_size
+            except OSError:
+                return 0
+        normal_files.sort(key=_size_key)
+        bucket_files.sort(key=lambda pair: _size_key(pair[0]))
+
         detect_msg = f"📊 Detected **{len(normal_files)}** normal + **{len(bucket_files)}** large tables" if lang == 'en' else f"📊 共检测到 **{len(normal_files)}** 个普通表 + **{len(bucket_files)}** 个大表"
         st.markdown(detect_msg)
 
@@ -215,21 +224,26 @@ def convert_data_with_progress(data_path: str, database: str, app_context: dict[
             processing_msg = f"**Bucketing**: `{file_name}` ({file_size_mb:.1f} MB) → {num_buckets} buckets [{current}/{total}]" if lang == 'en' else f"**分桶转换**: `{file_name}` ({file_size_mb:.1f} MB) → {num_buckets} 个桶 [{current}/{total}]"
             status_text.markdown(processing_msg)
 
-            # 检查分桶目录是否已存在
+            # 检查分桶目录是否真正完成（通过 _COMPLETE 标记），无标记则视为不完整需重做
             bucket_dir = csv_file.parent / f"{stem}_bucket"
-            if bucket_dir.exists() and list(bucket_dir.glob('bucket_id=*')):
+            sentinel = bucket_dir / '_COMPLETE'
+            if bucket_dir.exists() and sentinel.exists():
                 skipped += 1
                 with details_container:
                     bucket_exists_msg = "bucket exists" if lang == 'en' else "分桶目录已存在"
                     st.caption(f"⏭️ {file_name} ({bucket_exists_msg})")
             else:
+                # 旧目录无 _COMPLETE 标记时清理再重做，避免半成品蒙混过关
+                if bucket_dir.exists():
+                    import shutil as _shutil
+                    _shutil.rmtree(bucket_dir, ignore_errors=True)
                 try:
                     # AUMC 使用 latin-1 编码（µmol 等特殊字符）
                     _encoding = 'latin-1' if database == 'aumc' else None
+                    # 内存留空 → BucketConfig.__post_init__ 通过 _memory_tier 自适应
                     config = BucketConfig(
                         num_buckets=num_buckets,
                         partition_col=partition_col,
-                        memory_limit='8GB',
                         encoding=_encoding,
                     )
                     result = convert_to_buckets(

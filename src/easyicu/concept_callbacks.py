@@ -2049,6 +2049,103 @@ def _callback_bmi(
 
     return _as_icutbl(merged.reset_index(drop=True), id_columns=id_columns, index_column=None, value_column="bmi")
 
+
+def _callback_anion_gap(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Derived concept: serum anion gap = Na - (Cl + HCO3).
+
+    Inputs are ``na``, ``cl`` and ``bicar`` (all in mEq/L). The three
+    components are joined on (id, time) and the difference is computed
+    row-wise. Rows missing any component are dropped. Values outside a
+    permissive physiological window are filtered to suppress lab noise.
+
+    Normal range: 8-16 mEq/L. Elevated AG (>16) indicates metabolic
+    acidosis with unmeasured anions (lactate, ketones, uremia, toxins);
+    low AG (<4) typically reflects hypoalbuminemia or lab error.
+    """
+    merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="inner")
+    if merged.empty:
+        keep = id_columns + ([index_column] if index_column else [])
+        empty = merged[keep].copy() if all(c in merged.columns for c in keep) else pd.DataFrame(columns=keep)
+        empty["anion_gap"] = pd.Series(dtype="float64")
+        return _as_icutbl(
+            empty,
+            id_columns=id_columns,
+            index_column=index_column,
+            value_column="anion_gap",
+        )
+
+    na = pd.to_numeric(merged["na"], errors="coerce")
+    cl = pd.to_numeric(merged["cl"], errors="coerce")
+    bicar = pd.to_numeric(merged["bicar"], errors="coerce")
+    anion_gap = na - (cl + bicar)
+
+    keep = id_columns + ([index_column] if index_column else [])
+    out = merged[keep].copy()
+    out["anion_gap"] = anion_gap
+    out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=["anion_gap"])
+    # Permissive physiological filter; standard reference is 8-16 mEq/L
+    # but we keep abnormal values up to 40 (severe metabolic acidosis)
+    # and down to -10 (lab error / extreme hypoalbuminemia).
+    out = out[(out["anion_gap"] >= -10) & (out["anion_gap"] <= 50)]
+
+    return _as_icutbl(
+        out.reset_index(drop=True),
+        id_columns=id_columns,
+        index_column=index_column,
+        value_column="anion_gap",
+    )
+
+
+def _callback_pulse_pressure(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Derived concept: arterial pulse pressure = SBP - DBP (mmHg).
+
+    Inputs are ``sbp`` and ``dbp`` (paired vitals, typically recorded at
+    the same timestamp). Rows missing either component are dropped.
+    Values outside a permissive physiological window are filtered.
+
+    Normal range: 30-50 mmHg. Narrow pulse pressure (<25) suggests
+    cardiogenic shock, tamponade, or severe hypovolemia; wide pulse
+    pressure (>60) suggests aortic regurgitation, sepsis vasoplegia,
+    or anemia.
+    """
+    merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="inner")
+    if merged.empty:
+        keep = id_columns + ([index_column] if index_column else [])
+        empty = merged[keep].copy() if all(c in merged.columns for c in keep) else pd.DataFrame(columns=keep)
+        empty["pulse_pressure"] = pd.Series(dtype="float64")
+        return _as_icutbl(
+            empty,
+            id_columns=id_columns,
+            index_column=index_column,
+            value_column="pulse_pressure",
+        )
+
+    sbp = pd.to_numeric(merged["sbp"], errors="coerce")
+    dbp = pd.to_numeric(merged["dbp"], errors="coerce")
+    pp = sbp - dbp
+
+    keep = id_columns + ([index_column] if index_column else [])
+    out = merged[keep].copy()
+    out["pulse_pressure"] = pp
+    out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=["pulse_pressure"])
+    # Permissive physiological filter; extreme but plausible values kept
+    # (very narrow PP in shock, very wide PP in severe AR).
+    out = out[(out["pulse_pressure"] >= 0) & (out["pulse_pressure"] <= 200)]
+
+    return _as_icutbl(
+        out.reset_index(drop=True),
+        id_columns=id_columns,
+        index_column=index_column,
+        value_column="pulse_pressure",
+    )
+
+
 def _callback_avpu(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -2850,17 +2947,34 @@ def _callback_mews(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    """Calculate MEWS score with 24-hour LOCF as in R ricu."""
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["mews"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="mews")
+
+    # Apply 24-hour LOCF to input columns (matching R ricu slide + locf)
+    # R ricu: cnc <- c("hr", "avpu", "temp", "sbp", "resp")
+    #         slide(res, lapply(.SD, locf), before = win_length, .SDcols = cnc)
+    value_cols = ["hr", "avpu", "temp", "sbp", "resp"]
+    data = _apply_locf_24h(data, id_columns, index_column, value_cols, win_length_hours=24.0)
+
+    # Handle avpu NaN: R ricu fifelse(x == "A", 0L, 3L) returns NA for NA input,
+    # and rowSums(.SD, na.rm=TRUE) treats NA as 0. So we preprocess NaN -> "A".
+    avpu_col = data.get("avpu")
+    if avpu_col is not None:
+        avpu_col = avpu_col.astype(str)
+        # Treat NaN (converted to "nan") and empty as "A" (score 0)
+        avpu_col = avpu_col.replace({"nan": "A", "None": "A", "": "A", "<NA>": "A"})
+    else:
+        avpu_col = pd.Series("A", index=data.index)
 
     result = mews_score(
         sbp=pd.to_numeric(data.get("sbp")),
         hr=pd.to_numeric(data.get("hr")),
         resp=pd.to_numeric(data.get("resp")),
         temp=pd.to_numeric(data.get("temp")),
-        avpu=data.get("avpu").astype(str),
+        avpu=avpu_col,
     )
     data["mews"] = result
     cols = id_columns + ([index_column] if index_column else []) + ["mews"]
@@ -2870,10 +2984,39 @@ def _callback_news(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    """Calculate NEWS score with 24-hour LOCF as in R ricu."""
     data, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
     if data.empty:
         cols = id_columns + ([index_column] if index_column else []) + ["news"]
         return _as_icutbl(pd.DataFrame(columns=cols), id_columns=id_columns, index_column=index_column, value_column="news")
+
+    # R ricu: res <- res[is.na(get("supp_o2")), c("supp_o2") := FALSE]
+    # Fill NA supp_o2 with FALSE BEFORE LOCF (so TRUE values propagate, but NA → FALSE stays FALSE)
+    if "supp_o2" in data.columns:
+        data["supp_o2"] = data["supp_o2"].fillna(False)
+
+    # Apply 24-hour LOCF to input columns (matching R ricu slide + locf)
+    # R ricu: cnc <- c("hr", "avpu", "supp_o2", "o2sat", "temp", "sbp", "resp")
+    #         slide(res, lapply(.SD, locf), before = win_length, .SDcols = cnc)
+    value_cols = ["hr", "avpu", "supp_o2", "o2sat", "temp", "sbp", "resp"]
+    data = _apply_locf_24h(data, id_columns, index_column, value_cols, win_length_hours=24.0)
+
+    # Handle avpu NaN: R ricu fifelse(x == "A", 0L, 3L) returns NA for NA input,
+    # and rowSums(.SD, na.rm=TRUE) treats NA as 0. So we preprocess NaN -> "A".
+    avpu_col = data.get("avpu")
+    if avpu_col is not None:
+        avpu_col = avpu_col.astype(str)
+        # Treat NaN (converted to "nan") and empty as "A" (score 0)
+        avpu_col = avpu_col.replace({"nan": "A", "None": "A", "": "A", "<NA>": "A"})
+    else:
+        avpu_col = pd.Series("A", index=data.index)
+
+    # supp_o2 should already be filled with False for NA values (done before LOCF)
+    supp_o2_col = data.get("supp_o2")
+    if supp_o2_col is not None:
+        supp_o2_col = supp_o2_col.astype(bool)
+    else:
+        supp_o2_col = pd.Series(False, index=data.index)
 
     result = news_score(
         resp=pd.to_numeric(data.get("resp")),
@@ -2881,8 +3024,8 @@ def _callback_news(
         temp=pd.to_numeric(data.get("temp")),
         sbp=pd.to_numeric(data.get("sbp")),
         hr=pd.to_numeric(data.get("hr")),
-        supp_o2=data.get("supp_o2").where(data.get("supp_o2").notna(), False).astype(bool),
-        avpu=data.get("avpu").astype(str),
+        supp_o2=supp_o2_col,
+        avpu=avpu_col,
         keep_components=False,
     )
     data["news"] = result
@@ -5193,12 +5336,70 @@ def _callback_vaso60(
         rate_df[rate_index_col] = pd.to_datetime(rate_df[rate_index_col], errors='coerce')
         dur_df[dur_index_col] = pd.to_datetime(dur_df[dur_index_col], errors='coerce')
 
-    # 🔧 FIX for ricu compatibility: R ricu applies change_interval (re_time with floor)
-    # to sub-concepts BEFORE passing them to the vaso60 callback.
-    # This means the start times are floored to whole hours.
-    # We need to replicate this behavior to match ricu's join conditions.
-    rate_df[rate_index_col] = rate_df[rate_index_col].dt.floor('h')
-    dur_df[dur_index_col] = dur_df[dur_index_col].dt.floor('h')
+    # 🔧 FIX for ricu compatibility (confirmed from R source callback-cncpt.R, callback-itm.R):
+    # R ricu pipeline: hirid_rate_kg → expand_intervals(LOCF per infusion) → MEDIAN per
+    # (patient, minute) → vaso60 [non-equi join, change_interval(1h), aggregate("max")].
+    # expand_intervals = create_intervals(overhang=1h, max_len=6h) + expand(step=1min)
+    # Since EasyICU loads sub-concepts with aggregate=False, we replicate this here.
+    rate_df[rate_index_col] = rate_df[rate_index_col].dt.floor('min')
+
+    # Detect infusion group column for per-infusion LOCF
+    _infusion_col = None
+    for _candidate in ['infusionid', 'orderid', 'linkorderid']:
+        if _candidate in rate_df.columns:
+            _infusion_col = _candidate
+            break
+
+    if _infusion_col is not None and len(rate_df) > 0:
+        # Vectorized per-infusion LOCF expansion at minute level
+        # (R ricu create_intervals overhang=1h, max_len=6h + expand step=1min)
+        _overhang_min = 60
+        _max_len_min = 360
+        _step = pd.Timedelta(minutes=1)
+        _group_cols = id_columns + [_infusion_col]
+        rate_df = rate_df.sort_values(_group_cols + [rate_index_col]).reset_index(drop=True)
+        # next_time per group
+        _next_time = rate_df.groupby(_group_cols, dropna=False)[rate_index_col].shift(-1)
+        _gap_min = (_next_time - rate_df[rate_index_col]).dt.total_seconds() / 60.0
+        # For last row in group: overhang; otherwise min(gap-1, max_len-1, overhang-1)
+        _dur_min = np.where(
+            _gap_min.isna(),
+            _overhang_min - 1,
+            np.minimum.reduce([
+                _gap_min.fillna(0).values - 1,
+                np.full(len(rate_df), _max_len_min - 1, dtype=float),
+                np.full(len(rate_df), _overhang_min - 1, dtype=float),
+            ]),
+        )
+        _dur_min = np.maximum(_dur_min, 0).astype(np.int64)
+        _repeat = (_dur_min + 1).astype(np.int64)  # minutes per row (inclusive)
+        _total = int(_repeat.sum())
+        if _total > 0:
+            # Fully vectorized repeat + per-row 0..k-1 offsets
+            _idx_repeat = np.repeat(np.arange(len(rate_df)), _repeat)
+            # offsets = position within each repeat group (0, 1, ..., _repeat[i]-1)
+            _group_start = np.repeat(np.cumsum(_repeat) - _repeat, _repeat)
+            _offsets = np.arange(_total) - _group_start
+            _expanded = rate_df.iloc[_idx_repeat].reset_index(drop=True)
+            _expanded[rate_index_col] = _expanded[rate_index_col] + pd.to_timedelta(_offsets, unit='m')
+            rate_df = _expanded
+        # Drop infusion column — R ricu expand drops grp_var
+        if _infusion_col in rate_df.columns:
+            rate_df = rate_df.drop(columns=[_infusion_col])
+
+        # MEDIAN per (patient, minute) — ONLY when LOCF was applied.
+        # For LOCF-expanded data, multiple values at same minute = concurrent
+        # overlapping infusions → MEDIAN gives the "typical" rate (R ricu behavior).
+        # For non-LOCF DBs (SIC/MIMIC/etc.), multiple values at same time represent
+        # sequential rate changes → keep them and let final MAX aggregation pick.
+        rate_df = (
+            rate_df.groupby(id_columns + [rate_index_col], dropna=False)[rate_col]
+            .median()
+            .reset_index()
+        )
+    # R ricu's vaso60 uses minute-precision start: end = start + duration
+    dur_df[dur_index_col] = dur_df[dur_index_col].dt.floor('min')
+    dur_df['__dur_time_min'] = dur_df[dur_index_col]
 
     durations = dur_df[dur_col]
     if pd.api.types.is_timedelta64_dtype(durations):
@@ -5254,8 +5455,9 @@ def _callback_vaso60(
             value_column=ctx.concept_name,
         )
 
+    # R ricu vaso60: start at minute precision, end = start + duration
     dur_df["__start"] = dur_df[dur_index_col]
-    dur_df["__end"] = dur_df["__start"] + dur_df["__duration"]
+    dur_df["__end"] = dur_df[dur_index_col] + dur_df["__duration"]
 
     max_gap = pd.Timedelta(minutes=5)
 
@@ -5461,6 +5663,8 @@ def _callback_vaso60(
     grouped = grouped.drop(columns=[rate_col])
 
     if final_interval is not None and not grouped.empty:
+        # 🔧 R ricu's vaso60: change_interval(res, final_int) then aggregate(res, "max")
+        # = floor to hours + MAX per (patient, hour). No LOCF, no MEDIAN.
         grouped[rate_index_col] = grouped[rate_index_col].dt.floor(final_interval)
         grouped = (
             grouped.groupby(id_columns + [rate_index_col], dropna=False)[ctx.concept_name]
@@ -6696,6 +6900,8 @@ def _callback_simple_passthrough(
 
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "bmi": _callback_bmi,
+    "anion_gap": _callback_anion_gap,
+    "pulse_pressure": _callback_pulse_pressure,
     "avpu": _callback_avpu,
     "norepi_equiv": _callback_norepi_equiv,
     "gcs": _callback_gcs,

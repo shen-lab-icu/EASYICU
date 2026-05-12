@@ -511,36 +511,42 @@ def sep3(
     sofa_prep = sofa.copy()
     sofa_prep['_sofa_time'] = sofa_prep[index_col]
     
-    # ========== 向量化 merge 替代 iterrows() ==========
-    # 使用 cross join + filter 的方式，对于中等数据集效率更高
-    
-    # 首先按 id_cols 分组计算 delta_sofa
-    # 优化：对于 delta_cummin，直接用向量化操作避免 transform 的开销
+    # ========== R ricu: by = .EACHI ==========
+    # Compute delta_sofa WITHIN each SI window (not over the full patient series).
+    # Order: merge sofa with SI events → filter to SI window → compute delta within window.
+
     sofa_prep = sofa_prep.sort_values(id_cols + [index_col])
-    
-    if delta_fun is delta_cummin or delta_fun.__name__ == 'delta_cummin':
-        # 向量化计算 delta_cummin: x - cummin(x) per group
-        # 使用 expanding().min() 代替 cummin() 可以利用分组
-        integer_max = 2147483647
-        sofa_filled = sofa_prep['sofa'].fillna(integer_max)
-        # 计算每组内的 cummin
-        cummin_vals = sofa_filled.groupby([sofa_prep[c] for c in id_cols], sort=False).cummin()
-        sofa_prep['_delta_sofa'] = sofa_prep['sofa'] - cummin_vals
-        # NaN 的位置保持 NaN
-        sofa_prep.loc[sofa_prep['sofa'].isna(), '_delta_sofa'] = np.nan
-    else:
-        # 其他 delta 函数使用 transform
-        sofa_prep['_delta_sofa'] = sofa_prep.groupby(id_cols)['sofa'].transform(delta_fun)
-    
-    # Merge SI events with SOFA on id_cols
+
+    # Merge SI events with SOFA on id_cols (cross within patient)
     merged = si_events.merge(sofa_prep, on=id_cols, how='inner', suffixes=('_si', '_sofa'))
-    
+
     if merged.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])
-    
+
     # Filter by time window: _si_lwr <= _sofa_time <= _si_upr
     in_window = (merged['_sofa_time'] >= merged['_si_lwr']) & (merged['_sofa_time'] <= merged['_si_upr'])
     merged = merged[in_window]
+
+    if merged.empty:
+        return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])
+
+    # Compute delta_sofa per (patient, SI window). For si_window in {"first","last"} there's one SI per
+    # patient, so id_cols suffices. For si_window="any", group by (id, _si_time).
+    if si_window == 'any':
+        delta_group_cols = id_cols + ['_si_time']
+    else:
+        delta_group_cols = id_cols
+
+    merged = merged.sort_values(delta_group_cols + ['_sofa_time']).reset_index(drop=True)
+
+    if delta_fun is delta_cummin or delta_fun.__name__ == 'delta_cummin':
+        integer_max = 2147483647
+        sofa_filled = merged['sofa'].fillna(integer_max)
+        cummin_vals = sofa_filled.groupby([merged[c] for c in delta_group_cols], sort=False).cummin()
+        merged['_delta_sofa'] = merged['sofa'] - cummin_vals
+        merged.loc[merged['sofa'].isna(), '_delta_sofa'] = np.nan
+    else:
+        merged['_delta_sofa'] = merged.groupby(delta_group_cols)['sofa'].transform(delta_fun)
     
     if merged.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])

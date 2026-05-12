@@ -1509,7 +1509,25 @@ def _infer_numeric_time_unit(values: pd.Series, index_col: str | None = None) ->
         "intakeoutputentryoffset",
         "measuredat_minutes",
     }
+
+    # 🔧 FIX 2026-05-11: AUMC 的 measuredat_minutes 在多处被改名为 charttime（值仍为分钟），
+    # 导致按 hour_like 解释会溢出 pd.Timedelta（>106751 days = ~292 years）。
+    # 当 max(|values|) 远超合理小时范围（>10 万 = 11 年）时，回退到分钟解释。
+    # 这处理了所有 AUMC sofa2 链路上的时间单位 bug。
+    PD_TIMEDELTA_MAX_HOURS = 2_500_000  # pd.Timedelta.max ≈ 2.56e6 hours
+    REASONABLE_HOURS_THRESHOLD = 100_000  # >11 years in hours is implausible for ICU
+
     if name in hour_like:
+        try:
+            _abs_max = pd.to_numeric(values, errors="coerce").abs().max()
+            if pd.notna(_abs_max) and _abs_max > REASONABLE_HOURS_THRESHOLD:
+                # Values are likely in minutes (e.g. AUMC measuredat_minutes renamed to charttime).
+                # If max as minutes still exceeds threshold, try seconds; otherwise minutes.
+                if _abs_max > REASONABLE_HOURS_THRESHOLD * 60:
+                    return "s"
+                return "min"
+        except Exception:
+            pass
         return "h"
     if name in minute_like or name.endswith("offset"):
         return "min"
