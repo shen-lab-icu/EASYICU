@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.cohort_filters import _read_table, _resolve_table_path
+from easyicu.webapp.data_paths import find_database_path
 from easyicu.webapp.services import count_unique_concepts, normalize_column_name
 
 
@@ -395,20 +397,17 @@ def apply_cohort_filter(data_path, database, candidate_ids=None, app_context: di
     subject_col = meta['subject_col']
 
     # Load ICU stays table
-    icu_path = data_path / meta['icu_table']
-    if not icu_path.exists():
+    icu_path = _resolve_table_path(data_path, database, meta['icu_table'])
+    if not icu_path:
         # Try fallback path (e.g., HiRID general_table.csv)
         fallback = meta.get('icu_table_fallback')
         if fallback:
-            icu_path = data_path / fallback
-        if not icu_path.exists():
-            print(f"[COHORT] ICU table not found: {icu_path}")
+            icu_path = _resolve_table_path(data_path, database, fallback) or (data_path / fallback)
+        if not icu_path or not icu_path.exists():
+            print(f"[COHORT] ICU table not found: {data_path / meta['icu_table']}")
             return None
 
-    if str(icu_path).endswith('.csv') or str(icu_path).endswith('.csv.gz'):
-        icu_df = pd.read_csv(icu_path)
-    else:
-        icu_df = pd.read_parquet(icu_path)
+    icu_df = _read_table(icu_path)
 
     # Normalize column names to lowercase for comparison (except for SICdb)
     if database != 'sic':
@@ -423,15 +422,15 @@ def apply_cohort_filter(data_path, database, candidate_ids=None, app_context: di
     patient_df = None
     admission_df = None
     if meta.get('patient_table'):
-        pt_path = data_path / meta['patient_table']
-        if pt_path.exists():
-            patient_df = pd.read_parquet(pt_path)
+        pt_path = _resolve_table_path(data_path, database, meta['patient_table'])
+        if pt_path:
+            patient_df = _read_table(pt_path)
             if database != 'sic':
                 patient_df.columns = [c.lower() for c in patient_df.columns]
     if meta.get('admission_table'):
-        adm_path = data_path / meta['admission_table']
-        if adm_path.exists():
-            admission_df = pd.read_parquet(adm_path)
+        adm_path = _resolve_table_path(data_path, database, meta['admission_table'])
+        if adm_path:
+            admission_df = _read_table(adm_path)
             if database != 'sic':
                 admission_df.columns = [c.lower() for c in admission_df.columns]
 
@@ -1595,6 +1594,21 @@ def load_data(app_context: dict[str, Any] | None = None):
             st.error(err_msg)
 
 
+def _select_quick_preview_concepts(selected: list[str], limit: int = 5) -> list[str]:
+    """Prefer lightweight raw concepts so Quick Preview remains quick."""
+    if not selected:
+        return []
+    priority = [
+        'hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp',
+        'crea', 'wbc', 'lact', 'glu', 'plt',
+    ]
+    selected_list = list(selected)
+    picked = [concept for concept in priority if concept in selected_list]
+    if len(picked) < limit:
+        picked.extend([concept for concept in selected_list if concept not in picked])
+    return picked[:limit]
+
+
 def load_data_for_preview(max_patients: int = 50, app_context: dict[str, Any] | None = None):
     """Load limited data for preview visualization (memory-friendly version)."""
     if app_context is not None:
@@ -1620,22 +1634,26 @@ def load_data_for_preview(max_patients: int = 50, app_context: dict[str, Any] | 
         load_start = time.time()
         data = {}
 
-        # 只加载前5个concept作为预览
-        preview_concepts = selected[:5]
+        # 只加载少量轻量概念作为预览。选中 ALL 时，列表开头通常是
+        # SOFA/Sepsis 派生概念，直接预览它们会让 Quick Preview 变慢。
+        preview_concepts = _select_quick_preview_concepts(selected, limit=5)
+        database = st.session_state.get('database', 'miiv')
+        raw_data_path = Path(st.session_state.data_path)
+        resolved_data_path = Path(find_database_path(str(raw_data_path), database))
+        if not resolved_data_path.exists():
+            resolved_data_path = raw_data_path
 
         # 先选max_patients个患者，再对这些患者做人群筛选
         patient_ids_filter = None
         id_col = 'stay_id'
         try:
-            data_path = Path(st.session_state.data_path)
-            database = st.session_state.get('database', 'miiv')
             id_col_map = {'miiv': 'stay_id', 'eicu': 'patientunitstayid', 'aumc': 'admissionid', 'hirid': 'patientid', 'mimic': 'icustay_id', 'sic': 'CaseID'}
             id_col = id_col_map.get(database, 'stay_id')
 
             # Step 1: 先选max_patients个患者作为候选集
             candidate_ids = None
             for f in _get_patient_id_table_files(database):
-                fp = data_path / f
+                fp = resolved_data_path / f
                 if fp.exists():
                     icustays_df = pd.read_parquet(fp, columns=[id_col] if id_col else None)
                     if id_col in icustays_df.columns:
@@ -1644,7 +1662,7 @@ def load_data_for_preview(max_patients: int = 50, app_context: dict[str, Any] | 
 
             # Step 2: 在候选集上应用人群筛选
             try:
-                data_path_for_cohort = st.session_state.data_path
+                data_path_for_cohort = str(resolved_data_path)
                 database_for_cohort = st.session_state.get('database', 'miiv')
                 cohort_result = apply_cohort_filter(data_path_for_cohort, database_for_cohort, candidate_ids=candidate_ids)
                 if cohort_result is not None:
@@ -1672,7 +1690,7 @@ def load_data_for_preview(max_patients: int = 50, app_context: dict[str, Any] | 
 
         try:
             load_kwargs = {
-                'data_path': st.session_state.data_path,
+                'data_path': str(resolved_data_path),
                 'database': st.session_state.get('database'),
                 'concepts': preview_concepts,
                 'verbose': False,
@@ -1710,11 +1728,15 @@ def load_data_for_preview(max_patients: int = 50, app_context: dict[str, Any] | 
             for concept in preview_concepts:
                 try:
                     df = load_concepts(
-                        data_path=st.session_state.data_path,
+                        data_path=str(resolved_data_path),
                         database=st.session_state.get('database'),
                         concepts=[concept],
+                        patient_ids=patient_ids_filter,
                         verbose=False,
                         merge=True,
+                        concept_workers=1,
+                        parallel_workers=1,
+                        parallel_backend="thread",
                         **_get_sepsis_runtime_options(),
                     )
                     if hasattr(df, 'to_pandas'):

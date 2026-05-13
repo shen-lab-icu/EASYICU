@@ -50,6 +50,7 @@ import re
 import sys
 import traceback
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
@@ -236,8 +237,7 @@ def _hide_prefilled_directory_text(input_key: str, mirrored_value: str) -> None:
     current = str(st.session_state.get(input_key, "") or "")
     if pending_key in st.session_state:
         return
-    looks_like_abs = current.startswith("/") or bool(re.match(r"^[A-Za-z]:[\\/]", current)) or current.startswith("~")
-    if looks_like_abs or (mirrored_value and current == str(mirrored_value)):
+    if mirrored_value and current == str(mirrored_value):
         st.session_state[input_key] = ""
 
 
@@ -457,17 +457,30 @@ def _filter_ids_from_module_file(
     return set(df.loc[mask, file_id].dropna().tolist())
 
 
-def _reduce_module_file_to_stay_level(
+def _read_module_file(
     *,
     path: Path,
     folder: Path,
     id_col: str,
     keep_ids: Optional[Set[Any]],
     used_columns: Set[str],
-) -> Optional[pd.DataFrame]:
+    canonical_time: str = "charttime",
+) -> Optional[Tuple[pd.DataFrame, bool]]:
+    """Read one module parquet and return ``(df, is_temporal)``.
+
+    * **Temporal** files have at least one time column.  The first detected
+      time column is renamed to *canonical_time* so all temporal files share
+      the same key name when merged.
+    * **Static** files (demographics, outcomes, …) have no time column and
+      return a single row per patient.
+
+    Returns ``None`` when the file cannot yield usable columns.
+    """
     df = pd.read_parquet(path)
     if df.empty:
         return None
+
+    # --- resolve id column ------------------------------------------------
     file_id = id_col if id_col in df.columns else None
     if file_id is None:
         ids = _detect_id_columns([str(c) for c in df.columns])
@@ -478,32 +491,46 @@ def _reduce_module_file_to_stay_level(
     if keep_ids is not None:
         df = df[df[file_id].isin(keep_ids)]
         if df.empty:
-            return pd.DataFrame({id_col: list(keep_ids)})
+            return None
 
+    # --- detect time column -----------------------------------------------
     lower = {str(c): str(c).lower() for c in df.columns}
     time_cols = [c for c in df.columns if lower[str(c)] in _TIME_COLUMN_NAMES]
+    is_temporal = len(time_cols) > 0
+
+    # --- value columns (exclude id + all time cols) -----------------------
     excluded = set(_detect_id_columns([str(c) for c in df.columns])) | set(time_cols)
     value_cols = [c for c in df.columns if c not in excluded and c != file_id]
     if not value_cols:
         return None
 
-    if time_cols:
+    prefix = _safe_column_prefix(path, folder)
+    generic = {"value", "valuenum", "amount", "result", "measurement"}
+
+    if is_temporal:
+        # Keep raw rows; rename id + first time col, then deduplicate value cols
+        time_col = time_cols[0]
+        keep = [file_id, time_col] + value_cols
+        sub = df[keep].dropna(subset=[file_id]).copy()
+        sub = sub.rename(columns={file_id: id_col, time_col: canonical_time})
+        # Sort by time so later duplicates are more recent
         try:
-            df = df.sort_values(time_cols)
+            sub = sub.sort_values([id_col, canonical_time])
         except Exception:
             pass
-    sub = (
-        df[[file_id] + value_cols]
-        .dropna(subset=[file_id])
-        .groupby(file_id, as_index=False)
-        .last()
-    )
-    if file_id != id_col:
-        sub = sub.rename(columns={file_id: id_col})
+    else:
+        # Static: one row per patient (take last non-null)
+        sub = (
+            df[[file_id] + value_cols]
+            .dropna(subset=[file_id])
+            .groupby(file_id, as_index=False)
+            .last()
+        )
+        if file_id != id_col:
+            sub = sub.rename(columns={file_id: id_col})
 
-    prefix = _safe_column_prefix(path, folder)
+    # --- rename value columns to avoid clashes ----------------------------
     rename: Dict[str, str] = {}
-    generic = {"value", "valuenum", "amount", "result", "measurement"}
     for col in value_cols:
         col_text = str(col)
         if len(value_cols) == 1 and col_text.lower() in generic:
@@ -515,7 +542,8 @@ def _reduce_module_file_to_stay_level(
         else:
             proposed = col_text
         rename[col] = _unique_column_name(proposed, used_columns)
-    return sub.rename(columns=rename)
+    sub = sub.rename(columns=rename)
+    return sub, is_temporal
 
 
 def _build_stay_level_from_module_folder(
@@ -526,6 +554,18 @@ def _build_stay_level_from_module_folder(
     filter_spec: Optional[Tuple[Path, str, str, str]] = None,
     join_how: str = "outer",
 ) -> pd.DataFrame:
+    """Merge selected module parquet files into a single cohort dataframe.
+
+    Merging strategy:
+    * **Temporal files** (contain a time column such as ``charttime``,
+      ``starttime``, etc.) are merged on ``[id_col, charttime]`` so that
+      time-points from different files are properly aligned.  All detected
+      time column names are normalised to ``charttime``.
+    * **Static files** (demographics, outcomes — no time column) are
+      broadcast onto the temporal result by merging on ``id_col`` alone.
+    * If *all* selected files are static, they are merged purely on
+      ``id_col`` and the result is a stay-level wide table.
+    """
     keep_ids: Optional[Set[Any]] = None
     if filter_spec is not None:
         filter_path, filter_col, mode, value = filter_spec
@@ -539,36 +579,74 @@ def _build_stay_level_from_module_folder(
         if not keep_ids:
             return pd.DataFrame(columns=[id_col])
 
-    used_columns: Set[str] = {id_col}
-    merged: Optional[pd.DataFrame] = None
-    how = "inner" if join_how == "inner" else "outer"
+    canonical_time = "charttime"
+    used_columns: Set[str] = {id_col, canonical_time}
+
+    temporal_dfs: List[pd.DataFrame] = []
+    static_dfs: List[pd.DataFrame] = []
+
     for path in selected_files:
-        sub = _reduce_module_file_to_stay_level(
+        result = _read_module_file(
             path=path,
             folder=folder,
             id_col=id_col,
             keep_ids=keep_ids,
             used_columns=used_columns,
+            canonical_time=canonical_time,
         )
-        if sub is None:
+        if result is None:
             continue
-        merged = sub if merged is None else merged.merge(sub, on=id_col, how=how)
+        sub, is_temporal = result
+        if is_temporal:
+            temporal_dfs.append(sub)
+        else:
+            static_dfs.append(sub)
 
-    if merged is None:
+    # --- merge temporal files on [id_col, canonical_time] -----------------
+    temporal_merged: Optional[pd.DataFrame] = None
+    for sub in temporal_dfs:
+        if temporal_merged is None:
+            temporal_merged = sub
+        else:
+            temporal_merged = temporal_merged.merge(
+                sub, on=[id_col, canonical_time], how="outer"
+            )
+
+    # --- merge static files on id_col only --------------------------------
+    static_merged: Optional[pd.DataFrame] = None
+    for sub in static_dfs:
+        if static_merged is None:
+            static_merged = sub
+        else:
+            static_merged = static_merged.merge(sub, on=id_col, how="outer")
+
+    # --- combine ----------------------------------------------------------
+    if temporal_merged is not None and static_merged is not None:
+        # Broadcast static columns onto every time-point row (left join keeps
+        # all temporal rows, adding static attributes per patient)
+        merged = temporal_merged.merge(static_merged, on=id_col, how="left")
+    elif temporal_merged is not None:
+        merged = temporal_merged
+    elif static_merged is not None:
+        merged = static_merged
+    else:
         merged = pd.DataFrame({id_col: sorted(keep_ids) if keep_ids is not None else []})
+
     if keep_ids is not None:
         merged = merged[merged[id_col].isin(keep_ids)]
-    cols = [id_col] + [c for c in merged.columns if c != id_col]
-    return merged[cols].reset_index(drop=True)
+
+    # Put id first, then canonical time (if present), then remaining cols
+    first_cols = [id_col]
+    if canonical_time in merged.columns:
+        first_cols.append(canonical_time)
+    rest = [c for c in merged.columns if c not in first_cols]
+    return merged[first_cols + rest].reset_index(drop=True)
 
 
 def _default_module_selection(labels: Sequence[str]) -> List[str]:
-    priority = (
-        "demographics", "outcome", "death", "sofa", "sepsis", "sep3",
-        "vitals", "lact", "map",
-    )
-    selected = [label for label in labels if any(token in label.lower() for token in priority)]
-    return selected[:10] or list(labels[:6])
+    # Default to all available modules so the user doesn't have to
+    # manually tick every file after selecting a folder.
+    return list(labels)
 
 
 def _available_extract_modules() -> Dict[str, List[str]]:
@@ -632,6 +710,16 @@ def _resolve_llm(
             kwargs["base_url"] = base_url
         if extra_headers:
             kwargs["extra_headers"] = dict(extra_headers)
+        # Qwen3 models default to thinking (chain-of-thought) mode on most
+        # local servers (vLLM, SGLang, etc.).  In thinking mode the model
+        # may emit only a <think>…</think> block with no trailing answer,
+        # which causes the JSON parser to receive an empty string.  Disable
+        # thinking at the API level so the model responds directly.
+        if model and model.lower().startswith("qwen3"):
+            kwargs["extra_body"] = {
+                "enable_thinking": False,
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
         return handles["OpenAIClient"](**kwargs)
     raise RuntimeError(f"Unknown LLM choice: {llm_choice}")
 
@@ -654,7 +742,11 @@ def _run_pipeline(
 ):
     """Invoke the pipeline; return the :class:`PipelineResult`."""
     pipeline = handles["ResearchAgentPipeline"](
-        workdir=workdir, llm=llm, disable_icu_context=disable_icu_context,
+        workdir=workdir,
+        llm=llm,
+        disable_icu_context=disable_icu_context,
+        enable_deterministic_planner_fallback=True,
+        enable_deterministic_code_fallback=True,
     )
     kwargs: Dict[str, Any] = dict(
         cohort=cohort,
@@ -688,6 +780,247 @@ _FINDING_BADGE = {
     "warning": "🟡",
     "error": "🔴",
 }
+
+_RA_TABLE_EXTS = {".csv", ".tsv", ".parquet", ".pq", ".feather"}
+_RA_RASTER_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+_RA_FIGURE_EXTS = _RA_RASTER_EXTS | {".svg", ".pdf", ".tiff", ".tif", ".pptx"}
+_RA_DEBUG_EXTS = {".json", ".jsonl", ".log", ".txt", ".py", ".r"}
+_RA_DEBUG_KINDS = {"log", "code"}
+
+
+def _read_json_file(path: Path) -> Dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _is_user_facing_step_artifact(rec: Dict[str, Any]) -> bool:
+    """Return true for artefacts that belong in the step-results view."""
+    rel = str(rec.get("relative_path") or "")
+    suffix = Path(rel).suffix.lower()
+    kind = str(rec.get("kind") or "").lower()
+    if kind in {"figure", "table"}:
+        return True
+    if suffix in _RA_FIGURE_EXTS or suffix in _RA_TABLE_EXTS:
+        return True
+    return False
+
+
+def _is_debug_artifact(rec: Dict[str, Any]) -> bool:
+    """Return true for raw runtime artefacts better suited for Debug."""
+    rel = str(rec.get("relative_path") or "")
+    suffix = Path(rel).suffix.lower()
+    kind = str(rec.get("kind") or "").lower()
+    if kind in _RA_DEBUG_KINDS:
+        return True
+    if suffix in _RA_DEBUG_EXTS:
+        return True
+    return not _is_user_facing_step_artifact(rec)
+
+
+def _manifest_path_for_run(run_dir: Path) -> Optional[Path]:
+    final_path = run_dir / "manifest.json"
+    partial_path = run_dir / "manifest_partial.json"
+    if final_path.exists():
+        return final_path
+    if partial_path.exists():
+        return partial_path
+    return None
+
+
+def _load_run_manifest(run_dir: Path) -> Tuple[Dict[str, Any], Optional[Path], bool]:
+    manifest_path = _manifest_path_for_run(run_dir)
+    if manifest_path is None:
+        return {}, None, False
+    manifest = _read_json_file(manifest_path)
+    return manifest, manifest_path, manifest_path.name == "manifest_partial.json"
+
+
+def _safe_step_status(record: Dict[str, Any]) -> str:
+    status = str(record.get("status") or "").strip()
+    if status:
+        return status
+    if record.get("step_summary"):
+        return "ok"
+    return "running"
+
+
+_RA_MILESTONE_STAGES = {"run", "cohort", "context", "audit", "hypothesis", "plan", "step", "literature"}
+
+
+def _progress_event_line(event: Dict[str, Any]) -> str:
+    status = event.get("status")
+    badge = {"complete": "✅", "error": "🔴", "paused": "⏸️"}.get(status, "⚙️")
+    stage = str(event.get("stage") or "step")
+    return f"{badge} **{stage}** — {event.get('message', '')}"
+
+
+def _run_summary_from_manifest(
+    run_dir: Path,
+    manifest: Dict[str, Any],
+    *,
+    partial: bool,
+) -> Dict[str, Any]:
+    records = [r for r in manifest.get("per_step_records", []) if isinstance(r, dict)]
+    evidence = [r for r in manifest.get("evidence", []) if isinstance(r, dict)]
+    findings = [f for f in manifest.get("findings", []) if isinstance(f, dict)]
+    statuses = [_safe_step_status(r) for r in records]
+    return {
+        "run_id": str(manifest.get("run_id") or run_dir.name),
+        "run_dir": run_dir,
+        "status": "partial" if partial else "complete",
+        "started_at": str(manifest.get("started_at") or ""),
+        "finished_at": str(manifest.get("finished_at") or ""),
+        "question": str(manifest.get("research_question") or ""),
+        "step_total": len(records),
+        "step_ok": sum(1 for s in statuses if s == "ok"),
+        "step_failed": sum(1 for s in statuses if "fail" in s or "error" in s or "blocked" in s),
+        "finding_errors": sum(1 for f in findings if f.get("severity") == "error"),
+        "finding_warnings": sum(1 for f in findings if f.get("severity") == "warning"),
+        "evidence_count": len(evidence),
+        "figure_count": sum(1 for r in evidence if r.get("kind") == "figure"),
+        "table_count": sum(1 for r in evidence if r.get("kind") == "table"),
+        "manifest_partial": partial,
+    }
+
+
+def _scan_research_agent_runs(workdir: Path, *, limit: int = 20) -> List[Dict[str, Any]]:
+    if not workdir.exists() or not workdir.is_dir():
+        return []
+    rows: List[Dict[str, Any]] = []
+    for run_dir in sorted(workdir.glob("run_*"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not run_dir.is_dir():
+            continue
+        manifest, _manifest_path, partial = _load_run_manifest(run_dir)
+        if not manifest:
+            continue
+        rows.append(_run_summary_from_manifest(run_dir, manifest, partial=partial))
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _evidence_by_id(manifest: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for rec in manifest.get("evidence", []) or []:
+        if isinstance(rec, dict) and rec.get("evidence_id"):
+            out[str(rec["evidence_id"])] = rec
+    return out
+
+
+def _evidence_for_step(record: Dict[str, Any], manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
+    step_id = str(record.get("step_id") or "")
+    by_id = _evidence_by_id(manifest)
+    seen: Set[str] = set()
+    out: List[Dict[str, Any]] = []
+    for evidence_id in record.get("evidence_ids") or []:
+        rec = by_id.get(str(evidence_id))
+        if rec is not None and rec.get("evidence_id") not in seen:
+            seen.add(str(rec.get("evidence_id")))
+            out.append(rec)
+    for rec in manifest.get("evidence", []) or []:
+        if (
+            isinstance(rec, dict)
+            and step_id
+            and rec.get("produced_by_step") == step_id
+            and rec.get("evidence_id") not in seen
+        ):
+            seen.add(str(rec.get("evidence_id")))
+            out.append(rec)
+    return out
+
+
+def _json_payload_for_evidence(
+    run_dir: Path,
+    manifest: Dict[str, Any],
+    evidence_id: str,
+    *,
+    fallback_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Read a structured JSON artefact by evidence id or fallback filename."""
+    rec = _evidence_by_id(manifest).get(evidence_id)
+    candidate_paths: List[Path] = []
+    if rec and rec.get("relative_path"):
+        candidate_paths.append(run_dir / str(rec["relative_path"]))
+    if fallback_name:
+        candidate_paths.append(run_dir / fallback_name)
+    for path in candidate_paths:
+        if path.exists():
+            payload = _read_json_file(path)
+            if payload:
+                return payload
+    return {}
+
+
+def _scalar_summary_items(summary: Dict[str, Any], *, limit: int = 12) -> List[Tuple[str, Any]]:
+    items: List[Tuple[str, Any]] = []
+    for key, value in summary.items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            text = value
+            if isinstance(value, str) and len(value) > 120:
+                text = value[:117] + "..."
+            items.append((str(key), text))
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _read_table_preview(path: Path, *, n: int = 50) -> pd.DataFrame:
+    suffix = path.suffix.lower()
+    if suffix in {".parquet", ".pq"}:
+        return pd.read_parquet(path).head(n)
+    if suffix == ".feather":
+        return pd.read_feather(path).head(n)
+    if suffix == ".tsv":
+        return pd.read_csv(path, sep="\t", nrows=n)
+    return pd.read_csv(path, nrows=n)
+
+
+def _render_artifact_preview(run_dir: Path, rec: Dict[str, Any], *, key_prefix: str) -> None:
+    rel = rec.get("relative_path") or ""
+    path = run_dir / rel
+    title = rec.get("description") or rec.get("evidence_id") or Path(rel).name
+    suffix = path.suffix.lower()
+    if not path.exists():
+        st.warning(_ra_text("artifact_missing", path=str(path)))
+        return
+    if rec.get("kind") == "figure" or suffix in _RA_FIGURE_EXTS:
+        caption = f"{title} · {rec.get('evidence_id', '')}"
+        if suffix in _RA_RASTER_EXTS:
+            try:
+                st.image(str(path), caption=caption, use_container_width=True)
+            except Exception:
+                st.image(str(path), caption=caption)
+        else:
+            st.markdown(f"**{html.escape(str(title))}**")
+            st.caption(str(path))
+        return
+    if rec.get("kind") == "table" or suffix in _RA_TABLE_EXTS:
+        with st.container(border=True):
+            st.markdown(f"**{_ra_text('table_preview')}: `{Path(rel).name}`**")
+            try:
+                st.dataframe(_read_table_preview(path), use_container_width=True, hide_index=True)
+            except Exception as exc:
+                st.warning(_ra_text("table_preview_failed", error=exc))
+                st.caption(str(path))
+        return
+    if suffix == ".json" or rec.get("kind") == "statistic":
+        with st.container(border=True):
+            st.markdown(f"**{_ra_text('summary_json')}: `{Path(rel).name}`**")
+            payload = _read_json_file(path)
+            if payload:
+                st.json(payload)
+            else:
+                st.caption(path.read_text(encoding="utf-8", errors="replace")[:4000])
+        return
+    if suffix in {".md", ".txt", ".log"}:
+        with st.container(border=True):
+            st.markdown(f"**{_ra_text('text_artifact')}: `{Path(rel).name}`**")
+            st.markdown(path.read_text(encoding="utf-8", errors="replace")[:6000])
+        return
+    st.caption(f"{title}: {path}")
 
 
 def _render_findings(manifest: Dict[str, Any]) -> None:
@@ -748,36 +1081,252 @@ def _render_figures(run_dir: Path, manifest: Dict[str, Any]) -> None:
                 st.caption(str(path))
 
 
-def _render_run_outputs(result, run_dir: Path) -> None:
-    manifest_path = Path(result.manifest_path)
-    if not manifest_path.exists():
-        st.error(_ra_text("manifest_missing", path=manifest_path))
-        return
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        st.error(_ra_text("manifest_parse_failed", error=exc))
+def _render_literature_and_plan(run_dir: Path, manifest: Dict[str, Any]) -> None:
+    """Render the pre-execution research grounding before step outputs."""
+    st.markdown(f"### {_ra_text('research_grounding')}")
+    st.caption(_ra_text("research_grounding_help"))
+
+    literature = _json_payload_for_evidence(
+        run_dir,
+        manifest,
+        "preplan_literature_bundle",
+        fallback_name="preplan_literature_bundle.json",
+    ) or _json_payload_for_evidence(
+        run_dir,
+        manifest,
+        "literature_bundle",
+        fallback_name="literature_bundle.json",
+    )
+    blueprint = _json_payload_for_evidence(
+        run_dir,
+        manifest,
+        "hypothesis_blueprint",
+        fallback_name="hypothesis_blueprint.json",
+    )
+    plan = _json_payload_for_evidence(
+        run_dir,
+        manifest,
+        "analysis_plan",
+        fallback_name=str(manifest.get("plan_path") or "analysis_plan.json"),
+    )
+
+    with st.container(border=True):
+        st.markdown(f"**1. {_ra_text('literature_review')}**")
+        citations = literature.get("citations") if isinstance(literature, dict) else None
+        if citations:
+            st.metric(_ra_text("citations"), len(citations))
+            rows = []
+            for rec in citations:
+                if not isinstance(rec, dict):
+                    continue
+                rows.append({
+                    _ra_text("citation_key"): rec.get("key"),
+                    _ra_text("year"): rec.get("year"),
+                    _ra_text("title"): rec.get("title"),
+                    _ra_text("relevance"): rec.get("relevance"),
+                    "PMID/DOI/URL": rec.get("pmid") or rec.get("doi") or rec.get("url"),
+                })
+            if rows:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info(_ra_text("no_literature_bundle"))
+
+    with st.container(border=True):
+        st.markdown(f"**2. {_ra_text('hypothesis_blueprint')}**")
+        if blueprint:
+            cols = st.columns(3)
+            cols[0].metric(_ra_text("feasibility"), str(blueprint.get("feasibility_status") or "-"))
+            cols[1].metric(_ra_text("hypothesis_type"), str(blueprint.get("hypothesis_type") or "-"))
+            cols[2].metric(
+                _ra_text("prior_refs"),
+                len(blueprint.get("prior_literature_keys") or []),
+            )
+            if blueprint.get("hypothesis"):
+                st.markdown(f"**{_ra_text('hypothesis')}**")
+                st.write(blueprint.get("hypothesis"))
+            if blueprint.get("novelty_rationale"):
+                st.markdown(f"**{_ra_text('novelty')}**")
+                st.write(blueprint.get("novelty_rationale"))
+            if blueprint.get("self_critique"):
+                st.markdown(f"**{_ra_text('self_critique')}**")
+                for item in list(blueprint.get("self_critique") or [])[:5]:
+                    st.markdown(f"- {item}")
+            domain_notes = list(blueprint.get("domain_gate_notes") or [])
+            if domain_notes:
+                with st.expander(_ra_text("domain_gate_notes"), expanded=False):
+                    for note in domain_notes[:12]:
+                        st.markdown(f"- {note}")
+        else:
+            st.info(_ra_text("no_hypothesis_blueprint"))
+
+    with st.container(border=True):
+        st.markdown(f"**3. {_ra_text('analysis_plan')}**")
+        steps = plan.get("steps") if isinstance(plan, dict) else None
+        if steps:
+            if plan.get("rationale"):
+                st.markdown(f"**{_ra_text('plan_rationale')}**")
+                st.write(plan.get("rationale"))
+            rows = []
+            for idx, step in enumerate(steps, start=1):
+                if not isinstance(step, dict):
+                    continue
+                rows.append({
+                    "#": idx,
+                    _ra_text("step_id"): step.get("step_id"),
+                    _ra_text("step_intent"): step.get("intent"),
+                    _ra_text("method"): step.get("method"),
+                    _ra_text("inputs"): ", ".join(map(str, step.get("inputs") or []))[:180],
+                    _ra_text("outputs"): ", ".join(map(str, step.get("expected_outputs") or []))[:180],
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info(_ra_text("no_analysis_plan"))
+
+
+def _render_step_records(run_dir: Path, manifest: Dict[str, Any], *, key_prefix: str) -> None:
+    records = [r for r in manifest.get("per_step_records", []) or [] if isinstance(r, dict)]
+    if not records:
+        st.info(_ra_text("no_steps"))
         return
 
+    status_counts: Dict[str, int] = {}
+    for record in records:
+        status = _safe_step_status(record)
+        status_counts[status] = status_counts.get(status, 0) + 1
+    cols = st.columns(4)
+    cols[0].metric(_ra_text("steps_total"), len(records))
+    cols[1].metric(_ra_text("steps_ok"), status_counts.get("ok", 0))
+    cols[2].metric(_ra_text("steps_failed"), sum(v for k, v in status_counts.items() if k != "ok"))
+    cols[3].metric(_ra_text("figures"), sum(1 for r in manifest.get("evidence", []) or [] if r.get("kind") == "figure"))
+
+    for idx, record in enumerate(records, start=1):
+        step_id = str(record.get("step_id") or f"step_{idx}")
+        status = _safe_step_status(record)
+        title = f"{idx}. {step_id} · {status}"
+        with st.expander(title, expanded=idx == len(records)):
+            intent = record.get("intent")
+            if intent:
+                st.markdown(f"**{_ra_text('step_intent')}**: {intent}")
+            meta_cols = st.columns(4)
+            meta_cols[0].metric(_ra_text("generation_mode"), str(record.get("generation_mode") or "-"))
+            meta_cols[1].metric(_ra_text("return_code"), str(record.get("returncode", "-")))
+            meta_cols[2].metric(_ra_text("repair_attempts"), int(record.get("code_repair_attempts") or 0))
+            meta_cols[3].metric(_ra_text("evidence"), len(_evidence_for_step(record, manifest)))
+
+            summary = record.get("step_summary")
+            if isinstance(summary, dict) and summary:
+                st.markdown(f"**{_ra_text('key_metrics')}**")
+                items = _scalar_summary_items(summary)
+                if items:
+                    st.dataframe(
+                        pd.DataFrame(items, columns=[_ra_text("metric"), _ra_text("value")]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                with st.expander(_ra_text("full_step_summary"), expanded=False):
+                    st.markdown(f"**{_ra_text('full_step_summary')}**")
+                    st.json(summary)
+
+            finding_rows: List[Dict[str, Any]] = []
+            for group_key in (
+                "usage_findings",
+                "stat_findings",
+                "clinical_findings",
+                "guard_findings",
+                "contract_findings",
+                "visual_findings",
+            ):
+                for finding in record.get(group_key) or []:
+                    if isinstance(finding, dict):
+                        finding_rows.append({
+                            "source": group_key,
+                            "severity": finding.get("severity"),
+                            "validator": finding.get("validator"),
+                            "message": finding.get("message"),
+                        })
+            if finding_rows:
+                with st.container(border=True):
+                    st.markdown(f"**{_ra_text('step_findings')}**")
+                    st.dataframe(pd.DataFrame(finding_rows), use_container_width=True, hide_index=True)
+
+            artefacts = _evidence_for_step(record, manifest)
+            visible_artefacts = [rec for rec in artefacts if _is_user_facing_step_artifact(rec)]
+            hidden_count = len(artefacts) - len(visible_artefacts)
+            if visible_artefacts:
+                st.markdown(f"**{_ra_text('step_artifacts')}**")
+                for art_idx, rec in enumerate(visible_artefacts):
+                    _render_artifact_preview(
+                        run_dir,
+                        rec,
+                        key_prefix=f"{key_prefix}_{step_id}_{art_idx}",
+                    )
+            if hidden_count:
+                st.caption(_ra_text("technical_artifacts_hidden", count=hidden_count))
+
+
+def _render_artifact_gallery(run_dir: Path, manifest: Dict[str, Any], *, kind: Optional[str] = None) -> None:
+    records = [r for r in manifest.get("evidence", []) or [] if isinstance(r, dict)]
+    if kind is not None:
+        records = [r for r in records if r.get("kind") == kind]
+    if not records:
+        st.info(_ra_text("no_evidence"))
+        return
+    for idx, rec in enumerate(records):
+        _render_artifact_preview(run_dir, rec, key_prefix=f"gallery_{idx}")
+
+
+def _result_like_from_manifest(run_dir: Path, manifest: Dict[str, Any]) -> SimpleNamespace:
+    run_id = str(manifest.get("run_id") or run_dir.name)
+    report_path = run_dir / str(manifest.get("report_path") or "results_report.md")
+    manuscript_path = run_dir / str(manifest.get("manuscript_path") or "manuscript_scaffold_bound.md")
+    evidence_count = len(manifest.get("evidence", []) or [])
+    findings_count = len(manifest.get("findings", []) or [])
+    return SimpleNamespace(
+        run_id=run_id,
+        workdir=str(run_dir),
+        report_path=str(report_path),
+        manuscript_path=str(manuscript_path),
+        manifest_path=str(run_dir / "manifest.json"),
+        evidence_count=evidence_count,
+        findings_count=findings_count,
+    )
+
+
+def _render_run_manifest(
+    *,
+    run_dir: Path,
+    manifest: Dict[str, Any],
+    result: Optional[Any] = None,
+    manifest_path: Optional[Path] = None,
+    key_prefix: str = "research_agent_run",
+) -> None:
+    result = result or _result_like_from_manifest(run_dir, manifest)
+    partial = manifest_path is not None and manifest_path.name == "manifest_partial.json"
     paused_after_analysis = "paused_after_analysis" in str(manifest.get("notes") or "")
-    st.success(_ra_text(
-        "run_complete",
-        run_id=result.run_id,
-        evidence=result.evidence_count,
-        findings=result.findings_count,
-    ))
+    summary = _run_summary_from_manifest(run_dir, manifest, partial=partial)
+
+    if partial:
+        st.info(_ra_text("partial_run_notice", run_id=result.run_id))
+    else:
+        st.success(_ra_text(
+            "run_complete",
+            run_id=result.run_id,
+            evidence=summary["evidence_count"],
+            findings=len(manifest.get("findings", []) or []),
+        ))
     if paused_after_analysis:
         st.info(_ra_text("paused_notice"))
 
     tab_labels = [
         _ra_text("tab_report"),
-        _ra_text("tab_manuscript"),
+        _ra_text("tab_steps"),
+        _ra_text("tab_artifacts"),
         _ra_text("tab_evidence"),
+        _ra_text("tab_manuscript"),
         _ra_text("tab_debug"),
     ]
     tabs = st.tabs(tab_labels)
 
-    # 1) Report
     with tabs[0]:
         report_path = Path(result.report_path)
         if report_path.exists():
@@ -785,8 +1334,32 @@ def _render_run_outputs(result, run_dir: Path) -> None:
         else:
             st.warning(_ra_text("report_missing"))
 
-    # 2) Manuscript (bound)
     with tabs[1]:
+        _render_literature_and_plan(run_dir, manifest)
+        st.divider()
+        _render_step_records(run_dir, manifest, key_prefix=f"{key_prefix}_steps")
+
+    with tabs[2]:
+        st.markdown(f"### {_ra_text('figures')}")
+        figure_records = [r for r in manifest.get("evidence", []) or [] if r.get("kind") == "figure"]
+        if figure_records:
+            _render_artifact_gallery(run_dir, {"evidence": figure_records}, kind=None)
+        else:
+            st.info(_ra_text("no_figures"))
+        st.markdown(f"### {_ra_text('tables')}")
+        table_records = [r for r in manifest.get("evidence", []) or [] if r.get("kind") == "table"]
+        if table_records:
+            _render_artifact_gallery(run_dir, {"evidence": table_records}, kind=None)
+        else:
+            st.info(_ra_text("no_tables"))
+
+    with tabs[3]:
+        st.markdown(f"### {_ra_text('findings')}")
+        _render_findings(manifest)
+        st.markdown(f"### {_ra_text('tab_evidence')}")
+        _render_evidence_table(run_dir, manifest)
+
+    with tabs[4]:
         mp = Path(result.manuscript_path)
         if mp.exists():
             text = mp.read_text(encoding="utf-8")
@@ -794,7 +1367,7 @@ def _render_run_outputs(result, run_dir: Path) -> None:
                 st.info(_ra_text("manuscript_skipped"))
                 if st.button(
                     _ra_text("draft_from_analysis"),
-                    key=f"research_agent_draft_from_{result.run_id}",
+                    key=f"research_agent_draft_from_{result.run_id}_{key_prefix}",
                     type="primary",
                     use_container_width=True,
                 ):
@@ -812,21 +1385,23 @@ def _render_run_outputs(result, run_dir: Path) -> None:
                     _ra_text("download_md"), data=text,
                     file_name="manuscript_scaffold_bound.md",
                     mime="text/markdown",
+                    key=f"{key_prefix}_download_md",
                 )
         else:
             st.warning(_ra_text("bound_missing"))
 
-    # 3) Evidence pack
-    with tabs[2]:
-        st.markdown(f"### {_ra_text('findings')}")
-        _render_findings(manifest)
-        st.markdown(f"### {_ra_text('figures')}")
-        _render_figures(run_dir, manifest)
-        st.markdown(f"### {_ra_text('tab_evidence')}")
-        _render_evidence_table(run_dir, manifest)
-
-    # 4) Debug artefacts
-    with tabs[3]:
+    with tabs[5]:
+        debug_records = [
+            r for r in manifest.get("evidence", []) or []
+            if isinstance(r, dict) and _is_debug_artifact(r)
+        ]
+        if debug_records:
+            with st.expander(
+                f"{_ra_text('technical_artifacts')} ({len(debug_records)})",
+                expanded=False,
+            ):
+                st.caption(_ra_text("technical_artifacts_help"))
+                _render_artifact_gallery(run_dir, {"evidence": debug_records}, kind=None)
         st.markdown(f"### {_ra_text('latex')}")
         tex_path = run_dir / "manuscript_scaffold.tex"
         if paused_after_analysis:
@@ -836,12 +1411,32 @@ def _render_run_outputs(result, run_dir: Path) -> None:
             st.download_button(
                 _ra_text("download_tex"), data=tex,
                 file_name="manuscript_scaffold.tex", mime="text/x-tex",
+                key=f"{key_prefix}_download_tex",
             )
             st.code(tex, language="latex")
         else:
             st.info(_ra_text("no_latex"))
         st.markdown(f"### {_ra_text('manifest')}")
         st.json(manifest)
+
+
+def _render_run_outputs(result, run_dir: Path) -> None:
+    manifest_path = Path(result.manifest_path)
+    if not manifest_path.exists():
+        st.error(_ra_text("manifest_missing", path=manifest_path))
+        return
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        st.error(_ra_text("manifest_parse_failed", error=exc))
+        return
+    _render_run_manifest(
+        run_dir=run_dir,
+        manifest=manifest,
+        result=result,
+        manifest_path=manifest_path,
+        key_prefix=f"research_agent_result_{result.run_id}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -997,7 +1592,14 @@ def _section_cohort_picker(
         for p in (last_export, export_path):
             if p:
                 try:
-                    extra_roots.append(Path(p).expanduser().resolve())
+                    resolved = Path(p).expanduser().resolve()
+                    extra_roots.append(resolved)
+                    # Also add the parent so sibling dated-export dirs
+                    # (e.g. miiv_20260428 next to miiv_20260427) are discovered
+                    # even when export_path points to a specific run folder.
+                    parent = resolved.parent
+                    if parent not in extra_roots and parent != resolved:
+                        extra_roots.append(parent)
                 except Exception:
                     pass
         dirs = _scan_workspace_for_module_dirs(extra_roots + _candidate_cohort_roots())
@@ -1139,13 +1741,9 @@ def _section_cohort_picker(
                 )
             filter_spec = (filter_path, filter_col, mode, value)
 
-        join_how = st.radio(
-            _ra_text("merge_strategy"),
-            ["outer", "inner"],
-            horizontal=True,
-            key="research_agent_module_join",
-            help=_ra_text("merge_strategy_help"),
-        )
+        # Merge strategy is fixed to outer — keeps all patient IDs from
+        # every selected file, which is the correct default for ICU cohorts.
+        join_how = "outer"
         filter_signature: Optional[Tuple[str, str, str, str]] = None
         if filter_spec is not None:
             filter_signature = (
@@ -1215,16 +1813,17 @@ def _section_cohort_picker(
             index=0,
             key="research_agent_extract_db",
         )
-        _hide_prefilled_directory_text("research_agent_extract_data_path", st.session_state.get("data_path", ""))
+        if st.session_state.get("data_path") and not st.session_state.get("research_agent_extract_data_path"):
+            st.session_state.research_agent_extract_data_path = st.session_state.data_path
         default_output_dir = st.session_state.get("export_path", str(Path.home() / "easyicu_export" / f"{db}_research_agent"))
-        _hide_prefilled_directory_text("research_agent_extract_output_dir", default_output_dir)
+        if default_output_dir and not st.session_state.get("research_agent_extract_output_dir"):
+            st.session_state.research_agent_extract_output_dir = default_output_dir
         data_path = _directory_input(
             _ra_text("raw_path"),
             value=st.session_state.get("data_path", ""),
             input_key="research_agent_extract_data_path",
             button_key="research_agent_extract_data_path_browse",
             placeholder=_placeholder_path(db),
-            show_value=False,
         ) or st.session_state.get("data_path", "")
         output_dir = _directory_input(
             _ra_text("output_folder"),
@@ -1232,7 +1831,6 @@ def _section_cohort_picker(
             input_key="research_agent_extract_output_dir",
             button_key="research_agent_extract_output_dir_browse",
             placeholder=_placeholder_path("easyicu_export"),
-            show_value=False,
         )
         output_dir = output_dir or default_output_dir
         default_modules = [
@@ -1248,7 +1846,7 @@ def _section_cohort_picker(
         max_patients = st.selectbox(
             _ra_text("patient_limit"),
             [100, 1000, 5000, 10000, 50000, 0],
-            index=1,
+            index=5,
             format_func=lambda x: _ra_text("all_patients") if x == 0 else f"{x:,}",
             key="research_agent_extract_patient_limit",
         )
@@ -1275,7 +1873,7 @@ def _section_cohort_picker(
             st.session_state.trigger_export = True
             st.session_state.export_completed = False
             st.session_state["_exporting_in_progress"] = True
-            st.session_state["_scroll_to_tab"] = "tutorial"
+            st.session_state["_scroll_to_tab"] = "export_progress"
             st.success(_ra_text("export_queued"))
             st.rerun()
         return None, ""
@@ -1288,7 +1886,11 @@ def _section_cohort_picker(
     for p in (export_path, last_export):
         if p:
             try:
-                extra_roots.append(Path(p).resolve())
+                resolved = Path(p).resolve()
+                extra_roots.append(resolved)
+                parent = resolved.parent
+                if parent not in extra_roots and parent != resolved:
+                    extra_roots.append(parent)
             except Exception:
                 pass
     candidates = _scan_workspace_for_cohorts(_candidate_cohort_roots() + extra_roots)
@@ -2010,6 +2612,66 @@ def _section_options() -> Tuple[bool, str, bool]:
     return disable_icu_context, (workdir_text or default_workdir), stop_choice == stop_options[0]
 
 
+def _format_history_label(row: Dict[str, Any]) -> str:
+    status = "partial" if row.get("manifest_partial") else "complete"
+    started = str(row.get("started_at") or "")[:19].replace("T", " ")
+    question = str(row.get("question") or "").strip()
+    if len(question) > 64:
+        question = question[:61] + "..."
+    bits = [
+        str(row.get("run_id") or ""),
+        status,
+        f"{row.get('step_ok', 0)}/{row.get('step_total', 0)} steps",
+    ]
+    if started:
+        bits.append(started)
+    if question:
+        bits.append(question)
+    return " · ".join(bits)
+
+
+def _render_run_history(workdir: Path) -> None:
+    selected_run: Dict[str, Any] | None = None
+    with st.expander(_ra_text("history_title"), expanded=False):
+        rows = _scan_research_agent_runs(workdir)
+        if not rows:
+            st.info(_ra_text("history_empty"))
+            return
+        table = pd.DataFrame([
+            {
+                _ra_text("history_run_id"): row["run_id"],
+                _ra_text("history_status"): row["status"],
+                _ra_text("history_started"): row["started_at"][:19].replace("T", " "),
+                _ra_text("history_steps"): f"{row['step_ok']}/{row['step_total']}",
+                _ra_text("history_figures"): row["figure_count"],
+                _ra_text("history_tables"): row["table_count"],
+                _ra_text("history_findings"): f"{row['finding_errors']}E / {row['finding_warnings']}W",
+                _ra_text("history_question"): row["question"][:120],
+            }
+            for row in rows
+        ])
+        st.dataframe(table, use_container_width=True, hide_index=True)
+        labels = [_format_history_label(row) for row in rows]
+        selected_label = st.selectbox(
+            _ra_text("history_open"),
+            labels,
+            index=0,
+            key="research_agent_history_pick",
+        )
+        selected_run = rows[labels.index(selected_label)]
+
+    if selected_run:
+        manifest, manifest_path, _partial = _load_run_manifest(selected_run["run_dir"])
+        if manifest:
+            st.markdown(f"### {_ra_text('history_selected')}: `{selected_run['run_id']}`")
+            _render_run_manifest(
+                run_dir=selected_run["run_dir"],
+                manifest=manifest,
+                manifest_path=manifest_path,
+                key_prefix=f"research_agent_history_{selected_run['run_id']}",
+            )
+
+
 def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
     """Render a static, non-token demo of the Research Agent outputs."""
     flow = [
@@ -2429,6 +3091,9 @@ def render_research_agent_page() -> None:
         stop_after_analysis = False
 
     st.divider()
+    history_workdir = Path(workdir_text).expanduser().resolve()
+    _render_run_history(history_workdir)
+
     run_clicked = st.button(
         "▶  " + (_ra_text("draft_button") if force_manuscript else _ra_text("run_button")),
         type="primary",
@@ -2468,6 +3133,7 @@ def render_research_agent_page() -> None:
     progress.info(_ra_text("running"))
     progress_bar = st.progress(0)
     progress_log = st.empty()
+    live_steps = st.empty()
     progress_events: List[Dict[str, Any]] = []
 
     def _on_progress(event: Dict[str, Any]) -> None:
@@ -2482,12 +3148,40 @@ def render_research_agent_page() -> None:
                 pass
         elif event.get("stage") == "run" and status == "complete":
             progress_bar.progress(1.0)
-        badge = {"complete": "✅", "error": "🔴", "paused": "⏸️"}.get(status, "⚙️")
-        lines = [
-            f"{badge} **{e.get('stage', 'step')}** — {e.get('message', '')}"
-            for e in progress_events[-8:]
+        milestones = [
+            e for e in progress_events
+            if str(e.get("stage") or "") in _RA_MILESTONE_STAGES
+            or e.get("status") in {"complete", "error", "paused"}
         ]
-        progress_log.markdown("\n".join(f"- {line}" for line in lines))
+        latest = progress_events[-1:]
+        milestone_lines = [_progress_event_line(e) for e in milestones[-8:]]
+        latest_lines = [_progress_event_line(e) for e in latest]
+        blocks = []
+        if milestone_lines:
+            blocks.append(
+                f"**{_ra_text('run_milestones')}**\n"
+                + "\n".join(f"- {line}" for line in milestone_lines)
+            )
+        if latest_lines and (not milestone_lines or latest_lines[-1] != milestone_lines[-1]):
+            blocks.append(
+                f"**{_ra_text('latest_activity')}**\n"
+                + "\n".join(f"- {line}" for line in latest_lines)
+            )
+        progress_log.markdown("\n\n".join(blocks))
+        run_id = event.get("run_id")
+        if run_id:
+            manifest, _manifest_path, _partial = _load_run_manifest(workdir / str(run_id))
+            if manifest:
+                with live_steps.container():
+                    st.markdown(f"### {_ra_text('live_steps')}")
+                    _render_literature_and_plan(workdir / str(run_id), manifest)
+                    if manifest.get("per_step_records"):
+                        st.divider()
+                        _render_step_records(
+                            workdir / str(run_id),
+                            manifest,
+                            key_prefix=f"research_agent_live_{run_id}",
+                        )
 
     try:
         with st.spinner(_ra_text("spinner")):
@@ -2513,6 +3207,7 @@ def render_research_agent_page() -> None:
         return
     progress.empty()
     progress_bar.empty()
+    live_steps.empty()
     if force_manuscript:
         st.session_state.pop("research_agent_resume_run_id", None)
         st.session_state.pop("research_agent_force_manuscript", None)

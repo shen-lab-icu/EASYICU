@@ -7,7 +7,13 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from easyicu.webapp.cohort_filters import _split_query_tokens, _supports_icd_filter
+from easyicu.webapp.cohort_filters import (
+    _read_table,
+    _resolve_table_path,
+    _table_path_candidates,
+    _split_query_tokens,
+    _supports_icd_filter,
+)
 
 
 def _clear_icd_preview_state() -> None:
@@ -124,21 +130,26 @@ def _preview_icd_match(data_path: Path, database: str, tokens: list[str]) -> dic
         if not meta:
             result['error'] = f"ICD preview not supported for {database}"
             return result
-        icu_path = data_path / meta['icu_table']
-        if not icu_path.exists():
-            result['error'] = f"ICU table not found: {icu_path.name}"
+        icu_path = _resolve_table_path(data_path, database, meta['icu_table'])
+        if not icu_path:
+            searched = ", ".join(str(p.relative_to(data_path)) for p in _table_path_candidates(data_path, database, meta['icu_table'])[:4])
+            result['error'] = f"ICU table not found. Checked: {searched}"
             return result
-        icu_df = pd.read_parquet(icu_path)
+        icu_df = _read_table(icu_path)
         icu_df.columns = [c.lower() for c in icu_df.columns]
         id_col = meta['id_col'].lower()
         result['total_patients'] = icu_df[id_col].nunique()
 
         if database in ('miiv', 'mimic'):
-            diag_path = data_path / 'diagnoses_icd.parquet'
-            if not diag_path.exists():
+            diag_path = _resolve_table_path(data_path, database, 'diagnoses_icd.parquet')
+            if not diag_path:
                 result['error'] = f"diagnoses_icd.parquet not found"
                 return result
-            diag_df = pd.read_parquet(diag_path, columns=['hadm_id', 'icd_code', 'icd_version'] if database == 'miiv' else ['hadm_id', 'icd_code'])
+            diag_columns = ['hadm_id', 'icd_code', 'icd_version'] if database == 'miiv' else ['hadm_id', 'icd_code']
+            try:
+                diag_df = _read_table(diag_path, columns=diag_columns)
+            except Exception:
+                diag_df = _read_table(diag_path, columns=['hadm_id', 'icd_code'])
             codes = diag_df['icd_code'].astype(str).str.upper().str.replace('.', '', regex=False)
             norm_tokens = [tok.upper().replace('.', '') for tok in tokens]
             diag_mask = pd.Series(False, index=diag_df.index)
@@ -156,9 +167,9 @@ def _preview_icd_match(data_path: Path, database: str, tokens: list[str]) -> dic
             code_counts.columns = ['ICD Code', 'Count']
             # Try enrich with descriptions
             try:
-                d_path = data_path / 'd_icd_diagnoses.parquet'
-                if d_path.exists():
-                    d_df = pd.read_parquet(d_path)
+                d_path = _resolve_table_path(data_path, database, 'd_icd_diagnoses.parquet')
+                if d_path:
+                    d_df = _read_table(d_path)
                     d_df.columns = [c.lower() for c in d_df.columns]
                     if 'icd_code' in d_df.columns and 'long_title' in d_df.columns:
                         d_df['icd_code'] = d_df['icd_code'].astype(str).str.upper().str.replace('.', '', regex=False)
@@ -169,11 +180,11 @@ def _preview_icd_match(data_path: Path, database: str, tokens: list[str]) -> dic
             result['top_codes'] = code_counts
 
         elif database == 'eicu':
-            diag_path = data_path / 'diagnosis.parquet'
-            if not diag_path.exists():
+            diag_path = _resolve_table_path(data_path, database, 'diagnosis.parquet')
+            if not diag_path:
                 result['error'] = f"diagnosis.parquet not found"
                 return result
-            diag_df = pd.read_parquet(diag_path)
+            diag_df = _read_table(diag_path)
             diag_df.columns = [c.lower() for c in diag_df.columns]
             if 'patientunitstayid' not in diag_df.columns:
                 result['error'] = "patientunitstayid not found in diagnosis table"

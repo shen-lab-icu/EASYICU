@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import textwrap
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal, get_args
@@ -44,6 +45,16 @@ def _target(container):
     return container if container is not None else st
 
 
+def _render_html(body: str, *, container=None) -> None:
+    """Render trusted in-app HTML without passing it through Markdown parsing."""
+    target = _target(container)
+    html_renderer = getattr(target, "html", None)
+    if callable(html_renderer):
+        html_renderer(body)
+    else:
+        target.markdown(body, unsafe_allow_html=True)
+
+
 def _tone_class(prefix: str, tone: Tone) -> str:
     if tone not in get_args(Tone):
         raise ValueError(f"Unknown UI tone: {tone}")
@@ -59,8 +70,7 @@ def render_status_banner(
     container=None,
 ) -> None:
     """Render a reusable status banner without inline style attributes."""
-    target = _target(container)
-    target.markdown(
+    _render_html(
         f"""
         <div class="app-status-banner {_tone_class("app-status-banner", tone)}">
             <div class="app-status-banner__icon" aria-hidden="true">{html.escape(icon)}</div>
@@ -70,7 +80,7 @@ def render_status_banner(
             </div>
         </div>
         """,
-        unsafe_allow_html=True,
+        container=container,
     )
 
 
@@ -86,9 +96,9 @@ def render_stat_grid(cards: Iterable[StatCard], *, columns: int = 4, compact: bo
         """
         for card in cards
     )
-    _target(container).markdown(
+    _render_html(
         f'<div class="app-stat-grid app-stat-grid--{columns}{modifier}">{card_html}</div>',
-        unsafe_allow_html=True,
+        container=container,
     )
 
 
@@ -105,23 +115,23 @@ def render_feature_grid(cards: Iterable[FeatureCard], *, columns: int = 3, muted
         """
         for card in cards
     )
-    _target(container).markdown(
+    _render_html(
         f'<div class="app-feature-grid app-feature-grid--{columns}{modifier}">{card_html}</div>',
-        unsafe_allow_html=True,
+        container=container,
     )
 
 
 def render_inline_heading(title: str, subtitle: str = "", *, container=None) -> None:
     """Render a compact section heading used inside Streamlit tabs."""
     subtitle_html = f'<span class="app-inline-heading__subtitle">{html.escape(subtitle)}</span>' if subtitle else ""
-    _target(container).markdown(
+    _render_html(
         f"""
         <div class="app-inline-heading">
             <span class="app-inline-heading__title">{html.escape(title)}</span>
             {subtitle_html}
         </div>
         """,
-        unsafe_allow_html=True,
+        container=container,
     )
 
 
@@ -151,20 +161,20 @@ def render_steps(steps: Iterable[tuple[str, str]], *, current_index: int, contai
             </div>
             """
         )
-    _target(container).markdown(f'<div class="app-step-grid">{"".join(step_html)}</div>', unsafe_allow_html=True)
+    _render_html(f'<div class="app-step-grid">{"".join(step_html)}</div>', container=container)
 
 
 def render_kicker(text: str, *, container=None) -> None:
     """Render a small uppercase section kicker."""
-    _target(container).markdown(f'<div class="app-kicker">{html.escape(text)}</div>', unsafe_allow_html=True)
+    _render_html(f'<div class="app-kicker">{html.escape(text)}</div>', container=container)
 
 
 def render_anchor(anchor_id: str, *, spacer: bool = False, container=None) -> None:
     """Render a stable in-page anchor."""
     class_name = "app-anchor app-anchor--spaced" if spacer else "app-anchor"
-    _target(container).markdown(
+    _render_html(
         f'<div id="{html.escape(anchor_id)}" class="{class_name}"></div>',
-        unsafe_allow_html=True,
+        container=container,
     )
 
 
@@ -216,8 +226,9 @@ def render_guide_card(
     mini_grid = f'<div class="app-mini-grid">{mini_html}</div>' if mini_html else ""
     panel_grid = f'<div class="app-guide-panel-grid">{panel_html}</div>' if panel_html else ""
 
-    _target(container).markdown(
-        f"""
+    _render_html(
+        textwrap.dedent(
+            f"""
         <div class="app-guide-card {_tone_class("app-guide-card", tone)}">
             <div class="app-guide-card__title">{html.escape(title)}</div>
             {panel_grid}
@@ -226,8 +237,9 @@ def render_guide_card(
             {ordered_html}
             {tip_html}
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
+        ).strip(),
+        container=container,
     )
 
 

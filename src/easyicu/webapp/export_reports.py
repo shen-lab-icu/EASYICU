@@ -15,8 +15,11 @@ _APP_CONTEXT: dict[str, Any] = {}
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Store app globals needed by transitional extraction helpers."""
+    if app_context is _APP_CONTEXT:
+        return
+    context_copy = dict(app_context)
     _APP_CONTEXT.clear()
-    _APP_CONTEXT.update(app_context)
+    _APP_CONTEXT.update(context_copy)
 
 
 def _ctx(name: str) -> Any:
@@ -32,6 +35,9 @@ def _generate_cohort_prefix(app_context: dict[str, Any] | None = None) -> str:
     Returns:
         筛选条件前缀字符串，如 "age18-80_firstICU_los24h"，无筛选则返回空字符串
     """
+    if app_context is not None:
+        _install_app_context(app_context)
+
     if not st.session_state.get('cohort_enabled', False):
         return ""
 

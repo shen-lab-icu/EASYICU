@@ -29,7 +29,7 @@ def default_provider_key() -> str:
 
 def public_default_provider_key() -> str:
     """Default provider exposed in end-user UI surfaces."""
-    return "openrouter"
+    return default_provider_key()
 
 
 PROVIDERS: Dict[str, ProviderInfo] = {
@@ -144,12 +144,10 @@ def is_internal_provider(provider: str) -> bool:
 
 
 def public_provider_keys() -> list[str]:
-    return [key for key in PROVIDERS.keys() if key not in INTERNAL_PROVIDER_KEYS]
+    return list(PROVIDERS.keys())
 
 
 def coerce_public_provider(provider: str) -> str:
-    if is_internal_provider(provider):
-        return public_default_provider_key()
     return provider if provider in PROVIDERS else "custom"
 
 

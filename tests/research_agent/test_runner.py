@@ -179,3 +179,59 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
     assert calls[1][0].endswith("python")
     assert any(p.name == "ok.txt" for p in result.artefacts)
     assert "retrying without sandbox-exec" in result.stderr
+
+
+def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    import easyicu.research_agent.runner as runner_mod
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+    )
+
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+        calls.append(list(cmd))
+        if cmd[0] == "sandbox-exec":
+            return SimpleNamespace(
+                stdout="",
+                stderr=(
+                    "Fatal Python error: init_sys_streams: can't initialize sys standard streams\n"
+                    "OSError: [Errno 9] Bad file descriptor"
+                ),
+                returncode=1,
+            )
+        Path(env["STEP_OUT_DIR"], "ok.txt").write_text("ok", encoding="utf-8")
+        return SimpleNamespace(stdout="ok\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(
+        runner,
+        "build_command",
+        lambda *, script_path: [
+            "sandbox-exec",
+            "-p",
+            "(deny network*)",
+            "python",
+            str(script_path),
+        ],
+    )
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+
+    result = runner.run(step_id="macos_stdio_fallback", code="print('ok')\n")
+
+    assert result.succeeded
+    assert len(calls) == 2
+    assert calls[0][0] == "sandbox-exec"
+    assert calls[1][0].endswith("python")
+    assert any(p.name == "ok.txt" for p in result.artefacts)
+    assert "prevented Python stdio initialisation" in result.stderr

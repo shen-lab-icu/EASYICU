@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from easyicu.webapp.components.constants import get_all_concepts
 from easyicu.webapp.data_dictionary_page import render_home_data_dictionary
 from easyicu.webapp.ui_helpers import (
     GuidePanel,
@@ -132,8 +133,13 @@ def _render_step_guide(lang: str, *, step1_done: bool, step2_done: bool, step3_d
         return
 
     if not step3_done:
+        feature_count = len(get_all_concepts())
         render_guide_card(
-            _pick(lang, "Select Features - 167 ICU Clinical Features", "选择特征 - 167 个 ICU 临床特征"),
+            _pick(
+                lang,
+                f"Select Features - {feature_count} ICU Clinical Features",
+                f"选择特征 - {feature_count} 个 ICU 临床特征",
+            ),
             mini_cards=[
                 MiniCard(_pick(lang, "Vital Signs", "生命体征"), _pick(lang, "HR, BP, Temp, SpO2, Resp", "心率、血压、体温、SpO2、呼吸"), "primary"),
                 MiniCard(_pick(lang, "Lab Tests", "实验室检验"), _pick(lang, "Chemistry, CBC, Coag, ABG", "生化、血常规、凝血、血气"), "success"),
@@ -395,8 +401,8 @@ def render_home_extract_mode(lang: str, app_context: dict[str, Any] | None = Non
     render_note(
         _pick(
             lang,
-            "Reference Guide: this dictionary contains all 167 ICU clinical features available in EasyICU, organized into 19 categories. Each feature includes its code name, full description, and measurement unit. Some features may not be available in all ICU databases.",
-            "参考指南：本字典包含 EasyICU 提供的全部 167 个 ICU 临床特征，分为 19 个类别。每个特征包括代码名称、完整描述和测量单位。部分特征可能并非所有 ICU 数据库都支持。",
+            f"Reference Guide: this dictionary contains all {len(get_all_concepts())} ICU clinical features available in EasyICU, organized into 19 categories. Each feature includes its code name, full description, and measurement unit. Some features may not be available in all ICU databases.",
+            f"参考指南：本字典包含 EasyICU 提供的全部 {len(get_all_concepts())} 个 ICU 临床特征，分为 19 个类别。每个特征包括代码名称、完整描述和测量单位。部分特征可能并非所有 ICU 数据库都支持。",
         ),
         tone="info",
     )

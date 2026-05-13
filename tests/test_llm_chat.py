@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from easyicu.webapp import llm_config
 from easyicu.webapp import llm_chat
 
 
@@ -90,6 +91,48 @@ def test_ai_assistant_starts_disabled_until_user_opt_in(monkeypatch) -> None:
     assert fake_streamlit.session_state["llm_enabled"] is False
 
 
+def test_easyicu_hosted_is_available_to_web_assistant() -> None:
+    assert llm_config.public_default_provider_key() == "easyicu_hosted"
+    assert "easyicu_hosted" in llm_config.public_provider_keys()
+    assert llm_config.coerce_public_provider("easyicu_hosted") == "easyicu_hosted"
+
+
+def test_easyicu_hosted_is_configured_without_user_key(monkeypatch) -> None:
+    fake_streamlit = SimpleNamespace(
+        session_state={
+            "llm_provider": "easyicu_hosted",
+            "llm_api_key": "",
+            "llm_base_url": "",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", fake_streamlit)
+
+    assert llm_chat._is_configured() is True
+
+
+def test_llm_reasoning_blocks_are_hidden_from_web_answers() -> None:
+    assert llm_chat._strip_llm_reasoning(
+        "<think>private scratchpad</think>\nSOFA features: sofa, sofa2"
+    ) == "SOFA features: sofa, sofa2"
+    assert llm_chat._strip_llm_reasoning(
+        "<think>streaming scratchpad still open"
+    ) == ""
+
+
+def test_verification_parser_ignores_model_reasoning_prefix() -> None:
+    parsed = llm_chat._parse_verification_report(
+        "<think>check answer</think>\n"
+        "STATUS: pass\n"
+        "ISSUES:\n"
+        "- none\n"
+        "CORRECTED_ANSWER:\n"
+        "Ready."
+    )
+
+    assert parsed["status"] == "pass"
+    assert parsed["corrected_answer"] == "Ready."
+
+
 def test_enabling_floating_ai_toggle_opens_panel_immediately(monkeypatch) -> None:
     fake_streamlit = _FakeStreamlit(
         {
@@ -108,6 +151,8 @@ def test_enabling_floating_ai_toggle_opens_panel_immediately(monkeypatch) -> Non
 
     assert fake_streamlit.session_state["llm_enabled"] is True
     assert fake_streamlit.session_state["_floating_ai_open"] is True
+    assert fake_streamlit.session_state["llm_provider"] == "easyicu_hosted"
+    assert fake_streamlit.session_state["llm_configured"] is True
 
 
 def test_disabling_floating_ai_toggle_hides_panel(monkeypatch) -> None:

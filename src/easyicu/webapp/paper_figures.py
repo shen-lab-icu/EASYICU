@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.components.constants import get_all_concepts
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to extracted workflows."""
@@ -969,7 +971,7 @@ def _render_paper_coverage_panel() -> None:
 def _render_paper_snapshot_panel() -> None:
     cards = [
         ("Total patients", "2,012"),
-        ("Total features", "167"),
+        ("Total features", str(len(get_all_concepts()))),
         ("Median SOFA", "6 (3-9)"),
         ("Top phenotype", "Sepsis 24.1%"),
         ("Mortality", "31.4%"),

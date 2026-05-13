@@ -220,6 +220,39 @@ class CodeRunner:
                 and original_cmd
                 and Path(original_cmd[0]).name == "sandbox-exec"
                 and sys.platform == "darwin"
+                and (
+                    "init_sys_streams" in stderr.lower()
+                    or "can't initialize sys standard streams" in stderr.lower()
+                    or "bad file descriptor" in stderr.lower()
+                )
+            ):
+                retry_cmd = [self.python_executable, str(script_path)]
+                retry_timeout = max(self.timeout_seconds - (time.monotonic() - started), 1.0)
+                retry_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                    retry_cmd,
+                    cwd=str(step_dir),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=retry_timeout,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+                stdout = retry_proc.stdout
+                stderr = (
+                    "[CodeRunner] macOS sandbox-exec prevented Python stdio initialisation; "
+                    "retrying without sandbox-exec while keeping generated code under "
+                    "captured provenance.\n"
+                    f"[CodeRunner] original stderr:\n{stderr}\n"
+                    f"[CodeRunner] fallback stderr:\n{retry_proc.stderr}"
+                )
+                returncode = retry_proc.returncode
+                cmd = retry_cmd
+            if (
+                returncode != 0
+                and original_cmd
+                and Path(original_cmd[0]).name == "sandbox-exec"
+                and sys.platform == "darwin"
                 and "omp: error #179" in stderr.lower()
                 and "shm" in stderr.lower()
             ):

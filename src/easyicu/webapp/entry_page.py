@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from easyicu.webapp.components.constants import get_all_concepts
 from easyicu.webapp.session_state import clear_run_state
 
 
@@ -154,9 +155,11 @@ def render_entry_page(app_context: dict[str, Any] | None = None):
     except Exception:
         ui = None
 
+    feature_count = len(get_all_concepts())
+
     if lang == 'en':
         lead_text = "Start from a clinical question, prepare local ICU data, review analysis tables and figures, then draft a manuscript only when the evidence is worth writing up."
-        stat_pills = ["6 ICU databases", "167 clinical concepts", "Module exports", "Analysis-first agent", "Optional manuscript"]
+        stat_pills = ["6 ICU databases", f"{feature_count} clinical concepts", "Module exports", "Analysis-first agent", "Optional manuscript"]
         tab_options = ["Research workflow", "Clinical layer", "Execution"]
         tab_default = "Research workflow"
         dbs_label = "Supported Databases"
@@ -191,7 +194,7 @@ def render_entry_page(app_context: dict[str, Any] | None = None):
         }
     else:
         lead_text = "从临床研究问题出发，准备本地 ICU 数据，先复核分析表格和图，再决定是否生成文章初稿。"
-        stat_pills = ["支持 6 大 ICU 数据库", "167 个临床概念", "模块化导出", "先分析后写作", "文章按需生成"]
+        stat_pills = ["支持 6 大 ICU 数据库", f"{feature_count} 个临床概念", "模块化导出", "先分析后写作", "文章按需生成"]
         tab_options = ["科研工作流", "临床智能层", "执行能力层"]
         tab_default = "科研工作流"
         dbs_label = "支持的数据库"

@@ -99,6 +99,7 @@ _REAL_WORKSPACE_MAX_PATIENTS = 5000
 
 _REAL_WORKSPACE_PREVIEW_CONCEPTS = [
     'hr', 'map', 'resp', 'temp', 'spo2', 'crea', 'bili', 'lact', 'glu', 'plt',
+    'death', 'los_icu', 'aki', 'rrt', 'vent_ind', 'mech_vent', 'vaso_ind', 'abx',
 ]
 
 
