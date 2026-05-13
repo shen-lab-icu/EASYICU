@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
 import types
 
 import easyicu
+from easyicu.concept import load_dictionary
 import easyicu.webapp.app as app
+import easyicu.webapp.concept_catalog as concept_catalog
 import easyicu.webapp.cohort_filters as cohort_filters
 import easyicu.webapp.cohort_workspace as cohort_workspace
 import easyicu.webapp.data_paths as data_paths
+import easyicu.webapp.data_workflows as data_workflows
+import easyicu.webapp.export_reports as export_reports
 import easyicu.webapp.export_workflow as export_workflow
 import easyicu.webapp.sidebar as sidebar
+import easyicu.webapp.subprocess_workers as subprocess_workers
+import easyicu.webapp.ui_helpers as ui_helpers
 import pandas as pd
 import pytest
 
@@ -23,6 +30,14 @@ def test_concept_catalog_helpers_remain_available_to_workflow_context() -> None:
     ]
     assert app._get_patient_id_table_files("hirid")[0] == "general.parquet"
     assert app._sample_patient_ids_random([3, 1, 2], 10) == [3, 1, 2]
+
+
+def test_quick_preview_prefers_lightweight_concepts_when_all_features_selected() -> None:
+    selected = ["sofa2", "sofa2_liver", "sep3_sofa2", "hr", "map", "temp", "spo2"]
+
+    preview = data_workflows._select_quick_preview_concepts(selected, limit=5)
+
+    assert preview == ["hr", "map", "temp", "spo2", "sofa2"]
 
 
 def test_terminate_process_tree_terminates_descendants(monkeypatch) -> None:
@@ -264,6 +279,42 @@ def test_export_path_default_reseeds_empty_without_overwriting_custom(monkeypatc
     assert streamlit_stub.session_state["sidebar_export_path_input"] == "/tmp/custom"
 
 
+def test_hide_prefilled_directory_text_keeps_user_absolute_path(monkeypatch) -> None:
+    class _SidebarStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "sidebar_data_path_input": "/Users/haibo/.mounty/新加卷/databases/mimic-iv-3.1",
+            }
+
+    streamlit_stub = _SidebarStreamlit()
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+
+    sidebar._hide_prefilled_directory_text(
+        "sidebar_data_path_input",
+        "/Users/haibo/.mounty/新加卷/databases/eicu",
+    )
+
+    assert streamlit_stub.session_state["sidebar_data_path_input"].endswith("mimic-iv-3.1")
+
+
+def test_hide_prefilled_directory_text_clears_only_mirrored_value(monkeypatch) -> None:
+    class _SidebarStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "sidebar_data_path_input": "/Users/haibo/.mounty/新加卷/databases/eicu",
+            }
+
+    streamlit_stub = _SidebarStreamlit()
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+
+    sidebar._hide_prefilled_directory_text(
+        "sidebar_data_path_input",
+        "/Users/haibo/.mounty/新加卷/databases/eicu",
+    )
+
+    assert streamlit_stub.session_state["sidebar_data_path_input"] == ""
+
+
 def test_home_dictionary_avoids_nested_expanders(monkeypatch) -> None:
     streamlit_stub = _FakeStreamlit()
 
@@ -285,6 +336,178 @@ def test_home_dictionary_avoids_nested_expanders(monkeypatch) -> None:
 
     assert streamlit_stub.expander_labels == ["Vitals (1 features)", "Labs (1 features)"]
     assert streamlit_stub.dataframe_calls == 0
+
+
+def test_guide_card_renders_html_instead_of_literal_div_tags(monkeypatch) -> None:
+    class _GuideStreamlit:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def markdown(self, body, **kwargs) -> None:
+            self.calls.append((body, kwargs))
+
+    streamlit_stub = _GuideStreamlit()
+    monkeypatch.setattr(ui_helpers, "st", streamlit_stub)
+
+    ui_helpers.render_guide_card(
+        "Select Features",
+        mini_cards=[ui_helpers.MiniCard("Vital Signs", "HR, BP", "primary")],
+        tip="Select by category.",
+    )
+
+    body, kwargs = streamlit_stub.calls[-1]
+    assert kwargs["unsafe_allow_html"] is True
+    assert body.startswith('<div class="app-guide-card')
+    assert '<div class="app-mini-grid">' in body
+
+
+def test_export_report_cohort_prefix_installs_app_context(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit(
+        {
+            "cohort_enabled": True,
+            "cohort_filter": {
+                "age_min": 18,
+                "age_max": 80,
+                "icd_include_query": "A41",
+                "icd_exclude_query": "I50",
+            },
+        }
+    )
+    monkeypatch.setattr(export_reports, "st", streamlit_stub)
+
+    prefix = export_reports._generate_cohort_prefix(
+        {"_split_query_tokens": cohort_filters._split_query_tokens}
+    )
+
+    assert prefix == "age18-80_icdInA41_icdExI50"
+
+
+def test_export_manifest_keeps_installed_context_when_generating_suffix(tmp_path, monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit(
+        {
+            "cohort_enabled": True,
+            "cohort_filter": {
+                "icd_include_query": "A41",
+                "icd_exclude_query": "I50",
+            },
+            "database": "miiv",
+            "entry_mode": "real",
+            "selected_concepts": ["hr"],
+            "selected_groups": ["vitals"],
+        }
+    )
+    monkeypatch.setattr(export_reports, "st", streamlit_stub)
+
+    context = {
+        "_split_query_tokens": cohort_filters._split_query_tokens,
+        "_get_sepsis_runtime_options": lambda: {},
+    }
+    export_reports._write_export_manifest(
+        tmp_path,
+        exported_files=[],
+        patient_count=1,
+        concept_count=1,
+        export_format="parquet",
+        app_context=context,
+    )
+
+    manifest = json.loads((tmp_path / "easyicu_export_manifest.json").read_text())
+    assert manifest["cohort_suffix"] == "icdInA41_icdExI50"
+
+
+def test_special_concept_worker_failure_writes_error_manifest(tmp_path, monkeypatch) -> None:
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("derived concept failed")
+
+    monkeypatch.setattr(subprocess_workers, "_subprocess_load_special_impl", _boom)
+
+    subprocess_workers._subprocess_load_special(
+        ["aki_stage"],
+        "miiv",
+        "/tmp/missing",
+        None,
+        None,
+        str(tmp_path),
+    )
+
+    assert json.loads((tmp_path / "_manifest.json").read_text()) == {}
+    assert "derived concept failed" in (tmp_path / "_error.txt").read_text()
+
+
+def test_special_concept_worker_computes_sep3_after_fallback_load(tmp_path, monkeypatch) -> None:
+    def _fake_load_concepts(*, concepts, **_kwargs):
+        frames = {
+            "susp_inf": pd.DataFrame(
+                {"stay_id": [1, 1, 2], "charttime": [0.0, 1.0, 0.0], "susp_inf": [1, 1, 1]}
+            ),
+            "sofa": pd.DataFrame(
+                {"stay_id": [1, 1, 2], "charttime": [0.0, 1.0, 0.0], "sofa": [1, 3, 4]}
+            ),
+            "sofa2": pd.DataFrame(
+                {"stay_id": [1, 1, 2], "charttime": [0.0, 1.0, 0.0], "sofa2": [2, 1, 5]}
+            ),
+        }
+        return {concept: frames[concept] for concept in concepts}
+
+    import easyicu.api as api_module
+
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    monkeypatch.setattr(api_module, "load_concepts", _fake_load_concepts)
+
+    subprocess_workers._subprocess_load_special_impl(
+        ["sep3_sofa1", "sep3_sofa2"],
+        "miiv",
+        "/tmp/easyicu-test-data",
+        {"stay_id": [1, 2]},
+        None,
+        str(tmp_path),
+        None,
+        str(export_dir),
+        "parquet",
+        None,
+        {"sep3_sofa1": "sepsis3_sofa1", "sep3_sofa2": "sepsis3_sofa2"},
+        "",
+        {},
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert set(manifest) == {"sep3_sofa1", "sep3_sofa2"}
+
+    export_manifest = json.loads((tmp_path / "_export_manifest.json").read_text())
+    assert export_manifest["sepsis3_sofa1"]["concepts"] == ["sep3_sofa1"]
+    assert export_manifest["sepsis3_sofa2"]["concepts"] == ["sep3_sofa2"]
+
+    sep1 = pd.read_parquet(manifest["sep3_sofa1"])
+    sep2 = pd.read_parquet(manifest["sep3_sofa2"])
+    assert sep1[["stay_id", "charttime"]].to_dict("records") == [
+        {"stay_id": 1, "charttime": 1.0},
+        {"stay_id": 2, "charttime": 0.0},
+    ]
+    assert sep2[["stay_id", "charttime"]].to_dict("records") == [
+        {"stay_id": 1, "charttime": 0.0},
+        {"stay_id": 2, "charttime": 0.0},
+    ]
+
+
+def test_all_web_dictionary_concepts_are_exposed_in_feature_groups() -> None:
+    grouped = {
+        concept
+        for concepts in concept_catalog.CONCEPT_GROUPS_INTERNAL.values()
+        for concept in concepts
+    }
+
+    assert set(concept_catalog.CONCEPT_DICTIONARY) - grouped == set()
+
+
+def test_mimiciv_dictionary_sources_include_updated_sparse_features() -> None:
+    dictionary = load_dictionary(include_sofa2=True)
+
+    tri_ids = dictionary["tri"].sources["miiv"][0].ids
+    assert 52642 in tri_ids
+
+    vent_sources = dictionary["vent_end"].sources["miiv"]
+    assert {source.table for source in vent_sources} == {"procedureevents", "chartevents"}
 
 
 def test_dataframe_compat_falls_back_when_width_stretch_is_unsupported(monkeypatch) -> None:
@@ -613,6 +836,105 @@ def test_preview_icd_match_counts_hadm_level_matches_across_icu_stays(tmp_path) 
     }
 
 
+def test_preview_icd_match_supports_mimiciv_hosp_icu_layout(tmp_path) -> None:
+    (tmp_path / "icu").mkdir()
+    (tmp_path / "hosp").mkdir()
+    pd.DataFrame(
+        {
+            "stay_id": [101, 102, 201],
+            "subject_id": [1, 1, 2],
+            "hadm_id": [10, 10, 20],
+        }
+    ).to_parquet(tmp_path / "icu" / "icustays.parquet")
+    pd.DataFrame(
+        {
+            "hadm_id": [10, 20],
+            "icd_code": ["A41.9", "I50.0"],
+            "icd_version": [10, 10],
+        }
+    ).to_parquet(tmp_path / "hosp" / "diagnoses_icd.parquet")
+    pd.DataFrame(
+        {
+            "icd_code": ["A419", "I500"],
+            "long_title": ["Sepsis, unspecified organism", "Heart failure"],
+        }
+    ).to_parquet(tmp_path / "hosp" / "d_icd_diagnoses.parquet")
+
+    result = app._preview_icd_match(tmp_path, "miiv", ["A41"])
+
+    assert result["error"] is None
+    assert result["total_patients"] == 3
+    assert result["matched_patients"] == 2
+    assert result["matched_ids"] == [101, 102]
+    assert result["top_codes"].iloc[0].to_dict() == {
+        "ICD Code": "A419",
+        "Count": 1,
+        "Description": "Sepsis, unspecified organism",
+    }
+
+
+def test_apply_cohort_filter_supports_mimiciv_hosp_icu_layout(tmp_path, monkeypatch) -> None:
+    (tmp_path / "icu").mkdir()
+    (tmp_path / "hosp").mkdir()
+    pd.DataFrame(
+        {
+            "stay_id": [101, 102, 201],
+            "subject_id": [1, 1, 2],
+            "hadm_id": [10, 10, 20],
+            "intime": ["2020-01-01", "2020-02-01", "2020-03-01"],
+            "outtime": ["2020-01-03", "2020-02-03", "2020-03-03"],
+            "los": [2.0, 2.0, 2.0],
+        }
+    ).to_parquet(tmp_path / "icu" / "icustays.parquet")
+    pd.DataFrame(
+        {
+            "subject_id": [1, 2],
+            "anchor_age": [60, 65],
+            "anchor_year": [2020, 2020],
+            "gender": ["F", "M"],
+        }
+    ).to_parquet(tmp_path / "hosp" / "patients.parquet")
+    pd.DataFrame(
+        {
+            "hadm_id": [10, 20],
+            "admittime": ["2020-01-01", "2020-03-01"],
+            "hospital_expire_flag": [0, 0],
+        }
+    ).to_parquet(tmp_path / "hosp" / "admissions.parquet")
+    pd.DataFrame(
+        {
+            "hadm_id": [10, 20],
+            "icd_code": ["A41.9", "I50.0"],
+        }
+    ).to_parquet(tmp_path / "hosp" / "diagnoses_icd.parquet")
+
+    streamlit_stub = _SessionStateStreamlit(
+        {
+            "language": "en",
+            "cohort_enabled": True,
+            "cohort_filter": {
+                "age_min": 0,
+                "age_max": 120,
+                "first_icu_stay": None,
+                "los_min": 0,
+                "gender": None,
+                "survived": None,
+                "disease_cohort": "none",
+                "icd_include_query": "A41",
+                "icd_exclude_query": "I50",
+            },
+        }
+    )
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    result = app.apply_cohort_filter(tmp_path, "miiv")
+
+    assert result is not None
+    assert result["total_before"] == 3
+    assert result["total_after"] == 2
+    assert result["filtered_ids"] == [101, 102]
+
+
 def test_plotly_compat_keeps_plotly_specific_width_api_untouched(monkeypatch) -> None:
     class _PlotlyStub:
         def __init__(self) -> None:
@@ -640,10 +962,17 @@ def test_quick_visualization_demo_loads_after_entry_selection(tmp_path, monkeypa
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
     at.run(timeout=60)
-    at.button[0].click().run(timeout=60)
+    at.button(key="entry_demo_btn").click().run(timeout=60)
     at.button(key="viz_load_demo").click().run(timeout=60)
 
-    assert any("Data Ready" in markdown.value for markdown in at.markdown)
+    rendered_text = " ".join(
+        getattr(element, "value", "")
+        for collection_name in ("markdown", "html")
+        for element in getattr(at, collection_name, [])
+    )
+    assert "Data Loaded" in rendered_text
+    assert len(at.session_state["loaded_concepts"]) > 0
+    assert len(at.session_state["patient_ids"]) == 50
 
 
 def test_sidebar_quick_preview_is_one_click_after_feature_confirmation(tmp_path, monkeypatch) -> None:
@@ -1403,6 +1732,28 @@ def test_build_cohort_dashboard_review_stats_reports_loaded_module_coverage(monk
     assert coverage.loc[coverage["module"] == "Vitals", "features"].item() == 2
     assert coverage.loc[coverage["module"] == "Vitals", "patients"].item() == 3
     assert coverage.loc[coverage["module"] == "Renal", "rows"].item() == 1
+
+
+def test_build_cohort_dashboard_review_stats_uses_loaded_concepts_for_clinical_panels(monkeypatch) -> None:
+    df = pd.DataFrame({"stay_id": [1, 2, 3]})
+    loaded_concepts = {
+        "sofa2": pd.DataFrame({"stay_id": [1, 2, 3], "sofa2": [1, 7, 10]}),
+        "death": pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 1]}),
+        "aki": pd.DataFrame({"stay_id": [2, 3], "aki": [1, 1]}),
+        "vaso_ind": pd.DataFrame({"stay_id": [2], "vaso_ind": [1]}),
+    }
+
+    monkeypatch.setattr(app, "get_concept_groups", lambda: {"Scores": ["sofa2"], "Outcome": ["death"]})
+
+    stats = app._build_cohort_dashboard_review_stats(df, loaded_concepts=loaded_concepts, lang="en")
+    phenotype = stats["phenotype"]
+    severity = stats["severity"]
+
+    assert stats["metrics"]["median_sofa"] == "7.0"
+    assert phenotype.loc[phenotype["label"] == "AKI", "pct"].item() == pytest.approx(66.7)
+    assert phenotype.loc[phenotype["label"] == "Vasopressors", "count"].item() == 1
+    assert severity.loc[severity["sofa_group"] == "6-9", "mortality"].item() == pytest.approx(100.0)
+    assert severity.loc[severity["sofa_group"] == ">=10", "patients"].item() == 1
 
 
 def test_generate_mock_cohort_dashboard_data_includes_sofa_reclassification_inputs() -> None:

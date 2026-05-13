@@ -77,6 +77,7 @@ from easyicu.webapp.data_workflows import (
     load_from_exported as _load_from_exported_impl,
     load_data as _load_data_impl,
     load_data_for_preview as _load_data_for_preview_impl,
+    _select_quick_preview_concepts,
 )
 from easyicu.webapp.conversion_workflow import (
     render_convert_dialog as _render_convert_dialog_impl,
@@ -1071,6 +1072,9 @@ def load_preview_concepts(
     from easyicu.memory_manager import release_memory
 
     concept_dict = load_dictionary(include_sofa2=True)
+    resolved_data_path = Path(find_database_path(str(data_path), database))
+    if not resolved_data_path.exists():
+        resolved_data_path = Path(data_path)
     preview_load_kwargs = dict(extra_kwargs or {})
     preview_load_kwargs.setdefault('memory_efficient', True)
     preview_load_kwargs.setdefault('concept_workers', 1)
@@ -1095,7 +1099,7 @@ def load_preview_concepts(
             normal_result = load_concepts(
                 normal_concepts,
                 database=database,
-                data_path=data_path,
+                data_path=str(resolved_data_path),
                 max_patients=max_patients,
                 merge=False,
                 verbose=verbose,
@@ -1112,7 +1116,7 @@ def load_preview_concepts(
             special_result = load_special_concepts(
                 concepts=special_concepts,
                 database=database,
-                data_path=data_path,
+                data_path=str(resolved_data_path),
                 max_patients=max_patients,
                 verbose=verbose,
                 **extra_kwargs,
@@ -1737,6 +1741,75 @@ def _cohort_numeric_series(df: pd.DataFrame, candidates: List[str]) -> Optional[
     return None
 
 
+def _augment_cohort_dashboard_frame(
+    df: pd.DataFrame,
+    loaded_concepts: Dict[str, Any],
+) -> pd.DataFrame:
+    """Merge stay-level concept previews into the cohort dashboard frame."""
+    if not loaded_concepts or not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+
+    id_candidates = [
+        'stay_id', 'patient_id', 'subject_id', 'hadm_id', 'icustay_id',
+        'patientunitstayid', 'admissionid', 'patientid', 'CaseID',
+    ]
+    base_id = next((col for col in id_candidates if col in df.columns), None)
+    if base_id is None:
+        return df
+
+    out = df.copy()
+    skip_cols = {
+        'charttime', 'time', 'starttime', 'endtime', 'datetime',
+        'valueuom', 'unit', 'label', 'source', 'database',
+    }
+
+    for concept, concept_df in (loaded_concepts or {}).items():
+        if not isinstance(concept_df, pd.DataFrame) or concept_df.empty:
+            continue
+        concept_id = next((col for col in id_candidates if col in concept_df.columns), None)
+        if concept_id is None:
+            continue
+        value_col = concept if concept in concept_df.columns else None
+        if value_col is None:
+            value_col = next(
+                (
+                    col for col in concept_df.columns
+                    if col not in skip_cols and col != concept_id
+                ),
+                None,
+            )
+        if value_col is None:
+            continue
+
+        tmp = concept_df[[concept_id, value_col]].dropna(subset=[concept_id]).copy()
+        if tmp.empty:
+            continue
+        try:
+            tmp[concept_id] = tmp[concept_id].astype(out[base_id].dtype, copy=False)
+        except Exception:
+            out[base_id] = out[base_id].astype(str)
+            tmp[concept_id] = tmp[concept_id].astype(str)
+        numeric = pd.to_numeric(tmp[value_col], errors='coerce')
+        if numeric.notna().any():
+            tmp[value_col] = numeric
+            aggregated = tmp.groupby(concept_id, as_index=False)[value_col].max()
+        else:
+            aggregated = tmp.groupby(concept_id, as_index=False)[value_col].first()
+        target_col = str(concept)
+        aggregated = aggregated.rename(columns={concept_id: base_id, value_col: target_col})
+        if target_col in out.columns:
+            continue
+        out = out.merge(aggregated, on=base_id, how='left')
+
+    if 'death' in out.columns and 'mortality' not in out.columns:
+        out['mortality'] = out['death']
+    if 'los_icu' in out.columns and 'los_hours' not in out.columns:
+        out['los_hours'] = out['los_icu']
+    if 'vaso' in out.columns and 'vasopressors' not in out.columns:
+        out['vasopressors'] = out['vaso']
+    return out
+
+
 def _build_loaded_module_coverage(
     loaded_concepts: Dict[str, Any],
     total_patients: int,
@@ -1808,13 +1881,14 @@ def _build_cohort_dashboard_review_stats(
 ) -> Dict[str, Any]:
     """Build clinically meaningful cohort review summaries for the dashboard."""
     loaded_concepts = loaded_concepts or {}
+    df = _augment_cohort_dashboard_frame(df, loaded_concepts)
     total = len(df)
-    sofa = _cohort_numeric_series(df, ['sofa_max', 'sofa2', 'sofa'])
-    los_hours = _cohort_numeric_series(df, ['los_hours'])
+    sofa = _cohort_numeric_series(df, ['sofa_max', 'sofa2_max', 'sofa2', 'sofa'])
+    los_hours = _cohort_numeric_series(df, ['los_hours', 'los_icu'])
     los_days = los_hours / 24 if los_hours is not None else _cohort_numeric_series(df, ['los_days'])
     age = _cohort_numeric_series(df, ['age'])
     survived = _cohort_bool_series(df, ['survived'])
-    mortality_series = _cohort_bool_series(df, ['mortality'])
+    mortality_series = _cohort_bool_series(df, ['mortality', 'death'])
     if mortality_series is None and survived is not None:
         mortality_series = ~survived
 
@@ -1826,8 +1900,8 @@ def _build_cohort_dashboard_review_stats(
         ('Sepsis' if lang == 'en' else '脓毒症', sepsis),
         ('AKI' if lang == 'en' else '急性肾损伤', _cohort_bool_series(df, ['aki', 'aki_stage'])),
         ('RRT' if lang == 'en' else '肾脏替代治疗', _cohort_bool_series(df, ['rrt'])),
-        ('Mechanical ventilation' if lang == 'en' else '机械通气', _cohort_bool_series(df, ['mech_vent', 'ventilation', 'vent'])),
-        ('Vasopressors' if lang == 'en' else '血管活性药物', _cohort_bool_series(df, ['vasopressors', 'vaso_ind'])),
+        ('Mechanical ventilation' if lang == 'en' else '机械通气', _cohort_bool_series(df, ['mech_vent', 'ventilation', 'vent', 'vent_ind'])),
+        ('Vasopressors' if lang == 'en' else '血管活性药物', _cohort_bool_series(df, ['vasopressors', 'vaso_ind', 'vaso'])),
         ('Antibiotics' if lang == 'en' else '抗菌药物', _cohort_bool_series(df, ['abx'])),
     ]
     if sofa is not None:
@@ -2770,7 +2844,7 @@ def main():
                     _data_path = st.session_state.get('data_path', '')
                     if _db and _data_path:
                         try:
-                            _preview_concepts = _sel_concepts
+                            _preview_concepts = _select_quick_preview_concepts(_sel_concepts, limit=5)
                             with st.spinner(f"Loading preview with {_preview_n} patients from {_db.upper()}..." if lang == 'en' else f"正在从 {_db.upper()} 加载 {_preview_n} 位患者的预览..."):
                                 preview_result = load_preview_concepts(
                                     concepts=_preview_concepts,
@@ -2869,21 +2943,37 @@ def main():
         st.session_state.trigger_export = False
         # 🔧 FIX: 添加 try-except 防止白屏崩溃
         try:
-            # 🔧 FIX: 使用 JavaScript 切换到 Tutorial 标签页（第1个标签）以显示导出进度
+            # 🔧 FIX: 使用 JavaScript 切换到 Tutorial 标签页并定位到导出进度
             js_switch_to_tutorial = '''
             <script>
                 (function() {
-                    // 滚动到页面顶部
-                    var mainContainer = window.parent.document.querySelector('section.main');
-                    if (mainContainer) mainContainer.scrollTop = 0;
-                    window.parent.document.documentElement.scrollTop = 0;
-                    window.parent.document.body.scrollTop = 0;
+                    function scrollToExportProgress() {
+                        var doc = window.parent.document;
+                        var anchor = doc.getElementById('export-progress');
+                        if (anchor) {
+                            anchor.scrollIntoView({behavior: 'smooth', block: 'start'});
+                            return true;
+                        }
+                        var headings = Array.from(doc.querySelectorAll('h1, h2, h3, div, p, span'));
+                        var target = headings.find(function(node) {
+                            var text = (node.innerText || node.textContent || '').trim();
+                            return text === '📤 Export Progress' || text === '📤 导出进度';
+                        });
+                        if (target) {
+                            target.scrollIntoView({behavior: 'smooth', block: 'start'});
+                            return true;
+                        }
+                        return false;
+                    }
 
                     // 点击第一个标签页 (Tutorial)
                     setTimeout(function() {
                         var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
                         if (tabs && tabs.length >= 1) {
                             tabs[0].click();
+                            setTimeout(scrollToExportProgress, 100);
+                            setTimeout(scrollToExportProgress, 600);
+                            setTimeout(scrollToExportProgress, 1400);
                         }
                     }, 100);
                 })();
@@ -2981,6 +3071,43 @@ def main():
                         }, 120);
                     }
                 }, 200);
+            })();
+        </script>
+        '''
+        st.components.v1.html(js_code, height=0)
+    elif scroll_to_tab == 'export_progress':
+        # 跳转到 Tutorial 标签页并滚动到导出进度锚点
+        js_code = '''
+        <script>
+            (function() {
+                function scrollToExportProgress() {
+                    var doc = window.parent.document;
+                    var anchor = doc.getElementById('export-progress');
+                    if (anchor) {
+                        anchor.scrollIntoView({behavior: 'smooth', block: 'start'});
+                        return true;
+                    }
+                    var headings = Array.from(doc.querySelectorAll('h1, h2, h3, div, p, span'));
+                    var target = headings.find(function(node) {
+                        var text = (node.innerText || node.textContent || '').trim();
+                        return text === '📤 Export Progress' || text === '📤 导出进度';
+                    });
+                    if (target) {
+                        target.scrollIntoView({behavior: 'smooth', block: 'start'});
+                        return true;
+                    }
+                    return false;
+                }
+
+                setTimeout(function() {
+                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+                    if (tabs && tabs.length >= 1) {
+                        tabs[0].click();
+                        setTimeout(scrollToExportProgress, 120);
+                        setTimeout(scrollToExportProgress, 500);
+                        setTimeout(scrollToExportProgress, 1200);
+                    }
+                }, 150);
             })();
         </script>
         '''

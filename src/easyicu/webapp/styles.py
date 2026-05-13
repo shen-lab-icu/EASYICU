@@ -1963,6 +1963,16 @@ def render_global_styles(st: Any) -> None:
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        .sidebar-export-detail {
+            font-size: 0.86rem;
+            line-height: 1.45;
+            margin: 0.42rem 0;
+            overflow-wrap: anywhere;
+        }
+        .sidebar-export-detail code {
+            white-space: normal;
+            word-break: break-word;
+        }
         .compact-inline-notice {
             border-radius: 10px;
             padding: 0.48rem 0.72rem;
@@ -2366,7 +2376,7 @@ def render_global_styles(st: Any) -> None:
         .mini-stat-card .mini-value,
         .tiny-stat-card .tiny-value {
             color: var(--figure-navy) !important;
-            letter-spacing: -0.02em !important;
+            letter-spacing: 0 !important;
         }
 
         [data-testid="stDataFrame"] {

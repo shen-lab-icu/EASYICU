@@ -3797,11 +3797,22 @@ def _deterministic_summary_repair(
     )
     generic_soft_failure = "unknown error" in error_text.lower()
     dtype_soft_failure = "pandas data cast to numpy dtype of object" in error_text.lower()
+    undefined_dummy_formula_failure = (
+        "nameerror" in error_text.lower()
+        and "sex_" in error_text.lower()
+        and "not defined" in error_text.lower()
+        and "pd.get_dummies" in code
+        and "logit(" in code.lower()
+    )
     if (
         predictor
         and error_text
         and predictor not in error_text
-        and not (generic_soft_failure or dtype_soft_failure)
+        and not (
+            generic_soft_failure
+            or dtype_soft_failure
+            or undefined_dummy_formula_failure
+        )
     ):
         return None
     duplicate_predictor_design = predictor and (
@@ -3874,6 +3885,18 @@ def _deterministic_summary_repair(
                 repaired = code.replace(marker, patch, 1)
                 if repaired != code:
                     return repair_name, repaired
+        if undefined_dummy_formula_failure and predictor:
+            repair_name = "formula_dummy_name_fallback_v1"
+            if previous_repair != repair_name:
+                fallback = _primary_association_fallback_code(
+                    predictor=predictor,
+                    outcome=str(step_summary.get("outcome") or "death"),
+                    reason=(
+                        "Deterministic fallback after statsmodels formula used "
+                        "a hard-coded dummy column name that was not present."
+                    ),
+                )
+                return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
         raw_categorical_sex_logit = (
             null_model_summary
             and "sm.logit" in code.lower()
@@ -4100,6 +4123,102 @@ def _deterministic_summary_repair(
                 return repair_name, fallback
 
     return None
+
+
+def _primary_association_fallback_code(
+    *,
+    predictor: str,
+    outcome: str = "death",
+    reason: str,
+) -> str:
+    """Appendable rescue block for common real-LLM regression preprocessing failures."""
+    predictor_lit = json.dumps(predictor)
+    outcome_lit = json.dumps(outcome or "death")
+    reason_lit = json.dumps(reason)
+    return textwrap.dedent(
+        f"""
+        def _easyicu_primary_association_fallback_v1():
+            import json
+            import os
+            import numpy as np
+            import pandas as pd
+            import statsmodels.api as sm
+
+            cohort_path = os.environ.get("COHORT_PARQUET")
+            out_dir = os.environ.get("STEP_OUT_DIR", ".")
+            if not cohort_path:
+                return
+            df_fallback = pd.read_parquet(cohort_path)
+            predictor_col = {predictor_lit}
+            outcome_col = {outcome_lit}
+            if predictor_col not in df_fallback.columns or outcome_col not in df_fallback.columns:
+                return
+            candidate_covariates = ["age", "sex", "lact", "creat", "map", "vaso", "los_icu"]
+            covariates = [
+                col for col in candidate_covariates
+                if col in df_fallback.columns and col not in {{predictor_col, outcome_col}}
+            ]
+            model_df = df_fallback[[outcome_col, predictor_col] + covariates].copy()
+            if "sex" in model_df.columns:
+                model_df["sex"] = (
+                    model_df["sex"].astype(str).str.lower()
+                    .isin(["m", "male", "1", "true"])
+                    .astype(float)
+                )
+            for col in model_df.columns:
+                model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
+            model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
+            if len(model_df) < 20 or model_df[outcome_col].nunique() < 2:
+                return
+            x_cols = [predictor_col] + covariates
+            y = model_df[outcome_col].astype(float)
+            X = sm.add_constant(model_df[x_cols].astype(float), has_constant="add")
+            result = sm.Logit(y, X).fit(disp=0)
+            coef = float(result.params[predictor_col])
+            ci = np.exp(result.conf_int().loc[predictor_col]).tolist()
+            primary_or = float(np.exp(coef))
+            p_value = float(result.pvalues[predictor_col])
+            table_path = os.path.join(out_dir, "primary_association.csv")
+            pd.DataFrame([{{
+                "variable": predictor_col,
+                "odds_ratio": primary_or,
+                "or_lower": float(ci[0]),
+                "or_upper": float(ci[1]),
+                "p_value": p_value,
+                "n_complete": int(len(model_df)),
+                "method": "deterministic_logistic_regression_fallback",
+            }}]).to_csv(table_path, index=False)
+            summary_path = os.path.join(out_dir, "step_summary.json")
+            summary = {{}}
+            if os.path.exists(summary_path):
+                try:
+                    with open(summary_path, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        summary.update(loaded)
+                except Exception:
+                    summary = {{}}
+            summary.update({{
+                "primary_predictor": predictor_col,
+                "outcome": outcome_col,
+                "primary_or": primary_or,
+                "statistic:primary_or": primary_or,
+                "primary_or_ci": [float(ci[0]), float(ci[1])],
+                "p_value": p_value,
+                "n_complete": int(len(model_df)),
+                "method": "deterministic_logistic_regression_fallback",
+                "fallback_reason": {reason_lit},
+            }})
+            with open(summary_path, "w", encoding="utf-8") as f:
+                json.dump(summary, f, indent=2, ensure_ascii=False)
+            print(json.dumps(summary, ensure_ascii=False))
+
+        try:
+            _easyicu_primary_association_fallback_v1()
+        except Exception as _easyicu_primary_fallback_exc:
+            print(f"primary_association_fallback_failed: {{_easyicu_primary_fallback_exc}}")
+        """
+    ).strip("\n")
 
 
 def _salvage_stdout_json_step_summary(run_result: RunResult) -> bool:
@@ -4682,7 +4801,305 @@ def _norepinephrine_dose_response_fallback_code() -> str:
     ).strip() + "\n"
 
 
+def _generic_clustering_fallback_code() -> str:
+    return textwrap.dedent(
+        """
+        import json
+        import math
+        import os
+        from pathlib import Path
+
+        import numpy as np
+        import pandas as pd
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        out_dir = Path(os.environ["STEP_OUT_DIR"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+
+        def _jsonable(value):
+            if isinstance(value, dict):
+                return {str(_jsonable(k)): _jsonable(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [_jsonable(v) for v in value]
+            if isinstance(value, (np.integer,)):
+                return int(value)
+            if isinstance(value, (np.floating,)):
+                value = float(value)
+                return value if math.isfinite(value) else None
+            if isinstance(value, (np.bool_,)):
+                return bool(value)
+            if isinstance(value, np.ndarray):
+                return _jsonable(value.tolist())
+            try:
+                if pd.isna(value):
+                    return None
+            except Exception:
+                pass
+            return value
+
+        def _find_column(tokens, *, numeric=True):
+            cols = list(df.columns)
+            lower = {c: str(c).lower() for c in cols}
+            for token in tokens:
+                token_l = token.lower()
+                exact = [c for c, lc in lower.items() if lc == token_l]
+                if exact:
+                    return exact[0]
+            for token in tokens:
+                token_l = token.lower()
+                partial = [c for c, lc in lower.items() if token_l in lc]
+                if partial:
+                    if numeric:
+                        numeric_partial = [
+                            c for c in partial
+                            if pd.api.types.is_numeric_dtype(pd.to_numeric(df[c], errors="coerce"))
+                        ]
+                        if numeric_partial:
+                            return numeric_partial[0]
+                    return partial[0]
+            return None
+
+        def _series_numeric(col):
+            if col is None or col not in df:
+                return None
+            return pd.to_numeric(df[col], errors="coerce")
+
+        column_specs = [
+            ("sofa2", ["sofa2_max_24h", "sofa2", "sofa_total", "sofa"]),
+            ("lactate", ["lactate_max_24h", "lactate", "lact"]),
+            ("map", ["map_min_24h", "map_median_24h", "mean_arterial_pressure", "map"]),
+            ("heart_rate", ["hr_max_24h", "hr_median_24h", "heart_rate", "heartrate", "hr"]),
+            ("creatinine", ["creat_max_24h", "creatinine_max", "creatinine", "crea", "creat"]),
+            ("vasopressor", ["vaso_any_24h", "vasopressor", "norepi", "norepinephrine", "pressor"]),
+        ]
+        selected = {}
+        for canonical, tokens in column_specs:
+            col = _find_column(tokens)
+            ser = _series_numeric(col)
+            if ser is not None and ser.notna().sum() >= max(3, min(10, len(df) // 5)):
+                selected[canonical] = col
+
+        outcome_col = _find_column(
+            ["death", "mortality", "hospital_mortality", "icu_mortality", "mort_icu", "expire"],
+            numeric=True,
+        )
+        if outcome_col is None:
+            survived = _find_column(["survival", "survived"], numeric=True)
+            if survived is not None:
+                outcome_col = "__easyicu_death_from_survival__"
+                df[outcome_col] = 1 - pd.to_numeric(df[survived], errors="coerce")
+
+        feature_frame = pd.DataFrame(index=df.index)
+        for canonical, col in selected.items():
+            feature_frame[canonical] = pd.to_numeric(df[col], errors="coerce")
+        if feature_frame.empty:
+            numeric_cols = [
+                c for c in df.columns
+                if pd.to_numeric(df[c], errors="coerce").notna().sum() >= max(3, min(10, len(df) // 5))
+            ][:6]
+            for col in numeric_cols:
+                feature_frame[str(col)] = pd.to_numeric(df[col], errors="coerce")
+
+        feature_frame = feature_frame.replace([np.inf, -np.inf], np.nan)
+        features_used = list(feature_frame.columns)
+        complete = feature_frame.dropna(how="all").copy()
+        labels = pd.Series(np.nan, index=df.index, dtype="float")
+        cluster_count = 0
+        score = pd.Series(dtype=float)
+        x_plot = pd.Series(dtype=float)
+        y_plot = pd.Series(dtype=float)
+        silhouette_score = None
+        if len(complete) >= 3 and features_used:
+            imputed = complete.fillna(complete.median(numeric_only=True))
+            scale = imputed.std(ddof=0).replace(0, 1)
+            scaled = ((imputed - imputed.median(numeric_only=True)) / scale).fillna(0.0)
+            matrix = scaled.to_numpy(dtype=float)
+            centered = matrix - matrix.mean(axis=0, keepdims=True)
+            if centered.shape[1] >= 2:
+                try:
+                    _, _, vt = np.linalg.svd(centered, full_matrices=False)
+                    embedding = centered @ vt[:2].T
+                    score = pd.Series(embedding[:, 0], index=scaled.index)
+                    x_plot = pd.Series(embedding[:, 0], index=scaled.index)
+                    y_plot = pd.Series(embedding[:, 1], index=scaled.index)
+                except Exception:
+                    score = scaled.sum(axis=1)
+                    x_plot = score
+                    y_plot = scaled.iloc[:, 0]
+            else:
+                score = scaled.iloc[:, 0]
+                x_plot = score
+                y_plot = pd.Series(np.zeros(len(scaled)), index=scaled.index)
+            bins = min(3, max(2, int(len(score) ** 0.5)))
+            try:
+                assigned = pd.qcut(score.rank(method="first"), q=bins, labels=False, duplicates="drop")
+            except Exception:
+                assigned = (score > score.median()).astype(int)
+            labels.loc[assigned.index] = assigned.astype(float)
+            cluster_values = sorted(int(v) for v in pd.Series(assigned).dropna().unique())
+            cluster_count = len(cluster_values)
+            if cluster_count >= 2 and len(score) >= cluster_count:
+                distances = []
+                y = labels.loc[score.index].to_numpy(dtype=float)
+                for i, row in enumerate(centered):
+                    same = centered[y == y[i]]
+                    if len(same) > 1:
+                        a = float(np.linalg.norm(same - row, axis=1).sum() / (len(same) - 1))
+                    else:
+                        a = 0.0
+                    b_vals = [
+                        float(np.linalg.norm(centered[y == lab] - row, axis=1).mean())
+                        for lab in cluster_values
+                        if lab != y[i] and np.any(y == lab)
+                    ]
+                    b = min(b_vals) if b_vals else 0.0
+                    distances.append((b - a) / max(a, b) if max(a, b) > 0 else 0.0)
+                silhouette_score = float(np.mean(distances)) if distances else None
+
+        label_table = pd.DataFrame({"row_index": np.arange(len(df)), "cluster": labels})
+        id_cols = [c for c in ["stay_id", "subject_id", "hadm_id", "patient_id"] if c in df.columns]
+        for col in reversed(id_cols):
+            label_table.insert(0, col, df[col].values)
+        label_table.to_csv(out_dir / "cluster_labels.csv", index=False)
+
+        working = feature_frame.copy()
+        working["cluster"] = labels
+        if outcome_col is not None:
+            working["death"] = pd.to_numeric(df[outcome_col], errors="coerce")
+        cluster_rows = []
+        mortality_rows = []
+        for cluster, group in working.dropna(subset=["cluster"]).groupby("cluster", dropna=False):
+            row = {"cluster": int(cluster), "n": int(len(group))}
+            for feature in features_used:
+                values = pd.to_numeric(group[feature], errors="coerce").dropna()
+                row[f"{feature}_median"] = float(values.median()) if len(values) else None
+                row[f"{feature}_q25"] = float(values.quantile(0.25)) if len(values) else None
+                row[f"{feature}_q75"] = float(values.quantile(0.75)) if len(values) else None
+            if "death" in group:
+                death = pd.to_numeric(group["death"], errors="coerce").dropna()
+                deaths = int(death.sum()) if len(death) else None
+                mortality = float(death.mean()) if len(death) else None
+            else:
+                deaths = None
+                mortality = None
+            row["deaths"] = deaths
+            row["mortality_rate"] = mortality
+            cluster_rows.append(row)
+            mortality_rows.append({
+                "cluster": int(cluster),
+                "n": int(len(group)),
+                "deaths": deaths,
+                "mortality_rate": mortality,
+            })
+        if not cluster_rows:
+            cluster_rows = [{"cluster": 0, "n": 0}]
+            mortality_rows = [{"cluster": 0, "n": 0, "deaths": None, "mortality_rate": None}]
+
+        characteristics = pd.DataFrame(cluster_rows).sort_values("cluster")
+        mortality = pd.DataFrame(mortality_rows).sort_values("cluster")
+        characteristics_path = out_dir / "cluster_characteristics.csv"
+        mortality_path = out_dir / "cluster_mortality.csv"
+        characteristics.to_csv(characteristics_path, index=False)
+        mortality.to_csv(mortality_path, index=False)
+
+        figure_files = []
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+        plot_index = x_plot.index if len(x_plot) else pd.Index([])
+        plot_labels = labels.loc[plot_index] if len(plot_index) else pd.Series(dtype=float)
+        if len(plot_index):
+            scatter = axes[0].scatter(
+                x_plot.loc[plot_index],
+                y_plot.loc[plot_index],
+                c=plot_labels.fillna(-1).astype(int),
+                s=16,
+                alpha=0.7,
+                cmap="viridis",
+            )
+            axes[0].legend(*scatter.legend_elements(), title="Cluster", loc="best", fontsize=8)
+        axes[0].set_title("Patient clusters")
+        axes[0].set_xlabel("Composite severity axis 1")
+        axes[0].set_ylabel("Composite severity axis 2")
+        if "mortality_rate" in mortality:
+            axes[1].bar(mortality["cluster"].astype(str), mortality["mortality_rate"].fillna(0))
+        axes[1].set_title("Mortality by cluster")
+        axes[1].set_xlabel("Cluster")
+        axes[1].set_ylabel("Mortality rate")
+        fig.tight_layout()
+        for suffix in ("png", "svg"):
+            path = out_dir / f"clustering_visualization.{suffix}"
+            fig.savefig(path, dpi=300 if suffix == "png" else None)
+            figure_files.append(str(path))
+        plt.close(fig)
+
+        if features_used and not characteristics.empty:
+            profile = characteristics.set_index("cluster")[
+                [c for c in characteristics.columns if c.endswith("_median")]
+            ].copy()
+            if not profile.empty:
+                fig, ax = plt.subplots(figsize=(max(6, len(profile.columns) * 0.9), 3.5))
+                im = ax.imshow(profile.fillna(0).to_numpy(dtype=float), aspect="auto", cmap="coolwarm")
+                ax.set_yticks(range(len(profile.index)))
+                ax.set_yticklabels([str(v) for v in profile.index])
+                ax.set_xticks(range(len(profile.columns)))
+                ax.set_xticklabels([c.replace("_median", "") for c in profile.columns], rotation=35, ha="right")
+                ax.set_title("Cluster feature profile")
+                fig.colorbar(im, ax=ax, shrink=0.8)
+                fig.tight_layout()
+                for suffix in ("png", "svg"):
+                    path = out_dir / f"cluster_profiles.{suffix}"
+                    fig.savefig(path, dpi=300 if suffix == "png" else None)
+                    figure_files.append(str(path))
+                plt.close(fig)
+
+        methodology = {
+            "method": "dependency_free_severity_quantile_clustering",
+            "features_requested": ["sofa2", "lactate", "map", "heart_rate", "creatinine", "vasopressor"],
+            "features_used": features_used,
+            "source_columns": selected,
+            "outcome_column": outcome_col,
+            "cluster_count": cluster_count,
+            "silhouette_score": silhouette_score,
+            "sklearn_required": False,
+            "note": "Deterministic EasyICU fallback used after generated clustering script failed.",
+        }
+        for name in ("clustering_methodology.json", "clustering_algorithm_details.json"):
+            with open(out_dir / name, "w", encoding="utf-8") as f:
+                json.dump(_jsonable(methodology), f, indent=2, ensure_ascii=False)
+
+        summary = {
+            "n_rows": int(len(df)),
+            "method": methodology["method"],
+            "features_used": features_used,
+            "source_columns": selected,
+            "cluster_count": cluster_count,
+            "statistic:cluster_count": cluster_count,
+            "silhouette_score": silhouette_score,
+            "statistic:silhouette_score": silhouette_score,
+            "cluster_characteristics": characteristics.to_dict(orient="records"),
+            "cluster_mortality": mortality.to_dict(orient="records"),
+            "table:cluster_characteristics": str(characteristics_path),
+            "table:cluster_mortality": str(mortality_path),
+            "table:cluster_labels": str(out_dir / "cluster_labels.csv"),
+            "figure_files": figure_files,
+            "figure:clustering_visualization": figure_files[0] if figure_files else None,
+            "manifest:clustering_methodology": methodology,
+            "clustering_methodology": methodology,
+            "missingness": {c: float(feature_frame[c].isna().mean()) for c in features_used},
+        }
+        with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
+            json.dump(_jsonable(summary), f, indent=2, ensure_ascii=False)
+        print(json.dumps(_jsonable(summary), ensure_ascii=False))
+        """
+    ).strip() + "\n"
+
+
 def _generic_v15_task_fallback_code(task_key: str) -> Optional[str]:
+    if task_key == "clustering":
+        return _generic_clustering_fallback_code()
+
     common = """
 import json
 import math
@@ -4999,6 +5416,17 @@ def _infer_generic_v15_fallback_key(code: str, diagnostic_text: str = "") -> Opt
     combined = f"{code}\n{diagnostic_text}".lower()
     if "norepi_equiv_max_24h" in combined or "t15_norepinephrine_dose_response" in combined:
         return None
+    if (
+        "cluster_labels" in combined
+        or "cluster_characteristics" in combined
+        or "cluster_mortality" in combined
+        or "clustering_visualization" in combined
+        or "trajectory_clustering" in combined
+        or "cluster characterization" in combined
+        or ("clustering" in combined and ("sofa" in combined or "lactate" in combined or "mortality" in combined))
+        or "聚类" in combined
+    ):
+        return "clustering"
     if "t14_creatinine_trajectory_kdigo" in combined:
         return "creatinine"
     if "t05_kdigo_renal_sensitivity" in combined:

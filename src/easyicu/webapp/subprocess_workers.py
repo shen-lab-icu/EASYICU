@@ -833,11 +833,11 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
         json.dump(manifest, f)
 
 
-def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
-                             max_patients, output_dir, preloaded_parquet_dir=None,
-                             export_dir=None, export_format='parquet',
-                             cohort_exclude_ids=None, concept_to_group=None,
-                             cohort_suffix='', sepsis_options=None):
+def _subprocess_load_special_impl(concepts, database, data_path, patient_ids_filter,
+                                  max_patients, output_dir, preloaded_parquet_dir=None,
+                                  export_dir=None, export_format='parquet',
+                                  cohort_exclude_ids=None, concept_to_group=None,
+                                  cohort_suffix='', sepsis_options=None):
     """在子进程中加载特殊概念（AKI, CircFailure 等），结果写入 parquet。
 
     当 export_dir 不为 None 时，在子进程内直接完成合并+导出，
@@ -1150,60 +1150,7 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
                             break
                     sep_dfs[_dep] = _cached
 
-            _have_all_cache = all(d in sep_dfs for d in _sep3_load_list)
-
-            if _have_all_cache:
-                import numpy as np
-                print(f"Sep3: using cached data ({', '.join(f'{k}={len(v)}rows' for k,v in sep_dfs.items())})")
-                susp_df = sep_dfs['susp_inf']
-                _id_col_s = None
-                for _ic in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']:
-                    if _ic in susp_df.columns:
-                        _id_col_s = _ic
-                        break
-                _time_col_s = 'charttime' if 'charttime' in susp_df.columns else None
-
-                if _id_col_s and _time_col_s:
-                    merged = susp_df.copy()
-                    for _sn in ['sofa', 'sofa2']:
-                        if _sn in sep_dfs:
-                            _sdf = sep_dfs[_sn]
-                            _vcols = [c for c in _sdf.columns if c not in [_id_col_s, 'charttime', 'valueuom', 'unit']]
-                            if _vcols:
-                                _keep = [c for c in [_id_col_s, 'charttime'] + _vcols if c in _sdf.columns]
-                                _sdf = _sdf[_keep].copy()
-                                if _sn not in _sdf.columns and len(_vcols) == 1:
-                                    _sdf = _sdf.rename(columns={_vcols[0]: _sn})
-                                _mc = [c for c in [_id_col_s, 'charttime'] if c in _sdf.columns]
-                                if _mc:
-                                    merged = pd.merge(merged, _sdf, on=_mc, how='left')
-
-                    _susp_v = 'susp_inf'
-                    if _susp_v not in merged.columns:
-                        _sc_cands = [c for c in merged.columns if c not in [_id_col_s, 'charttime', 'sofa', 'sofa2']]
-                        if _sc_cands:
-                            merged = merged.rename(columns={_sc_cands[0]: 'susp_inf'})
-
-                    if 'susp_inf' in merged.columns:
-                        _sm = merged['susp_inf'].fillna(0).astype(bool)
-                        _rc = [_id_col_s, 'charttime']
-                        if 'sep3_sofa1' in sep_concepts and 'sofa' in merged.columns:
-                            _s1 = _sm & (merged['sofa'].fillna(0) >= 2)
-                            _sep1_df = merged[_s1][_rc].copy()
-                            _sep1_df['sep3_sofa1'] = True
-                            if not _sep1_df.empty:
-                                path = os.path.join(output_dir, 'sep3_sofa1.parquet')
-                                _sep1_df.to_parquet(path, index=False)
-                                saved['sep3_sofa1'] = path
-                        if 'sep3_sofa2' in sep_concepts and 'sofa2' in merged.columns:
-                            _s2 = _sm & (merged['sofa2'].fillna(0) >= 2)
-                            _sep2_df = merged[_s2][_rc].copy()
-                            _sep2_df['sep3_sofa2'] = True
-                            if not _sep2_df.empty:
-                                path = os.path.join(output_dir, 'sep3_sofa2.parquet')
-                                _sep2_df.to_parquet(path, index=False)
-                                saved['sep3_sofa2'] = path
-            else:
+            if not all(d in sep_dfs for d in _sep3_load_list):
                 # Fallback: batch load
                 _missing = [d for d in _sep3_load_list if d not in sep_dfs]
                 if _missing:
@@ -1251,6 +1198,63 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
                                         sep_dfs[_bk] = _bv
                         except Exception:
                             pass
+
+            for _dep, _cdf in list(sep_dfs.items()):
+                if 'charttime' not in _cdf.columns:
+                    for _ta in _time_aliases_all:
+                        if _ta in _cdf.columns:
+                            sep_dfs[_dep] = _cdf.rename(columns={_ta: 'charttime'})
+                            break
+
+            if all(d in sep_dfs for d in _sep3_load_list):
+                print(f"Sep3: using data ({', '.join(f'{k}={len(v)}rows' for k,v in sep_dfs.items())})")
+                susp_df = sep_dfs['susp_inf']
+                _id_col_s = None
+                for _ic in ['stay_id', 'patientunitstayid', 'admissionid', 'patientid', 'icustay_id', 'CaseID']:
+                    if _ic in susp_df.columns:
+                        _id_col_s = _ic
+                        break
+                _time_col_s = 'charttime' if 'charttime' in susp_df.columns else None
+
+                if _id_col_s and _time_col_s:
+                    merged = susp_df.copy()
+                    for _sn in ['sofa', 'sofa2']:
+                        if _sn in sep_dfs:
+                            _sdf = sep_dfs[_sn]
+                            _vcols = [c for c in _sdf.columns if c not in [_id_col_s, 'charttime', 'valueuom', 'unit']]
+                            if _vcols:
+                                _keep = [c for c in [_id_col_s, 'charttime'] + _vcols if c in _sdf.columns]
+                                _sdf = _sdf[_keep].copy()
+                                if _sn not in _sdf.columns and len(_vcols) == 1:
+                                    _sdf = _sdf.rename(columns={_vcols[0]: _sn})
+                                _mc = [c for c in [_id_col_s, 'charttime'] if c in _sdf.columns]
+                                if _mc:
+                                    merged = pd.merge(merged, _sdf, on=_mc, how='left')
+
+                    if 'susp_inf' not in merged.columns:
+                        _sc_cands = [c for c in merged.columns if c not in [_id_col_s, 'charttime', 'sofa', 'sofa2']]
+                        if _sc_cands:
+                            merged = merged.rename(columns={_sc_cands[0]: 'susp_inf'})
+
+                    if 'susp_inf' in merged.columns:
+                        _sm = merged['susp_inf'].fillna(0).astype(bool)
+                        _rc = [_id_col_s, 'charttime']
+                        if 'sep3_sofa1' in sep_concepts and 'sofa' in merged.columns:
+                            _s1 = _sm & (merged['sofa'].fillna(0) >= 2)
+                            _sep1_df = merged[_s1][_rc].copy()
+                            _sep1_df['sep3_sofa1'] = True
+                            if not _sep1_df.empty:
+                                path = os.path.join(output_dir, 'sep3_sofa1.parquet')
+                                _sep1_df.to_parquet(path, index=False)
+                                saved['sep3_sofa1'] = path
+                        if 'sep3_sofa2' in sep_concepts and 'sofa2' in merged.columns:
+                            _s2 = _sm & (merged['sofa2'].fillna(0) >= 2)
+                            _sep2_df = merged[_s2][_rc].copy()
+                            _sep2_df['sep3_sofa2'] = True
+                            if not _sep2_df.empty:
+                                path = os.path.join(output_dir, 'sep3_sofa2.parquet')
+                                _sep2_df.to_parquet(path, index=False)
+                                saved['sep3_sofa2'] = path
         except Exception as e:
             print(f"Sep3 loading failed: {e}")
             import traceback
@@ -1427,3 +1431,31 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
     if exported_manifest:
         with open(os.path.join(output_dir, '_export_manifest.json'), 'w') as f:
             json.dump(exported_manifest, f)
+
+
+def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
+                             max_patients, output_dir, preloaded_parquet_dir=None,
+                             export_dir=None, export_format='parquet',
+                             cohort_exclude_ids=None, concept_to_group=None,
+                             cohort_suffix='', sepsis_options=None):
+    """Run special concept loading without letting optional derivations kill export."""
+    try:
+        return _subprocess_load_special_impl(
+            concepts, database, data_path, patient_ids_filter,
+            max_patients, output_dir, preloaded_parquet_dir,
+            export_dir, export_format, cohort_exclude_ids,
+            concept_to_group, cohort_suffix, sepsis_options,
+        )
+    except Exception as exc:
+        import json
+        import os
+        import traceback
+
+        os.makedirs(output_dir, exist_ok=True)
+        with open(os.path.join(output_dir, '_manifest.json'), 'w') as f:
+            json.dump({}, f)
+        with open(os.path.join(output_dir, '_error.txt'), 'w') as f:
+            f.write(f"{type(exc).__name__}: {exc}\n\n")
+            f.write(traceback.format_exc())
+        print(f"[SPECIAL] Optional special concept worker failed: {exc}")
+        traceback.print_exc()

@@ -56,15 +56,68 @@ def _get_supported_disease_cohorts(database: str) -> list[str]:
     return base
 
 
+def _table_path_candidates(data_path: Path, database: str, table_name: str) -> list[Path]:
+    """Return likely locations for raw ICU database tables.
+
+    MIMIC-IV ships core ICU tables under ``icu/`` and hospital tables under
+    ``hosp/``; older EasyICU exports keep flattened ``*.parquet`` files at the
+    selected root. Keep the flat path first so existing exports still win.
+    """
+    name = str(table_name)
+    path = Path(data_path)
+    db = str(database or "").lower()
+    stem = Path(name).stem
+    suffixes = [Path(name).suffix] if Path(name).suffix else [".parquet"]
+    for extra in (".csv.gz", ".csv"):
+        if extra not in suffixes:
+            suffixes.append(extra)
+
+    candidate_dirs = [path]
+    if db in {"miiv", "mimic"}:
+        if stem == "icustays":
+            candidate_dirs.extend([path / "icu", path / "hosp"])
+        elif stem in {"patients", "admissions", "diagnoses_icd", "d_icd_diagnoses"}:
+            candidate_dirs.extend([path / "hosp", path / "icu"])
+    candidate_dirs.extend([path / "icu", path / "hosp"])
+
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for folder in candidate_dirs:
+        for suffix in suffixes:
+            candidate = folder / f"{stem}{suffix}"
+            if candidate not in seen:
+                seen.add(candidate)
+                candidates.append(candidate)
+    return candidates
+
+
+def _resolve_table_path(data_path: Path, database: str, table_name: str) -> Path | None:
+    """Resolve a database table across flat exports and raw DB subfolders."""
+    for candidate in _table_path_candidates(data_path, database, table_name):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _read_table(path: Path, columns: list[str] | None = None) -> pd.DataFrame:
+    """Read a parquet or CSV table, optionally projecting columns."""
+    suffixes = "".join(path.suffixes).lower()
+    if path.suffix.lower() in {".parquet", ".pq"}:
+        return pd.read_parquet(path, columns=columns)
+    if suffixes.endswith(".csv.gz") or path.suffix.lower() == ".csv":
+        return pd.read_csv(path, usecols=columns)
+    return pd.read_parquet(path, columns=columns)
+
+
 def _match_ids_by_icd_tokens(data_path: Path, database: str, icu_df: pd.DataFrame, id_col_lower: str, tokens: list[str]) -> set:
     """Match ICU stay IDs by ICD prefixes / diagnosis keywords for DBs with diagnosis coding."""
     if not tokens or not _supports_icd_filter(database):
         return set()
     matched_ids = set()
     if database in {'miiv', 'mimic'}:
-        diag_path = data_path / 'diagnoses_icd.parquet'
-        if diag_path.exists() and 'hadm_id' in icu_df.columns:
-            diag_df = pd.read_parquet(diag_path, columns=['hadm_id', 'icd_code'])
+        diag_path = _resolve_table_path(data_path, database, 'diagnoses_icd.parquet')
+        if diag_path and diag_path.exists() and 'hadm_id' in icu_df.columns:
+            diag_df = _read_table(diag_path, columns=['hadm_id', 'icd_code'])
             codes = diag_df['icd_code'].astype(str).str.upper().str.replace('.', '', regex=False)
             norm_tokens = [tok.upper().replace('.', '') for tok in tokens]
             diag_mask = pd.Series(False, index=diag_df.index)
@@ -73,9 +126,9 @@ def _match_ids_by_icd_tokens(data_path: Path, database: str, icu_df: pd.DataFram
             matched_hadm = set(diag_df.loc[diag_mask, 'hadm_id'].dropna().unique())
             matched_ids = set(icu_df.loc[icu_df['hadm_id'].isin(matched_hadm), id_col_lower].dropna().unique())
     elif database == 'eicu':
-        diag_path = data_path / 'diagnosis.parquet'
-        if diag_path.exists():
-            diag_df = pd.read_parquet(diag_path)
+        diag_path = _resolve_table_path(data_path, database, 'diagnosis.parquet')
+        if diag_path and diag_path.exists():
+            diag_df = _read_table(diag_path)
             diag_df.columns = [c.lower() for c in diag_df.columns]
             if 'patientunitstayid' in diag_df.columns:
                 diag_text = pd.Series('', index=diag_df.index, dtype='object')

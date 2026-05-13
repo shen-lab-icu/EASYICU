@@ -246,12 +246,16 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                 good_msg = "✅ Missingness is negligible across loaded concepts." if lang == 'en' else "✅ 当前已加载概念几乎没有缺失。"
                 st.success(good_msg)
             else:
-                chart_limit = 10 if screenshot_mode else 18
+                # In screenshot mode keep a compact fixed size; in the
+                # interactive web view show ALL concepts so nothing is hidden.
+                # The chart height auto-scales and Streamlit's scrollable
+                # container handles overflow.
+                screenshot_limit = 18
                 total_quality_concepts = len(missing_plot_df)
-                if sort_order == 'alpha':
-                    chart_df = missing_plot_df.head(chart_limit).copy()
+                if screenshot_mode:
+                    chart_df = missing_plot_df.head(screenshot_limit).copy()
                 else:
-                    chart_df = missing_plot_df.head(chart_limit).copy()
+                    chart_df = missing_plot_df.copy()
                 chart_df['_missing_bin'] = pd.cut(
                     chart_df[missing_rate_label],
                     bins=[-0.001, 25, 50, 75, 100],
@@ -277,7 +281,7 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                 )
                 fig.update_layout(
                     template="plotly_white",
-                    height=max(340, len(chart_df) * 30 + 110),
+                    height=max(340, len(chart_df) * 34 + 110),
                     showlegend=True,
                     legend=dict(
                         title='Missing rate (%)' if lang == 'en' else '缺失率 (%)',

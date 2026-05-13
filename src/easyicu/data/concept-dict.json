@@ -7824,12 +7824,15 @@
           "sub_var": "labname"
         }
       ],
-      "miiv": [
-        {
-          "ids": 51002,
-          "table": "labevents",
-          "sub_var": "itemid"
-        }
+    "miiv": [
+      {
+        "ids": [
+          51002,
+          52642
+        ],
+        "table": "labevents",
+        "sub_var": "itemid"
+      }
       ],
       "mimic": [
         {
@@ -8062,11 +8065,11 @@
           "callback": "transform_fun(set_val(TRUE))"
         }
       ],
-      "eicu_demo": [
-        {
-          "table": "respiratorycare",
-          "val_var": "ventendoffset",
-          "callback": "vent_flag",
+    "eicu_demo": [
+      {
+        "table": "respiratorycare",
+        "val_var": "ventendoffset",
+        "callback": "vent_flag",
           "class_name": "col_itm"
         },
         {
@@ -8084,13 +8087,35 @@
           "table": "respiratorycharting",
           "sub_var": "respchartvalue",
           "val_var": "respchartvaluelabel",
-          "callback": "transform_fun(set_val(TRUE))"
-        }
-      ],
-      "mimic": [
-        {
-          "ids": [
-            225468,
+        "callback": "transform_fun(set_val(TRUE))"
+      }
+    ],
+    "miiv": [
+      {
+        "ids": [
+          225468,
+          225477,
+          227194
+        ],
+        "table": "procedureevents",
+        "sub_var": "itemid",
+        "callback": "transform_fun(set_val(TRUE))"
+      },
+      {
+        "ids": [
+          467,
+          469,
+          226732
+        ],
+        "table": "chartevents",
+        "sub_var": "itemid",
+        "callback": "transform_fun(set_val(TRUE))"
+      }
+    ],
+    "mimic": [
+      {
+        "ids": [
+          225468,
             225477,
             227194
           ],

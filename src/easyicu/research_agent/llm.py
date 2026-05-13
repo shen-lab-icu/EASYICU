@@ -56,6 +56,15 @@ class LLMClient(Protocol):
                  temperature: float = 0.2) -> str: ...
 
 
+def _strip_reasoning_blocks(text: str) -> str:
+    """Remove private reasoning blocks from OpenAI-compatible model output."""
+    if not text:
+        return ""
+    cleaned = re.sub(r"<think\b[^>]*>.*?</think>", "", text, flags=re.I | re.S)
+    cleaned = re.sub(r"<think\b[^>]*>.*$", "", cleaned, flags=re.I | re.S)
+    return cleaned.strip()
+
+
 # ---------------------------------------------------------------------------
 # Mock client: ICU-aware canned responses, used for tests / offline demo
 # ---------------------------------------------------------------------------
@@ -1679,15 +1688,23 @@ class OpenAIClient:
             self.last_usage = None
 
         # T1.3 — robust content extraction. Reasoning-tuned models
-        # (GLM-4.5, DeepSeek-R1, o1-style) often leave ``content``
-        # empty and put the answer in ``reasoning`` / ``reasoning_content``.
-        # OpenRouter typically surfaces this under ``reasoning``;
+        # (GLM-4.5, DeepSeek-R1, o1-style, Qwen3) often leave ``content``
+        # empty and put the answer in ``reasoning`` / ``reasoning_content``,
+        # OR embed the entire output (including the answer) inside
+        # <think>…</think> tags with nothing after the closing tag.
+        # OpenRouter typically surfaces reasoning under ``reasoning``;
         # z.ai's native API uses ``reasoning_content``. Fall through
         # the common attributes and finally scan the message dump.
+        #
+        # IMPORTANT: strip <think> blocks BEFORE the empty-content check so
+        # that a response like "<think>…</think>" (no trailing answer text,
+        # produced by Qwen3 in default thinking mode) correctly falls through
+        # to the fallback chain rather than being treated as non-empty.
         choice = resp.choices[0]
         self.last_finish_reason = getattr(choice, "finish_reason", None)
         msg = choice.message
-        content = (getattr(msg, "content", None) or "").strip()
+        raw_msg_content = (getattr(msg, "content", None) or "").strip()
+        content = _strip_reasoning_blocks(raw_msg_content)
         if not content:
             for attr in ("reasoning_content", "reasoning"):
                 val = getattr(msg, attr, None)
@@ -1707,9 +1724,23 @@ class OpenAIClient:
                     if isinstance(v, str) and len(v.strip()) > len(best):
                         best = v.strip()
                 if best:
-                    content = best
+                    content = _strip_reasoning_blocks(best)
             except Exception:
                 pass
+        if not content and raw_msg_content:
+            # Qwen3 / thinking-mode last-ditch: the model emitted only a
+            # <think>…</think> block, or an unclosed <think> prefix, with no
+            # trailing answer text. Extract
+            # the inner reasoning so the downstream parser at least receives
+            # non-empty text (it may still fail JSON parsing, but the error
+            # message will contain useful information instead of len=0).
+            m = re.search(r"<think\b[^>]*>(.*?)</think>", raw_msg_content, re.I | re.S)
+            if m:
+                content = m.group(1).strip()
+            else:
+                m = re.search(r"<think\b[^>]*>(.*)$", raw_msg_content, re.I | re.S)
+                if m:
+                    content = m.group(1).strip()
 
         # Optional debug dump — ``EASYICU_LLM_DEBUG=1 …`` writes one
         # JSON file per call so the user can inspect what the model
@@ -1792,7 +1823,7 @@ class OpenAIClient:
         choice = resp.choices[0]
         self.last_finish_reason = getattr(choice, "finish_reason", None)
         msg = choice.message
-        return (getattr(msg, "content", None) or "").strip()
+        return _strip_reasoning_blocks((getattr(msg, "content", None) or "").strip())
 
 
 # ---------------------------------------------------------------------------

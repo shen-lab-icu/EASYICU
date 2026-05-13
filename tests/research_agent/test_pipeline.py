@@ -3194,6 +3194,40 @@ result = model.fit(disp=0)
     assert 'X_encoded.apply(pd.to_numeric, errors="coerce").astype(float)' in patched
 
 
+def test_deterministic_summary_repair_handles_formula_dummy_name_error(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+import pandas as pd
+from statsmodels.formula.api import logit
+df = pd.read_parquet(cohort_path)
+df = pd.get_dummies(df, columns=['sex'], drop_first=True)
+try:
+    model = logit('death ~ sofa2 + age + sex_F', data=df).fit()
+except Exception as e:
+    step_summary = {
+        'primary_predictor': 'sofa2',
+        'estimate': None,
+        'error': str(e),
+    }
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "primary_predictor": "sofa2",
+            "estimate": None,
+            "error": "Error evaluating factor: NameError: name 'sex_F' is not defined",
+        },
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "formula_dummy_name_fallback_v1"
+    assert "_easyicu_primary_association_fallback_v1" in patched
+    assert '"primary_or"' in patched
+    compile(patched, "<patched>", "exec")
+
+
 def test_deterministic_summary_repair_restores_predictor_in_helper_design(ra):
     from easyicu.research_agent.pipeline import _deterministic_summary_repair
 
@@ -3679,5 +3713,62 @@ def test_generic_creatinine_fallback_writes_clustering_contract(ra, tmp_path: Pa
         "clustering_algorithm_details.json",
         "clustering_visualization.png",
         "clustering_visualization.svg",
+    ]:
+        assert (out_dir / name).exists()
+
+
+def test_generic_clustering_fallback_writes_tables_and_figures(ra, tmp_path: Path, monkeypatch):
+    from easyicu.research_agent.pipeline import (
+        _generic_v15_task_fallback_code,
+        _infer_generic_v15_fallback_key,
+    )
+
+    cohort = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4, 5, 6],
+        "sofa2_max_24h": [1, 2, 4, 7, 9, 11],
+        "lactate_max_24h": [1.1, 1.4, 2.8, 3.1, 4.5, 5.0],
+        "map_min_24h": [82, 78, 70, 62, 55, 51],
+        "hr_max_24h": [88, 92, 104, 115, 122, 130],
+        "creat_max_24h": [0.8, 1.0, 1.3, 1.8, 2.1, 2.6],
+        "vaso_any_24h": [0, 0, 1, 1, 1, 1],
+        "death": [0, 0, 0, 1, 1, 1],
+    })
+    cohort_path = tmp_path / "cohort.parquet"
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    cohort.to_parquet(cohort_path, index=False)
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+
+    assert _infer_generic_v15_fallback_key(
+        "Generate cluster_characteristics and cluster_mortality for SOFA/lactate clustering",
+        "KeyError: cluster_labels",
+    ) == "clustering"
+
+    code = _generic_v15_task_fallback_code("clustering")
+    assert code is not None
+    compile(code, "<clustering_fallback>", "exec")
+    exec(code, {"__name__": "__main__"})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["cluster_count"] >= 2
+    assert {"sofa2", "lactate", "map", "heart_rate", "creatinine", "vasopressor"} <= set(
+        summary["features_used"]
+    )
+    assert summary["cluster_characteristics"]
+    assert summary["cluster_mortality"]
+    assert summary["table:cluster_characteristics"].endswith("cluster_characteristics.csv")
+    assert summary["table:cluster_mortality"].endswith("cluster_mortality.csv")
+    assert summary["figure:clustering_visualization"].endswith("clustering_visualization.png")
+    for name in [
+        "cluster_labels.csv",
+        "cluster_characteristics.csv",
+        "cluster_mortality.csv",
+        "clustering_methodology.json",
+        "clustering_algorithm_details.json",
+        "clustering_visualization.png",
+        "clustering_visualization.svg",
+        "cluster_profiles.png",
+        "cluster_profiles.svg",
     ]:
         assert (out_dir / name).exists()

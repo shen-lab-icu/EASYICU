@@ -8,6 +8,8 @@ from typing import Any
 
 import streamlit as st
 
+from easyicu.webapp.components.constants import get_all_concepts
+
 
 def _html_escape_text(value: Any, default: str = "—") -> str:
     """Escape short UI values for HTML snippets."""
@@ -216,7 +218,7 @@ def _render_extraction_pipeline_figure(
                     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.38rem;margin-bottom:0.58rem">{group_chips}</div>
                     <div class="workflow-label">{"Select clinical concepts" if is_en else "选择临床概念"}</div>
                     <div class="workflow-concepts">{concepts_html}</div>
-                    <div class="workflow-input" style="margin-top:0.65rem;background:#f5f7ff">{"167 concepts available" if not selected_concepts else f"{len(selected_concepts)} concepts selected"}</div>
+                    <div class="workflow-input" style="margin-top:0.65rem;background:#f5f7ff">{f"{len(get_all_concepts())} concepts available" if not selected_concepts else f"{len(selected_concepts)} concepts selected"}</div>
                 </div>
                 <div class="workflow-arrow">→</div>
                 <div class="workflow-card">

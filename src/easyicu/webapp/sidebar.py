@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 from pathlib import Path
+import html
 import os
-import re
 
 import streamlit as st
 from easyicu.webapp.session_state import clear_run_state
@@ -46,8 +46,7 @@ def _hide_prefilled_directory_text(input_key: str, mirrored_value: str) -> None:
     current = str(st.session_state.get(input_key, "") or "")
     if pending_key in st.session_state:
         return
-    looks_like_abs = current.startswith("/") or bool(re.match(r"^[A-Za-z]:[\\/]", current)) or current.startswith("~")
-    if looks_like_abs or (mirrored_value and current == str(mirrored_value)):
+    if mirrored_value and current == str(mirrored_value):
         st.session_state[input_key] = ""
 
 
@@ -201,7 +200,7 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                 st.session_state.loaded_concepts = {}
                 st.session_state.loaded_data_origin = 'none'
                 # 🔧 FIX (2026-02-15): 重置采样参数，避免上次提取的 patient_limit/patient_ids 泄露到新提取
-                st.session_state.patient_limit = 1000  # 重置为默认值
+                st.session_state.patient_limit = 0  # 重置为默认值：全量患者
                 st.session_state.patient_ids = []
                 st.session_state.all_patient_count = 0
                 st.session_state.pop('_viz_auto_load_export', None)
@@ -345,7 +344,8 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
             _hint = f"Enter the path to your {_db_display} data directory" if st.session_state.language == 'en' else f"请输入 {_db_display} 数据目录的路径"
 
             path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
-            _hide_prefilled_directory_text("sidebar_data_path_input", st.session_state.data_path or "")
+            if st.session_state.get("data_path") and not st.session_state.get("sidebar_data_path_input"):
+                st.session_state.sidebar_data_path_input = st.session_state.data_path
             data_path = _directory_input(
                 path_label,
                 value=st.session_state.data_path or "",
@@ -353,7 +353,6 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                 button_key="sidebar_data_path_browse",
                 placeholder=_placeholder,
                 help=_hint,
-                show_value=False,
             )
             effective_data_path = data_path or st.session_state.get("data_path", "")
 
@@ -395,15 +394,15 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
             last_validation = st.session_state.get('last_validation', {})
             last_path = st.session_state.get('last_validated_path', '')
 
-            if st.session_state.get('path_validated') and st.session_state.data_path == data_path:
+            if st.session_state.get('path_validated') and st.session_state.data_path == effective_data_path:
                 validated_msg = "✅ Path validated" if st.session_state.language == 'en' else "✅ 路径已验证"
                 st.success(validated_msg)
-            elif last_validation.get('can_convert') and last_path == data_path:
+            elif last_validation.get('can_convert') and last_path == effective_data_path:
                 # 显示转换按钮
                 convert_btn = "🔄 Convert & Setup" if st.session_state.language == 'en' else "🔄 转换并设置"
                 if st.button(convert_btn, use_container_width=True, type="primary", key="convert_csv"):
                     st.session_state.show_convert_dialog = True
-                    st.session_state.convert_source_path = data_path
+                    st.session_state.convert_source_path = effective_data_path
                     st.rerun()
                 convert_hint = "💡 One-click: convert → validate → ready" if st.session_state.language == 'en' else "💡 一键完成：转换 → 验证 → 就绪"
                 st.caption(convert_hint)
@@ -419,7 +418,7 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                     )
                     if last_validation.get('download_note'):
                         st.caption(last_validation['download_note'])
-            elif last_validation and (not last_validation.get('valid')) and last_path == data_path:
+            elif last_validation and (not last_validation.get('valid')) and last_path == effective_data_path:
                 if last_validation.get('download_url'):
                     st.link_button(
                         last_validation.get('download_label') or (
@@ -432,7 +431,7 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                     )
                     if last_validation.get('download_note'):
                         st.caption(last_validation['download_note'])
-            elif data_path and Path(data_path).exists():
+            elif effective_data_path and Path(effective_data_path).exists():
                 validate_hint = "💡 Click the button above to validate data format" if st.session_state.language == 'en' else "💡 点击上方按钮验证数据格式"
                 st.caption(validate_hint)
 
@@ -1018,6 +1017,13 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                     st.session_state['_preview_n'] = preview_n
                     st.session_state['_scroll_to_tab'] = 'viz'
                     st.rerun()
+                if st.session_state.get('_preview_requested', False):
+                    preview_pending_msg = (
+                        "⏳ Quick Preview is loading. The Quick Visualization tab will open when the sample is ready."
+                        if st.session_state.language == 'en' else
+                        "⏳ 正在加载快速预览。样本准备好后会自动打开快速可视化标签页。"
+                    )
+                    st.info(preview_pending_msg)
         else:
             # 如果没有选中任何概念，重置确认状态
             st.session_state.step3_confirmed = False
@@ -1054,8 +1060,11 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
         default_export_path = str(Path(base_export_path) / default_dir_name)
         export_input_key = "sidebar_export_path_input"
         export_default_key = "_sidebar_export_path_default"
-        st.session_state[export_default_key] = default_export_path
-        _hide_prefilled_directory_text(export_input_key, st.session_state.get("export_path", default_export_path))
+        _ensure_default_directory_input_value(
+            input_key=export_input_key,
+            default_key=export_default_key,
+            default_value=st.session_state.get("export_path", default_export_path),
+        )
 
         export_path = _directory_input(
             "Export Path" if st.session_state.language == 'en' else "导出路径",
@@ -1064,7 +1073,6 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
             button_key="sidebar_export_path_browse",
             placeholder="Select export directory" if st.session_state.language == 'en' else "选择导出目录",
             help=(f"Data will be exported to this directory (Current database: {db_name.upper()})" if st.session_state.language == 'en' else f"数据将导出到此目录（当前数据库: {db_name.upper()}）"),
-            show_value=False,
         )
         export_path = export_path or st.session_state.get("export_path", default_export_path)
         st.session_state.export_path = export_path
@@ -1104,7 +1112,7 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
 
         # 🚀 患者数量限制（性能优化选项）
         limit_label = "Patient Limit" if st.session_state.language == 'en' else "患者数量限制"
-        limit_help = "Limit number of patients to speed up loading. 0 = no limit (full data, requires large memory)" if st.session_state.language == 'en' else "限制加载的患者数量以加速。0 = 不限制（全量数据，需要大内存。超过5万患者时自动分批）"
+        limit_help = "Use All patients for the optimized full-dataset export. Pick a smaller number only for a quick test." if st.session_state.language == 'en' else "默认使用全部患者的优化全量导出。只有快速测试时才选择较小数量。"
         patient_limit_options = [100, 1000, 5000, 10000, 20000, 50000, 0]
         patient_limit_labels = {
             100: "100 (quick test)" if st.session_state.language == 'en' else "100（快速测试）",
@@ -1113,11 +1121,11 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
             10000: "10,000",
             20000: "20,000",
             50000: "50,000",
-            0: "All patients (auto-batch)" if st.session_state.language == 'en' else "全部患者（自动分批）"
+            0: "All patients" if st.session_state.language == 'en' else "全部患者"
         }
-        current_limit = st.session_state.get('patient_limit', 1000)  # 🔧 FIX: 默认1000患者（全量太慢）
+        current_limit = st.session_state.get('patient_limit', 0)
         if current_limit not in patient_limit_options:
-            current_limit = 1000  # 🔧 FIX: 默认1000患者
+            current_limit = 0
         patient_limit = st.selectbox(
             limit_label,
             options=patient_limit_options,
@@ -1173,8 +1181,17 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                         unsafe_allow_html=True,
                     )
 
-                st.markdown(f"**{get_text('sanity_path')}:** `{export_path}`")
-                st.markdown(f"**{get_text('sanity_modules')}:** {_n_mods}")
+                st.markdown(
+                    '<div class="sidebar-export-detail">'
+                    f'<strong>{html.escape(get_text("sanity_path"))}:</strong><br>'
+                    f'<code>{html.escape(str(export_path))}</code>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    f'<div class="sidebar-export-detail"><strong>{html.escape(get_text("sanity_modules"))}:</strong> {_n_mods}</div>',
+                    unsafe_allow_html=True,
+                )
 
             _col_ok, _col_back = st.columns(2)
             with _col_ok:
@@ -1182,7 +1199,7 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                     st.session_state.trigger_export = True
                     st.session_state.export_completed = False
                     st.session_state['_exporting_in_progress'] = True
-                    st.session_state['_scroll_to_top'] = True
+                    st.session_state['_scroll_to_tab'] = 'export_progress'
                     st.rerun()
             with _col_back:
                 if st.button(get_text('sanity_back'), use_container_width=True, key="sanity_back_btn"):

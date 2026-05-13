@@ -158,11 +158,67 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
             )
             st.markdown(f'<div class="compact-inline-notice info">{preview_reextract_msg}</div>', unsafe_allow_html=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
 
         # 直接使用用户设置的导出路径（已包含数据库子目录）
         export_dir = Path(export_path)
         export_dir.mkdir(parents=True, exist_ok=True)
+
+        # ── 内存预检：在创建进度条之前，低内存时要求用户确认 ────────────────
+        # 实测：流式导出每模块到峰内存约94k患者约 1––1.3 GB，1.5 GB 阈値下才真正属于低内存场景
+        _LOW_MEM_THRESHOLD_MB = 1536  # 1.5 GB
+        _mem_check_confirmed = st.session_state.get("_low_mem_export_confirmed", False)
+        if not _mem_check_confirmed and not is_viz_import_mode:
+            try:
+                from easyicu.memory_manager import get_available_memory_mb
+                _avail_mb_pre = get_available_memory_mb()
+                if _avail_mb_pre < _LOW_MEM_THRESHOLD_MB:
+                    st.session_state["_exporting_in_progress"] = False
+                    if lang == "en":
+                        st.warning(
+                            f"⚠️ **Low available memory detected: {_avail_mb_pre:.0f} MB** "
+                            f"(recommended ≥ 1.5 GB).\n\n"
+                            f"With this little RAM the export will be split into many small batches, "
+                            f"which is much slower. **Please close other applications to free memory** "
+                            f"and then click *Check Again*."
+                        )
+                        col_check, col_continue = st.columns(2)
+                        with col_check:
+                            if st.button("🔄 Check Again", key="_low_mem_recheck", use_container_width=True):
+                                st.rerun()
+                        with col_continue:
+                            if st.button(
+                                "⚡ Continue Anyway (slow)",
+                                key="_low_mem_confirm",
+                                use_container_width=True,
+                                type="secondary",
+                            ):
+                                st.session_state["_low_mem_export_confirmed"] = True
+                                st.session_state["_exporting_in_progress"] = True
+                                st.rerun()
+                    else:
+                        st.warning(
+                            f"⚠️ **检测到可用内存不足：{_avail_mb_pre:.0f} MB**（建议 ≥ 1.5 GB）。\n\n"
+                            f"内存不足时导出会被分成很多小批次，速度大幅降低。"
+                            f"**建议先关闭其他程序释放内存**，再点击「重新检测」。"
+                        )
+                        col_check, col_continue = st.columns(2)
+                        with col_check:
+                            if st.button("🔄 重新检测", key="_low_mem_recheck", use_container_width=True):
+                                st.rerun()
+                        with col_continue:
+                            if st.button(
+                                "⚡ 仍然继续（速度较慢）",
+                                key="_low_mem_confirm",
+                                use_container_width=True,
+                                type="secondary",
+                            ):
+                                st.session_state["_low_mem_export_confirmed"] = True
+                                st.session_state["_exporting_in_progress"] = True
+                                st.rerun()
+                    return  # 等待用户决策，不继续后续流程
+            except Exception:
+                pass  # 无法检测内存时直接继续
 
         exported_files = []
         module_times = {}
@@ -173,6 +229,16 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
         progress_bar = st.progress(0)
         _export_action_cols = st.columns([4, 1])
         status_text = _export_action_cols[0].empty()
+
+        def _set_status(message: str, *, level: str = "info") -> None:
+            """Render export status as plain text to avoid markdown/spinner artifacts."""
+            plain = str(message).replace("**", "").replace("`", "")
+            if level == "success":
+                status_text.success(plain)
+            elif level == "warning":
+                status_text.warning(plain)
+            else:
+                status_text.info(plain)
 
         # 🔧 添加取消按钮
         import time as time_module
@@ -389,8 +455,8 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
         if use_mock or use_loaded_data_export:
             # 生成模拟数据并导出
             if use_mock:
-                gen_msg = "**Generating mock data...**" if lang == 'en' else "**正在生成模拟数据...**"
-                status_text.markdown(gen_msg)
+                gen_msg = "Generating mock data..." if lang == 'en' else "正在生成模拟数据..."
+                _set_status(gen_msg)
                 # 🔧 使用 get_mock_params_with_cohort 获取完整参数（包含最新的 cohort_filter）
                 params = get_mock_params_with_cohort()
                 all_mock_data, patient_ids = generate_mock_data(**params)
@@ -411,7 +477,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                     skip_msg = f"⚠️ {len(missing)} concepts not in mock data: {', '.join(missing[:5])}" if lang == 'en' else f"⚠️ 模拟数据中不存在 {len(missing)} 个概念: {', '.join(missing[:5])}"
                     st.warning(skip_msg)
             else:
-                status_text.markdown("**Using loaded visualization data...**" if lang == 'en' else "**正在使用已加载的可视化数据...**")
+                _set_status("Using loaded visualization data..." if lang == 'en' else "正在使用已加载的可视化数据...")
                 data = {concept: loaded_concepts[concept] for concept in concepts_to_export if concept in loaded_concepts}
                 if not data:
                     err_msg = "❌ No loaded visualization data matches the selected features" if lang == 'en' else "❌ 当前已加载的可视化数据中没有匹配所选特征"
@@ -448,14 +514,14 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                 return
 
             # 批量并行加载所有特征
-            patient_limit_display = st.session_state.get('patient_limit', 100)
+            patient_limit_display = st.session_state.get('patient_limit', 0)
             patient_info = f"({patient_limit_display} patients)" if patient_limit_display else "(all patients)"
             patient_info_cn = f"（{patient_limit_display}患者）" if patient_limit_display else "（全部患者）"
-            batch_msg = f"**Loading concepts {patient_info}...**" if lang == 'en' else f"**正在加载概念 {patient_info_cn}...**"
-            status_text.markdown(batch_msg)
+            batch_msg = f"Loading concepts {patient_info}..." if lang == 'en' else f"正在加载概念 {patient_info_cn}..."
+            _set_status(batch_msg)
 
             # 🚀 性能优化：参照 extract_baseline_features.py 的配置
-            patient_limit = st.session_state.get('patient_limit', 1000)  # 🔧 FIX: 默认1000患者
+            patient_limit = st.session_state.get('patient_limit', 0)
 
             patient_ids_filter = None
             id_col = 'stay_id'
@@ -569,9 +635,9 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
 
             n_patients_display = num_patients or 'all'
             if lang == 'en':
-                perf_msg = f"{tier_emoji} System: {resources['cpu_count']} cores, {resources['total_memory_gb']}GB RAM → Loading {n_patients_display} patients (sequential by module)"
+                perf_msg = f"{tier_emoji} System: {resources['cpu_count']} cores, {resources['total_memory_gb']}GB RAM → optimized full export for {n_patients_display} patients"
             else:
-                perf_msg = f"{tier_emoji} 系统: {resources['cpu_count']} 核心, {resources['total_memory_gb']}GB 内存 → 加载 {n_patients_display} 患者（按模块顺序加载）"
+                perf_msg = f"{tier_emoji} 系统: {resources['cpu_count']} 核心, {resources['total_memory_gb']}GB 内存 → 优化全量导出 {n_patients_display} 患者"
             st.info(perf_msg)
 
             try:
@@ -710,29 +776,28 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                     len(patient_ids_filter.get(id_col, [])) if patient_ids_filter else None
                 )
                 # 🔧 2026-05-11: 默认不分批，追求合理内存下的最优速度。
-                # 实测 12GB+ 系统跑单模块 167 特征 peak ≤ 8GB；外层 module-per-subprocess
-                # 已经隔离了内存碎片，patient-级再分批反而降低速度（多次 DuckDB
-                # initialize、多次 buckets 扫描）。
-                # 仅在可用内存 < 6 GB（8GB 以下系统或被占用严重）才启用 patient-级分批。
-                _LOW_MEM_THRESHOLD_MB = 6 * 1024
+                # 实测：流式导出每模块到峰内存约94k患者约 1–1.3 GB。
+                # 仅在可用内存 < 1.5 GB 时才启用 patient-级分批，
+                # 评估依据：单模块 DataFrame 约 1 GB + 处理峰唃 500 MB。
+                _LOW_MEM_THRESHOLD_MB = 1536  # 1.5 GB
                 if _n_load_patients is not None and _n_load_patients > 5000:
                     try:
                         from easyicu.memory_manager import get_available_memory_mb
                         _avail_mb = get_available_memory_mb()
                         if _avail_mb < _LOW_MEM_THRESHOLD_MB:
-                            # 低内存：分批保守
-                            _frag_safe_max = max(10000, int(_avail_mb * 0.4))
+                            # 低内存：分批保守（用户已在启动前确认过，此处静默执行）
+                            # 每批大小：用可用内存 * 0.6（索留 40% 给 OS + 处理开销）
+                            _frag_safe_max = max(20000, int(_avail_mb * 0.6))
                             if _n_load_patients > _frag_safe_max:
                                 _auto_batch_size = _frag_safe_max
                                 _n_batches = (_n_load_patients + _auto_batch_size - 1) // _auto_batch_size
                                 if lang == 'en':
-                                    st.warning(f"⚠️ Low memory ({_avail_mb:.0f}MB < 6GB): "
+                                    st.info(f"🔀 Low memory ({_avail_mb:.0f}MB): "
                                             f"batching {_n_load_patients} patients into {_n_batches} batches "
-                                            f"of {_auto_batch_size}/module. Consider freeing RAM for faster export.")
+                                            f"of {_auto_batch_size}/module.")
                                 else:
-                                    st.warning(f"⚠️ 低内存 ({_avail_mb:.0f}MB < 6GB): "
-                                            f"{_n_load_patients} 患者分 {_n_batches} 批 ({_auto_batch_size}/模块)。"
-                                            f"释放内存可加速。")
+                                    st.info(f"🔀 低内存 ({_avail_mb:.0f}MB): "
+                                            f"{_n_load_patients} 患者分 {_n_batches} 批 ({_auto_batch_size}/模块)。")
                         else:
                             # ≥ 6GB: 默认不分批，最快路径
                             if lang == 'en':
@@ -838,10 +903,10 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                     concept_list = list(concept_dfs_dict.keys())
                     concepts_str = ', '.join(concept_list[:5]) + (f'... +{len(concept_list)-5}' if len(concept_list) > 5 else '')
                     if lang == 'en':
-                        _emsg = f"**Exporting**: `{group_name}` ({step_idx+1}/{total_steps}) | {concepts_str}"
+                        _emsg = f"Exporting: {group_name} ({step_idx+1}/{total_steps}) | {concepts_str}"
                     else:
-                        _emsg = f"**正在导出**: `{group_name}` ({step_idx+1}/{total_steps}) | {concepts_str}"
-                    status_text.markdown(_emsg)
+                        _emsg = f"正在导出: {group_name} ({step_idx+1}/{total_steps}) | {concepts_str}"
+                    _set_status(_emsg)
 
                     # ── 合并为宽表（完整保留原有逻辑） ──
                     id_candidates = ['stay_id', 'hadm_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID']
@@ -1354,17 +1419,17 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                     elapsed_str = f"{elapsed:.0f}s"
                     if lang == 'en':
                         status_msg = (
-                            f"**Loading {mod_name}** ({len(mod_concepts)} concepts, "
+                            f"Loading {mod_name} ({len(mod_concepts)} concepts, "
                             f"module {mod_idx+1}/{total_modules}, elapsed {elapsed_str}){eta_str}\n\n"
-                            f"`{concept_list_str}`"
+                            f"{concept_list_str}"
                         )
                     else:
                         status_msg = (
-                            f"**正在加载 {mod_name}** ({len(mod_concepts)} 个概念, "
+                            f"正在加载 {mod_name} ({len(mod_concepts)} 个概念, "
                             f"模块 {mod_idx+1}/{total_modules}, 已用 {elapsed_str}){eta_str}\n\n"
-                            f"`{concept_list_str}`"
+                            f"{concept_list_str}"
                         )
-                    status_text.markdown(status_msg)
+                    _set_status(status_msg)
 
                     # 批量加载整个模块
                     # 🔧 FIX (Bug 52): load + merge + export 全部在子进程内完成
@@ -1411,12 +1476,12 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                                 _mod_elapsed = _time_mod.time() - mod_start
                                 _spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_keepalive_tick % 10]
                                 _alive_msg = (
-                                    f"{_spinner} **{'Loading' if lang == 'en' else '正在加载'} {mod_name}** "
+                                    f"{_spinner} {'Loading' if lang == 'en' else '正在加载'} {mod_name} "
                                     f"({len(mod_concepts)} {'concepts' if lang == 'en' else '个概念'}, "
                                     f"{'module' if lang == 'en' else '模块'} {mod_idx+1}/{total_modules}, "
                                     f"{'elapsed' if lang == 'en' else '已用'} {_mod_elapsed:.0f}s){eta_str}"
                                 )
-                                status_text.markdown(_alive_msg)
+                                _set_status(_alive_msg)
 
                             if _sub_proc.exitcode != 0:
                                 raise RuntimeError(f"Subprocess exited with code {_sub_proc.exitcode}")
@@ -1517,12 +1582,12 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                                 _mod_elapsed = _time_mod.time() - mod_start
                                 _spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_keepalive_tick % 10]
                                 _alive_msg = (
-                                    f"{_spinner} **{'Loading & exporting' if lang == 'en' else '正在加载并导出'} {mod_name}** "
+                                    f"{_spinner} {'Loading & exporting' if lang == 'en' else '正在加载并导出'} {mod_name} "
                                     f"({len(mod_concepts)} {'concepts' if lang == 'en' else '个概念'}, "
                                     f"{'module' if lang == 'en' else '模块'} {mod_idx+1}/{total_modules}, "
                                     f"{'elapsed' if lang == 'en' else '已用'} {_mod_elapsed:.0f}s){eta_str}"
                                 )
-                                status_text.markdown(_alive_msg)
+                                _set_status(_alive_msg)
 
                             if _sub_proc.exitcode != 0:
                                 raise RuntimeError(f"Subprocess exited with code {_sub_proc.exitcode}")
@@ -1592,8 +1657,8 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
 
                 # 🆕 加载特殊概念（AKI, circ_failure等）— 子进程隔离
                 if special_concepts_to_load:
-                    special_msg = f"**Loading special concepts (AKI, CircFailure)...**" if lang == 'en' else f"**正在加载特殊概念 (AKI, 循环衰竭)...**"
-                    status_text.markdown(special_msg)
+                    special_msg = "Loading special concepts (AKI, CircFailure)..." if lang == 'en' else "正在加载特殊概念 (AKI, 循环衰竭)..."
+                    _set_status(special_msg)
 
                     try:
                         import multiprocessing as _mp_mod
@@ -1633,10 +1698,10 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                             _sp_elapsed = _time_mod.time() - _sp_start
                             _sp_spinner = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'][_sp_tick % 10]
                             if lang == 'en':
-                                _sp_msg = f"{_sp_spinner} **Loading special concepts** (AKI, CircFailure, elapsed {_sp_elapsed:.0f}s)"
+                                _sp_msg = f"{_sp_spinner} Loading special concepts (AKI, CircFailure, elapsed {_sp_elapsed:.0f}s)"
                             else:
-                                _sp_msg = f"{_sp_spinner} **正在加载特殊概念** (AKI, 循环衰竭, 已用 {_sp_elapsed:.0f}s)"
-                            status_text.markdown(_sp_msg)
+                                _sp_msg = f"{_sp_spinner} 正在加载特殊概念 (AKI, 循环衰竭, 已用 {_sp_elapsed:.0f}s)"
+                            _set_status(_sp_msg)
 
                         if _sp_proc.exitcode != 0:
                             raise RuntimeError(f"Special concepts subprocess exited with code {_sp_proc.exitcode}")
@@ -1662,6 +1727,19 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                                 with open(_sp_manifest) as _mf:
                                     _sp_saved = _json_mod.load(_mf)
                                 _sp_loaded_concepts = list(_sp_saved.keys())
+                            _sp_error_path = os.path.join(_sp_tmp_dir, '_error.txt')
+                            if os.path.exists(_sp_error_path):
+                                try:
+                                    with open(_sp_error_path) as _ef:
+                                        _sp_error_head = _ef.readline().strip()
+                                    if _sp_error_head:
+                                        st.warning(
+                                            f"⚠️ Optional derived concepts were skipped: {_sp_error_head}"
+                                            if lang == 'en' else
+                                            f"⚠️ 可选派生概念已跳过: {_sp_error_head}"
+                                        )
+                                except Exception:
+                                    pass
 
                         failed_special = [c for c in special_concepts_to_load if c not in _sp_loaded_concepts]
                         failed_concepts.extend(failed_special)
@@ -1710,13 +1788,28 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                             st.warning(f"⚠️ Export failed for remaining module '{_rg_key}': {_exp_e}")
                     data.clear()
 
-                # 🔧 FIX: 合并 unsupported 和 failed 概念，只显示一次警告
-                all_skipped = list(set(unsupported_concepts + failed_concepts))
-                if all_skipped:
-                    skip_list = ', '.join(all_skipped[:5])
-                    more_text = f'... +{len(all_skipped)-5}' if len(all_skipped) > 5 else ''
-                    skip_msg = f"⚠️ Skipped {len(all_skipped)} unavailable: {skip_list}{more_text}" if lang == 'en' else f"⚠️ 跳过 {len(all_skipped)} 个不可用: {skip_list}{more_text}"
+                # 🔧 分开展示“无当前数据库映射”和“加载/派生失败”，避免把有定义的派生特征误报为不存在。
+                unsupported_unique = sorted(set(unsupported_concepts))
+                if unsupported_unique:
+                    skip_list = ', '.join(unsupported_unique[:5])
+                    more_text = f'... +{len(unsupported_unique)-5}' if len(unsupported_unique) > 5 else ''
+                    skip_msg = (
+                        f"⚠️ {len(unsupported_unique)} selected concepts have no source mapping for {database.upper()}: {skip_list}{more_text}"
+                        if lang == 'en' else
+                        f"⚠️ {len(unsupported_unique)} 个所选概念暂无 {database.upper()} 数据源映射: {skip_list}{more_text}"
+                    )
                     st.warning(skip_msg)
+
+                failed_unique = sorted(set(failed_concepts) - set(unsupported_concepts))
+                if failed_unique:
+                    fail_list = ', '.join(failed_unique[:5])
+                    more_text = f'... +{len(failed_unique)-5}' if len(failed_unique) > 5 else ''
+                    fail_msg = (
+                        f"⚠️ {len(failed_unique)} concepts were defined but not exported (empty dependencies or derived calculation failed): {fail_list}{more_text}"
+                        if lang == 'en' else
+                        f"⚠️ {len(failed_unique)} 个概念已定义但未导出（依赖为空或派生计算失败）: {fail_list}{more_text}"
+                    )
+                    st.warning(fail_msg)
 
                 # 🆕 显示空结果概念提示
                 if empty_concepts:
@@ -1728,7 +1821,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                 # 概念计数：已导出 = exported_files 中的概念数（后面统计）
                 _n_loaded_concepts = len(valid_concepts) - len(failed_concepts) - len(unsupported_concepts)
                 loaded_msg = f"✅ Loaded & exported {_n_loaded_concepts} concepts" if lang == 'en' else f"✅ 已加载并导出 {_n_loaded_concepts} 个概念"
-                status_text.markdown(loaded_msg)
+                _set_status(loaded_msg, level="success")
 
             except Exception as e:
                 import traceback as _tb_mod
@@ -1894,8 +1987,8 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                     return
                 mod_display = CONCEPT_GROUP_NAMES.get(mod_key, (mod_key, mod_key))
                 mod_name = mod_display[1] if lang != 'en' else mod_display[0]
-                status_text.markdown(
-                    f"**{'Exporting' if lang == 'en' else '正在导出'} {mod_name}** "
+                _set_status(
+                    f"{'Exporting' if lang == 'en' else '正在导出'} {mod_name} "
                     f"({mod_idx + 1}/{total_mock_modules})"
                 )
                 mod_start = time_module.time()
@@ -1923,6 +2016,8 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
             del st.session_state['_overwrite_modules']
         if '_export_cancelled' in st.session_state:
             del st.session_state['_export_cancelled']
+        if '_low_mem_export_confirmed' in st.session_state:
+            del st.session_state['_low_mem_export_confirmed']
 
         if exported_files:
             _prime_export_completion(export_dir, exported_files, auto_load=True)

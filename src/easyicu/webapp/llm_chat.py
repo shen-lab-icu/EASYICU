@@ -24,22 +24,24 @@ from pathlib import Path
 
 import requests
 import streamlit as st
+from easyicu.webapp.components.constants import get_all_concepts
 from easyicu.webapp.llm_config import (
     PROVIDERS,
     coerce_public_provider,
     ensure_llm_config_state,
-    is_internal_provider,
     needs_api_key as _shared_needs_api_key,
     public_default_provider_key,
     public_provider_defaults,
     public_provider_keys,
 )
 
+_FEATURE_COUNT = len(get_all_concepts())
+
 # ---------------------------------------------------------------------------
 # System prompt — enriched with EasyICU documentation & concept catalogue
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT = f"""\
 You are an intelligent assistant embedded in **EasyICU**, an interactive platform \
 for clinical data extraction and exploration across multiple public ICU databases.
 
@@ -47,7 +49,7 @@ for clinical data extraction and exploration across multiple public ICU database
 EasyICU is a Python toolkit (v1.0) that provides:
 - Unified access to **6 public ICU databases**: MIMIC-IV (miiv), MIMIC-III (mimic), \
 eICU-CRD (eicu), AmsterdamUMCdb (aumc), HiRID (hirid), SICdb (sic)
-- Automated extraction of **167 standardized clinical concepts** across 19 feature modules
+- Automated extraction of **{_FEATURE_COUNT} standardized clinical concepts** across 19 feature modules
 - A no-code Streamlit web interface for cohort construction, feature selection, \
 quality review, and cohort comparison
 - High-performance computing optimised for 16 GB RAM machines
@@ -56,7 +58,7 @@ quality review, and cohort comparison
 ## Workflow (4 Steps)
 1. **Data Source** — choose database & path (or Demo mode with simulated data)
 2. **Cohort Selection** — filter by age, sex, ICU LOS, mortality, disease cohort (e.g. Sepsis-3, AKI, RRT, mechanical ventilation), and ICD keywords where supported
-3. **Select Features** — pick from 19 modules (167 concepts); supports SOFA-1, SOFA-2, \
+3. **Select Features** — pick from 19 modules ({_FEATURE_COUNT} concepts); supports SOFA-1, SOFA-2, \
 Sepsis-3, KDIGO-AKI, circulatory failure, etc.
 4. **Export Data** — batch export to disk; streaming architecture, subprocess memory isolation
 
@@ -66,20 +68,21 @@ Sepsis-3, KDIGO-AKI, circulatory failure, etc.
 - **Cohort Analysis** — compare groups and review downstream cohort summaries
 - **AI Assistant** — guided help for navigation, feature planning, troubleshooting, and evidence lookup
 
-## Feature Modules & Concepts (19 modules, 167 concepts)
-- **Vital Signs** (7): hr, map, sbp, dbp, temp, spo2, resp
+## Feature Modules & Concepts (19 modules, {_FEATURE_COUNT} concepts)
+- **Vital Signs** (8): hr, map, sbp, dbp, pulse_pressure, temp, spo2, resp
 - **Respiratory** (14): pafi, safi, fio2, supp_o2, vent_ind, vent_start, vent_end, \
 o2sat, sao2, mech_vent, ett_gcs, ecmo, ecmo_indication, adv_resp
 - **Ventilator Parameters** (12): peep, tidal_vol, tidal_vol_set, pip, plateau_pres, \
 mean_airway_pres, minute_vol, vent_rate, etco2, compliance, driving_pres, ps
 - **Blood Gas** (9): be, cai, hbco, lact, methb, pco2, ph, po2, tco2
-- **Chemistry** (21): alb, alp, alt, ast, bicar, bili, bili_dir, bun, ca, ck, ckmb, \
+- **Chemistry** (22): alb, alp, alt, ast, anion_gap, bicar, bili, bili_dir, bun, ca, ck, ckmb, \
 cl, crea, crp, glu, k, mg, na, phos, tnt, tri
 - **Hematology** (20): bnd, basos, eos, esr, fgn, hba1c, hct, hgb, inr_pt, lymph, \
 mch, mchc, mcv, neut, plt, pt, ptt, rbc, rdw, wbc
 - **Vasopressors** (17): norepi_rate/dur/equiv/60, epi_rate/dur/60, \
 dopa_rate/dur/60, dobu_rate/dur/60, adh_rate, phn_rate, vaso_ind, other_vaso
-- **Medications** (4): abx, cort, dex, ins
+- **Medications** (15): abx, cort, dex, ins, amiodarone, dexmedetomidine, fentanyl, \
+furosemide, heparin, mannitol, midazolam, milrinone, morphine, propofol, rocuronium
 - **Renal / KDIGO** (17): urine, urine24, uo_6h/12h/24h, rrt, rrt_criteria, \
 aki, aki_stage, aki_stage_creat/uo/rrt, creat_low_past_48hr/7day, uo_rt_6hr/12hr/24hr
 - **Neurological** (11): avpu, egcs, gcs, mgcs, rass, tgcs, vgcs, sedated_gcs, \
@@ -892,14 +895,25 @@ def _stream_text(stream, placeholder):
     chunks = []
     for token in _token_generator(stream):
         chunks.append(token)
-        placeholder.markdown("".join(chunks) + "▌")
-    text = "".join(chunks).strip()
+        visible_text = _strip_llm_reasoning("".join(chunks))
+        placeholder.markdown((visible_text + "▌") if visible_text else "…")
+    text = _strip_llm_reasoning("".join(chunks))
     placeholder.markdown(text)
     return text
 
 
+def _strip_llm_reasoning(text: str) -> str:
+    """Remove model-private reasoning blocks from OpenAI-compatible outputs."""
+    if not text:
+        return ""
+    cleaned = re.sub(r"<think\b[^>]*>.*?</think>", "", text, flags=re.I | re.S)
+    cleaned = re.sub(r"<think\b[^>]*>.*$", "", cleaned, flags=re.I | re.S)
+    return cleaned.strip()
+
+
 def _parse_verification_report(text: str) -> dict[str, object]:
     """Parse verifier output into a structured result."""
+    text = _strip_llm_reasoning(text)
     result = {
         "status": "uncertain",
         "issues": [],
@@ -983,8 +997,6 @@ def _needs_api_key(provider: str) -> bool:
 def _is_configured() -> bool:
     """Return True when the provider is ready to use."""
     provider = st.session_state.get("llm_provider", public_default_provider_key())
-    if is_internal_provider(provider):
-        return False
     _, default_url, _default_model, _needs_key, _desc_en, _desc_zh = public_provider_defaults(provider)
     if _needs_api_key(provider) and not st.session_state.get("llm_api_key", "").strip():
         return False
@@ -1000,8 +1012,9 @@ def _get_client():
         return None
 
     provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
+    _display, default_url, _default_model, _needs_key, _desc_en, _desc_zh = public_provider_defaults(provider)
     api_key = st.session_state.get("llm_api_key", "").strip()
-    base_url = st.session_state.get("llm_base_url", "").strip() or None
+    base_url = st.session_state.get("llm_base_url", "").strip() or default_url or None
 
     if not api_key and not _needs_api_key(provider):
         api_key = os.getenv("EASYICU_HOSTED_CLIENT_TOKEN", "easyicu-hosted")
@@ -1122,12 +1135,6 @@ def render_llm_settings():
             return
 
         # Provider
-        original_provider = st.session_state.get("llm_provider", public_default_provider_key())
-        if is_internal_provider(original_provider):
-            st.session_state.llm_provider = public_default_provider_key()
-            st.session_state.llm_base_url = ""
-            st.session_state.llm_model = ""
-            st.session_state.llm_configured = False
         provider_keys = public_provider_keys()
         current_provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
         idx = provider_keys.index(current_provider) if current_provider in provider_keys else 0
@@ -2228,7 +2235,7 @@ def _bg_llm_call(messages: list, lang: str, provider: str, model: str,
                 messages=messages,
                 stream=False,
             )
-            draft = resp.choices[0].message.content or ""
+            draft = _strip_llm_reasoning(resp.choices[0].message.content or "")
         finally:
             os.environ.update(env_backup)
 
@@ -2362,6 +2369,9 @@ def _token_generator(stream):
         choices = getattr(chunk, "choices", None)
         if choices:
             delta = choices[0].delta
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning:
+                continue
             token = getattr(delta, "content", None)
             if token:
                 yield token
