@@ -138,6 +138,8 @@ WINDOW_CONCEPTS = {
     "mech_vent", "vent_ind", "supp_o2",
     "norepi_rate", "epi_rate", "dobu_rate", "adh_rate",
     "dopa_rate", "phn_rate", "vaso_ind",
+    # Sedation/analgesia rate concepts (2026-05-13)
+    "propofol_rate", "fentanyl_rate", "midazolam_rate",
     # 注意: "dex" 不应该在这里！它的 target: "win_tbl" 意味着返回原始格式，不展开
     # "ett_gcs" 也不应该展开，它使用 ts_to_win_tbl 回调返回窗口格式
 }
@@ -156,6 +158,28 @@ POINT_EVENT_CONCEPTS = {
     "amiodarone",                                 # Antiarrhythmic
     "milrinone",                                  # Inotrope
     "rocuronium",                                 # Neuromuscular blocker
+    # Batch 2 (2026-05-13)
+    "lorazepam",                                  # Benzodiazepine
+    "ketamine",                                   # Sedation/analgesia
+    "vecuronium", "cisatracurium",                # Neuromuscular blockers
+    "nitroglycerin",                              # Vasodilator
+    # Batch 3 (2026-05-13)
+    "pantoprazole",                               # PPI
+    "vancomycin", "meropenem",                    # Specific antibiotics
+    "calcium_iv",                                 # IV electrolyte
+    # Batch 4 (2026-05-13)
+    "potassium_iv", "magnesium_iv",               # IV electrolytes
+    "albumin_iv",                                 # Colloid
+    "packed_rbc",                                 # Blood product
+    # Batch 5 (2026-05-13)
+    "bicarbonate",                                # Acidosis correction
+    "dextrose50",                                 # Hypoglycemia rescue
+    "ffp", "platelets",                           # Blood products
+    # Batch 6 (2026-05-13)
+    "levetiracetam",                              # Antiepileptic
+    "dexamethasone",                              # Specific corticosteroid
+    "octreotide",                                 # Somatostatin analog
+    "neostigmine",                                # NMB reversal
 }
 
 # 时长概念（已编码持续时间，不需要展开）

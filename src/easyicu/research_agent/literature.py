@@ -62,6 +62,15 @@ class LiteratureBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
     research_question: str
     citations: List[CitationRecord]
+    prisma: Optional[Dict[str, int]] = Field(
+        default=None,
+        description=(
+            "PRISMA 2020 flow counts for the literature search (O21). Expected "
+            "keys: identified, screened, eligible, included, duplicates_removed. "
+            "Populated by LiteratureAgent; the manuscript can cite "
+            "{evidence:literature_prisma}."
+        ),
+    )
 
 
 class HypothesisBlueprintAgent:
@@ -788,6 +797,19 @@ class LiteratureAgent:
         seen_pmids = {c.pmid for c in merged if c.pmid}
         seen_urls = {c.url for c in merged if c.url}
 
+        # O21 — PRISMA 2020 counts. We treat:
+        # * identified = every candidate record pulled from any source
+        #   (curated, PubMed, Tavily, LLM),
+        # * duplicates_removed = records dropped because a key / PMID /
+        #   URL already existed,
+        # * screened = identified - duplicates_removed,
+        # * eligible = records that survived each source's own
+        #   relevance filter (we treat every returned record as
+        #   eligible; source-side relevance ranking is the filter),
+        # * included = records present in the final merged bundle.
+        identified = len(baseline)
+        duplicates = 0
+
         # 2) PubMed live (T2.2). Errors are swallowed: the bundle is
         #    still useful even if the network is unreachable.
         if self.enable_pubmed:
@@ -796,8 +818,10 @@ class LiteratureAgent:
                 hits = client.search_for_context(context, retmax=self.pubmed_retmax)
             except Exception:
                 hits = []
+            identified += len(hits)
             for rec in hits:
                 if rec.key in seen_keys or (rec.pmid and rec.pmid in seen_pmids):
+                    duplicates += 1
                     continue
                 seen_keys.add(rec.key)
                 if rec.pmid:
@@ -815,8 +839,10 @@ class LiteratureAgent:
                 hits = client.search_for_context(context, max_results=self.tavily_retmax)
             except Exception:
                 hits = []
+            identified += len(hits)
             for rec in hits:
                 if rec.key in seen_keys or (rec.url and rec.url in seen_urls):
+                    duplicates += 1
                     continue
                 seen_keys.add(rec.key)
                 if rec.url:
@@ -848,12 +874,15 @@ class LiteratureAgent:
                 data = _parse_citation_json(raw)
             except Exception:
                 data = []
+            identified += len(data)
             for d in data:
                 try:
                     rec = CitationRecord.model_validate(d)
                 except Exception:
+                    duplicates += 1  # treated as filtered (schema fail ~ not eligible)
                     continue
                 if rec.key in seen_keys or (rec.pmid and rec.pmid in seen_pmids):
+                    duplicates += 1
                     continue
                 seen_keys.add(rec.key)
                 if rec.pmid:
@@ -862,9 +891,17 @@ class LiteratureAgent:
                     seen_urls.add(rec.url)
                 merged.append(rec)
 
+        prisma = {
+            "identified": identified,
+            "duplicates_removed": duplicates,
+            "screened": max(0, identified - duplicates),
+            "eligible": len(merged),
+            "included": len(merged),
+        }
         return LiteratureBundle(
             research_question=context.research_question,
             citations=merged,
+            prisma=prisma,
         )
 
 

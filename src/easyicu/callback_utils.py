@@ -3198,6 +3198,240 @@ def eicu_rate_units_callback(ml_to_mcg: float, mcg_to_units: float) -> Callable:
 
     return callback
 
+def eicu_rate_mass_callback(target_unit: str) -> Callable:
+    """eICU rate conversion for mass-rate drugs (no weight normalization).
+
+    Mirrors :func:`eicu_rate_kg_callback` but omits the final ÷weight step,
+    because the concept is a bare mass/time rate (e.g. mcg/hour fentanyl,
+    mg/hour midazolam) rather than a weight-indexed rate.
+
+    Strategy
+    --------
+    1. Parse the unit from ``drugname`` using the same ``(mcg/hr)``-style
+       parenthesized suffix pattern used elsewhere in this module.
+    2. Drop rows whose unit is NOT mass/time. Specifically incompatible:
+         - ``/kg/`` anything — these rows need weight re-normalization, which
+           would be a separate callback; mixing in this mass-rate pipeline
+           would silently inflate per-kg-rate patients.
+         - ``ml/`` anything — we don't know the drug concentration for every
+           eICU drugname variant, so can't convert to mass rate safely.
+         - Empty / ``unknown`` / ``nan`` / ``()`` / ``cont`` — unusable.
+         - ``units/`` anything — for non-mass drugs.
+    3. Convert the remaining mass/time rate to ``target_unit`` using the
+       same conversion factors as the kg variant.
+    4. Run the same interval-expansion logic as ``eicu_rate_kg_callback`` so
+       rates align to the ricu hourly grid with LOCF gap filling.
+
+    Supported target units
+    ----------------------
+    ``mcg/hour``, ``mcg/min``, ``mg/hour``, ``mg/min``
+
+    Examples
+    --------
+    >>> # Fentanyl in mcg/hour (drugnames like "fentanyl (mcg/hr)")
+    >>> fen_cb = eicu_rate_mass_callback("mcg/hour")
+    >>> # Midazolam in mg/hour
+    >>> mid_cb = eicu_rate_mass_callback("mg/hour")
+    """
+    target = target_unit.lower().replace("hr", "hour").strip()
+    if target not in {"mcg/hour", "mcg/min", "mg/hour", "mg/min"}:
+        raise ValueError(
+            f"eicu_rate_mass_callback: unsupported target_unit {target_unit!r}. "
+            "Must be one of mcg/hour, mcg/min, mg/hour, mg/min."
+        )
+    # Split into (mass, time)
+    target_mass, target_time = target.split("/")
+
+    def callback(
+        frame: pd.DataFrame,
+        val_var: str,
+        sub_var: str,
+        concept_name: str,
+        data_source=None,
+        patient_ids=None,
+    ) -> pd.DataFrame:
+        """Apply eICU mass-rate conversion (no ÷weight) and expand intervals."""
+        frame = frame.copy()
+
+        if val_var in frame.columns:
+            frame[val_var] = pd.to_numeric(frame[val_var], errors="coerce")
+
+        # Extract unit from drugname (same pattern as eicu_rate_kg)
+        if sub_var in frame.columns:
+            _sub = frame[sub_var].astype(str)
+            _extracted = _sub.str.extract(r"\(([^)]+)\)$", expand=False)
+            _bare_unit = _sub.str.contains(r"/", na=False) | _sub.str.lower().isin(
+                ["mg", "mcg", "ml", "units"]
+            )
+            _fallback = _bare_unit & _extracted.isna()
+            _extracted[_fallback] = _sub[_fallback]
+            _extracted[frame[sub_var].isna()] = None
+            frame["unit_var"] = _extracted
+        else:
+            frame["unit_var"] = None
+
+        _val = pd.to_numeric(frame[val_var], errors="coerce").values.astype(np.float64).copy()
+        _unit = frame["unit_var"].astype(str).str.strip().str.lower()
+        _unit_raw_na = frame["unit_var"].isna()
+
+        # Row-level invalid flags → NaN (will be dropped before expand)
+        _invalid = (
+            _unit_raw_na
+            | _unit.str.contains("/kg/", na=False)  # would need kg re-norm
+            | _unit.str.startswith("ml/", na=False)  # no concentration
+            | _unit.str.startswith("units/", na=False)  # non-mass
+            | _unit.isin(["unknown", "ml", "", "nan", "none", "cont"])
+        )
+        _val[_invalid.values] = np.nan
+
+        # Apply unit conversions row-wise to reach target.
+        # Start unit string (post-lowercase). Build working array we can mutate.
+        _unit_arr = _unit.values.copy()
+        _valid = ~_invalid.values
+
+        # 1) Normalize time suffix
+        _hr = _unit.str.contains("/hr", na=False).values & _valid
+        _hour = _unit.str.contains("/hour", na=False).values & _valid
+        # /hr → /min if target_time is min (×1/60), no-op if target is hour
+        if target_time == "min":
+            mask_need_to_min = (_hr | _hour) & _valid
+            _val[mask_need_to_min] /= 60.0
+            if mask_need_to_min.any():
+                _unit_arr[mask_need_to_min] = np.array(
+                    [u.replace("/hr", "/min").replace("/hour", "/min")
+                     for u in _unit_arr[mask_need_to_min]]
+                )
+        else:  # target_time == "hour"
+            _per_min = _unit.str.endswith("/min", na=False).values & _valid
+            _val[_per_min] *= 60.0
+            if _per_min.any():
+                _unit_arr[_per_min] = np.array(
+                    [u.replace("/min", "/hour") for u in _unit_arr[_per_min]]
+                )
+            # Normalize /hr label
+            _hr_rows = _hr & ~_hour
+            if _hr_rows.any():
+                _unit_arr[_hr_rows] = np.array(
+                    [u.replace("/hr", "/hour") for u in _unit_arr[_hr_rows]]
+                )
+
+        # 2) Normalize mass prefix (after time normalization)
+        _unit_s = pd.Series(_unit_arr)
+        if target_mass == "mcg":
+            _mg = _unit_s.str.startswith("mg/").values & _valid
+            _val[_mg] *= 1000.0
+            if _mg.any():
+                _unit_arr[_mg] = np.array(["mcg" + u[2:] for u in _unit_arr[_mg]])
+            _ng = _unit_s.str.startswith("nanograms/").values & _valid
+            _val[_ng] /= 1000.0
+        else:  # target_mass == "mg"
+            _mcg = _unit_s.str.startswith("mcg/").values & _valid
+            _val[_mcg] /= 1000.0
+            if _mcg.any():
+                _unit_arr[_mcg] = np.array(["mg" + u[3:] for u in _unit_arr[_mcg]])
+
+        # 3) Final guard: only keep rows that now land exactly on the target unit.
+        # We require the resulting mass/time tokens to match.
+        _final_unit = pd.Series(_unit_arr)
+        target_norm = f"{target_mass}/{target_time}"
+        _ok = _final_unit.str.lower().str.fullmatch(re.escape(target_norm)).fillna(False).values
+        _val[~_ok] = np.nan
+
+        frame[concept_name] = _val
+        frame = frame.drop(columns=["unit_var"], errors="ignore")
+
+        # Find time and ID columns (matches eicu_rate_kg_callback)
+        time_col = None
+        for candidate in ["infusionoffset", "charttime", "starttime"]:
+            if candidate in frame.columns:
+                time_col = candidate
+                break
+        if time_col is None:
+            return frame
+        id_col = None
+        for candidate in [
+            "patientunitstayid", "stay_id", "hadm_id", "icustay_id"
+        ]:
+            if candidate in frame.columns:
+                id_col = candidate
+                break
+        if id_col is None:
+            return frame
+
+        # Drop rows with NaN concept value (incompatible units filtered out)
+        frame = frame[frame[concept_name].notna()].copy()
+        if len(frame) == 0:
+            return pd.DataFrame(columns=[id_col, time_col, concept_name])
+
+        # R ricu-compatible interval expansion — identical to eicu_rate_kg
+        frame = frame.sort_values([id_col, time_col]).reset_index(drop=True)
+        frame["_hour"] = (frame[time_col] // 60).astype(int)
+        hourly = frame.groupby([id_col, "_hour"], as_index=False).agg(
+            {concept_name: "last"}
+        )
+        hourly = hourly.sort_values([id_col, "_hour"])
+
+        overhang = 1
+        max_len = 6
+        interval = 1
+
+        hourly = hourly.copy()
+        hourly["_diff"] = hourly.groupby(id_col)["_hour"].shift(-1) - hourly["_hour"]
+        hourly.loc[hourly["_diff"].isna(), "_diff"] = overhang
+        hourly["_diff"] = hourly["_diff"].clip(upper=max_len)
+        hourly["_diff"] = hourly["_diff"] - interval
+        hourly["_end_hour"] = hourly["_hour"] + hourly["_diff"]
+
+        start_hours = hourly["_hour"].values.astype(int)
+        end_hours = hourly["_end_hour"].values.astype(int)
+        n_points = np.maximum(end_hours - start_hours + 1, 1)
+        total_points = n_points.sum()
+
+        if total_points == 0:
+            return pd.DataFrame(columns=[id_col, time_col, concept_name])
+
+        patient_ids_exp = np.repeat(hourly[id_col].values, n_points)
+        values_exp = np.repeat(hourly[concept_name].values, n_points)
+        time_points = np.concatenate([
+            np.arange(s, s + n) * 60
+            for s, n in zip(start_hours, n_points)
+        ])
+        expanded = pd.DataFrame({
+            id_col: patient_ids_exp,
+            time_col: time_points,
+            concept_name: values_exp,
+        })
+        expanded = expanded.groupby([id_col, time_col], as_index=False).agg(
+            {concept_name: "max"}
+        )
+        expanded = expanded.sort_values([id_col, time_col]).reset_index(drop=True)
+
+        # LOCF gap-fill across each patient's [min, max] hour range
+        def fill_gaps_locf(group):
+            if len(group) < 2:
+                return group
+            min_hour = int(group[time_col].min() / 60)
+            max_hour = int(group[time_col].max() / 60)
+            all_minutes = [h * 60 for h in range(min_hour, max_hour + 1)]
+            grid = pd.DataFrame({
+                id_col: group.name if not isinstance(group.name, tuple) else group.name[0],
+                time_col: all_minutes,
+            })
+            merged = grid.merge(
+                group[[time_col, concept_name]], on=time_col, how="left"
+            )
+            merged[concept_name] = merged[concept_name].ffill()
+            return merged
+
+        expanded = expanded.groupby(id_col, group_keys=False).apply(
+            fill_gaps_locf, include_groups=False
+        )
+        expanded = expanded.reset_index(drop=True)
+        return expanded
+
+    return callback
+
+
 def _infer_interval_from_series(series: pd.Series) -> pd.Timedelta:
     """Best-effort detection of interval spacing for offset/time columns."""
 
@@ -3627,6 +3861,284 @@ def aumc_rate_kg(
             result = pd.DataFrame(columns=[c for c in result.columns if c != stop_col])
     
     return result
+
+def aumc_rate_mass(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    val_col: str,
+    unit_col: Optional[str],
+    rate_unit_col: Optional[str],
+    index_col: Optional[str],
+    stop_col: Optional[str],
+    target_unit: str,
+) -> pd.DataFrame:
+    """AUMC non-kg mass-rate callback (analogue of aumc_rate_kg without ÷weight).
+
+    Implements R ricu-style pipeline for AUMC ``drugitems`` rows that express a
+    mass-rate (mg/hour, mcg/hour) rather than a kg-normalized rate:
+
+      1. Normalize mass column (`mg`/`µg`/`g` → target mass unit).
+      2. Normalize rate-time column (`uur` → hour, `dag` → day, `min` → min).
+      3. Pure unit filter: only rows whose final `unit/rate_unit` exactly
+         matches ``target_unit`` survive. Everything else becomes NaN and is
+         dropped before interval expansion. Crucially:
+           * rows where ``doserateperkg == 1`` are excluded (this would need
+             kg re-normalization, which this callback does not perform);
+           * rows whose ``rate_unit`` is missing are excluded (raw/bolus dose).
+      4. Interval-expand from ``index_col`` to ``stop_col`` at a 1-hour
+         resolution — identical to ``aumc_rate_kg``'s expand step, guaranteeing
+         output schema parity.
+
+    Supported target units
+    ----------------------
+    ``mcg/hour``, ``mcg/min``, ``mg/hour``, ``mg/min``.
+
+    Examples
+    --------
+    >>> # Fentanyl AUMC itemid 7219 — target mcg/hour
+    >>> cb = aumc_rate_mass
+    >>> # Dispatched via concept-dict callback
+    ...  "aumc_rate_mass(target_unit = \"mcg/hour\")"
+    """
+    target = target_unit.lower().replace("hr", "hour").strip()
+    if target not in {"mcg/hour", "mcg/min", "mg/hour", "mg/min"}:
+        raise ValueError(
+            f"aumc_rate_mass: unsupported target_unit {target_unit!r}"
+        )
+    target_mass, target_time = target.split("/")
+
+    if frame.empty:
+        return frame
+
+    df = frame.copy()
+
+    if val_col not in df.columns:
+        return pd.DataFrame(columns=list(df.columns) + [concept_name])
+
+    df[val_col] = pd.to_numeric(df[val_col], errors="coerce")
+    df = df.dropna(subset=[val_col])
+    if df.empty:
+        return df
+
+    # Drop rows missing unit / rate_unit (raw bolus dose cannot be converted to rate)
+    na_cols = []
+    if unit_col and unit_col in df.columns:
+        na_cols.append(unit_col)
+    if rate_unit_col and rate_unit_col in df.columns:
+        na_cols.append(rate_unit_col)
+    if na_cols:
+        df = df.dropna(subset=na_cols, how="any")
+        if df.empty:
+            return df
+
+    # Drop rows whose doserateperkg is true (would need kg normalization)
+    if "doserateperkg" in df.columns:
+        per_kg_mask = pd.to_numeric(df["doserateperkg"], errors="coerce").fillna(0).astype(bool)
+        if per_kg_mask.any():
+            df = df.loc[~per_kg_mask].copy()
+            if df.empty:
+                return df
+
+    # Normalize mass units to mcg internally (reuse existing helper)
+    _aumc_normalize_mass_units(df, unit_col, val_col)
+    rate_unit_col = _aumc_normalize_rate_units(df, rate_unit_col, val_col) or rate_unit_col
+
+    # At this point mass is in mcg and time is in 'min'. Convert to target.
+    # Convert mcg → target mass
+    if target_mass == "mg":
+        df[val_col] = df[val_col] / 1000.0
+    # target mcg → no-op
+
+    # Convert /min → target time
+    if target_time == "hour":
+        df[val_col] = df[val_col] * 60.0
+
+    # Set final unit string for downstream bookkeeping
+    if unit_col and unit_col in df.columns:
+        df[unit_col] = f"{target_mass}/{target_time}"
+
+    df[concept_name] = df[val_col]
+
+    id_cols = _aumc_get_id_columns(df)
+    result_cols = list(dict.fromkeys(id_cols))
+    if index_col:
+        if index_col not in df.columns:
+            df[index_col] = pd.NaT
+        result_cols.append(index_col)
+    result_cols.append(concept_name)
+    if unit_col and unit_col in df.columns:
+        result_cols.append(unit_col)
+
+    result = df[result_cols].dropna(subset=[concept_name])
+
+    # Interval expand (identical to aumc_rate_kg)
+    if stop_col and stop_col in df.columns and index_col and index_col in df.columns:
+        result[stop_col] = df.loc[result.index, stop_col]
+
+        step_minutes = 60.0
+        starts = pd.to_numeric(result[index_col], errors="coerce")
+        stops = pd.to_numeric(result[stop_col], errors="coerce")
+        valid = starts.notna() & stops.notna() & (stops > starts)
+        result_valid = result.loc[valid].copy()
+        starts_v = starts.loc[valid].values
+        stops_v = stops.loc[valid].values
+
+        start_hours = np.floor(starts_v / step_minutes) * step_minutes
+        stop_hours = np.floor(stops_v / step_minutes) * step_minutes
+        n_points = ((stop_hours - start_hours) / step_minutes).astype(int) + 1
+        n_points = np.maximum(n_points, 1)
+
+        if n_points.sum() > 0:
+            row_indices = np.repeat(np.arange(len(result_valid)), n_points)
+            expanded = result_valid.iloc[row_indices].reset_index(drop=True)
+            time_values = np.concatenate([
+                np.arange(sh, sh + n * step_minutes, step_minutes)
+                for sh, n in zip(start_hours, n_points)
+            ])
+            expanded[index_col] = time_values
+            if stop_col in expanded.columns:
+                expanded = expanded.drop(columns=[stop_col])
+            result = expanded
+        else:
+            result = pd.DataFrame(columns=[c for c in result.columns if c != stop_col])
+
+    return result
+
+
+def sic_rate_mass(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    val_col: str,
+    index_col: Optional[str],
+    stop_col: Optional[str],
+    target_unit: str,
+) -> pd.DataFrame:
+    """SIC non-kg mass-rate callback for sedatives/analgesics.
+
+    Unlike vasopressors (where ``AmountPerMinute`` is a genuine g/min rate),
+    SIC sedatives store the **total bolus dose** in both ``Amount`` and
+    ``AmountPerMinute`` (see audit report 2026-05-13). The actual infusion
+    rate must be computed as:
+
+        rate = Amount / duration_seconds × conversion_factor
+
+    where ``duration_seconds = OffsetDrugEnd − Offset``.
+
+    SIC ``Amount`` is in **grams** (confirmed by d_references unit='g' for
+    DrugID 1480/1495/1499/1549). Conversion to target:
+
+      - mcg/hour: Amount_g × 1e6 / duration_seconds × 3600
+      - mg/hour:  Amount_g × 1e3 / duration_seconds × 3600
+      - mcg/min:  Amount_g × 1e6 / duration_seconds × 60
+      - mg/min:   Amount_g × 1e3 / duration_seconds × 60
+
+    Rows with zero or negative duration are dropped (single-push boluses
+    with no meaningful rate).
+
+    After rate computation, intervals are expanded to an hourly grid
+    (matching ``sic_rate_kg``'s expand logic).
+
+    Parameters
+    ----------
+    target_unit : str
+        One of ``mcg/hour``, ``mcg/min``, ``mg/hour``, ``mg/min``.
+    """
+    target = target_unit.lower().replace("hr", "hour").strip()
+    if target not in {"mcg/hour", "mcg/min", "mg/hour", "mg/min"}:
+        raise ValueError(f"sic_rate_mass: unsupported target_unit {target_unit!r}")
+    target_mass, target_time = target.split("/")
+
+    # Mass multiplier: grams → target mass
+    mass_mult = {"mcg": 1e6, "mg": 1e3}[target_mass]
+    # Time multiplier: per-second → per-target_time
+    time_mult = {"hour": 3600.0, "min": 60.0}[target_time]
+
+    if frame.empty:
+        return frame
+
+    df = frame.copy()
+
+    # Resolve val_col (may have been renamed to concept_name)
+    actual_val = val_col if val_col in df.columns else (
+        concept_name if concept_name in df.columns else None
+    )
+    if actual_val is None:
+        return pd.DataFrame(columns=list(df.columns) + [concept_name])
+
+    # Use Amount column (total dose in grams) — NOT AmountPerMinute
+    # because for sedatives Amount == AmountPerMinute (audit finding).
+    # If val_col was set to AmountPerMinute in the dict, that's fine —
+    # the values are the same. We just need the duration to compute rate.
+    df[actual_val] = pd.to_numeric(df[actual_val], errors="coerce")
+    df = df.dropna(subset=[actual_val])
+    if df.empty:
+        return df
+
+    # Compute duration in seconds
+    if not index_col:
+        for cand in ["Offset", "OffsetDrugStart", "start", "charttime"]:
+            if cand in df.columns:
+                index_col = cand
+                break
+    if not stop_col:
+        for cand in ["OffsetDrugEnd", "stop", "endtime"]:
+            if cand in df.columns:
+                stop_col = cand
+                break
+
+    if not (index_col and stop_col and index_col in df.columns and stop_col in df.columns):
+        return pd.DataFrame(columns=list(df.columns) + [concept_name])
+
+    starts = pd.to_numeric(df[index_col], errors="coerce")
+    stops = pd.to_numeric(df[stop_col], errors="coerce")
+    duration_sec = stops - starts
+
+    # Drop zero/negative duration (bolus pushes with no meaningful rate)
+    valid = duration_sec > 0
+    df = df.loc[valid].copy()
+    duration_sec = duration_sec.loc[valid]
+    if df.empty:
+        return df
+
+    # Compute rate: Amount_g × mass_mult / duration_sec × time_mult
+    df[concept_name] = df[actual_val] * mass_mult / duration_sec * time_mult
+
+    # Drop implausible (NaN, inf, negative)
+    df = df[df[concept_name].notna() & np.isfinite(df[concept_name]) & (df[concept_name] > 0)]
+    if df.empty:
+        return df
+
+    # Expand intervals to hourly grid (same logic as sic_rate_kg in concept.py)
+    _PATIENT_ID_COLS = ["CaseID", "stay_id", "icustay_id", "patientunitstayid",
+                        "admissionid", "patientid"]
+    id_cols = [c for c in _PATIENT_ID_COLS if c in df.columns]
+    keep_cols = id_cols + [concept_name]
+
+    expanded_rows = []
+    for _, row in df.iterrows():
+        start_val = pd.to_numeric(row.get(index_col), errors="coerce")
+        stop_val = pd.to_numeric(row.get(stop_col), errors="coerce")
+        if pd.isna(start_val) or pd.isna(stop_val) or stop_val <= start_val:
+            continue
+        start_hour = int(start_val // 3600)
+        stop_hour = int(stop_val // 3600)
+        for t in range(start_hour, stop_hour + 1):
+            new_row = {index_col: t}
+            for c in keep_cols:
+                if c in row.index:
+                    new_row[c] = row[c]
+            expanded_rows.append(new_row)
+
+    if expanded_rows:
+        result = pd.DataFrame(expanded_rows)
+        if concept_name in result.columns:
+            result[concept_name] = pd.to_numeric(result[concept_name], errors="coerce")
+        return result
+    else:
+        return pd.DataFrame(columns=id_cols + [index_col, concept_name])
+
 
 def aumc_rate_units_callback(mcg_to_units: float) -> Callable:
     """
@@ -4192,6 +4704,151 @@ def hirid_rate(
     result_cols = [c for c in result_cols if c in grouped.columns]
     result = grouped[result_cols].dropna(subset=[concept_name])
     
+    return result
+
+
+def hirid_rate_mass(
+    frame: pd.DataFrame,
+    *,
+    concept_name: str,
+    val_col: str,
+    unit_col: Optional[str],
+    grp_var: Optional[str],
+    index_col: Optional[str],
+    target_unit: str,
+) -> pd.DataFrame:
+    """HiRID mass-rate callback (analogue of ``hirid_rate_kg`` without ÷weight).
+
+    HiRID pharma stores each administration event's dose in a native mass unit
+    (``doseunit``: µg for fentanyl, mg for midazolam, ...). Unlike the vasopressin
+    ``hirid_rate`` variant, this callback locks to a caller-specified target
+    unit rather than inferring from the most-frequent doseunit.
+
+    Steps (mirroring ``hirid_rate_kg``):
+
+    1. Filter to rows whose ``doseunit`` is compatible with ``target_unit`` —
+       i.e. can be converted to the target mass via a unit factor. Rows with
+       other or missing units are dropped.
+    2. Group by (patientid, hour-floor, infusionid) and SUM the doses given
+       within each hour.
+    3. Divide by 60 (HiRID pharma events accumulate within an hourly grid;
+       the summed dose across 1 hour becomes the per-minute rate).
+    4. Convert to ``target_unit`` via mass + time scaling.
+    5. Return ``(patientid, hour, concept_name, unit)`` columns.
+
+    Parameters
+    ----------
+    target_unit : str
+        One of ``mcg/hour``, ``mcg/min``, ``mg/hour``, ``mg/min``.
+
+    Examples
+    --------
+    >>> # Fentanyl: doseunit µg, target mcg/hour
+    >>> # dispatched via concept-dict callback "hirid_rate_mass(target_unit = \"mcg/hour\")"
+    """
+    target = target_unit.lower().replace("hr", "hour").strip()
+    if target not in {"mcg/hour", "mcg/min", "mg/hour", "mg/min"}:
+        raise ValueError(
+            f"hirid_rate_mass: unsupported target_unit {target_unit!r}"
+        )
+    target_mass, target_time = target.split("/")
+
+    empty = pd.DataFrame(columns=list(frame.columns) + [concept_name])
+    if frame.empty:
+        return empty
+
+    df = frame.copy()
+
+    # Handle val_col rename collision (same pattern as hirid_rate)
+    actual_val_col = val_col
+    if val_col not in df.columns:
+        if concept_name in df.columns:
+            actual_val_col = concept_name
+        else:
+            return empty
+
+    df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors="coerce")
+    df = df.dropna(subset=[actual_val_col])
+    if df.empty:
+        return empty
+
+    # ── Step 1: unit-compatibility filter ──
+    # HiRID doseunit is one of: µg, mg, g (rare)
+    if unit_col and unit_col in df.columns:
+        unit_lower = df[unit_col].astype(str).str.strip().str.lower()
+        # Map each row's unit to multiplier that converts its mass to target_mass
+        #   µg → mcg: 1.0,  mg → mcg: 1000, g → mcg: 1e6
+        #   µg → mg: 0.001, mg → mg: 1.0,   g → mg: 1000
+        mass_mult = pd.Series(np.nan, index=df.index)
+        is_mcg = unit_lower.isin({"µg", "μg", "ug", "mcg"})
+        is_mg = unit_lower.eq("mg")
+        is_g = unit_lower.eq("g")
+        if target_mass == "mcg":
+            mass_mult[is_mcg] = 1.0
+            mass_mult[is_mg] = 1000.0
+            mass_mult[is_g] = 1_000_000.0
+        else:  # target_mass == "mg"
+            mass_mult[is_mcg] = 0.001
+            mass_mult[is_mg] = 1.0
+            mass_mult[is_g] = 1000.0
+
+        valid = mass_mult.notna()
+        df = df.loc[valid].copy()
+        mass_mult = mass_mult.loc[valid]
+        if df.empty:
+            return empty
+        df[actual_val_col] = df[actual_val_col] * mass_mult
+    # If no unit column, assume values are already in target_mass — risky but
+    # consistent with how hirid_rate handles missing units.
+
+    # ── Step 2: identify ID and time columns ──
+    id_col = None
+    for cand in ["patientid", "stay_id", "admissionid", "patientunitstayid"]:
+        if cand in df.columns:
+            id_col = cand
+            break
+    if id_col is None:
+        return df
+
+    if not index_col:
+        for cand in ["datetime", "givenat", "charttime", "time"]:
+            if cand in df.columns:
+                index_col = cand
+                break
+
+    if index_col and index_col in df.columns:
+        time_series = df[index_col]
+        if pd.api.types.is_numeric_dtype(time_series):
+            df["_hour"] = np.floor(time_series).astype(int)
+        else:
+            df["_hour"] = time_series
+    else:
+        df["_hour"] = 0
+
+    # ── Step 3: group-sum per (patient, hour, infusion) ──
+    group_cols = [id_col, "_hour"]
+    if grp_var and grp_var in df.columns:
+        group_cols.append(grp_var)
+    grouped = df.groupby(group_cols, as_index=False).agg({actual_val_col: "sum"})
+
+    # ── Step 4: sum over hour → rate per target_time ──
+    # An hour's total dose / 60 = per-minute rate; multiply if target_time = hour
+    grouped[concept_name] = grouped[actual_val_col] / 60.0
+    if target_time == "hour":
+        grouped[concept_name] = grouped[concept_name] * 60.0  # back to per-hour
+
+    grouped = grouped.rename(columns={"_hour": index_col if index_col else "datetime"})
+
+    if unit_col:
+        grouped[unit_col] = f"{target_mass}/{target_time}"
+
+    result_cols = [id_col, index_col if index_col else "datetime", concept_name]
+    if grp_var and grp_var in grouped.columns:
+        result_cols.append(grp_var)
+    if unit_col:
+        result_cols.append(unit_col)
+    result_cols = [c for c in result_cols if c in grouped.columns]
+    result = grouped[result_cols].dropna(subset=[concept_name])
     return result
 
 

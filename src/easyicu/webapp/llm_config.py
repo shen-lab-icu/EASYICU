@@ -76,7 +76,7 @@ PROVIDERS: Dict[str, ProviderInfo] = {
     "openrouter": (
         "OpenRouter",
         "https://openrouter.ai/api/v1",
-        "deepseek/deepseek-chat-v3-0324:free",
+        "openai/gpt-oss-120b:free",
         True,
         "Aggregator with free & paid models. Get key at openrouter.ai",
         "模型聚合平台，有免费和付费模型。在 openrouter.ai 获取 Key。",

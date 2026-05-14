@@ -39,12 +39,20 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-HOSTED_DEFAULT_MODEL = os.getenv("EASYICU_HOSTED_DEFAULT_MODEL", "openrouter/free").strip()
+HOSTED_DEFAULT_MODEL = os.getenv(
+    "EASYICU_HOSTED_DEFAULT_MODEL",
+    "openai/gpt-oss-120b:free",
+).strip()
 HOSTED_FALLBACK_MODELS = [
     item.strip()
     for item in os.getenv(
         "EASYICU_HOSTED_FALLBACK_MODELS",
-        "openrouter/free,deepseek/deepseek-chat-v3-0324:free",
+        (
+            "openai/gpt-oss-120b:free,"
+            "google/gemma-4-31b-it:free,"
+            "z-ai/glm-4.5-air:free,"
+            "openrouter/free"
+        ),
     ).split(",")
     if item.strip()
 ]

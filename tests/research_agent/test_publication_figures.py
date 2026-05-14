@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import zipfile
 
@@ -460,3 +461,94 @@ def test_publication_figure_skill_renders_from_registered_association_table(ra, 
     assert evidence.get("publication_figure_contract") is not None
     assert evidence.get("publication_figure_skill_summary") is not None
     assert (run_dir / "publication_figures" / "easyicu_publication_figure.svg").exists()
+
+
+def test_publication_figure_skill_promotes_prediction_validation_bundle(ra, tmp_path: Path):
+    from PIL import Image
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    svg = tmp_path / "discrimination_calibration.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+        '<rect width="120" height="80" fill="white"/>'
+        '<text x="12" y="28">AUROC 0.78</text>'
+        '<text x="12" y="52">Calibration</text>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    png = tmp_path / "discrimination_calibration.png"
+    Image.new("RGB", (120, 80), "white").save(png)
+    summary = tmp_path / "step_summary.json"
+    summary.write_text(
+        json.dumps(
+            {
+                "auroc": 0.78,
+                "brier_score": 0.18,
+                "baseline_prevalence": 0.10,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = ra.EvidenceStore(run_dir)
+    evidence.register_file(
+        kind="figure",
+        description="Discrimination and calibration figure from model training.",
+        source_path=svg,
+        evidence_id="figure_discrimination_calibration_svg",
+        aliases=["discrimination_calibration"],
+    )
+    evidence.register_file(
+        kind="figure",
+        description="Discrimination and calibration figure from model training.",
+        source_path=png,
+        evidence_id="figure_discrimination_calibration_png",
+        aliases=["discrimination_calibration_png"],
+    )
+    evidence.register_file(
+        kind="statistic",
+        description="Prediction model summary.",
+        source_path=summary,
+        evidence_id="statistic_step_summary_model",
+        aliases=["01_model_training"],
+    )
+
+    context = ra.ResearchContext(
+        research_question="Build an ICU mortality prediction model.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[
+            ra.ConceptDescriptor(name="age", role="demographic", dtype="float64"),
+            ra.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_model_training_figure",
+                intent="Render the publication figure(s) declared by step '01_model_training'.",
+                expected_outputs=["figure:discrimination_calibration"],
+            )
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+    )
+
+    assert result.generated is True
+    for suffix in ("svg", "png", "pdf", "tiff"):
+        assert evidence.get(f"publication_figure_{suffix}") is not None
+        assert (run_dir / "publication_figures" / f"easyicu_publication_figure.{suffix}").exists()
+    assert evidence.get("publication_figure_contract") is not None

@@ -622,7 +622,22 @@ class CriticAgent:
         scaffold: str,
         available_evidence_ids: Sequence[str],
     ) -> CritiqueReport:
-        missing = sorted(set(re.findall(r"\[evidence missing: ([^\]]+)\]", scaffold)))
+        missing = sorted(
+            set(
+                re.findall(
+                    r"(?:\[evidence missing:\s*([^\]]+)\]|<!--\s*evidence missing:\s*([^>]+)-->)",
+                    scaffold,
+                    flags=re.I,
+                )
+            )
+        )
+        missing = sorted(
+            {
+                (first or second).strip()
+                for first, second in missing
+                if (first or second).strip()
+            }
+        )
         concerns: List[str] = []
         if missing:
             concerns.append("Manuscript contains unresolved evidence placeholders.")
@@ -878,6 +893,8 @@ class CoderAgent:
                     "calibration metrics to step_summary.json. Keep categorical columns "
                     "as objects until a ColumnTransformer categorical branch handles them; "
                     "do not coerce mixed numeric + categorical feature frames all at once. "
+                    "If you use `calibration_curve`, import it from `sklearn.calibration`, "
+                    "not `sklearn.metrics`. "
                     "Never use `('onehot', 'passthrough')` for a categorical branch feeding "
                     "a numeric estimator; import OneHotEncoder and use "
                     "`OneHotEncoder(handle_unknown='ignore', sparse_output=False)`.\n"
@@ -1000,10 +1017,49 @@ class WriterAgent:
                     "and the manuscript becomes unreadable. Pull the "
                     "number from the registered tables/statistics first, "
                     "write it inline, then cite.\n"
-                    "  • If a number is unknown, say so explicitly "
-                    "    (e.g. `the median age was [TBD] years "
-                    "{evidence:table_one}`) — never paper over it with "
-                    "a placeholder noun.\n\n"
+                    "  • If a number is unknown, omit the sentence or say "
+                    "    explicitly that the value was not available from the "
+                    "    registered digest — never paper over it with a "
+                    "    placeholder noun.\n\n"
+                    "RESULTS WRITING RULES:\n"
+                    "- Do not write `[TBD]`. If the digest does not contain a required number, "
+                    "omit that sentence instead of leaving placeholders in the manuscript.\n"
+                    "- If an exact baseline number is unavailable, write a table-anchored sentence such as "
+                    "`Baseline characteristics are summarised in Table 1 {evidence:table_one}.` "
+                    "Do not force partially filled numeric prose.\n"
+                    "- Only cite `table_one`, `outcome_rate`, or `primary_association` when those ids "
+                    "actually appear in the available evidence ids and aliases below. If an alias is "
+                    "absent, omit that sentence instead of leaving an unresolved placeholder.\n"
+                    "- Use `table_one` / `cohort_summary` for cohort size and baseline characteristics.\n"
+                    "- Use `outcome_rate` / `outcome_incidence` for event counts and mortality incidence; "
+                    "do not cite `00_probe` for the primary mortality result.\n"
+                    "- Use `primary_association` for adjusted effect estimates, 95% CI, and p-values.\n"
+                    "- For prediction-model tasks, prefer `model_performance`, `prediction_performance`, "
+                    "or the model-training step summary for AUROC, Brier score, calibration, split "
+                    "strategy, and baseline prevalence. Do not write odds-ratio or predictor-significance "
+                    "claims unless the evidence ids explicitly include a coefficient/effect table.\n"
+                    "- For AUROC/Brier/baseline-prevalence claims, copy the value from the MACHINE "
+                    "EVIDENCE DIGEST exactly enough to support normal rounding: for example 0.7769 "
+                    "may be written as 0.78, never as 0.82. Do not report a confidence interval "
+                    "unless the digest explicitly contains lower and upper CI fields for that metric.\n"
+                    "- If a prediction-model task lacks `table_one`, cite `research_context` or the "
+                    "model-performance step for cohort size rather than writing `Table 1`.\n"
+                    "- If a prediction-model task lacks `outcome_rate`, use baseline prevalence from "
+                    "`model_performance`, `prediction_performance`, or the prediction step summary.\n"
+                    "- If the digest includes covariate rows such as `age_or`, `age_p_value`, "
+                    "`sex_M_or`, or `sex_M_p_value`, you may state whether those covariates were "
+                    "or were not statistically significant. If those fields are absent, do not guess.\n"
+                    "- Keep the Abstract balanced and data-rich: include cohort N, outcome incidence, "
+                    "the primary adjusted effect size with precision, and one concise limitation when "
+                    "the digest indicates a QC or statistical warning.\n"
+                    "- Write like a manuscript, not a pipeline log. Never write phrases such as "
+                    "`warning: see manifest`, `the primary analysis reveals`, or `data integrity`.\n"
+                    "- If a validator warning matters clinically, restate it as one ordinary sentence "
+                    "in Results or the final Abstract sentence, for example by describing missingness, "
+                    "non-monotonic score-zero behaviour, or multiple-testing caveats.\n"
+                    "- In Results, prioritise this order when the facts are available: cohort size, "
+                    "event count/rate, baseline characteristics, primary association, then one "
+                    "sensitivity or QC sentence.\n\n"
                     "PLACEHOLDER FORMAT:\n"
                     "Exact form `{evidence:<id>}`, no spaces inside braces. "
                     "Use only ids from the list below; anything else "
@@ -1247,20 +1303,34 @@ def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
         sentence = raw_sentence.strip()
         if not sentence:
             continue
-        if "{evidence:" in sentence:
+        if (
+            "{evidence:" in sentence
+            or re.search(r"\]\(\s*evidence/[^)]+\)", sentence, flags=re.I)
+        ):
             continue
-        if "[evidence missing:" in sentence:
+        if re.search(
+            r"(?:\[evidence missing:\s*[^\]]+\]|<!--\s*evidence missing:\s*[^>]+-->)",
+            sentence,
+            flags=re.I,
+        ):
             unsupported.append(sentence)
             continue
         has_number = bool(re.search(r"\d", sentence))
         has_claimy_word = bool(
             re.search(
-                r"\b(cohort|stays|patients|mortality|death|auroc|auc|hazard|odds|risk|cluster|survival|ci|p=|calibration|brier)\b",
+                r"\b(cohort|stays|patients|mortality|death|auroc|auc|hazard|odds|risk|cluster|survival|ci|p=|calibration|brier|discrimination|performance|robust(?:ness)?|overfitting|miscalibration|missingness|generalisability|generalizability)\b",
                 sentence,
                 flags=re.I,
             )
         )
-        if has_number and has_claimy_word:
+        has_unquantified_result_claim = bool(
+            re.search(
+                r"\b(performance|robust(?:ness)?|consistent|overfitting|miscalibration|missingness|generalisability|generalizability)\b",
+                sentence,
+                flags=re.I,
+            )
+        )
+        if (has_number and has_claimy_word) or has_unquantified_result_claim:
             unsupported.append(sentence)
     return unsupported
 

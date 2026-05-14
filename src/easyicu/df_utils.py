@@ -10,19 +10,28 @@ import pandas as pd
 # Known ID column names by database
 KNOWN_ID_COLUMNS = {
     'miiv': ['stay_id', 'subject_id', 'hadm_id'],
-    'eicu': ['patientunitstayid', 'patientid'],
+    'eicu': ['patientunitstayid', 'patienthealthsystemstayid', 'uniquepid'],
     'aumc': ['admissionid', 'patientid'],
     'hirid': ['patientid'],
-    'sic': ['patientid', 'icustay_id'],
+    'sic': ['CaseID', 'PatientID'],
 }
 
 # Known time column names by database
 KNOWN_TIME_COLUMNS = {
     'miiv': ['charttime', 'starttime', 'endtime'],
-    'eicu': ['observationoffset', 'nursingchartoffset', 'offset'],
+    'eicu': [
+        'observationoffset',
+        'nursingchartoffset',
+        'labresultoffset',
+        'infusionoffset',
+        'intakeoutputoffset',
+        'hospitaladmitoffset',
+        'unitadmitoffset',
+        'offset',
+    ],
     'aumc': ['measuredat', 'start', 'stop'],
     'hirid': ['datetime', 'charttime'],
-    'sic': ['datetime', 'charttime'],
+    'sic': ['Offset', 'ICUOffset', 'OffsetDrugEnd', 'OffsetEnd'],
 }
 
 # Generic fallback patterns

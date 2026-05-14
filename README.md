@@ -143,8 +143,9 @@ EasyICU includes interactive tools for:
 
 For advanced users, EasyICU also includes an optional
 `easyicu.research_agent` layer for ICU-aware analysis planning,
-evidence-bound reporting, and manuscript scaffold generation. It is
-not required for the standard web workflow or Python extraction APIs.
+evidence-bound reporting, manuscript scaffold generation, and
+paper-aware replication mode for retrospective ICU studies. It is not
+required for the standard web workflow or Python extraction APIs.
 See [src/easyicu/research_agent/README.md](src/easyicu/research_agent/README.md)
 for details.
 

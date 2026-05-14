@@ -172,7 +172,7 @@ class VisualQAAuditor:
                         detail={"path": str(p), "extrema": list(extrema)},
                     ))
 
-            if p.suffix.lower() in {".png", ".pdf"} and not p.with_suffix(".svg").exists():
+            if p.suffix.lower() in {".png", ".pdf"} and not _matching_svg_exists(p):
                 findings.append(ValidationFinding(
                     validator=self.name,
                     severity="info",
@@ -187,6 +187,24 @@ class VisualQAAuditor:
             findings.extend(self.vlm_adapter.audit(figure_paths=figure_paths))
 
         return findings
+
+
+def _matching_svg_exists(path: Path) -> bool:
+    """Return true when an editable SVG companion exists for a figure.
+
+    EvidenceStore prefixes artefacts with a content hash
+    (``<evidence_id>__<basename>.png``), so the literal
+    ``path.with_suffix('.svg')`` check can miss a true companion whose
+    hash differs but whose source basename is identical.
+    """
+    direct = path.with_suffix(".svg")
+    if direct.exists():
+        return True
+    if "__" not in path.name:
+        return False
+    source_stem = path.name.split("__", 1)[1]
+    source_stem = str(Path(source_stem).with_suffix(""))
+    return any(path.parent.glob(f"*__{source_stem}.svg"))
 
 
 def _audit_svg_text_layout(

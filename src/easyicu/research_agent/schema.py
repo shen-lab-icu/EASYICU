@@ -651,6 +651,31 @@ class AnalysisManifest(BaseModel):
         ),
     )
     cost_records: List[CostRecord] = Field(default_factory=list)
+    reproducibility: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Compact LLM reproducibility envelope (O20): per-call prompt/response "
+            "sha256, requested seed, temperature, provider/model, and a "
+            "PHI-safe environment snapshot. Populated when "
+            "ResearchAgentPipeline(enable_reproducibility_envelope=True)."
+        ),
+    )
+    readiness: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Fail-closed readiness gates for the run: execution_complete, "
+            "evidence_complete, numeric_verified, analysis_validated, "
+            "manuscript_ready and publication_ready."
+        ),
+    )
+    artifact_paths: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Canonical run-level diagnostic artefacts such as run_status.json, "
+            "claim_ledger.csv, evidence_audit.json, numeric_audit.json, "
+            "author_review_note.md and, only when gated, manuscript_ready.md."
+        ),
+    )
     report_path: Optional[str] = None
     manuscript_path: Optional[str] = None
     audit_log_path: Optional[str] = None
@@ -678,6 +703,9 @@ class PipelineResult(BaseModel):
     manuscript_path: str
     evidence_count: int
     findings_count: int
+    paper_profile_path: Optional[str] = None
+    replication_spec_path: Optional[str] = None
+    replication_report_path: Optional[str] = None
 
     def as_paths(self) -> Dict[str, Path]:
         return {
@@ -687,6 +715,105 @@ class PipelineResult(BaseModel):
             "report": Path(self.report_path),
             "manuscript": Path(self.manuscript_path),
         }
+
+
+class PaperClaimRecord(BaseModel):
+    """Typed representation of one original-paper result claim."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    claim_id: str
+    section: str = "results"
+    sentence: str
+    metric: Optional[str] = None
+    paper_value: Optional[str] = None
+    numeric_value: Optional[float] = None
+    direction: Optional[str] = None
+    predictor: Optional[str] = None
+    outcome: Optional[str] = None
+
+
+class PaperProfile(BaseModel):
+    """Deterministic paper-normalisation output for replication mode."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "easyicu.paper_profile/1"
+    paper_source: str
+    paper_title: Optional[str] = None
+    paper_type: Literal[
+        "descriptive",
+        "association",
+        "prediction",
+        "survival",
+        "fairness",
+        "causal-like",
+        "unsupported_or_underspecified",
+    ] = "unsupported_or_underspecified"
+    research_question: str = ""
+    target_outcome: Optional[str] = None
+    cohort_definition: str = ""
+    inclusion_criteria: List[str] = Field(default_factory=list)
+    exclusion_criteria: List[str] = Field(default_factory=list)
+    primary_exposure: Optional[str] = None
+    primary_predictor: Optional[str] = None
+    covariates: List[str] = Field(default_factory=list)
+    primary_analysis_method: str = ""
+    secondary_analyses: List[str] = Field(default_factory=list)
+    table_figure_inventory: List[str] = Field(default_factory=list)
+    key_claims: List[PaperClaimRecord] = Field(default_factory=list)
+    unsupported_reasons: List[str] = Field(default_factory=list)
+
+
+class PaperReplicationSpec(BaseModel):
+    """Typed execution contract derived from a paper profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "easyicu.paper_replication_spec/1"
+    paper_title: Optional[str] = None
+    paper_type: str
+    replication_goal: str = "design_and_conclusion_alignment"
+    mapped_concepts: Dict[str, str] = Field(default_factory=dict)
+    unmappable_items: List[str] = Field(default_factory=list)
+    approximate_substitutions: Dict[str, str] = Field(default_factory=dict)
+    time_windows: List[str] = Field(default_factory=list)
+    required_outputs: List[str] = Field(default_factory=list)
+    alignment_targets: List[str] = Field(default_factory=list)
+    notes: List[str] = Field(default_factory=list)
+
+
+class PaperResultLedger(BaseModel):
+    """Compact ledger of original-paper claims and EasyICU metrics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "easyicu.paper_result_ledger/1"
+    paper_claims: List[PaperClaimRecord] = Field(default_factory=list)
+    easyicu_metrics: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ReplicationDeviationItem(BaseModel):
+    """One explicit mismatch or approximation in a replication attempt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    item: str
+    severity: Literal["info", "warning", "error"] = "warning"
+    original: Optional[str] = None
+    easyicu_proxy: Optional[str] = None
+    reason: str
+
+
+class ReplicationDeviationReport(BaseModel):
+    """Fail-closed report of deviations between paper and EasyICU setup."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "easyicu.replication_deviation_report/1"
+    supported: bool = False
+    summary: str = ""
+    items: List[ReplicationDeviationItem] = Field(default_factory=list)
 
 
 __all__ = [
@@ -719,4 +846,10 @@ __all__ = [
     "CostRecord",
     "AnalysisManifest",
     "PipelineResult",
+    "PaperClaimRecord",
+    "PaperProfile",
+    "PaperReplicationSpec",
+    "PaperResultLedger",
+    "ReplicationDeviationItem",
+    "ReplicationDeviationReport",
 ]

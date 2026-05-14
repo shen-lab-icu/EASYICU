@@ -67,6 +67,41 @@ def test_pipeline_enables_vlm_visual_qa_when_client_is_configured(ra, tmp_path: 
     assert pipeline._enable_vlm_visual_qa is True
 
 
+def test_pipeline_auto_enables_vlm_visual_qa_for_vision_capable_llm(ra, tmp_path: Path):
+    class _VisionLLM:
+        name = "vision"
+        supports_vision = True
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            return '{"findings":[]}'
+
+        def complete_with_images(self, *, prompt, image_paths, **kwargs):
+            return '{"findings":[]}'
+
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=_VisionLLM(),
+    )
+
+    assert pipeline._enable_vlm_visual_qa is True
+
+
+def test_pipeline_auto_disables_vlm_visual_qa_for_text_only_llm(ra, tmp_path: Path):
+    class _TextOnlyLLM:
+        name = "text-only"
+        supports_vision = False
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            return '{"findings":[]}'
+
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=_TextOnlyLLM(),
+    )
+
+    assert pipeline._enable_vlm_visual_qa is False
+
+
 def test_parse_vlm_visual_qa_response_tolerates_json_fence(ra, tmp_path: Path):
     fig_path = tmp_path / "a.png"
     fig_path.write_bytes(b"not a real image but path resolution is enough")

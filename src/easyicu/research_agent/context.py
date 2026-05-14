@@ -258,9 +258,10 @@ def build_research_context(
         proxy.
     cross_database_validation
         Other databases to replicate this analysis on. The pipeline
-        does not run those analyses itself in v1 — it surfaces them
-        for the human to schedule — but the manifest tracks which
-        databases were promised vs. actually run.
+        records these targets in every single-database run. The
+        higher-level ``ResearchAgentPipeline.replicate(...)`` helper
+        can execute the same question across multiple cohorts and
+        summarise which databases were promised vs. actually run.
     """
     # --- normalise cohort input
     if isinstance(cohort, (str, Path)):
@@ -324,6 +325,11 @@ def build_research_context(
                 missingness_test_meta=missingness_test_meta,
             )
         )
+    _enrich_target_outcome_descriptor(
+        descriptors=descriptors,
+        research_question=research_question,
+        target_outcome=target_outcome,
+    )
 
     prefs_obj = (
         user_preferences
@@ -489,6 +495,88 @@ def _count_unique(df: pd.DataFrame, cols: Sequence[str]) -> int:
         return int(len(df))
 
 
+def _infer_outcome_semantics(
+    *,
+    research_question: str,
+    outcome_name: Optional[str],
+) -> Dict[str, str]:
+    question = (research_question or "").lower()
+    outcome = (outcome_name or "").lower()
+    if "icu mortality" in question or outcome in {"death_icu", "icu_death", "icu_mortality"}:
+        return {
+            "label": "ICU mortality",
+            "description": "Binary outcome flag operationalizing ICU mortality for this analysis.",
+            "source_concept": "icu_mortality",
+        }
+    if (
+        "in-hospital mortality" in question
+        or "hospital mortality" in question
+        or outcome in {"death_hosp", "hospital_death", "hospital_mortality"}
+    ):
+        return {
+            "label": "hospital mortality",
+            "description": "Binary outcome flag operationalizing hospital mortality for this analysis.",
+            "source_concept": "hospital_mortality",
+        }
+    if "28-day mortality" in question or outcome in {"death_28d", "mortality_28d"}:
+        return {
+            "label": "28-day mortality",
+            "description": "Binary outcome flag operationalizing 28-day mortality for this analysis.",
+            "source_concept": "mortality_28d",
+        }
+    if "30-day mortality" in question or outcome in {"death_30d", "mortality_30d"}:
+        return {
+            "label": "30-day mortality",
+            "description": "Binary outcome flag operationalizing 30-day mortality for this analysis.",
+            "source_concept": "mortality_30d",
+        }
+    if outcome in {"death", "mortality"}:
+        return {
+            "label": "all-cause mortality",
+            "description": "Binary mortality outcome flag; confirm whether this refers to ICU, hospital, or fixed-horizon mortality before interpretation.",
+            "source_concept": "mortality_unspecified",
+        }
+    return {}
+
+
+def _enrich_target_outcome_descriptor(
+    *,
+    descriptors: Sequence[ConceptDescriptor],
+    research_question: str,
+    target_outcome: Optional[str],
+) -> None:
+    if not target_outcome:
+        return
+    semantics = _infer_outcome_semantics(
+        research_question=research_question,
+        outcome_name=target_outcome,
+    )
+    if not semantics:
+        return
+    for descriptor in descriptors:
+        if descriptor.name != target_outcome:
+            continue
+        if descriptor.role != VariableRole.OUTCOME:
+            descriptor.role = VariableRole.OUTCOME
+        if not descriptor.description:
+            descriptor.description = semantics["description"]
+        if not descriptor.source_concept:
+            descriptor.source_concept = semantics["source_concept"]
+        explicit_note = (
+            f"For this analysis, '{target_outcome}' is explicitly treated as "
+            f"{semantics['label']} because that is what the research question asks for."
+        )
+        if explicit_note not in descriptor.clinical_caveats:
+            descriptor.clinical_caveats.append(explicit_note)
+        harmonization_note = (
+            f"Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
+            f"for one another when using '{target_outcome}'."
+        )
+        if harmonization_note not in descriptor.cross_database_notes:
+            descriptor.cross_database_notes.append(harmonization_note)
+        break
+
+
 # ---------------------------------------------------------------------------
 # Naive context builder (T1.4 — ablation arm)
 # ---------------------------------------------------------------------------
@@ -577,6 +665,11 @@ def build_naive_research_context(
             pitfalls=[],
             missingness=None,
         ))
+    _enrich_target_outcome_descriptor(
+        descriptors=descriptors,
+        research_question=research_question,
+        target_outcome=target_outcome,
+    )
 
     # Default windows are also stripped — a naive agent does not know
     # about "first_24h"; keep an empty list unless the caller passed one.

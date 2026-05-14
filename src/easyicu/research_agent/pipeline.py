@@ -33,6 +33,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 import asyncio
+import csv
 import hashlib
 import json
 import re
@@ -62,6 +63,44 @@ from .agents import (
 )
 from .architecture import architecture_profile_markdown, default_architecture_profile
 from .cost import CostMeter, metered_role_resolver
+from .reproducibility_envelope import (
+    ENVELOPE_SCHEMA_VERSION,
+    ReproEnvelope,
+    envelope_role_resolver,
+)
+from .multiple_testing import build_multiple_testing_report
+from .causal_audit import run_causal_audit
+from .reporting_checklist import (
+    build_strobe_checklist,
+    build_tripod_ai_checklist,
+    choose_checklist,
+)
+from .reviewer import run_reviewer_round
+from .provenance import ProvenanceBundle, SourceFileRecord, build_provenance_bundle, hash_sources
+from .sensitivity import (
+    EValueResult,
+    NegativeControlResult,
+    compute_e_value,
+    run_negative_control_check,
+)
+from .paper_replication import (
+    build_paper_replication_spec,
+    build_paper_result_ledger,
+    compare_paper_to_easyicu,
+    load_paper_source,
+    parse_paper_profile,
+    render_deviation_report,
+    render_replication_report,
+    render_showcase_manuscript,
+    write_claim_csv,
+)
+from .repro_artifacts import (
+    NotebookStep,
+    build_notebook,
+    build_requirements_lockfile,
+    write_notebook,
+)
+from .hypothesis_generator import generate_hypotheses
 from .context import (
     build_naive_research_context,
     build_research_context,
@@ -78,7 +117,14 @@ from .literature import (
     LiteratureBundle,
     render_hypothesis_blueprint_for_prompt,
 )
-from .llm import LLMClient, LLMRouter, MockLLMClient, resolve_role_client
+from .llm import (
+    LLMClient,
+    LLMRouter,
+    MockLLMClient,
+    llm_is_mockish,
+    llm_supports_vision,
+    resolve_role_client,
+)
 from .memory import RunMemory
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runner import CodeRunner, DockerRunner, RunResult
@@ -91,8 +137,12 @@ from .schema import (
     EvidenceRecord,
     EvidenceRef,
     ManuscriptDraftPacket,
+    PaperProfile,
+    PaperReplicationSpec,
+    PaperResultLedger,
     PipelineResult,
     ResearchContext,
+    ReplicationDeviationReport,
     TimeWindow,
     ValidationFinding,
     VariableRole,
@@ -110,6 +160,9 @@ from .validators import (
     CohortAuditor,
     ConceptUsageAuditor,
     LLMConceptAuditor,
+    PublicationClaimAuditor,
+    ReplicationDesignAuditor,
+    ReplicationResultComparator,
     StatisticalGuard,
     StatisticalValidator,
 )
@@ -131,6 +184,7 @@ class _PlanPhaseResult:
     prompt_files: Dict[str, str]
     role_resolver: Callable[[str], Any]
     cost_meter: Optional[CostMeter]
+    repro_envelope: Optional[ReproEnvelope]
     started_at: datetime
     resume_state: Optional[Dict[str, Any]]
     aborted_result: Optional[PipelineResult] = None
@@ -166,10 +220,10 @@ class ResearchAgentPipeline:
         enable_literature: bool = True,
         enable_visual_qa: bool = True,
         enable_publication_figure_skill: bool = True,
-        enable_vlm_visual_qa: bool = False,
+        enable_vlm_visual_qa: Optional[bool] = None,
         vlm_client: Optional[LLMClient] = None,
         visual_qa_adapter: Optional[VLMVisualQAAdapter] = None,
-        enable_llm_concept_audit: bool = False,
+        enable_llm_concept_audit: Optional[bool] = None,
         llm_concept_auditor_client: Optional[LLMClient] = None,
         enable_memory: bool = True,
         enable_latex: bool = True,
@@ -193,6 +247,18 @@ class ResearchAgentPipeline:
         cache_dir: Optional[Union[str, Path]] = None,
         enable_cost_tracking: bool = False,
         cost_price_table: Optional[Dict[str, Any]] = None,
+        enable_reproducibility_envelope: bool = False,
+        llm_seed: Optional[int] = None,
+        envelope_include_previews: bool = False,
+        enable_multiple_testing_correction: bool = True,
+        multiple_testing_alpha: float = 0.05,
+        enable_causal_audit: bool = True,
+        enable_reporting_checklist: bool = True,
+        reporting_checklist_names: Optional[Sequence[str]] = None,
+        enable_reviewer_round: bool = True,
+        enable_fairness_subgroups: bool = True,
+        enable_hypothesis_generator: bool = False,
+        hypothesis_generator_top_k: int = 5,
         max_concurrent_steps: int = 1,
         enable_probe_step: bool = True,
         enable_replanning: bool = True,
@@ -210,15 +276,24 @@ class ResearchAgentPipeline:
         self._enable_literature = enable_literature
         self._enable_visual_qa = enable_visual_qa
         self._enable_publication_figure_skill = bool(enable_publication_figure_skill)
-        self._enable_vlm_visual_qa = bool(
-            enable_vlm_visual_qa
-            or vlm_client is not None
-            or visual_qa_adapter is not None
-        )
         self._vlm_client = vlm_client
         self._visual_qa_adapter = visual_qa_adapter
-        self._enable_llm_concept_audit = bool(enable_llm_concept_audit)
         self._llm_concept_auditor_client = llm_concept_auditor_client
+        if enable_vlm_visual_qa is None:
+            self._enable_vlm_visual_qa = bool(
+                visual_qa_adapter is not None
+                or llm_supports_vision(vlm_client)
+                or llm_supports_vision(llm)
+            )
+        else:
+            self._enable_vlm_visual_qa = bool(enable_vlm_visual_qa)
+        if enable_llm_concept_audit is None:
+            concept_client = llm_concept_auditor_client or llm
+            self._enable_llm_concept_audit = bool(
+                concept_client is not None and not llm_is_mockish(concept_client)
+            )
+        else:
+            self._enable_llm_concept_audit = bool(enable_llm_concept_audit)
         self._enable_memory = enable_memory
         self._enable_latex = enable_latex
         self._latex_venue_template = latex_venue_template or "article"
@@ -278,6 +353,48 @@ class ResearchAgentPipeline:
         # default pipeline behaviour stays bit-identical.
         self._enable_cost_tracking = bool(enable_cost_tracking)
         self._cost_price_table = cost_price_table
+        # O20 — Reproducibility envelope. Records prompt/response
+        # sha256, requested seed, temperature, provider/model, and a
+        # PHI-safe environment snapshot for every LLM call the pipeline
+        # makes. Off by default so the base pipeline behaviour stays
+        # bit-identical; turn on when a paper reviewer asks for an
+        # auditable replay bundle.
+        self._enable_reproducibility_envelope = bool(enable_reproducibility_envelope)
+        self._llm_seed = int(llm_seed) if llm_seed is not None else None
+        self._envelope_include_previews = bool(envelope_include_previews)
+        # O22 — run-wide multiple-testing correction. Defaults to ON
+        # because reviewers of a research-agent paper will always ask
+        # for it; the correction is cheap to compute and does not
+        # rewrite existing artefacts.
+        self._enable_multiple_testing_correction = bool(
+            enable_multiple_testing_correction
+        )
+        self._multiple_testing_alpha = float(multiple_testing_alpha)
+        # O18 — Causal audit. Deterministic: labels every primary
+        # effect as associational vs causal, scans bound manuscript
+        # for causal language over associational effects, emits
+        # warnings/errors. Default ON because the cost of a paper
+        # that silently sells an OR as causal is high.
+        self._enable_causal_audit = bool(enable_causal_audit)
+        # O16 — Reporting-guideline checklist. STROBE always; TRIPOD+AI
+        # when the analysis looks like a prediction model. Default ON
+        # because ICU journals routinely require the checklist.
+        self._enable_reporting_checklist = bool(enable_reporting_checklist)
+        self._reporting_checklist_names = (
+            tuple(reporting_checklist_names) if reporting_checklist_names else None
+        )
+        # O15 — Three-role reviewer round (statistician / clinician /
+        # methodologist) driven off already-computed evidence and
+        # findings. Deterministic; no extra LLM calls. Default ON.
+        self._enable_reviewer_round = bool(enable_reviewer_round)
+        # O24 — Fairness / subgroup analysis for the primary effect.
+        # Deterministic (pure numpy); runs after E-values.
+        self._enable_fairness_subgroups = bool(enable_fairness_subgroups)
+        # O17 — Front-door hypothesis generator. Runs early (plan phase)
+        # to emit a ranked candidate list; does not change the
+        # downstream plan unless the user reassigns ``question``.
+        self._enable_hypothesis_generator = bool(enable_hypothesis_generator)
+        self._hypothesis_generator_top_k = int(hypothesis_generator_top_k)
         # T3.3 — concurrent step execution. The canonical AnalysisPlan
         # has independent steps (each step reads the cohort and writes
         # to its own out_dir), so a small thread pool can shrink the
@@ -492,6 +609,7 @@ class ResearchAgentPipeline:
                 prompt_files=prompt_pack_files(),
                 role_resolver=lambda _role: resolve_role_client(llm, _role),
                 cost_meter=None,
+                repro_envelope=None,
                 started_at=datetime.now(timezone.utc),
                 resume_state=resume_state,
                 aborted_result=aborted,
@@ -585,6 +703,70 @@ class ResearchAgentPipeline:
                         producer="hypothesis_blueprint",
                         generation_mode="deterministic_skill",
                     )
+                # O17 — Front-door hypothesis generation. Opt-in; writes
+                # ``hypothesis_candidates.json`` + ``.md`` so the paper
+                # Methods section can quote "Out of N candidates we
+                # preregistered Q" rather than "we picked Q".
+                if self._enable_hypothesis_generator:
+                    try:
+                        hg_result = generate_hypotheses(
+                            context=agent_context,
+                            citations=list(preplan_literature.citations),
+                            top_k=self._hypothesis_generator_top_k,
+                        )
+                        hg_json = run_dir / "hypothesis_candidates.json"
+                        hg_md = run_dir / "hypothesis_candidates.md"
+                        hg_json.write_text(
+                            json.dumps(hg_result.to_json(), indent=2, default=str),
+                            encoding="utf-8",
+                        )
+                        hg_md.write_text(hg_result.to_markdown(), encoding="utf-8")
+                        if evidence.get("hypothesis_candidates") is None:
+                            evidence.register_file(
+                                kind="log",
+                                description=(
+                                    "Ranked front-door hypothesis candidates "
+                                    "(predictor × outcome) with coverage, "
+                                    "novelty and ICU-gate scores (O17)."
+                                ),
+                                source_path=hg_json,
+                                evidence_id="hypothesis_candidates",
+                                producer="hypothesis_generator",
+                                generation_mode="deterministic_skill",
+                            )
+                        if evidence.get("hypothesis_candidates_summary") is None:
+                            evidence.register_file(
+                                kind="log",
+                                description=(
+                                    "Human-readable hypothesis-candidate table (O17)."
+                                ),
+                                source_path=hg_md,
+                                evidence_id="hypothesis_candidates_summary",
+                                producer="hypothesis_generator",
+                                generation_mode="deterministic_skill",
+                            )
+                        findings.append(
+                            ValidationFinding(
+                                validator="hypothesis_generator",
+                                severity="info",
+                                message=(
+                                    f"Ranked {len(hg_result.candidates)} candidate "
+                                    f"hypotheses; top={hg_result.candidates[0].question if hg_result.candidates else 'n/a'}"
+                                ),
+                                evidence_ids=["hypothesis_candidates"],
+                            )
+                        )
+                    except Exception as exc:
+                        findings.append(
+                            ValidationFinding(
+                                validator="hypothesis_generator",
+                                severity="warning",
+                                message=(
+                                    f"Hypothesis generator failed: "
+                                    f"{type(exc).__name__}: {exc}"
+                                ),
+                            )
+                        )
                 blueprint = HypothesisBlueprintAgent().run(
                     context=agent_context,
                     literature=preplan_literature,
@@ -650,6 +832,7 @@ class ResearchAgentPipeline:
                         prompt_files=prompt_pack_files(),
                         role_resolver=lambda _role: resolve_role_client(llm, _role),
                         cost_meter=None,
+                        repro_envelope=None,
                         started_at=datetime.now(timezone.utc),
                         resume_state=resume_state,
                         aborted_result=aborted,
@@ -681,6 +864,13 @@ class ResearchAgentPipeline:
         prompt_files = prompt_pack_files()
 
         cost_meter: Optional[CostMeter] = None
+        repro_envelope: Optional[ReproEnvelope] = None
+        if self._enable_reproducibility_envelope:
+            repro_envelope = ReproEnvelope(
+                run_id=run_id,
+                seed=self._llm_seed,
+                include_previews=self._envelope_include_previews,
+            )
         if self._enable_cost_tracking:
             cost_meter = (
                 CostMeter(
@@ -691,7 +881,48 @@ class ResearchAgentPipeline:
                 if self._cost_price_table is not None
                 else CostMeter()
             )
-            role_resolver = metered_role_resolver(llm, cost_meter)
+            # Order: envelope wraps the innermost client so prompt /
+            # response hashes are computed on the exact strings the
+            # agent sent / received; the metered layer then observes
+            # ``last_usage`` the envelope passes through.
+            if repro_envelope is not None:
+                env_resolver = envelope_role_resolver(
+                    llm, repro_envelope, seed=self._llm_seed,
+                )
+
+                class _EnvelopeShim:
+                    """Bridges a ``role -> client`` resolver back into an LLMClient-like object.
+
+                    ``metered_role_resolver`` expects an object it can
+                    call ``resolve_role_client`` on. The shim exposes
+                    ``for_role`` so the downstream resolver takes our
+                    envelope-wrapped client as the inner client.
+                    """
+
+                    name = "envelope_shim"
+
+                    def __init__(self, resolver):
+                        self._resolver = resolver
+
+                    def for_role(self, role: str):
+                        return self._resolver(role)
+
+                    # A no-op ``complete`` so static checks don't trip;
+                    # the real call always goes through ``for_role``.
+                    def complete(self, *args, **kwargs):  # pragma: no cover
+                        raise RuntimeError(
+                            "EnvelopeShim is a role dispatcher; call for_role() first."
+                        )
+
+                role_resolver = metered_role_resolver(
+                    _EnvelopeShim(env_resolver), cost_meter,
+                )
+            else:
+                role_resolver = metered_role_resolver(llm, cost_meter)
+        elif repro_envelope is not None:
+            role_resolver = envelope_role_resolver(
+                llm, repro_envelope, seed=self._llm_seed,
+            )
         else:
 
             def role_resolver(role: str):
@@ -809,6 +1040,7 @@ class ResearchAgentPipeline:
             prompt_files=prompt_files,
             role_resolver=role_resolver,
             cost_meter=cost_meter,
+            repro_envelope=repro_envelope,
             started_at=started_at,
             resume_state=resume_state,
         )
@@ -1042,8 +1274,6 @@ class ResearchAgentPipeline:
                         [
                             "probe_summary",
                             "cohort_probe",
-                            "outcome_rate",
-                            "mortality_rate",
                         ]
                     )
                 rec = evidence.register_file(
@@ -1150,6 +1380,20 @@ class ResearchAgentPipeline:
                         messages.append(finding.message)
             return messages
 
+        def _failed_dependency_record(step: AnalysisStep) -> Optional[Dict[str, Any]]:
+            parent_step_id = _parent_step_id_for_figure_step(step)
+            if parent_step_id is None:
+                return None
+            with shared_lock:
+                records = list(per_step_records)
+            for record in records:
+                if record.get("step_id") != parent_step_id:
+                    continue
+                if str(record.get("status") or "").lower() == "ok":
+                    return None
+                return record
+            return None
+
         def _execute_one_step(step: AnalysisStep) -> Dict[str, Any]:
             nonlocal runtime_state
             step_record: Dict[str, Any] = {
@@ -1157,6 +1401,46 @@ class ResearchAgentPipeline:
                 "intent": step.intent,
             }
             step_current = step_order.get(step.step_id, 0) + 1
+            dependency_record = _failed_dependency_record(step)
+            if dependency_record is not None:
+                parent_step_id = str(dependency_record.get("step_id") or "")
+                step_record.update(
+                    {
+                        "status": "skipped_dependency_failed",
+                        "dependency_step_id": parent_step_id,
+                        "diagnostic_only": True,
+                        "generation_mode": "system",
+                    }
+                )
+                with shared_lock:
+                    findings.append(
+                        ValidationFinding(
+                            validator="dependency_gate",
+                            severity="warning",
+                            message=(
+                                f"Skipped downstream figure step {step.step_id} because "
+                                f"required analysis step {parent_step_id} did not pass."
+                            ),
+                            detail={
+                                "step_id": step.step_id,
+                                "dependency_step_id": parent_step_id,
+                                "dependency_status": dependency_record.get("status"),
+                                "diagnostic_only": True,
+                            },
+                        )
+                    )
+                    per_step_records.append(step_record)
+                    _flush_partial_manifest()
+                emit_progress(
+                    "step",
+                    f"Skipped {step.step_id}; required step {parent_step_id} failed.",
+                    status="skipped",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                )
+                return step_record
             emit_progress(
                 "step",
                 f"Step {step_current}/{total_steps} started: {step.step_id}.",
@@ -1428,6 +1712,11 @@ class ResearchAgentPipeline:
                             run_result.artefacts = sorted(
                                 p for p in run_result.out_dir.iterdir() if p.is_file()
                             )
+                    else:
+                        _salvage_minimal_contract_step_summary(
+                            step=step,
+                            out_dir=run_result.out_dir,
+                        )
                     if not run_result.artefacts:
                         fallback_code = _deterministic_fallback_code("no_artefacts")
                         if fallback_code is not None:
@@ -1438,11 +1727,15 @@ class ResearchAgentPipeline:
                     visual_summary_path = run_result.out_dir / "step_summary.json"
                     if visual_summary_path.exists():
                         try:
-                            visual_step_summary = json.loads(
+                            vloaded = json.loads(
                                 visual_summary_path.read_text(encoding="utf-8")
                             )
                         except Exception:
-                            visual_step_summary = {}
+                            vloaded = None
+                        if isinstance(vloaded, dict):
+                            visual_step_summary = vloaded
+                        else:
+                            visual_step_summary = {"raw": vloaded}
                     step_figures = [
                         art
                         for art in run_result.artefacts
@@ -1808,10 +2101,19 @@ class ResearchAgentPipeline:
             publication_step = (
                 step.method == "publication_figure_generation"
                 or "publication_figure" in (step.step_id or "").lower()
+                or "publication figure" in (step.intent or "").lower()
+                or "publication-ready figure" in (step.intent or "").lower()
                 or any(
                     str(item).startswith("figure:publication_figure")
                     for item in step.expected_outputs
                 )
+            )
+            figure_role = (
+                "publication_figure"
+                if publication_step
+                else "analysis_figure"
+                if _step_expects_figure(step)
+                else None
             )
             if publication_step and not _has_figure_exports(run_result.out_dir):
                 promoted = _promote_prior_publication_bundle(
@@ -1822,6 +2124,15 @@ class ResearchAgentPipeline:
                 if promoted is not None:
                     runner_repair_name = promoted
                     step_record["runner_repair"] = promoted
+                else:
+                    rescued = _render_prediction_publication_bundle_from_prior_outputs(
+                        run_dir=run_dir,
+                        current_step_id=step.step_id,
+                        out_dir=run_result.out_dir,
+                    )
+                    if rescued is not None:
+                        runner_repair_name = rescued
+                        step_record["runner_repair"] = rescued
 
             run_result.artefacts = sorted(
                 p for p in run_result.out_dir.iterdir() if p.is_file()
@@ -1870,7 +2181,11 @@ class ResearchAgentPipeline:
                         aliases=step_aliases,
                         producer="runner",
                         generation_mode=generation_mode,
-                        metadata={"script_evidence_id": script_record.evidence_id},
+                        metadata={
+                            "script_evidence_id": script_record.evidence_id,
+                            "figure_role": figure_role or "analysis_figure",
+                            "diagnostic_only": False,
+                        },
                     )
                 elif art.suffix.lower() in {".csv", ".tsv", ".parquet", ".feather"}:
                     rec = evidence.register_file(
@@ -1901,7 +2216,11 @@ class ResearchAgentPipeline:
                         aliases=step_aliases,
                         producer="runner",
                         generation_mode=generation_mode,
-                        metadata={"script_evidence_id": script_record.evidence_id},
+                        metadata={
+                            "script_evidence_id": script_record.evidence_id,
+                            "figure_role": figure_role or "analysis_figure",
+                            "diagnostic_only": False,
+                        },
                     )
                 else:
                     rec = evidence.register_file(
@@ -1921,9 +2240,17 @@ class ResearchAgentPipeline:
             ssj = run_result.out_dir / "step_summary.json"
             if ssj.exists():
                 try:
-                    step_summary = json.loads(ssj.read_text(encoding="utf-8"))
+                    loaded = json.loads(ssj.read_text(encoding="utf-8"))
                 except Exception:
-                    step_summary = {}
+                    loaded = None
+                if isinstance(loaded, dict):
+                    step_summary = loaded
+                else:
+                    # The coder emitted a non-dict JSON (bare string /
+                    # list / number). Keep it accessible but coerce to
+                    # a dict so every downstream consumer that calls
+                    # ``.get(...)`` still works.
+                    step_summary = {"raw": loaded}
             stat_findings = stat_validator.audit(
                 context=context,
                 cohort_path=cohort_path,
@@ -2225,6 +2552,53 @@ class ResearchAgentPipeline:
         per_step_records = execute_result.per_step_records
         critic = CriticAgent(role_resolver("analyzer"))
 
+        execution_gate = _execution_gate_status(
+            plan=execute_result.plan,
+            per_step_records=per_step_records,
+        )
+        if not execution_gate["execution_complete"]:
+            findings.append(
+                ValidationFinding(
+                    validator="manuscript_gate",
+                    severity="error",
+                    message=(
+                        "Formal manuscript generation skipped because the execution "
+                        "gate did not pass. Review author_review_note.md and the "
+                        "diagnostic artefacts before rerunning."
+                    ),
+                    detail=execution_gate,
+                )
+            )
+            bound_path = run_dir / "manuscript_scaffold_bound.md"
+            bound_path.write_text(
+                "# Manuscript scaffold not generated\n\n"
+                "Strict fail-closed policy blocked manuscript drafting because "
+                "one or more required analysis steps did not complete successfully.\n\n"
+                "Review `author_review_note.md`, `run_status.json`, "
+                "`evidence_audit.json`, `numeric_audit.json`, and "
+                "`claim_ledger.csv` for the diagnostic record.\n",
+                encoding="utf-8",
+            )
+            return _WritePhaseResult(literature=None, bound_path=bound_path)
+
+        if stop_after_analysis:
+            emit_progress(
+                "pause",
+                "Analysis phase complete; manuscript generation skipped by user setting.",
+                status="paused",
+                run_id=run_id,
+            )
+            bound_path = run_dir / "manuscript_scaffold_bound.md"
+            bound_path.write_text(
+                "# Manuscript scaffold not generated\n\n"
+                "This run stopped after the analysis phase. Review the "
+                "`results_report.md`, tables, figures and manifest, then "
+                "rerun with manuscript drafting enabled when the analysis "
+                "is ready.\n",
+                encoding="utf-8",
+            )
+            return _WritePhaseResult(literature=None, bound_path=bound_path)
+
         literature: Optional[LiteratureBundle] = None
         if self._enable_publication_figure_skill:
             try:
@@ -2279,24 +2653,6 @@ class ResearchAgentPipeline:
                         message=f"Publication figure skill failed; writer will use existing evidence only: {exc}",
                     )
                 )
-
-        if stop_after_analysis:
-            emit_progress(
-                "pause",
-                "Analysis phase complete; manuscript generation skipped by user setting.",
-                status="paused",
-                run_id=run_id,
-            )
-            bound_path = run_dir / "manuscript_scaffold_bound.md"
-            bound_path.write_text(
-                "# Manuscript scaffold not generated\n\n"
-                "This run stopped after the analysis phase. Review the "
-                "`results_report.md`, tables, figures and manifest, then "
-                "rerun with manuscript drafting enabled when the analysis "
-                "is ready.\n",
-                encoding="utf-8",
-            )
-            return _WritePhaseResult(literature=None, bound_path=bound_path)
 
         if self._enable_literature:
             try:
@@ -2357,6 +2713,54 @@ class ResearchAgentPipeline:
                             "enable_tavily": self._enable_tavily,
                         },
                     )
+                # O21 — PRISMA 2020 counts. Registered as a separate
+                # evidence id so the manuscript can cite
+                # ``{evidence:literature_prisma}`` without pulling the
+                # whole citation table into the binder.
+                if literature.prisma is not None:
+                    prisma_path = run_dir / "literature_prisma.json"
+                    prisma_md_path = run_dir / "literature_prisma.md"
+                    prisma_path.write_text(
+                        json.dumps(
+                            {
+                                "research_question": literature.research_question,
+                                "prisma": literature.prisma,
+                            },
+                            indent=2,
+                            default=str,
+                        ),
+                        encoding="utf-8",
+                    )
+                    p = literature.prisma
+                    prisma_md = (
+                        "# PRISMA 2020 flow (O21)\n\n"
+                        f"- Records identified: **{p.get('identified', 0)}**\n"
+                        f"- Duplicates removed: **{p.get('duplicates_removed', 0)}**\n"
+                        f"- Records screened: **{p.get('screened', 0)}**\n"
+                        f"- Records eligible: **{p.get('eligible', 0)}**\n"
+                        f"- Records included in review: **{p.get('included', 0)}**\n"
+                    )
+                    prisma_md_path.write_text(prisma_md, encoding="utf-8")
+                    if evidence.get("literature_prisma") is None:
+                        evidence.register_file(
+                            kind="statistic",
+                            description=(
+                                "PRISMA 2020 flow counts for the literature search (O21)."
+                            ),
+                            source_path=prisma_path,
+                            evidence_id="literature_prisma",
+                            producer="literature",
+                            generation_mode="system",
+                        )
+                    if evidence.get("literature_prisma_summary") is None:
+                        evidence.register_file(
+                            kind="log",
+                            description="Human-readable PRISMA flow summary (O21).",
+                            source_path=prisma_md_path,
+                            evidence_id="literature_prisma_summary",
+                            producer="literature",
+                            generation_mode="system",
+                        )
             except Exception as exc:
                 findings.append(
                     ValidationFinding(
@@ -2407,14 +2811,42 @@ class ResearchAgentPipeline:
                     prompt_pack_version=prompt_version,
                 )
         try:
-            writer_evidence_digest = _render_writer_evidence_digest(per_step_records)
+            writer_evidence_digest = _render_writer_evidence_digest(
+                context=context,
+                run_dir=run_dir,
+                per_step_records=per_step_records,
+            )
             scaffold = writer.run(
                 context=agent_context,
-                evidence_ids=evidence.resolvable_names(),
+                evidence_ids=_preferred_writer_evidence_names(evidence),
                 evidence_digest=writer_evidence_digest,
             )
         except Exception as exc:
             scaffold = f"(writer failed: {exc})"
+        scaffold, placeholder_repairs = _repair_common_writer_placeholders(
+            scaffold,
+            context=context,
+            evidence=evidence,
+        )
+        if placeholder_repairs:
+            findings.append(
+                ValidationFinding(
+                    validator="evidence_bound_writer",
+                    severity="warning",
+                    message=(
+                        "Repaired common manuscript evidence placeholder(s): "
+                        + ", ".join(
+                            f"{old}->{new}" for old, new in placeholder_repairs
+                        )
+                    ),
+                    detail={
+                        "repairs": [
+                            {"from": old, "to": new}
+                            for old, new in placeholder_repairs
+                        ]
+                    },
+                )
+            )
         scaffold_path = run_dir / "manuscript_scaffold.md"
         scaffold_path.write_text(scaffold, encoding="utf-8")
         if evidence.get("manuscript_scaffold_raw") is None:
@@ -2458,6 +2890,7 @@ class ResearchAgentPipeline:
         bound, demoted_missing_ids = _demote_unresolved_evidence_placeholders(
             bound_unfiltered
         )
+        bound, removed_tbd_sentences = _remove_tbd_sentences(bound)
         bound_path = run_dir / "manuscript_scaffold_bound.md"
         bound_path.write_text(bound, encoding="utf-8")
         if evidence.get("manuscript_scaffold_bound") is None:
@@ -2498,24 +2931,38 @@ class ResearchAgentPipeline:
                     detail={"missing_evidence_ids": sorted(set(demoted_missing_ids))},
                 )
             )
+        if removed_tbd_sentences:
+            findings.append(
+                ValidationFinding(
+                    validator="evidence_bound_writer",
+                    severity="warning",
+                    message=(
+                        f"Removed {len(removed_tbd_sentences)} sentence(s) containing "
+                        "[TBD] from the bound manuscript; the writer must omit "
+                        "unsupported values instead of leaving placeholders."
+                    ),
+                    detail={"removed_sentences": removed_tbd_sentences},
+                )
+            )
+        manuscript_numeric_findings = _audit_manuscript_numeric_claims(
+            bound,
+            per_step_records=per_step_records,
+        )
+        findings.extend(manuscript_numeric_findings)
 
         manuscript_critique = critic.review_manuscript(
-            scaffold=bound_unfiltered,
+            scaffold=bound,
             available_evidence_ids=evidence.resolvable_names(),
         )
-        if removed_sentences:
+        if manuscript_numeric_findings:
             manuscript_critique = manuscript_critique.model_copy(
                 update={
-                    "status": (
-                        "needs_revision"
-                        if manuscript_critique.status == "pass"
-                        else manuscript_critique.status
-                    ),
+                    "status": "blocked",
                     "unsupported_claims": list(manuscript_critique.unsupported_claims)
-                    + removed_sentences,
+                    + [finding.message for finding in manuscript_numeric_findings],
                     "concerns": list(manuscript_critique.concerns)
                     + [
-                        "Pipeline removed result-like sentences that lacked evidence placeholders."
+                        "Manuscript numeric claims disagree with registered step_summary values."
                     ],
                 }
             )
@@ -2534,37 +2981,10 @@ class ResearchAgentPipeline:
                 generation_mode="system",
             )
         if manuscript_critique.status in {"needs_revision", "blocked"}:
-            # blocked-only because of unresolved [evidence missing: …]
-            # placeholders is a presentation gap, not an analysis-quality
-            # gap. The pipeline already demotes those markers to HTML
-            # comments above, so the bound manuscript renders cleanly.
-            # Surface the issue as a warning instead of blocking the run
-            # through downstream acceptance / failure-class logic.
-            # ``status == 'blocked'`` is only ever produced by
-            # ``[evidence missing: …]`` markers (see CriticAgent.review_manuscript).
-            # Fix E demoted those markers in the on-disk manuscript, so the
-            # block reason no longer reflects a quality issue. The
-            # ``unsupported_claims`` field may still be populated via the
-            # earlier ``enforce_evidence_bound_scaffold`` filter — those
-            # are already removed from the rendered manuscript and tracked
-            # via a separate evidence_bound_writer warning, so they should
-            # not re-block the run here.
-            blocked_due_only_to_missing_placeholders = (
-                manuscript_critique.status == "blocked"
-                and bool(manuscript_critique.missing_evidence_refs)
-            )
-            critic_severity = (
-                "warning"
-                if (
-                    manuscript_critique.status == "needs_revision"
-                    or blocked_due_only_to_missing_placeholders
-                )
-                else "error"
-            )
             findings.append(
                 ValidationFinding(
                     validator="critic_agent",
-                    severity=critic_severity,
+                    severity="error",
                     message=(
                         f"CriticAgent marked manuscript as {manuscript_critique.status}: "
                         + "; ".join(
@@ -2626,6 +3046,329 @@ class ResearchAgentPipeline:
                         message=f"LaTeX export failed: {exc}",
                     )
                 )
+
+        # O18 — Causal audit. Run last in the write phase so the
+        # bound manuscript (post binding, post filtering) is what gets
+        # scanned. Associational-effect-with-causal-language is a
+        # warning; causal_overclaimed-with-causal-language is an
+        # error.
+        if self._enable_causal_audit:
+            try:
+                bound_text = bound_path.read_text(encoding="utf-8")
+            except Exception:
+                bound_text = ""
+            causal_report = run_causal_audit(
+                evidence_records=evidence.records(),
+                run_dir=run_dir,
+                bound_manuscript=bound_text,
+            )
+            causal_json = run_dir / "causal_audit_report.json"
+            causal_md = run_dir / "causal_audit_report.md"
+            causal_report.write_json(causal_json)
+            causal_report.write_markdown(causal_md)
+            if evidence.get("causal_audit_report") is None:
+                evidence.register_file(
+                    kind="statistic",
+                    description=(
+                        "Causal-claim audit (O18): effect labels "
+                        "(associational / causal_explicit / "
+                        "causal_overclaimed) and causal-language hits."
+                    ),
+                    source_path=causal_json,
+                    evidence_id="causal_audit_report",
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+            if evidence.get("causal_audit_summary") is None:
+                evidence.register_file(
+                    kind="log",
+                    description="Human-readable causal-audit summary (O18).",
+                    source_path=causal_md,
+                    evidence_id="causal_audit_summary",
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+            summary = causal_report.summary()
+            if summary["n_effects_labelled"] > 0 or summary["n_language_errors"] > 0:
+                findings.append(
+                    ValidationFinding(
+                        validator="causal_audit",
+                        severity="info",
+                        message=(
+                            f"Labelled {summary['n_effects_labelled']} effect(s); "
+                            f"{summary['n_associational']} associational, "
+                            f"{summary['n_causal_explicit']} causal_explicit, "
+                            f"{summary['n_causal_overclaimed']} causal_overclaimed."
+                        ),
+                        evidence_ids=["causal_audit_report"],
+                        detail=summary,
+                    )
+                )
+            for hit in causal_report.language_hits:
+                findings.append(
+                    ValidationFinding(
+                        validator="causal_audit",
+                        severity=hit.severity,
+                        message=(
+                            f"Causal language over {hit.strength} pattern "
+                            f"`{hit.pattern}` cited "
+                            f"{hit.linked_effect_labels or 'no labelled effect'}."
+                        ),
+                        evidence_ids=list(hit.linked_evidence_ids)
+                        + ["causal_audit_report"],
+                        detail={"sentence": hit.sentence[:280]},
+                    )
+                )
+
+        # O16 — Reporting-guideline checklist. Writes STROBE (always)
+        # and TRIPOD+AI (when the analysis family looks like a
+        # prediction / validation study). Findings are emitted at
+        # ``info`` severity by default so the paper can still be
+        # produced; reviewers see the coverage number and decide.
+        if self._enable_reporting_checklist:
+            try:
+                bound_text = bound_path.read_text(encoding="utf-8")
+            except Exception:
+                bound_text = ""
+            if self._reporting_checklist_names is not None:
+                wanted = tuple(
+                    n.lower() for n in self._reporting_checklist_names
+                )
+            else:
+                analysis_family = (
+                    (context.user_preferences.inferred_analysis_family or "")
+                    if getattr(context, "user_preferences", None)
+                    else ""
+                )
+                wanted = choose_checklist(analysis_family)
+            checklist_reports = []
+            if "strobe" in wanted:
+                checklist_reports.append(
+                    ("strobe", build_strobe_checklist(
+                        evidence_records=evidence.records(),
+                        bound_manuscript=bound_text,
+                    ))
+                )
+            if "tripod_ai" in wanted or "tripod+ai" in wanted:
+                checklist_reports.append(
+                    ("tripod_ai", build_tripod_ai_checklist(
+                        evidence_records=evidence.records(),
+                        bound_manuscript=bound_text,
+                    ))
+                )
+            for key, report in checklist_reports:
+                md_path = run_dir / f"reporting_checklist_{key}.md"
+                json_path = run_dir / f"reporting_checklist_{key}.json"
+                md_path.write_text(report.to_markdown(), encoding="utf-8")
+                json_path.write_text(
+                    json.dumps(report.to_json(), indent=2, default=str),
+                    encoding="utf-8",
+                )
+                md_evid_id = f"reporting_checklist_{key}"
+                json_evid_id = f"reporting_checklist_{key}_json"
+                if evidence.get(md_evid_id) is None:
+                    evidence.register_file(
+                        kind="log",
+                        description=(
+                            f"Auto-filled {report.name} reporting checklist (O16)."
+                        ),
+                        source_path=md_path,
+                        evidence_id=md_evid_id,
+                        producer="pipeline",
+                        generation_mode="system",
+                    )
+                if evidence.get(json_evid_id) is None:
+                    evidence.register_file(
+                        kind="log",
+                        description=(
+                            f"Structured {report.name} reporting checklist (O16)."
+                        ),
+                        source_path=json_path,
+                        evidence_id=json_evid_id,
+                        producer="pipeline",
+                        generation_mode="system",
+                    )
+                summary = report.summary()
+                findings.append(
+                    ValidationFinding(
+                        validator="reporting_checklist",
+                        severity="info",
+                        message=(
+                            f"{report.name} coverage {summary['coverage']:.0%} "
+                            f"({summary['n_addressed']} addressed, "
+                            f"{summary['n_partial']} partial, "
+                            f"{summary['n_open']} open, "
+                            f"{summary['n_not_applicable']} n/a)."
+                        ),
+                        evidence_ids=[md_evid_id],
+                        detail=summary,
+                    )
+                )
+                # Promote to warning only if coverage < 50 %; reviewers
+                # care about Methods completeness, not every cell.
+                if summary["coverage"] < 0.5:
+                    findings.append(
+                        ValidationFinding(
+                            validator="reporting_checklist",
+                            severity="warning",
+                            message=(
+                                f"{report.name} reporting coverage below 50 %; "
+                                "expect reviewer pushback on Methods completeness."
+                            ),
+                            evidence_ids=[md_evid_id],
+                            detail=summary,
+                        )
+                    )
+
+        # O15 — Simulated three-role reviewer round. Runs after the
+        # deterministic gates so each reviewer reads the latest
+        # findings (multiple-testing, causal-audit, checklist). The
+        # output is not a validator; it is a reviewer-facing note
+        # bundle that the manuscript author / responsible clinician
+        # uses to tighten the draft before submission.
+        if self._enable_reviewer_round:
+            reviewer_report = run_reviewer_round(
+                evidence_records=evidence.records(),
+                findings=findings,
+                round_index=0,
+            )
+            reviewer_md = run_dir / "reviewer_report.md"
+            reviewer_json = run_dir / "reviewer_report.json"
+            reviewer_md.write_text(reviewer_report.to_markdown(), encoding="utf-8")
+            reviewer_json.write_text(
+                json.dumps(reviewer_report.to_json(), indent=2, default=str),
+                encoding="utf-8",
+            )
+            if evidence.get("reviewer_report") is None:
+                evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Three-role simulated reviewer report (O15): "
+                        "statistician / clinician / methodologist."
+                    ),
+                    source_path=reviewer_md,
+                    evidence_id="reviewer_report",
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+            if evidence.get("reviewer_report_json") is None:
+                evidence.register_file(
+                    kind="log",
+                    description="Structured reviewer report (O15).",
+                    source_path=reviewer_json,
+                    evidence_id="reviewer_report_json",
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+            summary = reviewer_report.summary()
+            rec = summary["aggregated_recommendation"]
+            severity = {
+                "accept": "info",
+                "minor_revision": "info",
+                "major_revision": "warning",
+                "reject": "error",
+            }.get(rec, "info")
+            findings.append(
+                ValidationFinding(
+                    validator="reviewer_round",
+                    severity=severity,
+                    message=(
+                        f"Simulated reviewers returned `{rec}` "
+                        f"(info={summary['counts'].get('info',0)}, "
+                        f"minor={summary['counts'].get('minor',0)}, "
+                        f"major={summary['counts'].get('major',0)}, "
+                        f"reject={summary['counts'].get('reject',0)})."
+                    ),
+                    evidence_ids=["reviewer_report"],
+                    detail=summary,
+                )
+            )
+
+        # O26 — Notebook + lockfile. Concatenates every per-step
+        # generated script in plan order into a single runnable
+        # ``run.ipynb`` and captures the interpreter's installed
+        # packages in ``requirements.lock.txt``. Runs regardless of
+        # reviewer / checklist flags so the reproducibility artefacts
+        # are always present.
+        try:
+            notebook_steps: List[NotebookStep] = []
+            intent_by_id = {s.step_id: s.intent for s in plan_result.plan.steps}
+            # Preserve plan order: iterate plan, pick first 'code'
+            # evidence per step.
+            code_records_by_step: Dict[str, Any] = {}
+            for rec in evidence.records():
+                if rec.kind != "code":
+                    continue
+                step_id = rec.produced_by_step or ""
+                if step_id and step_id not in code_records_by_step:
+                    code_records_by_step[step_id] = rec
+            for step in plan_result.plan.steps:
+                rec = code_records_by_step.get(step.step_id)
+                if rec is None:
+                    continue
+                candidates = [
+                    run_dir / "evidence" / rec.relative_path,
+                    run_dir / rec.relative_path,
+                ]
+                path = next((p for p in candidates if p.exists()), None)
+                if path is None:
+                    continue
+                try:
+                    code_text = path.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                notebook_steps.append(
+                    NotebookStep(
+                        step_id=step.step_id,
+                        intent=intent_by_id.get(step.step_id, step.intent),
+                        code=code_text,
+                    )
+                )
+            if notebook_steps:
+                notebook = build_notebook(
+                    research_question=plan_result.context.research_question,
+                    cohort_relative_path="cohort.parquet",
+                    steps=notebook_steps,
+                )
+                nb_path = run_dir / "run.ipynb"
+                write_notebook(nb_path, notebook)
+                if evidence.get("run_notebook") is None:
+                    evidence.register_file(
+                        kind="code",
+                        description=(
+                            "Auto-generated Jupyter notebook re-running "
+                            "every plan step top-to-bottom (O26)."
+                        ),
+                        source_path=nb_path,
+                        evidence_id="run_notebook",
+                        producer="pipeline",
+                        generation_mode="system",
+                    )
+            lockfile_path = run_dir / "requirements.lock.txt"
+            lockfile_path.write_text(build_requirements_lockfile(), encoding="utf-8")
+            if evidence.get("requirements_lockfile") is None:
+                evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Interpreter-level requirements lockfile captured "
+                        "at run time (O26)."
+                    ),
+                    source_path=lockfile_path,
+                    evidence_id="requirements_lockfile",
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+        except Exception as exc:
+            findings.append(
+                ValidationFinding(
+                    validator="repro_artifacts",
+                    severity="warning",
+                    message=(
+                        f"Failed to build run.ipynb / lockfile: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+            )
 
         return _WritePhaseResult(
             literature=literature,
@@ -2783,6 +3526,418 @@ class ResearchAgentPipeline:
                 generation_mode="system",
             )
 
+        reproducibility_summary: Optional[Dict[str, Any]] = None
+        if plan_result.repro_envelope is not None:
+            envelope_path = run_dir / "reproducibility_envelope.json"
+            plan_result.repro_envelope.to_disk(envelope_path)
+            evidence.register_file(
+                kind="log",
+                description=(
+                    "LLM reproducibility envelope (O20): per-call prompt/response "
+                    "sha256, requested seed, temperature, provider/model, and a "
+                    "PHI-safe environment snapshot."
+                ),
+                source_path=envelope_path,
+                evidence_id="reproducibility_envelope",
+                producer="pipeline",
+                generation_mode="system",
+            )
+            reproducibility_summary = plan_result.repro_envelope.to_manifest_summary()
+
+        # O22 — Multiple-testing correction. Scan every registered
+        # table / statistic artefact for p-values and BH-adjust the
+        # whole family run-wide. Writes a CSV + MD pair and registers
+        # both as evidence so the manuscript can cite
+        # ``{evidence:multiple_testing_report}``.
+        if self._enable_multiple_testing_correction:
+            mt_report = build_multiple_testing_report(
+                evidence_records=evidence.records(),
+                run_dir=run_dir,
+                alpha=self._multiple_testing_alpha,
+            )
+            mt_csv = run_dir / "multiple_testing_report.csv"
+            mt_md = run_dir / "multiple_testing_report.md"
+            mt_report.write_csv(mt_csv)
+            mt_report.write_markdown(mt_md)
+            if evidence.get("multiple_testing_report") is None:
+                evidence.register_file(
+                    kind="statistic",
+                    description=(
+                        "Run-wide Benjamini–Hochberg and Bonferroni correction "
+                        "for every registered p-value (O22)."
+                    ),
+                    source_path=mt_csv,
+                    evidence_id="multiple_testing_report",
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+            if evidence.get("multiple_testing_summary") is None:
+                evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Human-readable summary of multiple-testing correction (O22)."
+                    ),
+                    source_path=mt_md,
+                    evidence_id="multiple_testing_summary",
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+            summary = mt_report.summary()
+            if summary["n_tests"] > 0:
+                # Surface the raw → corrected gap as an info finding so
+                # paper figures can include it without re-reading the
+                # CSV.
+                findings.append(
+                    ValidationFinding(
+                        validator="multiple_testing",
+                        severity="info",
+                        message=(
+                            f"Ran BH-FDR across {summary['n_tests']} tests at "
+                            f"alpha={summary['alpha']:.3f}: "
+                            f"{summary['n_significant_raw']} significant raw, "
+                            f"{summary['n_significant_bh']} after BH, "
+                            f"{summary['n_significant_bonferroni']} after Bonferroni."
+                        ),
+                        evidence_ids=["multiple_testing_report"],
+                        detail=summary,
+                    )
+                )
+                # If raw and BH disagree meaningfully, emit a warning
+                # so the Discussion section has to engage with it.
+                if (
+                    summary["n_significant_raw"]
+                    > summary["n_significant_bh"]
+                ):
+                    findings.append(
+                        ValidationFinding(
+                            validator="multiple_testing",
+                            severity="warning",
+                            message=(
+                                "Some raw-significant results did not survive "
+                                "BH-FDR at the run-wide family level. Revise "
+                                "the primary / secondary endpoint distinction "
+                                "or report corrected p-values explicitly."
+                            ),
+                            evidence_ids=["multiple_testing_report"],
+                            detail={
+                                "n_raw_only": (
+                                    summary["n_significant_raw"]
+                                    - summary["n_significant_bh"]
+                                ),
+                            },
+                        )
+                    )
+
+        # O23 — E-values. For every primary-association row, compute
+        # VanderWeele–Ding E-value + lower-CI E-value. Writes
+        # ``e_values.csv`` + ``e_values.md`` and registers both.
+        # Baseline prevalence defaults to observed outcome rate when
+        # an ``outcome_rate.csv`` was registered.
+        try:
+            primary_path = None
+            for rec in evidence.records():
+                if rec.evidence_id != "primary_association":
+                    continue
+                candidates = [
+                    run_dir / "evidence" / rec.relative_path,
+                    run_dir / rec.relative_path,
+                ]
+                primary_path = next(
+                    (c for c in candidates if c.exists() and c.suffix == ".csv"),
+                    None,
+                )
+                break
+            if primary_path is not None:
+                import csv as _csv
+
+                baseline_prev = 0.1
+                outcome_rate_rec = evidence.get("outcome_rate")
+                if outcome_rate_rec is not None:
+                    try:
+                        or_path = next(
+                            (
+                                p
+                                for p in (
+                                    run_dir / "evidence" / outcome_rate_rec.relative_path,
+                                    run_dir / outcome_rate_rec.relative_path,
+                                )
+                                if p.exists() and p.suffix == ".csv"
+                            ),
+                            None,
+                        )
+                        if or_path:
+                            with or_path.open("r", encoding="utf-8") as fh:
+                                for row in _csv.DictReader(fh):
+                                    for key in (
+                                        "outcome_rate",
+                                        "rate",
+                                        "mortality_rate",
+                                        "event_rate",
+                                    ):
+                                        if key in row:
+                                            try:
+                                                cand = float(row[key])
+                                                if 0 < cand < 1:
+                                                    baseline_prev = cand
+                                            except (TypeError, ValueError):
+                                                pass
+                    except Exception:
+                        pass
+
+                rows_out: List[Dict[str, Any]] = []
+                with primary_path.open("r", encoding="utf-8") as fh:
+                    reader = _csv.DictReader(fh)
+                    for row in reader:
+                        # Accept OR or odds_ratio column; skip age / intercept etc.
+                        or_val = None
+                        for key in ("odds_ratio", "or", "OR"):
+                            if key in row and row[key] not in (None, "", "nan"):
+                                try:
+                                    or_val = float(row[key])
+                                    break
+                                except (TypeError, ValueError):
+                                    continue
+                        if or_val is None:
+                            continue
+                        try:
+                            ci_lo = float(row.get("or_lower") or row.get("ci_lower") or 0.0)
+                            ci_hi = float(row.get("or_upper") or row.get("ci_upper") or 0.0)
+                            ci = (ci_lo, ci_hi) if ci_lo > 0 and ci_hi > 0 else None
+                        except (TypeError, ValueError):
+                            ci = None
+                        ev = compute_e_value(
+                            estimate=or_val,
+                            ci=ci,
+                            estimate_type="or",
+                            baseline_prevalence=baseline_prev,
+                        )
+                        row_out = {
+                            "term": row.get("term")
+                            or row.get("variable")
+                            or row.get("predictor")
+                            or "",
+                            "odds_ratio": or_val,
+                            "ci_lower": ci[0] if ci else "",
+                            "ci_upper": ci[1] if ci else "",
+                            "baseline_prevalence": baseline_prev,
+                            "e_value": ev.e_value,
+                            "e_value_lower_bound": ev.e_value_lower_bound,
+                            "note": ev.note or "",
+                        }
+                        rows_out.append(row_out)
+
+                if rows_out:
+                    ev_csv = run_dir / "e_values.csv"
+                    ev_md = run_dir / "e_values.md"
+                    with ev_csv.open("w", newline="", encoding="utf-8") as fh:
+                        writer = _csv.writer(fh)
+                        writer.writerow(list(rows_out[0].keys()))
+                        for row in rows_out:
+                            writer.writerow([row[k] for k in rows_out[0].keys()])
+                    ev_md_lines = [
+                        "# E-values for primary effects (O23)",
+                        "",
+                        f"Baseline event prevalence used: **{baseline_prev:.3f}**",
+                        "",
+                        "| Term | OR | 95% CI | E-value | E-value (CI bound) |",
+                        "|---|---|---|---|---|",
+                    ]
+                    for row in rows_out:
+                        ci_disp = (
+                            f"{row['ci_lower']:.2f} – {row['ci_upper']:.2f}"
+                            if row["ci_lower"] != "" and row["ci_upper"] != ""
+                            else "—"
+                        )
+                        ev_md_lines.append(
+                            "| {t} | {orv:.2f} | {ci} | {ev:.2f} | {evb} |".format(
+                                t=str(row["term"])[:40],
+                                orv=row["odds_ratio"],
+                                ci=ci_disp,
+                                ev=row["e_value"],
+                                evb=(
+                                    f"{row['e_value_lower_bound']:.2f}"
+                                    if row["e_value_lower_bound"] is not None
+                                    else "—"
+                                ),
+                            )
+                        )
+                    ev_md.write_text("\n".join(ev_md_lines) + "\n", encoding="utf-8")
+                    if evidence.get("e_values") is None:
+                        evidence.register_file(
+                            kind="statistic",
+                            description=(
+                                "VanderWeele–Ding E-values for every primary "
+                                "effect row (O23)."
+                            ),
+                            source_path=ev_csv,
+                            evidence_id="e_values",
+                            producer="pipeline",
+                            generation_mode="system",
+                        )
+                    if evidence.get("e_values_summary") is None:
+                        evidence.register_file(
+                            kind="log",
+                            description="Human-readable E-value summary (O23).",
+                            source_path=ev_md,
+                            evidence_id="e_values_summary",
+                            producer="pipeline",
+                            generation_mode="system",
+                        )
+                    findings.append(
+                        ValidationFinding(
+                            validator="e_value",
+                            severity="info",
+                            message=(
+                                f"Computed E-values for {len(rows_out)} primary "
+                                f"effect row(s) (baseline prevalence={baseline_prev:.3f})."
+                            ),
+                            evidence_ids=["e_values"],
+                        )
+                    )
+        except Exception as exc:
+            findings.append(
+                ValidationFinding(
+                    validator="e_value",
+                    severity="warning",
+                    message=f"E-value computation failed: {type(exc).__name__}: {exc}",
+                )
+            )
+
+        # O24 — Fairness / subgroup analysis. Runs when a
+        # ``primary_association`` artefact exists and the cohort has
+        # at least one of (``age``, ``sex``, ``sex_M``, ``race``,
+        # ``insurance``). Pure numpy; no pandas-only helpers so we
+        # stay consistent with the rest of the deterministic layer.
+        if self._enable_fairness_subgroups:
+            try:
+                primary_rec = evidence.get("primary_association")
+                if primary_rec is not None:
+                    import csv as _csv
+
+                    candidates = [
+                        run_dir / "evidence" / primary_rec.relative_path,
+                        run_dir / primary_rec.relative_path,
+                    ]
+                    primary_path = next(
+                        (p for p in candidates if p.exists() and p.suffix == ".csv"),
+                        None,
+                    )
+                    predictor_name: Optional[str] = None
+                    outcome_name = context.target_outcome
+                    if primary_path is not None:
+                        with primary_path.open("r", encoding="utf-8") as fh:
+                            for row in _csv.DictReader(fh):
+                                term = (
+                                    row.get("term")
+                                    or row.get("variable")
+                                    or row.get("predictor")
+                                    or ""
+                                )
+                                if term and term.lower() not in {
+                                    "intercept",
+                                    "const",
+                                    "age",
+                                    "sex_m",
+                                }:
+                                    predictor_name = term
+                                    break
+                    cohort_df = pd.read_parquet(cohort_path)
+                    candidate_subgroups = [
+                        col
+                        for col in ("age", "sex", "sex_M", "race", "insurance")
+                        if col in cohort_df.columns
+                    ]
+                    if (
+                        predictor_name is not None
+                        and outcome_name
+                        and outcome_name in cohort_df.columns
+                        and candidate_subgroups
+                    ):
+                        from .fairness import run_subgroup_analysis
+
+                        result = run_subgroup_analysis(
+                            cohort_df=cohort_df,
+                            predictor=predictor_name,
+                            outcome=outcome_name,
+                            subgroup_columns=candidate_subgroups,
+                        )
+                        fair_csv = run_dir / "fairness_subgroups.csv"
+                        fair_md = run_dir / "fairness_subgroups.md"
+                        result.write_csv(fair_csv)
+                        result.write_markdown(fair_md)
+                        if evidence.get("fairness_subgroups") is None:
+                            evidence.register_file(
+                                kind="statistic",
+                                description=(
+                                    "Subgroup / fairness analysis for the "
+                                    "primary effect (O24)."
+                                ),
+                                source_path=fair_csv,
+                                evidence_id="fairness_subgroups",
+                                producer="pipeline",
+                                generation_mode="system",
+                            )
+                        if evidence.get("fairness_subgroups_summary") is None:
+                            evidence.register_file(
+                                kind="log",
+                                description=(
+                                    "Human-readable fairness / subgroup summary (O24)."
+                                ),
+                                source_path=fair_md,
+                                evidence_id="fairness_subgroups_summary",
+                                producer="pipeline",
+                                generation_mode="system",
+                            )
+                        findings.append(
+                            ValidationFinding(
+                                validator="fairness_subgroups",
+                                severity="info",
+                                message=(
+                                    f"Subgroup analysis for {predictor_name} ~ "
+                                    f"{outcome_name} across "
+                                    f"{len(candidate_subgroups)} axis/axes."
+                                ),
+                                evidence_ids=["fairness_subgroups"],
+                                detail={
+                                    "predictor": predictor_name,
+                                    "outcome": outcome_name,
+                                    "subgroup_columns": candidate_subgroups,
+                                    "interaction_pvalues": result.interaction_pvalues,
+                                },
+                            )
+                        )
+                        # Escalate to warning if any interaction p < 0.05.
+                        sig_cols = [
+                            col
+                            for col, p in result.interaction_pvalues.items()
+                            if p < 0.05
+                        ]
+                        if sig_cols:
+                            findings.append(
+                                ValidationFinding(
+                                    validator="fairness_subgroups",
+                                    severity="warning",
+                                    message=(
+                                        f"Interaction p < 0.05 on "
+                                        f"{sig_cols}; subgroup heterogeneity "
+                                        "must be discussed."
+                                    ),
+                                    evidence_ids=["fairness_subgroups"],
+                                    detail={"significant_subgroups": sig_cols},
+                                )
+                            )
+            except Exception as exc:
+                findings.append(
+                    ValidationFinding(
+                        validator="fairness_subgroups",
+                        severity="warning",
+                        message=(
+                            f"Subgroup analysis failed: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                    )
+                )
+
         manifest_notes = notes
         if stop_after_analysis:
             suffix = (
@@ -2800,6 +3955,17 @@ class ResearchAgentPipeline:
             else literature_provenance
         )
 
+        readiness, artifact_paths = _write_readiness_artifacts(
+            context=context,
+            plan=plan,
+            findings=findings,
+            per_step_records=per_step_records,
+            evidence=evidence,
+            run_dir=run_dir,
+            manuscript_path=write_result.bound_path,
+            stop_after_analysis=stop_after_analysis,
+        )
+
         report_path.write_text(
             _render_report(
                 context=context,
@@ -2808,6 +3974,7 @@ class ResearchAgentPipeline:
                 per_step_records=per_step_records,
                 evidence=evidence,
                 paused_after_analysis=stop_after_analysis,
+                readiness=readiness,
             ),
             encoding="utf-8",
         )
@@ -2823,6 +3990,9 @@ class ResearchAgentPipeline:
             findings=findings,
             per_step_records=per_step_records,
             cost_records=cost_records_for_manifest,
+            reproducibility=reproducibility_summary,
+            readiness=readiness,
+            artifact_paths=artifact_paths,
             report_path=str(report_path.relative_to(run_dir)),
             manuscript_path=str(write_result.bound_path.relative_to(run_dir)),
             audit_log_path=audit_log_rel,
@@ -2906,6 +4076,7 @@ class ResearchAgentPipeline:
         resume_run_id: Optional[str] = None,
         stop_after_analysis: bool = False,
         experiment_spec: Optional[Union[ExperimentSpec, Dict[str, Any]]] = None,
+        source_files: Optional[Sequence[Any]] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> PipelineResult:
         """Run the explicit Plan → Execute → Write phases for one cohort."""
@@ -3064,6 +4235,43 @@ class ResearchAgentPipeline:
         if plan_result.aborted_result is not None:
             return plan_result.aborted_result
 
+        # O27 — Raw EHR provenance. Hash the cohort parquet and any
+        # user-supplied source files and register as evidence so the
+        # manuscript's provenance chain goes: raw EHR -> cohort ->
+        # analysis artefacts -> manuscript. Only runs after the plan
+        # phase succeeded (abort path would have returned above).
+        try:
+            provenance = build_provenance_bundle(
+                cohort_path=cohort_path,
+                source_files=source_files,
+            )
+            provenance_path = run_dir / "provenance_sources.json"
+            provenance.to_disk(provenance_path)
+            if plan_result.evidence.get("provenance_sources") is None:
+                plan_result.evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Raw EHR and cohort provenance hashes (O27): "
+                        "sha256 + size + mtime for every source file "
+                        "and the materialised cohort parquet."
+                    ),
+                    source_path=provenance_path,
+                    evidence_id="provenance_sources",
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+        except Exception as exc:
+            plan_result.findings.append(
+                ValidationFinding(
+                    validator="provenance",
+                    severity="warning",
+                    message=(
+                        f"Failed to compute raw-EHR provenance bundle: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+            )
+
         execute_result = self._run_execute_phase(
             plan_result=plan_result,
             cohort_path=cohort_path,
@@ -3197,6 +4405,28 @@ class ResearchAgentPipeline:
             _render_cross_database_comparison_markdown(comparison_rows),
             encoding="utf-8",
         )
+        run_summaries = [
+            _extract_cross_database_run_summary(database=db, result=res)
+            for db, res in run_results.items()
+        ]
+        summary_df = pd.DataFrame(run_summaries)
+        summary_csv_path = replication_dir / "cross_database_summary.csv"
+        summary_df.to_csv(summary_csv_path, index=False)
+        summary_md_path = replication_dir / "cross_database_summary.md"
+        summary_md_path.write_text(
+            _render_cross_database_summary_markdown(run_summaries),
+            encoding="utf-8",
+        )
+        validation_report_path = replication_dir / "cross_database_validation_report.md"
+        validation_report_path.write_text(
+            _render_cross_database_validation_report(
+                question=question,
+                target_outcome=target_outcome,
+                rows=comparison_rows,
+                run_summaries=run_summaries,
+            ),
+            encoding="utf-8",
+        )
         summary_path = replication_dir / "cross_database_runs.json"
         summary_path.write_text(
             json.dumps(
@@ -3204,6 +4434,9 @@ class ResearchAgentPipeline:
                     "question": question,
                     "target_outcome": target_outcome,
                     "stop_after_analysis": stop_after_analysis,
+                    "comparison_csv": str(csv_path),
+                    "summary_csv": str(summary_csv_path),
+                    "validation_report": str(validation_report_path),
                     "runs": {
                         db: {
                             "run_id": res.run_id,
@@ -3224,6 +4457,9 @@ class ResearchAgentPipeline:
             "replication_dir": str(replication_dir),
             "comparison_csv": str(csv_path),
             "comparison_md": str(md_path),
+            "summary_csv": str(summary_csv_path),
+            "summary_md": str(summary_md_path),
+            "validation_report": str(validation_report_path),
             "summary_json": str(summary_path),
             "runs": run_results,
         }
@@ -3231,6 +4467,114 @@ class ResearchAgentPipeline:
     async def replicate_async(self, **kwargs: Any) -> Dict[str, Any]:
         """Async wrapper for cross-database replication."""
         return await asyncio.to_thread(self.replicate, **kwargs)
+
+    def reproduce_paper(
+        self,
+        *,
+        paper: Union[str, Path],
+        cohort: Union[str, Path, pd.DataFrame],
+        database: str,
+        mode: str = "replication",
+        cohort_name: str = "paper_replication_cohort",
+        manuscript_language: Optional[str] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> PipelineResult:
+        """Run the paper-reproduction dual-track workflow."""
+        paper_profile = parse_paper_profile(paper)
+        replication_spec, deviation_report = build_paper_replication_spec(paper_profile)
+        if not deviation_report.supported:
+            return self._write_fail_closed_paper_package(
+                paper=paper,
+                cohort=cohort,
+                database=database,
+                cohort_name=cohort_name,
+                paper_profile=paper_profile,
+                replication_spec=replication_spec,
+                deviation_report=deviation_report,
+            )
+
+        target_outcome = (
+            replication_spec.mapped_concepts.get("target_outcome")
+            or replication_spec.mapped_concepts.get("outcome")
+            or _canonical_outcome_name(paper_profile.target_outcome)
+        )
+        question = paper_profile.research_question or (
+            f"Replicate the published ICU study '{paper_profile.paper_title or paper_profile.paper_source}' "
+            "using EasyICU with design-and-conclusion alignment."
+        )
+        notes = _build_replication_notes(
+            paper_profile=paper_profile,
+            replication_spec=replication_spec,
+            mode=mode,
+        )
+        source_files: List[Any] = []
+        raw_paper = str(paper)
+        if "\n" not in raw_paper and len(raw_paper) <= 240:
+            paper_candidate = Path(raw_paper).expanduser()
+            try:
+                if paper_candidate.exists():
+                    source_files.append(paper_candidate)
+            except OSError:
+                pass
+        result = self.run(
+            question=question,
+            cohort=cohort,
+            cohort_name=cohort_name,
+            database=database,
+            target_outcome=target_outcome,
+            notes=notes,
+            manuscript_language=manuscript_language,
+            progress_callback=progress_callback,
+            source_files=source_files or None,
+            user_preferences={
+                "inferred_analysis_family": paper_profile.paper_type,
+                "timing_and_design": "paper_replication",
+                "must_have_outputs": ", ".join(replication_spec.required_outputs),
+                "covariates": paper_profile.covariates,
+                "extra_notes": (
+                    "Replication mode: use EasyICU actual results only; if the original paper "
+                    "is referenced, frame it as 'original paper reported ...'."
+                ),
+            },
+            stop_after_analysis=(mode == "replication"),
+        )
+        return self._postprocess_paper_replication(
+            result=result,
+            paper_profile=paper_profile,
+            replication_spec=replication_spec,
+            deviation_report=deviation_report,
+            mode=mode,
+        )
+
+    def compare_with_paper(
+        self,
+        *,
+        paper: Union[str, Path],
+        result: Optional[PipelineResult] = None,
+        run_dir: Optional[Union[str, Path]] = None,
+    ) -> Dict[str, Any]:
+        """Return comparison rows between a parsed paper and one EasyICU run."""
+        if result is None and run_dir is None:
+            raise ValueError("Provide either `result` or `run_dir`.")
+        paper_profile = parse_paper_profile(paper)
+        actual_run_dir = Path(result.workdir if result is not None else run_dir).resolve()
+        manifest = json.loads((actual_run_dir / "manifest.json").read_text(encoding="utf-8"))
+        context_payload: Optional[Dict[str, Any]] = None
+        context_rel = manifest.get("context_path")
+        if context_rel:
+            context_path = actual_run_dir / str(context_rel)
+            if context_path.exists():
+                context_payload = json.loads(context_path.read_text(encoding="utf-8"))
+        ledger = build_paper_result_ledger(
+            paper_profile=paper_profile,
+            manifest=manifest,
+            context_payload=context_payload,
+        )
+        rows = compare_paper_to_easyicu(
+            paper_profile=paper_profile,
+            ledger=ledger,
+        )
+        return {"paper_profile": paper_profile, "ledger": ledger, "rows": rows}
 
     # ------------------------------------------------------------------
     # Helpers
@@ -3270,6 +4614,498 @@ class ResearchAgentPipeline:
             cohort.to_parquet(target, index=False)
             return target
         raise TypeError("cohort must be a path or a pandas DataFrame")
+
+    def _postprocess_paper_replication(
+        self,
+        *,
+        result: PipelineResult,
+        paper_profile: PaperProfile,
+        replication_spec: PaperReplicationSpec,
+        deviation_report: ReplicationDeviationReport,
+        mode: str,
+    ) -> PipelineResult:
+        run_dir = Path(result.workdir)
+        manifest_path = run_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        context_payload: Optional[Dict[str, Any]] = None
+        context_rel = manifest.get("context_path")
+        if context_rel:
+            context_path = run_dir / str(context_rel)
+            if context_path.exists():
+                context_payload = json.loads(context_path.read_text(encoding="utf-8"))
+
+        ledger = build_paper_result_ledger(
+            paper_profile=paper_profile,
+            manifest=manifest,
+            context_payload=context_payload,
+        )
+        comparator = ReplicationResultComparator()
+        comparison_rows = comparator.compare(
+            paper_profile=paper_profile,
+            ledger=ledger,
+        )
+        design_findings = ReplicationDesignAuditor().audit(
+            paper_profile=paper_profile,
+            deviation_report=deviation_report,
+        )
+        comparison_findings = comparator.findings_from_rows(comparison_rows)
+
+        evidence = EvidenceStore(run_dir)
+        profile_path = run_dir / "paper_profile.json"
+        profile_path.write_text(
+            paper_profile.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        spec_path = run_dir / "replication_spec.json"
+        spec_path.write_text(
+            replication_spec.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        claim_rows = [
+            {
+                "claim_id": claim.claim_id,
+                "section": claim.section,
+                "sentence": claim.sentence,
+                "metric": claim.metric or "",
+                "paper_value": claim.paper_value or "",
+                "numeric_value": "" if claim.numeric_value is None else claim.numeric_value,
+                "direction": claim.direction or "",
+                "predictor": claim.predictor or "",
+                "outcome": claim.outcome or "",
+            }
+            for claim in paper_profile.key_claims
+        ]
+        claim_csv_path = write_claim_csv(
+            run_dir / "paper_claim_ledger.csv",
+            claim_rows,
+            [
+                "claim_id",
+                "section",
+                "sentence",
+                "metric",
+                "paper_value",
+                "numeric_value",
+                "direction",
+                "predictor",
+                "outcome",
+            ],
+        )
+        comparison_csv_path = write_claim_csv(
+            run_dir / "replication_comparison.csv",
+            comparison_rows,
+            [
+                "claim_id",
+                "paper_claim",
+                "paper_value",
+                "easyicu_value",
+                "alignment_status",
+                "reason_if_mismatch",
+                "metric",
+            ],
+        )
+        deviation_md_path = run_dir / "deviation_report.md"
+        deviation_md_path.write_text(
+            render_deviation_report(deviation_report),
+            encoding="utf-8",
+        )
+        replication_report_path = run_dir / "replication_report.md"
+        replication_report_path.write_text(
+            render_replication_report(
+                paper_profile=paper_profile,
+                spec=replication_spec,
+                deviation_report=deviation_report,
+                comparison_rows=comparison_rows,
+                ledger=ledger,
+            ),
+            encoding="utf-8",
+        )
+
+        manuscript_bound_path = run_dir / manifest.get("manuscript_path", "manuscript_scaffold_bound.md")
+        if not manuscript_bound_path.exists():
+            manuscript_bound_path = run_dir / "manuscript_scaffold_bound.md"
+        bound_text = manuscript_bound_path.read_text(encoding="utf-8") if manuscript_bound_path.exists() else ""
+        showcase_text = render_showcase_manuscript(
+            bound_manuscript=bound_text,
+            paper_profile=paper_profile,
+            deviation_report=deviation_report,
+        )
+        publication_claim_findings = PublicationClaimAuditor().audit(
+            manuscript_text=showcase_text,
+            deviation_report=deviation_report,
+        )
+
+        all_findings = list(manifest.get("findings") or [])
+        all_findings.extend(f.model_dump(mode="json") for f in design_findings)
+        all_findings.extend(f.model_dump(mode="json") for f in comparison_findings)
+        all_findings.extend(f.model_dump(mode="json") for f in publication_claim_findings)
+        manifest["findings"] = all_findings
+
+        readiness = dict(manifest.get("readiness") or {})
+        design_reproduced = bool(
+            readiness.get("execution_complete")
+            and paper_profile.paper_type != "unsupported_or_underspecified"
+            and not any(f.severity == "error" for f in design_findings)
+        )
+        paper_claims_parsed = bool(paper_profile.key_claims)
+        result_alignment_audited = bool(comparison_rows)
+        replication_report_ready = bool(
+            readiness.get("execution_complete")
+            and design_reproduced
+            and paper_claims_parsed
+            and replication_report_path.exists()
+        )
+        showcase_errors = [
+            f for f in publication_claim_findings if f.severity == "error"
+        ]
+        showcase_manuscript_ready = bool(
+            mode == "manuscript"
+            and readiness.get("manuscript_ready")
+            and design_reproduced
+            and paper_claims_parsed
+            and result_alignment_audited
+            and not showcase_errors
+        )
+        readiness.update(
+            {
+                "design_reproduced": design_reproduced,
+                "paper_claims_parsed": paper_claims_parsed,
+                "result_alignment_audited": result_alignment_audited,
+                "replication_report_ready": replication_report_ready,
+                "showcase_manuscript_ready": showcase_manuscript_ready,
+            }
+        )
+        manifest["readiness"] = readiness
+
+        manuscript_ready_path = run_dir / "manuscript_ready.md"
+        artifact_paths = dict(manifest.get("artifact_paths") or {})
+        if showcase_manuscript_ready:
+            manuscript_ready_path.write_text(showcase_text, encoding="utf-8")
+            artifact_paths["manuscript_ready"] = "manuscript_ready.md"
+        elif manuscript_ready_path.exists():
+            manuscript_ready_path.unlink()
+            artifact_paths.pop("manuscript_ready", None)
+        artifact_paths.update(
+            {
+                "paper_profile": "paper_profile.json",
+                "replication_spec": "replication_spec.json",
+                "paper_claim_ledger": "paper_claim_ledger.csv",
+                "replication_comparison": "replication_comparison.csv",
+                "replication_report": "replication_report.md",
+                "deviation_report": "deviation_report.md",
+            }
+        )
+        manifest["artifact_paths"] = artifact_paths
+
+        run_status_path = run_dir / "run_status.json"
+        status_payload = (
+            json.loads(run_status_path.read_text(encoding="utf-8"))
+            if run_status_path.exists()
+            else {"schema_version": "easyicu.run_status/1"}
+        )
+        status_payload["status"] = (
+            "publication_ready"
+            if readiness.get("publication_ready") and showcase_manuscript_ready
+            else "manuscript_ready"
+            if showcase_manuscript_ready
+            else "replication_ready"
+            if readiness.get("replication_report_ready")
+            else "analysis_only"
+            if readiness.get("execution_complete")
+            else "diagnostic_only"
+        )
+        status_payload["gates"] = readiness
+        status_payload["canonical_outputs"] = artifact_paths
+        run_status_path.write_text(
+            json.dumps(status_payload, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+
+        author_note_path = run_dir / "author_review_note.md"
+        base_note = author_note_path.read_text(encoding="utf-8") if author_note_path.exists() else "# Author review note\n\n"
+        paper_status = (
+            "publication_ready"
+            if readiness.get("publication_ready") and showcase_manuscript_ready
+            else "manuscript_ready"
+            if showcase_manuscript_ready
+            else "replication_ready"
+            if readiness.get("replication_report_ready")
+            else "analysis_only"
+            if readiness.get("execution_complete")
+            else "diagnostic_only"
+        )
+        base_note = re.sub(
+            r"(?m)^- Status: `[^`]+`$",
+            f"- Status: `{paper_status}`",
+            base_note,
+            count=1,
+        )
+        if readiness.get("replication_report_ready") and "Use `replication_report.md`" not in base_note:
+            base_note = base_note.rstrip() + (
+                "\n\n## Replication review\n\n"
+                "The analysis run completed for paper replication. Use `replication_report.md` "
+                "and `replication_comparison.csv` as the canonical replication outputs. "
+                "`manuscript_ready.md` is emitted only in showcase manuscript mode after the "
+                "paper-aware manuscript gates pass.\n"
+            )
+        author_note_path.write_text(
+            base_note.rstrip()
+            + "\n\n## Paper replication gates\n\n"
+            + f"- design_reproduced: `{design_reproduced}`\n"
+            + f"- paper_claims_parsed: `{paper_claims_parsed}`\n"
+            + f"- result_alignment_audited: `{result_alignment_audited}`\n"
+            + f"- replication_report_ready: `{replication_report_ready}`\n"
+            + f"- showcase_manuscript_ready: `{showcase_manuscript_ready}`\n",
+            encoding="utf-8",
+        )
+
+        for evidence_id, kind, description, path in (
+            ("paper_profile", "log", "Parsed source-paper profile for replication mode.", profile_path),
+            ("replication_spec", "log", "Typed EasyICU replication specification derived from the paper.", spec_path),
+            ("paper_claim_ledger", "table", "Ledger of parsed result claims from the source paper.", claim_csv_path),
+            ("replication_comparison", "table", "Claim-by-claim comparison of source paper and EasyICU results.", comparison_csv_path),
+            ("replication_report", "log", "Narrative EasyICU replication report.", replication_report_path),
+            ("deviation_report", "log", "Structured deviation report for unsupported or approximated design elements.", deviation_md_path),
+        ):
+            if evidence.get(evidence_id) is None:
+                evidence.register_file(
+                    kind=kind,
+                    description=description,
+                    source_path=path,
+                    evidence_id=evidence_id,
+                    aliases=[evidence_id],
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+
+        manifest["evidence"] = [record.model_dump(mode="json") for record in evidence.records()]
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        return PipelineResult.model_validate(
+            {
+                **result.model_dump(mode="json"),
+                "paper_profile_path": str(profile_path),
+                "replication_spec_path": str(spec_path),
+                "replication_report_path": str(replication_report_path),
+            }
+        )
+
+    def _write_fail_closed_paper_package(
+        self,
+        *,
+        paper: Union[str, Path],
+        cohort: Union[str, Path, pd.DataFrame],
+        database: str,
+        cohort_name: str,
+        paper_profile: PaperProfile,
+        replication_spec: PaperReplicationSpec,
+        deviation_report: ReplicationDeviationReport,
+    ) -> PipelineResult:
+        run_id = (
+            "paperrep_"
+            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+            + "_"
+            + uuid.uuid4().hex[:6]
+        )
+        run_dir = self.workdir / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        cohort_path = self._materialise_cohort(cohort, run_dir)
+        df = pd.read_parquet(cohort_path)
+        context = ResearchContext(
+            research_question=paper_profile.research_question or "Paper replication failed closed before execution.",
+            cohort=build_naive_research_context(
+                research_question=paper_profile.research_question or "Paper replication failed closed.",
+                cohort=cohort_path,
+                cohort_name=cohort_name,
+                database=database,
+                target_outcome=_canonical_outcome_name(paper_profile.target_outcome),
+            ).cohort,
+            variables=[],
+            target_outcome=_canonical_outcome_name(paper_profile.target_outcome),
+            cohort_parquet=str(cohort_path),
+            notes="Strict fail-closed paper replication package.",
+        )
+        context_path = run_dir / "context.json"
+        context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
+        plan = AnalysisPlan(
+            research_question=context.research_question,
+            steps=[],
+        )
+        plan_path = run_dir / "plan.json"
+        plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+
+        evidence = EvidenceStore(run_dir)
+        profile_path = run_dir / "paper_profile.json"
+        profile_path.write_text(paper_profile.model_dump_json(indent=2), encoding="utf-8")
+        spec_path = run_dir / "replication_spec.json"
+        spec_path.write_text(replication_spec.model_dump_json(indent=2), encoding="utf-8")
+        deviation_md_path = run_dir / "deviation_report.md"
+        deviation_md_path.write_text(render_deviation_report(deviation_report), encoding="utf-8")
+        claim_csv_path = write_claim_csv(
+            run_dir / "paper_claim_ledger.csv",
+            [
+                {
+                    "claim_id": claim.claim_id,
+                    "section": claim.section,
+                    "sentence": claim.sentence,
+                    "metric": claim.metric or "",
+                    "paper_value": claim.paper_value or "",
+                    "numeric_value": "" if claim.numeric_value is None else claim.numeric_value,
+                    "direction": claim.direction or "",
+                    "predictor": claim.predictor or "",
+                    "outcome": claim.outcome or "",
+                }
+                for claim in paper_profile.key_claims
+            ],
+            [
+                "claim_id",
+                "section",
+                "sentence",
+                "metric",
+                "paper_value",
+                "numeric_value",
+                "direction",
+                "predictor",
+                "outcome",
+            ],
+        )
+        comparison_csv_path = write_claim_csv(
+            run_dir / "replication_comparison.csv",
+            [],
+            [
+                "claim_id",
+                "paper_claim",
+                "paper_value",
+                "easyicu_value",
+                "alignment_status",
+                "reason_if_mismatch",
+                "metric",
+            ],
+        )
+        replication_report_path = run_dir / "replication_report.md"
+        replication_report_path.write_text(
+            render_replication_report(
+                paper_profile=paper_profile,
+                spec=replication_spec,
+                deviation_report=deviation_report,
+                comparison_rows=[],
+                ledger=PaperResultLedger(paper_claims=paper_profile.key_claims, easyicu_metrics={"n_stays": int(len(df))}),
+            ),
+            encoding="utf-8",
+        )
+        manuscript_path = run_dir / "manuscript_scaffold_bound.md"
+        manuscript_path.write_text(
+            "# Manuscript scaffold not generated\n\nStrict fail-closed policy blocked paper replication drafting.\n",
+            encoding="utf-8",
+        )
+
+        design_findings = ReplicationDesignAuditor().audit(
+            paper_profile=paper_profile,
+            deviation_report=deviation_report,
+        )
+        readiness, artifact_paths = _write_readiness_artifacts(
+            context=context,
+            plan=plan,
+            findings=design_findings,
+            per_step_records=[],
+            evidence=evidence,
+            run_dir=run_dir,
+            manuscript_path=manuscript_path,
+            stop_after_analysis=False,
+        )
+        readiness.update(
+            {
+                "design_reproduced": False,
+                "paper_claims_parsed": bool(paper_profile.key_claims),
+                "result_alignment_audited": False,
+                "replication_report_ready": True,
+                "showcase_manuscript_ready": False,
+            }
+        )
+        artifact_paths.update(
+            {
+                "paper_profile": "paper_profile.json",
+                "replication_spec": "replication_spec.json",
+                "paper_claim_ledger": "paper_claim_ledger.csv",
+                "replication_comparison": "replication_comparison.csv",
+                "replication_report": "replication_report.md",
+                "deviation_report": "deviation_report.md",
+            }
+        )
+        for evidence_id, kind, description, path in (
+            ("paper_profile", "log", "Parsed source-paper profile for replication mode.", profile_path),
+            ("replication_spec", "log", "Typed EasyICU replication specification derived from the paper.", spec_path),
+            ("paper_claim_ledger", "table", "Ledger of parsed result claims from the source paper.", claim_csv_path),
+            ("replication_comparison", "table", "Claim-by-claim comparison of source paper and EasyICU results.", comparison_csv_path),
+            ("replication_report", "log", "Narrative EasyICU replication report.", replication_report_path),
+            ("deviation_report", "log", "Structured deviation report for unsupported or approximated design elements.", deviation_md_path),
+        ):
+            if evidence.get(evidence_id) is None:
+                evidence.register_file(
+                    kind=kind,
+                    description=description,
+                    source_path=path,
+                    evidence_id=evidence_id,
+                    aliases=[evidence_id],
+                    producer="pipeline",
+                    generation_mode="system",
+                )
+
+        report_path = run_dir / "results_report.md"
+        report_path.write_text(
+            _render_report(
+                context=context,
+                plan=plan,
+                findings=design_findings,
+                per_step_records=[],
+                evidence=evidence,
+                readiness=readiness,
+            ),
+            encoding="utf-8",
+        )
+        run_status_path = run_dir / "run_status.json"
+        run_status = json.loads(run_status_path.read_text(encoding="utf-8"))
+        run_status["gates"] = readiness
+        run_status["canonical_outputs"] = artifact_paths
+        run_status_path.write_text(
+            json.dumps(run_status, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        manifest = AnalysisManifest(
+            run_id=run_id,
+            research_question=context.research_question,
+            started_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc),
+            context_path="context.json",
+            plan_path="plan.json",
+            evidence=evidence.records(),
+            findings=design_findings,
+            readiness=readiness,
+            artifact_paths=artifact_paths,
+            report_path="results_report.md",
+            manuscript_path="manuscript_scaffold_bound.md",
+            used_mock_llm=isinstance(self._llm, MockLLMClient) if self._llm is not None else False,
+            prompt_pack_version=PROMPT_PACK_VERSION,
+            prompt_pack_files=prompt_pack_files(),
+            notes="Strict fail-closed replication package generated before analysis execution.",
+        )
+        manifest_path = run_dir / "manifest.json"
+        manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+        return PipelineResult(
+            run_id=run_id,
+            workdir=str(run_dir),
+            context_path=str(context_path),
+            plan_path=str(plan_path),
+            manifest_path=str(manifest_path),
+            report_path=str(report_path),
+            manuscript_path=str(manuscript_path),
+            evidence_count=len(evidence.records()),
+            findings_count=len(design_findings),
+            paper_profile_path=str(profile_path),
+            replication_spec_path=str(spec_path),
+            replication_report_path=str(replication_report_path),
+        )
 
     # ------------------------------------------------------------------
     # T3.5 — cohort cache (helpers)
@@ -3472,6 +5308,33 @@ class ResearchAgentPipeline:
             ),
             encoding="utf-8",
         )
+        bound_path = run_dir / "manuscript_scaffold_bound.md"
+        bound_path.write_text(
+            f"# Manuscript scaffold not generated\n\nPipeline aborted: {reason}.\n",
+            encoding="utf-8",
+        )
+        readiness, artifact_paths = _write_readiness_artifacts(
+            context=context,
+            plan=None,
+            findings=findings,
+            per_step_records=[],
+            evidence=evidence,
+            run_dir=run_dir,
+            manuscript_path=bound_path,
+            stop_after_analysis=False,
+        )
+        report_path.write_text(
+            _render_report(
+                context=context,
+                plan=None,
+                findings=findings,
+                per_step_records=[],
+                evidence=evidence,
+                aborted_reason=reason,
+                readiness=readiness,
+            ),
+            encoding="utf-8",
+        )
         manifest = AnalysisManifest(
             run_id=run_id,
             research_question=context.research_question,
@@ -3481,6 +5344,8 @@ class ResearchAgentPipeline:
             evidence=evidence.records(),
             findings=findings,
             report_path=str(report_path.relative_to(run_dir)),
+            readiness=readiness,
+            artifact_paths=artifact_paths,
             llm_signature=self._llm_signature(self._llm),
             used_mock_llm=any(True for _ in self._iter_mock_clients(self._llm)),
             prompt_pack_version=PROMPT_PACK_VERSION,
@@ -3489,11 +5354,6 @@ class ResearchAgentPipeline:
         )
         manifest_path = run_dir / "manifest.json"
         manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
-        bound_path = run_dir / "manuscript_scaffold_bound.md"
-        bound_path.write_text(
-            f"# Manuscript scaffold not generated\n\nPipeline aborted: {reason}.\n",
-            encoding="utf-8",
-        )
         return PipelineResult(
             run_id=run_id,
             workdir=str(run_dir),
@@ -3964,6 +5824,33 @@ def _deterministic_summary_repair(
             )
             if repaired != code:
                 return repair_name, repaired
+        categorical_sex_loop_dropna = (
+            (
+                "insufficient data" in skipped
+                or "no valid data" in skipped
+                or null_model_summary
+            )
+            and "for col in x_cols:" in code
+            and "pd.to_numeric(model_df[col], errors=\"coerce\")" in code
+            and "sex" in code
+        )
+        if categorical_sex_loop_dropna:
+            repair_name = "sex_covariate_numeric_loop_guard_v1"
+            if previous_repair != repair_name:
+                marker = (
+                    "for col in x_cols:\n"
+                    "    model_df[col] = pd.to_numeric(model_df[col], errors=\"coerce\")"
+                )
+                replacement = (
+                    "for col in x_cols:\n"
+                    "    if col == \"sex\":\n"
+                    "        model_df[col] = model_df[col].astype(str).str.lower().isin([\"m\", \"male\", \"1\", \"true\"]).astype(float)\n"
+                    "        continue\n"
+                    "    model_df[col] = pd.to_numeric(model_df[col], errors=\"coerce\")"
+                )
+                repaired = code.replace(marker, replacement, 1)
+                if repaired != code:
+                    return repair_name, repaired
         robustness_null_summary = (
             null_model_summary
             and "sm.Logit" in code
@@ -4282,6 +6169,133 @@ def _salvage_named_json_step_summary(run_result: RunResult) -> bool:
     return False
 
 
+def _salvage_minimal_contract_step_summary(
+    *,
+    step: AnalysisStep,
+    out_dir: Path,
+) -> bool:
+    """Backfill an empty ``step_summary.json`` from standard artefacts.
+
+    Small local coder models sometimes write the main CSV/PDF/SVG outputs but
+    leave ``step_summary.json`` as ``{}``. Treating that as a hard failure makes
+    the run look unusable even though the structured evidence is present. This
+    helper only fills a *minimal* machine-readable summary from artefacts that
+    already exist on disk; it never invents numbers that are not recoverable
+    deterministically from those artefacts.
+    """
+    summary_path = out_dir / "step_summary.json"
+    if not summary_path.exists():
+        return False
+    try:
+        loaded = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(loaded, dict) or loaded:
+        return False
+
+    recovered: Dict[str, Any] = {}
+    table_one_csv = out_dir / "table_one.csv"
+    if table_one_csv.exists():
+        try:
+            frame = pd.read_csv(table_one_csv)
+            recovered["table_one_path"] = table_one_csv.name
+            recovered["table_one_rows"] = frame.to_dict(orient="records")
+            recovered["n_rows"] = int(len(frame))
+            recovered["variables_reported"] = sorted(
+                {str(value) for value in frame.get("variable", pd.Series(dtype=str)).dropna().astype(str)}
+            )
+        except Exception:
+            pass
+
+    outcome_csv = out_dir / "outcome_incidence.csv"
+    if outcome_csv.exists():
+        try:
+            frame = pd.read_csv(outcome_csv)
+            recovered["outcome_incidence_path"] = outcome_csv.name
+            for key in ("outcome_rate", "mortality_rate", "rate", "incidence"):
+                if key in frame.columns and not frame.empty:
+                    recovered["outcome_rate"] = float(frame[key].iloc[0])
+                    break
+        except Exception:
+            pass
+
+    assoc_csv = out_dir / "primary_association.csv"
+    if assoc_csv.exists():
+        try:
+            frame = pd.read_csv(assoc_csv)
+            recovered["primary_association_path"] = assoc_csv.name
+            if not frame.empty:
+                working = frame.copy()
+                if "variable" in working.columns:
+                    working = working.loc[
+                        ~working["variable"].astype(str).str.lower().isin({"const", "intercept"})
+                    ]
+                row = working.iloc[0] if not working.empty else frame.iloc[0]
+                predictor = row.get("variable")
+                if predictor is not None:
+                    recovered["predictor"] = str(predictor)
+                for src, dst in (
+                    ("odds_ratio", "primary_or"),
+                    ("estimate", "primary_or"),
+                    ("p_value", "primary_pvalue"),
+                    ("p", "primary_pvalue"),
+                    ("ci_low", "primary_ci_low"),
+                    ("conf_low", "primary_ci_low"),
+                    ("ci_high", "primary_ci_high"),
+                    ("conf_high", "primary_ci_high"),
+                ):
+                    value = row.get(src)
+                    if value is None:
+                        continue
+                    try:
+                        recovered[dst] = float(value)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    perf_csv = out_dir / "model_performance.csv"
+    if perf_csv.exists():
+        try:
+            frame = pd.read_csv(perf_csv)
+            recovered["model_performance_path"] = perf_csv.name
+            for src, dst in (
+                ("auroc", "cv_auroc_mean"),
+                ("auc", "cv_auroc_mean"),
+                ("brier_score", "brier_score"),
+                ("calibration_slope", "calibration_slope"),
+                ("calibration_intercept", "calibration_intercept"),
+            ):
+                if src not in frame.columns:
+                    continue
+                series = pd.to_numeric(frame[src], errors="coerce").dropna()
+                if series.empty:
+                    continue
+                recovered[dst] = float(series.mean())
+        except Exception:
+            pass
+
+    figure_files = sorted(
+        path.name
+        for path in out_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".png", ".svg", ".pdf", ".tiff", ".tif"}
+    )
+    if figure_files:
+        recovered["figure_files"] = figure_files
+        recovered.setdefault("figure_path", figure_files[0])
+
+    if not recovered:
+        return False
+    try:
+        summary_path.write_text(
+            json.dumps(recovered, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+    except Exception:
+        return False
+    return True
+
+
 def _extract_last_json_object(text: str) -> Optional[Dict[str, Any]]:
     decoder = json.JSONDecoder()
     latest: Optional[Dict[str, Any]] = None
@@ -4300,6 +6314,457 @@ def _extract_last_json_object(text: str) -> Optional[Dict[str, Any]]:
 _UNRESOLVED_EVIDENCE_PLACEHOLDER_RE = re.compile(
     r"\[evidence missing:\s*(?P<id>[^\]]+)\]"
 )
+
+
+def _repair_common_writer_placeholders(
+    scaffold: str,
+    *,
+    context: ResearchContext,
+    evidence: EvidenceStore,
+) -> tuple[str, List[tuple[str, str]]]:
+    """Map common writer aliases to existing evidence for prediction tasks.
+
+    The manuscript writer sometimes carries habits from association tasks
+    (`table_one`, `outcome_rate`, `primary_association`) into prediction-model
+    tasks. When the intended fact is already present in a registered prediction
+    step summary, repair the placeholder before binding instead of letting the
+    manuscript accumulate avoidable missing-evidence comments.
+    """
+    text = scaffold
+    repairs: List[tuple[str, str]] = []
+    resolvable = set(evidence.resolvable_names())
+    question = (context.research_question or "").lower()
+    is_prediction = any(
+        token in question for token in ("prediction", "predict", "auroc", "brier", "calibration")
+    )
+    if not is_prediction:
+        return text, repairs
+
+    prediction_summary = _first_resolvable_name(
+        resolvable,
+        (
+            "01_model_training",
+            "model_training",
+            "model_performance",
+            "prediction_performance",
+            "statistic_step_summary",
+            "research_context",
+        ),
+    )
+    if prediction_summary is None:
+        return text, repairs
+
+    fallback_map: Dict[str, str] = {}
+    if "table_one" not in resolvable and "research_context" in resolvable:
+        fallback_map["table_one"] = "research_context"
+    if "cohort_summary" not in resolvable and "research_context" in resolvable:
+        fallback_map["cohort_summary"] = "research_context"
+    if "outcome_rate" not in resolvable:
+        fallback_map["outcome_rate"] = prediction_summary
+    if "outcome_incidence" not in resolvable:
+        fallback_map["outcome_incidence"] = prediction_summary
+    if "primary_association" not in resolvable:
+        fallback_map["primary_association"] = prediction_summary
+
+    for old, new in fallback_map.items():
+        old_token = "{evidence:" + old + "}"
+        if old_token not in text:
+            continue
+        text = text.replace(old_token, "{evidence:" + new + "}")
+        repairs.append((old, new))
+    return text, repairs
+
+
+def _first_resolvable_name(
+    resolvable: set[str], candidates: Sequence[str]
+) -> Optional[str]:
+    for candidate in candidates:
+        if candidate in resolvable:
+            return candidate
+    for candidate in candidates:
+        for name in sorted(resolvable):
+            if candidate in name:
+                return name
+    return None
+
+
+def _audit_manuscript_numeric_claims(
+    bound_manuscript: str,
+    *,
+    per_step_records: Sequence[Dict[str, Any]] | None = None,
+) -> List[ValidationFinding]:
+    """Block manuscript claims that drift from registered numeric evidence.
+
+    Evidence binding proves a sentence points somewhere; it does not prove the
+    number in the sentence matches the machine-readable result. Small local
+    models can cite the right table while rounding from memory or inventing a
+    confidence interval. This audit catches the high-risk prediction metrics
+    before a run can be treated as manuscript-ready.
+    """
+    summaries = [
+        item.get("step_summary")
+        for item in (per_step_records or [])
+        if isinstance(item.get("step_summary"), dict)
+    ]
+    if not summaries:
+        return []
+
+    findings: List[ValidationFinding] = []
+
+    auroc = _first_summary_scalar(
+        summaries,
+        (
+            "auroc",
+            "statistic:auroc",
+            "auc",
+            "statistic:auc",
+            "held_out_auroc",
+            "statistic:held_out_auroc",
+            "cv_auroc",
+            "statistic:cv_auroc",
+            "cv_auroc_mean",
+            "statistic:cv_auroc_mean",
+            "mean_auroc",
+            "auroc_mean",
+        ),
+    )
+    if auroc is not None:
+        claimed_aurocs = _extract_metric_claims(bound_manuscript, r"\b(?:AUROC|AUC)\b")
+        for claimed in claimed_aurocs:
+            # Allow ordinary two-decimal rounding (0.7769 -> 0.78), but not
+            # manuscript-friendly drift such as 0.82.
+            if abs(claimed - auroc) > 0.015:
+                findings.append(
+                    ValidationFinding(
+                        validator="manuscript_numeric_auditor",
+                        severity="error",
+                        message=(
+                            f"Manuscript AUROC claim {claimed:.3g} does not match "
+                            f"registered AUROC {auroc:.3g}."
+                        ),
+                        detail={
+                            "metric": "auroc",
+                            "claimed": claimed,
+                            "registered": auroc,
+                        },
+                    )
+                )
+        ci_low = _first_summary_scalar(
+            summaries,
+            ("auroc_ci_lower", "statistic:auroc_ci_lower", "auc_ci_lower", "ci_lower_auroc"),
+        )
+        ci_high = _first_summary_scalar(
+            summaries,
+            ("auroc_ci_upper", "statistic:auroc_ci_upper", "auc_ci_upper", "ci_upper_auroc"),
+        )
+        if (ci_low is None or ci_high is None) and re.search(
+            r"\b(?:AUROC|AUC)\b.{0,80}\b95\s*%\s*CI\b",
+            bound_manuscript,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            findings.append(
+                ValidationFinding(
+                    validator="manuscript_numeric_auditor",
+                    severity="error",
+                    message=(
+                        "Manuscript reports an AUROC confidence interval, but no "
+                        "AUROC CI bounds are registered in step_summary evidence."
+                    ),
+                    detail={"metric": "auroc_ci"},
+                )
+            )
+
+    brier = _first_summary_scalar(
+        summaries,
+        (
+            "brier_score",
+            "statistic:brier_score",
+            "held_out_brier",
+            "statistic:held_out_brier",
+            "cv_brier_mean",
+            "statistic:cv_brier_mean",
+            "brier_mean",
+        ),
+    )
+    if brier is not None:
+        for claimed in _extract_metric_claims(bound_manuscript, r"\bBrier(?: score)?\b"):
+            if abs(claimed - brier) > 0.015:
+                findings.append(
+                    ValidationFinding(
+                        validator="manuscript_numeric_auditor",
+                        severity="error",
+                        message=(
+                            f"Manuscript Brier claim {claimed:.3g} does not match "
+                            f"registered Brier score {brier:.3g}."
+                        ),
+                        detail={
+                            "metric": "brier_score",
+                            "claimed": claimed,
+                            "registered": brier,
+                        },
+                    )
+                )
+
+    baseline = _first_summary_scalar(
+        summaries,
+        (
+            "baseline_prevalence",
+            "statistic:baseline_prevalence",
+            "outcome_rate",
+            "statistic:outcome_rate",
+            "event_rate",
+            "statistic:event_rate",
+        ),
+    )
+    if baseline is not None:
+        for claimed in _extract_percent_claims_near(
+            bound_manuscript,
+            r"\b(?:baseline prevalence|mortality|death|outcome incidence)\b",
+        ):
+            if abs(claimed - baseline) > 0.015:
+                findings.append(
+                    ValidationFinding(
+                        validator="manuscript_numeric_auditor",
+                        severity="error",
+                        message=(
+                            f"Manuscript prevalence claim {claimed:.3g} does not match "
+                            f"registered baseline prevalence {baseline:.3g}."
+                        ),
+                        detail={
+                            "metric": "baseline_prevalence",
+                            "claimed": claimed,
+                            "registered": baseline,
+                        },
+                    )
+                )
+
+    return findings
+
+
+def _first_summary_scalar(
+    summaries: Sequence[Dict[str, Any]], keys: Sequence[str]
+) -> Optional[float]:
+    for summary in summaries:
+        value = _first_present_scalar(summary, keys)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
+    claims: List[float] = []
+    clean_text = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
+    clean_text = re.sub(r"<!--.*?-->", "", clean_text, flags=re.DOTALL)
+    pattern = re.compile(
+        metric_pattern + r"[^0-9]{0,40}([01](?:\.\d+)?)",
+        flags=re.IGNORECASE,
+    )
+    for match in pattern.finditer(clean_text):
+        try:
+            value = float(match.group(1))
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= value <= 1.0:
+            claims.append(value)
+    return claims
+
+
+def _extract_percent_claims_near(text: str, phrase_pattern: str) -> List[float]:
+    claims: List[float] = []
+    clean_text = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
+    clean_text = re.sub(r"<!--.*?-->", "", clean_text, flags=re.DOTALL)
+    pattern = re.compile(
+        phrase_pattern + r".{0,80}?([0-9]+(?:\.[0-9]+)?)\s*%",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(clean_text):
+        try:
+            value = float(match.group(1)) / 100.0
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= value <= 1.0:
+            claims.append(value)
+    return claims
+
+
+def _parent_step_id_for_figure_step(step: AnalysisStep) -> Optional[str]:
+    step_id = str(step.step_id or "")
+    if step_id.endswith("_figure") and len(step_id) > len("_figure"):
+        return step_id[: -len("_figure")]
+    match = re.search(
+        r"declared by step ['`]([^'`]+)['`]",
+        str(step.intent or ""),
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match.group(1)
+    return None
+
+
+def _step_expects_figure(step: AnalysisStep) -> bool:
+    if "figure" in str(step.method or "").lower():
+        return True
+    return any(
+        "figure" in str(output or "").lower() or "plot" in str(output or "").lower()
+        for output in (step.expected_outputs or [])
+    )
+
+
+def _execution_gate_status(
+    *,
+    plan: Optional[AnalysisPlan],
+    per_step_records: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if plan is None:
+        return {
+            "execution_complete": False,
+            "required_step_count": 0,
+            "completed_step_count": 0,
+            "missing_steps": [],
+            "failed_steps": [{"step_id": "plan", "status": "not_available"}],
+        }
+    required_step_ids = [s.step_id for s in (plan.steps if plan is not None else [])]
+    status_by_step = {
+        str(record.get("step_id")): str(record.get("status") or "")
+        for record in per_step_records
+        if record.get("step_id") and record.get("step_id") != "00_probe"
+    }
+    missing_steps = [step_id for step_id in required_step_ids if step_id not in status_by_step]
+    failed_steps = [
+        {"step_id": step_id, "status": status_by_step.get(step_id)}
+        for step_id in required_step_ids
+        if step_id in status_by_step and status_by_step.get(step_id) != "ok"
+    ]
+    return {
+        "execution_complete": not missing_steps and not failed_steps,
+        "required_step_count": len(required_step_ids),
+        "completed_step_count": sum(
+            1 for step_id in required_step_ids if status_by_step.get(step_id) == "ok"
+        ),
+        "missing_steps": missing_steps,
+        "failed_steps": failed_steps,
+    }
+
+
+def _count_missing_evidence_markers(text: str) -> int:
+    return len(
+        re.findall(
+            r"(?:\[evidence missing:\s*[^\]]+\]|<!--\s*evidence missing:\s*[^>]+-->)",
+            text or "",
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _publication_figure_bundle_ready(
+    *, evidence: EvidenceStore, run_dir: Path
+) -> Dict[str, Any]:
+    stems: Dict[str, set[str]] = {}
+    for record in evidence.records():
+        if record.kind != "figure":
+            continue
+        role = str((record.metadata or {}).get("figure_role") or "").lower()
+        haystack = " ".join(
+            [
+                record.evidence_id,
+                record.description,
+                record.relative_path,
+                role,
+            ]
+        ).lower()
+        if "publication" not in haystack:
+            continue
+        path = run_dir / record.relative_path
+        stem = path.with_suffix("").name.split("__", 1)[-1]
+        stems.setdefault(stem, set()).add(path.suffix.lower().lstrip("."))
+    ready_stems = [
+        stem
+        for stem, suffixes in stems.items()
+        if {"svg", "png", "pdf", "tiff"} <= suffixes or {"svg", "png", "pdf", "tif"} <= suffixes
+    ]
+    return {
+        "publication_figure_bundle_ready": bool(ready_stems),
+        "publication_figure_stems": sorted(stems),
+        "publication_ready_stems": sorted(ready_stems),
+    }
+
+
+def _compute_readiness_gates(
+    *,
+    plan: Optional[AnalysisPlan],
+    per_step_records: Sequence[Dict[str, Any]],
+    findings: Sequence[ValidationFinding],
+    evidence: EvidenceStore,
+    run_dir: Path,
+    manuscript_path: Path,
+    stop_after_analysis: bool,
+) -> Dict[str, Any]:
+    execution = _execution_gate_status(plan=plan, per_step_records=per_step_records)
+    manuscript_text = ""
+    if manuscript_path.exists():
+        try:
+            manuscript_text = manuscript_path.read_text(encoding="utf-8")
+        except Exception:
+            manuscript_text = ""
+    missing_evidence_count = _count_missing_evidence_markers(manuscript_text)
+    numeric_errors = [
+        f.message
+        for f in findings
+        if f.severity == "error" and f.validator == "manuscript_numeric_auditor"
+    ]
+    evidence_errors = [
+        f.message
+        for f in findings
+        if f.severity == "error" and f.validator in {"evidence_bound_writer", "critic_agent"}
+    ]
+    non_manuscript_errors = [
+        f.message
+        for f in findings
+        if f.severity == "error"
+        and f.validator
+        not in {
+            "manuscript_numeric_auditor",
+            "evidence_bound_writer",
+            "critic_agent",
+        }
+    ]
+    manuscript_generated = (
+        manuscript_path.exists()
+        and "Manuscript scaffold not generated" not in manuscript_text[:300]
+        and not stop_after_analysis
+    )
+    evidence_complete = manuscript_generated and missing_evidence_count == 0 and not evidence_errors
+    numeric_verified = manuscript_generated and not numeric_errors
+    analysis_validated = execution["execution_complete"] and not non_manuscript_errors
+    manuscript_ready = (
+        execution["execution_complete"]
+        and evidence_complete
+        and numeric_verified
+        and analysis_validated
+    )
+    publication = _publication_figure_bundle_ready(evidence=evidence, run_dir=run_dir)
+    return {
+        **execution,
+        "evidence_complete": evidence_complete,
+        "numeric_verified": numeric_verified,
+        "analysis_validated": analysis_validated,
+        "manuscript_ready": manuscript_ready,
+        "publication_ready": manuscript_ready
+        and publication["publication_figure_bundle_ready"],
+        "manuscript_generated": manuscript_generated,
+        "missing_evidence_count": missing_evidence_count,
+        "numeric_error_count": len(numeric_errors),
+        "evidence_error_count": len(evidence_errors),
+        "analysis_error_count": len(non_manuscript_errors),
+        "numeric_errors": numeric_errors,
+        "evidence_errors": evidence_errors,
+        "analysis_errors": non_manuscript_errors,
+        **publication,
+    }
 
 
 def _demote_unresolved_evidence_placeholders(
@@ -4331,6 +6796,40 @@ def _demote_unresolved_evidence_placeholders(
 
     rewritten = _UNRESOLVED_EVIDENCE_PLACEHOLDER_RE.sub(_replace, bound_manuscript)
     return rewritten, demoted
+
+
+_TBD_RE = re.compile(r"\[(?:TBD|TODO|TK)\]|\bTBD\b", re.IGNORECASE)
+
+
+def _remove_tbd_sentences(bound_manuscript: str) -> tuple[str, List[str]]:
+    """Drop manuscript sentences that still contain unresolved writer placeholders.
+
+    The writer prompt already tells the model not to emit ``[TBD]``.
+    Small local/free models still occasionally do it, and a journal-facing
+    bound manuscript should never carry placeholders that look like
+    results. We remove only the offending sentence fragments and keep the
+    surrounding evidence-bound prose intact.
+    """
+
+    removed: List[str] = []
+    cleaned_lines: List[str] = []
+    for line in (bound_manuscript or "").splitlines():
+        if not _TBD_RE.search(line):
+            cleaned_lines.append(line)
+            continue
+        parts = re.split(r"(?<=[.!?。！？])\s+", line)
+        kept: List[str] = []
+        for part in parts:
+            if _TBD_RE.search(part):
+                stripped = part.strip()
+                if stripped:
+                    removed.append(stripped)
+            else:
+                kept.append(part)
+        rewritten = " ".join(part for part in kept if part).strip()
+        if rewritten:
+            cleaned_lines.append(rewritten)
+    return "\n".join(cleaned_lines).strip() + "\n", removed
 
 
 _KEYERROR_NOT_IN_INDEX_RE = re.compile(
@@ -5416,6 +7915,22 @@ def _infer_generic_v15_fallback_key(code: str, diagnostic_text: str = "") -> Opt
     combined = f"{code}\n{diagnostic_text}".lower()
     if "norepi_equiv_max_24h" in combined or "t15_norepinephrine_dose_response" in combined:
         return None
+    prediction_markers = (
+        "t07_mortality_prediction_auroc",
+        "prediction_model",
+        "mortality prediction",
+        "predict_proba",
+        "roc_auc_score",
+        "stratifiedkfold",
+        "auroc",
+        "brier",
+        "calibration",
+    )
+    if sum(marker in combined for marker in prediction_markers) >= 2:
+        # Prediction scripts often mention lactate / MAP / SOFA as features.
+        # Do not let shared covariate names misroute the task into an
+        # association-style generic fallback.
+        return None
     if (
         "cluster_labels" in combined
         or "cluster_characteristics" in combined
@@ -5633,6 +8148,29 @@ def _deterministic_runner_repair(
             if repaired != code:
                 return repair_name, repaired
 
+    wrong_calibration_import = (
+        "cannot import name 'calibration_curve' from 'sklearn.metrics'" in lowered
+        and "calibration_curve" in code
+    )
+    if wrong_calibration_import:
+        repair_name = "prediction_calibration_import_fix_v1"
+        repaired = re.sub(
+            r"from sklearn\.metrics import ([^\n]*?)\bcalibration_curve\b,?\s*",
+            lambda match: (
+                "from sklearn.metrics import "
+                + ", ".join(
+                    part.strip().strip(",")
+                    for part in match.group(1).split(",")
+                    if part.strip().strip(",")
+                )
+                + "\nfrom sklearn.calibration import calibration_curve\n"
+            ),
+            code,
+            count=1,
+        )
+        if repaired != code:
+            return repair_name, repaired
+
     json_numpy_key_failure = (
         "keys must be str, int, float, bool or none" in lowered
         and "json.dump(" in code
@@ -5767,6 +8305,31 @@ def _deterministic_runner_repair(
             guard = "x_cols = [col for col in x_cols if col in model_df.columns]"
             if marker in code and guard not in code:
                 repaired = code.replace(marker, guard + "\n" + marker, 1)
+                return repair_name, repaired
+
+    categorical_prediction_coercion = (
+        "found array with 0 feature(s)" in lowered
+        and "onehotencoder" in lowered
+        and "categorical_features" in code
+        and "pd.to_numeric" in code
+    )
+    if categorical_prediction_coercion:
+        repair_name = "prediction_preserve_categorical_before_ohe_v1"
+        if previous_repair != repair_name:
+            repaired = re.sub(
+                r"for col in predictors:\s*\n\s*if col in data:\s*\n\s*data\[col\]\s*=\s*pd\.to_numeric\(data\[col\], errors=\"coerce\"\)",
+                (
+                    "for col in predictors:\n"
+                    "    if col in data and col not in [\"sex\"]:\n"
+                    "        data[col] = pd.to_numeric(data[col], errors=\"coerce\")\n"
+                    "if \"sex\" in data:\n"
+                    "    data[\"sex\"] = data[\"sex\"].astype(\"string\")"
+                ),
+                code,
+                count=1,
+                flags=re.MULTILINE,
+            )
+            if repaired != code:
                 return repair_name, repaired
 
     duplicate_outcome_column_unique = (
@@ -6789,7 +9352,7 @@ def _deterministic_runner_repair(
                     color='gray', alpha=0.3, markersize=5, label='Data distribution')
             ax.set_xlabel('Lactate max 24h (mmol/L)', fontsize=12)
             ax.set_ylabel('Predicted probability of death', fontsize=12)
-            ax.set_title('Adjusted association: early lactate and hospital mortality', fontsize=13)
+            ax.set_title('Adjusted association: early lactate and target outcome', fontsize=13)
             ax.set_ylim(-0.05, 1.05)
             ax.grid(True, alpha=0.3)
             ax.legend(loc='upper left')
@@ -7128,6 +9691,14 @@ def _deterministic_runner_repair(
             )
 
         repaired = model_call.sub(_rewrite, patched, count=1)
+        repaired = repaired.replace(
+            "X_array = X.to_numpy()\n"
+            "y_array = y.to_numpy()\n",
+            "y, X = _easyicu_runner_repair_v1(X, y)\n"
+            "X_array = np.asarray(X, dtype=float)\n"
+            "y_array = np.asarray(y, dtype=float)\n",
+            1,
+        )
         if repaired != code:
             return repair_name, repaired
 
@@ -7222,11 +9793,209 @@ def _promote_prior_publication_bundle(
             "source_outputs_dir": str(files[next(iter(files))].parent),
         }
     )
+    exported_figure_files = [
+        str((out_dir / f"{target_stem}{key}").name)
+        for key in sorted(files)
+        if key != "contract"
+    ]
+    summary["figure_files"] = exported_figure_files
+    if exported_figure_files:
+        summary["figure_path"] = exported_figure_files[0]
     step_summary_path.write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
     return "publication_bundle_promote_v1"
+
+
+def _render_prediction_publication_bundle_from_prior_outputs(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Deterministically build a validation figure from prior prediction outputs.
+
+    Some small models successfully write ``model_performance.csv`` and
+    ``step_summary.json`` in the parent model-training step but fail to
+    render the follow-up figure step. When that happens, we can still
+    construct a publication-style validation bundle from the structured
+    parent artefacts instead of failing the entire run.
+    """
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return None
+
+    best_parent: Optional[tuple[Path, Path, Dict[str, Any]]] = None
+    for step_dir in sorted(steps_dir.iterdir()):
+        if not step_dir.is_dir() or step_dir.name == current_step_id:
+            continue
+        outputs_dir = step_dir / "outputs"
+        perf_path = outputs_dir / "model_performance.csv"
+        summary_path = outputs_dir / "step_summary.json"
+        if not perf_path.exists() or not summary_path.exists():
+            continue
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(summary, dict):
+            continue
+        best_parent = (perf_path, summary_path, summary)
+        break
+    if best_parent is None:
+        return None
+
+    perf_path, summary_path, summary = best_parent
+    try:
+        frame = pd.read_csv(perf_path)
+    except Exception:
+        return None
+    metric_cols = [col for col in ("auroc", "brier_score") if col in frame.columns]
+    calib_cols = [
+        col for col in ("calibration_slope", "calibration_intercept") if col in frame.columns
+    ]
+    if not metric_cols and not calib_cols:
+        return None
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from easyicu.research_agent.publication_figures import (
+        add_panel_label,
+        apply_publication_style,
+        make_figure_contract,
+        save_publication_figure,
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fig, axes = plt.subplots(1, 2, figsize=(183 / 25.4, 82 / 25.4), constrained_layout=True)
+    apply_publication_style(fig)
+    if not isinstance(axes, (list, tuple)):
+        axes = axes.ravel()
+    folds = frame.get("fold")
+    if folds is None:
+        folds = pd.Series([f"Fold {idx + 1}" for idx in range(len(frame))])
+    folds = folds.astype(str)
+
+    ax1, ax2 = axes[0], axes[1]
+    if "auroc" in frame.columns:
+        ax1.plot(folds, frame["auroc"].astype(float), marker="o", linewidth=1.4, label="AUROC")
+    if "brier_score" in frame.columns:
+        ax1.plot(
+            folds,
+            frame["brier_score"].astype(float),
+            marker="s",
+            linewidth=1.2,
+            label="Brier",
+        )
+    ax1.set_title("Cross-validation discrimination", loc="left", pad=4)
+    ax1.set_xlabel("Fold")
+    ax1.set_ylabel("Metric value")
+    ax1.tick_params(axis="x", rotation=35)
+    ax1.legend(frameon=False, fontsize=7)
+    add_panel_label(ax1, "A", x=-0.1)
+
+    if "calibration_slope" in frame.columns:
+        ax2.plot(
+            folds,
+            frame["calibration_slope"].astype(float),
+            marker="o",
+            linewidth=1.4,
+            label="Slope",
+        )
+        ax2.axhline(1.0, linestyle="--", linewidth=0.8, color="#8F8F8F")
+    if "calibration_intercept" in frame.columns:
+        ax2.plot(
+            folds,
+            frame["calibration_intercept"].astype(float),
+            marker="s",
+            linewidth=1.2,
+            label="Intercept",
+        )
+        ax2.axhline(0.0, linestyle=":", linewidth=0.8, color="#B64342")
+    ax2.set_title("Cross-validation calibration", loc="left", pad=4)
+    ax2.set_xlabel("Fold")
+    ax2.set_ylabel("Calibration statistic")
+    ax2.tick_params(axis="x", rotation=35)
+    if calib_cols:
+        ax2.legend(frameon=False, fontsize=7)
+    add_panel_label(ax2, "B", x=-0.1)
+
+    contract = make_figure_contract(
+        figure_id="publication_figure",
+        core_claim=(
+            "Prediction-model validation metrics are summarised from the "
+            "registered cross-validation performance table."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Discrimination",
+                "role": "validation",
+                "claim": "Fold-level AUROC and Brier score are derived from the model-performance table.",
+                "evidence_ids": ["model_performance", "01_model_training"],
+            },
+            {
+                "panel_id": "B",
+                "title": "Calibration",
+                "role": "validation",
+                "claim": "Fold-level calibration slope and intercept are derived from the registered step summary and performance table.",
+                "evidence_ids": ["model_performance", "01_model_training"],
+            },
+        ],
+        source_data=["model_performance", "01_model_training"],
+        statistics_note=(
+            "Deterministic rescue figure generated from parent-step outputs "
+            "when the figure-only child step did not emit exports."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig,
+        out_dir / "publication_figure",
+        contract=contract,
+        dpi=300,
+    )
+    plt.close(fig)
+
+    existing_summary: Dict[str, Any] = {}
+    step_summary_path = out_dir / "step_summary.json"
+    if step_summary_path.exists():
+        try:
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_summary = loaded
+        except Exception:
+            existing_summary = {}
+    existing_summary.setdefault("publication_figure_rescue", {})
+    existing_summary["publication_figure_rescue"].update(
+        {
+            "mode": "prediction_validation_from_parent_outputs",
+            "source_model_performance": str(perf_path),
+            "source_step_summary": str(summary_path),
+        }
+    )
+    figure_files = [
+        path.name for key, path in outputs.items() if key != "contract"
+    ]
+    existing_summary["figure_files"] = figure_files
+    if figure_files:
+        existing_summary["figure_path"] = figure_files[0]
+    existing_summary.setdefault("cv_auroc_mean", summary.get("statistic:auroc"))
+    existing_summary.setdefault("cv_brier_mean", summary.get("statistic:brier_score"))
+    existing_summary.setdefault(
+        "calibration_slope", summary.get("statistic:calibration_slope")
+    )
+    existing_summary.setdefault(
+        "calibration_intercept", summary.get("statistic:calibration_intercept")
+    )
+    step_summary_path.write_text(
+        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "prediction_publication_bundle_from_parent_outputs_v1"
 
 
 def _expected_numeric_annotations_for_step(
@@ -7399,6 +10168,7 @@ def _enforce_advanced_plan_contract(
             family = "clustering"
         elif (
             "sofa" not in plan_blob
+            and _question_primary_predictor_is_vasopressor_or_unknown(context)
             and (
                 any(
                     marker in plan_blob
@@ -7630,6 +10400,83 @@ def _enforce_advanced_plan_contract(
         },
     )
     return revised, [finding]
+
+
+def _question_primary_predictor_is_vasopressor_or_unknown(
+    context: ResearchContext,
+) -> bool:
+    predictor = _infer_primary_predictor_from_context(context)
+    if not predictor:
+        return True
+    tokens = _predictor_tokens(predictor)
+    return bool(tokens & {"vaso", "vasopressor", "vasopressors", "norepinephrine"})
+
+
+def _infer_primary_predictor_from_context(
+    context: ResearchContext,
+) -> Optional[str]:
+    """Infer the named exposure/predictor from the question and variables.
+
+    This intentionally stays task-family generic. It scores variable-name
+    tokens that appear before adjustment language higher than tokens that
+    appear only in an "adjusted for ..." covariate clause.
+    """
+
+    question = (context.research_question or "").lower()
+    if not question:
+        return None
+    primary_span = re.split(
+        r"\b(?:after adjustment for|adjusted for|controlling for|with adjustment for|including covariates|covariates?)\b",
+        question,
+        maxsplit=1,
+    )[0]
+    best_name: Optional[str] = None
+    best_score = 0
+    for variable in context.variables:
+        if variable.role in {VariableRole.ID, VariableRole.TIME, VariableRole.OUTCOME}:
+            continue
+        tokens = _predictor_tokens(variable.name)
+        if not tokens:
+            continue
+        score = 0
+        for token in tokens:
+            if token in primary_span:
+                score += 20
+            elif token in question:
+                score += 5
+        if score > best_score:
+            best_score = score
+            best_name = variable.name
+    return best_name if best_score > 0 else None
+
+
+def _predictor_tokens(name: Optional[str]) -> set[str]:
+    if not name:
+        return set()
+    raw_tokens = re.split(r"[^a-zA-Z0-9]+", str(name).lower())
+    stop = {
+        "",
+        "24h",
+        "48h",
+        "72h",
+        "max",
+        "min",
+        "mean",
+        "median",
+        "first",
+        "last",
+        "any",
+        "flag",
+        "binary",
+        "value",
+        "score",
+    }
+    tokens = {token for token in raw_tokens if token not in stop}
+    if "vaso" in tokens:
+        tokens.add("vasopressor")
+    if "norepi" in tokens:
+        tokens.add("norepinephrine")
+    return tokens
 
 
 _FIGURE_STEP_TOKENS = ("figure", "plot", "chart", "fig:", "figure:", "plot:")
@@ -8211,9 +11058,15 @@ def _step_contract_repair_guidance(
     code: str,
 ) -> str:
     guidance: List[str] = []
+    if not isinstance(step_summary, dict):
+        # Hosted models sometimes emit a bare string as step_summary
+        # when the generated code prints JSON as stdout. Treat non-dict
+        # summaries as empty for repair guidance so we never crash in
+        # the middle of the loop.
+        step_summary = {}
     predictor = str(
-        (step_summary or {}).get("primary_predictor")
-        or (step_summary or {}).get("predictor")
+        step_summary.get("primary_predictor")
+        or step_summary.get("predictor")
         or ""
     ).strip()
     summary_text = json.dumps(step_summary or {}, ensure_ascii=False, default=str)
@@ -8380,16 +11233,193 @@ def _step_contract_repair_guidance(
     return "\n".join(f"- {item}" for item in guidance)
 
 
-def _render_writer_evidence_digest(per_step_records: Sequence[Dict[str, Any]]) -> str:
+def _resolve_writer_aux_path(
+    *,
+    run_dir: Path,
+    step_id: str,
+    candidate: Optional[Any],
+) -> Optional[Path]:
+    if not candidate:
+        return None
+    raw = Path(str(candidate))
+    if raw.is_absolute() and raw.exists():
+        return raw
+    candidates = [
+        run_dir / "steps" / step_id / "outputs" / raw.name,
+        run_dir / "steps" / step_id / "outputs" / str(raw),
+        run_dir / str(raw),
+    ]
+    return next((path for path in candidates if path.exists()), None)
+
+
+def _summarise_table_one_rows(rows: Any) -> Dict[str, Any]:
+    if not isinstance(rows, list):
+        return {}
+    wanted = {
+        "age": "age",
+        "sofa2": "sofa2",
+        "lact": "lact",
+        "creat": "creat",
+        "map": "map",
+        "los_icu": "los_icu",
+    }
+    summary: Dict[str, Any] = {}
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        variable = str(item.get("variable") or "").strip().lower()
+        if variable not in wanted:
+            continue
+        prefix = wanted[variable]
+        for source_key, target_key in (
+            ("n", f"{prefix}_n"),
+            ("median", f"{prefix}_median"),
+            ("q25", f"{prefix}_q25"),
+            ("q75", f"{prefix}_q75"),
+            ("most_common", f"{prefix}_most_common"),
+            ("most_common_n", f"{prefix}_most_common_n"),
+        ):
+            scalar = _first_present_scalar(item, (source_key,))
+            if scalar is not None:
+                summary[target_key] = scalar
+    return summary
+
+
+def _summarise_primary_association_table(path: Optional[Path]) -> Dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        frame = pd.read_csv(path)
+    except Exception:
+        return {}
+    if frame.empty:
+        return {}
+    cols = {str(c).lower(): c for c in frame.columns}
+    variable_col = cols.get("variable") or cols.get("term")
+    odds_col = cols.get("odds_ratio") or cols.get("or")
+    lower_col = cols.get("or_lower") or cols.get("ci_lower") or cols.get("lower")
+    upper_col = cols.get("or_upper") or cols.get("ci_upper") or cols.get("upper")
+    p_col = cols.get("p_value") or cols.get("p")
+    if variable_col is None:
+        return {}
+    digest: Dict[str, Any] = {}
+    for _, row in frame.iterrows():
+        variable = str(row.get(variable_col) or "").strip()
+        if not variable or variable.lower() == "intercept":
+            continue
+        key = variable.replace(" ", "_")
+        if odds_col is not None:
+            val = _first_present_scalar(row, (odds_col,))
+            if val is not None:
+                digest[f"{key}_or"] = val
+        if lower_col is not None:
+            val = _first_present_scalar(row, (lower_col,))
+            if val is not None:
+                digest[f"{key}_ci_low"] = val
+        if upper_col is not None:
+            val = _first_present_scalar(row, (upper_col,))
+            if val is not None:
+                digest[f"{key}_ci_high"] = val
+        if p_col is not None:
+            val = _first_present_scalar(row, (p_col,))
+            if val is not None:
+                digest[f"{key}_p_value"] = val
+    return digest
+
+
+def _summarise_sofa_zero_audit(path: Optional[Path]) -> Dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        frame = pd.read_csv(path)
+    except Exception:
+        return {}
+    cols = {str(c).lower(): c for c in frame.columns}
+    sofa_col = cols.get("sofa2") or cols.get("score") or cols.get("stratum")
+    rate_col = cols.get("death_rate") or cols.get("outcome_rate") or cols.get("mortality_rate")
+    if sofa_col is None or rate_col is None:
+        return {}
+    digest: Dict[str, Any] = {}
+    for level in (0, 1):
+        try:
+            row = frame.loc[pd.to_numeric(frame[sofa_col], errors="coerce") == level]
+        except Exception:
+            row = pd.DataFrame()
+        if row.empty:
+            continue
+        value = _first_present_scalar(row.iloc[0], (rate_col,))
+        if value is not None:
+            digest[f"sofa2_{level}_death_rate"] = value
+    return digest
+
+
+def _preferred_writer_evidence_names(evidence: EvidenceStore) -> List[str]:
+    aliases = evidence.aliases()
+    preferred = [
+        "table_one",
+        "cohort_summary",
+        "outcome_incidence",
+        "outcome_rate",
+        "mortality_rate",
+        "primary_association",
+        "sofa_strata",
+        "stratum_audit",
+        "multiple_testing_report",
+        "fairness_subgroups",
+        "literature_prisma",
+        "causal_audit_report",
+        "causal_audit_summary",
+        "reporting_checklist",
+    ]
+    out: List[str] = [name for name in preferred if name in aliases or evidence.get(name) is not None]
+    step_aliases = [
+        name for name in sorted(aliases)
+        if re.match(r"^\d{2}[_-]", name)
+    ]
+    for name in step_aliases:
+        if name not in out:
+            out.append(name)
+    return out or evidence.resolvable_names()
+
+
+def _render_writer_evidence_digest(
+    per_step_records: Sequence[Dict[str, Any]] | None = None,
+    *,
+    context: ResearchContext | None = None,
+    run_dir: Path | None = None,
+) -> str:
     lines: List[str] = []
+    if context is not None:
+        lines.append("RUN_CONTEXT")
+        lines.append(
+            "  "
+            + json.dumps(
+                {
+                    "research_question": context.research_question,
+                    "cohort_name": context.cohort.cohort_name,
+                    "database": context.cohort.database,
+                    "n_stays": context.cohort.n_stays,
+                    "n_patients": context.cohort.n_patients,
+                    "target_outcome": context.target_outcome,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+        )
+    run_dir = Path(run_dir or ".")
     preferred_keys = (
         "sample_size",
         "n_total",
         "n_total_stays",
+        "n_death",
         "n_complete",
         "n_complete_case",
         "complete_case_n",
         "outcome_rate",
+        "overall_mortality_rate",
+        "overall_ci_low",
+        "overall_ci_high",
         "mortality_rate",
         "median_age",
         "estimate",
@@ -8400,19 +11430,36 @@ def _render_writer_evidence_digest(per_step_records: Sequence[Dict[str, Any]]) -
         "ci_upper",
         "primary_ci_low",
         "primary_ci_high",
+        "primary_or_ci",
         "p_value",
         "auroc",
+        "statistic:auroc",
+        "auc",
+        "statistic:auc",
         "cv_auroc",
+        "statistic:cv_auroc",
+        "held_out_auroc",
+        "statistic:held_out_auroc",
         "mean_auroc",
+        "statistic:mean_auroc",
         "auroc_median",
+        "statistic:auroc_ci_lower",
+        "statistic:auroc_ci_upper",
         "brier_score",
+        "statistic:brier_score",
         "held_out_brier",
+        "statistic:held_out_brier",
         "brier_median",
         "calibration_slope",
+        "statistic:calibration_slope",
         "calibration_slope_median",
         "calibration_intercept",
+        "statistic:calibration_intercept",
         "calibration_intercept_median",
         "baseline_prevalence",
+        "statistic:baseline_prevalence",
+        "split_strategy",
+        "statistic:split_strategy",
         "silhouette_score",
         "silhouette",
         "n_clusters",
@@ -8437,10 +11484,73 @@ def _render_writer_evidence_digest(per_step_records: Sequence[Dict[str, Any]]) -
                 digest_row[key] = scalar
         if "primary_predictor" in summary:
             digest_row["primary_predictor"] = str(summary["primary_predictor"])
+        elif "predictor" in summary:
+            digest_row["primary_predictor"] = str(summary["predictor"])
         if "target_outcome" in summary:
             digest_row["target_outcome"] = str(summary["target_outcome"])
+        elif "outcome" in summary:
+            digest_row["target_outcome"] = str(summary["outcome"])
+        if "primary_or_ci" in summary and isinstance(summary["primary_or_ci"], (list, tuple)):
+            ci_values = list(summary["primary_or_ci"])
+            if len(ci_values) == 2:
+                digest_row.setdefault("primary_ci_low", ci_values[0])
+                digest_row.setdefault("primary_ci_high", ci_values[1])
+        digest_row.update(_summarise_table_one_rows(summary.get("table_one_rows")))
+        primary_path = _resolve_writer_aux_path(
+            run_dir=run_dir,
+            step_id=step_id,
+            candidate=summary.get("primary_association_path"),
+        )
+        digest_row.update(_summarise_primary_association_table(primary_path))
+        strata_path = _resolve_writer_aux_path(
+            run_dir=run_dir,
+            step_id=step_id,
+            candidate=summary.get("table") if "sofa_zero_audit" in step_id.lower() else None,
+        )
+        if strata_path is None and "sofa_zero_audit" in step_id.lower():
+            strata_path = run_dir / "steps" / step_id / "outputs" / "sofa_strata.csv"
+        digest_row.update(_summarise_sofa_zero_audit(strata_path))
         lines.append(
             "  " + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
+        )
+    return "\n".join(lines)
+
+
+def _canonical_outcome_name(raw: Optional[str]) -> Optional[str]:
+    text = (raw or "").lower()
+    if not text:
+        return None
+    if "mortality" in text or "death" in text:
+        return "death"
+    if "length of stay" in text or "los" in text:
+        return "los_icu"
+    return raw
+
+
+def _build_replication_notes(
+    *,
+    paper_profile: PaperProfile,
+    replication_spec: PaperReplicationSpec,
+    mode: str,
+) -> str:
+    lines = [
+        "Paper replication mode is active.",
+        f"Source paper: {paper_profile.paper_title or paper_profile.paper_source}.",
+        f"Replication goal: {replication_spec.replication_goal}.",
+        f"Mode: {mode}.",
+        "Use only EasyICU-observed numbers in the manuscript.",
+        "If the original paper is referenced, phrase it as 'original paper reported ...'.",
+        "Treat unmappable design elements as explicit deviations, not silent substitutions.",
+    ]
+    if replication_spec.mapped_concepts:
+        lines.append(
+            "Mapped concepts: "
+            + ", ".join(f"{k}->{v}" for k, v in sorted(replication_spec.mapped_concepts.items()))
+            + "."
+        )
+    if replication_spec.unmappable_items:
+        lines.append(
+            "Unmappable items: " + "; ".join(replication_spec.unmappable_items) + "."
         )
     return "\n".join(lines)
 
@@ -8449,9 +11559,8 @@ def _extract_primary_effect_row(
     *, database: str, result: PipelineResult
 ) -> Dict[str, Any]:
     run_dir = Path(result.workdir)
-    summary_candidates = sorted(
-        run_dir.glob("steps/*primary_association*/outputs/step_summary.json")
-    )
+    preferred_predictor = _infer_primary_predictor_from_run_dir(run_dir)
+    summary_candidates = sorted(run_dir.rglob("step_summary.json"))
     payload: Dict[str, Any] = {
         "database": database,
         "run_id": result.run_id,
@@ -8462,8 +11571,8 @@ def _extract_primary_effect_row(
         "primary_ci_high": None,
         "status": "missing_primary_association",
     }
-    if not summary_candidates:
-        summary_candidates = sorted(run_dir.rglob("step_summary.json"))
+    best_payload: Optional[Dict[str, Any]] = None
+    best_score = -10_000
     for path in summary_candidates:
         try:
             summary = json.loads(path.read_text(encoding="utf-8"))
@@ -8471,7 +11580,12 @@ def _extract_primary_effect_row(
             continue
         if not isinstance(summary, dict):
             continue
-        predictor = summary.get("predictor") or summary.get("variable")
+        predictor = (
+            summary.get("primary_predictor")
+            or summary.get("predictor")
+            or summary.get("predictor_variable")
+            or summary.get("variable")
+        )
         primary_or = _first_present_scalar(
             summary,
             ("primary_or", "odds_ratio", "estimate", "adjusted_or", "lactate_or"),
@@ -8492,20 +11606,125 @@ def _extract_primary_effect_row(
             vals = list(summary["primary_or_ci"])
             if len(vals) >= 2:
                 ci_low, ci_high = vals[0], vals[1]
-        payload.update(
-            {
-                "predictor": predictor,
-                "primary_or": primary_or,
-                "primary_ci_low": ci_low,
-                "primary_ci_high": ci_high,
-                "status": (
-                    "ok" if primary_or is not None else "summary_missing_primary_or"
-                ),
-                "step_summary_path": str(path),
-            }
+        score = _primary_effect_candidate_score(
+            path,
+            summary=summary,
+            preferred_predictor=preferred_predictor,
         )
-        return payload
+        candidate_payload = {
+            "predictor": predictor,
+            "primary_or": primary_or,
+            "primary_ci_low": ci_low,
+            "primary_ci_high": ci_high,
+            "status": (
+                "ok" if primary_or is not None else "summary_missing_primary_or"
+            ),
+            "step_summary_path": str(path),
+        }
+        if score > best_score:
+            best_score = score
+            best_payload = candidate_payload
+    if best_payload is not None:
+        payload.update(best_payload)
     return payload
+
+
+def _infer_primary_predictor_from_run_dir(run_dir: Path) -> Optional[str]:
+    try:
+        payload = json.loads((run_dir / "research_context.json").read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        context = ResearchContext.model_validate(payload)
+    except Exception:
+        return None
+    return _infer_primary_predictor_from_context(context)
+
+
+def _primary_effect_candidate_score(
+    path: Path,
+    *,
+    summary: Dict[str, Any],
+    preferred_predictor: Optional[str],
+) -> int:
+    path_text = str(path).lower()
+    blob = json.dumps(summary, ensure_ascii=False, default=str).lower()
+    predictor = str(
+        summary.get("primary_predictor")
+        or summary.get("predictor")
+        or summary.get("predictor_variable")
+        or summary.get("variable")
+        or ""
+    ).lower()
+    score = 0
+    if _first_present_scalar(
+        summary,
+        ("primary_or", "odds_ratio", "estimate", "adjusted_or", "lactate_or"),
+    ) is not None:
+        score += 100
+    if "primary_association" in path_text or "association_model" in path_text:
+        score += 30
+    if "model" in path_text or "regression" in path_text:
+        score += 10
+    if summary.get("error"):
+        score -= 20
+    if "bias" in path_text or "vasopressor_selection" in path_text:
+        score -= 40
+    if preferred_predictor:
+        preferred_tokens = _predictor_tokens(preferred_predictor)
+        predictor_tokens = _predictor_tokens(predictor)
+        path_or_blob_tokens = _predictor_tokens(path_text + " " + blob)
+        if preferred_predictor.lower() in predictor or preferred_predictor.lower() in path_text:
+            score += 80
+        elif preferred_tokens & predictor_tokens:
+            score += 70
+        elif preferred_tokens & path_or_blob_tokens:
+            score += 40
+        if not (preferred_tokens & {"vaso", "vasopressor", "vasopressors", "norepinephrine"}) and (
+            "vasopressor_selection" in path_text
+            or "vaso" in predictor
+            or "vasopressor" in predictor
+        ):
+            score -= 60
+    elif predictor:
+        score += 5
+    return score
+
+
+def _extract_cross_database_run_summary(
+    *,
+    database: str,
+    result: PipelineResult,
+) -> Dict[str, Any]:
+    run_dir = Path(result.workdir)
+    run_status_path = run_dir / "run_status.json"
+    gates: Dict[str, Any] = {}
+    status = "missing_run_status"
+    if run_status_path.exists():
+        try:
+            payload = json.loads(run_status_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                status = str(payload.get("status") or status)
+                raw_gates = payload.get("gates")
+                if isinstance(raw_gates, dict):
+                    gates = raw_gates
+        except Exception:
+            status = "invalid_run_status"
+    return {
+        "database": database,
+        "run_id": result.run_id,
+        "status": status,
+        "execution_complete": bool(gates.get("execution_complete")),
+        "evidence_complete": bool(gates.get("evidence_complete")),
+        "numeric_verified": bool(gates.get("numeric_verified")),
+        "analysis_validated": bool(gates.get("analysis_validated")),
+        "manuscript_ready": bool(gates.get("manuscript_ready")),
+        "publication_ready": bool(gates.get("publication_ready")),
+        "missing_evidence_count": int(gates.get("missing_evidence_count") or 0),
+        "numeric_error_count": int(gates.get("numeric_error_count") or 0),
+        "manifest_path": str(result.manifest_path),
+        "report_path": str(result.report_path),
+        "manuscript_path": str(result.manuscript_path),
+    }
 
 
 def _render_cross_database_comparison_markdown(rows: Sequence[Dict[str, Any]]) -> str:
@@ -8543,6 +11762,353 @@ def _render_cross_database_comparison_markdown(rows: Sequence[Dict[str, Any]]) -
     return "\n".join(lines) + "\n"
 
 
+def _render_cross_database_summary_markdown(rows: Sequence[Dict[str, Any]]) -> str:
+    lines = [
+        "# Cross-database readiness summary",
+        "",
+        "| database | run_id | status | execution | evidence | numeric | validated | manuscript | publication | missing evidence | numeric errors |",
+        "|---|---|---|---|---|---|---|---|---|---:|---:|",
+    ]
+    for row in rows:
+        lines.append(
+            "| {database} | {run_id} | {status} | {execution_complete} | {evidence_complete} | {numeric_verified} | {analysis_validated} | {manuscript_ready} | {publication_ready} | {missing_evidence_count} | {numeric_error_count} |".format(
+                **row
+            )
+        )
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _render_cross_database_validation_report(
+    *,
+    question: Optional[str],
+    target_outcome: Optional[str],
+    rows: Sequence[Dict[str, Any]],
+    run_summaries: Sequence[Dict[str, Any]],
+) -> str:
+    successful = sum(1 for row in run_summaries if row.get("execution_complete"))
+    manuscript_ready = sum(1 for row in run_summaries if row.get("manuscript_ready"))
+    publication_ready = sum(1 for row in run_summaries if row.get("publication_ready"))
+    lines = [
+        "# Cross-database validation report",
+        "",
+        f"- Research question: {question or 'n/a'}",
+        f"- Target outcome: {target_outcome or 'n/a'}",
+        f"- Databases run: {len(run_summaries)}",
+        f"- Execution-complete runs: {successful}/{len(run_summaries)}",
+        f"- Manuscript-ready runs: {manuscript_ready}/{len(run_summaries)}",
+        f"- Publication-ready runs: {publication_ready}/{len(run_summaries)}",
+        "",
+        "## Effect comparison",
+        "",
+    ]
+    lines.extend(_render_cross_database_comparison_markdown(rows).splitlines())
+    lines.extend([
+        "",
+        "## Readiness summary",
+        "",
+    ])
+    lines.extend(_render_cross_database_summary_markdown(run_summaries).splitlines())
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _write_readiness_artifacts(
+    *,
+    context: ResearchContext,
+    plan: Optional[AnalysisPlan],
+    findings: Sequence[ValidationFinding],
+    per_step_records: Sequence[Dict[str, Any]],
+    evidence: EvidenceStore,
+    run_dir: Path,
+    manuscript_path: Path,
+    stop_after_analysis: bool,
+) -> tuple[Dict[str, Any], Dict[str, str]]:
+    gates = _compute_readiness_gates(
+        plan=plan,
+        per_step_records=per_step_records,
+        findings=findings,
+        evidence=evidence,
+        run_dir=run_dir,
+        manuscript_path=manuscript_path,
+        stop_after_analysis=stop_after_analysis,
+    )
+    status = (
+        "publication_ready"
+        if gates["publication_ready"]
+        else "manuscript_ready"
+        if gates["manuscript_ready"]
+        else "analysis_only"
+        if gates["execution_complete"]
+        else "diagnostic_only"
+    )
+
+    artifact_paths: Dict[str, str] = {}
+
+    run_status_path = run_dir / "run_status.json"
+    run_status_payload = {
+        "schema_version": "easyicu.run_status/1",
+        "status": status,
+        "strict_fail_closed": True,
+        "research_question": context.research_question,
+        "gates": gates,
+        "canonical_outputs": {},
+    }
+    run_status_path.write_text(
+        json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    artifact_paths["run_status"] = str(run_status_path.relative_to(run_dir))
+
+    evidence_audit_path = run_dir / "evidence_audit.json"
+    evidence_records = evidence.records()
+    kinds: Dict[str, int] = {}
+    for rec in evidence_records:
+        kinds[rec.kind] = kinds.get(rec.kind, 0) + 1
+    evidence_audit_payload = {
+        "schema_version": "easyicu.evidence_audit/1",
+        "evidence_count": len(evidence_records),
+        "kinds": kinds,
+        "missing_evidence_count": gates["missing_evidence_count"],
+        "evidence_complete": gates["evidence_complete"],
+        "manuscript_path": str(manuscript_path.relative_to(run_dir))
+        if manuscript_path.exists()
+        else None,
+    }
+    evidence_audit_path.write_text(
+        json.dumps(evidence_audit_payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    artifact_paths["evidence_audit"] = str(evidence_audit_path.relative_to(run_dir))
+
+    numeric_audit_path = run_dir / "numeric_audit.json"
+    numeric_audit_payload = {
+        "schema_version": "easyicu.numeric_audit/1",
+        "numeric_verified": gates["numeric_verified"],
+        "numeric_error_count": gates["numeric_error_count"],
+        "numeric_errors": gates["numeric_errors"],
+    }
+    numeric_audit_path.write_text(
+        json.dumps(numeric_audit_payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    artifact_paths["numeric_audit"] = str(numeric_audit_path.relative_to(run_dir))
+
+    claim_ledger_path = run_dir / "claim_ledger.csv"
+    claim_rows = _extract_claim_ledger_rows(manuscript_path=manuscript_path, gates=gates)
+    with claim_ledger_path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=[
+                "claim_id",
+                "claim_text",
+                "evidence_refs",
+                "status",
+                "note",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(claim_rows)
+    artifact_paths["claim_ledger"] = str(claim_ledger_path.relative_to(run_dir))
+
+    author_review_path = run_dir / "author_review_note.md"
+    author_review_path.write_text(
+        _render_author_review_note(
+            status=status,
+            gates=gates,
+            findings=findings,
+            per_step_records=per_step_records,
+        ),
+        encoding="utf-8",
+    )
+    artifact_paths["author_review_note"] = str(author_review_path.relative_to(run_dir))
+
+    manuscript_ready_path = run_dir / "manuscript_ready.md"
+    if gates["manuscript_ready"] and manuscript_path.exists():
+        manuscript_ready_path.write_text(
+            manuscript_path.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        artifact_paths["manuscript_ready"] = str(
+            manuscript_ready_path.relative_to(run_dir)
+        )
+    elif manuscript_ready_path.exists():
+        manuscript_ready_path.unlink()
+
+    run_status_payload["canonical_outputs"] = artifact_paths
+    run_status_path.write_text(
+        json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+
+    registrations = [
+        (
+            "run_status",
+            "log",
+            "Fail-closed run readiness gate summary.",
+            run_status_path,
+        ),
+        (
+            "evidence_audit",
+            "statistic",
+            "Evidence completeness audit for manuscript gating.",
+            evidence_audit_path,
+        ),
+        (
+            "numeric_audit",
+            "statistic",
+            "Numeric-claim audit for manuscript gating.",
+            numeric_audit_path,
+        ),
+        (
+            "claim_ledger",
+            "table",
+            "Ledger of manuscript claims and evidence links.",
+            claim_ledger_path,
+        ),
+        (
+            "author_review_note",
+            "log",
+            "Human-readable fail-closed review note for the run.",
+            author_review_path,
+        ),
+    ]
+    if gates["manuscript_ready"] and manuscript_ready_path.exists():
+        registrations.append(
+            (
+                "manuscript_ready",
+                "log",
+                "Formal manuscript-ready markdown, emitted only after readiness gates pass.",
+                manuscript_ready_path,
+            )
+        )
+    for evidence_id, kind, description, path in registrations:
+        if evidence.get(evidence_id) is None:
+            evidence.register_file(
+                kind=kind,
+                description=description,
+                source_path=path,
+                evidence_id=evidence_id,
+                aliases=[evidence_id],
+                producer="pipeline",
+                generation_mode="system",
+            )
+
+    return gates, artifact_paths
+
+
+def _extract_claim_ledger_rows(
+    *, manuscript_path: Path, gates: Dict[str, Any]
+) -> List[Dict[str, str]]:
+    if not manuscript_path.exists():
+        return [
+            {
+                "claim_id": "claim_000",
+                "claim_text": "",
+                "evidence_refs": "",
+                "status": "not_generated",
+                "note": "No manuscript file was produced.",
+            }
+        ]
+    text = manuscript_path.read_text(encoding="utf-8", errors="replace")
+    if "Manuscript scaffold not generated" in text[:300]:
+        return [
+            {
+                "claim_id": "claim_000",
+                "claim_text": "Formal manuscript was not generated.",
+                "evidence_refs": "",
+                "status": "diagnostic_only",
+                "note": "Strict fail-closed gate blocked writer output.",
+            }
+        ]
+    rows: List[Dict[str, str]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("|"):
+            continue
+        evidence_refs = re.findall(r"\[([^\]]+)\]\((?:evidence/)?[^)]+\)", stripped)
+        missing = _count_missing_evidence_markers(stripped)
+        if not evidence_refs and not missing:
+            continue
+        rows.append(
+            {
+                "claim_id": f"claim_{len(rows) + 1:03d}",
+                "claim_text": re.sub(r"\s+", " ", stripped)[:1000],
+                "evidence_refs": ";".join(evidence_refs),
+                "status": "missing_evidence" if missing else "bound",
+                "note": "" if not missing else "Unresolved evidence marker present.",
+            }
+        )
+    if not rows:
+        rows.append(
+            {
+                "claim_id": "claim_000",
+                "claim_text": "",
+                "evidence_refs": "",
+                "status": "empty",
+                "note": (
+                    "No evidence-bound claims were detected; manuscript_ready="
+                    + str(bool(gates.get("manuscript_ready")))
+                ),
+            }
+        )
+    return rows
+
+
+def _render_author_review_note(
+    *,
+    status: str,
+    gates: Dict[str, Any],
+    findings: Sequence[ValidationFinding],
+    per_step_records: Sequence[Dict[str, Any]],
+) -> str:
+    lines = [
+        "# Author review note",
+        "",
+        f"- Status: `{status}`",
+        f"- execution_complete: `{gates['execution_complete']}`",
+        f"- evidence_complete: `{gates['evidence_complete']}`",
+        f"- numeric_verified: `{gates['numeric_verified']}`",
+        f"- analysis_validated: `{gates['analysis_validated']}`",
+        f"- manuscript_ready: `{gates['manuscript_ready']}`",
+        f"- publication_ready: `{gates['publication_ready']}`",
+        "",
+    ]
+    failed_steps = gates.get("failed_steps") or []
+    missing_steps = gates.get("missing_steps") or []
+    if failed_steps or missing_steps:
+        lines.extend(["## Blocking step issues", ""])
+        for item in failed_steps:
+            lines.append(f"- `{item.get('step_id')}` status `{item.get('status')}`")
+        for step_id in missing_steps:
+            lines.append(f"- `{step_id}` missing execution record")
+        lines.append("")
+    error_findings = [f for f in findings if f.severity == "error"]
+    if error_findings:
+        lines.extend(["## Blocking findings", ""])
+        for finding in error_findings:
+            lines.append(f"- `{finding.validator}`: {finding.message}")
+        lines.append("")
+    if not error_findings and not failed_steps and not missing_steps:
+        lines.extend(
+            [
+                "## Review",
+                "",
+                "No blocking gate failures were detected. Use `manuscript_ready.md` "
+                "as the formal draft if present.",
+                "",
+            ]
+        )
+    lines.extend(["## Step status", ""])
+    for record in per_step_records:
+        step_id = record.get("step_id", "")
+        if step_id == "00_probe":
+            continue
+        lines.append(f"- `{step_id}`: `{record.get('status', '?')}`")
+    lines.append("")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Reports
 # ---------------------------------------------------------------------------
@@ -8557,6 +12123,7 @@ def _render_report(
     evidence: EvidenceStore,
     aborted_reason: Optional[str] = None,
     paused_after_analysis: bool = False,
+    readiness: Optional[Dict[str, Any]] = None,
 ) -> str:
     parts: List[str] = []
     parts.append("# Research-agent results report")
@@ -8585,6 +12152,25 @@ def _render_report(
             "The run intentionally stopped before literature retrieval, "
             "manuscript drafting and LaTeX export. Review the registered "
             "tables, figures, statistics and findings before drafting the article."
+        )
+        parts.append("")
+    elif readiness:
+        status = (
+            "PUBLICATION READY"
+            if readiness.get("publication_ready")
+            else "MANUSCRIPT READY"
+            if readiness.get("manuscript_ready")
+            else "DIAGNOSTIC ONLY"
+        )
+        parts.append(f"## Status: {status}")
+        parts.append("")
+        parts.append(
+            "- Gates: execution_complete={execution_complete}, "
+            "evidence_complete={evidence_complete}, "
+            "numeric_verified={numeric_verified}, "
+            "analysis_validated={analysis_validated}, "
+            "manuscript_ready={manuscript_ready}, "
+            "publication_ready={publication_ready}".format(**readiness)
         )
         parts.append("")
 
@@ -8668,7 +12254,6 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
     ("table_one", "step_summary.json"): (
         "table_one",
         "cohort_summary",
-        "outcome_rate",
         "mortality_rate",
     ),
     # Outcome incidence summary should also answer to "outcome_rate".
@@ -8849,8 +12434,7 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
                 [
                     "model_performance",
                     "prediction_performance",
-                    "primary_association",
-                    "outcome_rate",
+                    "baseline_prevalence",
                 ]
             )
         if any(token in expected for token in ("cluster", "silhouette")) or (
@@ -8881,7 +12465,10 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
                     "robustness_summary",
                 ]
             )
-        if not (artefact.parent / "table_one.csv").exists():
+        if (
+            ("table_one" in step_id.lower() or "table:table_one" in expected)
+            and not (artefact.parent / "table_one.csv").exists()
+        ):
             out.append("table_one")
     for (step_substr, basename), aliases in _SEMANTIC_ALIAS_MAP.items():
         if basename != artefact.name:

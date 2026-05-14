@@ -780,7 +780,13 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                 # 仅在可用内存 < 1.5 GB 时才启用 patient-级分批，
                 # 评估依据：单模块 DataFrame 约 1 GB + 处理峰唃 500 MB。
                 _LOW_MEM_THRESHOLD_MB = 1536  # 1.5 GB
-                if _n_load_patients is not None and _n_load_patients > 5000:
+                # 🔧 FIX 2026-05-xx: 对大量患者（>10k）始终启用流式分批。
+                # 原因：非流式路径在子进程中一次性向 DuckDB 发出 94k 患者 IN 子句，
+                # 对大型原始数据（chartevents 300M+行）极慢甚至卡死；即使内存充足
+                # 也应使用流式路径以保持逐批进度可见、避免单次超大查询。
+                # 内存充足时批大小取 50000（通常 1-2 批），低内存时取较小值。
+                _LARGE_PATIENT_THRESHOLD = 10000
+                if _n_load_patients is not None and _n_load_patients > _LARGE_PATIENT_THRESHOLD:
                     try:
                         from easyicu.memory_manager import get_available_memory_mb
                         _avail_mb = get_available_memory_mb()
@@ -788,28 +794,28 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                             # 低内存：分批保守（用户已在启动前确认过，此处静默执行）
                             # 每批大小：用可用内存 * 0.6（索留 40% 给 OS + 处理开销）
                             _frag_safe_max = max(20000, int(_avail_mb * 0.6))
-                            if _n_load_patients > _frag_safe_max:
-                                _auto_batch_size = _frag_safe_max
-                                _n_batches = (_n_load_patients + _auto_batch_size - 1) // _auto_batch_size
-                                if lang == 'en':
-                                    st.info(f"🔀 Low memory ({_avail_mb:.0f}MB): "
-                                            f"batching {_n_load_patients} patients into {_n_batches} batches "
-                                            f"of {_auto_batch_size}/module.")
-                                else:
-                                    st.info(f"🔀 低内存 ({_avail_mb:.0f}MB): "
-                                            f"{_n_load_patients} 患者分 {_n_batches} 批 ({_auto_batch_size}/模块)。")
-                        else:
-                            # ≥ 6GB: 默认不分批，最快路径
+                            _auto_batch_size = _frag_safe_max
+                            _n_batches = (_n_load_patients + _auto_batch_size - 1) // _auto_batch_size
                             if lang == 'en':
-                                st.info(f"🚀 Loading {_n_load_patients} patients per module (no batching, "
-                                        f"available memory {_avail_mb:.0f}MB — fastest path).")
+                                st.info(f"🔀 Low memory ({_avail_mb:.0f}MB): "
+                                        f"streaming {_n_load_patients} patients in {_n_batches} batches "
+                                        f"of {_auto_batch_size}/module.")
                             else:
-                                st.info(f"🚀 每模块加载 {_n_load_patients} 患者 (不分批, "
-                                        f"可用内存 {_avail_mb:.0f}MB — 最优速度)。")
+                                st.info(f"🔀 低内存 ({_avail_mb:.0f}MB): "
+                                        f"{_n_load_patients} 患者分 {_n_batches} 批 ({_auto_batch_size}/模块)。")
+                        else:
+                            # 内存充足：使用大批量流式加载（避免单次超大 IN 子句卡死）
+                            _auto_batch_size = 50000
+                            _n_batches = (_n_load_patients + _auto_batch_size - 1) // _auto_batch_size
+                            if lang == 'en':
+                                st.info(f"🚀 Streaming {_n_load_patients} patients in {_n_batches} batch(es) "
+                                        f"of {_auto_batch_size} (available memory {_avail_mb:.0f}MB).")
+                            else:
+                                st.info(f"🚀 流式加载 {_n_load_patients} 患者，分 {_n_batches} 批 "
+                                        f"({_auto_batch_size}/批，可用内存 {_avail_mb:.0f}MB)。")
                     except Exception:
                         # 无法检测内存时，保守起见仍然分批
-                        if _n_load_patients > 5000:
-                            _auto_batch_size = 10000
+                        _auto_batch_size = 20000
 
                 # 🚀 FIX: 全模块批量加载 + 改善进度提示
                 # 测试结果：逐概念加载比批量慢 3-10x（etco2: 873s 逐概念 vs <100s 批量）
@@ -1504,7 +1510,16 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                                 _shutil_mod.rmtree(_tmp_dir, ignore_errors=True)
                             except Exception:
                                 pass
-                            for concept in mod_concepts:
+                            if lang == 'en':
+                                _set_status(f"⚠️ Subprocess failed for {mod_name}. Falling back to in-process loading...")
+                            else:
+                                _set_status(f"⚠️ 子进程失败 ({mod_name})，回退至主进程加载...")
+                            for _ci, concept in enumerate(mod_concepts):
+                                _fb_elapsed = _time_mod.time() - mod_start
+                                if lang == 'en':
+                                    _set_status(f"⚠️ Fallback {mod_name}: concept {_ci+1}/{len(mod_concepts)} ({concept}), elapsed {_fb_elapsed:.0f}s...")
+                                else:
+                                    _set_status(f"⚠️ 回退加载 {mod_name}: 概念 {_ci+1}/{len(mod_concepts)} ({concept})，已用 {_fb_elapsed:.0f}s...")
                                 try:
                                     result = load_concepts(
                                         data_path=st.session_state.data_path,
@@ -1621,7 +1636,28 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                             # 子进程失败 → 逐概念回退（inprocess）
                             import traceback as _tb_mod
                             _tb_mod.print_exc()
-                            for concept in mod_concepts:
+                            _sub_exit = getattr(_sub_proc, 'exitcode', None)
+                            _fb_err_str = str(_sub_e)[:200]
+                            if lang == 'en':
+                                _set_status(
+                                    f"⚠️ Subprocess failed (exit={_sub_exit}, {_fb_err_str}). "
+                                    f"Falling back to in-process loading for {mod_name}...")
+                            else:
+                                _set_status(
+                                    f"⚠️ 子进程失败 (exit={_sub_exit}, {_fb_err_str})。"
+                                    f"回退至主进程加载 {mod_name}...")
+                            for _ci, concept in enumerate(mod_concepts):
+                                _fb_elapsed = _time_mod.time() - mod_start
+                                if lang == 'en':
+                                    _set_status(
+                                        f"⚠️ Fallback loading {mod_name}: "
+                                        f"concept {_ci+1}/{len(mod_concepts)} ({concept}), "
+                                        f"elapsed {_fb_elapsed:.0f}s...")
+                                else:
+                                    _set_status(
+                                        f"⚠️ 回退加载 {mod_name}: "
+                                        f"概念 {_ci+1}/{len(mod_concepts)} ({concept})，"
+                                        f"已用 {_fb_elapsed:.0f}s...")
                                 try:
                                     result = load_concepts(
                                         data_path=st.session_state.data_path,

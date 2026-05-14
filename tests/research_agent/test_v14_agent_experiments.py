@@ -824,6 +824,110 @@ def test_acceptance_status_clean_ok_when_contract_is_complete(tmp_path: Path):
     assert record["acceptance_status"] == "clean_ok"
 
 
+def test_acceptance_status_counts_demoted_missing_evidence_comments(tmp_path: Path):
+    run_dir = tmp_path / "run_demoted_missing"
+    step_dir = run_dir / "steps" / "01_model" / "outputs"
+    step_dir.mkdir(parents=True)
+    (run_dir / "manuscript_scaffold_bound.md").write_text(
+        "The cohort had 1,000 stays <!-- evidence missing: table_one -->.",
+        encoding="utf-8",
+    )
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run_demoted_missing",
+                "evidence": [
+                    {"kind": "code", "evidence_id": "code"},
+                    {"kind": "log", "evidence_id": "log"},
+                    {"kind": "table", "evidence_id": "table"},
+                    {"kind": "figure", "evidence_id": "figure"},
+                    {"kind": "statistic", "evidence_id": "stat"},
+                ],
+                "findings": [],
+                "per_step_records": [{"step_id": "01_model", "status": "ok"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (step_dir / "step_summary.json").write_text(
+        json.dumps({"statistic:auroc": 0.78, "statistic:brier_score": 0.16}),
+        encoding="utf-8",
+    )
+    task = v14.V14Task(
+        key="t07_mortality_prediction_auroc",
+        title="Prediction",
+        family="prediction_model",
+        difficulty="advanced",
+        cohort_file="x.parquet",
+        question="Build model.",
+        expected_metrics=["auroc", "brier_score"],
+        required_artifacts=["manifest", "bound_manuscript", "step_summary", "table", "statistic", "figure"],
+    )
+
+    metrics = v14._extract_metrics(run_dir, task)
+    failure = v14._classify_failure(None, metrics, task)
+    record = v14._with_status_fields({"run_dir": str(run_dir), "failure_class": failure, "metrics": metrics})
+
+    assert metrics["evidence_missing_count"] == 1
+    assert failure == "evidence_binding_issue"
+    assert record["acceptance_status"] == "partial"
+
+
+def test_acceptance_status_blocks_manuscript_critic_errors(tmp_path: Path):
+    run_dir = tmp_path / "run_manuscript_needs_revision"
+    step_dir = run_dir / "steps" / "01_model" / "outputs"
+    step_dir.mkdir(parents=True)
+    (run_dir / "manuscript_scaffold_bound.md").write_text(
+        "The model achieved AUROC 0.78 [model](evidence/model.json).",
+        encoding="utf-8",
+    )
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run_manuscript_needs_revision",
+                "evidence": [
+                    {"kind": "code", "evidence_id": "code"},
+                    {"kind": "log", "evidence_id": "log"},
+                    {"kind": "table", "evidence_id": "table"},
+                    {"kind": "figure", "evidence_id": "figure"},
+                    {"kind": "statistic", "evidence_id": "stat"},
+                ],
+                "findings": [
+                    {
+                        "validator": "critic_agent",
+                        "severity": "error",
+                        "message": "CriticAgent marked manuscript as needs_revision",
+                    }
+                ],
+                "per_step_records": [{"step_id": "01_model", "status": "ok"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (step_dir / "step_summary.json").write_text(
+        json.dumps({"statistic:auroc": 0.78, "statistic:brier_score": 0.16}),
+        encoding="utf-8",
+    )
+    task = v14.V14Task(
+        key="t07_mortality_prediction_auroc",
+        title="Prediction",
+        family="prediction_model",
+        difficulty="advanced",
+        cohort_file="x.parquet",
+        question="Build model.",
+        expected_metrics=["auroc", "brier_score"],
+        required_artifacts=["manifest", "bound_manuscript", "step_summary", "table", "statistic", "figure"],
+    )
+
+    metrics = v14._extract_metrics(run_dir, task)
+    failure = v14._classify_failure(None, metrics, task)
+    record = v14._with_status_fields({"run_dir": str(run_dir), "failure_class": failure, "metrics": metrics})
+
+    assert metrics["manuscript_error_count"] == 1
+    assert failure == "manuscript_binding_issue"
+    assert record["acceptance_status"] == "partial"
+
+
 def test_aggregate_only_recovers_stale_heartbeat(tmp_path: Path):
     cohort = tmp_path / "cohort.parquet"
     cohort.write_bytes(b"fake")

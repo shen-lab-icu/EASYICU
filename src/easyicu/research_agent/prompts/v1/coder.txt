@@ -170,6 +170,9 @@ PREDICTION / CLUSTERING APIs:
   small RandomForest. Use `StratifiedKFold` when reporting 5-fold CV
   AUROC. Always write `auroc` or `cv_auroc_mean`, and write
   `brier_score` or another calibration metric to step_summary.json.
+  If you use `calibration_curve`, import it with
+  `from sklearn.calibration import calibration_curve`; it is not in
+  `sklearn.metrics`.
   Keep categorical columns as strings/objects until they reach the
   categorical transformer; do not run `df[predictor_cols].apply(
   pd.to_numeric, errors="coerce")` over mixed numeric + categorical

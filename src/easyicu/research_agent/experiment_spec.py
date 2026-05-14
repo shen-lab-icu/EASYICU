@@ -40,6 +40,8 @@ class RuntimeSpec(BaseModel):
     stop_after_analysis: bool = False
     enable_literature: bool = True
     enable_visual_qa: bool = True
+    enable_vlm_visual_qa: Optional[bool] = None
+    enable_llm_concept_audit: Optional[bool] = None
     enable_memory: bool = True
     enable_latex: bool = True
     enable_probe_step: bool = True
@@ -72,6 +74,8 @@ class ExperimentSpec(BaseModel):
             "manuscript_language": runtime.manuscript_language,
             "enable_literature": runtime.enable_literature,
             "enable_visual_qa": runtime.enable_visual_qa,
+            "enable_vlm_visual_qa": runtime.enable_vlm_visual_qa,
+            "enable_llm_concept_audit": runtime.enable_llm_concept_audit,
             "enable_memory": runtime.enable_memory,
             "enable_latex": runtime.enable_latex,
             "enable_probe_step": runtime.enable_probe_step,

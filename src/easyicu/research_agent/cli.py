@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -33,6 +33,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--question", required=False, help="Plain-language research question."
     )
     p.add_argument("--cohort", required=False, help="Path to cohort parquet (or CSV).")
+    p.add_argument(
+        "--cohort-map",
+        action="append",
+        default=[],
+        metavar="DB=PATH",
+        help=(
+            "Cross-database mode: repeatable database-to-cohort mapping, "
+            "e.g. miiv=/path/a.parquet --cohort-map eicu=/path/b.parquet."
+        ),
+    )
     p.add_argument(
         "--spec",
         default=None,
@@ -126,17 +136,50 @@ def _build_parser() -> argparse.ArgumentParser:
         default=5,
         help="Maximum Tavily results when --enable-tavily (default: 5).",
     )
-    p.add_argument(
+    vlm_group = p.add_mutually_exclusive_group()
+    vlm_group.add_argument(
         "--enable-vlm-visual-qa",
         action="store_true",
-        help="Run optional VLM figure review using the configured LLM.",
+        dest="enable_vlm_visual_qa",
+        help="Force-enable model-based figure review.",
     )
-    p.add_argument(
+    vlm_group.add_argument(
+        "--disable-vlm-visual-qa",
+        action="store_false",
+        dest="enable_vlm_visual_qa",
+        help="Force-disable model-based figure review even if the model looks vision-capable.",
+    )
+    p.set_defaults(enable_vlm_visual_qa=None)
+
+    concept_group = p.add_mutually_exclusive_group()
+    concept_group.add_argument(
         "--enable-llm-concept-audit",
         action="store_true",
-        help="Run optional LLM semantic concept-use audit after static checks.",
+        dest="enable_llm_concept_audit",
+        help="Force-enable semantic concept-use audit after static checks.",
     )
+    concept_group.add_argument(
+        "--disable-llm-concept-audit",
+        action="store_false",
+        dest="enable_llm_concept_audit",
+        help="Force-disable semantic concept-use audit.",
+    )
+    p.set_defaults(enable_llm_concept_audit=None)
     return p
+
+
+def _parse_cohort_map(raw_items: Sequence[str]) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for raw in raw_items:
+        if "=" not in raw:
+            raise SystemExit(f"--cohort-map must be DB=PATH, got: {raw!r}")
+        database, path = raw.split("=", 1)
+        database = database.strip()
+        path = path.strip()
+        if not database or not path:
+            raise SystemExit(f"--cohort-map must be DB=PATH, got: {raw!r}")
+        mapping[database] = str(Path(path).resolve())
+    return mapping
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -172,9 +215,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         pipeline = ResearchAgentPipeline(**runtime_kwargs)
         result = pipeline.run_from_spec(spec)
     else:
-        if not args.question or not args.cohort:
+        cross_db_cohorts = _parse_cohort_map(args.cohort_map)
+        if not args.question or (not args.cohort and not cross_db_cohorts):
             raise SystemExit(
-                "--question and --cohort are required unless --spec is provided."
+                "--question and either --cohort or --cohort-map are required unless --spec is provided."
             )
 
         pipeline = ResearchAgentPipeline(
@@ -197,6 +241,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if args.cross_database
             else []
         )
+
+        if cross_db_cohorts:
+            cohorts = dict(cross_db_cohorts)
+            if args.cohort:
+                cohorts = {args.database: str(Path(args.cohort).resolve()), **cohorts}
+            result = pipeline.replicate(
+                question=args.question,
+                cohorts=cohorts,
+                target_outcome=args.target_outcome,
+                cohort_name_prefix=args.cohort_name,
+                inclusion_criteria=args.inclusion,
+                exclusion_criteria=args.exclusion,
+                manuscript_language=args.manuscript_language,
+                stop_after_analysis=False,
+            )
+            print(f"replication_id: {result['replication_id']}")
+            print(f"replication_dir: {result['replication_dir']}")
+            print(f"comparison_csv: {result['comparison_csv']}")
+            print(f"comparison_md: {result['comparison_md']}")
+            if "summary_csv" in result:
+                print(f"summary_csv: {result['summary_csv']}")
+            if "summary_md" in result:
+                print(f"summary_md: {result['summary_md']}")
+            if "validation_report" in result:
+                print(f"validation_report: {result['validation_report']}")
+            return 0
 
         result = pipeline.run(
             question=args.question,

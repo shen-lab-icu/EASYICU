@@ -28,10 +28,10 @@ DATABASE_FULL_NAMES = {
 # Primary ID columns (patient/stay identifiers)
 ID_COLUMNS: Dict[str, List[str]] = {
     'miiv': ['stay_id', 'subject_id', 'hadm_id'],
-    'eicu': ['patientunitstayid', 'patientid'],
+    'eicu': ['patientunitstayid', 'patienthealthsystemstayid', 'uniquepid'],
     'aumc': ['admissionid', 'patientid'],
     'hirid': ['patientid'],
-    'sic': ['patientid', 'icustay_id'],
+    'sic': ['CaseID', 'PatientID'],
 }
 
 # Primary time columns
@@ -40,7 +40,7 @@ TIME_COLUMNS: Dict[str, str] = {
     'eicu': 'observationoffset',
     'aumc': 'measuredat',
     'hirid': 'datetime',
-    'sic': 'datetime',
+    'sic': 'Offset',
 }
 
 # Alternative time columns (start/end times for intervals)
@@ -49,7 +49,7 @@ START_TIME_COLUMNS: Dict[str, str] = {
     'eicu': 'drugstartoffset',
     'aumc': 'start',
     'hirid': 'datetime',
-    'sic': 'datetime',
+    'sic': 'Offset',
 }
 
 END_TIME_COLUMNS: Dict[str, str] = {
@@ -57,7 +57,7 @@ END_TIME_COLUMNS: Dict[str, str] = {
     'eicu': 'drugstopoffset',
     'aumc': 'stop',
     'hirid': 'datetime',
-    'sic': 'datetime',
+    'sic': 'OffsetDrugEnd',
 }
 
 # Value columns (generic measurement values)
@@ -88,7 +88,7 @@ TIME_IS_OFFSET: Dict[str, bool] = {
     'eicu': True,   # Uses minutes from admission
     'aumc': False,  # Uses datetime
     'hirid': False, # Uses datetime
-    'sic': False,   # Uses datetime
+    'sic': True,    # Uses numeric offsets from ICU admission
 }
 
 # Threshold for detecting pre-ICU records (minutes)
