@@ -2081,6 +2081,37 @@ def norepi_equiv(
     return result
 
 
+def fluid_balance_admitted(
+    urine: pd.DataFrame,
+    interval: pd.Timedelta = None,
+) -> pd.DataFrame:
+    """Compute cumulative fluid balance = cumulative_input_mL - cumulative_urine_mL.
+
+    Phase A implementation (approved defaults from design doc):
+      - Input scope: only rows where amountuom == 'mL' from inputevents.
+      - Output scope: urine only (no drains, no insensible).
+      - Aggregation: cumulative sum per stay, reported hourly.
+      - Drug-carrier double-counting: included (stance A — union by volume).
+
+    This callback receives the ``urine`` dependency from the concept resolver.
+    It loads ``total_input_ml`` directly from the data source (passed via the
+    callback context) because the standard concept-dict pattern doesn't support
+    unit-based row filtering.
+
+    Returns:
+        DataFrame with columns [id_col, time_col, 'fluid_balance_admitted']
+        where the value is cumulative mL balance since ICU admission.
+    """
+    # This function is a placeholder that will be called by the rec_cncpt
+    # dispatch system. The actual implementation lives in concept_callbacks.py
+    # as _callback_fluid_balance_admitted which has access to the data source.
+    # This function signature exists for import compatibility.
+    raise NotImplementedError(
+        "fluid_balance_admitted must be called via the CALLBACK_REGISTRY dispatch "
+        "in concept_callbacks.py, not directly."
+    )
+
+
 def urine24(
     urine: pd.DataFrame,
     min_win: pd.Timedelta = pd.Timedelta(hours=12),

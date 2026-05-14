@@ -96,7 +96,11 @@ def _import_agent_layer():
         list_skills,
         get_skill,
     )
-    from easyicu.research_agent.llm import MockLLMClient  # type: ignore
+    from easyicu.research_agent.llm import (  # type: ignore
+        FallbackLLMClient,
+        LLMRouter,
+        MockLLMClient,
+    )
 
     try:
         from easyicu.research_agent.llm import OpenAIClient  # type: ignore
@@ -107,6 +111,8 @@ def _import_agent_layer():
         "ResearchAgentPipeline": ResearchAgentPipeline,
         "MockLLMClient": MockLLMClient,
         "OpenAIClient": OpenAIClient,
+        "LLMRouter": LLMRouter,
+        "FallbackLLMClient": FallbackLLMClient,
         "list_skills": list_skills,
         "get_skill": get_skill,
     }
@@ -635,6 +641,19 @@ def _build_stay_level_from_module_folder(
     if keep_ids is not None:
         merged = merged[merged[id_col].isin(keep_ids)]
 
+    # The Research Agent expects one analytical row per ICU stay. Module
+    # exports can be time-series, so collapse any temporal merge to the most
+    # recent observed row after static fields have been broadcast.
+    if canonical_time in merged.columns:
+        try:
+            merged = (
+                merged.sort_values([id_col, canonical_time])
+                .groupby(id_col, as_index=False)
+                .last()
+            )
+        except Exception:
+            merged = merged.drop(columns=[canonical_time]).groupby(id_col, as_index=False).last()
+
     # Put id first, then canonical time (if present), then remaining cols
     first_cols = [id_col]
     if canonical_time in merged.columns:
@@ -720,8 +739,106 @@ def _resolve_llm(
                 "enable_thinking": False,
                 "chat_template_kwargs": {"enable_thinking": False},
             }
+        if (
+            llm_choice == "OpenRouter"
+            and handles.get("LLMRouter") is not None
+            and handles.get("FallbackLLMClient") is not None
+        ):
+            return _build_openrouter_role_router(
+                handles=handles,
+                api_key=api_key,
+                base_url=base_url or "https://openrouter.ai/api/v1",
+                extra_headers=dict(extra_headers or {}),
+                preferred_model=model,
+            )
         return handles["OpenAIClient"](**kwargs)
     raise RuntimeError(f"Unknown LLM choice: {llm_choice}")
+
+
+_OPENROUTER_SKIP_AS_PRIMARY = {
+    "",
+    "openrouter/free",
+    "z-ai/glm-4.5-air:free",
+}
+
+_OPENROUTER_ROLE_MODEL_CHAINS: Dict[str, List[str]] = {
+    "planner": [
+        "openai/gpt-oss-120b:free",
+        "google/gemma-4-31b-it:free",
+        "z-ai/glm-4.5-air:free",
+    ],
+    "writer": [
+        "openai/gpt-oss-120b:free",
+        "google/gemma-4-31b-it:free",
+        "z-ai/glm-4.5-air:free",
+    ],
+    "coder": [
+        "openai/gpt-oss-120b:free",
+        "google/gemma-4-31b-it:free",
+        "z-ai/glm-4.5-air:free",
+        "qwen/qwen3-coder:free",
+    ],
+    "analyzer": [
+        "google/gemma-4-31b-it:free",
+        "openai/gpt-oss-120b:free",
+        "z-ai/glm-4.5-air:free",
+    ],
+    "literature": [
+        "openai/gpt-oss-120b:free",
+        "google/gemma-4-31b-it:free",
+        "z-ai/glm-4.5-air:free",
+    ],
+}
+
+
+def _ordered_openrouter_models(*, role: str, preferred_model: str) -> List[str]:
+    preferred = (preferred_model or "").strip()
+    ordered: List[str] = []
+    if preferred and preferred not in _OPENROUTER_SKIP_AS_PRIMARY:
+        ordered.append(preferred)
+    for model_name in _OPENROUTER_ROLE_MODEL_CHAINS.get(role, []):
+        if model_name not in ordered:
+            ordered.append(model_name)
+    return ordered
+
+
+def _build_openrouter_role_router(
+    *,
+    handles: Dict[str, Any],
+    api_key: str,
+    base_url: str,
+    extra_headers: Dict[str, str],
+    preferred_model: str,
+):
+    openai_client = handles["OpenAIClient"]
+    fallback_cls = handles["FallbackLLMClient"]
+    router_cls = handles["LLMRouter"]
+
+    def _chain(role: str):
+        clients = [
+            openai_client(
+                model=model_name,
+                api_key=api_key,
+                base_url=base_url,
+                extra_headers=extra_headers,
+            )
+            for model_name in _ordered_openrouter_models(
+                role=role,
+                preferred_model=preferred_model,
+            )
+        ]
+        return fallback_cls(*clients, name=f"openrouter:{role}")
+
+    planner = _chain("planner")
+    analyzer = _chain("analyzer")
+    return router_cls(
+        default=planner,
+        planner=planner,
+        coder=_chain("coder"),
+        analyzer=analyzer,
+        writer=_chain("writer"),
+        literature=_chain("literature"),
+    )
 
 
 def _run_pipeline(
@@ -1307,6 +1424,16 @@ def _render_run_manifest(
 
     if partial:
         st.info(_ra_text("partial_run_notice", run_id=result.run_id))
+    elif summary["step_failed"]:
+        st.warning(_ra_text(
+            "run_complete_with_review",
+            run_id=result.run_id,
+            failed=summary["step_failed"],
+            evidence=summary["evidence_count"],
+            findings=len(manifest.get("findings", []) or []),
+        ))
+        if summary["figure_count"] == 0 and summary["table_count"] == 0:
+            st.error(_ra_text("run_no_tables_figures"))
     else:
         st.success(_ra_text(
             "run_complete",
@@ -2514,7 +2641,7 @@ def _section_llm_picker(handles: Dict[str, Any]) -> Tuple[str, str, str, Optiona
         default_model = _env_or_secret(
             "EASYICU_HOSTED_DEFAULT_MODEL",
             "EASYICU_SMOKE_MODEL",
-            default="z-ai/glm-4.5-air:free",
+            default="openai/gpt-oss-120b:free",
         )
         st.caption(_ra_text("openrouter_caption"))
         api_key = st.text_input(
@@ -2529,13 +2656,14 @@ def _section_llm_picker(handles: Dict[str, Any]) -> Tuple[str, str, str, Optiona
         )
         # Sensible quick-pick presets users can override by typing.
         preset_models = [
+            "openai/gpt-oss-120b:free",
+            "google/gemma-4-31b-it:free",
             "z-ai/glm-4.5-air:free",
-            "deepseek/deepseek-chat-v3.1:free",
+            "qwen/qwen3-next-80b-a3b-instruct:free",
+            "qwen/qwen3-coder:free",
             "meta-llama/llama-3.3-70b-instruct:free",
-            "qwen/qwen-2.5-72b-instruct:free",
-            "google/gemini-2.0-flash-exp:free",
+            "openrouter/free",
             "deepseek/deepseek-chat",
-            "anthropic/claude-3.5-haiku",
             "openai/gpt-4o-mini",
         ]
         if default_model not in preset_models:

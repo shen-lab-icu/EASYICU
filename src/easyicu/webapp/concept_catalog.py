@@ -86,9 +86,33 @@ CONCEPT_DICTIONARY = {
     'epi_rate': ('Epinephrine Rate', '肾上腺素速率', 'mcg/kg/min'),
     'furosemide': ('Furosemide (Lasix)', '呋塞米 (速尿)', 'boolean'),
     'propofol': ('Propofol (Diprivan)', '丙泊酚', 'boolean'),
+    'propofol_rate': ('Propofol Rate', '丙泊酚速率', 'mcg/kg/min'),
     'midazolam': ('Midazolam (Versed)', '咪达唑仑', 'boolean'),
+    'midazolam_rate': ('Midazolam Rate', '咪达唑仑速率', 'mg/hour'),
     'dexmedetomidine': ('Dexmedetomidine (Precedex)', '右美托咪定', 'boolean'),
     'fentanyl': ('Fentanyl', '芬太尼', 'boolean'),
+    'fentanyl_rate': ('Fentanyl Rate', '芬太尼速率', 'mcg/hour'),
+    'lorazepam': ('Lorazepam (Ativan)', '劳拉西泮', 'boolean'),
+    'ketamine': ('Ketamine', '氯胺酮', 'boolean'),
+    'vecuronium': ('Vecuronium', '维库溴铵', 'boolean'),
+    'cisatracurium': ('Cisatracurium (Nimbex)', '顺阿曲库铵', 'boolean'),
+    'nitroglycerin': ('Nitroglycerin', '硝酸甘油', 'boolean'),
+    'pantoprazole': ('Pantoprazole (Protonix)', '泮托拉唑', 'boolean'),
+    'vancomycin': ('Vancomycin', '万古霉素', 'boolean'),
+    'meropenem': ('Meropenem', '美罗培南', 'boolean'),
+    'calcium_iv': ('Calcium IV', '静脉钙剂', 'boolean'),
+    'potassium_iv': ('Potassium IV', '静脉钾剂', 'boolean'),
+    'magnesium_iv': ('Magnesium IV', '静脉镁剂', 'boolean'),
+    'albumin_iv': ('Albumin IV', '静脉白蛋白', 'boolean'),
+    'packed_rbc': ('Packed RBC Transfusion', '红细胞输注', 'boolean'),
+    'bicarbonate': ('Sodium Bicarbonate', '碳酸氢钠', 'boolean'),
+    'dextrose50': ('Dextrose 50% (D50)', '50%葡萄糖', 'boolean'),
+    'ffp': ('Fresh Frozen Plasma', '新鲜冰冻血浆', 'boolean'),
+    'platelets': ('Platelet Transfusion', '血小板输注', 'boolean'),
+    'levetiracetam': ('Levetiracetam (Keppra)', '左乙拉西坦', 'boolean'),
+    'dexamethasone': ('Dexamethasone', '地塞米松', 'boolean'),
+    'octreotide': ('Octreotide (Sandostatin)', '奥曲肽', 'boolean'),
+    'neostigmine': ('Neostigmine', '新斯的明', 'boolean'),
     'morphine': ('Morphine', '吗啡', 'boolean'),
     'heparin': ('Heparin', '肝素', 'boolean'),
     'mannitol': ('Mannitol', '甘露醇', 'boolean'),
@@ -104,6 +128,9 @@ CONCEPT_DICTIONARY = {
     # 尿量
     'urine': ('Urine Output', '尿量', 'mL'),
     'urine24': ('24h Urine Output', '24小时尿量', 'mL/24h'),
+    'uo_6h': ('6h Avg Urine Output Rate', '6小时平均尿量速率', 'mL/kg/h'),
+    'uo_12h': ('12h Avg Urine Output Rate', '12小时平均尿量速率', 'mL/kg/h'),
+    'uo_24h': ('24h Avg Urine Output Rate', '24小时平均尿量速率', 'mL/kg/h'),
 
     # 神经系统
     'avpu': ('AVPU Scale', 'AVPU意识评分', ''),
@@ -372,7 +399,7 @@ CONCEPT_GROUPS_INTERNAL = {
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc'],
     'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
-    'medications': ['abx', 'cort', 'dex', 'ins', 'amiodarone', 'dexmedetomidine', 'fentanyl', 'furosemide', 'heparin', 'mannitol', 'midazolam', 'milrinone', 'morphine', 'propofol', 'rocuronium'],
+    'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium'],
     # 🔧 2026-02-04: 移除重复的 kdigo_aki/kdigo_creat/kdigo_uo，只保留 aki_* 规范名
     'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
               # 规范化后的列名（从 kdigo_* 展开列规范化而来）
@@ -520,6 +547,43 @@ CONCEPT_DB_COVERAGE = {
     'propofol': 5, 'midazolam': 6, 'dexmedetomidine': 4,
     'fentanyl': 6, 'morphine': 6, 'heparin': 6,
     'mannitol': 5, 'amiodarone': 6, 'milrinone': 5, 'rocuronium': 5,
+    # Rate concepts (2026-05-13): HiRID pharma has no propofol reference;
+    # SIC removed pending AmountPerMinute unit audit (see
+    # audit_reports/sic_amount_per_minute_unit_audit_20260513.md)
+    'propofol_rate': 4,
+    # MIIV+MIMIC only for now; other DBs need non-kg mass-rate callback (TODO)
+    'fentanyl_rate': 5,
+    'midazolam_rate': 5,
+    # Batch 2 (2026-05-13)
+    'lorazepam': 5,
+    'ketamine': 5,
+    'vecuronium': 4,
+    'cisatracurium': 4,
+    'nitroglycerin': 5,
+    # Batch 3 (2026-05-13)
+    'pantoprazole': 4,
+    'vancomycin': 5,
+    'meropenem': 5,
+    'calcium_iv': 4,
+    # Batch 4 (2026-05-13)
+    'potassium_iv': 5,
+    'magnesium_iv': 5,
+    'albumin_iv': 4,
+    'packed_rbc': 4,
+    # Batch 5 (2026-05-13)
+    'bicarbonate': 4,
+    'dextrose50': 4,
+    'ffp': 3,
+    'platelets': 4,
+    # Batch 6 (2026-05-13)
+    'levetiracetam': 5,
+    'dexamethasone': 2,
+    'octreotide': 5,
+    'neostigmine': 4,
+    # Renal rolling-window UO rates (2026-05-13): derived from urine + weight
+    'uo_6h': 6,
+    'uo_12h': 6,
+    'uo_24h': 6,
 }
 
 SUPPORTED_DB_KEYS = ('miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic')

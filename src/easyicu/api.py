@@ -2177,12 +2177,33 @@ def load_medications(
     interval: Union[str, pd.Timedelta] = '1h',
     win_length: Union[str, pd.Timedelta] = '24h',
     verbose: bool = False,
+    groups: Optional[Union[str, List[str]]] = None,
+    include_new: bool = True,
 ) -> pd.DataFrame:
     """
-    加载药物治疗数据（参考ricu.R的data_med）
+    加载药物治疗数据（参考ricu.R的data_med + EasyICU 扩展药物集）
 
-    包含: abx, adh_rate, cort, dex, dobu_dur, dobu_rate, dobu60,
-          epi_dur, epi_rate, ins, norepi_dur, norepi_equiv, norepi_rate, vaso_ind
+    默认包含（如 include_new=True，共 48 个概念）:
+      - Vasopressors/inotropes: adh_rate, dobu_rate/dur/60, dopa_rate/dur,
+        epi_rate/dur, norepi_rate/dur/equiv, phn_rate, vaso_ind
+      - Sedation: propofol, propofol_rate, midazolam, midazolam_rate,
+        dexmedetomidine, lorazepam, ketamine
+      - Analgesia: fentanyl, fentanyl_rate, morphine
+      - Neuromuscular blockers: rocuronium, vecuronium, cisatracurium
+      - Antibiotics: abx, vancomycin, meropenem
+      - GI prophylaxis: pantoprazole
+      - GI: octreotide
+      - Neurology: levetiracetam
+      - Corticosteroids: cort, dexamethasone
+      - Reversal: neostigmine
+      - Electrolytes: calcium_iv, potassium_iv, magnesium_iv, bicarbonate
+      - Colloids / blood products: albumin_iv, packed_rbc, ffp, platelets
+      - Other: dex, dextrose50, ins, furosemide, heparin, mannitol,
+        amiodarone, milrinone, nitroglycerin
+
+    如 include_new=False, 回落到最初的 14 个 ricu 概念（向后兼容）:
+      abx, adh_rate, cort, dex, dobu_dur, dobu_rate, dobu60,
+      epi_dur, epi_rate, ins, norepi_dur, norepi_equiv, norepi_rate, vaso_ind
 
     Args:
         patient_ids: 患者ID列表（None=所有患者）
@@ -2191,18 +2212,107 @@ def load_medications(
         interval: 时间间隔（默认1小时）
         win_length: 窗口长度（默认24小时）
         verbose: 是否显示详细信息
+        groups: 只加载指定的药理学分组。支持单个字符串或列表，可选值：
+            'vasopressors', 'sedation', 'analgesia', 'neuromuscular',
+            'antibiotics', 'cardiac', 'diuretics', 'anticoagulation',
+            'endocrine', 'vasodilators', 'gi_prophylaxis', 'electrolytes',
+            'colloids_blood', 'neurology', 'gi', 'reversal',
+            'corticosteroids', 'other'
+            例如 groups='sedation' 只加载镇静类药物。
+        include_new: 是否包含 EasyICU 扩展药物。默认 True。
+            设为 False 仅加载原 ricu 14 个概念（向后兼容老脚本）。
 
     Returns:
         药物治疗DataFrame
 
     Examples:
+        >>> # 全部药物（默认）
         >>> meds = load_medications(patient_ids=[123, 456])
+
+        >>> # 只要镇静药物
+        >>> seda = load_medications(groups='sedation', database='miiv')
+
+        >>> # 镇静 + 镇痛
+        >>> analg = load_medications(groups=['sedation', 'analgesia'])
+
+        >>> # 向后兼容模式（仅原 ricu 14 概念）
+        >>> ricu_compat = load_medications(include_new=False)
     """
     if verbose:
         print("💊 加载药物治疗数据...")
 
-    concepts = ['abx', 'adh_rate', 'cort', 'dex', 'dobu_dur', 'dobu_rate', 'dobu60',
-               'epi_dur', 'epi_rate', 'ins', 'norepi_dur', 'norepi_equiv', 'norepi_rate', 'vaso_ind']
+    # 药理学分组 - single source of truth
+    MEDICATION_GROUPS = {
+        'vasopressors': [
+            'adh_rate', 'dobu_dur', 'dobu_rate', 'dobu60',
+            'dopa_dur', 'dopa_rate', 'epi_dur', 'epi_rate',
+            'norepi_dur', 'norepi_equiv', 'norepi_rate',
+            'phn_rate', 'vaso_ind',
+        ],
+        'sedation': [
+            'propofol', 'propofol_rate',
+            'midazolam', 'midazolam_rate',
+            'dexmedetomidine', 'lorazepam', 'ketamine',
+        ],
+        'analgesia': [
+            'fentanyl', 'fentanyl_rate', 'morphine',
+        ],
+        'neuromuscular': [
+            'rocuronium', 'vecuronium', 'cisatracurium',
+        ],
+        'antibiotics': ['abx', 'vancomycin', 'meropenem'],
+        'cardiac': ['amiodarone', 'milrinone'],
+        'diuretics': ['furosemide', 'mannitol'],
+        'anticoagulation': ['heparin'],
+        'endocrine': ['cort', 'ins'],
+        'vasodilators': ['nitroglycerin'],
+        'gi_prophylaxis': ['pantoprazole'],
+        'electrolytes': ['calcium_iv', 'potassium_iv', 'magnesium_iv', 'bicarbonate'],
+        'colloids_blood': ['albumin_iv', 'packed_rbc', 'ffp', 'platelets'],
+        'neurology': ['levetiracetam'],
+        'gi': ['octreotide'],
+        'reversal': ['neostigmine'],
+        'corticosteroids': ['cort', 'dexamethasone'],
+        'other': ['dex', 'dextrose50'],  # dextrose as fluid/med
+    }
+
+    # 构建目标概念列表
+    legacy_concepts = [
+        'abx', 'adh_rate', 'cort', 'dex', 'dobu_dur', 'dobu_rate', 'dobu60',
+        'epi_dur', 'epi_rate', 'ins', 'norepi_dur', 'norepi_equiv',
+        'norepi_rate', 'vaso_ind',
+    ]
+
+    if groups is not None:
+        # Explicit group selection overrides include_new
+        if isinstance(groups, str):
+            groups = [groups]
+        unknown = set(groups) - set(MEDICATION_GROUPS)
+        if unknown:
+            raise ValueError(
+                f"Unknown medication group(s): {sorted(unknown)}. "
+                f"Valid groups: {sorted(MEDICATION_GROUPS)}"
+            )
+        concepts: List[str] = []
+        seen: set = set()
+        for g in groups:
+            for c in MEDICATION_GROUPS[g]:
+                if c not in seen:
+                    concepts.append(c)
+                    seen.add(c)
+    elif include_new:
+        # Full catalog: union of all groups
+        concepts = []
+        seen = set()
+        for group_concepts in MEDICATION_GROUPS.values():
+            for c in group_concepts:
+                if c not in seen:
+                    concepts.append(c)
+                    seen.add(c)
+    else:
+        # Backward-compatible ricu subset
+        concepts = legacy_concepts
+
     available_concepts = _validate_concepts(concepts, verbose)
 
     if not available_concepts:

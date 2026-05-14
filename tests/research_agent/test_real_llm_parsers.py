@@ -250,3 +250,40 @@ def test_writer_language_prompt_preserves_evidence_ids(ra):
     assert "Simplified Chinese" in captured["prompt"]
     assert "do not translate evidence ids" in captured["prompt"]
     assert "{evidence:table_one}" in out
+
+
+def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
+    captured = {}
+
+    class _DummyLLM:
+        name = "dummy"
+
+        def complete(self, messages, **kwargs):
+            captured["prompt"] = messages[-1].content
+            return "# Title\n\n## Results\n\nBaseline characteristics are summarised in Table 1 {evidence:table_one}.\n"
+
+    from easyicu.research_agent.agents import WriterAgent
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="x",
+        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        variables=[],
+    )
+
+    out = WriterAgent(_DummyLLM()).run(context=ctx, evidence_ids=["table_one"])
+
+    assert "Do not write `[TBD]`" in captured["prompt"]
+    assert "warning: see manifest" in captured["prompt"]
+    assert "Baseline characteristics are summarised in Table 1" in captured["prompt"]
+    assert "Only cite `table_one`, `outcome_rate`, or `primary_association`" in captured["prompt"]
+    assert "For prediction-model tasks, prefer `model_performance`" in captured["prompt"]
+    assert "{evidence:table_one}" in out
+
+
+def test_openrouter_reasoning_extra_body_skips_gpt_oss(ra):
+    from easyicu.research_agent.llm import openrouter_reasoning_extra_body
+
+    assert openrouter_reasoning_extra_body("openai/gpt-oss-120b:free") is None
+    assert openrouter_reasoning_extra_body("z-ai/glm-4.5-air:free") == {
+        "reasoning": {"effort": "none", "exclude": True}
+    }

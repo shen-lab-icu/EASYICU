@@ -117,6 +117,27 @@ def test_default_time_windows_attached(ra):
     assert {"first_24h", "first_6h", "full_stay"} <= names
 
 
+def test_target_outcome_semantics_are_enriched_from_question(ra):
+    df = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4],
+        "age": [60.0, 70.0, 80.0, 55.0],
+        "death": [0, 1, 0, 1],
+    })
+    ctx = ra.build_research_context(
+        research_question="Is age associated with ICU mortality?",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="death",
+    )
+    death = ctx.variable("death")
+    assert death is not None
+    assert death.description is not None
+    assert "ICU mortality" in death.description
+    assert death.source_concept == "icu_mortality"
+    assert any("explicitly treated as ICU mortality" in note for note in death.clinical_caveats)
+
+
 def test_naive_context_strips_icu_metadata_and_preferences(ra):
     df = pd.DataFrame({
         "stay_id": [1, 2, 3, 4],

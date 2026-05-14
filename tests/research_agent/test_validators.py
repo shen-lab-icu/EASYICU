@@ -338,6 +338,120 @@ def test_llm_concept_auditor_parses_findings(ra):
     assert findings[0].detail["step_id"] == "04_primary"
 
 
+def test_llm_concept_auditor_prompt_includes_outcome_semantics(ra):
+    auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
+    ctx = ra.build_research_context(
+        research_question="Is age associated with ICU mortality?",
+        cohort=pd.DataFrame({
+            "stay_id": [1, 2, 3],
+            "age": [60, 70, 80],
+            "death": [0, 1, 0],
+        }),
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="death",
+    )
+    prompt = auditor._prompt(context=ctx, script_text="print('hello')", step=None)
+    assert "icu_mortality" in prompt
+    assert "explicitly treated as ICU mortality" in prompt
+
+
+def test_llm_concept_auditor_downgrades_nonblocking_outcome_confusion(ra):
+    from easyicu.research_agent.validators import parse_llm_concept_audit_response
+
+    raw = """
+    {
+      "findings": [
+        {
+          "severity": "error",
+          "message": "ICU vs hospital mortality confusion",
+          "detail": {
+            "issue": "Explicitly noted that 'death' is ICU mortality, but the script does not verify or enforce consistent usage across all downstream analyses or reporting."
+          }
+        }
+      ]
+    }
+    """
+    findings = parse_llm_concept_audit_response(raw, step_id="02_model")
+    assert len(findings) == 1
+    assert findings[0].severity == "warning"
+
+
+def test_llm_concept_auditor_uses_context_to_downgrade_outcome_ambiguity(ra):
+    class _FalsePositiveLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return """
+            {
+              "findings": [
+                {
+                  "severity": "error",
+                  "message": "ICU vs hospital mortality confusion",
+                  "detail": {
+                    "context": "The script uses death without clarifying whether it is ICU, hospital, or 28-day mortality."
+                  }
+                }
+              ]
+            }
+            """
+
+    ctx = ra.build_research_context(
+        research_question="Is early lactate associated with ICU mortality?",
+        cohort=pd.DataFrame({
+            "stay_id": [1, 2, 3],
+            "lactate_max_24h": [1.0, 2.0, 3.0],
+            "death": [0, 1, 0],
+        }),
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="death",
+    )
+    findings = ra.LLMConceptAuditor(_FalsePositiveLLM()).audit(
+        context=ctx,
+        script_text="model.fit(df[['lactate_max_24h']], df['death'])",
+        step=None,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "warning"
+    assert findings[0].detail["downgraded_reason"]
+
+
+def test_llm_concept_auditor_preserves_error_for_conflicting_outcome_label(ra):
+    class _ConfusionLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return """
+            {
+              "findings": [
+                {
+                  "severity": "error",
+                  "message": "ICU vs hospital mortality confusion",
+                  "detail": {"context": "The plot labels ICU death as hospital mortality."}
+                }
+              ]
+            }
+            """
+
+    ctx = ra.build_research_context(
+        research_question="Is early lactate associated with ICU mortality?",
+        cohort=pd.DataFrame({
+            "stay_id": [1, 2, 3],
+            "lactate_max_24h": [1.0, 2.0, 3.0],
+            "death": [0, 1, 0],
+        }),
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="death",
+    )
+    findings = ra.LLMConceptAuditor(_ConfusionLLM()).audit(
+        context=ctx,
+        script_text="ax.set_title('Adjusted association with hospital mortality')",
+        step=None,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+
+
 def test_clinical_constraint_validator_warns_on_missing_time_zero(ra, tmp_path: Path):
     ctx = _ctx_with_sofa(ra).model_copy(
         update={
@@ -357,6 +471,35 @@ def test_clinical_constraint_validator_warns_on_missing_time_zero(ra, tmp_path: 
         step_summary={},
     )
     assert any("immortal time bias" in f.message.lower() for f in findings), findings
+
+
+def test_clinical_constraint_validator_does_not_flag_prediction_feature_list_as_treatment_effect(
+    ra, tmp_path: Path
+):
+    ctx = _ctx_with_sofa(ra).model_copy(
+        update={
+            "research_question": (
+                "Build a mortality prediction workflow using age, sex, SOFA-2, "
+                "lactate, MAP, and vasopressor exposure."
+            ),
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="prediction_model"
+            ),
+        }
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="01_model_training",
+        intent="Train and validate the mortality prediction model with AUROC and calibration.",
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    findings = ra.ClinicalConstraintValidator().audit(
+        context=ctx,
+        step=step,
+        out_dir=out_dir,
+        step_summary={"statistic:auroc": 0.8, "statistic:brier_score": 0.18},
+    )
+    assert not any("immortal time bias" in f.message.lower() for f in findings), findings
 
 
 def test_statistical_guard_warns_when_prediction_outputs_lack_split_metadata(ra, tmp_path: Path):

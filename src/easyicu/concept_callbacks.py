@@ -6898,6 +6898,160 @@ def _callback_simple_passthrough(
     # Return the ICUTable for this concept
     return result_dict[concept_name]
 
+
+def _callback_fluid_balance_admitted(
+    tables: Dict[str, "ICUTable"],
+    ctx: "ConceptCallbackContext",
+) -> "ICUTable":
+    """Compute cumulative fluid balance = cumulative_input_mL - cumulative_urine_mL.
+
+    Phase A implementation (approved defaults):
+      - Input: all inputevents rows where amountuom == 'mL', summed per hour.
+      - Output: urine concept (already loaded as dependency).
+      - Result: cumulative(input) - cumulative(urine) per stay.
+
+    This callback directly loads inputevents from the data source because the
+    standard concept-dict pattern doesn't support unit-based row filtering.
+    """
+    import numpy as np
+
+    # Get urine data from dependencies
+    urine_tbl = tables.get("urine")
+    if urine_tbl is None or urine_tbl.data.empty:
+        # Return empty with correct schema
+        empty_cols = ["stay_id", "charttime", "fluid_balance_admitted"]
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column="fluid_balance_admitted",
+        )
+
+    urine_df = urine_tbl.data.copy()
+    id_col = urine_tbl.id_columns[0] if urine_tbl.id_columns else "stay_id"
+    time_col = urine_tbl.index_column or "charttime"
+    urine_val_col = "urine" if "urine" in urine_df.columns else urine_tbl.value_column
+
+    # Load total input (mL-valued rows) directly from data source
+    data_source = ctx.data_source
+    patient_ids = ctx.patient_ids
+
+    try:
+        # Determine database type
+        db_name = ""
+        if hasattr(data_source, "config") and hasattr(data_source.config, "name"):
+            db_name = data_source.config.name.lower()
+
+        # Choose table and unit filter based on database
+        if db_name in ("miiv", "mimic"):
+            table_name = "inputevents" if db_name == "miiv" else "inputevents_mv"
+            unit_col = "amountuom"
+            unit_value = "mL" if db_name == "miiv" else "ml"
+            amount_col = "amount"
+        else:
+            # Other databases not yet supported for fluid balance
+            empty_cols = [id_col, time_col, "fluid_balance_admitted"]
+            return _as_icutbl(
+                pd.DataFrame(columns=empty_cols),
+                id_columns=[id_col],
+                index_column=time_col,
+                value_column="fluid_balance_admitted",
+            )
+
+        # Load inputevents with amount and unit columns
+        from .datasource import FilterSpec, FilterOp
+
+        # Get patient IDs from urine data
+        stay_ids = urine_df[id_col].unique().tolist()
+
+        input_df = data_source.load_table(
+            table_name,
+            columns=[id_col, "starttime", amount_col, unit_col],
+            filters=[
+                FilterSpec(column=id_col, op=FilterOp.IN, value=stay_ids),
+            ],
+        )
+
+        # Extract DataFrame from ICUTable if needed
+        if hasattr(input_df, "data"):
+            input_df = input_df.data
+
+        if input_df is None or input_df.empty:
+            empty_cols = [id_col, time_col, "fluid_balance_admitted"]
+            return _as_icutbl(
+                pd.DataFrame(columns=empty_cols),
+                id_columns=[id_col],
+                index_column=time_col,
+                value_column="fluid_balance_admitted",
+            )
+
+        # Filter to mL-valued rows only (approved default: stance A)
+        input_df = input_df[input_df[unit_col].astype(str).str.strip().str.lower() == unit_value.lower()].copy()
+        input_df[amount_col] = pd.to_numeric(input_df[amount_col], errors="coerce")
+        input_df = input_df.dropna(subset=[amount_col])
+
+        if input_df.empty:
+            empty_cols = [id_col, time_col, "fluid_balance_admitted"]
+            return _as_icutbl(
+                pd.DataFrame(columns=empty_cols),
+                id_columns=[id_col],
+                index_column=time_col,
+                value_column="fluid_balance_admitted",
+            )
+
+        # Convert starttime to hours (same as urine's time column)
+        time_input_col = "starttime"
+        if pd.api.types.is_numeric_dtype(input_df[time_input_col]):
+            input_df["_hour"] = np.floor(input_df[time_input_col]).astype(int)
+        else:
+            # datetime → relative hours would need intime; for now use numeric
+            input_df["_hour"] = pd.to_numeric(input_df[time_input_col], errors="coerce")
+            input_df["_hour"] = np.floor(input_df["_hour"]).astype(int)
+
+        # Sum input per (stay, hour)
+        input_hourly = input_df.groupby([id_col, "_hour"], as_index=False).agg(
+            {amount_col: "sum"}
+        ).rename(columns={"_hour": time_col, amount_col: "input_ml"})
+
+        # Prepare urine hourly
+        urine_df[urine_val_col] = pd.to_numeric(urine_df[urine_val_col], errors="coerce").fillna(0)
+        urine_df[time_col] = pd.to_numeric(urine_df[time_col], errors="coerce")
+        urine_df["_hour"] = np.floor(urine_df[time_col]).astype(int)
+        urine_hourly = urine_df.groupby([id_col, "_hour"], as_index=False).agg(
+            {urine_val_col: "sum"}
+        ).rename(columns={"_hour": time_col, urine_val_col: "urine_ml"})
+
+        # Merge input and urine on (stay, hour) — outer join
+        merged = pd.merge(input_hourly, urine_hourly, on=[id_col, time_col], how="outer")
+        merged["input_ml"] = merged["input_ml"].fillna(0)
+        merged["urine_ml"] = merged["urine_ml"].fillna(0)
+        merged = merged.sort_values([id_col, time_col])
+
+        # Compute cumulative balance per stay
+        merged["cum_input"] = merged.groupby(id_col)["input_ml"].cumsum()
+        merged["cum_urine"] = merged.groupby(id_col)["urine_ml"].cumsum()
+        merged["fluid_balance_admitted"] = merged["cum_input"] - merged["cum_urine"]
+
+        result = merged[[id_col, time_col, "fluid_balance_admitted"]].copy()
+
+        return _as_icutbl(
+            result,
+            id_columns=[id_col],
+            index_column=time_col,
+            value_column="fluid_balance_admitted",
+        )
+
+    except Exception as e:
+        logger.warning(f"fluid_balance_admitted callback failed: {e}")
+        empty_cols = [id_col, time_col, "fluid_balance_admitted"]
+        return _as_icutbl(
+            pd.DataFrame(columns=empty_cols),
+            id_columns=[id_col],
+            index_column=time_col,
+            value_column="fluid_balance_admitted",
+        )
+
+
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "bmi": _callback_bmi,
     "anion_gap": _callback_anion_gap,
@@ -6932,6 +7086,7 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "supp_o2_aumc": _callback_supp_o2_aumc,
     "vent_ind": _callback_vent_ind,
     "urine24": _callback_urine24,
+    "fluid_balance_admitted": _callback_fluid_balance_admitted,
     "vaso_ind": _callback_vaso_ind,
     "vaso_ind_rate": _callback_vaso_ind_rate,
     "sep3": _callback_sep3,

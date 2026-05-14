@@ -33,12 +33,16 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 
 import pandas as pd
 
+from .paper_replication import compare_metric_values
 from .schema import (
     AggregationRule,
     AnalysisStep,
     ConceptDescriptor,
     EvidenceRecord,
+    PaperProfile,
+    PaperResultLedger,
     ResearchContext,
+    ReplicationDeviationReport,
     ValidationFinding,
     VariableRole,
 )
@@ -482,10 +486,15 @@ class LLMConceptAuditor:
                 severity="warning",
                 message=f"LLM concept auditor failed: {exc}",
             )]
-        return parse_llm_concept_audit_response(
+        findings = parse_llm_concept_audit_response(
             raw,
             validator=self.name,
             step_id=step.step_id if step else None,
+        )
+        return _downgrade_metadata_supported_outcome_findings(
+            findings=findings,
+            context=context,
+            script_text=script_text,
         )
 
     def _prompt(
@@ -498,9 +507,13 @@ class LLMConceptAuditor:
         variables = [
             {
                 "name": v.name,
+                "description": v.description,
                 "role": v.role.value,
+                "source_concept": v.source_concept,
                 "allowed_aggregations": [a.value for a in v.allowed_aggregations],
                 "pitfalls": v.pitfalls,
+                "clinical_caveats": v.clinical_caveats,
+                "cross_database_notes": v.cross_database_notes,
                 "missingness": (
                     v.missingness.model_dump(mode="json")
                     if v.missingness is not None else None
@@ -513,7 +526,11 @@ class LLMConceptAuditor:
             "that deterministic regex checks may miss. Focus only on: ordinal "
             "scores treated as continuous, silent missingness assumptions, "
             "PaO2/FiO2 or GCS/SOFA/KDIGO misuse, ICU vs hospital mortality "
-            "confusion, and causal/clinical treatment claims in analysis code.\n\n"
+            "confusion, and causal/clinical treatment claims in analysis code. "
+            "If a generic outcome column such as 'death' is explicitly bound in "
+            "the variable metadata to ICU mortality, hospital mortality or a "
+            "fixed follow-up horizon, do not raise an error unless the script "
+            "contradicts that binding or mixes incompatible outcome definitions.\n\n"
             "Return JSON only: "
             '{"findings":[{"severity":"info|warning|error",'
             '"message":"short finding","detail":{"optional":"context"}}]}. '
@@ -562,6 +579,8 @@ def parse_llm_concept_audit_response(
         if step_id:
             detail = dict(detail)
             detail.setdefault("step_id", step_id)
+        if _llm_outcome_confusion_is_nonblocking(msg, detail):
+            sev = "warning"
         findings.append(ValidationFinding(
             validator=validator,
             severity=sev,  # type: ignore[arg-type]
@@ -569,6 +588,133 @@ def parse_llm_concept_audit_response(
             detail=detail or None,
         ))
     return findings
+
+
+def _llm_outcome_confusion_is_nonblocking(
+    message: str,
+    detail: Dict[str, Any],
+) -> bool:
+    lowered_message = (message or "").lower()
+    if "icu vs hospital mortality confusion" not in lowered_message:
+        return False
+    detail_text = json.dumps(detail or {}, ensure_ascii=False).lower()
+    soft_signals = (
+        "explicitly noted",
+        "explicitly treated as",
+        "does not verify or enforce consistent usage",
+        "possible",
+    )
+    return any(token in detail_text for token in soft_signals)
+
+
+def _downgrade_metadata_supported_outcome_findings(
+    *,
+    findings: Sequence[ValidationFinding],
+    context: ResearchContext,
+    script_text: str,
+) -> List[ValidationFinding]:
+    """Prevent optional LLM audit false positives from blocking clear outcomes.
+
+    The deterministic context builder may bind a generic column such as
+    ``death`` to ICU, hospital, or fixed-horizon mortality based on the
+    research question. Some small auditor models still flag "death is
+    ambiguous" even when the script only uses the bound target column.
+    In that case the finding remains visible as a warning, but it should
+    not block execution. If the script actually mixes outcome definitions,
+    the error is preserved.
+    """
+
+    outcome = context.target_outcome
+    if not outcome:
+        return list(findings)
+    descriptor = context.variable(outcome)
+    if descriptor is None or not descriptor.source_concept:
+        return list(findings)
+    source = descriptor.source_concept.lower()
+    if source not in {
+        "icu_mortality",
+        "hospital_mortality",
+        "mortality_28d",
+        "mortality_30d",
+    }:
+        return list(findings)
+
+    code = (script_text or "").lower()
+    contradictory_tokens_by_source = {
+        "icu_mortality": (
+            "hospital_death",
+            "death_hosp",
+            "hospital_mortality",
+            "hospital mortality",
+            "in-hospital mortality",
+            "28-day mortality",
+            "30-day mortality",
+        ),
+        "hospital_mortality": (
+            "death_icu",
+            "icu_mortality",
+            "icu mortality",
+            "28-day mortality",
+            "30-day mortality",
+        ),
+        "mortality_28d": (
+            "death_icu",
+            "icu_mortality",
+            "icu mortality",
+            "hospital_death",
+            "hospital_mortality",
+            "hospital mortality",
+            "30-day mortality",
+        ),
+        "mortality_30d": (
+            "death_icu",
+            "icu_mortality",
+            "icu mortality",
+            "hospital_death",
+            "hospital_mortality",
+            "hospital mortality",
+            "28-day mortality",
+        ),
+    }
+    if any(token in code for token in contradictory_tokens_by_source[source]):
+        return list(findings)
+
+    ambiguity_tokens = (
+        "icu vs hospital mortality confusion",
+        "mortality confusion",
+        "outcome variable",
+        "death is ambiguous",
+        "without clarifying whether",
+        "does not specify whether",
+        "lacks explicit clarification",
+    )
+    downgraded: List[ValidationFinding] = []
+    for finding in findings:
+        if finding.validator == LLMConceptAuditor.name and finding.severity == "error":
+            text = " ".join(
+                [
+                    finding.message or "",
+                    json.dumps(finding.detail or {}, ensure_ascii=False, default=str),
+                ]
+            ).lower()
+            if any(token in text for token in ambiguity_tokens):
+                detail = dict(finding.detail or {})
+                detail.setdefault(
+                    "downgraded_reason",
+                    (
+                        f"Target outcome '{outcome}' is bound to "
+                        f"{descriptor.source_concept} in ResearchContext and "
+                        "the script does not reference a conflicting mortality definition."
+                    ),
+                )
+                downgraded.append(
+                    finding.model_copy(
+                        update={"severity": "warning", "detail": detail}
+                    )
+                )
+                continue
+        downgraded.append(finding)
+    return downgraded
 
 
 def _strip_jsonish(text: str) -> str:
@@ -945,10 +1091,31 @@ class ClinicalConstraintValidator:
                 [question, timing, (step.intent or "").lower(), json.dumps(step_summary, ensure_ascii=False).lower()],
             )
         )
+        prediction_like = family == "prediction_model" or any(
+            term in combined
+            for term in (
+                "prediction workflow",
+                "prediction model",
+                "mortality prediction",
+                "auroc",
+                "brier",
+                "calibration",
+            )
+        )
 
         if (
-            family in {"causal_inference", "treatment_response", "reinforcement_learning"}
-            or any(term in combined for term in ("target trial", "treatment", "vasopressor", "intervention"))
+            not prediction_like
+            and (
+                family in {"causal_inference", "treatment_response", "reinforcement_learning"}
+                or any(term in combined for term in ("target trial", "treatment", "intervention"))
+                or (
+                    "vasopressor" in combined
+                    and any(
+                        term in combined
+                        for term in ("effect", "association", "odds ratio", "target trial", "treatment")
+                    )
+                )
+            )
         ):
             if not any(term in combined for term in ("time zero", "time-zero", "eligibility", "anchor", "alignment")):
                 findings.append(ValidationFinding(
@@ -1152,12 +1319,191 @@ class StatisticalGuard:
         return findings
 
 
+class ReplicationDesignAuditor:
+    """Validate whether a parsed paper is reproducible in EasyICU."""
+
+    name = "replication_design_auditor"
+
+    def audit(
+        self,
+        *,
+        paper_profile: PaperProfile,
+        deviation_report: ReplicationDeviationReport,
+    ) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        if paper_profile.paper_type == "unsupported_or_underspecified":
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        "Paper is unsupported or underspecified for strict replication: "
+                        + "; ".join(paper_profile.unsupported_reasons or ["no reason recorded"])
+                    ),
+                )
+            )
+        for item in deviation_report.items:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity=item.severity,
+                    message=f"{item.item}: {item.reason}",
+                    detail={
+                        "original": item.original,
+                        "easyicu_proxy": item.easyicu_proxy,
+                    },
+                )
+            )
+        return findings
+
+
+class ReplicationResultComparator:
+    """Compare original-paper claims to EasyICU structured metrics."""
+
+    name = "replication_result_comparator"
+
+    _metric_map = {
+        "or": "primary_or",
+        "hr": "primary_or",
+        "rr": "primary_or",
+        "auroc": "auroc",
+        "auc": "auroc",
+        "brier_score": "brier_score",
+        "p_value": "primary_pvalue",
+        "p": "primary_pvalue",
+        "n": "n_stays",
+    }
+
+    def compare(
+        self,
+        *,
+        paper_profile: PaperProfile,
+        ledger: PaperResultLedger,
+    ) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for claim in paper_profile.key_claims:
+            easyicu_value = ledger.easyicu_metrics.get(
+                self._metric_map.get((claim.metric or "").lower(), "")
+            )
+            alignment, reason = compare_metric_values(
+                metric=claim.metric,
+                paper_value=claim.numeric_value,
+                paper_direction=claim.direction,
+                easyicu_value=easyicu_value,
+            )
+            rows.append(
+                {
+                    "claim_id": claim.claim_id,
+                    "paper_claim": claim.sentence,
+                    "paper_value": claim.paper_value or "",
+                    "easyicu_value": "" if easyicu_value is None else str(easyicu_value),
+                    "alignment_status": alignment,
+                    "reason_if_mismatch": reason,
+                    "metric": claim.metric or "",
+                }
+            )
+        return rows
+
+    def findings_from_rows(self, rows: Sequence[Dict[str, Any]]) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        if not rows:
+            return [
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message="No result-alignment rows were produced for the parsed paper claims.",
+                )
+            ]
+        for row in rows:
+            if row.get("alignment_status") != "not_aligned":
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        f"Claim {row.get('claim_id')} was not aligned with EasyICU results: "
+                        f"{row.get('reason_if_mismatch')}"
+                    ),
+                    detail=dict(row),
+                )
+            )
+        return findings
+
+
+class PublicationClaimAuditor:
+    """Block showcase manuscripts that misrepresent the replication relationship."""
+
+    name = "publication_claim_auditor"
+
+    def audit(
+        self,
+        *,
+        manuscript_text: str,
+        deviation_report: ReplicationDeviationReport,
+    ) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        text = manuscript_text or ""
+        lower = text.lower()
+        prohibited = (
+            "exactly reproduced",
+            "identical to the original paper",
+            "fully reproduced the original study",
+            "same dataset as the original paper",
+        )
+        for phrase in prohibited:
+            if phrase in lower:
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=f"Showcase manuscript over-claims replication fidelity via phrase: {phrase!r}.",
+                    )
+                )
+        if "replication" not in lower:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message="Showcase manuscript does not state that it is a replication study.",
+                )
+            )
+        if "easyicu" not in lower:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message="Showcase manuscript does not identify EasyICU as the cohort source.",
+                )
+            )
+        if deviation_report.items and not re.search(r"\bdeviation|differ|limitation|harmoni[sz]ation\b", lower):
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message="Showcase manuscript does not explain replication deviations/limitations.",
+                )
+            )
+        if re.search(r"\boriginal paper\b", lower) and "original paper reported" not in lower:
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message="References to the original paper should be explicitly framed as reported original results.",
+                )
+            )
+        return findings
+
+
 __all__ = [
     "CohortAuditor",
     "ConceptUsageAuditor",
     "LLMConceptAuditor",
     "parse_llm_concept_audit_response",
     "StatisticalValidator",
+    "ReplicationDesignAuditor",
+    "ReplicationResultComparator",
+    "PublicationClaimAuditor",
     "ClinicalConstraintValidator",
     "StatisticalGuard",
 ]

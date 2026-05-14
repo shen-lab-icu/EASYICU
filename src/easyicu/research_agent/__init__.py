@@ -90,6 +90,12 @@ __all__ = [
     "EvidenceRecord",
     "AnalysisManifest",
     "PipelineResult",
+    "PaperClaimRecord",
+    "PaperProfile",
+    "PaperReplicationSpec",
+    "PaperResultLedger",
+    "ReplicationDeviationItem",
+    "ReplicationDeviationReport",
     # Context builder
     "build_research_context",
     "build_naive_research_context",
@@ -154,6 +160,9 @@ __all__ = [
     "StatisticalGuard",
     "ConceptUsageAuditor",
     "LLMConceptAuditor",
+    "ReplicationDesignAuditor",
+    "ReplicationResultComparator",
+    "PublicationClaimAuditor",
     "VisualQAAuditor",
     "VLMVisualQAAdapter",
     "PublicationFigureSkill",
@@ -178,6 +187,16 @@ __all__ = [
     "shock_strata",
     "summarize_lactate_map_vaso_cohort",
     "run_lactate_map_vaso_replication",
+    "load_paper_source",
+    "parse_paper_profile",
+    "build_paper_replication_spec",
+    "build_paper_result_ledger",
+    "collect_easyicu_metrics",
+    "compare_paper_to_easyicu",
+    "compare_metric_values",
+    "render_replication_report",
+    "render_deviation_report",
+    "render_showcase_manuscript",
     # Skills
     "ClinicalSkill",
     "register_skill",
@@ -219,6 +238,66 @@ __all__ = [
     "CostMeter",
     "MeteredClient",
     "CostRecord",
+    # Reproducibility envelope (O20)
+    "ReproEnvelope",
+    "ReproRecordingClient",
+    "build_environment_snapshot",
+    "envelope_role_resolver",
+    # Multiple-testing correction (O22)
+    "MultipleTestingReport",
+    "PValueRecord",
+    "build_multiple_testing_report",
+    # Causal audit (O18)
+    "CausalAuditReport",
+    "CausalLanguageHit",
+    "EffectLabel",
+    "label_effects",
+    "run_causal_audit",
+    "scan_manuscript_for_causal_language",
+    # Reporting checklist (O16)
+    "ChecklistItem",
+    "ChecklistReport",
+    "build_strobe_checklist",
+    "build_tripod_ai_checklist",
+    "choose_checklist",
+    # Reviewer round (O15)
+    "ReviewerComment",
+    "ReviewerCritique",
+    "ReviewerReport",
+    "run_reviewer_round",
+    # Provenance (O27)
+    "ProvenanceBundle",
+    "SourceFileRecord",
+    "build_provenance_bundle",
+    "hash_sources",
+    # Sensitivity (O23): E-value + negative-control
+    "EValueResult",
+    "NegativeControlResult",
+    "compute_e_value",
+    "run_negative_control_check",
+    # Notebook + lockfile (O26)
+    "NotebookStep",
+    "build_notebook",
+    "build_requirements_lockfile",
+    "write_notebook",
+    # Survival analysis (O19)
+    "CoxCoefficient",
+    "CoxFitResult",
+    "fit_cox_model",
+    "fit_fine_gray_subdistribution",
+    # Missing data (O25)
+    "MICEImputationResult",
+    "TippingPointResult",
+    "mice_impute",
+    "tipping_point_analysis",
+    # Fairness / subgroup (O24)
+    "SubgroupAnalysisResult",
+    "SubgroupEstimate",
+    "run_subgroup_analysis",
+    # Hypothesis generator (O17)
+    "HypothesisCandidate",
+    "HypothesisGeneratorResult",
+    "generate_hypotheses",
     "AuditEvent",
     "AuditLogger",
     "WorkflowGraph",
@@ -265,6 +344,12 @@ from .schema import (
     AnalysisManifest,
     PipelineResult,
     CostRecord,
+    PaperClaimRecord,
+    PaperProfile,
+    PaperReplicationSpec,
+    PaperResultLedger,
+    ReplicationDeviationItem,
+    ReplicationDeviationReport,
 )
 from .icu_rules import ICU_RULES, VariableKind
 
@@ -385,6 +470,9 @@ def __getattr__(name: str):
         "StatisticalGuard",
         "ConceptUsageAuditor",
         "LLMConceptAuditor",
+        "ReplicationDesignAuditor",
+        "ReplicationResultComparator",
+        "PublicationClaimAuditor",
     }:
         from . import validators as _validators
 
@@ -449,6 +537,21 @@ def __getattr__(name: str):
         from . import replication as _replication
 
         return getattr(_replication, name)
+    if name in {
+        "load_paper_source",
+        "parse_paper_profile",
+        "build_paper_replication_spec",
+        "build_paper_result_ledger",
+        "collect_easyicu_metrics",
+        "compare_paper_to_easyicu",
+        "compare_metric_values",
+        "render_replication_report",
+        "render_deviation_report",
+        "render_showcase_manuscript",
+    }:
+        from . import paper_replication as _paper_replication
+
+        return getattr(_paper_replication, name)
     if name in {"ClinicalSkill", "register_skill", "get_skill", "list_skills"}:
         from . import skills as _skills
 
@@ -492,6 +595,114 @@ def __getattr__(name: str):
         from . import cost as _cost
 
         return getattr(_cost, name)
+    if name in {
+        "ReproEnvelope",
+        "ReproRecordingClient",
+        "build_environment_snapshot",
+        "envelope_role_resolver",
+    }:
+        from . import reproducibility_envelope as _repro
+
+        return getattr(_repro, name)
+    if name in {
+        "MultipleTestingReport",
+        "PValueRecord",
+        "build_multiple_testing_report",
+    }:
+        from . import multiple_testing as _mt
+
+        return getattr(_mt, name)
+    if name in {
+        "CausalAuditReport",
+        "CausalLanguageHit",
+        "EffectLabel",
+        "label_effects",
+        "run_causal_audit",
+        "scan_manuscript_for_causal_language",
+    }:
+        from . import causal_audit as _ca
+
+        return getattr(_ca, name)
+    if name in {
+        "ChecklistItem",
+        "ChecklistReport",
+        "build_strobe_checklist",
+        "build_tripod_ai_checklist",
+        "choose_checklist",
+    }:
+        from . import reporting_checklist as _rc
+
+        return getattr(_rc, name)
+    if name in {
+        "ReviewerComment",
+        "ReviewerCritique",
+        "ReviewerReport",
+        "run_reviewer_round",
+    }:
+        from . import reviewer as _rv
+
+        return getattr(_rv, name)
+    if name in {
+        "ProvenanceBundle",
+        "SourceFileRecord",
+        "build_provenance_bundle",
+        "hash_sources",
+    }:
+        from . import provenance as _prov
+
+        return getattr(_prov, name)
+    if name in {
+        "EValueResult",
+        "NegativeControlResult",
+        "compute_e_value",
+        "run_negative_control_check",
+    }:
+        from . import sensitivity as _sens
+
+        return getattr(_sens, name)
+    if name in {
+        "NotebookStep",
+        "build_notebook",
+        "build_requirements_lockfile",
+        "write_notebook",
+    }:
+        from . import repro_artifacts as _repro_art
+
+        return getattr(_repro_art, name)
+    if name in {
+        "CoxCoefficient",
+        "CoxFitResult",
+        "fit_cox_model",
+        "fit_fine_gray_subdistribution",
+    }:
+        from . import survival as _surv
+
+        return getattr(_surv, name)
+    if name in {
+        "MICEImputationResult",
+        "TippingPointResult",
+        "mice_impute",
+        "tipping_point_analysis",
+    }:
+        from . import missing_data as _md
+
+        return getattr(_md, name)
+    if name in {
+        "SubgroupAnalysisResult",
+        "SubgroupEstimate",
+        "run_subgroup_analysis",
+    }:
+        from . import fairness as _fair
+
+        return getattr(_fair, name)
+    if name in {
+        "HypothesisCandidate",
+        "HypothesisGeneratorResult",
+        "generate_hypotheses",
+    }:
+        from . import hypothesis_generator as _hg
+
+        return getattr(_hg, name)
     if name in {"mcp_dispatch", "MCP_TOOLS", "MCP_TOOL_SCHEMAS"}:
         from . import mcp_server as _mcp
 

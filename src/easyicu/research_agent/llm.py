@@ -97,7 +97,11 @@ class MockLLMClient:
         self.last_usage: Optional[Dict[str, int]] = None
 
     def complete(self, messages: Sequence[LLMMessage], *, max_tokens: int = 2048,
-                 temperature: float = 0.2) -> str:
+                 temperature: float = 0.2, seed: Optional[int] = None) -> str:
+        # ``seed`` is accepted for signature parity with OpenAIClient so
+        # the reproducibility envelope (O20) can forward it uniformly.
+        # The mock is deterministic regardless of seed.
+        _ = seed
         last_user = next(
             (m.content for m in reversed(messages) if m.role == "user"),
             "",
@@ -1627,6 +1631,7 @@ class OpenAIClient:
         request_timeout: float = 120.0,
         extra_headers: Optional[Dict[str, str]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
+        supports_vision: Optional[bool] = None,
     ) -> None:
         try:
             from openai import OpenAI  # type: ignore
@@ -1656,9 +1661,21 @@ class OpenAIClient:
         self._model = model
         self._timeout = request_timeout
         self._extra_body = dict(extra_body or {})
+        self.supports_vision = (
+            bool(supports_vision)
+            if supports_vision is not None
+            else _model_looks_vision_capable(model)
+        )
+        if _model_looks_like_qwen3(model):
+            self._extra_body.setdefault("enable_thinking", False)
+            chat_kwargs = self._extra_body.get("chat_template_kwargs")
+            if not isinstance(chat_kwargs, dict):
+                chat_kwargs = {}
+            chat_kwargs.setdefault("enable_thinking", False)
+            self._extra_body["chat_template_kwargs"] = chat_kwargs
 
     def complete(self, messages: Sequence[LLMMessage], *, max_tokens: int = 2048,
-                 temperature: float = 0.2) -> str:
+                 temperature: float = 0.2, seed: Optional[int] = None) -> str:
         chat_messages = [{"role": m.role, "content": m.content} for m in messages]
         create_kwargs: Dict[str, Any] = {
             "model": self._model,
@@ -1667,6 +1684,14 @@ class OpenAIClient:
             "temperature": temperature,
             "timeout": self._timeout,
         }
+        if seed is not None:
+            # OpenAI / OpenRouter / most OpenAI-compatible providers
+            # accept a ``seed`` integer for deterministic(-ish) output.
+            # Providers that ignore it still succeed; the envelope
+            # records the requested value regardless so reviewers can
+            # see user intent even when the provider does not honour
+            # it.
+            create_kwargs["seed"] = int(seed)
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
         resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
@@ -1773,6 +1798,150 @@ class OpenAIClient:
                 pass
 
         return content
+
+
+def _model_looks_like_qwen3(model: str) -> bool:
+    lowered = (model or "").strip().lower()
+    return lowered.startswith("qwen3") or "/qwen3" in lowered or "qwen3-" in lowered
+
+
+def _model_looks_vision_capable(model: str) -> bool:
+    lowered = (model or "").strip().lower()
+    if not lowered:
+        return False
+    positive_tokens = (
+        "gpt-4o",
+        "omni",
+        "vision",
+        "gemini",
+        "qwen-vl",
+        "qwen2.5-vl",
+        "vl-",
+        "pixtral",
+        "llava",
+        "molmo",
+        "internvl",
+    )
+    negative_tokens = (
+        "coder",
+        "instruct",
+        "reasoner",
+        "embedding",
+        "rerank",
+        "whisper",
+        "audio",
+    )
+    if any(token in lowered for token in negative_tokens):
+        return False
+    return any(token in lowered for token in positive_tokens)
+
+
+def openrouter_reasoning_extra_body(model: str) -> Optional[Dict[str, Any]]:
+    """Return provider-specific reasoning controls only for models that need them.
+
+    OpenRouter free models are not uniform here:
+
+    * some reasoning-heavy families (notably GLM / Qwen / DeepSeek-R1 style
+      endpoints) benefit from suppressing reasoning so the usable answer is
+      not truncated inside ``message.reasoning``;
+    * other endpoints (notably GPT-OSS free) reject requests that try to
+      disable reasoning because reasoning is mandatory on that route.
+
+    Keep the default conservative: only attach the extra_body when the model
+    family is known to benefit from it.
+    """
+    lowered = (model or "").strip().lower()
+    if not lowered:
+        return None
+    if "gpt-oss" in lowered:
+        return None
+    if any(token in lowered for token in ("glm", "qwen", "deepseek", "r1")):
+        return {"reasoning": {"effort": "none", "exclude": True}}
+    return None
+
+
+def _retryable_provider_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return any(
+        token in text
+        for token in (
+            " 429",
+            "429 ",
+            "rate limit",
+            "rate-limited",
+            "temporarily",
+            "overloaded",
+            "provider returned error",
+            "retry after",
+            " 500",
+            " 502",
+            " 503",
+            " 504",
+        )
+    )
+
+
+class FallbackLLMClient:
+    """Try several compatible clients in order until one succeeds.
+
+    This is primarily used for free-tier OpenRouter deployments where a
+    single upstream model might be temporarily rate-limited even though
+    alternative free models remain available.
+    """
+
+    def __init__(
+        self,
+        *clients: Any,
+        name: Optional[str] = None,
+    ) -> None:
+        self._clients = [client for client in clients if client is not None]
+        if not self._clients:
+            raise ValueError("FallbackLLMClient requires at least one child client.")
+        self.name = name or "fallback(" + " -> ".join(
+            getattr(client, "_model", getattr(client, "name", type(client).__name__))
+            for client in self._clients
+        ) + ")"
+        self.last_usage = None
+        self.last_finish_reason = None
+        self.last_client_name = None
+
+    def complete(
+        self,
+        messages: Sequence["LLMMessage"],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+    ) -> str:
+        errors: List[str] = []
+        last_exc: Optional[Exception] = None
+        for client in self._clients:
+            try:
+                out = client.complete(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    seed=seed,
+                )
+                self.last_usage = getattr(client, "last_usage", None)
+                self.last_finish_reason = getattr(client, "last_finish_reason", None)
+                self.last_client_name = getattr(
+                    client, "_model", getattr(client, "name", type(client).__name__)
+                )
+                return out
+            except Exception as exc:  # pragma: no cover - exercised via tests with fake clients
+                last_exc = exc
+                errors.append(
+                    f"{getattr(client, '_model', getattr(client, 'name', type(client).__name__))}: {exc}"
+                )
+                if not _retryable_provider_error(exc):
+                    raise
+        if last_exc is not None:
+            raise RuntimeError(
+                "All fallback LLM clients failed after retryable provider errors: "
+                + " | ".join(errors)
+            ) from last_exc
+        raise RuntimeError("FallbackLLMClient had no usable clients.")
 
     def complete_with_images(
         self,
@@ -1972,11 +2141,85 @@ def resolve_role_client(llm: Any, role: str) -> Any:
     return llm
 
 
+def llm_supports_vision(client: Any) -> bool:
+    """Best-effort capability probe for optional figure-VLM review.
+
+    The pipeline uses this only to decide whether vision-based QA
+    should be enabled automatically. It stays intentionally
+    conservative: unknown clients default to ``False`` unless they
+    explicitly advertise ``supports_vision`` or expose a
+    ``complete_with_images`` method without a contradicting model
+    heuristic.
+    """
+
+    if client is None:
+        return False
+    if hasattr(client, "supports_vision"):
+        advertised = getattr(client, "supports_vision")
+        try:
+            return bool(advertised() if callable(advertised) else advertised)
+        except Exception:
+            return False
+    if hasattr(client, "for_role"):
+        try:
+            analyzer_client = client.for_role("analyzer")
+        except Exception:
+            analyzer_client = None
+        if analyzer_client is not None:
+            return llm_supports_vision(analyzer_client)
+    if hasattr(client, "iter_clients"):
+        try:
+            return any(llm_supports_vision(child) for child in client.iter_clients())
+        except Exception:
+            return False
+    if hasattr(client, "complete_with_images"):
+        model = getattr(client, "_model", None)
+        if model is None:
+            return True
+        return _model_looks_vision_capable(str(model))
+    return False
+
+
+def llm_is_mockish(client: Any) -> bool:
+    """Return true when ``client`` is effectively a mock/offline stub."""
+
+    if client is None:
+        return False
+    if isinstance(client, MockLLMClient):
+        return True
+    if hasattr(client, "for_role"):
+        try:
+            analyzer_client = client.for_role("analyzer")
+        except Exception:
+            analyzer_client = None
+        if analyzer_client is not None:
+            return llm_is_mockish(analyzer_client)
+    if hasattr(client, "iter_clients"):
+        try:
+            children = list(client.iter_clients())
+        except Exception:
+            children = []
+        if children:
+            return all(llm_is_mockish(child) for child in children)
+    lowered = " ".join(
+        str(part).lower()
+        for part in (
+            type(client).__name__,
+            getattr(client, "name", ""),
+            getattr(client, "_model", ""),
+        )
+    )
+    return "mock" in lowered
+
+
 __all__ = [
     "LLMMessage",
     "LLMClient",
     "MockLLMClient",
     "OpenAIClient",
     "LLMRouter",
+    "llm_is_mockish",
+    "llm_supports_vision",
+    "openrouter_reasoning_extra_body",
     "resolve_role_client",
 ]

@@ -1,6 +1,32 @@
 Writer contract:
 - Discussion is OFF-LIMITS. End the manuscript with a one-line stub
   saying Discussion is left to the human author.
+- Write in the register of a restrained clinical paper, not a dashboard
+  summary. Prefer short factual sentences, past tense in Results, and
+  plain manuscript prose over meta-commentary.
+- Abstract structure: one sentence on question/cohort, one sentence on
+  analysis approach, one sentence on the primary numeric finding, one
+  sentence on the main caveat when a validator raised a real warning.
+- Results structure: cohort anchor first, primary association second,
+  then one short audit/robustness sentence if the digest supports it.
+- Only cite `table_one`, `outcome_rate`, or `primary_association` when
+  those ids actually exist in the available evidence list. If an alias
+  is absent, do not write a placeholder sentence around it.
+- For prediction-model tasks, treat AUROC, Brier score, calibration,
+  split strategy, and baseline prevalence as the primary results. Do
+  not invent odds ratios or "significant predictor" prose unless a
+  coefficient / effect table is explicitly present in the evidence ids.
+- If no `table_one` alias is available, anchor cohort size to
+  `research_context` or the model-performance step summary instead of
+  writing "Table 1".
+- If no `outcome_rate` alias is available for a prediction task, use
+  baseline prevalence from `model_performance`,
+  `prediction_performance`, or the prediction step summary.
+- When a baseline number is unavailable, cite Table 1 in prose instead
+  of writing `[TBD]`, leaving a blank, or inventing a value.
+- Do not write machine-facing phrases such as `warning: see manifest`,
+  `the primary analysis reveals`, `data integrity`, or similar pipeline
+  narration. Translate validator output into ordinary manuscript prose.
 - Every numeric claim in Methods or Results must be either spelled
   out in words ("the cohort comprised X stays") with X immediately
   followed by an {evidence:<id>} placeholder, OR phrased as

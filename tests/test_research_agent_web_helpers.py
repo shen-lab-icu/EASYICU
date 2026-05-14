@@ -116,6 +116,28 @@ def test_scans_research_agent_history_from_final_and_partial_manifests(tmp_path:
     assert final["table_count"] == 1
 
 
+def test_run_summary_counts_failed_steps_and_missing_outputs(tmp_path: Path) -> None:
+    manifest = {
+        "run_id": "run_failed",
+        "per_step_records": [
+            {"step_id": "00_probe", "status": "ok"},
+            {"step_id": "01_clustering", "status": "execution_failed"},
+            {"step_id": "02_plot", "status": "blocked_by_concept_audit"},
+        ],
+        "evidence": [{"evidence_id": "log1", "kind": "log"}],
+        "findings": [{"severity": "error"}, {"severity": "warning"}],
+    }
+
+    summary = ra_page._run_summary_from_manifest(tmp_path / "run_failed", manifest, partial=False)
+
+    assert summary["step_ok"] == 1
+    assert summary["step_failed"] == 2
+    assert summary["figure_count"] == 0
+    assert summary["table_count"] == 0
+    assert summary["finding_errors"] == 1
+    assert summary["finding_warnings"] == 1
+
+
 def test_step_evidence_links_explicit_ids_and_produced_by_step(tmp_path: Path) -> None:
     manifest = {
         "evidence": [

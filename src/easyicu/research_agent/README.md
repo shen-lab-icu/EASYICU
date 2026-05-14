@@ -352,6 +352,43 @@ easyicu-research-agent \
     --workdir ./research_output
 ```
 
+For paper reproduction, the replication CLI now supports a second,
+paper-aware mode. It first parses the paper into a typed replication
+spec, then runs the standard analysis pipeline, then emits both a
+replication report and, only when the gates pass, a showcase
+replication manuscript:
+
+```bash
+easyicu-research-replication \
+    --paper ./papers/critical_care_example.md \
+    --cohort ./cohorts/miiv_sofa_mortality.parquet \
+    --database miiv \
+    --mode manuscript \
+    --llm openai \
+    --openai-model qwen3-coder-30b \
+    --output ./research_output/paper_replication
+```
+
+This mode writes:
+
+- `paper_profile.json`
+- `replication_spec.json`
+- `paper_claim_ledger.csv`
+- `replication_comparison.csv`
+- `replication_report.md`
+- `deviation_report.md`
+- `manuscript_ready.md` only when both the standard manuscript gates and
+  the paper-aware publication-claim audit pass
+
+The paper-aware readiness bundle extends the existing fail-closed gates
+with:
+
+- `design_reproduced`
+- `paper_claims_parsed`
+- `result_alignment_audited`
+- `replication_report_ready`
+- `showcase_manuscript_ready`
+
 For the lactate-MAP-vasopressor case, the deterministic replication
 runner consumes EasyICU concept-export packages directly and writes
 per-database cohorts, source manifests and summary tables. Missing

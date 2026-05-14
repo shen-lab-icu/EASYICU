@@ -1172,8 +1172,16 @@ class ConceptResolver:
                 try:
                     from .datasource import load_bucketed_table_multi_aggregated
 
+                    # 🔧 FIX 2026-05: 排除使用非默认聚合的概念（如 safi/pafi 的 fio2 需要 max，o2sat/po2 需要 min）
+                    # 这些概念必须走单概念加载路径，以便正确传递 agg_func 给 DuckDB。
+                    # 否则批量路径会强制使用 MEDIAN，导致 pafi/safi 与 ricu 不一致。
+                    _concepts_for_batch = [
+                        (name, val_var) for name, val_var in concepts_info
+                        if aggregators.get(name) in (None, False, 'auto', 'median')
+                        and name not in multi_source_concepts
+                    ]
+
                     # ⚡ PERF: 跳过已在缓存中的概念，避免重复读取长表
-                    _concepts_for_batch = list(concepts_info)
                     if self._keep_cache_between_calls:
                         _pid_hash = _compute_patient_ids_hash(patient_ids)
                         _concepts_for_batch = [
@@ -1262,6 +1270,15 @@ class ConceptResolver:
                         _time_col_out = 'charttime'
                         if 'measuredat_minutes' in batch_df.columns:
                             _time_col_out = 'measuredat_minutes'
+
+                        # 🔧 FIX 2026-05: AUMC batch-multi outputs minutes, but single-concept
+                        # path and _align_time_to_admission expect hours. Convert to hours here
+                        # to match single-concept behavior (avoid downstream time-unit mismatch
+                        # when merging sub-concepts, e.g. in _callback_news/mews).
+                        _db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                        if _db_name == 'aumc' and _time_col_out == 'measuredat_minutes':
+                            batch_df = batch_df.copy()
+                            batch_df['measuredat_minutes'] = batch_df['measuredat_minutes'] / 60.0
 
                         covered_names = set()
                         for concept_name in batch_itemids:
@@ -1698,6 +1715,34 @@ class ConceptResolver:
                     _n_value_transform_sources += 1
         _block_duckdb_value_transform = _n_value_transform_sources > 1
 
+        # 🔧 FIX 2026-05: 同表多源检测
+        # 当 2+ 个源指向同一个表时（如 AUMC o2sat 的 [6709, 8903] + [12311 *100]），
+        # 每个源单独在 DuckDB 中聚合会得到 median-of-medians 而不是池化 median。
+        # R ricu 的行为是把所有源的原始值一起 pool，再一次性 median。
+        # 为了匹配 ricu，禁止同表多源使用 DuckDB 预聚合，让 change_interval 做统一聚合。
+        _table_source_counts: Dict[str, int] = {}
+        for _src in sources:
+            _tbl = getattr(_src, 'table', None)
+            if _tbl:
+                _table_source_counts[_tbl] = _table_source_counts.get(_tbl, 0) + 1
+        _block_duckdb_same_table = any(cnt > 1 for cnt in _table_source_counts.values())
+
+        # 🔧 FIX 2026-05: 多源（不论是否同表）聚合一致性
+        # 即使源分布在不同表（如 MIMIC o2sat 的 chartevents + labevents），
+        # 每源独立 DuckDB MEDIAN 后 concat 再 mean，仍与 ricu 的池化 median 不一致。
+        # 对所有 num_cncpt 且至少有一个数值列的源 ≥ 2 情况，禁用 DuckDB 预聚合。
+        # rgx_itm 类源常量比较稀疏，保持原路径。
+        _n_plain_num_sources = 0
+        for _src in sources:
+            _cb = getattr(_src, 'callback', None)
+            _cls = getattr(_src, 'class_name', None)
+            if _cls == 'rgx_itm':
+                continue
+            # plain numeric source OR simple transform source
+            if _cb is None or isinstance(_cb, str):
+                _n_plain_num_sources += 1
+        _block_duckdb_multi_numeric = _n_plain_num_sources >= 2
+
         for source in sources:
             _convert_unit_callback_for_duckdb = False  # 每个 source 重置
             use_duckdb_aggregation = False  # 每个 source 重置
@@ -2102,6 +2147,10 @@ class ConceptResolver:
                         if _block_duckdb_value_transform and (_is_percent_as_numeric or is_convert_unit or _is_transform_binary_op):
                             # 多源 value_transform：禁止内联，回退到 Python 回调路径
                             _can_inline_callback = not has_callback
+                        # 🔧 FIX 2026-05: 同表多源时禁用 DuckDB 预聚合
+                        # 让 change_interval 做一次性跨源 MEDIAN（匹配 R ricu 的 pooled 行为）
+                        if _block_duckdb_same_table or _block_duckdb_multi_numeric:
+                            _can_inline_callback = False
                         # 🚀 id_tbl DuckDB 快速路径：per-patient 聚合（MEDIAN）代替全表加载
                         # 例如 height/weight 从 chartevents(5.7GB) 只需 ≤500 行
                         if has_sub_var and _can_inline_callback and _effective_ids and _target == 'id_tbl' and not _skip_db_duckdb:
@@ -8940,6 +8989,30 @@ def _apply_callback(
             concept_name=concept_name,
         )
 
+    # Handle eicu_rate_mass(target_unit = "mcg/hour") - non-kg mass-rate drugs
+    match = re.fullmatch(
+        r"eicu_rate_mass\(\s*target_unit\s*=\s*['\"]?([^'\"\)]+?)['\"]?\s*\)",
+        expr,
+        flags=re.DOTALL,
+    )
+    if match:
+        from .callback_utils import eicu_rate_mass_callback
+
+        target_unit = match.group(1).strip()
+        callback_fn = eicu_rate_mass_callback(target_unit)
+
+        val_var = source.value_var or concept_name
+        sub_var = source.sub_var
+
+        return callback_fn(
+            frame,
+            val_var=val_var,
+            sub_var=sub_var,
+            concept_name=concept_name,
+            data_source=data_source,
+            patient_ids=patient_ids,
+        )
+
     if expr == "aumc_rate_kg":
         from .callback_utils import aumc_rate_kg
 
@@ -9004,6 +9077,38 @@ def _apply_callback(
             rate_unit_col=rate_uom,
             index_col=index_var,
             stop_col=stop_var,
+        )
+
+    # Handle aumc_rate_mass(target_unit = "mcg/hour") — non-kg mass-rate
+    match = re.fullmatch(
+        r"aumc_rate_mass\(\s*target_unit\s*=\s*['\"]?([^'\"\)]+?)['\"]?\s*\)",
+        expr,
+        flags=re.DOTALL,
+    )
+    if match:
+        from .callback_utils import aumc_rate_mass
+
+        target_unit = match.group(1).strip()
+
+        val_var = source.value_var or concept_name
+        unit_var = source.unit_var or unit_column
+        rate_uom = source.params.get("rate_uom") if source.params else None
+        if rate_uom is None and "rateunit" in frame.columns:
+            rate_uom = "rateunit"
+        stop_var = source.params.get("stop_var") if source.params else None
+        index_var = source.index_var
+        if not index_var and source.table == "drugitems":
+            index_var = "start"
+
+        return aumc_rate_mass(
+            frame,
+            concept_name=concept_name,
+            val_col=val_var,
+            unit_col=unit_var,
+            rate_unit_col=rate_uom,
+            index_col=index_var,
+            stop_col=stop_var,
+            target_unit=target_unit,
         )
 
     # Handle hirid_duration callback - calculate infusion durations
@@ -9188,6 +9293,36 @@ def _apply_callback(
             unit_col=unit_var,
             grp_var=grp_var,
             index_col=index_var,
+        )
+
+    # Handle hirid_rate_mass(target_unit = "mcg/hour") - HiRID mass-rate (non-kg)
+    match = re.fullmatch(
+        r"hirid_rate_mass\(\s*target_unit\s*=\s*['\"]?([^'\"\)]+?)['\"]?\s*\)",
+        expr,
+        flags=re.DOTALL,
+    )
+    if match:
+        from .callback_utils import hirid_rate_mass
+
+        target_unit = match.group(1).strip()
+
+        val_var = source.value_var or 'givendose'
+        unit_var = source.unit_var or 'doseunit'
+        grp_var = source.params.get("grp_var") if source.params else None
+        if not grp_var:
+            grp_var = getattr(source, 'grp_var', None)
+        if not grp_var and 'infusionid' in frame.columns:
+            grp_var = 'infusionid'
+        index_var = source.index_var or 'givenat'
+
+        return hirid_rate_mass(
+            frame,
+            concept_name=concept_name,
+            val_col=val_var,
+            unit_col=unit_var,
+            grp_var=grp_var,
+            index_col=index_var,
+            target_unit=target_unit,
         )
 
     # Handle aumc_rate callback - combine unit_var and rate_var into unit/rate format
@@ -9517,6 +9652,42 @@ def _apply_callback(
                 frame = agg_df[[c for c in result_cols if c in agg_df.columns]]
         
         return frame
+
+    # Handle sic_rate_mass(target_unit = "mcg/hour") — SIC non-kg mass-rate
+    # for sedatives/analgesics where AmountPerMinute is actually total dose
+    match = re.fullmatch(
+        r"sic_rate_mass\(\s*target_unit\s*=\s*['\"]?([^'\"\)]+?)['\"]?\s*\)",
+        expr,
+        flags=re.DOTALL,
+    )
+    if match:
+        from .callback_utils import sic_rate_mass
+
+        target_unit = match.group(1).strip()
+        val_var = source.value_var or concept_name
+        if val_var not in frame.columns and concept_name in frame.columns:
+            val_var = concept_name
+        stop_var = source.params.get("stop_var") if source.params else None
+        if not stop_var:
+            for candidate in ["OffsetDrugEnd", "stop", "endtime"]:
+                if candidate in frame.columns:
+                    stop_var = candidate
+                    break
+        index_var = source.index_var
+        if not index_var:
+            for candidate in ["Offset", "OffsetDrugStart", "start", "charttime"]:
+                if candidate in frame.columns:
+                    index_var = candidate
+                    break
+
+        return sic_rate_mass(
+            frame,
+            concept_name=concept_name,
+            val_col=val_var,
+            index_col=index_var,
+            stop_col=stop_var,
+            target_unit=target_unit,
+        )
 
     # Handle SICdb sic_rate_kg callback
     # R ricu logic: add_weight + multiply by 10^6 / weight + expand

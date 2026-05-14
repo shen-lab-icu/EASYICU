@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -202,6 +203,24 @@ def test_pipeline_falls_back_when_planner_returns_empty(ra, synthetic_cohort, tm
     assert Path(result.plan_path).exists()
 
 
+def test_remove_tbd_sentences_strips_placeholder_results(ra):
+    from easyicu.research_agent.pipeline import _remove_tbd_sentences
+
+    bound = (
+        "## Results\n\n"
+        "The cohort comprised 800 patients {evidence:table_one}. "
+        "Median age was [TBD] years {evidence:table_one}. "
+        "SOFA-2 was associated with mortality (OR 1.17) {evidence:primary_association}.\n"
+    )
+
+    cleaned, removed = _remove_tbd_sentences(bound)
+
+    assert "Median age was [TBD] years" not in cleaned
+    assert "The cohort comprised 800 patients" in cleaned
+    assert "SOFA-2 was associated with mortality" in cleaned
+    assert removed == ["Median age was [TBD] years {evidence:table_one}."]
+
+
 def test_pipeline_repairs_failed_generated_code(ra, tmp_path: Path):
     """A real-LLM style traceback should trigger one coder repair pass."""
 
@@ -305,6 +324,13 @@ def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: P
     assert (target_dir / "publication_figure.figure_contract.json").exists()
     summary = json.loads((target_dir / "step_summary.json").read_text(encoding="utf-8"))
     assert summary["publication_figure_rescue"]["mode"] == "promotion"
+    assert summary["figure_path"] == "publication_figure.pdf"
+    assert sorted(summary["figure_files"]) == [
+        "publication_figure.pdf",
+        "publication_figure.png",
+        "publication_figure.svg",
+        "publication_figure.tiff",
+    ]
 
 
 def test_pipeline_repairs_concept_audit_violation(ra, tmp_path: Path):
@@ -831,10 +857,78 @@ def test_pipeline_replicate_writes_cross_database_comparison(ra, tmp_path: Path)
     )
     csv_path = Path(result["comparison_csv"])
     md_path = Path(result["comparison_md"])
+    summary_csv_path = Path(result["summary_csv"])
+    summary_md_path = Path(result["summary_md"])
+    validation_report_path = Path(result["validation_report"])
     assert csv_path.exists()
     assert md_path.exists()
+    assert summary_csv_path.exists()
+    assert summary_md_path.exists()
+    assert validation_report_path.exists()
     df = pd.read_csv(csv_path)
     assert set(df["database"]) == {"miiv", "eicu"}
+    summary_df = pd.read_csv(summary_csv_path)
+    assert set(summary_df["database"]) == {"miiv", "eicu"}
+
+
+def test_plan_contract_does_not_relabel_covariate_as_primary_bias_audit(ra):
+    from easyicu.research_agent import pipeline as pipeline_mod
+
+    ctx = ra.build_research_context(
+        research_question=(
+            "Is biomarker X associated with ICU mortality after adjustment "
+            "for age, sex, MAP, and vasopressor exposure?"
+        ),
+        cohort=pd.DataFrame({
+            "stay_id": [1, 2, 3, 4],
+            "biomarker_x": [1.0, 2.0, 3.0, 4.0],
+            "map_min_24h": [70, 65, 60, 55],
+            "vaso_any_24h": [0, 0, 1, 1],
+            "death": [0, 0, 1, 1],
+        }),
+        cohort_name="c",
+        database="miiv",
+        target_outcome="death",
+    )
+    plan = ra.schema.AnalysisPlan(
+        research_question=ctx.research_question,
+        steps=[
+            ra.schema.AnalysisStep(
+                step_id="03_biomarker_mortality_association",
+                intent=(
+                    "Model biomarker_x and death with age, sex, MAP, "
+                    "and vasopressor exposure as covariates."
+                ),
+                inputs=["biomarker_x", "death", "vaso_any_24h"],
+                expected_outputs=["table:primary_association", "statistic:primary_or"],
+                method="logistic_regression",
+            )
+        ],
+    )
+
+    revised, findings = pipeline_mod._enforce_advanced_plan_contract(
+        plan=plan,
+        context=ctx,
+    )
+
+    assert not findings
+    assert revised.steps[0].step_id == "03_biomarker_mortality_association"
+
+
+def test_pipeline_auto_enables_llm_concept_audit_for_non_mock_llm(ra, tmp_path: Path):
+    class _TextLLM:
+        name = "real-ish"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            return '{"findings":[]}'
+
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=_TextLLM())
+    assert pipeline._enable_llm_concept_audit is True
+
+
+def test_pipeline_keeps_llm_concept_audit_off_for_mock_default(ra, tmp_path: Path):
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    assert pipeline._enable_llm_concept_audit is False
 
 
 def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path):
@@ -1535,6 +1629,29 @@ figure_contract = FigureContract(
     assert '"split_strategy": "stratified_random"' in patched
 
 
+def test_deterministic_runner_repair_preserves_categorical_prediction_columns(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+for col in predictors:
+    if col in data:
+        data[col] = pd.to_numeric(data[col], errors="coerce")
+categorical_features = ["sex"]
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log=(
+            "ValueError: Found array with 0 feature(s) (shape=(800, 0)) while a minimum "
+            "of 1 is required. OneHotEncoder failed after categorical branch was emptied."
+        ),
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "prediction_preserve_categorical_before_ohe_v1"
+    assert 'col not in ["sex"]' in patched
+    assert 'data["sex"] = data["sex"].astype("string")' in patched
+
+
 def test_deterministic_runner_repair_injects_logreg_imputation(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
@@ -1555,6 +1672,46 @@ y_pred_proba = model.predict_proba(X_test)[:, 1]
     assert name == "logreg_impute_v1"
     assert "_easyicu_logreg_impute_v1" in patched
     assert "X_test = _easyicu_logreg_impute_v1(X_test)" in patched
+
+
+def test_deterministic_runner_repair_fixes_prediction_calibration_import(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from sklearn.metrics import roc_auc_score, brier_score_loss, calibration_curve
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log=(
+            "ImportError: cannot import name 'calibration_curve' from "
+            "'sklearn.metrics'"
+        ),
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "prediction_calibration_import_fix_v1"
+    assert "from sklearn.metrics import roc_auc_score, brier_score_loss" in patched
+    assert "from sklearn.calibration import calibration_curve" in patched
+
+
+def test_deterministic_runner_repair_retries_prediction_calibration_import(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from sklearn.metrics import roc_auc_score, brier_score_loss, calibration_curve
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log=(
+            "ImportError: cannot import name 'calibration_curve' from "
+            "'sklearn.metrics'"
+        ),
+        previous_repair="prediction_calibration_import_fix_v1",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "prediction_calibration_import_fix_v1"
+    assert "from sklearn.calibration import calibration_curve" in patched
 
 
 def test_deterministic_runner_repair_regularizes_singular_logit(ra):
@@ -2486,8 +2643,7 @@ def test_deterministic_runner_repair_skips_helper_already_defined(ra):
 
 def test_demote_unresolved_evidence_placeholders_rewrites_to_html_comment(ra):
     """Regression: ``[evidence missing: …]`` markers must be demoted to
-    HTML comments so the runner stops counting them as
-    ``evidence_binding_issue`` while the source still preserves trace.
+    HTML comments for clean rendering while the source still preserves trace.
     """
     from easyicu.research_agent.pipeline import (
         _demote_unresolved_evidence_placeholders,
@@ -2510,6 +2666,430 @@ def test_demote_unresolved_evidence_placeholders_rewrites_to_html_comment(ra):
     # bound link to a real evidence id must survive untouched
     assert "[stratum_table](evidence/x.csv)" in rewritten
     assert demoted == ["mortality_rate", "sensitivity_table"]
+
+
+def test_manuscript_numeric_auditor_blocks_auroc_drift(ra):
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "The model achieved an AUROC of 0.82 (95% CI: 0.79-0.85) "
+        "[model_performance](evidence/model_performance.csv).\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {
+                    "statistic:auroc": 0.7769836515783012,
+                    "statistic:brier_score": 0.1793673693714194,
+                },
+            }
+        ],
+    )
+
+    messages = [finding.message for finding in findings]
+    assert any("AUROC claim" in message for message in messages)
+    assert any("confidence interval" in message for message in messages)
+    assert {finding.severity for finding in findings} == {"error"}
+
+
+def test_manuscript_numeric_auditor_allows_normal_rounding(ra):
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "The model achieved an AUROC of 0.78 and Brier score of 0.18 "
+        "[model_performance](evidence/model_performance.csv). "
+        "The baseline prevalence was 9.6% [model_performance](evidence/model_performance.csv).\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {
+                    "statistic:auroc": 0.7769836515783012,
+                    "statistic:brier_score": 0.1793673693714194,
+                    "statistic:baseline_prevalence": 0.096,
+                },
+            }
+        ],
+    )
+
+    assert findings == []
+
+
+def test_repair_common_writer_placeholders_prediction_fallbacks(ra, tmp_path: Path):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _repair_common_writer_placeholders
+
+    store = EvidenceStore(tmp_path)
+    context_path = tmp_path / "research_context.json"
+    context_path.write_text("{}", encoding="utf-8")
+    store.register_file(
+        kind="log",
+        description="ResearchContext",
+        source_path=context_path,
+        evidence_id="research_context",
+        producer="test",
+    )
+    summary_path = tmp_path / "step_summary.json"
+    summary_path.write_text("{}", encoding="utf-8")
+    store.register_file(
+        kind="statistic",
+        description="Model summary",
+        source_path=summary_path,
+        evidence_id="statistic_step_summary_model",
+        producer="test",
+        aliases=["01_model_training"],
+    )
+
+    scaffold = (
+        "The cohort had 1,000 stays {evidence:table_one}. "
+        "Mortality was 9.6% {evidence:outcome_rate}. "
+        "Performance was evaluated {evidence:primary_association}."
+    )
+    repaired, repairs = _repair_common_writer_placeholders(
+        scaffold,
+        context=SimpleNamespace(
+            research_question="Build a mortality prediction workflow with AUROC."
+        ),
+        evidence=store,
+    )
+
+    assert "{evidence:table_one}" not in repaired
+    assert "{evidence:outcome_rate}" not in repaired
+    assert "{evidence:primary_association}" not in repaired
+    assert "{evidence:research_context}" in repaired
+    assert "{evidence:01_model_training}" in repaired
+    assert ("table_one", "research_context") in repairs
+
+
+def test_execution_gate_and_parent_figure_dependency_helpers(ra):
+    from easyicu.research_agent.pipeline import (
+        _execution_gate_status,
+        _parent_step_id_for_figure_step,
+    )
+
+    plan = ra.AnalysisPlan(
+        research_question="Build a mortality prediction model.",
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_model_training",
+                intent="Train and evaluate model.",
+                expected_outputs=["table:model_performance"],
+            ),
+            ra.AnalysisStep(
+                step_id="01_model_training_figure",
+                intent="Render the publication figure(s) declared by step '01_model_training'.",
+                expected_outputs=["figure:discrimination_calibration"],
+            ),
+        ],
+    )
+
+    assert _parent_step_id_for_figure_step(plan.steps[1]) == "01_model_training"
+    gate = _execution_gate_status(
+        plan=plan,
+        per_step_records=[
+            {"step_id": "01_model_training", "status": "execution_failed"},
+            {
+                "step_id": "01_model_training_figure",
+                "status": "skipped_dependency_failed",
+                "diagnostic_only": True,
+            },
+        ],
+    )
+
+    assert gate["execution_complete"] is False
+    assert gate["failed_steps"] == [
+        {"step_id": "01_model_training", "status": "execution_failed"},
+        {"step_id": "01_model_training_figure", "status": "skipped_dependency_failed"},
+    ]
+
+
+def test_readiness_artifacts_fail_closed_without_manuscript_ready(ra, tmp_path: Path):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+    from easyicu.research_agent.schema import ValidationFinding
+
+    context = ra.ResearchContext(
+        research_question="Build a mortality prediction model.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_model_training",
+                intent="Train model.",
+                expected_outputs=["table:model_performance"],
+            )
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        "# Manuscript scaffold not generated\n\nStrict fail-closed policy blocked drafting.\n",
+        encoding="utf-8",
+    )
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[
+            ValidationFinding(
+                validator="runner",
+                severity="error",
+                message="Step 01_model_training failed.",
+            )
+        ],
+        per_step_records=[
+            {"step_id": "01_model_training", "status": "execution_failed"}
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["manuscript_ready"] is False
+    assert gates["execution_complete"] is False
+    assert not (tmp_path / "manuscript_ready.md").exists()
+    for filename in (
+        "run_status.json",
+        "claim_ledger.csv",
+        "evidence_audit.json",
+        "numeric_audit.json",
+        "author_review_note.md",
+    ):
+        assert (tmp_path / filename).exists()
+    assert "manuscript_ready" not in artifact_paths
+    run_status = json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
+    assert run_status["status"] == "diagnostic_only"
+
+
+def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(ra, tmp_path: Path):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Estimate mortality risk.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_model_training",
+                intent="Train model.",
+                expected_outputs=["table:model_performance"],
+            )
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        "The model achieved an AUROC of 0.78 [model_performance](evidence/model.csv).\n",
+        encoding="utf-8",
+    )
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {"statistic:auroc": 0.776},
+            }
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["manuscript_ready"] is True
+    assert gates["publication_ready"] is False
+    assert artifact_paths["manuscript_ready"] == "manuscript_ready.md"
+    assert (tmp_path / "manuscript_ready.md").read_text(
+        encoding="utf-8"
+    ) == bound_path.read_text(encoding="utf-8")
+
+
+def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
+    ra, tmp_path: Path
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+
+    evidence = EvidenceStore(tmp_path)
+    for suffix in ("svg", "png", "pdf", "tiff"):
+        path = tmp_path / f"easyicu_publication_figure.{suffix}"
+        path.write_text("x", encoding="utf-8")
+        evidence.register_file(
+            kind="figure",
+            description="Publication figure export.",
+            source_path=path,
+            evidence_id=f"publication_figure_{suffix}",
+            producer="publication_figure_skill",
+            generation_mode="deterministic_figure_skill",
+            metadata={"figure_role": "publication_figure"},
+        )
+
+    readiness = _publication_figure_bundle_ready(evidence=evidence, run_dir=tmp_path)
+
+    assert readiness["publication_figure_bundle_ready"] is True
+    assert readiness["publication_ready_stems"] == ["easyicu_publication_figure"]
+
+
+def test_salvage_minimal_contract_step_summary_from_table_one_csv(
+    ra, tmp_path: Path
+):
+    from easyicu.research_agent.pipeline import _salvage_minimal_contract_step_summary
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir(parents=True)
+    (out_dir / "step_summary.json").write_text("{}", encoding="utf-8")
+    pd.DataFrame(
+        [
+            {"variable": "age", "median": 65.0},
+            {"variable": "sofa2", "median": 7.0},
+        ]
+    ).to_csv(out_dir / "table_one.csv", index=False)
+
+    salvaged = _salvage_minimal_contract_step_summary(
+        step=ra.AnalysisStep(
+            step_id="01_table_one",
+            intent="Summarise baseline characteristics.",
+            expected_outputs=["table:table_one"],
+        ),
+        out_dir=out_dir,
+    )
+
+    assert salvaged is True
+    payload = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert payload["table_one_path"] == "table_one.csv"
+    assert payload["n_rows"] == 2
+    assert payload["variables_reported"] == ["age", "sofa2"]
+
+
+def test_metric_claim_extractors_ignore_evidence_link_ids(ra):
+    from easyicu.research_agent.pipeline import (
+        _extract_metric_claims,
+        _extract_percent_claims_near,
+    )
+
+    text = (
+        "Model performance was assessed using AUROC, Brier score, and baseline prevalence "
+        "[01_model_training](evidence/statistic_step_summary.json). "
+        "The model demonstrated an AUROC of 0.70 [01_model_training](evidence/x.json) "
+        "and a Brier score of 0.20 [01_model_training](evidence/x.json). "
+        "The incidence of ICU death was 9.6% [00_probe](evidence/probe.csv)."
+    )
+
+    assert _extract_metric_claims(text, r"\b(?:AUROC|AUC)\b") == [0.70]
+    assert _extract_metric_claims(text, r"\bBrier(?: score)?\b") == [0.20]
+    assert _extract_percent_claims_near(
+        text, r"\b(?:mortality|death|outcome incidence)\b"
+    ) == [0.096]
+
+
+def test_critic_accepts_bound_markdown_evidence_links_but_blocks_hidden_missing_refs(ra):
+    critic = ra.CriticAgent()
+
+    clean = critic.review_manuscript(
+        scaffold=(
+            "The cohort comprised 1,000 ICU stays "
+            "[research_context](evidence/research_context__research_context.json \"sha256=abc\"). "
+            "The model achieved an AUROC of 0.78 "
+            "[01_model_training](evidence/statistic_step_summary.json \"sha256=def\")."
+        ),
+        available_evidence_ids=["research_context", "01_model_training"],
+    )
+
+    assert clean.status == "pass"
+    assert clean.unsupported_claims == []
+    assert clean.missing_evidence_refs == []
+
+    blocked = critic.review_manuscript(
+        scaffold=(
+            "The cohort comprised 1,000 ICU stays "
+            "[research_context](evidence/research_context__research_context.json \"sha256=abc\"). "
+            "<!-- evidence missing: table_one -->"
+        ),
+        available_evidence_ids=["research_context"],
+    )
+
+    assert blocked.status == "blocked"
+    assert blocked.missing_evidence_refs == ["table_one"]
+
+
+def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
+    ra, synthetic_cohort, tmp_path: Path, monkeypatch
+):
+    def fake_manuscript_run(self, *, context, evidence_ids, evidence_digest=None):
+        return (
+            "The model's performance was consistent across folds, indicating robustness.\n\n"
+            "Baseline characteristics are summarised in Table 1 {evidence:research_context}.\n"
+        )
+
+    monkeypatch.setattr(ra.ManuscriptAgent, "run", fake_manuscript_run)
+
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    result = pipeline.run(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=synthetic_cohort,
+        cohort_name="synthetic_test_cohort",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    run_dir = Path(result.workdir)
+    critique = json.loads((run_dir / "manuscript_critique.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    run_status = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
+    filtered = (run_dir / "manuscript_scaffold_filtered.md").read_text(encoding="utf-8")
+
+    assert critique["status"] == "pass"
+    assert critique["unsupported_claims"] == []
+    assert "performance was consistent" not in filtered
+    assert run_status["gates"]["evidence_complete"] is True
+    assert not any(
+        finding["validator"] == "critic_agent" and "manuscript" in finding["message"]
+        for finding in manifest["findings"]
+    )
+
+
+def test_evidence_filter_removes_unquantified_performance_claims(ra, tmp_path: Path):
+    from easyicu.research_agent.evidence import EvidenceStore
+
+    store = EvidenceStore(tmp_path)
+    scaffold = (
+        "The model's performance was consistent across folds, indicating robustness.\n"
+        "Methods text can remain here.\n"
+    )
+
+    filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
+
+    assert "performance was consistent" not in filtered
+    assert any("performance was consistent" in sentence for sentence in removed)
+    assert "Methods text can remain here." in filtered
 
 
 def test_demote_unresolved_evidence_placeholders_no_op_when_clean(ra):
@@ -2832,6 +3412,25 @@ def test_semantic_aliases_include_step_id_and_prediction_aliases(ra, tmp_path: P
     assert "model_training" in aliases
     assert "model_performance" in aliases
     assert "prediction_performance" in aliases
+    assert "baseline_prevalence" in aliases
+    assert "primary_association" not in aliases
+    assert "outcome_rate" not in aliases
+
+
+def test_infer_generic_v15_fallback_key_skips_prediction_tasks(ra):
+    from easyicu.research_agent.pipeline import _infer_generic_v15_fallback_key
+
+    key = _infer_generic_v15_fallback_key(
+        code=(
+            "from sklearn.model_selection import StratifiedKFold\n"
+            "y_pred = model.predict_proba(X)[:, 1]\n"
+            "roc_auc_score(y, y_pred)\n"
+            "brier_score_loss(y, y_pred)\n"
+            "lactate_max_24h\n"
+        ),
+        diagnostic_text="Prediction model for t07_mortality_prediction_auroc calibration plot",
+    )
+    assert key is None
 
 
 def test_semantic_aliases_bind_cohort_summary_outcome_rate(ra, tmp_path: Path):

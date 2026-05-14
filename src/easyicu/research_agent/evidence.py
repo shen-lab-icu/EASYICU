@@ -533,14 +533,14 @@ class EvidenceStore:
                     missing.append(requested_id)
                     continue
                 if verbose:
-                    suffix = _binding_caveat(rec)
+                    suffix = _binding_caveat(rec, verbose=verbose)
                     bound_parts.append(
                         f"[{rec.description} | {rec.relative_path} | sha256={rec.sha256[:8]}]{suffix}"
                     )
                 else:
                     bound_parts.append(
                         f'[{requested_id}]({rec.relative_path} "sha256={rec.sha256[:8]}")'
-                        f"{_binding_caveat(rec)}"
+                        f"{_binding_caveat(rec, verbose=verbose)}"
                     )
             if missing:
                 bound_parts.extend(f"[evidence missing: {item}]" for item in missing)
@@ -585,15 +585,20 @@ def _id_prefix(kind: str, stem: str) -> str:
     return f"{kind}_{safe}" if safe else kind
 
 
-def _binding_caveat(record: EvidenceRecord) -> str:
+def _binding_caveat(record: EvidenceRecord, *, verbose: bool = False) -> str:
     severity = record.finding_severity
     if severity in {"warning", "error"}:
-        return f" ({severity}: see manifest)"
+        if verbose:
+            return f" ({severity}: see manifest)"
+        return f"<!-- {severity}: see manifest -->"
     return ""
 
 
 _RESULT_TOKEN_RE = re.compile(
     r"(\bOR\b|\bHR\b|\bRR\b|\bAUC\b|\bAUROC\b|\bBrier\b|\bcalibration\b|"
+    r"\bdiscrimination\b|\bperformance\b|\brobust(?:ness)?\b|"
+    r"\boverfitting\b|\bmiscalibration\b|\bmissingness\b|\bgeneralisa(?:bility|ble)\b|"
+    r"\bgeneraliza(?:bility|ble)\b|"
     r"\bmedian\b|\bmean\b|\bincidence\b|\bmortality\b|\bhazard\b|"
     r"\bconfidence interval\b|\bCI\b|\bp\s*[<=>]|%|\d)",
     re.I,

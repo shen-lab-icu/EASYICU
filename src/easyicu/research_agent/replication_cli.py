@@ -1,4 +1,10 @@
-"""CLI for deterministic EasyICU research-agent replication packages."""
+"""CLI for EasyICU replication packages.
+
+Two modes are supported:
+
+1. The legacy deterministic lactate-MAP-vasopressor package builder.
+2. Paper-aware replication mode driven by ``ResearchAgentPipeline.reproduce_paper``.
+"""
 
 from __future__ import annotations
 
@@ -11,10 +17,39 @@ from typing import Dict, Optional, Sequence
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="easyicu-research-replication",
-        description=(
-            "Build deterministic lactate-MAP-vasopressor replication tables "
-            "from one or more EasyICU concept-export directories."
-        ),
+        description="Build deterministic EasyICU replication packages or run paper-aware replication mode.",
+    )
+    parser.add_argument(
+        "--paper",
+        default=None,
+        help="Path to paper text/markdown/PDF, or inline text for paper-aware replication mode.",
+    )
+    parser.add_argument(
+        "--cohort",
+        default=None,
+        help="Cohort parquet/CSV for paper-aware replication mode.",
+    )
+    parser.add_argument(
+        "--database",
+        default=None,
+        help="Database tag for paper-aware replication mode.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["replication", "manuscript"],
+        default="replication",
+        help="Paper-aware replication mode: replication only, or replication plus showcase manuscript.",
+    )
+    parser.add_argument(
+        "--llm",
+        choices=["mock", "openai"],
+        default=None,
+        help="LLM backend for paper-aware replication mode.",
+    )
+    parser.add_argument(
+        "--openai-model",
+        default="gpt-4o-mini",
+        help="Model name when --llm openai is used.",
     )
     parser.add_argument(
         "--target",
@@ -109,6 +144,33 @@ def _parse_pairs(raw_pairs: Sequence[str], flag: str) -> Dict[str, Path]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
+
+    if args.paper:
+        if not args.cohort or not args.database:
+            raise SystemExit("--paper mode requires --cohort and --database.")
+        if args.llm is None:
+            raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`) for --paper mode.")
+        from .llm import MockLLMClient, OpenAIClient
+        from .pipeline import ResearchAgentPipeline
+
+        llm = OpenAIClient(model=args.openai_model) if args.llm == "openai" else MockLLMClient()
+        pipeline = ResearchAgentPipeline(
+            workdir=args.output,
+            llm=llm,
+        )
+        result = pipeline.reproduce_paper(
+            paper=args.paper,
+            cohort=args.cohort,
+            database=args.database,
+            mode=args.mode,
+        )
+        print(f"run_id: {result.run_id}")
+        print(f"workdir: {result.workdir}")
+        print(f"manifest: {result.manifest_path}")
+        print(f"report: {result.report_path}")
+        print(f"replication_report: {result.replication_report_path}")
+        print(f"manuscript: {result.manuscript_path}")
+        return 0
 
     from .replication import (
         LACTATE_MAP_VASO_MINIMAL_EXPORT_GROUPS,
