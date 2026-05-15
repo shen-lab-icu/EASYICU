@@ -113,6 +113,16 @@ CONCEPT_DICTIONARY = {
     'dexamethasone': ('Dexamethasone', '地塞米松', 'boolean'),
     'octreotide': ('Octreotide (Sandostatin)', '奥曲肽', 'boolean'),
     'neostigmine': ('Neostigmine', '新斯的明', 'boolean'),
+    'phenytoin': ('Phenytoin (Dilantin)', '苯妥英', 'boolean'),
+    'labetalol': ('Labetalol', '拉贝洛尔', 'boolean'),
+    'esmolol': ('Esmolol (Brevibloc)', '艾司洛尔', 'boolean'),
+    'diltiazem': ('Diltiazem (Cardizem)', '地尔硫卓', 'boolean'),
+    'nicardipine': ('Nicardipine (Cardene)', '尼卡地平', 'boolean'),
+    'warfarin': ('Warfarin (Coumadin)', '华法林', 'boolean'),
+    'apixaban': ('Apixaban (Eliquis)', '阿哌沙班', 'boolean'),
+    'enoxaparin': ('Enoxaparin (Lovenox)', '依诺肝素', 'boolean'),
+    'aspirin': ('Aspirin', '阿司匹林', 'boolean'),
+    'insulin': ('Insulin (boolean)', '胰岛素 (布尔)', 'boolean'),
     'morphine': ('Morphine', '吗啡', 'boolean'),
     'heparin': ('Heparin', '肝素', 'boolean'),
     'mannitol': ('Mannitol', '甘露醇', 'boolean'),
@@ -128,6 +138,9 @@ CONCEPT_DICTIONARY = {
     # 尿量
     'urine': ('Urine Output', '尿量', 'mL'),
     'urine24': ('24h Urine Output', '24小时尿量', 'mL/24h'),
+    'total_input_ml': ('Total IV Fluid Input', '总输液量', 'mL/hr'),
+    'fluid_balance': ('Hourly Fluid Balance', '每小时液体平衡', 'mL/hr'),
+    'fluid_balance_cumulative': ('Cumulative Fluid Balance', '累计液体平衡', 'mL'),
     'uo_6h': ('6h Avg Urine Output Rate', '6小时平均尿量速率', 'mL/kg/h'),
     'uo_12h': ('12h Avg Urine Output Rate', '12小时平均尿量速率', 'mL/kg/h'),
     'uo_24h': ('24h Avg Urine Output Rate', '24小时平均尿量速率', 'mL/kg/h'),
@@ -580,6 +593,22 @@ CONCEPT_DB_COVERAGE = {
     'dexamethasone': 2,
     'octreotide': 5,
     'neostigmine': 4,
+    # Batch 7 (2026-05-14)
+    'phenytoin': 3,
+    'labetalol': 5,
+    'esmolol': 5,
+    'diltiazem': 5,
+    'nicardipine': 4,
+    # Batch 8 (2026-05-14)
+    'warfarin': 4,
+    'apixaban': 1,
+    'enoxaparin': 4,
+    'aspirin': 3,
+    'insulin': 5,  # MIIV+MIMIC+eICU+AUMC+HiRID
+    # Fluid balance (2026-05-14)
+    'total_input_ml': 4,  # MIIV + MIMIC-III MV + AUMC
+    'fluid_balance': 4,
+    'fluid_balance_cumulative': 4,
     # Renal rolling-window UO rates (2026-05-13): derived from urine + weight
     'uo_6h': 6,
     'uo_12h': 6,

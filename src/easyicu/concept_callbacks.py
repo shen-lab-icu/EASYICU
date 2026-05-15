@@ -7052,6 +7052,147 @@ def _callback_fluid_balance_admitted(
         )
 
 
+def _callback_fluid_balance_hourly(
+    tables: Dict[str, "ICUTable"],
+    ctx: "ConceptCallbackContext",
+) -> "ICUTable":
+    """Compute hourly fluid balance = total_input_ml - urine.
+
+    Both dependencies go through the standard loading pipeline, so their time
+    columns are already aligned to relative hours. This callback simply merges
+    them on (id, time) and subtracts.
+    """
+    input_tbl = tables.get("total_input_ml")
+    urine_tbl = tables.get("urine")
+
+    # Determine schema from whichever table is available
+    ref_tbl = input_tbl or urine_tbl
+    if ref_tbl is None:
+        return _as_icutbl(
+            pd.DataFrame(columns=["stay_id", "charttime", "fluid_balance"]),
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column="fluid_balance",
+        )
+
+    id_col = ref_tbl.id_columns[0] if ref_tbl.id_columns else "stay_id"
+    declared_time_col = ref_tbl.index_column or "charttime"
+
+    # Detect actual time column in the DataFrame (may differ from declared)
+    def detect_time_col(df, declared):
+        if declared in df.columns:
+            return declared
+        # Common time-column candidates after pipeline normalization
+        for candidate in ("charttime", "starttime", "start", "time", "measuredat",
+                          "givenat", "Offset", "datetime"):
+            if candidate in df.columns:
+                return candidate
+        return declared
+
+    # Extract DataFrames
+    def to_df(tbl, val_name):
+        if tbl is None or tbl.data.empty:
+            return pd.DataFrame(columns=[id_col, "charttime", val_name])
+        df = tbl.data.copy()
+        # Detect time column from this specific DataFrame
+        if "charttime" in df.columns:
+            pass  # already canonical
+        else:
+            # Find first available time-like column and rename
+            for candidate in (declared_time_col, "starttime", "start", "time",
+                              "measuredat", "givenat", "Offset", "datetime"):
+                if candidate and candidate in df.columns:
+                    df = df.rename(columns={candidate: "charttime"})
+                    break
+        # Rename value column
+        vc = tbl.value_column or val_name
+        if vc in df.columns and vc != val_name:
+            df = df.rename(columns={vc: val_name})
+        elif val_name not in df.columns:
+            # Try to find the value column
+            non_meta = [c for c in df.columns if c not in [id_col, "charttime"]]
+            if non_meta:
+                df = df.rename(columns={non_meta[0]: val_name})
+        # Defensive: if still missing required columns, return empty
+        if "charttime" not in df.columns or val_name not in df.columns:
+            return pd.DataFrame(columns=[id_col, "charttime", val_name])
+        return df[[id_col, "charttime", val_name]].copy()
+
+    input_df = to_df(input_tbl, "input_ml")
+    urine_df = to_df(urine_tbl, "urine_ml")
+    time_col = "charttime"  # canonical post-rename
+
+    # Ensure numeric
+    input_df["input_ml"] = pd.to_numeric(input_df["input_ml"], errors="coerce").fillna(0)
+    urine_df["urine_ml"] = pd.to_numeric(urine_df["urine_ml"], errors="coerce").fillna(0)
+
+    # Merge on (id, time) — outer join
+    merged = pd.merge(input_df, urine_df, on=[id_col, time_col], how="outer")
+    merged["input_ml"] = merged["input_ml"].fillna(0)
+    merged["urine_ml"] = merged["urine_ml"].fillna(0)
+
+    # Hourly balance = input - output
+    merged["fluid_balance"] = merged["input_ml"] - merged["urine_ml"]
+    merged = merged.sort_values([id_col, time_col])
+
+    result = merged[[id_col, time_col, "fluid_balance"]].copy()
+
+    return _as_icutbl(
+        result,
+        id_columns=[id_col],
+        index_column=time_col,
+        value_column="fluid_balance",
+    )
+
+
+def _callback_fluid_balance_cumulative(
+    tables: Dict[str, "ICUTable"],
+    ctx: "ConceptCallbackContext",
+) -> "ICUTable":
+    """Cumulative fluid balance = running sum of hourly fluid_balance per stay."""
+    fb_tbl = tables.get("fluid_balance")
+    if fb_tbl is None or fb_tbl.data.empty:
+        return _as_icutbl(
+            pd.DataFrame(columns=["stay_id", "charttime", "fluid_balance_cumulative"]),
+            id_columns=["stay_id"],
+            index_column="charttime",
+            value_column="fluid_balance_cumulative",
+        )
+
+    df = fb_tbl.data.copy()
+    id_col = fb_tbl.id_columns[0] if fb_tbl.id_columns else "stay_id"
+    declared_time_col = fb_tbl.index_column or "charttime"
+    val_col = fb_tbl.value_column or "fluid_balance"
+
+    # Detect time col from actual DataFrame
+    if declared_time_col not in df.columns:
+        for candidate in ("charttime", "starttime", "start", "time"):
+            if candidate in df.columns:
+                df = df.rename(columns={candidate: "charttime"})
+                break
+    elif declared_time_col != "charttime":
+        df = df.rename(columns={declared_time_col: "charttime"})
+    time_col = "charttime"
+
+    if val_col not in df.columns:
+        # Fallback to first non-meta column
+        non_meta = [c for c in df.columns if c not in [id_col, time_col]]
+        if non_meta:
+            val_col = non_meta[0]
+
+    df[val_col] = pd.to_numeric(df[val_col], errors="coerce").fillna(0)
+    df = df.sort_values([id_col, time_col])
+    df["fluid_balance_cumulative"] = df.groupby(id_col)[val_col].cumsum()
+    result = df[[id_col, time_col, "fluid_balance_cumulative"]].copy()
+
+    return _as_icutbl(
+        result,
+        id_columns=[id_col],
+        index_column=time_col,
+        value_column="fluid_balance_cumulative",
+    )
+
+
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "bmi": _callback_bmi,
     "anion_gap": _callback_anion_gap,
@@ -7087,6 +7228,8 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "vent_ind": _callback_vent_ind,
     "urine24": _callback_urine24,
     "fluid_balance_admitted": _callback_fluid_balance_admitted,
+    "fluid_balance_hourly": _callback_fluid_balance_hourly,
+    "fluid_balance_cumulative": _callback_fluid_balance_cumulative,
     "vaso_ind": _callback_vaso_ind,
     "vaso_ind_rate": _callback_vaso_ind_rate,
     "sep3": _callback_sep3,

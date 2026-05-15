@@ -298,6 +298,11 @@ __all__ = [
     "HypothesisCandidate",
     "HypothesisGeneratorResult",
     "generate_hypotheses",
+    # Analysis-pattern auditor (generic ICU footguns)
+    "AnalysisPatternAuditor",
+    # PDF render
+    "PDFRenderResult",
+    "render_pdf_for_run",
     "AuditEvent",
     "AuditLogger",
     "WorkflowGraph",
@@ -703,6 +708,14 @@ def __getattr__(name: str):
         from . import hypothesis_generator as _hg
 
         return getattr(_hg, name)
+    if name == "AnalysisPatternAuditor":
+        from .analysis_pattern_auditor import AnalysisPatternAuditor
+
+        return AnalysisPatternAuditor
+    if name in {"PDFRenderResult", "render_pdf_for_run"}:
+        from . import pdf_render as _pdf
+
+        return getattr(_pdf, name)
     if name in {"mcp_dispatch", "MCP_TOOLS", "MCP_TOOL_SCHEMAS"}:
         from . import mcp_server as _mcp
 

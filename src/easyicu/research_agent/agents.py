@@ -971,18 +971,65 @@ class AnalyzerAgent:
 
 
 class WriterAgent:
-    """Produces a manuscript scaffold whose every claim cites an evidence id.
+    """Produces a full manuscript by writing each section in a separate
+    LLM call, then concatenating. This avoids the "lazy middle"
+    problem where small models truncate Introduction / Discussion.
 
-    The writer does NOT generate Discussion or clinical claims; that is
-    a policy decision encoded in the prompt and enforced by the
-    pipeline (Discussion section is left blank with a note for the
-    human author).
+    Each section call gets:
+    - the full research context (variables, cohort, question),
+    - the machine evidence digest (numbers to cite),
+    - the list of available evidence ids,
+    - a section-specific instruction with word-count target.
+
+    The downstream causal-audit + critic loop reject drafts that use
+    causal language for associations or cite non-existent evidence ids.
     """
 
     def __init__(self, llm: LLMClient, *, language: str = "en") -> None:
         self.llm = llm
         lang = (language or "en").lower()
         self.language = "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
+
+    def _call_section(
+        self,
+        *,
+        section_name: str,
+        instruction: str,
+        context: ResearchContext,
+        evidence_ids: Sequence[str],
+        evidence_digest: Optional[str],
+        max_tokens: int = 2048,
+    ) -> str:
+        lang_inst = _writer_language_instruction(self.language)
+        messages = [
+            LLMMessage(role="system", content=_SYSTEM_GUIDE + _WRITER_GUIDE),
+            LLMMessage(
+                role="user",
+                content=(
+                    f"Write ONLY the **{section_name}** section of an ICU research "
+                    "manuscript in markdown. Do NOT write any other section.\n\n"
+                    f"{instruction}\n\n"
+                    f"{lang_inst}\n\n"
+                    "CITATION RULE:\n"
+                    "- `{{evidence:<id>}}` is an inline citation (like a footnote number).\n"
+                    "- Write the actual number in prose, then cite: "
+                    "`mortality was 12% {{evidence:outcome_rate}}`.\n"
+                    "- NEVER use a placeholder as a noun. If a number is unavailable, omit the sentence.\n"
+                    "- Only use ids from this list: " + str(list(evidence_ids)) + "\n\n"
+                    "LANGUAGE POLICY:\n"
+                    "- Use ONLY associational phrasing. Forbidden: 'caused by', 'causal', "
+                    "'attributable to', 'effect of', 'due to', 'leads to', 'drives'.\n"
+                    "- Allowed: 'was associated with', 'correlated with', 'observed alongside', "
+                    "'consistent with', 'may reflect'.\n\n"
+                    "MACHINE EVIDENCE DIGEST:\n"
+                    + (evidence_digest or "(none)")
+                    + "\n\nRESEARCH CONTEXT:\n"
+                    + _format_context(context)
+                ),
+            ),
+        ]
+        raw = self.llm.complete(messages, max_tokens=max_tokens, temperature=0.3).strip()
+        return _strip_code_fence(raw)
 
     def run(
         self,
@@ -991,105 +1038,154 @@ class WriterAgent:
         evidence_ids: Sequence[str],
         evidence_digest: Optional[str] = None,
     ) -> str:
-        messages = [
-            LLMMessage(role="system", content=_SYSTEM_GUIDE + _WRITER_GUIDE),
-            LLMMessage(
-                role="user",
-                content=(
-                    "Write a MANUSCRIPT scaffold (markdown) with sections "
-                    "Title, Abstract (one paragraph), Methods, Results. "
-                    "Leave Discussion as a one-line stub: "
-                    "'(left to the human author)'.\n\n"
-                    + _writer_language_instruction(self.language)
-                    + "\n\n"
-                    "CITATION RULE — VERY IMPORTANT:\n"
-                    "`{evidence:<id>}` is a *citation*, not a value. It "
-                    "binds to a markdown link in the rendered manuscript. "
-                    "Treat it like an inline footnote.\n"
-                    "  • DO write the actual numbers in prose, then cite. "
-                    "    e.g. `The cohort comprised 51,838 stays "
-                    "{evidence:table_one}.`\n"
-                    "  • DO write `(see {evidence:primary_association})` "
-                    "    after a sentence describing a finding.\n"
-                    "  • DO NOT use a placeholder *as the noun*. "
-                    "    e.g. NEVER write `a cohort of {evidence:table_one} "
-                    "patients` — the binder has no number to substitute "
-                    "and the manuscript becomes unreadable. Pull the "
-                    "number from the registered tables/statistics first, "
-                    "write it inline, then cite.\n"
-                    "  • If a number is unknown, omit the sentence or say "
-                    "    explicitly that the value was not available from the "
-                    "    registered digest — never paper over it with a "
-                    "    placeholder noun.\n\n"
-                    "RESULTS WRITING RULES:\n"
-                    "- Do not write `[TBD]`. If the digest does not contain a required number, "
-                    "omit that sentence instead of leaving placeholders in the manuscript.\n"
-                    "- If an exact baseline number is unavailable, write a table-anchored sentence such as "
-                    "`Baseline characteristics are summarised in Table 1 {evidence:table_one}.` "
-                    "Do not force partially filled numeric prose.\n"
-                    "- Only cite `table_one`, `outcome_rate`, or `primary_association` when those ids "
-                    "actually appear in the available evidence ids and aliases below. If an alias is "
-                    "absent, omit that sentence instead of leaving an unresolved placeholder.\n"
-                    "- Use `table_one` / `cohort_summary` for cohort size and baseline characteristics.\n"
-                    "- Use `outcome_rate` / `outcome_incidence` for event counts and mortality incidence; "
-                    "do not cite `00_probe` for the primary mortality result.\n"
-                    "- Use `primary_association` for adjusted effect estimates, 95% CI, and p-values.\n"
-                    "- For prediction-model tasks, prefer `model_performance`, `prediction_performance`, "
-                    "or the model-training step summary for AUROC, Brier score, calibration, split "
-                    "strategy, and baseline prevalence. Do not write odds-ratio or predictor-significance "
-                    "claims unless the evidence ids explicitly include a coefficient/effect table.\n"
-                    "- For AUROC/Brier/baseline-prevalence claims, copy the value from the MACHINE "
-                    "EVIDENCE DIGEST exactly enough to support normal rounding: for example 0.7769 "
-                    "may be written as 0.78, never as 0.82. Do not report a confidence interval "
-                    "unless the digest explicitly contains lower and upper CI fields for that metric.\n"
-                    "- If a prediction-model task lacks `table_one`, cite `research_context` or the "
-                    "model-performance step for cohort size rather than writing `Table 1`.\n"
-                    "- If a prediction-model task lacks `outcome_rate`, use baseline prevalence from "
-                    "`model_performance`, `prediction_performance`, or the prediction step summary.\n"
-                    "- If the digest includes covariate rows such as `age_or`, `age_p_value`, "
-                    "`sex_M_or`, or `sex_M_p_value`, you may state whether those covariates were "
-                    "or were not statistically significant. If those fields are absent, do not guess.\n"
-                    "- Keep the Abstract balanced and data-rich: include cohort N, outcome incidence, "
-                    "the primary adjusted effect size with precision, and one concise limitation when "
-                    "the digest indicates a QC or statistical warning.\n"
-                    "- Write like a manuscript, not a pipeline log. Never write phrases such as "
-                    "`warning: see manifest`, `the primary analysis reveals`, or `data integrity`.\n"
-                    "- If a validator warning matters clinically, restate it as one ordinary sentence "
-                    "in Results or the final Abstract sentence, for example by describing missingness, "
-                    "non-monotonic score-zero behaviour, or multiple-testing caveats.\n"
-                    "- In Results, prioritise this order when the facts are available: cohort size, "
-                    "event count/rate, baseline characteristics, primary association, then one "
-                    "sensitivity or QC sentence.\n\n"
-                    "PLACEHOLDER FORMAT:\n"
-                    "Exact form `{evidence:<id>}`, no spaces inside braces. "
-                    "Use only ids from the list below; anything else "
-                    "renders as `[evidence missing: …]`. Prefer short "
-                    "semantic aliases (`table_one`, `outcome_rate`, "
-                    "`sofa_strata`, `primary_association`) when available. "
-                    "For prediction-model tasks, prefer `model_performance` "
-                    "or `prediction_performance` for AUROC/Brier/calibration "
-                    "claims instead of inventing a primary-association citation.\n\n"
-                    "OUTPUT FORMAT:\n"
-                    "Return *only* the markdown manuscript. No commentary "
-                    "before or after. A leading ```markdown … ``` fence is "
-                    "acceptable and will be stripped.\n\n"
-                    f"Available evidence ids and aliases: {list(evidence_ids)}\n\n"
-                    "MACHINE EVIDENCE DIGEST:\n"
-                    + (evidence_digest or "(no machine digest available)")
-                    + "\n\n"
-                    "DIGEST RULES:\n"
-                    "- Use numeric values only if they appear in the MACHINE EVIDENCE DIGEST.\n"
-                    "- If a digest entry says a result is null, skipped, unavailable, or error, "
-                    "do not write a numeric effect estimate for that result.\n"
-                    "- If the digest and free-form context disagree, trust the digest.\n\n"
-                    "RESEARCH CONTEXT:\n" + _format_context(context)
-                ),
+        common = dict(
+            context=context,
+            evidence_ids=evidence_ids,
+            evidence_digest=evidence_digest,
+        )
+
+        title = self._call_section(
+            section_name="Title and Keywords",
+            instruction=(
+                "Write:\n"
+                "1. `# <title>` — 12-20 words, include study design + cohort + primary finding direction.\n"
+                "2. On the next line: `**Keywords:** keyword1, keyword2, ...` (5-7 keywords).\n"
+                "Nothing else."
             ),
-        ]
-        raw = self.llm.complete(messages, max_tokens=2048, temperature=0.2).strip()
-        # Free-tier models often wrap markdown in ```markdown … ```; the
-        # binder needs raw markdown to find {evidence:*} placeholders.
-        return _strip_code_fence(raw)
+            max_tokens=256,
+            **common,
+        )
+
+        abstract = self._call_section(
+            section_name="Abstract",
+            instruction=(
+                "Write `## Abstract` with four labelled paragraphs:\n"
+                "- **Background:** 2-3 sentences (clinical importance, knowledge gap).\n"
+                "- **Methods:** 3-4 sentences (cohort, design, primary analysis, ICU-aware aggregation).\n"
+                "- **Results:** 4-5 sentences (N, outcome incidence, primary effect size with 95% CI and p, one supporting finding).\n"
+                "- **Conclusions:** 1-2 sentences (associational phrasing only, call for validation).\n"
+                "Target: 200-300 words total."
+            ),
+            max_tokens=1024,
+            **common,
+        )
+
+        introduction = self._call_section(
+            section_name="Introduction",
+            instruction=(
+                "Write `## Introduction` with 4-5 paragraphs (400-600 words total):\n"
+                "- Para 1: Clinical importance of ICU mortality prediction / organ dysfunction scoring.\n"
+                "- Para 2: Current evidence on the predictor (SOFA / lactate / the relevant variable). Cite literature if available.\n"
+                "- Para 3: Knowledge gap or limitation of prior work.\n"
+                "- Para 4: Study objective and hypothesis (one sentence each).\n"
+                "Write substantive prose, not bullet points."
+            ),
+            max_tokens=2048,
+            **common,
+        )
+
+        methods = self._call_section(
+            section_name="Methods",
+            instruction=(
+                "Write `## Methods` with sub-sections:\n"
+                "### Study design and cohort\n"
+                "  Database, setting (ICU type), inclusion/exclusion criteria, time period.\n"
+                "### Variables\n"
+                "  Primary predictor, outcome, covariates. For each, state the ICU-aware "
+                "aggregation rule (from the research context: ordinal → max-in-window, "
+                "labs → median, etc.).\n"
+                "### Statistical analysis\n"
+                "  Model family (logistic regression / Cox / clustering), adjustment set, "
+                "sensitivity analyses (multiple-testing correction, subgroup analysis, "
+                "SOFA-zero stratum audit if applicable).\n"
+                "### Software and reproducibility\n"
+                "  One sentence: 'Analyses were conducted through the EasyICU research-agent "
+                "pipeline; the full reproducibility envelope (prompt/response SHA-256 hashes, "
+                "per-step scripts, and dependency lockfile) is released as supplementary material.'\n"
+                "Target: 400-600 words."
+            ),
+            max_tokens=2048,
+            **common,
+        )
+
+        results = self._call_section(
+            section_name="Results",
+            instruction=(
+                "Write `## Results` with sub-sections:\n"
+                "### Cohort characteristics\n"
+                "  N, key demographics, cite {evidence:table_one} if available.\n"
+                "### Primary outcome\n"
+                "  Incidence, cite {evidence:outcome_rate}.\n"
+                "### Primary association\n"
+                "  Effect size, 95% CI, p-value, cite {evidence:primary_association} or "
+                "{evidence:model_performance}.\n"
+                "### Sensitivity and subgroup analyses\n"
+                "  Multiple-testing result, subgroup heterogeneity, E-value if available.\n"
+                "### ICU-specific quality control\n"
+                "  SOFA-zero stratum finding if applicable, cite {evidence:sofa_strata}.\n"
+                "Target: 400-600 words. Every numeric claim MUST have an {evidence:id} citation."
+            ),
+            max_tokens=2048,
+            **common,
+        )
+
+        discussion = self._call_section(
+            section_name="Discussion",
+            instruction=(
+                "Write `## Discussion` with 4-5 paragraphs (600-1000 words total):\n"
+                "- Para 1: Restate primary finding, situate vs. prior literature.\n"
+                "- Para 2: Possible mechanisms (use 'may reflect', 'is consistent with', "
+                "'one possible explanation'). NEVER say 'caused by'.\n"
+                "- Para 3: Clinical implications as hypothesis-generating ('these data suggest', "
+                "'support further investigation'). Do NOT recommend a treatment.\n"
+                "- Para 4: Comparison with published cohorts.\n"
+                "- Para 5: Strengths of the approach (traceable evidence, ICU-aware rules, "
+                "reproducibility envelope).\n"
+                "Write substantive prose. This is the most important section for reviewers."
+            ),
+            max_tokens=3072,
+            **common,
+        )
+
+        limitations = self._call_section(
+            section_name="Limitations",
+            instruction=(
+                "Write `## Limitations` — one paragraph, 150-250 words. Include at least:\n"
+                "1. Observational design → no causal inference, residual confounding.\n"
+                "2. Single synthetic/database cohort → limited external generalisability.\n"
+                "3. One ICU-specific limitation from the evidence (component missingness in "
+                "SOFA-zero stratum, ordinal-score handling, or time-window assumptions).\n"
+                "4. LLM-in-the-loop limitation (generated code was audited but not manually "
+                "reviewed line-by-line)."
+            ),
+            max_tokens=1024,
+            **common,
+        )
+
+        conclusion = self._call_section(
+            section_name="Conclusion, Data availability, Funding, COI",
+            instruction=(
+                "Write these sections exactly:\n"
+                "## Conclusion\n"
+                "1-2 sentences. Associational phrasing. End with a call for prospective / "
+                "external validation.\n\n"
+                "## Data and code availability\n"
+                "'The cohort, generated scripts, SHA-256 evidence store, reproducibility "
+                "envelope, STROBE checklist, and supplementary tables are released alongside "
+                "this manuscript.'\n\n"
+                "## Funding\n"
+                "'TBD by author.'\n\n"
+                "## Conflicts of interest\n"
+                "'The authors declare no conflicts of interest.'"
+            ),
+            max_tokens=512,
+            **common,
+        )
+
+        # Concatenate all sections.
+        parts = [title, abstract, introduction, methods, results, discussion, limitations, conclusion]
+        manuscript = "\n\n".join(p.strip() for p in parts if p.strip())
+        return manuscript
 
 
 def _writer_language_instruction(language: str) -> str:

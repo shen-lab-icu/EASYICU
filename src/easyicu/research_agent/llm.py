@@ -1629,6 +1629,7 @@ class OpenAIClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         request_timeout: float = 120.0,
+        max_retries: int = 8,
         extra_headers: Optional[Dict[str, str]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
         supports_vision: Optional[bool] = None,
@@ -1650,8 +1651,40 @@ class OpenAIClient:
         )
         if env_key:
             kwargs["api_key"] = env_key
-        if base_url or os.environ.get("OPENAI_BASE_URL"):
-            kwargs["base_url"] = base_url or os.environ.get("OPENAI_BASE_URL")
+        resolved_base_url = base_url or os.environ.get("OPENAI_BASE_URL")
+        if resolved_base_url:
+            kwargs["base_url"] = resolved_base_url
+        # macOS system proxies (Clash, Surge, etc.) silently break
+        # localhost calls because httpx (used by the OpenAI SDK)
+        # respects the system proxy even when the user has
+        # ``localhost`` in the proxy exception list. Detect a local
+        # base_url and inject a non-proxying httpx client so vLLM /
+        # llama.cpp / Ollama just work.
+        if resolved_base_url and any(
+            host in resolved_base_url
+            for host in ("localhost", "127.0.0.1", "0.0.0.0")
+        ):
+            try:
+                import httpx  # type: ignore
+
+                # ``trust_env=False`` tells httpx to ignore HTTP_PROXY /
+                # HTTPS_PROXY env vars *and* the macOS system proxy
+                # configuration. Without this, Clash / Surge / Shadow-
+                # rocket route localhost traffic to their listener
+                # which returns 503 because vLLM is not configured as
+                # an upstream.
+                kwargs["http_client"] = httpx.Client(
+                    trust_env=False,
+                    timeout=request_timeout,
+                )
+            except Exception:
+                # Fall back to setting the env vars; the SDK's default
+                # client picks them up.
+                os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1,0.0.0.0")
+                os.environ.setdefault("no_proxy", "localhost,127.0.0.1,0.0.0.0")
+        # Bump retries: local vLLM under load returns 503 frequently.
+        # Default OpenAI SDK is 2; we let the user override via kwarg.
+        kwargs["max_retries"] = int(max_retries)
         # OpenRouter recommends — and some providers require — a
         # ``HTTP-Referer`` / ``X-Title`` header for analytics. Pass them
         # to the SDK as default headers when supplied.
@@ -1673,6 +1706,16 @@ class OpenAIClient:
                 chat_kwargs = {}
             chat_kwargs.setdefault("enable_thinking", False)
             self._extra_body["chat_template_kwargs"] = chat_kwargs
+        # OpenRouter reasoning-model suppression: DeepSeek V4 Flash,
+        # GLM, Qwen-thinking etc. dump chain-of-thought into content
+        # unless we explicitly exclude it. Auto-apply when the
+        # base_url looks like OpenRouter and the model is a known
+        # thinking family.
+        if resolved_base_url and "openrouter" in (resolved_base_url or "").lower():
+            reasoning_body = openrouter_reasoning_extra_body(model)
+            if reasoning_body:
+                for k, v in reasoning_body.items():
+                    self._extra_body.setdefault(k, v)
 
     def complete(self, messages: Sequence[LLMMessage], *, max_tokens: int = 2048,
                  temperature: float = 0.2, seed: Optional[int] = None) -> str:
@@ -1694,7 +1737,28 @@ class OpenAIClient:
             create_kwargs["seed"] = int(seed)
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
-        resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
+        # Manual back-off for 503 / overloaded errors. The SDK retries
+        # quickly (1-2s) which is too aggressive for a busy local vLLM
+        # whose KV cache needs ~5-10 s to drain. We layer a longer wait
+        # on top of the SDK's retries.
+        import time as _time
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(4):
+            try:
+                resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
+                break
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc).lower()
+                if "503" in msg or "service unavailable" in msg or "overload" in msg or "429" in msg or "rate" in msg:
+                    last_exc = exc
+                    backoff = 5.0 * (attempt + 1)
+                    _time.sleep(backoff)
+                    continue
+                raise
+        else:
+            if last_exc is not None:
+                raise last_exc
         # T3.2 cost tracking: stash the SDK's reported usage so a wrapping
         # ``MeteredClient`` can pull authoritative token counts instead of
         # falling back to the chars/4 heuristic. Defensive: not every

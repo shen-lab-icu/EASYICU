@@ -2847,7 +2847,11 @@ def load_bucketed_table_aggregated(
 
     if time_col is None:
         if db_name == 'aumc':
-            time_col = 'measuredat'  # AUMC使用measuredat（毫秒时间戳）
+            # AUMC: most tables use 'measuredat', but drugitems uses 'start'
+            if table_name == 'drugitems':
+                time_col = 'start'
+            else:
+                time_col = 'measuredat'  # AUMC使用measuredat（毫秒时间戳）
         elif db_name == 'hirid':
             time_col = 'datetime'
         elif db_name in ('sic', 'sic_demo'):
@@ -2856,7 +2860,12 @@ def load_bucketed_table_aggregated(
             configured_time_col = getattr(getattr(table_cfg, 'defaults', None), 'index_var', None)
             time_col = configured_time_col or 'labresultoffset'
         else:
-            time_col = 'charttime'
+            # MIIV/MIMIC: most tables use 'charttime', but inputevents/procedureevents use 'starttime'
+            _starttime_tables = {'inputevents', 'inputevents_mv', 'inputevents_cv', 'procedureevents'}
+            if table_name in _starttime_tables:
+                time_col = 'starttime'
+            else:
+                time_col = 'charttime'
     
     # 确定itemid列名
     if db_name == 'aumc':

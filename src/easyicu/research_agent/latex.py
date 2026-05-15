@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 import textwrap
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 from .bibtex import (
     bibtex_key_for,
@@ -38,6 +38,17 @@ _HEADING_PATTERN = re.compile(r"^(?P<hashes>#+)\s+(?P<text>.+)$", re.MULTILINE)
 _BOLD_PATTERN = re.compile(r"\*\*(?P<text>.+?)\*\*")
 _INLINE_CODE_PATTERN = re.compile(r"`(?P<text>[^`]+)`")
 _BULLET_PATTERN = re.compile(r"^\s*-\s+(?P<text>.+)$", re.MULTILINE)
+# Markdown links: ``[label](url "title")``. The URL may be a relative
+# evidence path; we render as ``\href{url}{label}``. The optional
+# ``"title"`` (used by EvidenceStore.bind_manuscript to embed the
+# sha256) is dropped because hyperref can't render it.
+_MD_LINK_PATTERN = re.compile(
+    r"\[(?P<label>[^\]]+)\]\((?P<url>[^)\s]+)(?:\s+\"[^\"]*\")?\)"
+)
+# HTML comments — ``<!-- ... -->`` — produced by the binder when
+# evidence ids are unresolved. They must be stripped, otherwise
+# pdflatex tries to render ``<!`` as text.
+_HTML_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.S)
 _LATEX_SPECIAL = {
     "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#",
     "_": r"\_", "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}",
@@ -52,9 +63,70 @@ def _escape_latex(text: str) -> str:
     return "".join(out)
 
 
+def _escape_url(url: str) -> str:
+    """Escape a URL for use inside ``\\href{...}``.
+
+    hyperref tolerates most ASCII; the only characters we must
+    backslash-escape are ``%`` and ``#`` (which break LaTeX's
+    tokenizer) and ``\\`` itself. Spaces are encoded as ``%20`` so the
+    URL doesn't break across LaTeX line wraps.
+    """
+    return (
+        url.replace("\\", r"\textbackslash{}")
+        .replace("%", r"\%")
+        .replace("#", r"\#")
+        .replace(" ", r"%20")
+    )
+
+
 def _md_inline_to_latex(line: str) -> str:
-    line = _BOLD_PATTERN.sub(lambda m: r"\textbf{" + _escape_latex(m.group("text")) + "}", line)
-    line = _INLINE_CODE_PATTERN.sub(lambda m: r"\texttt{" + _escape_latex(m.group("text")) + "}", line)
+    """Convert markdown inline syntax to LaTeX.
+
+    The function expects raw markdown — do NOT pre-escape special
+    characters. We extract markdown links / inline code / bold *first*
+    (while their syntactic markers ``[]``, ``()``, `` ` `` are still
+    intact), stash the rendered LaTeX in placeholders, escape the
+    remaining plain text, then put the rendered LaTeX back.
+    """
+    placeholders: list = []
+
+    def _link(match: "re.Match[str]") -> str:
+        url = _escape_url(match.group("url"))
+        label = _escape_latex(match.group("label"))
+        # Evidence links (relative paths to evidence/ directory) are
+        # rendered as superscript footnote-style markers rather than
+        # clickable \href — reviewers reading a PDF can't click a
+        # relative path anyway. External URLs (http/https) keep \href.
+        raw_url = match.group("url")
+        if raw_url.startswith(("http://", "https://")):
+            rendered = r"\href{" + url + "}{" + label + "}"
+        else:
+            # Evidence citation: render as superscript [label]
+            rendered = r"\textsuperscript{[" + label + "]}"
+        placeholders.append(rendered)
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    def _bold(match: "re.Match[str]") -> str:
+        placeholders.append(r"\textbf{" + _escape_latex(match.group("text")) + "}")
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    def _code(match: "re.Match[str]") -> str:
+        placeholders.append(r"\texttt{" + _escape_latex(match.group("text")) + "}")
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    line = _MD_LINK_PATTERN.sub(_link, line)
+    line = _BOLD_PATTERN.sub(_bold, line)
+    line = _INLINE_CODE_PATTERN.sub(_code, line)
+    # Now escape the remaining plain text *between* placeholders.
+    line = _escape_latex(line)
+
+    def _restore(match: "re.Match[str]") -> str:
+        return placeholders[int(match.group(1))]
+
+    line = re.sub(r"\\x00(\d+)\\x00", _restore, line)
+    # Above regex doesn't match real \x00 because we just escaped \\.
+    # Use literal NUL match instead.
+    line = re.sub("\x00(\\d+)\x00", _restore, line)
     return line
 
 
@@ -68,6 +140,7 @@ def scaffold_to_latex(
     bibliography_style: str = "plain",
     inline_bibliography: bool = False,
     venue_template: str = "article",
+    figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
 ) -> str:
     """Convert the markdown manuscript scaffold into a LaTeX document.
 
@@ -81,6 +154,11 @@ def scaffold_to_latex(
     don't want a separate biber/bibtex run.
     """
     authors = list(authors or ["EasyICU research-agent"])
+
+    # Strip HTML comments (``<!-- ... -->``) — produced by the binder
+    # when evidence ids are unresolved. pdflatex would otherwise emit
+    # raw ``<!`` text into the rendered PDF.
+    markdown = _HTML_COMMENT_PATTERN.sub("", markdown)
 
     # Split into headed sections so we can rebuild them as LaTeX sections.
     sections: List[tuple] = []  # (level, title, body)
@@ -119,13 +197,11 @@ def scaffold_to_latex(
         if title_text.strip().lower() in {"title"}:
             continue  # already in \maketitle
         if title_text.strip().lower() == "discussion":
-            parts.append(r"\section*{Discussion}")
-            parts.append(
-                r"\textcolor{red}{(\textbf{TODO}: this section is intentionally left "
-                r"to the human author. The research-agent writer does not generate "
-                r"clinical claims.)}"
-            )
+            parts.append(r"\section{Discussion}")
             parts.append("")
+            if body:
+                parts.append(_render_body(body))
+                parts.append("")
             continue
         parts.append(cmd + "{" + _escape_latex(title_text) + "}")
         parts.append("")
@@ -153,6 +229,26 @@ def scaffold_to_latex(
         else:
             parts.append(r"\bibliographystyle{" + bibliography_style + "}")
             parts.append(r"\bibliography{" + bibliography_basename + "}")
+            parts.append("")
+
+    # Auto-embed registered figures as a Figures appendix.
+    if figure_paths:
+        parts.append(r"\clearpage")
+        parts.append(r"\section*{Figures}")
+        parts.append("")
+        for idx, (fig_id, fig_rel_path) in enumerate(figure_paths, start=1):
+            parts.append(r"\begin{figure}[htbp]")
+            parts.append(r"\centering")
+            parts.append(
+                r"\includegraphics[width=\textwidth]{"
+                + _escape_latex(fig_rel_path)
+                + "}"
+            )
+            parts.append(
+                r"\caption{" + _escape_latex(fig_id.replace("_", " ").title()) + "}"
+            )
+            parts.append(r"\label{fig:" + fig_id + "}")
+            parts.append(r"\end{figure}")
             parts.append("")
 
     parts.append(r"\end{document}")
@@ -198,7 +294,7 @@ def _render_body(body: str) -> str:
             return
         out.append(r"\begin{itemize}")
         for b in bullet_buffer:
-            out.append("  \\item " + _md_inline_to_latex(_escape_latex(b)))
+            out.append("  \\item " + _md_inline_to_latex(b))
         out.append(r"\end{itemize}")
         bullet_buffer.clear()
 
@@ -212,7 +308,7 @@ def _render_body(body: str) -> str:
             if stripped == "":
                 out.append("")
             else:
-                out.append(_md_inline_to_latex(_escape_latex(stripped)))
+                out.append(_md_inline_to_latex(stripped))
     flush_bullets()
     return "\n".join(out)
 
