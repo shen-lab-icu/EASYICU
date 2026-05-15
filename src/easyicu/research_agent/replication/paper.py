@@ -15,16 +15,24 @@ import csv
 import json
 import math
 import re
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
-from .schema import (
+import pandas as pd
+
+from ..schema import (
+    AnalysisManifest,
+    AnalysisPlan,
     PaperClaimRecord,
     PaperProfile,
     PaperReplicationSpec,
     PaperResultLedger,
+    PipelineResult,
     ReplicationDeviationItem,
     ReplicationDeviationReport,
+    ResearchContext,
 )
 
 SUPPORTED_CONCEPT_ALIASES: Dict[str, Tuple[str, ...]] = {
@@ -800,3 +808,571 @@ def _map_claim_metric_to_easyicu_key(metric: Optional[str]) -> Optional[str]:
     if metric is None:
         return None
     return mapping.get(metric.lower())
+
+
+# ---------------------------------------------------------------------------
+# Pipeline post-processing
+# ---------------------------------------------------------------------------
+
+
+def postprocess_paper_replication(
+    *,
+    result: "PipelineResult",
+    paper_profile: PaperProfile,
+    replication_spec: PaperReplicationSpec,
+    deviation_report: ReplicationDeviationReport,
+    mode: str,
+) -> "PipelineResult":
+    """Post-process a completed analysis run into paper-replication artefacts.
+
+    Reads the run's ``manifest.json`` produced by the main pipeline,
+    derives an EasyICU result ledger, compares it against the parsed
+    paper claims, runs design / comparison / publication-claim audits,
+    and writes the canonical replication outputs:
+    ``paper_profile.json``, ``replication_spec.json``,
+    ``paper_claim_ledger.csv``, ``replication_comparison.csv``,
+    ``deviation_report.md``, ``replication_report.md`` and an updated
+    ``manuscript_ready.md`` (in showcase manuscript mode).
+
+    Audits are imported lazily to break the ``replication.paper`` ↔
+    ``audits.validators`` import cycle.
+    """
+    # Local imports to avoid the audits ↔ replication import cycle.
+    from ..audits.validators import (
+        PublicationClaimAuditor,
+        ReplicationDesignAuditor,
+        ReplicationResultComparator,
+    )
+    from ..evidence import EvidenceStore
+    from ..schema import PipelineResult
+
+    run_dir = Path(result.workdir)
+    manifest_path = run_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    context_payload: Optional[Dict[str, Any]] = None
+    context_rel = manifest.get("context_path")
+    if context_rel:
+        context_path = run_dir / str(context_rel)
+        if context_path.exists():
+            context_payload = json.loads(context_path.read_text(encoding="utf-8"))
+
+    ledger = build_paper_result_ledger(
+        paper_profile=paper_profile,
+        manifest=manifest,
+        context_payload=context_payload,
+    )
+    comparator = ReplicationResultComparator()
+    comparison_rows = comparator.compare(
+        paper_profile=paper_profile,
+        ledger=ledger,
+    )
+    design_findings = ReplicationDesignAuditor().audit(
+        paper_profile=paper_profile,
+        deviation_report=deviation_report,
+    )
+    comparison_findings = comparator.findings_from_rows(comparison_rows)
+
+    evidence = EvidenceStore(run_dir)
+    profile_path = run_dir / "paper_profile.json"
+    profile_path.write_text(
+        paper_profile.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    spec_path = run_dir / "replication_spec.json"
+    spec_path.write_text(
+        replication_spec.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    claim_rows = [
+        {
+            "claim_id": claim.claim_id,
+            "section": claim.section,
+            "sentence": claim.sentence,
+            "metric": claim.metric or "",
+            "paper_value": claim.paper_value or "",
+            "numeric_value": "" if claim.numeric_value is None else claim.numeric_value,
+            "direction": claim.direction or "",
+            "predictor": claim.predictor or "",
+            "outcome": claim.outcome or "",
+        }
+        for claim in paper_profile.key_claims
+    ]
+    claim_csv_path = write_claim_csv(
+        run_dir / "paper_claim_ledger.csv",
+        claim_rows,
+        [
+            "claim_id",
+            "section",
+            "sentence",
+            "metric",
+            "paper_value",
+            "numeric_value",
+            "direction",
+            "predictor",
+            "outcome",
+        ],
+    )
+    comparison_csv_path = write_claim_csv(
+        run_dir / "replication_comparison.csv",
+        comparison_rows,
+        [
+            "claim_id",
+            "paper_claim",
+            "paper_value",
+            "easyicu_value",
+            "alignment_status",
+            "reason_if_mismatch",
+            "metric",
+        ],
+    )
+    deviation_md_path = run_dir / "deviation_report.md"
+    deviation_md_path.write_text(
+        render_deviation_report(deviation_report),
+        encoding="utf-8",
+    )
+    replication_report_path = run_dir / "replication_report.md"
+    replication_report_path.write_text(
+        render_replication_report(
+            paper_profile=paper_profile,
+            spec=replication_spec,
+            deviation_report=deviation_report,
+            comparison_rows=comparison_rows,
+            ledger=ledger,
+        ),
+        encoding="utf-8",
+    )
+
+    manuscript_bound_path = run_dir / manifest.get("manuscript_path", "manuscript_scaffold_bound.md")
+    if not manuscript_bound_path.exists():
+        manuscript_bound_path = run_dir / "manuscript_scaffold_bound.md"
+    bound_text = manuscript_bound_path.read_text(encoding="utf-8") if manuscript_bound_path.exists() else ""
+    showcase_text = render_showcase_manuscript(
+        bound_manuscript=bound_text,
+        paper_profile=paper_profile,
+        deviation_report=deviation_report,
+    )
+    publication_claim_findings = PublicationClaimAuditor().audit(
+        manuscript_text=showcase_text,
+        deviation_report=deviation_report,
+    )
+
+    all_findings = list(manifest.get("findings") or [])
+    all_findings.extend(f.model_dump(mode="json") for f in design_findings)
+    all_findings.extend(f.model_dump(mode="json") for f in comparison_findings)
+    all_findings.extend(f.model_dump(mode="json") for f in publication_claim_findings)
+    manifest["findings"] = all_findings
+
+    readiness = dict(manifest.get("readiness") or {})
+    design_reproduced = bool(
+        readiness.get("execution_complete")
+        and paper_profile.paper_type != "unsupported_or_underspecified"
+        and not any(f.severity == "error" for f in design_findings)
+    )
+    paper_claims_parsed = bool(paper_profile.key_claims)
+    result_alignment_audited = bool(comparison_rows)
+    replication_report_ready = bool(
+        readiness.get("execution_complete")
+        and design_reproduced
+        and paper_claims_parsed
+        and replication_report_path.exists()
+    )
+    showcase_errors = [
+        f for f in publication_claim_findings if f.severity == "error"
+    ]
+    showcase_manuscript_ready = bool(
+        mode == "manuscript"
+        and readiness.get("manuscript_ready")
+        and design_reproduced
+        and paper_claims_parsed
+        and result_alignment_audited
+        and not showcase_errors
+    )
+    readiness.update(
+        {
+            "design_reproduced": design_reproduced,
+            "paper_claims_parsed": paper_claims_parsed,
+            "result_alignment_audited": result_alignment_audited,
+            "replication_report_ready": replication_report_ready,
+            "showcase_manuscript_ready": showcase_manuscript_ready,
+        }
+    )
+    manifest["readiness"] = readiness
+
+    manuscript_ready_path = run_dir / "manuscript_ready.md"
+    artifact_paths = dict(manifest.get("artifact_paths") or {})
+    if showcase_manuscript_ready:
+        manuscript_ready_path.write_text(showcase_text, encoding="utf-8")
+        artifact_paths["manuscript_ready"] = "manuscript_ready.md"
+    elif manuscript_ready_path.exists():
+        manuscript_ready_path.unlink()
+        artifact_paths.pop("manuscript_ready", None)
+    artifact_paths.update(
+        {
+            "paper_profile": "paper_profile.json",
+            "replication_spec": "replication_spec.json",
+            "paper_claim_ledger": "paper_claim_ledger.csv",
+            "replication_comparison": "replication_comparison.csv",
+            "replication_report": "replication_report.md",
+            "deviation_report": "deviation_report.md",
+        }
+    )
+    manifest["artifact_paths"] = artifact_paths
+
+    run_status_path = run_dir / "run_status.json"
+    status_payload = (
+        json.loads(run_status_path.read_text(encoding="utf-8"))
+        if run_status_path.exists()
+        else {"schema_version": "easyicu.run_status/1"}
+    )
+    status_payload["status"] = (
+        "publication_ready"
+        if readiness.get("publication_ready") and showcase_manuscript_ready
+        else "manuscript_ready"
+        if showcase_manuscript_ready
+        else "replication_ready"
+        if readiness.get("replication_report_ready")
+        else "analysis_only"
+        if readiness.get("execution_complete")
+        else "diagnostic_only"
+    )
+    status_payload["gates"] = readiness
+    status_payload["canonical_outputs"] = artifact_paths
+    run_status_path.write_text(
+        json.dumps(status_payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+
+    author_note_path = run_dir / "author_review_note.md"
+    base_note = author_note_path.read_text(encoding="utf-8") if author_note_path.exists() else "# Author review note\n\n"
+    paper_status = (
+        "publication_ready"
+        if readiness.get("publication_ready") and showcase_manuscript_ready
+        else "manuscript_ready"
+        if showcase_manuscript_ready
+        else "replication_ready"
+        if readiness.get("replication_report_ready")
+        else "analysis_only"
+        if readiness.get("execution_complete")
+        else "diagnostic_only"
+    )
+    base_note = re.sub(
+        r"(?m)^- Status: `[^`]+`$",
+        f"- Status: `{paper_status}`",
+        base_note,
+        count=1,
+    )
+    if readiness.get("replication_report_ready") and "Use `replication_report.md`" not in base_note:
+        base_note = base_note.rstrip() + (
+            "\n\n## Replication review\n\n"
+            "The analysis run completed for paper replication. Use `replication_report.md` "
+            "and `replication_comparison.csv` as the canonical replication outputs. "
+            "`manuscript_ready.md` is emitted only in showcase manuscript mode after the "
+            "paper-aware manuscript gates pass.\n"
+        )
+    author_note_path.write_text(
+        base_note.rstrip()
+        + "\n\n## Paper replication gates\n\n"
+        + f"- design_reproduced: `{design_reproduced}`\n"
+        + f"- paper_claims_parsed: `{paper_claims_parsed}`\n"
+        + f"- result_alignment_audited: `{result_alignment_audited}`\n"
+        + f"- replication_report_ready: `{replication_report_ready}`\n"
+        + f"- showcase_manuscript_ready: `{showcase_manuscript_ready}`\n",
+        encoding="utf-8",
+    )
+
+    for evidence_id, kind, description, path in (
+        ("paper_profile", "log", "Parsed source-paper profile for replication mode.", profile_path),
+        ("replication_spec", "log", "Typed EasyICU replication specification derived from the paper.", spec_path),
+        ("paper_claim_ledger", "table", "Ledger of parsed result claims from the source paper.", claim_csv_path),
+        ("replication_comparison", "table", "Claim-by-claim comparison of source paper and EasyICU results.", comparison_csv_path),
+        ("replication_report", "log", "Narrative EasyICU replication report.", replication_report_path),
+        ("deviation_report", "log", "Structured deviation report for unsupported or approximated design elements.", deviation_md_path),
+    ):
+        if evidence.get(evidence_id) is None:
+            evidence.register_file(
+                kind=kind,
+                description=description,
+                source_path=path,
+                evidence_id=evidence_id,
+                aliases=[evidence_id],
+                producer="pipeline",
+                generation_mode="system",
+            )
+
+    manifest["evidence"] = [record.model_dump(mode="json") for record in evidence.records()]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return PipelineResult.model_validate(
+        {
+            **result.model_dump(mode="json"),
+            "paper_profile_path": str(profile_path),
+            "replication_spec_path": str(spec_path),
+            "replication_report_path": str(replication_report_path),
+        }
+    )
+
+
+def canonical_outcome_name(raw: Optional[str]) -> Optional[str]:
+    """Map a free-text outcome label to a canonical EasyICU outcome key.
+
+    ``death`` covers ICU/hospital/28-day mortality labels; ``los_icu``
+    covers length-of-stay variants. Anything that doesn't match a
+    known canonical bucket is returned unchanged so the caller can
+    still observe what the paper meant.
+    """
+    text = (raw or "").lower()
+    if not text:
+        return None
+    if "mortality" in text or "death" in text:
+        return "death"
+    if "length of stay" in text or "los" in text:
+        return "los_icu"
+    return raw
+
+
+def write_fail_closed_paper_package(
+    *,
+    workdir: Path,
+    llm: Optional[Any],
+    materialise_cohort: Callable[[Any, Path], Path],
+    paper: Union[str, Path],
+    cohort: Any,
+    database: str,
+    cohort_name: str,
+    paper_profile: PaperProfile,
+    replication_spec: PaperReplicationSpec,
+    deviation_report: ReplicationDeviationReport,
+) -> PipelineResult:
+    """Write the canonical fail-closed paper-replication package.
+
+    Called when the source-paper profile cannot be safely replicated
+    (unsupported features, missing concepts). Emits the same artefact
+    set a successful replication would (``paper_profile.json``,
+    ``replication_spec.json``, ``paper_claim_ledger.csv``,
+    ``replication_comparison.csv``, ``replication_report.md``,
+    ``deviation_report.md``, ``results_report.md``, ``manifest.json``)
+    but with empty / blocked content so downstream tools still see a
+    valid run directory layout.
+
+    The caller supplies ``workdir`` (the pipeline's run-root), ``llm``
+    (only used to set ``used_mock_llm`` on the manifest) and the
+    ``materialise_cohort`` helper that converts the cohort (path or
+    DataFrame) into a parquet file under ``run_dir``.
+
+    Lazy imports break the ``replication.paper`` ↔ ``audits.validators``
+    and ``replication.paper`` ↔ ``pipeline_report`` cycles that would
+    otherwise be created.
+    """
+    from ..audits.validators import ReplicationDesignAuditor
+    from ..context import build_naive_research_context
+    from ..evidence import EvidenceStore
+    from ..llm import MockLLMClient
+    from ..pipeline_report import render_report, write_readiness_artifacts
+    from ..prompts import PROMPT_PACK_VERSION, prompt_pack_files
+
+    run_id = (
+        "paperrep_"
+        + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        + "_"
+        + uuid.uuid4().hex[:6]
+    )
+    run_dir = workdir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    cohort_path = materialise_cohort(cohort, run_dir)
+    df = pd.read_parquet(cohort_path)
+    context = ResearchContext(
+        research_question=paper_profile.research_question or "Paper replication failed closed before execution.",
+        cohort=build_naive_research_context(
+            research_question=paper_profile.research_question or "Paper replication failed closed.",
+            cohort=cohort_path,
+            cohort_name=cohort_name,
+            database=database,
+            target_outcome=canonical_outcome_name(paper_profile.target_outcome),
+        ).cohort,
+        variables=[],
+        target_outcome=canonical_outcome_name(paper_profile.target_outcome),
+        cohort_parquet=str(cohort_path),
+        notes="Strict fail-closed paper replication package.",
+    )
+    context_path = run_dir / "context.json"
+    context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        steps=[],
+    )
+    plan_path = run_dir / "plan.json"
+    plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+
+    evidence = EvidenceStore(run_dir)
+    profile_path = run_dir / "paper_profile.json"
+    profile_path.write_text(paper_profile.model_dump_json(indent=2), encoding="utf-8")
+    spec_path = run_dir / "replication_spec.json"
+    spec_path.write_text(replication_spec.model_dump_json(indent=2), encoding="utf-8")
+    deviation_md_path = run_dir / "deviation_report.md"
+    deviation_md_path.write_text(render_deviation_report(deviation_report), encoding="utf-8")
+    claim_csv_path = write_claim_csv(
+        run_dir / "paper_claim_ledger.csv",
+        [
+            {
+                "claim_id": claim.claim_id,
+                "section": claim.section,
+                "sentence": claim.sentence,
+                "metric": claim.metric or "",
+                "paper_value": claim.paper_value or "",
+                "numeric_value": "" if claim.numeric_value is None else claim.numeric_value,
+                "direction": claim.direction or "",
+                "predictor": claim.predictor or "",
+                "outcome": claim.outcome or "",
+            }
+            for claim in paper_profile.key_claims
+        ],
+        [
+            "claim_id",
+            "section",
+            "sentence",
+            "metric",
+            "paper_value",
+            "numeric_value",
+            "direction",
+            "predictor",
+            "outcome",
+        ],
+    )
+    comparison_csv_path = write_claim_csv(
+        run_dir / "replication_comparison.csv",
+        [],
+        [
+            "claim_id",
+            "paper_claim",
+            "paper_value",
+            "easyicu_value",
+            "alignment_status",
+            "reason_if_mismatch",
+            "metric",
+        ],
+    )
+    replication_report_path = run_dir / "replication_report.md"
+    replication_report_path.write_text(
+        render_replication_report(
+            paper_profile=paper_profile,
+            spec=replication_spec,
+            deviation_report=deviation_report,
+            comparison_rows=[],
+            ledger=PaperResultLedger(paper_claims=paper_profile.key_claims, easyicu_metrics={"n_stays": int(len(df))}),
+        ),
+        encoding="utf-8",
+    )
+    manuscript_path = run_dir / "manuscript_scaffold_bound.md"
+    manuscript_path.write_text(
+        "# Manuscript scaffold not generated\n\nStrict fail-closed policy blocked paper replication drafting.\n",
+        encoding="utf-8",
+    )
+
+    design_findings = ReplicationDesignAuditor().audit(
+        paper_profile=paper_profile,
+        deviation_report=deviation_report,
+    )
+    readiness, artifact_paths = write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=design_findings,
+        per_step_records=[],
+        evidence=evidence,
+        run_dir=run_dir,
+        manuscript_path=manuscript_path,
+        stop_after_analysis=False,
+    )
+    readiness.update(
+        {
+            "design_reproduced": False,
+            "paper_claims_parsed": bool(paper_profile.key_claims),
+            "result_alignment_audited": False,
+            "replication_report_ready": True,
+            "showcase_manuscript_ready": False,
+        }
+    )
+    artifact_paths.update(
+        {
+            "paper_profile": "paper_profile.json",
+            "replication_spec": "replication_spec.json",
+            "paper_claim_ledger": "paper_claim_ledger.csv",
+            "replication_comparison": "replication_comparison.csv",
+            "replication_report": "replication_report.md",
+            "deviation_report": "deviation_report.md",
+        }
+    )
+    for evidence_id, kind, description, path in (
+        ("paper_profile", "log", "Parsed source-paper profile for replication mode.", profile_path),
+        ("replication_spec", "log", "Typed EasyICU replication specification derived from the paper.", spec_path),
+        ("paper_claim_ledger", "table", "Ledger of parsed result claims from the source paper.", claim_csv_path),
+        ("replication_comparison", "table", "Claim-by-claim comparison of source paper and EasyICU results.", comparison_csv_path),
+        ("replication_report", "log", "Narrative EasyICU replication report.", replication_report_path),
+        ("deviation_report", "log", "Structured deviation report for unsupported or approximated design elements.", deviation_md_path),
+    ):
+        if evidence.get(evidence_id) is None:
+            evidence.register_file(
+                kind=kind,
+                description=description,
+                source_path=path,
+                evidence_id=evidence_id,
+                aliases=[evidence_id],
+                producer="pipeline",
+                generation_mode="system",
+            )
+
+    report_path = run_dir / "results_report.md"
+    report_path.write_text(
+        render_report(
+            context=context,
+            plan=plan,
+            findings=design_findings,
+            per_step_records=[],
+            evidence=evidence,
+            readiness=readiness,
+        ),
+        encoding="utf-8",
+    )
+    run_status_path = run_dir / "run_status.json"
+    run_status = json.loads(run_status_path.read_text(encoding="utf-8"))
+    run_status["gates"] = readiness
+    run_status["canonical_outputs"] = artifact_paths
+    run_status_path.write_text(
+        json.dumps(run_status, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    manifest = AnalysisManifest(
+        run_id=run_id,
+        research_question=context.research_question,
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+        context_path="context.json",
+        plan_path="plan.json",
+        evidence=evidence.records(),
+        findings=design_findings,
+        readiness=readiness,
+        artifact_paths=artifact_paths,
+        report_path="results_report.md",
+        manuscript_path="manuscript_scaffold_bound.md",
+        used_mock_llm=isinstance(llm, MockLLMClient) if llm is not None else False,
+        prompt_pack_version=PROMPT_PACK_VERSION,
+        prompt_pack_files=prompt_pack_files(),
+        notes="Strict fail-closed replication package generated before analysis execution.",
+    )
+    manifest_path = run_dir / "manifest.json"
+    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    return PipelineResult(
+        run_id=run_id,
+        workdir=str(run_dir),
+        context_path=str(context_path),
+        plan_path=str(plan_path),
+        manifest_path=str(manifest_path),
+        report_path=str(report_path),
+        manuscript_path=str(manuscript_path),
+        evidence_count=len(evidence.records()),
+        findings_count=len(design_findings),
+        paper_profile_path=str(profile_path),
+        replication_spec_path=str(spec_path),
+        replication_report_path=str(replication_report_path),
+    )

@@ -40,7 +40,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from .schema import (
+from ..schema import (
     AnalysisStep,
     ConceptDescriptor,
     ResearchContext,

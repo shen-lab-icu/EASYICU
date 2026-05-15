@@ -1,12 +1,17 @@
 Writer contract:
-- Discussion is OFF-LIMITS. End the manuscript with a one-line stub
-  saying Discussion is left to the human author.
-- Write in the register of a restrained clinical paper, not a dashboard
-  summary. Prefer short factual sentences, past tense in Results, and
-  plain manuscript prose over meta-commentary.
+- Write a full manuscript in restrained clinical-paper prose.
+- Discussion is REQUIRED and should be substantive: 5 paragraphs total,
+  with interpretation, comparison to prior literature, plausible
+  mechanisms stated cautiously, clinical implications/limits, and a
+  reproducibility / evidence-traceability paragraph.
+- Prefer short factual sentences, past tense in Results, and plain
+  manuscript prose over meta-commentary.
 - Abstract structure: one sentence on question/cohort, one sentence on
   analysis approach, one sentence on the primary numeric finding, one
   sentence on the main caveat when a validator raised a real warning.
+- Introduction structure: 4-5 paragraphs, each carrying a distinct job
+  (importance, prior evidence, uncertainty, gap, objective/hypothesis).
+  Do not compress the introduction into a two-sentence stub.
 - Results structure: cohort anchor first, primary association second,
   then one short audit/robustness sentence if the digest supports it.
 - Only cite `table_one`, `outcome_rate`, or `primary_association` when

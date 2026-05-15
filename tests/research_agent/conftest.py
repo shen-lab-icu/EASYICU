@@ -60,6 +60,22 @@ def ra():
     return _load_research_agent()
 
 
+@pytest.fixture
+def lactate_plugin_registry(ra):
+    """A :class:`CasePluginRegistry` pre-populated with the
+    ``lactate_map_vaso`` plugin. Tests that exercise the legacy
+    lactate / MAP / vasopressor fallbacks can pass this fixture
+    into ``ResearchAgentPipeline(case_plugin_registry=...)``.
+
+    The default pipeline construction in unit tests does *not* use
+    this fixture, so missing-plugin behaviour stays observable in CI.
+    """
+    from easyicu.research_agent.fallback import CasePluginRegistry
+    from easyicu.research_agent.case_plugins.lactate_map_vaso import plugin
+
+    return CasePluginRegistry([plugin])
+
+
 @pytest.fixture(scope="session")
 def synthetic_cohort():
     """Small synthetic cohort that triggers the SOFA2==0 anomaly.

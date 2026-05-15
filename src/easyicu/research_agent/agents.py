@@ -16,6 +16,15 @@ Prompt design rule: every prompt is grounded in
 through the prompt — only the structured context. The LLM cannot
 hallucinate variable names, time windows or aggregation rules
 because they are pinned in the system message.
+
+Contract
+--------
+The 11 agent classes below expose typed entry points
+(``run``, ``build_request`` + ``materialize``, ``review_step``,
+``_call_section``) tailored to each agent's role. :mod:`pipeline` invokes
+them by name with concrete typed arguments; mypy / IDEs can statically
+check each call site. Add new agents in the same style — there is no
+generic dispatch Protocol because nothing in the codebase consumes one.
 """
 
 from __future__ import annotations
@@ -1001,6 +1010,7 @@ class WriterAgent:
         max_tokens: int = 2048,
     ) -> str:
         lang_inst = _writer_language_instruction(self.language)
+        evidence_list = ", ".join(str(eid) for eid in evidence_ids) if evidence_ids else "(none)"
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _WRITER_GUIDE),
             LLMMessage(
@@ -1015,12 +1025,14 @@ class WriterAgent:
                     "- Write the actual number in prose, then cite: "
                     "`mortality was 12% {{evidence:outcome_rate}}`.\n"
                     "- NEVER use a placeholder as a noun. If a number is unavailable, omit the sentence.\n"
-                    "- Only use ids from this list: " + str(list(evidence_ids)) + "\n\n"
+                    f"- Only use ids from this list: {evidence_list}\n\n"
                     "LANGUAGE POLICY:\n"
                     "- Use ONLY associational phrasing. Forbidden: 'caused by', 'causal', "
                     "'attributable to', 'effect of', 'due to', 'leads to', 'drives'.\n"
                     "- Allowed: 'was associated with', 'correlated with', 'observed alongside', "
                     "'consistent with', 'may reflect'.\n\n"
+                    "SECTION-SPECIFIC LENGTH TARGET:\n"
+                    f"- {section_name}: follow the requested length and paragraph structure exactly.\n\n"
                     "MACHINE EVIDENCE DIGEST:\n"
                     + (evidence_digest or "(none)")
                     + "\n\nRESEARCH CONTEXT:\n"
@@ -1073,14 +1085,15 @@ class WriterAgent:
         introduction = self._call_section(
             section_name="Introduction",
             instruction=(
-                "Write `## Introduction` with 4-5 paragraphs (400-600 words total):\n"
-                "- Para 1: Clinical importance of ICU mortality prediction / organ dysfunction scoring.\n"
-                "- Para 2: Current evidence on the predictor (SOFA / lactate / the relevant variable). Cite literature if available.\n"
-                "- Para 3: Knowledge gap or limitation of prior work.\n"
-                "- Para 4: Study objective and hypothesis (one sentence each).\n"
-                "Write substantive prose, not bullet points."
+                "Write `## Introduction` with 4-5 paragraphs (900-1200 words total):\n"
+                "- Para 1: Clinical importance of the ICU question and why it matters now.\n"
+                "- Para 2: Prior evidence on the key predictor / score / exposure. Use evidence ids from the digest when possible and cite literature if available.\n"
+                "- Para 3: What prior studies did well, and where they still leave uncertainty.\n"
+                "- Para 4: The specific gap in the literature that this study addresses.\n"
+                "- Para 5: One sentence on the objective, one sentence on the hypothesis, and one sentence on the expected contribution.\n"
+                "Requirements: write full prose (no bullets), avoid generic filler, and include at least one evidence citation or literature citation in each paragraph when evidence is available. Do not collapse the introduction into two sentences."
             ),
-            max_tokens=2048,
+            max_tokens=4096,
             **common,
         )
 
@@ -1132,18 +1145,15 @@ class WriterAgent:
         discussion = self._call_section(
             section_name="Discussion",
             instruction=(
-                "Write `## Discussion` with 4-5 paragraphs (600-1000 words total):\n"
-                "- Para 1: Restate primary finding, situate vs. prior literature.\n"
-                "- Para 2: Possible mechanisms (use 'may reflect', 'is consistent with', "
-                "'one possible explanation'). NEVER say 'caused by'.\n"
-                "- Para 3: Clinical implications as hypothesis-generating ('these data suggest', "
-                "'support further investigation'). Do NOT recommend a treatment.\n"
-                "- Para 4: Comparison with published cohorts.\n"
-                "- Para 5: Strengths of the approach (traceable evidence, ICU-aware rules, "
-                "reproducibility envelope).\n"
-                "Write substantive prose. This is the most important section for reviewers."
+                "Write `## Discussion` with 5 paragraphs (900-1300 words total):\n"
+                "- Para 1: Restate the main finding and interpret it cautiously in the context of the results.\n"
+                "- Para 2: Compare with prior literature and explain where this study agrees or diverges.\n"
+                "- Para 3: Discuss plausible mechanisms using only associational language ('may reflect', 'could be consistent with', 'one possible explanation').\n"
+                "- Para 4: Clinical implications, limits to generalisability, and why the result should not be over-interpreted.\n"
+                "- Para 5: Strengths of the pipeline, evidence traceability, ICU-aware rules, and reproducibility.\n"
+                "Requirements: full prose only, no bullets, no recommendations or causal claims, and at least one evidence citation or literature citation in each paragraph when available. Do not collapse the discussion into a two-sentence stub."
             ),
-            max_tokens=3072,
+            max_tokens=4096,
             **common,
         )
 

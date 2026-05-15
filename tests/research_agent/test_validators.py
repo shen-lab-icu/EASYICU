@@ -326,7 +326,7 @@ def test_cohort_auditor_allows_correlation_context_without_target_outcome(ra, tm
 
 
 def test_llm_concept_auditor_parses_findings(ra):
-    from easyicu.research_agent.validators import parse_llm_concept_audit_response
+    from easyicu.research_agent.audits.validators import parse_llm_concept_audit_response
 
     raw = """```json
 {"findings":[{"severity":"warning","message":"ICU mortality may be confused with hospital mortality.","detail":{"column":"death_hosp"}}]}
@@ -357,7 +357,7 @@ def test_llm_concept_auditor_prompt_includes_outcome_semantics(ra):
 
 
 def test_llm_concept_auditor_downgrades_nonblocking_outcome_confusion(ra):
-    from easyicu.research_agent.validators import parse_llm_concept_audit_response
+    from easyicu.research_agent.audits.validators import parse_llm_concept_audit_response
 
     raw = """
     {

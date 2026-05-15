@@ -38,10 +38,10 @@ _HEADING_PATTERN = re.compile(r"^(?P<hashes>#+)\s+(?P<text>.+)$", re.MULTILINE)
 _BOLD_PATTERN = re.compile(r"\*\*(?P<text>.+?)\*\*")
 _INLINE_CODE_PATTERN = re.compile(r"`(?P<text>[^`]+)`")
 _BULLET_PATTERN = re.compile(r"^\s*-\s+(?P<text>.+)$", re.MULTILINE)
-# Markdown links: ``[label](url "title")``. The URL may be a relative
-# evidence path; we render as ``\href{url}{label}``. The optional
-# ``"title"`` (used by EvidenceStore.bind_manuscript to embed the
-# sha256) is dropped because hyperref can't render it.
+# Markdown links: ``[label](url "title")``. Evidence links may point to
+# relative paths and include a sha256 title; we render them as LaTeX
+# footnotes so the PDF carries a readable provenance marker instead of a
+# dead relative hyperlink.
 _MD_LINK_PATTERN = re.compile(
     r"\[(?P<label>[^\]]+)\]\((?P<url>[^)\s]+)(?:\s+\"[^\"]*\")?\)"
 )
@@ -101,8 +101,13 @@ def _md_inline_to_latex(line: str) -> str:
         if raw_url.startswith(("http://", "https://")):
             rendered = r"\href{" + url + "}{" + label + "}"
         else:
-            # Evidence citation: render as superscript [label]
-            rendered = r"\textsuperscript{[" + label + "]}"
+            # Evidence citation: render as a footnote-style marker with
+            # the label preserved, so PDF reviewers can still see the
+            # bound evidence id even though relative paths are not clickable.
+            rendered = (
+                r"\textsuperscript{[" + label + "]}"
+                r"\footnote{\texttt{" + _escape_latex(raw_url) + "}}"
+            )
         placeholders.append(rendered)
         return f"\x00{len(placeholders) - 1}\x00"
 
@@ -123,9 +128,7 @@ def _md_inline_to_latex(line: str) -> str:
     def _restore(match: "re.Match[str]") -> str:
         return placeholders[int(match.group(1))]
 
-    line = re.sub(r"\\x00(\d+)\\x00", _restore, line)
-    # Above regex doesn't match real \x00 because we just escaped \\.
-    # Use literal NUL match instead.
+    # Restore placeholders from the literal NUL markers inserted above.
     line = re.sub("\x00(\\d+)\x00", _restore, line)
     return line
 
@@ -199,6 +202,7 @@ def scaffold_to_latex(
         if title_text.strip().lower() == "discussion":
             parts.append(r"\section{Discussion}")
             parts.append("")
+            parts.append(r"\footnotetext{Evidence citations are rendered as footnote-style markers so the bound manuscript remains readable in PDF form.}")
             if body:
                 parts.append(_render_body(body))
                 parts.append("")

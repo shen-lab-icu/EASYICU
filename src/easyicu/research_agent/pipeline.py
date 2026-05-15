@@ -63,7 +63,7 @@ from .agents import (
 )
 from .architecture import architecture_profile_markdown, default_architecture_profile
 from .cost import CostMeter, metered_role_resolver
-from .reproducibility_envelope import (
+from .replication.envelope import (
     ENVELOPE_SCHEMA_VERSION,
     ReproEnvelope,
     envelope_role_resolver,
@@ -83,18 +83,21 @@ from .sensitivity import (
     compute_e_value,
     run_negative_control_check,
 )
-from .paper_replication import (
+from .replication.paper import (
     build_paper_replication_spec,
     build_paper_result_ledger,
+    canonical_outcome_name,
     compare_paper_to_easyicu,
     load_paper_source,
     parse_paper_profile,
+    postprocess_paper_replication,
     render_deviation_report,
     render_replication_report,
     render_showcase_manuscript,
     write_claim_csv,
+    write_fail_closed_paper_package,
 )
-from .repro_artifacts import (
+from .replication.notebook import (
     NotebookStep,
     build_notebook,
     build_requirements_lockfile,
@@ -107,7 +110,52 @@ from .context import (
     build_research_context,
     build_retrieved_research_context,
 )
-from .evidence import EvidenceStore
+from . import pipeline_cache as _pipeline_cache
+from .pipeline_config import PipelineConfig
+from .pipeline_report import (
+    execution_gate_status,
+    render_report,
+    write_readiness_artifacts,
+)
+# Back-compat aliases. Tests (and any downstream code) that imported the
+# leading-underscore names from this module before the readiness/report
+# helpers were moved to ``pipeline_report`` keep working unchanged.
+from .pipeline_report import (
+    _publication_figure_bundle_ready,  # noqa: F401
+    _compute_readiness_gates,  # noqa: F401
+    _count_missing_evidence_markers,  # noqa: F401
+    _extract_claim_ledger_rows,  # noqa: F401
+    _render_author_review_note,  # noqa: F401
+)
+_execution_gate_status = execution_gate_status  # noqa: F841 (legacy alias)
+_write_readiness_artifacts = write_readiness_artifacts  # noqa: F841 (legacy alias)
+_render_report = render_report  # noqa: F841 (legacy alias)
+from .audits.manuscript_claims import audit_manuscript_numeric_claims  # noqa: E402
+from .audits.manuscript_claims import (  # noqa: E402,F401
+    _first_summary_scalar,
+    _extract_metric_claims,
+    _extract_percent_claims_near,
+)
+_audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+
+# Case-specific fallback code generators (lactate / MAP / vasopressor study)
+# now live in the dedicated plugin module. Re-import them under their
+# historical underscore-prefixed names so existing pipeline.py callsites and
+# any external tests keep working. P4 will switch the callsites to go through
+# ``CasePluginRegistry`` instead, at which point these aliases can retire.
+from .case_plugins.lactate_map_vaso.fallbacks import (  # noqa: E402,F401
+    _primary_association_fallback_code,
+    _age_stratified_mortality_fallback_code,
+    _norepinephrine_dose_response_fallback_code,
+    _generic_v15_task_fallback_code,
+)
+
+from .evidence import (
+    EvidenceEnforcementError,
+    EvidenceEnforcementMode,
+    EvidenceStore,
+    _coerce_enforcement_mode,
+)
 from .experiment_spec import ExperimentSpec, dump_experiment_spec
 from .figure_skill import PublicationFigureSkill
 from .bibtex import render_bibtex
@@ -156,7 +204,7 @@ from .runtime_artifacts import (
     render_workflow_graph_mermaid,
     write_json_artifact,
 )
-from .validators import (
+from .audits.validators import (
     ClinicalConstraintValidator,
     CohortAuditor,
     ConceptUsageAuditor,
@@ -211,6 +259,18 @@ class _WritePhaseResult:
 class ResearchAgentPipeline:
     """One-shot orchestration. Construct, call :meth:`run`, read the result."""
 
+    @classmethod
+    def from_config(cls, config: PipelineConfig) -> "ResearchAgentPipeline":
+        """Construct a pipeline from a :class:`PipelineConfig` object.
+
+        The legacy keyword-argument form of ``__init__`` continues to
+        work; this classmethod is the recommended new-code entry point
+        because the config object is typed, copyable
+        (``config.with_overrides(...)``) and serialisable
+        (``config.as_kwargs()``).
+        """
+        return cls(**config.as_kwargs())
+
     def __init__(
         self,
         *,
@@ -230,6 +290,7 @@ class ResearchAgentPipeline:
         enable_latex: bool = True,
         latex_venue_template: str = "article",
         manuscript_language: str = "en",
+        evidence_enforcement_mode: str = "soft",
         disable_icu_context: bool = False,
         context_top_k: Optional[int] = None,
         max_code_repair_attempts: int = 1,
@@ -269,7 +330,21 @@ class ResearchAgentPipeline:
         runner_network: str = "none",
         runner_factory: Optional[Callable[..., Any]] = None,
         runner_kwargs: Optional[Dict[str, Any]] = None,
+        case_plugin_registry: Optional[Any] = None,
     ) -> None:
+        # Snapshot the construction kwargs into a typed config object for
+        # introspection / replay / serialisation. The body below still reads
+        # from local variables directly (so the legacy ``__init__(**kwargs)``
+        # signature stays unchanged); ``self._config`` is purely a view onto
+        # what we were given.
+        self._config: PipelineConfig = PipelineConfig.from_kwargs(
+            **{k: v for k, v in locals().items() if k != "self"}
+        )
+        # Lazy import to avoid pulling the plugin registry module if no
+        # plugins are configured (the default).
+        from .fallback import CasePluginRegistry as _CasePluginRegistry
+
+        self._case_plugin_registry = case_plugin_registry or _CasePluginRegistry()
         self.workdir = Path(workdir).resolve()
         self.workdir.mkdir(parents=True, exist_ok=True)
         self._llm = llm
@@ -302,6 +377,11 @@ class ResearchAgentPipeline:
         lang = (manuscript_language or "en").lower()
         self._manuscript_language = (
             "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
+        )
+        # Stored as the canonical Enum so downstream code can compare
+        # against EvidenceEnforcementMode.STRICT without string casing.
+        self._evidence_enforcement_mode = _coerce_enforcement_mode(
+            evidence_enforcement_mode
         )
         # T1.4 — when set, the pipeline strips the ICU rules out of the
         # context that drives planning, coding and validation. This is
@@ -346,6 +426,7 @@ class ResearchAgentPipeline:
             if cache_dir is not None
             else self.workdir / ".cache"
         )
+        self._cache = _pipeline_cache.PipelineCache(self._cache_dir)
         # T3.2 — opt-in LLM cost tracking. When enabled, every per-role
         # client is wrapped in a ``MeteredClient`` that records token
         # counts (prompt / completion) and an estimated USD cost into a
@@ -531,7 +612,10 @@ class ResearchAgentPipeline:
             n_variables=len(context.variables),
         )
 
-        evidence = EvidenceStore(root=run_dir)
+        evidence = EvidenceStore(
+            root=run_dir,
+            enforcement_mode=self._evidence_enforcement_mode,
+        )
         if evidence.get("research_context") is None:
             evidence.register_file(
                 kind="log",
@@ -1086,7 +1170,7 @@ class ResearchAgentPipeline:
         )
         runner = self._build_runner(run_dir=run_dir, cohort_path=cohort_path)
         usage_auditor = ConceptUsageAuditor()
-        from .analysis_pattern_auditor import AnalysisPatternAuditor
+        from .audits.patterns import AnalysisPatternAuditor
 
         pattern_auditor = AnalysisPatternAuditor()
         stat_validator = StatisticalValidator()
@@ -2597,7 +2681,7 @@ class ResearchAgentPipeline:
         per_step_records = execute_result.per_step_records
         critic = CriticAgent(role_resolver("analyzer"))
 
-        execution_gate = _execution_gate_status(
+        execution_gate = execution_gate_status(
             plan=execute_result.plan,
             per_step_records=per_step_records,
         )
@@ -2936,6 +3020,17 @@ class ResearchAgentPipeline:
             bound_unfiltered
         )
         bound, removed_tbd_sentences = _remove_tbd_sentences(bound)
+        if (
+            removed_tbd_sentences
+            and self._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT
+        ):
+            raise EvidenceEnforcementError(
+                f"STRICT evidence mode: writer emitted {len(removed_tbd_sentences)} "
+                f"sentence(s) containing [TBD]/[TODO]/[TK] placeholder(s). "
+                f"The bound manuscript must not carry unresolved writer "
+                f"placeholders before submission.",
+                detail={"tbd_sentences": removed_tbd_sentences},
+            )
         bound_path = run_dir / "manuscript_scaffold_bound.md"
         bound_path.write_text(bound, encoding="utf-8")
         if evidence.get("manuscript_scaffold_bound") is None:
@@ -2989,7 +3084,7 @@ class ResearchAgentPipeline:
                     detail={"removed_sentences": removed_tbd_sentences},
                 )
             )
-        manuscript_numeric_findings = _audit_manuscript_numeric_claims(
+        manuscript_numeric_findings = audit_manuscript_numeric_claims(
             bound,
             per_step_records=per_step_records,
         )
@@ -3520,7 +3615,7 @@ class ResearchAgentPipeline:
         )
         report_path = run_dir / "results_report.md"
         report_path.write_text(
-            _render_report(
+            render_report(
                 context=context,
                 plan=plan,
                 findings=findings,
@@ -4063,7 +4158,7 @@ class ResearchAgentPipeline:
             else literature_provenance
         )
 
-        readiness, artifact_paths = _write_readiness_artifacts(
+        readiness, artifact_paths = write_readiness_artifacts(
             context=context,
             plan=plan,
             findings=findings,
@@ -4075,7 +4170,7 @@ class ResearchAgentPipeline:
         )
 
         report_path.write_text(
-            _render_report(
+            render_report(
                 context=context,
                 plan=plan,
                 findings=findings,
@@ -4143,7 +4238,7 @@ class ResearchAgentPipeline:
             findings_count=len(findings),
         )
         if cache_key is not None:
-            self._record_cache_hit(cache_key, result)
+            self._cache.record_hit(cache_key, result)
         emit_progress(
             "run",
             "Research-agent run complete.",
@@ -4290,7 +4385,7 @@ class ResearchAgentPipeline:
 
         cache_key: Optional[str] = None
         if self._enable_cache and not resume_run_id:
-            cache_key = self._compute_cache_key(
+            cache_key = self._cache.compute_key(
                 cohort_path=cohort_path,
                 question=question,
                 target_outcome=target_outcome,
@@ -4299,8 +4394,9 @@ class ResearchAgentPipeline:
                 llm=self._llm,
                 stop_after_analysis=stop_after_analysis,
                 manuscript_language=run_language,
+                flags=self._cache_flag_payload(),
             )
-            cached = self._lookup_cache(cache_key)
+            cached = self._cache.lookup(cache_key)
             if cached is not None:
                 shutil.rmtree(run_dir, ignore_errors=True)
                 _emit_progress(
@@ -4604,7 +4700,7 @@ class ResearchAgentPipeline:
         target_outcome = (
             replication_spec.mapped_concepts.get("target_outcome")
             or replication_spec.mapped_concepts.get("outcome")
-            or _canonical_outcome_name(paper_profile.target_outcome)
+            or canonical_outcome_name(paper_profile.target_outcome)
         )
         question = paper_profile.research_question or (
             f"Replicate the published ICU study '{paper_profile.paper_title or paper_profile.paper_source}' "
@@ -4732,271 +4828,13 @@ class ResearchAgentPipeline:
         deviation_report: ReplicationDeviationReport,
         mode: str,
     ) -> PipelineResult:
-        run_dir = Path(result.workdir)
-        manifest_path = run_dir / "manifest.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        context_payload: Optional[Dict[str, Any]] = None
-        context_rel = manifest.get("context_path")
-        if context_rel:
-            context_path = run_dir / str(context_rel)
-            if context_path.exists():
-                context_payload = json.loads(context_path.read_text(encoding="utf-8"))
-
-        ledger = build_paper_result_ledger(
+        """Thin delegate; real logic lives in :func:`replication.paper.postprocess_paper_replication`."""
+        return postprocess_paper_replication(
+            result=result,
             paper_profile=paper_profile,
-            manifest=manifest,
-            context_payload=context_payload,
-        )
-        comparator = ReplicationResultComparator()
-        comparison_rows = comparator.compare(
-            paper_profile=paper_profile,
-            ledger=ledger,
-        )
-        design_findings = ReplicationDesignAuditor().audit(
-            paper_profile=paper_profile,
+            replication_spec=replication_spec,
             deviation_report=deviation_report,
-        )
-        comparison_findings = comparator.findings_from_rows(comparison_rows)
-
-        evidence = EvidenceStore(run_dir)
-        profile_path = run_dir / "paper_profile.json"
-        profile_path.write_text(
-            paper_profile.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        spec_path = run_dir / "replication_spec.json"
-        spec_path.write_text(
-            replication_spec.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        claim_rows = [
-            {
-                "claim_id": claim.claim_id,
-                "section": claim.section,
-                "sentence": claim.sentence,
-                "metric": claim.metric or "",
-                "paper_value": claim.paper_value or "",
-                "numeric_value": "" if claim.numeric_value is None else claim.numeric_value,
-                "direction": claim.direction or "",
-                "predictor": claim.predictor or "",
-                "outcome": claim.outcome or "",
-            }
-            for claim in paper_profile.key_claims
-        ]
-        claim_csv_path = write_claim_csv(
-            run_dir / "paper_claim_ledger.csv",
-            claim_rows,
-            [
-                "claim_id",
-                "section",
-                "sentence",
-                "metric",
-                "paper_value",
-                "numeric_value",
-                "direction",
-                "predictor",
-                "outcome",
-            ],
-        )
-        comparison_csv_path = write_claim_csv(
-            run_dir / "replication_comparison.csv",
-            comparison_rows,
-            [
-                "claim_id",
-                "paper_claim",
-                "paper_value",
-                "easyicu_value",
-                "alignment_status",
-                "reason_if_mismatch",
-                "metric",
-            ],
-        )
-        deviation_md_path = run_dir / "deviation_report.md"
-        deviation_md_path.write_text(
-            render_deviation_report(deviation_report),
-            encoding="utf-8",
-        )
-        replication_report_path = run_dir / "replication_report.md"
-        replication_report_path.write_text(
-            render_replication_report(
-                paper_profile=paper_profile,
-                spec=replication_spec,
-                deviation_report=deviation_report,
-                comparison_rows=comparison_rows,
-                ledger=ledger,
-            ),
-            encoding="utf-8",
-        )
-
-        manuscript_bound_path = run_dir / manifest.get("manuscript_path", "manuscript_scaffold_bound.md")
-        if not manuscript_bound_path.exists():
-            manuscript_bound_path = run_dir / "manuscript_scaffold_bound.md"
-        bound_text = manuscript_bound_path.read_text(encoding="utf-8") if manuscript_bound_path.exists() else ""
-        showcase_text = render_showcase_manuscript(
-            bound_manuscript=bound_text,
-            paper_profile=paper_profile,
-            deviation_report=deviation_report,
-        )
-        publication_claim_findings = PublicationClaimAuditor().audit(
-            manuscript_text=showcase_text,
-            deviation_report=deviation_report,
-        )
-
-        all_findings = list(manifest.get("findings") or [])
-        all_findings.extend(f.model_dump(mode="json") for f in design_findings)
-        all_findings.extend(f.model_dump(mode="json") for f in comparison_findings)
-        all_findings.extend(f.model_dump(mode="json") for f in publication_claim_findings)
-        manifest["findings"] = all_findings
-
-        readiness = dict(manifest.get("readiness") or {})
-        design_reproduced = bool(
-            readiness.get("execution_complete")
-            and paper_profile.paper_type != "unsupported_or_underspecified"
-            and not any(f.severity == "error" for f in design_findings)
-        )
-        paper_claims_parsed = bool(paper_profile.key_claims)
-        result_alignment_audited = bool(comparison_rows)
-        replication_report_ready = bool(
-            readiness.get("execution_complete")
-            and design_reproduced
-            and paper_claims_parsed
-            and replication_report_path.exists()
-        )
-        showcase_errors = [
-            f for f in publication_claim_findings if f.severity == "error"
-        ]
-        showcase_manuscript_ready = bool(
-            mode == "manuscript"
-            and readiness.get("manuscript_ready")
-            and design_reproduced
-            and paper_claims_parsed
-            and result_alignment_audited
-            and not showcase_errors
-        )
-        readiness.update(
-            {
-                "design_reproduced": design_reproduced,
-                "paper_claims_parsed": paper_claims_parsed,
-                "result_alignment_audited": result_alignment_audited,
-                "replication_report_ready": replication_report_ready,
-                "showcase_manuscript_ready": showcase_manuscript_ready,
-            }
-        )
-        manifest["readiness"] = readiness
-
-        manuscript_ready_path = run_dir / "manuscript_ready.md"
-        artifact_paths = dict(manifest.get("artifact_paths") or {})
-        if showcase_manuscript_ready:
-            manuscript_ready_path.write_text(showcase_text, encoding="utf-8")
-            artifact_paths["manuscript_ready"] = "manuscript_ready.md"
-        elif manuscript_ready_path.exists():
-            manuscript_ready_path.unlink()
-            artifact_paths.pop("manuscript_ready", None)
-        artifact_paths.update(
-            {
-                "paper_profile": "paper_profile.json",
-                "replication_spec": "replication_spec.json",
-                "paper_claim_ledger": "paper_claim_ledger.csv",
-                "replication_comparison": "replication_comparison.csv",
-                "replication_report": "replication_report.md",
-                "deviation_report": "deviation_report.md",
-            }
-        )
-        manifest["artifact_paths"] = artifact_paths
-
-        run_status_path = run_dir / "run_status.json"
-        status_payload = (
-            json.loads(run_status_path.read_text(encoding="utf-8"))
-            if run_status_path.exists()
-            else {"schema_version": "easyicu.run_status/1"}
-        )
-        status_payload["status"] = (
-            "publication_ready"
-            if readiness.get("publication_ready") and showcase_manuscript_ready
-            else "manuscript_ready"
-            if showcase_manuscript_ready
-            else "replication_ready"
-            if readiness.get("replication_report_ready")
-            else "analysis_only"
-            if readiness.get("execution_complete")
-            else "diagnostic_only"
-        )
-        status_payload["gates"] = readiness
-        status_payload["canonical_outputs"] = artifact_paths
-        run_status_path.write_text(
-            json.dumps(status_payload, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
-
-        author_note_path = run_dir / "author_review_note.md"
-        base_note = author_note_path.read_text(encoding="utf-8") if author_note_path.exists() else "# Author review note\n\n"
-        paper_status = (
-            "publication_ready"
-            if readiness.get("publication_ready") and showcase_manuscript_ready
-            else "manuscript_ready"
-            if showcase_manuscript_ready
-            else "replication_ready"
-            if readiness.get("replication_report_ready")
-            else "analysis_only"
-            if readiness.get("execution_complete")
-            else "diagnostic_only"
-        )
-        base_note = re.sub(
-            r"(?m)^- Status: `[^`]+`$",
-            f"- Status: `{paper_status}`",
-            base_note,
-            count=1,
-        )
-        if readiness.get("replication_report_ready") and "Use `replication_report.md`" not in base_note:
-            base_note = base_note.rstrip() + (
-                "\n\n## Replication review\n\n"
-                "The analysis run completed for paper replication. Use `replication_report.md` "
-                "and `replication_comparison.csv` as the canonical replication outputs. "
-                "`manuscript_ready.md` is emitted only in showcase manuscript mode after the "
-                "paper-aware manuscript gates pass.\n"
-            )
-        author_note_path.write_text(
-            base_note.rstrip()
-            + "\n\n## Paper replication gates\n\n"
-            + f"- design_reproduced: `{design_reproduced}`\n"
-            + f"- paper_claims_parsed: `{paper_claims_parsed}`\n"
-            + f"- result_alignment_audited: `{result_alignment_audited}`\n"
-            + f"- replication_report_ready: `{replication_report_ready}`\n"
-            + f"- showcase_manuscript_ready: `{showcase_manuscript_ready}`\n",
-            encoding="utf-8",
-        )
-
-        for evidence_id, kind, description, path in (
-            ("paper_profile", "log", "Parsed source-paper profile for replication mode.", profile_path),
-            ("replication_spec", "log", "Typed EasyICU replication specification derived from the paper.", spec_path),
-            ("paper_claim_ledger", "table", "Ledger of parsed result claims from the source paper.", claim_csv_path),
-            ("replication_comparison", "table", "Claim-by-claim comparison of source paper and EasyICU results.", comparison_csv_path),
-            ("replication_report", "log", "Narrative EasyICU replication report.", replication_report_path),
-            ("deviation_report", "log", "Structured deviation report for unsupported or approximated design elements.", deviation_md_path),
-        ):
-            if evidence.get(evidence_id) is None:
-                evidence.register_file(
-                    kind=kind,
-                    description=description,
-                    source_path=path,
-                    evidence_id=evidence_id,
-                    aliases=[evidence_id],
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-
-        manifest["evidence"] = [record.model_dump(mode="json") for record in evidence.records()]
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
-        return PipelineResult.model_validate(
-            {
-                **result.model_dump(mode="json"),
-                "paper_profile_path": str(profile_path),
-                "replication_spec_path": str(spec_path),
-                "replication_report_path": str(replication_report_path),
-            }
+            mode=mode,
         )
 
     def _write_fail_closed_paper_package(
@@ -5010,272 +4848,39 @@ class ResearchAgentPipeline:
         replication_spec: PaperReplicationSpec,
         deviation_report: ReplicationDeviationReport,
     ) -> PipelineResult:
-        run_id = (
-            "paperrep_"
-            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-            + "_"
-            + uuid.uuid4().hex[:6]
-        )
-        run_dir = self.workdir / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        cohort_path = self._materialise_cohort(cohort, run_dir)
-        df = pd.read_parquet(cohort_path)
-        context = ResearchContext(
-            research_question=paper_profile.research_question or "Paper replication failed closed before execution.",
-            cohort=build_naive_research_context(
-                research_question=paper_profile.research_question or "Paper replication failed closed.",
-                cohort=cohort_path,
-                cohort_name=cohort_name,
-                database=database,
-                target_outcome=_canonical_outcome_name(paper_profile.target_outcome),
-            ).cohort,
-            variables=[],
-            target_outcome=_canonical_outcome_name(paper_profile.target_outcome),
-            cohort_parquet=str(cohort_path),
-            notes="Strict fail-closed paper replication package.",
-        )
-        context_path = run_dir / "context.json"
-        context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
-        plan = AnalysisPlan(
-            research_question=context.research_question,
-            steps=[],
-        )
-        plan_path = run_dir / "plan.json"
-        plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
-
-        evidence = EvidenceStore(run_dir)
-        profile_path = run_dir / "paper_profile.json"
-        profile_path.write_text(paper_profile.model_dump_json(indent=2), encoding="utf-8")
-        spec_path = run_dir / "replication_spec.json"
-        spec_path.write_text(replication_spec.model_dump_json(indent=2), encoding="utf-8")
-        deviation_md_path = run_dir / "deviation_report.md"
-        deviation_md_path.write_text(render_deviation_report(deviation_report), encoding="utf-8")
-        claim_csv_path = write_claim_csv(
-            run_dir / "paper_claim_ledger.csv",
-            [
-                {
-                    "claim_id": claim.claim_id,
-                    "section": claim.section,
-                    "sentence": claim.sentence,
-                    "metric": claim.metric or "",
-                    "paper_value": claim.paper_value or "",
-                    "numeric_value": "" if claim.numeric_value is None else claim.numeric_value,
-                    "direction": claim.direction or "",
-                    "predictor": claim.predictor or "",
-                    "outcome": claim.outcome or "",
-                }
-                for claim in paper_profile.key_claims
-            ],
-            [
-                "claim_id",
-                "section",
-                "sentence",
-                "metric",
-                "paper_value",
-                "numeric_value",
-                "direction",
-                "predictor",
-                "outcome",
-            ],
-        )
-        comparison_csv_path = write_claim_csv(
-            run_dir / "replication_comparison.csv",
-            [],
-            [
-                "claim_id",
-                "paper_claim",
-                "paper_value",
-                "easyicu_value",
-                "alignment_status",
-                "reason_if_mismatch",
-                "metric",
-            ],
-        )
-        replication_report_path = run_dir / "replication_report.md"
-        replication_report_path.write_text(
-            render_replication_report(
-                paper_profile=paper_profile,
-                spec=replication_spec,
-                deviation_report=deviation_report,
-                comparison_rows=[],
-                ledger=PaperResultLedger(paper_claims=paper_profile.key_claims, easyicu_metrics={"n_stays": int(len(df))}),
-            ),
-            encoding="utf-8",
-        )
-        manuscript_path = run_dir / "manuscript_scaffold_bound.md"
-        manuscript_path.write_text(
-            "# Manuscript scaffold not generated\n\nStrict fail-closed policy blocked paper replication drafting.\n",
-            encoding="utf-8",
-        )
-
-        design_findings = ReplicationDesignAuditor().audit(
+        """Thin delegate; real logic lives in
+        :func:`replication.paper.write_fail_closed_paper_package`."""
+        return write_fail_closed_paper_package(
+            workdir=self.workdir,
+            llm=self._llm,
+            materialise_cohort=self._materialise_cohort,
+            paper=paper,
+            cohort=cohort,
+            database=database,
+            cohort_name=cohort_name,
             paper_profile=paper_profile,
+            replication_spec=replication_spec,
             deviation_report=deviation_report,
-        )
-        readiness, artifact_paths = _write_readiness_artifacts(
-            context=context,
-            plan=plan,
-            findings=design_findings,
-            per_step_records=[],
-            evidence=evidence,
-            run_dir=run_dir,
-            manuscript_path=manuscript_path,
-            stop_after_analysis=False,
-        )
-        readiness.update(
-            {
-                "design_reproduced": False,
-                "paper_claims_parsed": bool(paper_profile.key_claims),
-                "result_alignment_audited": False,
-                "replication_report_ready": True,
-                "showcase_manuscript_ready": False,
-            }
-        )
-        artifact_paths.update(
-            {
-                "paper_profile": "paper_profile.json",
-                "replication_spec": "replication_spec.json",
-                "paper_claim_ledger": "paper_claim_ledger.csv",
-                "replication_comparison": "replication_comparison.csv",
-                "replication_report": "replication_report.md",
-                "deviation_report": "deviation_report.md",
-            }
-        )
-        for evidence_id, kind, description, path in (
-            ("paper_profile", "log", "Parsed source-paper profile for replication mode.", profile_path),
-            ("replication_spec", "log", "Typed EasyICU replication specification derived from the paper.", spec_path),
-            ("paper_claim_ledger", "table", "Ledger of parsed result claims from the source paper.", claim_csv_path),
-            ("replication_comparison", "table", "Claim-by-claim comparison of source paper and EasyICU results.", comparison_csv_path),
-            ("replication_report", "log", "Narrative EasyICU replication report.", replication_report_path),
-            ("deviation_report", "log", "Structured deviation report for unsupported or approximated design elements.", deviation_md_path),
-        ):
-            if evidence.get(evidence_id) is None:
-                evidence.register_file(
-                    kind=kind,
-                    description=description,
-                    source_path=path,
-                    evidence_id=evidence_id,
-                    aliases=[evidence_id],
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-
-        report_path = run_dir / "results_report.md"
-        report_path.write_text(
-            _render_report(
-                context=context,
-                plan=plan,
-                findings=design_findings,
-                per_step_records=[],
-                evidence=evidence,
-                readiness=readiness,
-            ),
-            encoding="utf-8",
-        )
-        run_status_path = run_dir / "run_status.json"
-        run_status = json.loads(run_status_path.read_text(encoding="utf-8"))
-        run_status["gates"] = readiness
-        run_status["canonical_outputs"] = artifact_paths
-        run_status_path.write_text(
-            json.dumps(run_status, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
-        manifest = AnalysisManifest(
-            run_id=run_id,
-            research_question=context.research_question,
-            started_at=datetime.now(timezone.utc),
-            finished_at=datetime.now(timezone.utc),
-            context_path="context.json",
-            plan_path="plan.json",
-            evidence=evidence.records(),
-            findings=design_findings,
-            readiness=readiness,
-            artifact_paths=artifact_paths,
-            report_path="results_report.md",
-            manuscript_path="manuscript_scaffold_bound.md",
-            used_mock_llm=isinstance(self._llm, MockLLMClient) if self._llm is not None else False,
-            prompt_pack_version=PROMPT_PACK_VERSION,
-            prompt_pack_files=prompt_pack_files(),
-            notes="Strict fail-closed replication package generated before analysis execution.",
-        )
-        manifest_path = run_dir / "manifest.json"
-        manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
-        return PipelineResult(
-            run_id=run_id,
-            workdir=str(run_dir),
-            context_path=str(context_path),
-            plan_path=str(plan_path),
-            manifest_path=str(manifest_path),
-            report_path=str(report_path),
-            manuscript_path=str(manuscript_path),
-            evidence_count=len(evidence.records()),
-            findings_count=len(design_findings),
-            paper_profile_path=str(profile_path),
-            replication_spec_path=str(spec_path),
-            replication_report_path=str(replication_report_path),
         )
 
     # ------------------------------------------------------------------
-    # T3.5 — cohort cache (helpers)
+    # T3.5 — cohort cache (delegates; real logic in pipeline_cache.py)
     # ------------------------------------------------------------------
 
     @staticmethod
     def _llm_signature(llm: Any) -> str:
-        """Return a short string identifying the configured LLM(s).
-
-        Two runs with different LLMs *must* invalidate the cache
-        because the bound manuscript / generated code / chosen plan
-        could differ. We canonicalise the signature so order doesn't
-        matter for routers.
-        """
-        if llm is None:
-            return "unconfigured"
-        if isinstance(llm, MockLLMClient):
-            return "mock"
-        # LLMRouter (T2.3) — fingerprint every distinct underlying client.
-        if hasattr(llm, "iter_clients"):
-            sigs = sorted(
-                ResearchAgentPipeline._llm_signature(c) for c in llm.iter_clients()
-            )
-            return "router(" + ",".join(sigs) + ")"
-        model = getattr(llm, "_model", None)
-        cls = getattr(llm, "name", llm.__class__.__name__)
-        return f"{cls}:{model}" if model else str(cls)
+        return _pipeline_cache.llm_signature(llm)
 
     @staticmethod
-    def _hash_file(path: Path, *, chunk: int = 1024 * 1024) -> str:
-        h = hashlib.sha256()
-        with open(path, "rb") as fh:
-            for buf in iter(lambda: fh.read(chunk), b""):
-                h.update(buf)
-        return h.hexdigest()
+    def _iter_mock_clients(llm: Any):
+        yield from _pipeline_cache.iter_mock_clients(llm)
 
-    def _compute_cache_key(
-        self,
-        *,
-        cohort_path: Path,
-        question: Optional[str],
-        target_outcome: Optional[str],
-        skill_key: Optional[str],
-        database: Optional[str],
-        llm: Any,
-        stop_after_analysis: bool,
-        manuscript_language: str,
-    ) -> str:
-        """Compose the deterministic cache key for this run.
-
-        The key includes every input that can change the produced
-        artefacts: cohort bytes hash, the configured LLM signature,
-        and the user-facing run knobs. ``disable_icu_context`` and
-        ``enable_pubmed`` are pipeline-level flags that also alter
-        the manuscript, so they participate too.
+    def _cache_flag_payload(self) -> Dict[str, Any]:
+        """Return the bag of pipeline-level flags that participate in
+        the cache key. Kept here (and not in :mod:`pipeline_cache`)
+        because the canonical list of flags is owned by the pipeline.
         """
-        payload = {
-            "cohort_sha256": self._hash_file(cohort_path),
-            "question": (question or "").strip(),
-            "target_outcome": (target_outcome or "").strip(),
-            "skill": (skill_key or "").strip(),
-            "database": (database or "").strip(),
+        return {
             "disable_icu_context": bool(self._disable_icu_context),
             "enable_pubmed": bool(self._enable_pubmed),
             "enable_tavily": bool(self._enable_tavily),
@@ -5294,104 +4899,7 @@ class ResearchAgentPipeline:
                 self._enable_deterministic_runner_repair
             ),
             "latex_venue_template": self._latex_venue_template,
-            "stop_after_analysis": bool(stop_after_analysis),
-            "manuscript_language": manuscript_language,
-            "llm": self._llm_signature(llm),
         }
-        blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-    def _cache_index_path(self) -> Path:
-        return self._cache_dir / "cache_index.json"
-
-    def _load_cache_index(self) -> Dict[str, Dict[str, str]]:
-        path = self._cache_index_path()
-        if not path.exists():
-            return {}
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        return {str(k): dict(v) for k, v in data.items() if isinstance(v, dict)}
-
-    def _save_cache_index(self, index: Dict[str, Dict[str, str]]) -> None:
-        self._cache_dir.mkdir(parents=True, exist_ok=True)
-        self._cache_index_path().write_text(
-            json.dumps(index, indent=2, ensure_ascii=False, sort_keys=True),
-            encoding="utf-8",
-        )
-
-    def _lookup_cache(self, cache_key: str) -> Optional[PipelineResult]:
-        """Return a previous :class:`PipelineResult` if the artefacts
-        it points at still exist on disk; otherwise None.
-
-        We deliberately verify both the manifest and the bound
-        manuscript files because callers rely on them to be present.
-        A cache entry whose run_dir was deleted is treated as a miss
-        and silently evicted from the index.
-        """
-        index = self._load_cache_index()
-        entry = index.get(cache_key)
-        if not entry:
-            return None
-        run_id = entry.get("run_id")
-        workdir = entry.get("workdir")
-        if not run_id or not workdir:
-            return None
-        run_dir = Path(workdir)
-        manifest = run_dir / "manifest.json"
-        if not manifest.exists():
-            # stale entry — drop it.
-            index.pop(cache_key, None)
-            self._save_cache_index(index)
-            return None
-        try:
-            return PipelineResult(
-                run_id=run_id,
-                workdir=str(run_dir),
-                context_path=str(run_dir / "research_context.json"),
-                plan_path=str(run_dir / "analysis_plan.json"),
-                manifest_path=str(manifest),
-                report_path=str(run_dir / "results_report.md"),
-                manuscript_path=str(run_dir / "manuscript_scaffold_bound.md"),
-                evidence_count=int(entry.get("evidence_count") or 0),
-                findings_count=int(entry.get("findings_count") or 0),
-            )
-        except Exception:
-            return None
-
-    def _record_cache_hit(self, cache_key: str, result: PipelineResult) -> None:
-        index = self._load_cache_index()
-        index[cache_key] = {
-            "run_id": result.run_id,
-            "workdir": result.workdir,
-            "evidence_count": str(result.evidence_count),
-            "findings_count": str(result.findings_count),
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-        }
-        self._save_cache_index(index)
-
-    @staticmethod
-    def _iter_mock_clients(llm: Any):
-        """Yield every :class:`MockLLMClient` reachable through ``llm``.
-
-        For a plain client this is just ``llm`` itself when it's a
-        Mock; for an :class:`LLMRouter` we walk the router's role
-        clients (and the default) so the per-role mocks all see the
-        cohort context. Idempotent for non-Mock clients.
-        """
-        if llm is None:
-            return
-        if isinstance(llm, MockLLMClient):
-            yield llm
-            return
-        # Router-style: anything exposing iter_clients()
-        if hasattr(llm, "iter_clients"):
-            for child in llm.iter_clients():
-                if isinstance(child, MockLLMClient):
-                    yield child
 
     def _finalise_aborted(
         self,
@@ -5406,7 +4914,7 @@ class ResearchAgentPipeline:
     ) -> PipelineResult:
         report_path = run_dir / "results_report.md"
         report_path.write_text(
-            _render_report(
+            render_report(
                 context=context,
                 plan=None,
                 findings=findings,
@@ -5421,7 +4929,7 @@ class ResearchAgentPipeline:
             f"# Manuscript scaffold not generated\n\nPipeline aborted: {reason}.\n",
             encoding="utf-8",
         )
-        readiness, artifact_paths = _write_readiness_artifacts(
+        readiness, artifact_paths = write_readiness_artifacts(
             context=context,
             plan=None,
             findings=findings,
@@ -5432,7 +4940,7 @@ class ResearchAgentPipeline:
             stop_after_analysis=False,
         )
         report_path.write_text(
-            _render_report(
+            render_report(
                 context=context,
                 plan=None,
                 findings=findings,
@@ -6120,102 +5628,6 @@ def _deterministic_summary_repair(
     return None
 
 
-def _primary_association_fallback_code(
-    *,
-    predictor: str,
-    outcome: str = "death",
-    reason: str,
-) -> str:
-    """Appendable rescue block for common real-LLM regression preprocessing failures."""
-    predictor_lit = json.dumps(predictor)
-    outcome_lit = json.dumps(outcome or "death")
-    reason_lit = json.dumps(reason)
-    return textwrap.dedent(
-        f"""
-        def _easyicu_primary_association_fallback_v1():
-            import json
-            import os
-            import numpy as np
-            import pandas as pd
-            import statsmodels.api as sm
-
-            cohort_path = os.environ.get("COHORT_PARQUET")
-            out_dir = os.environ.get("STEP_OUT_DIR", ".")
-            if not cohort_path:
-                return
-            df_fallback = pd.read_parquet(cohort_path)
-            predictor_col = {predictor_lit}
-            outcome_col = {outcome_lit}
-            if predictor_col not in df_fallback.columns or outcome_col not in df_fallback.columns:
-                return
-            candidate_covariates = ["age", "sex", "lact", "creat", "map", "vaso", "los_icu"]
-            covariates = [
-                col for col in candidate_covariates
-                if col in df_fallback.columns and col not in {{predictor_col, outcome_col}}
-            ]
-            model_df = df_fallback[[outcome_col, predictor_col] + covariates].copy()
-            if "sex" in model_df.columns:
-                model_df["sex"] = (
-                    model_df["sex"].astype(str).str.lower()
-                    .isin(["m", "male", "1", "true"])
-                    .astype(float)
-                )
-            for col in model_df.columns:
-                model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
-            model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
-            if len(model_df) < 20 or model_df[outcome_col].nunique() < 2:
-                return
-            x_cols = [predictor_col] + covariates
-            y = model_df[outcome_col].astype(float)
-            X = sm.add_constant(model_df[x_cols].astype(float), has_constant="add")
-            result = sm.Logit(y, X).fit(disp=0)
-            coef = float(result.params[predictor_col])
-            ci = np.exp(result.conf_int().loc[predictor_col]).tolist()
-            primary_or = float(np.exp(coef))
-            p_value = float(result.pvalues[predictor_col])
-            table_path = os.path.join(out_dir, "primary_association.csv")
-            pd.DataFrame([{{
-                "variable": predictor_col,
-                "odds_ratio": primary_or,
-                "or_lower": float(ci[0]),
-                "or_upper": float(ci[1]),
-                "p_value": p_value,
-                "n_complete": int(len(model_df)),
-                "method": "deterministic_logistic_regression_fallback",
-            }}]).to_csv(table_path, index=False)
-            summary_path = os.path.join(out_dir, "step_summary.json")
-            summary = {{}}
-            if os.path.exists(summary_path):
-                try:
-                    with open(summary_path, "r", encoding="utf-8") as f:
-                        loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        summary.update(loaded)
-                except Exception:
-                    summary = {{}}
-            summary.update({{
-                "primary_predictor": predictor_col,
-                "outcome": outcome_col,
-                "primary_or": primary_or,
-                "statistic:primary_or": primary_or,
-                "primary_or_ci": [float(ci[0]), float(ci[1])],
-                "p_value": p_value,
-                "n_complete": int(len(model_df)),
-                "method": "deterministic_logistic_regression_fallback",
-                "fallback_reason": {reason_lit},
-            }})
-            with open(summary_path, "w", encoding="utf-8") as f:
-                json.dump(summary, f, indent=2, ensure_ascii=False)
-            print(json.dumps(summary, ensure_ascii=False))
-
-        try:
-            _easyicu_primary_association_fallback_v1()
-        except Exception as _easyicu_primary_fallback_exc:
-            print(f"primary_association_fallback_failed: {{_easyicu_primary_fallback_exc}}")
-        """
-    ).strip("\n")
-
-
 def _salvage_stdout_json_step_summary(run_result: RunResult) -> bool:
     """Persist a JSON object printed to stdout as step_summary.json.
 
@@ -6496,209 +5908,6 @@ def _first_resolvable_name(
     return None
 
 
-def _audit_manuscript_numeric_claims(
-    bound_manuscript: str,
-    *,
-    per_step_records: Sequence[Dict[str, Any]] | None = None,
-) -> List[ValidationFinding]:
-    """Block manuscript claims that drift from registered numeric evidence.
-
-    Evidence binding proves a sentence points somewhere; it does not prove the
-    number in the sentence matches the machine-readable result. Small local
-    models can cite the right table while rounding from memory or inventing a
-    confidence interval. This audit catches the high-risk prediction metrics
-    before a run can be treated as manuscript-ready.
-    """
-    summaries = [
-        item.get("step_summary")
-        for item in (per_step_records or [])
-        if isinstance(item.get("step_summary"), dict)
-    ]
-    if not summaries:
-        return []
-
-    findings: List[ValidationFinding] = []
-
-    auroc = _first_summary_scalar(
-        summaries,
-        (
-            "auroc",
-            "statistic:auroc",
-            "auc",
-            "statistic:auc",
-            "held_out_auroc",
-            "statistic:held_out_auroc",
-            "cv_auroc",
-            "statistic:cv_auroc",
-            "cv_auroc_mean",
-            "statistic:cv_auroc_mean",
-            "mean_auroc",
-            "auroc_mean",
-        ),
-    )
-    if auroc is not None:
-        claimed_aurocs = _extract_metric_claims(bound_manuscript, r"\b(?:AUROC|AUC)\b")
-        for claimed in claimed_aurocs:
-            # Allow ordinary two-decimal rounding (0.7769 -> 0.78), but not
-            # manuscript-friendly drift such as 0.82.
-            if abs(claimed - auroc) > 0.015:
-                findings.append(
-                    ValidationFinding(
-                        validator="manuscript_numeric_auditor",
-                        severity="error",
-                        message=(
-                            f"Manuscript AUROC claim {claimed:.3g} does not match "
-                            f"registered AUROC {auroc:.3g}."
-                        ),
-                        detail={
-                            "metric": "auroc",
-                            "claimed": claimed,
-                            "registered": auroc,
-                        },
-                    )
-                )
-        ci_low = _first_summary_scalar(
-            summaries,
-            ("auroc_ci_lower", "statistic:auroc_ci_lower", "auc_ci_lower", "ci_lower_auroc"),
-        )
-        ci_high = _first_summary_scalar(
-            summaries,
-            ("auroc_ci_upper", "statistic:auroc_ci_upper", "auc_ci_upper", "ci_upper_auroc"),
-        )
-        if (ci_low is None or ci_high is None) and re.search(
-            r"\b(?:AUROC|AUC)\b.{0,80}\b95\s*%\s*CI\b",
-            bound_manuscript,
-            flags=re.IGNORECASE | re.DOTALL,
-        ):
-            findings.append(
-                ValidationFinding(
-                    validator="manuscript_numeric_auditor",
-                    severity="error",
-                    message=(
-                        "Manuscript reports an AUROC confidence interval, but no "
-                        "AUROC CI bounds are registered in step_summary evidence."
-                    ),
-                    detail={"metric": "auroc_ci"},
-                )
-            )
-
-    brier = _first_summary_scalar(
-        summaries,
-        (
-            "brier_score",
-            "statistic:brier_score",
-            "held_out_brier",
-            "statistic:held_out_brier",
-            "cv_brier_mean",
-            "statistic:cv_brier_mean",
-            "brier_mean",
-        ),
-    )
-    if brier is not None:
-        for claimed in _extract_metric_claims(bound_manuscript, r"\bBrier(?: score)?\b"):
-            if abs(claimed - brier) > 0.015:
-                findings.append(
-                    ValidationFinding(
-                        validator="manuscript_numeric_auditor",
-                        severity="error",
-                        message=(
-                            f"Manuscript Brier claim {claimed:.3g} does not match "
-                            f"registered Brier score {brier:.3g}."
-                        ),
-                        detail={
-                            "metric": "brier_score",
-                            "claimed": claimed,
-                            "registered": brier,
-                        },
-                    )
-                )
-
-    baseline = _first_summary_scalar(
-        summaries,
-        (
-            "baseline_prevalence",
-            "statistic:baseline_prevalence",
-            "outcome_rate",
-            "statistic:outcome_rate",
-            "event_rate",
-            "statistic:event_rate",
-        ),
-    )
-    if baseline is not None:
-        for claimed in _extract_percent_claims_near(
-            bound_manuscript,
-            r"\b(?:baseline prevalence|mortality|death|outcome incidence)\b",
-        ):
-            if abs(claimed - baseline) > 0.015:
-                findings.append(
-                    ValidationFinding(
-                        validator="manuscript_numeric_auditor",
-                        severity="error",
-                        message=(
-                            f"Manuscript prevalence claim {claimed:.3g} does not match "
-                            f"registered baseline prevalence {baseline:.3g}."
-                        ),
-                        detail={
-                            "metric": "baseline_prevalence",
-                            "claimed": claimed,
-                            "registered": baseline,
-                        },
-                    )
-                )
-
-    return findings
-
-
-def _first_summary_scalar(
-    summaries: Sequence[Dict[str, Any]], keys: Sequence[str]
-) -> Optional[float]:
-    for summary in summaries:
-        value = _first_present_scalar(summary, keys)
-        if value is None:
-            continue
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
-    claims: List[float] = []
-    clean_text = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
-    clean_text = re.sub(r"<!--.*?-->", "", clean_text, flags=re.DOTALL)
-    pattern = re.compile(
-        metric_pattern + r"[^0-9]{0,40}([01](?:\.\d+)?)",
-        flags=re.IGNORECASE,
-    )
-    for match in pattern.finditer(clean_text):
-        try:
-            value = float(match.group(1))
-        except (TypeError, ValueError):
-            continue
-        if 0.0 <= value <= 1.0:
-            claims.append(value)
-    return claims
-
-
-def _extract_percent_claims_near(text: str, phrase_pattern: str) -> List[float]:
-    claims: List[float] = []
-    clean_text = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
-    clean_text = re.sub(r"<!--.*?-->", "", clean_text, flags=re.DOTALL)
-    pattern = re.compile(
-        phrase_pattern + r".{0,80}?([0-9]+(?:\.[0-9]+)?)\s*%",
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    for match in pattern.finditer(clean_text):
-        try:
-            value = float(match.group(1)) / 100.0
-        except (TypeError, ValueError):
-            continue
-        if 0.0 <= value <= 1.0:
-            claims.append(value)
-    return claims
-
-
 def _parent_step_id_for_figure_step(step: AnalysisStep) -> Optional[str]:
     step_id = str(step.step_id or "")
     if step_id.endswith("_figure") and len(step_id) > len("_figure"):
@@ -6720,159 +5929,6 @@ def _step_expects_figure(step: AnalysisStep) -> bool:
         "figure" in str(output or "").lower() or "plot" in str(output or "").lower()
         for output in (step.expected_outputs or [])
     )
-
-
-def _execution_gate_status(
-    *,
-    plan: Optional[AnalysisPlan],
-    per_step_records: Sequence[Dict[str, Any]],
-) -> Dict[str, Any]:
-    if plan is None:
-        return {
-            "execution_complete": False,
-            "required_step_count": 0,
-            "completed_step_count": 0,
-            "missing_steps": [],
-            "failed_steps": [{"step_id": "plan", "status": "not_available"}],
-        }
-    required_step_ids = [s.step_id for s in (plan.steps if plan is not None else [])]
-    status_by_step = {
-        str(record.get("step_id")): str(record.get("status") or "")
-        for record in per_step_records
-        if record.get("step_id") and record.get("step_id") != "00_probe"
-    }
-    missing_steps = [step_id for step_id in required_step_ids if step_id not in status_by_step]
-    failed_steps = [
-        {"step_id": step_id, "status": status_by_step.get(step_id)}
-        for step_id in required_step_ids
-        if step_id in status_by_step and status_by_step.get(step_id) != "ok"
-    ]
-    return {
-        "execution_complete": not missing_steps and not failed_steps,
-        "required_step_count": len(required_step_ids),
-        "completed_step_count": sum(
-            1 for step_id in required_step_ids if status_by_step.get(step_id) == "ok"
-        ),
-        "missing_steps": missing_steps,
-        "failed_steps": failed_steps,
-    }
-
-
-def _count_missing_evidence_markers(text: str) -> int:
-    return len(
-        re.findall(
-            r"(?:\[evidence missing:\s*[^\]]+\]|<!--\s*evidence missing:\s*[^>]+-->)",
-            text or "",
-            flags=re.IGNORECASE,
-        )
-    )
-
-
-def _publication_figure_bundle_ready(
-    *, evidence: EvidenceStore, run_dir: Path
-) -> Dict[str, Any]:
-    stems: Dict[str, set[str]] = {}
-    for record in evidence.records():
-        if record.kind != "figure":
-            continue
-        role = str((record.metadata or {}).get("figure_role") or "").lower()
-        haystack = " ".join(
-            [
-                record.evidence_id,
-                record.description,
-                record.relative_path,
-                role,
-            ]
-        ).lower()
-        if "publication" not in haystack:
-            continue
-        path = run_dir / record.relative_path
-        stem = path.with_suffix("").name.split("__", 1)[-1]
-        stems.setdefault(stem, set()).add(path.suffix.lower().lstrip("."))
-    ready_stems = [
-        stem
-        for stem, suffixes in stems.items()
-        if {"svg", "png", "pdf", "tiff"} <= suffixes or {"svg", "png", "pdf", "tif"} <= suffixes
-    ]
-    return {
-        "publication_figure_bundle_ready": bool(ready_stems),
-        "publication_figure_stems": sorted(stems),
-        "publication_ready_stems": sorted(ready_stems),
-    }
-
-
-def _compute_readiness_gates(
-    *,
-    plan: Optional[AnalysisPlan],
-    per_step_records: Sequence[Dict[str, Any]],
-    findings: Sequence[ValidationFinding],
-    evidence: EvidenceStore,
-    run_dir: Path,
-    manuscript_path: Path,
-    stop_after_analysis: bool,
-) -> Dict[str, Any]:
-    execution = _execution_gate_status(plan=plan, per_step_records=per_step_records)
-    manuscript_text = ""
-    if manuscript_path.exists():
-        try:
-            manuscript_text = manuscript_path.read_text(encoding="utf-8")
-        except Exception:
-            manuscript_text = ""
-    missing_evidence_count = _count_missing_evidence_markers(manuscript_text)
-    numeric_errors = [
-        f.message
-        for f in findings
-        if f.severity == "error" and f.validator == "manuscript_numeric_auditor"
-    ]
-    evidence_errors = [
-        f.message
-        for f in findings
-        if f.severity == "error" and f.validator in {"evidence_bound_writer", "critic_agent"}
-    ]
-    non_manuscript_errors = [
-        f.message
-        for f in findings
-        if f.severity == "error"
-        and f.validator
-        not in {
-            "manuscript_numeric_auditor",
-            "evidence_bound_writer",
-            "critic_agent",
-        }
-    ]
-    manuscript_generated = (
-        manuscript_path.exists()
-        and "Manuscript scaffold not generated" not in manuscript_text[:300]
-        and not stop_after_analysis
-    )
-    evidence_complete = manuscript_generated and missing_evidence_count == 0 and not evidence_errors
-    numeric_verified = manuscript_generated and not numeric_errors
-    analysis_validated = execution["execution_complete"] and not non_manuscript_errors
-    manuscript_ready = (
-        execution["execution_complete"]
-        and evidence_complete
-        and numeric_verified
-        and analysis_validated
-    )
-    publication = _publication_figure_bundle_ready(evidence=evidence, run_dir=run_dir)
-    return {
-        **execution,
-        "evidence_complete": evidence_complete,
-        "numeric_verified": numeric_verified,
-        "analysis_validated": analysis_validated,
-        "manuscript_ready": manuscript_ready,
-        "publication_ready": manuscript_ready
-        and publication["publication_figure_bundle_ready"],
-        "manuscript_generated": manuscript_generated,
-        "missing_evidence_count": missing_evidence_count,
-        "numeric_error_count": len(numeric_errors),
-        "evidence_error_count": len(evidence_errors),
-        "analysis_error_count": len(non_manuscript_errors),
-        "numeric_errors": numeric_errors,
-        "evidence_errors": evidence_errors,
-        "analysis_errors": non_manuscript_errors,
-        **publication,
-    }
 
 
 def _demote_unresolved_evidence_placeholders(
@@ -7072,340 +6128,6 @@ def _patch_json_dump_numpy_key_sanitizer(code: str) -> str:
         """
     ).strip()
     return helper + "\n" + code
-
-
-def _age_stratified_mortality_fallback_code() -> str:
-    return textwrap.dedent(
-        """
-        import json
-        import math
-        import os
-        import numpy as np
-        import pandas as pd
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        def _jsonable(value):
-            if isinstance(value, dict):
-                return {str(_jsonable(k)): _jsonable(v) for k, v in value.items()}
-            if isinstance(value, (list, tuple)):
-                return [_jsonable(v) for v in value]
-            if isinstance(value, (np.integer,)):
-                return int(value)
-            if isinstance(value, (np.floating,)):
-                value = float(value)
-                return value if math.isfinite(value) else None
-            if isinstance(value, (np.bool_,)):
-                return bool(value)
-            if isinstance(value, np.ndarray):
-                return _jsonable(value.tolist())
-            try:
-                if pd.isna(value):
-                    return None
-            except Exception:
-                pass
-            return value
-
-        def _wilson(count, n):
-            count = float(count)
-            n = float(n)
-            if n <= 0:
-                return None, None
-            z = 1.959963984540054
-            p = count / n
-            denom = 1.0 + z * z / n
-            centre = p + z * z / (2.0 * n)
-            spread = z * math.sqrt((p * (1.0 - p) + z * z / (4.0 * n)) / n)
-            return max(0.0, (centre - spread) / denom), min(1.0, (centre + spread) / denom)
-
-        out_dir = os.environ["STEP_OUT_DIR"]
-        cohort_path = os.environ["COHORT_PARQUET"]
-        os.makedirs(out_dir, exist_ok=True)
-        df = pd.read_parquet(cohort_path)
-        analysis = df[["age", "death"]].copy()
-        analysis["age"] = pd.to_numeric(analysis["age"], errors="coerce")
-        analysis["death"] = pd.to_numeric(analysis["death"], errors="coerce")
-        analysis = analysis.dropna(subset=["age", "death"])
-        analysis = analysis[analysis["age"] >= 18].copy()
-        if analysis.empty:
-            table = pd.DataFrame(columns=["age_tertile", "n", "deaths", "mortality_rate", "ci_lower", "ci_upper"])
-        else:
-            ranks = analysis["age"].rank(method="first")
-            analysis["age_tertile"] = pd.qcut(ranks, q=min(3, len(analysis)), labels=False, duplicates="drop")
-            table = (
-                analysis.groupby("age_tertile", dropna=False)
-                .agg(n=("death", "size"), deaths=("death", "sum"), age_min=("age", "min"), age_max=("age", "max"))
-                .reset_index()
-            )
-            rows = []
-            for _, row in table.iterrows():
-                n = int(row["n"])
-                deaths = int(row["deaths"])
-                lo, hi = _wilson(deaths, n)
-                rows.append({
-                    "age_tertile": f"T{int(row['age_tertile']) + 1}",
-                    "n": n,
-                    "deaths": deaths,
-                    "mortality_rate": deaths / n if n else None,
-                    "ci_lower": lo,
-                    "ci_upper": hi,
-                    "age_min": float(row["age_min"]),
-                    "age_max": float(row["age_max"]),
-                })
-            table = pd.DataFrame(rows)
-        table_path = os.path.join(out_dir, "age_tertile_mortality.csv")
-        table.to_csv(table_path, index=False)
-        statistic_path = os.path.join(out_dir, "age_tertile_statistics.json")
-        overall_deaths = int(analysis["death"].sum()) if len(analysis) else 0
-        overall_n = int(len(analysis))
-        overall_rate = overall_deaths / overall_n if overall_n else None
-        stats_payload = {
-            "n_rows": int(len(df)),
-            "n_analyzed": overall_n,
-            "mortality_rate": overall_rate,
-            "missingness": {
-                "age_missing_n": int(pd.to_numeric(df.get("age"), errors="coerce").isna().sum()) if "age" in df else int(len(df)),
-                "death_missing_n": int(pd.to_numeric(df.get("death"), errors="coerce").isna().sum()) if "death" in df else int(len(df)),
-            },
-            "stratum_table": table.to_dict(orient="records"),
-        }
-        with open(statistic_path, "w", encoding="utf-8") as f:
-            json.dump(_jsonable(stats_payload), f, indent=2, ensure_ascii=False)
-        figure_files = []
-        if not table.empty:
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.bar(table["age_tertile"].astype(str), table["mortality_rate"].astype(float))
-            ax.set_xlabel("Age tertile")
-            ax.set_ylabel("Mortality proportion")
-            ax.set_ylim(0, max(0.01, float(table["mortality_rate"].max()) * 1.25))
-            ax.set_title("Mortality by age tertile")
-            fig.tight_layout()
-            for suffix in ("png", "svg"):
-                path = os.path.join(out_dir, f"age_tertile_mortality.{suffix}")
-                fig.savefig(path, dpi=300 if suffix == "png" else None)
-                figure_files.append(path)
-            plt.close(fig)
-        summary = {
-            "n_rows": int(len(df)),
-            "n_analyzed": overall_n,
-            "mortality_rate": overall_rate,
-            "missingness": stats_payload["missingness"],
-            "stratum_table": stats_payload["stratum_table"],
-            "table_path": table_path,
-            "statistic_path": statistic_path,
-            "figure_files": figure_files,
-        }
-        with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
-            json.dump(_jsonable(summary), f, indent=2, ensure_ascii=False)
-        print(json.dumps(_jsonable(summary), ensure_ascii=False))
-        """
-    ).strip() + "\n"
-
-
-def _norepinephrine_dose_response_fallback_code() -> str:
-    return textwrap.dedent(
-        """
-        import json
-        import math
-        import os
-        import numpy as np
-        import pandas as pd
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-
-        def _jsonable(value):
-            if isinstance(value, dict):
-                return {str(_jsonable(k)): _jsonable(v) for k, v in value.items()}
-            if isinstance(value, (list, tuple)):
-                return [_jsonable(v) for v in value]
-            if isinstance(value, (np.integer,)):
-                return int(value)
-            if isinstance(value, (np.floating,)):
-                value = float(value)
-                return value if math.isfinite(value) else None
-            if isinstance(value, (np.bool_,)):
-                return bool(value)
-            if isinstance(value, np.ndarray):
-                return _jsonable(value.tolist())
-            try:
-                if pd.isna(value):
-                    return None
-            except Exception:
-                pass
-            return value
-
-        def _wilson(count, n):
-            count = float(count)
-            n = float(n)
-            if n <= 0:
-                return None, None
-            z = 1.959963984540054
-            p = count / n
-            denom = 1.0 + z * z / n
-            centre = p + z * z / (2.0 * n)
-            spread = z * math.sqrt((p * (1.0 - p) + z * z / (4.0 * n)) / n)
-            return max(0.0, (centre - spread) / denom), min(1.0, (centre + spread) / denom)
-
-        def _fallback_or(frame, predictor, outcome):
-            data = frame[[predictor, outcome]].dropna().copy()
-            if len(data) < 4 or data[outcome].nunique() < 2:
-                return None, None, None
-            median = data[predictor].median()
-            high = data[data[predictor] > median][outcome]
-            low = data[data[predictor] <= median][outcome]
-            a = float(high.sum()) + 0.5
-            b = float(len(high) - high.sum()) + 0.5
-            c = float(low.sum()) + 0.5
-            d = float(len(low) - low.sum()) + 0.5
-            log_or = math.log((a / b) / (c / d))
-            se = math.sqrt(1.0 / a + 1.0 / b + 1.0 / c + 1.0 / d)
-            return math.exp(log_or), math.exp(log_or - 1.96 * se), math.exp(log_or + 1.96 * se)
-
-        def _adjusted_or(frame, predictor, outcome, covariates):
-            try:
-                from scipy.optimize import minimize
-            except Exception:
-                return _fallback_or(frame, predictor, outcome)
-            cols = [outcome, predictor] + [c for c in covariates if c in frame.columns]
-            data = frame[cols].copy()
-            if "sex" in data.columns:
-                data["sex"] = data["sex"].astype(str).str.lower().isin(["m", "male", "1", "true"]).astype(float)
-            for col in data.columns:
-                data[col] = pd.to_numeric(data[col], errors="coerce")
-            data = data.replace([np.inf, -np.inf], np.nan).dropna()
-            if len(data) < 20 or data[outcome].nunique() < 2:
-                return _fallback_or(frame, predictor, outcome)
-            y = data[outcome].astype(float).to_numpy()
-            x = data[[predictor] + [c for c in covariates if c in data.columns]].astype(float)
-            means = x.mean(axis=0)
-            scales = x.std(axis=0).replace(0, 1.0)
-            x = ((x - means) / scales).to_numpy()
-            X = np.column_stack([np.ones(len(x)), x])
-            def nll(beta):
-                eta = np.clip(X @ beta, -30, 30)
-                return float(np.sum(np.logaddexp(0, eta) - y * eta))
-            result = minimize(nll, np.zeros(X.shape[1]), method="BFGS")
-            if not result.success:
-                return _fallback_or(frame, predictor, outcome)
-            beta = float(result.x[1])
-            se = None
-            try:
-                hess_inv = np.asarray(result.hess_inv)
-                if hess_inv.shape[0] > 1:
-                    se = float(math.sqrt(max(hess_inv[1, 1], 0.0)))
-            except Exception:
-                se = None
-            if se is None or not math.isfinite(se):
-                return math.exp(beta), None, None
-            return math.exp(beta), math.exp(beta - 1.96 * se), math.exp(beta + 1.96 * se)
-
-        out_dir = os.environ["STEP_OUT_DIR"]
-        cohort_path = os.environ["COHORT_PARQUET"]
-        os.makedirs(out_dir, exist_ok=True)
-        df = pd.read_parquet(cohort_path)
-        predictor = "norepi_equiv_max_24h"
-        outcome = "death"
-        covariates = ["age", "sex", "map_min_24h", "lactate_max_24h", "sofa2_cardio_max_24h"]
-        analysis = df[[c for c in [predictor, outcome] + covariates if c in df.columns]].copy()
-        for col in [predictor, outcome]:
-            if col not in analysis.columns:
-                analysis[col] = np.nan
-        analysis[predictor] = pd.to_numeric(analysis[predictor], errors="coerce")
-        analysis[outcome] = pd.to_numeric(analysis[outcome], errors="coerce")
-        exposed = analysis[analysis[predictor].notna() & (analysis[predictor] > 0)].copy()
-        if exposed.empty:
-            exposed = analysis[analysis[predictor].notna()].copy()
-        quartile_rows = []
-        if not exposed.empty:
-            ranks = exposed[predictor].rank(method="first")
-            exposed["dose_quartile"] = pd.qcut(ranks, q=min(4, len(exposed)), labels=False, duplicates="drop")
-            grouped = exposed.dropna(subset=[outcome]).groupby("dose_quartile", dropna=False)
-            for quartile, group in grouped:
-                n = int(len(group))
-                deaths = int(group[outcome].sum())
-                lo, hi = _wilson(deaths, n)
-                quartile_rows.append({
-                    "dose_quartile": f"Q{int(quartile) + 1}",
-                    "n": n,
-                    "deaths": deaths,
-                    "mortality_rate": deaths / n if n else None,
-                    "ci_lower": lo,
-                    "ci_upper": hi,
-                    "dose_min": float(group[predictor].min()),
-                    "dose_max": float(group[predictor].max()),
-                })
-        quartile_table = pd.DataFrame(quartile_rows)
-        table_path = os.path.join(out_dir, "norepinephrine_quartile_mortality.csv")
-        quartile_table.to_csv(table_path, index=False)
-        primary_or, primary_or_lower, primary_or_upper = _adjusted_or(exposed, predictor, outcome, covariates)
-        missingness = {
-            col: {
-                "missing_n": int(analysis[col].isna().sum()) if col in analysis.columns else int(len(df)),
-                "missing_fraction": float(analysis[col].isna().mean()) if col in analysis.columns else 1.0,
-            }
-            for col in [predictor, outcome] + covariates
-        }
-        complete_case_n = int(exposed[[predictor, outcome] + [c for c in covariates if c in exposed.columns]].dropna().shape[0])
-        mortality_rate = float(exposed[outcome].mean()) if len(exposed.dropna(subset=[outcome])) else None
-        statistic_payload = {
-            "primary_or": primary_or,
-            "statistic:primary_or": primary_or,
-            "primary_or_lower": primary_or_lower,
-            "primary_or_upper": primary_or_upper,
-            "mortality_rate": mortality_rate,
-            "complete_case_n": complete_case_n,
-            "missingness": missingness,
-            "quartile_mortality": quartile_rows,
-        }
-        statistic_path = os.path.join(out_dir, "norepinephrine_dose_response_statistics.json")
-        with open(statistic_path, "w", encoding="utf-8") as f:
-            json.dump(_jsonable(statistic_payload), f, indent=2, ensure_ascii=False)
-        figure_files = []
-        if not quartile_table.empty:
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.errorbar(
-                quartile_table["dose_quartile"].astype(str),
-                quartile_table["mortality_rate"].astype(float),
-                yerr=[
-                    quartile_table["mortality_rate"].astype(float) - quartile_table["ci_lower"].astype(float),
-                    quartile_table["ci_upper"].astype(float) - quartile_table["mortality_rate"].astype(float),
-                ],
-                fmt="o-",
-                capsize=4,
-            )
-            ax.set_xlabel("Norepinephrine-equivalent dose quartile")
-            ax.set_ylabel("Mortality proportion")
-            ax.set_ylim(0, max(0.01, float(quartile_table["ci_upper"].max()) * 1.15))
-            ax.set_title("Dose-response mortality by quartile")
-            fig.tight_layout()
-            for suffix in ("png", "svg"):
-                path = os.path.join(out_dir, f"norepinephrine_dose_response.{suffix}")
-                fig.savefig(path, dpi=300 if suffix == "png" else None)
-                figure_files.append(path)
-            plt.close(fig)
-        summary = {
-            "n_rows": int(len(df)),
-            "sample_size": int(len(exposed)),
-            "complete_case_n": complete_case_n,
-            "primary_predictor": predictor,
-            "primary_or": primary_or,
-            "statistic:primary_or": primary_or,
-            "primary_or_lower": primary_or_lower,
-            "primary_or_upper": primary_or_upper,
-            "mortality_rate": mortality_rate,
-            "missingness": missingness,
-            "quartile_mortality": quartile_rows,
-            "table_path": table_path,
-            "statistic_path": statistic_path,
-            "figure_files": figure_files,
-        }
-        with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
-            json.dump(_jsonable(summary), f, indent=2, ensure_ascii=False)
-        print(json.dumps(_jsonable(summary), ensure_ascii=False))
-        """
-    ).strip() + "\n"
 
 
 def _generic_clustering_fallback_code() -> str:
@@ -7701,322 +6423,6 @@ def _generic_clustering_fallback_code() -> str:
         print(json.dumps(_jsonable(summary), ensure_ascii=False))
         """
     ).strip() + "\n"
-
-
-def _generic_v15_task_fallback_code(task_key: str) -> Optional[str]:
-    if task_key == "clustering":
-        return _generic_clustering_fallback_code()
-
-    common = """
-import json
-import math
-import os
-import numpy as np
-import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
-def _jsonable(value):
-    if isinstance(value, dict):
-        return {str(_jsonable(k)): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, (np.floating,)):
-        value = float(value)
-        return value if math.isfinite(value) else None
-    if isinstance(value, (np.bool_,)):
-        return bool(value)
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    try:
-        if pd.isna(value):
-            return None
-    except Exception:
-        pass
-    return value
-
-def _save(summary, table, stem, out_dir):
-    os.makedirs(out_dir, exist_ok=True)
-    table_path = os.path.join(out_dir, f"{stem}.csv")
-    stat_path = os.path.join(out_dir, f"{stem}_statistics.json")
-    table.to_csv(table_path, index=False)
-    with open(stat_path, "w", encoding="utf-8") as f:
-        json.dump(_jsonable(summary), f, indent=2, ensure_ascii=False)
-    summary["table_path"] = table_path
-    summary["statistic_path"] = stat_path
-    with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
-        json.dump(_jsonable(summary), f, indent=2, ensure_ascii=False)
-    print(json.dumps(_jsonable(summary), ensure_ascii=False))
-
-def _fallback_or(frame, predictor, outcome):
-    data = frame[[predictor, outcome]].dropna().copy()
-    if len(data) < 4 or data[outcome].nunique() < 2:
-        return None, None, None
-    median = data[predictor].median()
-    high = data[data[predictor] > median][outcome]
-    low = data[data[predictor] <= median][outcome]
-    a = float(high.sum()) + 0.5
-    b = float(len(high) - high.sum()) + 0.5
-    c = float(low.sum()) + 0.5
-    d = float(len(low) - low.sum()) + 0.5
-    log_or = math.log((a / b) / (c / d))
-    se = math.sqrt(1.0 / a + 1.0 / b + 1.0 / c + 1.0 / d)
-    return math.exp(log_or), math.exp(log_or - 1.96 * se), math.exp(log_or + 1.96 * se)
-
-out_dir = os.environ["STEP_OUT_DIR"]
-df = pd.read_parquet(os.environ["COHORT_PARQUET"])
-"""
-    bodies = {
-        "table_one": """
-rows = []
-for col in df.columns:
-    s = df[col]
-    row = {"variable": col, "n": int(len(s)), "missing_n": int(s.isna().sum()), "missing_fraction": float(s.isna().mean())}
-    non = s.dropna()
-    if len(non) and pd.api.types.is_numeric_dtype(non):
-        row.update({"median": float(non.median()), "q25": float(non.quantile(0.25)), "q75": float(non.quantile(0.75))})
-    elif len(non):
-        top = non.astype(str).value_counts().head(1)
-        row.update({"most_common": str(top.index[0]), "most_common_n": int(top.iloc[0])})
-    rows.append(row)
-table = pd.DataFrame(rows)
-death = pd.to_numeric(df["death"], errors="coerce") if "death" in df else pd.Series(dtype=float)
-summary = {"n_rows": int(len(df)), "mortality_rate": float(death.mean()) if len(death.dropna()) else None, "missingness": {c: float(df[c].isna().mean()) for c in df.columns}, "table_one_rows": table.to_dict(orient="records")}
-fig, ax = plt.subplots(figsize=(7, 4))
-plot = table.head(10)
-ax.bar(plot["variable"].astype(str), plot["missing_fraction"].astype(float))
-ax.set_ylabel("Missing fraction")
-ax.set_xticklabels(plot["variable"].astype(str), rotation=45, ha="right")
-fig.tight_layout()
-figure_files = []
-for suffix in ("png", "svg"):
-    path = os.path.join(out_dir, f"table_one_missingness.{suffix}")
-    fig.savefig(path, dpi=300 if suffix == "png" else None)
-    figure_files.append(path)
-plt.close(fig)
-summary["figure_files"] = figure_files
-_save(summary, table, "table_one", out_dir)
-""",
-        "severity_correlation": """
-total = "sofa2_max_24h"
-components = [c for c in df.columns if c.startswith("sofa2_") and c != total]
-rows = []
-for col in components:
-    pair = df[[total, col]].apply(pd.to_numeric, errors="coerce").dropna()
-    rho = float(pair[total].corr(pair[col], method="spearman")) if len(pair) >= 3 else None
-    rows.append({"variable": col, "correlation": rho, "spearman_rho": rho, "n": int(len(pair)), "p_value": None})
-table = pd.DataFrame(rows)
-summary = {"n_rows": int(len(df)), "spearman_rho": next((r["spearman_rho"] for r in rows if r["spearman_rho"] is not None), None), "missingness": {c: float(df[c].isna().mean()) for c in [total] + components if c in df}, "correlations": rows}
-fig, ax = plt.subplots(figsize=(7, 4))
-if not table.empty:
-    ax.bar(table["variable"].astype(str), table["spearman_rho"].fillna(0).astype(float))
-ax.set_ylabel("Spearman rho vs total SOFA-2")
-ax.set_xticklabels(table["variable"].astype(str), rotation=45, ha="right")
-fig.tight_layout()
-figure_files = []
-for suffix in ("png", "svg"):
-    path = os.path.join(out_dir, f"sofa2_component_correlations.{suffix}")
-    fig.savefig(path, dpi=300 if suffix == "png" else None)
-    figure_files.append(path)
-plt.close(fig)
-summary["figure_files"] = figure_files
-_save(summary, table, "sofa2_component_correlations", out_dir)
-""",
-        "lactate": """
-predictor, outcome = "lactate_max_24h", "death"
-analysis = df[[c for c in [predictor, outcome, "age", "sex", "map_min_24h", "vaso_any_24h"] if c in df]].copy()
-for col in [predictor, outcome, "age", "map_min_24h", "vaso_any_24h"]:
-    if col in analysis:
-        analysis[col] = pd.to_numeric(analysis[col], errors="coerce")
-primary_or, lo, hi = _fallback_or(analysis, predictor, outcome)
-table = pd.DataFrame([{"term": predictor, "primary_or": primary_or, "ci_lower": lo, "ci_upper": hi, "complete_case_n": int(analysis[[predictor, outcome]].dropna().shape[0])}])
-summary = {"n_rows": int(len(df)), "primary_predictor": predictor, "primary_or": primary_or, "statistic:primary_or": primary_or, "odds_ratio": primary_or, "primary_or_lower": lo, "primary_or_upper": hi, "missingness": {c: float(analysis[c].isna().mean()) for c in analysis.columns}}
-fig, ax = plt.subplots(figsize=(5, 3))
-if primary_or is not None:
-    ax.errorbar([primary_or], [0], xerr=[[max(primary_or - (lo or primary_or), 0)], [max((hi or primary_or) - primary_or, 0)]], fmt="o", capsize=4)
-ax.axvline(1, color="grey", linestyle="--")
-ax.set_yticks([0]); ax.set_yticklabels([predictor]); ax.set_xlabel("Odds ratio")
-fig.tight_layout()
-figure_files = []
-for suffix in ("png", "svg"):
-    path = os.path.join(out_dir, f"lactate_primary_association.{suffix}")
-    fig.savefig(path, dpi=300 if suffix == "png" else None)
-    figure_files.append(path)
-plt.close(fig)
-summary["figure_files"] = figure_files
-_save(summary, table, "lactate_primary_association", out_dir)
-""",
-        "kdigo": """
-predictor, outcome = "kdigo_stage_max_24h", "death"
-analysis = df[[c for c in [predictor, outcome, "age", "sex", "sofa2_renal_max_24h", "vaso_any_24h"] if c in df]].copy()
-for col in [predictor, outcome, "age", "sofa2_renal_max_24h", "vaso_any_24h"]:
-    if col in analysis:
-        analysis[col] = pd.to_numeric(analysis[col], errors="coerce")
-primary_or, lo, hi = _fallback_or(analysis, predictor, outcome)
-grouped = analysis.dropna(subset=[predictor, outcome]).groupby(predictor)[outcome].agg(["size", "sum", "mean"]).reset_index()
-grouped = grouped.rename(columns={"size": "n", "sum": "deaths", "mean": "mortality_rate"})
-table = grouped if not grouped.empty else pd.DataFrame([{"n": 0}])
-complete_case_n = int(analysis.dropna().shape[0])
-summary = {"n_rows": int(len(df)), "complete_case_n": complete_case_n, "primary_predictor": predictor, "primary_or": primary_or, "statistic:primary_or": primary_or, "odds_ratio": primary_or, "primary_or_lower": lo, "primary_or_upper": hi, "missingness": {c: float(analysis[c].isna().mean()) for c in analysis.columns}}
-fig, ax = plt.subplots(figsize=(5, 3))
-if not grouped.empty:
-    ax.bar(grouped[predictor].astype(str), grouped["mortality_rate"].astype(float))
-ax.set_xlabel("KDIGO stage"); ax.set_ylabel("Mortality proportion")
-fig.tight_layout()
-figure_files = []
-for suffix in ("png", "svg"):
-    path = os.path.join(out_dir, f"kdigo_mortality_sensitivity.{suffix}")
-    fig.savefig(path, dpi=300 if suffix == "png" else None)
-    figure_files.append(path)
-plt.close(fig)
-summary["figure_files"] = figure_files
-_save(summary, table, "kdigo_mortality_sensitivity", out_dir)
-""",
-        "vitals": """
-vitals = [c for c in ["hr_max_24h", "hr_median_24h", "sbp_min_24h", "sbp_median_24h", "map_min_24h", "map_median_24h"] if c in df]
-rows = []
-for col in vitals:
-    vals = pd.to_numeric(df[col], errors="coerce")
-    rows.append({"variable": col, "n": int(vals.notna().sum()), "missing_fraction": float(vals.isna().mean()), "median": float(vals.median()) if vals.notna().any() else None, "q25": float(vals.quantile(0.25)) if vals.notna().any() else None, "q75": float(vals.quantile(0.75)) if vals.notna().any() else None})
-table = pd.DataFrame(rows)
-summary = {"n_rows": int(len(df)), "missingness": {c: float(df[c].isna().mean()) for c in vitals}, "vital_summary": rows}
-fig, ax = plt.subplots(figsize=(5, 4))
-x = pd.to_numeric(df.get("map_min_24h"), errors="coerce") if "map_min_24h" in df else pd.Series(dtype=float)
-y = pd.to_numeric(df.get("hr_max_24h"), errors="coerce") if "hr_max_24h" in df else pd.Series(dtype=float)
-ax.scatter(x, y, s=8, alpha=0.35)
-ax.set_xlabel("MAP min 24h"); ax.set_ylabel("HR max 24h")
-fig.tight_layout()
-figure_files = []
-for suffix in ("png", "svg"):
-    path = os.path.join(out_dir, f"paired_vital_summary.{suffix}")
-    fig.savefig(path, dpi=300 if suffix == "png" else None)
-    figure_files.append(path)
-plt.close(fig)
-summary["figure_files"] = figure_files
-_save(summary, table, "admission_vital_summary", out_dir)
-""",
-        "creatinine": """
-required = ["creat_max_24h", "creat_median_24h", "kdigo_stage_max_24h", "sofa2_renal_max_24h"]
-analysis = pd.DataFrame(index=df.index)
-for col in required:
-    analysis[col] = pd.to_numeric(df[col], errors="coerce") if col in df else np.nan
-analysis["creat_ratio"] = analysis["creat_max_24h"] / analysis["creat_median_24h"].replace(0, np.nan)
-analysis = analysis.replace([np.inf, -np.inf], np.nan)
-rho_df = analysis[["creat_ratio", "sofa2_renal_max_24h"]].dropna()
-rho = float(rho_df["creat_ratio"].corr(rho_df["sofa2_renal_max_24h"], method="spearman")) if len(rho_df) >= 3 else None
-features = analysis[["creat_ratio", "sofa2_renal_max_24h"]].dropna()
-labels = pd.Series(np.nan, index=analysis.index, dtype="float")
-cluster_count = 0
-silhouette_score = None
-if len(features) >= 3:
-    scaled = (features - features.median()) / features.std(ddof=0).replace(0, 1)
-    scaled = scaled.fillna(0.0)
-    score = scaled["creat_ratio"] + scaled["sofa2_renal_max_24h"]
-    try:
-        labels.loc[features.index] = pd.qcut(score.rank(method="first"), q=min(3, len(features)), labels=False, duplicates="drop").astype(float)
-    except Exception:
-        labels.loc[features.index] = (score > score.median()).astype(float)
-    unique_labels = sorted([float(v) for v in labels.dropna().unique()])
-    cluster_count = int(len(unique_labels))
-    if cluster_count >= 2:
-        x = scaled.to_numpy(dtype=float)
-        y = labels.loc[features.index].to_numpy(dtype=float)
-        sil_values = []
-        for i in range(len(x)):
-            same = x[y == y[i]]
-            other_vals = []
-            if len(same) > 1:
-                a = float(np.linalg.norm(same - x[i], axis=1).sum() / (len(same) - 1))
-            else:
-                a = 0.0
-            for lab in unique_labels:
-                if lab == y[i]:
-                    continue
-                group = x[y == lab]
-                if len(group):
-                    other_vals.append(float(np.linalg.norm(group - x[i], axis=1).mean()))
-            b = min(other_vals) if other_vals else 0.0
-            sil_values.append((b - a) / max(a, b) if max(a, b) > 0 else 0.0)
-        silhouette_score = float(np.mean(sil_values)) if sil_values else None
-analysis["cluster"] = labels
-cluster_data = analysis.dropna(subset=["cluster"]).copy()
-if not cluster_data.empty:
-    cluster_data["cluster"] = cluster_data["cluster"].astype(int)
-    cluster_characteristics = cluster_data.groupby("cluster", dropna=False).agg(
-        n=("creat_ratio", "size"),
-        creat_ratio_median=("creat_ratio", "median"),
-        creat_ratio_mean=("creat_ratio", "mean"),
-        renal_sofa_median=("sofa2_renal_max_24h", "median"),
-        kdigo_median=("kdigo_stage_max_24h", "median"),
-    ).reset_index()
-    cluster_mortality = cluster_characteristics[["cluster", "n"]].copy()
-    cluster_mortality["mortality_rate"] = None
-    cluster_mortality["deaths"] = None
-else:
-    cluster_characteristics = pd.DataFrame([{"cluster": 0, "n": 0, "creat_ratio_median": None, "creat_ratio_mean": None, "renal_sofa_median": None, "kdigo_median": None}])
-    cluster_mortality = pd.DataFrame([{"cluster": 0, "n": 0, "mortality_rate": None, "deaths": None}])
-table = analysis.groupby("kdigo_stage_max_24h", dropna=False)["creat_ratio"].agg(["size", "median", "mean"]).reset_index().rename(columns={"size": "n", "median": "ratio_median", "mean": "ratio_mean"})
-cluster_characteristics_path = os.path.join(out_dir, "cluster_characteristics.csv")
-cluster_mortality_path = os.path.join(out_dir, "cluster_mortality.csv")
-cluster_characteristics.to_csv(cluster_characteristics_path, index=False)
-cluster_mortality.to_csv(cluster_mortality_path, index=False)
-methodology = {
-    "method": "dependency_free_quantile_clustering",
-    "features": ["creat_ratio", "sofa2_renal_max_24h"],
-    "cluster_count": cluster_count,
-    "silhouette_score": silhouette_score,
-    "sklearn_required": False,
-}
-for name in ["clustering_methodology.json", "clustering_algorithm_details.json"]:
-    with open(os.path.join(out_dir, name), "w", encoding="utf-8") as f:
-        json.dump(_jsonable(methodology), f, indent=2, ensure_ascii=False)
-fig, ax = plt.subplots(figsize=(6, 4))
-plot_df = analysis.dropna(subset=["creat_ratio", "sofa2_renal_max_24h"]).copy()
-if not plot_df.empty:
-    colors = plot_df["cluster"].fillna(-1).astype(int)
-    ax.scatter(plot_df["creat_ratio"], plot_df["sofa2_renal_max_24h"], c=colors, s=14, alpha=0.65)
-ax.set_xlabel("Creatinine max/median ratio"); ax.set_ylabel("Renal SOFA max 24h")
-fig.tight_layout()
-figure_files = []
-for suffix in ("png", "svg"):
-    path = os.path.join(out_dir, f"clustering_visualization.{suffix}")
-    fig.savefig(path, dpi=300 if suffix == "png" else None)
-    figure_files.append(path)
-for suffix in ("png", "svg"):
-    path = os.path.join(out_dir, f"creatinine_trajectory_kdigo.{suffix}")
-    fig.savefig(path, dpi=300 if suffix == "png" else None)
-    figure_files.append(path)
-plt.close(fig)
-summary = {
-    "n_rows": int(len(df)),
-    "spearman_rho": rho,
-    "statistic:spearman_rho": rho,
-    "silhouette_score": silhouette_score,
-    "statistic:silhouette_score": silhouette_score,
-    "cluster_count": cluster_count,
-    "statistic:cluster_count": cluster_count,
-    "n_clusters": cluster_count,
-    "cluster_characteristics": cluster_characteristics.to_dict(orient="records"),
-    "cluster_mortality": cluster_mortality.to_dict(orient="records"),
-    "clustering_methodology": methodology,
-    "manifest:clustering_methodology": methodology,
-    "clustering_algorithm_details": methodology,
-    "missingness": {c: float(df[c].isna().mean()) for c in required if c in df},
-    "creatinine_ratio_by_kdigo": table.to_dict(orient="records"),
-    "figure_files": figure_files,
-    "cluster_characteristics_path": cluster_characteristics_path,
-    "cluster_mortality_path": cluster_mortality_path,
-}
-_save(summary, table, "creatinine_trajectory_kdigo", out_dir)
-""",
-    }
-    body = bodies.get(task_key)
-    if body is None:
-        return None
-    return textwrap.dedent(common + "\n" + body).strip() + "\n"
 
 
 def _infer_generic_v15_fallback_key(code: str, diagnostic_text: str = "") -> Optional[str]:
@@ -11624,17 +10030,6 @@ def _render_writer_evidence_digest(
     return "\n".join(lines)
 
 
-def _canonical_outcome_name(raw: Optional[str]) -> Optional[str]:
-    text = (raw or "").lower()
-    if not text:
-        return None
-    if "mortality" in text or "death" in text:
-        return "death"
-    if "length of stay" in text or "los" in text:
-        return "los_icu"
-    return raw
-
-
 def _build_replication_notes(
     *,
     paper_profile: PaperProfile,
@@ -11921,417 +10316,6 @@ def _render_cross_database_validation_report(
     return "\n".join(lines) + "\n"
 
 
-def _write_readiness_artifacts(
-    *,
-    context: ResearchContext,
-    plan: Optional[AnalysisPlan],
-    findings: Sequence[ValidationFinding],
-    per_step_records: Sequence[Dict[str, Any]],
-    evidence: EvidenceStore,
-    run_dir: Path,
-    manuscript_path: Path,
-    stop_after_analysis: bool,
-) -> tuple[Dict[str, Any], Dict[str, str]]:
-    gates = _compute_readiness_gates(
-        plan=plan,
-        per_step_records=per_step_records,
-        findings=findings,
-        evidence=evidence,
-        run_dir=run_dir,
-        manuscript_path=manuscript_path,
-        stop_after_analysis=stop_after_analysis,
-    )
-    status = (
-        "publication_ready"
-        if gates["publication_ready"]
-        else "manuscript_ready"
-        if gates["manuscript_ready"]
-        else "analysis_only"
-        if gates["execution_complete"]
-        else "diagnostic_only"
-    )
-
-    artifact_paths: Dict[str, str] = {}
-
-    run_status_path = run_dir / "run_status.json"
-    run_status_payload = {
-        "schema_version": "easyicu.run_status/1",
-        "status": status,
-        "strict_fail_closed": True,
-        "research_question": context.research_question,
-        "gates": gates,
-        "canonical_outputs": {},
-    }
-    run_status_path.write_text(
-        json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    artifact_paths["run_status"] = str(run_status_path.relative_to(run_dir))
-
-    evidence_audit_path = run_dir / "evidence_audit.json"
-    evidence_records = evidence.records()
-    kinds: Dict[str, int] = {}
-    for rec in evidence_records:
-        kinds[rec.kind] = kinds.get(rec.kind, 0) + 1
-    evidence_audit_payload = {
-        "schema_version": "easyicu.evidence_audit/1",
-        "evidence_count": len(evidence_records),
-        "kinds": kinds,
-        "missing_evidence_count": gates["missing_evidence_count"],
-        "evidence_complete": gates["evidence_complete"],
-        "manuscript_path": str(manuscript_path.relative_to(run_dir))
-        if manuscript_path.exists()
-        else None,
-    }
-    evidence_audit_path.write_text(
-        json.dumps(evidence_audit_payload, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    artifact_paths["evidence_audit"] = str(evidence_audit_path.relative_to(run_dir))
-
-    numeric_audit_path = run_dir / "numeric_audit.json"
-    numeric_audit_payload = {
-        "schema_version": "easyicu.numeric_audit/1",
-        "numeric_verified": gates["numeric_verified"],
-        "numeric_error_count": gates["numeric_error_count"],
-        "numeric_errors": gates["numeric_errors"],
-    }
-    numeric_audit_path.write_text(
-        json.dumps(numeric_audit_payload, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    artifact_paths["numeric_audit"] = str(numeric_audit_path.relative_to(run_dir))
-
-    claim_ledger_path = run_dir / "claim_ledger.csv"
-    claim_rows = _extract_claim_ledger_rows(manuscript_path=manuscript_path, gates=gates)
-    with claim_ledger_path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(
-            fh,
-            fieldnames=[
-                "claim_id",
-                "claim_text",
-                "evidence_refs",
-                "status",
-                "note",
-            ],
-        )
-        writer.writeheader()
-        writer.writerows(claim_rows)
-    artifact_paths["claim_ledger"] = str(claim_ledger_path.relative_to(run_dir))
-
-    author_review_path = run_dir / "author_review_note.md"
-    author_review_path.write_text(
-        _render_author_review_note(
-            status=status,
-            gates=gates,
-            findings=findings,
-            per_step_records=per_step_records,
-        ),
-        encoding="utf-8",
-    )
-    artifact_paths["author_review_note"] = str(author_review_path.relative_to(run_dir))
-
-    manuscript_ready_path = run_dir / "manuscript_ready.md"
-    if gates["manuscript_ready"] and manuscript_path.exists():
-        manuscript_ready_path.write_text(
-            manuscript_path.read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
-        artifact_paths["manuscript_ready"] = str(
-            manuscript_ready_path.relative_to(run_dir)
-        )
-    elif manuscript_ready_path.exists():
-        manuscript_ready_path.unlink()
-
-    run_status_payload["canonical_outputs"] = artifact_paths
-    run_status_path.write_text(
-        json.dumps(run_status_payload, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-
-    registrations = [
-        (
-            "run_status",
-            "log",
-            "Fail-closed run readiness gate summary.",
-            run_status_path,
-        ),
-        (
-            "evidence_audit",
-            "statistic",
-            "Evidence completeness audit for manuscript gating.",
-            evidence_audit_path,
-        ),
-        (
-            "numeric_audit",
-            "statistic",
-            "Numeric-claim audit for manuscript gating.",
-            numeric_audit_path,
-        ),
-        (
-            "claim_ledger",
-            "table",
-            "Ledger of manuscript claims and evidence links.",
-            claim_ledger_path,
-        ),
-        (
-            "author_review_note",
-            "log",
-            "Human-readable fail-closed review note for the run.",
-            author_review_path,
-        ),
-    ]
-    if gates["manuscript_ready"] and manuscript_ready_path.exists():
-        registrations.append(
-            (
-                "manuscript_ready",
-                "log",
-                "Formal manuscript-ready markdown, emitted only after readiness gates pass.",
-                manuscript_ready_path,
-            )
-        )
-    for evidence_id, kind, description, path in registrations:
-        if evidence.get(evidence_id) is None:
-            evidence.register_file(
-                kind=kind,
-                description=description,
-                source_path=path,
-                evidence_id=evidence_id,
-                aliases=[evidence_id],
-                producer="pipeline",
-                generation_mode="system",
-            )
-
-    return gates, artifact_paths
-
-
-def _extract_claim_ledger_rows(
-    *, manuscript_path: Path, gates: Dict[str, Any]
-) -> List[Dict[str, str]]:
-    if not manuscript_path.exists():
-        return [
-            {
-                "claim_id": "claim_000",
-                "claim_text": "",
-                "evidence_refs": "",
-                "status": "not_generated",
-                "note": "No manuscript file was produced.",
-            }
-        ]
-    text = manuscript_path.read_text(encoding="utf-8", errors="replace")
-    if "Manuscript scaffold not generated" in text[:300]:
-        return [
-            {
-                "claim_id": "claim_000",
-                "claim_text": "Formal manuscript was not generated.",
-                "evidence_refs": "",
-                "status": "diagnostic_only",
-                "note": "Strict fail-closed gate blocked writer output.",
-            }
-        ]
-    rows: List[Dict[str, str]] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped.startswith("|"):
-            continue
-        evidence_refs = re.findall(r"\[([^\]]+)\]\((?:evidence/)?[^)]+\)", stripped)
-        missing = _count_missing_evidence_markers(stripped)
-        if not evidence_refs and not missing:
-            continue
-        rows.append(
-            {
-                "claim_id": f"claim_{len(rows) + 1:03d}",
-                "claim_text": re.sub(r"\s+", " ", stripped)[:1000],
-                "evidence_refs": ";".join(evidence_refs),
-                "status": "missing_evidence" if missing else "bound",
-                "note": "" if not missing else "Unresolved evidence marker present.",
-            }
-        )
-    if not rows:
-        rows.append(
-            {
-                "claim_id": "claim_000",
-                "claim_text": "",
-                "evidence_refs": "",
-                "status": "empty",
-                "note": (
-                    "No evidence-bound claims were detected; manuscript_ready="
-                    + str(bool(gates.get("manuscript_ready")))
-                ),
-            }
-        )
-    return rows
-
-
-def _render_author_review_note(
-    *,
-    status: str,
-    gates: Dict[str, Any],
-    findings: Sequence[ValidationFinding],
-    per_step_records: Sequence[Dict[str, Any]],
-) -> str:
-    lines = [
-        "# Author review note",
-        "",
-        f"- Status: `{status}`",
-        f"- execution_complete: `{gates['execution_complete']}`",
-        f"- evidence_complete: `{gates['evidence_complete']}`",
-        f"- numeric_verified: `{gates['numeric_verified']}`",
-        f"- analysis_validated: `{gates['analysis_validated']}`",
-        f"- manuscript_ready: `{gates['manuscript_ready']}`",
-        f"- publication_ready: `{gates['publication_ready']}`",
-        "",
-    ]
-    failed_steps = gates.get("failed_steps") or []
-    missing_steps = gates.get("missing_steps") or []
-    if failed_steps or missing_steps:
-        lines.extend(["## Blocking step issues", ""])
-        for item in failed_steps:
-            lines.append(f"- `{item.get('step_id')}` status `{item.get('status')}`")
-        for step_id in missing_steps:
-            lines.append(f"- `{step_id}` missing execution record")
-        lines.append("")
-    error_findings = [f for f in findings if f.severity == "error"]
-    if error_findings:
-        lines.extend(["## Blocking findings", ""])
-        for finding in error_findings:
-            lines.append(f"- `{finding.validator}`: {finding.message}")
-        lines.append("")
-    if not error_findings and not failed_steps and not missing_steps:
-        lines.extend(
-            [
-                "## Review",
-                "",
-                "No blocking gate failures were detected. Use `manuscript_ready.md` "
-                "as the formal draft if present.",
-                "",
-            ]
-        )
-    lines.extend(["## Step status", ""])
-    for record in per_step_records:
-        step_id = record.get("step_id", "")
-        if step_id == "00_probe":
-            continue
-        lines.append(f"- `{step_id}`: `{record.get('status', '?')}`")
-    lines.append("")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Reports
-# ---------------------------------------------------------------------------
-
-
-def _render_report(
-    *,
-    context: ResearchContext,
-    plan: Optional[AnalysisPlan],
-    findings: Sequence[ValidationFinding],
-    per_step_records: Sequence[Dict[str, Any]],
-    evidence: EvidenceStore,
-    aborted_reason: Optional[str] = None,
-    paused_after_analysis: bool = False,
-    readiness: Optional[Dict[str, Any]] = None,
-) -> str:
-    parts: List[str] = []
-    parts.append("# Research-agent results report")
-    parts.append("")
-    parts.append(f"- Research question: {context.research_question}")
-    parts.append(f"- Cohort: {context.cohort.cohort_name} ({context.cohort.database})")
-    parts.append(
-        f"- Stays: {context.cohort.n_stays:,} / Patients: {context.cohort.n_patients:,}"
-    )
-    if context.target_outcome:
-        parts.append(f"- Target outcome: {context.target_outcome}")
-    if context.cross_database_validation:
-        parts.append(
-            "- Cross-database replication: "
-            + ", ".join(context.cross_database_validation)
-        )
-    parts.append("")
-
-    if aborted_reason:
-        parts.append(f"## Status: ABORTED ({aborted_reason})")
-        parts.append("")
-    elif paused_after_analysis:
-        parts.append("## Status: PAUSED AFTER ANALYSIS")
-        parts.append("")
-        parts.append(
-            "The run intentionally stopped before literature retrieval, "
-            "manuscript drafting and LaTeX export. Review the registered "
-            "tables, figures, statistics and findings before drafting the article."
-        )
-        parts.append("")
-    elif readiness:
-        status = (
-            "PUBLICATION READY"
-            if readiness.get("publication_ready")
-            else "MANUSCRIPT READY"
-            if readiness.get("manuscript_ready")
-            else "DIAGNOSTIC ONLY"
-        )
-        parts.append(f"## Status: {status}")
-        parts.append("")
-        parts.append(
-            "- Gates: execution_complete={execution_complete}, "
-            "evidence_complete={evidence_complete}, "
-            "numeric_verified={numeric_verified}, "
-            "analysis_validated={analysis_validated}, "
-            "manuscript_ready={manuscript_ready}, "
-            "publication_ready={publication_ready}".format(**readiness)
-        )
-        parts.append("")
-
-    if plan:
-        parts.append("## Plan")
-        parts.append("")
-        for s in plan.steps:
-            parts.append(f"- **{s.step_id}** — {s.intent}")
-        parts.append("")
-
-    if per_step_records:
-        parts.append("## Step outcomes")
-        parts.append("")
-        for r in per_step_records:
-            parts.append(
-                f"- **{r['step_id']}** — status: `{r.get('status', '?')}`"
-                + (f" (rc={r['returncode']})" if "returncode" in r else "")
-            )
-        parts.append("")
-
-    parts.append("## Findings")
-    parts.append("")
-    if not findings:
-        parts.append("- (no findings recorded)")
-    else:
-        for f in findings:
-            parts.append(f"- `{f.severity}` [{f.validator}] {f.message}")
-    parts.append("")
-
-    parts.append("## Evidence (registered artefacts)")
-    parts.append("")
-    parts.append("| evidence_id | kind | description | sha256 (head) | path |")
-    parts.append("|---|---|---|---|---|")
-    pipe_escape = "\\|"
-    for r in evidence.records():
-        desc = r.description.replace("|", pipe_escape)
-        parts.append(
-            f"| `{r.evidence_id}` | {r.kind} | "
-            f"{desc} | `{r.sha256[:10]}…` | `{r.relative_path}` |"
-        )
-    parts.append("")
-    parts.append(
-        textwrap.dedent(
-            """
-        ---
-        Generated by `easyicu.research_agent.ResearchAgentPipeline`. Every entry
-        in the Evidence table is reproducible: rerun the script identified by
-        `script_evidence_id` in the manifest, hash the output, and confirm it
-        matches the `sha256` recorded here.
-    """
-        ).strip()
-    )
-    return "\n".join(parts) + "\n"
 
 
 # ---------------------------------------------------------------------------

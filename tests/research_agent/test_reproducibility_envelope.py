@@ -28,7 +28,7 @@ import pytest
 
 def test_sha256_messages_is_deterministic_across_calls(ra):
     from easyicu.research_agent.llm import LLMMessage
-    from easyicu.research_agent.reproducibility_envelope import sha256_messages
+    from easyicu.research_agent.replication.envelope import sha256_messages
 
     msgs = [
         LLMMessage(role="system", content="you are careful"),
@@ -42,7 +42,7 @@ def test_sha256_messages_is_deterministic_across_calls(ra):
 
 def test_sha256_messages_changes_on_content_change(ra):
     from easyicu.research_agent.llm import LLMMessage
-    from easyicu.research_agent.reproducibility_envelope import sha256_messages
+    from easyicu.research_agent.replication.envelope import sha256_messages
 
     base = [LLMMessage(role="user", content="plan the analysis")]
     other = [LLMMessage(role="user", content="plan the analysis.")]
@@ -158,7 +158,7 @@ def test_manifest_summary_aggregates_by_role_and_model(ra):
     assert set(summary["by_model"].keys()) == {"m1", "m2"}
     assert summary["by_model"]["m1"]["n_calls"] == 2
     assert summary["by_model"]["m2"]["n_calls"] == 1
-    assert summary["schema_version"] == ra.reproducibility_envelope.ENVELOPE_SCHEMA_VERSION  # type: ignore[attr-defined]
+    assert summary["schema_version"] == ra.replication.envelope.ENVELOPE_SCHEMA_VERSION  # type: ignore[attr-defined]
 
 
 def test_envelope_to_disk_roundtrips(ra, tmp_path):

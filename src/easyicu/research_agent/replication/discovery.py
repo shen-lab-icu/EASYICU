@@ -19,7 +19,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
-from .easyicu_case_builder import EasyICUCasePackage, build_lactate_map_vaso_cohort_from_export
+from ..easyicu_case_builder import EasyICUCasePackage, build_lactate_map_vaso_cohort_from_export
 
 
 PathLike = Union[str, Path]
@@ -147,7 +147,7 @@ def discover_easyicu_exports(
 
 def build_export_index(export_dir: PathLike) -> Dict[str, Dict[str, object]]:
     """Thin wrapper used by discovery to avoid importing case-builder names elsewhere."""
-    from .easyicu_case_builder import index_export_package
+    from ..easyicu_case_builder import index_export_package
 
     return index_export_package(export_dir)
 

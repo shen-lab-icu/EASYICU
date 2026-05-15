@@ -175,6 +175,8 @@ __all__ = [
     "save_publication_figure",
     "audit_publication_exports",
     "EvidenceStore",
+    "EvidenceEnforcementMode",
+    "EvidenceEnforcementError",
     "EasyICUCasePackage",
     "index_export_package",
     "read_exported_concept",
@@ -479,7 +481,7 @@ def __getattr__(name: str):
         "ReplicationResultComparator",
         "PublicationClaimAuditor",
     }:
-        from . import validators as _validators
+        from .audits import validators as _validators
 
         return getattr(_validators, name)
     if name in {
@@ -516,10 +518,10 @@ def __getattr__(name: str):
         from . import publication_figures as _pubfig
 
         return getattr(_pubfig, name)
-    if name == "EvidenceStore":
-        from .evidence import EvidenceStore
+    if name in {"EvidenceStore", "EvidenceEnforcementMode", "EvidenceEnforcementError"}:
+        from . import evidence as _evidence
 
-        return EvidenceStore
+        return getattr(_evidence, name)
     if name in {
         "EasyICUCasePackage",
         "index_export_package",
@@ -554,7 +556,7 @@ def __getattr__(name: str):
         "render_deviation_report",
         "render_showcase_manuscript",
     }:
-        from . import paper_replication as _paper_replication
+        from .replication import paper as _paper_replication
 
         return getattr(_paper_replication, name)
     if name in {"ClinicalSkill", "register_skill", "get_skill", "list_skills"}:
@@ -606,7 +608,7 @@ def __getattr__(name: str):
         "build_environment_snapshot",
         "envelope_role_resolver",
     }:
-        from . import reproducibility_envelope as _repro
+        from .replication import envelope as _repro
 
         return getattr(_repro, name)
     if name in {
@@ -671,7 +673,7 @@ def __getattr__(name: str):
         "build_requirements_lockfile",
         "write_notebook",
     }:
-        from . import repro_artifacts as _repro_art
+        from .replication import notebook as _repro_art
 
         return getattr(_repro_art, name)
     if name in {
@@ -709,7 +711,7 @@ def __getattr__(name: str):
 
         return getattr(_hg, name)
     if name == "AnalysisPatternAuditor":
-        from .analysis_pattern_auditor import AnalysisPatternAuditor
+        from .audits.patterns import AnalysisPatternAuditor
 
         return AnalysisPatternAuditor
     if name in {"PDFRenderResult", "render_pdf_for_run"}:
@@ -729,4 +731,16 @@ def __getattr__(name: str):
         from .pipeline import ResearchAgentPipeline
 
         return ResearchAgentPipeline
+    if name == "PipelineConfig":
+        from .pipeline_config import PipelineConfig
+
+        return PipelineConfig
+    if name in {"PlanPhaseState", "ExecutePhaseState", "WritePhaseState"}:
+        from . import pipeline_state as _ps
+
+        return getattr(_ps, name)
+    if name in {"PlanPhaseRunner", "ExecutePhaseRunner", "WritePhaseRunner"}:
+        from . import pipeline_phases as _pp
+
+        return getattr(_pp, name)
     raise AttributeError(f"module 'easyicu.research_agent' has no attribute {name!r}")
