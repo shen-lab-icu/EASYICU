@@ -96,6 +96,8 @@ __all__ = [
     "PaperResultLedger",
     "ReplicationDeviationItem",
     "ReplicationDeviationReport",
+    "ProbeSummary",
+    "StepRecord",
     # Context builder
     "build_research_context",
     "build_naive_research_context",
@@ -357,6 +359,8 @@ from .schema import (
     PaperResultLedger,
     ReplicationDeviationItem,
     ReplicationDeviationReport,
+    ProbeSummary,
+    StepRecord,
 )
 from .icu_rules import ICU_RULES, VariableKind
 
