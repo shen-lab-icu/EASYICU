@@ -44,9 +44,10 @@ import logging
 import re
 import shutil
 import threading
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .schema import EvidenceRecord
 
@@ -128,6 +129,141 @@ def _quarantine_corrupt_index(path: Path, exc: Exception, kind: str) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Numeric claim registry (value-level provenance, A-track)
+# ---------------------------------------------------------------------------
+#
+# Sentence-level evidence binding (``{evidence:<id>}`` placeholders) tells
+# a reviewer which artefact a sentence is grounded in, but a sentence
+# typically embeds multiple numeric values — odds ratios, p-values,
+# AUC, cohort counts — each of which the reviewer may want to verify
+# *individually*. The :class:`NumericClaim` registry closes that gap:
+# every numeric leaf the runner emits in ``step_summary.json`` is
+# captured with (value, source step, source field, owning evidence id),
+# so the manuscript post-processor can scan rendered prose and bind
+# each number to the exact field of the exact step output that
+# produced it.
+#
+# Inspired by ``data-to-paper`` (NEJM AI 2024) which uses
+# ``\hypertarget`` / ``\hyperlink`` to make every number in the
+# manuscript click-traceable to its producing code line.
+
+
+_NUMERIC_LEAF_RE = re.compile(
+    r"^[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?$"
+)
+# Numbers embedded in manuscript prose. The manuscript layer only
+# binds numbers that *look like* result quantities: decimal-bearing
+# (1.42 / 0.003 / 12.5%), comma-grouped thousands (1,234), exponent
+# form (1.2e-5), or bare integers with ≥3 digits (999, 1234). Two-digit
+# integers are deliberately rejected because they collide with hyphenated
+# identifiers (SOFA-2), CI labels (95% CI), and chapter-section refs
+# (Section 4). When a manuscript truly needs to cite a two-digit count
+# it should embed it inside an explicit evidence placeholder.
+_NUMERIC_IN_PROSE_RE = re.compile(
+    r"(?<![A-Za-z_\d.])"                         # avoid mid-identifier digits
+    r"(?P<value>"
+    r"[-+]?"
+    r"(?:"
+    r"\d{1,3}(?:,\d{3})+(?:\.\d+)?"              # comma-grouped (with optional fraction)
+    r"|"
+    r"\d+\.\d+(?:[eE][-+]?\d+)?"                 # decimal (with optional exponent)
+    r"|"
+    r"\d+[eE][-+]?\d+"                           # bare exponent
+    r"|"
+    r"\d{3,}"                                    # ≥3-digit integer
+    r")"
+    r"%?"                                        # optional percent suffix
+    r")"
+    r"(?![A-Za-z_\d.])"                          # not followed by identifier / decimal
+)
+
+
+@dataclass
+class NumericClaim:
+    """One numeric leaf the manuscript may cite, tied back to its source.
+
+    Fields:
+
+    * ``value`` — literal string form (preserves precision/formatting)
+    * ``canonical`` — float for tolerance-based matching
+    * ``evidence_id`` — owning evidence record (e.g. the
+      ``step_summary.json`` for the step)
+    * ``step_id`` — step that emitted this value
+    * ``source_field`` — dotted path inside step_summary
+      (e.g. ``primary_or`` or ``stratified.male.auc``)
+    * ``tolerance`` — relative tolerance for fuzzy matching when the
+      manuscript prints a rounded version of the canonical value
+    """
+
+    value: str
+    canonical: float
+    evidence_id: str
+    step_id: str
+    source_field: str
+    tolerance: float = 1e-3
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "NumericClaim":
+        known = {f for f in cls.__dataclass_fields__}
+        clean = {k: v for k, v in data.items() if k in known}
+        return cls(**clean)
+
+
+def _coerce_numeric_literal(value: Any) -> Optional[Tuple[str, float]]:
+    """Return ``(literal_str, canonical_float)`` for a numeric leaf.
+
+    Booleans are rejected (they are not numeric *values* for our
+    purposes even though ``isinstance(True, int)`` is ``True``).
+    Non-finite floats (``inf`` / ``nan``) are rejected because the
+    manuscript binder cannot resolve them.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        f = float(value)
+        if not (f == f) or f in (float("inf"), float("-inf")):
+            return None
+        if isinstance(value, int):
+            return (str(value), f)
+        return (f"{value:.6g}", f)
+    if isinstance(value, str):
+        stripped = value.strip().rstrip("%").replace(",", "")
+        if _NUMERIC_LEAF_RE.match(stripped):
+            try:
+                return (value.strip(), float(stripped))
+            except ValueError:
+                return None
+    return None
+
+
+def _walk_numeric_leaves(
+    obj: Any, prefix: str = ""
+) -> List[Tuple[str, str, float]]:
+    """Yield ``(dotted_path, literal_str, canonical_float)`` for every
+    numeric leaf in a nested dict/list. Strings that happen to parse as
+    numbers are also captured because runners frequently emit
+    ``"0.18"`` rather than ``0.18``."""
+    out: List[Tuple[str, str, float]] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            key = f"{prefix}.{k}" if prefix else str(k)
+            out.extend(_walk_numeric_leaves(v, key))
+    elif isinstance(obj, (list, tuple)):
+        for idx, v in enumerate(obj):
+            key = f"{prefix}[{idx}]"
+            out.extend(_walk_numeric_leaves(v, key))
+    else:
+        coerced = _coerce_numeric_literal(obj)
+        if coerced is not None:
+            literal, canonical = coerced
+            out.append((prefix or "<root>", literal, canonical))
+    return out
+
+
 def sha256_of_file(path: Path, chunk: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -164,11 +300,13 @@ class EvidenceStore:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.index_path = self.dir / "evidence_index.json"
         self.aliases_path = self.dir / "evidence_aliases.json"
+        self.numeric_claims_path = self.dir / "numeric_claims.json"
         self.enforcement_mode: EvidenceEnforcementMode = _coerce_enforcement_mode(
             enforcement_mode
         )
         self._records: List[EvidenceRecord] = self._load_records()
         self._aliases: Dict[str, str] = self._load_aliases()
+        self._numeric_claims: List[NumericClaim] = self._load_numeric_claims()
         # T3.3 — concurrent step execution: every register / get / save
         # path runs under this lock so two worker threads can safely
         # call ``register_file`` simultaneously. Reentrant so that
@@ -211,6 +349,18 @@ class EvidenceStore:
         )
         return {}
 
+    def _load_numeric_claims(self) -> List[NumericClaim]:
+        if not self.numeric_claims_path.exists():
+            return []
+        try:
+            data = json.loads(self.numeric_claims_path.read_text(encoding="utf-8"))
+            return [NumericClaim.from_dict(c) for c in data]
+        except Exception as exc:
+            _quarantine_corrupt_index(
+                self.numeric_claims_path, exc, kind="numeric_claims"
+            )
+            return []
+
     def _save(self) -> None:
         self.index_path.write_text(
             json.dumps(
@@ -223,6 +373,14 @@ class EvidenceStore:
         )
         self.aliases_path.write_text(
             json.dumps(self._aliases, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+        self.numeric_claims_path.write_text(
+            json.dumps(
+                [c.to_dict() for c in self._numeric_claims],
+                indent=2,
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
 
@@ -456,6 +614,122 @@ class EvidenceStore:
                 record.prompt_pack_version = prompt_pack_version
             self._save()
             return record
+
+    # ------------------------------------------------------------------
+    # Numeric claim registry (value-level provenance)
+    # ------------------------------------------------------------------
+
+    def register_numeric_claim(
+        self,
+        *,
+        value: str,
+        canonical: float,
+        evidence_id: str,
+        step_id: str,
+        source_field: str,
+        tolerance: float = 1e-3,
+    ) -> NumericClaim:
+        """Register a single numeric leaf for later manuscript binding.
+
+        Idempotent on ``(step_id, source_field, canonical)`` — re-running
+        a step does not duplicate claims. The literal ``value`` is
+        preserved with the most precise form seen so far.
+        """
+        with self._lock:
+            for claim in self._numeric_claims:
+                if (
+                    claim.step_id == step_id
+                    and claim.source_field == source_field
+                    and abs(claim.canonical - canonical) <= claim.tolerance
+                ):
+                    if len(value) > len(claim.value):
+                        claim.value = value
+                    self._save()
+                    return claim
+            claim = NumericClaim(
+                value=value,
+                canonical=canonical,
+                evidence_id=evidence_id,
+                step_id=step_id,
+                source_field=source_field,
+                tolerance=tolerance,
+            )
+            self._numeric_claims.append(claim)
+            self._save()
+            return claim
+
+    def register_step_summary_numerics(
+        self,
+        *,
+        step_id: str,
+        evidence_id: str,
+        summary: Any,
+        tolerance: float = 1e-3,
+    ) -> List[NumericClaim]:
+        """Walk a ``step_summary`` payload and register every numeric leaf.
+
+        This is the bulk registration hook invoked from the pipeline
+        after a step's ``step_summary.json`` is loaded. Non-numeric
+        leaves and structural fields are silently skipped.
+        """
+        registered: List[NumericClaim] = []
+        for path, literal, canonical in _walk_numeric_leaves(summary):
+            registered.append(
+                self.register_numeric_claim(
+                    value=literal,
+                    canonical=canonical,
+                    evidence_id=evidence_id,
+                    step_id=step_id,
+                    source_field=path,
+                    tolerance=tolerance,
+                )
+            )
+        return registered
+
+    def numeric_claims(self) -> List[NumericClaim]:
+        with self._lock:
+            return list(self._numeric_claims)
+
+    def find_claim_for_value(
+        self,
+        value_str: str,
+        *,
+        tolerance: Optional[float] = None,
+    ) -> Optional[NumericClaim]:
+        """Look up the claim that best matches a numeric literal.
+
+        Matching strategy (first hit wins):
+
+        1. Exact literal equality (preserves precision/formatting).
+        2. Canonical float equality.
+        3. Relative-tolerance match against canonical (defaults to the
+           claim's own tolerance; override with ``tolerance`` for a
+           caller-specific window).
+
+        Returns ``None`` if no claim matches — callers in STRICT mode
+        should treat that as a binding failure.
+        """
+        stripped = value_str.strip().rstrip("%").replace(",", "")
+        try:
+            canonical = float(stripped)
+        except ValueError:
+            return None
+        with self._lock:
+            for claim in self._numeric_claims:
+                if claim.value == value_str.strip():
+                    return claim
+            for claim in self._numeric_claims:
+                if claim.canonical == canonical:
+                    return claim
+            for claim in self._numeric_claims:
+                window = tolerance if tolerance is not None else claim.tolerance
+                if abs(claim.canonical) > 1e-9:
+                    rel = abs(claim.canonical - canonical) / abs(claim.canonical)
+                else:
+                    rel = abs(claim.canonical - canonical)
+                if rel <= window:
+                    return claim
+        return None
 
     # ------------------------------------------------------------------
     # Lookup

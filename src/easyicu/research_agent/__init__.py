@@ -212,16 +212,26 @@ __all__ = [
     "infer_analysis_type",
     "planner_analysis_type_guide",
     "analysis_type_catalog_markdown",
+    "TaskCategory",
     "ICUAgentBenchMetricSpec",
+    "ICUAgentBenchNumericBound",
+    "ICUAgentBenchGoldAnswer",
     "ICUAgentBenchTask",
     "ICUAgentBenchSuite",
     "ICUAgentBenchTaskResult",
     "ICUAgentBenchReport",
     "default_icu_agent_bench_suite",
+    "grade_bench_task",
+    "aggregate_bench_report",
+    "TaskMetricDelta",
+    "BenchABComparison",
+    "compare_bench_reports",
     "icu_agent_bench_markdown",
     # Memory
     "RunMemory",
     "StrategyCard",
+    "MemoryScoreBreakdown",
+    "MemoryRetrievalAuditEntry",
     # LaTeX
     "scaffold_to_latex",
     "latex_template_preamble",
@@ -579,18 +589,31 @@ def __getattr__(name: str):
 
         return getattr(_analysis_types, name)
     if name in {
+        "TaskCategory",
         "ICUAgentBenchMetricSpec",
+        "ICUAgentBenchNumericBound",
+        "ICUAgentBenchGoldAnswer",
         "ICUAgentBenchTask",
         "ICUAgentBenchSuite",
         "ICUAgentBenchTaskResult",
         "ICUAgentBenchReport",
         "default_icu_agent_bench_suite",
+        "grade_bench_task",
+        "aggregate_bench_report",
+        "TaskMetricDelta",
+        "BenchABComparison",
+        "compare_bench_reports",
         "icu_agent_bench_markdown",
     }:
         from . import icu_agent_bench as _icu_agent_bench
 
         return getattr(_icu_agent_bench, name)
-    if name in {"RunMemory", "StrategyCard"}:
+    if name in {
+        "RunMemory",
+        "StrategyCard",
+        "MemoryScoreBreakdown",
+        "MemoryRetrievalAuditEntry",
+    }:
         from . import memory as _memory
 
         return getattr(_memory, name)

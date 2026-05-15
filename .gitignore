@@ -110,6 +110,10 @@ scripts/*
 .env.local
 .gitignore
 
+# Agent roadmap — local-only, contains credentials
+AGENT_PLAN.md
+pilot_runs/
+
 # 其他
 *.md
 !README.md
