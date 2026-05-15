@@ -816,6 +816,99 @@ class ReplicationDeviationReport(BaseModel):
     items: List[ReplicationDeviationItem] = Field(default_factory=list)
 
 
+class ProbeSummary(BaseModel):
+    """Schema for the deterministic-probe step's output dict.
+
+    Built once per run by ``_build_probe_summary``. Represents the cohort
+    snapshot the planner sees before the first analysis step runs:
+    row/column counts, top-missing columns, and any per-score
+    distribution anomalies (e.g. SOFA components with a degenerate
+    range). ``extra='allow'`` so future probe metrics can be added
+    without churning this schema.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    n_rows: int
+    n_columns: int
+    target_outcome: Optional[str] = None
+    top_missing_columns: List[Dict[str, Any]] = Field(default_factory=list)
+    score_anomalies: List[Dict[str, Any]] = Field(default_factory=list)
+    outcome_rate: Optional[float] = None
+
+
+class StepRecord(BaseModel):
+    """Schema for a per-step record accumulated into ``per_step_records``.
+
+    Each entry in ``per_step_records`` is one (step_id, status, summary)
+    snapshot of how a planner-emitted step ran. The shape grew
+    organically across many pipeline code paths; this model centralises
+    the field list so:
+
+    * a reader can find the field set in one place;
+    * resume / manifest-load code can validate persisted records via
+      :meth:`StepRecord.model_validate`;
+    * mypy can flag obvious typos on new code that constructs records.
+
+    ``extra='allow'`` keeps backward compatibility with the existing
+    dict-style construction sites (they remain valid; this schema is
+    documentation-and-opt-in-validation rather than a forced rewrite).
+    Field names mirror what is already written to disk in
+    ``manifest.json`` and consumed by the resume path.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    # Always set on construction.
+    step_id: str
+    intent: str
+
+    # Lifecycle / status.
+    status: Optional[str] = Field(
+        default=None,
+        description=(
+            "Terminal state. Observed values include 'ok', "
+            "'skipped_dependency_failed', 'coder_failed', "
+            "'execution_failed', 'repair_failed', 'blocked_by_concept_audit'."
+        ),
+    )
+    generation_mode: Optional[str] = Field(
+        default=None,
+        description="How the code was produced: 'llm', 'system', 'fallback', 'deterministic_probe'.",
+    )
+    diagnostic_only: Optional[bool] = None
+    dependency_step_id: Optional[str] = None
+
+    # Step result payload.
+    step_summary: Optional[Dict[str, Any]] = None
+    evidence_ids: List[str] = Field(default_factory=list)
+    analysis_request: Optional[Dict[str, Any]] = None
+    visualization_request: Optional[Dict[str, Any]] = None
+    semantics_family: Optional[str] = None
+
+    # Runner observability.
+    returncode: Optional[int] = None
+    timed_out: Optional[bool] = None
+    code_repair_attempts: Optional[int] = None
+    runner_repair: Optional[str] = None
+    deterministic_code_fallback: Optional[str] = None
+
+    # Concept / contract / quality findings.
+    concept_audit_error_count: Optional[int] = None
+    concept_repair_attempts: Optional[int] = None
+    usage_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    stat_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    clinical_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    guard_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    contract_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    visual_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    visual_qa_demoted: Optional[bool] = None
+
+    # Downstream artefacts.
+    critique_report: Optional[Dict[str, Any]] = None
+    interpretation_evidence_id: Optional[str] = None
+
+
 __all__ = [
     "VariableRole",
     "AggregationRule",
@@ -852,4 +945,6 @@ __all__ = [
     "PaperResultLedger",
     "ReplicationDeviationItem",
     "ReplicationDeviationReport",
+    "ProbeSummary",
+    "StepRecord",
 ]
