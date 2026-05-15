@@ -101,6 +101,7 @@ from .repro_artifacts import (
     write_notebook,
 )
 from .hypothesis_generator import generate_hypotheses
+from .pdf_render import render_pdf_for_run
 from .context import (
     build_naive_research_context,
     build_research_context,
@@ -259,6 +260,7 @@ class ResearchAgentPipeline:
         enable_fairness_subgroups: bool = True,
         enable_hypothesis_generator: bool = False,
         hypothesis_generator_top_k: int = 5,
+        enable_pdf_render: bool = False,
         max_concurrent_steps: int = 1,
         enable_probe_step: bool = True,
         enable_replanning: bool = True,
@@ -395,6 +397,11 @@ class ResearchAgentPipeline:
         # downstream plan unless the user reassigns ``question``.
         self._enable_hypothesis_generator = bool(enable_hypothesis_generator)
         self._hypothesis_generator_top_k = int(hypothesis_generator_top_k)
+        # PDF rendering (TexLive optional). Off by default because not
+        # every CI environment has a LaTeX install; turn on when the
+        # user actually wants ``manuscript_scaffold.pdf`` next to the
+        # ``.tex`` and ``.bib``.
+        self._enable_pdf_render = bool(enable_pdf_render)
         # T3.3 — concurrent step execution. The canonical AnalysisPlan
         # has independent steps (each step reads the cohort and writes
         # to its own out_dir), so a small thread pool can shrink the
@@ -1079,6 +1086,9 @@ class ResearchAgentPipeline:
         )
         runner = self._build_runner(run_dir=run_dir, cohort_path=cohort_path)
         usage_auditor = ConceptUsageAuditor()
+        from .analysis_pattern_auditor import AnalysisPatternAuditor
+
+        pattern_auditor = AnalysisPatternAuditor()
         stat_validator = StatisticalValidator()
         clinical_validator = ClinicalConstraintValidator()
         statistical_guard = StatisticalGuard()
@@ -1532,6 +1542,17 @@ class ResearchAgentPipeline:
                     script_text=code,
                     step=step,
                 )
+                # O-generic: analysis-pattern auditor (clustering /
+                # prediction / survival footguns). Runs alongside the
+                # concept-usage auditor so both sets of findings are
+                # merged before the error-gate decision.
+                usage_findings.extend(
+                    pattern_auditor.audit(
+                        context=context,
+                        script_text=code,
+                        step=step,
+                    )
+                )
                 if self._enable_llm_concept_audit:
                     llm_audit_client = (
                         self._llm_concept_auditor_client or role_resolver("analyzer")
@@ -1560,6 +1581,30 @@ class ResearchAgentPipeline:
                 if concept_repair_attempts >= self._max_code_repair_attempts:
                     fallback_code = _deterministic_fallback_code("concept_audit")
                     if fallback_code is not None:
+                        # Surface the pattern/concept findings that
+                        # forced the fallback; otherwise the manifest
+                        # silently drops the original ICU rule
+                        # violations that the LLM emitted. We dedupe by
+                        # message so repeated retries don't spam.
+                        with shared_lock:
+                            seen_msgs = {f.message for f in findings}
+                            for f in usage_findings:
+                                if f.message in seen_msgs:
+                                    continue
+                                # Demote ``error`` severity to
+                                # ``warning`` because the run is
+                                # continuing on the deterministic
+                                # fallback; reviewer still sees the
+                                # original violation in the manifest.
+                                if f.severity == "error":
+                                    f = f.model_copy(update={
+                                        "severity": "warning",
+                                        "message": (
+                                            "[surfaced after fallback] "
+                                            + f.message
+                                        ),
+                                    })
+                                findings.append(f)
                         code = fallback_code
                         continue
                     step_record["status"] = "blocked_by_concept_audit"
@@ -3005,6 +3050,17 @@ class ResearchAgentPipeline:
                     run_id=run_id,
                 )
                 bib_basename = "manuscript_scaffold"
+                # Collect registered figure paths for auto-embedding.
+                fig_paths_for_latex: List[Tuple[str, str]] = []
+                for rec in evidence.records():
+                    if rec.kind != "figure":
+                        continue
+                    # Prefer PNG for LaTeX compatibility; SVG needs
+                    # inkscape or svg package.
+                    if rec.relative_path.endswith((".png", ".pdf", ".tiff")):
+                        fig_paths_for_latex.append(
+                            (rec.evidence_id, "evidence/" + rec.relative_path)
+                        )
                 tex = scaffold_to_latex(
                     markdown=bound,
                     title=manuscript_title
@@ -3013,6 +3069,7 @@ class ResearchAgentPipeline:
                     bibliography=literature,
                     bibliography_basename=bib_basename,
                     venue_template=self._latex_venue_template,
+                    figure_paths=fig_paths_for_latex or None,
                 )
                 tex_path = run_dir / "manuscript_scaffold.tex"
                 tex_path.write_text(tex, encoding="utf-8")
@@ -3037,6 +3094,57 @@ class ResearchAgentPipeline:
                             evidence_id="manuscript_bibliography",
                             producer="pipeline",
                             generation_mode="system",
+                        )
+                # Optional: compile the .tex to PDF on disk so users
+                # can open ``manuscript_scaffold.pdf`` directly. Off
+                # by default because not every environment has a
+                # LaTeX install.
+                if self._enable_pdf_render:
+                    bib_full = (
+                        run_dir / f"{bib_basename}.bib"
+                        if (run_dir / f"{bib_basename}.bib").exists()
+                        else None
+                    )
+                    pdf_result = render_pdf_for_run(
+                        tex_path=tex_path,
+                        bib_path=bib_full,
+                        output_dir=run_dir,
+                    )
+                    if pdf_result.success and pdf_result.pdf_path is not None:
+                        if evidence.get("manuscript_scaffold_pdf") is None:
+                            evidence.register_file(
+                                kind="log",
+                                description=(
+                                    f"Compiled manuscript PDF "
+                                    f"(engine={pdf_result.engine})."
+                                ),
+                                source_path=pdf_result.pdf_path,
+                                evidence_id="manuscript_scaffold_pdf",
+                                producer="pipeline",
+                                generation_mode="system",
+                            )
+                        findings.append(
+                            ValidationFinding(
+                                validator="pdf_render",
+                                severity="info",
+                                message=(
+                                    f"Rendered manuscript PDF via "
+                                    f"{pdf_result.engine}."
+                                ),
+                                evidence_ids=["manuscript_scaffold_pdf"],
+                            )
+                        )
+                    else:
+                        findings.append(
+                            ValidationFinding(
+                                validator="pdf_render",
+                                severity="warning",
+                                message=(
+                                    "PDF render failed or no LaTeX "
+                                    "engine found: "
+                                    + "; ".join(pdf_result.notes)
+                                ),
+                            )
                         )
             except Exception as exc:
                 findings.append(

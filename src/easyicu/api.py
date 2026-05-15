@@ -1897,7 +1897,7 @@ def load_output(
     """
     加载输出量数据（参考ricu.R的data_output）
 
-    包含: urine, urine24
+    包含: urine, urine24, total_input_ml, fluid_balance, fluid_balance_cumulative
 
     Args:
         patient_ids: 患者ID列表（None=所有患者）
@@ -1916,7 +1916,8 @@ def load_output(
     if verbose:
         print("💧 加载输出量数据...")
 
-    concepts = ['urine', 'urine24']
+    concepts = ['urine', 'urine24', 'total_input_ml',
+                'fluid_balance', 'fluid_balance_cumulative']
     available_concepts = _validate_concepts(concepts, verbose)
 
     if not available_concepts:
@@ -2263,8 +2264,9 @@ def load_medications(
         'antibiotics': ['abx', 'vancomycin', 'meropenem'],
         'cardiac': ['amiodarone', 'milrinone'],
         'diuretics': ['furosemide', 'mannitol'],
-        'anticoagulation': ['heparin'],
-        'endocrine': ['cort', 'ins'],
+        'anticoagulation': ['heparin', 'warfarin', 'apixaban', 'enoxaparin'],
+        'antiplatelet': ['aspirin'],
+        'endocrine': ['cort', 'ins', 'insulin'],
         'vasodilators': ['nitroglycerin'],
         'gi_prophylaxis': ['pantoprazole'],
         'electrolytes': ['calcium_iv', 'potassium_iv', 'magnesium_iv', 'bicarbonate'],

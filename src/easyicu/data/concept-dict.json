@@ -12907,5 +12907,1188 @@
         }
       ]
     }
+  },
+  "phenytoin": {
+    "class_name": "lgl_cncpt",
+    "description": "phenytoin/fosphenytoin (Dilantin) — antiepileptic",
+    "aggregate": "max",
+    "category": "medications",
+    "sources": {
+      "miiv": [
+        {
+          "ids": [
+            227689,
+            227690
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            227689,
+            227690
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            227689,
+            227690
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1478
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "labetalol": {
+    "class_name": "lgl_cncpt",
+    "description": "labetalol — beta blocker (hypertensive emergency)",
+    "aggregate": "max",
+    "category": "medications",
+    "sources": {
+      "aumc": [
+        {
+          "ids": 7151,
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "(?i)labetalol",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?i)labetalol",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            225153
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            225153
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            225153
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1505
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "esmolol": {
+    "class_name": "lgl_cncpt",
+    "description": "esmolol (Brevibloc) — ultra-short-acting beta blocker",
+    "aggregate": "max",
+    "category": "medications",
+    "sources": {
+      "aumc": [
+        {
+          "ids": 7213,
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "(?i)esmolol|brevibloc",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?i)esmolol|brevibloc",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            221429
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            221429
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            221429
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1561
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "diltiazem": {
+    "class_name": "lgl_cncpt",
+    "description": "diltiazem (Cardizem) — calcium channel blocker",
+    "aggregate": "max",
+    "category": "medications",
+    "sources": {
+      "aumc": [
+        {
+          "ids": 7174,
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "(?i)diltiazem|cardizem",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?i)diltiazem|cardizem",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            221468
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            221468
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            221468
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1817
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "nicardipine": {
+    "class_name": "lgl_cncpt",
+    "description": "nicardipine (Cardene) — calcium channel blocker (IV antihypertensive)",
+    "aggregate": "max",
+    "category": "medications",
+    "sources": {
+      "aumc": [
+        {
+          "ids": 7218,
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "(?i)nicardipine|cardene",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?i)nicardipine|cardene",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            222042,
+            229624
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            222042
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            222042
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "total_input_ml": {
+    "unit": "mL",
+    "min": 0,
+    "max": 10000,
+    "aggregate": "sum",
+    "description": "total IV fluid input per hour — MIIV + MIMIC-III MV + AUMC + eICU; HiRID/SIC pending",
+    "category": "output",
+    "sources": {
+      "miiv": [
+        {
+          "ids": [
+            220862,
+            220864,
+            220949,
+            220950,
+            220952,
+            220970,
+            221036,
+            221207,
+            225158,
+            225159,
+            225161,
+            225168,
+            225170,
+            225171,
+            225173,
+            225174,
+            225795,
+            225797,
+            225799,
+            225801,
+            225823,
+            225825,
+            225827,
+            225828,
+            225830,
+            225916,
+            225917,
+            225920,
+            225928,
+            225929,
+            225930,
+            225931,
+            225934,
+            225935,
+            225936,
+            225937,
+            225941,
+            225943,
+            225944,
+            225991,
+            225994,
+            225995,
+            225996,
+            225999,
+            226000,
+            226002,
+            226016,
+            226017,
+            226019,
+            226020,
+            226022,
+            226023,
+            226024,
+            226026,
+            226027,
+            226028,
+            226030,
+            226031,
+            226036,
+            226038,
+            226039,
+            226044,
+            226045,
+            226046,
+            226047,
+            226048,
+            226049,
+            226050,
+            226051,
+            226058,
+            226059,
+            226089,
+            226361,
+            226363,
+            226364,
+            226365,
+            226367,
+            226368,
+            226369,
+            226370,
+            226371,
+            226372,
+            226375,
+            226376,
+            226377,
+            226452,
+            226453,
+            226875,
+            226877,
+            226880,
+            226881,
+            226882,
+            227070,
+            227071,
+            227072,
+            227090,
+            227518,
+            227522,
+            227523,
+            227528,
+            227529,
+            227530,
+            227532,
+            227533,
+            227695,
+            227696,
+            227698,
+            227699,
+            227973,
+            227974,
+            227975,
+            227976,
+            227977,
+            227978,
+            227979,
+            228131,
+            228132,
+            228133,
+            228134,
+            228135,
+            228140,
+            228141,
+            228142,
+            228341,
+            228348,
+            228351,
+            228355,
+            228356,
+            228359,
+            228360,
+            228361,
+            228363,
+            228364,
+            228367,
+            228383,
+            229009,
+            229010,
+            229011,
+            229012,
+            229013,
+            229014,
+            229295,
+            229296,
+            229297,
+            229574,
+            229583,
+            229640
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "val_var": "amount"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            220862,
+            220864,
+            220949,
+            220950,
+            220952,
+            220970,
+            221036,
+            221207,
+            225158,
+            225159,
+            225161,
+            225168,
+            225170,
+            225171,
+            225173,
+            225174,
+            225795,
+            225797,
+            225799,
+            225801,
+            225823,
+            225825,
+            225827,
+            225828,
+            225830,
+            225916,
+            225917,
+            225920,
+            225928,
+            225929,
+            225930,
+            225931,
+            225934,
+            225935,
+            225936,
+            225937,
+            225941,
+            225943,
+            225944,
+            225991,
+            225994,
+            225995,
+            225996,
+            226016,
+            226017,
+            226019,
+            226020,
+            226021,
+            226022,
+            226023,
+            226024,
+            226026,
+            226027,
+            226028,
+            226030,
+            226031,
+            226036,
+            226038,
+            226039,
+            226044,
+            226045,
+            226046,
+            226047,
+            226048,
+            226049,
+            226050,
+            226051,
+            226058,
+            226059,
+            226089,
+            226361,
+            226363,
+            226364,
+            226365,
+            226367,
+            226368,
+            226369,
+            226370,
+            226371,
+            226372,
+            226375,
+            226376,
+            226377,
+            226452,
+            226453,
+            226875,
+            226877,
+            226880,
+            226881,
+            226882,
+            227070,
+            227071,
+            227072,
+            227091,
+            227370,
+            227518,
+            227522,
+            227523,
+            227528,
+            227529,
+            227530,
+            227532,
+            227533,
+            227695,
+            227696,
+            227698,
+            227699,
+            227973,
+            227974,
+            227975,
+            227976,
+            227977,
+            227978,
+            227979,
+            228131,
+            228132,
+            228133,
+            228134,
+            228135,
+            228140,
+            228141,
+            228142,
+            228341,
+            228348,
+            228351,
+            228356,
+            228359,
+            228361,
+            228363,
+            228364,
+            228367,
+            228383
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "val_var": "amount"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            220862,
+            220864,
+            220949,
+            220950,
+            220952,
+            220970,
+            221036,
+            221207,
+            225158,
+            225159,
+            225161,
+            225168,
+            225170,
+            225171,
+            225173,
+            225174,
+            225795,
+            225797,
+            225799,
+            225801,
+            225823,
+            225825,
+            225827,
+            225828,
+            225830,
+            225916,
+            225917,
+            225920,
+            225928,
+            225929,
+            225930,
+            225931,
+            225934,
+            225935,
+            225936,
+            225937,
+            225941,
+            225943,
+            225944,
+            225991,
+            225994,
+            225995,
+            225996,
+            226016,
+            226017,
+            226019,
+            226020,
+            226021,
+            226022,
+            226023,
+            226024,
+            226026,
+            226027,
+            226028,
+            226030,
+            226031,
+            226036,
+            226038,
+            226039,
+            226044,
+            226045,
+            226046,
+            226047,
+            226048,
+            226049,
+            226050,
+            226051,
+            226058,
+            226059,
+            226089,
+            226361,
+            226363,
+            226364,
+            226365,
+            226367,
+            226368,
+            226369,
+            226370,
+            226371,
+            226372,
+            226375,
+            226376,
+            226377,
+            226452,
+            226453,
+            226875,
+            226877,
+            226880,
+            226881,
+            226882,
+            227070,
+            227071,
+            227072,
+            227091,
+            227370,
+            227518,
+            227522,
+            227523,
+            227528,
+            227529,
+            227530,
+            227532,
+            227533,
+            227695,
+            227696,
+            227698,
+            227699,
+            227973,
+            227974,
+            227975,
+            227976,
+            227977,
+            227978,
+            227979,
+            228131,
+            228132,
+            228133,
+            228134,
+            228135,
+            228140,
+            228141,
+            228142,
+            228341,
+            228348,
+            228351,
+            228356,
+            228359,
+            228361,
+            228363,
+            228364,
+            228367,
+            228383
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "val_var": "amount"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            7194,
+            7252,
+            7254,
+            7255,
+            7256,
+            7257,
+            7291,
+            7292,
+            7293,
+            7295,
+            7316,
+            7360,
+            7366,
+            7367,
+            7369,
+            7480,
+            8267,
+            8429,
+            8932,
+            8933,
+            8936,
+            8937,
+            8938,
+            8939,
+            8940,
+            8942,
+            8943,
+            8944,
+            8945,
+            8946,
+            8971,
+            8974,
+            8998,
+            9351,
+            9599,
+            10738,
+            10739,
+            12892,
+            16817,
+            16854,
+            16904,
+            19932,
+            20174
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "val_var": "fluidin"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "(?i)(IVF|IVPB|\\bIV\\b|\\bNS\\b|D5|D10|D50|D51|crystalloid|colloid|sodium chloride|saline|ringer|lactated|albumin|FFP|pRBC|plasma|platelet|continuous infusion|infusion meds|other meds|tpn|hetastarch|mannitol|bicarb)",
+          "table": "intakeoutput",
+          "sub_var": "celllabel",
+          "val_var": "cellvaluenumeric",
+          "class_name": "rgx_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?i)(IVF|IVPB|\\bIV\\b|\\bNS\\b|D5|D10|D50|D51|crystalloid|colloid|sodium chloride|saline|ringer|lactated|albumin|FFP|pRBC|plasma|platelet|continuous infusion|infusion meds|other meds|tpn|hetastarch|mannitol|bicarb)",
+          "table": "intakeoutput",
+          "sub_var": "celllabel",
+          "val_var": "cellvaluenumeric",
+          "class_name": "rgx_itm"
+        }
+      ]
+    }
+  },
+  "fluid_balance": {
+    "class_name": "rec_cncpt",
+    "category": "output",
+    "unit": "mL",
+    "description": "hourly fluid balance (total_input_ml - urine) — Phase A, MIIV only",
+    "concepts": [
+      "total_input_ml",
+      "urine"
+    ],
+    "depends_on": [
+      "total_input_ml",
+      "urine"
+    ],
+    "callback": "fluid_balance_hourly"
+  },
+  "fluid_balance_cumulative": {
+    "class_name": "rec_cncpt",
+    "category": "output",
+    "unit": "mL",
+    "description": "cumulative fluid balance since admission (running sum of hourly fluid_balance)",
+    "concepts": [
+      "fluid_balance"
+    ],
+    "depends_on": [
+      "fluid_balance"
+    ],
+    "callback": "fluid_balance_cumulative"
+  },
+  "warfarin": {
+    "class_name": "lgl_cncpt",
+    "description": "warfarin (Coumadin) — vitamin K antagonist anticoagulant",
+    "aggregate": "max",
+    "category": "medications",
+    "sources": {
+      "eicu": [
+        {
+          "regex": "(?i)warfarin|coumadin",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?i)warfarin|coumadin",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            225913
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            225913
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            225913
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1657
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "apixaban": {
+    "class_name": "lgl_cncpt",
+    "description": "apixaban (Eliquis) — direct oral Xa inhibitor",
+    "aggregate": "max",
+    "category": "medications",
+    "sources": {
+      "sic": [
+        {
+          "ids": [
+            1954
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "enoxaparin": {
+    "class_name": "lgl_cncpt",
+    "description": "enoxaparin (Lovenox) — low-molecular-weight heparin",
+    "aggregate": "max",
+    "category": "medications",
+    "sources": {
+      "eicu": [
+        {
+          "regex": "(?i)enoxaparin|lovenox",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?i)enoxaparin|lovenox",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            225906
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            225906
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            225906
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1536,
+            1923
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "aspirin": {
+    "class_name": "lgl_cncpt",
+    "description": "aspirin (acetylsalicylic acid) — antiplatelet (any route, includes PO 81mg)",
+    "aggregate": "max",
+    "category": "medications",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            12798,
+            12438
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "(?i)aspirin|acetylsalic",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "(?i)aspirin|acetylsalic",
+          "table": "medication",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "sic": [
+        {
+          "ids": [
+            1448,
+            1473
+          ],
+          "table": "medication",
+          "sub_var": "DrugID",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
+  },
+  "insulin": {
+    "class_name": "lgl_cncpt",
+    "description": "insulin administration (boolean) — companion to ins rate concept",
+    "aggregate": "max",
+    "category": "medications",
+    "sources": {
+      "aumc": [
+        {
+          "ids": [
+            7624,
+            9014,
+            19129
+          ],
+          "table": "drugitems",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu": [
+        {
+          "regex": "^insulin (250.+)?\\(((ml|units)/hr)?\\)$",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "regex": "^insulin (250.+)?\\(((ml|units)/hr)?\\)$",
+          "table": "infusiondrug",
+          "sub_var": "drugname",
+          "class_name": "rgx_itm",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "hirid": [
+        {
+          "ids": [
+            15,
+            1000724
+          ],
+          "table": "pharma",
+          "sub_var": "pharmaid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "miiv": [
+        {
+          "ids": [
+            223258,
+            223260
+          ],
+          "table": "inputevents",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": [
+            30045,
+            30100
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            223258,
+            223260
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": [
+            30045,
+            30100
+          ],
+          "table": "inputevents_cv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        },
+        {
+          "ids": [
+            223258,
+            223260
+          ],
+          "table": "inputevents_mv",
+          "sub_var": "itemid",
+          "callback": "transform_fun(set_val(TRUE))"
+        }
+      ]
+    }
   }
 }

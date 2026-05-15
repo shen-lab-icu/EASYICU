@@ -180,6 +180,13 @@ POINT_EVENT_CONCEPTS = {
     "dexamethasone",                              # Specific corticosteroid
     "octreotide",                                 # Somatostatin analog
     "neostigmine",                                # NMB reversal
+    # Batch 7 (2026-05-14)
+    "phenytoin", "labetalol", "esmolol",          # Antiepileptic + beta blockers
+    "diltiazem", "nicardipine",                   # Calcium channel blockers
+    # Batch 8 (2026-05-14)
+    "warfarin", "apixaban", "enoxaparin",         # Anticoagulants
+    "aspirin",                                    # Antiplatelet
+    "insulin",                                    # Insulin (boolean companion to ins rate)
 }
 
 # 时长概念（已编码持续时间，不需要展开）
