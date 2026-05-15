@@ -37,6 +37,7 @@ The on-disk layout under ``<workdir>/evidence/`` is::
 
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 import logging
@@ -50,6 +51,55 @@ from typing import Any, Dict, List, Optional, Sequence
 from .schema import EvidenceRecord
 
 logger = logging.getLogger(__name__)
+
+
+class EvidenceEnforcementMode(str, enum.Enum):
+    """How strictly the EvidenceStore polices manuscript-bound output.
+
+    ``SOFT`` (default) — the long-standing behaviour: unsupported
+    result-like sentences are silently filtered, unresolved
+    ``{evidence:<id>}`` placeholders are rendered as
+    ``[evidence missing: <id>]`` and reported as warnings. Suitable for
+    interactive runs where the writer is being iterated on.
+
+    ``STRICT`` — every guard raises :class:`EvidenceEnforcementError`
+    instead of repairing the manuscript in place. Use this for CI
+    gates and final submission packaging where a silent demotion would
+    let an unverified claim slip into the bound manuscript.
+    """
+
+    SOFT = "soft"
+    STRICT = "strict"
+
+
+class EvidenceEnforcementError(RuntimeError):
+    """Raised by an :class:`EvidenceStore` in ``STRICT`` mode when the
+    manuscript would otherwise need to be silently repaired.
+
+    The ``detail`` mapping carries the offending items (removed
+    sentences, missing evidence ids, ...) so callers can include them
+    in audit logs without re-parsing the message string.
+    """
+
+    def __init__(self, message: str, *, detail: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(message)
+        self.detail: Dict[str, Any] = dict(detail or {})
+
+
+def _coerce_enforcement_mode(
+    value: Optional[str | EvidenceEnforcementMode],
+) -> EvidenceEnforcementMode:
+    if value is None:
+        return EvidenceEnforcementMode.SOFT
+    if isinstance(value, EvidenceEnforcementMode):
+        return value
+    try:
+        return EvidenceEnforcementMode(str(value).lower())
+    except ValueError as exc:
+        raise ValueError(
+            f"Unknown evidence enforcement mode: {value!r}; "
+            f"expected one of {[m.value for m in EvidenceEnforcementMode]}"
+        ) from exc
 
 
 def _quarantine_corrupt_index(path: Path, exc: Exception, kind: str) -> None:
@@ -103,12 +153,20 @@ class EvidenceStore:
     crashes don't lose evidence.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        enforcement_mode: Optional[str | EvidenceEnforcementMode] = None,
+    ) -> None:
         self.root = Path(root)
         self.dir = self.root / "evidence"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.index_path = self.dir / "evidence_index.json"
         self.aliases_path = self.dir / "evidence_aliases.json"
+        self.enforcement_mode: EvidenceEnforcementMode = _coerce_enforcement_mode(
+            enforcement_mode
+        )
         self._records: List[EvidenceRecord] = self._load_records()
         self._aliases: Dict[str, str] = self._load_aliases()
         # T3.3 — concurrent step execution: every register / get / save
@@ -466,6 +524,10 @@ class EvidenceStore:
         before it can enter the final manuscript. We keep headings, list items,
         and non-result narrative intact, and return the filtered scaffold plus a
         list of sentences that were removed.
+
+        In ``STRICT`` mode, raises :class:`EvidenceEnforcementError` when any
+        sentence would have been dropped, so a CI / submission run fails loudly
+        instead of shipping a silently shortened manuscript.
         """
         removed: List[str] = []
         filtered_lines: List[str] = []
@@ -489,6 +551,13 @@ class EvidenceStore:
                     continue
                 kept.append(sentence.strip())
             filtered_lines.append(" ".join(part for part in kept if part).strip())
+        if removed and self.enforcement_mode is EvidenceEnforcementMode.STRICT:
+            raise EvidenceEnforcementError(
+                f"STRICT evidence mode: {len(removed)} result-like sentence(s) "
+                f"without {{evidence:<id>}} placeholders. The writer must cite "
+                f"registered evidence ids for every analytical claim.",
+                detail={"removed_sentences": removed},
+            )
         return "\n".join(filtered_lines).strip() + "\n", removed
 
     def bind_manuscript(self, scaffold: str, *, verbose: bool = False) -> str:
@@ -503,8 +572,14 @@ class EvidenceStore:
         Unbound placeholders are replaced with ``[evidence missing: id]``
         so a reviewer can immediately see what the writer expected to
         cite.
+
+        In ``STRICT`` mode, any unresolved placeholder raises
+        :class:`EvidenceEnforcementError` so the run fails before a
+        manuscript containing ``[evidence missing: …]`` markers can be
+        written out.
         """
         out: List[str] = []
+        all_missing: List[str] = []
         i = 0
         n = len(scaffold)
         while i < n:
@@ -544,11 +619,22 @@ class EvidenceStore:
                     )
             if missing:
                 bound_parts.extend(f"[evidence missing: {item}]" for item in missing)
+                all_missing.extend(missing)
             if bound_parts:
                 out.append("; ".join(bound_parts))
             elif verbose:
                 out.append(f"[evidence missing: {eid}]")
+                all_missing.append(eid)
             i = k + 1
+        if all_missing and self.enforcement_mode is EvidenceEnforcementMode.STRICT:
+            unique_missing = sorted(set(all_missing))
+            raise EvidenceEnforcementError(
+                f"STRICT evidence mode: {len(unique_missing)} manuscript "
+                f"placeholder(s) do not resolve to a registered evidence id: "
+                f"{', '.join(unique_missing)}. Register the underlying "
+                f"artefact, or correct the placeholder before binding.",
+                detail={"missing_evidence_ids": unique_missing},
+            )
         return "".join(out)
 
 
@@ -620,4 +706,10 @@ def _looks_result_like_sentence(sentence: str) -> bool:
     return bool(_RESULT_TOKEN_RE.search(sentence))
 
 
-__all__ = ["EvidenceStore", "sha256_of_file", "sha256_of_bytes"]
+__all__ = [
+    "EvidenceStore",
+    "EvidenceEnforcementMode",
+    "EvidenceEnforcementError",
+    "sha256_of_file",
+    "sha256_of_bytes",
+]

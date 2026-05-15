@@ -45,7 +45,7 @@ from .context import build_research_context
 from .evidence import EvidenceStore
 from .pipeline import ResearchAgentPipeline
 from .skills import list_skills
-from .validators import CohortAuditor, ConceptUsageAuditor
+from .audits.validators import CohortAuditor, ConceptUsageAuditor
 
 
 PROTOCOL_VERSION = "2024-11-05"

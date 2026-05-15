@@ -33,8 +33,8 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 
 import pandas as pd
 
-from .paper_replication import compare_metric_values
-from .schema import (
+from ..replication.paper import compare_metric_values
+from ..schema import (
     AggregationRule,
     AnalysisStep,
     ConceptDescriptor,
@@ -46,7 +46,7 @@ from .schema import (
     ValidationFinding,
     VariableRole,
 )
-from .llm import LLMClient, LLMMessage
+from ..llm import LLMClient, LLMMessage
 
 
 # ---------------------------------------------------------------------------

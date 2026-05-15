@@ -429,7 +429,7 @@ def envelope_role_resolver(llm: Any, envelope: ReproEnvelope, *, seed: Optional[
     The order matters: recording must see the exact prompt / response
     strings, so it sits closest to the inner client.
     """
-    from .llm import resolve_role_client
+    from ..llm import resolve_role_client
 
     def _resolve(role: str):
         inner = resolve_role_client(llm, role)

@@ -67,7 +67,7 @@ def build_requirements_lockfile() -> str:
         "# easyicu.research_agent — requirements.lock",
         f"# python_version={sys.version.split(' ')[0]}",
         f"# python_implementation={sys.implementation.name}",
-        "# generated_by=easyicu.research_agent.repro_artifacts",
+        "# generated_by=easyicu.research_agent.replication.notebook",
     ]
     return "\n".join(header + rows) + "\n"
 

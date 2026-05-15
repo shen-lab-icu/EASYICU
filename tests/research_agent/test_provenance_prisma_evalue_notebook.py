@@ -96,7 +96,7 @@ def test_e_value_raises_on_unsupported_type(ra):
 def test_requirements_lockfile_has_header_and_entries(ra):
     text = ra.build_requirements_lockfile()
     assert "python_version=" in text
-    assert "generated_by=easyicu.research_agent.repro_artifacts" in text
+    assert "generated_by=easyicu.research_agent.replication.notebook" in text
     # At least one entry that looks like package==version
     entry_lines = [l for l in text.splitlines() if "==" in l and not l.startswith("#")]
     assert entry_lines
