@@ -51,8 +51,11 @@ llmserver = [
   "fastapi>=0.115",
   "uvicorn>=0.30"
 ]
+agentic = [
+  "langgraph>=1.0"
+]
 all = [
-  "easyicu[dev,viz,webapp,llmserver]"
+  "easyicu[dev,viz,webapp,llmserver,agentic]"
 ]
 
 [project.scripts]

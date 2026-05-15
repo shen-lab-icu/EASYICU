@@ -22,9 +22,15 @@ pure functions with no pipeline state, so isolating them here cuts
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
-from .evidence import EvidenceStore
+from .evidence import (
+    EvidenceEnforcementError,
+    EvidenceEnforcementMode,
+    EvidenceStore,
+    NumericClaim,
+    _NUMERIC_IN_PROSE_RE,
+)
 from .schema import ResearchContext
 
 
@@ -169,9 +175,119 @@ def _remove_tbd_sentences(bound_manuscript: str) -> tuple[str, List[str]]:
     return "\n".join(cleaned_lines).strip() + "\n", removed
 
 
+_NUMERIC_BIND_SKIP_CONTEXTS = (
+    re.compile(r"\{evidence:[^}]*\}"),
+    re.compile(r"\[\^[A-Za-z0-9_]+\]"),
+    re.compile(r"#+\s.*"),
+)
+
+
+def _spans_to_skip(text: str) -> List[Tuple[int, int]]:
+    spans: List[Tuple[int, int]] = []
+    for pat in _NUMERIC_BIND_SKIP_CONTEXTS:
+        for m in pat.finditer(text):
+            spans.append((m.start(), m.end()))
+    return spans
+
+
+def _position_is_inside(pos: int, spans: Sequence[Tuple[int, int]]) -> bool:
+    return any(start <= pos < end for start, end in spans)
+
+
+def bind_numeric_values(
+    manuscript: str,
+    *,
+    evidence: EvidenceStore,
+    enforcement_mode: Optional[EvidenceEnforcementMode] = None,
+    footnote_prefix: str = "claim",
+) -> Tuple[str, Dict[str, NumericClaim], List[str]]:
+    """Bind every numeric value in ``manuscript`` to a registered claim.
+
+    Each matched value gets a Markdown footnote ``[^claim_N]`` whose
+    definition is appended at the bottom of the manuscript pointing to
+    the source step, source field, and owning evidence id. Numbers
+    that do not match any registered claim:
+
+    * SOFT mode → emit a comment marker ``<!-- UNTRACED:<value> -->``
+      next to the number so reviewers see them, and record the value
+      in the returned ``untraced`` list.
+    * STRICT mode → raise :class:`EvidenceEnforcementError` after
+      scanning, with the offending values in ``detail['untraced']``.
+
+    The implementation skips numbers that are already inside
+    ``{evidence:<id>}`` placeholders, existing footnote markers
+    ``[^xxx]``, or Markdown headings, so it composes cleanly with
+    sentence-level evidence binding.
+
+    Inspired by data-to-paper's ``\\hypertarget`` / ``\\hyperlink``
+    binding (NEJM AI 2024) but emits Markdown footnotes so the output
+    stays readable without a LaTeX pass.
+    """
+    if not manuscript:
+        return manuscript, {}, []
+    mode = enforcement_mode or evidence.enforcement_mode
+
+    skip_spans = _spans_to_skip(manuscript)
+    binding_map: Dict[str, NumericClaim] = {}
+    untraced: List[str] = []
+    used_ids: Dict[str, str] = {}  # source_field -> footnote_id
+
+    def _footnote_id_for(claim: NumericClaim) -> str:
+        existing = used_ids.get(claim.source_field)
+        if existing is not None:
+            return existing
+        idx = len(used_ids) + 1
+        fid = f"{footnote_prefix}_{idx}"
+        used_ids[claim.source_field] = fid
+        binding_map[fid] = claim
+        return fid
+
+    out_parts: List[str] = []
+    cursor = 0
+    for match in _NUMERIC_IN_PROSE_RE.finditer(manuscript):
+        start, end = match.start("value"), match.end("value")
+        if _position_is_inside(start, skip_spans):
+            continue
+        out_parts.append(manuscript[cursor:end])
+        value = match.group("value")
+        claim = evidence.find_claim_for_value(value)
+        if claim is None:
+            untraced.append(value)
+            if mode is EvidenceEnforcementMode.SOFT:
+                out_parts.append(f" <!-- UNTRACED:{value} -->")
+        else:
+            fid = _footnote_id_for(claim)
+            out_parts.append(f"[^{fid}]")
+        cursor = end
+    out_parts.append(manuscript[cursor:])
+    bound = "".join(out_parts)
+
+    if binding_map:
+        defs = ["\n"]
+        for fid, claim in binding_map.items():
+            defs.append(
+                f"[^{fid}]: value={claim.value}; "
+                f"step={claim.step_id}; "
+                f"field={claim.source_field}; "
+                f"evidence={claim.evidence_id}\n"
+            )
+        bound = bound.rstrip() + "\n" + "".join(defs)
+
+    if mode is EvidenceEnforcementMode.STRICT and untraced:
+        raise EvidenceEnforcementError(
+            f"Manuscript contains {len(untraced)} numeric value(s) not "
+            f"traceable to any registered claim (STRICT mode). "
+            f"Examples: {untraced[:5]}",
+            detail={"untraced": untraced},
+        )
+
+    return bound, binding_map, untraced
+
+
 __all__ = [
     "_first_resolvable_name",
     "_repair_common_writer_placeholders",
     "_demote_unresolved_evidence_placeholders",
     "_remove_tbd_sentences",
+    "bind_numeric_values",
 ]

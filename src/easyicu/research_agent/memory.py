@@ -59,7 +59,17 @@ class RunMemoryRecord:
 
 @dataclass
 class StrategyCard:
-    """Reusable procedural knowledge distilled from prior runs."""
+    """Reusable procedural knowledge distilled from prior runs.
+
+    The counter / lifecycle fields (``confidence``, ``times_retrieved``,
+    ``validation_count``, ``last_validated_at``, ``retired``,
+    ``retired_reason``) make the memory layer self-correcting:
+    callers bump ``validation_count`` via :meth:`RunMemory.validate_card`
+    after a run reused the card without regressions, and mark cards
+    retired via :meth:`RunMemory.retire_card` when later evidence
+    contradicts the recommendation. Retired cards are excluded from
+    default retrieval.
+    """
 
     strategy_id: str
     task_family: str
@@ -71,13 +81,49 @@ class StrategyCard:
     applicable_databases: List[str] = field(default_factory=list)
     contraindicated_databases: List[str] = field(default_factory=list)
     concept_dependencies: List[str] = field(default_factory=list)
+    confidence: float = 0.5
+    times_retrieved: int = 0
+    validation_count: int = 0
+    last_validated_at: Optional[str] = None
+    retired: bool = False
+    retired_reason: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "StrategyCard":
-        return cls(**data)
+        # Drop unknown keys so cards persisted by older builds load cleanly
+        # under a newer schema (and vice versa).
+        known = {f for f in cls.__dataclass_fields__}
+        clean = {k: v for k, v in data.items() if k in known}
+        return cls(**clean)
+
+
+@dataclass
+class MemoryScoreBreakdown:
+    """Transparent score record for one StrategyCard retrieval decision."""
+
+    overlap: float = 0.0
+    support_bonus: float = 0.0
+    dependency_bonus: float = 0.0
+    database_bonus: float = 0.0
+    outcome_bonus: float = 0.0
+    confidence_bonus: float = 0.0
+    validation_bonus: float = 0.0
+    retired_penalty: float = 0.0
+    total: float = 0.0
+
+
+@dataclass
+class MemoryRetrievalAuditEntry:
+    """One line of a retrieval-decision audit log."""
+
+    strategy_id: str
+    task_family: str
+    score: MemoryScoreBreakdown
+    disposition: str  # "selected" | "dropped" | "retired" | "blocked"
+    rationale: str
 
 
 class RunMemory:
@@ -289,6 +335,167 @@ class RunMemory:
 
         return cards
 
+    def _score_strategy_card(
+        self,
+        card: StrategyCard,
+        *,
+        q_tokens: set,
+        database: str,
+        target_outcome: Optional[str],
+    ) -> Tuple[MemoryScoreBreakdown, str]:
+        """Compute a transparent score for a single card.
+
+        Returns ``(breakdown, dependency_status)``. The total score is
+        already populated on ``breakdown``. ``dependency_status`` is
+        ``"blocked"`` when the card's required concepts are unavailable
+        on this database; callers should drop blocked cards from
+        retrieval.
+        """
+        card_tokens = set(card.trigger_tokens) | _tokenise(card.task_family)
+        breakdown = MemoryScoreBreakdown()
+        breakdown.overlap = float(len(q_tokens & card_tokens))
+        breakdown.support_bonus = min(2.0, len(card.supporting_run_ids) * 0.25)
+
+        dependency_status = _strategy_dependency_status(card, database)
+        if dependency_status == "full":
+            breakdown.dependency_bonus = 0.5
+        elif dependency_status == "degraded":
+            breakdown.dependency_bonus = -0.75
+
+        db = database.lower()
+        if db in {d.lower() for d in card.applicable_databases}:
+            breakdown.database_bonus = 1.0
+        if db in {d.lower() for d in card.contraindicated_databases}:
+            breakdown.database_bonus -= 2.0
+
+        if target_outcome and target_outcome.lower() in card_tokens:
+            breakdown.outcome_bonus = 0.5
+
+        # Confidence + validation give cards earned trust over time. The
+        # confidence bonus is measured *relative to* the 0.5 baseline so
+        # that an untouched default-confidence card contributes nothing
+        # — only cards whose synthesizer or operator raised confidence
+        # above baseline earn a retrieval bump.
+        breakdown.confidence_bonus = 0.5 * (float(card.confidence) - 0.5)
+        breakdown.validation_bonus = min(1.0, 0.25 * card.validation_count)
+        if card.retired:
+            breakdown.retired_penalty = -10.0
+
+        breakdown.total = (
+            breakdown.overlap
+            + breakdown.support_bonus
+            + breakdown.dependency_bonus
+            + breakdown.database_bonus
+            + breakdown.outcome_bonus
+            + breakdown.confidence_bonus
+            + breakdown.validation_bonus
+            + breakdown.retired_penalty
+        )
+        return breakdown, dependency_status
+
+    def scored_strategy_cards(
+        self,
+        *,
+        research_question: str,
+        database: str,
+        target_outcome: Optional[str],
+        limit: int = 4,
+        include_retired: bool = False,
+        audit_path: Optional[Path] = None,
+    ) -> List[Tuple[StrategyCard, MemoryScoreBreakdown]]:
+        """Rank strategy cards with a transparent score breakdown.
+
+        Unlike :meth:`relevant_strategy_cards` (which returns bare cards
+        for backward compatibility), this method returns
+        ``(card, MemoryScoreBreakdown)`` pairs so callers can audit why
+        a card was selected. Pass ``audit_path`` to also persist a JSONL
+        audit log of the retrieval decision.
+        """
+        q_tokens = _tokenise(
+            " ".join([research_question, database, target_outcome or ""])
+        )
+        decisions: List[Tuple[StrategyCard, MemoryScoreBreakdown, str, str]] = []
+        for card in self.all_strategy_cards():
+            if card.retired and not include_retired:
+                decisions.append(
+                    (
+                        card,
+                        MemoryScoreBreakdown(retired_penalty=-10.0, total=-10.0),
+                        "retired",
+                        f"card retired ({card.retired_reason or 'no reason'})",
+                    )
+                )
+                continue
+            breakdown, dependency_status = self._score_strategy_card(
+                card,
+                q_tokens=q_tokens,
+                database=database,
+                target_outcome=target_outcome,
+            )
+            if dependency_status == "blocked":
+                decisions.append(
+                    (
+                        card,
+                        breakdown,
+                        "blocked",
+                        f"required concepts unavailable on {database}",
+                    )
+                )
+                continue
+            disposition = "candidate" if breakdown.total > 0.0 else "dropped"
+            decisions.append((card, breakdown, disposition, ""))
+
+        # Rank only the candidate set.
+        candidates = [d for d in decisions if d[2] == "candidate"]
+        candidates.sort(key=lambda d: d[1].total, reverse=True)
+        selected = candidates[:limit]
+        selected_ids = {c.strategy_id for c, _, _, _ in selected}
+
+        # Finalize dispositions for audit.
+        if audit_path is not None:
+            audit_entries: List[MemoryRetrievalAuditEntry] = []
+            for card, breakdown, disposition, rationale in decisions:
+                final_disposition = (
+                    "selected"
+                    if card.strategy_id in selected_ids
+                    else (disposition if disposition != "candidate" else "dropped")
+                )
+                audit_entries.append(
+                    MemoryRetrievalAuditEntry(
+                        strategy_id=card.strategy_id,
+                        task_family=card.task_family,
+                        score=breakdown,
+                        disposition=final_disposition,
+                        rationale=rationale or f"score={breakdown.total:.3f}",
+                    )
+                )
+            audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with audit_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                            "research_question": research_question,
+                            "database": database,
+                            "target_outcome": target_outcome,
+                            "entries": [
+                                {
+                                    "strategy_id": e.strategy_id,
+                                    "task_family": e.task_family,
+                                    "disposition": e.disposition,
+                                    "rationale": e.rationale,
+                                    "score": e.score.__dict__,
+                                }
+                                for e in audit_entries
+                            ],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+        return [(c, b) for c, b, _, _ in selected]
+
     def relevant_strategy_cards(
         self,
         *,
@@ -297,30 +504,77 @@ class RunMemory:
         target_outcome: Optional[str],
         limit: int = 4,
     ) -> List[StrategyCard]:
-        q_tokens = _tokenise(" ".join([research_question, database, target_outcome or ""]))
+        scored = self.scored_strategy_cards(
+            research_question=research_question,
+            database=database,
+            target_outcome=target_outcome,
+            limit=limit,
+        )
+        return [card for card, _ in scored]
 
-        def score(card: StrategyCard) -> float:
-            card_tokens = set(card.trigger_tokens) | _tokenise(card.task_family)
-            s = float(len(q_tokens & card_tokens))
-            s += min(2.0, len(card.supporting_run_ids) * 0.25)
-            db = database.lower()
-            dependency_status = _strategy_dependency_status(card, database)
-            if dependency_status == "blocked":
-                return float("-inf")
-            if dependency_status == "full":
-                s += 0.5
-            elif dependency_status == "degraded":
-                s -= 0.75
-            if db in {d.lower() for d in card.applicable_databases}:
-                s += 1.0
-            if db in {d.lower() for d in card.contraindicated_databases}:
-                s -= 2.0
-            if target_outcome and target_outcome.lower() in card_tokens:
-                s += 0.5
-            return s
+    def validate_card(self, strategy_id: str) -> Optional[StrategyCard]:
+        """Mark a card as validated by another successful retrieval.
 
-        ranked = sorted(self.all_strategy_cards(), key=score, reverse=True)
-        return [card for card in ranked if score(card) > 0.0][:limit]
+        Bumps ``validation_count``, sets ``last_validated_at`` to now,
+        rewrites the card file. Returns the updated card or ``None`` if
+        the card no longer exists on disk.
+        """
+        path = self.strategies_dir / f"{strategy_id}.json"
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        card = StrategyCard.from_dict(data)
+        card.validation_count += 1
+        card.last_validated_at = datetime.now(timezone.utc).isoformat()
+        path.write_text(
+            json.dumps(card.to_dict(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return card
+
+    def retire_card(
+        self,
+        strategy_id: str,
+        *,
+        reason: str,
+    ) -> Optional[StrategyCard]:
+        """Retire a card so it is excluded from default retrieval.
+
+        Retirement is reversible — set ``retired`` back to ``False`` by
+        editing the JSON on disk. The ``reason`` is preserved so future
+        readers can see why the lesson was withdrawn.
+        """
+        path = self.strategies_dir / f"{strategy_id}.json"
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        card = StrategyCard.from_dict(data)
+        card.retired = True
+        card.retired_reason = reason
+        path.write_text(
+            json.dumps(card.to_dict(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return card
+
+    def record_retrieval(self, strategy_ids: Sequence[str]) -> None:
+        """Bump ``times_retrieved`` on each card that was just selected.
+
+        Separate from :meth:`validate_card`: retrieval indicates the
+        card was *surfaced* to the planner, validation indicates it was
+        successfully *applied* without later regressions.
+        """
+        for sid in strategy_ids:
+            path = self.strategies_dir / f"{sid}.json"
+            if not path.exists():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            card = StrategyCard.from_dict(data)
+            card.times_retrieved += 1
+            path.write_text(
+                json.dumps(card.to_dict(), indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
 
     def strategy_digest_for_prompt(
         self,
