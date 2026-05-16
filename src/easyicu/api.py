@@ -3008,13 +3008,32 @@ def get_all_patient_ids(
     table_name = get_patient_table_for_database(database)
     
     data_path = Path(data_path)
-    
+
+    # 患者表的备用文件名（部分数据库导出的 parquet 文件名与表名不同）
+    _table_filename_aliases = {
+        'general': ['general', 'general_table'],  # HiRID
+    }
+    _name_candidates = _table_filename_aliases.get(table_name, [table_name])
+
     # 尝试加载患者表
     try:
         all_ids = None
-        # 首选：直接加载 parquet 文件
-        parquet_file = data_path / f'{table_name}.parquet'
-        if parquet_file.exists():
+        # 首选：直接定位患者表 parquet（含 icu/ hosp/ 等子目录）。
+        # 患者表都很小（icustays/patient/cases 仅几 MB），列裁剪后秒级读取；
+        # 找不到就退回慢速 BaseICULoader 全库扫描——在慢速挂载上后者要十几分钟。
+        parquet_file = None
+        for _name in _name_candidates:
+            flat = data_path / f'{_name}.parquet'
+            if flat.exists():
+                parquet_file = flat
+                break
+            # 一级子目录搜索（MIMIC-IV 的表位于 icu/ 或 hosp/ 下）
+            for sub in sorted(data_path.glob(f'*/{_name}.parquet')):
+                parquet_file = sub
+                break
+            if parquet_file is not None:
+                break
+        if parquet_file is not None and parquet_file.exists():
             try:
                 df = pd.read_parquet(parquet_file, columns=[id_col])
                 all_ids = df[id_col].dropna().unique().tolist()
@@ -3140,18 +3159,35 @@ _SPECIAL_CONCEPT_MODULES = {'sepsis3_sofa1', 'sepsis3_sofa2'}
 
 # 已知数据库路径映射（可被 data_paths 参数或环境变量 EASYICU_DATA_PATH 覆盖）
 # 默认使用环境变量中的数据根目录
-def _build_default_db_paths() -> Dict[str, str]:
-    """从环境变量构建默认数据库路径"""
+_DEFAULT_DB_PATH_CACHE: Dict[str, str] = {}
+
+def _get_default_db_path(database: str) -> Optional[str]:
+    """惰性解析单个数据库的默认路径（按需，带缓存）。
+
+    旧实现在 import api.py 时就为全部 6 个库递归扫描目录。
+    在慢速 FUSE 挂载上，每个 os.listdir 要数秒，且每个提取子进程
+    import 时都重复付出这笔开销。改为按需解析、只扫描真正用到的库。
+    """
+    if database in _DEFAULT_DB_PATH_CACHE:
+        return _DEFAULT_DB_PATH_CACHE[database]
     _root = os.environ.get('EASYICU_DATA_PATH', '')
     if not _root:
-        return {}
+        return None
     try:
         from easyicu.webapp.data_paths import find_database_path
-        return {db: find_database_path(_root, db) for db in ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']}
+        path = find_database_path(_root, database)
     except ImportError:
-        return {db: os.path.join(_root, db) for db in ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']}
+        path = os.path.join(_root, database)
+    _DEFAULT_DB_PATH_CACHE[database] = path
+    return path
 
-DEFAULT_DB_PATHS: Dict[str, str] = _build_default_db_paths()
+def _build_default_db_paths() -> Dict[str, str]:
+    """解析全部 6 个数据库的默认路径（仅 extract_all_databases 使用）。"""
+    return {
+        db: p
+        for db in ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']
+        if (p := _get_default_db_path(db)) is not None
+    }
 
 
 def _extract_module_worker(
@@ -3356,7 +3392,7 @@ def extract_database(
 
     Args:
         database: 数据库类型 ('miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic')
-        data_path: 数据路径（None 则使用 DEFAULT_DB_PATHS 或自动检测）
+        data_path: 数据路径（None 则按数据库名自动解析）
         output_dir: 输出目录（None 则不写文件，仅返回 dict）
         modules: 要提取的模块列表（None = 全部 19 个模块）
         patient_ids: 患者 ID 列表或 dict（None = 全部患者）
@@ -3394,7 +3430,7 @@ def extract_database(
 
     # 确定数据路径
     if data_path is None:
-        data_path = DEFAULT_DB_PATHS.get(database)
+        data_path = _get_default_db_path(database)
         if data_path is None:
             data_path = get_default_data_path()
     data_path = str(data_path)
@@ -3643,7 +3679,7 @@ def extract_all_databases(
     if databases is None:
         databases = ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']
 
-    merged_paths = dict(DEFAULT_DB_PATHS)
+    merged_paths = _build_default_db_paths()
     if data_paths:
         merged_paths.update(data_paths)
 
