@@ -289,6 +289,31 @@ def run_execute_phase(
         )
         if preservation_findings:
             findings.extend(preservation_findings)
+
+        # C1 (pilot 20260515 fix): cap total plan size after a replan.
+        # The pilot saw the replanner grow a simple SOFA-2 association
+        # to 30 steps with 13 revisions and never converge. The cap
+        # truncates excess late-stage steps and forces the replanner
+        # to revise existing steps in place on later passes. Cap of 0
+        # disables the guard for backward compatibility.
+        cap = pipeline._max_total_steps
+        if cap > 0 and len(revised.steps) > cap:
+            dropped = [s.step_id for s in revised.steps[cap:]]
+            revised = revised.model_copy(update={"steps": list(revised.steps[:cap])})
+            findings.append(
+                ValidationFinding(
+                    validator="replanner",
+                    severity="warning",
+                    message=(
+                        f"Replanner produced {len(dropped) + cap} steps; "
+                        f"truncated to max_total_steps={cap}. Dropped: "
+                        f"{', '.join(dropped[:6])}"
+                        + (" ..." if len(dropped) > 6 else "")
+                    ),
+                    detail={"dropped_step_ids": dropped, "cap": cap},
+                )
+            )
+
         if revised.model_dump(mode="json") == current_plan.model_dump(mode="json"):
             return current_plan
         plan_path = _register_plan_revision(revised, reason=reason)
@@ -1342,10 +1367,12 @@ def run_execute_phase(
             # manuscript binder can reverse-link numbers in prose to the
             # exact field of the exact step output that produced them.
             try:
+                cap = pipeline._max_numeric_claims_per_step
                 evidence.register_step_summary_numerics(
                     step_id=step.step_id,
                     evidence_id=step_summary_record_id,
                     summary=step_summary,
+                    max_leaves=cap if cap > 0 else None,
                 )
             except Exception as exc:
                 logger.warning(

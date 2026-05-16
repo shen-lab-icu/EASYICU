@@ -157,6 +157,32 @@ def test_bind_numeric_values_skips_existing_evidence_placeholders(
     assert len(binding_map) == 1
 
 
+def test_bind_numeric_values_skips_sha256_in_link_targets(ra, tmp_path: Path):
+    """D1 (pilot 20260515 fix). After sentence-level binding, every
+    ``{evidence:foo}`` becomes ``[label](evidence/foo.json
+    "sha256=273e4341")``. The hex sha256 prefix would otherwise match
+    the numeric regex's exponent branch and emit ``UNTRACED:273e4341``.
+    The Markdown link target must be in the skip-span set.
+    """
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_step_summary_numerics(
+        step_id="s1", evidence_id="evid_assoc",
+        summary={"primary_or": 1.42},
+    )
+    manuscript = (
+        "Higher SOFA-2 (OR=1.42) per "
+        '[outcome_rate](evidence/statistic_outcome_273e4341__outcome.json "sha256=273e4341")'
+        " and a stray genuine 999 should be untraced.\n"
+    )
+    _, _, untraced = bind_numeric_values(manuscript, evidence=store)
+    # The hex inside the link target must not surface as untraced.
+    assert "273e4341" not in untraced
+    # Real numeric outside the link target still surfaces untraced.
+    assert "999" in untraced
+
+
 def test_numeric_claims_persist_across_store_reload(ra, tmp_path: Path):
     store_a = _store(ra, tmp_path)
     store_a.register_step_summary_numerics(

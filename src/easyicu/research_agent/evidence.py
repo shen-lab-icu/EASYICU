@@ -665,15 +665,34 @@ class EvidenceStore:
         evidence_id: str,
         summary: Any,
         tolerance: float = 1e-3,
+        max_leaves: Optional[int] = None,
     ) -> List[NumericClaim]:
         """Walk a ``step_summary`` payload and register every numeric leaf.
 
         This is the bulk registration hook invoked from the pipeline
         after a step's ``step_summary.json`` is loaded. Non-numeric
         leaves and structural fields are silently skipped.
+
+        ``max_leaves`` caps the number of claims registered per call to
+        prevent a single step that dumps a full interaction matrix into
+        ``step_summary`` from drowning the registry. When the cap is
+        exceeded the **first** ``max_leaves`` leaves (typically the most
+        salient summary-level fields like ``primary_or``) are kept and
+        the remainder is silently skipped; a single info-level marker
+        claim records that truncation happened. ``None`` (the default
+        when called directly) disables the cap. Pipelines pass the
+        ``PipelineConfig.max_numeric_claims_per_step`` value.
         """
         registered: List[NumericClaim] = []
-        for path, literal, canonical in _walk_numeric_leaves(summary):
+        leaves = _walk_numeric_leaves(summary)
+        truncated = False
+        if max_leaves is not None and max_leaves > 0 and len(leaves) > max_leaves:
+            truncated_count = len(leaves) - max_leaves
+            leaves = leaves[:max_leaves]
+            truncated = True
+        else:
+            truncated_count = 0
+        for path, literal, canonical in leaves:
             registered.append(
                 self.register_numeric_claim(
                     value=literal,
@@ -683,6 +702,21 @@ class EvidenceStore:
                     source_field=path,
                     tolerance=tolerance,
                 )
+            )
+        if truncated:
+            # A sentinel claim so reviewers see that the step exceeded
+            # the cap without scrolling validator findings. The value is
+            # the cap itself so an audit query can correlate cap value
+            # → truncated step. The float is the count of *dropped*
+            # leaves; matching it back to the cap is just (literal -
+            # registered_count).
+            self.register_numeric_claim(
+                value=str(truncated_count),
+                canonical=float(truncated_count),
+                evidence_id=evidence_id,
+                step_id=step_id,
+                source_field="__easyicu_numeric_claim_overflow__",
+                tolerance=tolerance,
             )
         return registered
 

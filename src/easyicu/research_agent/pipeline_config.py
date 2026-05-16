@@ -121,6 +121,21 @@ class PipelineConfig:
     max_concurrent_steps: int = 1
     enable_probe_step: bool = True
     enable_replanning: bool = True
+    # Hard cap on plan size after any replanner revision. The replanner
+    # can still revise existing steps in place; it just may not push the
+    # total count above this. Set to 0 / None to disable (legacy behaviour).
+    # Default of 12 covers probe + cohort summary + 2-3 primary models +
+    # 2-3 sensitivities + figure + interpretation. Pilot run 20260515 saw
+    # the planner expand a simple SOFA-2 association to 30 steps with 13
+    # revisions before being killed at step 20; this cap prevents that.
+    max_total_steps: int = 12
+    # Hard cap on numeric-claim leaves registered per single step.
+    # Prevents one step that dumps a full interaction matrix into
+    # step_summary.json from creating hundreds of footnotes when its
+    # numbers are referenced in the manuscript. Pilot run 20260515
+    # had a step with 295 claims; 100 covers any realistic clinical
+    # analysis without truncating real result quantities.
+    max_numeric_claims_per_step: int = 100
 
     # --- code runner ----------------------------------------------------
     runner_kind: str = "subprocess"

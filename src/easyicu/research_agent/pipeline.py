@@ -262,6 +262,7 @@ from .audits.validators import (
     ReplicationResultComparator,
     StatisticalGuard,
     StatisticalValidator,
+    dedupe_findings,
 )
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
@@ -373,6 +374,8 @@ class ResearchAgentPipeline:
         max_concurrent_steps: int = 1,
         enable_probe_step: bool = True,
         enable_replanning: bool = True,
+        max_total_steps: int = 12,
+        max_numeric_claims_per_step: int = 100,
         runner_kind: str = "subprocess",
         runner_image: Optional[str] = None,
         runner_network: str = "none",
@@ -541,6 +544,16 @@ class ResearchAgentPipeline:
         self._max_concurrent_steps = max(1, int(max_concurrent_steps))
         self._enable_probe_step = bool(enable_probe_step)
         self._enable_replanning = bool(enable_replanning)
+        # 0 / None means "no cap". Anything positive enforces the cap in
+        # the replanner overflow guard (see pipeline_execute.py).
+        self._max_total_steps = (
+            int(max_total_steps) if max_total_steps and max_total_steps > 0 else 0
+        )
+        self._max_numeric_claims_per_step = (
+            int(max_numeric_claims_per_step)
+            if max_numeric_claims_per_step and max_numeric_claims_per_step > 0
+            else 0
+        )
         # T3.1 — runner backend selection. ``subprocess`` keeps the
         # existing behaviour; ``docker`` swaps in :class:`DockerRunner`
         # which mounts the cohort read-only inside a container with
@@ -1131,6 +1144,28 @@ class ResearchAgentPipeline:
             context=context,
         )
         findings.extend(figure_guard_findings)
+
+        # C1 (pilot 20260515 fix): cap initial plan size for the same
+        # reason the replanner is capped (see pipeline_execute.py).
+        # Truncation happens AFTER figure-step guard so a publication
+        # figure step is not accidentally dropped.
+        cap = self._max_total_steps
+        if cap > 0 and len(plan.steps) > cap:
+            dropped = [s.step_id for s in plan.steps[cap:]]
+            plan = plan.model_copy(update={"steps": list(plan.steps[:cap])})
+            findings.append(
+                ValidationFinding(
+                    validator="planner",
+                    severity="warning",
+                    message=(
+                        f"Initial plan had {len(dropped) + cap} steps; "
+                        f"truncated to max_total_steps={cap}. Dropped: "
+                        f"{', '.join(dropped[:6])}"
+                        + (" ..." if len(dropped) > 6 else "")
+                    ),
+                    detail={"dropped_step_ids": dropped, "cap": cap},
+                )
+            )
         plan_path = run_dir / "analysis_plan.json"
         plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
@@ -2726,6 +2761,13 @@ class ResearchAgentPipeline:
             else literature_provenance
         )
 
+        # C3 (pilot 20260515 fix): byte-identical findings recorded
+        # multiple times across steps that share the same flagged column
+        # get rolled up into a single entry with a ``duplicate_count``
+        # detail. Keeps the manifest, the bound report, and the reviewer
+        # prompt readable without losing audit information.
+        findings = dedupe_findings(findings)
+
         readiness, artifact_paths = write_readiness_artifacts(
             context=context,
             plan=plan,
@@ -3524,6 +3566,8 @@ class ResearchAgentPipeline:
         findings: List[ValidationFinding],
         reason: str,
     ) -> PipelineResult:
+        # C3: dedupe before any output uses the findings list.
+        findings = dedupe_findings(findings)
         report_path = run_dir / "results_report.md"
         report_path.write_text(
             render_report(
