@@ -2504,22 +2504,52 @@ class ConceptResolver:
                             _hd_files = _enumerate_bucket_parquet_files(bucket_dir)
                             if _hd_files:
                                 _hd_files_sql = "[" + ", ".join(f"'{f}'" for f in _hd_files) + "]"
-                                _hd_read_expr = f"read_parquet({_hd_files_sql}, union_by_name=true)"
+                                # Same bucket dir was produced by one converter run →
+                                # all parquet files share schema. Skip union_by_name=true
+                                # so DuckDB does not pre-sweep 81 files for schema
+                                # reconciliation on slow mounts (the dominant cost
+                                # on macfuse). Fallback below if schemas differ.
+                                _hd_read_expr_fast = f"read_parquet({_hd_files_sql})"
+                                _hd_read_expr_safe = f"read_parquet({_hd_files_sql}, union_by_name=true)"
                             else:
                                 _hd_glob = _duckdb_path(bucket_dir / 'bucket_id=*' / '*.parquet')
-                                _hd_read_expr = f"read_parquet('{_hd_glob}', union_by_name=true)"
+                                _hd_read_expr_fast = f"read_parquet('{_hd_glob}')"
+                                _hd_read_expr_safe = f"read_parquet('{_hd_glob}', union_by_name=true)"
                             src_ids = list(source.ids) if hasattr(source.ids, '__iter__') else [source.ids]
-                            ids_str = ', '.join(str(x) for x in src_ids)
-                            pids_str = ', '.join(str(p) for p in _query_pids)
-                            
-                            query = f"""
-                                SELECT patientid, MAX(datetime) as datetime
-                                FROM {_hd_read_expr}
-                                WHERE variableid IN ({ids_str})
-                                  AND patientid IN ({pids_str})
-                                GROUP BY patientid
+                            # Register dead-pid and variableid filters as DuckDB
+                            # views so the planner does a true semi-join instead
+                            # of an inline IN-list with thousands of literals
+                            # (which slowed query planning more than scanning).
+                            _hd_conn.register(
+                                "_hirid_death_pids",
+                                pd.DataFrame({"patientid": list(_query_pids)}),
+                            )
+                            _hd_conn.register(
+                                "_hirid_death_ids",
+                                pd.DataFrame({"variableid": list(src_ids)}),
+                            )
+                            _hd_query_tpl = """
+                                SELECT obs.patientid, MAX(obs.datetime) AS datetime
+                                FROM {read_expr} AS obs
+                                WHERE obs.variableid IN (SELECT variableid FROM _hirid_death_ids)
+                                  AND obs.patientid IN (SELECT patientid FROM _hirid_death_pids)
+                                GROUP BY obs.patientid
                             """
-                            frame = _hd_conn.execute(query).fetchdf()
+                            try:
+                                frame = _hd_conn.execute(
+                                    _hd_query_tpl.format(read_expr=_hd_read_expr_fast)
+                                ).fetchdf()
+                            except Exception as _hd_exc:
+                                if verbose:
+                                    print(
+                                        f"   ⚠️  hirid_death 快速路径 schema 不一致，回退 union_by_name: {_hd_exc}"
+                                    )
+                                frame = _hd_conn.execute(
+                                    _hd_query_tpl.format(read_expr=_hd_read_expr_safe)
+                                ).fetchdf()
+                            finally:
+                                _hd_conn.unregister("_hirid_death_pids")
+                                _hd_conn.unregister("_hirid_death_ids")
                             frame[concept_name] = True
                         else:
                             frame = pd.DataFrame(columns=['patientid', 'datetime', concept_name])

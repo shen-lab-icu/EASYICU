@@ -1506,4 +1506,45 @@ __all__ = [
     "PublicationClaimAuditor",
     "ClinicalConstraintValidator",
     "StatisticalGuard",
+    "dedupe_findings",
 ]
+
+
+def dedupe_findings(
+    findings: Sequence[ValidationFinding],
+) -> List[ValidationFinding]:
+    """Collapse byte-identical ``(validator, severity, message)`` findings.
+
+    The pilot run on 2026-05-15 surfaced the same
+    ``concept_usage_auditor`` message recorded 5 times in a single run
+    because step-level audits fire across every step that touches the
+    flagged column. The output reads like 5 separate problems when it
+    is one. This helper keeps the first occurrence (preserves order),
+    records the rolled-up count under ``detail['duplicate_count']``,
+    and merges ``evidence_ids`` across the collapsed group so no
+    reference is lost.
+
+    Findings that already declare a non-empty ``detail`` are still
+    merged: their detail is shallow-copied and the duplicate count
+    overwrites only the dedicated key.
+    """
+    seen: Dict[tuple, int] = {}
+    out: List[ValidationFinding] = []
+    for f in findings:
+        key = (f.validator, f.severity, f.message)
+        if key not in seen:
+            seen[key] = len(out)
+            out.append(f)
+            continue
+        idx = seen[key]
+        existing = out[idx]
+        new_detail: Dict[str, Any] = dict(existing.detail or {})
+        new_detail["duplicate_count"] = new_detail.get("duplicate_count", 1) + 1
+        merged_evidence = list(existing.evidence_ids)
+        for eid in f.evidence_ids:
+            if eid not in merged_evidence:
+                merged_evidence.append(eid)
+        out[idx] = existing.model_copy(
+            update={"detail": new_detail, "evidence_ids": merged_evidence},
+        )
+    return out

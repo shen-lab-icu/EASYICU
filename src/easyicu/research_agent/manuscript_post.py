@@ -179,6 +179,13 @@ _NUMERIC_BIND_SKIP_CONTEXTS = (
     re.compile(r"\{evidence:[^}]*\}"),
     re.compile(r"\[\^[A-Za-z0-9_]+\]"),
     re.compile(r"#+\s.*"),
+    # D1 (pilot 20260515 fix): after sentence-level evidence binding,
+    # every {evidence:foo} becomes ``[label](evidence/foo.json
+    # "sha256=DEADBEEF")``. The sha256 prefix matches the numeric
+    # regex's exponent branch (``273e4341`` reads as ``273 * 10^4341``).
+    # Skip the whole Markdown link target — href + title attribute —
+    # so binder never sees those characters.
+    re.compile(r"\(evidence/[^)]*\)"),
 )
 
 
