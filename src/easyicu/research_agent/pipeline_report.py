@@ -60,10 +60,17 @@ def execution_gate_status(
             "failed_steps": [{"step_id": "plan", "status": "not_available"}],
         }
     required_step_ids = [s.step_id for s in (plan.steps if plan is not None else [])]
+    # 🔧 2026-05-16: previously this dict excluded `00_probe` records on the
+    # assumption the planner never lists it. But the planner *does* sometimes
+    # include `00_probe` in the published plan, and a deterministic probe
+    # record is appended to per_step_records with status='ok' from
+    # pipeline_execute._build_probe_summary. Excluding it here made the gate
+    # mis-report `00_probe` as a permanently-missing required step. Surfacing
+    # the deterministic probe record fixes the false negative.
     status_by_step = {
         str(record.get("step_id")): str(record.get("status") or "")
         for record in per_step_records
-        if record.get("step_id") and record.get("step_id") != "00_probe"
+        if record.get("step_id")
     }
     missing_steps = [step_id for step_id in required_step_ids if step_id not in status_by_step]
     failed_steps = [

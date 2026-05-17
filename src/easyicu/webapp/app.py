@@ -30,6 +30,7 @@ import numpy as np
 import os
 import json
 import html
+import logging
 import re
 import threading
 import base64
@@ -82,7 +83,6 @@ from easyicu.webapp.data_workflows import (
 from easyicu.webapp.conversion_workflow import (
     render_convert_dialog as _render_convert_dialog_impl,
     convert_csv_to_parquet as _convert_csv_to_parquet_impl,
-    _convert_hirid_data as _convert_hirid_data_impl,
 )
 from easyicu.webapp.paper_figures import (
     render_publication_composite_figure as _render_publication_composite_figure_impl,
@@ -160,6 +160,7 @@ from easyicu.webapp.cohort_workspace import (
     _ensure_cohort_demo_workspace,
     _ensure_cohort_figure_demo_data,
     _ensure_cohort_real_workspace,
+    _ensure_cohort_real_workspace_from_loaded_concepts,
 )
 from easyicu.webapp.concept_catalog import (
     CLINICAL_LANES,
@@ -2047,11 +2048,30 @@ def render_cohort_comparison_page():
             _render_cohort_demo_workspace_status(lang)
 
     elif st.session_state.get('entry_mode') == 'real':
+        # Two valid sources for the shared workspace:
+        #   1. A sidebar-validated raw ICU data root (icustays/patients/...)
+        #      — feeds all 5 panels including Cross-DB Benchmark.
+        #   2. Module exports already loaded via Quick Visualization
+        #      (state['loaded_concepts']) — feeds Group Contrast / Coverage /
+        #      Snapshot / SOFA Δ. Cross-DB still needs ≥2 DBs' raw schema.
+        # Gate only when neither is available; otherwise let the launcher
+        # offer the matching one-click prep.
+        _real_data_path = _default_real_data_root()
+        _has_raw_path = bool(_real_data_path) and Path(_real_data_path).exists()
+        _has_loaded_exports = bool(st.session_state.get('loaded_concepts'))
+        if not _has_raw_path and not _has_loaded_exports:
+            if not screenshot_mode:
+                _render_cohort_real_no_path_guide(lang)
+                return
+
         # Real data: offer a one-click shared workspace without hiding the
         # original panel-level raw/exported-data import flows.
         if not _cohort_real_workspace_ready(st.session_state):
             if not screenshot_mode:
-                _render_cohort_real_workspace_launcher(lang)
+                if _has_raw_path:
+                    _render_cohort_real_workspace_launcher(lang)
+                else:
+                    _render_cohort_real_loaded_exports_launcher(lang)
         else:
             if not _cohort_real_workspace_matches_sidebar(st.session_state):
                 # Sidebar path changed since last workspace load
@@ -2110,6 +2130,66 @@ def _render_demo_generation_card(icon: str, title: str, desc: str):
         ''',
         unsafe_allow_html=True,
     )
+
+
+def _render_cohort_real_no_path_guide(lang: str) -> None:
+    """Single guide for Cohort Analysis (real mode) before a data path is validated.
+
+    Replaces what used to be a contradictory mix of a "go to Step 1" banner
+    plus fully-rendered sub-tabs and per-panel Data Configuration forms.
+
+    When module exports have already been loaded via Quick Visualization, the
+    guide explicitly acknowledges that state instead of contradicting the
+    "Data Loaded" footer — Cohort Analysis still needs the raw DB schema
+    (icustays/patients/admissions), which exports don't carry.
+    """
+    loaded_concepts = st.session_state.get('loaded_concepts') or {}
+    n_concepts = len(loaded_concepts)
+    n_patients = len(st.session_state.get('patient_ids') or [])
+    has_exports = n_concepts > 0 and n_patients > 0
+
+    if has_exports:
+        if lang == 'en':
+            title = "Cohort Analysis needs the raw database schema"
+            desc = (
+                f"You already have <b>{n_concepts} concepts × {n_patients} patients</b> "
+                "loaded from module exports — those power <b>Quick Visualization</b> "
+                "(tables, time series, patient overview, data quality) and "
+                "<b>Research Agent</b>.<br><br>"
+                "The Cohort Analysis panels (Group Contrast, Coverage, Cross-DB, "
+                "Snapshot, SOFA Δ) read <code>icustays</code> / <code>patients</code> / "
+                "<code>admissions</code> directly, so they require a converted raw "
+                "ICU root. Use <b>🔄 Convert &amp; Setup</b> in the sidebar to "
+                "convert raw CSV/CSV.GZ/tar.gz inputs into the expected layout, "
+                "or point <b>Step 1 · Data Source</b> at an already-converted root."
+            )
+        else:
+            title = "队列分析需要原始数据库 schema"
+            desc = (
+                f"你已经从导出模块加载了 <b>{n_concepts} 个概念 × {n_patients} 个患者</b>"
+                "——这些数据可在 <b>Quick Visualization</b>（表格、时间序列、患者概览、"
+                "数据质量）和 <b>Research Agent</b> 中使用。<br><br>"
+                "Cohort Analysis 的各个面板（分组对比、覆盖度、跨库、快照、SOFA Δ）"
+                "直接读取 <code>icustays</code> / <code>patients</code> / "
+                "<code>admissions</code> 表，因此需要一个已转换的原始 ICU 数据根。"
+                "请在侧边栏使用 <b>🔄 Convert &amp; Setup</b> 把原始 "
+                "CSV/CSV.GZ/tar.gz 转换成所需布局，或让 <b>步骤 1 · 数据源</b> "
+                "指向一个已转换好的目录。"
+            )
+        _render_demo_generation_card("🔄", title, desc)
+        return
+
+    if lang == 'en':
+        title = "Validate a data path first"
+        desc = ("Cohort Analysis needs a real ICU database. Open "
+                "<b>Step 1 · Data Source</b> in the sidebar, enter your ICU data "
+                "root and validate it — all cohort panels unlock once the path "
+                "is confirmed.")
+    else:
+        title = "请先验证数据路径"
+        desc = ("队列分析需要真实 ICU 数据库。请在侧边栏打开 <b>步骤 1 · 数据源</b>，"
+                "填入 ICU 数据根目录并完成验证——路径确认后所有队列面板会自动解锁。")
+    _render_demo_generation_card("📁", title, desc)
 
 
 def _render_cohort_demo_workspace_status(lang: str) -> None:
@@ -2224,35 +2304,13 @@ def render_convert_dialog():
 
 def convert_csv_to_parquet(
     source_dir: str,
-    target_dir: str,
     overwrite: bool = False,
-    extraction_optimized_buckets: bool = False,
 ) -> tuple:
-    """将 CSV 数据转换为 Parquet。"""
+    """将 CSV 数据转换为 Parquet（含 HiRID 归档解压，统一走 DataConverter）。"""
     return _convert_csv_to_parquet_impl(
         source_dir,
-        target_dir,
         overwrite,
         globals(),
-        extraction_optimized_buckets=extraction_optimized_buckets,
-    )
-
-
-
-
-def _convert_hirid_data(
-    source_dir: str,
-    target_dir: str,
-    overwrite: bool = False,
-    extraction_optimized_buckets: bool = False,
-) -> tuple:
-    """转换 HiRID 数据。"""
-    return _convert_hirid_data_impl(
-        source_dir,
-        target_dir,
-        overwrite,
-        globals(),
-        extraction_optimized_buckets=extraction_optimized_buckets,
     )
 
 
@@ -2472,6 +2530,73 @@ def _render_cohort_real_workspace_launcher(lang: str) -> None:
                 st.error(f"❌ {msg}")
 
 
+def _render_cohort_real_loaded_exports_launcher(lang: str) -> None:
+    """Offer a one-click bridge from already-loaded module exports to the
+    shared Cohort Analysis workspace.
+
+    Shown only when the sidebar Data Path is NOT validated but
+    ``state['loaded_concepts']`` is non-empty (the user came in via Quick
+    Visualization's "Previously Exported Data" path). Backs the bridge with
+    :func:`_ensure_cohort_real_workspace_from_loaded_concepts`. Cross-DB
+    Benchmark is intentionally left gated because it needs raw schema of
+    multiple databases — exports of one DB can't fake the others.
+    """
+    n_concepts = len(st.session_state.get('loaded_concepts') or {})
+    n_patients = len(st.session_state.get('patient_ids') or [])
+    db = st.session_state.get('database') or _default_real_database()
+    db_labels = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
+    db_label = db_labels.get(db, db)
+
+    if lang == 'en':
+        title = "Use loaded module exports for Cohort Analysis"
+        subtitle = (
+            f"Bridge the <b>{n_concepts} concepts × {n_patients} patients</b> already "
+            f"loaded for <b>{db_label}</b> into Group Contrast, Coverage, Cohort Snapshot, "
+            "and SOFA Δ. Cross-DB Benchmark stays gated — it needs raw schema for ≥2 databases."
+        )
+        button_label = "🚀 Build workspace from loaded exports"
+        status_chip = "exports shortcut"
+    else:
+        title = "用已加载的模块导出运行队列分析"
+        subtitle = (
+            f"将已为 <b>{db_label}</b> 加载的 <b>{n_concepts} 个概念 × {n_patients} 个患者</b>"
+            "桥接到 分组对比、覆盖度、队列快照、SOFA Δ 面板。"
+            "跨库面板仍需要原始 schema（至少两个数据库），保持待解锁。"
+        )
+        button_label = "🚀 用已加载导出构建工作区"
+        status_chip = "导出快捷"
+
+    st.markdown(
+        f'''
+        <div class="cohort-demo-workspace">
+            <div class="cohort-demo-badge" style="background:linear-gradient(135deg,#0891b2 0%,#7c3aed 100%)">E</div>
+            <div>
+                <div class="cohort-demo-title">{html.escape(title)}</div>
+                <div class="cohort-demo-subtitle">{subtitle}</div>
+            </div>
+            <div class="cohort-demo-status" style="color:#0891b2">{html.escape(status_chip)}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+    if st.button(
+        button_label,
+        type="primary",
+        use_container_width=True,
+        key="cohort_real_exports_bridge",
+    ):
+        with st.spinner("Bridging exports..." if lang == 'en' else "正在桥接导出数据..."):
+            ok, msg = _ensure_cohort_real_workspace_from_loaded_concepts(
+                st.session_state, lang=lang,
+            )
+        if ok:
+            st.success(f"✅ {msg}")
+            st.rerun()
+        else:
+            st.error(f"❌ {msg}")
+
+
 def _render_cohort_real_workspace_status(lang: str) -> None:
     """Render one shared real-data workspace status strip for all Cohort Analysis panels."""
     state = st.session_state
@@ -2481,13 +2606,28 @@ def _render_cohort_real_workspace_status(lang: str) -> None:
     n = len(state.get('_cohort_real_ws_demographics', []))
     n_concepts = len(state.get('_cohort_real_ws_concepts', {}))
     errors = state.get('_cohort_real_ws_errors', [])
+    is_exports = state.get('_cohort_real_ws_origin') == 'loaded_exports'
 
-    title = f"Shared real-data workspace — {db_label}" if lang == 'en' else f"共享真实数据工作区 — {db_label}"
-    subtitle = (
-        f"{n:,} patients, {n_concepts} concepts loaded. All subpanels share this data."
-        if lang == 'en' else
-        f"已加载 {n:,} 名患者、{n_concepts} 个概念。所有子面板共用此数据。"
-    )
+    if is_exports:
+        title = (
+            f"Shared workspace from module exports — {db_label}"
+            if lang == 'en' else
+            f"基于模块导出的共享工作区 — {db_label}"
+        )
+        subtitle = (
+            f"{n:,} patients, {n_concepts} concepts bridged from loaded exports. "
+            "Cross-DB Benchmark stays gated (needs raw schema for ≥2 DBs)."
+            if lang == 'en' else
+            f"已从导出文件桥接 {n:,} 名患者、{n_concepts} 个概念。"
+            "跨库面板仍待解锁（需要至少两个数据库的原始 schema）。"
+        )
+    else:
+        title = f"Shared real-data workspace — {db_label}" if lang == 'en' else f"共享真实数据工作区 — {db_label}"
+        subtitle = (
+            f"{n:,} patients, {n_concepts} concepts loaded. All subpanels share this data."
+            if lang == 'en' else
+            f"已加载 {n:,} 名患者、{n_concepts} 个概念。所有子面板共用此数据。"
+        )
     status = f"✓ Ready" if lang == 'en' else f"✓ 就绪"
     warn_html = ""
     if errors:
@@ -2515,11 +2655,16 @@ def _render_cohort_real_workspace_status(lang: str) -> None:
             key="cohort_real_workspace_reload",
         ):
             with st.spinner("Reloading..." if lang == 'en' else "正在重新加载..."):
-                ok, msg = _ensure_cohort_real_workspace(
-                    st.session_state, lang=lang,
-                    max_patients=state.get('_cohort_real_ws_max_patients', _REAL_WORKSPACE_DEFAULT_MAX_PATIENTS),
-                    force=True,
-                )
+                if is_exports:
+                    ok, msg = _ensure_cohort_real_workspace_from_loaded_concepts(
+                        st.session_state, lang=lang,
+                    )
+                else:
+                    ok, msg = _ensure_cohort_real_workspace(
+                        st.session_state, lang=lang,
+                        max_patients=state.get('_cohort_real_ws_max_patients', _REAL_WORKSPACE_DEFAULT_MAX_PATIENTS),
+                        force=True,
+                    )
             if ok:
                 st.success(f"✅ {msg}")
             else:
@@ -2788,20 +2933,51 @@ def main():
     )
 
     page_registry = build_main_page_registry(get_text)
-    page_tabs = dict(zip(
-        [page["key"] for page in page_registry],
-        st.tabs([page["label"] for page in page_registry]),
-    ))
-    tab1 = page_tabs["tutorial"]
-    tab2 = page_tabs["quick_viz"]
-    tab3 = page_tabs["cohort"]
-    tab_research_agent = page_tabs["research_agent"]
+    page_keys = [page["key"] for page in page_registry]
+    page_labels = {page["key"]: page["label"] for page in page_registry}
 
-    with tab1:
+    # Resolve any pending navigation request (set by "Go to ..." buttons,
+    # the sidebar, or the AI dock) into the active main page. This replaces
+    # the previous JS-injection tab switching, which depended on Streamlit's
+    # internal DOM and silently failed.
+    _nav_request = st.session_state.pop('_scroll_to_tab', None)
+    _nav_page_map = {
+        'viz': 'quick_viz',
+        'tutorial': 'tutorial',
+        'cohort': 'cohort',
+        'research_agent': 'research_agent',
+        'export_progress': 'tutorial',
+        'home_dict': 'tutorial',
+    }
+    if _nav_request == 'ai_assistant':
+        if not _is_screenshot_mode():
+            st.session_state['_floating_ai_open'] = True
+    elif _nav_request in _nav_page_map:
+        st.session_state['_active_main_page'] = _nav_page_map[_nav_request]
+
+    if st.session_state.get('_active_main_page') not in page_keys:
+        st.session_state['_active_main_page'] = page_keys[0]
+
+    # st.radio always keeps exactly one selection (never None) and its value
+    # can be steered programmatically by writing the key before this call,
+    # which is what makes the "Go to ..." buttons reliable. The container key
+    # scopes the segmented-bar CSS (styles.py) to this radio only.
+    with st.container(key="main_nav_bar"):
+        st.radio(
+            "Main navigation",
+            options=page_keys,
+            format_func=lambda key: page_labels.get(key, key),
+            horizontal=True,
+            label_visibility='collapsed',
+            key='_active_main_page',
+        )
+    active_page = st.session_state['_active_main_page']
+
+    if active_page == "tutorial":
         render_home()
         _render_feature_definition_panel(lang)
 
-    with tab2:
+    elif active_page == "quick_viz":
         if export_in_progress:
             export_hold_msg = (
                 "⏳ Export in progress. Preview charts are temporarily paused to avoid preview-state conflicts during full extraction."
@@ -2899,7 +3075,7 @@ def main():
 
             render_quick_visualization_page()
 
-    with tab3:
+    elif active_page == "cohort":
         if export_in_progress:
             export_hold_msg = (
                 "⏳ Export in progress. Cohort analysis views are temporarily paused until extraction finishes."
@@ -2910,7 +3086,7 @@ def main():
         else:
             render_cohort_comparison_page()
 
-    with tab_research_agent:
+    elif active_page == "research_agent":
         # T1.7 — embed the ICU-aware research-agent page so reviewers can
         # run the full pipeline end-to-end (cohort → plan → code → run →
         # validators → bound manuscript) from the webapp without a
@@ -2989,7 +3165,6 @@ def main():
                 loaded_concepts = st.session_state.get('loaded_concepts', {})
                 if loaded_concepts:
                     st.session_state.selected_concepts = list(loaded_concepts.keys())
-                    print(f"[DEBUG] main(): Auto-set selected_concepts from loaded_concepts: {len(st.session_state.selected_concepts)} concepts")
 
             # 🔧 只有在有选择的概念时才执行导出
             if st.session_state.get('selected_concepts'):
@@ -3019,211 +3194,16 @@ def main():
                 st.error(f"❌ 导出失败: {e}")
             st.session_state['_exporting_in_progress'] = False
 
-    # 🆕 处理页面跳转请求 - 在渲染完成后执行 JavaScript
-    scroll_to_tab, scroll_to_top = app_state.clear_navigation_request()
-
-    if scroll_to_tab == 'viz':
-        # 跳转到 Quick Visualization 标签页（第2个标签，索引1）并滚动到顶部
-        js_code = '''
-        <script>
-            (function() {
-                // 滚动到页面顶部
-                var mainContainer = window.parent.document.querySelector('section.main');
-                if (mainContainer) mainContainer.scrollTop = 0;
-                window.parent.document.documentElement.scrollTop = 0;
-                window.parent.document.body.scrollTop = 0;
-
-                // 点击第二个标签页
-                setTimeout(function() {
-                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
-                    if (tabs && tabs.length >= 2) {
-                        tabs[1].click();
-                        // 再次滚动确保在顶部
-                        setTimeout(function() {
-                            var mainContainer = window.parent.document.querySelector('section.main');
-                            if (mainContainer) mainContainer.scrollTop = 0;
-                            window.parent.document.documentElement.scrollTop = 0;
-                        }, 100);
-                    }
-                }, 200);
-            })();
-        </script>
-        '''
-        st.components.v1.html(js_code, height=0)
-    elif scroll_to_tab == 'tutorial':
-        # 跳转到 Tutorial 标签页（第1个标签，索引0）并滚动到顶部
-        js_code = '''
-        <script>
-            (function() {
-                var mainContainer = window.parent.document.querySelector('section.main');
-                if (mainContainer) mainContainer.scrollTop = 0;
-                window.parent.document.documentElement.scrollTop = 0;
-                window.parent.document.body.scrollTop = 0;
-
-                setTimeout(function() {
-                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
-                    if (tabs && tabs.length >= 1) {
-                        tabs[0].click();
-                        setTimeout(function() {
-                            var mainContainer = window.parent.document.querySelector('section.main');
-                            if (mainContainer) mainContainer.scrollTop = 0;
-                            window.parent.document.documentElement.scrollTop = 0;
-                        }, 120);
-                    }
-                }, 200);
-            })();
-        </script>
-        '''
-        st.components.v1.html(js_code, height=0)
-    elif scroll_to_tab == 'export_progress':
-        # 跳转到 Tutorial 标签页并滚动到导出进度锚点
-        js_code = '''
-        <script>
-            (function() {
-                function scrollToExportProgress() {
-                    var doc = window.parent.document;
-                    var anchor = doc.getElementById('export-progress');
-                    if (anchor) {
-                        anchor.scrollIntoView({behavior: 'smooth', block: 'start'});
-                        return true;
-                    }
-                    var headings = Array.from(doc.querySelectorAll('h1, h2, h3, div, p, span'));
-                    var target = headings.find(function(node) {
-                        var text = (node.innerText || node.textContent || '').trim();
-                        return text === '📤 Export Progress' || text === '📤 导出进度';
-                    });
-                    if (target) {
-                        target.scrollIntoView({behavior: 'smooth', block: 'start'});
-                        return true;
-                    }
-                    return false;
-                }
-
-                setTimeout(function() {
-                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
-                    if (tabs && tabs.length >= 1) {
-                        tabs[0].click();
-                        setTimeout(scrollToExportProgress, 120);
-                        setTimeout(scrollToExportProgress, 500);
-                        setTimeout(scrollToExportProgress, 1200);
-                    }
-                }, 150);
-            })();
-        </script>
-        '''
-        st.components.v1.html(js_code, height=0)
-    elif scroll_to_tab == 'home_dict':
-        # 跳转到 Tutorial 标签页并滚动到数据字典锚点
-        js_code = '''
-        <script>
-            (function() {
-                function scrollToDictionary() {
-                    var mainDoc = window.parent.document;
-                    var mainContainer = mainDoc.querySelector('section.main');
-                    var dictAnchor = mainDoc.getElementById('dictionary');
-                    if (dictAnchor) {
-                        dictAnchor.scrollIntoView({behavior: 'smooth', block: 'start'});
-                        return true;
-                    }
-
-                    var headings = Array.from(mainDoc.querySelectorAll('h1, h2, h3, div, p, span'));
-                    var dictHeading = headings.find(function(node) {
-                        var text = (node.innerText || node.textContent || '').trim();
-                        return text === '📖 Data Dictionary' ||
-                               text === '📖 数据字典' ||
-                               text === '📖 Complete Data Dictionary' ||
-                               text === '📖 完整数据字典';
-                    });
-                    if (dictHeading) {
-                        dictHeading.scrollIntoView({behavior: 'smooth', block: 'start'});
-                        return true;
-                    }
-
-                    if (mainContainer) {
-                        mainContainer.scrollTop = Math.max(mainContainer.scrollTop, 1800);
-                    }
-                    return false;
-                }
-
-                setTimeout(function() {
-                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
-                    if (tabs && tabs.length >= 1) {
-                        tabs[0].click();
-                        setTimeout(function() {
-                            if (!scrollToDictionary()) {
-                                setTimeout(scrollToDictionary, 300);
-                                setTimeout(scrollToDictionary, 700);
-                            }
-                        }, 300);
-                    }
-                }, 200);
-            })();
-        </script>
-        '''
-        st.components.v1.html(js_code, height=0)
-    elif scroll_to_tab == 'cohort':
-        # 跳转到 Cohort Analysis 标签页（第3个标签，索引2）并滚动到顶部
-        js_code = '''
-        <script>
-            (function() {
-                var mainContainer = window.parent.document.querySelector('section.main');
-                if (mainContainer) mainContainer.scrollTop = 0;
-                window.parent.document.documentElement.scrollTop = 0;
-                window.parent.document.body.scrollTop = 0;
-
-                setTimeout(function() {
-                    var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
-                    if (tabs && tabs.length >= 3) {
-                        tabs[2].click();
-                        setTimeout(function() {
-                            var mainContainer = window.parent.document.querySelector('section.main');
-                            if (mainContainer) mainContainer.scrollTop = 0;
-                            window.parent.document.documentElement.scrollTop = 0;
-                        }, 100);
-                    }
-                }, 200);
-            })();
-        </script>
-        '''
-        st.components.v1.html(js_code, height=0)
-    elif scroll_to_tab == 'ai_assistant':
-        if not _is_screenshot_mode():
-            st.session_state['_floating_ai_open'] = True
+    # Page navigation now happens via the segmented_control above. Only the
+    # scroll-to-top request still needs a small script — and this one does not
+    # depend on Streamlit's internal DOM structure.
+    if st.session_state.pop('_scroll_to_top', False):
         st.components.v1.html(
-            '''
-            <script>
-                (function() {
-                    var mainContainer = window.parent.document.querySelector('section.main');
-                    if (mainContainer) mainContainer.scrollTop = 0;
-                    window.parent.document.documentElement.scrollTop = 0;
-                    window.parent.document.body.scrollTop = 0;
-                })();
-            </script>
-            ''',
+            "<script>window.parent.scrollTo({top:0});"
+            "window.parent.document.querySelector('section.main')"
+            "?.scrollTo({top:0});</script>",
             height=0,
         )
-    elif scroll_to_top:
-        # 滚动到页面最顶部
-        js_code = '''
-        <script>
-            (function() {
-                // 尝试多种滚动方式确保生效
-                var mainContainer = window.parent.document.querySelector('section.main');
-                if (mainContainer) mainContainer.scrollTop = 0;
-                window.parent.document.documentElement.scrollTop = 0;
-                window.parent.document.body.scrollTop = 0;
-
-                // 延迟再次滚动以确保页面完全加载后也在顶部
-                setTimeout(function() {
-                    var mainContainer = window.parent.document.querySelector('section.main');
-                    if (mainContainer) mainContainer.scrollTop = 0;
-                    window.parent.document.documentElement.scrollTop = 0;
-                    window.parent.document.body.scrollTop = 0;
-                }, 100);
-            })();
-        </script>
-        '''
-        st.components.v1.html(js_code, height=0)
 
     _render_figure_target_jump_script()
 
@@ -3232,7 +3212,9 @@ def main():
             from easyicu.webapp.llm_chat import render_floating_chat_dock
             render_floating_chat_dock()
         except Exception:
-            pass
+            logging.getLogger(__name__).warning(
+                "Floating chat dock failed to render", exc_info=True
+            )
 
     if not _is_screenshot_mode():
         # 底部状态栏

@@ -464,11 +464,23 @@ def expand(
             raise ValueError(f"End variable '{end_var}' not found in data")
         
         end_col = end_var
-        
-        # Filter valid rows (non-NA, start <= end)
-        valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
+
+        # 🔧 FIX 2026-05-16: when start is numeric (hours/minutes since admission)
+        # but end happens to be datetime (e.g. mimic delirium_tx endtime keeps the
+        # raw datetime from inputevents while charttime got time-aligned), drop to
+        # an NA-only filter to avoid a numeric-vs-datetime TypeError. The expand
+        # below still bounds-checks per-row.
+        try:
+            valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
+        except (TypeError, ValueError) as _cmp_err:
+            import logging as _ts_log
+            _ts_log.getLogger(__name__).debug(
+                f"expand() numeric-branch comparison fallback: {_cmp_err} "
+                f"(start={data[start_var].dtype}, end={data[end_col].dtype})"
+            )
+            valid_mask = data[start_var].notna() & data[end_col].notna()
         valid_data = data[valid_mask].copy()
-        
+
         if len(valid_data) == 0:
             result_cols = [start_var] + id_cols + keep_vars
             return pd.DataFrame(columns=result_cols)
@@ -515,9 +527,16 @@ def expand(
         # seq(start, end, step) = [start, start+step, ..., start+n*step]
         # where start + n*step <= end and start + (n+1)*step > end
         # So n = floor((end - start) / step), and count = n + 1
-        diff = end_values - start_values
-        counts = np.floor(diff / step_val).astype(int) + 1
-        counts = np.maximum(counts, 1)  # 🔧 FIX: R seq() always returns at least 1 value when start <= end
+        # 🔧 FIX 2026-05-16: end_values may be datetime while start_values is float
+        # (e.g. mimic delirium_tx where charttime got time-aligned to hours but
+        # endtime kept the raw datetime). The numeric path can't span both — fall
+        # back to count=1 (single-point expansion) so we still produce a result.
+        try:
+            diff = end_values - start_values
+            counts = np.floor(diff / step_val).astype(int) + 1
+            counts = np.maximum(counts, 1)
+        except Exception:
+            counts = np.ones(len(start_values), dtype=int)
         
         # Filter out rows with 0 counts
         row_mask = counts > 0
@@ -601,11 +620,34 @@ def expand(
         end_col = '_end_abs'
     else:
         if not pd.api.types.is_datetime64_any_dtype(data[end_var]):
-            data[end_var] = pd.to_datetime(data[end_var])
+            data[end_var] = pd.to_datetime(data[end_var], errors='coerce')
         end_col = end_var
-    
-    # Filter valid rows (non-NA, start <= end)
-    valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
+
+    # 🔧 FIX 2026-05-16: unconditionally pin both sides to datetime64[ns]. Mixing
+    # datetime64[us] (DuckDB / pyarrow default) with datetime64[ns] (pandas default)
+    # raises "Invalid comparison between dtype=datetime64[us] and ndarray" because
+    # pandas internally falls back to numpy ndarray and refuses the comparison.
+    # Reproduces on mimic delirium_tx (charttime us-precision, endtime ns-precision).
+    try:
+        data[start_var] = pd.to_datetime(data[start_var], errors='coerce').astype('datetime64[ns]')
+    except Exception:
+        pass
+    try:
+        data[end_col] = pd.to_datetime(data[end_col], errors='coerce').astype('datetime64[ns]')
+    except Exception:
+        pass
+
+    # Filter valid rows (non-NA, start <= end). Guard with try/except — if the
+    # comparison still fails (e.g. mixed object dtypes), fall back to a NA-only
+    # mask so the caller can still produce a result rather than skipping expansion.
+    try:
+        valid_mask = data[start_var].notna() & data[end_col].notna() & (data[start_var] <= data[end_col])
+    except (TypeError, ValueError) as _cmp_err:
+        import logging as _ts_log
+        _ts_log.getLogger(__name__).debug(
+            f"expand() comparison fallback: {_cmp_err} (start={data[start_var].dtype}, end={data[end_col].dtype})"
+        )
+        valid_mask = data[start_var].notna() & data[end_col].notna()
     valid_data = data[valid_mask].copy()
     
     if len(valid_data) == 0:

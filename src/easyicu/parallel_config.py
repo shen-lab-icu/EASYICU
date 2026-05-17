@@ -140,13 +140,18 @@ def get_parallel_config(
         total_mem = override_memory_gb
         available_mem = override_memory_gb * 0.7  # 假设70%可用
     
-    # 计算并行策略
-    # 基于内存的策略（保守估计，每个并行任务需要约2GB内存）
-    memory_based_workers = max(1, int(available_mem / 2))
-    
+    # 🚀 perf B6: parallel_config is cached globally on first import. If
+    # the host happens to be under memory pressure when easyicu first
+    # loads (e.g. concurrent data conversion is running), the original
+    # formula `available_mem / 2` permanently capped workers to 1 for
+    # the rest of the run. Floor available memory at half of total so a
+    # transient low-availability moment doesn't poison the whole session.
+    effective_mem_for_sizing = max(available_mem, total_mem * 0.5)
+    memory_based_workers = max(1, int(effective_mem_for_sizing / 2))
+
     # 基于CPU的策略（不超过CPU核心数的一半，避免过度竞争）
     cpu_based_workers = max(1, cpu_count // 2)
-    
+
     # 取较小值，确保不会OOM
     max_workers = min(memory_based_workers, cpu_based_workers)
     

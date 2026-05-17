@@ -308,9 +308,14 @@ def create_full_distribution_figure(
     fig.update_layout(
         height=280 * rows,
         width=1400,
-        title_text="Multi-Database Feature Distribution Comparison",
-        title_x=0.5,
-        title_font_size=20,
+        title=dict(
+            text="Multi-Database Feature Distribution Comparison",
+            x=0.5,
+            xanchor="center",
+            y=0.985,
+            yanchor="top",
+            font=dict(size=20),
+        ),
         showlegend=True,
         legend=dict(
             orientation="h",
@@ -320,7 +325,7 @@ def create_full_distribution_figure(
             x=0.5,
             font=dict(size=12),
         ),
-        margin=dict(t=100, b=50, l=50, r=50),
+        margin=dict(t=140, b=50, l=50, r=50),
     )
     
     # 更新子图标题字体大小

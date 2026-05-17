@@ -24,6 +24,19 @@ EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It prov
 
 ## Start Here
 
+### Quick Lookup: "I want to ... → run ..."
+
+| Goal | Entry point |
+|------|-------------|
+| Validate data / define cohorts / export features without writing Python | **Web app** — `easyicu-webapp` *(or `./start_easyicu.sh` / `start_easyicu.command`)* — see **Path A** |
+| Build a reproducible extraction or feature pipeline in Python | **Python API** — `import easyicu` — see **Path B** |
+| Extract features via CLI (scripted, no UI) | `easyicu` (the `extract_features` console script) |
+| Run the research-agent on a question + cohort | `easyicu-research-agent` |
+| Reproduce an external paper through the agent | `easyicu-research-replication` |
+| Host the LLM proxy used by the research-agent | `easyicu-llm-server` |
+
+All console scripts are declared in `pyproject.toml` under `[project.scripts]` and become available after `pip install -e ".[dev,webapp]"` (or `".[all]"`).
+
 ### Path A: Web Interface
 
 Choose this path if you want to:

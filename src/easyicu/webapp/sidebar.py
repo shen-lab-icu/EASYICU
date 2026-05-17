@@ -955,8 +955,21 @@ def _render_step3_concept_selection(concept_groups: dict[str, list[str]]) -> lis
     if st.session_state.selected_groups:
         import hashlib
 
-        detail_label = "🎯 Feature Detail Configuration" if st.session_state.language == 'en' else "🎯 特征详细配置"
-        with st.expander(detail_label, expanded=True):
+        _detail_concept_count = sum(
+            len(concept_groups.get(g, []))
+            for g in st.session_state.selected_groups
+            if g in concept_groups
+        )
+        detail_label = (
+            f"🎯 Feature Detail Configuration ({_detail_concept_count})"
+            if st.session_state.language == 'en'
+            else f"🎯 特征详细配置（{_detail_concept_count}）"
+        )
+        # Collapsed by default: with all categories selected this expander
+        # holds hundreds of checkboxes and would otherwise dominate the sidebar.
+        # It is an advanced step (de-selecting individual concepts) — the
+        # category chips above already cover the common case.
+        with st.expander(detail_label, expanded=False):
             for group_name in st.session_state.selected_groups:
                 if group_name not in concept_groups:
                     continue

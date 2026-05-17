@@ -1100,6 +1100,66 @@ def _deterministic_runner_repair(
     )
     # NOTE: generic fallback moved to end of function so specific repairs have priority
 
+    # 🔧 2026-05-17: defend against LLM hallucinating non-existent easyicu
+    # sub-modules (e.g. deepseek-v4-flash emitted
+    # `from easyicu.research_agent.rcs import restricted_cubic_spline`,
+    # killing pilot run_20260516T182501_329a01 step 03). Detect the runtime
+    # ModuleNotFoundError, strip the bad import lines, and stub each
+    # imported name with a clear NotImplementedError so the next repair
+    # attempt has actionable diagnostics instead of the same import error.
+    _fake_easyicu_match = re.search(
+        r"ModuleNotFoundError: No module named ['\"](easyicu\.[\w\.]+)['\"]",
+        run_log or "",
+    )
+    if _fake_easyicu_match:
+        bad_module = _fake_easyicu_match.group(1)
+        repair_name = f"strip_fake_easyicu_import_{bad_module.replace('.', '_')}_v1"
+        if previous_repair != repair_name:
+            stripped_names: list[str] = []
+            _line_re = re.compile(
+                r"^\s*from\s+" + re.escape(bad_module) + r"\s+import\s+(.+?)\s*(?:#.*)?$",
+                re.MULTILINE,
+            )
+            for _match in _line_re.finditer(code):
+                for _name in _match.group(1).split(","):
+                    _name = _name.strip()
+                    if _name and not _name.startswith("("):
+                        # Handle `import X as Y` aliases
+                        _final = _name.split(" as ")[-1].strip().rstrip(")")
+                        if _final.isidentifier():
+                            stripped_names.append(_final)
+            if stripped_names:
+                # Remove all matching import lines
+                repaired = _line_re.sub(
+                    f"# stripped: import from non-existent {bad_module}",
+                    code,
+                )
+                # Also remove `import easyicu.research_agent.X` style
+                repaired = re.sub(
+                    r"^\s*import\s+" + re.escape(bad_module) + r"\s*$",
+                    f"# stripped: import {bad_module}",
+                    repaired,
+                    flags=re.MULTILINE,
+                )
+                # Inject stubs after the import block (top of file)
+                _stub_lines = "\n".join(
+                    f"def {n}(*args, **kwargs): "
+                    f"raise NotImplementedError("
+                    f"\"{n} from {bad_module} is not available; "
+                    f"reimplement inline using numpy/scipy/statsmodels.\")"
+                    for n in dict.fromkeys(stripped_names)
+                )
+                # Insert after the first contiguous block of imports
+                lines = repaired.splitlines()
+                insert_at = 0
+                for i, ln in enumerate(lines[:80]):
+                    if ln.startswith(("import ", "from ", "#")) or not ln.strip():
+                        insert_at = i + 1
+                    else:
+                        break
+                lines.insert(insert_at, "\n# auto-stubs for stripped fake imports\n" + _stub_lines + "\n")
+                return repair_name, "\n".join(lines)
+
     missing_optional_v15_dependency = (
         "modulenotfounderror: no module named 'statsmodels'" in lowered
         or "modulenotfounderror: no module named 'sklearn'" in lowered

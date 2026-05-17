@@ -2758,20 +2758,30 @@ def units_to_unit(x: pd.Timedelta) -> str:
         >>> units_to_unit(pd.Timedelta(hours=1))
         'hour'
     """
-    # Get resolution (e.g., 'H' for hours, 'T' for minutes)
+    # pandas <1.5 returned upper-case codes ('H'/'T'/'S'/...); pandas >=1.5
+    # returns 'h'/'min'/'s'/... — accept both forms so this helper stays
+    # correct across pandas versions instead of silently defaulting every
+    # sub-day Timedelta to 'hour'.
     resolution = x.resolution_string
-    
-    # Map to full names
+
     unit_map = {
+        # pandas 1.x (upper-case)
         'D': 'day',
         'H': 'hour',
         'T': 'min',
         'S': 'sec',
         'L': 'millisec',
         'U': 'microsec',
-        'N': 'nanosec'
+        'N': 'nanosec',
+        # pandas 2.x (lower-case, plus 'min' written out)
+        'h': 'hour',
+        'min': 'min',
+        's': 'sec',
+        'ms': 'millisec',
+        'us': 'microsec',
+        'ns': 'nanosec',
     }
-    
+
     return unit_map.get(resolution, 'hour')
 
 def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:

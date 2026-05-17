@@ -2925,6 +2925,25 @@ def load_bucketed_table_aggregated(
     # 🔧 FIX 2026-05-11: case-insensitive 列存在性检查（同 multi-concept 路径，应对 MIMIC-III 1.4 大写列名）
     raw_columns_lower = {str(c).lower() for c in raw_columns}
 
+    # 🔧 FIX 2026-05-16: detect VARCHAR-typed numeric value columns (e.g. eicu
+    # respiratorycharting.respchartvalue) and rewrite SQL references to use
+    # TRY_CAST(... AS DOUBLE). Without this, WHERE bounds and MEDIAN() fail with
+    # "Cannot compare values of type VARCHAR and type DECIMAL".
+    _value_col_is_string = False
+    try:
+        _types = conn.execute(
+            f"DESCRIBE SELECT {value_column} FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
+        ).fetchall()
+        if _types:
+            _t = str(_types[0][1]).upper()
+            _value_col_is_string = _t.startswith("VARCHAR") or _t == "STRING" or _t.startswith("TEXT")
+    except Exception:
+        _value_col_is_string = False
+    if _value_col_is_string:
+        _value_col_numeric = f"TRY_CAST({value_column} AS DOUBLE)"
+    else:
+        _value_col_numeric = value_column
+
     patient_filter_col = id_col
     patient_filter_values = patient_ids
     join_left_col = id_col
@@ -2985,9 +3004,9 @@ def load_bucketed_table_aggregated(
     # 所以 bounds 应该在 post-aggregation 阶段（concept.py ~L3838）应用
     if not value_transform and not (convert_unit_op is not None and convert_unit_factor is not None):
         if value_min is not None:
-            where_conditions.append(f"{value_column} >= {value_min}")
+            where_conditions.append(f"{_value_col_numeric} >= {value_min}")
         if value_max is not None:
-            where_conditions.append(f"{value_column} <= {value_max}")
+            where_conditions.append(f"{_value_col_numeric} <= {value_max}")
     
     where_clause = "WHERE " + " AND ".join(where_conditions)
     
@@ -3051,7 +3070,7 @@ def load_bucketed_table_aggregated(
         # 不在 MEDIAN 内部过滤 min/max。post-agg filter_bounds 在 concept.py 中处理
         _agg_value_expr = f"{duckdb_agg}({value_transform}) as {value_column}"
     else:
-        _agg_value_expr = f"{duckdb_agg}({value_column}) as {value_column}"
+        _agg_value_expr = f"{duckdb_agg}({_value_col_numeric}) as {value_column}"
     
     unit_select = ",\n            ANY_VALUE(unit) as unit" if include_unit else ""
     
@@ -3833,16 +3852,17 @@ def load_wide_table_aggregated(
     }
     duckdb_agg = agg_map.get(agg_func, 'MEDIAN')
     
-    # 构建WHERE条件
-    where_conditions = []
-    if patient_ids:
-        ids_str = ", ".join(str(x) for x in patient_ids)
-        where_conditions.append(f"{id_col} IN ({ids_str})")
-    
+    # 🚀 perf: register patient_ids as a DuckDB view rather than embedding
+    # tens of thousands of literals into a SQL IN list (which inflates plan
+    # time and breaks the parquet predicate pushdown path).
+    conn = _get_duckdb_connection()
     where_clause = ""
-    if where_conditions:
-        where_clause = "WHERE " + " AND ".join(where_conditions)
-    
+    _wide_pid_view = None
+    if patient_ids:
+        _wide_pid_view = "_easyicu_wide_pids"
+        conn.register(_wide_pid_view, pd.DataFrame({id_col: list(patient_ids)}))
+        where_clause = f"WHERE {id_col} IN (SELECT {id_col} FROM {_wide_pid_view})"
+
     # 🚀 优化：单个 GROUP BY 替代 per-column CTE + FULL OUTER JOIN
     # MEDIAN() 自动忽略 NULL，不需要 WHERE col IS NOT NULL 分支
     # 单次扫描，单次 GROUP BY，无 FULL OUTER JOIN 中间结果膨胀
@@ -3866,27 +3886,52 @@ def load_wide_table_aggregated(
         agg_exprs = ", ".join(agg_parts)
     else:
         agg_exprs = ", ".join(f"{duckdb_agg}({col}) as {col}" for col in value_columns)
-    
-    query = f"""
-    SELECT 
-        {id_col},
-        FLOOR({time_col} / {interval_hours * 60.0}) as charttime,
-        {agg_exprs}
-    FROM read_parquet('{glob_pattern}', union_by_name=true)
-    {where_clause}
-    GROUP BY {id_col}, FLOOR({time_col} / {interval_hours * 60.0})
-    ORDER BY {id_col}, charttime
-    """
-    
-    # 执行查询
-    conn = _get_duckdb_connection()
-    
+
+    # 🚀 perf B1: same-directory bucket parquets share schema (the bucket
+    # converter writes them in one pass). Drop union_by_name=true so DuckDB
+    # does not pre-sweep every file's metadata for schema reconciliation —
+    # on slow filesystems this dominated wall-clock. Fall back to
+    # union_by_name=true if the fast path raises a schema-mismatch error.
+    # 🚀 perf B5: drop the trailing ORDER BY — downstream groupby/merge
+    # does not depend on it, and sorting tens of millions of rows after
+    # aggregation was pure overhead.
+    _wide_query_tpl = (
+        "SELECT\n"
+        f"    {id_col},\n"
+        f"    FLOOR({time_col} / {interval_hours * 60.0}) as charttime,\n"
+        f"    {agg_exprs}\n"
+        "FROM {read_expr}\n"
+        f"{where_clause}\n"
+        f"GROUP BY {id_col}, FLOOR({time_col} / {interval_hours * 60.0})\n"
+    )
+    _wide_read_fast = f"read_parquet('{glob_pattern}')"
+    _wide_read_safe = f"read_parquet('{glob_pattern}', union_by_name=true)"
+
+    def _exec_wide(read_expr: str) -> pd.DataFrame:
+        q = _wide_query_tpl.format(read_expr=read_expr)
+        try:
+            arrow_table = conn.execute(q).fetch_arrow_table()
+            df_ = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
+            del arrow_table
+            return df_
+        except Exception:
+            return conn.execute(q).fetchdf()
+
     try:
-        arrow_table = conn.execute(query).fetch_arrow_table()
-        df = _arrow_to_pandas_compat(arrow_table, split_blocks=True)
-        del arrow_table
-    except Exception:
-        df = conn.execute(query).fetchdf()
+        df = _exec_wide(_wide_read_fast)
+    except Exception as _wide_exc:
+        # Schema actually differs across files (rare) → safe variant.
+        logger.warning(
+            "wide_table fast path failed (%s); falling back to union_by_name=true",
+            _wide_exc,
+        )
+        df = _exec_wide(_wide_read_safe)
+    finally:
+        if _wide_pid_view is not None:
+            try:
+                conn.unregister(_wide_pid_view)
+            except Exception:
+                pass
     # Downcast float64 value columns to float32 (skip ID/time columns)
     _skip_cols = {id_col, 'charttime'}
     for c in df.columns:

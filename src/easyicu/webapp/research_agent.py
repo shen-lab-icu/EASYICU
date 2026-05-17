@@ -56,6 +56,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 import pandas as pd
 import streamlit as st
 
+from easyicu.webapp.ai_optin import AIOptInError, enforce_external_llm_opt_in
 from easyicu.webapp.i18n import get_text
 from easyicu.webapp.llm_config import (
     agent_config_from_shared_settings,
@@ -1409,6 +1410,139 @@ def _result_like_from_manifest(run_dir: Path, manifest: Dict[str, Any]) -> Simpl
     )
 
 
+def _gate_passed(value: Any) -> Optional[bool]:
+    """Best-effort pass/fail read of a readiness-gate value.
+
+    Readiness-gate values are loosely typed (bool, status dict, or string),
+    so this normalises them; an unknown shape returns None (rendered neutral).
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        for key in ("passed", "ok", "ready", "complete", "satisfied"):
+            if isinstance(value.get(key), bool):
+                return value[key]
+        status = str(value.get("status", "")).lower()
+        if status in {"pass", "passed", "ok", "ready", "complete"}:
+            return True
+        if status in {"fail", "failed", "blocked", "incomplete"}:
+            return False
+        return None
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in {"pass", "passed", "ok", "ready", "complete", "true", "yes"}:
+            return True
+        if low in {"fail", "failed", "blocked", "incomplete", "false", "no"}:
+            return False
+    return None
+
+
+def _render_reproducibility_panel(manifest: Dict[str, Any]) -> None:
+    """Surface the evidence-enforcement / reproducibility story for a run.
+
+    Everything here is already in the run manifest — this panel makes the
+    fail-closed readiness gates, validator findings and LLM reproducibility
+    envelope visible instead of leaving them buried in the raw JSON.
+    """
+    is_en = st.session_state.get("language", "en") == "en"
+    findings = [f for f in manifest.get("findings", []) if isinstance(f, dict)]
+    readiness = manifest.get("readiness")
+    readiness = readiness if isinstance(readiness, dict) else {}
+    repro = manifest.get("reproducibility")
+    repro = repro if isinstance(repro, dict) else {}
+    used_mock = bool(manifest.get("used_mock_llm"))
+
+    errors = [f for f in findings if f.get("severity") == "error"]
+    warnings = [f for f in findings if f.get("severity") == "warning"]
+    infos = [f for f in findings if f.get("severity") == "info"]
+
+    title = ("🔒 Reproducibility & Evidence Enforcement"
+             if is_en else "🔒 可复现性与证据校验")
+    with st.expander(title, expanded=True):
+        if errors:
+            st.error(
+                f"{len(errors)} error-severity finding(s). Under STRICT evidence "
+                f"enforcement these would block the bound manuscript."
+                if is_en else
+                f"{len(errors)} 个 error 级问题。在 STRICT 强制模式下会阻止生成绑定手稿。"
+            )
+        else:
+            st.success(
+                "No error-severity findings — this run satisfies STRICT evidence enforcement."
+                if is_en else
+                "无 error 级问题 —— 该 run 可通过 STRICT 强制校验。"
+            )
+
+        # Only the boolean entries are fail-closed gates; readiness also
+        # carries count/list diagnostics (step counts, missing steps) that
+        # would be noise in the gate grid.
+        gate_items = [
+            (name, ok)
+            for name, value in readiness.items()
+            if (ok := _gate_passed(value)) is not None
+        ]
+        if gate_items:
+            st.markdown(
+                f"**{'Fail-closed readiness gates' if is_en else '失败即拦截的就绪门控'}**"
+            )
+            grid = st.columns(min(3, len(gate_items)))
+            for idx, (name, ok) in enumerate(gate_items):
+                icon = "✅" if ok else "❌"
+                grid[idx % len(grid)].markdown(f"{icon} {str(name).replace('_', ' ')}")
+            done = readiness.get("completed_step_count")
+            total = readiness.get("required_step_count")
+            if isinstance(done, int) and isinstance(total, int) and total:
+                st.caption(
+                    f"Execution: {done}/{total} planned steps completed."
+                    if is_en else
+                    f"执行进度：{total} 个计划步骤中完成 {done} 个。"
+                )
+
+        st.markdown(f"**{'Validator findings' if is_en else '校验器发现'}**")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Errors" if is_en else "错误", len(errors))
+        c2.metric("Warnings" if is_en else "警告", len(warnings))
+        c3.metric("Info", len(infos))
+        for finding in errors + warnings:
+            sev = finding.get("severity", "info")
+            st.markdown(
+                f"{_FINDING_BADGE.get(sev, '⚪')} **`{finding.get('validator', '?')}`** — "
+                f"{finding.get('message', '')}"
+            )
+
+        st.markdown(f"**{'LLM reproducibility' if is_en else 'LLM 可复现性'}**")
+        if used_mock:
+            st.caption(
+                "Mock LLM — deterministic responses, no external model call."
+                if is_en else
+                "使用 Mock LLM —— 确定性响应，未调用外部模型。"
+            )
+        if repro:
+            calls = repro.get("calls") or repro.get("llm_calls") or []
+            meta_bits: List[str] = []
+            for key in ("provider", "model", "requested_seed", "seed", "temperature"):
+                if repro.get(key) not in (None, ""):
+                    meta_bits.append(f"{key}={repro[key]}")
+            if isinstance(calls, list) and calls:
+                meta_bits.append(
+                    f"{len(calls)} call(s) hashed" if is_en
+                    else f"已记录 {len(calls)} 次调用哈希"
+                )
+            if meta_bits:
+                st.caption(" · ".join(meta_bits))
+            with st.expander(
+                "Raw reproducibility envelope" if is_en else "原始可复现性信封",
+                expanded=False,
+            ):
+                st.json(repro)
+        elif not used_mock:
+            st.caption(
+                "No reproducibility envelope recorded for this run."
+                if is_en else
+                "该 run 未记录可复现性信封。"
+            )
+
+
 def _render_run_manifest(
     *,
     run_dir: Path,
@@ -1443,6 +1577,8 @@ def _render_run_manifest(
         ))
     if paused_after_analysis:
         st.info(_ra_text("paused_notice"))
+
+    _render_reproducibility_panel(manifest)
 
     tab_labels = [
         _ra_text("tab_report"),
@@ -3248,11 +3384,20 @@ def render_research_agent_page() -> None:
     workdir = Path(workdir_text).expanduser().resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     try:
+        # Central opt-in gate: external LLM calls require the sidebar
+        # AI toggle to be on. MockLLMClient is bypassed (offline).
+        enforce_external_llm_opt_in(
+            llm_choice,
+            language=st.session_state.get("language", "zh"),
+        )
         llm = _resolve_llm(
             handles, llm_choice,
             api_key=api_key, model=model,
             base_url=base_url, extra_headers=extra_headers,
         )
+    except AIOptInError as exc:
+        st.error(str(exc))
+        return
     except Exception as exc:
         st.error(str(exc))
         return

@@ -348,17 +348,21 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
     return result
 
 
-def _generate_mock_cohort_dashboard_data(lang: str = 'en') -> pd.DataFrame:
+def _generate_mock_cohort_dashboard_data(lang: str = 'en', n_patients: int = 500) -> pd.DataFrame:
     """生成模拟的队列仪表盘数据用于演示。
 
     Args:
         lang: 语言
+        n_patients: 患者人数，由共享队列工作区的滑块控制
 
     Returns:
         包含患者人口统计学和结局数据的DataFrame
     """
     np.random.seed(42)
-    n_patients = 500
+    try:
+        n_patients = max(1, int(n_patients))
+    except (TypeError, ValueError):
+        n_patients = 500
 
     # 基本人口统计学
     patient_ids = list(range(30000000, 30000000 + n_patients))

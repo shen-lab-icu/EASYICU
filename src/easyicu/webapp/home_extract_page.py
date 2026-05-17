@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from easyicu.webapp.components.constants import get_all_concepts
+from easyicu.webapp.concept_catalog import CONCEPT_GROUPS_INTERNAL
 from easyicu.webapp.data_dictionary_page import render_home_data_dictionary
 from easyicu.webapp.ui_helpers import (
     GuidePanel,
@@ -155,6 +156,18 @@ def _render_step_guide(lang: str, *, step1_done: bool, step2_done: bool, step3_d
         return
 
     if not step4_done:
+        if st.session_state.get("_export_conflict_pending", False):
+            render_status_banner(
+                _pick(lang, "Waiting for Your Decision", "等待你的选择"),
+                _pick(
+                    lang,
+                    "Existing files were detected. Choose how to handle them in the panel below.",
+                    "检测到已存在的文件，请在下方面板选择如何处理。",
+                ),
+                tone="warning",
+                icon="!",
+            )
+            return
         if st.session_state.get("_exporting_in_progress", False):
             render_status_banner(
                 _pick(lang, "Export in Progress...", "导出进行中..."),
@@ -259,12 +272,27 @@ def _render_export_success(lang: str) -> None:
         unsupported_list = set(export_result.get("unsupported_concepts", []))
         unsupported = sorted(concept for concept in unavailable_concepts if concept in unsupported_list)
         empty_or_other = sorted(concept for concept in unavailable_concepts if concept not in unsupported_list)
-        parts = []
-        if unsupported:
-            parts.append(_pick(lang, f"Not configured: {', '.join(unsupported)}", f"该数据库未配置：{', '.join(unsupported)}"))
-        if empty_or_other:
-            parts.append(_pick(lang, f"No data for selected patients: {', '.join(empty_or_other)}", f"所选患者无数据：{', '.join(empty_or_other)}"))
-        st.warning("\n\n".join(parts))
+        total_unavailable = len(unsupported) + len(empty_or_other)
+        st.warning(_pick(
+            lang,
+            f"{total_unavailable} selected concept(s) produced no exported data.",
+            f"有 {total_unavailable} 个所选概念未能导出数据。",
+        ))
+        with st.expander(_pick(lang, "Show concepts with no data", "查看无数据的概念"), expanded=False):
+            if unsupported:
+                st.markdown(_pick(
+                    lang,
+                    f"**Not configured for this database ({len(unsupported)})**",
+                    f"**该数据库未配置（{len(unsupported)}）**",
+                ))
+                st.caption(", ".join(unsupported))
+            if empty_or_other:
+                st.markdown(_pick(
+                    lang,
+                    f"**No data for selected patients ({len(empty_or_other)})**",
+                    f"**所选患者无数据（{len(empty_or_other)}）**",
+                ))
+                st.caption(", ".join(empty_or_other))
 
     st.session_state["_last_export_concept_count"] = export_result.get("concept_count", len(exported_files))
     st.session_state["_last_export_patient_count"] = export_result.get("patient_count", 0)
@@ -401,8 +429,8 @@ def render_home_extract_mode(lang: str, app_context: dict[str, Any] | None = Non
     render_note(
         _pick(
             lang,
-            f"Reference Guide: this dictionary contains all {len(get_all_concepts())} ICU clinical features available in EasyICU, organized into 19 categories. Each feature includes its code name, full description, and measurement unit. Some features may not be available in all ICU databases.",
-            f"参考指南：本字典包含 EasyICU 提供的全部 {len(get_all_concepts())} 个 ICU 临床特征，分为 19 个类别。每个特征包括代码名称、完整描述和测量单位。部分特征可能并非所有 ICU 数据库都支持。",
+            f"Reference Guide: this dictionary contains all {len(get_all_concepts())} ICU clinical features available in EasyICU, organized into {len(CONCEPT_GROUPS_INTERNAL)} categories. Each feature includes its code name, full description, and measurement unit. Some features may not be available in all ICU databases.",
+            f"参考指南：本字典包含 EasyICU 提供的全部 {len(get_all_concepts())} 个 ICU 临床特征，分为 {len(CONCEPT_GROUPS_INTERNAL)} 个类别。每个特征包括代码名称、完整描述和测量单位。部分特征可能并非所有 ICU 数据库都支持。",
         ),
         tone="info",
     )

@@ -491,13 +491,21 @@ def test_special_concept_worker_computes_sep3_after_fallback_load(tmp_path, monk
 
 
 def test_all_web_dictionary_concepts_are_exposed_in_feature_groups() -> None:
-    grouped = {
-        concept
-        for concepts in concept_catalog.CONCEPT_GROUPS_INTERNAL.values()
-        for concept in concepts
-    }
+    """CONCEPT_GROUPS_INTERNAL is the single source of the feature count
+    (`get_all_concepts()` flattens it, and every "N clinical features"
+    label across the webapp derives from that). It must stay in exact
+    sync with CONCEPT_DICTIONARY: every dictionary concept lands in
+    exactly one group, and no group lists a concept absent from the
+    dictionary — otherwise the counts shown in different places drift.
+    """
+    group_lists = list(concept_catalog.CONCEPT_GROUPS_INTERNAL.values())
+    grouped_flat = [concept for concepts in group_lists for concept in concepts]
+    grouped = set(grouped_flat)
+    dictionary = set(concept_catalog.CONCEPT_DICTIONARY)
 
-    assert set(concept_catalog.CONCEPT_DICTIONARY) - grouped == set()
+    assert dictionary - grouped == set(), "dictionary concepts missing from feature groups"
+    assert grouped - dictionary == set(), "feature groups list concepts absent from the dictionary"
+    assert len(grouped_flat) == len(grouped), "a concept appears in more than one feature group"
 
 
 def test_mimiciv_dictionary_sources_include_updated_sparse_features() -> None:
@@ -543,63 +551,28 @@ def test_button_compat_uses_width_instead_of_deprecated_container_flag(monkeypat
     assert streamlit_stub.kwargs == {"key": "run", "width": "stretch"}
 
 
-def test_conversion_wrapper_passes_extraction_optimized_bucket_flag(monkeypatch) -> None:
+def test_conversion_wrapper_forwards_to_data_converter(monkeypatch) -> None:
+    """The 2026-05-17 converter consolidation removed bucket optimisation and
+    the separate HiRID wrapper; convert_csv_to_parquet now forwards just
+    source_dir + overwrite to the unified DataConverter-backed impl (HiRID
+    archive extraction is handled inside DataConverter.convert_all)."""
     called: dict[str, object] = {}
 
-    def _fake_convert(source_dir, target_dir, overwrite=False, app_context=None, extraction_optimized_buckets=False):
+    def _fake_convert(source_dir, overwrite=False, app_context=None):
         called.update(
             source_dir=source_dir,
-            target_dir=target_dir,
             overwrite=overwrite,
             app_context=app_context,
-            extraction_optimized_buckets=extraction_optimized_buckets,
         )
         return 1, 0
 
     monkeypatch.setattr(app, "_convert_csv_to_parquet_impl", _fake_convert)
 
-    result = app.convert_csv_to_parquet(
-        "/tmp/source",
-        "/tmp/target",
-        overwrite=True,
-        extraction_optimized_buckets=True,
-    )
+    result = app.convert_csv_to_parquet("/tmp/source", overwrite=True)
 
     assert result == (1, 0)
     assert called["source_dir"] == "/tmp/source"
-    assert called["target_dir"] == "/tmp/target"
     assert called["overwrite"] is True
-    assert called["extraction_optimized_buckets"] is True
-    assert isinstance(called["app_context"], dict)
-
-
-def test_hirid_conversion_wrapper_passes_extraction_optimized_bucket_flag(monkeypatch) -> None:
-    called: dict[str, object] = {}
-
-    def _fake_hirid(source_dir, target_dir, overwrite=False, app_context=None, extraction_optimized_buckets=False):
-        called.update(
-            source_dir=source_dir,
-            target_dir=target_dir,
-            overwrite=overwrite,
-            app_context=app_context,
-            extraction_optimized_buckets=extraction_optimized_buckets,
-        )
-        return 2, 0
-
-    monkeypatch.setattr(app, "_convert_hirid_data_impl", _fake_hirid)
-
-    result = app._convert_hirid_data(
-        "/tmp/source",
-        "/tmp/target",
-        overwrite=True,
-        extraction_optimized_buckets=True,
-    )
-
-    assert result == (2, 0)
-    assert called["source_dir"] == "/tmp/source"
-    assert called["target_dir"] == "/tmp/target"
-    assert called["overwrite"] is True
-    assert called["extraction_optimized_buckets"] is True
     assert isinstance(called["app_context"], dict)
 
 
@@ -963,6 +936,11 @@ def test_quick_visualization_demo_loads_after_entry_selection(tmp_path, monkeypa
     at.session_state["language"] = "en"
     at.run(timeout=60)
     at.button(key="entry_demo_btn").click().run(timeout=60)
+    # Main nav is a st.radio since the tabs→radio refactor: only the active
+    # page renders, so switch to the quick-viz page before its demo-load
+    # button (`viz_load_demo`) is reachable.
+    at.session_state["_active_main_page"] = "quick_viz"
+    at.run(timeout=60)
     at.button(key="viz_load_demo").click().run(timeout=60)
 
     rendered_text = " ".join(
@@ -1309,6 +1287,54 @@ def test_real_cohort_page_keeps_panel_import_paths_visible_before_shared_workspa
         "🧭 SOFA Δ",
     ]
     assert rendered_panels == ["groups", "coverage", "crossdb", "snapshot", "sofa"]
+
+
+def test_real_cohort_page_gates_sub_tabs_when_no_data_path_validated(monkeypatch) -> None:
+    class _FakePanel:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {"language": "en", "entry_mode": "real"}
+            self.tabs_called = False
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def warning(self, *_args, **_kwargs) -> None:
+            pass
+
+        def info(self, *_args, **_kwargs) -> None:
+            pass
+
+        def columns(self, spec):
+            return [_FakePanel() for _ in spec]
+
+        def tabs(self, labels):
+            self.tabs_called = True
+            return [_FakePanel() for _ in labels]
+
+    streamlit_stub = _FakeStreamlit()
+    rendered_panels: list[str] = []
+
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    # No validated data path → page must show one guide and gate everything.
+    monkeypatch.setattr(app, "_default_real_data_root", lambda: "")
+    monkeypatch.setattr(app, "_default_real_database", lambda: "miiv")
+    monkeypatch.setattr(app, "render_group_comparison_subtab", lambda _lang: rendered_panels.append("groups"))
+    monkeypatch.setattr(app, "render_data_coverage_audit_subtab", lambda _lang: rendered_panels.append("coverage"))
+    monkeypatch.setattr(app, "render_multidb_distribution_subtab", lambda _lang: rendered_panels.append("crossdb"))
+    monkeypatch.setattr(app, "render_cohort_dashboard_subtab", lambda _lang: rendered_panels.append("snapshot"))
+    monkeypatch.setattr(app, "render_severity_reclassification_subtab", lambda _lang: rendered_panels.append("sofa"))
+
+    app.render_cohort_comparison_page()
+
+    assert streamlit_stub.tabs_called is False
+    assert rendered_panels == []
 
 
 def test_real_workspace_launcher_defaults_to_fast_import_preview(tmp_path, monkeypatch) -> None:

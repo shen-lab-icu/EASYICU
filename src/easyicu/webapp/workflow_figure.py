@@ -130,23 +130,26 @@ def _render_extraction_pipeline_figure(
     export_format = st.session_state.get('export_format') or "Parquet"
     patient_limit = st.session_state.get('patient_limit', 0)
     patient_limit_text = "All patients" if not patient_limit else f"{int(patient_limit):,}"
-    export_files = st.session_state.get('_export_success_result', {}).get('files') or [
-        "vital_signs_hr_map_sbp.parquet",
-        "laboratory_wbc_creatinine.parquet",
-        "scores_sofa2_aki_stage.parquet",
-    ]
+    export_result = st.session_state.get('_export_success_result') or {}
+    export_files = list(export_result.get('files') or [])
     export_files_html = "".join(
-        f'<div>▧ {html.escape(Path(str(file_name)).name)} <span style="float:right;color:#6b7280">{"18.6 MB" if idx == 0 else "—"}</span></div>'
-        for idx, file_name in enumerate(export_files[:4])
+        f'<div>▧ {html.escape(Path(str(file_name)).name)}</div>'
+        for file_name in export_files[:4]
     )
     if len(export_files) > 4:
         export_files_html += f'<div style="text-align:center;color:#60718a">… ({len(export_files) - 4} more files)</div>'
+    if not export_files:
+        export_files_html = (
+            f'<div style="color:#94a3b8">{"No files exported yet" if is_en else "尚未导出文件"}</div>'
+        )
 
     title = "EasyICU Data Preparation Workflow" if is_en else "EasyICU 数据准备流程"
     subtitle = (
-        "Configure the data source, define a cohort, choose clinical concepts, export module files, then review the export summary."
+        "Progress overview only — run each step using the sidebar on the left. "
+        "Panels A–D mirror your sidebar configuration; panel E reviews the export."
         if is_en else
-        "配置数据源、定义队列、选择临床概念、导出模块文件，并在最后复核导出摘要。"
+        "仅为流程进度总览——每个步骤请使用左侧侧边栏操作。"
+        "A–D 面板镜像侧边栏配置，E 面板用于复核导出。"
     )
     summary_title = "Export summary" if is_en else "导出摘要"
     summary_status = (
@@ -160,11 +163,39 @@ def _render_extraction_pipeline_figure(
     summary_strip_class = "workflow-success-strip" if summary_ready else "workflow-success-strip warn"
     summary_icon = "✓" if summary_ready else "!"
 
+    import time as _time_module
+
+    def _fmt_duration(seconds: float | None) -> str:
+        if not seconds:
+            return "—"
+        minutes, secs = divmod(int(seconds), 60)
+        if is_en:
+            return f"{minutes} min {secs} sec" if minutes else f"{secs} sec"
+        return f"{minutes} 分 {secs} 秒" if minutes else f"{secs} 秒"
+
+    start_time_text = "—"
+    if export_result.get('start_time'):
+        start_time_text = _time_module.strftime(
+            "%H:%M:%S", _time_module.localtime(export_result['start_time'])
+        )
+    total_size_text = "—"
+    if step4_done and export_files:
+        try:
+            total_bytes = sum(
+                Path(str(f)).stat().st_size
+                for f in export_files
+                if Path(str(f)).exists()
+            )
+            if total_bytes:
+                total_size_text = f"{total_bytes / (1024 * 1024):.1f} MB"
+        except OSError:
+            total_size_text = "—"
+
     stats = [
-        ("Start time" if is_en else "开始时间", "14:22:10"),
-        ("Duration" if is_en else "耗时", "4 min 21 sec" if is_en else "4 分 21 秒"),
-        ("Files" if is_en else "文件数", str(len(export_files))),
-        ("Total size" if is_en else "总大小", "148.3 MB"),
+        ("Start time" if is_en else "开始时间", start_time_text),
+        ("Duration" if is_en else "耗时", _fmt_duration(export_result.get('total_time'))),
+        ("Files" if is_en else "文件数", str(len(export_files)) if export_files else "—"),
+        ("Total size" if is_en else "总大小", total_size_text),
     ]
     stats_html = "".join(
         f'<div class="workflow-mini-stat"><div class="workflow-mini-label">{html.escape(label)}</div><div class="workflow-mini-value">{html.escape(value)}</div></div>'

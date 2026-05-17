@@ -78,8 +78,6 @@ def convert_data_with_progress(data_path: str, database: str, app_context: dict[
     """带进度条的数据转换功能。"""
     if app_context is not None:
         _install_app_context(app_context)
-    
-    import time
 
     lang = st.session_state.get('language', 'en')
 
@@ -89,223 +87,86 @@ def convert_data_with_progress(data_path: str, database: str, app_context: dict[
     warn_msg = "⚠️ **Note**: Converting large datasets may take a long time (30min~2hrs), please be patient." if lang == 'en' else "⚠️ **注意**：转换大型数据集可能需要较长时间（30分钟~2小时），请耐心等待。"
     st.warning(warn_msg)
 
-    info_msg = "💡 Using DuckDB for memory-efficient conversion. Large tables will be bucket-partitioned automatically." if lang == 'en' else "💡 使用 DuckDB 进行内存安全转换，大表将自动进行分桶优化。"
+    info_msg = "💡 Converting CSV/CSV.GZ to Parquet. Large tables are partitioned automatically for memory-safe extraction." if lang == 'en' else "💡 正在将 CSV/CSV.GZ 转换为 Parquet，大表会自动分区以便内存安全提取。"
     st.info(info_msg)
 
-    # 定义需要分桶转换的大表
-    BUCKET_TABLES = {
-        'miiv': {
-            'chartevents': ('itemid', 100),
-            'labevents': ('itemid', 100),
-            'inputevents': ('itemid', 50),
-        },
-        'eicu': {
-            'nursecharting': ('nursingchartcelltypevalname', 30),  # 按字符串hash
-            'lab': ('labname', 50),
-        },
-        'aumc': {
-            'numericitems': ('itemid', 100),
-            'listitems': ('itemid', 50),
-        },
-        'hirid': {
-            'observations': ('variableid', 100),
-            'pharma': ('pharmaid', 50),
-        },
-        'mimic': {
-            'chartevents': ('itemid', 100),
-            'labevents': ('itemid', 100),
-        },
-        'sic': {
-            'data_float_h': ('dataid', 50),
-            'laboratory': ('laboratoryid', 50),
-        },
-    }
-
     try:
-        from easyicu.duckdb_converter import DuckDBConverter
-        from easyicu.bucket_converter import convert_to_buckets, BucketConfig
-        import gc
-
-        # 自动检测可用内存，预留 3GB 给 OS/Python
-        from easyicu.memory_manager import get_available_memory_mb
-        _avail_gb = get_available_memory_mb() / 1024
-        _duckdb_mem_gb = max(2.0, _avail_gb - 3.0)
-
-        converter = DuckDBConverter(
-            data_path=data_path,
-            memory_limit_gb=_duckdb_mem_gb,
-            verbose=True
-        )
-
-        # 获取需要转换的文件列表
-        csv_files = converter._find_csv_files()
-        total_files = len(csv_files)
-
-        if total_files == 0:
-            err_msg = "No CSV files found to convert" if lang == 'en' else "未找到需要转换的 CSV 文件"
-            st.error(err_msg)
-            return
-
-        # 分类文件：大表用分桶，小表用普通转换
-        bucket_tables_config = BUCKET_TABLES.get(database, {})
-        bucket_files = []
-        normal_files = []
-
-        for csv_file in csv_files:
-            stem = csv_file.stem.lower().replace('.csv', '')
-            if stem in bucket_tables_config:
-                bucket_files.append((csv_file, bucket_tables_config[stem]))
-            else:
-                normal_files.append(csv_file)
-
-        # 按文件大小升序处理：先快速完成小文件给用户反馈，把整段大文件留到最后单独跑
-        def _size_key(p):
-            try:
-                return p.stat().st_size
-            except OSError:
-                return 0
-        normal_files.sort(key=_size_key)
-        bucket_files.sort(key=lambda pair: _size_key(pair[0]))
-
-        detect_msg = f"📊 Detected **{len(normal_files)}** normal + **{len(bucket_files)}** large tables" if lang == 'en' else f"📊 共检测到 **{len(normal_files)}** 个普通表 + **{len(bucket_files)}** 个大表"
-        st.markdown(detect_msg)
-
-        # 创建进度条
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        details_container = st.container()
-
-        converted = 0
-        skipped = 0
-        failed = 0
-        total = len(normal_files) + len(bucket_files)
-        current = 0
-
-        # 1. 先转换普通表
-        for csv_file in normal_files:
-            current += 1
-            file_name = csv_file.name
-            file_size_mb = csv_file.stat().st_size / (1024 * 1024)
-
-            processing_msg = f"**Processing**: `{file_name}` ({file_size_mb:.1f} MB) [{current}/{total}]" if lang == 'en' else f"**正在处理**: `{file_name}` ({file_size_mb:.1f} MB) [{current}/{total}]"
-            status_text.markdown(processing_msg)
-
-            parquet_path = converter._get_parquet_path(csv_file)
-            if parquet_path.exists():
-                skipped += 1
-                with details_container:
-                    exists_msg = "exists" if lang == 'en' else "已存在"
-                    st.caption(f"⏭️ {file_name} ({exists_msg})")
-            else:
-                try:
-                    result = converter.convert_file(csv_file)
-                    if result['status'] == 'success':
-                        converted += 1
-                        with details_container:
-                            rows_label = "rows" if lang == 'en' else "行"
-                            st.caption(f"✅ {file_name}: {result['row_count']:,} {rows_label}")
-                    else:
-                        failed += 1
-                        with details_container:
-                            st.caption(f"❌ {file_name}: {result.get('error', 'unknown')[:40]}")
-                except Exception as e:
-                    failed += 1
-                    with details_container:
-                        st.caption(f"❌ {file_name}: {str(e)[:40]}")
-
-            progress_bar.progress(current / total)
-            gc.collect()
-
-        # 2. 分桶转换大表
-        for csv_file, (partition_col, num_buckets) in bucket_files:
-            current += 1
-            file_name = csv_file.name
-            file_size_mb = csv_file.stat().st_size / (1024 * 1024)
-            stem = csv_file.stem.lower().replace('.csv', '')
-
-            processing_msg = f"**Bucketing**: `{file_name}` ({file_size_mb:.1f} MB) → {num_buckets} buckets [{current}/{total}]" if lang == 'en' else f"**分桶转换**: `{file_name}` ({file_size_mb:.1f} MB) → {num_buckets} 个桶 [{current}/{total}]"
-            status_text.markdown(processing_msg)
-
-            # 检查分桶目录是否真正完成（通过 _COMPLETE 标记），无标记则视为不完整需重做
-            bucket_dir = csv_file.parent / f"{stem}_bucket"
-            sentinel = bucket_dir / '_COMPLETE'
-            if bucket_dir.exists() and sentinel.exists():
-                skipped += 1
-                with details_container:
-                    bucket_exists_msg = "bucket exists" if lang == 'en' else "分桶目录已存在"
-                    st.caption(f"⏭️ {file_name} ({bucket_exists_msg})")
-            else:
-                # 旧目录无 _COMPLETE 标记时清理再重做，避免半成品蒙混过关
-                if bucket_dir.exists():
-                    import shutil as _shutil
-                    _shutil.rmtree(bucket_dir, ignore_errors=True)
-                try:
-                    # AUMC 使用 latin-1 编码（µmol 等特殊字符）
-                    _encoding = 'latin-1' if database == 'aumc' else None
-                    # 内存留空 → BucketConfig.__post_init__ 通过 _memory_tier 自适应
-                    config = BucketConfig(
-                        num_buckets=num_buckets,
-                        partition_col=partition_col,
-                        encoding=_encoding,
-                    )
-                    result = convert_to_buckets(
-                        source_path=csv_file,
-                        output_dir=bucket_dir,
-                        config=config,
-                        overwrite=True
-                    )
-                    if result.success:
-                        converted += 1
-                        with details_container:
-                            bucket_label = "buckets" if lang == 'en' else "个桶"
-                            rows_label = "rows" if lang == 'en' else "行"
-                            st.caption(f"✅ {file_name} → {result.num_buckets} {bucket_label}, {result.total_rows:,} {rows_label}")
-                    else:
-                        failed += 1
-                        with details_container:
-                            st.caption(f"❌ {file_name}: {result.error[:40] if result.error else 'unknown'}")
-                except Exception as e:
-                    failed += 1
-                    with details_container:
-                        st.caption(f"❌ {file_name}: {str(e)[:40]}")
-
-            progress_bar.progress(current / total)
-            gc.collect()
-
-        # 转换完成
-        progress_bar.progress(1.0)
-        status_text.empty()
-
-        if lang == 'en':
-            summary = f"""
-            ✅ **Conversion Complete!**
-            - Successfully converted: {converted} files
-            - Already existed/skipped: {skipped} files
-            - Failed: {failed} files
-            """
-        else:
-            summary = f"""
-            ✅ **转换完成！**
-            - 成功转换: {converted} 个文件
-            - 已存在跳过: {skipped} 个文件
-            - 转换失败: {failed} 个文件
-            """
-        st.success(summary)
-
-        if failed == 0:
-            st.balloons()
-            all_done_msg = "🎉 All data converted successfully, you can now load the data!" if lang == 'en' else "🎉 所有数据已转换完成，现在可以加载数据了！"
-            st.info(all_done_msg)
-        else:
-            partial_msg = "Some files failed to convert, but you can still try loading the converted data." if lang == 'en' else "部分文件转换失败，但您仍可以尝试加载已转换的数据。"
-            st.warning(partial_msg)
-
+        from easyicu.data_converter import DataConverter, ConversionStatus
     except ImportError as e:
         import_err = f"Data converter module not installed: {e}" if lang == 'en' else f"数据转换模块未安装: {e}"
         st.error(import_err)
+        return
+
+    try:
+        converter = DataConverter(data_path=data_path, database=database, verbose=False)
+    except ValueError as e:
+        st.error(str(e))
+        return
+
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    details_container = st.container()
+    counters = {'converted': 0, 'failed': 0}
+
+    def _on_progress(info: dict) -> None:
+        cur, tot = info['current'], info['total'] or 1
+        progress_bar.progress(min(cur / tot, 1.0))
+        name = info['file']
+        result = info.get('result') or {}
+        if info.get('status') == ConversionStatus.FAILED:
+            counters['failed'] += 1
+            with details_container:
+                st.caption(f"❌ {name}: {(result.get('error') or 'unknown')[:60]}")
+        else:
+            counters['converted'] += 1
+            with details_container:
+                rows_label = "rows" if lang == 'en' else "行"
+                shards = result.get('shards', 0)
+                suffix = f", {shards} shards" if shards else ""
+                st.caption(f"✅ {name}: {result.get('row_count', 0):,} {rows_label}{suffix}")
+        processing_msg = f"**Processing**: `{name}` [{cur}/{tot}]" if lang == 'en' else f"**正在处理**: `{name}` [{cur}/{tot}]"
+        status_text.markdown(processing_msg)
+
+    try:
+        converter.convert_all(force=False, progress_callback=_on_progress)
     except Exception as e:
         conv_err = f"Conversion error: {str(e)}" if lang == 'en' else f"转换过程出错: {str(e)}"
         st.error(conv_err)
+        return
+
+    progress_bar.progress(1.0)
+    status_text.empty()
+
+    converted = counters['converted']
+    failed = counters['failed']
+
+    if converted == 0 and failed == 0:
+        all_converted_msg = "✅ All data is already converted." if lang == 'en' else "✅ 所有数据均已转换。"
+        st.success(all_converted_msg)
+        st.info("🎉 You can now load the data!" if lang == 'en' else "🎉 现在可以加载数据了！")
+        return
+
+    if lang == 'en':
+        summary = f"""
+        ✅ **Conversion Complete!**
+        - Successfully converted: {converted} files
+        - Failed: {failed} files
+        """
+    else:
+        summary = f"""
+        ✅ **转换完成！**
+        - 成功转换: {converted} 个文件
+        - 转换失败: {failed} 个文件
+        """
+    st.success(summary)
+
+    if failed == 0:
+        st.balloons()
+        all_done_msg = "🎉 All data converted successfully, you can now load the data!" if lang == 'en' else "🎉 所有数据已转换完成，现在可以加载数据了！"
+        st.info(all_done_msg)
+    else:
+        partial_msg = "Some files failed to convert, but you can still try loading the converted data." if lang == 'en' else "部分文件转换失败，但您仍可以尝试加载已转换的数据。"
+        st.warning(partial_msg)
 
 
 def apply_cohort_filter(data_path, database, candidate_ids=None, app_context: dict[str, Any] | None = None):
@@ -512,23 +373,18 @@ def apply_cohort_filter(data_path, database, candidate_ids=None, app_context: di
             cn_label = "仅存活" if cf['survived'] else "仅死亡"
             filter_details.append((en_label, cn_label, excluded))
 
-    # ---------- Sepsis / ICD pre-filter ----------
+    # ---------- Disease cohort pre-filter ----------
+    # Concept-derived cohorts (sepsis / aki / circ_failure / mech_vent / rrt)
+    # are deliberately NOT narrowed here. Their membership IS the EasyICU
+    # derivation (Sepsis-3 = susp_inf + SOFA-2, AKI = KDIGO, ...), which has no
+    # cheap table shortcut. The ICD-code proxy that used to live here capped the
+    # Sepsis-3 cohort at the ~10k ICD-coded subset instead of the true ~30k
+    # Sepsis-3 stays. These cohorts are narrowed after extraction by
+    # _post_filter_cohort_data using the real concept (sep3_sofa2, aki_stage,
+    # ...), which is derived exactly once during extraction. Only ICD-template
+    # cohorts (ards / pneumonia / ...) carry an icd_tokens shortcut.
     disease_cohort = cf.get('disease_cohort')
     disease_cfg = DISEASE_COHORT_CONFIG.get(disease_cohort or 'none', {})
-    if disease_cohort == 'sepsis':
-        try:
-            from easyicu.patient_filter import PatientFilter
-            before_count = keep_mask.sum()
-            pf = PatientFilter(database=database, data_path=data_path, verbose=False)
-            sepsis_ids = pf._get_sepsis_patients()
-            if sepsis_ids:
-                keep_mask &= icu_df[id_col_lower].isin(sepsis_ids)
-            else:
-                keep_mask &= False
-            excluded = int(before_count - keep_mask.sum())
-            filter_details.append(("Sepsis-3 / sepsis cohort", "脓毒症队列", excluded))
-        except Exception as e:
-            print(f"[COHORT] Sepsis pre-filter skipped ({database}): {e}")
 
     icd_template_tokens = disease_cfg.get('icd_tokens', [])
     if disease_cohort not in (None, '', 'none', 'sepsis') and icd_template_tokens and database in ICD_FILTER_DATABASES:
@@ -961,11 +817,18 @@ def load_from_exported(export_dir: str, max_patients: int = 50, selected_files: 
                             _id_col_for_filter = _idc
                             break
                     if _id_col_for_filter:
-                        # 优先扫 demographics/outcome（小且包含全部患者）
-                        _priority_names = {'demographics', 'outcome', 'circulatory'}
+                        # 优先扫 demographics/outcome（包含全部患者）。
+                        # 导出文件名带 cohort 后缀（如 demographics_adm_age_...），
+                        # 必须用前缀匹配，否则会退化成"选最小文件"，
+                        # 而最小文件往往是稀疏模块，导致患者数被错误裁剪。
+                        _priority_names = ('demographics', 'outcome', 'circulatory')
                         _scan_file = None
                         for _pf in parquet_files:
-                            if _pf.stem in _priority_names:
+                            _stem_lower = _pf.stem.lower()
+                            if any(
+                                _stem_lower == _name or _stem_lower.startswith(_name + '_')
+                                for _name in _priority_names
+                            ):
                                 _scan_file = _pf
                                 break
                         if _scan_file is None:

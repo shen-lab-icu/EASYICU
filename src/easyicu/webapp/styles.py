@@ -543,6 +543,42 @@ def render_global_styles(st: Any) -> None:
                 grid-template-columns: 1fr;
             }
         }
+        /* Narrow-viewport notice. The data-dense Plotly grids, multi-column
+           Cohort Analysis panels, and side-by-side metric cards in this app
+           are designed for ≥1024 px screens — Streamlit's default narrow
+           layout overlaps the sidebar onto main content and clips charts.
+           Inject a soft banner instead of pretending it'll work. */
+        body::before {
+            content: "📱 EasyICU is optimised for screens ≥ 1024 px. Cohort Analysis charts, multi-column metric cards, and the sidebar workflow may clip on narrower viewports. Open in a wider window for the full experience.";
+            display: none;
+            position: sticky;
+            top: 0;
+            z-index: 9999;
+            padding: 10px 16px;
+            background: linear-gradient(135deg, #fef3c7 0%, #fed7aa 100%);
+            color: #7c2d12;
+            font-size: 0.82rem;
+            font-weight: 600;
+            border-bottom: 1px solid #fdba74;
+            line-height: 1.45;
+            text-align: center;
+        }
+        @media (max-width: 1024px) {
+            body::before { display: block; }
+        }
+        /* Tame ~6-10 px horizontal overflow from BaseWeb shadows / gradient
+           borders extending past the sidebar+main containers. Cosmetic
+           rounding from Streamlit's emotion CSS — clip the outermost
+           shells to their own box without affecting interactive widgets. */
+        section[data-testid="stSidebar"],
+        section.stMain,
+        section[data-testid="stMain"] {
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+        }
+        section[data-testid="stSidebar"] {
+            overflow-x: hidden !important;
+        }
 
         /* ============ 全局排版 ============ */
         html, body, .stApp, *, *::before, *::after {
@@ -658,6 +694,18 @@ def render_global_styles(st: Any) -> None:
             background: var(--gradient-primary) !important;
             border: none !important;
             box-shadow: 0 6px 16px rgba(37,99,235,0.18) !important;
+            max-width: none !important;
+        }
+        /* Show full label inside multiselect chips instead of clipping
+           "Demographics" to "Demograph..." — BaseWeb's default styling
+           applies max-width + text-overflow:ellipsis on the inner span. */
+        [data-testid="stMultiSelect"] [data-baseweb="tag"] span,
+        [data-testid="stMultiSelect"] [data-baseweb="tag"] [class*="Text"],
+        [data-testid="stMultiSelect"] [data-baseweb="tag"] [title] {
+            max-width: none !important;
+            text-overflow: clip !important;
+            overflow: visible !important;
+            white-space: normal !important;
         }
         [data-testid="stMultiSelect"] [data-baseweb="tag"] svg {
             color: #ffffff !important;
@@ -764,6 +812,59 @@ def render_global_styles(st: Any) -> None:
         /* Tab 下划线隐藏 */
         div[data-baseweb="tab-highlight"] {
             display: none !important;
+        }
+
+        /* ============ 主导航 — 连体分段栏 ============ */
+        /* The main page nav is an st.radio (programmatically steerable),
+           restyled here into a connected segmented bar. Scoped via the
+           st.container(key="main_nav_bar") wrapper so other radios are
+           untouched. If a Streamlit upgrade changes the radio DOM this
+           degrades to a plain radio — it never breaks navigation. */
+        .st-key-main_nav_bar div[role="radiogroup"] {
+            display: flex !important;
+            flex-wrap: nowrap !important;
+            gap: 0 !important;
+            padding: 4px !important;
+            margin-bottom: 0.4rem !important;
+            background: rgba(241,245,249,0.8) !important;
+            border: 1px solid var(--border-subtle) !important;
+            border-radius: var(--radius-xl) !important;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            overflow-x: auto !important;
+        }
+        .st-key-main_nav_bar div[role="radiogroup"] > label {
+            flex: 1 1 0 !important;
+            margin: 0 !important;
+            padding: 9px 16px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 0.35rem !important;
+            border-radius: var(--radius-lg) !important;
+            cursor: pointer !important;
+            white-space: nowrap !important;
+            font-weight: 700 !important;
+            font-size: clamp(0.8rem, 0.08vw + 0.78rem, 0.94rem) !important;
+            color: var(--text-secondary-light) !important;
+            background: transparent !important;
+            transition: var(--transition-fast) !important;
+        }
+        /* hide the radio circle so each option reads as a segment */
+        .st-key-main_nav_bar div[role="radiogroup"] > label > div:first-child {
+            display: none !important;
+        }
+        .st-key-main_nav_bar div[role="radiogroup"] > label:hover {
+            background: rgba(37,99,235,0.08) !important;
+            color: var(--primary-color) !important;
+        }
+        .st-key-main_nav_bar div[role="radiogroup"] > label:has(input:checked) {
+            background: var(--gradient-primary) !important;
+            box-shadow: 0 2px 12px rgba(37,99,235,0.24) !important;
+        }
+        .st-key-main_nav_bar div[role="radiogroup"] > label:has(input:checked),
+        .st-key-main_nav_bar div[role="radiogroup"] > label:has(input:checked) * {
+            color: #ffffff !important;
         }
 
 

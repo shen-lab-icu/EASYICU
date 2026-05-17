@@ -135,7 +135,6 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
     if is_viz_import_mode and not selected_concepts:
         selected_concepts = list(loaded_concepts.keys())
         st.session_state.selected_concepts = selected_concepts
-        print(f"[DEBUG] Auto-set selected_concepts from loaded_concepts: {len(selected_concepts)} concepts")
 
     if not export_path or not Path(export_path).exists():
         err_msg = "❌ Please set a valid export path first" if lang == 'en' else "❌ 请先设置有效的导出路径"
@@ -266,6 +265,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
             st.session_state.trigger_export = False
             st.session_state['_exporting_in_progress'] = False
             st.session_state['_export_cancelled'] = False
+            st.session_state.pop('_export_conflict_pending', None)
             progress_bar.empty()
             status_text.empty()
             cancel_placeholder.empty()
@@ -318,20 +318,19 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
             skipped_modules = st.session_state.get('_skipped_modules', set())
             overwrite_modules = st.session_state.get('_overwrite_modules', set())
 
-            # 🔧 DEBUG: 打印状态以便调试
-            print(f"[DEBUG] existing_modules: {list(existing_modules.keys())}")
-            print(f"[DEBUG] skipped_modules: {skipped_modules}")
-            print(f"[DEBUG] overwrite_modules: {overwrite_modules}")
-
             # 找出尚未决定的模块
             pending_modules = [m for m in existing_modules.keys()
                                if m not in skipped_modules and m not in overwrite_modules]
 
-            print(f"[DEBUG] pending_modules: {pending_modules}")
-
             if pending_modules:
-                # 🔧 FIX: 显示冲突时清除 _exporting_in_progress，避免显示 "Export in Progress"
+                # 显示冲突对话框时并未真正在导出：清除进行中标记。
                 st.session_state['_exporting_in_progress'] = False
+                # 首次检测到冲突时，标记“等待用户选择”并重新进入，
+                # 让页面横幅显示等待状态而不是“导出进行中”。
+                if not st.session_state.get('_export_conflict_pending'):
+                    st.session_state['_export_conflict_pending'] = True
+                    st.session_state.trigger_export = True
+                    st.rerun()
 
                 # 显示所有冲突模块
                 conflict_title = "⚠️ Existing Files Detected" if lang == 'en' else "⚠️ 检测到已存在的文件"
@@ -355,6 +354,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                     # 将所有 existing_modules 添加到 overwrite 列表
                     all_modules = set(st.session_state.get('_existing_modules_list', []))
                     st.session_state['_overwrite_modules'] = all_modules
+                    st.session_state.pop('_export_conflict_pending', None)
                     st.session_state['_exporting_in_progress'] = True
                     # 🔧 FIX: 设置 trigger_export 并让它rerun来继续执行
                     st.session_state.trigger_export = True
@@ -363,6 +363,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                     """跳过全部的回调函数"""
                     all_modules = set(st.session_state.get('_existing_modules_list', []))
                     st.session_state['_skipped_modules'] = all_modules
+                    st.session_state.pop('_export_conflict_pending', None)
                     st.session_state['_exporting_in_progress'] = True
                     # 🔧 FIX: 设置 trigger_export 并让它rerun来继续执行
                     st.session_state.trigger_export = True
@@ -2050,6 +2051,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
             del st.session_state['_skipped_modules']
         if '_overwrite_modules' in st.session_state:
             del st.session_state['_overwrite_modules']
+        st.session_state.pop('_export_conflict_pending', None)
         if '_export_cancelled' in st.session_state:
             del st.session_state['_export_cancelled']
         if '_low_mem_export_confirmed' in st.session_state:
@@ -2097,10 +2099,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
 
             exported_concept_count = len(all_exported_columns)
 
-            # 🔧 DEBUG: 打印实际收集到的患者数量和概念数量
-            print(f"[DEBUG] Exported patient count: {actual_patient_count}, concept count: {exported_concept_count}")
-
-            # 🆕 计算被选择但未能提取的概念列表
+            # 计算被选择但未能提取的概念列表
             # 这不是错误，只是一些概念在当前数据库中不可用
             selected_but_not_exported = []
             selected_concepts_set = set(selected_concepts) if selected_concepts else set()
@@ -2116,6 +2115,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                 'files': exported_files,
                 'export_dir': str(export_dir),
                 'total_time': total_elapsed,
+                'start_time': export_start_time,
                 'module_times': module_times.copy(),
                 'patient_count': actual_patient_count,  # 🆕 保存实际患者数
                 'concept_count': exported_concept_count,  # 🆕 保存实际概念数
