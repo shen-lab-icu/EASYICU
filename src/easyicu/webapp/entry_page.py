@@ -118,9 +118,9 @@ def render_entry_page(app_context: dict[str, Any] | None = None):
     with col1:
         st.markdown('<div class="entry-btn-wrap demo-col">', unsafe_allow_html=True)
         if lang == 'en':
-            demo_label = "🧪\n\nDemo Mode\n\nGuided tour with simulated ICU data\nAgent preview, no tokens\n\n✨ Quick Start"
+            demo_label = "🧪\n\nDemo Mode\n\nGuided tour with simulated ICU data, agent preview with no tokens\n\n✨ Quick Start"
         else:
-            demo_label = "🧪\n\n演示模式\n\n使用模拟 ICU 数据完成导览\n预览智能体，不消耗 token\n\n✨ 快速开始"
+            demo_label = "🧪\n\n演示模式\n\n使用模拟 ICU 数据完成导览，预览智能体不消耗 token\n\n✨ 快速开始"
         if st.button(demo_label, key="entry_demo_btn", use_container_width=True, type="secondary"):
             clear_run_state("all")
             st.session_state.entry_mode = 'demo'
@@ -135,9 +135,9 @@ def render_entry_page(app_context: dict[str, Any] | None = None):
     with col2:
         st.markdown('<div class="entry-btn-wrap real-col">', unsafe_allow_html=True)
         if lang == 'en':
-            real_label = "📊\n\nReal Data Mode\n\nConnect local ICU data or module exports\nRun analysis first, draft later\n\n🔬 Research Ready"
+            real_label = "📊\n\nReal Data Mode\n\nConnect local ICU data or module exports, then run analysis before drafting\n\n🔬 Research Ready"
         else:
-            real_label = "📊\n\n真实数据模式\n\n连接本地 ICU 数据或模块导出\n先分析复核，再生成文章\n\n🔬 科研就绪"
+            real_label = "📊\n\n真实数据模式\n\n连接本地 ICU 数据或模块导出，先分析复核再生成文章\n\n🔬 科研就绪"
         if st.button(real_label, key="entry_real_btn", use_container_width=True, type="primary"):
             clear_run_state("all")
             st.session_state.entry_mode = 'real'
@@ -243,7 +243,7 @@ def render_entry_page(app_context: dict[str, Any] | None = None):
         )
     else:
         selected_tab = st.radio(
-            "",
+            "Workflow overview tabs",
             options=tab_options,
             index=tab_options.index(tab_default),
             horizontal=True,

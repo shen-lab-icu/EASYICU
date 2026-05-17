@@ -22,11 +22,13 @@ import tarfile
 import logging
 import hashlib
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
+from typing import Optional, List, Dict, Any, Tuple, Callable, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import threading
 from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
@@ -148,6 +150,14 @@ class DataConverter:
     
     # Common encodings to try
     ENCODINGS = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+
+    # pandas.read_csv default NA strings — used by the Arrow CSV path so its
+    # string-column null handling matches the legacy pandas converter.
+    _PANDAS_NA_VALUES = [
+        '', '#N/A', '#N/A N/A', '#NA', '-1.#IND', '-1.#QNAN', '-NaN', '-nan',
+        '1.#IND', '1.#QNAN', '<NA>', 'N/A', 'NA', 'NULL', 'NaN', 'None',
+        'n/a', 'nan', 'null',
+    ]
     
     # Memory threshold for buffer flush (in rows per partition)
     PARTITION_BUFFER_THRESHOLD = 500_000
@@ -175,13 +185,134 @@ class DataConverter:
         self.chunk_size = chunk_size
         self.parallel_workers = parallel_workers
         self.verbose = verbose
-        
+
+        # Parquet output codec. zstd produces ~20-25% smaller files than
+        # snappy at similar speed; on a slow mount fewer bytes means faster
+        # conversion *writes* AND faster downstream extraction *reads*.
+        # Override with EASYICU_PARQUET_COMPRESSION (e.g. 'snappy').
+        self.parquet_compression = os.environ.get(
+            'EASYICU_PARQUET_COMPRESSION', 'zstd'
+        ).lower()
+
         if not self.data_path.exists():
             raise ValueError(f"Data path does not exist: {self.data_path}")
         
         self._status: Dict[str, Dict[str, Any]] = {}
+        # convert_all() runs _convert_file() on a ThreadPoolExecutor; this
+        # reentrant lock serialises mutations of _status and the JSON write
+        # so concurrent workers cannot corrupt .easyicu_conversion_status.json
+        # or trip json.dump's "dictionary changed size during iteration".
+        self._status_lock = threading.RLock()
         self._load_status()
-    
+
+        # 🚀 perf A1/A2: cache bucket-shard presence at init so
+        # `_has_valid_shards` does not re-walk `<table>_bucket/bucket_id=*/*.parquet`
+        # for every CSV file. On slow filesystems (macfuse / network mounts)
+        # the per-call recursive readdir over 100 bucket sub-dirs dominated
+        # status checks; one shot at startup is two orders of magnitude
+        # cheaper. Lazy-init: defer the scan until first lookup.
+        self._bucket_dir_cache: Optional[Dict[str, int]] = None
+        self._shard_dir_cache: Optional[Dict[str, int]] = None
+
+    def _scan_bucket_dirs(self) -> Dict[str, int]:
+        """One-shot scan of `<table>_bucket` directories. Returns
+        ``{table_name: non_empty_bucket_count}``. Cached.
+        """
+        if self._bucket_dir_cache is not None:
+            return self._bucket_dir_cache
+        cache: Dict[str, int] = {}
+        try:
+            for entry in self.data_path.iterdir():
+                if not entry.is_dir() or not entry.name.endswith("_bucket"):
+                    continue
+                table_name = entry.name[: -len("_bucket")]
+                try:
+                    bucket_subdirs = [d for d in entry.iterdir() if d.is_dir() and d.name.startswith("bucket_id=")]
+                except OSError:
+                    continue
+                non_empty = 0
+                for d in bucket_subdirs:
+                    try:
+                        # 🚀 perf A1/A2 (footer guard): require at least one
+                        # bucket file to pass the parquet-magic check, not
+                        # just exist. Same rationale as the shard-dir scan
+                        # above — partial / truncated files must not be
+                        # accepted as "already converted".
+                        parquet_files = [p for p in d.iterdir() if p.suffix == ".parquet"]
+                        if any(self._has_parquet_footer(p) for p in parquet_files):
+                            non_empty += 1
+                    except OSError:
+                        pass
+                if non_empty > 0:
+                    cache[table_name] = non_empty
+        except OSError:
+            pass
+        self._bucket_dir_cache = cache
+        return cache
+
+    def _scan_shard_dirs(self) -> Dict[str, int]:
+        """One-shot scan of `<table>/N.parquet` shard directories. Returns
+        ``{table_name: sequential_shard_count}``. Cached.
+
+        🚀 perf A1/A2 (footer guard): we also verify each shard's parquet
+        magic bytes at the very end of the file (4 bytes ``PAR1``). A
+        previous conversion killed mid-write left ``vitalperiodic/1.parquet``
+        present-but-truncated; the original scan only checked filename
+        existence and the corrupt shard slipped through as "converted",
+        which silently broke the entire reconvert flow. The footer
+        check is one ``open + seek + read(8)`` per file — negligible.
+        """
+        if self._shard_dir_cache is not None:
+            return self._shard_dir_cache
+        cache: Dict[str, int] = {}
+        try:
+            for entry in self.data_path.iterdir():
+                if not entry.is_dir():
+                    continue
+                try:
+                    shard_paths: Dict[int, Path] = {}
+                    for p in entry.iterdir():
+                        if p.suffix == ".parquet" and p.stem.isdigit():
+                            shard_paths[int(p.stem)] = p
+                    if not shard_paths:
+                        continue
+                    shard_nums = sorted(shard_paths.keys())
+                    if shard_nums[0] != 1 or shard_nums != list(range(1, len(shard_nums) + 1)):
+                        continue
+                    if not all(self._has_parquet_footer(shard_paths[n]) for n in shard_nums):
+                        # Treat as not-converted so the caller redrives
+                        # the conversion instead of trusting truncated shards.
+                        continue
+                    cache[entry.name] = len(shard_nums)
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        self._shard_dir_cache = cache
+        return cache
+
+    @staticmethod
+    def _has_parquet_footer(path: Path) -> bool:
+        """Cheap parquet integrity check — last 4 bytes must be ``PAR1``.
+
+        Avoids a full pyarrow metadata read; one syscall per shard.
+        Catches truncated files from killed converters / disconnected mounts.
+        """
+        try:
+            sz = path.stat().st_size
+            if sz < 8:
+                return False
+            with path.open("rb") as f:
+                f.seek(-4, 2)
+                return f.read(4) == b"PAR1"
+        except OSError:
+            return False
+
+    def _invalidate_dir_caches(self) -> None:
+        """Drop bucket/shard dir caches. Call after writing new shards/buckets."""
+        self._bucket_dir_cache = None
+        self._shard_dir_cache = None
+
     def _detect_database(self) -> str:
         """Detect database type from directory structure."""
         path_str = str(self.data_path).lower()
@@ -350,13 +481,36 @@ class DataConverter:
                 self._status = {}
     
     def _save_status(self) -> None:
-        """Save conversion status to file."""
+        """Persist conversion status atomically.
+
+        Called concurrently from ThreadPoolExecutor workers. The lock keeps
+        json serialisation from iterating ``self._status`` while another
+        worker mutates it; the temp-file + ``os.replace`` ensures the on-disk
+        file is always a complete JSON document even if the process dies
+        mid-write.
+        """
         status_file = self.data_path / self.STATUS_FILE
         try:
-            with open(status_file, 'w') as f:
-                json.dump(self._status, f, indent=2)
+            with self._status_lock:
+                payload = json.dumps(self._status, indent=2)
+            tmp_file = status_file.with_name(
+                f"{status_file.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+            )
+            with open(tmp_file, 'w') as f:
+                f.write(payload)
+            os.replace(tmp_file, status_file)
         except Exception as e:
             logger.warning(f"Could not save status file: {e}")
+
+    def _record_status(self, file_key: str, result: Dict[str, Any]) -> None:
+        """Atomically record one file's status and flush to disk.
+
+        Holds the lock across both the dict mutation and the serialise step
+        so a concurrent worker can never observe (or persist) a torn state.
+        """
+        with self._status_lock:
+            self._status[file_key] = result
+            self._save_status()
     
     def _get_csv_files(self) -> List[Path]:
         """Get all CSV/CSV.GZ files in the data directory (including subdirs).
@@ -390,18 +544,37 @@ class DataConverter:
                 if subdir_path.is_dir():
                     search_paths.append(subdir_path)
         
-        # Find all CSV and CSV.GZ files recursively
+        # 🚀 perf A2 (extension): os.walk with directory pruning so we
+        # never descend into `<table>_bucket/` or sharded shard dirs
+        # full of parquet files. The previous implementation called
+        # `rglob` 4 times (one per CSV pattern) over the entire tree,
+        # touching 10k+ parquet entries in chartevents_bucket purely to
+        # discard them — the dominant cost of startup on slow mounts and
+        # the reason `mimic-iii "All N files are already converted"`
+        # printed instantly but the process kept running for minutes.
+        csv_suffixes = ('.csv', '.csv.gz')
         for search_path in search_paths:
-            for pattern in ['*.csv', '*.csv.gz', '*.CSV', '*.CSV.GZ']:
-                for f in search_path.rglob(pattern):
-                    if _is_hidden_sidecar(f):
+            for root, dirs, files in os.walk(search_path, topdown=True):
+                # Prune excluded subtrees in place (os.walk respects this
+                # only when topdown=True).
+                pruned: List[str] = []
+                for d in dirs:
+                    dl = d.lower()
+                    if dl in excluded_dirs:
                         continue
-                    # Check if any parent directory is in the excluded list
-                    try:
-                        parts_lower = [p.lower() for p in f.relative_to(self.data_path).parts[:-1]]
-                    except ValueError:
-                        parts_lower = [p.lower() for p in f.parts[:-1]]
-                    if any(part in excluded_dirs for part in parts_lower):
+                    # Skip `<table>_bucket/` shard layouts entirely —
+                    # they only ever contain parquet, not CSV.
+                    if dl.endswith('_bucket'):
+                        continue
+                    pruned.append(d)
+                dirs[:] = pruned
+
+                for name in files:
+                    lower = name.lower()
+                    if not lower.endswith(csv_suffixes):
+                        continue
+                    f = Path(root) / name
+                    if _is_hidden_sidecar(f):
                         continue
                     csv_files.append(f)
         
@@ -468,23 +641,28 @@ class DataConverter:
             if not skip:
                 filtered_files.append(f)
         
-        # Deduplicate by table name (keep largest file for each table)
-        table_files: Dict[str, Path] = {}
+        # 🚀 perf A3: stat each file ONCE — the original code called
+        # ``f.stat().st_size`` three times per file (dedup compare + final
+        # sort), which on slow filesystems is the dominant cost of file
+        # enumeration. Read size once, carry it on a tuple.
+        sized: List[Tuple[Path, int]] = []
         for f in filtered_files:
+            try:
+                size = f.stat().st_size
+            except OSError:
+                size = 0
+            sized.append((f, size))
+
+        table_files: Dict[str, Tuple[Path, int]] = {}
+        for f, size in sized:
             table_name = self._get_table_name_from_path(f)
-            if table_name not in table_files:
-                table_files[table_name] = f
-            else:
-                # Prefer larger file (full data vs demo)
-                existing = table_files[table_name]
-                if f.stat().st_size > existing.stat().st_size:
-                    table_files[table_name] = f
-        
-        # Get unique files and sort by size
-        unique_files = list(table_files.values())
-        unique_files.sort(key=lambda f: f.stat().st_size)
-        
-        return unique_files
+            existing = table_files.get(table_name)
+            if existing is None or size > existing[1]:
+                table_files[table_name] = (f, size)
+
+        unique = list(table_files.values())
+        unique.sort(key=lambda pair: pair[1])
+        return [p for p, _ in unique]
     
     # ricu table name mappings (CSV name -> Parquet name)
     # Some databases use different names for CSV vs Parquet files
@@ -554,45 +732,46 @@ class DataConverter:
     def _has_valid_shards(self, csv_path: Path) -> Tuple[bool, int]:
         """
         Check if valid sharded parquet files exist for a CSV.
-        Checks both root directory, subdirectory locations, and bucket directories.
-        
+
+        🚀 perf A1/A2: uses cached one-shot scans (`_scan_bucket_dirs`,
+        `_scan_shard_dirs`) so this method is O(1) per call after the
+        first invocation, instead of recursively walking the bucket tree
+        for every CSV (which was the dominant cost on slow filesystems —
+        the cause of the mimic-iii startup hang on macfuse).
+
         Returns:
             (has_shards, shard_count)
         """
         table_name = self._get_table_name(csv_path)
-        
-        # Check for bucket directories first (e.g., nursecharting_bucket/bucket_id=*)
-        bucket_dir = self.data_path / f"{table_name}_bucket"
-        if bucket_dir.is_dir():
-            bucket_subdirs = list(bucket_dir.glob("bucket_id=*"))
-            if bucket_subdirs:
-                # Count non-empty buckets
-                non_empty = sum(1 for d in bucket_subdirs if list(d.glob("*.parquet")))
-                if non_empty > 0:
-                    return True, non_empty
-        
-        # Check both possible shard directory locations
-        for shard_dir in [self._get_shard_dir(csv_path), self._get_shard_dir_with_subdir(csv_path)]:
-            if not shard_dir.is_dir():
-                continue
-            
-            # Count parquet shards (1.parquet, 2.parquet, etc.)
-            shard_files = list(shard_dir.glob('[0-9]*.parquet'))
-            if not shard_files:
-                continue
-            
-            # Verify shards are numbered sequentially from 1
-            shard_nums = sorted([int(f.stem) for f in shard_files if f.stem.isdigit()])
-            if not shard_nums or shard_nums[0] != 1:
-                continue
-            
-            # Check for gaps in sequence
-            expected = list(range(1, len(shard_nums) + 1))
-            if shard_nums != expected:
-                continue
-            
-            return True, len(shard_nums)
-        
+
+        # Bucket dirs (e.g., chartevents_bucket/bucket_id=*/*.parquet) win first.
+        bucket_cache = self._scan_bucket_dirs()
+        if table_name in bucket_cache:
+            return True, bucket_cache[table_name]
+
+        # Sequential shards (e.g., vitalPeriodic/1.parquet ... N.parquet).
+        # Check both the table-name directory and the same-name-with-subdir
+        # path used by `_get_shard_dir_with_subdir`.
+        shard_cache = self._scan_shard_dirs()
+        if table_name in shard_cache:
+            return True, shard_cache[table_name]
+
+        # Fall back to the slow per-call paths only for the subdir variant
+        # (e.g., icu/chartevents/) which the cache does not enumerate.
+        subdir_shard_dir = self._get_shard_dir_with_subdir(csv_path)
+        if subdir_shard_dir.is_dir():
+            try:
+                shard_nums: List[int] = []
+                for p in subdir_shard_dir.iterdir():
+                    if p.suffix == ".parquet" and p.stem.isdigit():
+                        shard_nums.append(int(p.stem))
+            except OSError:
+                shard_nums = []
+            if shard_nums:
+                shard_nums.sort()
+                if shard_nums[0] == 1 and shard_nums == list(range(1, len(shard_nums) + 1)):
+                    return True, len(shard_nums)
+
         return False, 0
     
     def _is_conversion_needed(self, csv_path: Path) -> Tuple[bool, str]:
@@ -737,35 +916,112 @@ class DataConverter:
     
     def _read_csv_with_encoding(self, csv_path: Path, **kwargs) -> pd.DataFrame:
         """Read CSV file with automatic encoding detection.
-        
+
         For chunked reading (chunksize in kwargs), detects encoding first
         to avoid errors during iteration.
-        
-        Uses optimized settings for memory-efficient reading.
+
+        🚀 perf Y: when the encoding is utf-8 (the common case) and the
+        caller is doing a streaming chunked read, dispatch to the
+        ``pyarrow.csv`` streaming reader instead of ``pandas.read_csv``.
+        PyArrow's CSV parser is C++-vectorised and benchmarked ~3× faster
+        on representative eicu/mimic files (see
+        ``scripts/bench_csv_reader.py``). The returned iterator yields
+        pandas DataFrames so downstream code (`_fix_mixed_type_columns`,
+        partition assignment, parquet write) is unchanged.
+
+        Set ``EASYICU_CSV_READER=pandas`` to force the legacy path.
         """
         is_gzipped = csv_path.name.endswith('.gz') or csv_path.name.endswith('.GZ')
-        
+
         # Detect encoding first
         encoding = self._detect_encoding(csv_path)
-        
+
+        # 🚀 perf Y (rolled back to opt-in): the pyarrow CSV streaming
+        # reader is 3× faster in isolation (see
+        # ``scripts/bench_csv_reader.py``) but during real conversion the
+        # downstream sort_values / groupby / parquet write are pandas
+        # operations, so every chunk pays an extra Arrow→pandas
+        # conversion. On eicu vitalPeriodic this made conversion ~5×
+        # SLOWER end-to-end than the pandas reader. Keeping the code
+        # path available behind the env flag so a future refactor can
+        # stay in pyarrow end-to-end (then it would be a real win).
+        chunksize = kwargs.get('chunksize')
+        prefer_arrow = (
+            chunksize is not None
+            and os.environ.get('EASYICU_CSV_READER', 'pandas').lower() == 'pyarrow'
+            and encoding in ('utf-8', 'utf-8-replace', 'ascii')
+        )
+        if prefer_arrow:
+            try:
+                return self._read_csv_arrow_chunks(csv_path, int(chunksize), is_gzipped)
+            except Exception as exc:
+                logger.info(
+                    "  ⚠️ pyarrow CSV reader failed on %s (%s), falling back to pandas",
+                    csv_path.name, type(exc).__name__,
+                )
+
         # Base read arguments - optimized for memory efficiency
         read_args = {
             'on_bad_lines': 'warn',  # Don't fail on bad lines
             'low_memory': True,  # Force low memory mode
         }
         read_args.update(kwargs)
-        
+
         # Handle special utf-8-replace fallback
         if encoding == 'utf-8-replace':
             read_args['encoding'] = 'utf-8'
             read_args['encoding_errors'] = 'replace'
         else:
             read_args['encoding'] = encoding
-        
+
         if is_gzipped:
             read_args['compression'] = 'gzip'
-        
+
         return pd.read_csv(csv_path, **read_args)
+
+    def _read_csv_arrow_chunks(self, csv_path: Path, chunksize: int, is_gzipped: bool):
+        """Yield pandas DataFrames of ~``chunksize`` rows each via
+        pyarrow.csv streaming reader.
+
+        PyArrow's reader delivers RecordBatches sized by ``block_size``
+        bytes (~10 MB by default), which usually contains many more
+        rows than our preferred chunksize. We re-batch into accumulator
+        slices roughly matching the caller's chunksize so downstream
+        partition assignment + write_table stays in a memory-friendly
+        regime.
+        """
+        import pyarrow.csv as pa_csv
+        import pyarrow as pa
+
+        # Aim for ~10 MB parse blocks; pyarrow defaults are similar but
+        # pinning here keeps row counts predictable.
+        block_size = max(8 * 1024 * 1024, chunksize * 200)
+        read_opts = pa_csv.ReadOptions(block_size=block_size)
+        parse_opts = pa_csv.ParseOptions(invalid_row_handler=lambda row: 'skip')
+        convert_opts = pa_csv.ConvertOptions(strings_can_be_null=True)
+
+        def _iterator():
+            with pa_csv.open_csv(
+                str(csv_path),
+                read_options=read_opts,
+                parse_options=parse_opts,
+                convert_options=convert_opts,
+            ) as reader:
+                accumulator: list = []
+                accumulated_rows = 0
+                for batch in reader:
+                    accumulator.append(batch)
+                    accumulated_rows += batch.num_rows
+                    if accumulated_rows >= chunksize:
+                        tbl = pa.Table.from_batches(accumulator)
+                        yield tbl.to_pandas()
+                        accumulator.clear()
+                        accumulated_rows = 0
+                if accumulator:
+                    tbl = pa.Table.from_batches(accumulator)
+                    yield tbl.to_pandas()
+
+        return _iterator()
     
     # Threshold for sharding large files (50MB compressed for memory safety)
     # Reduced from 1GB to prevent OOM on typical systems
@@ -776,8 +1032,13 @@ class DataConverter:
     # Known problematic columns that have mixed types
     # These columns often contain mixed numeric/string/bytes data
     MIXED_TYPE_COLUMNS = {
+        # MIMIC-III / MIMIC-IV — chartevents.value mixes numeric vitals with
+        # GCS-component text ('Spontaneously' / 'Oriented'); type inference
+        # that picks a numeric type silently drops every text row, losing
+        # 6+ neurological concepts. Pin it to string.
+        'chartevents': ['value'],
         # MIMIC-IV
-        'pharmacy': ['lockout_interval', 'one_hr_max', 'doses_per_24_hrs', 
+        'pharmacy': ['lockout_interval', 'one_hr_max', 'doses_per_24_hrs',
                      'duration', 'duration_interval', 'expiration_value'],
         'prescriptions': ['dose_val_rx', 'form_val_disp', 'doses_per_24_hrs'],
         'emar': ['dose_due', 'dose_given'],
@@ -913,8 +1174,7 @@ class DataConverter:
         try:
             # Update status
             result['status'] = ConversionStatus.CONVERTING
-            self._status[file_key] = result.copy()
-            self._save_status()
+            self._record_status(file_key, result.copy())
             
             file_size_mb = csv_path.stat().st_size / (1024 * 1024)
             should_shard = self._should_shard(csv_path)
@@ -936,8 +1196,7 @@ class DataConverter:
             logger.error(f"  ❌ Failed to convert {file_key}: {e}")
         
         # Update and save status
-        self._status[file_key] = result
-        self._save_status()
+        self._record_status(file_key, result)
         
         return result
     
@@ -992,7 +1251,7 @@ class DataConverter:
                     if writer is None:
                         if reference_schema is None:
                             reference_schema = table.schema
-                        writer = pq.ParquetWriter(parquet_path, reference_schema, compression='snappy')
+                        writer = pq.ParquetWriter(parquet_path, reference_schema, compression=self.parquet_compression)
                     
                     # Normalize schema if different from reference
                     if table.schema != reference_schema:
@@ -1036,14 +1295,14 @@ class DataConverter:
             
             # Convert to parquet with error handling
             try:
-                df.to_parquet(parquet_path, index=False, engine='pyarrow')
+                df.to_parquet(parquet_path, index=False, engine='pyarrow', compression=self.parquet_compression)
             except Exception as e:
                 if 'Expected bytes' in str(e) or 'object' in str(e).lower():
                     # Convert all object columns to string
                     logger.warning(f"  ⚠️ Converting object columns to string for {csv_path.name}")
                     for col in df.select_dtypes(include=['object']).columns:
                         df[col] = df[col].astype(str)
-                    df.to_parquet(parquet_path, index=False, engine='pyarrow')
+                    df.to_parquet(parquet_path, index=False, engine='pyarrow', compression=self.parquet_compression)
                 else:
                     raise
             
@@ -1115,15 +1374,46 @@ class DataConverter:
         return result
     
     def _convert_with_id_partitioning(
-        self, 
-        csv_path: Path, 
-        shard_dir: Path, 
+        self,
+        csv_path: Path,
+        shard_dir: Path,
+        partition_config: Dict[str, Any],
+        result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Dispatch ID-partitioned conversion: end-to-end Arrow, pandas fallback.
+
+        The Arrow path keeps the whole pipeline (CSV parse → partition assign →
+        parquet write) in pyarrow, avoiding the per-chunk Arrow↔pandas round
+        trips that made the earlier naive pyarrow reader ~5× slower end-to-end.
+        On any failure (non-UTF8, unexpected schema drift, etc.) it falls back
+        to the proven pandas implementation.
+        """
+        if self._arrow_csv_enabled(csv_path):
+            try:
+                return self._convert_with_id_partitioning_arrow(
+                    csv_path, shard_dir, partition_config, result
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "  ⚠️ Arrow id-partition path failed for %s (%s: %s); "
+                    "falling back to pandas",
+                    csv_path.name, type(exc).__name__, exc,
+                )
+                self._wipe_shard_dir(shard_dir)
+        return self._convert_with_id_partitioning_pandas(
+            csv_path, shard_dir, partition_config, result
+        )
+
+    def _convert_with_id_partitioning_pandas(
+        self,
+        csv_path: Path,
+        shard_dir: Path,
         partition_config: Dict[str, Any],
         result: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Convert using ID-based partitioning (matching ricu's logic).
-        
+
         Partitions data based on breakpoints in a specific column.
         Uses memory-efficient streaming - writes directly to partition files
         without accumulating data in memory.
@@ -1190,7 +1480,7 @@ class DataConverter:
                 partition_writers[part_num] = pq.ParquetWriter(
                     shard_path, 
                     reference_schema,
-                    compression='snappy'
+                    compression=self.parquet_compression
                 )
             
             # Write the batch
@@ -1238,20 +1528,42 @@ class DataConverter:
                             pass
                     return self._convert_with_row_partitioning(csv_path, shard_dir, result)
                 
-                # Vectorized partition assignment
+                # 🚀 perf A5: actually-vectorized partition assignment.
+                # The original code claimed vectorization but ran a Python
+                # list comprehension over `col_values`; np.searchsorted is
+                # C-vectorized and 10-100× faster on million-row chunks.
                 col_values = chunk[partition_col].values
-                chunk['_partition'] = [bisect.bisect_right(breaks, v) + 1 for v in col_values]
-                
-                # Write each partition's data directly to file
-                for part_num in range(1, n_partitions + 1):
-                    part_chunk = chunk[chunk['_partition'] == part_num].drop(columns=['_partition'])
-                    if len(part_chunk) > 0:
-                        write_to_partition(part_num, part_chunk)
-                        del part_chunk
-                
-                # Aggressive memory cleanup - every chunk for safety
+                _np_breaks = np.asarray(breaks)
+                chunk['_partition'] = np.searchsorted(_np_breaks, col_values, side='right') + 1
+
+                # 🚀 perf Z (eicu wide-table cohort speedup): sort each chunk
+                # by partition_col before writing. Each parquet row group
+                # then carries a narrow [min, max] zone-map on partition_col,
+                # so DuckDB can skip row groups that don't intersect a
+                # cohort filter (`patientunitstayid IN (...)`). On a typical
+                # 200-patient cohort this prunes ~70-95% of row groups
+                # within each shard — much bigger win than re-partitioning.
+                # Cost: pandas sort_values on a 1M-row chunk is sub-second.
+                chunk = chunk.sort_values(
+                    [partition_col], kind='mergesort'
+                )
+
+                # 🚀 perf A6: single groupby pass instead of N boolean
+                # masks + N drops. Each `chunk[mask].drop(...)` allocated
+                # a new DataFrame; on 5M-row chunks with 8 partitions that
+                # was 8× the necessary memory churn.
+                for part_num, part_chunk in chunk.groupby('_partition', sort=False):
+                    if len(part_chunk) == 0:
+                        continue
+                    part_chunk = part_chunk.drop(columns=['_partition'])
+                    write_to_partition(int(part_num), part_chunk)
+                    del part_chunk
+
+                # 🚀 perf A7: drop the per-chunk `gc.collect()`. CPython
+                # already reclaims when refcounts hit zero (the `del chunk`
+                # below is sufficient); calling gc every chunk inserts a
+                # 20–100 ms STW pause that compounded on macfuse runs.
                 del chunk
-                gc.collect()
             
             # Close all writers
             close_all_writers()
@@ -1409,6 +1721,27 @@ class DataConverter:
         shard_dir: Path,
         result: Dict[str, Any]
     ) -> Dict[str, Any]:
+        """Dispatch row-count sharded conversion: Arrow path, pandas fallback."""
+        if self._arrow_csv_enabled(csv_path):
+            try:
+                return self._convert_with_row_partitioning_arrow(
+                    csv_path, shard_dir, result
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "  ⚠️ Arrow row-shard path failed for %s (%s: %s); "
+                    "falling back to pandas",
+                    csv_path.name, type(exc).__name__, exc,
+                )
+                self._wipe_shard_dir(shard_dir)
+        return self._convert_with_row_partitioning_pandas(csv_path, shard_dir, result)
+
+    def _convert_with_row_partitioning_pandas(
+        self,
+        csv_path: Path,
+        shard_dir: Path,
+        result: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Convert using row-count based partitioning (fallback method).
         Uses streaming write to avoid memory accumulation.
@@ -1470,7 +1803,7 @@ class DataConverter:
                     if reference_schema is None:
                         reference_schema = table.schema
                     shard_path = shard_dir / f"{shard_num}.parquet"
-                    current_writer = pq.ParquetWriter(shard_path, reference_schema, compression='snappy')
+                    current_writer = pq.ParquetWriter(shard_path, reference_schema, compression=self.parquet_compression)
                 
                 # Normalize table to match reference schema
                 if table.schema != reference_schema:
@@ -1480,14 +1813,13 @@ class DataConverter:
                 
                 current_shard_rows += chunk_len
                 del chunk, table
-                
+
                 # Start new shard when reaching threshold
                 if current_shard_rows >= self.ROWS_PER_SHARD:
                     start_new_shard()
-                    gc.collect()  # GC after closing each shard
-                
-                # Aggressive GC every chunk for memory safety
-                gc.collect()
+                    # 🚀 perf A7: keep one gc.collect at shard boundaries
+                    # (cheap, infrequent) but drop the per-chunk call below.
+                    gc.collect()
         
         finally:
             # Clean up iterator to release file handles and memory
@@ -1512,7 +1844,329 @@ class DataConverter:
             logger.info(f"  ✅ Converted {result['file']}: {total_rows:,} rows in {shard_num} shards")
         
         return result
-    
+
+    # ------------------------------------------------------------------
+    # End-to-end Arrow conversion path
+    #
+    # The legacy pandas path parses CSV with pandas.read_csv and round-trips
+    # every chunk Arrow→pandas→Arrow. On gzip-compressed databases (eicu,
+    # mimic-iv) CSV parsing dominates and pandas is ~3× slower than
+    # pyarrow.csv. Keeping the whole pipeline in pyarrow removes both the
+    # slow parser and the round trips. The pandas methods above remain as a
+    # robustness fallback for non-UTF8 files or unexpected schema drift.
+    # ------------------------------------------------------------------
+
+    def _arrow_csv_enabled(self, csv_path: Path) -> bool:
+        """Whether the end-to-end Arrow CSV path may be used for this file."""
+        if os.environ.get('EASYICU_CSV_READER', '').lower() == 'pandas':
+            return False
+        try:
+            enc = self._detect_encoding(csv_path)
+        except Exception:  # noqa: BLE001
+            return False
+        # pyarrow.csv assumes UTF-8/ASCII; other encodings go to pandas.
+        return enc in ('utf-8', 'ascii', 'utf-8-replace')
+
+    def _wipe_shard_dir(self, shard_dir: Path) -> None:
+        """Delete parquet shards left behind by a failed Arrow attempt."""
+        try:
+            for p in shard_dir.glob('*.parquet'):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _open_arrow_csv(self, csv_path: Path, table_name: str):
+        """Open a pyarrow streaming CSV reader (.gz handled transparently).
+
+        Known mixed-type columns are pinned to string up front via
+        ConvertOptions.column_types, which replaces the pandas-era
+        ``_fix_mixed_type_columns`` post-processing.
+        """
+        import pyarrow as pa
+        import pyarrow.csv as pa_csv
+
+        col_types = {
+            col: pa.string()
+            for col in self.MIXED_TYPE_COLUMNS.get(table_name, [])
+        }
+        read_opts = pa_csv.ReadOptions(block_size=16 * 1024 * 1024)
+        parse_opts = pa_csv.ParseOptions(invalid_row_handler=lambda row: 'skip')
+        convert_opts = pa_csv.ConvertOptions(
+            strings_can_be_null=True,
+            column_types=col_types or None,
+            # Match pandas.read_csv's default NA strings so string columns
+            # get the same null treatment as the legacy pandas converter
+            # (otherwise values like 'NA'/'None'/'null' stay as text and
+            # diverge from existing prepared parquet).
+            null_values=self._PANDAS_NA_VALUES,
+        )
+        return pa_csv.open_csv(
+            str(csv_path),
+            read_options=read_opts,
+            parse_options=parse_opts,
+            convert_options=convert_opts,
+        )
+
+    def _threaded_batch_iter(self, reader, queue_size: int = 4):
+        """Yield record batches from *reader* via a background producer thread.
+
+        The CSV read/decompress/parse (``read_next_batch``) and the parquet
+        encode/compress/write the caller does both release the GIL in
+        pyarrow's C++ layer, so running the reader on its own thread overlaps
+        the two phases — conversion wall time drops toward ``max(read, write)``
+        instead of ``read + write``.
+        """
+        import threading
+        import queue as _queue
+
+        q: "_queue.Queue" = _queue.Queue(maxsize=queue_size)
+        sentinel = object()
+        err: list = []
+        stop = threading.Event()
+
+        def _produce():
+            try:
+                while not stop.is_set():
+                    try:
+                        batch = reader.read_next_batch()
+                    except StopIteration:
+                        break
+                    # timed put so an early consumer exit can't deadlock us
+                    while not stop.is_set():
+                        try:
+                            q.put(batch, timeout=0.5)
+                            break
+                        except _queue.Full:
+                            continue
+            except Exception as exc:  # noqa: BLE001
+                err.append(exc)
+            finally:
+                try:
+                    q.put(sentinel, timeout=0.5)
+                except _queue.Full:
+                    pass
+
+        thread = threading.Thread(target=_produce, daemon=True)
+        thread.start()
+        try:
+            while True:
+                batch = q.get()
+                if batch is sentinel:
+                    break
+                yield batch
+        finally:
+            stop.set()
+            # unblock a producer parked on a full queue
+            try:
+                while True:
+                    q.get_nowait()
+            except _queue.Empty:
+                pass
+            thread.join(timeout=10)
+        if err:
+            raise err[0]
+
+    def _convert_with_id_partitioning_arrow(
+        self,
+        csv_path: Path,
+        shard_dir: Path,
+        partition_config: Dict[str, Any],
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """ID-partitioned conversion kept entirely in pyarrow."""
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        import pyarrow.parquet as pq
+
+        partition_col = partition_config['col']
+        breaks = partition_config['breaks']
+        if not isinstance(breaks, list):
+            breaks = [breaks]
+        n_partitions = len(breaks) + 1
+        table_name = self._get_table_name(csv_path)
+
+        if self.verbose:
+            logger.info(
+                f"  Using ID-based partitioning on '{partition_col}' with "
+                f"{n_partitions} partitions (Arrow streaming)"
+            )
+
+        reader = self._open_arrow_csv(csv_path, table_name)
+        schema = reader.schema
+        if partition_col not in schema.names:
+            try:
+                reader.close()
+            except Exception:  # noqa: BLE001
+                pass
+            raise ValueError(
+                f"partition column '{partition_col}' not in CSV header"
+            )
+
+        writers: Dict[int, "pq.ParquetWriter"] = {}
+        part_rows: Dict[int, int] = {i: 0 for i in range(1, n_partitions + 1)}
+        total_rows = 0
+        # ~1M-row working tables: big enough to amortise per-table overhead,
+        # small enough that 8 partition slices stay well within memory.
+        batch_target = 1_000_000
+        pending: list = []
+        pending_rows = 0
+
+        def flush(tbl: "pa.Table") -> None:
+            nonlocal total_rows
+            if tbl.num_rows == 0:
+                return
+            col = tbl.column(partition_col)
+            part_idx = None
+            for b in breaks:
+                ge = pc.cast(pc.greater_equal(col, b), pa.int32())
+                part_idx = ge if part_idx is None else pc.add(part_idx, ge)
+            part_idx = pc.add(part_idx, pa.scalar(1, pa.int32()))
+            # Null ids (should not occur for an ID column) -> last partition,
+            # so rows are never silently dropped.
+            part_idx = pc.fill_null(part_idx, pa.scalar(n_partitions, pa.int32()))
+            tagged = tbl.append_column('__part', part_idx)
+            for p in range(1, n_partitions + 1):
+                sub = tagged.filter(pc.equal(tagged.column('__part'), p))
+                if sub.num_rows == 0:
+                    continue
+                # Drop helper col, then sort by the partition column so each
+                # parquet row group carries a narrow zone-map (cohort filters
+                # can skip row groups) — parity with the pandas path.
+                sub = sub.drop(['__part']).sort_by(partition_col)
+                if p not in writers:
+                    writers[p] = pq.ParquetWriter(
+                        shard_dir / f"{p}.parquet", schema, compression=self.parquet_compression
+                    )
+                writers[p].write_table(sub)
+                part_rows[p] += sub.num_rows
+            total_rows += tbl.num_rows
+
+        try:
+            for batch in self._threaded_batch_iter(reader):
+                pending.append(batch)
+                pending_rows += batch.num_rows
+                if pending_rows >= batch_target:
+                    flush(pa.Table.from_batches(pending, schema))
+                    pending = []
+                    pending_rows = 0
+                    if self.verbose:
+                        logger.info(f"  Read {total_rows:,} rows...")
+            if pending:
+                flush(pa.Table.from_batches(pending, schema))
+        finally:
+            for p, w in writers.items():
+                try:
+                    w.close()
+                    if self.verbose:
+                        logger.info(
+                            f"  📁 Wrote partition {p}: {part_rows[p]:,} rows"
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"  ⚠️ Error closing partition {p}: {exc}")
+            try:
+                reader.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        result['status'] = ConversionStatus.COMPLETED
+        result['row_count'] = total_rows
+        result['shards'] = n_partitions
+        result['shard_dir'] = str(shard_dir)
+        result['partition_col'] = partition_col
+        result['partition_breaks'] = breaks
+        if self.verbose:
+            logger.info(
+                f"  ✅ Converted {result['file']}: {total_rows:,} rows "
+                f"in {n_partitions} partitions (Arrow)"
+            )
+        return result
+
+    def _convert_with_row_partitioning_arrow(
+        self,
+        csv_path: Path,
+        shard_dir: Path,
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Row-count sharded conversion kept entirely in pyarrow."""
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        table_name = self._get_table_name(csv_path)
+        reader = self._open_arrow_csv(csv_path, table_name)
+        schema = reader.schema
+
+        total_rows = 0
+        shards_written = 0
+        writer = None
+        shard_rows = 0
+        pending: list = []
+        pending_rows = 0
+        flush_target = 500_000
+
+        def write_pending() -> None:
+            nonlocal writer, shard_rows, pending, pending_rows
+            if not pending:
+                return
+            tbl = pa.Table.from_batches(pending, schema)
+            pending = []
+            pending_rows = 0
+            if writer is None:
+                writer = pq.ParquetWriter(
+                    shard_dir / f"{shards_written + 1}.parquet",
+                    schema, compression=self.parquet_compression,
+                )
+            writer.write_table(tbl)
+            shard_rows += tbl.num_rows
+
+        try:
+            for batch in self._threaded_batch_iter(reader):
+                pending.append(batch)
+                pending_rows += batch.num_rows
+                total_rows += batch.num_rows
+                if pending_rows >= flush_target:
+                    write_pending()
+                if shard_rows >= self.ROWS_PER_SHARD:
+                    writer.close()
+                    shards_written += 1
+                    if self.verbose:
+                        logger.info(
+                            f"  📁 Wrote shard {shards_written}: "
+                            f"{shard_rows:,} rows"
+                        )
+                    writer = None
+                    shard_rows = 0
+            write_pending()
+        finally:
+            if writer is not None:
+                try:
+                    writer.close()
+                    shards_written += 1
+                    if self.verbose:
+                        logger.info(
+                            f"  📁 Wrote shard {shards_written}: "
+                            f"{shard_rows:,} rows"
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"  ⚠️ Error closing shard: {exc}")
+            try:
+                reader.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        result['status'] = ConversionStatus.COMPLETED
+        result['row_count'] = total_rows
+        result['shards'] = max(shards_written, 1)
+        result['shard_dir'] = str(shard_dir)
+        if self.verbose:
+            logger.info(
+                f"  ✅ Converted {result['file']}: {total_rows:,} rows "
+                f"in {shards_written} shards (Arrow)"
+            )
+        return result
+
     def get_conversion_status(self) -> Dict[str, Dict[str, Any]]:
         """
         Get the current conversion status for all files.
@@ -1548,19 +2202,34 @@ class DataConverter:
         *,
         write_manifest: bool = True,
         evidence_root: Optional[str | Path] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Convert all CSV files to Parquet.
-        
+
         Args:
             force: Force reconversion even if parquet exists
             write_manifest: Write ``conversion_manifest.json`` after status resolution
             evidence_root: Optional research-agent run/work directory. When provided,
                 the manifest is also registered in an EvidenceStore.
-            
+            progress_callback: Optional callable invoked once per converted file
+                with ``{'file', 'current', 'total', 'status', 'result'}``. Lets a
+                UI render per-file progress without re-implementing the loop.
+
         Returns:
             Dictionary of conversion results
         """
+        # HiRID ships its bulk tables as tar.gz archives; extract them so
+        # _get_csv_files / sharding see the unpacked data. Idempotent — skips
+        # when shards already exist.
+        if self.database == 'hirid':
+            try:
+                extracted = self._extract_hirid_archives()
+                if extracted and self.verbose:
+                    logger.info(f"📦 Extracted HiRID archives: {', '.join(extracted)}")
+            except Exception as e:
+                logger.warning(f"HiRID archive extraction failed: {e}")
+
         csv_files = self._get_csv_files()
         
         if not csv_files:
@@ -1592,7 +2261,22 @@ class DataConverter:
             logger.info(f"Converting {len(files_to_convert)} of {len(csv_files)} files...")
         
         results = {}
-        
+        total = len(files_to_convert)
+
+        def _emit(csv_path: Path, result: Dict[str, Any], done: int) -> None:
+            if progress_callback is None:
+                return
+            try:
+                progress_callback({
+                    'file': csv_path.name,
+                    'current': done,
+                    'total': total,
+                    'status': result.get('status'),
+                    'result': result,
+                })
+            except Exception as e:  # noqa: BLE001 — UI callback must not abort conversion
+                logger.warning(f"progress_callback raised: {e}")
+
         # Use parallel conversion for multiple files
         if len(files_to_convert) > 1 and self.parallel_workers > 1:
             with ThreadPoolExecutor(max_workers=self.parallel_workers) as executor:
@@ -1600,26 +2284,34 @@ class DataConverter:
                     executor.submit(self._convert_file, csv_path): csv_path
                     for csv_path in files_to_convert
                 }
-                
+
+                done = 0
                 for future in as_completed(future_map):
                     csv_path = future_map[future]
                     try:
                         result = future.result()
                         results[csv_path.name] = result
                     except Exception as e:
-                        results[csv_path.name] = {
+                        result = {
                             'status': ConversionStatus.FAILED,
                             'error': str(e),
                         }
+                        results[csv_path.name] = result
+                    done += 1
+                    _emit(csv_path, result, done)
         else:
             # Sequential conversion
-            for csv_path in files_to_convert:
+            for done, csv_path in enumerate(files_to_convert, start=1):
                 result = self._convert_file(csv_path)
                 results[csv_path.name] = result
+                _emit(csv_path, result, done)
         if write_manifest:
             self.write_conversion_manifest(results, evidence_root=evidence_root)
+        # 🚀 perf A1/A2: drop bucket/shard cache so a subsequent call sees
+        # the new shards/buckets written by this run.
+        self._invalidate_dir_caches()
         return results
-    
+
     def is_ready(self) -> Tuple[bool, List[str]]:
         """
         Check if all data files are ready (converted to parquet).
@@ -1715,6 +2407,10 @@ class DataConverter:
         """
 
         results = dict(results or self.get_conversion_status())
+        # 完整 SHA256 需把每个输入/输出文件再整读一遍——在慢速挂载上代价极高。
+        # 仅当本次 manifest 要做 research-agent 证据绑定时才计算密码学哈希；
+        # 普通转换用 size+mtime 指纹即可。
+        hash_files = evidence_root is not None
         manifest = {
             "schema_version": "easyicu.conversion_manifest/1",
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1731,7 +2427,7 @@ class DataConverter:
                 "large_tables_may_be_sharded": True,
             },
             "tables": [
-                self._conversion_manifest_entry(file_name, result)
+                self._conversion_manifest_entry(file_name, result, hash_files=hash_files)
                 for file_name, result in sorted(results.items())
             ],
         }
@@ -1765,6 +2461,8 @@ class DataConverter:
         self,
         file_name: str,
         result: Dict[str, Any],
+        *,
+        hash_files: bool = True,
     ) -> Dict[str, Any]:
         csv_path = self._find_csv_by_name(file_name)
         outputs = self._converted_outputs_for_result(csv_path, result)
@@ -1778,8 +2476,14 @@ class DataConverter:
             "shards": result.get("shards"),
             "partition_col": result.get("partition_col"),
             "partition_breaks": result.get("partition_breaks"),
-            "input": self._file_manifest_record(csv_path) if csv_path else None,
-            "outputs": [self._file_manifest_record(path) for path in outputs],
+            "input": (
+                self._file_manifest_record(csv_path, hash_files=hash_files)
+                if csv_path else None
+            ),
+            "outputs": [
+                self._file_manifest_record(path, hash_files=hash_files)
+                for path in outputs
+            ],
         }
 
     def _find_csv_by_name(self, file_name: str) -> Optional[Path]:
@@ -1807,7 +2511,9 @@ class DataConverter:
         ]
         return [path for path in candidates if path.exists()]
 
-    def _file_manifest_record(self, path: Optional[Path]) -> Dict[str, Any]:
+    def _file_manifest_record(
+        self, path: Optional[Path], *, hash_files: bool = True
+    ) -> Dict[str, Any]:
         if path is None:
             return {"path": None, "exists": False}
         exists = path.exists()
@@ -1822,10 +2528,14 @@ class DataConverter:
         }
         if exists and path.is_file():
             stat = path.stat()
-            record.update({
-                "size_bytes": stat.st_size,
-                "sha256": _sha256_file(path),
-            })
+            record["size_bytes"] = stat.st_size
+            if hash_files:
+                record["sha256"] = _sha256_file(path)
+            else:
+                # 慢速存储上跳过整文件 SHA256（要把所有输入/输出再整读一遍盘，
+                # 在 macfuse 挂载上能让转换耗时翻倍）。改用 size+mtime 廉价指纹；
+                # 完整 SHA256 仅在 research-agent 证据绑定（传入 evidence_root）时计算。
+                record["mtime_ns"] = stat.st_mtime_ns
         return record
     
     def get_table_info(self) -> Dict[str, Dict[str, Any]]:

@@ -8680,8 +8680,7 @@
           "class_name": "rgx_itm",
           "callback": "transform_fun(set_val(TRUE))"
         }
-      ],
-      "hirid": []
+      ]
     }
   },
   "ecmo_indication": {
@@ -8755,8 +8754,7 @@
           ],
           "callback": "apply_map(c(`VA ECMO` = 'cardiovascular', `VV ECMO` = 'respiratory'), var = 'value')"
         }
-      ],
-      "hirid": []
+      ]
     }
   },
   "rrt": {
@@ -8808,8 +8806,11 @@
         {
           "table": "observations",
           "sub_var": "variableid",
-          "ids": [],
-          "callback": "transform_fun(set_val(TRUE))"
+          "ids": [
+            10002508
+          ],
+          "callback": "transform_fun(set_val(TRUE))",
+          "_comment": "10002508 = Haemofiltration (from hirid_variable_reference.csv). HiRID does not separately track CRRT/CVVHD/hemodialysis subtypes."
         }
       ],
       "mimic": [
@@ -8869,8 +8870,7 @@
     "sources": {
       "miiv": [],
       "eicu": [],
-      "aumc": [],
-      "hirid": []
+      "aumc": []
     },
     "target": "id_tbl",
     "callback": "rrt_criteria"
@@ -8918,14 +8918,6 @@
           ],
           "callback": "transform_fun(set_val(TRUE))"
         }
-      ],
-      "hirid": [
-        {
-          "table": "observations",
-          "sub_var": "variableid",
-          "ids": [],
-          "callback": "transform_fun(set_val(TRUE))"
-        }
       ]
     }
   },
@@ -8953,8 +8945,7 @@
           "regex": "GCS.*pre.*sedat",
           "class_name": "rgx_itm"
         }
-      ],
-      "hirid": []
+      ]
     }
   },
   "potassium": {

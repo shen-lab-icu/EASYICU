@@ -1753,6 +1753,7 @@
         "defaults": {
           "index_var": "respchartoffset",
           "val_var": "respchartvalue",
+          "sub_var": "respchartvaluelabel",
           "time_vars": [
             "respchartoffset",
             "respchartentryoffset"
@@ -3706,6 +3707,7 @@
         "defaults": {
           "index_var": "respchartoffset",
           "val_var": "respchartvalue",
+          "sub_var": "respchartvaluelabel",
           "time_vars": [
             "respchartoffset",
             "respchartentryoffset"

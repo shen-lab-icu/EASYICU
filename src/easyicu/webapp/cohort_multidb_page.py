@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
@@ -47,6 +48,78 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
 
     # ========== Real Data模式 ==========
     if entry_mode != 'demo':
+        # Exports-only workspace covers a single database. Cross-DB needs ≥2
+        # DBs to actually compare — but the original config form below still
+        # works if the user has a multi-DB root on disk. Show a helpful hint,
+        # not a wall.
+        if st.session_state.get('_cohort_real_ws_origin') == 'loaded_exports':
+            db_label_for_msg = {
+                'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC',
+                'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb',
+            }.get(st.session_state.get('_cohort_real_ws_db', ''), '')
+
+            # Best-effort: detect sibling DB folders next to the sidebar path.
+            sidebar_path = st.session_state.get('data_path') or ''
+            sibling_dbs: list[str] = []
+            sibling_root: str = ''
+            if sidebar_path:
+                try:
+                    p = Path(sidebar_path)
+                    parent = p if p.is_dir() and any(
+                        (p / name).is_dir() for name in
+                        ('mimiciv', 'mimic-iv', 'eicu', 'eicu-crd', 'aumc',
+                         'amsterdamumcdb', 'hirid', 'mimic', 'mimiciii', 'sic')
+                    ) else p.parent
+                    if parent.is_dir():
+                        for name in parent.iterdir():
+                            if not name.is_dir():
+                                continue
+                            lower = name.name.lower()
+                            for tag in ('mimiciv', 'mimic-iv', 'mimic_iv',
+                                        'eicu', 'aumc', 'amsterdamumcdb',
+                                        'hirid', 'mimiciii', 'mimic-iii',
+                                        'mimic_iii', 'mimic3', 'sic'):
+                                if tag in lower:
+                                    sibling_dbs.append(name.name)
+                                    break
+                        if len(sibling_dbs) >= 2:
+                            sibling_root = str(parent)
+                except (OSError, PermissionError, ValueError):
+                    pass
+
+            if lang == 'en':
+                base = (
+                    f"💡 **Cross-DB compares multiple databases.** Your loaded "
+                    f"module exports cover only **{db_label_for_msg or 'one database'}**, "
+                    "so a fair cross-database comparison needs additional DB roots. "
+                    "Fill **ICU Data Root** below with a folder that contains "
+                    "**≥2 database subfolders** (e.g. `mimiciv/`, `eicu/`, `aumc/`), "
+                    "pick the databases in **Databases**, then click **Load & Generate**."
+                )
+                if sibling_dbs:
+                    base += (
+                        f"\n\n🔎 Detected near your sidebar path: "
+                        f"`{sibling_root}` with subfolders "
+                        + ", ".join(f"`{n}`" for n in sibling_dbs[:6])
+                        + ". You can paste that into **ICU Data Root** below."
+                    )
+                st.info(base)
+            else:
+                base = (
+                    f"💡 **跨库面板用于对比多个数据库。** 你加载的模块导出只覆盖 "
+                    f"**{db_label_for_msg or '单个数据库'}**，因此还需要其它数据库根目录。"
+                    "请在下方 **ICU 数据根目录** 中填入包含 "
+                    "**≥2 个数据库子目录**（如 `mimiciv/`、`eicu/`、`aumc/`）的文件夹，"
+                    "在 **数据库** 中勾选要对比的库，然后点击 **加载并生成**。"
+                )
+                if sibling_dbs:
+                    base += (
+                        f"\n\n🔎 在你侧边栏路径附近发现：`{sibling_root}` 包含子目录 "
+                        + "、".join(f"`{n}`" for n in sibling_dbs[:6])
+                        + "。可直接粘贴到下方 **ICU 数据根目录**。"
+                    )
+                st.info(base)
+            _render_compact_divider()
         # 如果共享工作区已就绪，确保路径/数据库同步
         if _cohort_real_workspace_ready(st.session_state):
             _sync_real_data_panel_defaults(root_key="multidb_data_root", multi_db_key="multidb_selected")
@@ -178,8 +251,23 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
             fig = mdd.create_distribution_grid(data, concepts, cols=n_cols)
             if not screenshot_mode:
                 fig.update_layout(
-                    title_text="Multi-Database Feature<br>Distribution Comparison",
-                    margin=dict(t=132, b=62, l=72, r=24),
+                    title=dict(
+                        text="Multi-Database Feature Distribution Comparison",
+                        x=0.5,
+                        xanchor="center",
+                        y=0.985,
+                        yanchor="top",
+                        font=dict(size=18),
+                    ),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="top",
+                        y=-0.08,
+                        xanchor="center",
+                        x=0.5,
+                        font=dict(size=12, color="black"),
+                    ),
+                    margin=dict(t=80, b=110, l=72, r=24),
                 )
             st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
 

@@ -1176,19 +1176,33 @@ def load_concepts(
     # N 批次后 RSS = N * 碎片 + 结果数据。MIIV 94K patients: 15G RSS for 1.4G data.
     # subprocess 隔离: 每批在子进程中运行，子进程退出后 OS 完整回收内存，零碎片。
     #
-    # 🔧 2026-05-11: 阈值改成内存自适应（实测 12GB 系统跑 167 特征单模块峰值 ≤ 5GB）：
-    #   <16GB 可用内存：始终启用 subprocess（macOS/Windows 上 pymalloc 不归还）
-    #   16-32GB：cohort > 30k 才启用
-    #   ≥32GB：不启用（开销大于收益，主进程足够装下碎片）
+    # 🔧 2026-05-16: 阈值改基于 **物理总内存** (psutil.virtual_memory().total)，
+    # 不再用 available_mb。available 在 macOS/16GB 机上常驻 4-8GB（别的应用占了
+    # 一部分），导致几乎所有 16GB+ 机器都走 subprocess 路径，付出 N×5s fork+import
+    # 开销（eicu 33 batch ≈ 165s）。
+    # 决策表（按 total RAM）：
+    #   <12GB: 始终 subprocess（小内存，pymalloc 碎片致命）
+    #   12-32GB: 仅在 cohort > 60K 时 subprocess（典型场景仍走 inprocess）
+    #   ≥32GB: 仅在 cohort > 120K 时 subprocess
+    # 显式覆盖：EASYICU_FORCE_INPROCESS_BATCH=1 强制 inprocess；
+    #          EASYICU_FORCE_SUBPROCESS_BATCH=1 强制 subprocess。
     if not use_subprocess and effective_batch_size is not None:
-        _avail_mb = get_available_memory_mb()
-        if _avail_mb < 16 * 1024:
+        if os.environ.get('EASYICU_FORCE_INPROCESS_BATCH'):
+            pass  # 用户显式禁用 subprocess，保持 inprocess
+        elif os.environ.get('EASYICU_FORCE_SUBPROCESS_BATCH'):
             use_subprocess = True
-        elif _avail_mb < 32 * 1024 and _total_patients is not None and _total_patients > 30000:
-            use_subprocess = True
-        elif _total_patients is not None and _total_patients > 60000:
-            # 32GB+ 系统也只对超大 cohort 启用，避免序列化开销
-            use_subprocess = True
+        else:
+            try:
+                import psutil
+                _total_mb = psutil.virtual_memory().total / (1024 * 1024)
+            except Exception:
+                _total_mb = get_available_memory_mb()  # 降级
+            if _total_mb < 12 * 1024:
+                use_subprocess = True
+            elif _total_mb < 32 * 1024 and _total_patients is not None and _total_patients > 60000:
+                use_subprocess = True
+            elif _total_patients is not None and _total_patients > 120000:
+                use_subprocess = True
     
     # 🔧 FIX Bug 54/63: daemon 子进程的分批隔离
     # Webapp 用 daemon=True 启动模块子进程以隔离内存碎片。

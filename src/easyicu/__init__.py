@@ -1265,69 +1265,6 @@ try:
 except ImportError:
     _HAS_DATA_CONVERTER = False
 
-# DuckDB 内存安全转换器 - 12GB 内存目标
-try:
-    from .duckdb_converter import (
-        DuckDBConverter,
-        convert_with_duckdb,
-    )
-    _HAS_DUCKDB_CONVERTER = True
-    __all__.extend([
-        "DuckDBConverter",
-        "convert_with_duckdb",
-    ])
-except ImportError:
-    _HAS_DUCKDB_CONVERTER = False
-
-# 分桶转换器 - 16GB内存优化
-try:
-    from .bucket_converter import (
-        BucketConfig,
-        ConversionResult as BucketConversionResult,
-        convert_to_buckets,
-        read_from_buckets,
-        convert_aumc_numericitems,
-        convert_aumc_listitems,
-        convert_hirid_observations,
-        convert_hirid_pharma,
-        convert_miiv_chartevents,
-        convert_miiv_labevents,
-        convert_miiv_inputevents,
-        convert_eicu_nursecharting,
-        convert_eicu_lab,
-        convert_mimic3_chartevents,
-        convert_mimic3_labevents,
-        convert_sic_data_float_h,
-        convert_sic_laboratory,
-        convert_sic_medication,
-        verify_query_plan,
-        _duckdb_hash_batch,
-    )
-    _HAS_BUCKET_CONVERTER = True
-    __all__.extend([
-        'BucketConfig', 
-        'BucketConversionResult',
-        'convert_to_buckets',
-        'read_from_buckets',
-        'convert_aumc_numericitems',
-        'convert_aumc_listitems',
-        'convert_hirid_observations',
-        'convert_hirid_pharma',
-        'convert_miiv_chartevents',
-        'convert_miiv_labevents',
-        'convert_miiv_inputevents',
-        'convert_eicu_nursecharting',
-        'convert_eicu_lab',
-        'convert_mimic3_chartevents',
-        'convert_mimic3_labevents',
-        'convert_sic_data_float_h',
-        'convert_sic_laboratory',
-        'convert_sic_medication',
-        'verify_query_plan',
-    ])
-except ImportError:
-    _HAS_BUCKET_CONVERTER = False
-
 # 模块初始化时自动执行缓存清理（如果启用）
 try:
     from .cache_manager import _initialize_cache_manager

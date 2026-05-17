@@ -539,35 +539,43 @@ class PatientFilter:
             return result['patient_id'].tolist()
     
     def _get_sepsis_patients(self) -> set:
-        """获取Sepsis患者ID集合"""
-        # 尝试从诊断表获取Sepsis患者
+        """获取 Sepsis 患者 ID 集合。
+
+        使用 EasyICU 的 Sepsis-3 定义（疑似感染 susp_inf + SOFA），而非 ICD
+        诊断编码。Sepsis-3 是推导出来的概念，没有便宜的查表捷径：本函数会触发
+        一次完整的 load_sepsis3 推导，这是保证队列定义正确的必要代价。ICD 编码
+        的脓毒症（A40/A41 等）只覆盖真实 Sepsis-3 队列的一个子集，不能作为代理。
+        """
         try:
-            if self.database in ['miiv', 'mimic']:
-                diagnoses = self._read_table('diagnoses_icd')
-                # Sepsis相关ICD码
-                sepsis_codes = [
-                    'A40', 'A41',  # ICD-10 Sepsis
-                    '99591', '99592', '78552',  # ICD-9 Sepsis
-                ]
-                sepsis_mask = diagnoses['icd_code'].str.startswith(tuple(sepsis_codes))
-                sepsis_hadm = set(diagnoses[sepsis_mask]['hadm_id'].dropna())
-                
-                # 获取对应的stay_id
-                icustays = self._read_table('icustays')
-                sepsis_stays = icustays[icustays['hadm_id'].isin(sepsis_hadm)]['stay_id']
-                return set(sepsis_stays)
-            
-            elif self.database == 'eicu':
-                diagnosis = self._read_table('diagnosis')
-                sepsis_mask = diagnosis['diagnosisstring'].str.lower().str.contains(
-                    'sepsis|septic', na=False
-                )
-                return set(diagnosis[sepsis_mask]['patientunitstayid'])
-            
+            from easyicu.api import load_sepsis3
+            sep3 = load_sepsis3(database=self.database, data_path=self.data_path)
         except Exception as e:
-            logger.warning(f"无法加载Sepsis诊断数据: {e}")
-        
-        return set()
+            logger.warning(f"无法用 Sepsis-3 定义筛选脓毒症患者: {e}")
+            return set()
+
+        if not isinstance(sep3, pd.DataFrame) or sep3.empty:
+            return set()
+
+        id_candidates = ['stay_id', 'icustay_id', 'patientunitstayid',
+                         'admissionid', 'patientid', 'CaseID']
+        id_col = next((c for c in id_candidates if c in sep3.columns), None)
+        if id_col is None:
+            logger.warning("load_sepsis3 结果中找不到患者 ID 列，无法筛选脓毒症队列")
+            return set()
+
+        value_candidates = ['sep3', 'sep3_sofa2', 'sep3_sofa1']
+        value_col = next((c for c in value_candidates if c in sep3.columns), None)
+        if value_col is None:
+            # 概念结果无显式标签列：出现在结果中即视为 Sepsis-3 阳性
+            return set(sep3[id_col].dropna().unique())
+
+        vals = pd.to_numeric(sep3[value_col], errors='coerce')
+        if vals.notna().any():
+            mask = vals > 0
+        else:
+            mask = sep3[value_col].astype(str).str.strip().str.lower().isin(
+                {'1', 'true', 't', 'yes', 'y'})
+        return set(sep3.loc[mask.fillna(False), id_col].dropna().unique())
     
     def get_filter_summary(self) -> Dict[str, Any]:
         """获取筛选结果摘要"""

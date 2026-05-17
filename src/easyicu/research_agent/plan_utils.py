@@ -962,6 +962,17 @@ def _step_contract_findings(
         or (figure_only_step and "figure:" in expected)
     )
     if figure_required:
+        # 🔧 2026-05-16: when the step itself declares it skipped (typically
+        # because the underlying data wasn't present — e.g.
+        # `"skipped": ["No SOFA-2 components available in the dataset"]` from
+        # 11_sofa2_component_figure), don't fail the figure contract. The
+        # skipped reason is the documented absence; the manuscript binder
+        # already treats `skipped` as a first-class signal. Otherwise figure-
+        # only steps would block the entire run whenever a sensitivity branch
+        # has no eligible cohort.
+        _skipped = step_summary.get("skipped") if isinstance(step_summary, dict) else None
+        if _skipped:
+            return findings
         figure_value = None
         for key, value in _flatten_scalar_dict(step_summary).items():
             lowered_key = key.lower()

@@ -33,6 +33,7 @@ class TableDefaults(BaseModel):
     id_var: Optional[str] = None
     index_var: Optional[str] = None
     val_var: Optional[str] = None
+    sub_var: Optional[str] = None
     unit_var: Optional[str] = None
     dur_var: Optional[str] = None
     time_vars: List[str] = Field(default_factory=list, alias="time_vars")

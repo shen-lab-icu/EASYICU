@@ -412,11 +412,13 @@ CONCEPT_GROUPS_INTERNAL = {
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc'],
     'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
-    'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium'],
+    'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium', 'apixaban', 'aspirin', 'diltiazem', 'enoxaparin', 'esmolol', 'insulin', 'labetalol', 'nicardipine', 'phenytoin', 'warfarin'],
     # 🔧 2026-02-04: 移除重复的 kdigo_aki/kdigo_creat/kdigo_uo，只保留 aki_* 规范名
     'renal': ['urine', 'urine24', 'uo_6h', 'uo_12h', 'uo_24h', 'rrt', 'rrt_criteria', 'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo', 'aki_stage_rrt',
               # 规范化后的列名（从 kdigo_* 展开列规范化而来）
-              'creat_low_past_48hr', 'creat_low_past_7day', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr'],
+              'creat_low_past_48hr', 'creat_low_past_7day', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+              # 液体平衡（入量/出量衍生）
+              'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml'],
     'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event'],  # 🔧 添加循环衰竭特征
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],

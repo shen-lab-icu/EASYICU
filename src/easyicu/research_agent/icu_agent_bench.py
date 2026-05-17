@@ -1,15 +1,27 @@
 """Typed ICUAgentBench scaffolding for benchmark/evaluation runs.
 
+================================================================================
+PROTOTYPE — NOT A PUBLISHED BENCHMARK
+================================================================================
+ICUAgentBench is an **internal prototype** evaluation framework. It is NOT a
+frozen, externally validated, or peer-reviewed benchmark.
+
+DO NOT cite this module (or its task IDs) in manuscripts, posters, or grant
+applications as if it were an established benchmark. The default suite contains
+exactly **one** partially frozen task (``synthetic_cohort_anomaly_audit``) with
+a checkable gold answer; all other tasks are descriptive specifications still
+awaiting frozen gold answers, adjudication rules, and an external runner.
+
+When ICUAgentBench is ready for public/paper-facing use, this banner will be
+removed and a versioned task-suite manifest will be added to the repo. Until
+then, the WriterAgent / ManuscriptAgent must not surface bench results as
+benchmark scores — describe runs as "internal prototype evaluation" only.
+================================================================================
+
 The current EASYICU benchmark runner grew organically from internal rule and
 analysis tasks. This module adds a formal, reusable schema layer so future
 paper-facing evaluation can talk about a stable ICUAgentBench task suite
 instead of ad hoc JSON blobs.
-
-Important: this is currently a **prototype** evaluation framework. The
-default suite contains one *partially frozen* task
-(``synthetic_cohort_anomaly_audit``) that ships with a checkable gold
-answer; all other tasks are descriptive specifications awaiting frozen
-gold answers, adjudication rules, and an external benchmark runner.
 
 The grading layer (``grade_bench_task`` + ``aggregate_bench_report``) is
 deliberately a **pure-function** layer that does *not* depend on the

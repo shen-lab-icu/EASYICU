@@ -1179,6 +1179,42 @@ def run_execute_phase(
                 )
                 _clear_output_dir(run_result.out_dir)
             except Exception as exc:
+                # 🔧 2026-05-16: distinguish transient LLM/parse failures from
+                # exhausted budget. JSON-parse errors after the OpenAIClient
+                # retry chain already exhausted its own backoff still bubble up
+                # here; treat them as one used repair attempt and loop instead
+                # of immediately bailing out. Only fall through to the
+                # deterministic fallback / repair_failed branch when we've
+                # genuinely used up max_code_repair_attempts.
+                _msg = str(exc).lower()
+                _is_transient = (
+                    isinstance(exc, json.JSONDecodeError)
+                    or "expecting value" in _msg
+                    or ("json" in _msg and "decode" in _msg)
+                    or "503" in _msg
+                    or "rate" in _msg
+                )
+                if (
+                    _is_transient
+                    and repair_attempts < pipeline._max_code_repair_attempts
+                ):
+                    emit_progress(
+                        "coder",
+                        f"Transient repair failure for {step.step_id} "
+                        f"(attempt {repair_attempts}): {type(exc).__name__}; retrying.",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                        repair_attempts=repair_attempts,
+                    )
+                    # The retained `code` is unchanged → next loop iteration
+                    # will re-run the same script, fail the same way, then
+                    # come back here for repair attempt N+1 with the same
+                    # traceback in run_log. That gives the LLM another shot
+                    # at producing parseable output.
+                    continue
+
                 fallback_code = _deterministic_fallback_code("repair_failed")
                 if fallback_code is not None:
                     code = fallback_code

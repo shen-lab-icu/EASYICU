@@ -313,10 +313,15 @@ def test_webapp_cohort_workspace_state_helpers_are_split_from_streamlit_app() ->
 
 
 def test_feature_definition_panel_lives_inside_tutorial_tab() -> None:
+    """The feature-definition panel must render inside the tutorial page,
+    after render_home() and before the quick-viz page branch. Main
+    navigation is a st.radio (active_page == ...) since the tabs→radio
+    refactor; the assertion still pins panel placement relative to the
+    quick-viz branch."""
     app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
 
     render_home_idx = app_content.index("        render_home()")
     feature_panel_idx = app_content.index("        _render_feature_definition_panel(lang)")
-    quick_viz_tab_idx = app_content.index("    with tab2:")
+    quick_viz_idx = app_content.index('    elif active_page == "quick_viz":')
 
-    assert render_home_idx < feature_panel_idx < quick_viz_tab_idx
+    assert render_home_idx < feature_panel_idx < quick_viz_idx

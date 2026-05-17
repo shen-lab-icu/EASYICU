@@ -67,6 +67,40 @@ def _strip_reasoning_blocks(text: str) -> str:
 
 from .llm_mocks import MockLLMClient  # re-exported for backward compatibility
 
+
+def _extract_retry_after(exc: Exception) -> Optional[float]:
+    """Pull a ``Retry-After`` hint out of an OpenRouter / OpenAI exception.
+
+    OpenRouter wraps the upstream provider's headers inside
+    ``exc.response.headers`` AND repeats the value inside the JSON body as
+    ``metadata.retry_after_seconds``. We probe both. Returns seconds (float)
+    or None if we can't find a hint.
+    """
+    try:
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            hdr = getattr(resp, "headers", None) or {}
+            ra = hdr.get("Retry-After") or hdr.get("retry-after")
+            if ra is not None:
+                return float(ra)
+    except Exception:
+        pass
+    # Fallback: parse out of the str(exc) which usually includes the JSON.
+    s = str(exc)
+    m = re.search(r"retry_after_seconds['\"]?\s*[:=]\s*([0-9.]+)", s)
+    if m:
+        try:
+            return float(m.group(1))
+        except Exception:
+            pass
+    m = re.search(r"Retry-After['\"]?\s*[:=]?\s*['\"]?([0-9.]+)", s)
+    if m:
+        try:
+            return float(m.group(1))
+        except Exception:
+            pass
+    return None
+
 # ---------------------------------------------------------------------------
 # OpenAI client (optional — only imported on first use)
 # ---------------------------------------------------------------------------
@@ -222,16 +256,76 @@ class OpenAIClient:
         import time as _time
 
         last_exc: Optional[Exception] = None
-        for attempt in range(4):
+        import json as _json
+
+        def _do_call():
+            resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
+            # Eager validation of the envelope so transient null-choices/null-
+            # message responses surface here and are caught by the retry loop
+            # below, rather than crashing the caller with `'NoneType' object
+            # is not subscriptable` later.
+            _choices = getattr(resp, "choices", None)
+            if not _choices:
+                raise RuntimeError(
+                    "LLM_TRANSIENT_NO_CHOICES: provider returned no choices "
+                    f"(finish_reason={getattr(resp, 'finish_reason', None)}, "
+                    f"model={self._model})"
+                )
+            _first = _choices[0]
+            if getattr(_first, "message", None) is None:
+                raise RuntimeError(
+                    "LLM_TRANSIENT_NO_MESSAGE: provider returned a choice "
+                    f"without `.message` (model={self._model})"
+                )
+            return resp
+
+        # 🔧 2026-05-17: bump retry budget from 4 → 8 attempts so persistent
+        # free-tier upstream rate-limit storms (Venice provider for llama-3.3-70b
+        # observed ~30s Retry-After headers repeating) can't tip the run into
+        # uncaught RateLimitError. Also honor the provider's Retry-After when
+        # present in the exception body.
+        for attempt in range(8):
             try:
-                resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
+                resp = _do_call()
                 break
+            except _json.JSONDecodeError as exc:
+                # 🔧 2026-05-16: OpenRouter / free-tier providers occasionally
+                # stream a chunk that the openai SDK can't parse as JSON
+                # (rate-limit notice mid-stream, truncated SSE, etc.). Treat
+                # as transient: short backoff, retry. Pilot run
+                # run_20260516T123840_cc32d5 lost step 08_model_validation to
+                # exactly this.
+                last_exc = exc
+                _time.sleep(2.0 * (attempt + 1))
+                continue
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc).lower()
                 if "503" in msg or "service unavailable" in msg or "overload" in msg or "429" in msg or "rate" in msg:
                     last_exc = exc
-                    backoff = 5.0 * (attempt + 1)
-                    _time.sleep(backoff)
+                    # Respect provider-supplied Retry-After (e.g. Venice's
+                    # ~30 s for llama-3.3-70b:free). Fall back to a quadratic
+                    # backoff so consecutive failures don't hammer the
+                    # endpoint (5s, 20s, 45s, 80s, ...).
+                    _retry_after = _extract_retry_after(exc)
+                    if _retry_after is not None:
+                        backoff = float(_retry_after) + 2.0
+                    else:
+                        backoff = 5.0 * (attempt + 1) ** 2
+                    _time.sleep(min(backoff, 120.0))
+                    continue
+                # JSON parse errors sometimes surface wrapped in other
+                # exception classes (e.g. APIError). Catch by message text
+                # as a safety net so we still get the backoff path.
+                msg = str(exc).lower()
+                if "expecting value" in msg or "json" in msg and "decode" in msg:
+                    last_exc = exc
+                    _time.sleep(2.0 * (attempt + 1))
+                    continue
+                # Our own LLM_TRANSIENT_* envelope failures from _do_call
+                # (null choices / null message) are retryable too.
+                if "llm_transient_no_choices" in msg or "llm_transient_no_message" in msg:
+                    last_exc = exc
+                    _time.sleep(2.0 * (attempt + 1))
                     continue
                 raise
         else:
@@ -267,6 +361,8 @@ class OpenAIClient:
         # that a response like "<think>…</think>" (no trailing answer text,
         # produced by Qwen3 in default thinking mode) correctly falls through
         # to the fallback chain rather than being treated as non-empty.
+        # (choices/message validated upstream in _do_call → retried with
+        # backoff. By the time we get here resp.choices[0].message is non-None.)
         choice = resp.choices[0]
         self.last_finish_reason = getattr(choice, "finish_reason", None)
         msg = choice.message

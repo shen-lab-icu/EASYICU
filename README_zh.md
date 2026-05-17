@@ -24,6 +24,19 @@ EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包�
 
 ## 从这里开始
 
+### 快速查表:"我想…… → 运行……"
+
+| 目标 | 入口 |
+|------|------|
+| 不写 Python,可视化校验数据 / 定义队列 / 导出特征 | **Web 应用** — `easyicu-webapp` *(或 `./start_easyicu.sh` / `start_easyicu.command`)* —— 见 **路线 A** |
+| 用 Python 构建可复现的特征/队列流水线 | **Python API** — `import easyicu` —— 见 **路线 B** |
+| 用 CLI 跑特征提取(脚本化、无 UI) | `easyicu`(对应 `extract_features` 控制台脚本) |
+| 让 research-agent 跑一个研究问题 + 队列 | `easyicu-research-agent` |
+| 用 agent 复现一篇外部论文 | `easyicu-research-replication` |
+| 启动 research-agent 用的 LLM 代理服务 | `easyicu-llm-server` |
+
+所有控制台脚本都在 `pyproject.toml` 的 `[project.scripts]` 里声明,执行 `pip install -e ".[dev,webapp]"`(或 `".[all]"`)后即可使用。
+
 ### 路线 A：Web 界面
 
 如果你想：

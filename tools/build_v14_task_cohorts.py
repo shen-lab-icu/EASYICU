@@ -10,7 +10,7 @@ Design goals
 ------------
 
 1. **Real, not synthetic.** Every cohort comes from the EasyICU export
-   the user is studying (e.g. ``/Users/haibo/Documents/GitHub/miiv_20260420/``).
+   the user is studying (e.g. ``/Users/haibo/Documents/GitHub/其他文件/miiv_20260420/``).
 2. **Reproducible.** Aggregation windows, filters, and column names
    are written in this file so the cohorts are a function of (export
    directory, code version) only.

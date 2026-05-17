@@ -116,9 +116,14 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                         key="dash_max_patients"
                     )
 
-                full_data_path = find_database_path(data_root, selected_db)
+                data_root_str = str(data_root or '').strip()
+                full_data_path = find_database_path(data_root_str, selected_db) if data_root_str else ''
+                path_ok = bool(full_data_path) and os.path.exists(full_data_path)
 
-                if os.path.exists(full_data_path):
+                if not data_root_str:
+                    st.info("ℹ️ " + ("Enter the ICU data root above to validate the database path."
+                                     if lang == 'en' else "请在上方填写 ICU 数据根目录以验证数据库路径。"))
+                elif path_ok:
                     st.success(f"✅ " + (f"Path valid: `{full_data_path}`" if lang == 'en' else f"路径有效: `{full_data_path}`"))
                 else:
                     st.warning(f"⚠️ " + (f"Path not found: `{full_data_path}`" if lang == 'en' else f"路径不存在: `{full_data_path}`"))
@@ -126,6 +131,7 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                 load_btn = st.button(
                     "🚀 " + ("Load Snapshot Data" if lang == 'en' else "加载快照数据"),
                     type="primary",
+                    disabled=not path_ok,
                     key="dash_load_btn"
                 )
 
