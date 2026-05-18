@@ -6,6 +6,154 @@ import numpy as np
 import pandas as pd
 
 
+def _add_catalog_mock_fallbacks(data, patient_ids, time_points, get_random_sample_times):
+    """Fill demo data gaps for concepts present in the web catalog.
+
+    The hand-written mock generator carries clinically shaped fixtures for the
+    common concepts.  The web catalog grows faster than those fixtures, so this
+    final pass keeps demo exports aligned with the current selectable concept
+    list instead of silently dropping newly added concepts.
+    """
+    try:
+        from easyicu.webapp.concept_catalog import CONCEPT_DICTIONARY
+    except Exception:
+        return
+
+    patient_ids = list(patient_ids)
+    if not patient_ids:
+        return
+
+    def _empty(concept):
+        return pd.DataFrame(columns=['stay_id', 'time', concept])
+
+    def _event_frame(concept, probability=0.12, duration_hours=8):
+        records = []
+        for pid in patient_ids:
+            if np.random.random() >= probability:
+                continue
+            start = int(np.random.uniform(0, max(1, len(time_points) - 1)))
+            for t in range(start, min(int(time_points[-1]) + 1, start + duration_hours), 4):
+                records.append({'stay_id': pid, 'time': float(t), concept: 1})
+        return pd.DataFrame(records) if records else _empty(concept)
+
+    def _static_event_frame(concept, probability=0.2):
+        records = [
+            {'stay_id': pid, concept: int(np.random.random() < probability)}
+            for pid in patient_ids
+        ]
+        return pd.DataFrame(records)
+
+    def _timeseries_frame(concept, mean, std, min_val=None, max_val=None, interval=12):
+        records = []
+        for pid in patient_ids:
+            for t in get_random_sample_times(pid, base_interval=interval, jitter=0.4):
+                value = float(np.random.normal(mean, std))
+                if min_val is not None:
+                    value = max(min_val, value)
+                if max_val is not None:
+                    value = min(max_val, value)
+                records.append({'stay_id': pid, 'time': t, concept: value})
+        return pd.DataFrame(records) if records else _empty(concept)
+
+    def _numeric_specs(concept):
+        specs = {
+            'bicar': (24, 4, 5, 45, 12),
+            'cl': (104, 5, 80, 130, 12),
+            'anion_gap': (13, 4, 0, 40, 12),
+            'alp': (90, 45, 20, 500, 24),
+            'alt': (35, 30, 5, 500, 24),
+            'ast': (42, 35, 5, 600, 24),
+            'bili_dir': (0.4, 0.5, 0.0, 15, 24),
+            'bun': (24, 14, 4, 150, 12),
+            'ca': (8.8, 0.8, 5.5, 13, 12),
+            'ck': (180, 150, 10, 4000, 24),
+            'ckmb': (4, 4, 0, 120, 24),
+            'crp': (55, 45, 0, 300, 24),
+            'mg': (2.0, 0.35, 1.0, 4.0, 12),
+            'tnt': (0.04, 0.08, 0, 3, 24),
+            'tri': (0.05, 0.1, 0, 5, 24),
+            'bnd': (4, 5, 0, 40, 24),
+            'basos': (0.5, 0.4, 0, 5, 24),
+            'eos': (2, 2, 0, 15, 24),
+            'esr': (35, 25, 0, 140, 24),
+            'fgn': (350, 120, 80, 900, 24),
+            'hba1c': (6.2, 1.3, 4.5, 14, 72),
+            'hct': (34, 6, 15, 55, 12),
+            'inr_pt': (1.2, 0.35, 0.8, 6, 12),
+            'lymph': (18, 10, 1, 60, 24),
+            'mch': (30, 2.5, 20, 40, 24),
+            'mchc': (33, 1.5, 25, 38, 24),
+            'mcv': (90, 8, 65, 120, 24),
+            'neut': (72, 12, 20, 98, 24),
+            'pt': (13, 3, 8, 60, 12),
+            'ptt': (32, 10, 18, 150, 12),
+            'rbc': (3.8, 0.8, 1.5, 7, 24),
+            'rdw': (14.5, 2.0, 10, 25, 24),
+            'total_input_ml': (120, 70, 0, 600, 1),
+            'fluid_balance': (20, 90, -300, 500, 1),
+            'fluid_balance_cumulative': (500, 900, -3000, 6000, 6),
+            'pulse_pressure': (50, 14, 10, 110, 1),
+        }
+        if concept in specs:
+            return specs[concept]
+        if concept.endswith('_rate') or concept in {'dex', 'ins'}:
+            return (0.08, 0.08, 0, 1.5, 4)
+        if concept.endswith('_dur'):
+            return (8, 6, 0, 72, 24)
+        return (50, 15, 0, 100, 12)
+
+    def _add_derived_frames():
+        if 'pulse_pressure' not in data and {'sbp', 'dbp'} <= set(data):
+            merged = data['sbp'].merge(data['dbp'], on=['stay_id', 'time'], how='inner')
+            if not merged.empty:
+                merged['pulse_pressure'] = (merged['sbp'] - merged['dbp']).clip(5, 120)
+                data['pulse_pressure'] = merged[['stay_id', 'time', 'pulse_pressure']]
+        if 'anion_gap' not in data and {'na', 'cl', 'bicar'} <= set(data):
+            merged = data['na'].merge(data['cl'], on=['stay_id', 'time'], how='inner')
+            merged = merged.merge(data['bicar'], on=['stay_id', 'time'], how='inner')
+            if not merged.empty:
+                merged['anion_gap'] = (merged['na'] - merged['cl'] - merged['bicar']).clip(0, 45)
+                data['anion_gap'] = merged[['stay_id', 'time', 'anion_gap']]
+
+    _add_derived_frames()
+
+    medication_like = {
+        'albumin_iv', 'amiodarone', 'apixaban', 'aspirin', 'bicarbonate',
+        'calcium_iv', 'cisatracurium', 'dexamethasone', 'dexmedetomidine',
+        'dextrose50', 'diltiazem', 'enoxaparin', 'esmolol', 'fentanyl',
+        'ffp', 'furosemide', 'heparin', 'insulin', 'ketamine',
+        'labetalol', 'levetiracetam', 'lorazepam', 'magnesium_iv',
+        'mannitol', 'meropenem', 'midazolam', 'milrinone', 'morphine',
+        'neostigmine', 'nicardipine', 'nitroglycerin', 'octreotide',
+        'packed_rbc', 'pantoprazole', 'phenytoin', 'platelets',
+        'potassium_iv', 'propofol', 'rocuronium', 'vancomycin',
+        'vecuronium', 'warfarin',
+    }
+
+    for concept, meta in CONCEPT_DICTIONARY.items():
+        if concept in data:
+            continue
+        unit = ''
+        if isinstance(meta, (tuple, list)) and len(meta) >= 3:
+            unit = str(meta[2]).lower()
+        if concept in medication_like or unit == 'boolean' or concept.endswith(('60', '_ind')):
+            data[concept] = _event_frame(concept, probability=0.10)
+        elif concept.endswith('_dur'):
+            mean, std, min_val, max_val, interval = _numeric_specs(concept)
+            data[concept] = _timeseries_frame(concept, mean, std, min_val, max_val, interval)
+        elif concept in {'fentanyl_rate', 'midazolam_rate', 'propofol_rate'}:
+            mean, std, min_val, max_val, interval = _numeric_specs(concept)
+            data[concept] = _timeseries_frame(concept, mean, std, min_val, max_val, interval)
+        elif concept in {'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml'}:
+            mean, std, min_val, max_val, interval = _numeric_specs(concept)
+            data[concept] = _timeseries_frame(concept, mean, std, min_val, max_val, interval)
+        elif concept == 'adm':
+            data[concept] = _static_event_frame(concept, probability=1.0)
+        else:
+            mean, std, min_val, max_val, interval = _numeric_specs(concept)
+            data[concept] = _timeseries_frame(concept, mean, std, min_val, max_val, interval)
+
+
 def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     """生成模拟 ICU 数据用于演示。
 
@@ -1122,7 +1270,10 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
     data['dobu60'] = pd.DataFrame(dobu60_records)
     data['ins'] = pd.DataFrame(ins_records)
     data['dex'] = pd.DataFrame(dex_records)
-    data['norepi_equiv'] = data['norepi_rate'].copy() if 'norepi_rate' in data else pd.DataFrame()
+    if 'norepi_rate' in data and not data['norepi_rate'].empty:
+        data['norepi_equiv'] = data['norepi_rate'].rename(columns={'norepi_rate': 'norepi_equiv'}).copy()
+    else:
+        data['norepi_equiv'] = pd.DataFrame(columns=['stay_id', 'time', 'norepi_equiv'])
 
     # vaso_ind (血管活性药物指示)
     vaso_ind_records = []
@@ -1273,7 +1424,10 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
         data['hgb'] = pd.DataFrame(hgb_records)
 
     # 数据复制和别名
-    data['mech_vent'] = data['vent_ind'].copy() if 'vent_ind' in data and not data['vent_ind'].empty else pd.DataFrame(columns=['stay_id', 'time', 'mech_vent'])
+    if 'vent_ind' in data and not data['vent_ind'].empty:
+        data['mech_vent'] = data['vent_ind'].rename(columns={'vent_ind': 'mech_vent'}).copy()
+    else:
+        data['mech_vent'] = pd.DataFrame(columns=['stay_id', 'time', 'mech_vent'])
 
     # vent_start 和 vent_end (机械通气起止时间)
     vent_start_records = []
@@ -1329,7 +1483,11 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
         if 'sao2' not in data or data['sao2'].empty:
             data['sao2'] = data['spo2'].rename(columns={'spo2': 'sao2'}).copy()
 
-    data['ett_gcs'] = data['gcs'].copy() if 'gcs' in data and not data['gcs'].empty else pd.DataFrame(columns=['stay_id', 'time', 'ett_gcs'])
+    if 'gcs' in data and not data['gcs'].empty:
+        data['ett_gcs'] = data['gcs'][['stay_id', 'time']].copy()
+        data['ett_gcs']['ett_gcs'] = (data['gcs']['gcs'] <= 8).astype(int).to_numpy()
+    else:
+        data['ett_gcs'] = pd.DataFrame(columns=['stay_id', 'time', 'ett_gcs'])
     # urine24: 24小时累计尿量，每6小时一个记录点（模拟真实采样频率）
     urine24_records = []
     if 'urine' in data and not data['urine'].empty:
@@ -1475,5 +1633,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
 
     # 🔧 已删除 sep3 别名概念（2026-02-13）：不再提取 sep3 特征
     # 保留 sep3_sofa1 和 sep3_sofa2 作为独立的 Sepsis-3 诊断概念
+
+    _add_catalog_mock_fallbacks(data, patient_ids, time_points, get_random_sample_times)
 
     return data, patient_ids

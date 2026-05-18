@@ -191,6 +191,20 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
                 key="multidb_features"
             )
 
+        # When the user picks ≥6 features the 4×N grid becomes very dense
+        # and individual subplots get tiny. Point them at the dedicated
+        # "Detailed Single Feature View" further down the page instead
+        # (2026-05 Phase D polish).
+        if len(selected_features) >= 6:
+            st.caption(
+                (f"💡 You selected {len(selected_features)} features — the grid will get crowded. "
+                 "For a focused side-by-side comparison, scroll down to "
+                 "**Detailed Single Feature View** after generation."
+                 if lang == 'en' else
+                 f"💡 你选择了 {len(selected_features)} 个特征——网格会比较密集。"
+                 "若想专注对比，请在生成后滚动到下方的 **单特征详细视图**。")
+            )
+
         # 加载按钮
         load_btn = st.button(
             "🚀 " + ("Load & Generate" if lang == 'en' else "加载并生成"),

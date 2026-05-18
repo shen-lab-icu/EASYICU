@@ -292,6 +292,22 @@ def _render_sidebar_top(entry_mode: str) -> None:
             st.session_state.entry_mode = 'none'
             st.session_state.use_mock_data = False
             st.rerun()
+
+        # Workflow help — Tutorial is no longer a top tab (2026-05 Phase A
+        # redesign); reach it from here instead. Toggles the active main
+        # page to the still-routable Tutorial page; "Back" returns to the
+        # previous page via the standard tab bar.
+        help_label = (
+            "📚 Workflow Help" if st.session_state.language == 'en'
+            else "📚 工作流帮助"
+        )
+        if st.button(help_label, key="open_tutorial",
+                     use_container_width=True,
+                     help=("Open the data-preparation tutorial"
+                           if st.session_state.language == 'en'
+                           else "打开数据准备教程")):
+            st.session_state['_active_main_page'] = 'tutorial'
+            st.rerun()
         st.markdown("---")
 
     # 显示当前模式标识 - 精简 pill 样式

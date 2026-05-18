@@ -1107,12 +1107,19 @@ class MultiDatabaseDistribution:
         # 获取特征标题
         titles = [self.FEATURE_CONFIG.get(c, {}).get('name', c) for c in concepts]
         
+        if rows <= 1:
+            vertical_spacing = 0.07
+        elif rows == 2:
+            vertical_spacing = 0.065
+        else:
+            vertical_spacing = 0.065
+
         fig = make_subplots(
             rows=rows,
             cols=cols,
             subplot_titles=titles,
-            vertical_spacing=0.12 if rows > 1 else 0.08,
-            horizontal_spacing=0.07,
+            vertical_spacing=vertical_spacing,
+            horizontal_spacing=0.055,
         )
         
         for idx, concept in enumerate(concepts):
@@ -1140,7 +1147,7 @@ class MultiDatabaseDistribution:
                         y=y,
                         mode='lines',
                         name=self.DB_LABELS.get(db, db),
-                        line=dict(color=color, width=2),
+                        line=dict(color=color, width=2.2),
                         fill='tozeroy',
                         fillcolor=f'rgba({r},{g},{b},0.25)',
                         showlegend=(idx == 0),
@@ -1153,19 +1160,19 @@ class MultiDatabaseDistribution:
             # 设置轴标签
             fig.update_xaxes(
                 title_text=config.get('unit', ''),
-                title_font_size=11,
-                tickfont=dict(size=10, color='black'),
-                title_font=dict(size=11, color='black'),
+                title_font_size=12,
+                tickfont=dict(size=11, color='black'),
+                title_font=dict(size=12, color='black'),
                 automargin=True,
                 row=row,
                 col=col,
             )
             fig.update_yaxes(
                 title_text='Density' if col == 1 else '',
-                title_font_size=11,
-                tickfont=dict(size=9, color='black'),
-                title_font=dict(size=11, color='black'),
-                title_standoff=10,
+                title_font_size=12,
+                tickfont=dict(size=10, color='black'),
+                title_font=dict(size=12, color='black'),
+                title_standoff=8,
                 nticks=4,
                 tickformat='.2g',
                 ticks='outside' if col == 1 else '',
@@ -1175,33 +1182,38 @@ class MultiDatabaseDistribution:
                 col=col,
             )
         
-        row_height = 340 if rows <= 2 else 300
+        if rows <= 1:
+            row_height = 360
+        elif rows == 2:
+            row_height = 320
+        else:
+            row_height = 280
         fig.update_layout(
             height=row_height * rows,
             title_text="Multi-Database Feature Distribution Comparison",
             title_x=0.5,
-            title_y=0.98,  # 🔧 FIX: 将标题位置上移
-            title_font_size=16,
+            title_y=0.955,
+            title_font_size=18,
             showlegend=True,
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
-                y=1.06,
+                y=1.095,
                 xanchor="left",
                 x=0,
                 font=dict(size=13, color='black'),
             ),
-            margin=dict(t=120, b=62, l=72, r=24),  # 留出纵坐标标题和刻度，避免重叠
-            font=dict(size=14, color='black'),
+            margin=dict(t=132, b=56, l=72, r=24),
+            font=dict(size=13, color='black'),
         )
         
         # 更新子图标题字体
         for annotation in fig.layout.annotations:
-            annotation.font.size = 10
-        fig.update_xaxes(tickfont=dict(size=10, color='black'), title_font=dict(size=11, color='black'), automargin=True)
+            annotation.font.size = 12
+        fig.update_xaxes(tickfont=dict(size=11, color='black'), title_font=dict(size=12, color='black'), automargin=True)
         fig.update_yaxes(
-            tickfont=dict(size=9, color='black'),
-            title_font=dict(size=11, color='black'),
+            tickfont=dict(size=10, color='black'),
+            title_font=dict(size=12, color='black'),
             nticks=4,
             tickformat='.2g',
             automargin=True,

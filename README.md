@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to **6 major public ICU databases**, automated extraction of **167 standardized clinical concepts**, and a **web-based interface** for cohort definition, feature review, visualization, and export.
+EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to **6 major public ICU databases**, automated extraction of **200+ standardized clinical concepts** (the canonical catalog exposes 217 — 210 dictionary concepts plus 7 derived clinical scores computed by the callback registry), and a **web-based interface** for cohort definition, feature review, visualization, and export.
 
 ## Why EasyICU
 
@@ -118,39 +118,53 @@ easyicu-webapp
 4. Define the research cohort, select features, and export the result.
 5. Use the built-in visualization and cohort analysis views for review.
 
+### Mode Selection
+
+On launch, EasyICU asks the user to pick a working mode. **Demo Mode** runs a guided tour against simulated ICU data with no tokens required; **Real Data Mode** connects to a local prepared dataset (or one of the supported public databases) and runs the full extraction-and-review workflow.
+
+![Mode Selection](docs/images/01_mode_selection.jpg)
+
 ### Data Preparation
 
-EasyICU can validate raw database directories and prepare them automatically for extraction. The web workflow detects unsupported raw layouts such as CSV / CSV.GZ / tar.gz, converts them to Parquet, applies database-specific optimizations, and prepares the structure needed by both the web interface and Python APIs.
+In Real Data Mode, EasyICU validates raw database directories and prepares them automatically for extraction. The web workflow detects unsupported raw layouts such as CSV / CSV.GZ / tar.gz, converts them to Parquet, applies database-specific optimizations, and prepares the structure needed by both the web interface and Python APIs.
 
-<img width="1931" height="956" alt="Data Conversion" src="https://github.com/user-attachments/assets/86ea826b-6a0f-491a-b967-c5a7ebdfaa5b" />
+### Patient Review — Modules and Features
 
-### Cohort Definition
+The **Patient Review** tab loads concept tables by module (Vital Signs, Labs, SOFA, Sepsis, AKI, …) and lets reviewers inspect features, time series, per-patient summaries, and a built-in data-quality audit. Each module shows its mapped raw fields and concept-level definitions, with merged or single-feature preview modes.
 
-Typical filters include:
-- ICU length of stay
-- age range
-- first ICU admission only
-- sex
-- in-hospital mortality
+![Patient Review](docs/images/02_patient_review.jpg)
 
-<img width="1931" height="736" alt="Cohort Selection" src="https://github.com/user-attachments/assets/628caf50-bed3-4918-b36f-5930464e9fb7" />
+### Time Series Review — Clinical Lanes
 
-### Feature Review And Export
+The **Time Series** sub-tab supports Clinical Lanes (multi-feature dashboard with reference thresholds), Single Patient, and Multi-Patient Comparison views. Each chart overlays clinically meaningful thresholds — e.g. Tachycardia / Bradycardia on heart rate, Fever / Hypothermia on temperature, Thrombocytopenia on platelets — so reviewers can sanity-check trends at a glance.
 
-Feature selection is organized by category, with concept definitions and mapping details available in the dictionary panel. Export formats include Parquet, CSV, and Excel.
+![Time Series — Clinical Lanes](docs/images/03_clinical_lanes.jpg)
 
-<img width="1931" height="1018" alt="Feature Selection" src="https://github.com/user-attachments/assets/f37fc262-b0e8-4894-8a08-2614614f4f18" />
+### Cohort Statistics
 
-<img width="4249" height="2241" alt="Batch Export" src="https://github.com/user-attachments/assets/9575d396-14ef-4e02-a4ac-a2a6222b1776" />
+The **Cohort Statistics** tab produces subgroup contrast tables (with p-values and SMD), coverage & eligibility audit, a one-page cohort snapshot, and SOFA-1 vs SOFA-2 sensitivity analysis — all powered by the prepared demo or real-data state. The Baseline Characteristics table below shows per-module values for the contrasted groups with significance flags (balanced / mild / large).
+
+![Cohort Statistics](docs/images/04_cohort_statistics.jpg)
+
+### Cross-Database Benchmark
+
+The **Cross-DB Benchmark** tab harmonizes the same clinical concepts across all six supported ICU databases and overlays their feature distributions for direct comparison — a key sanity check when a study aims to generalize across cohorts.
+
+![Cross-Database Benchmark](docs/images/06_cross_db_benchmark.jpg)
 
 ## Visualization & Analysis
 
-EasyICU includes interactive tools for:
+EasyICU's main interface is organized as 5 top-level tabs:
 
-- **Quick Visualization**: data tables, time-series review, patient overview, and data-quality assessment
-- **Cohort Analysis**: subgroup contrast tables, cross-database distribution review, cohort snapshots, and SOFA-1/SOFA-2 sensitivity analysis
+- **Tutorial** — data-preparation workflow guide (data source → cohort → concepts → export) shown on the leftmost tab so first-time users can find it without leaving the main pane; also reachable via the sidebar "📚 Workflow Help" button.
+- **Patient Review** — data tables, time-series review with clinical thresholds, per-patient overview, and data-quality audit (missingness / out-of-physio / temporal integrity).
+- **Cohort Statistics** — subgroup contrast tables (with p-values and SMD), coverage & eligibility audit, cohort one-page snapshot, and SOFA-1 vs SOFA-2 sensitivity analysis.
+- **Cross-DB Benchmark** — harmonized feature-distribution comparison across multiple ICU databases (kept separate because it needs raw schema for ≥ 2 databases).
+- **Research Agent** — optional analysis-and-manuscript scaffolding driven by a research question; includes a built-in deterministic replication runner for paper reproduction.
 
-<img width="3051" height="1823" alt="Quick Visualization Example" src="https://github.com/user-attachments/assets/09c64137-9c6a-401e-a1d0-fe358ea458de" />
+The Research Agent layer turns a question + prepared EasyICU data into an evidence-bound research output via a 4-stage pipeline — **Plan → Build → Analyze → Gate** — and only drafts the manuscript after the evidence gate passes:
+
+![Research Agent pipeline](docs/images/05_research_agent.jpg)
 
 ## Optional Research-Agent Layer
 
@@ -164,7 +178,7 @@ for details.
 
 ## 🚀 Going Further (Developers / Advanced Users)
 
-## Development & Testing
+### Development & Testing
 
 Create a local development environment and run the current automated checks:
 

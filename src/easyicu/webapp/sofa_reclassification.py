@@ -382,6 +382,13 @@ def _build_sofa_reclassification_stats(df: pd.DataFrame, lang: str = 'en') -> Di
     up_pct = summary.loc[summary['group'] == group_labels['up'], 'pct'].iloc[0]
     down_pct = summary.loc[summary['group'] == group_labels['down'], 'pct'].iloc[0]
     discordant_pct = round(float(up_pct + down_pct), 1)
+    # Median is 0 in most demos which is technically correct but confusing
+    # on its own — surface the full range so readers don't think the panel
+    # is broken (2026-05 Phase D polish).
+    _delta_series = work['delta']
+    _delta_min = float(_delta_series.min())
+    _delta_max = float(_delta_series.max())
+    _median_value = float(_delta_series.median())
     metrics = {
         'patients': f"{len(work):,}",
         'denominator': f"{len(work):,}",
@@ -391,7 +398,8 @@ def _build_sofa_reclassification_stats(df: pd.DataFrame, lang: str = 'en') -> Di
         'discordant_pct': f"{discordant_pct:.1f}%",
         'up_pct': f"{up_pct:.1f}%",
         'down_pct': f"{down_pct:.1f}%",
-        'median_delta': f"{work['delta'].median():.1f}",
+        'median_delta': f"{_median_value:.1f}",
+        'median_delta_range': f"range {_delta_min:+.0f} to {_delta_max:+.0f}",
     }
 
     return {
@@ -550,7 +558,13 @@ def _render_reclassification_cards(reclass: Dict[str, Any], lang: str = 'en'):
         (metrics['discordant_pct'], "Discordant" if lang == 'en' else "重新分层", "SOFA-2 != SOFA-1" if lang == 'en' else "SOFA-2 != SOFA-1", "#ea580c", "⇄"),
         (metrics['up_pct'], "Up-classified" if lang == 'en' else "上调分层", "higher SOFA-2" if lang == 'en' else "SOFA-2更高", "#e11d48", "↑"),
         (metrics['down_pct'], "Down-classified" if lang == 'en' else "下调分层", "lower SOFA-2" if lang == 'en' else "SOFA-2更低", "#0f766e", "↓"),
-        (metrics['median_delta'], "Median delta" if lang == 'en' else "Delta中位数", "SOFA-2 - SOFA-1" if lang == 'en' else "SOFA-2 - SOFA-1", "#475569", "Δ"),
+        (metrics['median_delta'],
+         "Median delta" if lang == 'en' else "Delta中位数",
+         # Show the range underneath so a "0.0" median isn't mistaken
+         # for "panel is broken" (2026-05 Phase D polish).
+         (metrics.get('median_delta_range', "SOFA-2 - SOFA-1") if lang == 'en'
+          else metrics.get('median_delta_range', "SOFA-2 - SOFA-1").replace('range', '范围')),
+         "#475569", "Δ"),
     ]
     for col, (value, label, hint, color, icon) in zip(cols, cards):
         with col:

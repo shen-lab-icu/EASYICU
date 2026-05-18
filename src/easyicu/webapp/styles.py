@@ -141,6 +141,9 @@ def render_global_styles(st: Any) -> None:
         .app-feature-grid--4 {
             grid-template-columns: repeat(4, minmax(0, 1fr));
         }
+        .app-stat-grid--5 {
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+        }
         .app-stat-grid--2 {
             grid-template-columns: repeat(2, minmax(0, 1fr));
         }
@@ -515,8 +518,19 @@ def render_global_styles(st: Any) -> None:
             color: var(--primary-color);
             font-weight: 700;
         }
+        @media (max-width: 1280px) {
+            /* Group Contrast's Comparison Mode horizontal radio packs 6
+               options into one row; under ~1280 px the labels collide.
+               Force flex-wrap so they re-flow to 2 rows cleanly
+               (2026-05 Phase D polish). */
+            div[data-testid="stRadio"] > div[role="radiogroup"][aria-orientation="horizontal"] {
+                flex-wrap: wrap !important;
+                row-gap: 8px !important;
+            }
+        }
         @media (max-width: 1024px) {
             .app-stat-grid--4,
+            .app-stat-grid--5,
             .app-stat-grid--2,
             .app-feature-grid--4,
             .app-feature-grid--3,
@@ -535,6 +549,7 @@ def render_global_styles(st: Any) -> None:
                 align-items: flex-start;
             }
             .app-stat-grid--4,
+            .app-stat-grid--5,
             .app-stat-grid--2,
             .app-feature-grid--4,
             .app-feature-grid--3,
@@ -1005,10 +1020,99 @@ def render_global_styles(st: Any) -> None:
 
         .ra-demo-flow {
             display: grid;
-            grid-template-columns: minmax(0,1fr) 24px minmax(0,1fr) 24px minmax(0,1fr) 24px minmax(0,1fr);
+            grid-template-columns: repeat(4, minmax(140px, 1fr));
             gap: 0.5rem;
             align-items: stretch;
             margin-top: 0.8rem;
+        }
+
+        .ra-demo-intro {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(220px, 0.34fr);
+            gap: 1rem;
+            align-items: start;
+        }
+
+        .ra-demo-kicker {
+            color: var(--primary-color);
+            font-size: 0.7rem;
+            font-weight: 900;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 0.28rem;
+        }
+
+        .ra-demo-heading {
+            color: var(--text-primary-light);
+            font-size: 1.08rem;
+            font-weight: 900;
+            line-height: 1.22;
+            margin-bottom: 0.28rem;
+        }
+
+        .ra-demo-copy {
+            color: var(--text-secondary-light);
+            font-size: 0.84rem;
+            font-weight: 620;
+            line-height: 1.5;
+            max-width: 58rem;
+        }
+
+        .ra-demo-note {
+            border: 1px solid rgba(245,158,11,0.42);
+            border-radius: var(--radius-sm);
+            background: rgba(254,243,199,0.72);
+            color: #7c2d12;
+            padding: 0.6rem 0.72rem;
+            font-size: 0.76rem;
+            font-weight: 800;
+            line-height: 1.42;
+        }
+
+        .ra-value-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.58rem;
+            margin-top: 0.9rem;
+        }
+
+        .ra-value-card {
+            border: 1px solid rgba(37,99,235,0.13);
+            border-radius: var(--radius-sm);
+            background: rgba(248,251,255,0.78);
+            padding: 0.68rem 0.72rem;
+        }
+
+        .ra-value-card-title {
+            color: var(--text-primary-light);
+            font-size: 0.86rem;
+            font-weight: 900;
+            line-height: 1.25;
+            margin-bottom: 0.22rem;
+        }
+
+        .ra-value-card-body {
+            color: var(--text-secondary-light);
+            font-size: 0.73rem;
+            font-weight: 650;
+            line-height: 1.42;
+        }
+
+        .ra-demo-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.44rem;
+        }
+
+        .ra-demo-chip {
+            border: 1px solid rgba(37,99,235,0.14);
+            border-radius: 999px;
+            background: rgba(37,99,235,0.06);
+            color: var(--text-primary-light);
+            padding: 0.32rem 0.56rem;
+            font-size: 0.76rem;
+            font-weight: 800;
+            line-height: 1.2;
         }
 
         .ra-demo-node,
@@ -1059,15 +1163,6 @@ def render_global_styles(st: Any) -> None:
 
         .ra-demo-node-body { font-size: 0.78rem; }
 
-        .ra-demo-arrow {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--primary-color);
-            font-size: 1.25rem;
-            font-weight: 900;
-        }
-
         .ra-output-grid {
             display: grid;
             grid-template-columns: 1.1fr 0.9fr 0.9fr;
@@ -1078,7 +1173,7 @@ def render_global_styles(st: Any) -> None:
 
         .ra-output-card {
             padding: 0.78rem 0.86rem;
-            min-height: 190px;
+            min-height: auto;
         }
 
         .ra-output-card.wide { grid-column: span 2; }
@@ -1136,9 +1231,10 @@ def render_global_styles(st: Any) -> None:
         }
 
         @media (max-width: 1100px) {
+            .ra-demo-intro,
+            .ra-value-grid,
             .ra-demo-flow,
             .ra-output-grid { grid-template-columns: 1fr; }
-            .ra-demo-arrow { display: none; }
             .ra-output-card.wide { grid-column: auto; }
         }
 

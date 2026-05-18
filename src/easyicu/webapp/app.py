@@ -100,6 +100,7 @@ from easyicu.webapp.services import (
     COLUMN_NORMALIZATION_MAP,
     NORMALIZED_TO_ORIGINAL_MAP,
     count_unique_columns,
+    cohort_feature_counts,
     count_unique_concepts,
     get_unique_concepts,
     map_column_to_concept,
@@ -578,10 +579,13 @@ FIGURE_TARGET_MAP = {
     'contrast': ('cohort', 'Group Contrast'),
     'coverage': ('cohort', 'Coverage Audit'),
     'audit': ('cohort', 'Coverage Audit'),
-    'crossdb': ('cohort', 'Cross-DB Benchmark'),
-    'cross-db': ('cohort', 'Cross-DB Benchmark'),
-    'distribution': ('cohort', 'Cross-DB Benchmark'),
-    'benchmark': ('cohort', 'Cross-DB Benchmark'),
+    # Cross-DB is its own top tab (2026-05 Phase B); keep the historical
+    # 'cohort' section name so screenshot URLs that already exist still
+    # land on the same chart.
+    'crossdb': ('cross_db', 'Cross-DB Benchmark'),
+    'cross-db': ('cross_db', 'Cross-DB Benchmark'),
+    'distribution': ('cross_db', 'Cross-DB Benchmark'),
+    'benchmark': ('cross_db', 'Cross-DB Benchmark'),
     'snapshot': ('cohort', 'Cohort Snapshot'),
     'dashboard': ('cohort', 'Cohort Snapshot'),
     'cohort': ('cohort', 'Cohort Snapshot'),
@@ -1477,8 +1481,12 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
     loaded_concepts = st.session_state.get("loaded_concepts") or {}
     if not loaded_concepts:
         return
-    concept_count = len(loaded_concepts)
-    patient_count = len(st.session_state.get("patient_ids") or [])
+    # 2026-05 unified counts: use the same dedup helper everywhere so the
+    # handoff hint, gate guide, exports launcher, status strip, and
+    # footer never disagree on "N concepts" for the same session.
+    _counts = cohort_feature_counts(st.session_state)
+    concept_count = _counts['features']
+    patient_count = _counts['patients']
     signature = (
         tuple(sorted(str(k) for k in loaded_concepts.keys())),
         patient_count,
@@ -1571,7 +1579,15 @@ def _add_clinical_thresholds(fig, concept_name: str, show: bool = True):
     thresholds = CLINICAL_THRESHOLDS.get(concept_name)
     if not thresholds:
         return fig
+    # ``source`` (clinical guideline citation) is optional metadata added in
+    # 2026-05 Phase D — surface it as the line hover so readers can see
+    # provenance without cluttering the annotation text itself.
+    source = thresholds.get('source', '')
+    unit = thresholds.get('unit', '')
     for val, color, label in zip(thresholds['lines'], thresholds['colors'], thresholds['labels']):
+        hover_text = f"{label}: {val}{(' ' + unit) if unit else ''}"
+        if source:
+            hover_text += f"<br><i>source: {source}</i>"
         fig.add_hline(
             y=val, line_dash="dot", line_color=color, line_width=1.5,
             opacity=0.7,
@@ -1579,6 +1595,7 @@ def _add_clinical_thresholds(fig, concept_name: str, show: bool = True):
             annotation_position="top right",
             annotation_font_size=10,
             annotation_font_color=color,
+            annotation_hovertext=hover_text,
         )
     return fig
 
@@ -2082,12 +2099,12 @@ def render_cohort_comparison_page():
             if not screenshot_mode:
                 _render_cohort_real_workspace_status(lang)
 
-    # 子标签页
+    # 子标签页 — Cross-DB Benchmark 已升级为顶 tab（2026-05 Phase B），
+    # 因为它对输入有结构性不同的要求（≥2 数据库根目录）。
     if lang == 'en':
         sub_tabs = st.tabs([
             "👥 Groups",
             "🧾 Coverage",
-            "📈 Cross-DB",
             "🎯 Snapshot",
             "🧭 SOFA Δ",
         ])
@@ -2095,7 +2112,6 @@ def render_cohort_comparison_page():
         sub_tabs = st.tabs([
             "👥 分组",
             "🧾 覆盖",
-            "📈 跨库",
             "🎯 快照",
             "🧭 SOFA Δ",
         ])
@@ -2107,12 +2123,9 @@ def render_cohort_comparison_page():
         render_data_coverage_audit_subtab(lang)
 
     with sub_tabs[2]:
-        render_multidb_distribution_subtab(lang)
-
-    with sub_tabs[3]:
         render_cohort_dashboard_subtab(lang)
 
-    with sub_tabs[4]:
+    with sub_tabs[3]:
         render_severity_reclassification_subtab(lang)
 
 
@@ -2144,8 +2157,9 @@ def _render_cohort_real_no_path_guide(lang: str) -> None:
     (icustays/patients/admissions), which exports don't carry.
     """
     loaded_concepts = st.session_state.get('loaded_concepts') or {}
-    n_concepts = len(loaded_concepts)
-    n_patients = len(st.session_state.get('patient_ids') or [])
+    _counts = cohort_feature_counts(st.session_state)
+    n_concepts = _counts['features']
+    n_patients = _counts['patients']
     has_exports = n_concepts > 0 and n_patients > 0
 
     if has_exports:
@@ -2541,8 +2555,9 @@ def _render_cohort_real_loaded_exports_launcher(lang: str) -> None:
     Benchmark is intentionally left gated because it needs raw schema of
     multiple databases — exports of one DB can't fake the others.
     """
-    n_concepts = len(st.session_state.get('loaded_concepts') or {})
-    n_patients = len(st.session_state.get('patient_ids') or [])
+    _counts = cohort_feature_counts(st.session_state)
+    n_concepts = _counts['features']
+    n_patients = _counts['patients']
     db = st.session_state.get('database') or _default_real_database()
     db_labels = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
     db_label = db_labels.get(db, db)
@@ -2604,7 +2619,11 @@ def _render_cohort_real_workspace_status(lang: str) -> None:
     db_labels = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
     db_label = db_labels.get(db, db)
     n = len(state.get('_cohort_real_ws_demographics', []))
-    n_concepts = len(state.get('_cohort_real_ws_concepts', {}))
+    # 2026-05 unified counts: dedup-counted features instead of raw len()
+    # so this strip matches the gate / launcher / footer for the same
+    # cohort. The workspace's concepts dict is built from loaded_concepts
+    # so cohort_feature_counts is the correct source.
+    n_concepts = count_unique_concepts(list(state.get('_cohort_real_ws_concepts', {}).keys()))
     errors = state.get('_cohort_real_ws_errors', [])
     is_exports = state.get('_cohort_real_ws_origin') == 'loaded_exports'
 
@@ -2945,6 +2964,8 @@ def main():
         'viz': 'quick_viz',
         'tutorial': 'tutorial',
         'cohort': 'cohort',
+        'cross_db': 'cross_db',
+        'crossdb': 'cross_db',
         'research_agent': 'research_agent',
         'export_progress': 'tutorial',
         'home_dict': 'tutorial',
@@ -2955,13 +2976,28 @@ def main():
     elif _nav_request in _nav_page_map:
         st.session_state['_active_main_page'] = _nav_page_map[_nav_request]
 
+    # Tutorial is now the leftmost top tab again so it's discoverable from
+    # the main pane (also still reachable via the sidebar "📚 Workflow Help"
+    # button and ``_scroll_to_tab='tutorial'`` nav requests).
     if st.session_state.get('_active_main_page') not in page_keys:
         st.session_state['_active_main_page'] = page_keys[0]
 
-    # st.radio always keeps exactly one selection (never None) and its value
-    # can be steered programmatically by writing the key before this call,
-    # which is what makes the "Go to ..." buttons reliable. The container key
-    # scopes the segmented-bar CSS (styles.py) to this radio only.
+    # Do NOT bind ``st.radio`` directly to ``_active_main_page`` via
+    # ``key=``. Streamlit serializes the widget state against the options
+    # list, so any value that briefly falls outside ``page_keys`` (e.g.
+    # an obsolete page name from a stale session) crashes the radio with
+    # ``ValueError: <name> is not in iterable``. Using a separate widget
+    # key + on_change-propagation keeps programmatic navigation safe.
+    _current_active = st.session_state.get('_active_main_page', page_keys[0])
+    _visible_active = _current_active if _current_active in page_keys else page_keys[0]
+    # Force the widget to reflect the current (or fallback) visible page
+    # each render — without this, Streamlit's widget-state persistence
+    # would override programmatic navigation from sidebar buttons.
+    st.session_state['_main_nav_widget'] = _visible_active
+
+    def _propagate_main_nav() -> None:
+        st.session_state['_active_main_page'] = st.session_state['_main_nav_widget']
+
     with st.container(key="main_nav_bar"):
         st.radio(
             "Main navigation",
@@ -2969,9 +3005,10 @@ def main():
             format_func=lambda key: page_labels.get(key, key),
             horizontal=True,
             label_visibility='collapsed',
-            key='_active_main_page',
+            key='_main_nav_widget',
+            on_change=_propagate_main_nav,
         )
-    active_page = st.session_state['_active_main_page']
+    active_page = st.session_state.get('_active_main_page', page_keys[0])
 
     if active_page == "tutorial":
         render_home()
@@ -3085,6 +3122,31 @@ def main():
             st.markdown(f'<div class="compact-inline-notice info">{export_hold_msg}</div>', unsafe_allow_html=True)
         else:
             render_cohort_comparison_page()
+
+    elif active_page == "cross_db":
+        # Promoted from a Cohort Statistics subtab to a top-level page
+        # (2026-05 Phase B) because Cross-DB Benchmark structurally needs
+        # ≥2 database roots — different from the single-DB inputs the
+        # other cohort panels accept. Render with the standard cohort
+        # page header so the chrome matches.
+        if export_in_progress:
+            xdb_hold_msg = (
+                "⏳ Export in progress. Cross-DB benchmark is paused until extraction finishes."
+                if lang == 'en' else
+                "⏳ 正在导出。提取完成前，跨库基准面板暂停加载。"
+            )
+            st.markdown(f'<div class="compact-inline-notice info">{xdb_hold_msg}</div>', unsafe_allow_html=True)
+        else:
+            render_page_header(
+                "Cross-Database Benchmark" if lang == 'en' else "跨库基准面板",
+                ("Figure 3-style comparison of harmonized feature distributions across ICU databases. "
+                 "Requires ≥2 database subfolders under one root."
+                 if lang == 'en' else
+                 "Figure 3 风格的跨库特征分布对比。需要在同一根目录下有 ≥2 个数据库子文件夹。"),
+                icon="🌐",
+                kicker="Cross-DB Benchmark" if lang == 'en' else "跨库基准",
+            )
+            render_multidb_distribution_subtab(lang)
 
     elif active_page == "research_agent":
         # T1.7 — embed the ICU-aware research-agent page so reviewers can
@@ -3229,11 +3291,18 @@ def main():
             else:
                 data_status = "✅ 数据已加载" if len(st.session_state.loaded_concepts) > 0 else "⏳ 未加载数据"
                 patients_label = "患者"
-            # 🔧 FIX (2026-02-04): 统计唯一概念数
-            n_concepts = count_unique_concepts(list(st.session_state.loaded_concepts.keys()))
-            n_patients = len(st.session_state.patient_ids) if st.session_state.patient_ids else 0
+            # 2026-05 unified counts: route through cohort_feature_counts
+            # so footer / handoff / gate guide / launcher always agree
+            # on the loaded-feature number. Also show "loaded / dictionary
+            # total" so users can see at a glance what fraction of the
+            # canonical catalog is currently in memory.
+            _ctr = cohort_feature_counts(st.session_state)
+            n_concepts = _ctr['features']
+            n_patients = _ctr['patients']
+            n_total = _ctr['dictionary_total']
+            ratio_suffix = f" / {n_total}" if n_total and n_concepts else ""
             st.markdown(
-                f'<small class="app-footer-status">{data_status} | 📋 {n_concepts} Concepts | 👥 {n_patients} {patients_label}</small>',
+                f'<small class="app-footer-status">{data_status} | 📋 {n_concepts}{ratio_suffix} Concepts | 👥 {n_patients} {patients_label}</small>',
                 unsafe_allow_html=True
             )
 

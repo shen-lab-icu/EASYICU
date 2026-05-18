@@ -48,12 +48,14 @@ from __future__ import annotations
 
 import operator
 import re
+from dataclasses import replace
 from typing import TYPE_CHECKING, List, Optional, Union
 
 import numpy as np
 import pandas as pd
 
 from .concept_schema import ConceptSource
+from .concept_loader import _get_concept_bounds
 from .concept_expr_parser import (
     _apply_binary_op,
     _parse_binary_op,
