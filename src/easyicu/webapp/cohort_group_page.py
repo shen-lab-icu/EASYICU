@@ -947,11 +947,13 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                 unsafe_allow_html=True,
             )
         else:
+            table_height = min(760, max(460, 42 + 35 * (len(result_df) + 1)))
             # 使用 Streamlit 表格并应用样式
             _st_dataframe_compat(
                 st,
                 result_df,
                 width='stretch',
+                height=table_height,
                 hide_index=True,
                 column_config={
                     'Module': st.column_config.TextColumn('Module' if lang == 'en' else '模块', width='small'),

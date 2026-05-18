@@ -247,7 +247,7 @@ def create_distribution_subplot(
                 y=y,
                 mode='lines',
                 name=DB_LABELS.get(db, db),
-                line=dict(color=DB_COLORS.get(db, '#888888'), width=2),
+                line=dict(color=DB_COLORS.get(db, '#888888'), width=2.2),
                 fill='tozeroy',
                 fillcolor=f"rgba{tuple(list(int(DB_COLORS.get(db, '#888888').lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + [0.3])}",
                 showlegend=show_legend,
@@ -260,13 +260,15 @@ def create_distribution_subplot(
     # 设置子图标题和轴标签
     fig.update_xaxes(
         title_text=config.get('unit', ''),
-        title_font_size=10,
+        title_font_size=12,
+        tickfont=dict(size=11, color='black'),
         row=row,
         col=col,
     )
     fig.update_yaxes(
         title_text='Density' if col == 1 else '',
-        title_font_size=10,
+        title_font_size=12,
+        tickfont=dict(size=10, color='black'),
         row=row,
         col=col,
     )
@@ -286,12 +288,19 @@ def create_full_distribution_figure(
     # 获取特征标题
     titles = [flat_features.get(f, {}).get('name', f) for f in selected_features]
     
+    if rows <= 1:
+        vertical_spacing = 0.07
+    elif rows == 2:
+        vertical_spacing = 0.065
+    else:
+        vertical_spacing = 0.065
+
     fig = make_subplots(
         rows=rows,
         cols=cols,
         subplot_titles=titles,
-        vertical_spacing=0.08,
-        horizontal_spacing=0.05,
+        vertical_spacing=vertical_spacing,
+        horizontal_spacing=0.055,
     )
     
     for idx, feature in enumerate(selected_features):
@@ -305,14 +314,21 @@ def create_full_distribution_figure(
         create_distribution_subplot(data, feature, config, row, col, fig, show_legend)
     
     # 更新整体布局
+    if rows <= 1:
+        row_height = 360
+    elif rows == 2:
+        row_height = 320
+    else:
+        row_height = 280
+
     fig.update_layout(
-        height=280 * rows,
+        height=row_height * rows,
         width=1400,
         title=dict(
             text="Multi-Database Feature Distribution Comparison",
             x=0.5,
             xanchor="center",
-            y=0.985,
+            y=0.955,
             yanchor="top",
             font=dict(size=20),
         ),
@@ -320,17 +336,18 @@ def create_full_distribution_figure(
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.02,
+            y=1.095,
             xanchor="center",
             x=0.5,
-            font=dict(size=12),
+            font=dict(size=13),
         ),
-        margin=dict(t=140, b=50, l=50, r=50),
+        margin=dict(t=132, b=56, l=72, r=30),
+        font=dict(size=13, color='black'),
     )
     
     # 更新子图标题字体大小
     for annotation in fig.layout.annotations:
-        annotation.font.size = 11
+        annotation.font.size = 12
     
     return fig
 

@@ -344,100 +344,25 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
             else:
                 st.warning("No SOFA severity column found" if lang == 'en' else "未找到SOFA严重程度列")
 
-        # ========== 图表行2: 基线分布和重新分层 ==========
-        chart_col3, chart_col4 = st.columns([1, 1.15])
-
-        with chart_col3:
-            st.markdown("##### " + ("Baseline Distributions" if lang == 'en' else "基线分布"))
-            age = review['age']
-            los_days = review['los_days']
-            if age is not None or los_days is not None:
-                fig = make_subplots(rows=1, cols=2, subplot_titles=("Age" if lang == 'en' else "年龄", "LOS days" if lang == 'en' else "住院天数"))
-                if age is not None:
-                    fig.add_trace(go.Histogram(x=age.dropna(), nbinsx=18, marker_color='#2563eb', name="Age" if lang == 'en' else "年龄"), row=1, col=1)
-                    fig.add_vline(x=float(age.median()), line_color='#f97316', line_dash='dash', row=1, col=1)
-                if los_days is not None:
-                    capped_los = los_days[los_days <= los_days.quantile(0.95)].dropna()
-                    fig.add_trace(go.Histogram(x=capped_los, nbinsx=20, marker_color='#0f766e', name="LOS" if lang == 'en' else "LOS"), row=1, col=2)
-                    fig.add_vline(x=float(los_days.median()), line_color='#e11d48', line_dash='dash', row=1, col=2)
-                fig.update_layout(
-                    template='plotly_white',
-                    height=315,
-                    margin=dict(l=20, r=20, t=38, b=35),
-                    bargap=0.08,
-                    showlegend=False,
-                    font=dict(size=13, color='#111827'),
-                )
-                fig.update_yaxes(title_text="Count" if lang == 'en' else "人数", gridcolor='#e5e7eb')
-                st.plotly_chart(fig, use_container_width=True, key="dash_baseline_distributions", config=_get_plotly_chart_config())
-            else:
-                st.warning("No age or LOS columns found" if lang == 'en' else "未找到年龄或住院时长列")
-
-        with chart_col4:
-            st.markdown("##### " + ("Data Coverage by Module" if lang == 'en' else "模块数据覆盖度"))
-            coverage_df = review.get('coverage')
-            if isinstance(coverage_df, pd.DataFrame) and not coverage_df.empty:
-                coverage_plot = coverage_df.copy()
-                # Sort so the longest bar sits on top (px horizontal bars stack bottom->top)
-                coverage_plot = coverage_plot.sort_values('coverage', ascending=True).tail(8)
-                features_label = "Features" if lang == 'en' else "特征数"
-                patients_label = "Patients" if lang == 'en' else "患者数"
-                rows_label = "Rows" if lang == 'en' else "记录数"
-                coverage_label = "Patient coverage (%)" if lang == 'en' else "患者覆盖率 (%)"
-                fig = px.bar(
-                    coverage_plot,
-                    x='coverage',
-                    y='module',
-                    orientation='h',
-                    color='features',
-                    color_continuous_scale=['#dbeafe', '#2563eb', '#1e3a8a'],
-                    text=coverage_plot['coverage'].map(lambda v: f"{v:.1f}%"),
-                    hover_data={
-                        'features': True,
-                        'patients': ':,',
-                        'rows': ':,',
-                        'coverage': ':.1f',
-                        'module': False,
-                    },
-                    labels={
-                        'coverage': coverage_label,
-                        'module': "",
-                        'features': features_label,
-                        'patients': patients_label,
-                        'rows': rows_label,
-                    },
-                )
-                fig.update_traces(textposition='outside', cliponaxis=False)
-                fig.update_layout(
-                    template='plotly_white',
-                    height=315,
-                    margin=dict(l=10, r=45, t=12, b=35),
-                    font=dict(size=13, color='#111827'),
-                    coloraxis_colorbar=dict(title=features_label),
-                )
-                fig.update_xaxes(range=[0, 110], gridcolor='#e5e7eb')
-                st.plotly_chart(fig, use_container_width=True, key="dash_module_coverage", config=_get_plotly_chart_config())
-            else:
-                st.info(
-                    "Load concepts via Quick Visualization to populate module coverage."
-                    if lang == 'en'
-                    else "在快速可视化中加载概念后会显示模块覆盖度。"
-                )
-
-            # Keep a slim teaser so the dashboard still surfaces SOFA definition sensitivity,
-            # but point at the dedicated tab instead of duplicating its chart here.
-            reclass = review.get('reclassification') or {}
-            if reclass.get('available'):
-                discordant_pct = reclass.get('metrics', {}).get('discordant_pct', '')
-                teaser_en = (
-                    f"Under SOFA-2, {discordant_pct} of patients reclassify — open the "
-                    "**SOFA-1 vs SOFA-2** tab for the matrix, organ contributors, and mortality breakdown."
-                )
-                teaser_zh = (
-                    f"在 SOFA-2 下，共 {discordant_pct} 的患者发生重新分层 —— "
-                    "切换到 **SOFA-1 vs SOFA-2** 标签查看重分类矩阵、器官贡献度与死亡率。"
-                )
-                st.info(teaser_en if lang == 'en' else teaser_zh, icon="🧭")
+        # 图表行 2 被删除（2026-05 Phase C 去重）：
+        #   - Baseline Distributions (Age + LOS days) 移到 Patient Review →
+        #     Patient Overview（避免与个人级 trend 重复）。
+        #   - Data Coverage by Module 移到 Cohort Statistics → Coverage tab
+        #     （那里是 coverage 的主页，避免双份）。
+        # 这里仅保留指向 SOFA Δ 的 1 行 teaser，让 Snapshot 真正变成
+        # "one-page cohort profile" 而不是杂烩。
+        reclass = review.get('reclassification') or {}
+        if reclass.get('available'):
+            discordant_pct = reclass.get('metrics', {}).get('discordant_pct', '')
+            teaser_en = (
+                f"Under SOFA-2, {discordant_pct} of patients reclassify — open the "
+                "**SOFA-1 vs SOFA-2** tab for the matrix, organ contributors, and mortality breakdown."
+            )
+            teaser_zh = (
+                f"在 SOFA-2 下，共 {discordant_pct} 的患者发生重新分层 —— "
+                "切换到 **SOFA-1 vs SOFA-2** 标签查看重分类矩阵、器官贡献度与死亡率。"
+            )
+            st.info(teaser_en if lang == 'en' else teaser_zh, icon="🧭")
 
     except Exception as e:
         st.error(f"Render error: {e}")

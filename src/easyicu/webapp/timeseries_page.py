@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
+from easyicu.webapp.ui_helpers import StatCard, render_stat_grid
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
@@ -353,6 +354,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                                 font=dict(size=14, color='black'),
                                 title_font_size=16,
                                 showlegend=False,
+                                height=450,
                                 margin=dict(l=50, r=30, t=50, b=50),
                             )
                             fig.update_traces(
@@ -376,7 +378,6 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                         if show_stats:
                             stat_title = "#### 📊 Statistical Summary" if lang == 'en' else "#### 📊 统计摘要"
                             st.markdown(stat_title)
-                            stat_cols = st.columns(5)
                             values = patient_df[value_col]
                             if lang == 'en':
                                 stats = [
@@ -394,9 +395,11 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                                     ("标准差", f"{values.std():.2f}", "📐"),
                                     ("记录数", f"{len(values)}", "📝"),
                                 ]
-                            for i, (label, value, icon) in enumerate(stats):
-                                with stat_cols[i]:
-                                    st.metric(f"{icon} {label}", value)
+                            render_stat_grid(
+                                [StatCard(label=f"{icon} {label}", value=value) for label, value, icon in stats],
+                                columns=5,
+                                compact=True,
+                            )
                     else:
                         # 🔧 FIX: 检测是否有布尔列（包括pandas boolean和numpy bool）
                         bool_cols = []

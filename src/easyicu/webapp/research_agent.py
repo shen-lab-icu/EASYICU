@@ -1711,6 +1711,7 @@ def _stay_level_from_loaded_concepts(
     loaded_concepts: Dict[str, "pd.DataFrame"],
     *,
     id_col: str,
+    patient_ids: Optional[Sequence[Any]] = None,
 ) -> Optional["pd.DataFrame"]:
     """Convert ``st.session_state.loaded_concepts`` into a stay-level frame.
 
@@ -1721,16 +1722,21 @@ def _stay_level_from_loaded_concepts(
     """
     if not loaded_concepts:
         return None
+    patient_id_set = set(patient_ids or [])
     base: Optional[pd.DataFrame] = None
     for concept, df in loaded_concepts.items():
         if not isinstance(df, pd.DataFrame) or df.empty or id_col not in df.columns:
             continue
+        if patient_id_set:
+            df = df[df[id_col].isin(patient_id_set)]
+            if df.empty:
+                continue
         # Pick the value column (first non-id, non-time-like column).
         time_cols = {"charttime", "starttime", "endtime", "time", "timestamp",
                      "stay_id_time", "_time", "time_to_event"}
         value_cols = [
             c for c in df.columns
-            if c != id_col and c.lower() not in time_cols
+            if c != id_col and str(c).lower() not in time_cols
         ]
         if not value_cols:
             continue
@@ -1749,7 +1755,153 @@ def _stay_level_from_loaded_concepts(
         if len(value_cols) == 1 and value_cols[0] != concept:
             sub = sub.rename(columns={value_cols[0]: concept})
         base = sub if base is None else base.merge(sub, on=id_col, how="outer")
+    if base is not None and patient_id_set:
+        base = base[base[id_col].isin(patient_id_set)].reset_index(drop=True)
     return base
+
+
+_DB_TAG_CANDIDATES = ('miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic')
+
+
+def _infer_db_tag_from_folder(folder: Path) -> str:
+    """Guess the database tag from an EasyICU module-export folder name.
+
+    Most prepared exports are named ``<dbtag>_<date>`` (e.g.
+    ``miiv_20260420`` / ``eicu_20260512``) — we extract the leading
+    token. Falls back to the parent folder name, then to the empty
+    string so the caller can let the user override.
+    """
+    name = folder.name.lower()
+    for tag in _DB_TAG_CANDIDATES:
+        if name == tag or name.startswith(tag + '_') or name.startswith(tag + '-'):
+            return tag
+    parent = folder.parent.name.lower()
+    for tag in _DB_TAG_CANDIDATES:
+        if parent == tag or parent.startswith(tag + '_'):
+            return tag
+    return ''
+
+
+def _discover_db_export_folders() -> List[Path]:
+    """Return all detectable EasyICU module-export folders under known
+    workspace roots plus the session's last-export folder."""
+    extra_roots: List[Path] = []
+    for key in ('export_path', 'last_export_dir'):
+        p = st.session_state.get(key) or ''
+        if not p:
+            continue
+        try:
+            resolved = Path(p).expanduser().resolve()
+            extra_roots.append(resolved)
+            parent = resolved.parent
+            if parent not in extra_roots and parent != resolved:
+                extra_roots.append(parent)
+        except Exception:
+            pass
+    return _scan_workspace_for_module_dirs(extra_roots + _candidate_cohort_roots())
+
+
+def _render_db_exports_multipicker(
+    *, key_prefix: str, min_selected: int = 1, intro: str = '',
+) -> List[Tuple[str, Path]]:
+    """Render a multi-select of detected EasyICU exports with per-row
+    DB-tag override. Returns ``[(db_tag, folder), ...]`` for the chosen
+    rows. Shared by the cross-DB cohort builder and the replication
+    runner so both surfaces stay aligned.
+    """
+    dirs = _discover_db_export_folders()
+    if not dirs:
+        st.info(_ra_text(
+            'multi_db_no_dirs' if min_selected >= 2 else 'replication_no_dirs'
+        ))
+        return []
+    if intro:
+        st.caption(intro)
+    dir_labels = [_display_path(p) for p in dirs]
+    picked_labels = st.multiselect(
+        _ra_text('multi_db_pick' if min_selected >= 2 else 'replication_pick'),
+        dir_labels,
+        default=dir_labels[: max(min_selected, 2)] if len(dir_labels) >= min_selected else dir_labels,
+        key=f'{key_prefix}_picks',
+    )
+    if not picked_labels:
+        return []
+    chosen: List[Tuple[str, Path]] = []
+    for label in picked_labels:
+        folder = dirs[dir_labels.index(label)]
+        inferred = _infer_db_tag_from_folder(folder) or _DB_TAG_CANDIDATES[0]
+        cols = st.columns([1.4, 4])
+        with cols[0]:
+            tag = st.selectbox(
+                f'DB tag for {folder.name}',
+                list(_DB_TAG_CANDIDATES),
+                index=list(_DB_TAG_CANDIDATES).index(inferred),
+                key=f'{key_prefix}_tag_{folder.name}',
+                label_visibility='collapsed',
+            )
+        with cols[1]:
+            st.caption(f'`{folder}`')
+        chosen.append((tag, folder))
+    return chosen
+
+
+def _build_multi_db_cohort() -> Tuple[Optional[pd.DataFrame], str]:
+    """Cross-DB cohort source: pick N exports → build per-DB stay-level
+    cohort → concat with a ``database`` column."""
+    st.caption(_ra_text('multi_db_intro'))
+    chosen = _render_db_exports_multipicker(
+        key_prefix='research_agent_multi_db', min_selected=2,
+    )
+    if not chosen:
+        return None, ''
+    if len(chosen) < 2:
+        st.info(_ra_text('multi_db_need_two'))
+        return None, ''
+
+    frames: List[pd.DataFrame] = []
+    per_db_summary: List[str] = []
+    for db_tag, folder in chosen:
+        module_files = _list_module_parquets(folder)
+        if not module_files:
+            st.warning(_ra_text('no_module_parquets', folder=folder))
+            continue
+        # Use first detected id column shared across files.
+        id_counts: Dict[str, int] = {}
+        for p in module_files:
+            for c in _parquet_file_summary(p).get('id_columns') or []:
+                id_counts[c] = id_counts.get(c, 0) + 1
+        if not id_counts:
+            st.warning(f'`{folder}` — no shared id column detected.')
+            continue
+        id_col = max(id_counts, key=lambda c: id_counts[c])
+        try:
+            sub = _build_stay_level_from_module_folder(
+                folder=folder,
+                selected_files=module_files,
+                id_col=id_col,
+                join_how='outer',
+            )
+        except Exception as exc:
+            st.warning(f'`{folder}` — build failed: {exc}')
+            continue
+        if sub is None or sub.empty:
+            continue
+        sub = sub.copy()
+        sub.insert(0, 'database', db_tag)
+        frames.append(sub)
+        per_db_summary.append(f'{db_tag}={len(sub):,}')
+
+    if not frames:
+        st.error('No databases could be loaded; check the warnings above.')
+        return None, ''
+
+    cohort = pd.concat(frames, axis=0, ignore_index=True, sort=False)
+    st.success(_ra_text(
+        'multi_db_built', rows=len(cohort), dbs=len(frames),
+        per_db=', '.join(per_db_summary),
+    ))
+    st.dataframe(cohort.head(8), use_container_width=True, hide_index=True)
+    return cohort, f'multi_db:{",".join(d for d, _ in chosen)}'
 
 
 def _section_cohort_picker(
@@ -1770,9 +1922,14 @@ def _section_cohort_picker(
     source_module = _ra_text("source_module_folder")
     source_no_data = _ra_text("source_no_data")
     source_upload = _ra_text("source_upload")
-    source_workspace = _ra_text("source_workspace")
+    source_multi_db = _ra_text("source_multi_db")
     source_synthetic = _ra_text("source_synthetic")
 
+    # 2026-05 Phase G: removed `source_workspace` (pick a parquet from
+    # workspace) — it was a strict subset of `source_module` (pick a
+    # folder, then pick a parquet inside it). Added `source_multi_db` to
+    # surface the cross-database cohort builder that the experiment_spec
+    # already supports via cross_database_validation.
     options: List[str] = []
     if has_inbound:
         options.append(source_handoff)
@@ -1782,8 +1939,8 @@ def _section_cohort_picker(
         options += [
             source_no_data,
             source_module,
+            source_multi_db,
             source_upload,
-            source_workspace,
             source_synthetic,
         ]
     else:
@@ -1791,7 +1948,7 @@ def _section_cohort_picker(
             source_synthetic,
             source_upload,
             source_module,
-            source_workspace,
+            source_multi_db,
             source_no_data,
         ]
     if st.session_state.get("research_agent_cohort_source") not in (None, *options):
@@ -1813,7 +1970,11 @@ def _section_cohort_picker(
 
     if source == source_loaded:
         with st.spinner(_ra_text("pivot_spinner")):
-            df = _stay_level_from_loaded_concepts(loaded_concepts, id_col=id_col)
+            df = _stay_level_from_loaded_concepts(
+                loaded_concepts,
+                id_col=id_col,
+                patient_ids=st.session_state.get("patient_ids") or None,
+            )
         if df is None or df.empty:
             st.error(_ra_text("pivot_error"))
             return None, ""
@@ -2141,37 +2302,16 @@ def _section_cohort_picker(
             st.rerun()
         return None, ""
 
-    # Workspace pick — also include the user's configured export_path
-    # so freshly-exported parquets show up without a path edit.
-    extra_roots: List[Path] = []
-    export_path = st.session_state.get("export_path") or ""
-    last_export = st.session_state.get("last_export_dir") or ""
-    for p in (export_path, last_export):
-        if p:
-            try:
-                resolved = Path(p).resolve()
-                extra_roots.append(resolved)
-                parent = resolved.parent
-                if parent not in extra_roots and parent != resolved:
-                    extra_roots.append(parent)
-            except Exception:
-                pass
-    candidates = _scan_workspace_for_cohorts(_candidate_cohort_roots() + extra_roots)
-    if not candidates:
-        st.info(_ra_text("workspace_none"))
-        return None, ""
-    rels = [str(p.relative_to(Path.cwd())) if p.is_relative_to(Path.cwd()) else str(p)
-            for p in candidates]
-    pick = st.selectbox(_ra_text("workspace_pick"), rels, key="research_agent_workspace_pick")
-    chosen = candidates[rels.index(pick)]
-    try:
-        df = pd.read_parquet(chosen)
-    except Exception as exc:
-        st.error(_ra_text("workspace_read_failed", path=chosen, error=exc))
-        return None, ""
-    st.caption(_ra_text("loaded_from", rows=len(df), path=chosen))
-    st.dataframe(df.head(8), use_container_width=True, hide_index=True)
-    return df, f"workspace:{chosen}"
+    # Cross-DB cohort builder: pick 2+ module export folders, infer each
+    # one's database tag from its folder name (or let the user override),
+    # build per-DB stay-level cohorts via the existing single-folder
+    # builder, then concatenate with a `database` column so downstream
+    # cross_database_validation can stratify.
+    if source == source_multi_db:
+        return _build_multi_db_cohort()
+
+    # Should not reach — every option above has a return path.
+    return None, ""
 
 
 def _request_examples() -> List[Dict[str, str]]:
@@ -2699,11 +2839,17 @@ def _section_llm_picker(handles: Dict[str, Any]) -> Tuple[str, str, str, Optiona
         st.caption(_ra_text("sdk_missing"))
     if st.session_state.get("research_agent_llm_choice") not in (None, *options):
         st.session_state.pop("research_agent_llm_choice", None)
-    default_index = (
-        options.index(sidebar_choice)
-        if sdk_ok and not sidebar_hosted_blocked and is_shared_llm_configured()
-        else options.index(mock_choice)
-    )
+    # 2026-05 Phase G: prefer a real API endpoint over MockLLMClient by
+    # default. Most users don't know what MockLLMClient is, and seeing a
+    # deterministic mock pipeline as "the default agent run" was misleading.
+    # Priority: sidebar-configured shared LLM > override (Custom OpenAI/
+    # OpenRouter, prompts for key) > Mock (only as last-resort offline path).
+    if sdk_ok and not sidebar_hosted_blocked and is_shared_llm_configured():
+        default_index = options.index(sidebar_choice)
+    elif sdk_ok and override_choice in options:
+        default_index = options.index(override_choice)
+    else:
+        default_index = options.index(mock_choice)
     choice = st.radio(
         _ra_text("llm_client"),
         options,
@@ -2937,45 +3083,43 @@ def _render_run_history(workdir: Path) -> None:
 
 
 def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
-    """Render a static, non-token demo of the Research Agent outputs."""
+    """Render a compact, non-token guide to the Research Agent workflow."""
     flow = [
         (
             "01",
-            "Research question" if is_en else "研究问题",
-            "Sepsis-3 ICU stays -> in-hospital mortality prediction"
+            "Plan" if is_en else "规划",
+            "Question -> study recipe"
             if is_en else
-            "Sepsis-3 ICU 患者 -> 院内死亡预测",
+            "问题 -> 研究配方",
             "",
         ),
         (
             "02",
-            "Data recipe" if is_en else "数据配方",
-            "Sepsis flag, demographics, SOFA-2, vitals, labs, outcome"
+            "Build" if is_en else "组装",
+            "EasyICU exports -> one row per ICU stay"
             if is_en else
-            "脓毒症标记、人口学、SOFA-2、生命体征、实验室、结局",
+            "EasyICU 导出 -> 每次 ICU 住院一行",
             "",
         ),
         (
             "03",
-            "Analysis pack" if is_en else "分析包",
-            "Family-specific tables, figures, diagnostics, and findings"
+            "Analyze" if is_en else "分析",
+            "Tables, figures, diagnostics, findings"
             if is_en else
-            "按研究类型生成表格、图、诊断指标和结果发现",
+            "表格、图、诊断、结果发现",
             "",
         ),
         (
             "04",
-            "Review gate" if is_en else "复核关口",
-            "User decides whether the evidence is strong enough to draft"
+            "Gate" if is_en else "关口",
+            "Evidence checks before drafting"
             if is_en else
-            "用户判断证据是否值得继续生成文章",
+            "写作前先过证据检查",
             " review",
         ),
     ]
     flow_html = ""
-    for idx, (label, title, body, klass) in enumerate(flow):
-        if idx:
-            flow_html += '<div class="ra-demo-arrow">→</div>'
+    for label, title, body, klass in flow:
         flow_html += (
             f'<div class="ra-demo-node{klass}">'
             f'<div class="ra-demo-node-label">{html.escape(label)}</div>'
@@ -2984,156 +3128,84 @@ def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
             '</div>'
         )
 
-    table_rows = [
-        ("Age", "65.2", "68.9", "+3.7"),
-        ("SOFA-2", "5.1", "8.6", "+3.5"),
-        ("Lactate", "2.1", "3.8", "+1.7"),
-        ("Vasopressor", "28%", "54%", "+26%"),
+    deliverables = [
+        "Study plan" if is_en else "研究方案",
+        "Cohort table" if is_en else "队列表",
+        "Results report" if is_en else "结果报告",
+        "Tables + figures" if is_en else "表格 + 图",
+        "Evidence manifest" if is_en else "证据清单",
+        "Optional draft" if is_en else "可选草稿",
     ]
-    table_html = "".join(
-        "<tr>"
-        f"<td>{html.escape(row[0])}</td>"
-        f"<td>{html.escape(row[1])}</td>"
-        f"<td>{html.escape(row[2])}</td>"
-        f"<td>{html.escape(row[3])}</td>"
-        "</tr>"
-        for row in table_rows
+    deliverables_html = "".join(
+        f'<span class="ra-demo-chip">{html.escape(item)}</span>'
+        for item in deliverables
     )
-    manuscript = (
-        "In this prediction-style example, the analysis pack suggested clinically meaningful mortality risk separation. "
-        "The draft is only generated after reviewing cohort balance, missingness, discrimination, and calibration."
+    value_cards = [
+        (
+            "Bring" if is_en else "输入",
+            "Question + ICU data"
+            if is_en else
+            "问题 + ICU 数据",
+        ),
+        (
+            "Agent adds" if is_en else "Agent 增加",
+            "Plan, cohort, analysis, evidence checks"
+            if is_en else
+            "规划、队列、分析、证据检查",
+        ),
+        (
+            "Get" if is_en else "产出",
+            "Reviewable results first, draft later"
+            if is_en else
+            "先复核结果，后生成草稿",
+        ),
+    ]
+    value_cards_html = "".join(
+        '<div class="ra-value-card">'
+        f'<div class="ra-value-card-title">{html.escape(title)}</div>'
+        f'<div class="ra-value-card-body">{html.escape(body)}</div>'
+        '</div>'
+        for title, body in value_cards
+    )
+    demo_title = (
+        "Question + EasyICU data -> evidence-bound research output"
         if is_en else
-        "在这个“预测型”示例中，分析包显示死亡风险存在具有临床意义的分层。只有在复核队列构成、缺失、区分度和校准后，才进入文章生成。"
+        "研究问题 + EasyICU 数据 -> 绑定证据的研究产出"
     )
-    synthetic_banner = (
-        "Synthetic illustration — these numbers, plots and finding cards are static demo content. "
-        "They are not produced by a real EasyICU research-agent run and must not be cited as results."
+    demo_body = (
+        "The agent turns prepared ICU data into a reviewable analysis pack, then drafts only after the evidence gate."
         if is_en else
-        "演示示意 — 下方的数字、图表和发现卡片均为静态示例，并非真实的 EasyICU 研究智能体运行结果，"
-        "不可作为研究结论引用。"
+        "Agent 先把 ICU 数据变成可复核分析包，通过证据关口后才进入文章草稿。"
     )
-    synthetic_chip = "Synthetic" if is_en else "演示数据"
-    finding_card_title = (
-        "Example findings before manuscript (illustrative wording only)"
+    value_title = (
+        "Real run outputs"
         if is_en else
-        "文章前的结果复核示例（仅为示例文案）"
+        "真实运行会产出"
     )
-    finding_card_note = (
-        "In a real run the agent stops here so users can catch wrong cohorts, weak signal or bad calibration "
-        "before spending writing tokens. The text below is sample wording, not a real finding."
+    demo_note = (
+        "Static demo. No fake metrics."
         if is_en else
-        "真实运行中智能体会停在这里，让用户在消耗写作 token 前发现队列错误、信号不足或校准较差。"
-        "下面只是示例文案，不是真实发现。"
+        "静态 Demo：不编造指标。"
     )
-    finding_text_1 = (
-        "Example wording: SOFA-2 and lactate could carry most of the risk signal; calibration should be checked in the high-risk decile."
-        if is_en else
-        "示例文案：SOFA-2 和乳酸可能贡献主要风险信号；高风险分位的校准需要重点复核。"
-    )
-    finding_text_2 = (
-        "Example wording: missingness acceptable for core predictors; manuscript drafting can be considered after sensitivity review."
-        if is_en else
-        "示例文案：核心预测变量缺失可接受；完成敏感性复核后可考虑生成文章。"
-    )
-    table_caption = (
-        "Illustrative values only — these numbers are static demo content, not from a real run."
-        if is_en else
-        "仅为示意值 — 这些数字是静态演示内容，并非真实运行产生。"
-    )
-    disc_caption = (
-        "Example AUROC / Brier values for layout only — not a real metric."
-        if is_en else
-        "AUROC / Brier 数值仅用于版面示意 — 并非真实指标。"
-    )
-    calib_caption = (
-        "Example calibration curve — illustrative only."
-        if is_en else
-        "示例校准曲线 — 仅为示意。"
-    )
-    manuscript_caption = (
-        "Example manuscript preview wording only."
-        if is_en else
-        "示例文章预览文案。"
-    )
+
     st.markdown(
         f"""
         <div class="ra-demo-hero">
+            <div class="ra-demo-intro">
+                <div>
+                    <div class="ra-demo-kicker">{"Demo guide" if is_en else "Demo 导览"}</div>
+                    <div class="ra-demo-heading">{html.escape(demo_title)}</div>
+                    <div class="ra-demo-copy">{html.escape(demo_body)}</div>
+                </div>
+                <div class="ra-demo-note">{html.escape(demo_note)}</div>
+            </div>
+            <div class="ra-value-grid">{value_cards_html}</div>
             <div class="ra-demo-flow">{flow_html}</div>
         </div>
-        <div style="margin:0.6rem 0 0.4rem 0;padding:0.55rem 0.8rem;border:1px solid #f59e0b;
-                    background:#fef3c7;color:#7c2d12;border-radius:8px;font-weight:600;
-                    display:flex;gap:0.55rem;align-items:flex-start;">
-            <span aria-hidden="true">⚠️</span>
-            <span>{html.escape(synthetic_banner)}</span>
-        </div>
-        <div class="ra-output-grid">
+        <div class="ra-output-grid" style="grid-template-columns: 1fr;">
             <div class="ra-output-card">
-                <div class="ra-output-title">{"Table 1 preview" if is_en else "表 1 预览"}
-                    <span style="margin-left:0.4rem;padding:0.05rem 0.4rem;border:1px solid #f59e0b;
-                                 background:#fef3c7;color:#7c2d12;border-radius:999px;
-                                 font-size:0.72rem;font-weight:700;">{html.escape(synthetic_chip)}</span>
-                </div>
-                <div class="ra-output-note">{html.escape(table_caption)}</div>
-                <table class="ra-mini-table">
-                    <thead><tr><th>{"Feature" if is_en else "变量"}</th><th>{"Alive" if is_en else "存活"}</th><th>{"Died" if is_en else "死亡"}</th><th>Δ</th></tr></thead>
-                    <tbody>{table_html}</tbody>
-                </table>
-            </div>
-            <div class="ra-output-card">
-                <div class="ra-output-title">{"Discrimination" if is_en else "区分度"}
-                    <span style="margin-left:0.4rem;padding:0.05rem 0.4rem;border:1px solid #f59e0b;
-                                 background:#fef3c7;color:#7c2d12;border-radius:999px;
-                                 font-size:0.72rem;font-weight:700;">{html.escape(synthetic_chip)}</span>
-                </div>
-                <div class="ra-output-note">AUROC 0.82 · Brier 0.14 · {html.escape(disc_caption)}</div>
-                <svg viewBox="0 0 220 128" width="100%" height="128" role="img" aria-label="Synthetic ROC curve (illustrative only)">
-                    <rect x="0" y="0" width="220" height="128" rx="10" fill="#f8fbff"/>
-                    <line x1="28" y1="102" x2="196" y2="102" stroke="#cbd5e1" stroke-width="1.5"/>
-                    <line x1="28" y1="102" x2="28" y2="18" stroke="#cbd5e1" stroke-width="1.5"/>
-                    <line x1="28" y1="102" x2="196" y2="18" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"/>
-                    <polyline points="28,102 44,76 61,58 83,42 113,31 150,24 196,18" fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round"/>
-                    <text x="36" y="26" fill="#082957" font-size="12" font-weight="700">ROC</text>
-                    <text x="196" y="120" fill="#b45309" font-size="10" font-weight="700"
-                          text-anchor="end" opacity="0.85">{html.escape(synthetic_chip).upper()}</text>
-                </svg>
-            </div>
-            <div class="ra-output-card">
-                <div class="ra-output-title">{"Calibration" if is_en else "校准"}
-                    <span style="margin-left:0.4rem;padding:0.05rem 0.4rem;border:1px solid #f59e0b;
-                                 background:#fef3c7;color:#7c2d12;border-radius:999px;
-                                 font-size:0.72rem;font-weight:700;">{html.escape(synthetic_chip)}</span>
-                </div>
-                <div class="ra-output-note">{html.escape(calib_caption)}</div>
-                <svg viewBox="0 0 220 128" width="100%" height="128" role="img" aria-label="Synthetic calibration curve (illustrative only)">
-                    <rect x="0" y="0" width="220" height="128" rx="10" fill="#f8fbff"/>
-                    <line x1="28" y1="102" x2="196" y2="18" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"/>
-                    <polyline points="28,98 57,82 87,68 117,54 151,38 196,24" fill="none" stroke="#0f766e" stroke-width="4" stroke-linecap="round"/>
-                    <circle cx="57" cy="82" r="4" fill="#0f766e"/>
-                    <circle cx="117" cy="54" r="4" fill="#0f766e"/>
-                    <circle cx="196" cy="24" r="4" fill="#0f766e"/>
-                    <text x="36" y="26" fill="#082957" font-size="12" font-weight="700">calibration</text>
-                    <text x="196" y="120" fill="#b45309" font-size="10" font-weight="700"
-                          text-anchor="end" opacity="0.85">{html.escape(synthetic_chip).upper()}</text>
-                </svg>
-            </div>
-            <div class="ra-output-card wide">
-                <div class="ra-output-title">{html.escape(finding_card_title)}
-                    <span style="margin-left:0.4rem;padding:0.05rem 0.4rem;border:1px solid #f59e0b;
-                                 background:#fef3c7;color:#7c2d12;border-radius:999px;
-                                 font-size:0.72rem;font-weight:700;">{html.escape(synthetic_chip)}</span>
-                </div>
-                <div class="ra-output-note">{html.escape(finding_card_note)}</div>
-                <div class="ra-finding">{html.escape(finding_text_1)}</div>
-                <div class="ra-finding">{html.escape(finding_text_2)}</div>
-            </div>
-            <div class="ra-output-card">
-                <div class="ra-output-title">{"Optional manuscript preview" if is_en else "可选文章预览"}
-                    <span style="margin-left:0.4rem;padding:0.05rem 0.4rem;border:1px solid #f59e0b;
-                                 background:#fef3c7;color:#7c2d12;border-radius:999px;
-                                 font-size:0.72rem;font-weight:700;">{html.escape(synthetic_chip)}</span>
-                </div>
-                <div class="ra-output-note">{html.escape(manuscript_caption)}</div>
-                <div class="ra-manuscript-preview">{html.escape(manuscript)}</div>
+                <div class="ra-output-title">{html.escape(value_title)}</div>
+                <div class="ra-demo-chip-row">{deliverables_html}</div>
             </div>
         </div>
         """,
@@ -3172,102 +3244,14 @@ def render_research_agent_demo_page() -> None:
     )
     _render_research_agent_demo_visuals(is_en=is_en)
 
-    overview_items = [
-        (
-            "Study plan" if is_en else "研究方案",
-            "Question -> study family, cohort, design constraints, target variables, outputs, and analysis steps."
-            if is_en else
-            "把问题转成研究类型、队列、设计约束、目标变量、输出要求和分析步骤。"
-        ),
-        (
-            "Data recipe" if is_en else "数据配方",
-            "Stay-level parquet, module export folder, or guided EasyICU extraction."
-            if is_en else
-            "支持 stay-level parquet、模块导出文件夹，或引导 EasyICU 先提取。"
-        ),
-        (
-            "Analysis pack" if is_en else "分析包",
-            "Tables, figures, family-specific diagnostics, and findings."
-            if is_en else
-            "表格、图、与研究类型相匹配的诊断指标和结果摘要。"
-        ),
-        (
-            "Manuscript draft" if is_en else "文章初稿",
-            "Generated only after the user reviews the analysis output."
-            if is_en else
-            "用户先看分析结果，确认后再生成文章初稿。"
-        ),
-    ]
-    cols = st.columns(4)
-    for col, (item_title, item_body) in zip(cols, overview_items):
-        with col:
-            st.markdown(f"**{item_title}**")
-            st.caption(item_body)
+    # 2026-05 Phase F simplification: removed the 4-column "Study plan /
+    # Data recipe / Analysis pack / Manuscript draft" row, the "Example
+    # workflow" question-and-outputs block, and the 3-step "Real-data
+    # workflow" list. All three duplicated what the 4-step flow at the
+    # top and the section pickers in Real Data Mode already show. The
+    # CTA below is enough to get users into the real flow.
 
     st.divider()
-    example_title = (
-        "Example workflow (prediction use case)"
-        if is_en else
-        "示例工作流（预测型用例）"
-    )
-    st.markdown(f"### {example_title}")
-
-    left, right = st.columns([1.05, 1.25])
-    with left:
-        st.markdown(
-            "\n".join([
-                "**Research question**" if is_en else "**研究问题**",
-                "Can we predict in-hospital mortality among Sepsis-3 ICU stays?"
-                if is_en else
-                "能否预测 Sepsis-3 ICU 患者的院内死亡风险？",
-                "",
-                "**Expected data modules**" if is_en else "**预期数据模块**",
-                "- sepsis / suspicion of infection",
-                "- demographics",
-                "- SOFA or SOFA-2 scores",
-                "- vital signs and laboratory summaries",
-                "- outcome: death in hospital",
-            ])
-        )
-    with right:
-        outputs = pd.DataFrame([
-            {
-                "Output" if is_en else "产出": "Table 1",
-                "Review target" if is_en else "复核重点": "Cohort balance, missingness, outcome rate" if is_en else "队列构成、缺失、死亡率",
-            },
-            {
-                "Output" if is_en else "产出": "Model metrics",
-                "Review target" if is_en else "复核重点": "AUROC, Brier score, calibration" if is_en else "AUROC、Brier、校准",
-            },
-            {
-                "Output" if is_en else "产出": "Figures",
-                "Review target" if is_en else "复核重点": "Calibration, ROC, feature effects" if is_en else "校准图、ROC、特征效应",
-            },
-            {
-                "Output" if is_en else "产出": "Findings",
-                "Review target" if is_en else "复核重点": "Whether the result is worth drafting" if is_en else "判断是否值得继续写文章",
-            },
-        ])
-        st.dataframe(outputs, hide_index=True, use_container_width=True)
-
-    st.divider()
-    st.markdown(
-        "### Real-data workflow" if is_en else "### 真实数据流程"
-    )
-    st.markdown(
-        "\n".join([
-            "1. Choose an existing stay-level file, an EasyICU module export folder, or the no-data extraction path."
-            if is_en else
-            "1. 选择已有 stay-level 文件、EasyICU 模块导出文件夹，或走“尚未准备数据”的提取路径。",
-            "2. Customize methods, covariates, cohort filters, and output stopping point."
-            if is_en else
-            "2. 定制方法、评估重点、时间设计、数据约束、队列筛选和停止点。",
-            "3. Run analysis first, review tables and figures, then decide whether to draft a manuscript."
-            if is_en else
-            "3. 先跑分析并查看表格/图，再决定是否生成文章。"
-        ])
-    )
-
     if st.button(
         "Switch to Real Data Mode" if is_en else "切换到真实数据模式",
         type="primary",
@@ -3281,6 +3265,86 @@ def render_research_agent_demo_page() -> None:
         st.session_state.loaded_data_origin = "none"
         st.session_state.patient_ids = []
         st.rerun()
+
+
+def _render_replication_section(*, default_workdir: Path) -> None:
+    """Thin web entry point for the deterministic lactate-MAP-vaso
+    replication package (``easyicu-research-replication`` without
+    ``--paper``). Reuses the multi-DB exports multipicker so users can
+    add multiple databases just by checking more rows.
+
+    Kept deliberately minimal:
+    * No paper-aware (LLM) mode — that path needs API keys, a paper
+      file, and writes a manuscript draft; users who want it should
+      use the CLI for now.
+    * Window defaults to 0–24 h (the package's default).
+    * Output dir defaults to ``<workdir>/replication``.
+    """
+    st.caption(_ra_text("replication_caption"))
+    chosen = _render_db_exports_multipicker(
+        key_prefix="research_agent_replication", min_selected=1,
+    )
+
+    col1, col2 = st.columns([1.0, 1.0])
+    with col1:
+        win_start = st.number_input(
+            _ra_text("replication_window") + " — start",
+            value=0.0, step=1.0,
+            key="research_agent_replication_win_start",
+        )
+    with col2:
+        win_end = st.number_input(
+            _ra_text("replication_window") + " — end",
+            value=24.0, step=1.0,
+            key="research_agent_replication_win_end",
+        )
+    output_dir_default = str(default_workdir / "replication")
+    output_dir = st.text_input(
+        _ra_text("replication_output"),
+        value=output_dir_default,
+        key="research_agent_replication_output",
+    )
+
+    run_clicked = st.button(
+        _ra_text("replication_run"),
+        type="primary",
+        disabled=not chosen,
+        use_container_width=True,
+        key="research_agent_replication_run",
+    )
+    if not chosen:
+        st.info(_ra_text("replication_need_one"))
+        return
+    if not run_clicked:
+        return
+
+    try:
+        from easyicu.research_agent.replication import (
+            run_lactate_map_vaso_replication,
+        )
+    except Exception as exc:
+        st.error(f"Could not import replication module: {exc}")
+        return
+
+    targets: Dict[str, Optional[Path]] = {tag: folder for tag, folder in chosen}
+    output_path = Path(output_dir).expanduser().resolve()
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    with st.spinner(_ra_text("replication_running")):
+        try:
+            paths = run_lactate_map_vaso_replication(
+                targets,
+                str(output_path),
+                window=(float(win_start), float(win_end)),
+            )
+        except Exception as exc:
+            st.error(f"Replication failed: {type(exc).__name__}: {exc}")
+            st.code(traceback.format_exc())
+            return
+
+    st.success(_ra_text("replication_done"))
+    rows = [{"output": name, "path": str(p)} for name, p in paths.items()]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def render_research_agent_page() -> None:
@@ -3308,34 +3372,12 @@ def render_research_agent_page() -> None:
         _ra_text("step4_title"),
         _ra_text("step5_title"),
     ]
-    _step_required = [True, False, True, True, False]
-    _required_label = "required" if _is_en else "必填"
     _optional_label = "optional" if _is_en else "可选"
-    _stepper_legend = (
-        "Suggested order. Steps 1, 3 and 4 are required to run the agent; steps 2 and 5 are optional."
-        if _is_en else
-        "推荐顺序。第 1、3、4 步为必填，第 2、5 步为可选。"
-    )
-    _stepper_items = "".join(
-        f'<div style="display:flex;align-items:center;gap:0.45rem;padding:0.3rem 0.55rem;'
-        f'border:1px solid {"#2563eb" if req else "#cbd5e1"};border-radius:999px;'
-        f'background:{"#eff6ff" if req else "#f8fafc"};color:#0f172a;font-size:0.78rem;'
-        f'font-weight:600;white-space:nowrap;">'
-        f'<span style="display:inline-flex;align-items:center;justify-content:center;'
-        f'width:1.35rem;height:1.35rem;border-radius:999px;background:{"#2563eb" if req else "#94a3b8"};'
-        f'color:white;font-size:0.72rem;">{idx + 1}</span>'
-        f'<span>{html.escape(title)}</span>'
-        f'<span style="font-size:0.66rem;color:{"#2563eb" if req else "#64748b"};'
-        f'text-transform:uppercase;letter-spacing:0.04em;">'
-        f'{_required_label if req else _optional_label}</span>'
-        f'</div>'
-        for idx, (title, req) in enumerate(zip(_step_titles, _step_required))
-    )
-    st.markdown(
-        f'<div style="display:flex;flex-wrap:wrap;gap:0.45rem;margin:0.4rem 0 0.25rem 0;">{_stepper_items}</div>'
-        f'<div style="font-size:0.78rem;color:#475569;margin-bottom:0.55rem;">{html.escape(_stepper_legend)}</div>',
-        unsafe_allow_html=True,
-    )
+    # 2026-05 Phase F simplification: removed the top stepper
+    # visualization (5 pills with required/optional badges) and its
+    # legend. Both duplicated the expander headers below — the user
+    # learned nothing new from the pills they wouldn't pick up from
+    # "1 · Research request", "2 · Study design (optional)", etc.
 
     with st.expander(f"1 · {_step_titles[0]}", expanded=True):
         free_question, target_outcome = _section_request_picker()
@@ -3357,6 +3399,13 @@ def render_research_agent_page() -> None:
     st.divider()
     history_workdir = Path(workdir_text).expanduser().resolve()
     _render_run_history(history_workdir)
+
+    # 2026-05 Phase G: paper replication as a sibling action below the
+    # interactive flow. Deterministic, no LLM, no tokens — uses the
+    # lactate × MAP × vasopressor 24-hour package from
+    # easyicu.research_agent.replication.
+    with st.expander(_ra_text("replication_title"), expanded=False):
+        _render_replication_section(default_workdir=history_workdir)
 
     run_clicked = st.button(
         "▶  " + (_ra_text("draft_button") if force_manuscript else _ra_text("run_button")),

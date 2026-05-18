@@ -241,7 +241,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                         dtype_str = str(display_df[col].dtype).lower()
                         if 'bool' in dtype_str:
                             display_df[col] = display_df[col].astype(str)
-                    st.dataframe(display_df, use_container_width=True, height=500)
+                    st.dataframe(display_df, use_container_width=True, height=680)
 
                     if len(df) > max_rows:
                         truncate_msg = (
@@ -331,7 +331,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                     dtype_str = str(display_merged[col].dtype).lower()
                     if 'bool' in dtype_str:
                         display_merged[col] = display_merged[col].astype(str)
-                st.dataframe(display_merged, use_container_width=True, height=500)
+                st.dataframe(display_merged, use_container_width=True, height=680)
             else:
                 from functools import reduce
                 merge_cols = [id_col, unified_time_col]
@@ -461,7 +461,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                                         unsafe_allow_html=True,
                                     )
                         st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
-                        st.dataframe(display_df, use_container_width=True, height=500)
+                        st.dataframe(display_df, use_container_width=True, height=680)
 
                         if len(merged_df) > max_rows:
                             truncate_msg = (

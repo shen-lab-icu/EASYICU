@@ -426,6 +426,39 @@ CONCEPT_GROUPS_INTERNAL = {
     'outcome': ['death', 'los_icu', 'los_hosp'],
 }
 
+# Canonical web concepts that are produced by composite loaders rather than by
+# one flat dictionary entry with the same name.  Keep UI/export names canonical
+# (for example `aki_stage`) while preserving the lower-level extraction source
+# (`kdigo_aki`, `kdigo_creat`, `kdigo_uo`, `sep3`, or the dedicated
+# circulatory-failure loader).
+COMPOSITE_CONCEPT_OUTPUT_SOURCES = {
+    'aki': 'kdigo_aki',
+    'aki_stage': 'kdigo_aki',
+    'aki_stage_rrt': 'kdigo_aki',
+    'aki_stage_creat': 'kdigo_creat',
+    'creat_low_past_48hr': 'kdigo_creat',
+    'creat_low_past_7day': 'kdigo_creat',
+    'aki_stage_uo': 'kdigo_uo',
+    'uo_rt_6hr': 'kdigo_uo',
+    'uo_rt_12hr': 'kdigo_uo',
+    'uo_rt_24hr': 'kdigo_uo',
+    'circ_event': 'circ_failure_loader',
+    'circ_failure': 'circ_failure_loader',
+    'sep3_sofa1': 'sep3',
+}
+
+# Concepts present in the extraction dictionary but intentionally hidden from
+# the user-facing catalog.  They are loader entry points or legacy/source aliases
+# whose outputs are surfaced through canonical web concepts above.
+HIDDEN_DICTIONARY_CONCEPTS = {
+    'bicarb',
+    'kdigo_aki',
+    'kdigo_creat',
+    'kdigo_uo',
+    'potassium',
+    'sep3',
+}
+
 # 双语显示名称映射（优化：更清晰的命名区分评分vs诊断，包含准确特征数量）
 CONCEPT_GROUP_NAMES = {
     'sofa2_score': ('⭐ SOFA-2 Scores', '⭐ SOFA-2 评分'),
@@ -513,30 +546,32 @@ PREVIEW_TIME_COLUMNS = [
 ]
 
 # ============ 临床阈值线（用于时序图表默认标注） ============
+# Optional ``source`` field documents the clinical guideline behind each
+# threshold so readers can see provenance (2026-05 Phase D polish).
 CLINICAL_THRESHOLDS = {
-    'hr':   {'lines': [60, 100], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Bradycardia', 'Tachycardia'], 'unit': 'bpm'},
-    'map':  {'lines': [65], 'colors': ['#ef4444'], 'labels': ['Hypotension'], 'unit': 'mmHg'},
-    'sbp':  {'lines': [90, 140], 'colors': ['#ef4444', '#f59e0b'], 'labels': ['Hypotension', 'Hypertension'], 'unit': 'mmHg'},
-    'spo2': {'lines': [94], 'colors': ['#ef4444'], 'labels': ['Hypoxemia'], 'unit': '%'},
-    'temp': {'lines': [36, 38], 'colors': ['#3b82f6', '#ef4444'], 'labels': ['Hypothermia', 'Fever'], 'unit': '°C'},
-    'resp': {'lines': [12, 20], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Bradypnea', 'Tachypnea'], 'unit': '/min'},
-    'lact': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Elevated'], 'unit': 'mmol/L'},
-    'crea': {'lines': [1.2], 'colors': ['#f59e0b'], 'labels': ['Elevated'], 'unit': 'mg/dL'},
-    'ph':   {'lines': [7.35, 7.45], 'colors': ['#ef4444', '#ef4444'], 'labels': ['Acidosis', 'Alkalosis'], 'unit': ''},
-    'glu':  {'lines': [70, 180], 'colors': ['#ef4444', '#f59e0b'], 'labels': ['Hypoglycemia', 'Hyperglycemia'], 'unit': 'mg/dL'},
-    'k':    {'lines': [3.5, 5.0], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Hypokalemia', 'Hyperkalemia'], 'unit': 'mEq/L'},
-    'na':   {'lines': [135, 145], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Hyponatremia', 'Hypernatremia'], 'unit': 'mEq/L'},
-    'anion_gap': {'lines': [8, 16], 'colors': ['#3b82f6', '#ef4444'], 'labels': ['Low AG', 'High AG (metabolic acidosis)'], 'unit': 'mEq/L'},
-    'pulse_pressure': {'lines': [25, 60], 'colors': ['#ef4444', '#f59e0b'], 'labels': ['Narrow PP (shock)', 'Wide PP'], 'unit': 'mmHg'},
-    'plt':  {'lines': [150], 'colors': ['#ef4444'], 'labels': ['Thrombocytopenia'], 'unit': '×10³/µL'},
-    'hgb':  {'lines': [7], 'colors': ['#ef4444'], 'labels': ['Severe Anemia'], 'unit': 'g/dL'},
-    'inr_pt': {'lines': [1.5], 'colors': ['#f59e0b'], 'labels': ['Coagulopathy'], 'unit': ''},
-    'pafi': {'lines': [300, 200, 100], 'colors': ['#f59e0b', '#ef4444', '#7f1d1d'], 'labels': ['Mild ARDS', 'Moderate ARDS', 'Severe ARDS'], 'unit': 'mmHg'},
-    'bili': {'lines': [1.2], 'colors': ['#f59e0b'], 'labels': ['Elevated'], 'unit': 'mg/dL'},
-    'sofa': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Organ Dysfunction'], 'unit': 'points'},
-    'sofa2': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Organ Dysfunction'], 'unit': 'points'},
-    'gcs':  {'lines': [8], 'colors': ['#ef4444'], 'labels': ['Severe Impairment'], 'unit': 'points'},
-    'qsofa': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Positive qSOFA'], 'unit': 'points'},
+    'hr':   {'lines': [60, 100], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Bradycardia', 'Tachycardia'], 'unit': 'bpm', 'source': 'AHA adult HR norms; SCCM 2021'},
+    'map':  {'lines': [65], 'colors': ['#ef4444'], 'labels': ['Hypotension'], 'unit': 'mmHg', 'source': 'Surviving Sepsis Campaign 2021'},
+    'sbp':  {'lines': [90, 140], 'colors': ['#ef4444', '#f59e0b'], 'labels': ['Hypotension', 'Hypertension'], 'unit': 'mmHg', 'source': 'SOFA 1996 (CV); ACC/AHA 2017 (HTN)'},
+    'spo2': {'lines': [94], 'colors': ['#ef4444'], 'labels': ['Hypoxemia'], 'unit': '%', 'source': 'BTS emergency oxygen 2017'},
+    'temp': {'lines': [36, 38], 'colors': ['#3b82f6', '#ef4444'], 'labels': ['Hypothermia', 'Fever'], 'unit': '°C', 'source': 'Sepsis-3 / SIRS 1992'},
+    'resp': {'lines': [12, 20], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Bradypnea', 'Tachypnea'], 'unit': '/min', 'source': 'qSOFA / SIRS criteria'},
+    'lact': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Elevated'], 'unit': 'mmol/L', 'source': 'Sepsis-3 / Surviving Sepsis Campaign'},
+    'crea': {'lines': [1.2], 'colors': ['#f59e0b'], 'labels': ['Elevated'], 'unit': 'mg/dL', 'source': 'KDIGO 2012 AKI'},
+    'ph':   {'lines': [7.35, 7.45], 'colors': ['#ef4444', '#ef4444'], 'labels': ['Acidosis', 'Alkalosis'], 'unit': '', 'source': 'standard arterial pH range'},
+    'glu':  {'lines': [70, 180], 'colors': ['#ef4444', '#f59e0b'], 'labels': ['Hypoglycemia', 'Hyperglycemia'], 'unit': 'mg/dL', 'source': 'ADA in-hospital glycemic targets 2024'},
+    'k':    {'lines': [3.5, 5.0], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Hypokalemia', 'Hyperkalemia'], 'unit': 'mEq/L', 'source': 'standard reference range'},
+    'na':   {'lines': [135, 145], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Hyponatremia', 'Hypernatremia'], 'unit': 'mEq/L', 'source': 'standard reference range'},
+    'anion_gap': {'lines': [8, 16], 'colors': ['#3b82f6', '#ef4444'], 'labels': ['Low AG', 'High AG (metabolic acidosis)'], 'unit': 'mEq/L', 'source': 'standard chemistry'},
+    'pulse_pressure': {'lines': [25, 60], 'colors': ['#ef4444', '#f59e0b'], 'labels': ['Narrow PP (shock)', 'Wide PP'], 'unit': 'mmHg', 'source': 'hemodynamic textbook'},
+    'plt':  {'lines': [150], 'colors': ['#ef4444'], 'labels': ['Thrombocytopenia'], 'unit': '×10³/µL', 'source': 'SOFA coag component'},
+    'hgb':  {'lines': [7], 'colors': ['#ef4444'], 'labels': ['Severe Anemia'], 'unit': 'g/dL', 'source': 'WHO anemia; TRICC transfusion'},
+    'inr_pt': {'lines': [1.5], 'colors': ['#f59e0b'], 'labels': ['Coagulopathy'], 'unit': '', 'source': 'clinical coagulopathy threshold'},
+    'pafi': {'lines': [300, 200, 100], 'colors': ['#f59e0b', '#ef4444', '#7f1d1d'], 'labels': ['Mild ARDS', 'Moderate ARDS', 'Severe ARDS'], 'unit': 'mmHg', 'source': 'Berlin Definition 2012'},
+    'bili': {'lines': [1.2], 'colors': ['#f59e0b'], 'labels': ['Elevated'], 'unit': 'mg/dL', 'source': 'SOFA liver component'},
+    'sofa': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Organ Dysfunction'], 'unit': 'points', 'source': 'Sepsis-3 (Singer 2016)'},
+    'sofa2': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Organ Dysfunction'], 'unit': 'points', 'source': 'Sepsis-3 / SOFA-2 update'},
+    'gcs':  {'lines': [8], 'colors': ['#ef4444'], 'labels': ['Severe Impairment'], 'unit': 'points', 'source': 'Teasdale 1974; severe TBI ≤8'},
+    'qsofa': {'lines': [2], 'colors': ['#ef4444'], 'labels': ['Positive qSOFA'], 'unit': 'points', 'source': 'Sepsis-3 (Seymour 2016)'},
 }
 
 # 临床概念分道映射

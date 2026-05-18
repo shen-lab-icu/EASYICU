@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入 **6 个主流公开 ICU 数据库**，支持 **167 种标准化临床概念**的自动提取，并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。
+EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入 **6 个主流公开 ICU 数据库**，支持 **200+ 种标准化临床概念**的自动提取（标准目录共 217 个 —— 210 个字典概念加上 7 个由回调注册表派生的临床评分），并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。
 
 ## 为什么是 EasyICU
 
@@ -117,39 +117,53 @@ easyicu-webapp
 4. 定义研究队列、选择特征并导出结果。
 5. 使用内置可视化与队列分析页面进行审阅。
 
+### 模式选择
+
+启动后，EasyICU 先让用户选择工作模式。**Demo Mode（演示模式）** 基于模拟 ICU 数据进行向导式体验，无需任何 token；**Real Data Mode（真实数据模式）** 连接本地准备好的数据集（或任一支持的公开数据库），运行完整的提取与审阅工作流。
+
+![模式选择](docs/images/01_mode_selection.jpg)
+
 ### 数据准备
 
-EasyICU 可以自动校验原始数据库目录，并将其准备成可直接提取的格式。Web 工作流会识别 CSV / CSV.GZ / tar.gz 等原始布局，将其转换为 Parquet，执行数据库专用优化，并准备 Web 界面和 Python API 共用的数据结构。
+在 Real Data Mode 中，EasyICU 自动校验原始数据库目录并完成提取前的准备。Web 工作流会识别 CSV / CSV.GZ / tar.gz 等原始布局，将其转换为 Parquet，执行数据库专用优化，并准备 Web 界面与 Python API 共用的数据结构。
 
-<img width="1931" height="956" alt="数据转换" src="https://github.com/user-attachments/assets/86ea826b-6a0f-491a-b967-c5a7ebdfaa5b" />
+### Patient Review — 模块与特征
 
-### 队列定义
+**Patient Review（患者审阅）** Tab 按模块（生命体征、化验、SOFA、Sepsis、AKI 等）加载概念表，让审阅者检查特征、时间序列、单患者总结，以及内置的数据质量审计。每个模块都会展示其映射的原始字段和概念层定义，并支持「合并宽表」与「单特征」两种预览模式。
 
-典型筛选条件包括：
-- ICU 住院时长
-- 年龄范围
-- 是否首次 ICU 入院
-- 性别
-- 院内死亡
+![Patient Review](docs/images/02_patient_review.jpg)
 
-<img width="1931" height="736" alt="队列选择" src="https://github.com/user-attachments/assets/628caf50-bed3-4918-b36f-5930464e9fb7" />
+### 时间序列审阅 — Clinical Lanes
 
-### 特征审阅与导出
+**Time Series（时序）** 子标签支持 Clinical Lanes（多特征面板 + 临床阈值线）、Single Patient、Multi-Patient Comparison 三种视图。每张图都叠加了临床上有意义的阈值线 —— 例如心率上的 Tachycardia / Bradycardia，温度上的 Fever / Hypothermia，血小板上的 Thrombocytopenia —— 让审阅者一眼即可识别趋势是否需要进一步关注。
 
-特征按类别组织，右侧词典面板提供概念定义和变量映射说明。支持导出为 Parquet、CSV 和 Excel。
+![Time Series — Clinical Lanes](docs/images/03_clinical_lanes.jpg)
 
-<img width="1931" height="1018" alt="特征选择" src="https://github.com/user-attachments/assets/f37fc262-b0e8-4894-8a08-2614614f4f18" />
+### Cohort Statistics
 
-<img width="4249" height="2241" alt="批量导出" src="https://github.com/user-attachments/assets/9575d396-14ef-4e02-a4ac-a2a6222b1776" />
+**Cohort Statistics（队列统计）** Tab 输出分组对照表（含 p 值与 SMD）、覆盖度与入组审计、单页队列快照，以及 SOFA-1 vs SOFA-2 敏感性分析 —— 全部基于已准备的 Demo 或真实数据状态。下方的 Baseline Characteristics 表逐模块展示对照组数值，并标注 balanced / mild / large 的显著性等级。
+
+![Cohort Statistics](docs/images/04_cohort_statistics.jpg)
+
+### Cross-Database Benchmark
+
+**Cross-DB Benchmark（跨库基准）** Tab 把同一组临床概念在六个支持的 ICU 数据库间标准化对齐，并叠加其分布以直接对比 —— 是研究希望"跨队列推广"时的一项关键合理性检查。
+
+![Cross-Database Benchmark](docs/images/06_cross_db_benchmark.jpg)
 
 ## 可视化与分析
 
-EasyICU 提供以下交互式工具：
+EasyICU Web 主界面包含 5 个顶级 tab：
 
-- **快速可视化**：数据表浏览、时间序列审阅、单患者概览、数据质量评估
-- **队列分析**：组间对照表、跨数据库分布对比、队列快照，以及 SOFA-1/SOFA-2 敏感性分析
+- **Tutorial（教程）** — 数据准备工作流向导（数据源 → 队列 → 概念 → 导出），作为最左侧顶部 tab，新用户进来就能找到，不必再去侧边栏；侧边栏的「📚 工作流帮助」也依然可用。
+- **Patient Review（患者审阅）** — 数据表浏览、带临床阈值的时间序列、单患者概览、数据质量审计（缺失 / 物理范围越界 / 时间完整性）。
+- **Cohort Statistics（队列统计）** — 分组对照表（含 p 值与 SMD）、覆盖度与入组流程审计、队列单页快照、SOFA-1 与 SOFA-2 敏感性分析。
+- **Cross-DB Benchmark（跨库基准）** — 多数据库间的标准化特征分布对比（独立出来是因为它需要 ≥ 2 个数据库的原始 schema）。
+- **Research Agent（研究智能体）** — 可选模块：以研究问题为入口的分析与文章草稿生成，内置确定性的论文复现入口。
 
-<img width="3051" height="1823" alt="快速可视化示例" src="https://github.com/user-attachments/assets/09c64137-9c6a-401e-a1d0-fe358ea458de" />
+Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 **Plan → Build → Analyze → Gate** 变成证据绑定的研究产物，并只在 Evidence Gate 通过后才生成论文草稿：
+
+![Research Agent pipeline](docs/images/05_research_agent.jpg)
 
 ## 可选的 Research-Agent 层
 
@@ -161,7 +175,9 @@ EasyICU 提供以下交互式工具：
 
 ## 🚀 进阶使用（开发者 / 高级用户）
 
-## 开发与测试
+
+
+### 开发与测试
 
 建议为本项目创建独立开发环境，并运行当前自动化检查：
 

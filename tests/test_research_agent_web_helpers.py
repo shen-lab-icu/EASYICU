@@ -256,3 +256,24 @@ def test_run_pipeline_enables_deterministic_planner_fallback(tmp_path: Path) -> 
     assert FakePipeline.init_kwargs["enable_deterministic_planner_fallback"] is True
     assert FakePipeline.init_kwargs["enable_deterministic_code_fallback"] is True
     assert result["ok"] is True
+
+
+def test_loaded_concepts_handoff_respects_current_patient_ids() -> None:
+    loaded = {
+        "age": pd.DataFrame({"stay_id": [1, 2, 3], "age": [60, 70, 80]}),
+        "hr": pd.DataFrame({
+            "stay_id": [1, 1, 2, 3],
+            "time": [0, 1, 0, 0],
+            "hr": [70, 75, 80, 90],
+        }),
+    }
+
+    cohort = ra_page._stay_level_from_loaded_concepts(
+        loaded,
+        id_col="stay_id",
+        patient_ids=[1, 3],
+    )
+
+    assert cohort is not None
+    assert set(cohort["stay_id"]) == {1, 3}
+    assert cohort.loc[cohort["stay_id"] == 1, "hr"].iloc[0] == 75

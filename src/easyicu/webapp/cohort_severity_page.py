@@ -84,11 +84,20 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
         st.caption(mode_cfg['description_en'] if lang == 'en' else mode_cfg['description_zh'])
     if locked_modes and not screenshot_mode:
         locked_text = ", ".join(mode_labels[key] for key in locked_modes)
-        st.caption(
+        # Use a visible warning callout instead of a caption — locked
+        # modes are a structural limitation users need to act on, not
+        # incidental footnote text (2026-05 Phase D polish).
+        st.warning(
             (
-                f"Load `sofa` and `sofa2` in Quick Visualization to unlock: {locked_text}."
+                f"🔒 **{locked_text}** {'is' if len(locked_modes) == 1 else 'are'} locked: "
+                "this mode needs time-aligned `sofa` and `sofa2` concepts. "
+                "Load both via **Patient Review → Previously Exported Data** "
+                "or generate them in Demo Mode."
                 if lang == 'en' else
-                f"先在快速可视化中载入 `sofa` 和 `sofa2`，即可解锁：{locked_text}。"
+                f"🔒 **{locked_text}** 暂未解锁："
+                "该口径需要同时间点的 `sofa` 与 `sofa2` 概念。"
+                "请在 **患者审阅 → 之前导出的结果文件** 中同时加载二者，"
+                "或在演示模式中生成。"
             )
         )
 

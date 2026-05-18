@@ -270,68 +270,27 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                 import plotly.graph_objects as go
                 from plotly.subplots import make_subplots
 
-                # 收集所有生命体征数据
-                vitals = ['hr', 'map', 'sbp', 'resp', 'spo2']
-                vitals_data = {}
-                time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat']
-
-                for v in vitals:
-                    if v in st.session_state.loaded_concepts:
-                        df = st.session_state.loaded_concepts[v]
-                        if isinstance(df, pd.DataFrame) and id_col in df.columns:
-                            patient_df = df[df[id_col] == patient_id]
-                            if len(patient_df) > 0:
-                                # 检测时间列
-                                time_col = None
-                                for tc in time_candidates:
-                                    if tc in patient_df.columns:
-                                        time_col = tc
-                                        break
-                                if time_col:
-                                    vitals_data[v] = (patient_df, time_col)
-
-                if vitals_data and not screenshot_mode:
-                    # 创建多行子图
-                    n_vitals = len(vitals_data)
-                    fig = make_subplots(
-                        rows=n_vitals, cols=1,
-                        shared_xaxes=True,
-                        vertical_spacing=0.05,
-                        subplot_titles=[v.upper() for v in vitals_data.keys()]
+                # Per-patient vitals trend (HR/MAP/SBP/RESP/SpO2) was
+                # removed (2026-05 Phase C de-dup) because **Time Series →
+                # Clinical Lanes** already plots the same vitals (and
+                # adds clinical threshold annotations like Tachycardia /
+                # Fever / Hypoxemia that this view didn't have). Keep
+                # Patient Overview focused on per-patient *summary*; send
+                # users to Time Series for trend inspection.
+                if not screenshot_mode:
+                    ts_hint_en = (
+                        "Vital-sign trends moved to **Time Series** "
+                        "(Clinical Lanes / Single Patient). They share the "
+                        "same per-patient data plus clinical threshold "
+                        "annotations (Tachycardia, Fever, Hypoxemia…) "
+                        "that this view didn't have."
                     )
-
-                    colors = ['#1f77b4', '#2ca02c', '#ff7f0e', '#d62728', '#9467bd']
-
-                    for i, (name, (df, time_col)) in enumerate(vitals_data.items(), 1):
-                        value_col = name if name in df.columns else df.columns[-1]
-                        fig.add_trace(
-                            go.Scatter(
-                                x=df[time_col], y=df[value_col],
-                                mode='lines+markers',
-                                name=name.upper(),
-                                line=dict(color=colors[(i-1) % len(colors)], width=2),
-                                marker=dict(size=4)
-                            ),
-                            row=i, col=1
-                        )
-
-                    vitals_title = f"Patient {patient_id} Vital Signs Trend" if lang == 'en' else f"患者 {patient_id} 生命体征趋势"
-                    fig.update_layout(
-                        height=150 * n_vitals + 100,
-                        template="plotly_white",
-                        showlegend=False,
-                        title_text=vitals_title,
-                        title_font_size=16,
-                        margin=dict(l=50, r=30, t=60, b=50),
-                        font=dict(size=14, color='black'),
+                    ts_hint_zh = (
+                        "生命体征趋势已迁移至 **时间序列**"
+                        "（临床通道 / 单患者视图），并附带 "
+                        "心动过速 / 发热 / 低氧 等临床阈值标注。"
                     )
-                    fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                    fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-
-                    st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
-                elif not screenshot_mode:
-                    no_vitals = "ℹ️ No standard vital signs are present in the current loaded features" if lang == 'en' else "ℹ️ 当前已加载特征中不包含标准生命体征"
-                    st.info(no_vitals)
+                    st.info(ts_hint_en if lang == 'en' else ts_hint_zh, icon="📈")
 
                 # SOFA 评分趋势
                 if 'sofa' in st.session_state.loaded_concepts:
