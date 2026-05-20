@@ -2893,7 +2893,11 @@ def main():
 
     # ============ 入口页面：选择Demo或Real Data模式 ============
     if entry_mode == 'none':
-        render_entry_page()
+        # Shell-A redesign: entry/mode-selection screen now uses the
+        # design-canvas layout from page-entry.jsx.
+        from easyicu.webapp.pages_redesign import render_entry_redesign_page
+        render_entry_redesign_page(lang)
+        return
         return
 
     _apply_assistant_preset()
@@ -3118,8 +3122,10 @@ def main():
     active_page = st.session_state.get('_active_main_page', page_keys[0])
 
     if active_page == "tutorial":
-        render_home()
-        _render_feature_definition_panel(lang)
+        # Shell-A redesign: Tutorial page now uses the hero + workflow
+        # strip + starting-point cards layout from page-tutorial.jsx.
+        from easyicu.webapp.pages_redesign import render_tutorial_redesign_page
+        render_tutorial_redesign_page(lang)
 
     elif active_page == "quick_viz":
         if export_in_progress:
@@ -3217,7 +3223,10 @@ def main():
                     else:
                         st.warning("Please configure data source first" if lang == 'en' else "请先配置数据源")
 
-            render_quick_visualization_page()
+            # Shell-A redesign: Quick Visualization full layout (4 subtabs)
+            # from page-quick-viz.jsx replaces the legacy compound page.
+            from easyicu.webapp.pages_redesign import render_quickviz_redesign_page
+            render_quickviz_redesign_page(lang)
 
     elif active_page == "cohort":
         if export_in_progress:
@@ -3271,20 +3280,13 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{ra_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            try:
-                from easyicu.webapp.research_agent import (
-                    render_research_agent_demo_page,
-                    render_research_agent_page,
-                )
-                if st.session_state.get('entry_mode') == 'demo':
-                    render_research_agent_demo_page()
-                else:
-                    render_research_agent_page()
-            except Exception as _ra_exc:  # pragma: no cover - defensive
-                st.error(get_text("ra_page_load_failed").format(
-                    error=f"{type(_ra_exc).__name__}: {_ra_exc}",
-                ))
-                st.caption(get_text("ra_optional_deps_hint"))
+            # Shell-A redesign: Research Agent visual surface from
+            # page-research-agent.jsx. The legacy compound page (real
+            # LLM controls etc.) remains importable via the dedicated
+            # research_agent module if needed, but the default render
+            # path now matches the design canvas exactly.
+            from easyicu.webapp.pages_redesign import render_agent_redesign_page
+            render_agent_redesign_page(lang)
 
     # 🔧 处理侧边栏触发的导出（在标签页渲染后执行，确保 Guide: Complete 中的 container 已创建）
     if st.session_state.get('trigger_export', False):

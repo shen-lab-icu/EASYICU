@@ -298,25 +298,152 @@ def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
 
 
 def _render_shell_brand(entry_mode: str) -> None:
-    """Brand block + mode pill (shell-A top of sidebar)."""
+    """Brand block + workspace switcher + command search (shell-A top of sidebar)."""
     lang = st.session_state.get("language", "en")
-    sub = "ICU Data Analytics" if lang == "en" else "ICU 数据分析平台"
+    sub = "ICU Data Analytics" if lang == "en" else "ICU 数据研究台"
     st.markdown(
         render_brand_html(name="EasyICU", sub=sub, initials="E"),
         unsafe_allow_html=True,
     )
+
+    # Workspace switcher — design-canvas style: a flat field with the
+    # mode pill + cohort name + chevron. We render the visual + a real
+    # selectbox immediately below (collapsed by CSS) so future routes
+    # can be wired in.
+    cohort_label = st.session_state.get("cohort_label", "sepsis_mortality_v3")
     if entry_mode == "demo":
-        label = "Demo · simulated data" if lang == "en" else "演示 · 模拟数据"
-        st.markdown(
-            f'<div style="padding:0 6px 10px">{render_pill_html(label, tone="demo")}</div>',
-            unsafe_allow_html=True,
-        )
+        mode_pill = render_pill_html("Demo" if lang == "en" else "演示", tone="demo")
     elif entry_mode == "real":
-        label = "Real data" if lang == "en" else "真实数据"
+        mode_pill = render_pill_html("Real" if lang == "en" else "真实", tone="real")
+    else:
+        mode_pill = render_pill_html("None" if lang == "en" else "未选择", tone="neutral")
+    st.markdown(
+        '<div style="padding:0 6px 8px">'
+        '<div style="display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;'
+        'border:1px solid var(--hair-2);background:var(--surface);border-radius:6px;'
+        'font-size:12.5px;justify-content:space-between">'
+        f'<div style="display:flex;align-items:center;gap:8px;min-width:0">'
+        f'{mode_pill}<span style="font-size:12px;white-space:nowrap;overflow:hidden;'
+        f'text-overflow:ellipsis">{html.escape(cohort_label)}</span></div>'
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.8" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    # Command search — Jump to… ⌘K (design preview; pressing it opens a
+    # placeholder modal toast so users see the affordance even before
+    # a real command palette ships).
+    placeholder_en = "Jump to…"
+    placeholder_zh = "跳转到…"
+    st.markdown(
+        '<div style="padding:0 6px 12px">'
+        '<div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;'
+        'border:1px solid var(--hair-2);background:var(--surface);border-radius:6px;'
+        'font-size:12px;color:var(--ink-4)">'
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
+        f'<span style="flex:1">{placeholder_en if lang == "en" else placeholder_zh}</span>'
+        '<span style="display:flex;gap:3px">'
+        '<span class="mono" style="font-family:var(--font-mono);font-size:10.5px;'
+        'padding:1px 5px;border:1px solid var(--hair-2);border-bottom-width:2px;border-radius:4px;'
+        'background:var(--surface);color:var(--ink-3)">⌘</span>'
+        '<span class="mono" style="font-family:var(--font-mono);font-size:10.5px;'
+        'padding:1px 5px;border:1px solid var(--hair-2);border-bottom-width:2px;border-radius:4px;'
+        'background:var(--surface);color:var(--ink-3)">K</span>'
+        '</span></div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_shell_recent_cohorts() -> None:
+    """Recent-cohorts list (sidebar shell-A block)."""
+    lang = st.session_state.get("language", "en")
+    label = "Recent cohorts" if lang == "en" else "最近队列"
+    st.markdown(
+        f'<div class="eu-section-label" style="padding-top:8px"><span>{html.escape(label)}</span></div>',
+        unsafe_allow_html=True,
+    )
+    items: list[tuple[str, str]] = st.session_state.get("_eu_recent_cohorts") or [
+        ("sepsis_mortality_v3", "2,481"),
+        ("aki_kdigo_24h", "1,103"),
+        ("vent_weaning_72h", "847"),
+    ]
+    for label_, count_ in items:
         st.markdown(
-            f'<div style="padding:0 6px 10px">{render_pill_html(label, tone="real")}</div>',
+            f'<div class="eu-nav-item" style="height:28px;padding:4px 10px">'
+            '<span class="ico" style="width:10px;display:inline-flex">'
+            '<svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">'
+            '<circle cx="12" cy="12" r="3"/></svg></span>'
+            f'<span class="label" style="font-size:12px">{html.escape(label_)}</span>'
+            f'<span class="count mono">{html.escape(count_)}</span>'
+            '</div>',
             unsafe_allow_html=True,
         )
+
+
+def _render_shell_footer_icons() -> None:
+    """Sidebar footer — 5 small icon buttons (back / help / settings / lang / avatar)."""
+    lang = st.session_state.get("language", "en")
+    st.markdown('<div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:8px"></div>',
+                unsafe_allow_html=True)
+    cols = st.columns([1, 1, 1, 1, 1])
+    icons = {
+        "back": '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>',
+        "help": '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M10 9a2 2 0 1 1 3 1.7c-.7.4-1 .9-1 1.5"/><path d="M12 17h.01"/></svg>',
+        "settings": '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.5-2.4.8a7 7 0 0 0-2-1.1L14 3h-4l-.5 2.4a7 7 0 0 0-2 1.1l-2.4-.8-2 3.5 2 1.6c-.1.4-.1.8-.1 1.2"/></svg>',
+        "globe": '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>',
+    }
+    with cols[0]:
+        if st.button(" ", key="_eu_footer_back", help=(
+                "Mode selection / 模式选择"
+                if lang == "en" else "返回模式选择 / Mode selection")):
+            clear_run_state("all")
+            st.session_state.entry_mode = "none"
+            st.session_state.use_mock_data = False
+            st.rerun()
+    with cols[1]:
+        if st.button(" ", key="_eu_footer_help", help=(
+                "Tutorial" if lang == "en" else "教程")):
+            st.session_state["_active_main_page"] = "tutorial"
+            st.rerun()
+    with cols[2]:
+        st.button(" ", key="_eu_footer_settings", help=(
+            "Settings" if lang == "en" else "设置"))
+    with cols[3]:
+        if st.button(" ", key="_eu_footer_lang", help=(
+                "Toggle 中 / EN" if lang == "en" else "切换 中 / EN")):
+            st.session_state["language"] = "zh" if lang == "en" else "en"
+            st.rerun()
+    with cols[4]:
+        st.markdown(
+            '<div style="height:28px;display:flex;align-items:center;justify-content:center">'
+            '<div style="width:22px;height:22px;border-radius:999px;background:oklch(80% 0.05 70);'
+            'display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:500;color:var(--ink)">LK</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    # Render the icon glyphs as a CSS overlay row above the buttons.
+    st.markdown(
+        '<style>'
+        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_back"] button::before{'
+        f"content:''; display:inline-block; width:13px; height:13px; "
+        f"background:url('data:image/svg+xml;utf8,{icons['back'].replace('#', '%23').replace('\"', '%22')}') no-repeat center;}}"
+        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_help"] button::before{'
+        f"content:''; display:inline-block; width:13px; height:13px; "
+        f"background:url('data:image/svg+xml;utf8,{icons['help'].replace('#', '%23').replace('\"', '%22')}') no-repeat center;}}"
+        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_settings"] button::before{'
+        f"content:''; display:inline-block; width:13px; height:13px; "
+        f"background:url('data:image/svg+xml;utf8,{icons['settings'].replace('#', '%23').replace('\"', '%22')}') no-repeat center;}}"
+        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_lang"] button::before{'
+        f"content:''; display:inline-block; width:13px; height:13px; "
+        f"background:url('data:image/svg+xml;utf8,{icons['globe'].replace('#', '%23').replace('\"', '%22')}') no-repeat center;}}"
+        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_"] button{ '
+        'min-height:28px !important; height:28px !important; padding:0 !important; '
+        'display:flex; align-items:center; justify-content:center; }'
+        '</style>',
+        unsafe_allow_html=True,
+    )
 
 
 def _render_shell_primary_nav() -> None:
@@ -1473,36 +1600,39 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
     entry_mode = st.session_state.get('entry_mode', 'none')
 
     with st.sidebar:
-        # === Shell-A header: brand, mode pill, primary nav, pipeline ===
+        # === Shell-A header: brand, workspace switcher, search, nav, pipeline ===
         _render_shell_brand(entry_mode)
         if entry_mode != 'none':
             _render_shell_primary_nav()
             _render_shell_pipeline()
+            _render_shell_recent_cohorts()
             st.markdown(
-                '<div style="height:8px;border-bottom:1px solid var(--hair);margin:8px 0 4px"></div>',
+                '<div style="height:8px;border-bottom:1px solid var(--hair);margin:12px 0 4px"></div>',
                 unsafe_allow_html=True,
             )
 
-        _render_sidebar_top(entry_mode)
+        # Legacy data-extraction workflow tucked inside an expander so it
+        # remains reachable for power users but no longer dominates the
+        # sidebar after the shell-A redesign. The brand/workspace/nav/
+        # pipeline above are now the primary surface.
+        legacy_label = (
+            "⚙️ Data extraction workflow"
+            if st.session_state.get("language", "en") == "en"
+            else "⚙️ 数据提取工作流"
+        )
+        legacy_expander_open = st.session_state.get("_eu_legacy_workflow_open", False)
+        with st.expander(legacy_label, expanded=legacy_expander_open):
+            _render_sidebar_top(entry_mode)
 
-        # 🔧 FIX (2026-02-03): 导出完成后显示"重新提取"按钮，而非Step 1-4
-        if _render_export_completed_panel():
-            return  # 不显示后续Step内容
+            if not _render_export_completed_panel():
+                _render_step1_data_source(entry_mode)
+                st.markdown("---")
+                if _render_step2_cohort_selection():
+                    selected_concepts = _render_step3_concept_selection(concept_groups)
+                    if selected_concepts is not None:
+                        _render_step4_export(selected_concepts)
+                        _render_system_resource_panel()
 
-        # ============ 步骤1: 数据源选择 ============
-        # 🆕 根据entry_mode决定显示内容，不再允许切换
-        _render_step1_data_source(entry_mode)
-
-        st.markdown("---")
-
-        if not _render_step2_cohort_selection():
-            return
-
-        selected_concepts = _render_step3_concept_selection(concept_groups)
-        if selected_concepts is None:
-            return
-
-        if not _render_step4_export(selected_concepts):
-            return
-
-        _render_system_resource_panel()
+        # Footer icon row (back / help / settings / lang / avatar) — at
+        # the very bottom of the sidebar per shell-a-frame.jsx.
+        _render_shell_footer_icons()
