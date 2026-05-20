@@ -13,6 +13,15 @@ import os
 
 import streamlit as st
 from easyicu.webapp.session_state import clear_run_state
+from easyicu.webapp.ui_helpers import (
+    PipelineStep,
+    ShellNavItem,
+    icon as _icon,
+    render_brand_html,
+    render_nav_item_html,
+    render_pill_html,
+    render_pipeline_block,
+)
 
 
 _PROTECTED_CONTEXT_NAMES = {"render_sidebar", "_install_app_context"}
@@ -257,6 +266,174 @@ def _render_step1_data_source(entry_mode: str) -> None:
             st.caption(validate_hint)
 
 
+def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
+    """Shell-A primary-nav items, matched to the page_registry."""
+    lang = st.session_state.get("language", "en")
+    if lang == "en":
+        labels = {
+            "tutorial": "Tutorial",
+            "quick_viz": "Quick Visualization",
+            "cohort": "Cohort Statistics",
+            "cross_db": "Cross-DB Benchmark",
+            "research_agent": "Research Agent",
+        }
+    else:
+        labels = {
+            "tutorial": "教程",
+            "quick_viz": "快速可视化",
+            "cohort": "Cohort 统计",
+            "cross_db": "跨库基准",
+            "research_agent": "研究 Agent",
+        }
+    selected = st.session_state.get("selected_concepts", [])
+    cohort_n = len(selected) if isinstance(selected, list) else 0
+    return [
+        ShellNavItem(key="tutorial",       label=labels["tutorial"],       icon="book"),
+        ShellNavItem(key="quick_viz",      label=labels["quick_viz"],      icon="bars"),
+        ShellNavItem(key="cohort",         label=labels["cohort"],         icon="layers",
+                     count=str(cohort_n) if cohort_n else ""),
+        ShellNavItem(key="cross_db",       label=labels["cross_db"],       icon="grid"),
+        ShellNavItem(key="research_agent", label=labels["research_agent"], icon="sparkles"),
+    ]
+
+
+def _render_shell_brand(entry_mode: str) -> None:
+    """Brand block + mode pill (shell-A top of sidebar)."""
+    lang = st.session_state.get("language", "en")
+    sub = "ICU Data Analytics" if lang == "en" else "ICU 数据分析平台"
+    st.markdown(
+        render_brand_html(name="EasyICU", sub=sub, initials="E"),
+        unsafe_allow_html=True,
+    )
+    if entry_mode == "demo":
+        label = "Demo · simulated data" if lang == "en" else "演示 · 模拟数据"
+        st.markdown(
+            f'<div style="padding:0 6px 10px">{render_pill_html(label, tone="demo")}</div>',
+            unsafe_allow_html=True,
+        )
+    elif entry_mode == "real":
+        label = "Real data" if lang == "en" else "真实数据"
+        st.markdown(
+            f'<div style="padding:0 6px 10px">{render_pill_html(label, tone="real")}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _render_shell_primary_nav() -> None:
+    """Sidebar primary nav — every item is a single ``st.button`` styled
+    by ``shell_styles`` to look like the shell-A nav row (icon + label +
+    optional count, active state filled with ``var(--ink)``)."""
+    entry_mode = st.session_state.get("entry_mode", "none")
+    items = _shell_nav_items(entry_mode)
+    active = st.session_state.get("_active_main_page", "tutorial")
+    lang = st.session_state.get("language", "en")
+    label = "Navigate" if lang == "en" else "导航"
+    st.markdown(
+        f'<div class="eu-section-label" style="padding-top:4px"><span>{html.escape(label)}</span></div>',
+        unsafe_allow_html=True,
+    )
+    icon_glyphs = {
+        "book": "📘",
+        "bars": "📊",
+        "layers": "🗂",
+        "grid": "🧩",
+        "sparkles": "✨",
+    }
+    for item in items:
+        is_active = item.key == active
+        # Build the visible button label so CSS can split icon + text +
+        # count via spacing; the key tags it for nav-specific styling.
+        glyph = icon_glyphs.get(item.icon, "•")
+        count_suffix = f"   ·  {item.count}" if item.count else ""
+        btn_label = f"{glyph}    {item.label}{count_suffix}"
+        # Mark active state via container class on a wrapping markdown
+        # (no DOM hierarchy reliance — purely sibling CSS via key attr).
+        if is_active:
+            st.markdown(
+                '<div data-eu-nav-active="1" style="height:0;overflow:hidden"></div>',
+                unsafe_allow_html=True,
+            )
+        clicked = st.button(
+            btn_label,
+            key=f"euonav_{item.key}",
+            use_container_width=True,
+            type="primary" if is_active else "secondary",
+        )
+        if clicked:
+            st.session_state["_active_main_page"] = item.key
+            st.rerun()
+
+
+def _compute_pipeline_steps() -> list[PipelineStep]:
+    """Compute the 4-step extraction pipeline status from session_state."""
+    lang = st.session_state.get("language", "en")
+    entry_mode = st.session_state.get("entry_mode", "none")
+    s1 = bool(st.session_state.get("step1_confirmed"))
+    s2 = bool(st.session_state.get("step2_confirmed"))
+    s3 = bool(st.session_state.get("step3_confirmed"))
+    s4 = bool(st.session_state.get("export_completed"))
+
+    def _status(prev_done: bool, this_done: bool) -> str:
+        if this_done:
+            return "done"
+        if prev_done:
+            return "active"
+        return "todo"
+
+    if lang == "en":
+        titles = {
+            "data": "Data source",
+            "cohort": "Cohort",
+            "concepts": "Concepts",
+            "export": "Export",
+        }
+    else:
+        titles = {
+            "data": "数据源",
+            "cohort": "队列",
+            "concepts": "概念变量",
+            "export": "导出",
+        }
+
+    db = st.session_state.get("database", "")
+    if entry_mode == "demo":
+        params = st.session_state.get("mock_params") or {}
+        n_pat = params.get("n_patients", 100)
+        data_meta = f"Demo · {n_pat} patients" if lang == "en" else f"演示 · {n_pat} 例"
+    elif db:
+        data_meta = f"{db.upper()}"
+    else:
+        data_meta = "—"
+
+    cohort_filter = st.session_state.get("cohort_filter") or {}
+    filter_n = sum(1 for v in cohort_filter.values() if v not in (None, "", []))
+    cohort_meta = (
+        f"{filter_n} filters" if lang == "en" else f"{filter_n} 条筛选"
+    ) if filter_n else ("not set" if lang == "en" else "未设置")
+
+    selected = st.session_state.get("selected_concepts", []) or []
+    concept_meta = (
+        f"{len(selected)} features" if lang == "en" else f"{len(selected)} 个特征"
+    ) if selected else ("auto from cohort" if lang == "en" else "随队列自动")
+
+    export_meta = ("completed" if lang == "en" else "已完成") if s4 else (
+        "ready" if (s3 and not s4) else ("locked" if lang == "en" else "待解锁")
+    )
+
+    return [
+        PipelineStep("data",     titles["data"],     data_meta,    _status(True, s1)),
+        PipelineStep("cohort",   titles["cohort"],   cohort_meta,  _status(s1, s2)),
+        PipelineStep("concepts", titles["concepts"], concept_meta, _status(s2, s3)),
+        PipelineStep("export",   titles["export"],   export_meta,  _status(s3, s4)),
+    ]
+
+
+def _render_shell_pipeline() -> None:
+    """Pipeline progress indicator (sidebar shell-A block)."""
+    steps = _compute_pipeline_steps()
+    render_pipeline_block(steps)
+
+
 def _render_sidebar_top(entry_mode: str) -> None:
     """Render the static top of the sidebar.
 
@@ -310,29 +487,11 @@ def _render_sidebar_top(entry_mode: str) -> None:
             st.rerun()
         st.markdown("---")
 
-    # 显示当前模式标识 - 精简 pill 样式
-    if entry_mode == 'demo':
-        mode_badge = "Demo Mode" if st.session_state.language == 'en' else "演示模式"
-        st.markdown(f"""
-        <div style="background:#ecfdf5;border:1px solid #a7f3d0;
-                    padding:8px 14px;border-radius:8px;color:#065f46;margin-bottom:12px;
-                    display:flex;align-items:center;gap:8px;font-size:.9rem">
-            <span style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block"></span>
-            <b>{mode_badge}</b>
-        </div>
-        """, unsafe_allow_html=True)
-    elif entry_mode == 'real':
-        mode_badge = "Real Data" if st.session_state.language == 'en' else "真实数据"
-        st.markdown(f"""
-        <div style="background:#eef2ff;border:1px solid #c7d2fe;
-                    padding:8px 14px;border-radius:8px;color:#3730a3;margin-bottom:12px;
-                    display:flex;align-items:center;gap:8px;font-size:.9rem">
-            <span style="width:8px;height:8px;border-radius:50%;background:#6366f1;display:inline-block"></span>
-            <b>{mode_badge}</b>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown(f"## {get_text('app_title')}")
+    # NOTE (shell-A redesign, 2026-05-21): the legacy mode pill and app
+    # title are now rendered by ``_render_shell_brand`` at the top of
+    # the sidebar; suppressed here to avoid duplication. The language
+    # selector and AI assistant panel still live in the rail so they
+    # remain reachable without expanding any subsection.
 
     # 语言切换 - 更紧凑的布局
     lang = st.selectbox(
@@ -345,8 +504,6 @@ def _render_sidebar_top(entry_mode: str) -> None:
        (lang == 'ZH' and st.session_state.language != 'zh'):
         st.session_state.language = 'en' if lang == 'EN' else 'zh'
         st.rerun()
-
-    st.markdown("---")
 
     # AI 助手设置（放在侧边栏最上方，方便用户看到）
     try:
@@ -1316,6 +1473,16 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
     entry_mode = st.session_state.get('entry_mode', 'none')
 
     with st.sidebar:
+        # === Shell-A header: brand, mode pill, primary nav, pipeline ===
+        _render_shell_brand(entry_mode)
+        if entry_mode != 'none':
+            _render_shell_primary_nav()
+            _render_shell_pipeline()
+            st.markdown(
+                '<div style="height:8px;border-bottom:1px solid var(--hair);margin:8px 0 4px"></div>',
+                unsafe_allow_html=True,
+            )
+
         _render_sidebar_top(entry_mode)
 
         # 🔧 FIX (2026-02-03): 导出完成后显示"重新提取"按钮，而非Step 1-4

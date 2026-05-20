@@ -92,6 +92,7 @@ from easyicu.webapp.paper_figures import (
 )
 from easyicu.webapp.workflow_figure import _render_extraction_pipeline_figure as _render_extraction_pipeline_figure_impl
 from easyicu.webapp.styles import render_global_styles
+from easyicu.webapp.shell_styles import render_shell_styles
 from easyicu.webapp.i18n import get_text, strip_emoji
 from easyicu.webapp.page_registry import build_main_page_registry
 from easyicu.webapp.page_header import render_page_header
@@ -207,6 +208,10 @@ except ImportError:
 sync_screenshot_mode(st)
 render_runtime_shell_styles(st)
 render_global_styles(st)
+# Shell-A design layer — must come after render_global_styles so the new
+# tokens (restrained-teal accent, IBM Plex stack, flat surfaces) override
+# the legacy gradient palette from styles.py.
+render_shell_styles(st)
 
 
 def _dataframe_compat(data, **kwargs):
@@ -2925,19 +2930,28 @@ def main():
     # （实际导出在渲染 Home 页面后执行，确保 container 已创建）
     default_export_container = st.container()
 
-    # ============ 顶部标题（精简现代风格） ============
-    # 用 badge 显示模式标识
+    # ============ Shell-A top bar (breadcrumb + status pills) ============
+    from easyicu.webapp.ui_helpers import render_topbar as _render_topbar
+    _active = st.session_state.get('_active_main_page', 'tutorial')
+    _page_labels_for_topbar = {
+        'tutorial':       'Tutorial' if lang == 'en' else '教程',
+        'quick_viz':      'Quick Visualization' if lang == 'en' else '快速可视化',
+        'cohort':         'Cohort Statistics' if lang == 'en' else 'Cohort 统计',
+        'cross_db':       'Cross-DB Benchmark' if lang == 'en' else '跨库基准',
+        'research_agent': 'Research Agent' if lang == 'en' else '研究 Agent',
+    }
+    _crumb_label = _page_labels_for_topbar.get(_active, _active)
+    _topbar_pills: list[tuple[str, str]] = []
     if entry_mode == 'demo':
-        _mode_badge = '<span style="display:inline-block;background:var(--gradient-success);color:white;font-size:0.68rem;font-weight:700;padding:2px 10px;border-radius:100px;margin-left:8px;vertical-align:middle;letter-spacing:0.03em;">DEMO</span>'
-    else:
-        _mode_badge = ''
-
-    if lang == 'en':
-        st.markdown(f'<div class="main-header">🏥 EasyICU{_mode_badge}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-header">ICU Data Analytics Platform</div>', unsafe_allow_html=True)
-    else:
-        st.markdown(f'<div class="main-header">🏥 EasyICU{_mode_badge}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sub-header">ICU 数据分析平台</div>', unsafe_allow_html=True)
+        _topbar_pills.append(('Demo · simulated' if lang == 'en' else '演示 · 模拟数据', 'demo'))
+    elif entry_mode == 'real':
+        _topbar_pills.append(('Real data' if lang == 'en' else '真实数据', 'real'))
+    if st.session_state.get('export_completed'):
+        _topbar_pills.append(('Export complete' if lang == 'en' else '导出完成', 'ok'))
+    _render_topbar(
+        ['EasyICU', _crumb_label],
+        pills=tuple(_topbar_pills),
+    )
 
     assistant_notice = st.session_state.pop('_assistant_notice', None)
     if assistant_notice:
@@ -2998,7 +3012,18 @@ def main():
     def _propagate_main_nav() -> None:
         st.session_state['_active_main_page'] = st.session_state['_main_nav_widget']
 
+    # The shell-A redesign moves primary navigation to the sidebar; the
+    # radio below is kept (1) to preserve programmatic navigation paths
+    # that wrote into ``_main_nav_widget``, and (2) as a fallback nav
+    # when the sidebar is collapsed. It is visually hidden by the CSS
+    # rule on ``[data-testid="stHorizontalBlock"][data-testid="main_nav_bar"]``
+    # in shell_styles, but the markup below also hides the row when
+    # the sidebar is on so it doesn't take vertical space.
     with st.container(key="main_nav_bar"):
+        st.markdown(
+            '<style>.stApp [class*="st-key-main_nav_bar"]{display:none !important;}</style>',
+            unsafe_allow_html=True,
+        )
         st.radio(
             "Main navigation",
             options=page_keys,
