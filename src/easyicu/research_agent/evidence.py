@@ -240,6 +240,23 @@ def _coerce_numeric_literal(value: Any) -> Optional[Tuple[str, float]]:
     return None
 
 
+def _decimal_places(value_str: str) -> int:
+    """Return the number of decimal places in a numeric display string.
+
+    The manuscript binder uses this to allow rounded prose values such
+    as ``1.22`` to match a more precise canonical claim like
+    ``1.224779``. Scientific notation is treated as zero-decimal for
+    the purposes of display rounding because the plain-text manuscript
+    binder only sees the rendered literal.
+    """
+    text = (value_str or "").strip()
+    if not text or "e" in text.lower() or "." not in text:
+        return 0
+    frac = text.split(".", 1)[1]
+    frac = re.sub(r"[^0-9].*$", "", frac)
+    return len(frac)
+
+
 def _walk_numeric_leaves(
     obj: Any, prefix: str = ""
 ) -> List[Tuple[str, str, float]]:
@@ -743,25 +760,37 @@ class EvidenceStore:
         Returns ``None`` if no claim matches — callers in STRICT mode
         should treat that as a binding failure.
         """
-        stripped = value_str.strip().rstrip("%").replace(",", "")
+        raw = value_str.strip()
+        has_percent = raw.endswith("%")
+        stripped = raw.rstrip("%").replace(",", "")
         try:
             canonical = float(stripped)
         except ValueError:
             return None
+        display_places = _decimal_places(stripped)
+        display_abs_tol = 0.0
+        if display_places > 0:
+            display_abs_tol = 0.5 * (10 ** (-display_places))
         with self._lock:
             for claim in self._numeric_claims:
-                if claim.value == value_str.strip():
+                if claim.value == raw:
                     return claim
             for claim in self._numeric_claims:
                 if claim.canonical == canonical:
                     return claim
+            if has_percent:
+                for claim in self._numeric_claims:
+                    if claim.canonical * 100.0 == canonical:
+                        return claim
             for claim in self._numeric_claims:
                 window = tolerance if tolerance is not None else claim.tolerance
-                if abs(claim.canonical) > 1e-9:
-                    rel = abs(claim.canonical - canonical) / abs(claim.canonical)
+                candidate = claim.canonical * 100.0 if has_percent else claim.canonical
+                if abs(candidate) > 1e-9:
+                    rel = abs(candidate - canonical) / abs(candidate)
                 else:
-                    rel = abs(claim.canonical - canonical)
-                if rel <= window:
+                    rel = abs(candidate - canonical)
+                abs_window = max(display_abs_tol, window * max(abs(candidate), abs(canonical), 1.0))
+                if rel <= window or abs(candidate - canonical) <= abs_window:
                     return claim
         return None
 
@@ -842,7 +871,10 @@ class EvidenceStore:
         for raw_line in scaffold.splitlines():
             line = raw_line.rstrip()
             stripped = line.strip()
-            if not stripped or stripped.startswith(("#", "```", "-", "*", ">")):
+            if not stripped or re.match(
+                r"^(?:#{1,6}\s+|```|(?:-|\*)\s+|>\s+)",
+                stripped,
+            ):
                 filtered_lines.append(line)
                 continue
             sentences = _split_sentences(line)
@@ -991,7 +1023,8 @@ def _binding_caveat(record: EvidenceRecord, *, verbose: bool = False) -> str:
 _RESULT_TOKEN_RE = re.compile(
     r"(\bOR\b|\bHR\b|\bRR\b|\bAUC\b|\bAUROC\b|\bBrier\b|\bcalibration\b|"
     r"\bdiscrimination\b|\bperformance\b|\brobust(?:ness)?\b|"
-    r"\boverfitting\b|\bmiscalibration\b|\bmissingness\b|\bgeneralisa(?:bility|ble)\b|"
+    r"\boverfitting\b|\bmiscalibration\b|\bmissingness\b|\bconsistent\b|"
+    r"\bgeneralisa(?:bility|ble)\b|"
     r"\bgeneraliza(?:bility|ble)\b|"
     r"\bmedian\b|\bmean\b|\bincidence\b|\bmortality\b|\bhazard\b|"
     r"\bconfidence interval\b|\bCI\b|\bp\s*[<=>]|%|\d)",

@@ -80,6 +80,22 @@ def test_find_claim_for_value_supports_tolerance(ra, tmp_path: Path):
     assert store.find_claim_for_value("2.0", tolerance=1e-3) is None
 
 
+def test_find_claim_for_value_supports_percent_and_rounding(ra, tmp_path: Path):
+    store = _store(ra, tmp_path)
+    store.register_step_summary_numerics(
+        step_id="s1",
+        evidence_id="evid_a",
+        summary={
+            "event_rate": 0.03769230769230769,
+            "primary_or": 1.2247797141430332,
+        },
+    )
+    percent_hit = store.find_claim_for_value("3.8%")
+    assert percent_hit is not None and percent_hit.source_field == "event_rate"
+    rounded_hit = store.find_claim_for_value("1.22")
+    assert rounded_hit is not None and rounded_hit.source_field == "primary_or"
+
+
 def test_bind_numeric_values_attaches_footnotes(ra, tmp_path: Path):
     from easyicu.research_agent.manuscript_post import bind_numeric_values
 
@@ -109,6 +125,26 @@ def test_bind_numeric_values_attaches_footnotes(ra, tmp_path: Path):
     assert "step=03_assoc" in bound
     assert "field=primary_or" in bound
     assert "evidence=evid_assoc" in bound
+
+
+def test_bind_numeric_values_handles_percent_and_rounding(ra, tmp_path: Path):
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    store.register_step_summary_numerics(
+        step_id="s1",
+        evidence_id="evid_a",
+        summary={
+            "event_rate": 0.03769230769230769,
+            "primary_or": 1.2247797141430332,
+        },
+    )
+    manuscript = "Mortality was 3.8% and the OR was 1.22, supporting stability."
+    bound, binding_map, untraced = bind_numeric_values(manuscript, evidence=store)
+    assert "3.8%[^" in bound
+    assert "1.22" in bound
+    assert len(binding_map) == 2
+    assert untraced == []
 
 
 def test_bind_numeric_values_strict_raises_on_untraced(ra, tmp_path: Path):
@@ -181,6 +217,21 @@ def test_bind_numeric_values_skips_sha256_in_link_targets(ra, tmp_path: Path):
     assert "273e4341" not in untraced
     # Real numeric outside the link target still surfaces untraced.
     assert "999" in untraced
+
+
+def test_bind_numeric_values_skips_sha256_in_prose(ra, tmp_path: Path):
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    store.register_step_summary_numerics(
+        step_id="s1",
+        evidence_id="evid_assoc",
+        summary={"primary_or": 1.42},
+    )
+    manuscript = "The reproducibility envelope includes SHA-256 hashes and OR=1.42."
+    _, _, untraced = bind_numeric_values(manuscript, evidence=store)
+    assert "256" not in untraced
+    assert "1.42" not in untraced
 
 
 def test_numeric_claims_persist_across_store_reload(ra, tmp_path: Path):

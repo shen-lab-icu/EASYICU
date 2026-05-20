@@ -28,6 +28,7 @@ import re
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Protocol, Sequence
 
 from .analysis_types import infer_analysis_type
@@ -101,6 +102,29 @@ def _extract_retry_after(exc: Exception) -> Optional[float]:
             pass
     return None
 
+
+def _is_local_openai_compatible_base_url(base_url: Optional[str]) -> bool:
+    lowered = (base_url or "").strip().lower()
+    if not lowered:
+        return False
+    return any(token in lowered for token in ("localhost", "127.0.0.1", "0.0.0.0"))
+
+
+def _response_namespace_from_payload(payload: Dict[str, Any]) -> Any:
+    choices: List[Any] = []
+    for raw_choice in payload.get("choices") or []:
+        raw_message = raw_choice.get("message") or {}
+        message = SimpleNamespace(**raw_message)
+        choices.append(
+            SimpleNamespace(
+                message=message,
+                finish_reason=raw_choice.get("finish_reason"),
+            )
+        )
+    usage = payload.get("usage")
+    usage_ns = SimpleNamespace(**usage) if isinstance(usage, dict) else None
+    return SimpleNamespace(choices=choices, usage=usage_ns)
+
 # ---------------------------------------------------------------------------
 # OpenAI client (optional — only imported on first use)
 # ---------------------------------------------------------------------------
@@ -146,13 +170,6 @@ class OpenAIClient:
         extra_body: Optional[Dict[str, Any]] = None,
         supports_vision: Optional[bool] = None,
     ) -> None:
-        try:
-            from openai import OpenAI  # type: ignore
-        except Exception as exc:  # pragma: no cover - exercised only when SDK missing
-            raise ImportError(
-                "OpenAIClient requires the 'openai' package. Install with `pip install openai`."
-            ) from exc
-
         kwargs: Dict[str, Any] = {}
         # Accept either OPENAI_API_KEY (vanilla) or OPENROUTER_API_KEY so
         # users don't have to alias the variable themselves.
@@ -161,21 +178,25 @@ class OpenAIClient:
             or os.environ.get("OPENAI_API_KEY")
             or os.environ.get("OPENROUTER_API_KEY")
         )
+        resolved_base_url = base_url or os.environ.get("OPENAI_BASE_URL")
         if env_key:
             kwargs["api_key"] = env_key
-        resolved_base_url = base_url or os.environ.get("OPENAI_BASE_URL")
-        if resolved_base_url:
-            kwargs["base_url"] = resolved_base_url
         # macOS system proxies (Clash, Surge, etc.) silently break
         # localhost calls because httpx (used by the OpenAI SDK)
         # respects the system proxy even when the user has
         # ``localhost`` in the proxy exception list. Detect a local
         # base_url and inject a non-proxying httpx client so vLLM /
         # llama.cpp / Ollama just work.
-        if resolved_base_url and any(
-            host in resolved_base_url
-            for host in ("localhost", "127.0.0.1", "0.0.0.0")
-        ):
+        self._client = None
+        self._local_http_client = None
+        self._local_noauth_mode = bool(
+            resolved_base_url
+            and _is_local_openai_compatible_base_url(resolved_base_url)
+            and not env_key
+        )
+        if resolved_base_url:
+            kwargs["base_url"] = resolved_base_url
+        if _is_local_openai_compatible_base_url(resolved_base_url):
             try:
                 import httpx  # type: ignore
 
@@ -185,10 +206,17 @@ class OpenAIClient:
                 # rocket route localhost traffic to their listener
                 # which returns 503 because vLLM is not configured as
                 # an upstream.
-                kwargs["http_client"] = httpx.Client(
+                local_http_client = httpx.Client(
                     trust_env=False,
                     timeout=request_timeout,
                 )
+                kwargs["http_client"] = local_http_client
+                if self._local_noauth_mode and resolved_base_url:
+                    self._local_http_client = httpx.Client(
+                        base_url=resolved_base_url.rstrip("/"),
+                        trust_env=False,
+                        timeout=request_timeout,
+                    )
             except Exception:
                 # Fall back to setting the env vars; the SDK's default
                 # client picks them up.
@@ -202,7 +230,14 @@ class OpenAIClient:
         # to the SDK as default headers when supplied.
         if extra_headers:
             kwargs["default_headers"] = dict(extra_headers)
-        self._client = OpenAI(**kwargs)
+        if not self._local_noauth_mode:
+            try:
+                from openai import OpenAI  # type: ignore
+            except Exception as exc:  # pragma: no cover - exercised only when SDK missing
+                raise ImportError(
+                    "OpenAIClient requires the 'openai' package. Install with `pip install openai`."
+                ) from exc
+            self._client = OpenAI(**kwargs)
         self._model = model
         self._timeout = request_timeout
         self._extra_body = dict(extra_body or {})
@@ -259,7 +294,24 @@ class OpenAIClient:
         import json as _json
 
         def _do_call():
-            resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[arg-type]
+            if getattr(self, "_local_noauth_mode", False):
+                if self._local_http_client is None:
+                    raise RuntimeError("Local no-auth HTTP client was not initialized.")
+                payload = {
+                    "model": self._model,
+                    "messages": chat_messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                }
+                if seed is not None:
+                    payload["seed"] = int(seed)
+                if self._extra_body:
+                    payload.update(self._extra_body)
+                resp = self._local_http_client.post("/chat/completions", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                return _response_namespace_from_payload(data)
+            resp = self._client.chat.completions.create(**create_kwargs)  # type: ignore[union-attr,arg-type]
             # Eager validation of the envelope so transient null-choices/null-
             # message responses surface here and are caught by the retry loop
             # below, rather than crashing the caller with `'NoneType' object

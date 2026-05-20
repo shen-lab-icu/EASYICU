@@ -868,6 +868,23 @@ class BaseICULoader:
                         frame_data = frame.data
                     else:
                         frame_data = frame
+                    # 2026-05-20 fix: when batched chunk loading hits a
+                    # concept whose per-batch result is itself a dict
+                    # (e.g. nested multi-output callbacks), the old code
+                    # would happily push the dict into aggregated_dict[name]
+                    # and then crash later at
+                    #   pd.concat(frames, ...)
+                    # with "cannot concatenate object of type '<class 'dict'>'".
+                    # Skip non-DataFrame entries here so the rest of the
+                    # chunked-load path still completes.
+                    if isinstance(frame_data, dict):
+                        logger.warning(
+                            "Skipping non-DataFrame chunk result for concept '%s' "
+                            "(type=dict) — likely a multi-output callback that "
+                            "needs explicit handling",
+                            name,
+                        )
+                        continue
                     if frame_data is not None and not getattr(frame_data, "empty", False):
                         aggregated_dict[name].append(frame_data)
                         if meta and name not in aggregated_meta:

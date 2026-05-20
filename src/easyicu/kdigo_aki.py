@@ -548,9 +548,27 @@ def kdigo_stages(
     if urine_df is not None and weight_df is not None and not urine_df.empty:
         try:
             uo_staging = kdigo_uo(urine_df, weight_df, id_col, time_col, urine_col, weight_col)
-            
+
             if not uo_staging.empty:
-                # Merge UO staging with creatinine staging
+                # 2026-05-20 fix: kdigo_uo auto-detects its own time column
+                # from `urine_df` (hirid → 'datetime', eicu →
+                # 'observationoffset', miiv/mimic → 'charttime') — the
+                # outer `time_col` passed in is just a hint and may not
+                # match what's actually in urine_df. The previous code
+                # then tried to `merge(..., on=[id_col, time_col])` with
+                # a time_col that wasn't present in uo_staging and
+                # silently lost uo_rt_6hr/12hr/24hr on hirid+eicu. Detect
+                # uo_staging's actual time col and align names before merge.
+                uo_time_col = time_col if time_col in uo_staging.columns else \
+                              _detect_time_col(uo_staging)
+                if uo_time_col and uo_time_col != time_col:
+                    uo_staging = uo_staging.rename(columns={uo_time_col: time_col})
+                missing_cols = [c for c in [id_col, time_col] if c not in uo_staging.columns]
+                if missing_cols:
+                    raise KeyError(
+                        f"uo_staging is missing merge key columns {missing_cols}; "
+                        f"available cols: {list(uo_staging.columns)}"
+                    )
                 result = result.merge(
                     uo_staging[[id_col, time_col, 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr', 'aki_stage_uo']],
                     on=[id_col, time_col],

@@ -116,6 +116,45 @@ TABLE-ONE / DESCRIPTIVE SUMMARIES:
   `table_one.csv` and `step_summary.json` even if some requested
   columns are missing; record missing variables under `"skipped"`.
 
+CLINICAL SCORE AND MISSINGNESS SEMANTICS:
+- Many ICU score components, stages, and categories are ordinal rather
+  than interval-scale measurements. For ordinal components or stages
+  such as organ-score components or clinical staging variables, prefer
+  ordered level distributions, counts/percentages, median/IQR, or
+  clinically defined thresholds. Do not make `mean()`/`std()` the only
+  evidence for an ordinal component's clinical interpretation.
+- For total scores that are commonly modelled as numeric covariates,
+  make that modelling choice explicit in step_summary.json and keep the
+  interpretation guarded.
+- When constructing windowed score components, use the documented
+  aggregation rule from the concept metadata or study protocol. If the
+  rule is unavailable, document the assumption instead of silently
+  averaging repeated ordinal values.
+- Never treat a numeric score value of 0 as equivalent to "not measured".
+  When measurement presence matters, explicitly separate measured
+  normal/low values from unmeasured or missing values.
+- Whenever you coerce descriptive or modelling variables to numeric,
+  preserve an audit table or step_summary block with original
+  missingness, post-coercion missingness, and newly invalid/coerced
+  values for each variable. Do not silently drop values created by
+  `pd.to_numeric(..., errors="coerce")` without counting them.
+- Before any complete-case model, create one shared complete-case mask
+  across the outcome, primary predictor/exposure, and all covariates.
+  Save a cohort-flow or complete-case table with `n_full`,
+  `n_complete_case`, `n_dropped`, and missingness by required variable.
+  Do not fit the model if the complete-case cohort is too small or
+  event counts are sparse; write a null estimate and a guarded
+  feasibility note instead.
+- If an exposure can be an intervention or treatment marker, explicitly
+  state the time-zero, observation window, assignment/timing definition,
+  and missingness before modelling. If treatment timing is unavailable,
+  describe the analysis as an observed association or selection
+  diagnostic only, never as a treatment effect.
+- If a missingness or score-zero audit finds that interpretation is
+  unsafe, write the audit artefacts and stop cleanly with null primary
+  estimates. Do not repair by silently changing the clinical estimand
+  or by dropping the audit concern from the summary.
+
 STATISTICS APIs:
 - For binomial confidence intervals use
   `statsmodels.stats.proportion.proportion_confint` or compute the
@@ -146,9 +185,9 @@ STATISTICS APIs:
   not the old covariate list that still contains the removed
   categorical column.
   Never call `sm.Logit(y, X)` until `np.isfinite(X.to_numpy()).all()`
-  and `np.isfinite(y.to_numpy()).all()` are true. If lactate is
-  missing-indicator imputed, still drop missing non-lactate covariates
-  such as MAP after creating the lactate indicator/imputed column.
+  and `np.isfinite(y.to_numpy()).all()` are true. If one predictor uses
+  a missing-indicator strategy, still drop or explicitly handle missing
+  values in the other required covariates after creating that indicator.
 - If a model fit fails inside `except`, write `step_summary.json`
   with null estimate fields and the error message, then exit normally.
   Do NOT `raise`, `raise e`, or call `sys.exit(1)` after writing the
@@ -158,6 +197,15 @@ STATISTICS APIs:
 PYTHON HYGIENE:
 - Python collection constructors must be syntactically valid:
   write `set(["a", "b"])` or `{"a", "b"}`, never `set("a", "b")`.
+- NumPy 2 is strict about dtype promotion. Never build string
+  categories with `np.where`/`np.select` branches that mix string labels
+  with `np.nan`, including nested `np.where` calls. Wrapping the result
+  in `pd.Series(..., dtype="object")` does not fix this, because NumPy
+  promotes the branch dtypes before pandas sees the array. Instead start
+  with `pd.Series(pd.NA, index=df.index, dtype="object")` (or nullable
+  string dtype) and fill labels with `.loc[mask] = "label"` assignments;
+  use `default=None` only if every non-default branch is string-like and
+  the result is immediately converted to an object/string Series.
 - Only import from the standard library, pandas, numpy, scipy,
   matplotlib, statsmodels, and scikit-learn (`sklearn`). No network
   access.

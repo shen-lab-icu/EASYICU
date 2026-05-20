@@ -1717,15 +1717,33 @@ def _apply_callback(
                             print("⚠️ [mimic_age] MERGE PRODUCED 0 ROWS!")
                             return frame
                         
-                        # Calculate age using actual_dob_col
-                        dob = pd.to_datetime(frame[actual_dob_col], errors='coerce')
-                        intime = pd.to_datetime(frame['intime'], errors='coerce')
-                        
-                        # R ricu: as.double(x, units = "days") / -365
-                        # Use total_seconds() for more precise day calculation (matching R)
-                        time_diff = intime - dob
-                        age_days = time_diff.dt.total_seconds() / (24 * 60 * 60)
-                        age_years = age_days / 365.0
+                        # 2026-05-19 fix: MIMIC-III shifts dob to year 2300+
+                        # for patients >=89 ("date_shift"). pandas Timestamps
+                        # cap at year 2262 (datetime64[ns] window), so the
+                        # naive (intime - dob) below blew up with
+                        #   OverflowError: Overflow in int64 addition
+                        # and lost the entire `age` concept for MIMIC-III.
+                        # Parse Y/M/D from the string columns and do
+                        # year-arithmetic age — never overflows, and the
+                        # > 90 cap below makes the imprecise month/day shift
+                        # for the obfuscated cohort moot.
+                        def _ymd(series):
+                            s = series.astype(str).str.extract(
+                                r'^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})'
+                            )
+                            return (
+                                pd.to_numeric(s['year'], errors='coerce'),
+                                pd.to_numeric(s['month'], errors='coerce'),
+                                pd.to_numeric(s['day'], errors='coerce'),
+                            )
+
+                        d_y, d_m, d_d = _ymd(frame[actual_dob_col])
+                        i_y, i_m, i_d = _ymd(frame['intime'])
+                        year_diff = i_y - d_y
+                        before_birthday = (
+                            (i_m < d_m) | ((i_m == d_m) & (i_d < d_d))
+                        ).fillna(False).astype(int)
+                        age_years = (year_diff - before_birthday).astype(float)
                         # Cap at 90 (R ricu: ifelse(x > 90, 90, x))
                         age_years = np.where(age_years > 90, 90, age_years)
                         frame[concept_name] = age_years
