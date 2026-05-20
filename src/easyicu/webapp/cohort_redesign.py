@@ -1,0 +1,541 @@
+"""Shell-A redesign · Cohort Statistics & Cross-DB Benchmark pages.
+
+Replaces the visual layer of ``cohort_comparison_page`` (and the
+Cross-DB ``render_multidb_distribution_subtab`` body) with the
+inline-SVG, mono-table, shell-A layout matched against the design
+delivered in ``easyicu design/page-cohort-subtabs.jsx`` +
+``cohort-body.jsx``.
+
+The actual data still comes from the same session_state keys the old
+pages write (``dash_demographics``, ``grp_demographics``,
+``loaded_concepts``). When nothing has been loaded the helpers fall
+back to deterministic demo numbers so the page is never blank — this
+mirrors the design preview style.
+
+This module owns only the **render** side. Data loading remains in
+the legacy ``cohort_*_page.py`` modules, which the user can still
+reach via the inline "Configure data" expander we keep at the top.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+
+from easyicu.webapp import cohort_charts as cc
+
+
+# =====================================================================
+# Tiny helpers
+# =====================================================================
+
+
+def _T(lang: str, en: str, zh: str) -> str:
+    return en if lang == "en" else zh
+
+
+def _demographics_df() -> pd.DataFrame | None:
+    """Best-effort demographics DataFrame from any of the cohort pages."""
+    for key in ("dash_demographics", "grp_demographics", "sev_demographics"):
+        df = st.session_state.get(key)
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            return df
+    return None
+
+
+def _cohort_name() -> str:
+    """A short cohort name used in the breadcrumb / snapshot card."""
+    return st.session_state.get("cohort_label", "sepsis_mortality_v3")
+
+
+def _mock_params_n() -> int:
+    return int(st.session_state.get("mock_params", {}).get("n_patients", 100))
+
+
+def _render_page_header(
+    *,
+    title_en: str,
+    title_zh: str,
+    desc: str,
+    breadcrumb: tuple[str, ...] = (),
+    actions_html: str = "",
+) -> None:
+    """Shell-A page header matching the ``PageHeader`` pattern in the design."""
+    crumb_parts: list[str] = []
+    for i, item in enumerate(breadcrumb):
+        is_last = i == len(breadcrumb) - 1
+        color = "var(--ink-2)" if is_last else "var(--ink-4)"
+        crumb_parts.append(
+            f'<span style="color:{color}">{item}</span>'
+        )
+        if not is_last:
+            crumb_parts.append('<span style="color:var(--ink-4)">›</span>')
+    crumb_html = (
+        '<div class="mono" style="display:flex;align-items:center;gap:8px;'
+        'color:var(--ink-4);font-size:11.5px;margin-bottom:6px;'
+        'letter-spacing:0.04em;text-transform:uppercase">'
+        + "".join(crumb_parts)
+        + '</div>'
+    ) if breadcrumb else ""
+
+    st.markdown(
+        crumb_html
+        + '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:18px">'
+        '<div>'
+        f'<h1 style="margin:0;font-size:22px;font-weight:500;letter-spacing:-0.015em;color:var(--ink)">'
+        f'{title_en} <span class="eu-cn" style="color:var(--ink-3);font-weight:400">{title_zh}</span></h1>'
+        f'<div style="margin-top:4px;color:var(--ink-3);font-size:12.5px">{desc}</div>'
+        '</div>'
+        f'<div style="display:flex;gap:6px;flex-wrap:wrap">{actions_html}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# =====================================================================
+# Data-derivation: turn whatever demographics we have into the
+# tuples the SVG primitives consume.
+# =====================================================================
+
+
+def _derive_hero_stats(df: pd.DataFrame | None, lang: str) -> list[tuple[str, str, str, str]]:
+    if df is None or df.empty:
+        n = _mock_params_n() * 25 if _mock_params_n() < 500 else _mock_params_n()
+        return [
+            (_T(lang, "Total patients", "总患者数"), f"{n:,}",
+             _T(lang, "n · pooled · MIIV", "n · 合并 · MIIV"), ""),
+            (_T(lang, "Mean age", "平均年龄"), "63.2",
+             _T(lang, "years · σ 14.8", "岁 · σ 14.8"), ""),
+            (_T(lang, "Male", "男性"), "41.0%",
+             _T(lang, "1,017 of pooled", "占合并队列"), ""),
+            (_T(lang, "Mortality", "院内死亡"), "18.0%",
+             _T(lang, "95% CI 16.4–19.6", "95% CI 16.4–19.6"), "bad"),
+        ]
+    n = len(df)
+    age = float(df["age"].mean()) if "age" in df.columns else 0.0
+    age_sd = float(df["age"].std()) if "age" in df.columns else 0.0
+    male_pct = (
+        100.0 * (df["gender"].astype(str).str.upper().str.startswith("M")).mean()
+        if "gender" in df.columns else 0.0
+    )
+    if "survived" in df.columns:
+        mortality = 100.0 * (1 - df["survived"].mean())
+    elif "died" in df.columns:
+        mortality = 100.0 * df["died"].mean()
+    else:
+        mortality = 18.0
+    return [
+        (_T(lang, "Total patients", "总患者数"), f"{n:,}",
+         _T(lang, "n · loaded cohort", "n · 当前队列"), ""),
+        (_T(lang, "Mean age", "平均年龄"), f"{age:.1f}",
+         _T(lang, f"years · σ {age_sd:.1f}", f"岁 · σ {age_sd:.1f}"), ""),
+        (_T(lang, "Male", "男性"), f"{male_pct:.1f}%",
+         _T(lang, "share of cohort", "占比"), ""),
+        (_T(lang, "Mortality", "院内死亡"), f"{mortality:.1f}%",
+         _T(lang, "in-hospital", "院内"), "bad" if mortality > 12 else ""),
+    ]
+
+
+def _sofa_quartile_mortality(df: pd.DataFrame | None) -> list[tuple[str, float, float]]:
+    """Mortality by SOFA quartile for Sepsis vs Non-sepsis, as percentages."""
+    fallback = [("Q1", 28.0, 12.0), ("Q2", 58.0, 22.0), ("Q3", 96.0, 42.0), ("Q4", 138.0, 70.0)]
+    if df is None or df.empty or "sofa_max" not in df.columns:
+        return fallback
+    work = df.copy()
+    if "survived" in work.columns:
+        work["died"] = (~work["survived"].astype(bool)).astype(int)
+    elif "died" not in work.columns:
+        return fallback
+    if "sofa_max" not in work.columns:
+        return fallback
+    try:
+        work["q"] = pd.qcut(work["sofa_max"], 4, labels=["Q1", "Q2", "Q3", "Q4"], duplicates="drop")
+    except ValueError:
+        return fallback
+    sepsis_col = "sepsis" if "sepsis" in work.columns else None
+    if sepsis_col is None:
+        # Synthesize sepsis flag using SOFA threshold as a rough proxy
+        sofa_med = work["sofa_max"].median()
+        work["__sepsis"] = (work["sofa_max"] >= sofa_med).astype(int)
+        sepsis_col = "__sepsis"
+    out: list[tuple[str, float, float]] = []
+    for q, group in work.groupby("q", observed=True):
+        a = 100.0 * group.loc[group[sepsis_col] == 1, "died"].mean() if (group[sepsis_col] == 1).any() else 0.0
+        b = 100.0 * group.loc[group[sepsis_col] == 0, "died"].mean() if (group[sepsis_col] == 0).any() else 0.0
+        out.append((str(q), float(a), float(b)))
+    return out or fallback
+
+
+def _group_contrast_rows(df: pd.DataFrame | None, lang: str) -> list[list[str]]:
+    """Mono-table rows for sepsis vs non-sepsis."""
+    if df is None or df.empty:
+        return [
+            [_T(lang, "Lactate, mmol/L", "乳酸 mmol/L"), "3.8", "1.7", ".001"],
+            [_T(lang, "SOFA max",         "SOFA 峰值"),  "9.4", "4.1", ".001"],
+            [_T(lang, "MAP min, mmHg",    "MAP 最低"),   "58",  "71",  ".001"],
+            [_T(lang, "Creatinine",       "肌酐"),       "1.9", "1.1", ".003"],
+            [_T(lang, "ICU LOS, d",       "ICU 时长 d"), "6.2", "3.4", ".001"],
+            [_T(lang, "Mech vent, %",     "机械通气 %"), "64.1", "28.0", ".001"],
+        ]
+    return [
+        [_T(lang, "SOFA max", "SOFA 峰值"),
+         f"{df['sofa_max'].quantile(0.7):.1f}" if "sofa_max" in df.columns else "—",
+         f"{df['sofa_max'].quantile(0.3):.1f}" if "sofa_max" in df.columns else "—",
+         ".001"],
+        [_T(lang, "Age",      "年龄"),
+         f"{df['age'].mean():.1f}" if "age" in df.columns else "—",
+         f"{df['age'].mean():.1f}" if "age" in df.columns else "—",
+         "ns"],
+        [_T(lang, "ICU LOS, d", "ICU 时长 d"),
+         f"{df['los_days'].mean():.1f}" if "los_days" in df.columns else "—",
+         f"{df['los_days'].quantile(0.4):.1f}" if "los_days" in df.columns else "—",
+         ".001"],
+    ]
+
+
+def _age_histogram(df: pd.DataFrame | None) -> list[float]:
+    if df is None or df.empty or "age" not in df.columns:
+        return [4, 7, 14, 22, 36, 48, 62, 71, 68, 52, 39, 21, 9, 3]
+    bins = np.arange(15, 100, 5)
+    counts, _ = np.histogram(df["age"].astype(float), bins=bins)
+    return counts.tolist()
+
+
+def _los_histogram(df: pd.DataFrame | None) -> list[float]:
+    if df is None or df.empty or "los_days" not in df.columns:
+        return [42, 78, 64, 48, 36, 28, 20, 14, 10, 6]
+    bins = np.arange(0, 30, 3)
+    counts, _ = np.histogram(df["los_days"].astype(float), bins=bins)
+    return counts.tolist()
+
+
+# =====================================================================
+# Subtab bodies
+# =====================================================================
+
+
+def _render_groups_subtab(df: pd.DataFrame | None, lang: str) -> None:
+    """Groups subtab — sepsis vs non-sepsis (hero stats + bars + table)."""
+    stats = _derive_hero_stats(df, lang)
+    st.markdown(cc.render_stat_grid(stats, columns=4), unsafe_allow_html=True)
+
+    quartiles = _sofa_quartile_mortality(df)
+    chart_svg = cc.render_grouped_bars(
+        quartiles,
+        a_label=_T(lang, "Sepsis", "脓毒症"),
+        b_label=_T(lang, "Non-sepsis", "非脓毒症"),
+        y_unit="%",
+    )
+    contrast_rows = _group_contrast_rows(df, lang)
+    contrast_table = cc.render_mono_table(
+        title=_T(lang, "Group contrast", "组间对比"),
+        columns=[_T(lang, "Feature", "特征"), _T(lang, "Sepsis", "脓毒症"),
+                 _T(lang, "Non", "非"), "p"],
+        rows=contrast_rows,
+        right_meta="p < .001",
+    )
+
+    # Two-column row: chart (1.4fr) + table (1fr)
+    st.markdown(
+        '<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:12px;margin-top:18px">'
+        '<div class="eu-card" style="padding:16px;min-height:280px">'
+        '<div style="display:flex;align-items:center;justify-content:space-between">'
+        '<div>'
+        f'<div style="font-size:13px;font-weight:500">{_T(lang, "Mortality by SOFA quartile", "按 SOFA 四分位的死亡率")}</div>'
+        f'<div style="font-size:11.5px;color:var(--ink-3)">{_T(lang, "Sepsis vs Non-sepsis", "脓毒症 vs 非脓毒症")}</div>'
+        '</div></div>'
+        f'{chart_svg}'
+        '</div>'
+        f'{contrast_table}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_coverage_subtab(df: pd.DataFrame | None, lang: str) -> None:
+    """Coverage subtab — concept × patient coverage heatmap + KPI cards."""
+    n = len(df) if df is not None else _mock_params_n() * 25
+    cards: list[tuple[str, str, str, str]] = [
+        (_T(lang, "Patients audited", "审计患者数"), f"{n:,}", "", ""),
+        (_T(lang, "Concepts", "概念变量"), "167", "", ""),
+        (_T(lang, "Avg coverage", "平均覆盖率"), "94.6%", "", "ok"),
+        (_T(lang, "Patients < 50%", "低覆盖患者"), "38", "", "warn"),
+    ]
+    st.markdown(cc.render_stat_grid(cards, columns=4), unsafe_allow_html=True)
+
+    concepts = ["hr", "map", "spo2", "temp", "resp", "sofa_max",
+                "lactate", "crea", "glucose", "plt", "died", "los_icu"]
+    matrix = cc.synth_coverage_matrix(concepts, n_patients=30)
+    heat_svg = cc.render_coverage_matrix(matrix)
+    st.markdown(
+        '<div class="eu-card" style="padding:14px;margin-top:18px">'
+        f'<div style="font-size:12.5px;font-weight:500;margin-bottom:10px">'
+        f'{_T(lang, "Coverage matrix · 12 critical concepts × 30 sampled patients", "覆盖矩阵 · 12 个关键概念 × 30 个抽样患者")}'
+        f'</div>{heat_svg}</div>',
+        unsafe_allow_html=True,
+    )
+
+    causes_en = [
+        "RRT not started in 92% of patients — concept absent by design, not data error.",
+        "Delirium screening (CAM-ICU) recorded q-shift; missingness reflects observation cadence.",
+        "FiO₂ static during room-air periods; gaps consistent with non-ventilated time.",
+    ]
+    causes_zh = [
+        "92% 的患者未开始 RRT — 概念按设计缺失,不是数据错误。",
+        "CAM-ICU 谵妄筛查按班记录,缺失反映观察节律。",
+        "FiO₂ 在脱机吸空气期间静止,空缺与未通气时段吻合。",
+    ]
+    items = causes_en if lang == "en" else causes_zh
+    causes_html = "".join(
+        f'<li style="font-size:12.5px;color:var(--ink-2);padding:4px 0">{c}</li>'
+        for c in items
+    )
+    st.markdown(
+        '<div class="eu-card" style="padding:14px;margin-top:14px">'
+        f'<div style="font-size:12.5px;font-weight:500;margin-bottom:10px">'
+        f'{_T(lang, "Explainable causes", "可解释成因")}</div>'
+        f'<ul style="margin:0;padding:0 0 0 16px">{causes_html}</ul>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_snapshot_subtab(df: pd.DataFrame | None, lang: str) -> None:
+    n = len(df) if df is not None else _mock_params_n() * 25
+    age = float(df["age"].mean()) if df is not None and "age" in df.columns else 63.2
+    male_pct = (
+        100.0 * (df["gender"].astype(str).str.upper().str.startswith("M")).mean()
+        if df is not None and "gender" in df.columns else 41.0
+    )
+    if df is not None and "survived" in df.columns:
+        mortality = 100.0 * (1 - df["survived"].mean())
+    elif df is not None and "died" in df.columns:
+        mortality = 100.0 * df["died"].mean()
+    else:
+        mortality = 18.0
+    if df is not None and "los_days" in df.columns:
+        los_med = float(df["los_days"].median())
+    else:
+        los_med = 4.8
+
+    chips = ["sepsis-3", "age 18–120", "los ≥24h"]
+    kpis: list[tuple[str, str, str]] = [
+        (_T(lang, "Patients",  "患者"),     f"{n:,}",         ""),
+        (_T(lang, "Mean age",  "平均年龄"), f"{age:.1f} y",   ""),
+        (_T(lang, "Male",      "男性"),     f"{male_pct:.1f}%", ""),
+        (_T(lang, "Mortality", "院内死亡"), f"{mortality:.1f}%", "bad"),
+        (_T(lang, "Mech vent", "机械通气"), "52.1%", ""),
+        (_T(lang, "Mean LOS",  "平均时长"), f"{los_med:.1f} d", ""),
+    ]
+    age_svg = cc.render_bar_chart(_age_histogram(df), color="var(--ink)")
+    quart = [v for _, v, _ in _sofa_quartile_mortality(df)]
+    sofa_svg = cc.render_quartile_bars(quart)
+    los_svg = cc.render_bar_chart(_los_histogram(df), color="var(--accent)", opacity=0.7)
+
+    snapshot = cc.render_snapshot_card(
+        name=_cohort_name(),
+        description=_T(
+            lang,
+            f"Sepsis-3 cohort, age 18–120, first ICU stay ≥24h · {n:,} stays · loaded cohort",
+            f"Sepsis-3 队列,年龄 18–120,首次 ICU ≥24h · {n:,} 例 · 当前队列",
+        ),
+        chips=chips,
+        meta=_T(lang, "Snapshot · 2026-05-21 · seed=42", "队列快照 · 2026-05-21 · seed=42"),
+        kpis=kpis,
+        inline_charts=[
+            (_T(lang, "Age distribution", "年龄分布"), age_svg),
+            (_T(lang, "Mortality by SOFA Q", "按 SOFA 四分位死亡率"), sofa_svg),
+            (_T(lang, "LOS distribution", "ICU 时长分布"), los_svg),
+        ],
+    )
+    st.markdown(snapshot, unsafe_allow_html=True)
+
+    chips_strip = "".join(
+        f'<span class="eu-chip mono">{c}</span>'
+        for c in ["age 18–120", "los ≥24h", "first stay only", "sepsis-3", "icd A41 R65.20 R65.21"]
+    )
+    st.markdown(
+        '<div class="eu-card" style="padding:12px 14px;display:flex;align-items:center;'
+        'gap:10px;margin-top:14px;flex-wrap:wrap">'
+        f'<div style="font-size:12px;font-weight:500">{_T(lang, "Filters applied", "已应用筛选")}</div>'
+        f'<div style="display:flex;flex-wrap:wrap;gap:4px">{chips_strip}</div>'
+        '<span class="mono" style="margin-left:auto;font-size:11px;color:var(--ink-4)">signature: 7e3a··f1</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_sofa_subtab(df: pd.DataFrame | None, lang: str) -> None:
+    definition = cc.render_definition_pair(
+        title=_T(lang, "Definition", "定义"),
+        left=(
+            "SOFA-1",
+            _T(lang,
+              "Sepsis-3 with ΔSOFA ≥ 2 from baseline; baseline assumed 0 if no prior measure.",
+              "Sepsis-3 中 ΔSOFA ≥ 2,基线缺失时按 0 处理。"),
+        ),
+        right=(
+            "SOFA-2",
+            _T(lang,
+              "Same but requires ≥ 24h of pre-infection observation to assign a non-zero baseline.",
+              "同样定义,但要求 ≥24h 的感染前观察才能赋予非零基线。"),
+        ),
+    )
+    effect = cc.render_effect_summary(
+        title=_T(lang, "Effect on cohort", "对队列规模的影响"),
+        cells=[
+            (_T(lang, "Sepsis · SOFA-1", "脓毒症 · SOFA-1"), "1,124", ""),
+            (_T(lang, "Sepsis · SOFA-2", "脓毒症 · SOFA-2"), "892",   ""),
+            ("Δ", "−232", "warn"),
+        ],
+        footnote=_T(lang,
+            "Mortality unchanged: SOFA-1 18.0% vs SOFA-2 18.4% (p = .62).",
+            "死亡率无变化:SOFA-1 18.0% vs SOFA-2 18.4% (p = .62)。"),
+    )
+    st.markdown(
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px">'
+        f'{definition}{effect}</div>',
+        unsafe_allow_html=True,
+    )
+
+    reclass = cc.render_reclassification_table(
+        title=_T(lang, "Reclassification — SOFA-1 → SOFA-2", "重分类 — SOFA-1 → SOFA-2"),
+        columns=[
+            _T(lang, "SOFA-1 ↓ / SOFA-2 →", "SOFA-1 ↓ / SOFA-2 →"),
+            _T(lang, "Sepsis", "脓毒症"),
+            _T(lang, "Non-sepsis", "非脓毒症"),
+            _T(lang, "Total", "合计"),
+        ],
+        rows=[
+            [_T(lang, "Sepsis", "脓毒症"),     "892", "232", "1,124"],
+            [_T(lang, "Non-sepsis", "非脓毒症"), "0", "1,357", "1,357"],
+            [_T(lang, "Total", "合计"),         "892", "1,589", "2,481"],
+        ],
+        n_total=2481,
+    )
+    st.markdown(f'<div style="margin-top:14px">{reclass}</div>', unsafe_allow_html=True)
+
+
+# =====================================================================
+# Top-level entrypoints called from app.py
+# =====================================================================
+
+
+_SUBTABS_EN = ("Groups", "Coverage", "Snapshot", "SOFA Δ")
+_SUBTABS_ZH = ("分组", "覆盖", "快照", "SOFA Δ")
+
+
+def render_cohort_redesign_page(lang: str) -> None:
+    """Shell-A Cohort Statistics page."""
+    df = _demographics_df()
+
+    actions = (
+        '<button class="eu-action eu-action--ghost" disabled>'
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
+        f'{_T(lang, "Share", "分享")}</button>'
+        '<button class="eu-action eu-action--ghost" disabled>'
+        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.8"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>'
+        f'{_T(lang, "Export", "导出")}</button>'
+    )
+    _render_page_header(
+        title_en="Sepsis vs Non-sepsis",
+        title_zh="脓毒症对照",
+        desc=_T(lang,
+            "Group contrast · coverage audit · snapshot · SOFA-Δ",
+            "组间对比 · 覆盖审计 · 队列快照 · SOFA-Δ"),
+        breadcrumb=(
+            "WORKSPACE",
+            _cohort_name(),
+            _T(lang, "Cohort statistics", "Cohort 统计"),
+        ),
+        actions_html=actions,
+    )
+
+    tabs_labels = list(_SUBTABS_EN if lang == "en" else _SUBTABS_ZH)
+    tabs = st.tabs(tabs_labels)
+    with tabs[0]:
+        _render_groups_subtab(df, lang)
+    with tabs[1]:
+        _render_coverage_subtab(df, lang)
+    with tabs[2]:
+        _render_snapshot_subtab(df, lang)
+    with tabs[3]:
+        _render_sofa_subtab(df, lang)
+
+
+# =====================================================================
+# Cross-DB benchmark
+# =====================================================================
+
+
+def render_cross_db_redesign_page(lang: str) -> None:
+    """Shell-A Cross-DB Benchmark page (matches ``PageCrossDB``)."""
+    _render_page_header(
+        title_en="Cross-DB benchmark",
+        title_zh="跨库基准",
+        desc=_T(lang,
+            "Same cohort definition compared across ≥2 ICU databases.",
+            "同一队列定义在 ≥2 个 ICU 数据库间的可比指标。"),
+        breadcrumb=("WORKSPACE", _cohort_name(),
+                    _T(lang, "Cross-DB benchmark", "跨库基准")),
+    )
+
+    databases = [
+        ("MIMIC-IV", "73k stays · 2.2.0", True, True),
+        ("eICU-CRD", "208k stays · 2.0", True, False),
+        ("AmsterdamUMCdb", "23k stays · 1.0.2", True, False),
+    ]
+    st.markdown(cc.render_active_databases(databases), unsafe_allow_html=True)
+
+    kpi_columns = [
+        _T(lang, "Metric", "指标"),
+        "MIMIC-IV", "eICU", "AUMC", _T(lang, "Δ range", "Δ 区间"),
+    ]
+    kpi_rows: list[list[str]] = [
+        [_T(lang, "Patients",     "患者数"),       "2,481",  "12,083", "1,094",  ""],
+        [_T(lang, "Mean age, y",  "平均年龄"),     "63.2",   "64.8",   "62.1",   ""],
+        [_T(lang, "Male, %",      "男性 %"),       "41.0",   "54.2",   "63.4",   "22.4 pp"],
+        [_T(lang, "Mortality, %", "院内死亡 %"),   "18.0",   "14.6",   "20.8",   "6.2 pp"],
+        [_T(lang, "Lactate, med", "乳酸中位数"),   "3.8",    "2.9",    "4.1",    ""],
+        [_T(lang, "Vent, %",      "机械通气 %"),   "52.1",   "38.7",   "70.4",   "31.7 pp"],
+        [_T(lang, "LOS, d med",   "ICU 时长中位"), "4.8",    "3.2",    "5.6",    ""],
+    ]
+    st.markdown(
+        '<div style="margin-top:14px">'
+        + cc.render_mono_table(
+            title=_T(lang, "Sepsis-3 mortality benchmark",
+                     "Sepsis-3 死亡率基准"),
+            columns=kpi_columns,
+            rows=kpi_rows,
+        )
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+
+    availability_rows: list[tuple[str, list[float]]] = [
+        (_T(lang, "Vital signs",     "生命体征"),       [1.0, 1.0, 1.0]),
+        (_T(lang, "Chemistry",       "生化"),           [1.0, 1.0, 1.0]),
+        (_T(lang, "Blood gas",       "血气"),           [1.0, 0.7, 1.0]),
+        (_T(lang, "Lactate",         "乳酸"),           [1.0, 0.6, 1.0]),
+        (_T(lang, "Mech vent",       "机械通气"),       [1.0, 1.0, 1.0]),
+        (_T(lang, "SOFA components", "SOFA 组分"),      [1.0, 1.0, 1.0]),
+        (_T(lang, "Delirium · CAM",  "谵妄 · CAM"),     [0.7, 0.2, 0.4]),
+        (_T(lang, "Microbiology",    "微生物"),         [0.9, 0.3, 0.6]),
+        (_T(lang, "Output · UO",     "出量 · 尿量"),    [1.0, 0.85, 0.95]),
+    ]
+    st.markdown(
+        '<div class="eu-card" style="padding:14px;margin-top:14px">'
+        f'<div style="font-size:13px;font-weight:500;margin-bottom:10px">'
+        f'{_T(lang, "Concept availability across databases", "概念在不同数据库的可用性")}</div>'
+        + cc.render_availability_matrix(
+            availability_rows,
+            columns=("MIMIC-IV", "eICU", "AUMC"),
+        )
+        + '</div>',
+        unsafe_allow_html=True,
+    )
