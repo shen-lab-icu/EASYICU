@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to **6 major public ICU databases**, automated extraction of **200+ standardized clinical concepts** (the canonical catalog exposes 217 — 210 dictionary concepts plus 7 derived clinical scores computed by the callback registry), and a **web-based interface** for cohort definition, feature review, visualization, and export.
+EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to **6 major public ICU databases**, automated extraction of **200+ standardized clinical concepts** (the canonical web-side catalog exposes **217** — 204 dictionary concepts plus 13 special concepts: 10 KDIGO AKI staging outputs, 2 circulatory-failure indicators, and the Sepsis-3 SOFA-1 diagnosis, all loadable through the same `load_concepts(...)` call), and a **web-based interface** for cohort definition, feature review, visualization, and export.
 
 ## Why EasyICU
 
@@ -213,6 +213,16 @@ converter.convert_all()
 
 After conversion, use the prepared directory in all API examples below.
 
+> **Tip — slow external storage (USB / network mounts)**: the default
+> `parallel_workers=4` is tuned for local SSD and can deadlock on slow
+> external storage during large sharded writes (PRESCRIPTIONS, CHARTEVENTS).
+> Set `EASYICU_CONV_WORKERS=1` to force single-threaded conversion:
+> ```bash
+> EASYICU_CONV_WORKERS=1 python convert_my_data.py
+> ```
+> On a 90 GB AUMC numericitems on USB this trades ~30 % wall-clock for
+> guaranteed completion.
+
 ### Minimal End-to-End Example
 
 The example below shows the full workflow for API users: start from raw data, convert it, then extract standardized features.
@@ -298,7 +308,42 @@ sepsis = load_concepts(
     database='miiv',
     data_path='/path/to/data'
 )
+
+# Special concepts — KDIGO AKI staging and circulatory failure are
+# computed by dedicated callbacks, but you can request them through the
+# same `load_concepts(...)` call. The API will route to the right
+# loader transparently.
+aki_and_circ = load_concepts(
+    concepts=['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
+              'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+              'creat_low_past_48hr', 'creat_low_past_7day',
+              'circ_failure', 'circ_event'],
+    database='miiv',
+    data_path='/path/to/data',
+)
+
+# Whole-DB / module-style batch extraction (fastest path)
+# Pass the full list of concepts in one call so the resolver can share
+# base-table reads (chartevents / labevents / inputevents bucket scans)
+# across all of them. `merge=False` returns a `dict[concept -> DataFrame]`
+# so the result stays small even on huge cohorts.
+all_features = load_concepts(
+    concepts=['hr', 'sbp', 'map', 'temp', 'spo2',
+              'bili', 'crea', 'lact', 'plt', 'wbc',
+              'sofa', 'sofa2', 'sep3',
+              'aki', 'circ_failure'],
+    database='miiv',
+    data_path='/path/to/data',
+    merge=False,           # return dict instead of one giant merged DataFrame
+)
 ```
+
+> **Note on full-cohort extraction**: when you don't pass `patient_ids`
+> and `max_patients`, EasyICU loads every patient in the database. On a
+> 16 GB machine with limited free memory, `load_concepts(...)` may
+> auto-batch into subprocess workers — set the environment variable
+> `EASYICU_BATCH_TIMEOUT_SEC` (default 3600) to bound each batch in
+> case a worker hangs.
 
 ### Domain-Specific Loaders
 

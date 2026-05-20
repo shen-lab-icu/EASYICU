@@ -1089,6 +1089,24 @@ def _merge_tables(
     )
     
     if _use_concat_fast_path:
+        # 2026-05-19 fix: harmonise the dtype of id_columns across all
+        # input frames before set_index, so a float64 NaN-bearing id from
+        # one component does not collide with an int64 id from another and
+        # poison the resulting MultiIndex (which then crashed downstream
+        # SOFA / sep3 / news merges with "incompatible merge keys").
+        _id_target_dtypes: dict = {}
+        for kc in id_columns:
+            kinds = []
+            for frame, _ in standardized_tables.values():
+                if frame.empty or kc not in frame.columns:
+                    continue
+                kinds.append(frame[kc].dtype)
+            if not kinds or all(k == kinds[0] for k in kinds):
+                continue
+            # any float -> use nullable Int64 (keeps int semantics + NaN)
+            if any(pd.api.types.is_float_dtype(k) for k in kinds) \
+               and any(pd.api.types.is_integer_dtype(k) for k in kinds):
+                _id_target_dtypes[kc] = 'Int64'
         indexed_frames = []
         for name, (frame, _) in standardized_tables.items():
             if frame.empty:
@@ -1098,6 +1116,17 @@ def _merge_tables(
             # 直接 set_index 会触发 pandas InvalidIndexError。
             if frame.duplicated(subset=key_cols).any():
                 frame = frame.drop_duplicates(subset=key_cols, keep='last')
+            if _id_target_dtypes:
+                cast_map = {k: v for k, v in _id_target_dtypes.items() if k in frame.columns}
+                if cast_map:
+                    try:
+                        frame = frame.astype(cast_map)
+                    except Exception:
+                        for k, v in cast_map.items():
+                            try:
+                                frame[k] = frame[k].astype(v)
+                            except Exception:
+                                pass
             indexed = frame.set_index(key_cols, drop=True)
             # Only keep the value column (concept name)
             if name in indexed.columns:
@@ -1132,6 +1161,31 @@ def _merge_tables(
                     duplicate_cols = [c for c in frame.columns if c in merged.columns and c not in actual_key_cols]
                     if duplicate_cols:
                         frame = frame.drop(columns=duplicate_cols)
+
+                    # 2026-05-19 fix: harmonise join-key dtypes before the
+                    # actual merge. Without this, MIMIC-III SOFA components
+                    # crashed with
+                    #   "incompatible merge keys [0] dtype('int64') and
+                    #    dtype('float64'), must be the same type"
+                    # because one SOFA component table came back with NaN-
+                    # bearing icustay_id (pandas upcasts to float64) while
+                    # the next was a clean int64. Same root cause hits
+                    # `news`, `sep3`, `sofa_resp`, `vent_ind` etc.
+                    for kc in actual_key_cols:
+                        l_dt = merged[kc].dtype
+                        r_dt = frame[kc].dtype
+                        if l_dt == r_dt:
+                            continue
+                        if (pd.api.types.is_integer_dtype(l_dt) and pd.api.types.is_float_dtype(r_dt)) \
+                           or (pd.api.types.is_float_dtype(l_dt) and pd.api.types.is_integer_dtype(r_dt)):
+                            # promote both sides to nullable Int64 so NaN
+                            # is preserved without forcing float semantics.
+                            try:
+                                merged[kc] = merged[kc].astype('Int64')
+                                frame = frame.assign(**{kc: frame[kc].astype('Int64')})
+                            except Exception:
+                                merged[kc] = merged[kc].astype('float64')
+                                frame = frame.assign(**{kc: frame[kc].astype('float64')})
 
                     merged = merged.merge(frame, on=actual_key_cols, how=how)
                 except (ValueError, KeyError) as e:
@@ -1866,16 +1920,31 @@ def _callback_mimic_age(
             # Merge patients with icustays to get intime
             data = data.merge(icustays, on='subject_id', how='inner')
             
-            # Parse datetime columns
-            dob = pd.to_datetime(data['dob'], errors='coerce')
-            intime = pd.to_datetime(data['intime'], errors='coerce')
-            
-            # R ricu formula: as.double(x, units = "days") / -365
-            # The negative is because R ricu passes (intime - dob) but in negative form
-            # Actually in R, the dob column is directly used and change_id calculates
-            # intime - dob as a difftime. So age = (intime - dob).days / 365
-            age_days = (intime - dob).dt.days
-            age_years = age_days / 365.0  # R ricu uses 365, not 365.25
+            # 2026-05-19 fix: MIMIC-III shifts dob to year 2300+ for patients
+            # >=89 to obfuscate age. pandas.to_datetime crashes outright on
+            # year 2300 because datetime64[ns] tops out at year 2262
+            # ("OverflowError: Overflow in int64 addition"). Parse Y/M/D
+            # straight out of the string instead and do year-arithmetic age,
+            # which mirrors R ricu's intent and never overflows. Cap is
+            # applied below by the > 90 mask.
+            def _ymd(series: pd.Series):
+                # Expect ISO-like 'YYYY-MM-DD ...' which is how MIMIC-III
+                # ships these columns. Anything else returns NaN.
+                s = series.astype(str).str.extract(
+                    r'^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})'
+                )
+                return (
+                    pd.to_numeric(s['year'], errors='coerce'),
+                    pd.to_numeric(s['month'], errors='coerce'),
+                    pd.to_numeric(s['day'], errors='coerce'),
+                )
+
+            d_y, d_m, d_d = _ymd(data['dob'])
+            i_y, i_m, i_d = _ymd(data['intime'])
+            year_diff = i_y - d_y
+            before_birthday = (i_m < d_m) | ((i_m == d_m) & (i_d < d_d))
+            before_birthday = before_birthday.fillna(False).astype(int)
+            age_years = (year_diff - before_birthday).astype(float)
             
             # Cap at 90 (R ricu: ifelse(x > 90, 90, x))
             age_years = np.where(age_years > 90, 90, age_years)
@@ -4342,6 +4411,26 @@ def _callback_vent_ind(
             }
             if id_columns:
                 merge_kwargs["by"] = id_columns
+                # 2026-05-19 fix: merge_asof's `by` columns must have
+                # identical dtypes on both sides. MIMIC-III vent_ind /
+                # sep3 / sofa hit this when one event table had NaN-
+                # bearing icustay_id (float64) and the other was clean
+                # int64. Promote to nullable Int64 so both sides match.
+                for kc in id_columns:
+                    if kc not in start_sorted.columns or kc not in end_sorted.columns:
+                        continue
+                    l_dt = start_sorted[kc].dtype
+                    r_dt = end_sorted[kc].dtype
+                    if l_dt == r_dt:
+                        continue
+                    if (pd.api.types.is_integer_dtype(l_dt) and pd.api.types.is_float_dtype(r_dt)) \
+                       or (pd.api.types.is_float_dtype(l_dt) and pd.api.types.is_integer_dtype(r_dt)):
+                        try:
+                            start_sorted[kc] = start_sorted[kc].astype('Int64')
+                            end_sorted = end_sorted.assign(**{kc: end_sorted[kc].astype('Int64')})
+                        except Exception:
+                            start_sorted[kc] = start_sorted[kc].astype('float64')
+                            end_sorted = end_sorted.assign(**{kc: end_sorted[kc].astype('float64')})
             merged = pd.merge_asof(start_sorted, end_sorted[id_columns + ["_end_dt"]], **merge_kwargs)
             # 🔥 R ricu 的 calc_dur 逻辑:
             # calc_dur <- function(x, y) fifelse(is.na(y), x + match_win, y - x)
@@ -4486,16 +4575,25 @@ def _urine24_batch(
     grid_sizes = np.where(stats['ricu_end'].values >= stats['min'].values, grid_sizes, 1)
     
     total_points = grid_sizes.sum()
-    
+
     # Pre-allocate arrays for speed
     all_times = np.empty(total_points, dtype=np.float64)
     all_ids = np.empty(total_points, dtype=df[id_col].dtype)
-    
+
+    # 2026-05-20 perf fix: previous code called `stats.iloc[i]['col']`
+    # three times per iteration of the per-patient loop. Each iloc call
+    # is O(N) in pandas and the loop ran once per patient — on a
+    # 60k-patient MIMIC-III run that was the dominant cost in urine24.
+    # Pull the arrays out of pandas once and index with plain numpy.
+    starts_arr = stats['min'].to_numpy()
+    ends_arr = stats['ricu_end'].to_numpy()
+    id_arr = stats[id_col].to_numpy()
+
     offset = 0
     for i in range(len(stats)):
         n = grid_sizes[i]
-        start = stats.iloc[i]['min']
-        end = stats.iloc[i]['ricu_end']
+        start = starts_arr[i]
+        end = ends_arr[i]
         if end >= start:
             times = np.arange(start, end + time_step * 0.5, time_step)[:n]
         else:
@@ -4503,7 +4601,7 @@ def _urine24_batch(
             n = 1
         actual_n = len(times)
         all_times[offset:offset + actual_n] = times
-        all_ids[offset:offset + actual_n] = stats.iloc[i][id_col]
+        all_ids[offset:offset + actual_n] = id_arr[i]
         offset += actual_n
     
     full_grid = pd.DataFrame({
@@ -5985,14 +6083,43 @@ def _callback_gcs(
         return (dt - dt.min()).dt.total_seconds() / 3600.0
 
     def _window_match_indicator(base_df: pd.DataFrame, window_df: pd.DataFrame, *, time_col: str, window_time_col: str, dur_col: str) -> pd.Series:
+        # 2026-05-20 perf fix: replaced the per-patient Python loop
+        # `for s, e in zip(fs, fe): coverage |= (times >= s) & (times <= e)`
+        # with a single numpy interval-coverage scan over sorted
+        # (start, +1) / (end, -1) breakpoints. Previously this loop was
+        # 22s/SOFA call on full MIMIC-IV — now O((T + W) log(T + W)) total.
         matched = pd.Series(False, index=base_df.index, dtype=bool)
         base_hours = _time_to_hours(base_df, time_col)
         window_hours = _time_to_hours(window_df, window_time_col)
         dur_hours = pd.to_numeric(window_df[dur_col], errors="coerce")
 
+        def _coverage_scan(times: np.ndarray, fs: np.ndarray, fe: np.ndarray) -> np.ndarray:
+            """Mark times[i] true iff it falls inside [fs[k], fe[k]] for any k."""
+            if times.size == 0 or fs.size == 0:
+                return np.zeros(times.shape, dtype=bool)
+            # build event stream: (+1 at start, -1 just after end)
+            events = np.empty(2 * fs.size, dtype=np.float64)
+            deltas = np.empty(2 * fs.size, dtype=np.int32)
+            events[0::2] = fs
+            events[1::2] = fe + 1e-9  # close interval treats fe as inside
+            deltas[0::2] = 1
+            deltas[1::2] = -1
+            order = np.argsort(events, kind='mergesort')
+            events = events[order]
+            deltas = deltas[order]
+            cum = np.cumsum(deltas)
+            # For each time, count of open intervals = searchsorted in event stream
+            # `cum` is the open-interval count strictly after each event point.
+            # times t lies inside if at the largest event <= t, cum > 0.
+            pos = np.searchsorted(events, times, side='right') - 1
+            inside = np.zeros(times.shape, dtype=bool)
+            valid = pos >= 0
+            if valid.any():
+                inside[valid] = cum[pos[valid]] > 0
+            return inside
+
         if id_columns:
             grouped = base_df.groupby(list(id_columns), dropna=False, sort=False).groups
-            # ⚡ Pre-group window_df by patient — O(W) once, instead of O(P × W)
             win_grouped = window_df.groupby(list(id_columns), dropna=False, sort=False).groups
             for key, idx in grouped.items():
                 win_idx = win_grouped.get(key)
@@ -6001,38 +6128,23 @@ def _callback_gcs(
                 starts = window_hours.loc[win_idx].to_numpy(dtype=float)
                 durs = dur_hours.loc[win_idx].to_numpy(dtype=float)
                 times = base_hours.loc[idx].to_numpy(dtype=float)
-                # Vectorized interval coverage — avoid per-window Python loop
                 valid = ~(np.isnan(starts) | np.isnan(durs))
                 if not valid.any():
                     continue
                 fs = np.floor(starts[valid])
                 fe = np.floor(fs + durs[valid])
-                # Broadcasting: times[i] vs all windows — O(T × W_patient)
-                if len(fs) <= 50:
-                    # Small number of windows: vectorized broadcasting
-                    coverage = np.zeros(len(times), dtype=bool)
-                    for s, e in zip(fs, fe):
-                        coverage |= (times >= s) & (times <= e)
-                else:
-                    # Many windows: sort and scan
-                    coverage = np.zeros(len(times), dtype=bool)
-                    order = np.argsort(fs)
-                    fs_sorted, fe_sorted = fs[order], fe[order]
-                    for s, e in zip(fs_sorted, fe_sorted):
-                        coverage |= (times >= s) & (times <= e)
-                matched.loc[idx] = coverage
+                matched.loc[idx] = _coverage_scan(times, fs, fe)
             return matched
 
         starts = window_hours.to_numpy(dtype=float)
         durs = dur_hours.to_numpy(dtype=float)
         times = base_hours.to_numpy(dtype=float)
-        coverage = np.zeros(len(times), dtype=bool)
-        for start, dur in zip(starts, durs):
-            if np.isnan(start) or np.isnan(dur):
-                continue
-            fs = np.floor(start)
-            fe = np.floor(fs + dur)
-            coverage |= (times >= fs) & (times <= fe)
+        valid = ~(np.isnan(starts) | np.isnan(durs))
+        if not valid.any():
+            return pd.Series(False, index=base_df.index, dtype=bool)
+        fs = np.floor(starts[valid])
+        fe = np.floor(fs + durs[valid])
+        coverage = _coverage_scan(times, fs, fe)
         return pd.Series(coverage, index=base_df.index, dtype=bool)
 
     ett_gcs = None

@@ -609,10 +609,34 @@ def distribute_amount(
                     expanded_rows.append(new_row)
         
         if expanded_rows:
-            if isinstance(expanded_rows[0], pd.DataFrame):
-                result = pd.concat(expanded_rows, ignore_index=True)
+            # 2026-05-20 fix: this list can mix DataFrame chunks (the
+            # vectorized fast path at line 556) with bare dict rows (the
+            # per-row fallback paths at 583 / 609). The previous code
+            # only inspected `expanded_rows[0]` and then pd.concat'd the
+            # whole list, which crashed with
+            #   "cannot concatenate object of type '<class 'dict'>'"
+            # on every full-cohort MIMIC-III medication-rate concept
+            # because the fast path runs first and the fallback rows
+            # come after. Normalise both branches into DataFrames before
+            # concat.
+            parts: list = []
+            bare: list = []
+            for r in expanded_rows:
+                if isinstance(r, pd.DataFrame):
+                    if bare:
+                        parts.append(pd.DataFrame(bare))
+                        bare = []
+                    parts.append(r)
+                else:
+                    bare.append(r)
+            if bare:
+                parts.append(pd.DataFrame(bare))
+            if len(parts) == 1:
+                result = parts[0]
+            elif parts:
+                result = pd.concat(parts, ignore_index=True)
             else:
-                result = pd.DataFrame(expanded_rows)
+                return data
             if unit_col and unit_col in data.columns:
                 result[unit_col] = 'units/hr'
             return result

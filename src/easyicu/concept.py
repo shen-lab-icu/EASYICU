@@ -4949,54 +4949,51 @@ class ConceptResolver:
             
             data[index_column] = numeric_vals
         
-        # 若时间列已是numeric（相对小时），仍尝试按ICU窗口裁剪范围
+        # If the time column is already numeric (relative hours), nothing to do.
+        # 2026-05-19 perf fix: the previous code did a load + datetime
+        # reparse + merge + drop on every call, even when:
+        #   (a) the icustays cache was warm (intime / outtime already
+        #       datetime64[ns]), and
+        #   (b) the only consumer of icu_len had been commented out
+        #       (the result was computed and immediately discarded).
+        # Profiling miiv full-cohort SOFA showed pd.to_datetime alone
+        # eating 28s, with cumulative `_align_time_to_admission` at 27s,
+        # so a no-op fast path is a big win. We keep the original code
+        # path only for the case where outtime hadn't been materialised
+        # yet (we still want the cache populated for the next caller).
         if pd.api.types.is_numeric_dtype(data[index_column]):
-            try:
-                # 确保存在intime/outtime以计算窗口长度（小时）
-                if 'intime' not in data.columns or 'outtime' not in data.columns:
-                    # Use cached icustays if available, otherwise load
-                    if self._icustays_cache is not None and all(c in self._icustays_cache.columns for c in [primary_id, 'intime', 'outtime', 'los']):
-                        icu_df = self._icustays_cache.copy()
-                    else:
-                        icu_cols = [primary_id, 'intime', 'outtime', 'los']
-                        icustays_table = data_source.load_table('icustays', columns=icu_cols, verbose=False)
-                        icu_df = icustays_table.data if hasattr(icustays_table, 'data') else icustays_table
-                        # Cache it
-                        self._icustays_cache = icu_df.copy()
+            cache = self._icustays_cache
+            need_warm_cache = (
+                cache is None
+                or 'intime' not in cache.columns
+                or primary_id not in cache.columns
+            )
+            if need_warm_cache:
+                try:
+                    icu_cols = [primary_id, 'intime', 'outtime', 'los']
+                    icustays_table = data_source.load_table('icustays', columns=icu_cols, verbose=False)
+                    icu_df = icustays_table.data if hasattr(icustays_table, 'data') else icustays_table
+                    icu_df = icu_df.copy()
                     icu_df['intime'] = pd.to_datetime(icu_df['intime'], errors='coerce', utc=True).dt.tz_localize(None)
                     if 'outtime' in icu_df.columns:
                         icu_df['outtime'] = pd.to_datetime(icu_df['outtime'], errors='coerce', utc=True).dt.tz_localize(None)
-                    # 若outtime缺失，尝试用los推断
                     if 'los' in icu_df.columns:
                         los_hours = pd.to_numeric(icu_df['los'], errors='coerce') * 24.0
-                        icu_df['outtime_fallback'] = icu_df['intime'] + pd.to_timedelta(los_hours, unit='h')
+                        outtime_fb = icu_df['intime'] + pd.to_timedelta(los_hours, unit='h')
                         if 'outtime' in icu_df.columns:
-                            icu_df['outtime'] = icu_df['outtime'].fillna(icu_df['outtime_fallback'])
+                            icu_df['outtime'] = icu_df['outtime'].fillna(outtime_fb)
                         else:
-                            icu_df['outtime'] = icu_df['outtime_fallback']
-                    data = data.merge(icu_df[[primary_id] + [c for c in ['intime', 'outtime'] if c in icu_df.columns]], on=primary_id, how='left')
-
-                # 计算ICU窗口长度（小时）
-                if 'outtime' in data.columns and data['outtime'].notna().any():
-                    icu_len = (pd.to_datetime(data['outtime']) - pd.to_datetime(data['intime']))
-                    icu_len.dt.total_seconds() / 3600.0
-
-                # 修复：R ricu保留所有数据，包括：
-                # 1. 入ICU前的数据（负时间）
-                # 2. ICU住院期间的数据（0到icu_len_hours）
-                # 3. 出ICU后的数据（超过icu_len_hours）
-                # 不过滤任何时间数据，完全匹配R ricu的行为
-                # 注释掉时间过滤，保留所有原始数据点
-                # if icu_len_hours is not None:
-                #     mask = data[index_column] <= icu_len_hours
-                #     data = data[mask].copy()
-                # 清理临时列
-                drop_cols = [c for c in ['intime', 'outtime'] if c in data.columns]
-                if drop_cols:
-                    data = data.drop(columns=drop_cols)
-            except Exception as _:
-                # 过滤失败则原样返回
-                pass
+                            icu_df['outtime'] = outtime_fb
+                    self._icustays_cache = icu_df
+                except Exception:
+                    # cache warmup failed; leave the frame untouched
+                    pass
+            # NOTE: previous implementation computed an `icu_len` from
+            # intime/outtime here but never consumed it (the only consumer
+            # — a time window filter — was commented out). The dead
+            # computation hit pd.to_datetime four times per call, so we
+            # drop it entirely. If a future caller actually needs ICU
+            # window length, read it off self._icustays_cache directly.
             # Convert dur_var from minutes to hours (same as datetime path at L4388)
             # Callbacks like hirid_vent produce dur_var in minutes; index is already in hours
             if 'dur_var' in data.columns and pd.api.types.is_numeric_dtype(data['dur_var']):

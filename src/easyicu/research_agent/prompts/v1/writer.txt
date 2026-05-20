@@ -1,5 +1,8 @@
 Writer contract:
 - Write a full manuscript in restrained clinical-paper prose.
+- Make the title a neutral descriptive noun phrase. Do not put
+  quantitative results, effect-direction language, or verdict words
+  like "finds", "shows", or "associated" into the title.
 - Discussion is REQUIRED and should be substantive: 5 paragraphs total,
   with interpretation, comparison to prior literature, plausible
   mechanisms stated cautiously, clinical implications/limits, and a
@@ -29,6 +32,10 @@ Writer contract:
   `prediction_performance`, or the prediction step summary.
 - When a baseline number is unavailable, cite Table 1 in prose instead
   of writing `[TBD]`, leaving a blank, or inventing a value.
+- Do not write sentences about the absence of an estimate, a missing
+  effect size, or other pipeline limitations unless those exact facts
+  are anchored to a registered evidence item. If a fact is unavailable,
+  omit that sentence instead of narrating the absence.
 - Do not write machine-facing phrases such as `warning: see manifest`,
   `the primary analysis reveals`, `data integrity`, or similar pipeline
   narration. Translate validator output into ordinary manuscript prose.

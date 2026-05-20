@@ -179,6 +179,10 @@ _NUMERIC_BIND_SKIP_CONTEXTS = (
     re.compile(r"\{evidence:[^}]*\}"),
     re.compile(r"\[\^[A-Za-z0-9_]+\]"),
     re.compile(r"#+\s.*"),
+    # Common hash notation such as SHA-256 is provenance metadata, not a
+    # manuscript number. Skip it so the numeric binder does not flag the
+    # hash width as an untraced result value.
+    re.compile(r"(?i)\bsha[- ]?256\b"),
     # D1 (pilot 20260515 fix): after sentence-level evidence binding,
     # every {evidence:foo} becomes ``[label](evidence/foo.json
     # "sha256=DEADBEEF")``. The sha256 prefix matches the numeric

@@ -172,17 +172,31 @@ class DataConverter:
     ):
         """
         Initialize the data converter.
-        
+
         Args:
             data_path: Path to the database directory containing CSV files
             database: Database type (auto-detected if None)
             chunk_size: Number of rows to read at a time for large files
             parallel_workers: Number of parallel conversion workers
+                (env override: ``EASYICU_CONV_WORKERS``). Default 4 works
+                well on local SSD; **on slow external storage (USB, network
+                mounts) set to 1** — concurrent sharded writes to such
+                storage can deadlock pyarrow's worker pool on large tables
+                like ``PRESCRIPTIONS`` (reproduced on MIMIC-IV / MIMIC-III
+                external USB).
             verbose: Enable verbose logging
         """
         self.data_path = Path(data_path)
         self.database = database or self._detect_database()
         self.chunk_size = chunk_size
+        # 2026-05-20: honor env var so users on slow external storage can
+        # set EASYICU_CONV_WORKERS=1 without touching code or call sites.
+        env_workers = os.environ.get("EASYICU_CONV_WORKERS")
+        if env_workers:
+            try:
+                parallel_workers = max(1, int(env_workers))
+            except ValueError:
+                pass
         self.parallel_workers = parallel_workers
         self.verbose = verbose
 
@@ -514,17 +528,23 @@ class DataConverter:
     
     def _get_csv_files(self) -> List[Path]:
         """Get all CSV/CSV.GZ files in the data directory (including subdirs).
-        
+
         Deduplicates files with the same table name, preferring:
-        1. Larger files (likely full data, not demo)
-        2. Files closer to root directory
-        
+        1. **`.csv.gz` over plain `.csv`** when both exist for the same
+           table. MIMIC-III ships some tables (CHARTEVENTS, DIAGNOSES_ICD,
+           ...) in both forms; without this rule the converter would pick
+           the 33 GB uncompressed CHARTEVENTS.csv over the 4 GB gz, which
+           is pure I/O waste on slow mounts.
+        2. Larger files (likely full data, not demo) — for everything
+           else.
+        3. Files closer to root directory.
+
         Filters out:
         1. CSV shards inside directories that already have ricu parquet shards
         2. part-*.csv files that belong to already-converted observation tables
         3. cache directory files (easyicu internal cache files)
         4. demo directory files
-        
+
         For HiRID: looks in raw_stage/ subdirectory if needed.
         """
         csv_files = []
@@ -653,11 +673,28 @@ class DataConverter:
                 size = 0
             sized.append((f, size))
 
+        def _is_gz(p: Path) -> bool:
+            return p.name.lower().endswith('.csv.gz')
+
         table_files: Dict[str, Tuple[Path, int]] = {}
         for f, size in sized:
             table_name = self._get_table_name_from_path(f)
             existing = table_files.get(table_name)
-            if existing is None or size > existing[1]:
+            if existing is None:
+                table_files[table_name] = (f, size)
+                continue
+            ep, es = existing
+            # 2026-05-20 fix: when both .csv and .csv.gz exist for the
+            # same table (MIMIC-III 1.4/), always pick the gz. Otherwise
+            # fall back to "bigger file wins" so demo vs full-size
+            # selection still works.
+            cur_gz = _is_gz(f)
+            ex_gz = _is_gz(ep)
+            if cur_gz and not ex_gz:
+                table_files[table_name] = (f, size)
+            elif ex_gz and not cur_gz:
+                continue
+            elif size > es:
                 table_files[table_name] = (f, size)
 
         unique = list(table_files.values())
@@ -1036,13 +1073,78 @@ class DataConverter:
         # GCS-component text ('Spontaneously' / 'Oriented'); type inference
         # that picks a numeric type silently drops every text row, losing
         # 6+ neurological concepts. Pin it to string.
-        'chartevents': ['value'],
+        # 2026-05-19 — also pin the metadata flag columns. When pyarrow's
+        # first chunk sees only blanks for resultstatus / stopped /
+        # warning / error / valueuom, it infers the column as `null` type
+        # and then crashes the moment a real value (e.g. 'Final') arrives.
+        'chartevents': ['value', 'valueuom',
+                        'resultstatus', 'stopped', 'warning', 'error'],
         # MIMIC-IV
+        # 2026-05-19: pharmacy.frequency contains values like 'q12h' / 'BID' /
+        # 'PRN'; pyarrow's first-block sample sees only integer-like text and
+        # then crashes on later string rows. Same for the dispensing /
+        # administration scheduling fields. Pin them up front.
+        # NOTE: pyarrow CSV error messages report column indices 0-indexed,
+        # so "column #26" is the 27th header column (`fill_quantity`).
+        # `fill_quantity` in MIMIC-IV pharmacy carries values like 'q12h'
+        # alongside numeric counts because of a real upstream data-quality
+        # bug — pin it (and `dispensation`) up front.
         'pharmacy': ['lockout_interval', 'one_hr_max', 'doses_per_24_hrs',
-                     'duration', 'duration_interval', 'expiration_value'],
-        'prescriptions': ['dose_val_rx', 'form_val_disp', 'doses_per_24_hrs'],
+                     'duration', 'duration_interval', 'expiration_value',
+                     'frequency', 'disp_sched', 'route',
+                     'infusion_type', 'sliding_scale',
+                     'fill_quantity', 'dispensation',
+                     'expiration_unit', 'expirationdate'],
+        # MIMIC-III/IV PRESCRIPTIONS — also pin the strength / route /
+        # name fields. MIMIC-III uses uppercase headers (DOSE_VAL_RX etc.);
+        # _open_arrow_csv now does case-insensitive matching against the
+        # actual header, so listing them lowercase here is enough.
+        'prescriptions': ['dose_val_rx', 'form_val_disp', 'doses_per_24_hrs',
+                          'dose_unit_rx', 'form_unit_disp', 'route',
+                          'drug_type', 'drug', 'drug_name_poe',
+                          'drug_name_generic', 'formulary_drug_cd',
+                          'gsn', 'ndc', 'prod_strength'],
         'emar': ['dose_due', 'dose_given'],
-        'emar_detail': ['dose_due', 'dose_given', 'completion_interval'],
+        # 2026-05-19: emar_detail blew up on '___' (MIMIC redaction marker)
+        # being parsed as double. The redaction can appear in any
+        # textual/unit/description field, so pin all of them — the cost is
+        # only a couple of extra string columns per row.
+        'emar_detail': ['dose_due', 'dose_given', 'completion_interval',
+                        'dose_due_unit', 'dose_given_unit',
+                        'product_amount_given', 'product_unit',
+                        'product_description', 'product_description_other',
+                        'will_remainder_of_dose_be_given',
+                        'complete_dose_not_given',
+                        'prior_infusion_rate', 'infusion_rate',
+                        'infusion_rate_adjustment',
+                        'infusion_rate_adjustment_amount',
+                        'infusion_rate_unit', 'restart_interval',
+                        'route', 'side', 'site',
+                        'new_iv_bag_hung', 'infusion_complete',
+                        'continued_infusion_in_other_location',
+                        'reason_for_no_barcode',
+                        'non_formulary_visual_verification'],
+        # MIMIC-III INPUTEVENTS_CV — ORIGINALSITE has values like 'Right Arm';
+        # ORIGINALROUTE has 'Oral'; STOPPED/NEWBOTTLE are flags. All textual.
+        # 2026-05-19 — also pin originalamount / originalrate / rate / amount.
+        # Even though they are conceptually numeric, the first chunk is
+        # often all-blank, so pyarrow types them as `null` and then dies
+        # on the first non-empty value. We keep them as string here; any
+        # downstream consumer that needs floats casts on read.
+        'inputevents_cv': ['stopped', 'newbottle',
+                           'originalroute', 'originalsite',
+                           'amountuom', 'rateuom',
+                           'originalamountuom', 'originalrateuom',
+                           'originalamount', 'originalrate',
+                           'amount', 'rate'],
+        # MIMIC-III NOTEEVENTS — CATEGORY/DESCRIPTION/TEXT all free text;
+        # CHARTTIME/STORETIME are often blank for notes that only carry
+        # CHARTDATE, and pyarrow infers the column as `null` from the first
+        # chunk and then dies on later timestamps. Pin everything textual /
+        # potentially-sparse.
+        'noteevents': ['category', 'description', 'text', 'iserror',
+                       'charttime', 'storetime', 'chartdate',
+                       'hadm_id', 'cgid', 'subject_id', 'row_id'],
         # eICU
         'infusiondrug': ['drugrate', 'infusionrate', 'drugamount', 'volumeoffluid'],
         'medication': ['dosage', 'loadingdose', 'frequency'],
@@ -1081,15 +1183,26 @@ class DataConverter:
                 table_name = table_name[:-len(ext)]
                 break
         
-        # Check for known problematic columns
+        # Check for known problematic columns. MIMIC-III ships uppercase
+        # headers, so match case-insensitively (the canonical entry is
+        # lowercase). 2026-05-19 fix: previously case-sensitive lookup made
+        # this loop a no-op on every MIMIC-III table.
         known_cols = self.MIXED_TYPE_COLUMNS.get(table_name, [])
+        lower_to_actual = {str(c).lower(): c for c in df.columns}
+        resolved_known: List[str] = []
         for col in known_cols:
-            if col in df.columns:
-                try:
-                    # Convert to string, handling bytes and other types
-                    df[col] = df[col].apply(lambda x: str(x) if pd.notna(x) and not isinstance(x, str) else x)
-                except Exception:
-                    df[col] = df[col].astype(str)
+            actual = lower_to_actual.get(col.lower())
+            if actual is None:
+                continue
+            resolved_known.append(actual)
+            try:
+                # Convert to string, handling bytes and other types
+                df[actual] = df[actual].apply(
+                    lambda x: str(x) if pd.notna(x) and not isinstance(x, str) else x
+                )
+            except Exception:
+                df[actual] = df[actual].astype(str)
+        known_cols = resolved_known
         
         # Aggressively convert ALL object columns to string to avoid mixed type issues
         # This is safer for parquet export
@@ -1888,12 +2001,40 @@ class DataConverter:
         import pyarrow as pa
         import pyarrow.csv as pa_csv
 
-        col_types = {
-            col: pa.string()
-            for col in self.MIXED_TYPE_COLUMNS.get(table_name, [])
-        }
+        pinned = self.MIXED_TYPE_COLUMNS.get(table_name, [])
+        # Match column names case-insensitively. MIMIC-III ships uppercase
+        # headers (VALUE, STOPPED, ORIGINALSITE, ...) while MIXED_TYPE_COLUMNS
+        # is written lowercase to match MIMIC-IV / eICU / AUMC. Without this
+        # mapping the pinning silently misses every MIMIC-III table and Arrow
+        # then crashes on the first non-numeric value it encounters.
+        col_types: Dict[str, "pa.DataType"] = {}
+        if pinned:
+            try:
+                header_cols = self._read_csv_header(csv_path)
+            except Exception:
+                header_cols = []
+            pinned_lower = {c.lower(): None for c in pinned}
+            if header_cols:
+                for actual in header_cols:
+                    if actual.lower() in pinned_lower:
+                        col_types[actual] = pa.string()
+            else:
+                # Fallback: pin both the canonical lowercase name and an
+                # uppercase variant so at least one of them matches.
+                for c in pinned:
+                    col_types[c] = pa.string()
+                    col_types[c.upper()] = pa.string()
+
         read_opts = pa_csv.ReadOptions(block_size=16 * 1024 * 1024)
-        parse_opts = pa_csv.ParseOptions(invalid_row_handler=lambda row: 'skip')
+        parse_opts = pa_csv.ParseOptions(
+            invalid_row_handler=lambda row: 'skip',
+            # MIMIC-III NOTEEVENTS embeds newlines inside the quoted TEXT
+            # column. Without this flag pyarrow reports
+            #   "CSV parser got out of sync with chunker"
+            # and the pandas fallback then trips on the resulting row
+            # shifting. Enabling it has zero effect on well-formed tables.
+            newlines_in_values=True,
+        )
         convert_opts = pa_csv.ConvertOptions(
             strings_can_be_null=True,
             column_types=col_types or None,
@@ -1909,6 +2050,24 @@ class DataConverter:
             parse_options=parse_opts,
             convert_options=convert_opts,
         )
+
+    def _read_csv_header(self, csv_path: Path) -> List[str]:
+        """Return the first row of *csv_path* as a list of column names.
+
+        Used to map case-insensitive MIXED_TYPE_COLUMNS entries onto whatever
+        casing the source database happens to use.
+        """
+        import gzip
+        import csv as _csv
+
+        opener = gzip.open if str(csv_path).endswith('.gz') else open
+        with opener(str(csv_path), 'rt', encoding='utf-8', errors='replace') as f:
+            reader = _csv.reader(f)
+            try:
+                row = next(reader)
+            except StopIteration:
+                return []
+        return [c.strip().strip('"') for c in row]
 
     def _threaded_batch_iter(self, reader, queue_size: int = 4):
         """Yield record batches from *reader* via a background producer thread.

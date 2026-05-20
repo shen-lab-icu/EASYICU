@@ -413,7 +413,41 @@ def _fork_and_run(target, args) -> int:
             os._exit(1)
     else:
         # ---- 父进程 ----
-        _, status = os.waitpid(pid, 0)
+        # 2026-05-20 fix (Bug E6): the previous version called
+        #   os.waitpid(pid, 0)
+        # which blocks forever. If a child process hangs (deadlock in
+        # DuckDB, stuck mutex, OOM-but-not-killed-yet, …) the parent
+        # waits forever — observed on real benchmarks. Poll with
+        # WNOHANG, and force-kill after a generous timeout so the
+        # convoy can move on. Same envelope as _popen_and_run (1 h).
+        import signal
+        timeout_s = float(os.environ.get('EASYICU_BATCH_TIMEOUT_SEC', '3600'))
+        start = time.time()
+        while True:
+            try:
+                done_pid, status = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                return -1
+            if done_pid != 0:
+                break
+            if time.time() - start > timeout_s:
+                logger.warning(
+                    f"⚠️ child pid={pid} exceeded {timeout_s:.0f}s, terminating"
+                )
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    # give it a moment to flush
+                    for _ in range(50):
+                        done_pid, status = os.waitpid(pid, os.WNOHANG)
+                        if done_pid != 0:
+                            return -1
+                        time.sleep(0.1)
+                    os.kill(pid, signal.SIGKILL)
+                    os.waitpid(pid, 0)
+                except OSError:
+                    pass
+                return -1
+            time.sleep(0.2)
         if hasattr(os, 'waitstatus_to_exitcode'):
             return os.waitstatus_to_exitcode(status)
         # Python < 3.9 fallback
@@ -792,8 +826,22 @@ def subprocess_batch_load(
                 ctx = mp.get_context(_method)
                 proc = ctx.Process(target=_subprocess_load_worker, args=(args,))
                 proc.start()
-                proc.join()
-                exitcode = proc.exitcode
+                # 2026-05-20 fix (Bug E6): bounded join — see _fork_and_run.
+                _timeout = float(os.environ.get('EASYICU_BATCH_TIMEOUT_SEC', '3600'))
+                proc.join(timeout=_timeout)
+                if proc.is_alive():
+                    logger.warning(
+                        f"⚠️ Batch {batch_num} mp.Process hang past "
+                        f"{_timeout:.0f}s, terminating"
+                    )
+                    proc.terminate()
+                    proc.join(timeout=10)
+                    if proc.is_alive():
+                        proc.kill()
+                        proc.join(timeout=5)
+                    exitcode = -1
+                else:
+                    exitcode = proc.exitcode
             
             if exitcode != 0:
                 logger.warning(f"⚠️ Batch {batch_num} 子进程退出码: {exitcode}")

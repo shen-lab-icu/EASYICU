@@ -877,7 +877,7 @@ def load_concepts(
         concepts_list = list(concepts)
 
     # SOFA2 相关概念集合（需要加载 sofa2-dict）
-    sofa2_concepts = {'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 
+    sofa2_concepts = {'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver',
                       'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
                       'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria', 'rrt',
                       'adv_resp', 'ecmo', 'ecmo_indication', 'sedated_gcs',
@@ -885,6 +885,26 @@ def load_concepts(
                       'motor_response', 'delirium_positive'}
     if any(c in sofa2_concepts or 'sofa2' in c.lower() for c in concepts_list):
         use_sofa2 = True
+
+    # 2026-05-20: SPECIAL_CONCEPTS dispatch — these concepts are NOT in
+    # concept-dict.json. The webapp routes them through dedicated loader
+    # functions (`kdigo_aki.load_kdigo_aki`, `circ_failure.load_circ_failure`).
+    # Previously `load_concepts(['aki'])` would raise
+    #   KeyError: "Concept 'aki' not present in dictionary"
+    # forcing API users to know about the side-channel modules. Detect
+    # them up front, peel them off, run the standard path on the rest,
+    # then re-attach the special results.
+    _KDIGO_OUTPUTS = {'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
+                      'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+                      'creat_low_past_48hr', 'creat_low_past_7day'}
+    _CIRC_OUTPUTS = {'circ_failure', 'circ_event'}
+    _requested = set(concepts_list)
+    _need_kdigo = _requested & _KDIGO_OUTPUTS
+    _need_circ = _requested & _CIRC_OUTPUTS
+    _special = _need_kdigo | _need_circ
+    if _special:
+        # Pull special concepts out of the list passed to the resolver.
+        concepts_list = [c for c in concepts_list if c not in _special]
 
     # 防御性检查: 检测常见的位置参数误用 (load_concepts(['hr'], 'miiv') 应为 database='miiv')
     _known_dbs = {'miiv', 'mimic', 'eicu', 'hirid', 'aumc', 'sic',
@@ -1323,23 +1343,151 @@ def load_concepts(
         )
 
     # 使用统一加载器加载概念
-    result = loader.load_concepts(
-        concepts=concepts_list,
-        patient_ids=patient_ids,
-        interval=interval,
-        win_length=win_length,
-        aggregate=aggregate,
-        keep_components=keep_components,
-        merge=merge,
-        r_compatible=r_compatible,
-        chunk_size=effective_chunk_size,
-        progress=progress,
-        parallel_workers=effective_parallel_workers,
-        concept_workers=effective_concept_workers,
-        parallel_backend=parallel_backend,
-        **kwargs
-    )
-    
+    if concepts_list:
+        result = loader.load_concepts(
+            concepts=concepts_list,
+            patient_ids=patient_ids,
+            interval=interval,
+            win_length=win_length,
+            aggregate=aggregate,
+            keep_components=keep_components,
+            merge=merge,
+            r_compatible=r_compatible,
+            chunk_size=effective_chunk_size,
+            progress=progress,
+            parallel_workers=effective_parallel_workers,
+            concept_workers=effective_concept_workers,
+            parallel_backend=parallel_backend,
+            **kwargs
+        )
+    else:
+        # All requested concepts were special; standard loader has nothing to do.
+        result = {} if not merge else pd.DataFrame()
+
+    # 2026-05-20: load any SPECIAL_CONCEPTS that were peeled off above
+    # (`aki*`, `circ_failure`, `circ_event`) via their dedicated loaders,
+    # then splice the resulting columns into the standard result so the
+    # API surface looks uniform.
+    if _special:
+        # Build preloaded_data dict from the standard result so the
+        # special loaders don't re-fetch crea / urine / lact / map etc.
+        # — that would re-trigger the memory_manager auto-batch
+        # subprocess pool (see Bug E6 in 2026-05-19 audit).
+        def _frame_of(v):
+            if v is None:
+                return None
+            if isinstance(v, pd.DataFrame):
+                return v if not v.empty else None
+            data_attr = getattr(v, "data", None)
+            if isinstance(data_attr, pd.DataFrame) and not data_attr.empty:
+                return data_attr
+            return None
+
+        _pre: Dict[str, pd.DataFrame] = {}
+        if isinstance(result, dict):
+            for name in ("crea", "urine", "weight", "rrt",
+                         "lact", "map", "norepi_rate", "epi_rate",
+                         "dobu_rate", "dopa_rate"):
+                df = _frame_of(result.get(name))
+                if df is not None:
+                    _pre[name] = df
+
+        special_dict: Dict[str, pd.DataFrame] = {}
+        if _need_kdigo:
+            try:
+                from .kdigo_aki import load_kdigo_aki
+                aki_df = load_kdigo_aki(
+                    database=database, data_path=str(data_path) if data_path else None,
+                    patient_ids=patient_ids if isinstance(patient_ids, list) else None,
+                    max_patients=max_patients, verbose=verbose,
+                    preloaded_data=_pre or None,
+                )
+                if isinstance(aki_df, pd.DataFrame) and not aki_df.empty:
+                    id_time = [c for c in ('stay_id', 'icustay_id',
+                                           'patientunitstayid', 'admissionid',
+                                           'patientid', 'CaseID',
+                                           'charttime', 'datetime',
+                                           'observationoffset')
+                               if c in aki_df.columns]
+                    for c in _need_kdigo:
+                        if c in aki_df.columns:
+                            special_dict[c] = aki_df[id_time + [c]].copy()
+            except Exception as e:
+                logger.warning(f"load_kdigo_aki failed: {e}")
+        if _need_circ:
+            try:
+                from .circ_failure import load_circ_failure
+                cf_df = load_circ_failure(
+                    database=database, data_path=str(data_path) if data_path else None,
+                    max_patients=max_patients,
+                    patient_ids=patient_ids if isinstance(patient_ids, list) else None,
+                    verbose=verbose, preloaded_data=_pre or None,
+                )
+                if isinstance(cf_df, pd.DataFrame) and not cf_df.empty:
+                    id_time = [c for c in ('stay_id', 'icustay_id',
+                                           'patientunitstayid', 'admissionid',
+                                           'patientid', 'CaseID',
+                                           'charttime', 'datetime',
+                                           'observationoffset')
+                               if c in cf_df.columns]
+                    for c in _need_circ:
+                        if c in cf_df.columns:
+                            special_dict[c] = cf_df[id_time + [c]].copy()
+            except Exception as e:
+                logger.warning(f"load_circ_failure failed: {e}")
+
+        if special_dict:
+            if not merge:
+                # User asked for dict. Standard loader returns dict for
+                # >1 concepts but a bare DataFrame for a single concept
+                # (a quirk of the public API). Normalise to dict so the
+                # special concepts can be attached uniformly.
+                if isinstance(result, pd.DataFrame):
+                    if concepts_list:
+                        result = {concepts_list[0]: result}
+                    else:
+                        result = {}
+                elif not isinstance(result, dict):
+                    result = {}
+                result.update(special_dict)
+            else:
+                # merge=True: outer-join special columns onto the standard
+                # result by shared id/time columns.
+                if isinstance(result, dict):
+                    # If standard path somehow returned dict despite
+                    # merge=True (edge case when concepts_list was empty),
+                    # bring it back to DataFrame form.
+                    if result:
+                        from functools import reduce
+                        frames = list(result.values())
+                        if frames and all(isinstance(f, pd.DataFrame) for f in frames):
+                            result = reduce(
+                                lambda a, b: a.merge(
+                                    b, on=[c for c in a.columns if c in b.columns],
+                                    how="outer"),
+                                frames,
+                            )
+                        else:
+                            result = pd.DataFrame()
+                    else:
+                        result = pd.DataFrame()
+                if isinstance(result, pd.DataFrame):
+                    for name, sdf in special_dict.items():
+                        join_cols = [c for c in sdf.columns
+                                     if c in result.columns and c != name]
+                        if join_cols:
+                            try:
+                                result = result.merge(sdf, on=join_cols, how="outer")
+                            except Exception as e:
+                                logger.warning(
+                                    f"failed to merge special concept {name!r}: {e}"
+                                )
+                        elif result.empty:
+                            # No standard concepts at all — return the
+                            # special frame as-is for this single-concept
+                            # case.
+                            result = sdf
+
     # 🆕 内存优化模式：压缩数据类型
     if memory_efficient:
         if isinstance(result, pd.DataFrame):

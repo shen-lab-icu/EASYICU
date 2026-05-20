@@ -2882,6 +2882,19 @@ def load_bucketed_table_aggregated(
             itemid_col = configured_sub_var
         elif table_name == 'nursecharting':
             itemid_col = 'nursingchartcelltypevalname'
+        elif table_name == 'intakeoutput':
+            # 2026-05-19 fix: intakeoutput's defaults block in
+            # data-sources.json has no `sub_var`, but the concept-dict
+            # consistently passes `sub_var: celllabel`. Without this
+            # explicit fall-back the DuckDB query referenced `labname`
+            # and broke all eicu fluid-balance / total_input_ml extractions.
+            itemid_col = 'celllabel'
+        elif table_name in ('infusiondrug', 'medication'):
+            itemid_col = 'drugname'
+        elif table_name == 'treatment':
+            itemid_col = 'treatmentstring'
+        elif table_name == 'respiratorycare':
+            itemid_col = 'respchartvaluelabel'
         else:
             itemid_col = 'labname'
     else:

@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 
-EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入 **6 个主流公开 ICU 数据库**，支持 **200+ 种标准化临床概念**的自动提取（标准目录共 217 个 —— 210 个字典概念加上 7 个由回调注册表派生的临床评分），并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。
+EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入 **6 个主流公开 ICU 数据库**，支持 **200+ 种标准化临床概念**的自动提取（Web 端目录共 **217 个** —— 204 个字典概念加上 13 个专用概念：10 个 KDIGO AKI 分期输出、2 个循环衰竭指标和 Sepsis-3 SOFA-1 诊断，全部都能通过同一个 `load_concepts(...)` 调用获取），并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。
 
 ## 为什么是 EasyICU
 
@@ -212,6 +212,16 @@ converter.convert_all()
 
 完成转换后，再使用下面的 API 示例。
 
+> **提示 — 外置慢速存储（USB / 网盘）**：默认 `parallel_workers=4`
+> 是为本地 SSD 调优的，在外置慢速存储上转换 PRESCRIPTIONS、CHARTEVENTS
+> 这类大表时可能出现 sharded 写入死锁。把环境变量
+> `EASYICU_CONV_WORKERS=1` 设上强制单线程：
+> ```bash
+> EASYICU_CONV_WORKERS=1 python convert_my_data.py
+> ```
+> 在 90 GB 的 AUMC numericitems（USB 上）大约会换来 30% 的耗时增加，
+> 但能保证不卡死、稳定跑完。
+
 ### 最小端到端示例
 
 下面这个示例演示了 API 用户的完整最小流程：从原始数据库目录开始，先转换，再提取标准化特征。
@@ -297,7 +307,40 @@ sepsis = load_concepts(
     database='miiv',
     data_path='/path/to/data'
 )
+
+# 专用概念 —— KDIGO AKI 分期与循环衰竭由专门 callback 计算，
+# 但你可以直接在同一个 `load_concepts(...)` 里请求它们，API 会
+# 自动路由到对应的加载函数，对调用方完全透明。
+aki_and_circ = load_concepts(
+    concepts=['aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
+              'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
+              'creat_low_past_48hr', 'creat_low_past_7day',
+              'circ_failure', 'circ_event'],
+    database='miiv',
+    data_path='/path/to/data',
+)
+
+# 整库 / 按模块批量提取（最快的方式）
+# 把所有需要的概念一次性传进去，resolver 就能在所有概念之间共享
+# base table（chartevents / labevents / inputevents 桶扫描）。
+# `merge=False` 返回 `dict[concept -> DataFrame]`，避免把所有特征
+# 合并成一个巨大的 DataFrame，更省内存。
+all_features = load_concepts(
+    concepts=['hr', 'sbp', 'map', 'temp', 'spo2',
+              'bili', 'crea', 'lact', 'plt', 'wbc',
+              'sofa', 'sofa2', 'sep3',
+              'aki', 'circ_failure'],
+    database='miiv',
+    data_path='/path/to/data',
+    merge=False,           # 返回 dict 而不是大合并 DataFrame
+)
 ```
+
+> **关于全患者提取**：当你不传 `patient_ids` 和 `max_patients` 时，
+> EasyICU 会加载整个数据库的所有患者。在内存紧张（< 6 GB 可用）的机器上
+> 会自动分批到 subprocess。可以用环境变量
+> `EASYICU_BATCH_TIMEOUT_SEC`（默认 3600）限制每个 batch 的最大时长，
+> 子进程超时会被强制杀掉，避免父进程永远等下去。
 
 ### 专业模块
 

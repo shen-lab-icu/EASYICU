@@ -1,9 +1,11 @@
 """EHRFlowBench-style benchmark runner for the research agent (T2.1).
 
 For every :class:`tests.bench.items.BenchItem` we run the same cohort
-through ``ResearchAgentPipeline`` *twice* — once with the ICU-aware
-context (this work) and once with the naive context (T1.4 baseline) —
-and score each run on four orthogonal axes:
+through ``ResearchAgentPipeline`` using the requested benchmark arm(s).
+By default this preserves the historical two-arm context ablation —
+once with the ICU-aware context (this work) and once with the naive
+context (T1.4 baseline) — but paper-facing platform runs can use
+``--arms aware`` to avoid running the naive ablation.
 
 1. **Direction match.** The fitted primary OR sign matches the
    item's `expected_or_direction`.
@@ -27,8 +29,9 @@ Usage::
     python tools/run_research_agent_bench.py
     python tools/run_research_agent_bench.py --items sofa2_mortality gcs_mortality
     python tools/run_research_agent_bench.py --seed 42 --out-root ./bench_runs
-    python tools/run_research_agent_bench.py --provider openrouter --model z-ai/glm-4.5-air:free
-    python tools/run_research_agent_bench.py --provider openrouter --models z-ai/glm-4.5-air:free deepseek/deepseek-chat-v3-0324:free
+    python tools/run_research_agent_bench.py --bench-kind analysis --arms aware
+    python tools/run_research_agent_bench.py --provider openrouter --model openai/gpt-oss-120b:free
+    python tools/run_research_agent_bench.py --provider openrouter --models openai/gpt-oss-120b:free deepseek/deepseek-chat-v3-0324:free
 
 The original bench was mock-LLM only so the comparison isolated the
 *context layer's* contribution from the LLM's. This script now also
@@ -66,6 +69,65 @@ def _bootstrap_imports():
 
 
 _REQUIRED_KINDS = {"code", "log", "table", "figure", "statistic"}
+_ARM_ORDER = ("naive", "aware")
+_ARM_LABELS = {"naive": "Naive", "aware": "ICU-aware"}
+
+
+def _local_openai_base_url(base_url: Optional[str]) -> bool:
+    lowered = (base_url or "").strip().lower()
+    if not lowered:
+        return False
+    return any(token in lowered for token in ("localhost", "127.0.0.1", "0.0.0.0"))
+
+
+def _normalize_arms(arms: Optional[Sequence[str]]) -> List[str]:
+    selected = list(arms or _ARM_ORDER)
+    unknown = [arm for arm in selected if arm not in _ARM_ORDER]
+    if unknown:
+        raise SystemExit(f"Unsupported arm(s): {unknown}; choose from {_ARM_ORDER}")
+    ordered = [arm for arm in _ARM_ORDER if arm in selected]
+    if not ordered:
+        raise SystemExit("At least one benchmark arm is required.")
+    return ordered
+
+
+def _skipped_arm(label: str) -> Dict[str, Any]:
+    return {
+        "arm": label,
+        "status": "skipped",
+        "run_id": None,
+        "workdir": None,
+        "primary_or": None,
+        "direction_match": None,
+        "expected_direction": None,
+        "icu_findings": {},
+        "workflow_hits": {},
+        "artifact_hits": {},
+        "n_findings": 0,
+        "n_warnings": 0,
+        "n_errors": 0,
+        "evidence_count": 0,
+        "evidence_kinds": {
+            "kinds_seen": [],
+            "kinds_missing": sorted(_REQUIRED_KINDS),
+            "complete": False,
+        },
+        "evidence_missing_in_manuscript": None,
+        "elapsed_seconds": 0.0,
+    }
+
+
+def _arm_was_run(score: Optional[Dict[str, Any]]) -> bool:
+    return bool(score) and score.get("status") != "skipped"
+
+
+def _run_arms_in_scores(scores: List[Dict[str, Any]]) -> List[str]:
+    arms = [
+        arm
+        for arm in _ARM_ORDER
+        if any(_arm_was_run(s.get(arm)) for s in scores)
+    ]
+    return arms or list(_ARM_ORDER)
 
 
 def _load_manifest(run_dir: Path) -> Dict[str, Any]:
@@ -201,7 +263,14 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
 
 
 def _run_one_arm(
-    *, item, cohort, workdir: Path, disable_icu_context: bool, label: str, llm
+    *,
+    item,
+    cohort,
+    workdir: Path,
+    disable_icu_context: bool,
+    label: str,
+    llm,
+    pipeline_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
 
@@ -210,6 +279,7 @@ def _run_one_arm(
         workdir=workdir,
         llm=llm,
         disable_icu_context=disable_icu_context,
+        **dict(pipeline_options or {}),
     )
     started = time.monotonic()
     result = pipeline.run(
@@ -227,29 +297,43 @@ def _run_one_arm(
 
 
 def _run_one_item(
-    *, item, seed: int, out_root: Path, llm, verbose: bool = True
+    *,
+    item,
+    seed: int,
+    out_root: Path,
+    llm,
+    arms: Sequence[str],
+    pipeline_options: Optional[Dict[str, Any]] = None,
+    verbose: bool = True,
 ) -> Dict[str, Any]:
     if verbose:
         print(f"\n=== {item.key} — {item.name} ===")
     cohort = item.cohort_factory(seed)
     item_root = out_root / item.key
-    naive = _run_one_arm(
-        item=item,
-        cohort=cohort.copy(),
-        workdir=item_root / "naive",
-        disable_icu_context=True,
-        label="naive",
-        llm=llm,
-    )
-    aware = _run_one_arm(
-        item=item,
-        cohort=cohort.copy(),
-        workdir=item_root / "aware",
-        disable_icu_context=False,
-        label="aware",
-        llm=llm,
-    )
-    return {
+    selected = set(_normalize_arms(arms))
+    naive = _skipped_arm("naive")
+    aware = _skipped_arm("aware")
+    if "naive" in selected:
+        naive = _run_one_arm(
+            item=item,
+            cohort=cohort.copy(),
+            workdir=item_root / "naive",
+            disable_icu_context=True,
+            label="naive",
+            llm=llm,
+            pipeline_options=pipeline_options,
+        )
+    if "aware" in selected:
+        aware = _run_one_arm(
+            item=item,
+            cohort=cohort.copy(),
+            workdir=item_root / "aware",
+            disable_icu_context=False,
+            label="aware",
+            llm=llm,
+            pipeline_options=pipeline_options,
+        )
+    payload = {
         "item_key": item.key,
         "name": item.name,
         "research_question": item.research_question,
@@ -261,9 +345,12 @@ def _run_one_item(
         "claim_scope": getattr(item, "claim_scope", "internal_benchmark_only"),
         "interpretation_note": getattr(item, "interpretation_note", None),
         "cohort_size": int(len(cohort)),
-        "naive": naive,
-        "aware": aware,
     }
+    if "naive" in selected:
+        payload["naive"] = naive
+    if "aware" in selected:
+        payload["aware"] = aware
+    return payload
 
 
 def _reuse_arm_if_complete(
@@ -287,6 +374,8 @@ def _run_one_item_with_reuse(
     seed: int,
     out_root: Path,
     llm,
+    arms: Sequence[str],
+    pipeline_options: Optional[Dict[str, Any]],
     reuse_existing: bool,
     verbose: bool = True,
 ) -> Dict[str, Any]:
@@ -294,18 +383,21 @@ def _run_one_item_with_reuse(
         print(f"\n=== {item.key} — {item.name} ===")
     cohort = item.cohort_factory(seed)
     item_root = out_root / item.key
+    selected = set(_normalize_arms(arms))
 
-    naive = None
-    aware = None
+    naive = _skipped_arm("naive")
+    aware = _skipped_arm("aware")
     if reuse_existing:
-        naive = _reuse_arm_if_complete(
-            arm_dir=item_root / "naive", item=item, label="naive"
-        )
-        aware = _reuse_arm_if_complete(
-            arm_dir=item_root / "aware", item=item, label="aware"
-        )
+        if "naive" in selected:
+            naive = _reuse_arm_if_complete(
+                arm_dir=item_root / "naive", item=item, label="naive"
+            ) or _skipped_arm("naive")
+        if "aware" in selected:
+            aware = _reuse_arm_if_complete(
+                arm_dir=item_root / "aware", item=item, label="aware"
+            ) or _skipped_arm("aware")
 
-    if naive is None:
+    if "naive" in selected and not _arm_was_run(naive):
         naive = _run_one_arm(
             item=item,
             cohort=cohort.copy(),
@@ -313,8 +405,9 @@ def _run_one_item_with_reuse(
             disable_icu_context=True,
             label="naive",
             llm=llm,
+            pipeline_options=pipeline_options,
         )
-    if aware is None:
+    if "aware" in selected and not _arm_was_run(aware):
         aware = _run_one_arm(
             item=item,
             cohort=cohort.copy(),
@@ -322,9 +415,10 @@ def _run_one_item_with_reuse(
             disable_icu_context=False,
             label="aware",
             llm=llm,
+            pipeline_options=pipeline_options,
         )
 
-    return {
+    payload = {
         "item_key": item.key,
         "name": item.name,
         "research_question": item.research_question,
@@ -336,9 +430,12 @@ def _run_one_item_with_reuse(
         "claim_scope": getattr(item, "claim_scope", "internal_benchmark_only"),
         "interpretation_note": getattr(item, "interpretation_note", None),
         "cohort_size": int(len(cohort)),
-        "naive": naive,
-        "aware": aware,
     }
+    if "naive" in selected:
+        payload["naive"] = naive
+    if "aware" in selected:
+        payload["aware"] = aware
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -348,15 +445,23 @@ def _run_one_item_with_reuse(
 
 def _aggregate(scores: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Compute per-arm aggregate metrics across all bench items."""
-    totals: Dict[str, Dict[str, int]] = {"naive": {}, "aware": {}}
-    for arm in ("naive", "aware"):
-        n_total = len(scores)
-        n_dir_correct = sum(1 for s in scores if s[arm]["direction_match"] is True)
-        n_dir_wrong = sum(1 for s in scores if s[arm]["direction_match"] is False)
-        n_dir_missing = sum(1 for s in scores if s[arm]["direction_match"] is None)
+    aggregate_arms = _run_arms_in_scores(scores) if scores else list(_ARM_ORDER)
+    totals: Dict[str, Dict[str, int]] = {arm: {} for arm in aggregate_arms}
+    for arm in aggregate_arms:
+        arm_scores = [s for s in scores if _arm_was_run(s.get(arm))]
+        n_total = len(arm_scores)
+        n_dir_correct = sum(
+            1 for s in arm_scores if s[arm]["direction_match"] is True
+        )
+        n_dir_wrong = sum(
+            1 for s in arm_scores if s[arm]["direction_match"] is False
+        )
+        n_dir_missing = sum(
+            1 for s in arm_scores if s[arm]["direction_match"] is None
+        )
         n_findings_full_hit = 0
         n_findings_partial = 0
-        for s in scores:
+        for s in arm_scores:
             hits = s[arm]["icu_findings"]
             if not hits:
                 continue
@@ -368,7 +473,7 @@ def _aggregate(scores: List[Dict[str, Any]]) -> Dict[str, Any]:
         n_workflow_partial = 0
         n_artifact_full_hit = 0
         n_artifact_partial = 0
-        for s in scores:
+        for s in arm_scores:
             workflow_hits = s[arm].get("workflow_hits", {})
             if workflow_hits:
                 if all(workflow_hits.values()):
@@ -382,10 +487,12 @@ def _aggregate(scores: List[Dict[str, Any]]) -> Dict[str, Any]:
                 elif any(artifact_hits.values()):
                     n_artifact_partial += 1
         n_kinds_complete = sum(
-            1 for s in scores if s[arm]["evidence_kinds"]["complete"]
+            1 for s in arm_scores if s[arm]["evidence_kinds"]["complete"]
         )
         evidence_missing = sum(
-            max(0, s[arm]["evidence_missing_in_manuscript"]) for s in scores
+            max(0, s[arm]["evidence_missing_in_manuscript"])
+            for s in arm_scores
+            if s[arm]["evidence_missing_in_manuscript"] is not None
         )
         totals[arm] = {
             "n_items": n_total,
@@ -413,6 +520,12 @@ def _fmt_or(or_value: Optional[float]) -> str:
     if or_value is None:
         return "—"
     return f"{or_value:.2f}"
+
+
+def _fmt_missing(value: Any) -> str:
+    if value is None:
+        return "—"
+    return str(value)
 
 
 def _direction_marker(direction_match: Optional[bool]) -> str:
@@ -443,18 +556,17 @@ def _render_markdown(
     *, scores: List[Dict[str, Any]], totals: Dict[str, Any], seed: int, bench_kind: str
 ) -> str:
     label = _bench_label(scores)
+    ran_arms = _run_arms_in_scores(scores)
     lines: List[str] = [
         f"# {label} — research agent benchmark",
         "",
         f"_Generated {datetime.now(timezone.utc).isoformat()} (seed={seed}, bench_kind={bench_kind})._",
         "",
         "Each item runs the *same* cohort through `ResearchAgentPipeline` "
-        "twice — once with the ICU-aware context (`aware`) and once with "
-        "the naive context (`naive`, T1.4 ablation arm) — and scores both "
-        "on direction match, ICU-rule findings, evidence completeness and "
-        "manuscript bindability. Within each benchmark run, both arms use "
-        "the same LLM backend so the comparison still isolates the "
-        "*context layer* as cleanly as possible.",
+        "using the requested arm(s): "
+        + ", ".join(f"`{arm}` ({_ARM_LABELS[arm]})" for arm in ran_arms)
+        + ". Scores cover direction match, ICU-rule findings, evidence "
+        "completeness and manuscript bindability.",
         "",
         "**Interpretation boundary.** All analysis-bench tasks use synthetic cohorts. "
         "`evidence_basis` describes how a task was designed (for example, literature-inspired, "
@@ -464,95 +576,84 @@ def _render_markdown(
         "",
         "## Per-item results",
         "",
-        "| Item | Family | Difficulty | Evidence basis | Direction (naive) | Direction (aware) | OR (naive) | OR (aware) | Predefined rule hits (naive) | Predefined rule hits (aware) | Workflow hits (naive) | Workflow hits (aware) | Artifact hits (naive) | Artifact hits (aware) | `[evidence missing]` (naive → aware) |",
-        "|---|---|---|---|:-:|:-:|---:|---:|:-:|:-:|:-:|:-:|:-:|:-:|---:|",
     ]
-    for s in scores:
-        n = s["naive"]
-        a = s["aware"]
+    if ran_arms == list(_ARM_ORDER):
+        lines.extend(
+            [
+                "| Item | Family | Difficulty | Evidence basis | Direction (naive) | Direction (aware) | OR (naive) | OR (aware) | Predefined rule hits (naive) | Predefined rule hits (aware) | Workflow hits (naive) | Workflow hits (aware) | Artifact hits (naive) | Artifact hits (aware) | `[evidence missing]` (naive → aware) |",
+                "|---|---|---|---|:-:|:-:|---:|---:|:-:|:-:|:-:|:-:|:-:|:-:|---:|",
+            ]
+        )
+        for s in scores:
+            n = s["naive"]
+            a = s["aware"]
+            lines.append(
+                f"| `{s['item_key']}` "
+                f"| `{s.get('benchmark_family', 'rule')}` "
+                f"| `{s.get('difficulty', 'basic')}` "
+                f"| `{s.get('evidence_basis', 'internal_synthetic')}` "
+                f"| {_direction_marker(n['direction_match'])} "
+                f"| {_direction_marker(a['direction_match'])} "
+                f"| {_fmt_or(n['primary_or'])} "
+                f"| {_fmt_or(a['primary_or'])} "
+                f"| {_findings_marker(n['icu_findings'])} "
+                f"| {_findings_marker(a['icu_findings'])} "
+                f"| {_findings_marker(n.get('workflow_hits', {}))} "
+                f"| {_findings_marker(a.get('workflow_hits', {}))} "
+                f"| {_findings_marker(n.get('artifact_hits', {}))} "
+                f"| {_findings_marker(a.get('artifact_hits', {}))} "
+                f"| {_fmt_missing(n['evidence_missing_in_manuscript'])} → {_fmt_missing(a['evidence_missing_in_manuscript'])} |"
+            )
+    else:
+        arm = ran_arms[0]
+        label_name = _ARM_LABELS[arm].lower()
+        lines.extend(
+            [
+                f"| Item | Family | Difficulty | Evidence basis | Direction ({arm}) | OR ({arm}) | Predefined rule hits ({arm}) | Workflow hits ({arm}) | Artifact hits ({arm}) | `[evidence missing]` ({arm}) |",
+                "|---|---|---|---|:-:|---:|:-:|:-:|:-:|---:|",
+            ]
+        )
+        for s in scores:
+            arm_score = s[arm]
+            lines.append(
+                f"| `{s['item_key']}` "
+                f"| `{s.get('benchmark_family', 'rule')}` "
+                f"| `{s.get('difficulty', 'basic')}` "
+                f"| `{s.get('evidence_basis', 'internal_synthetic')}` "
+                f"| {_direction_marker(arm_score['direction_match'])} "
+                f"| {_fmt_or(arm_score['primary_or'])} "
+                f"| {_findings_marker(arm_score['icu_findings'])} "
+                f"| {_findings_marker(arm_score.get('workflow_hits', {}))} "
+                f"| {_findings_marker(arm_score.get('artifact_hits', {}))} "
+                f"| {_fmt_missing(arm_score['evidence_missing_in_manuscript'])} |"
+            )
+        lines.append("")
         lines.append(
-            f"| `{s['item_key']}` "
-            f"| `{s.get('benchmark_family', 'rule')}` "
-            f"| `{s.get('difficulty', 'basic')}` "
-            f"| `{s.get('evidence_basis', 'internal_synthetic')}` "
-            f"| {_direction_marker(n['direction_match'])} "
-            f"| {_direction_marker(a['direction_match'])} "
-            f"| {_fmt_or(n['primary_or'])} "
-            f"| {_fmt_or(a['primary_or'])} "
-            f"| {_findings_marker(n['icu_findings'])} "
-            f"| {_findings_marker(a['icu_findings'])} "
-            f"| {_findings_marker(n.get('workflow_hits', {}))} "
-            f"| {_findings_marker(a.get('workflow_hits', {}))} "
-            f"| {_findings_marker(n.get('artifact_hits', {}))} "
-            f"| {_findings_marker(a.get('artifact_hits', {}))} "
-            f"| {n['evidence_missing_in_manuscript']} → {a['evidence_missing_in_manuscript']} |"
+            f"_Only the {label_name} arm was executed; skipped arms were not called._"
         )
     lines.append("")
 
     lines.append("## Aggregate (across all items)")
     lines.append("")
-    lines.append("| Metric | Naive | ICU-aware |")
-    lines.append("|---|---:|---:|")
+    lines.append("| Metric | " + " | ".join(_ARM_LABELS[arm] for arm in ran_arms) + " |")
+    lines.append("|---" + "|---:" * len(ran_arms) + "|")
     rows = [
-        ("Number of items", totals["naive"]["n_items"], totals["aware"]["n_items"]),
-        (
-            "Direction correct",
-            totals["naive"]["direction_correct"],
-            totals["aware"]["direction_correct"],
-        ),
-        (
-            "Direction wrong",
-            totals["naive"]["direction_wrong"],
-            totals["aware"]["direction_wrong"],
-        ),
-        (
-            "Direction missing (no OR produced)",
-            totals["naive"]["direction_missing"],
-            totals["aware"]["direction_missing"],
-        ),
-        (
-            "Items with all predefined rule hits",
-            totals["naive"]["icu_findings_full_hit"],
-            totals["aware"]["icu_findings_full_hit"],
-        ),
-        (
-            "Items with partial predefined rule hits",
-            totals["naive"]["icu_findings_partial_hit"],
-            totals["aware"]["icu_findings_partial_hit"],
-        ),
-        (
-            "Items with all workflow expectations hit",
-            totals["naive"]["workflow_full_hit"],
-            totals["aware"]["workflow_full_hit"],
-        ),
-        (
-            "Items with partial workflow expectations",
-            totals["naive"]["workflow_partial_hit"],
-            totals["aware"]["workflow_partial_hit"],
-        ),
-        (
-            "Items with all artifact expectations hit",
-            totals["naive"]["artifact_full_hit"],
-            totals["aware"]["artifact_full_hit"],
-        ),
-        (
-            "Items with partial artifact expectations",
-            totals["naive"]["artifact_partial_hit"],
-            totals["aware"]["artifact_partial_hit"],
-        ),
-        (
-            "Items with all 5 evidence kinds",
-            totals["naive"]["evidence_kinds_complete"],
-            totals["aware"]["evidence_kinds_complete"],
-        ),
-        (
-            "Total `[evidence missing]` lines (lower is better)",
-            totals["naive"]["evidence_missing_in_manuscripts"],
-            totals["aware"]["evidence_missing_in_manuscripts"],
-        ),
+        ("Number of items", "n_items"),
+        ("Direction correct", "direction_correct"),
+        ("Direction wrong", "direction_wrong"),
+        ("Direction missing (no OR produced)", "direction_missing"),
+        ("Items with all predefined rule hits", "icu_findings_full_hit"),
+        ("Items with partial predefined rule hits", "icu_findings_partial_hit"),
+        ("Items with all workflow expectations hit", "workflow_full_hit"),
+        ("Items with partial workflow expectations", "workflow_partial_hit"),
+        ("Items with all artifact expectations hit", "artifact_full_hit"),
+        ("Items with partial artifact expectations", "artifact_partial_hit"),
+        ("Items with all 5 evidence kinds", "evidence_kinds_complete"),
+        ("Total `[evidence missing]` lines (lower is better)", "evidence_missing_in_manuscripts"),
     ]
-    for name, n, a in rows:
-        lines.append(f"| {name} | {n} | {a} |")
+    for name, key in rows:
+        values = [str(totals[arm][key]) for arm in ran_arms]
+        lines.append(f"| {name} | " + " | ".join(values) + " |")
     lines.append("")
 
     lines.append("## Interpretation Notes")
@@ -570,10 +671,12 @@ def _render_markdown(
     lines.append("## Per-item provenance")
     lines.append("")
     for s in scores:
-        lines.append(
-            f"- **{s['item_key']}** — `{s['naive']['workdir']}` "
-            f"(naive) ; `{s['aware']['workdir']}` (aware)"
-        )
+        parts = [
+            f"`{s[arm]['workdir']}` ({arm})"
+            for arm in ran_arms
+            if _arm_was_run(s.get(arm))
+        ]
+        lines.append(f"- **{s['item_key']}** — " + " ; ".join(parts))
     lines.append("")
     return "\n".join(lines)
 
@@ -590,6 +693,7 @@ def _slugify_model(model: str) -> str:
 
 def _make_llm(*, provider: str, model: str, request_timeout: float):
     from easyicu.research_agent import MockLLMClient, OpenAIClient  # type: ignore
+    from easyicu.research_agent.llm import openrouter_reasoning_extra_body  # type: ignore
 
     if provider == "mock":
         return MockLLMClient()
@@ -597,7 +701,7 @@ def _make_llm(*, provider: str, model: str, request_timeout: float):
         key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise SystemExit("OPENROUTER_API_KEY is required for --provider openrouter")
-        return OpenAIClient(
+        kwargs = dict(
             model=model,
             api_key=key,
             base_url=os.environ.get(
@@ -608,18 +712,42 @@ def _make_llm(*, provider: str, model: str, request_timeout: float):
                 "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
                 "X-Title": "EasyICU research-agent benchmark",
             },
-            extra_body={"reasoning": {"effort": "none", "exclude": True}},
         )
+        extra_body = openrouter_reasoning_extra_body(model)
+        if extra_body is not None:
+            kwargs["extra_body"] = extra_body
+        return OpenAIClient(**kwargs)
     if provider == "openai":
         key = os.environ.get("OPENAI_API_KEY")
-        if not key:
+        base_url = os.environ.get("OPENAI_BASE_URL")
+        if not key and not _local_openai_base_url(base_url):
             raise SystemExit("OPENAI_API_KEY is required for --provider openai")
-        return OpenAIClient(
-            model=model,
-            api_key=key,
-            request_timeout=float(request_timeout),
-        )
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "request_timeout": float(request_timeout),
+        }
+        if key:
+            kwargs["api_key"] = key
+        if base_url:
+            kwargs["base_url"] = base_url
+        return OpenAIClient(**kwargs)
     raise SystemExit(f"Unsupported provider: {provider}")
+
+
+def _benchmark_pipeline_options(
+    *,
+    max_total_steps: Optional[int],
+    disable_replanning: bool,
+    max_code_repair_attempts: Optional[int],
+) -> Dict[str, Any]:
+    options: Dict[str, Any] = {}
+    if max_total_steps is not None:
+        options["max_total_steps"] = int(max_total_steps)
+    if disable_replanning:
+        options["enable_replanning"] = False
+    if max_code_repair_attempts is not None:
+        options["max_code_repair_attempts"] = int(max_code_repair_attempts)
+    return options
 
 
 def _run_suite(
@@ -630,10 +758,13 @@ def _run_suite(
     bench_kind: str,
     provider: str,
     model: str,
+    arms: Sequence[str],
+    pipeline_options: Optional[Dict[str, Any]] = None,
     verbose: bool = True,
     request_timeout: float = 180.0,
     reuse_existing: bool = False,
 ) -> Dict[str, Any]:
+    selected_arms = _normalize_arms(arms)
     llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
     from easyicu.research_agent import (  # type: ignore
         default_icu_agent_bench_suite,
@@ -648,6 +779,8 @@ def _run_suite(
                 seed=seed,
                 out_root=out_root,
                 llm=llm,
+                arms=selected_arms,
+                pipeline_options=pipeline_options,
                 reuse_existing=reuse_existing,
                 verbose=verbose,
             )
@@ -660,6 +793,8 @@ def _run_suite(
         "bench_kind": bench_kind,
         "provider": provider,
         "model": model,
+        "arms": selected_arms,
+        "pipeline_options": dict(pipeline_options or {}),
         "items": [it.key for it in items],
         "scores": scores,
         "totals": totals,
@@ -692,26 +827,45 @@ def _run_suite(
 
 
 def _render_model_matrix(runs: List[Dict[str, Any]]) -> str:
+    ran_arms = [
+        arm
+        for arm in _ARM_ORDER
+        if any(run.get("totals", {}).get(arm, {}).get("n_items", 0) > 0 for run in runs)
+    ] or list(_ARM_ORDER)
+    metric_columns: List[tuple[str, str, str]] = []
+    for arm in ran_arms:
+        suffix = _ARM_LABELS[arm]
+        metric_columns.extend(
+            [
+                (f"Direction correct ({suffix})", arm, "direction_correct"),
+                (f"ICU findings full-hit ({suffix})", arm, "icu_findings_full_hit"),
+                (f"Workflow full-hit ({suffix})", arm, "workflow_full_hit"),
+                (f"Artifact full-hit ({suffix})", arm, "artifact_full_hit"),
+                (f"Evidence missing ({suffix})", arm, "evidence_missing_in_manuscripts"),
+            ]
+        )
     lines = [
         "# Benchmark model matrix",
         "",
-        "| Model | Provider | Bench kind | Direction correct (aware) | Direction correct (naive) | ICU findings full-hit (aware) | ICU findings full-hit (naive) | Workflow full-hit (aware) | Workflow full-hit (naive) | Artifact full-hit (aware) | Artifact full-hit (naive) | Evidence missing (aware) | Evidence missing (naive) |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Model | Provider | Bench kind | "
+        + " | ".join(name for name, _, _ in metric_columns)
+        + " |",
+        "|---|---|---" + "|---:" * len(metric_columns) + "|",
     ]
     for run in runs:
         totals = run["totals"]
+        values: List[str] = []
+        for _, arm, key in metric_columns:
+            if key == "direction_correct":
+                values.append(
+                    f"{totals[arm]['direction_correct']}/{totals[arm]['n_items']}"
+                )
+            else:
+                values.append(str(totals[arm].get(key, 0)))
         lines.append(
             f"| `{run['model']}` | `{run['provider']}` | `{run.get('bench_kind', 'rule')}` | "
-            f"{totals['aware']['direction_correct']}/{totals['aware']['n_items']} | "
-            f"{totals['naive']['direction_correct']}/{totals['naive']['n_items']} | "
-            f"{totals['aware']['icu_findings_full_hit']} | "
-            f"{totals['naive']['icu_findings_full_hit']} | "
-            f"{totals['aware'].get('workflow_full_hit', 0)} | "
-            f"{totals['naive'].get('workflow_full_hit', 0)} | "
-            f"{totals['aware'].get('artifact_full_hit', 0)} | "
-            f"{totals['naive'].get('artifact_full_hit', 0)} | "
-            f"{totals['aware']['evidence_missing_in_manuscripts']} | "
-            f"{totals['naive']['evidence_missing_in_manuscripts']} |"
+            + " | ".join(values)
+            + " |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -749,7 +903,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "z-ai/glm-4.5-air:free"),
+        default=os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"),
         help="Single model name for real-provider runs.",
     )
     parser.add_argument(
@@ -765,9 +919,39 @@ def main() -> int:
         help="Per-request timeout for real LLM providers.",
     )
     parser.add_argument(
+        "--arms",
+        nargs="+",
+        choices=list(_ARM_ORDER),
+        default=list(_ARM_ORDER),
+        help="Benchmark arm(s) to run. Use '--arms aware' for platform-only runs.",
+    )
+    parser.add_argument(
         "--reuse-existing",
         action="store_true",
         help="Reuse completed item/arm runs already present under --out-root.",
+    )
+    parser.add_argument(
+        "--max-total-steps",
+        type=int,
+        default=None,
+        help=(
+            "Override ResearchAgentPipeline max_total_steps. For cheap "
+            "development dry runs, use a small value such as 4."
+        ),
+    )
+    parser.add_argument(
+        "--disable-replanning",
+        action="store_true",
+        help=(
+            "Disable LLM replanning inside ResearchAgentPipeline. Useful for "
+            "low-cost dry runs before protocol freeze."
+        ),
+    )
+    parser.add_argument(
+        "--max-code-repair-attempts",
+        type=int,
+        default=None,
+        help="Override the per-step generated-code repair attempt budget.",
     )
     parser.add_argument(
         "--ehrflowbench-jsonl",
@@ -776,12 +960,19 @@ def main() -> int:
         "key, question, cohort_path, target_outcome, expected_or_direction.",
     )
     args = parser.parse_args()
+    pipeline_options = _benchmark_pipeline_options(
+        max_total_steps=args.max_total_steps,
+        disable_replanning=bool(args.disable_replanning),
+        max_code_repair_attempts=args.max_code_repair_attempts,
+    )
 
     if args.ehrflowbench_jsonl:
         return _run_ehrflowbench_jsonl(
             jsonl_path=Path(args.ehrflowbench_jsonl).resolve(),
             out_root=Path(args.out_root).resolve(),
             seed=args.seed,
+            arms=args.arms,
+            pipeline_options=pipeline_options,
         )
 
     all_items = list(
@@ -821,6 +1012,8 @@ def main() -> int:
             bench_kind=args.bench_kind,
             provider=args.provider,
             model=model,
+            arms=args.arms,
+            pipeline_options=pipeline_options,
             request_timeout=float(args.request_timeout),
             reuse_existing=bool(args.reuse_existing),
         )
@@ -830,19 +1023,19 @@ def main() -> int:
         print(f"=== Bench complete — {model} ===")
         print(f"  -> {model_root / 'bench_results.json'}")
         print(f"  -> {model_root / 'bench_results.md'}")
-        print(
-            f"  Direction correct  — naive: {totals['naive']['direction_correct']}/"
-            f"{totals['naive']['n_items']} ; "
-            f"aware: {totals['aware']['direction_correct']}/{totals['aware']['n_items']}"
-        )
-        print(
-            f"  ICU findings full  — naive: {totals['naive']['icu_findings_full_hit']} ; "
-            f"aware: {totals['aware']['icu_findings_full_hit']}"
-        )
-        print(
-            f"  Evidence missing   — naive: {totals['naive']['evidence_missing_in_manuscripts']} ; "
-            f"aware: {totals['aware']['evidence_missing_in_manuscripts']}"
-        )
+        ran_arms = _run_arms_in_scores(payload["scores"])
+        for arm in ran_arms:
+            print(
+                f"  Direction correct  — {arm}: {totals[arm]['direction_correct']}/"
+                f"{totals[arm]['n_items']}"
+            )
+            print(
+                f"  ICU findings full  — {arm}: {totals[arm]['icu_findings_full_hit']}"
+            )
+            print(
+                f"  Evidence missing   — {arm}: "
+                f"{totals[arm]['evidence_missing_in_manuscripts']}"
+            )
 
     if len(all_runs) > 1:
         matrix_payload = {
@@ -850,6 +1043,8 @@ def main() -> int:
             "seed": args.seed,
             "bench_kind": args.bench_kind,
             "provider": args.provider,
+            "arms": _normalize_arms(args.arms),
+            "pipeline_options": pipeline_options,
             "items": [it.key for it in items],
             "runs": all_runs,
         }
@@ -866,7 +1061,14 @@ def main() -> int:
     return 0
 
 
-def _run_ehrflowbench_jsonl(*, jsonl_path: Path, out_root: Path, seed: int) -> int:
+def _run_ehrflowbench_jsonl(
+    *,
+    jsonl_path: Path,
+    out_root: Path,
+    seed: int,
+    arms: Sequence[str],
+    pipeline_options: Optional[Dict[str, Any]] = None,
+) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     from types import SimpleNamespace
     import pandas as pd
@@ -941,7 +1143,13 @@ def _run_ehrflowbench_jsonl(*, jsonl_path: Path, out_root: Path, seed: int) -> i
             inclusion_criteria=list(row.get("inclusion_criteria") or []),
         )
         scores.append(
-            _run_one_item_from_cohort(item=item, cohort=cohort, out_root=out_root)
+            _run_one_item_from_cohort(
+                item=item,
+                cohort=cohort,
+                out_root=out_root,
+                arms=arms,
+                pipeline_options=pipeline_options,
+            )
         )
 
     totals = _aggregate(scores) if scores else {"naive": {}, "aware": {}}
@@ -949,6 +1157,8 @@ def _run_ehrflowbench_jsonl(*, jsonl_path: Path, out_root: Path, seed: int) -> i
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": str(jsonl_path),
         "seed": seed,
+        "arms": _normalize_arms(arms),
+        "pipeline_options": dict(pipeline_options or {}),
         "scores": scores,
         "pending": pending,
         "totals": totals,
@@ -981,26 +1191,40 @@ def _run_ehrflowbench_jsonl(*, jsonl_path: Path, out_root: Path, seed: int) -> i
     return 0
 
 
-def _run_one_item_from_cohort(*, item, cohort, out_root: Path) -> Dict[str, Any]:
+def _run_one_item_from_cohort(
+    *,
+    item,
+    cohort,
+    out_root: Path,
+    arms: Sequence[str],
+    pipeline_options: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     llm = _make_llm(provider="mock", model="mock", request_timeout=180.0)
     item_root = out_root / item.key
-    naive = _run_one_arm(
-        item=item,
-        cohort=cohort.copy(),
-        workdir=item_root / "naive",
-        disable_icu_context=True,
-        label="naive",
-        llm=llm,
-    )
-    aware = _run_one_arm(
-        item=item,
-        cohort=cohort.copy(),
-        workdir=item_root / "aware",
-        disable_icu_context=False,
-        label="aware",
-        llm=llm,
-    )
-    return {
+    selected = set(_normalize_arms(arms))
+    naive = _skipped_arm("naive")
+    aware = _skipped_arm("aware")
+    if "naive" in selected:
+        naive = _run_one_arm(
+            item=item,
+            cohort=cohort.copy(),
+            workdir=item_root / "naive",
+            disable_icu_context=True,
+            label="naive",
+            llm=llm,
+            pipeline_options=pipeline_options,
+        )
+    if "aware" in selected:
+        aware = _run_one_arm(
+            item=item,
+            cohort=cohort.copy(),
+            workdir=item_root / "aware",
+            disable_icu_context=False,
+            label="aware",
+            llm=llm,
+            pipeline_options=pipeline_options,
+        )
+    payload = {
         "item_key": item.key,
         "name": item.name,
         "research_question": item.research_question,
@@ -1012,9 +1236,12 @@ def _run_one_item_from_cohort(*, item, cohort, out_root: Path) -> Dict[str, Any]
         "claim_scope": getattr(item, "claim_scope", "external_import_only"),
         "interpretation_note": getattr(item, "interpretation_note", None),
         "cohort_size": int(len(cohort)),
-        "naive": naive,
-        "aware": aware,
     }
+    if "naive" in selected:
+        payload["naive"] = naive
+    if "aware" in selected:
+        payload["aware"] = aware
+    return payload
 
 
 if __name__ == "__main__":  # pragma: no cover

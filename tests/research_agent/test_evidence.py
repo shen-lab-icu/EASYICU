@@ -246,3 +246,22 @@ def test_enforce_evidence_bound_scaffold_filters_unsupported_result_sentences(ra
     assert "This study describes baseline characteristics." in filtered
     assert "Median age was 65 years {evidence:table_one}." in filtered
     assert removed == ["The cohort comprised 10 stays."]
+
+
+def test_enforce_evidence_bound_scaffold_filters_bold_section_result_sentences(
+    ra, tmp_path: Path
+):
+    store = ra.EvidenceStore(root=tmp_path)
+    scaffold = (
+        "**Background:** The relation between early SOFA-2 severity and ICU mortality "
+        "remains sensitive to missingness and score-zero artefacts.\n"
+        "**Discussion:** Several mechanisms could be consistent with the observed "
+        "association, although none can be separated definitively.\n"
+        "**Results:** Median age was 65 years {evidence:table_one}.\n"
+    )
+    filtered, removed = store.enforce_evidence_bound_scaffold(scaffold)
+    assert "**Results:** Median age was 65 years {evidence:table_one}." in filtered
+    assert "**Background:**" not in filtered
+    assert "**Discussion:**" not in filtered
+    assert any("missingness and score-zero artefacts" in item for item in removed)
+    assert any("consistent with the observed association" in item for item in removed)
