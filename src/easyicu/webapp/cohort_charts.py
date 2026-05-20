@@ -724,10 +724,18 @@ def render_tutorial_starting_card(
     badge_html: str,
     desc: str,
     bullets: Sequence[str],
-    cta_label: str,
-    cta_primary: bool = False,
-    cta_dashed: bool = False,
+    cta_label: str = "",  # accepted for backwards compatibility but unused
+    cta_primary: bool = False,  # noqa: ARG001 — see CTA buttons rendered as real st.button by caller
+    cta_dashed: bool = False,  # noqa: ARG001
 ) -> str:
+    """Tutorial starting-point card body — *no embedded CTA button*.
+
+    The CTA itself is rendered as a real ``st.button`` immediately
+    below the card so the click actually wires through to the
+    session_state mode switch. Embedding a decorative HTML button
+    inside the card would just duplicate the visual without any
+    behaviour.
+    """
     border = (
         "border:1px solid var(--accent-border);background:linear-gradient(180deg,var(--accent-soft),var(--surface))"
         if tone == "accent" else
@@ -739,26 +747,9 @@ def render_tutorial_starting_card(
         for b in bullets
     )
     title_color = "var(--accent-ink)" if tone == "accent" else "var(--ink)"
-    if cta_dashed:
-        cta_class = "eu-cta-ghost-dashed"
-        cta_style = (
-            "margin-top:auto;justify-content:center;height:32px;"
-            "background:transparent;border:1px dashed var(--hair-3);color:var(--ink-3)"
-        )
-    elif cta_primary:
-        cta_class = "eu-cta-primary"
-        cta_style = (
-            "margin-top:4px;justify-content:center;height:32px;"
-            "background:var(--ink);color:#fff;border:1px solid var(--ink)"
-        )
-    else:
-        cta_class = "eu-cta"
-        cta_style = (
-            "margin-top:4px;justify-content:center;height:32px;"
-            "background:var(--surface);border:1px solid var(--hair-2);color:var(--ink)"
-        )
     return (
-        f'<div class="eu-card" style="padding:18px;display:flex;flex-direction:column;gap:10px;{border}">'
+        f'<div class="eu-card" style="padding:18px;display:flex;flex-direction:column;gap:10px;'
+        f'min-height:240px;{border}">'
         '<div style="display:flex;align-items:center;gap:10px">'
         f'<span style="color:{title_color}">{_STEP_ICONS.get(icon, "")}</span>'
         f'<div style="font-size:14px;font-weight:500;color:{title_color}">{_esc(title_en)}'
@@ -767,9 +758,6 @@ def render_tutorial_starting_card(
         '</div>'
         f'<div style="font-size:12.5px;color:var(--ink-2);line-height:1.55">{_esc(desc)}</div>'
         f'<ul style="margin:0;padding:0;list-style:none">{bullets_html}</ul>'
-        f'<button class="eu-btn {cta_class}" style="display:flex;align-items:center;gap:6px;'
-        f'border-radius:6px;font-size:12.5px;padding:0 14px;cursor:pointer;{cta_style}">'
-        f'{_esc(cta_label)} {_STEP_ICONS["chevron"]}</button>'
         '</div>'
     )
 

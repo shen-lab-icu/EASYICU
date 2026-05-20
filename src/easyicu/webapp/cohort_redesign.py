@@ -140,8 +140,16 @@ def _derive_hero_stats(df: pd.DataFrame | None, lang: str) -> list[tuple[str, st
 
 
 def _sofa_quartile_mortality(df: pd.DataFrame | None) -> list[tuple[str, float, float]]:
-    """Mortality by SOFA quartile for Sepsis vs Non-sepsis, as percentages."""
-    fallback = [("Q1", 28.0, 12.0), ("Q2", 58.0, 22.0), ("Q3", 96.0, 42.0), ("Q4", 138.0, 70.0)]
+    """Mortality by SOFA quartile for Sepsis vs Non-sepsis, as percentages.
+
+    Fallback values reflect realistic in-hospital mortality rates by
+    SOFA quartile (Sepsis-3 cohort): Q1 ~11%, Q2 ~23%, Q3 ~38%, Q4 ~55%
+    for sepsis vs roughly half that for non-sepsis. The renderer caps
+    y_max at the next 15-percentage-point step so the axis labels stay
+    clean (0/15/30/45/60).
+    """
+    fallback = [("Q1", 11.0, 5.0), ("Q2", 23.0, 9.0),
+                ("Q3", 38.0, 17.0), ("Q4", 55.0, 28.0)]
     if df is None or df.empty or "sofa_max" not in df.columns:
         return fallback
     work = df.copy()
