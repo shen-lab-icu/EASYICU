@@ -201,17 +201,28 @@ footer { display: none !important; }
   letter-spacing: 0.02em;
 }
 
-/* Slider — use ink instead of red. */
-.stApp .stSlider [data-baseweb="slider"] [role="slider"] {
+/* Slider — full coverage so the BaseWeb thumb / tick / filled track
+   no longer renders in Streamlit's default red. Targets every painted
+   surface the slider can use: the thumb role node, any direct child
+   div the BaseWeb component fills with the brand color, and the
+   inline-style background overrides BaseWeb applies. */
+.stApp .stSlider [data-baseweb="slider"] [role="slider"],
+.stApp .stSlider [data-baseweb="slider"] [data-testid="stThumbValue"] {
   background: var(--ink) !important;
   border-color: var(--ink) !important;
+  color: var(--ink) !important;
   box-shadow: 0 0 0 4px rgba(14,17,22,0.06) !important;
 }
-.stApp .stSlider [data-baseweb="slider"] div[role="progressbar"] {
+.stApp .stSlider [data-baseweb="slider"] div[role="progressbar"],
+.stApp .stSlider [data-baseweb="slider"] div[style*="background"],
+.stApp .stSlider [data-baseweb="slider"] > div > div > div > div,
+.stApp .stSlider [data-baseweb="slider"] [data-testid="stTickBar"] > div {
   background: var(--ink) !important;
 }
-.stApp .stSlider [data-baseweb="slider"] div[style*="background"] {
-  background: var(--ink) !important;
+.stApp .stSlider [data-testid="stTickBarMin"],
+.stApp .stSlider [data-testid="stTickBarMax"] {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
 }
 
 /* Radio + checkbox accents */
@@ -734,6 +745,15 @@ footer { display: none !important; }
 [data-testid="stSidebar"] [class*="st-key-euonav_"] {
   margin-top: 1px !important;
   margin-bottom: 1px !important;
+}
+
+/* Shell-A redesign: the Quick Visualization screenshot-mode toggle
+   used to sit beside the page title in a heavy panel. The shell-A
+   topbar already covers status pills, so we shrink the toggle to a
+   muted right-side caption + Streamlit-native toggle. */
+.stApp [data-testid="stToggle"] label {
+  font-size: 12px !important;
+  color: var(--ink-3) !important;
 }
 
 /* Shell-A redesign: hide the legacy bottom status strip
