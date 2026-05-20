@@ -3223,10 +3223,25 @@ def main():
                     else:
                         st.warning("Please configure data source first" if lang == 'en' else "请先配置数据源")
 
-            # Shell-A redesign: Quick Visualization full layout (4 subtabs)
-            # from page-quick-viz.jsx replaces the legacy compound page.
-            from easyicu.webapp.pages_redesign import render_quickviz_redesign_page
-            render_quickviz_redesign_page(lang)
+            # Shell-A redesign: wrap the *real* quick-visualization page
+            # (live patient/concept data driving its own charts) in the
+            # new PageHeader chrome. The earlier synthetic SVG layout
+            # only mocked data and is no longer the default.
+            from easyicu.webapp.cohort_charts import render_design_page_header
+            st.markdown(
+                render_design_page_header(
+                    kicker="QUICK VISUALIZATION · 快速可视化" if lang == 'en' else "快速可视化 · QUICK VISUALIZATION",
+                    title_en="Quick visualization" if lang == 'en' else "快速可视化",
+                    title_zh="快速可视化" if lang == 'en' else "Quick Visualization",
+                    desc=(
+                        "Interactive tables, time series, per-patient overview, and data quality on the loaded cohort."
+                        if lang == 'en' else
+                        "针对当前加载队列的交互式数据表、时间序列、病人全景与数据质量。"
+                    ),
+                ),
+                unsafe_allow_html=True,
+            )
+            render_quick_visualization_page()
 
     elif active_page == "cohort":
         if export_in_progress:
@@ -3237,14 +3252,20 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{export_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            # Shell-A redesign (2026-05-21): the visual layer of the
-            # cohort statistics page now goes through cohort_redesign
-            # (PageHeader + SubTabs + inline-SVG mini-charts that match
-            # page-cohort-subtabs.jsx). The old layered config UI is
-            # still callable via render_cohort_comparison_page when
-            # debugging, but is no longer the default render path.
+            # Shell-A redesign: keep the new PageHeader + bilingual
+            # breadcrumb chrome, but delegate each subtab body to the
+            # original render functions so the *real* loaded cohort
+            # data drives the charts. The synthetic SVG bodies remain
+            # available behind st.session_state["_eu_shell_only"] for
+            # design QA.
             from easyicu.webapp.cohort_redesign import render_cohort_redesign_page
-            render_cohort_redesign_page(lang)
+            render_cohort_redesign_page(
+                lang,
+                group_fn=render_group_comparison_subtab,
+                coverage_fn=render_data_coverage_audit_subtab,
+                snapshot_fn=render_cohort_dashboard_subtab,
+                sofa_fn=render_severity_reclassification_subtab,
+            )
 
     elif active_page == "cross_db":
         # Promoted from a Cohort Statistics subtab to a top-level page
@@ -3260,12 +3281,14 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{xdb_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            # Shell-A redesign (2026-05-21): use the design-aligned
-            # Cross-DB page (active DB row + benchmark mono-table +
-            # availability matrix). The original feature-distribution
-            # subtab remains accessible via the page footer toggle.
+            # Shell-A redesign: PageHeader chrome only; body delegates
+            # to the real multi-DB feature distribution renderer so
+            # actual ICU databases drive the comparison plots.
             from easyicu.webapp.cohort_redesign import render_cross_db_redesign_page
-            render_cross_db_redesign_page(lang)
+            render_cross_db_redesign_page(
+                lang,
+                multidb_fn=render_multidb_distribution_subtab,
+            )
 
     elif active_page == "research_agent":
         # T1.7 — embed the ICU-aware research-agent page so reviewers can
@@ -3280,13 +3303,39 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{ra_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            # Shell-A redesign: Research Agent visual surface from
-            # page-research-agent.jsx. The legacy compound page (real
-            # LLM controls etc.) remains importable via the dedicated
-            # research_agent module if needed, but the default render
-            # path now matches the design canvas exactly.
-            from easyicu.webapp.pages_redesign import render_agent_redesign_page
-            render_agent_redesign_page(lang)
+            # Shell-A redesign: keep the design PageHeader chrome but
+            # delegate the body to the original research_agent module
+            # so real LLM controls + bound outputs work. The fully
+            # synthetic shell-A preview is only used when no
+            # research_agent module is importable.
+            from easyicu.webapp.cohort_charts import render_design_page_header
+            st.markdown(
+                render_design_page_header(
+                    kicker="RESEARCH AGENT · 研究代理" if lang == 'en' else "研究代理 · RESEARCH AGENT",
+                    title_en="Research Agent" if lang == 'en' else "研究 Agent",
+                    title_zh="研究 Agent" if lang == 'en' else "Research Agent",
+                    desc=(
+                        "Analysis-first · manuscript stays behind a review gate."
+                        if lang == 'en' else
+                        "先做分析,稿件锁在审阅闸门后。"
+                    ),
+                ),
+                unsafe_allow_html=True,
+            )
+            try:
+                from easyicu.webapp.research_agent import (
+                    render_research_agent_demo_page,
+                    render_research_agent_page,
+                )
+                if st.session_state.get('entry_mode') == 'demo':
+                    render_research_agent_demo_page()
+                else:
+                    render_research_agent_page()
+            except Exception as _ra_exc:  # pragma: no cover - defensive
+                st.error(get_text("ra_page_load_failed").format(
+                    error=f"{type(_ra_exc).__name__}: {_ra_exc}",
+                ))
+                st.caption(get_text("ra_optional_deps_hint"))
 
     # 🔧 处理侧边栏触发的导出（在标签页渲染后执行，确保 Guide: Complete 中的 container 已创建）
     if st.session_state.get('trigger_export', False):

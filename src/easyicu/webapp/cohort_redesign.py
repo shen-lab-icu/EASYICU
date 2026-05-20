@@ -436,20 +436,27 @@ _SUBTABS_EN = ("Groups", "Coverage", "Snapshot", "SOFA Δ")
 _SUBTABS_ZH = ("分组", "覆盖", "快照", "SOFA Δ")
 
 
-def render_cohort_redesign_page(lang: str) -> None:
-    """Shell-A Cohort Statistics page."""
-    df = _demographics_df()
+def render_cohort_redesign_page(
+    lang: str,
+    *,
+    group_fn=None,
+    coverage_fn=None,
+    snapshot_fn=None,
+    sofa_fn=None,
+) -> None:
+    """Shell-A Cohort Statistics page.
 
-    actions = (
-        '<button class="eu-action eu-action--ghost" disabled>'
-        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
-        f'{_T(lang, "Share", "分享")}</button>'
-        '<button class="eu-action eu-action--ghost" disabled>'
-        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.8"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>'
-        f'{_T(lang, "Export", "导出")}</button>'
-    )
+    The visual chrome (PageHeader with breadcrumb + bilingual title +
+    Share/Export actions, plus the SubTabs strip) comes from the
+    redesign. The body of each subtab is delegated to the
+    ``*_fn`` callables passed in (which are the real app.py wrappers
+    that close over the app-level ``globals()`` context). This keeps
+    the actual cohort charts data-driven instead of mocked SVG.
+
+    Setting ``st.session_state["_eu_shell_only"] = True`` falls back
+    to the synthetic design-preview bodies — useful for design QA
+    when no real data has been loaded.
+    """
     _render_page_header(
         title_en="Sepsis vs Non-sepsis",
         title_zh="脓毒症对照",
@@ -461,19 +468,40 @@ def render_cohort_redesign_page(lang: str) -> None:
             _cohort_name(),
             _T(lang, "Cohort statistics", "Cohort 统计"),
         ),
-        actions_html=actions,
     )
 
-    tabs_labels = list(_SUBTABS_EN if lang == "en" else _SUBTABS_ZH)
+    use_shell_preview = (
+        st.session_state.get("_eu_shell_only")
+        or None in (group_fn, coverage_fn, snapshot_fn, sofa_fn)
+    )
+    if use_shell_preview:
+        df = _demographics_df()
+        tabs_labels = list(_SUBTABS_EN if lang == "en" else _SUBTABS_ZH)
+        tabs = st.tabs(tabs_labels)
+        with tabs[0]:
+            _render_groups_subtab(df, lang)
+        with tabs[1]:
+            _render_coverage_subtab(df, lang)
+        with tabs[2]:
+            _render_snapshot_subtab(df, lang)
+        with tabs[3]:
+            _render_sofa_subtab(df, lang)
+        return
+
+    tabs_labels = (
+        ["👥 Groups", "🧾 Coverage", "🎯 Snapshot", "🧭 SOFA Δ"]
+        if lang == "en" else
+        ["👥 分组", "🧾 覆盖", "🎯 快照", "🧭 SOFA Δ"]
+    )
     tabs = st.tabs(tabs_labels)
     with tabs[0]:
-        _render_groups_subtab(df, lang)
+        group_fn(lang)
     with tabs[1]:
-        _render_coverage_subtab(df, lang)
+        coverage_fn(lang)
     with tabs[2]:
-        _render_snapshot_subtab(df, lang)
+        snapshot_fn(lang)
     with tabs[3]:
-        _render_sofa_subtab(df, lang)
+        sofa_fn(lang)
 
 
 # =====================================================================
@@ -481,8 +509,15 @@ def render_cohort_redesign_page(lang: str) -> None:
 # =====================================================================
 
 
-def render_cross_db_redesign_page(lang: str) -> None:
-    """Shell-A Cross-DB Benchmark page (matches ``PageCrossDB``)."""
+def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
+    """Shell-A Cross-DB Benchmark page.
+
+    PageHeader chrome from the design canvas; body delegated to the
+    real multi-DB distribution renderer (``multidb_fn``) so the
+    feature-distribution plots are driven by actual loaded data.
+    Falls back to the synthetic shell-A preview when ``multidb_fn``
+    is ``None`` or when ``_eu_shell_only`` is set.
+    """
     _render_page_header(
         title_en="Cross-DB benchmark",
         title_zh="跨库基准",
@@ -492,6 +527,10 @@ def render_cross_db_redesign_page(lang: str) -> None:
         breadcrumb=("WORKSPACE", _cohort_name(),
                     _T(lang, "Cross-DB benchmark", "跨库基准")),
     )
+
+    if multidb_fn is not None and not st.session_state.get("_eu_shell_only"):
+        multidb_fn(lang)
+        return
 
     databases = [
         ("MIMIC-IV", "73k stays · 2.2.0", True, True),
