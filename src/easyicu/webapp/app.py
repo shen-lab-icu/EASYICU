@@ -3223,24 +3223,12 @@ def main():
                     else:
                         st.warning("Please configure data source first" if lang == 'en' else "请先配置数据源")
 
-            # Shell-A redesign: wrap the *real* quick-visualization page
-            # (live patient/concept data driving its own charts) in the
-            # new PageHeader chrome. The earlier synthetic SVG layout
-            # only mocked data and is no longer the default.
-            from easyicu.webapp.cohort_charts import render_design_page_header
-            st.markdown(
-                render_design_page_header(
-                    kicker="QUICK VISUALIZATION · 快速可视化" if lang == 'en' else "快速可视化 · QUICK VISUALIZATION",
-                    title_en="Quick visualization" if lang == 'en' else "快速可视化",
-                    title_zh="快速可视化" if lang == 'en' else "Quick Visualization",
-                    desc=(
-                        "Interactive tables, time series, per-patient overview, and data quality on the loaded cohort."
-                        if lang == 'en' else
-                        "针对当前加载队列的交互式数据表、时间序列、病人全景与数据质量。"
-                    ),
-                ),
-                unsafe_allow_html=True,
-            )
+            # Shell-A redesign: render_quick_visualization_page already
+            # ships its own ``render_page_header`` (now restyled to the
+            # shell-A tokens via shell_styles.app-page-header rules), so
+            # we don't add another header on top — that would just
+            # duplicate the bilingual title. The topbar breadcrumb above
+            # is the only chrome we contribute here.
             render_quick_visualization_page()
 
     elif active_page == "cohort":
@@ -3303,25 +3291,9 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{ra_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            # Shell-A redesign: keep the design PageHeader chrome but
-            # delegate the body to the original research_agent module
-            # so real LLM controls + bound outputs work. The fully
-            # synthetic shell-A preview is only used when no
-            # research_agent module is importable.
-            from easyicu.webapp.cohort_charts import render_design_page_header
-            st.markdown(
-                render_design_page_header(
-                    kicker="RESEARCH AGENT · 研究代理" if lang == 'en' else "研究代理 · RESEARCH AGENT",
-                    title_en="Research Agent" if lang == 'en' else "研究 Agent",
-                    title_zh="研究 Agent" if lang == 'en' else "Research Agent",
-                    desc=(
-                        "Analysis-first · manuscript stays behind a review gate."
-                        if lang == 'en' else
-                        "先做分析,稿件锁在审阅闸门后。"
-                    ),
-                ),
-                unsafe_allow_html=True,
-            )
+            # Shell-A redesign: the real research_agent module renders
+            # its own page header (now restyled by shell_styles), so
+            # we don't add a duplicate above it.
             try:
                 from easyicu.webapp.research_agent import (
                     render_research_agent_demo_page,
