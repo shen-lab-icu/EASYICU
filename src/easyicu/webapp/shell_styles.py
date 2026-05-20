@@ -732,6 +732,23 @@ footer { display: none !important; }
   margin-bottom: 1px !important;
 }
 
+/* Shell-A topbar action group: keep labels on one line, compact height,
+   align with the breadcrumb visual baseline. */
+.stApp [class*="st-key-_eu_topbar_"] .stButton > button,
+.stApp [class*="st-key-_eu_topbar_"] button {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  min-height: 30px !important;
+  padding: 4px 10px !important;
+  font-size: 12.5px !important;
+}
+
+/* Shell-A topbar wrapper: subtle bottom border under the whole row. */
+.stApp [class*="st-key-_eu_topbar_run"] {
+  text-align: right;
+}
+
 /* Workflow Help / Back to Mode Selection / language: keep them readable
    but visually de-emphasised so they don't compete with the primary nav. */
 [data-testid="stSidebar"] [class*="st-key-back_to_entry"] button,

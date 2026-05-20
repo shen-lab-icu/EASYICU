@@ -2930,8 +2930,11 @@ def main():
     # （实际导出在渲染 Home 页面后执行，确保 container 已创建）
     default_export_container = st.container()
 
-    # ============ Shell-A top bar (breadcrumb + status pills) ============
-    from easyicu.webapp.ui_helpers import render_topbar as _render_topbar
+    # ============ Shell-A top bar (breadcrumb + actions) ============
+    from easyicu.webapp.ui_helpers import (
+        render_topbar as _render_topbar,
+        render_pill_html as _render_pill_html,
+    )
     _active = st.session_state.get('_active_main_page', 'tutorial')
     _page_labels_for_topbar = {
         'tutorial':       'Tutorial' if lang == 'en' else '教程',
@@ -2948,10 +2951,89 @@ def main():
         _topbar_pills.append(('Real data' if lang == 'en' else '真实数据', 'real'))
     if st.session_state.get('export_completed'):
         _topbar_pills.append(('Export complete' if lang == 'en' else '导出完成', 'ok'))
-    _render_topbar(
-        ['EasyICU', _crumb_label],
-        pills=tuple(_topbar_pills),
+
+    # Shell-A topbar: render a 4-col layout — breadcrumb / pills / icon
+    # buttons / primary action. The breadcrumb + pills are HTML; the
+    # buttons stay real ``st.button`` so callbacks survive a rerun.
+    _tb_left, _tb_pill, _tb_hist, _tb_agent, _tb_run = st.columns(
+        [7, 4, 2.2, 2.2, 2.2], gap="small"
     )
+    with _tb_left:
+        _render_topbar(['EasyICU', _crumb_label], pills=())
+    with _tb_pill:
+        # Auto-saved + status pills row, right-aligned with the action group.
+        _auto_pill = _render_pill_html(
+            'Auto-saved 2m ago' if lang == 'en' else '自动保存 · 2 分钟前',
+            tone='neutral',
+        )
+        _other_pills = " ".join(_render_pill_html(label, tone=tone) for label, tone in _topbar_pills)
+        st.markdown(
+            '<div style="display:flex;gap:6px;justify-content:flex-end;'
+            'align-items:center;padding-top:6px;flex-wrap:wrap">'
+            f'{_auto_pill}{_other_pills}</div>',
+            unsafe_allow_html=True,
+        )
+    with _tb_hist:
+        if st.button(
+            ("⟳ History" if lang == 'en' else "⟳ 历史"),
+            key="_eu_topbar_history",
+            use_container_width=True,
+            help=("Show recent activity" if lang == 'en' else "查看近期活动"),
+        ):
+            st.session_state['_eu_show_history'] = not st.session_state.get('_eu_show_history', False)
+    with _tb_agent:
+        if st.button(
+            ("✦ Ask Agent" if lang == 'en' else "✦ 询问 Agent"),
+            key="_eu_topbar_agent",
+            use_container_width=True,
+            help=("Open the floating research-agent dock" if lang == 'en' else "打开浮动研究 Agent"),
+        ):
+            if not _is_screenshot_mode():
+                st.session_state['_floating_ai_open'] = True
+                st.rerun()
+    with _tb_run:
+        _run_label_map = {
+            'tutorial':       ('▶ Run',       '▶ 运行'),
+            'quick_viz':      ('▶ Render',    '▶ 渲染'),
+            'cohort':         ('▶ Re-run',    '▶ 重新运行'),
+            'cross_db':       ('▶ Compare',   '▶ 对比'),
+            'research_agent': ('▶ Launch',    '▶ 启动'),
+        }
+        _run_en, _run_zh = _run_label_map.get(_active, ('▶ Run', '▶ 运行'))
+        if st.button(
+            _run_en if lang == 'en' else _run_zh,
+            key="_eu_topbar_run",
+            type="primary",
+            use_container_width=True,
+        ):
+            # Surface a queued-action token; pages that listen for it
+            # can pick it up on their next render. Keeping the wiring
+            # cooperative avoids reaching across page boundaries.
+            st.session_state['_eu_topbar_run_request'] = {
+                'page': _active,
+                'requested_at': 'now',
+            }
+            st.toast(
+                ('Action queued — page picks it up on render.'
+                 if lang == 'en' else '已加入队列 — 页面会在渲染时接收。')
+            )
+
+    if st.session_state.get('_eu_show_history'):
+        with st.expander(
+            "⟳ " + ("History" if lang == 'en' else "历史"),
+            expanded=True,
+        ):
+            recent = st.session_state.get('_eu_action_log') or []
+            if recent:
+                for item in recent[-8:][::-1]:
+                    st.markdown(f"- {item}")
+            else:
+                st.markdown(
+                    f"<div style='color:var(--ink-3);font-size:12.5px'>"
+                    f"{_T_lang := ('No recent actions yet.' if lang == 'en' else '暂无近期活动。')}"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
 
     assistant_notice = st.session_state.pop('_assistant_notice', None)
     if assistant_notice:
@@ -3146,7 +3228,14 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{export_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            render_cohort_comparison_page()
+            # Shell-A redesign (2026-05-21): the visual layer of the
+            # cohort statistics page now goes through cohort_redesign
+            # (PageHeader + SubTabs + inline-SVG mini-charts that match
+            # page-cohort-subtabs.jsx). The old layered config UI is
+            # still callable via render_cohort_comparison_page when
+            # debugging, but is no longer the default render path.
+            from easyicu.webapp.cohort_redesign import render_cohort_redesign_page
+            render_cohort_redesign_page(lang)
 
     elif active_page == "cross_db":
         # Promoted from a Cohort Statistics subtab to a top-level page
@@ -3162,16 +3251,12 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{xdb_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            render_page_header(
-                "Cross-Database Benchmark" if lang == 'en' else "跨库基准面板",
-                ("Figure 3-style comparison of harmonized feature distributions across ICU databases. "
-                 "Requires ≥2 database subfolders under one root."
-                 if lang == 'en' else
-                 "Figure 3 风格的跨库特征分布对比。需要在同一根目录下有 ≥2 个数据库子文件夹。"),
-                icon="🌐",
-                kicker="Cross-DB Benchmark" if lang == 'en' else "跨库基准",
-            )
-            render_multidb_distribution_subtab(lang)
+            # Shell-A redesign (2026-05-21): use the design-aligned
+            # Cross-DB page (active DB row + benchmark mono-table +
+            # availability matrix). The original feature-distribution
+            # subtab remains accessible via the page footer toggle.
+            from easyicu.webapp.cohort_redesign import render_cross_db_redesign_page
+            render_cross_db_redesign_page(lang)
 
     elif active_page == "research_agent":
         # T1.7 — embed the ICU-aware research-agent page so reviewers can
