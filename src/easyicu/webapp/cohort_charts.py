@@ -623,6 +623,461 @@ def render_subtabs(items: Sequence[str], *, active: str) -> str:
 # Pre-baked deterministic demo coverage matrix
 # ---------------------------------------------------------------------
 
+# ---------------------------------------------------------------------
+# Design-system PageHeader (kicker + bilingual title + desc + right)
+# ---------------------------------------------------------------------
+
+def render_design_page_header(
+    *,
+    kicker: str,
+    title_en: str,
+    title_zh: str,
+    desc: str,
+    right_html: str = "",
+) -> str:
+    return (
+        '<div style="margin-bottom:6px">'
+        f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
+        f'letter-spacing:0.06em;text-transform:uppercase">{_esc(kicker)}</div>'
+        '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-top:6px">'
+        '<div>'
+        f'<h1 style="margin:0;font-size:22px;font-weight:500;letter-spacing:-0.015em;color:var(--ink)">'
+        f'{_esc(title_en)} <span class="eu-cn" style="color:var(--ink-3);font-weight:400">{_esc(title_zh)}</span>'
+        '</h1>'
+        f'<div style="margin-top:4px;color:var(--ink-3);font-size:12.5px">{_esc(desc)}</div>'
+        '</div>'
+        f'<div style="display:flex;gap:6px;flex-shrink:0">{right_html}</div>'
+        '</div></div>'
+    )
+
+
+# ---------------------------------------------------------------------
+# Tutorial — 4-step workflow strip
+# ---------------------------------------------------------------------
+
+_STEP_ICONS = {
+    "database": '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6"/></svg>',
+    "users":    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19a6 6 0 0 1 12 0"/><path d="M14 19c0-1.6.8-3 2-3.8"/></svg>',
+    "layers":   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/><path d="m3 18 9 5 9-5"/></svg>',
+    "bars":     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-8"/><path d="M22 20v-5"/></svg>',
+    "flask":    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6L4 20a1 1 0 0 0 .9 1.5h14.2A1 1 0 0 0 20 20l-6-11V3"/><path d="M8 14h8"/></svg>',
+    "file":     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>',
+    "book":     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H20v15H5.5A1.5 1.5 0 0 0 4 19.5v-15Z"/></svg>',
+    "chevron":  '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
+    "chevronR": '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
+}
+
+
+def render_step_card(
+    *,
+    number: str,
+    icon: str,
+    label_en: str,
+    label_zh: str,
+    desc: str,
+    sub: str,
+) -> str:
+    return (
+        '<div style="flex:1;border:1px solid var(--hair);background:var(--surface);'
+        'border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;'
+        'position:relative;min-width:0">'
+        '<div style="display:flex;align-items:center;gap:10px">'
+        f'<div class="mono" style="width:26px;height:26px;border-radius:6px;background:var(--ink);'
+        f'color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;'
+        f'font-weight:500;font-family:var(--font-mono)">{_esc(number)}</div>'
+        f'<div style="color:var(--ink-3)">{_STEP_ICONS.get(icon, "")}</div>'
+        f'<div class="mono" style="margin-left:auto;font-size:10.5px;color:var(--ink-4);'
+        f'font-family:var(--font-mono)">{_esc(sub)}</div>'
+        '</div>'
+        '<div>'
+        f'<div style="font-size:14px;font-weight:500">{_esc(label_en)}</div>'
+        f'<div class="eu-cn" style="font-size:11px;color:var(--ink-4)">{_esc(label_zh)}</div>'
+        '</div>'
+        f'<div style="font-size:12px;color:var(--ink-3);line-height:1.5">{_esc(desc)}</div>'
+        '</div>'
+    )
+
+
+def render_workflow_strip(steps: Sequence[dict]) -> str:
+    chevron = (
+        '<div style="display:flex;align-items:center;color:var(--ink-4)">'
+        f'{_STEP_ICONS["chevronR"]}</div>'
+    )
+    parts: list[str] = []
+    for i, s in enumerate(steps):
+        if i > 0:
+            parts.append(chevron)
+        parts.append(render_step_card(**s))
+    return (
+        '<div style="display:flex;gap:12px;align-items:stretch">'
+        + "".join(parts)
+        + '</div>'
+    )
+
+
+def render_tutorial_starting_card(
+    *,
+    tone: str,
+    icon: str,
+    title_en: str,
+    title_zh: str,
+    badge_html: str,
+    desc: str,
+    bullets: Sequence[str],
+    cta_label: str,
+    cta_primary: bool = False,
+    cta_dashed: bool = False,
+) -> str:
+    border = (
+        "border:1px solid var(--accent-border);background:linear-gradient(180deg,var(--accent-soft),var(--surface))"
+        if tone == "accent" else
+        "border:1px solid var(--hair);background:var(--surface)"
+    )
+    bullets_html = "".join(
+        '<li style="display:flex;gap:8px;padding:4px 0;font-size:12.5px;color:var(--ink-2)">'
+        f'<span style="color:var(--ink-4);margin-top:3px">·</span><span>{_esc(b)}</span></li>'
+        for b in bullets
+    )
+    title_color = "var(--accent-ink)" if tone == "accent" else "var(--ink)"
+    if cta_dashed:
+        cta_class = "eu-cta-ghost-dashed"
+        cta_style = (
+            "margin-top:auto;justify-content:center;height:32px;"
+            "background:transparent;border:1px dashed var(--hair-3);color:var(--ink-3)"
+        )
+    elif cta_primary:
+        cta_class = "eu-cta-primary"
+        cta_style = (
+            "margin-top:4px;justify-content:center;height:32px;"
+            "background:var(--ink);color:#fff;border:1px solid var(--ink)"
+        )
+    else:
+        cta_class = "eu-cta"
+        cta_style = (
+            "margin-top:4px;justify-content:center;height:32px;"
+            "background:var(--surface);border:1px solid var(--hair-2);color:var(--ink)"
+        )
+    return (
+        f'<div class="eu-card" style="padding:18px;display:flex;flex-direction:column;gap:10px;{border}">'
+        '<div style="display:flex;align-items:center;gap:10px">'
+        f'<span style="color:{title_color}">{_STEP_ICONS.get(icon, "")}</span>'
+        f'<div style="font-size:14px;font-weight:500;color:{title_color}">{_esc(title_en)}'
+        f' <span class="eu-cn" style="font-weight:400;margin-left:6px">{_esc(title_zh)}</span></div>'
+        f'<span style="margin-left:auto">{badge_html}</span>'
+        '</div>'
+        f'<div style="font-size:12.5px;color:var(--ink-2);line-height:1.55">{_esc(desc)}</div>'
+        f'<ul style="margin:0;padding:0;list-style:none">{bullets_html}</ul>'
+        f'<button class="eu-btn {cta_class}" style="display:flex;align-items:center;gap:6px;'
+        f'border-radius:6px;font-size:12.5px;padding:0 14px;cursor:pointer;{cta_style}">'
+        f'{_esc(cta_label)} {_STEP_ICONS["chevron"]}</button>'
+        '</div>'
+    )
+
+
+# ---------------------------------------------------------------------
+# Quick Viz · time-series lane
+# ---------------------------------------------------------------------
+
+def render_lane(
+    *,
+    title_en: str,
+    title_zh: str,
+    unit: str,
+    data: Sequence[float],
+    threshold: float | None = None,
+) -> str:
+    if not data:
+        return ""
+    last = data[-1]
+    mu = sum(data) / len(data)
+    # Map data to 0-40 plot area (invert so larger = upper)
+    vmin, vmax = min(data), max(data)
+    span = (vmax - vmin) or 1
+    pts = []
+    for i, v in enumerate(data):
+        x = (i / (len(data) - 1)) * 400 if len(data) > 1 else 0
+        y = 35 - ((v - vmin) / span) * 30
+        pts.append(f"{x:.2f},{y:.2f}")
+    threshold_html = (
+        f'<line x1="0" y1="{threshold:.2f}" x2="400" y2="{threshold:.2f}" '
+        f'stroke="var(--warn)" stroke-dasharray="3 3" opacity="0.5"/>'
+        if threshold is not None else ""
+    )
+    return (
+        '<div style="border-top:1px solid var(--hair);padding:10px 14px;display:grid;'
+        'grid-template-columns:160px 1fr 84px;align-items:center;gap:12px">'
+        '<div>'
+        f'<div style="font-size:12.5px;font-weight:500">{_esc(title_en)}</div>'
+        f'<div class="mono" style="font-size:10.5px;color:var(--ink-4)">{_esc(title_zh)} · {_esc(unit)}</div>'
+        '</div>'
+        '<svg width="100%" height="40" viewBox="0 0 400 40" preserveAspectRatio="none">'
+        f'{threshold_html}'
+        f'<polyline fill="none" stroke="var(--ink)" stroke-width="1.5" points="{" ".join(pts)}"/>'
+        '</svg>'
+        f'<div class="mono" style="font-size:11.5px;color:var(--ink);text-align:right">'
+        f'<div>{last}<span style="color:var(--ink-4);margin-left:3px">{_esc(unit)}</span></div>'
+        f'<div style="color:var(--ink-4);font-size:10px">μ {mu:.1f}</div>'
+        '</div></div>'
+    )
+
+
+def render_lane_group(title_en: str, meta: str, lanes_html: str) -> str:
+    return (
+        '<div class="eu-card" style="padding:0;overflow:hidden">'
+        '<div style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between">'
+        f'<div style="font-size:12px;font-weight:500">{_esc(title_en)}</div>'
+        f'<span class="mono" style="font-size:10.5px;color:var(--ink-4)">{_esc(meta)}</span>'
+        '</div>'
+        f'{lanes_html}</div>'
+    )
+
+
+# ---------------------------------------------------------------------
+# Quick Viz · patient timeline + sparkline tile
+# ---------------------------------------------------------------------
+
+def render_timeline(
+    events: Sequence[tuple[float, str, str]],
+    *,
+    total_days: float = 6.2,
+) -> str:
+    """Events: [(x_pos_0_to_1000, label, color)]"""
+    parts: list[str] = []
+    parts.append('<line x1="0" y1="45" x2="1000" y2="45" stroke="var(--hair-2)"/>')
+    for x, label, color in events:
+        parts.append(
+            f'<line x1="{x}" y1="45" x2="{x}" y2="20" stroke="{color}" stroke-width="1.5"/>'
+            f'<circle cx="{x}" cy="20" r="3.5" fill="{color}"/>'
+            f'<text x="{x}" y="14" font-size="9.5" fill="var(--ink-2)" text-anchor="middle">{_esc(label)}</text>'
+        )
+    for d in range(int(total_days) + 1):
+        xd = d * (1000.0 / total_days)
+        parts.append(
+            f'<text x="{xd:.1f}" y="58" font-size="9" fill="var(--ink-4)" '
+            f'font-family="var(--font-mono)">{d}d</text>'
+        )
+    return (
+        '<svg width="100%" height="60" viewBox="0 0 1000 60">'
+        + "".join(parts) + '</svg>'
+    )
+
+
+def render_sparkline_tile(
+    *,
+    label: str,
+    value: str,
+    unit: str,
+    data: Sequence[float],
+) -> str:
+    if not data:
+        return ""
+    vmax = max(data) or 1.0
+    pts = " ".join(
+        f"{(i / (len(data) - 1)) * 120 if len(data) > 1 else 0:.1f},"
+        f"{30 - (v / vmax) * 26:.1f}"
+        for i, v in enumerate(data)
+    )
+    unit_html = (
+        f'<span style="color:var(--ink-4);font-weight:400;margin-left:4px">{_esc(unit)}</span>'
+        if unit else ""
+    )
+    return (
+        '<div class="eu-card" style="padding:12px">'
+        f'<div style="font-size:10px;color:var(--ink-4);letter-spacing:0.06em;'
+        f'text-transform:uppercase;font-weight:500">{_esc(label)}</div>'
+        f'<div class="mono" style="font-size:12.5px;margin-top:2px;color:var(--ink);'
+        f'font-family:var(--font-mono)">{_esc(value)}{unit_html}</div>'
+        '<svg width="100%" height="34" viewBox="0 0 120 34" style="margin-top:4px">'
+        f'<polyline fill="none" stroke="var(--ink)" stroke-width="1.4" points="{pts}"/>'
+        '</svg></div>'
+    )
+
+
+# ---------------------------------------------------------------------
+# Quick Viz · missingness horizontal bars
+# ---------------------------------------------------------------------
+
+def render_missingness_bars(
+    rows: Sequence[tuple[str, float, str]],
+) -> str:
+    """Each row: (concept_name, percent_missing 0..100, denominator_label)."""
+    cells: list[str] = []
+    for n, p, denom in rows:
+        if p > 80:
+            color = "var(--bad)"
+        elif p > 40:
+            color = "var(--warn)"
+        else:
+            color = "var(--ink)"
+        cells.append(
+            f'<span class="mono" style="font-size:11.5px;color:var(--ink-2)">{_esc(n)}</span>'
+            f'<div style="height:14px;background:var(--surface-2);border-radius:3px;overflow:hidden">'
+            f'<div style="height:100%;width:{p:.1f}%;background:{color};opacity:0.85"></div>'
+            '</div>'
+            f'<span class="mono" style="font-size:11px;color:var(--ink-3);text-align:right">{p:.1f}%</span>'
+            f'<span class="eu-chip mono" style="font-size:9.5px;padding:0 5px">{_esc(denom)}</span>'
+        )
+    return (
+        '<div style="display:grid;grid-template-columns:180px 1fr 64px 36px;'
+        'gap:10px;align-items:center">' + "".join(cells) + '</div>'
+    )
+
+
+# ---------------------------------------------------------------------
+# Research Agent · output tile previews
+# ---------------------------------------------------------------------
+
+def render_tile_table() -> str:
+    rows = []
+    for r in range(5):
+        head_color = "var(--ink-3)" if r == 0 else "var(--hair-3)"
+        rows.append(
+            f'<rect x="10" y="{8 + r * 13}" width="40" height="6" fill="{head_color}" rx="1"/>'
+            f'<rect x="56" y="{8 + r * 13}" width="22" height="6" fill="var(--hair-2)" rx="1"/>'
+            f'<rect x="84" y="{8 + r * 13}" width="22" height="6" fill="var(--hair-2)" rx="1"/>'
+        )
+    return f'<svg width="120" height="78" viewBox="0 0 120 78">{"".join(rows)}</svg>'
+
+
+def render_tile_roc() -> str:
+    return (
+        '<svg width="120" height="78" viewBox="0 0 120 78">'
+        '<line x1="14" y1="64" x2="106" y2="64" stroke="var(--hair-3)"/>'
+        '<line x1="14" y1="64" x2="14" y2="10" stroke="var(--hair-3)"/>'
+        '<line x1="14" y1="64" x2="106" y2="10" stroke="var(--hair-2)" stroke-dasharray="2 3"/>'
+        '<path d="M14 64 Q 30 30 60 22 Q 90 16 106 12" stroke="var(--ink)" stroke-width="1.5" fill="none"/>'
+        '</svg>'
+    )
+
+
+def render_tile_calibration() -> str:
+    points = [(20, 56), (35, 44), (55, 32), (70, 22), (92, 16)]
+    dots = "".join(f'<circle cx="{x}" cy="{y}" r="2.5" fill="var(--ink)"/>' for x, y in points)
+    return (
+        '<svg width="120" height="78" viewBox="0 0 120 78">'
+        '<line x1="14" y1="64" x2="106" y2="64" stroke="var(--hair-3)"/>'
+        '<line x1="14" y1="64" x2="14" y2="10" stroke="var(--hair-3)"/>'
+        '<line x1="14" y1="64" x2="106" y2="10" stroke="var(--hair-2)" stroke-dasharray="2 3"/>'
+        f'{dots}</svg>'
+    )
+
+
+def render_tile_feature_effects() -> str:
+    widths = [62, 48, 35, 24, 18]
+    bars = "".join(
+        f'<rect x="34" y="{10 + i * 12}" width="{w}" height="8" fill="var(--ink)" '
+        f'opacity="{1 - i * 0.15:.2f}" rx="1"/>'
+        for i, w in enumerate(widths)
+    )
+    return f'<svg width="120" height="78" viewBox="0 0 120 78">{bars}</svg>'
+
+
+def render_tile_missing() -> str:
+    cells = []
+    for r in range(9):
+        for c in range(12):
+            seed = _stable_hash(f"miss-{r}-{c}", 100) / 100.0
+            if seed > 0.7:
+                fill, op = "var(--bad)", 0.7
+            else:
+                fill, op = "var(--hair-3)", 1.0
+            cells.append(
+                f'<rect x="{8 + c * 8.5:.1f}" y="{8 + r * 7.2:.1f}" '
+                f'width="6" height="5" fill="{fill}" opacity="{op}" rx="0.5"/>'
+            )
+    return f'<svg width="120" height="78" viewBox="0 0 120 78">{"".join(cells)}</svg>'
+
+
+def render_output_tile(
+    *,
+    kind: str,
+    title: str,
+    sub: str,
+    preview_html: str,
+    badge_html: str = "",
+) -> str:
+    badge = (
+        f'<span style="position:absolute;top:8px;right:8px">{badge_html}</span>'
+        if badge_html else ""
+    )
+    return (
+        '<div class="eu-card" style="padding:0;overflow:hidden;display:flex;flex-direction:column">'
+        '<div style="height:110px;background:var(--surface-2);border-bottom:1px solid var(--hair);'
+        f'display:flex;align-items:center;justify-content:center;position:relative">{preview_html}{badge}</div>'
+        '<div style="padding:8px 12px">'
+        f'<div class="mono" style="font-size:10.5px;color:var(--ink-4)">{_esc(kind)}</div>'
+        f'<div style="font-size:12.5px;font-weight:500;margin-top:1px">{_esc(title)}</div>'
+        f'<div style="font-size:11px;color:var(--ink-4)">{_esc(sub)}</div>'
+        '</div></div>'
+    )
+
+
+# ---------------------------------------------------------------------
+# Quick Viz · module picker (Data Tables subtab)
+# ---------------------------------------------------------------------
+
+def render_module_picker(
+    modules: Sequence[tuple[str, int, bool]],
+) -> str:
+    """Each module: (name, feature_count, is_active)."""
+    items = []
+    for name, count, active in modules:
+        cls = "eu-nav-item active" if active else "eu-nav-item"
+        items.append(
+            f'<div class="{cls}" style="height:28px;padding:4px 10px">'
+            '<span class="ico" style="width:10px;display:inline-flex">'
+            '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="3"/></svg>'
+            '</span>'
+            f'<span class="label" style="font-size:12px">{_esc(name)}</span>'
+            f'<span class="count mono">{count}</span>'
+            '</div>'
+        )
+    return (
+        '<div class="eu-card" style="padding:12px;display:flex;flex-direction:column;gap:1px">'
+        f'<div class="eu-section-label" style="padding:0;margin:0 0 6px">'
+        f'<span>Modules · {len(modules)}</span></div>'
+        + "".join(items)
+        + '</div>'
+    )
+
+
+# ---------------------------------------------------------------------
+# Data preview table (Quick Viz · Data Tables)
+# ---------------------------------------------------------------------
+
+def render_data_preview_table(
+    *,
+    title: str,
+    meta: str,
+    columns: Sequence[str],
+    rows: Sequence[Sequence],
+) -> str:
+    head = "".join(
+        f'<th style="text-align:left;padding:6px 12px;font-weight:500">{_esc(c)}</th>'
+        for c in columns
+    )
+    body_rows = []
+    for row in rows:
+        cells = "".join(
+            f'<td style="padding:5px 12px;color:{"var(--ink-3)" if i == 0 else "var(--ink)"}">{_esc(c)}</td>'
+            for i, c in enumerate(row)
+        )
+        body_rows.append(f'<tr style="border-top:1px solid var(--hair)">{cells}</tr>')
+    return (
+        '<div class="eu-card" style="padding:0;overflow:hidden">'
+        '<div style="padding:10px 14px;border-bottom:1px solid var(--hair);'
+        'display:flex;justify-content:space-between;align-items:center">'
+        f'<div style="font-size:12px;font-weight:500">{_esc(title)}</div>'
+        f'<span class="mono" style="font-size:11px;color:var(--ink-4)">{_esc(meta)}</span>'
+        '</div>'
+        '<table class="mono" style="width:100%;border-collapse:collapse;font-size:11.5px;font-family:var(--font-mono)">'
+        '<thead><tr style="background:var(--surface-2);color:var(--ink-4);font-size:10px;'
+        'letter-spacing:0.06em;text-transform:uppercase">'
+        f'{head}</tr></thead><tbody>{"".join(body_rows)}</tbody></table>'
+        '</div>'
+    )
+
+
 def synth_coverage_matrix(
     concepts: Sequence[str],
     n_patients: int = 30,
