@@ -798,33 +798,38 @@ def render_entry_redesign_page(lang: str) -> None:
     still drive the real ``entry_mode`` / ``use_mock_data`` session
     state so downstream pages continue to work.
     """
-    # Minimal top bar
+    # Top bar (in-flow div, no negative margins — Streamlit collapses
+    # negative-margin or out-of-flow elements that try to break the
+    # block container).
     st.markdown(
-        '<header style="height:56px;padding:0 32px;display:flex;align-items:center;'
-        'border-bottom:1px solid var(--hair);background:var(--surface);margin:-1.25rem -1rem 0">'
+        '<div class="eu-entry-topbar" style="height:56px;padding:0 24px;display:flex;'
+        'align-items:center;border:1px solid var(--hair);background:var(--surface);'
+        'border-radius:12px;margin-bottom:18px">'
         '<div style="display:flex;align-items:center;gap:10px">'
-        '<div style="width:24px;height:24px;border-radius:6px;background:var(--ink);color:#fff;'
-        'display:flex;align-items:center;justify-content:center;font-weight:600">E</div>'
-        '<div>'
+        '<div style="width:28px;height:28px;border-radius:7px;background:var(--ink);color:#fff;'
+        'display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px">E</div>'
+        '<div style="line-height:1.1">'
         '<div style="font-size:15px;font-weight:500;letter-spacing:-0.005em">EasyICU</div>'
-        f'<div class="eu-cn" style="font-size:10.5px;color:var(--ink-4)">{_T(lang, "ICU data research workspace", "ICU 数据研究台")}</div>'
+        f'<div class="eu-cn" style="font-size:10.5px;color:var(--ink-4);font-family:var(--font-mono);'
+        f'letter-spacing:0.04em">{_T(lang, "ICU data research workspace", "ICU 数据研究台")}</div>'
         '</div></div>'
-        '<div style="margin-left:auto;display:flex;gap:6px;align-items:center">'
-        f'<span class="eu-pill" style="background:transparent;border-color:transparent">{_T(lang, "Docs", "文档")}</span>'
-        f'<span class="eu-pill" style="background:transparent;border-color:transparent">{_T(lang, "Cite", "引用")}</span>'
-        f'<span class="eu-pill" style="background:transparent;border-color:transparent">{_T(lang, "中 / EN", "中 / EN")}</span>'
-        '<div style="width:1px;height:16px;background:var(--hair);margin:0 6px"></div>'
-        '<span class="mono" style="font-size:10.5px;color:var(--ink-4)">v1.0 · py3.10+</span>'
-        '</div></header>',
+        '<div style="margin-left:auto;display:flex;gap:6px;align-items:center;font-size:12px;color:var(--ink-3)">'
+        f'<span style="padding:4px 10px">{_T(lang, "Docs", "文档")}</span>'
+        f'<span style="padding:4px 10px">{_T(lang, "Cite", "引用")}</span>'
+        f'<span style="padding:4px 10px">{_T(lang, "中 / EN", "中 / EN")}</span>'
+        '<div style="width:1px;height:16px;background:var(--hair);margin:0 4px"></div>'
+        '<span class="mono" style="font-size:10.5px;color:var(--ink-4);font-family:var(--font-mono)">v1.0 · py3.10+</span>'
+        '</div></div>',
         unsafe_allow_html=True,
     )
 
     # Hero
     st.markdown(
-        '<div style="padding:64px 0 40px;text-align:center">'
-        f'<div class="mono" style="font-size:11px;color:var(--ink-4);letter-spacing:.08em;text-transform:uppercase">'
+        '<div style="padding:32px 0 24px;text-align:center">'
+        f'<div class="mono" style="font-size:11px;color:var(--ink-4);letter-spacing:.08em;'
+        f'text-transform:uppercase;font-family:var(--font-mono)">'
         f'{_T(lang, "Local-first ICU research workflow", "本地优先 · ICU 数据研究工作流")}</div>'
-        f'<h1 style="margin:12px 0 8px;font-size:38px;font-weight:500;letter-spacing:-0.025em">'
+        f'<h1 style="margin:12px 0 8px;font-size:38px;font-weight:500;letter-spacing:-0.025em;color:var(--ink)">'
         f'{_T(lang, "Extract. Review. Analyze. Draft.", "数据抽取 · 审阅 · 分析 · 起草")}</h1>'
         f'<div class="eu-cn" style="font-size:15px;color:var(--ink-3)">'
         f'{_T(lang, "数据抽取 · 审阅 · 分析 · 起草 — 一站完成", "Extract · Review · Analyze · Draft — all in one place")}</div>'
@@ -832,14 +837,19 @@ def render_entry_redesign_page(lang: str) -> None:
         unsafe_allow_html=True,
     )
 
-    # Mode cards row (HTML body) + real Streamlit click overlay below
-    demo_body = (
-        '<div style="flex:1;padding:28px 28px 24px;background:var(--accent-soft);'
-        'border:1px solid var(--accent-border);border-radius:14px;display:flex;flex-direction:column;gap:14px;min-height:380px">'
+    # Two mode cards rendered as a single column row, then a button
+    # column row immediately below — same column ratios so CTAs line
+    # up under each card.
+    demo_card = (
+        '<div style="padding:24px 24px 18px;background:var(--accent-soft);'
+        'border:1px solid var(--accent-border);border-radius:14px;display:flex;'
+        'flex-direction:column;gap:12px;min-height:340px">'
         '<div style="display:flex;align-items:center;gap:10px">'
         '<div style="width:36px;height:36px;border-radius:8px;background:var(--accent);color:#fff;'
         'display:flex;align-items:center;justify-content:center">'
-        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 3h6"/><path d="M10 3v6L4 20a1 1 0 0 0 .9 1.5h14.2A1 1 0 0 0 20 20l-6-11V3"/></svg></div>'
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M9 3h6"/><path d="M10 3v6L4 20a1 1 0 0 0 .9 1.5h14.2A1 1 0 0 0 20 20l-6-11V3"/></svg></div>'
         '<div>'
         f'<div style="font-size:18px;font-weight:500;letter-spacing:-0.01em">{_T(lang, "Demo Mode", "演示模式")}</div>'
         f'<div class="eu-cn" style="font-size:12px;color:var(--ink-3)">{_T(lang, "演示模式", "Demo Mode")}</div>'
@@ -849,10 +859,10 @@ def render_entry_redesign_page(lang: str) -> None:
         f'<p style="margin:0;font-size:13.5px;color:var(--ink-2);line-height:1.55">'
         f'{_T(lang, "Reproducible mock data for the full pipeline. No tokens, no local data, no outbound calls.", "自动生成可复现的模拟 ICU 数据,完整体验全流程。无 token、无本地数据、无外部连接。")}'
         '</p>'
-        '<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px">'
+        '<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px">'
         + "".join([
             '<li style="display:flex;gap:8px;font-size:12.5px;color:var(--ink-2)">'
-            '<span style="margin-top:5px;width:4px;height:4px;background:var(--ink-4);border-radius:999px;flex:none"></span>'
+            '<span style="margin-top:6px;width:4px;height:4px;background:var(--ink-4);border-radius:999px;flex:none"></span>'
             f'<span>{b}</span></li>'
             for b in [
                 _T(lang, "50–500 simulated patients · 24–168h windows",
@@ -867,14 +877,17 @@ def render_entry_redesign_page(lang: str) -> None:
         ])
         + '</ul></div>'
     )
-    real_body = (
-        '<div style="flex:1;padding:28px 28px 24px;background:var(--surface);'
-        'border:1px solid var(--hair);border-radius:14px;display:flex;flex-direction:column;gap:14px;min-height:380px">'
+    real_card = (
+        '<div style="padding:24px 24px 18px;background:var(--surface);'
+        'border:1px solid var(--hair);border-radius:14px;display:flex;'
+        'flex-direction:column;gap:12px;min-height:340px">'
         '<div style="display:flex;align-items:center;gap:10px">'
         '<div style="width:36px;height:36px;border-radius:8px;background:var(--ink);color:#fff;'
         'display:flex;align-items:center;justify-content:center">'
-        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">'
-        '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6"/></svg></div>'
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
+        '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5"/>'
+        '<path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6"/></svg></div>'
         '<div>'
         f'<div style="font-size:18px;font-weight:500;letter-spacing:-0.01em">{_T(lang, "Real Data", "真实数据")}</div>'
         f'<div class="eu-cn" style="font-size:12px;color:var(--ink-3)">{_T(lang, "真实数据", "Real Data")}</div>'
@@ -884,10 +897,10 @@ def render_entry_redesign_page(lang: str) -> None:
         f'<p style="margin:0;font-size:13.5px;color:var(--ink-2);line-height:1.55">'
         f'{_T(lang, "Connect to local ICU exports. Everything is processed on your machine — EasyICU never uploads anything.", "连接本机的 ICU 数据库导出。所有处理都在你的机器上完成,EasyICU 不会上传或外发任何数据。")}'
         '</p>'
-        '<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px">'
+        '<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px">'
         + "".join([
             '<li style="display:flex;gap:8px;font-size:12.5px;color:var(--ink-2)">'
-            '<span style="margin-top:5px;width:4px;height:4px;background:var(--ink-4);border-radius:999px;flex:none"></span>'
+            '<span style="margin-top:6px;width:4px;height:4px;background:var(--ink-4);border-radius:999px;flex:none"></span>'
             f'<span>{b}</span></li>'
             for b in [
                 _T(lang, "6 databases · MIMIC-IV / eICU / AUMC / HiRID / MIMIC-III / SICdb",
@@ -902,56 +915,62 @@ def render_entry_redesign_page(lang: str) -> None:
         ])
         + '</ul></div>'
     )
-    st.markdown(
-        '<div style="padding:0 96px 32px;display:flex;flex-direction:column;gap:16px">'
-        f'<div style="display:flex;gap:16px">{demo_body}{real_body}</div>'
-        # No-data row
-        '<div style="display:flex;align-items:center;gap:14px;padding:14px 22px;background:var(--surface);'
-        'border:1px dashed var(--hair-3);border-radius:12px">'
-        '<div style="color:var(--ink-3)">'
-        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">'
-        '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/></svg></div>'
-        '<div style="flex:1">'
-        f'<div style="font-size:13px;font-weight:500">{_T(lang, "No data yet?", "还没有数据?")} '
-        f'<span class="eu-cn" style="color:var(--ink-3);font-weight:400;margin-left:6px">'
-        f'{_T(lang, "还没有数据?", "No data yet?")}</span></div>'
-        f'<div style="font-size:12px;color:var(--ink-3)">'
-        f'{_T(lang, "Let the Research Agent generate a reusable code skeleton (cohort.py / analysis.py / methods draft), plug data in later.", "让 Research Agent 先生成可复用的代码骨架(cohort.py / analysis.py / methods 草稿),稍后再接入真实数据。")}</div>'
-        '</div></div></div>',
-        unsafe_allow_html=True,
-    )
 
-    cols = st.columns([1, 1, 0.8], gap="medium")
-    with cols[0]:
-        if st.button(_T(lang, "Start demo", "开始演示"),
+    # Mode cards row (HTML) — two equal columns
+    col_demo, col_real = st.columns(2, gap="medium")
+    with col_demo:
+        st.markdown(demo_card, unsafe_allow_html=True)
+        if st.button(_T(lang, "Start demo →", "开始演示 →"),
                      key="_eu_entry_demo", type="primary", use_container_width=True):
             st.session_state["entry_mode"] = "demo"
             st.session_state["use_mock_data"] = True
             st.session_state["database"] = "mock"
             st.rerun()
-    with cols[1]:
-        if st.button(_T(lang, "Configure data path", "配置数据路径"),
+    with col_real:
+        st.markdown(real_card, unsafe_allow_html=True)
+        if st.button(_T(lang, "Configure data path →", "配置数据路径 →"),
                      key="_eu_entry_real", use_container_width=True):
             st.session_state["entry_mode"] = "real"
             st.session_state["use_mock_data"] = False
             st.rerun()
-    with cols[2]:
-        if st.button(_T(lang, "Generate code only", "仅生成代码"),
+
+    # No-data row + CTA
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:14px;padding:14px 18px;'
+        'background:var(--surface);border:1px dashed var(--hair-3);border-radius:12px;margin-top:16px">'
+        '<div style="color:var(--ink-3)">'
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>'
+        '<path d="M14 3v6h6"/></svg></div>'
+        '<div style="flex:1">'
+        f'<div style="font-size:13px;font-weight:500">{_T(lang, "No data yet?", "还没有数据?")}'
+        f' <span class="eu-cn" style="color:var(--ink-3);font-weight:400;margin-left:6px">'
+        f'{_T(lang, "还没有数据?", "No data yet?")}</span></div>'
+        f'<div style="font-size:12px;color:var(--ink-3)">'
+        f'{_T(lang, "Let the Research Agent generate a reusable code skeleton (cohort.py / analysis.py / methods draft), plug data in later.", "让 Research Agent 先生成可复用的代码骨架(cohort.py / analysis.py / methods 草稿),稍后再接入真实数据。")}</div>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+    _, col_skip = st.columns([7, 2])
+    with col_skip:
+        if st.button(_T(lang, "Generate code only →", "仅生成代码 →"),
                      key="_eu_entry_nodata", use_container_width=True):
             st.session_state["entry_mode"] = "demo"
             st.session_state["_active_main_page"] = "research_agent"
             st.rerun()
 
-    # Footer
+    # Footer band (in-flow, no negative margins)
     st.markdown(
-        '<footer style="height:44px;padding:0 32px;border-top:1px solid var(--hair);background:var(--surface);'
-        'display:flex;align-items:center;font-size:11.5px;color:var(--ink-4);margin:24px -1rem -2.5rem">'
-        f'<span class="mono">{_T(lang, "Last opened: sepsis_mortality_v3 · 2 hours ago", "上次打开:sepsis_mortality_v3 · 2 小时前")}</span>'
-        '<span style="margin-left:auto;display:flex;gap:14px">'
+        '<div class="eu-entry-footer" style="height:44px;padding:0 18px;'
+        'border:1px solid var(--hair);border-radius:10px;background:var(--surface);'
+        'display:flex;align-items:center;font-size:11.5px;color:var(--ink-4);margin-top:18px">'
+        f'<span class="mono" style="font-family:var(--font-mono)">{_T(lang, "Last opened: sepsis_mortality_v3 · 2 hours ago", "上次打开:sepsis_mortality_v3 · 2 小时前")}</span>'
+        '<span style="margin-left:auto;display:flex;gap:18px">'
         f'<span>{_T(lang, "Tutorial", "教程")}</span>'
         f'<span>{_T(lang, "Concept catalog", "概念目录")}</span>'
         f'<span>{_T(lang, "Sample cohorts", "样例队列")}</span>'
         '<span>BibTeX</span>'
-        '</span></footer>',
+        '</span></div>',
         unsafe_allow_html=True,
     )

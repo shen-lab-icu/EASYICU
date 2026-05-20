@@ -486,16 +486,20 @@ footer { display: none !important; }
   margin: 1px 0;
 }
 .eu-nav-item .ico { width: 16px; height: 16px; flex: none; color: var(--ink-3); display: inline-flex; }
-.eu-nav-item .label { flex: 1; min-width: 0; }
+.eu-nav-item .ico svg { color: var(--ink-3); }
+.eu-nav-item .label { flex: 1; min-width: 0; color: var(--ink-2); }
 .eu-nav-item .count {
   font-family: var(--font-mono); font-size: 11px;
   color: var(--ink-4);
 }
 .eu-nav-item.active {
-  background: var(--ink); color: #fff;
+  background: var(--ink); color: #fff !important;
 }
-.eu-nav-item.active .ico { color: #fff; }
-.eu-nav-item.active .count { color: rgba(255,255,255,0.6); }
+.eu-nav-item.active .ico,
+.eu-nav-item.active .ico svg,
+.eu-nav-item.active .label,
+.eu-nav-item.active span { color: #fff !important; }
+.eu-nav-item.active .count { color: rgba(255,255,255,0.6) !important; }
 
 /* Pipeline step */
 .eu-pipe-step {
@@ -731,6 +735,12 @@ footer { display: none !important; }
   margin-top: 1px !important;
   margin-bottom: 1px !important;
 }
+
+/* Shell-A redesign: hide the legacy bottom status strip
+   ("No Data | 0 Concepts | 0 Patients"). The shell already surfaces
+   mode + pipeline state in the sidebar and topbar. */
+.stApp .app-footer-status { display: none !important; }
+.stApp .divider { display: none !important; }
 
 /* Shell-A topbar action group: keep labels on one line, compact height,
    align with the breadcrumb visual baseline. */

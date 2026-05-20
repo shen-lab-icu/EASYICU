@@ -383,19 +383,19 @@ def _render_shell_recent_cohorts() -> None:
 
 
 def _render_shell_footer_icons() -> None:
-    """Sidebar footer — 5 small icon buttons (back / help / settings / lang / avatar)."""
+    """Sidebar footer — 5 small icon buttons (back / help / settings / lang / avatar).
+
+    Uses Unicode glyphs instead of inline-SVG data URIs because the latter
+    rendered as empty boxes in some Streamlit / Chromium combos.
+    """
     lang = st.session_state.get("language", "en")
-    st.markdown('<div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:8px"></div>',
-                unsafe_allow_html=True)
+    st.markdown(
+        '<div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:8px"></div>',
+        unsafe_allow_html=True,
+    )
     cols = st.columns([1, 1, 1, 1, 1])
-    icons = {
-        "back": '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>',
-        "help": '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M10 9a2 2 0 1 1 3 1.7c-.7.4-1 .9-1 1.5"/><path d="M12 17h.01"/></svg>',
-        "settings": '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.5-2.4.8a7 7 0 0 0-2-1.1L14 3h-4l-.5 2.4a7 7 0 0 0-2 1.1l-2.4-.8-2 3.5 2 1.6c-.1.4-.1.8-.1 1.2"/></svg>',
-        "globe": '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18"/><path d="M12 3a14 14 0 0 0 0 18"/></svg>',
-    }
     with cols[0]:
-        if st.button(" ", key="_eu_footer_back", help=(
+        if st.button("◀", key="_eu_footer_back", help=(
                 "Mode selection / 模式选择"
                 if lang == "en" else "返回模式选择 / Mode selection")):
             clear_run_state("all")
@@ -403,15 +403,15 @@ def _render_shell_footer_icons() -> None:
             st.session_state.use_mock_data = False
             st.rerun()
     with cols[1]:
-        if st.button(" ", key="_eu_footer_help", help=(
+        if st.button("?", key="_eu_footer_help", help=(
                 "Tutorial" if lang == "en" else "教程")):
             st.session_state["_active_main_page"] = "tutorial"
             st.rerun()
     with cols[2]:
-        st.button(" ", key="_eu_footer_settings", help=(
+        st.button("⚙", key="_eu_footer_settings", help=(
             "Settings" if lang == "en" else "设置"))
     with cols[3]:
-        if st.button(" ", key="_eu_footer_lang", help=(
+        if st.button("中" if lang == "en" else "EN", key="_eu_footer_lang", help=(
                 "Toggle 中 / EN" if lang == "en" else "切换 中 / EN")):
             st.session_state["language"] = "zh" if lang == "en" else "en"
             st.rerun()
@@ -419,28 +419,21 @@ def _render_shell_footer_icons() -> None:
         st.markdown(
             '<div style="height:28px;display:flex;align-items:center;justify-content:center">'
             '<div style="width:22px;height:22px;border-radius:999px;background:oklch(80% 0.05 70);'
-            'display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:500;color:var(--ink)">LK</div>'
+            'display:flex;align-items:center;justify-content:center;font-size:10.5px;'
+            'font-weight:500;color:var(--ink)">LK</div>'
             '</div>',
             unsafe_allow_html=True,
         )
-    # Render the icon glyphs as a CSS overlay row above the buttons.
     st.markdown(
         '<style>'
-        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_back"] button::before{'
-        f"content:''; display:inline-block; width:13px; height:13px; "
-        f"background:url('data:image/svg+xml;utf8,{icons['back'].replace('#', '%23').replace('\"', '%22')}') no-repeat center;}}"
-        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_help"] button::before{'
-        f"content:''; display:inline-block; width:13px; height:13px; "
-        f"background:url('data:image/svg+xml;utf8,{icons['help'].replace('#', '%23').replace('\"', '%22')}') no-repeat center;}}"
-        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_settings"] button::before{'
-        f"content:''; display:inline-block; width:13px; height:13px; "
-        f"background:url('data:image/svg+xml;utf8,{icons['settings'].replace('#', '%23').replace('\"', '%22')}') no-repeat center;}}"
-        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_lang"] button::before{'
-        f"content:''; display:inline-block; width:13px; height:13px; "
-        f"background:url('data:image/svg+xml;utf8,{icons['globe'].replace('#', '%23').replace('\"', '%22')}') no-repeat center;}}"
-        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_"] button{ '
-        'min-height:28px !important; height:28px !important; padding:0 !important; '
-        'display:flex; align-items:center; justify-content:center; }'
+        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_"] button{'
+        'min-height:28px !important; height:28px !important; padding:0 !important;'
+        'font-size:13px !important; font-weight:500 !important;'
+        'color:var(--ink-3) !important; line-height:1;'
+        '}'
+        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_"] button:hover{'
+        'color:var(--ink) !important; background:var(--surface-2) !important;'
+        '}'
         '</style>',
         unsafe_allow_html=True,
     )
