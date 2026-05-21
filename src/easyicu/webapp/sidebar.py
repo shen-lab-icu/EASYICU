@@ -24,7 +24,7 @@ from easyicu.webapp.ui_helpers import (
 )
 
 
-_PROTECTED_CONTEXT_NAMES = {"render_sidebar", "_install_app_context"}
+_PROTECTED_CONTEXT_NAMES = {"render_sidebar", "render_extract_page", "_install_app_context"}
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
@@ -549,9 +549,21 @@ def _compute_pipeline_steps() -> list[PipelineStep]:
 
 
 def _render_shell_pipeline() -> None:
-    """Pipeline progress indicator (sidebar shell-A block)."""
+    """Pipeline progress indicator (sidebar shell-A block).
+
+    Clicking the header (or any step) routes to the main-area Extract
+    page where the real step renderers live.
+    """
     steps = _compute_pipeline_steps()
     render_pipeline_block(steps)
+    lang = st.session_state.get("language", "en")
+    if st.button(
+        ("→ Open data extraction" if lang == "en" else "→ 打开数据提取"),
+        key="euonav_extract",
+        use_container_width=True,
+    ):
+        st.session_state["_active_main_page"] = "extract"
+        st.rerun()
 
 
 def _render_sidebar_top(entry_mode: str) -> None:
@@ -1604,28 +1616,106 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                 unsafe_allow_html=True,
             )
 
-        # Legacy data-extraction workflow tucked inside an expander so it
-        # remains reachable for power users but no longer dominates the
-        # sidebar after the shell-A redesign. The brand/workspace/nav/
-        # pipeline above are now the primary surface.
-        legacy_label = (
-            "⚙️ Data extraction workflow"
-            if st.session_state.get("language", "en") == "en"
-            else "⚙️ 数据提取工作流"
-        )
-        legacy_expander_open = st.session_state.get("_eu_legacy_workflow_open", False)
-        with st.expander(legacy_label, expanded=legacy_expander_open):
-            _render_sidebar_top(entry_mode)
-
-            if not _render_export_completed_panel():
-                _render_step1_data_source(entry_mode)
-                st.markdown("---")
-                if _render_step2_cohort_selection():
-                    selected_concepts = _render_step3_concept_selection(concept_groups)
-                    if selected_concepts is not None:
-                        _render_step4_export(selected_concepts)
-                        _render_system_resource_panel()
+        # The data-extraction workflow (steps 1-4) now lives on the main
+        # "Extract" page (render_extract_page) — reached by clicking the
+        # pipeline items above. The sidebar only carries the AI settings
+        # + language now, plus the footer icon row.
+        if entry_mode != 'none':
+            _render_sidebar_ai_and_lang()
 
         # Footer icon row (back / help / settings / lang / avatar) — at
         # the very bottom of the sidebar per shell-a-frame.jsx.
         _render_shell_footer_icons()
+
+
+def _render_sidebar_ai_and_lang() -> None:
+    """Compact AI-assistant settings + language selector for the rail.
+
+    The brand / mode pill / app title that ``_render_sidebar_top`` used
+    to draw are now handled by ``_render_shell_brand``; this trimmed
+    version keeps only the still-needed controls.
+    """
+    lang = st.session_state.get("language", "en")
+    with st.expander(
+        "✦ AI assistant" if lang == "en" else "✦ AI 助手",
+        expanded=False,
+    ):
+        try:
+            from easyicu.webapp.llm_chat import render_llm_settings
+            render_llm_settings()
+        except Exception:
+            pass
+
+
+def render_extract_page(lang: str, app_context: dict[str, Any] | None = None) -> None:
+    """Main-area data-extraction workflow (steps 1-4).
+
+    Faithful to the design canvas (page-data-source / page-cohort-builder
+    / page-concepts) intent: the extraction pipeline is a *main page*
+    reached from the sidebar pipeline, not a sidebar form. The actual
+    per-step renderers are the real EU implementations
+    (_render_step1_data_source etc.) so all extraction logic is
+    preserved — only their host moved from sidebar to main pane.
+    """
+    if app_context is not None:
+        _install_app_context(app_context)
+
+    entry_mode = st.session_state.get("entry_mode", "none")
+    concept_groups = get_concept_groups()
+
+    # Design PageHeader
+    from easyicu.webapp.cohort_charts import render_design_page_header
+    st.markdown(
+        render_design_page_header(
+            kicker="DATA EXTRACTION · 数据提取" if lang == "en" else "数据提取 · DATA EXTRACTION",
+            title_en="Prepare & export cohort" if lang == "en" else "准备并导出队列",
+            title_zh="准备并导出队列" if lang == "en" else "Prepare & export cohort",
+            desc=(
+                "Configure the data source, define the cohort, pick concepts, and export — all four steps run here."
+                if lang == "en" else
+                "配置数据源、定义队列、选择概念、导出 —— 四个步骤都在这里完成。"
+            ),
+        ),
+        unsafe_allow_html=True,
+    )
+
+    # Step status indicator
+    steps = _compute_pipeline_steps()
+    done_n = sum(1 for s in steps if s.status == "done")
+    chips = []
+    for i, s in enumerate(steps):
+        chips.append(
+            f'<div class="eu-pipe-step {s.status}" style="flex:1;background:'
+            f'{"var(--surface-2)" if s.status == "active" else "transparent"}">'
+            f'<div class="dot">{"✓" if s.status == "done" else ""}</div>'
+            '<div class="body">'
+            f'<div class="title">{i + 1}. {html.escape(s.title)}</div>'
+            f'<div class="meta">{html.escape(s.meta)}</div>'
+            '</div></div>'
+        )
+    st.markdown(
+        f'<div class="eu-section-label" style="padding:0;margin:0 0 6px">'
+        f'<span>{"Pipeline" if lang == "en" else "流程"}</span>'
+        f'<span class="num">{done_n} / {len(steps)}</span></div>'
+        '<div style="display:flex;gap:8px;border:1px solid var(--hair);border-radius:10px;'
+        'padding:8px;background:var(--surface);margin-bottom:18px">'
+        + "".join(chips)
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if _render_export_completed_panel():
+        return
+
+    # Run the real step renderers in sequence (same gating as the old
+    # sidebar flow, just hosted in the main pane).
+    _render_step1_data_source(entry_mode)
+    st.markdown("---")
+    if not _render_step2_cohort_selection():
+        return
+    selected_concepts = _render_step3_concept_selection(concept_groups)
+    if selected_concepts is None:
+        return
+    if not _render_step4_export(selected_concepts):
+        return
+    _render_system_resource_panel()
