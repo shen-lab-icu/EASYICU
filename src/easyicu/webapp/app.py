@@ -1398,6 +1398,12 @@ def render_sidebar():
     return _render_sidebar_impl(globals())
 
 
+def render_extract_page(lang: str):
+    """渲染主区数据提取页（步骤 1-4，shell-A redesign）。"""
+    from easyicu.webapp.sidebar import render_extract_page as _impl
+    return _impl(lang, globals())
+
+
 
 
 def _get_pyarrow_version() -> str | None:
@@ -2941,6 +2947,7 @@ def main():
     )
     _active = st.session_state.get('_active_main_page', 'tutorial')
     _page_labels_for_topbar = {
+        'extract':        'Data Extraction' if lang == 'en' else '数据提取',
         'tutorial':       'Tutorial' if lang == 'en' else '教程',
         'quick_viz':      'Quick Visualization' if lang == 'en' else '快速可视化',
         'cohort':         'Cohort Statistics' if lang == 'en' else 'Cohort 统计',
@@ -3032,10 +3039,9 @@ def main():
                 for item in recent[-8:][::-1]:
                     st.markdown(f"- {item}")
             else:
+                _empty_history = 'No recent actions yet.' if lang == 'en' else '暂无近期活动。'
                 st.markdown(
-                    f"<div style='color:var(--ink-3);font-size:12.5px'>"
-                    f"{_T_lang := ('No recent actions yet.' if lang == 'en' else '暂无近期活动。')}"
-                    "</div>",
+                    f"<div style='color:var(--ink-3);font-size:12.5px'>{_empty_history}</div>",
                     unsafe_allow_html=True,
                 )
 
@@ -3079,7 +3085,11 @@ def main():
     # Tutorial is now the leftmost top tab again so it's discoverable from
     # the main pane (also still reachable via the sidebar "📚 Workflow Help"
     # button and ``_scroll_to_tab='tutorial'`` nav requests).
-    if st.session_state.get('_active_main_page') not in page_keys:
+    # 'extract' is a special main page (the relocated data-extraction
+    # workflow) reached via the sidebar pipeline; it is intentionally
+    # NOT in the radio page_keys but is still a valid active page.
+    _EXTRA_PAGES = {'extract'}
+    if st.session_state.get('_active_main_page') not in (set(page_keys) | _EXTRA_PAGES):
         st.session_state['_active_main_page'] = page_keys[0]
 
     # Do NOT bind ``st.radio`` directly to ``_active_main_page`` via
@@ -3121,7 +3131,21 @@ def main():
         )
     active_page = st.session_state.get('_active_main_page', page_keys[0])
 
-    if active_page == "tutorial":
+    if active_page == "extract":
+        # Shell-A redesign: the data-extraction workflow (steps 1-4)
+        # relocated from the sidebar into a main-area page, reached via
+        # the sidebar pipeline "Open data extraction" button.
+        if export_in_progress:
+            st.markdown(
+                f'<div class="compact-inline-notice info">'
+                + ("⏳ Export in progress." if lang == 'en' else "⏳ 正在导出。")
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            render_extract_page(lang)
+
+    elif active_page == "tutorial":
         # Shell-A redesign: Tutorial page now uses the hero + workflow
         # strip + starting-point cards layout from page-tutorial.jsx.
         from easyicu.webapp.pages_redesign import render_tutorial_redesign_page
