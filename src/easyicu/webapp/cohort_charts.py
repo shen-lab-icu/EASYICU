@@ -634,7 +634,15 @@ def render_design_page_header(
     title_zh: str,
     desc: str,
     right_html: str = "",
+    lang: str = "en",
 ) -> str:
+    """Page header that renders a *single* language (clean switch).
+
+    ``title_en`` / ``title_zh`` are both accepted but only the one for
+    the active ``lang`` is shown — no always-on bilingual span, which
+    is what produced the EN/ZH-mixed look.
+    """
+    title = title_zh if lang == "zh" else title_en
     return (
         '<div style="margin-bottom:6px">'
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
@@ -642,7 +650,7 @@ def render_design_page_header(
         '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-top:6px">'
         '<div>'
         f'<h1 style="margin:0;font-size:22px;font-weight:500;letter-spacing:-0.015em;color:var(--ink)">'
-        f'{_esc(title_en)} <span class="eu-cn" style="color:var(--ink-3);font-weight:400">{_esc(title_zh)}</span>'
+        f'{_esc(title)}'
         '</h1>'
         f'<div style="margin-top:4px;color:var(--ink-3);font-size:12.5px">{_esc(desc)}</div>'
         '</div>'

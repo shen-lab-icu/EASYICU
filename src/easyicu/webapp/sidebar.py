@@ -313,12 +313,17 @@ def _render_shell_brand(entry_mode: str) -> None:
     cohort_label = st.session_state.get("cohort_label", "sepsis_mortality_v3")
     if entry_mode == "demo":
         mode_pill = render_pill_html("Demo" if lang == "en" else "演示", tone="demo")
+        mode_word = "Demo" if lang == "en" else "演示模式"
     elif entry_mode == "real":
         mode_pill = render_pill_html("Real" if lang == "en" else "真实", tone="real")
+        mode_word = "Real data" if lang == "en" else "真实数据"
     else:
         mode_pill = render_pill_html("None" if lang == "en" else "未选择", tone="neutral")
+        mode_word = "—"
+    # Workspace switcher visual (the real click target is the button
+    # rendered just below, styled to overlay-feel via key class).
     st.markdown(
-        '<div style="padding:0 6px 8px">'
+        '<div style="padding:0 6px 2px">'
         '<div style="display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;'
         'border:1px solid var(--hair-2);background:var(--surface);border-radius:6px;'
         'font-size:12.5px;justify-content:space-between">'
@@ -330,30 +335,34 @@ def _render_shell_brand(entry_mode: str) -> None:
         '</div></div>',
         unsafe_allow_html=True,
     )
-
-    # Command search — Jump to… ⌘K (design preview; pressing it opens a
-    # placeholder modal toast so users see the affordance even before
-    # a real command palette ships).
-    placeholder_en = "Jump to…"
-    placeholder_zh = "跳转到…"
-    st.markdown(
-        '<div style="padding:0 6px 12px">'
-        '<div style="display:flex;align-items:center;gap:6px;height:28px;padding:0 10px;'
-        'border:1px solid var(--hair-2);background:var(--surface);border-radius:6px;'
-        'font-size:12px;color:var(--ink-4)">'
-        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
-        f'<span style="flex:1">{placeholder_en if lang == "en" else placeholder_zh}</span>'
-        '<span style="display:flex;gap:3px">'
-        '<span class="mono" style="font-family:var(--font-mono);font-size:10.5px;'
-        'padding:1px 5px;border:1px solid var(--hair-2);border-bottom-width:2px;border-radius:4px;'
-        'background:var(--surface);color:var(--ink-3)">⌘</span>'
-        '<span class="mono" style="font-family:var(--font-mono);font-size:10.5px;'
-        'padding:1px 5px;border:1px solid var(--hair-2);border-bottom-width:2px;border-radius:4px;'
-        'background:var(--surface);color:var(--ink-3)">K</span>'
-        '</span></div></div>',
-        unsafe_allow_html=True,
+    # Real, functional mode switcher: a selectbox that lets the user
+    # jump between Demo / Real data without losing the session. This is
+    # the answer to "how do I switch from demo to real (and back)".
+    switch_label = "Switch workspace mode" if lang == "en" else "切换工作模式"
+    options = ["demo", "real"]
+    opt_labels = {
+        "demo": "🧪 Demo · simulated" if lang == "en" else "🧪 演示 · 模拟数据",
+        "real": "📊 Real data · local" if lang == "en" else "📊 真实数据 · 本地",
+    }
+    cur_index = options.index(entry_mode) if entry_mode in options else 0
+    chosen = st.selectbox(
+        switch_label,
+        options=options,
+        index=cur_index,
+        format_func=lambda k: opt_labels[k],
+        key="_eu_mode_switch",
+        label_visibility="collapsed",
     )
+    if chosen != entry_mode and chosen in options:
+        st.session_state["entry_mode"] = chosen
+        st.session_state["use_mock_data"] = (chosen == "demo")
+        if chosen == "demo":
+            st.session_state["database"] = "mock"
+        # Reset step confirmations so the new mode's extraction starts clean.
+        for _k in ("step1_confirmed", "step2_confirmed", "step3_confirmed"):
+            st.session_state[_k] = False
+        st.session_state["_active_main_page"] = "extract"
+        st.rerun()
 
 
 def _render_shell_recent_cohorts() -> None:
@@ -557,10 +566,12 @@ def _render_shell_pipeline() -> None:
     steps = _compute_pipeline_steps()
     render_pipeline_block(steps)
     lang = st.session_state.get("language", "en")
+    active = st.session_state.get("_active_main_page", "tutorial")
     if st.button(
-        ("→ Open data extraction" if lang == "en" else "→ 打开数据提取"),
+        ("⚙ Open data extraction" if lang == "en" else "⚙ 打开数据提取"),
         key="euonav_extract",
         use_container_width=True,
+        type="primary" if active == "extract" else "secondary",
     ):
         st.session_state["_active_main_page"] = "extract"
         st.rerun()
@@ -1667,14 +1678,15 @@ def render_extract_page(lang: str, app_context: dict[str, Any] | None = None) ->
     from easyicu.webapp.cohort_charts import render_design_page_header
     st.markdown(
         render_design_page_header(
-            kicker="DATA EXTRACTION · 数据提取" if lang == "en" else "数据提取 · DATA EXTRACTION",
-            title_en="Prepare & export cohort" if lang == "en" else "准备并导出队列",
-            title_zh="准备并导出队列" if lang == "en" else "Prepare & export cohort",
+            kicker="DATA EXTRACTION" if lang == "en" else "数据提取",
+            title_en="Prepare & export cohort",
+            title_zh="准备并导出队列",
             desc=(
                 "Configure the data source, define the cohort, pick concepts, and export — all four steps run here."
                 if lang == "en" else
                 "配置数据源、定义队列、选择概念、导出 —— 四个步骤都在这里完成。"
             ),
+            lang=lang,
         ),
         unsafe_allow_html=True,
     )

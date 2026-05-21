@@ -62,8 +62,10 @@ def _render_page_header(
     desc: str,
     breadcrumb: tuple[str, ...] = (),
     actions_html: str = "",
+    lang: str = "en",
 ) -> None:
-    """Shell-A page header matching the ``PageHeader`` pattern in the design."""
+    """Shell-A page header — renders a single language (clean switch)."""
+    title = title_zh if lang == "zh" else title_en
     crumb_parts: list[str] = []
     for i, item in enumerate(breadcrumb):
         is_last = i == len(breadcrumb) - 1
@@ -86,7 +88,7 @@ def _render_page_header(
         + '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:18px">'
         '<div>'
         f'<h1 style="margin:0;font-size:22px;font-weight:500;letter-spacing:-0.015em;color:var(--ink)">'
-        f'{title_en} <span class="eu-cn" style="color:var(--ink-3);font-weight:400">{title_zh}</span></h1>'
+        f'{title}</h1>'
         f'<div style="margin-top:4px;color:var(--ink-3);font-size:12.5px">{desc}</div>'
         '</div>'
         f'<div style="display:flex;gap:6px;flex-wrap:wrap">{actions_html}</div>'
@@ -468,6 +470,7 @@ def render_cohort_redesign_page(
             _cohort_name(),
             _T(lang, "Cohort statistics", "Cohort 统计"),
         ),
+        lang=lang,
     )
 
     use_shell_preview = (
@@ -526,6 +529,7 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
             "同一队列定义在 ≥2 个 ICU 数据库间的可比指标。"),
         breadcrumb=("WORKSPACE", _cohort_name(),
                     _T(lang, "Cross-DB benchmark", "跨库基准")),
+        lang=lang,
     )
 
     if multidb_fn is not None and not st.session_state.get("_eu_shell_only"):

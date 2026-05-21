@@ -43,11 +43,9 @@ def render_tutorial_redesign_page(lang: str) -> None:
         # Hero ------------------------------------------------------
         '<div style="padding:0 4px 8px">'
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
-        f'letter-spacing:.06em;text-transform:uppercase">{_T(lang, "Tutorial · 教程", "教程 · Tutorial")}</div>'
+        f'letter-spacing:.06em;text-transform:uppercase">{_T(lang, "Tutorial", "教程")}</div>'
         f'<h1 style="margin:6px 0;font-size:28px;font-weight:500;letter-spacing:-0.02em;color:var(--ink)">'
-        f'{_T(lang, "Extract, review, analyze, draft.", "数据抽取 → 审阅 → 分析 → 起草")} '
-        f'<span class="eu-cn" style="color:var(--ink-3);font-weight:400">'
-        f'{_T(lang, "数据抽取 → 审阅 → 分析 → 起草", "Extract · Review · Analyze · Draft")}</span></h1>'
+        f'{_T(lang, "Extract, review, analyze, draft.", "数据抽取 → 审阅 → 分析 → 起草")}</h1>'
         f'<p style="margin:0;color:var(--ink-3);font-size:13.5px;max-width:760px;line-height:1.55">'
         f'{_T(lang, "EasyICU is a local-first ICU research workspace. The four steps below cover the core data-preparation flow — once complete you can move into the analysis modules or hand the cohort off to the Research Agent.", "EasyICU 是一套本地优先的 ICU 数据研究工作台。下面四步是核心数据准备流程,完成后即可进入分析模块或交给 Research Agent。")}'
         '</p></div>',
@@ -180,25 +178,29 @@ def render_tutorial_redesign_page(lang: str) -> None:
         unsafe_allow_html=True,
     )
 
-    # Action buttons (real Streamlit clicks for primary CTAs)
+    # Action buttons. Every CTA routes the user somewhere visible so
+    # nothing is a dead click — the previous "Start demo" did nothing
+    # when already in demo mode.
     cols = st.columns([1, 1, 0.8])
     with cols[0]:
-        if st.button(_T(lang, "Start demo", "开始演示"),
+        if st.button(_T(lang, "Start demo → Extract", "开始演示 → 提取"),
                      key="_eu_tutorial_demo", type="primary",
                      use_container_width=True):
             st.session_state["entry_mode"] = "demo"
             st.session_state["use_mock_data"] = True
             st.session_state["database"] = "mock"
+            st.session_state["_active_main_page"] = "extract"
             st.rerun()
     with cols[1]:
-        if st.button(_T(lang, "Configure data path", "配置数据路径"),
+        if st.button(_T(lang, "Configure data path → Extract", "配置数据路径 → 提取"),
                      key="_eu_tutorial_real",
                      use_container_width=True):
             st.session_state["entry_mode"] = "real"
             st.session_state["use_mock_data"] = False
+            st.session_state["_active_main_page"] = "extract"
             st.rerun()
     with cols[2]:
-        if st.button(_T(lang, "Skip data for now", "跳过数据"),
+        if st.button(_T(lang, "Skip data → Agent", "跳过数据 → Agent"),
                      key="_eu_tutorial_nodata",
                      use_container_width=True):
             st.session_state["_active_main_page"] = "research_agent"

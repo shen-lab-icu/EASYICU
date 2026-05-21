@@ -21,13 +21,20 @@ so it wins the CSS cascade.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 _TOKENS_PATH = Path(__file__).with_name("tokens.css")
 
 
+@lru_cache(maxsize=1)
 def _load_tokens_css() -> str:
+    """Read tokens.css once per process (cached across reruns).
+
+    Streamlit re-runs the whole script on every interaction; reading
+    this file from disk each time was a needless per-rerun cost.
+    """
     try:
         return _TOKENS_PATH.read_text(encoding="utf-8")
     except OSError:
@@ -206,12 +213,18 @@ footer { display: none !important; }
    surface the slider can use: the thumb role node, any direct child
    div the BaseWeb component fills with the brand color, and the
    inline-style background overrides BaseWeb applies. */
-.stApp .stSlider [data-baseweb="slider"] [role="slider"],
-.stApp .stSlider [data-baseweb="slider"] [data-testid="stThumbValue"] {
+.stApp .stSlider [data-baseweb="slider"] [role="slider"] {
   background: var(--ink) !important;
   border-color: var(--ink) !important;
-  color: var(--ink) !important;
   box-shadow: 0 0 0 4px rgba(14,17,22,0.06) !important;
+}
+/* The numeric value label floats above the thumb on the page surface,
+   so it must be ink text on no background (not white-on-ink, and not
+   the Streamlit-red default). */
+.stApp .stSlider [data-testid="stThumbValue"] {
+  background: transparent !important;
+  color: var(--ink) !important;
+  font-family: var(--font-mono) !important;
 }
 .stApp .stSlider [data-baseweb="slider"] div[role="progressbar"],
 .stApp .stSlider [data-baseweb="slider"] div[style*="background"],
@@ -225,11 +238,33 @@ footer { display: none !important; }
   font-family: var(--font-mono) !important;
 }
 
-/* Radio + checkbox accents */
-.stApp .stRadio input:checked + div,
-.stApp .stCheckbox input:checked + div {
+/* Radio + checkbox accents.
+   IMPORTANT: only the radio/checkbox *control* (the small circle/box,
+   which BaseWeb renders as the first child <div> right after the
+   <input>) gets the ink fill. We must NOT paint the label wrapper —
+   doing so produced black-on-black, unreadable option text. */
+.stApp .stRadio [data-baseweb="radio"] input:checked ~ div:first-of-type,
+.stApp .stCheckbox [data-baseweb="checkbox"] input:checked ~ div:first-of-type {
   background-color: var(--ink) !important;
   border-color: var(--ink) !important;
+}
+/* Radio option label text — always readable, never inverted. */
+.stApp .stRadio [data-baseweb="radio"],
+.stApp .stRadio [data-baseweb="radio"] div,
+.stApp .stCheckbox [data-baseweb="checkbox"] {
+  color: var(--ink-2) !important;
+}
+/* The inner selected dot BaseWeb draws inside the control. */
+.stApp .stRadio [role="radio"][aria-checked="true"],
+.stApp .stRadio [data-baseweb="radio"] [aria-checked="true"] > div {
+  background-color: var(--ink) !important;
+  border-color: var(--ink) !important;
+}
+/* Horizontal radio: kill any inherited dark pill background on the
+   option container so the text stays on the page surface. */
+.stApp .stRadio [role="radiogroup"] label {
+  background: transparent !important;
+  color: var(--ink-2) !important;
 }
 
 /* Tabs — used inside cohort subtabs. */
@@ -588,7 +623,11 @@ footer { display: none !important; }
 .stApp[data-eu-density="comfy"] { font-size: 14.5px; }
 .stApp[data-eu-density="comfy"] .eu-card { padding: 18px 20px; }
 
-/* Hide bilingual subtitles when the user opts out. */
+/* Language switch (not mixing): the primary copy is already rendered
+   in the active language via the Python _T() helper. The .eu-cn spans
+   are the redundant opposite-language duplicates that produced the
+   EN/ZH-mixed look, so we hide them globally. */
+.stApp .eu-cn { display: none !important; }
 .stApp[data-eu-bilingual="off"] .eu-cn { display: none !important; }
 
 /* ------------------------------------------------------------------
@@ -789,22 +828,31 @@ footer { display: none !important; }
 """
 
 
+_FONTS_LINK = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link rel="stylesheet" '
+    'href="https://fonts.googleapis.com/css2?'
+    'family=IBM+Plex+Sans:wght@300;400;500;600&'
+    'family=IBM+Plex+Sans+SC:wght@300;400;500;600&'
+    'family=IBM+Plex+Mono:wght@400;500&display=swap">'
+)
+
+
 def render_shell_styles(st: Any) -> None:
     """Inject the shell-A token layer + Streamlit re-skin.
 
     Must be called after :func:`easyicu.webapp.styles.render_global_styles`
     so the cascade resolves to the new tokens.
+
+    Kept as separate ``st.markdown`` calls (font <link> tags, the
+    tokens <style>, and the overrides <style>) — combining them into a
+    single markdown string made Streamlit's markdown/directive parser
+    throw "Cannot set properties of undefined (directiveAttributes)"
+    and drop ALL the styles. The per-rerun cost is just the cached
+    token read + three small emits.
     """
-    fonts = (
-        '<link rel="preconnect" href="https://fonts.googleapis.com">'
-        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-        '<link rel="stylesheet" '
-        'href="https://fonts.googleapis.com/css2?'
-        'family=IBM+Plex+Sans:wght@300;400;500;600&'
-        'family=IBM+Plex+Sans+SC:wght@300;400;500;600&'
-        'family=IBM+Plex+Mono:wght@400;500&display=swap">'
-    )
-    st.markdown(fonts, unsafe_allow_html=True)
+    st.markdown(_FONTS_LINK, unsafe_allow_html=True)
     tokens = _load_tokens_css()
     if tokens:
         st.markdown(f"<style>{tokens}</style>", unsafe_allow_html=True)
