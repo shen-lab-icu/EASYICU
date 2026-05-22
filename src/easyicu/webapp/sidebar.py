@@ -461,15 +461,15 @@ def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
         }
     return [
         ShellNavItem(key="tutorial",       label=labels["tutorial"],       icon="book"),
-        ShellNavItem(key="quick_viz",      label=labels["quick_viz"],      icon="bars", count="19"),
-        ShellNavItem(key="cohort",         label=labels["cohort"],         icon="layers", count="5"),
-        ShellNavItem(key="cross_db",       label=labels["cross_db"],       icon="grid", count="2/5"),
+        ShellNavItem(key="quick_viz",      label=labels["quick_viz"],      icon="bars"),
+        ShellNavItem(key="cohort",         label=labels["cohort"],         icon="layers"),
+        ShellNavItem(key="cross_db",       label=labels["cross_db"],       icon="grid"),
         ShellNavItem(key="research_agent", label=labels["research_agent"], icon="sparkles"),
     ]
 
 
 def _render_shell_brand(entry_mode: str) -> None:
-    """Brand block + workspace switcher + command search (shell-A top of sidebar)."""
+    """Brand block at the top of the sidebar."""
     lang = st.session_state.get("language", "en")
     sub = "ICU Research Workspace" if lang == "en" else "ICU 数据研究台"
     st.markdown(
@@ -477,59 +477,177 @@ def _render_shell_brand(entry_mode: str) -> None:
         unsafe_allow_html=True,
     )
 
-    # Workspace switcher — design-canvas style: a flat field with the
-    # mode pill + cohort name + chevron. We render the visual + a real
-    # selectbox immediately below (collapsed by CSS) so future routes
-    # can be wired in.
-    cohort_label = st.session_state.get("cohort_label", "sepsis_mortality_v3")
+
+def _session_summary_html(entry_mode: str, lang: str) -> str:
+    """Return the current session card used by the lower sidebar dock."""
+    params = st.session_state.get("mock_params") or {}
+    n_patients = params.get("n_patients", st.session_state.get("demo_mode_patients", 100))
     if entry_mode == "demo":
         mode_pill = render_pill_html("Demo" if lang == "en" else "演示", tone="demo")
+        title = "Demo workspace" if lang == "en" else "演示工作区"
+        meta = (
+            f"Ready demo cohort · {n_patients} patients"
+            if lang == "en" else
+            f"演示队列已就绪 · {n_patients} 例"
+        )
+        row_label = "Mode" if lang == "en" else "模式"
+        row_value = "simulated" if lang == "en" else "模拟"
     elif entry_mode == "real":
         mode_pill = render_pill_html("Real" if lang == "en" else "真实", tone="real")
+        db = st.session_state.get("database") or "database"
+        data_path = st.session_state.get("data_path") or ""
+        title = str(db).upper()
+        meta = Path(data_path).name if data_path else ("No path selected" if lang == "en" else "未选择路径")
+        row_label = "Source" if lang == "en" else "来源"
+        row_value = st.session_state.get("cohort_label") or ("local export" if lang == "en" else "本地导出")
     else:
-        mode_pill = render_pill_html("None" if lang == "en" else "未选择", tone="neutral")
+        mode_pill = render_pill_html("Setup" if lang == "en" else "配置", tone="neutral")
+        title = "Choose workspace" if lang == "en" else "选择工作区"
+        meta = "Choose Demo or Real Data to begin" if lang == "en" else "选择演示或真实数据开始"
+        row_label = "Next" if lang == "en" else "下一步"
+        row_value = "Demo or real data" if lang == "en" else "演示或真实数据"
 
-    # Workspace switcher visual — matches the Shell-A field from the design.
-    st.markdown(
-        '<div class="eu-workspace-field">'
-        f'<div class="inner">{mode_pill}<span class="cohort">{html.escape(cohort_label)}</span></div>'
-        '<span class="chev">'
-        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>'
-        '</span></div>',
-        unsafe_allow_html=True,
+    return (
+        '<div class="eu-session-card">'
+        '<div class="eu-session-top">'
+        f'{mode_pill}'
+        f'<span class="eu-session-title">{html.escape(title)}</span>'
+        '</div>'
+        f'<div class="eu-session-meta">{html.escape(meta)}</div>'
+        '<div class="eu-session-row">'
+        f'<span>{html.escape(row_label)}</span>'
+        f'<span>{html.escape(str(row_value))}</span>'
+        '</div>'
+        '</div>'
     )
 
-    st.markdown(
-        '<div class="eu-search-field">'
-        f'{_icon("search")}'
-        f'<span>{html.escape("Jump to..." if lang == "en" else "跳转...")}</span>'
-        '<span class="keys"><span class="eu-kbd">⌘</span><span class="eu-kbd">K</span></span>'
-        '</div>',
-        unsafe_allow_html=True,
+
+def _context_summary_html(entry_mode: str, lang: str) -> str:
+    """Return a plain-language summary of the data setup shown in the rail."""
+    params = st.session_state.get("mock_params") or {}
+    if entry_mode == "demo":
+        data_value = (
+            f"Demo · {params.get('n_patients', 100)} patients"
+            if lang == "en" else
+            f"演示 · {params.get('n_patients', 100)} 例"
+        )
+        mode_hint = "Demo" if lang == "en" else "演示"
+    elif entry_mode == "real":
+        db = st.session_state.get("database") or "real data"
+        data_value = str(db).upper()
+        mode_hint = "Real" if lang == "en" else "真实"
+    else:
+        data_value = "not selected" if lang == "en" else "未选择"
+        mode_hint = "Not selected" if lang == "en" else "未选择"
+
+    cohort_value = (
+        "configured" if st.session_state.get("step2_confirmed") else
+        ("demo defaults" if entry_mode == "demo" and lang == "en" else
+         "演示默认" if entry_mode == "demo" else
+         "not configured" if lang == "en" else "未配置")
+    )
+    concepts = st.session_state.get("selected_concepts", []) or []
+    concept_value = (
+        f"{len(concepts)} selected" if concepts else
+        ("demo defaults" if entry_mode == "demo" and lang == "en" else
+         "演示默认" if entry_mode == "demo" else
+         "auto defaults" if lang == "en" else "默认变量")
+    )
+    rows = [
+        ("Dataset" if lang == "en" else "数据集", data_value),
+        ("Cohort" if lang == "en" else "队列", cohort_value),
+        ("Variables" if lang == "en" else "变量", concept_value),
+    ]
+    row_html = "".join(
+        '<div class="eu-context-row">'
+        f'<span>{html.escape(label)}</span>'
+        f'<strong>{html.escape(str(value))}</strong>'
+        '</div>'
+        for label, value in rows
+    )
+    return (
+        '<div class="eu-section-label eu-context-label">'
+        f'<span>{html.escape("Current setup" if lang == "en" else "当前设置")}</span>'
+        f'<span class="num">{html.escape(mode_hint)}</span>'
+        '</div>'
+        f'<div class="eu-context-card">{row_html}</div>'
+    )
+
+
+def _sidebar_next_steps_html(entry_mode: str, lang: str) -> str:
+    """Return a read-only path guide that uses otherwise empty sidebar space."""
+    if entry_mode == "real":
+        steps = [
+            ("01", "Validate folder" if lang == "en" else "校验目录", "check database layout" if lang == "en" else "检查数据库目录"),
+            ("02", "Review cohort" if lang == "en" else "审阅队列", "confirm filters" if lang == "en" else "确认筛选条件"),
+            ("03", "Analyze locally" if lang == "en" else "本地分析", "visualize or hand off" if lang == "en" else "可视化或交给 Agent"),
+        ]
+    elif entry_mode == "demo":
+        steps = [
+            ("01", "Start demo" if lang == "en" else "开始演示", "opens extraction" if lang == "en" else "进入提取流程"),
+            ("02", "Review cohort" if lang == "en" else "审阅队列", "demo defaults" if lang == "en" else "审阅演示默认值"),
+            ("03", "Export or ask" if lang == "en" else "导出或询问", "tables, code, agent" if lang == "en" else "表格、代码、Agent"),
+        ]
+    else:
+        steps = [
+            ("01", "Choose mode" if lang == "en" else "选择模式", "demo or local data" if lang == "en" else "演示或本地数据"),
+            ("02", "Prepare cohort" if lang == "en" else "准备队列", "filters and variables" if lang == "en" else "筛选队列和变量"),
+            ("03", "Run review" if lang == "en" else "运行审阅", "outputs stay local" if lang == "en" else "输出保留在本机"),
+        ]
+
+    title = "Path after setup" if lang == "en" else "配置后的路径"
+    rows = "".join(
+        '<div class="eu-side-guide-row">'
+        f'<span>{html.escape(num)}</span>'
+        '<div>'
+        f'<b>{html.escape(title_)}</b>'
+        f'<small>{html.escape(note)}</small>'
+        '</div>'
+        '</div>'
+        for num, title_, note in steps
+    )
+    return (
+        '<div class="eu-side-guide">'
+        f'<div class="eu-side-guide-title">{html.escape(title)}</div>'
+        f'{rows}'
+        '</div>'
     )
 
 
 def _render_shell_recent_cohorts() -> None:
-    """Recent-cohorts list (sidebar shell-A block)."""
+    """Recent or demo cohort list (sidebar shell-A block)."""
     lang = st.session_state.get("language", "en")
-    label = "Recent cohorts" if lang == "en" else "最近队列"
+    session_items = st.session_state.get("_eu_recent_cohorts")
+    has_real_recent = bool(session_items)
+    label = (
+        ("Recent exports" if lang == "en" else "最近导出")
+        if has_real_recent else
+        ("Demo presets" if lang == "en" else "演示预设")
+    )
+    hint = (
+        ("from this workspace" if lang == "en" else "来自当前工作区")
+        if has_real_recent else
+        ("samples" if lang == "en" else "示例")
+    )
     st.markdown(
-        f'<div class="eu-section-label" style="padding-top:0;margin-top:12px"><span>{html.escape(label)}</span></div>',
+        '<div class="eu-section-label eu-recent-label" style="padding-top:0;margin-top:12px">'
+        f'<span>{html.escape(label)}</span>'
+        f'<span class="num">{html.escape(hint)}</span>'
+        '</div>',
         unsafe_allow_html=True,
     )
-    items: list[tuple[str, str]] = st.session_state.get("_eu_recent_cohorts") or [
-        ("sepsis_mortality_v3", "2,481"),
-        ("aki_kdigo_24h", "1,103"),
-        ("vent_weaning_72h", "847"),
+    items: list[tuple[str, str]] = session_items or [
+        ("sepsis_mortality", "mock"),
+        ("aki_kdigo_24h", "mock"),
+        ("vent_weaning_72h", "mock"),
     ]
     for label_, count_ in items:
         st.markdown(
-            f'<div class="eu-nav-item" style="height:28px;padding:4px 10px">'
-            '<span class="ico" style="width:10px;display:inline-flex">'
+            '<div class="eu-recent-row">'
+            '<span class="ico">'
             '<svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">'
             '<circle cx="12" cy="12" r="3"/></svg></span>'
-            f'<span class="label" style="font-size:12px">{html.escape(label_)}</span>'
+            f'<span class="label">{html.escape(label_)}</span>'
             f'<span class="count mono">{html.escape(count_)}</span>'
             '</div>',
             unsafe_allow_html=True,
@@ -621,6 +739,7 @@ def _render_shell_primary_nav() -> None:
                 use_container_width=True,
             ):
                 st.session_state["_active_main_page"] = item.key
+                st.session_state["_main_nav_widget"] = item.key
                 st.rerun()
 
 
@@ -688,24 +807,49 @@ def _compute_pipeline_steps() -> list[PipelineStep]:
     ]
 
 
-def _render_shell_pipeline() -> None:
-    """Pipeline progress indicator (sidebar shell-A block).
+def _render_shell_context_body() -> None:
+    """Render extraction pipeline or compact data context inside the dock.
 
-    Clicking the header (or any step) routes to the main-area Extract
-    page where the real step renderers live.
+    The full 4-step extraction state is useful on the Extract page, but it
+    reads like unrelated project state on Tutorial / analysis pages.
     """
-    steps = _compute_pipeline_steps()
-    render_pipeline_block(steps)
     lang = st.session_state.get("language", "en")
     active = st.session_state.get("_active_main_page", "tutorial")
+    if active == "extract":
+        render_pipeline_block(_compute_pipeline_steps())
+        return
+
+    entry_mode = st.session_state.get("entry_mode", "none")
+    st.markdown(_context_summary_html(entry_mode, lang), unsafe_allow_html=True)
     if st.button(
-        ("⚙ Open data extraction" if lang == "en" else "⚙ 打开数据提取"),
-        key="euonav_extract",
+        "Edit setup" if lang == "en" else "编辑配置",
+        key="eu_context_edit_setup",
         use_container_width=True,
-        type="primary" if active == "extract" else "secondary",
+        icon=":material/tune:",
     ):
         st.session_state["_active_main_page"] = "extract"
         st.rerun()
+    st.markdown(_sidebar_next_steps_html(entry_mode, lang), unsafe_allow_html=True)
+
+
+def _render_shell_workspace_dock(entry_mode: str) -> None:
+    """Lower sidebar dock: current session + data context.
+
+    The design PDFs use the left rail mainly for navigation and put
+    contextual state near the lower part of the rail. Keeping this in a
+    dock avoids the whole sidebar reading as one crowded top stack.
+    """
+    lang = st.session_state.get("language", "en")
+    with st.container(key="eu_sidebar_dock"):
+        st.markdown(
+            '<div class="eu-section-label eu-workspace-label">'
+            f'<span>{html.escape("Workspace" if lang == "en" else "工作区")}</span>'
+            f'<span class="num">{html.escape("current" if lang == "en" else "当前")}</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(_session_summary_html(entry_mode, lang), unsafe_allow_html=True)
+        _render_shell_context_body()
 
 
 def _render_sidebar_top(entry_mode: str) -> None:
@@ -2439,13 +2583,9 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
         # === Shell-A header: brand, workspace switcher, search, nav, pipeline ===
         _render_shell_brand(entry_mode)
         if entry_mode != 'none':
-            _render_shell_primary_nav()
-            _render_shell_pipeline()
-            _render_shell_recent_cohorts()
-            st.markdown(
-                '<div style="height:8px;border-bottom:1px solid var(--hair);margin:12px 0 4px"></div>',
-                unsafe_allow_html=True,
-            )
+            with st.container(key="eu_sidebar_nav_area"):
+                _render_shell_primary_nav()
+            _render_shell_workspace_dock(entry_mode)
 
         # Footer icon row (back / help / settings / lang / avatar) — at
         # the very bottom of the sidebar per shell-a-frame.jsx.

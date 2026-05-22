@@ -13,6 +13,79 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
             globals()[name] = value
 
 
+def _load_demo_review_workspace_from_state() -> tuple[int, int]:
+    """Hydrate Quick Viz on explicit user request."""
+    params_getter = globals().get("get_mock_params_with_cohort")
+    if callable(params_getter):
+        params = dict(params_getter())
+    else:
+        params = dict(st.session_state.get("mock_params") or {})
+
+    try:
+        params["n_patients"] = int(params.get("n_patients") or 100)
+    except (TypeError, ValueError):
+        params["n_patients"] = 100
+    try:
+        params["hours"] = int(params.get("hours") or 72)
+    except (TypeError, ValueError):
+        params["hours"] = 72
+
+    mock_data, patient_ids = generate_mock_data(**params)
+    st.session_state.mock_params = params
+    st.session_state.loaded_concepts = mock_data
+    st.session_state.loaded_data_origin = "demo_viz"
+    st.session_state.patient_ids = sorted(patient_ids) if patient_ids else []
+    st.session_state.id_col = "stay_id"
+    st.session_state.time_col = "time"
+    st.session_state.selected_concepts = list(mock_data.keys())
+    st.session_state.trigger_export = False
+    st.session_state["_exporting_in_progress"] = False
+    st.session_state.viz_data_source_mode = "demo"
+    return len(mock_data), len(st.session_state.patient_ids)
+
+
+def _quick_viz_panel_options(lang: str) -> list[tuple[str, str]]:
+    labels = {
+        "Data Tables": get_text("review_tables"),
+        "Time Series": get_text("review_trends"),
+        "Patient Overview": get_text("review_patients"),
+        "Data Quality": get_text("review_quality"),
+    }
+    return [(key, labels[key]) for key in labels]
+
+
+def _render_quick_viz_panel_switcher(lang: str) -> str:
+    """Render a lazy panel switcher and return the active panel key.
+
+    Streamlit tabs eagerly execute every tab body on every rerun. The
+    Quick Visualization panels are dataframe/chart heavy, so this
+    segmented radio keeps the visual four-panel affordance while rendering
+    only the selected panel.
+    """
+    panel_options = _quick_viz_panel_options(lang)
+    panel_keys = [key for key, _label in panel_options]
+    label_map = dict(panel_options)
+    state_key = "quick_viz_active_panel"
+    if st.session_state.get(state_key) not in panel_keys:
+        st.session_state[state_key] = panel_keys[0]
+
+    switcher_label = "Review panel" if lang == "en" else "审阅面板"
+    with st.container(key="qv_panel_switcher"):
+        st.markdown(
+            f'<div class="inline-control-label">{html.escape(switcher_label)}</div>',
+            unsafe_allow_html=True,
+        )
+        active_panel = st.radio(
+            switcher_label,
+            options=panel_keys,
+            format_func=lambda key: label_map.get(key, key),
+            horizontal=True,
+            key=state_key,
+            label_visibility="collapsed",
+        )
+    return active_panel
+
+
 def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
     """渲染快速可视化主页面 - 包含数据加载区域和四个子模块。"""
     if app_context is not None:
@@ -48,7 +121,6 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
         )
         st.markdown(f'<div class="compact-inline-notice info">{screenshot_notice}</div>', unsafe_allow_html=True)
 
-    data_loaded = len(st.session_state.loaded_concepts) > 0
     if 'viz_export_path' not in st.session_state:
         st.session_state.viz_export_path = ""
     recent_export_path = st.session_state.get('viz_confirmed_path') or st.session_state.get('last_export_dir') or ""
@@ -79,6 +151,7 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
     if auto_notice:
         st.success(auto_notice)
 
+    data_loaded = len(st.session_state.loaded_concepts) > 0
     show_data_loader = not data_loaded
     if show_data_loader:
         with st.container(key="eu_qv_loader"):
@@ -190,9 +263,9 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                     "生成完整演示审阅工作区"
                 )
                 _viz_demo_subtitle = (
-                    "Loads representative tables, time series, patient overview, and quality metrics together for the Figure 3-style multi-view review."
+                    "Loads representative tables, time series, patient overview, and quality metrics together for a multi-view review workspace."
                     if lang == 'en' else
-                    "一次性加载代表性表格、时间序列、患者概览和质量指标，用于 Figure 3 风格的多视角审阅。"
+                    "一次性加载代表性表格、时间序列、患者概览和质量指标，用于多视角审阅工作区。"
                 )
                 st.markdown(
                     f"""
@@ -256,27 +329,21 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
             render_quick_figure_panel(figure_panel)
             return
 
-        sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
-            get_text('review_tables'),
-            get_text('review_trends'),
-            get_text('review_patients'),
-            get_text('review_quality'),
-        ])
-
-        with sub_tab1:
+        active_panel = _render_quick_viz_panel_switcher(lang)
+        if active_panel == "Data Tables":
             render_data_table_subtab()
-        with sub_tab2:
+        elif active_panel == "Time Series":
             render_timeseries_page()
-        with sub_tab3:
+        elif active_panel == "Patient Overview":
             render_patient_page()
-        with sub_tab4:
+        elif active_panel == "Data Quality":
             render_quality_page()
     else:
         empty_title = "Preview workspace awaits data" if lang == 'en' else "预览工作区等待数据"
         empty_subtitle = (
-            "Generate demo data or load exported files above; the review tabs will appear here as a compact Figure 3-style interface."
+            "Generate demo data or load exported files above; the review tabs will appear here as a compact multi-view workspace."
             if lang == 'en' else
-            "请在上方生成演示数据或加载导出文件；随后这里会显示 Figure 3 风格的紧凑审阅界面。"
+            "请在上方生成演示数据或加载导出文件；随后这里会显示紧凑的多视角审阅界面。"
         )
         no_data_msg = f"""
         <div class="viz-empty-state">

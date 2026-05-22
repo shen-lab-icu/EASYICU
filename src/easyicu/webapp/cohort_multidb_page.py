@@ -26,9 +26,9 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
 
     title = "Cross-Database Benchmark" if lang == 'en' else "跨库分布基准"
     subtitle = (
-        "Figure 3-style comparison of harmonized feature distributions across ICU databases; kept separate from the S1 cohort audit."
+        "Comparison of harmonized feature distributions across ICU databases; kept separate from the cohort audit."
         if lang == 'en' else
-        "对应 Figure 3 风格的跨 ICU 数据库标准化特征分布对照；与补充图 S1 的队列审计保持分工。"
+        "跨 ICU 数据库标准化特征分布对照；与队列审计保持分工。"
     )
     if not screenshot_mode:
         st.markdown(f"""

@@ -100,6 +100,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
             id_col = st.session_state.get('id_col', 'stay_id')
             _show_thresh = st.session_state.get('_ts_show_thresholds', True)
             screenshot_concepts = set(_select_timeseries_screenshot_concepts(available_concepts)) if screenshot_mode else None
+            lane_rows = []
 
             for lane_name, lane_concepts in CLINICAL_LANES.items():
                 _lane_avail = [c for c in lane_concepts if c in available_concepts]
@@ -107,8 +108,35 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                     _lane_avail = [c for c in _lane_avail if c in screenshot_concepts]
                 if not _lane_avail:
                     continue
+                lane_rows.append((lane_name, get_text(f'lane_{lane_name}'), _lane_avail))
 
-                lane_label = get_text(f'lane_{lane_name}')
+            if not lane_rows:
+                st.info("No time-series lanes available." if lang == 'en' else "当前没有可用的时序分组。")
+                return
+
+            if screenshot_mode:
+                lanes_to_render = lane_rows
+            else:
+                lane_state_key = "ts_active_lane"
+                lane_keys = [name for name, _label, _concepts in lane_rows]
+                if st.session_state.get(lane_state_key) not in lane_keys:
+                    st.session_state[lane_state_key] = lane_keys[0]
+                lane_label_map = {name: label for name, label, _concepts in lane_rows}
+                st.markdown(
+                    f'<div class="inline-control-label">{"Clinical lane" if lang == "en" else "临床分组"}</div>',
+                    unsafe_allow_html=True,
+                )
+                active_lane = st.radio(
+                    "Clinical lane" if lang == 'en' else "临床分组",
+                    options=lane_keys,
+                    format_func=lambda key: lane_label_map.get(key, key),
+                    horizontal=True,
+                    key=lane_state_key,
+                    label_visibility="collapsed",
+                )
+                lanes_to_render = [row for row in lane_rows if row[0] == active_lane]
+
+            for lane_name, lane_label, _lane_avail in lanes_to_render:
                 st.markdown(f"#### {lane_label}")
 
                 _n_cols = min(len(_lane_avail), 3)

@@ -22,13 +22,18 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
 
     page_copy = _get_data_table_page_copy(lang)
     page_title = page_copy["title"]
-    st.markdown(f'<div class="compact-section-title">{page_title}</div>', unsafe_allow_html=True)
-
     page_desc = page_copy["description"]
-    st.markdown(f'<div class="compact-section-desc">{page_desc}</div>', unsafe_allow_html=True)
-    st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
 
     if len(st.session_state.loaded_concepts) == 0:
+        st.markdown(
+            f'''
+            <div class="dt-page-head">
+                <div class="compact-section-title">{page_title}</div>
+                <div class="compact-section-desc">{page_desc}</div>
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
         no_data_msg = "Please load data first in the settings above." if lang == 'en' else "请先在上方设置中加载数据。"
         st.warning(no_data_msg)
         return
@@ -72,7 +77,16 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
         if lang == 'en'
         else f"已加载 {len(loaded_by_module)} 个模块 · {unique_feature_count} 个特征 · {patient_count} 名患者"
     )
-    st.markdown(f'<div class="preview-hint-line">{loaded_summary}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'''
+        <div class="dt-page-head">
+            <div class="compact-section-title">{page_title}</div>
+            <div class="compact-section-desc">{page_desc}</div>
+            <div class="preview-hint-line">{loaded_summary}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
 
     module_options = list(loaded_by_module.keys())
 
@@ -81,34 +95,32 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
         st.info(no_module_msg)
         return
 
-    # Shell-A: the design's left module rail (clickable list) + right preview
-    # pane, replacing the old full-width selectbox. The active module persists
-    # in the same session key the rest of the page reads.
     if st.session_state.get('data_table_module_select') not in module_options:
         st.session_state['data_table_module_select'] = module_options[0]
 
-    rail_label = "Modules" if lang == 'en' else "模块"
-    rail_col, preview_col = st.columns([1, 3], gap="medium")
-    with rail_col:
-        st.markdown(
-            f'<div class="eu-rail-label">{rail_label} · {len(module_options)}</div>',
-            unsafe_allow_html=True,
-        )
-        # Bounded, scrollable rail so a long module list doesn't push the
-        # preview table far down the page.
-        rail_box = st.container(height=360, border=False) if len(module_options) > 9 else st.container()
-        with rail_box:
-            for _m in module_options:
-                _n = len(loaded_by_module[_m]['concepts'])
-                _active = _m == st.session_state['data_table_module_select']
-                if st.button(
-                    f"{_m}　{_n}",
-                    key=f"dt_mod_{_m}",
-                    use_container_width=True,
-                    type="primary" if _active else "secondary",
-                ):
-                    st.session_state['data_table_module_select'] = _m
-                    st.rerun()
+    with st.container(key="dt_module_picker"):
+        picker_cols = st.columns([1.45, 0.55, 0.55], gap="medium")
+        with picker_cols[0]:
+            st.markdown(
+                f'<div class="inline-control-label">{"Module" if lang == "en" else "模块"}</div>',
+                unsafe_allow_html=True,
+            )
+            st.selectbox(
+                "Module" if lang == 'en' else "模块",
+                options=module_options,
+                key="data_table_module_select",
+                label_visibility="collapsed",
+            )
+        with picker_cols[1]:
+            st.markdown(
+                f'<div class="tiny-stat-card"><div class="tiny-label">{"Modules" if lang == "en" else "模块数"}</div><div class="tiny-value">{len(module_options)}</div></div>',
+                unsafe_allow_html=True,
+            )
+        with picker_cols[2]:
+            st.markdown(
+                f'<div class="tiny-stat-card"><div class="tiny-label">{"Features" if lang == "en" else "特征数"}</div><div class="tiny-value">{unique_feature_count}</div></div>',
+                unsafe_allow_html=True,
+            )
 
     selected_module = st.session_state['data_table_module_select']
 
@@ -117,6 +129,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
         module_key = module_meta.get('group_key', '')
         module_concepts = module_meta['concepts']
         preview_meta = _build_module_preview_metadata(module_key, selected_module, module_concepts, lang=lang)
+        module_share_pct = (len(module_concepts) / unique_feature_count * 100) if unique_feature_count else 0.0
 
         tags_html = "".join(
             f'<span class="module-feature-chip">{html.escape(tag)}</span>'
@@ -125,12 +138,33 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
         if preview_meta['overflow_count']:
             tags_html += f'<span class="module-feature-chip muted">+{preview_meta["overflow_count"]}</span>'
 
-        with preview_col:
-            selected_label = "Selected Module" if lang == 'en' else "当前模块"
-            features_label = "Features" if lang == 'en' else "特征数"
-            patients_label = "Patients" if lang == 'en' else "患者数"
-            st.markdown(
-                f'''
+        selected_label = "Selected Module" if lang == 'en' else "当前模块"
+        features_label = "Features" if lang == 'en' else "特征数"
+        patients_label = "Patients" if lang == 'en' else "患者数"
+        glance_title = "Module at a glance" if lang == 'en' else "模块一览"
+        glance_note = (
+            "Workspace-wide context for the selected module before you switch to preview mode."
+            if lang == 'en'
+            else "在切换到预览模式前，先看一下当前模块在工作区中的上下文。"
+        )
+        glance_specs = [
+            ("Workspace modules" if lang == 'en' else "工作区模块", f"{len(module_options)}"),
+            (features_label, f"{len(module_concepts)}"),
+            ("Share" if lang == 'en' else "占比", f"{module_share_pct:.1f}%"),
+            (patients_label, f"{patient_count}"),
+        ]
+        glance_cards_html = "".join(
+            f'''
+            <div class="tiny-stat-card">
+                <div class="tiny-label">{html.escape(str(label))}</div>
+                <div class="tiny-value">{html.escape(str(value))}</div>
+            </div>
+            '''
+            for label, value in glance_specs
+        )
+        st.markdown(
+            f'''
+            <div class="dt-module-context-grid">
                 <div class="module-preview-card">
                     <div class="eyebrow">{selected_label}</div>
                     <div class="title">{html.escape(selected_module)}</div>
@@ -141,18 +175,24 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                         <div class="eu-mod-tile"><div class="k">{patients_label}</div><div class="v">{patient_count}</div></div>
                     </div>
                 </div>
-                ''',
-                unsafe_allow_html=True,
-            )
-        st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+                <div class="module-glance-panel">
+                    <div class="module-glance-title">📊 {html.escape(glance_title)}</div>
+                    <div class="module-glance-note">{html.escape(glance_note)}</div>
+                    <div class="module-glance-grid">{glance_cards_html}</div>
+                </div>
+            </div>
+            ''',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="dt-section-separator"></div>', unsafe_allow_html=True)
 
         # 特征选择器（单选或多选合并）- 默认合并全部放第一个
         # 🔧 放大标题
         view_mode_label = "Preview Mode" if lang == 'en' else "预览模式"
-        st.markdown(f'<div style="font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin:8px 0 4px">{view_mode_label}</div>', unsafe_allow_html=True)
         view_modes = ["Merge All (Wide Table)", "Single Feature"] if lang == 'en' else ["合并全部（宽表）", "单个特征"]
-
-        view_mode = st.radio("View Mode", view_modes, horizontal=True, key="data_table_view_mode", index=0, label_visibility="collapsed")
+        with st.container(key="dt_preview_mode"):
+            st.markdown(f'<div class="dt-preview-mode-label">{view_mode_label}</div>', unsafe_allow_html=True)
+            view_mode = st.radio("View Mode", view_modes, horizontal=True, key="data_table_view_mode", index=0, label_visibility="collapsed")
 
         if view_mode == view_modes[1]:
             # 单个特征模式 (现在是第二个选项)
@@ -447,36 +487,36 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                             dtype_str = str(display_df[col].dtype).lower()
                             if 'bool' in dtype_str:
                                 display_df[col] = display_df[col].astype(str)
-                        summary_wrap_cols = st.columns([2.15, 1.0])
-                        with summary_wrap_cols[0]:
-                            summary_cols = st.columns([1.12, 0.9, 0.9])
-                            with summary_cols[0]:
-                                summary_badge = (
-                                    f"⚠️ Sample preview · max {MAX_ROWS_PER_DF:,} rows per feature"
-                                    if sampled_for_preview and lang == 'en'
-                                    else (
-                                        f"⚠️ 采样预览 · 每个特征最多 {MAX_ROWS_PER_DF:,} 行"
-                                        if sampled_for_preview
+                        with st.container(key="dt_preview_summary"):
+                            summary_wrap_cols = st.columns([2.15, 1.0])
+                            with summary_wrap_cols[0]:
+                                summary_cols = st.columns([1.12, 0.9, 0.9])
+                                with summary_cols[0]:
+                                    summary_badge = (
+                                        f"⚠️ Sample preview · max {MAX_ROWS_PER_DF:,} rows per feature"
+                                        if sampled_for_preview and lang == 'en'
                                         else (
-                                            "✅ Merged preview ready"
-                                            if lang == 'en'
-                                            else "✅ 合并预览已就绪"
+                                            f"⚠️ 采样预览 · 每个特征最多 {MAX_ROWS_PER_DF:,} 行"
+                                            if sampled_for_preview
+                                            else (
+                                                "✅ Merged preview ready"
+                                                if lang == 'en'
+                                                else "✅ 合并预览已就绪"
+                                            )
                                         )
                                     )
-                                )
-                                badge_class = "preview-badge warning" if sampled_for_preview else "preview-badge"
-                                st.markdown(f'<div class="{badge_class}">{summary_badge}</div>', unsafe_allow_html=True)
-                            preview_stats = [
-                                ("Preview Rows" if lang == 'en' else "预览行数", f"{len(display_df):,}"),
-                                ("Preview Columns" if lang == 'en' else "预览列数", len(display_df.columns)),
-                            ]
-                            for idx, (label, value) in enumerate(preview_stats, start=1):
-                                with summary_cols[idx]:
-                                    st.markdown(
-                                        f'<div class="tiny-stat-card"><div class="tiny-label">{label}</div><div class="tiny-value">{value}</div></div>',
-                                        unsafe_allow_html=True,
-                                    )
-                        st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
+                                    badge_class = "preview-badge warning" if sampled_for_preview else "preview-badge"
+                                    st.markdown(f'<div class="{badge_class}">{summary_badge}</div>', unsafe_allow_html=True)
+                                preview_stats = [
+                                    ("Preview Rows" if lang == 'en' else "预览行数", f"{len(display_df):,}"),
+                                    ("Preview Columns" if lang == 'en' else "预览列数", len(display_df.columns)),
+                                ]
+                                for idx, (label, value) in enumerate(preview_stats, start=1):
+                                    with summary_cols[idx]:
+                                        st.markdown(
+                                            f'<div class="tiny-stat-card"><div class="tiny-label">{label}</div><div class="tiny-value">{value}</div></div>',
+                                            unsafe_allow_html=True,
+                                        )
                         st.dataframe(display_df, use_container_width=True, height=680)
 
                         if len(merged_df) > max_rows:

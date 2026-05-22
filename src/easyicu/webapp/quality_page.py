@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
 from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
@@ -13,6 +14,35 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
     for name, value in app_context.items():
         if not name.startswith("__") and name not in protected:
             globals()[name] = value
+
+
+def _render_quality_panel_switcher(lang: str, screenshot_mode: bool = False) -> str:
+    panel_options = {
+        "missingness": "📊 Missingness" if lang == 'en' else "📊 缺失分析",
+        "outliers": "🧪 Out-of-Physio" if lang == 'en' else "🧪 生理范围越界",
+        "temporal": "⏱️ Temporal Integrity" if lang == 'en' else "⏱️ 时序完整性",
+    }
+    state_key = "quality_active_panel"
+    if st.session_state.get(state_key) not in panel_options:
+        st.session_state[state_key] = "missingness"
+
+    if screenshot_mode:
+        return "missingness"
+
+    label = "Quality panel" if lang == 'en' else "质控面板"
+    with st.container(key="quality_panel_switcher"):
+        st.markdown(
+            f'<div class="inline-control-label">{html.escape(label)}</div>',
+            unsafe_allow_html=True,
+        )
+        return st.radio(
+            label,
+            options=list(panel_options.keys()),
+            format_func=lambda key: panel_options[key],
+            horizontal=True,
+            key=state_key,
+            label_visibility="collapsed",
+        )
 
 
 def render_quality_page(app_context: dict[str, Any] | None = None):
@@ -196,12 +226,9 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                 context=f"database={st.session_state.get('database', '')}; loaded_concepts={len(st.session_state.get('loaded_concepts', {}))}; explain missingness, physiologic range outliers, and temporal integrity issues from the current QC summary",
             )
 
-    tab1_label = "📊 Missingness" if lang == 'en' else "📊 缺失分析"
-    tab2_label = "🧪 Out-of-Physio" if lang == 'en' else "🧪 生理范围越界"
-    tab3_label = "⏱️ Temporal Integrity" if lang == 'en' else "⏱️ 时序完整性"
-    tab1, tab2, tab3 = st.tabs([tab1_label, tab2_label, tab3_label])
+    active_quality_panel = _render_quality_panel_switcher(lang, screenshot_mode=screenshot_mode)
 
-    with tab1:
+    if active_quality_panel == "missingness":
         if screenshot_mode:
             sort_order = 'desc'
         else:
@@ -312,10 +339,10 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                         showarrow=False,
                         font=dict(size=11, color='#60718a'),
                         align='right',
-                    )
+                )
                 st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
 
-    with tab2:
+    elif active_quality_panel == "outliers":
         if quality_df.empty:
             st.info("No quality metrics available." if lang == 'en' else "当前没有可用的质量指标。")
         else:
@@ -358,7 +385,7 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                 )
                 st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
 
-    with tab3:
+    elif active_quality_panel == "temporal":
         if quality_df.empty:
             st.info("No quality metrics available." if lang == 'en' else "当前没有可用的质量指标。")
         else:
