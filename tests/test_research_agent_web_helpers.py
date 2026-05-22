@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from easyicu.webapp import research_agent as ra_page
+from easyicu.webapp.agent_workbench import build_workbench_state_from_manifest
 
 
 def test_module_export_folder_builds_filtered_stay_level_cohort(tmp_path: Path) -> None:
@@ -136,6 +137,71 @@ def test_run_summary_counts_failed_steps_and_missing_outputs(tmp_path: Path) -> 
     assert summary["table_count"] == 0
     assert summary["finding_errors"] == 1
     assert summary["finding_warnings"] == 1
+
+
+def test_workbench_state_builds_from_real_run_manifest(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_20260103T000000_abcd12"
+    run_dir.mkdir()
+    (run_dir / "analysis.py").write_text("print('ok')\n", encoding="utf-8")
+    (run_dir / "run_status.json").write_text(
+        json.dumps({
+            "status": "diagnostic_only",
+            "gates": {
+                "execution_complete": False,
+                "evidence_complete": True,
+                "numeric_verified": False,
+            },
+        }),
+        encoding="utf-8",
+    )
+    manifest = {
+        "run_id": "run_manifest_bound",
+        "research_question": "Does lactate predict mortality?",
+        "context_path": "context.json",
+        "plan_path": "analysis_plan.json",
+        "per_step_records": [
+            {"step_id": "01_table_one", "status": "ok", "generation_mode": "system"},
+            {
+                "step_id": "02_model_training",
+                "status": "execution_failed",
+                "returncode": 1,
+                "evidence_ids": ["script_1"],
+            },
+        ],
+        "evidence": [
+            {
+                "evidence_id": "script_1",
+                "kind": "code",
+                "relative_path": "analysis.py",
+                "produced_by_step": "02_model_training",
+            },
+            {
+                "evidence_id": "fig_1",
+                "kind": "figure",
+                "relative_path": "figures/roc.svg",
+                "produced_by_step": "02_model_training",
+            },
+        ],
+        "findings": [
+            {"severity": "error", "validator": "runner", "message": "model failed"},
+            {"severity": "warning", "validator": "cohort_auditor", "message": "missingness high"},
+        ],
+    }
+
+    state = build_workbench_state_from_manifest(run_dir, manifest, partial=False)
+
+    assert state["run_id"] == "run_manifest_bound"
+    assert state["status"] == "blocked"
+    assert [step["status"] for step in state["steps"]] == ["ok", "fail"]
+    assert "print('ok')" in state["code"]
+    assert state["steps"][1]["step_id"] == "02_model_training"
+    assert state["step_details"][1]["code_path"] == "analysis.py"
+    assert state["step_details"][1]["results"][0]["kind"] == "figure"
+    assert state["source_label"] == "Real manifest"
+    assert state["audit"]["counts"] == {"errors": 1, "warnings": 1, "info": 0}
+    assert any(gate["label"] == "numeric verified" and gate["ok"] is False for gate in state["audit"]["gates"])
+    assert state["results"][0]["kind"] == "figure"
+    assert state["evidence"][0]["tag"] == "code"
 
 
 def test_step_evidence_links_explicit_ids_and_produced_by_step(tmp_path: Path) -> None:

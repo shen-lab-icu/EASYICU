@@ -262,6 +262,30 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _find_resumable_run(workdir: Path) -> Optional[str]:
+    """Return the run_id of an interrupted run that can be resumed.
+
+    A run is resumable when it wrote a ``manifest_partial.json`` checkpoint but
+    did not reach ``execution_complete`` — e.g. a provider 502 / quota outage
+    killed it mid-step. ResearchAgentPipeline.run(resume_run_id=...) then skips
+    the already-completed steps instead of redoing the whole analysis.
+    """
+    candidates = []
+    for partial in workdir.glob("run_*/manifest_partial.json"):
+        run_dir = partial.parent
+        rs = run_dir / "run_status.json"
+        if rs.exists():
+            try:
+                gates = json.loads(rs.read_text(encoding="utf-8")).get(
+                    "gates", {})
+                if gates.get("execution_complete"):
+                    continue  # already finished — nothing to resume
+            except (json.JSONDecodeError, OSError):
+                pass
+        candidates.append(run_dir.name)
+    return sorted(candidates)[-1] if candidates else None
+
+
 def _run_one_arm(
     *,
     item,
@@ -271,6 +295,7 @@ def _run_one_arm(
     label: str,
     llm,
     pipeline_options: Optional[Dict[str, Any]] = None,
+    reuse_existing: bool = False,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
 
@@ -281,6 +306,10 @@ def _run_one_arm(
         disable_icu_context=disable_icu_context,
         **dict(pipeline_options or {}),
     )
+    resume_run_id = _find_resumable_run(workdir) if reuse_existing else None
+    if resume_run_id:
+        print(f"[research_agent] resuming interrupted run {resume_run_id} "
+              f"(step-level checkpoint) for {item.key}/{label}")
     started = time.monotonic()
     result = pipeline.run(
         question=item.research_question,
@@ -289,6 +318,7 @@ def _run_one_arm(
         database="bench",
         target_outcome=item.target_outcome,
         inclusion_criteria=item.inclusion_criteria,
+        resume_run_id=resume_run_id,
     )
     elapsed = time.monotonic() - started
     score = _score_arm(run_dir=Path(result.workdir), item=item, label=label)
@@ -967,12 +997,19 @@ def main() -> int:
     )
 
     if args.ehrflowbench_jsonl:
+        ehrflow_model = args.model if args.provider != "mock" else "mock"
+        if args.models:
+            ehrflow_model = args.models[0]
         return _run_ehrflowbench_jsonl(
             jsonl_path=Path(args.ehrflowbench_jsonl).resolve(),
             out_root=Path(args.out_root).resolve(),
             seed=args.seed,
             arms=args.arms,
             pipeline_options=pipeline_options,
+            provider=args.provider,
+            model=ehrflow_model,
+            request_timeout=float(args.request_timeout),
+            reuse_existing=bool(args.reuse_existing),
         )
 
     all_items = list(
@@ -1061,6 +1098,23 @@ def main() -> int:
     return 0
 
 
+def _ehrflow_item_done(item_root: Path) -> bool:
+    """True if this item already has a run that reached execution_complete.
+
+    Used for resume: a quota 502 mid-batch should not force re-running items
+    that already finished cleanly. Quota-disrupted (incomplete) runs return
+    False so they are redone.
+    """
+    for rs in item_root.glob("*/run_*/run_status.json"):
+        try:
+            gates = json.loads(rs.read_text(encoding="utf-8")).get("gates", {})
+        except (json.JSONDecodeError, OSError):
+            continue
+        if gates.get("execution_complete"):
+            return True
+    return False
+
+
 def _run_ehrflowbench_jsonl(
     *,
     jsonl_path: Path,
@@ -1068,6 +1122,10 @@ def _run_ehrflowbench_jsonl(
     seed: int,
     arms: Sequence[str],
     pipeline_options: Optional[Dict[str, Any]] = None,
+    provider: str = "mock",
+    model: str = "mock",
+    request_timeout: float = 180.0,
+    reuse_existing: bool = False,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     from types import SimpleNamespace
@@ -1142,15 +1200,38 @@ def _run_ehrflowbench_jsonl(
             ),
             inclusion_criteria=list(row.get("inclusion_criteria") or []),
         )
-        scores.append(
-            _run_one_item_from_cohort(
+        # Resume support: skip items that already finished cleanly so a quota
+        # 502 mid-batch never forces a full redo. An item counts as "done" only
+        # if its latest run reached execution_complete — quota-disrupted
+        # diagnostic_only runs are redone.
+        if reuse_existing and _ehrflow_item_done(out_root / key):
+            print(f"\n=== {key} — reuse existing complete run ===")
+            pending.append({"key": key, "status": "reused_complete"})
+            continue
+        # Per-item isolation: a provider 502 / crash on one item must not abort
+        # the remaining items. Record the failure and continue.
+        try:
+            score = _run_one_item_from_cohort(
                 item=item,
                 cohort=cohort,
                 out_root=out_root,
                 arms=arms,
                 pipeline_options=pipeline_options,
+                provider=provider,
+                model=model,
+                request_timeout=request_timeout,
+                reuse_existing=reuse_existing,
             )
-        )
+            scores.append(score)
+        except Exception as exc:  # noqa: BLE001 — keep batch alive on 502/etc.
+            print(f"[ehrflowbench] item {key} FAILED: {type(exc).__name__}: "
+                  f"{str(exc)[:200]}")
+            pending.append({
+                "key": key,
+                "status": "item_exception",
+                "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            })
+            continue
 
     totals = _aggregate(scores) if scores else {"naive": {}, "aware": {}}
     payload = {
@@ -1198,8 +1279,14 @@ def _run_one_item_from_cohort(
     out_root: Path,
     arms: Sequence[str],
     pipeline_options: Optional[Dict[str, Any]] = None,
+    provider: str = "mock",
+    model: str = "mock",
+    request_timeout: float = 180.0,
+    reuse_existing: bool = False,
 ) -> Dict[str, Any]:
-    llm = _make_llm(provider="mock", model="mock", request_timeout=180.0)
+    llm = _make_llm(
+        provider=provider, model=model, request_timeout=request_timeout
+    )
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
     naive = _skipped_arm("naive")
@@ -1213,6 +1300,7 @@ def _run_one_item_from_cohort(
             label="naive",
             llm=llm,
             pipeline_options=pipeline_options,
+            reuse_existing=reuse_existing,
         )
     if "aware" in selected:
         aware = _run_one_arm(
@@ -1223,6 +1311,7 @@ def _run_one_item_from_cohort(
             label="aware",
             llm=llm,
             pipeline_options=pipeline_options,
+            reuse_existing=reuse_existing,
         )
     payload = {
         "item_key": item.key,

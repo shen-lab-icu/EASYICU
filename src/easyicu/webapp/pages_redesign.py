@@ -22,6 +22,7 @@ data loading and side effects continue to live in the legacy
 
 from __future__ import annotations
 
+import html
 from typing import Any, Sequence
 
 import streamlit as st
@@ -33,12 +34,106 @@ def _T(lang: str, en: str, zh: str) -> str:
     return en if lang == "en" else zh
 
 
+def _esc(value: object) -> str:
+    return html.escape(str(value))
+
+
+def _tutorial_start_card(
+    *,
+    title: str,
+    subtitle: str,
+    desc: str,
+    bullets: Sequence[str],
+    badge_html: str = "",
+    tone: str = "neutral",
+) -> str:
+    tone_class = " primary" if tone == "primary" else ""
+    bullets_html = "".join(
+        '<li><span></span><p>' + _esc(item) + "</p></li>"
+        for item in bullets
+    )
+    return (
+        f'<div class="eu-start-card{tone_class}">'
+        '<div class="eu-start-head">'
+        '<div>'
+        f'<div class="eu-start-kicker">{_esc(subtitle)}</div>'
+        f'<h3>{_esc(title)}</h3>'
+        '</div>'
+        f'{badge_html}'
+        '</div>'
+        f'<p class="eu-start-desc">{_esc(desc)}</p>'
+        f'<ul class="eu-start-list">{bullets_html}</ul>'
+        '</div>'
+    )
+
+
+def _tutorial_flow_card(steps: Sequence[dict[str, str]], lang: str) -> str:
+    rows = []
+    for step in steps:
+        rows.append(
+            '<div class="eu-flow-step">'
+            f'<div class="eu-flow-num">{_esc(step["number"])}</div>'
+            '<div>'
+            f'<div class="eu-flow-title">{_esc(step["label"])}</div>'
+            f'<div class="eu-flow-desc">{_esc(step["desc"])}</div>'
+            '</div>'
+            f'<div class="eu-flow-tag">{_esc(step["sub"])}</div>'
+            '</div>'
+        )
+    return (
+        '<div class="eu-rail-card">'
+        f'<div class="eu-rail-title">{_T(lang, "Workflow", "工作流")}</div>'
+        f'<div class="eu-flow-list">{"".join(rows)}</div>'
+        '</div>'
+    )
+
+
+def _tutorial_agent_card(lang: str) -> str:
+    gates = [
+        (_T(lang, "Input locked", "输入锁定"), _T(lang, "cohort + concept manifest", "队列 + 变量清单")),
+        (_T(lang, "Evidence bound", "证据绑定"), _T(lang, "scripts, logs, tables", "脚本、日志、表格")),
+        (_T(lang, "Draft gated", "草稿闸门"), _T(lang, "claim audit before report", "审计后再写报告")),
+    ]
+    rows = "".join(
+        '<div class="eu-agent-mini-row">'
+        f'<span></span><div><b>{_esc(title)}</b><small>{_esc(note)}</small></div>'
+        '</div>'
+        for title, note in gates
+    )
+    return (
+        '<div class="eu-rail-card eu-agent-mini">'
+        f'<div class="eu-rail-title">{_T(lang, "Agent handoff", "Agent 交接")}</div>'
+        f'<p>{_T(lang, "The web flow now mirrors the agent review gates: inputs are fixed before execution, evidence is tracked while running, and drafts stay behind an audit gate.", "Web 端现在对齐 agent 的审阅闸门：先固定输入，再追踪证据，最后通过审计闸门再生成草稿。")}</p>'
+        f'<div>{rows}</div>'
+        '</div>'
+    )
+
+
+def _tutorial_resources_card(lang: str) -> str:
+    resources = [
+        _T(lang, "Sample cohorts", "样例队列"),
+        _T(lang, "Concept catalog · 19", "概念目录 · 19"),
+        _T(lang, "Video walkthrough · 4 min", "视频导览 · 4 分钟"),
+        _T(lang, "Cite · BibTeX", "引用 · BibTeX"),
+    ]
+    rows = "".join(
+        f'<div class="eu-resource-row"><span>{_esc(item)}</span><i></i></div>'
+        for item in resources
+    )
+    return (
+        '<div class="eu-rail-card">'
+        f'<div class="eu-rail-title">{_T(lang, "Resources", "资源")}</div>'
+        f'<div class="eu-resource-list">{rows}</div>'
+        '</div>'
+    )
+
+
 # =====================================================================
 # Tutorial page
 # =====================================================================
 
 
-def render_tutorial_redesign_page(lang: str) -> None:
+def _render_tutorial_redesign_page_legacy(lang: str) -> None:
     st.markdown(
         # Hero ------------------------------------------------------
         '<div style="padding:0 4px 8px">'
@@ -225,6 +320,137 @@ def render_tutorial_redesign_page(lang: str) -> None:
         '</div></div>',
         unsafe_allow_html=True,
     )
+
+
+def render_tutorial_redesign_page(lang: str) -> None:
+    st.markdown(
+        '<div class="eu-tutorial-hero">'
+        f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
+        f'letter-spacing:0;text-transform:uppercase">{_T(lang, "Tutorial", "教程")}</div>'
+        f'<h1>{_T(lang, "Extract, review, analyze, draft.", "数据抽取 → 审阅 → 分析 → 起草")}</h1>'
+        f'<p>{_T(lang, "Start with demo data, a local database export, or code-only agent drafting. The page is arranged like a workbench: entry actions on the left, workflow and agent gates on the right.", "你可以从演示数据、本地数据库导出或仅代码 agent 起草开始。页面按工作台组织：左侧选择入口，右侧保留流程和 agent 审阅闸门。")}</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    steps = [
+        {
+            "number": "1",
+            "label": _T(lang, "Data source", "数据源"),
+            "desc": _T(lang, "Demo, real ICU exports, or code-only mode.", "演示、本地 ICU 导出或仅代码模式。"),
+            "sub": _T(lang, "3 modes", "3 种"),
+        },
+        {
+            "number": "2",
+            "label": _T(lang, "Cohort", "队列"),
+            "desc": _T(lang, "Filter age, outcome, LOS, ICD, Sepsis-3, AKI, ARDS.", "筛选年龄、转归、LOS、ICD、Sepsis-3、AKI、ARDS。"),
+            "sub": _T(lang, "9 filters", "9 项"),
+        },
+        {
+            "number": "3",
+            "label": _T(lang, "Concepts", "变量"),
+            "desc": _T(lang, "Select modules, merge previews, align timestamps.", "选择模块、合并预览并对齐时间轴。"),
+            "sub": _T(lang, "19 modules", "19 模块"),
+        },
+        {
+            "number": "4",
+            "label": _T(lang, "Analysis", "分析"),
+            "desc": _T(lang, "Review, compare databases, or hand off to the agent.", "审阅、跨库比较或交给 agent。"),
+            "sub": _T(lang, "4 views", "4 视图"),
+        },
+    ]
+
+    badge_recommended = (
+        f'<span class="eu-pill" style="background:var(--surface);border-color:var(--hair-2)">{_T(lang, "recommended", "推荐")}</span>'
+    )
+    badge_localonly = (
+        f'<span class="eu-pill ok"><span class="dot"></span>{_T(lang, "local-only", "仅本地")}</span>'
+    )
+    demo_card = _tutorial_start_card(
+        tone="primary",
+        title=_T(lang, "Demo Mode", "演示模式"),
+        subtitle=_T(lang, "Fastest complete path", "最快完整路径"),
+        badge_html=badge_recommended,
+        desc=_T(lang,
+            "Generate reproducible mock ICU data and walk through extraction, review, visualization, and agent handoff without touching local files.",
+            "生成可复现的模拟 ICU 数据，直接走完抽取、审阅、可视化和 agent 交接，不需要接触本地文件。"),
+        bullets=[
+            _T(lang, "50-500 simulated patients with 24-168h windows",
+                    "50-500 名模拟患者，24-168 小时时间窗"),
+            _T(lang, "All 19 modules and 167 features are available",
+                    "19 个模块和 167 个特征均可预览"),
+            _T(lang, "Agent gallery and audit handoff are ready",
+                    "Agent 画廊和审计交接可直接查看"),
+        ],
+    )
+    real_card = _tutorial_start_card(
+        title=_T(lang, "Real Data", "真实数据"),
+        subtitle=_T(lang, "Use local ICU exports", "连接本地 ICU 导出"),
+        badge_html=badge_localonly,
+        desc=_T(lang,
+            "Point EasyICU to prepared database folders and keep processing on your machine.",
+            "将 EasyICU 指向已准备好的数据库目录，所有处理留在本机。"),
+        bullets=[
+            _T(lang, "MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb",
+                    "MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb"),
+            _T(lang, "Reuse prior module-folder exports",
+                    "可复用之前的模块导出目录"),
+        ],
+    )
+    nodata_card = _tutorial_start_card(
+        title=_T(lang, "No Data", "仅代码"),
+        subtitle=_T(lang, "Draft first", "先起草代码"),
+        desc=_T(lang,
+            "Let the Research Agent prepare a reusable analysis skeleton before data are available.",
+            "还没有数据时，先让 Research Agent 准备可复用的分析代码骨架。"),
+        bullets=[
+            _T(lang, "Generate cohort.py / analysis.py", "生成 cohort.py / analysis.py"),
+            _T(lang, "Create a methods-section draft", "生成 Methods 段草稿"),
+        ],
+    )
+
+    main_col, rail_col = st.columns([1.42, 0.72], gap="large")
+    with main_col:
+        st.markdown(
+            f'<div class="eu-section-label" style="padding:0;margin:4px 0 10px">'
+            f'<span>{_T(lang, "Choose a starting point", "选择起点")}</span></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(demo_card, unsafe_allow_html=True)
+        if st.button(_T(lang, "Start demo -> Extract", "开始演示 -> 提取"),
+                     key="_eu_tutorial_demo", type="primary",
+                     use_container_width=True):
+            st.session_state["entry_mode"] = "demo"
+            st.session_state["use_mock_data"] = True
+            st.session_state["database"] = "mock"
+            st.session_state["_active_main_page"] = "extract"
+            st.rerun()
+
+        secondary_left, secondary_right = st.columns(2, gap="medium")
+        with secondary_left:
+            st.markdown(real_card, unsafe_allow_html=True)
+            if st.button(_T(lang, "Configure data path -> Extract", "配置数据路径 -> 提取"),
+                         key="_eu_tutorial_real",
+                         use_container_width=True):
+                st.session_state["entry_mode"] = "real"
+                st.session_state["use_mock_data"] = False
+                st.session_state["_active_main_page"] = "extract"
+                st.rerun()
+        with secondary_right:
+            st.markdown(nodata_card, unsafe_allow_html=True)
+            if st.button(_T(lang, "Skip data -> Agent", "跳过数据 -> Agent"),
+                         key="_eu_tutorial_nodata",
+                         use_container_width=True):
+                st.session_state["_active_main_page"] = "research_agent"
+                st.rerun()
+
+    with rail_col:
+        st.markdown(
+            _tutorial_flow_card(steps, lang)
+            + _tutorial_agent_card(lang)
+            + _tutorial_resources_card(lang),
+            unsafe_allow_html=True,
+        )
 
 
 # =====================================================================

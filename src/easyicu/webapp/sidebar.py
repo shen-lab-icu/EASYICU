@@ -27,6 +27,103 @@ from easyicu.webapp.ui_helpers import (
 _PROTECTED_CONTEXT_NAMES = {"render_sidebar", "render_extract_page", "_install_app_context"}
 
 
+def _activate_entry_mode(target: str) -> None:
+    """Switch the workspace mode while keeping the shell on extraction."""
+    if target not in {"demo", "real"}:
+        return
+    st.session_state["entry_mode"] = target
+    st.session_state["use_mock_data"] = target == "demo"
+    if target == "demo":
+        st.session_state["database"] = "mock"
+    for key in ("step1_confirmed", "step2_confirmed", "step3_confirmed", "export_completed"):
+        st.session_state[key] = False
+    st.session_state["_active_main_page"] = "extract"
+
+
+def _render_source_mode_tabs(entry_mode: str) -> None:
+    """Render the Data source segmented mode control from the design."""
+    lang = st.session_state.get("language", "en")
+    tabs = [
+        ("demo", "Demo", "模拟数据", ":material/science:"),
+        ("real", "Real Data", "真实数据", ":material/database:"),
+        ("none", "No Data", "仅生成代码", ":material/draft:"),
+    ]
+    cols = st.columns(3, gap="small")
+    for col, (target, label_en, label_zh, icon_name) in zip(cols, tabs):
+        with col:
+            label = label_en if lang == "en" else label_zh
+            if st.button(
+                label,
+                key=f"_eu_source_mode_{target}",
+                type="primary" if target == entry_mode else "secondary",
+                disabled=target == "none",
+                use_container_width=True,
+                icon=icon_name,
+                help=(
+                    "Code-only mode is surfaced through Research Agent for now."
+                    if target == "none" and lang == "en" else
+                    "仅代码模式目前从 Research Agent 进入。"
+                    if target == "none" else None
+                ),
+            ):
+                _activate_entry_mode(target)
+                st.rerun()
+
+
+def _render_data_source_page_header(entry_mode: str, *, desc: str) -> None:
+    """Top header used by the Step 1 data-source page."""
+    lang = st.session_state.get("language", "en")
+    title = "Configure data source" if lang == "en" else "配置数据源"
+    left, right = st.columns([1.55, 1.25], gap="large")
+    with left:
+        st.markdown(
+            '<div class="eu-source-header">'
+            f'<h1>{html.escape(title)}</h1>'
+            f'<p>{html.escape(desc)}</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    with right:
+        _render_source_mode_tabs(entry_mode)
+
+
+def _render_demo_preview_table(n_patients: int, hours: int) -> None:
+    """Small deterministic vitals preview mirroring page-data-source.jsx."""
+    sample_rows = [
+        (20001, "00:00", 92, 82, 132, 96, 36.8, 18),
+        (20001, "01:00", 95, 78, 128, 95, 37.0, 20),
+        (20001, "02:00", 101, 70, 119, 93, 37.4, 24),
+        (20002, "00:00", 78, 88, 144, 98, 36.5, 14),
+        (20002, "01:00", 80, 86, 141, 98, 36.6, 15),
+    ]
+    row_html = "".join(
+        "<tr>"
+        + "".join(
+            f'<td class="{"muted" if idx == 0 else ""}">{html.escape(str(cell))}</td>'
+            for idx, cell in enumerate(row)
+        )
+        + "</tr>"
+        for row in sample_rows
+    )
+    headers = "".join(f"<th>{h}</th>" for h in ("stay_id", "time", "hr", "map", "sbp", "spo2", "temp", "resp"))
+    st.markdown(
+        '<div class="eu-source-table-card">'
+        '<div class="table-head">'
+        '<div>'
+        f'<div class="title">{html.escape("Sample preview · vitals module" if st.session_state.get("language", "en") == "en" else "样本预览 · 生命体征模块")}</div>'
+        f'<div class="sub">5 of {n_patients * hours:,} rows</div>'
+        '</div>'
+        f'<span class="eu-mini-button">{html.escape("View all modules" if st.session_state.get("language", "en") == "en" else "查看全部模块")}</span>'
+        '</div>'
+        '<table>'
+        f'<thead><tr>{headers}</tr></thead>'
+        f'<tbody>{row_html}</tbody>'
+        '</table>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to the extracted sidebar."""
     for name, value in app_context.items():
@@ -73,17 +170,27 @@ def _render_step1_data_source(entry_mode: str) -> None:
       affordances based on the cached validation result.
     """
     if entry_mode == 'demo':
-        # ===== DEMO 模式：只显示模拟数据参数，不显示数据库选择 =====
-        st.markdown(f"### 📊 {get_text('step1')}")
-        demo_title = "Demo Mode" if st.session_state.language == 'en' else "演示模式"
-        demo_desc = "Auto-generated simulated ICU data" if st.session_state.language == 'en' else "自动生成模拟ICU数据"
-        st.markdown(f"""
-        <div style="background:#f0fdf4;border:1px solid #bbf7d0;
-                    padding:10px 14px;border-radius:10px;margin:6px 0 10px">
-            <div style="font-weight:600;color:#166534;font-size:.92rem">{demo_title}</div>
-            <div style="color:#4ade80;font-size:.78rem;margin-top:2px">{demo_desc}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        # ===== DEMO 模式：按 easyicu design/page-data-source.jsx 渲染 =====
+        lang = st.session_state.get("language", "en")
+        _render_data_source_page_header(
+            entry_mode,
+            desc=(
+                "Choose how patient data enters the workspace. You can switch later — sliders only affect demo runs."
+                if lang == "en" else
+                "选择患者数据如何进入工作区。稍后可以切换；滑块只影响演示运行。"
+            ),
+        )
+        st.markdown(
+            '<div class="eu-source-banner">'
+            '<div class="banner-icon">⚗</div>'
+            '<div class="banner-copy">'
+            f'<div class="title">{html.escape("Demo mode" if lang == "en" else "演示模式")}</div>'
+            f'<div class="sub">{html.escape("Automatically generates reproducible mock ICU data for tutorials and feature demos. No real database, token, or working directory is used." if lang == "en" else "自动生成可重复的模拟 ICU 数据，用于教程和功能演示。不连接任何真实数据库，token 与工作目录都不会被使用。")}</div>'
+            '</div>'
+            f'<span class="learn">{html.escape("Learn more" if lang == "en" else "了解更多")}</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         st.session_state.database = 'mock'
         st.session_state.use_mock_data = True
 
@@ -95,32 +202,99 @@ def _render_step1_data_source(entry_mode: str) -> None:
         if 'demo_mode_hours' not in st.session_state:
             st.session_state.demo_mode_hours = st.session_state.mock_params.get('hours', 72)
 
-        n_patients = st.slider(
-            n_patients_label,
-            50,
-            500,
-            key="demo_mode_patients",
-        )
-        hours = st.slider(
-            hours_label,
-            24,
-            168,
-            key="demo_mode_hours",
-        )
+        with st.container(key="eu_generation_card"):
+            st.markdown(
+                '<div class="eu-section-label" style="padding:0;margin:0 0 10px">'
+                f'<span>{html.escape("Generation parameters" if lang == "en" else "生成参数")}</span></div>',
+                unsafe_allow_html=True,
+            )
+            slider_cols = st.columns(2, gap="large")
+            with slider_cols[0]:
+                n_patients = st.slider(
+                    n_patients_label,
+                    50,
+                    500,
+                    key="demo_mode_patients",
+                )
+            with slider_cols[1]:
+                hours = st.slider(
+                    hours_label,
+                    24,
+                    168,
+                    key="demo_mode_hours",
+                )
+            metric_html = "".join(
+                '<div class="eu-source-metric">'
+                f'<div class="label">{html.escape(label)}</div>'
+                f'<div class="value">{html.escape(value)}</div>'
+                f'<div class="sub">{html.escape(sub)}</div>'
+                '</div>'
+                for label, value, sub in [
+                    (
+                        "Expected stays" if lang == "en" else "预计 ICU stay",
+                        f"{n_patients:,}",
+                        "patients · single ICU stay" if lang == "en" else "患者 · 单次 ICU stay",
+                    ),
+                    (
+                        "Time points" if lang == "en" else "时间点",
+                        f"{n_patients * hours:,}",
+                        f"hourly · {n_patients} × {hours}" if lang == "en" else f"每小时 · {n_patients} × {hours}",
+                    ),
+                    (
+                        "Feature modules" if lang == "en" else "特征模块",
+                        "19",
+                        "vitals, labs, sofa, ..." if lang == "en" else "生命体征、化验、SOFA ...",
+                    ),
+                    (
+                        "Estimated size" if lang == "en" else "预计大小",
+                        f"~{max(0.8, n_patients * hours * 0.00044):.1f}",
+                        "MB · in-memory" if lang == "en" else "MB · 内存中",
+                    ),
+                ]
+            )
+            st.markdown(f'<div class="eu-source-metrics">{metric_html}</div>', unsafe_allow_html=True)
         # 🔧 注意: mock_params 需要在 Step 2 (Cohort Selection) 之后更新
         # 这里只保存基本参数，cohort_filter 在 Step 2 之后的函数中动态获取
         st.session_state.mock_params = {'n_patients': n_patients, 'hours': hours}
 
+        _render_demo_preview_table(n_patients, hours)
+
         # ✅ Step 1 确认按钮
-        step1_confirm_label = "✅ Confirm Data Source" if st.session_state.language == 'en' else "✅ 确认数据源配置"
-        if st.button(step1_confirm_label, type="primary", use_container_width=True, key="step1_confirm_demo"):
+        footer_l, reset_col, confirm_col = st.columns([5, 1, 2.4], gap="small")
+        with footer_l:
+            st.markdown(
+                f'<div class="eu-source-footer-note">{html.escape("Step 1 of 4" if lang == "en" else "第 1 步 / 共 4 步")}</div>',
+                unsafe_allow_html=True,
+            )
+        with reset_col:
+            if st.button("Reset" if lang == "en" else "重置", use_container_width=True, key="step1_reset_demo"):
+                st.session_state.demo_mode_patients = 100
+                st.session_state.demo_mode_hours = 72
+                st.session_state.mock_params = {"n_patients": 100, "hours": 72}
+                st.rerun()
+        step1_confirm_label = "Confirm data source" if st.session_state.language == 'en' else "确认数据源"
+        with confirm_col:
+            confirm_clicked = st.button(
+                step1_confirm_label,
+                type="primary",
+                use_container_width=True,
+                key="step1_confirm_demo",
+                icon=":material/chevron_right:",
+            )
+        if confirm_clicked:
             st.session_state.step1_confirmed = True
-            step1_done_msg = "✅ Step 1 completed! Proceed to Step 2: Cohort Selection" if st.session_state.language == 'en' else "✅ 步骤1已完成！请继续步骤2: 队列筛选"
-            st.success(step1_done_msg)
+            st.rerun()
 
     elif entry_mode == 'real':
         # ===== REAL DATA 模式：只显示数据库选择，不显示Demo选项 =====
-        st.markdown(f"### 📊 {get_text('step1')}")
+        _render_data_source_page_header(
+            entry_mode,
+            desc=(
+                "Local-first. EasyICU never uploads data — paths and conversions happen on your machine."
+                if st.session_state.language == "en" else
+                "本地优先。EasyICU 不上传数据；路径验证和转换都在你的机器上完成。"
+            ),
+        )
 
         # 🔧 自动检测数据库：根据路径中的关键词自动选择
         def detect_database_from_path(path: str) -> str:
@@ -285,14 +459,11 @@ def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
             "cross_db": "跨库基准",
             "research_agent": "研究 Agent",
         }
-    selected = st.session_state.get("selected_concepts", [])
-    cohort_n = len(selected) if isinstance(selected, list) else 0
     return [
         ShellNavItem(key="tutorial",       label=labels["tutorial"],       icon="book"),
-        ShellNavItem(key="quick_viz",      label=labels["quick_viz"],      icon="bars"),
-        ShellNavItem(key="cohort",         label=labels["cohort"],         icon="layers",
-                     count=str(cohort_n) if cohort_n else ""),
-        ShellNavItem(key="cross_db",       label=labels["cross_db"],       icon="grid"),
+        ShellNavItem(key="quick_viz",      label=labels["quick_viz"],      icon="bars", count="19"),
+        ShellNavItem(key="cohort",         label=labels["cohort"],         icon="layers", count="5"),
+        ShellNavItem(key="cross_db",       label=labels["cross_db"],       icon="grid", count="2/5"),
         ShellNavItem(key="research_agent", label=labels["research_agent"], icon="sparkles"),
     ]
 
@@ -300,7 +471,7 @@ def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
 def _render_shell_brand(entry_mode: str) -> None:
     """Brand block + workspace switcher + command search (shell-A top of sidebar)."""
     lang = st.session_state.get("language", "en")
-    sub = "ICU Data Analytics" if lang == "en" else "ICU 数据研究台"
+    sub = "ICU Research Workspace" if lang == "en" else "ICU 数据研究台"
     st.markdown(
         render_brand_html(name="EasyICU", sub=sub, initials="E"),
         unsafe_allow_html=True,
@@ -313,56 +484,30 @@ def _render_shell_brand(entry_mode: str) -> None:
     cohort_label = st.session_state.get("cohort_label", "sepsis_mortality_v3")
     if entry_mode == "demo":
         mode_pill = render_pill_html("Demo" if lang == "en" else "演示", tone="demo")
-        mode_word = "Demo" if lang == "en" else "演示模式"
     elif entry_mode == "real":
         mode_pill = render_pill_html("Real" if lang == "en" else "真实", tone="real")
-        mode_word = "Real data" if lang == "en" else "真实数据"
     else:
         mode_pill = render_pill_html("None" if lang == "en" else "未选择", tone="neutral")
-        mode_word = "—"
-    # Workspace switcher visual (the real click target is the button
-    # rendered just below, styled to overlay-feel via key class).
+
+    # Workspace switcher visual — matches the Shell-A field from the design.
     st.markdown(
-        '<div style="padding:0 6px 2px">'
-        '<div style="display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;'
-        'border:1px solid var(--hair-2);background:var(--surface);border-radius:6px;'
-        'font-size:12.5px;justify-content:space-between">'
-        f'<div style="display:flex;align-items:center;gap:8px;min-width:0">'
-        f'{mode_pill}<span style="font-size:12px;white-space:nowrap;overflow:hidden;'
-        f'text-overflow:ellipsis">{html.escape(cohort_label)}</span></div>'
+        '<div class="eu-workspace-field">'
+        f'<div class="inner">{mode_pill}<span class="cohort">{html.escape(cohort_label)}</span></div>'
+        '<span class="chev">'
         '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.8" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>'
-        '</div></div>',
+        'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>'
+        '</span></div>',
         unsafe_allow_html=True,
     )
-    # Real, functional mode switcher: a selectbox that lets the user
-    # jump between Demo / Real data without losing the session. This is
-    # the answer to "how do I switch from demo to real (and back)".
-    switch_label = "Switch workspace mode" if lang == "en" else "切换工作模式"
-    options = ["demo", "real"]
-    opt_labels = {
-        "demo": "🧪 Demo · simulated" if lang == "en" else "🧪 演示 · 模拟数据",
-        "real": "📊 Real data · local" if lang == "en" else "📊 真实数据 · 本地",
-    }
-    cur_index = options.index(entry_mode) if entry_mode in options else 0
-    chosen = st.selectbox(
-        switch_label,
-        options=options,
-        index=cur_index,
-        format_func=lambda k: opt_labels[k],
-        key="_eu_mode_switch",
-        label_visibility="collapsed",
+
+    st.markdown(
+        '<div class="eu-search-field">'
+        f'{_icon("search")}'
+        f'<span>{html.escape("Jump to..." if lang == "en" else "跳转...")}</span>'
+        '<span class="keys"><span class="eu-kbd">⌘</span><span class="eu-kbd">K</span></span>'
+        '</div>',
+        unsafe_allow_html=True,
     )
-    if chosen != entry_mode and chosen in options:
-        st.session_state["entry_mode"] = chosen
-        st.session_state["use_mock_data"] = (chosen == "demo")
-        if chosen == "demo":
-            st.session_state["database"] = "mock"
-        # Reset step confirmations so the new mode's extraction starts clean.
-        for _k in ("step1_confirmed", "step2_confirmed", "step3_confirmed"):
-            st.session_state[_k] = False
-        st.session_state["_active_main_page"] = "extract"
-        st.rerun()
 
 
 def _render_shell_recent_cohorts() -> None:
@@ -370,7 +515,7 @@ def _render_shell_recent_cohorts() -> None:
     lang = st.session_state.get("language", "en")
     label = "Recent cohorts" if lang == "en" else "最近队列"
     st.markdown(
-        f'<div class="eu-section-label" style="padding-top:8px"><span>{html.escape(label)}</span></div>',
+        f'<div class="eu-section-label" style="padding-top:0;margin-top:12px"><span>{html.escape(label)}</span></div>',
         unsafe_allow_html=True,
     )
     items: list[tuple[str, str]] = st.session_state.get("_eu_recent_cohorts") or [
@@ -398,49 +543,54 @@ def _render_shell_footer_icons() -> None:
     rendered as empty boxes in some Streamlit / Chromium combos.
     """
     lang = st.session_state.get("language", "en")
-    st.markdown(
-        '<div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:8px"></div>',
-        unsafe_allow_html=True,
-    )
-    cols = st.columns([1, 1, 1, 1, 1])
-    with cols[0]:
-        if st.button("◀", key="_eu_footer_back", help=(
-                "Mode selection / 模式选择"
-                if lang == "en" else "返回模式选择 / Mode selection")):
-            clear_run_state("all")
-            st.session_state.entry_mode = "none"
-            st.session_state.use_mock_data = False
-            st.rerun()
-    with cols[1]:
-        if st.button("?", key="_eu_footer_help", help=(
-                "Tutorial" if lang == "en" else "教程")):
-            st.session_state["_active_main_page"] = "tutorial"
-            st.rerun()
-    with cols[2]:
-        st.button("⚙", key="_eu_footer_settings", help=(
-            "Settings" if lang == "en" else "设置"))
-    with cols[3]:
-        if st.button("中" if lang == "en" else "EN", key="_eu_footer_lang", help=(
-                "Toggle 中 / EN" if lang == "en" else "切换 中 / EN")):
-            st.session_state["language"] = "zh" if lang == "en" else "en"
-            st.rerun()
-    with cols[4]:
+    with st.container(key="eu_sidebar_footer"):
         st.markdown(
-            '<div style="height:28px;display:flex;align-items:center;justify-content:center">'
-            '<div style="width:22px;height:22px;border-radius:999px;background:oklch(80% 0.05 70);'
-            'display:flex;align-items:center;justify-content:center;font-size:10.5px;'
-            'font-weight:500;color:var(--ink)">LK</div>'
-            '</div>',
+            '<div class="eu-sidebar-footer-rule"></div>',
             unsafe_allow_html=True,
         )
+        cols = st.columns([1, 1, 1, 1, 1])
+        with cols[0]:
+            if st.button("", icon=":material/arrow_back:", key="_eu_footer_back", help=(
+                    "Mode selection / 模式选择"
+                    if lang == "en" else "返回模式选择 / Mode selection")):
+                clear_run_state("all")
+                st.session_state.entry_mode = "none"
+                st.session_state.use_mock_data = False
+                st.rerun()
+        with cols[1]:
+            if st.button("", icon=":material/help:", key="_eu_footer_help", help=(
+                    "Tutorial" if lang == "en" else "教程")):
+                st.session_state["_active_main_page"] = "tutorial"
+                st.rerun()
+        with cols[2]:
+            st.button("", icon=":material/settings:", key="_eu_footer_settings", help=(
+                "Settings" if lang == "en" else "设置"))
+        with cols[3]:
+            if st.button("中" if lang == "en" else "EN", icon=":material/language:", key="_eu_footer_lang", help=(
+                    "Toggle 中 / EN" if lang == "en" else "切换 中 / EN")):
+                st.session_state["language"] = "zh" if lang == "en" else "en"
+                st.rerun()
+        with cols[4]:
+            st.markdown(
+                '<div style="height:28px;display:flex;align-items:center;justify-content:center">'
+                '<div style="width:22px;height:22px;border-radius:999px;background:oklch(80% 0.05 70);'
+                'display:flex;align-items:center;justify-content:center;font-size:10.5px;'
+                'font-weight:500;color:var(--ink)">LK</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
     st.markdown(
         '<style>'
-        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_"] button{'
-        'min-height:28px !important; height:28px !important; padding:0 !important;'
-        'font-size:13px !important; font-weight:500 !important;'
+        '.stApp [data-testid="stSidebar"] [class*="st-key-_eu_footer_"] .stButton > button,'
+        '.stApp [data-testid="stSidebar"] [class*="st-key-_eu_footer_"] button{'
+        'min-height:30px !important; height:30px !important; padding:0 !important;'
+        'border-radius:var(--r-2) !important;'
+        'font-size:12px !important; font-weight:500 !important;'
         'color:var(--ink-3) !important; line-height:1;'
+        'border:1px solid transparent !important;background:transparent !important;box-shadow:none !important;'
         '}'
-        '[data-testid="stSidebar"] [class*="st-key-_eu_footer_"] button:hover{'
+        '.stApp [data-testid="stSidebar"] [class*="st-key-_eu_footer_"] .stButton > button:hover,'
+        '.stApp [data-testid="stSidebar"] [class*="st-key-_eu_footer_"] button:hover{'
         'color:var(--ink) !important; background:var(--surface-2) !important;'
         '}'
         '</style>',
@@ -455,42 +605,23 @@ def _render_shell_primary_nav() -> None:
     entry_mode = st.session_state.get("entry_mode", "none")
     items = _shell_nav_items(entry_mode)
     active = st.session_state.get("_active_main_page", "tutorial")
-    lang = st.session_state.get("language", "en")
-    label = "Navigate" if lang == "en" else "导航"
-    st.markdown(
-        f'<div class="eu-section-label" style="padding-top:4px"><span>{html.escape(label)}</span></div>',
-        unsafe_allow_html=True,
-    )
-    icon_glyphs = {
-        "book": "📘",
-        "bars": "📊",
-        "layers": "🗂",
-        "grid": "🧩",
-        "sparkles": "✨",
-    }
+    visual_active = "cohort" if active == "extract" else active
+    # Each row renders the design's ``eu-nav-item`` HTML (icon + label +
+    # right-aligned count, dark fill when active) with an invisible
+    # full-row ``st.button`` overlaid for routing — this gives the exact
+    # design alignment that a plain text button can't (the count column
+    # stays flush right instead of floating after the label).
     for item in items:
-        is_active = item.key == active
-        # Build the visible button label so CSS can split icon + text +
-        # count via spacing; the key tags it for nav-specific styling.
-        glyph = icon_glyphs.get(item.icon, "•")
-        count_suffix = f"   ·  {item.count}" if item.count else ""
-        btn_label = f"{glyph}    {item.label}{count_suffix}"
-        # Mark active state via container class on a wrapping markdown
-        # (no DOM hierarchy reliance — purely sibling CSS via key attr).
-        if is_active:
-            st.markdown(
-                '<div data-eu-nav-active="1" style="height:0;overflow:hidden"></div>',
-                unsafe_allow_html=True,
-            )
-        clicked = st.button(
-            btn_label,
-            key=f"euonav_{item.key}",
-            use_container_width=True,
-            type="primary" if is_active else "secondary",
-        )
-        if clicked:
-            st.session_state["_active_main_page"] = item.key
-            st.rerun()
+        is_active = item.key == visual_active
+        with st.container(key=f"eunavrow_{item.key}"):
+            st.markdown(render_nav_item_html(item, active=is_active), unsafe_allow_html=True)
+            if st.button(
+                item.label,
+                key=f"euonav_{item.key}",
+                use_container_width=True,
+            ):
+                st.session_state["_active_main_page"] = item.key
+                st.rerun()
 
 
 def _compute_pipeline_steps() -> list[PipelineStep]:
@@ -1383,8 +1514,20 @@ def _render_step3_concept_selection(concept_groups: dict[str, list[str]]) -> lis
 
 def _render_step4_export(selected_concepts: list[str]) -> bool:
     """Render Step 4 and return whether the sidebar should keep rendering."""
-    step4_title = "Step 4: Export Data" if st.session_state.language == 'en' else "步骤4: 导出数据"
-    st.markdown(f"### 💾 {step4_title}")
+    lang = st.session_state.get("language", "en")
+    step4_title = "Export bundle" if lang == 'en' else "导出数据包"
+    step4_desc = (
+        "Review destination, format, patient limit, and selected modules before starting extraction."
+        if lang == "en" else
+        "开始提取前，复核导出位置、格式、患者数量限制和已选模块。"
+    )
+    st.markdown(
+        '<div class="eu-export-header">'
+        f'<h1>{html.escape(step4_title)}</h1>'
+        f'<p>{html.escape(step4_desc)}</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     # 🔧 FIX (2026-02-05): 检查步骤依赖 - Step3必须先确认（点击确认选择按钮）
     step3_complete = st.session_state.get('step3_confirmed', False) and len(st.session_state.get('selected_concepts', [])) > 0
@@ -1418,74 +1561,119 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
         default_value=st.session_state.get("export_path", default_export_path),
     )
 
-    export_path = _directory_input(
-        "Export Path" if st.session_state.language == 'en' else "导出路径",
-        value=default_export_path,
-        input_key=export_input_key,
-        button_key="sidebar_export_path_browse",
-        placeholder="Select export directory" if st.session_state.language == 'en' else "选择导出目录",
-        help=(f"Data will be exported to this directory (Current database: {db_name.upper()})" if st.session_state.language == 'en' else f"数据将导出到此目录（当前数据库: {db_name.upper()}）"),
-    )
-    export_path = export_path or st.session_state.get("export_path", default_export_path)
-    st.session_state.export_path = export_path
+    st.session_state.setdefault("export_format", "Parquet")
+    if st.session_state.export_format not in {"Parquet", "CSV", "Excel"}:
+        st.session_state.export_format = "Parquet"
+    patient_limit_options = [0, 100, 1000, 5000, 10000, 20000, 50000]
+    if st.session_state.get('patient_limit', 0) not in patient_limit_options:
+        st.session_state.patient_limit = 0
 
-    # 检查路径并提供创建选项
-    if export_path:
-        if Path(export_path).exists():
-            path_ok_msg = "✅ Path valid" if st.session_state.language == 'en' else "✅ 路径有效"
-            st.success(path_ok_msg)
-        else:
-            col_create, col_info = st.columns([1, 2])
-            with col_create:
-                create_btn = "📁 Create Directory" if st.session_state.language == 'en' else "📁 创建目录"
-                if st.button(create_btn, key="create_export_dir"):
-                    try:
-                        Path(export_path).mkdir(parents=True, exist_ok=True)
-                        ok_msg = "✅ Directory created" if st.session_state.language == 'en' else "✅ 目录已创建"
-                        st.success(ok_msg)
+    settings_col, review_col = st.columns([1.08, 0.92], gap="large")
+    with settings_col:
+        with st.container(key="eu_export_settings_card"):
+            st.markdown(
+                '<div class="eu-export-card-head">'
+                f'<span>{html.escape("Destination" if lang == "en" else "导出位置")}</span>'
+                f'<small>{html.escape(db_name.upper())}</small>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            export_path = _directory_input(
+                "Export path" if lang == 'en' else "导出路径",
+                value=default_export_path,
+                input_key=export_input_key,
+                button_key="sidebar_export_path_browse",
+                placeholder="Select export directory" if lang == 'en' else "选择导出目录",
+                help=(
+                    f"Data will be exported to this directory (Current database: {db_name.upper()})"
+                    if lang == 'en' else
+                    f"数据将导出到此目录（当前数据库: {db_name.upper()}）"
+                ),
+            )
+            export_path = export_path or st.session_state.get("export_path", default_export_path)
+            st.session_state.export_path = export_path
+            path_exists = bool(export_path and Path(export_path).exists())
+            if path_exists:
+                st.markdown(
+                    '<div class="eu-export-status ok">'
+                    f'<span>✓</span>{html.escape("Path valid" if lang == "en" else "路径有效")}'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                missing_text = "Path does not exist" if lang == "en" else "路径不存在"
+                st.markdown(
+                    '<div class="eu-export-status warn">'
+                    f'<span>!</span>{html.escape(missing_text)}'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                create_col, hint_col = st.columns([0.42, 0.58], gap="small")
+                with create_col:
+                    create_btn = "Create folder" if lang == 'en' else "创建目录"
+                    if st.button(create_btn, key="create_export_dir", use_container_width=True):
+                        try:
+                            Path(export_path).mkdir(parents=True, exist_ok=True)
+                            st.rerun()
+                        except Exception as e:
+                            err_msg = f"Creation failed: {e}" if lang == 'en' else f"创建失败: {e}"
+                            st.error(err_msg)
+                with hint_col:
+                    st.caption(
+                        "EasyICU can create the final folder before exporting."
+                        if lang == "en" else
+                        "EasyICU 可在导出前创建最终目录。"
+                    )
+
+            st.markdown(
+                '<div class="eu-export-control-label">'
+                f'{html.escape("Export format" if lang == "en" else "导出格式")}'
+                '<small>Parquet recommended</small>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            fmt_cols = st.columns(3, gap="small")
+            for fmt_col, fmt in zip(fmt_cols, ["Parquet", "CSV", "Excel"]):
+                with fmt_col:
+                    if st.button(
+                        fmt,
+                        key=f"eu_export_format_{fmt.lower()}",
+                        type="primary" if st.session_state.export_format == fmt else "secondary",
+                        use_container_width=True,
+                    ):
+                        st.session_state.export_format = fmt
                         st.rerun()
-                    except Exception as e:
-                        err_msg = f"Creation failed: {e}" if st.session_state.language == 'en' else f"创建失败: {e}"
-                        st.error(err_msg)
-            with col_info:
-                not_exist_msg = "Path does not exist" if st.session_state.language == 'en' else "路径不存在"
-                st.caption(not_exist_msg)
 
-    # 导出格式选择（优先Parquet）
-    format_label = "Export Format" if st.session_state.language == 'en' else "导出格式"
-    format_help = "Parquet format is smaller and faster to load, recommended" if st.session_state.language == 'en' else "Parquet格式体积小、加载快，推荐使用"
-    export_format = st.selectbox(
-        format_label,
-        options=['Parquet', 'CSV', 'Excel'],
-        index=0,
-        help=format_help
-    )
-    st.session_state.export_format = export_format
+            st.markdown(
+                '<div class="eu-export-control-label">'
+                f'{html.escape("Patient limit" if lang == "en" else "患者数量限制")}'
+                f'<small>{html.escape("All patients for final runs" if lang == "en" else "正式运行建议全部患者")}</small>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            limit_labels = {
+                0: "All" if lang == "en" else "全部",
+                100: "100",
+                1000: "1k",
+                5000: "5k",
+                10000: "10k",
+                20000: "20k",
+                50000: "50k",
+            }
+            limit_cols = st.columns(len(patient_limit_options), gap="small")
+            for limit_col, limit_value in zip(limit_cols, patient_limit_options):
+                with limit_col:
+                    if st.button(
+                        limit_labels[limit_value],
+                        key=f"eu_export_limit_{limit_value}",
+                        type="primary" if st.session_state.patient_limit == limit_value else "secondary",
+                        use_container_width=True,
+                    ):
+                        st.session_state.patient_limit = limit_value
+                        st.rerun()
 
-    # 🚀 患者数量限制（性能优化选项）
-    limit_label = "Patient Limit" if st.session_state.language == 'en' else "患者数量限制"
-    limit_help = "Use All patients for the optimized full-dataset export. Pick a smaller number only for a quick test." if st.session_state.language == 'en' else "默认使用全部患者的优化全量导出。只有快速测试时才选择较小数量。"
-    patient_limit_options = [100, 1000, 5000, 10000, 20000, 50000, 0]
-    patient_limit_labels = {
-        100: "100 (quick test)" if st.session_state.language == 'en' else "100（快速测试）",
-        1000: "1,000",
-        5000: "5,000",
-        10000: "10,000",
-        20000: "20,000",
-        50000: "50,000",
-        0: "All patients" if st.session_state.language == 'en' else "全部患者"
-    }
-    current_limit = st.session_state.get('patient_limit', 0)
-    if current_limit not in patient_limit_options:
-        current_limit = 0
-    patient_limit = st.selectbox(
-        limit_label,
-        options=patient_limit_options,
-        index=patient_limit_options.index(current_limit),
-        format_func=lambda x: patient_limit_labels.get(x, str(x)),
-        help=limit_help
-    )
-    st.session_state.patient_limit = patient_limit
+    export_format = st.session_state.export_format
+    patient_limit = st.session_state.patient_limit
 
     # 导出按钮
     use_mock = st.session_state.get('use_mock_data', False)
@@ -1500,7 +1688,64 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
         st.session_state.selected_concepts = selected_concepts
         can_export = export_path and Path(export_path).exists()
 
-    export_btn = "📥 Export Data" if st.session_state.language == 'en' else "📥 导出数据"
+    _n_feats = len(selected_concepts)
+    _n_mods = len(set(g for g, cs in CONCEPT_GROUPS_INTERNAL.items() if any(c in selected_concepts for c in cs)))
+    _pat_str = str(patient_limit) if patient_limit and patient_limit > 0 else ("All" if lang == 'en' else "全部")
+    _selected_groups = [
+        g for g, cs in CONCEPT_GROUPS_INTERNAL.items() if any(c in selected_concepts for c in cs)
+    ]
+    if not _selected_groups and st.session_state.get("selected_groups"):
+        _selected_groups = list(st.session_state.get("selected_groups", []))
+    module_chip_html = "".join(
+        f'<span>{html.escape(str(group).replace("_", " "))}</span>'
+        for group in _selected_groups[:8]
+    )
+    if len(_selected_groups) > 8:
+        module_chip_html += f'<em>+{len(_selected_groups) - 8}</em>'
+    if not module_chip_html:
+        module_chip_html = f'<em>{html.escape("No modules" if lang == "en" else "无模块")}</em>'
+    path_exists = bool(export_path and Path(export_path).exists())
+    check_items = [
+        ("source", "Demo data" if use_mock else db_name.upper(), True),
+        ("cohort", f"{len(_step2_filter_chips(lang))} filters", True),
+        ("features", f"{_n_feats} selected", _n_feats > 0),
+        ("path", "ready" if path_exists else "missing", path_exists),
+    ]
+    check_html = "".join(
+        '<div class="eu-export-check">'
+        f'<span class="{"ok" if ok else "warn"}">{"✓" if ok else "!"}</span>'
+        f'<b>{html.escape(label)}</b>'
+        f'<em>{html.escape(value)}</em>'
+        '</div>'
+        for label, value, ok in check_items
+    )
+    with review_col:
+        st.markdown(
+            '<div class="eu-export-review-card">'
+            '<div class="eu-card-head">'
+            f'<span>{html.escape("Bundle review" if lang == "en" else "导出包复核")}</span>'
+            f'<small>{html.escape("Step 4 of 4" if lang == "en" else "第 4 / 4 步")}</small>'
+            '</div>'
+            '<div class="eu-export-summary-grid">'
+            f'<div><small>{html.escape("Patients" if lang == "en" else "患者")}</small><strong>{html.escape(_pat_str)}</strong></div>'
+            f'<div><small>{html.escape("Features" if lang == "en" else "特征")}</small><strong>{_n_feats}</strong></div>'
+            f'<div><small>{html.escape("Modules" if lang == "en" else "模块")}</small><strong>{_n_mods}</strong></div>'
+            f'<div><small>{html.escape("Format" if lang == "en" else "格式")}</small><strong>{html.escape(export_format)}</strong></div>'
+            '</div>'
+            '<div class="eu-export-path">'
+            f'<small>{html.escape("Export path" if lang == "en" else "导出路径")}</small>'
+            f'<code>{html.escape(str(export_path))}</code>'
+            '</div>'
+            f'<div class="eu-export-checklist">{check_html}</div>'
+            '<div class="eu-export-module-strip">'
+            f'<small>{html.escape("Selected modules" if lang == "en" else "已选模块")}</small>'
+            f'<div>{module_chip_html}</div>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    export_btn = "Export data" if lang == 'en' else "导出数据"
     if st.session_state.get('_exporting_in_progress', False):
         export_pending_msg = (
             "⏳ Export has started. EasyICU is re-extracting data from the source database, not reusing the preview sample."
@@ -1508,63 +1753,42 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
             "⏳ 导出已经开始。EasyICU 正在从源数据库重新提取数据，不会直接复用刚才的预览样本。"
         )
         st.info(export_pending_msg)
-    if can_export:
-        # ============ Final Sanity Review ============
-        sanity_title = get_text('sanity_title')
-        with st.expander(sanity_title, expanded=True):
-            _sc1, _sc2, _sc3 = st.columns(3)
-            _n_feats = len(selected_concepts)
-            _n_mods = len(set(g for g, cs in CONCEPT_GROUPS_INTERNAL.items() if any(c in selected_concepts for c in cs)))
-            _pat_lim = st.session_state.get('patient_limit', 0)
-            _pat_str = str(_pat_lim) if _pat_lim and _pat_lim > 0 else ("All" if st.session_state.language == 'en' else "全部")
-            with _sc1:
-                st.markdown(
-                    f'<div class="compact-summary-card"><div class="summary-label">{get_text("sanity_patients")}</div><div class="summary-value">{_pat_str}</div></div>',
-                    unsafe_allow_html=True,
-                )
-            with _sc2:
-                st.markdown(
-                    f'<div class="compact-summary-card"><div class="summary-label">{get_text("sanity_features")}</div><div class="summary-value">{_n_feats}</div></div>',
-                    unsafe_allow_html=True,
-                )
-            with _sc3:
-                st.markdown(
-                    f'<div class="compact-summary-card"><div class="summary-label">{get_text("sanity_format")}</div><div class="summary-value">{export_format}</div></div>',
-                    unsafe_allow_html=True,
-                )
-
-            st.markdown(
-                '<div class="sidebar-export-detail">'
-                f'<strong>{html.escape(get_text("sanity_path"))}:</strong><br>'
-                f'<code>{html.escape(str(export_path))}</code>'
-                '</div>',
-                unsafe_allow_html=True,
-            )
-            st.markdown(
-                f'<div class="sidebar-export-detail"><strong>{html.escape(get_text("sanity_modules"))}:</strong> {_n_mods}</div>',
-                unsafe_allow_html=True,
-            )
-
-        _col_ok, _col_back = st.columns(2)
-        with _col_ok:
-            if st.button(get_text('sanity_confirm'), type="primary", use_container_width=True, key="final_export_btn"):
-                st.session_state.trigger_export = True
-                st.session_state.export_completed = False
-                st.session_state['_exporting_in_progress'] = True
-                st.session_state['_scroll_to_tab'] = 'export_progress'
-                st.rerun()
-        with _col_back:
-            if st.button(get_text('sanity_back'), use_container_width=True, key="sanity_back_btn"):
-                st.session_state.step3_confirmed = False
-                st.rerun()
-    else:
-        st.button(export_btn, type="primary", use_container_width=True, disabled=True)
+    st.markdown(
+        f'<div class="eu-source-footer-note">{html.escape("Step 4 of 4" if lang == "en" else "第 4 步 / 共 4 步")}</div>',
+        unsafe_allow_html=True,
+    )
+    footer_left, footer_mid, footer_right = st.columns([1, 0.9, 1.05], gap="small")
+    with footer_mid:
+        if st.button(get_text('sanity_back'), use_container_width=True, key="sanity_back_btn"):
+            st.session_state.step3_confirmed = False
+            st.rerun()
+    with footer_right:
+        if st.button(
+            get_text('sanity_confirm') if can_export else export_btn,
+            type="primary",
+            use_container_width=True,
+            key="final_export_btn",
+            disabled=not can_export,
+        ):
+            st.session_state.trigger_export = True
+            st.session_state.export_completed = False
+            st.session_state['_exporting_in_progress'] = True
+            st.session_state['_scroll_to_tab'] = 'export_progress'
+            st.rerun()
+    if not can_export:
+        missing = []
         if not selected_concepts:
-            feat_warn = "⚠️ Please select features first" if st.session_state.language == 'en' else "⚠️ 请先选择特征"
-            st.caption(feat_warn)
-        elif not use_mock and not st.session_state.data_path:
-            path_warn = "⚠️ Please set data path first" if st.session_state.language == 'en' else "⚠️ 请先设置数据路径"
-            st.caption(path_warn)
+            missing.append("features" if lang == "en" else "特征")
+        if not path_exists:
+            missing.append("valid path" if lang == "en" else "有效路径")
+        if not use_mock and not st.session_state.data_path:
+            missing.append("data source" if lang == "en" else "数据源")
+        warn_msg = (
+            "Missing: " + ", ".join(missing)
+            if lang == "en" else
+            "缺少：" + "、".join(missing)
+        )
+        st.caption(warn_msg)
 
     return True
 
@@ -1576,32 +1800,628 @@ def _render_system_resource_panel() -> None:
     from the installed app context and shows a brief CPU/RAM summary with
     auto-optimized worker recommendations.
     """
-    st.markdown("---")
     resources = get_system_resources()
-    perf_title = "⚡ Performance" if st.session_state.language == 'en' else "⚡ 性能配置"
-    with st.expander(perf_title, expanded=False):
-        if st.session_state.language == 'en':
-            st.markdown(f"""
-            **System Resources:**
-            - 🖥️ CPU: {resources['cpu_count']} cores
-            - 💾 RAM: {resources['total_memory_gb']} GB total
-            - 📊 Available: {resources['available_memory_gb']} GB
+    lang = st.session_state.get("language", "en")
+    title = "Performance" if lang == "en" else "性能配置"
+    items = [
+        ("CPU", f"{resources['cpu_count']} cores" if lang == "en" else f"{resources['cpu_count']} 核"),
+        ("RAM", f"{resources['available_memory_gb']} / {resources['total_memory_gb']} GB"),
+        ("Workers", str(resources['recommended_workers']) if lang == "en" else f"{resources['recommended_workers']} 并行"),
+        ("Backend", str(resources['recommended_backend'])),
+    ]
+    item_html = "".join(
+        '<div>'
+        f'<small>{html.escape(label)}</small>'
+        f'<strong>{html.escape(value)}</strong>'
+        '</div>'
+        for label, value in items
+    )
+    st.markdown(
+        '<div class="eu-performance-strip">'
+        '<div class="eu-card-head">'
+        f'<span>{html.escape(title)}</span>'
+        f'<small>{html.escape("auto-optimized" if lang == "en" else "自动优化")}</small>'
+        '</div>'
+        f'<div class="eu-performance-grid">{item_html}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-            **Auto-optimized:**
-            - Workers: {resources['recommended_workers']}
-            - Backend: {resources['recommended_backend']}
-            """)
+
+def _ensure_step2_state_defaults() -> None:
+    """Initialize cohort-builder state without overwriting existing choices."""
+    if 'cohort_filter' not in st.session_state:
+        st.session_state.cohort_filter = {
+            'age_min': None,
+            'age_max': None,
+            'first_icu_stay': None,
+            'los_min': None,
+            'los_max': None,
+            'gender': None,
+            'survived': None,
+            'has_sepsis': None,
+            'disease_cohort': 'none',
+            'icd_query': '',
+            'icd_include_query': '',
+            'icd_exclude_query': '',
+            'icd_mode': 'include',
+        }
+    cf = st.session_state.cohort_filter
+    if 'icd_include_query' not in cf:
+        legacy_query = str(cf.get('icd_query', '')).strip()
+        legacy_mode = cf.get('icd_mode', 'include')
+        cf['icd_include_query'] = legacy_query if legacy_mode != 'exclude' else ''
+        cf['icd_exclude_query'] = legacy_query if legacy_mode == 'exclude' else ''
+    cf.setdefault('icd_exclude_query', '')
+    cf.setdefault('icd_query', '')
+    cf.setdefault('icd_mode', 'include')
+    st.session_state.setdefault('sepsis_si_mode', 'auto')
+    st.session_state.setdefault('sepsis_abx_win_hours', 24)
+    st.session_state.setdefault('sepsis_samp_win_hours', 72)
+    st.session_state.setdefault('sepsis_positive_cultures', False)
+    if 'cohort_enabled' not in st.session_state:
+        st.session_state.cohort_enabled = st.session_state.get("entry_mode") == "demo"
+    if 'filtered_patient_count' not in st.session_state:
+        st.session_state.filtered_patient_count = None
+
+
+def _step2_filter_chips(lang: str) -> list[str]:
+    """Return compact localized chips for the currently active filters."""
+    cf = st.session_state.get('cohort_filter', {})
+    chips: list[str] = []
+    if cf.get('age_min') is not None or cf.get('age_max') is not None:
+        chips.append(
+            f"age {cf.get('age_min') or 0}-{cf.get('age_max') or 120}"
+            if lang == "en" else
+            f"年龄 {cf.get('age_min') or 0}-{cf.get('age_max') or 120}"
+        )
+    if cf.get('first_icu_stay') is True:
+        chips.append("first stay only" if lang == "en" else "仅首次 ICU")
+    elif cf.get('first_icu_stay') is False:
+        chips.append("readmissions only" if lang == "en" else "仅再入院")
+    if cf.get('los_min') is not None:
+        chips.append(f">={cf['los_min']}h ICU" if lang == "en" else f"ICU >={cf['los_min']}小时")
+    if cf.get('gender') is not None:
+        chips.append(f"sex {cf['gender']}" if lang == "en" else f"性别 {cf['gender']}")
+    if cf.get('survived') is True:
+        chips.append("survived" if lang == "en" else "存活")
+    elif cf.get('survived') is False:
+        chips.append("deceased" if lang == "en" else "死亡")
+    disease = cf.get('disease_cohort')
+    if disease and disease != 'none':
+        disease_cfg = DISEASE_COHORT_CONFIG.get(disease, {})
+        disease_label = disease_cfg.get('label_en') if lang == "en" else disease_cfg.get('label_zh')
+        chips.append(disease_label or disease)
+    if cf.get('icd_include_query'):
+        chips.append(f"ICD + {cf['icd_include_query']}")
+    if cf.get('icd_exclude_query'):
+        chips.append(f"ICD - {cf['icd_exclude_query']}")
+    return chips
+
+
+def _render_cohort_live_preview(lang: str) -> None:
+    """Render the stateful right-hand preview from the cohort-builder design."""
+    base_n = int(st.session_state.get('mock_params', {}).get('n_patients', 100) or 100)
+    cf = st.session_state.get('cohort_filter', {})
+    chips = _step2_filter_chips(lang) if st.session_state.get('cohort_enabled') else []
+    factor = 1.0
+    if cf.get('age_min') is not None or cf.get('age_max') is not None:
+        factor *= 0.86
+    if cf.get('los_min') is not None:
+        factor *= 0.82
+    if cf.get('first_icu_stay') is not None:
+        factor *= 0.74
+    if cf.get('gender') is not None:
+        factor *= 0.50
+    if cf.get('survived') is not None:
+        factor *= 0.58
+    if cf.get('disease_cohort') and cf.get('disease_cohort') != 'none':
+        factor *= 0.50
+    if cf.get('icd_include_query'):
+        factor *= 0.72
+    filtered_n = max(1, int(round(base_n * factor))) if chips else base_n
+    pct_drop = 0 if base_n == 0 else round((1 - filtered_n / base_n) * 100, 1)
+    ready_label = f"{filtered_n:,} ready" if lang == "en" else f"{filtered_n:,} 可用"
+    of_label = (
+        f"of {base_n:,} stays · -{pct_drop}%"
+        if lang == "en" else
+        f"共 {base_n:,} 个 stay · -{pct_drop}%"
+    )
+    bar_w = max(6, min(300, int(300 * filtered_n / max(base_n, 1))))
+    los_w = max(6, min(300, int(300 * 0.82)))
+    chips_html = "".join(
+        f'<span class="eu-cohort-chip">{html.escape(chip)}<span>×</span></span>'
+        for chip in chips
+    ) or f'<span class="eu-cohort-empty">{html.escape("No active filters" if lang == "en" else "无启用筛选")}</span>'
+    sample_rows = [
+        (20001, 71, "M", 6.2, 9, "—"),
+        (20002, 58, "F", 3.8, 7, "—"),
+        (20003, 83, "F", 8.1, 12, "✓"),
+        (20004, 67, "M", 2.4, 5, "—"),
+        (20005, 74, "M", 5.6, 8, "—"),
+    ]
+    body = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(str(cell))}</td>" for cell in row) + "</tr>"
+        for row in sample_rows
+    )
+    st.markdown(
+        '<div class="eu-cohort-preview-stack">'
+        '<div class="eu-cohort-preview-card">'
+        '<div class="preview-head"><div>'
+        f'<div class="title">{html.escape("Live preview" if lang == "en" else "实时预览")}</div>'
+        f'<div class="sub">{html.escape("Sample of demo cohort" if lang == "en" else "演示队列样本")}</div>'
+        '</div>'
+        f'<span class="eu-pill ok"><span class="dot"></span>{html.escape(ready_label)}</span></div>'
+        '<div class="preview-big mono">'
+        f'<span>{filtered_n:,}</span><em>{html.escape(of_label)}</em></div>'
+        '<svg class="eu-cohort-funnel" viewBox="0 0 300 34" preserveAspectRatio="none">'
+        '<rect x="0" y="6" width="300" height="6" rx="3"></rect>'
+        f'<rect class="ink" x="0" y="6" width="{bar_w}" height="6" rx="3"></rect>'
+        '<rect x="0" y="20" width="300" height="6" rx="3"></rect>'
+        f'<rect class="accent" x="0" y="20" width="{los_w}" height="6" rx="3"></rect>'
+        '</svg>'
+        '<div class="funnel-labels mono">'
+        f'<span>{html.escape("after filters" if lang == "en" else "筛选后")}: {filtered_n:,}</span>'
+        f'<span>{html.escape("after stay rule" if lang == "en" else "时长规则后")}: {int(base_n * 0.82):,}</span>'
+        '</div>'
+        '<div class="hist-head">'
+        f'<span>{html.escape("Age distribution" if lang == "en" else "年龄分布")}</span>'
+        '<span class="mono">mu 63.2 · sigma 14.8</span></div>'
+        '<svg class="eu-cohort-hist" viewBox="0 0 252 60" preserveAspectRatio="none">'
+        + "".join(
+            f'<rect x="{i * 18 + 2}" y="{60 - h}" width="14" height="{h}" rx="1"></rect>'
+            for i, h in enumerate([4, 7, 14, 22, 36, 48, 54, 51, 42, 31, 20, 11, 6, 3])
+        )
+        + '</svg>'
+        '<div class="eu-cohort-metrics">'
+        f'<div><b>{html.escape("MORTALITY" if lang == "en" else "死亡率")}</b><span>18.0%</span></div>'
+        f'<div><b>{html.escape("MEAN LOS" if lang == "en" else "平均 LOS")}</b><span>4.8 d</span></div>'
+        f'<div><b>{html.escape("MECH VENT" if lang == "en" else "机械通气")}</b><span>52.1%</span></div>'
+        '</div></div>'
+        '<div class="eu-cohort-chip-card">'
+        '<div class="chip-head">'
+        f'<span>{html.escape("Active filters" if lang == "en" else "当前筛选")} · {len(chips)}</span>'
+        f'<em>{html.escape("Clear all" if lang == "en" else "清空")}</em></div>'
+        f'<div class="chip-wrap">{chips_html}</div></div>'
+        '<div class="eu-cohort-sample-card">'
+        '<div class="table-head">'
+        f'<span>{html.escape("Sample · first 5" if lang == "en" else "样本 · 前 5 行")}</span>'
+        '<em class="mono">seed=42</em></div>'
+        '<table class="mono"><thead><tr><th>stay</th><th>age</th><th>sex</th><th>los</th><th>sofa</th><th>died</th></tr></thead>'
+        f'<tbody>{body}</tbody></table></div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_step2_cohort_builder_design() -> bool:
+    """Render Step 2 as the two-column cohort-builder design page."""
+    lang = st.session_state.get("language", "en")
+    use_mock = st.session_state.get('use_mock_data', False)
+    step1_complete = (
+        st.session_state.get('step1_confirmed', False)
+        if use_mock else
+        bool(st.session_state.get('data_path')) and Path(st.session_state.data_path).exists()
+    )
+    if not step1_complete:
+        st.warning("Confirm Step 1 before building the cohort." if lang == "en" else "请先确认第 1 步，再构建队列。")
+        return False
+
+    _ensure_step2_state_defaults()
+    left, right = st.columns([1.42, 1.0], gap="large")
+    with left:
+        header_l, header_r = st.columns([1.0, 0.45], gap="small")
+        with header_l:
+            st.markdown(
+                '<div class="eu-cohort-header">'
+                f'<h1>{html.escape("Build cohort" if lang == "en" else "构建队列")}</h1>'
+                f'<p>{html.escape("Filter the patient population. Preview updates live." if lang == "en" else "筛选患者人群，右侧预览实时更新。")}</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        with header_r:
+            st.toggle(
+                "Enable filtering" if lang == "en" else "启用筛选",
+                key="cohort_enabled",
+                help=("Filter patients by demographics and clinical criteria" if lang == "en" else "根据人口统计学和临床标准筛选患者"),
+            )
+
+        with st.container(key="eu_cohort_demographics_card"):
+            st.markdown(
+                f'<div class="eu-section-label"><span>{html.escape("Demographics & stay" if lang == "en" else "人口统计与 ICU stay")}</span></div>',
+                unsafe_allow_html=True,
+            )
+            cf = st.session_state.cohort_filter
+            row1 = st.columns([1, 1, 1.2], gap="small")
+            with row1[0]:
+                age_min = st.number_input(
+                    "Min age" if lang == "en" else "最小年龄",
+                    min_value=0, max_value=120,
+                    value=0 if cf.get('age_min') is None else int(cf['age_min']),
+                    key="cohort_age_min_design",
+                    disabled=not st.session_state.cohort_enabled,
+                )
+                cf['age_min'] = age_min if st.session_state.cohort_enabled and age_min > 0 else None
+            with row1[1]:
+                age_max = st.number_input(
+                    "Max age" if lang == "en" else "最大年龄",
+                    min_value=0, max_value=120,
+                    value=120 if cf.get('age_max') is None else int(cf['age_max']),
+                    key="cohort_age_max_design",
+                    disabled=not st.session_state.cohort_enabled,
+                )
+                cf['age_max'] = age_max if st.session_state.cohort_enabled and age_max < 120 else None
+            with row1[2]:
+                first_opts = {
+                    'any': 'Any' if lang == "en" else '不限',
+                    'yes': 'First stay only' if lang == "en" else '仅首次 ICU',
+                    'no': 'Readmissions' if lang == "en" else '仅再入院',
+                }
+                current_first = 'yes' if cf.get('first_icu_stay') is True else 'no' if cf.get('first_icu_stay') is False else 'any'
+                first_val = st.selectbox(
+                    "First ICU stay" if lang == "en" else "首次 ICU",
+                    options=list(first_opts.keys()),
+                    format_func=lambda x: first_opts[x],
+                    index=list(first_opts.keys()).index(current_first),
+                    key="cohort_first_icu_design",
+                    disabled=not st.session_state.cohort_enabled,
+                )
+                cf['first_icu_stay'] = True if first_val == 'yes' else False if first_val == 'no' else None
+
+            row2 = st.columns([1, 1, 1], gap="small")
+            with row2[0]:
+                los_min = st.number_input(
+                    "Min ICU stay (h)" if lang == "en" else "最短 ICU 时长(h)",
+                    min_value=0, max_value=10000,
+                    value=0 if cf.get('los_min') is None else int(cf['los_min']),
+                    key="cohort_los_min_design",
+                    disabled=not st.session_state.cohort_enabled,
+                )
+                cf['los_min'] = los_min if st.session_state.cohort_enabled and los_min > 0 else None
+                cf['los_max'] = None
+            with row2[1]:
+                gender_opts = {'any': 'Any' if lang == "en" else '不限', 'M': 'Male' if lang == "en" else '男性', 'F': 'Female' if lang == "en" else '女性'}
+                current_gender = cf.get('gender') or 'any'
+                gender_val = st.selectbox(
+                    "Gender" if lang == "en" else "性别",
+                    options=list(gender_opts.keys()),
+                    format_func=lambda x: gender_opts[x],
+                    index=list(gender_opts.keys()).index(current_gender),
+                    key="cohort_gender_design",
+                    disabled=not st.session_state.cohort_enabled,
+                )
+                cf['gender'] = gender_val if st.session_state.cohort_enabled and gender_val != 'any' else None
+            with row2[2]:
+                survival_opts = {'any': 'Any' if lang == "en" else '不限', 'survived': 'Survived' if lang == "en" else '存活', 'deceased': 'Deceased' if lang == "en" else '死亡'}
+                current_survival = 'survived' if cf.get('survived') is True else 'deceased' if cf.get('survived') is False else 'any'
+                survival_val = st.selectbox(
+                    "Outcome" if lang == "en" else "转归",
+                    options=list(survival_opts.keys()),
+                    format_func=lambda x: survival_opts[x],
+                    index=list(survival_opts.keys()).index(current_survival),
+                    key="cohort_survival_design",
+                    disabled=not st.session_state.cohort_enabled,
+                )
+                cf['survived'] = True if survival_val == 'survived' else False if survival_val == 'deceased' else None
+
+        with st.container(key="eu_cohort_clinical_card"):
+            st.markdown(
+                '<div class="eu-card-head">'
+                f'<span>{html.escape("Clinical cohort" if lang == "en" else "临床队列")}</span>'
+                '<em class="mono">disease_cohort</em></div>',
+                unsafe_allow_html=True,
+            )
+            supported = _get_supported_disease_cohorts(st.session_state.get('database', 'miiv'))
+            option_map_en = {
+                'none': ('No filter', 'all stays'),
+                'sepsis': ('Sepsis-3', 'SOFA delta >=2 + suspected infection'),
+                'aki': ('AKI · KDIGO', 'stage >=1 within 48h'),
+                'circ_failure': ('Circulatory failure', 'shock / vaso support'),
+                'mech_vent': ('Mechanical ventilation', 'vent exposure'),
+                'rrt': ('RRT', 'renal replacement therapy'),
+                'ards': ('ARDS', 'ICD respiratory cohort'),
+                'pneumonia': ('Pneumonia', 'ICD infection cohort'),
+                'heart_failure': ('Heart failure', 'ICD cardiac cohort'),
+            }
+            option_map_zh = {
+                'none': ('不限', '所有 stay'),
+                'sepsis': ('脓毒症 Sepsis-3', 'SOFA delta >=2 + 疑似感染'),
+                'aki': ('AKI · KDIGO', '48h 内 stage >=1'),
+                'circ_failure': ('循环衰竭', '休克 / 血管活性支持'),
+                'mech_vent': ('机械通气', '通气暴露'),
+                'rrt': ('RRT', '肾脏替代治疗'),
+                'ards': ('ARDS', 'ICD 呼吸队列'),
+                'pneumonia': ('肺炎', 'ICD 感染队列'),
+                'heart_failure': ('心力衰竭', 'ICD 心脏队列'),
+            }
+            option_map = option_map_en if lang == "en" else option_map_zh
+            current = cf.get('disease_cohort', 'none')
+            if current not in supported:
+                current = 'none'
+            disease_cols = st.columns(3, gap="small")
+            for idx, disease_key in enumerate([key for key in supported if key in option_map][:9]):
+                label, sub = option_map[disease_key]
+                with disease_cols[idx % 3]:
+                    if st.button(
+                        label,
+                        key=f"cohort_disease_card_{disease_key}",
+                        type="primary" if current == disease_key else "secondary",
+                        use_container_width=True,
+                        disabled=not st.session_state.cohort_enabled,
+                    ):
+                        cf['disease_cohort'] = disease_key
+                        cf['has_sepsis'] = True if disease_key == 'sepsis' else None
+                        st.rerun()
+                    st.caption(sub)
+            if not st.session_state.cohort_enabled:
+                cf['disease_cohort'] = 'none'
+                cf['has_sepsis'] = None
+
+        if _supports_icd_filter(st.session_state.get('database')) or st.session_state.get("entry_mode") == "demo":
+            with st.container(key="eu_cohort_icd_card"):
+                st.markdown(
+                    '<div class="eu-card-head">'
+                    f'<span>{html.escape("ICD codes" if lang == "en" else "ICD 编码")} <small>(MIMIC-IV / eICU)</small></span>'
+                    '<em class="mono">comma / space separated</em></div>',
+                    unsafe_allow_html=True,
+                )
+                icd_cols = st.columns(2, gap="small")
+                with icd_cols[0]:
+                    include_value = st.text_input(
+                        "Include" if lang == "en" else "包含",
+                        value=cf.get('icd_include_query', ''),
+                        key="cohort_icd_include_query_design",
+                        placeholder="A41,A42 or A41-42" if lang == "en" else "A41,A42 或 A41-42",
+                        disabled=not st.session_state.cohort_enabled,
+                    )
+                    cf['icd_include_query'] = include_value.strip() if st.session_state.cohort_enabled else ""
+                with icd_cols[1]:
+                    exclude_value = st.text_input(
+                        "Exclude" if lang == "en" else "排除",
+                        value=cf.get('icd_exclude_query', ''),
+                        key="cohort_icd_exclude_query_design",
+                        placeholder="I50,C34 or I50-51" if lang == "en" else "I50,C34 或 I50-51",
+                        disabled=not st.session_state.cohort_enabled,
+                    )
+                    cf['icd_exclude_query'] = exclude_value.strip() if st.session_state.cohort_enabled else ""
+                cf['icd_query'] = cf.get('icd_include_query', '')
+                cf['icd_mode'] = 'include'
         else:
-            st.markdown(f"""
-            **系统资源:**
-            - 🖥️ CPU: {resources['cpu_count']} 核心
-            - 💾 内存: {resources['total_memory_gb']} GB 总计
-            - 📊 可用: {resources['available_memory_gb']} GB
+            cf['icd_query'] = ""
+            cf['icd_include_query'] = ""
+            cf['icd_exclude_query'] = ""
+            cf['icd_mode'] = 'include'
+            _clear_icd_preview_state()
 
-            **自动优化配置:**
-            - 并行数: {resources['recommended_workers']}
-            - 后端: {resources['recommended_backend']}
-            """)
+        footer_l, reset_col, preset_col, confirm_col = st.columns([2.45, 0.72, 1.15, 1.85], gap="small")
+        with footer_l:
+            st.markdown(
+                f'<div class="eu-source-footer-note">{html.escape("Step 2 of 4" if lang == "en" else "第 2 步 / 共 4 步")}</div>',
+                unsafe_allow_html=True,
+            )
+        with reset_col:
+            if st.button("Reset" if lang == "en" else "重置", key="cohort_builder_reset", use_container_width=True):
+                st.session_state.pop('cohort_filter', None)
+                st.session_state.cohort_enabled = st.session_state.get("entry_mode") == "demo"
+                st.rerun()
+        with preset_col:
+            if st.button("Save preset" if lang == "en" else "保存预设", key="cohort_builder_save_preset", use_container_width=True):
+                st.toast("Preset saved for this session." if lang == "en" else "已保存为当前会话预设。")
+        with confirm_col:
+            if st.button(
+                "Confirm cohort" if lang == "en" else "确认队列",
+                key="step2_confirm_design",
+                type="primary",
+                use_container_width=True,
+            ):
+                _clear_icd_preview_state()
+                st.session_state.step2_confirmed = True
+                st.rerun()
+
+    with right:
+        _render_cohort_live_preview(lang)
+
+    return True
+
+
+def _default_concept_groups(concept_groups: dict[str, list[str]]) -> list[str]:
+    """Pick stable sensible defaults by label substring across EN/ZH labels."""
+    wanted = [
+        "SOFA-2", "Vital", "生命体征", "Respiratory", "呼吸",
+        "Chemistry", "生化", "Hematology", "血液",
+        "Demographics", "人口", "Outcome", "结局",
+    ]
+    defaults: list[str] = []
+    for group_name in concept_groups:
+        if any(token in group_name for token in wanted):
+            defaults.append(group_name)
+        if len(defaults) >= 8:
+            break
+    return defaults or list(concept_groups.keys())[:4]
+
+
+def _reset_concepts_to_groups(concept_groups: dict[str, list[str]], groups: list[str]) -> None:
+    """Sync selected groups and concept checkbox state."""
+    st.session_state.selected_groups = [g for g in groups if g in concept_groups]
+    st.session_state.concept_checkboxes = {}
+    for group_name in st.session_state.selected_groups:
+        for concept in concept_groups.get(group_name, []):
+            st.session_state.concept_checkboxes[concept] = True
+
+
+def _collect_selected_concepts(concept_groups: dict[str, list[str]]) -> list[str]:
+    selected: list[str] = []
+    for group_name in st.session_state.get("selected_groups", []):
+        for concept in concept_groups.get(group_name, []):
+            if st.session_state.concept_checkboxes.get(concept, True):
+                selected.append(concept)
+    return sorted(set(selected))
+
+
+def _render_concept_summary(lang: str, concept_groups: dict[str, list[str]], selected_concepts: list[str]) -> None:
+    selected_groups = [g for g in st.session_state.get("selected_groups", []) if g in concept_groups]
+    total_features = sum(len(v) for v in concept_groups.values())
+    module_tiles = "".join(
+        '<div>'
+        f'<b>{html.escape(group_name)}</b>'
+        f'<span>{sum(1 for c in concept_groups.get(group_name, []) if c in selected_concepts)}/{len(concept_groups.get(group_name, []))}</span>'
+        '</div>'
+        for group_name in selected_groups[:6]
+    )
+    feature_list = "".join(
+        f'<span class="eu-concept-chip">{html.escape(concept)}</span>'
+        for concept in selected_concepts[:22]
+    )
+    if len(selected_concepts) > 22:
+        feature_list += f'<span class="eu-concept-more">+{len(selected_concepts) - 22}</span>'
+    if not feature_list:
+        feature_list = f'<span class="eu-cohort-empty">{html.escape("No features selected" if lang == "en" else "尚未选择变量")}</span>'
+    st.markdown(
+        '<div class="eu-concept-summary-card">'
+        f'<div class="label">{html.escape("Selection summary" if lang == "en" else "选择摘要")}</div>'
+        '<div class="big mono">'
+        f'<span>{len(selected_concepts)}</span>'
+        f'<em>{html.escape(("of " + str(total_features) + " features") if lang == "en" else ("共 " + str(total_features) + " 个变量"))}</em>'
+        '</div>'
+        '<div class="eu-concept-module-grid">'
+        f'{module_tiles}'
+        '</div>'
+        '</div>'
+        '<div class="eu-concept-summary-card">'
+        f'<div class="label">{html.escape("Selected features" if lang == "en" else "已选变量")}</div>'
+        f'<div class="eu-concept-chip-wrap">{feature_list}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]]) -> list[str] | None:
+    """Render Step 3 as the concept-selection artboard."""
+    lang = st.session_state.get("language", "en")
+    if not st.session_state.get('step2_confirmed', False):
+        st.warning(
+            "Please complete Step 2 first." if lang == "en" else "请先完成第 2 步。",
+        )
+        return None
+    st.session_state.setdefault("concept_checkboxes", {})
+    st.session_state.setdefault("selected_groups", [])
+    if not st.session_state.selected_groups and not st.session_state.get("_eu_concept_defaults_seeded"):
+        _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
+        st.session_state["_eu_concept_defaults_seeded"] = True
+
+    header_l, header_r = st.columns([1.4, 0.9], gap="large")
+    with header_l:
+        st.markdown(
+            '<div class="eu-concept-header">'
+            f'<h1>{html.escape("Select concepts" if lang == "en" else "选择变量")}</h1>'
+            f'<p>{html.escape("Module-level defaults are ready; expand details only when you need feature-level control." if lang == "en" else "模块默认选择已准备好；需要精细控制时再展开单个变量。")}</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    with header_r:
+        defaults_col, clear_col = st.columns([1.35, 0.8], gap="small")
+        with defaults_col:
+            if st.button(
+                "Sensible defaults" if lang == "en" else "推荐默认",
+                key="concept_defaults_design",
+                use_container_width=True,
+            ):
+                _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
+                st.rerun()
+        with clear_col:
+            if st.button(
+                "Clear all" if lang == "en" else "清空",
+                key="concept_clear_design",
+                use_container_width=True,
+            ):
+                _reset_concepts_to_groups(concept_groups, [])
+                st.rerun()
+
+    left, right = st.columns([1.48, 1.0], gap="large")
+    with left:
+        search = st.text_input(
+            "Filter by name, code, or unit" if lang == "en" else "按名称、代码或单位筛选",
+            key="concept_search_design",
+            placeholder="sofa, lactate, renal..." if lang == "en" else "SOFA、乳酸、肾脏...",
+        ).strip().lower()
+        visible_groups = [
+            group_name for group_name, concepts in concept_groups.items()
+            if not search
+            or search in group_name.lower()
+            or any(search in concept.lower() for concept in concepts)
+        ]
+        st.markdown(
+            f'<div class="eu-section-label"><span>{html.escape("Modules" if lang == "en" else "模块")}</span></div>',
+            unsafe_allow_html=True,
+        )
+        card_cols = st.columns(2, gap="small")
+        for idx, group_name in enumerate(visible_groups):
+            concepts = concept_groups.get(group_name, [])
+            selected_count = sum(1 for c in concepts if st.session_state.concept_checkboxes.get(c, False))
+            active = group_name in st.session_state.selected_groups
+            with card_cols[idx % 2]:
+                if st.button(
+                    group_name,
+                    key=f"concept_module_card_{idx}",
+                    type="primary" if active else "secondary",
+                    use_container_width=True,
+                ):
+                    groups = list(st.session_state.selected_groups)
+                    if active:
+                        groups = [g for g in groups if g != group_name]
+                        for concept in concepts:
+                            st.session_state.concept_checkboxes.pop(concept, None)
+                    else:
+                        groups.append(group_name)
+                        for concept in concepts:
+                            st.session_state.concept_checkboxes[concept] = True
+                    st.session_state.selected_groups = groups
+                    st.rerun()
+                st.caption(f"{selected_count}/{len(concepts)} features" if lang == "en" else f"{selected_count}/{len(concepts)} 个变量")
+
+        selected_groups = [g for g in st.session_state.selected_groups if g in concept_groups]
+        if selected_groups:
+            with st.expander(
+                "Feature detail configuration" if lang == "en" else "变量详细配置",
+                expanded=False,
+            ):
+                import hashlib
+                for group_name in selected_groups:
+                    key_hash = hashlib.md5(group_name.encode()).hexdigest()[:8]
+                    st.markdown(f"**{html.escape(group_name)}**")
+                    cols = st.columns(3)
+                    for cidx, concept in enumerate(concept_groups.get(group_name, [])):
+                        with cols[cidx % 3]:
+                            default_val = st.session_state.concept_checkboxes.get(concept, True)
+                            checked = st.checkbox(concept, value=default_val, key=f"cb_design_{key_hash}_{concept}")
+                            st.session_state.concept_checkboxes[concept] = checked
+
+        selected_concepts = _collect_selected_concepts(concept_groups)
+        st.session_state.selected_concepts = selected_concepts
+        footer_l, reset_col, confirm_col = st.columns([4.2, 1.0, 1.65], gap="small")
+        with footer_l:
+            st.markdown(
+                f'<div class="eu-source-footer-note">{html.escape("Step 3 of 4" if lang == "en" else "第 3 步 / 共 4 步")}</div>',
+                unsafe_allow_html=True,
+            )
+        with reset_col:
+            if st.button("Reset" if lang == "en" else "重置", key="concept_reset_design", use_container_width=True):
+                _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
+                st.rerun()
+        with confirm_col:
+            if st.button(
+                "Confirm concepts" if lang == "en" else "确认变量",
+                key="step3_confirm_design",
+                type="primary",
+                disabled=len(selected_concepts) == 0,
+                use_container_width=True,
+            ):
+                st.session_state.step3_confirmed = True
+                st.rerun()
+
+    with right:
+        _render_concept_summary(lang, concept_groups, st.session_state.get("selected_concepts", []) or [])
+
+    return st.session_state.get("selected_concepts", []) or []
 
 
 def render_sidebar(app_context: dict[str, Any] | None = None):
@@ -1626,13 +2446,6 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
                 '<div style="height:8px;border-bottom:1px solid var(--hair);margin:12px 0 4px"></div>',
                 unsafe_allow_html=True,
             )
-
-        # The data-extraction workflow (steps 1-4) now lives on the main
-        # "Extract" page (render_extract_page) — reached by clicking the
-        # pipeline items above. The sidebar only carries the AI settings
-        # + language now, plus the footer icon row.
-        if entry_mode != 'none':
-            _render_sidebar_ai_and_lang()
 
         # Footer icon row (back / help / settings / lang / avatar) — at
         # the very bottom of the sidebar per shell-a-frame.jsx.
@@ -1674,60 +2487,25 @@ def render_extract_page(lang: str, app_context: dict[str, Any] | None = None) ->
     entry_mode = st.session_state.get("entry_mode", "none")
     concept_groups = get_concept_groups()
 
-    # Design PageHeader
-    from easyicu.webapp.cohort_charts import render_design_page_header
-    st.markdown(
-        render_design_page_header(
-            kicker="DATA EXTRACTION" if lang == "en" else "数据提取",
-            title_en="Prepare & export cohort",
-            title_zh="准备并导出队列",
-            desc=(
-                "Configure the data source, define the cohort, pick concepts, and export — all four steps run here."
-                if lang == "en" else
-                "配置数据源、定义队列、选择概念、导出 —— 四个步骤都在这里完成。"
-            ),
-            lang=lang,
-        ),
-        unsafe_allow_html=True,
-    )
-
-    # Step status indicator
-    steps = _compute_pipeline_steps()
-    done_n = sum(1 for s in steps if s.status == "done")
-    chips = []
-    for i, s in enumerate(steps):
-        chips.append(
-            f'<div class="eu-pipe-step {s.status}" style="flex:1;background:'
-            f'{"var(--surface-2)" if s.status == "active" else "transparent"}">'
-            f'<div class="dot">{"✓" if s.status == "done" else ""}</div>'
-            '<div class="body">'
-            f'<div class="title">{i + 1}. {html.escape(s.title)}</div>'
-            f'<div class="meta">{html.escape(s.meta)}</div>'
-            '</div></div>'
-        )
-    st.markdown(
-        f'<div class="eu-section-label" style="padding:0;margin:0 0 6px">'
-        f'<span>{"Pipeline" if lang == "en" else "流程"}</span>'
-        f'<span class="num">{done_n} / {len(steps)}</span></div>'
-        '<div style="display:flex;gap:8px;border:1px solid var(--hair);border-radius:10px;'
-        'padding:8px;background:var(--surface);margin-bottom:18px">'
-        + "".join(chips)
-        + '</div>',
-        unsafe_allow_html=True,
-    )
-
     if _render_export_completed_panel():
         return
 
-    # Run the real step renderers in sequence (same gating as the old
-    # sidebar flow, just hosted in the main pane).
-    _render_step1_data_source(entry_mode)
-    st.markdown("---")
-    if not _render_step2_cohort_selection():
+    if not st.session_state.get("step1_confirmed"):
+        _render_step1_data_source(entry_mode)
         return
-    selected_concepts = _render_step3_concept_selection(concept_groups)
-    if selected_concepts is None:
+
+    if not st.session_state.get("step2_confirmed"):
+        if not _render_step2_cohort_builder_design():
+            return
         return
+
+    if not st.session_state.get("step3_confirmed"):
+        selected_concepts = _render_step3_concept_selection_design(concept_groups)
+        if selected_concepts is None:
+            return
+        return
+
+    selected_concepts = st.session_state.get("selected_concepts", []) or []
     if not _render_step4_export(selected_concepts):
         return
     _render_system_resource_panel()

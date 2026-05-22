@@ -1506,12 +1506,12 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
     if st.session_state.get("research_agent_inbound_signature") == signature:
         return
 
-    left, right = st.columns([3.2, 1.35])
+    left, right = st.columns([6.0, 1.6])
     with left:
-        st.info(get_text("ra_handoff_hint").format(
-            concepts=concept_count,
-            patients=patient_count,
-        ))
+        st.markdown(
+            f'<div class="eu-handoff-note">{html.escape(get_text("ra_handoff_hint").format(concepts=concept_count, patients=patient_count))}</div>',
+            unsafe_allow_html=True,
+        )
     with right:
         if st.button(get_text("ra_handoff_button"), key=f"ra_handoff_{key_suffix}", use_container_width=True):
             try:
@@ -2872,6 +2872,96 @@ def render_cohort_figure_panel(panel: str) -> None:
     return _render_cohort_figure_panel_impl(panel, globals())
 
 
+def _render_global_status_strip(lang: str, entry_mode: str) -> None:
+    """Render a compact source-of-truth status strip for every work page."""
+    db_display = {
+        "mock": "Mock",
+        "miiv": "MIMIC-IV",
+        "eicu": "eICU-CRD",
+        "aumc": "AmsterdamUMCdb",
+        "hirid": "HiRID",
+        "mimic": "MIMIC-III",
+        "sic": "SICdb",
+    }
+    database = st.session_state.get("database", "")
+    db_label = db_display.get(database, database.upper() if database else "—")
+
+    if entry_mode == "demo":
+        mode_value = "Demo" if lang == "en" else "演示"
+        mode_tone = "demo"
+        path_value = "mock data" if lang == "en" else "模拟数据"
+        path_tone = "ok"
+    else:
+        mode_value = "Real data" if lang == "en" else "真实数据"
+        mode_tone = "real"
+        data_path = str(st.session_state.get("data_path") or "")
+        if st.session_state.get("path_validated"):
+            path_value = "valid" if lang == "en" else "已验证"
+            path_tone = "ok"
+        elif data_path:
+            path_value = "needs validation" if lang == "en" else "待验证"
+            path_tone = "warn"
+        else:
+            path_value = "not set" if lang == "en" else "未设置"
+            path_tone = "warn"
+
+    cohort_value = (
+        "configured" if lang == "en" else "已配置"
+    ) if st.session_state.get("step2_confirmed") else (
+        "not set" if lang == "en" else "未设置"
+    )
+    cohort_tone = "ok" if st.session_state.get("step2_confirmed") else "warn"
+
+    selected = st.session_state.get("selected_concepts", []) or []
+    features_value = (
+        f"{len(selected)} selected" if lang == "en" else f"已选 {len(selected)}"
+    ) if selected else ("none" if lang == "en" else "未选择")
+    features_tone = "ok" if selected else "warn"
+
+    counts = cohort_feature_counts(st.session_state)
+    patients = counts.get("patients", 0) or len(st.session_state.get("patient_ids", []) or [])
+    patients_value = f"{patients:,}" if patients else ("not loaded" if lang == "en" else "未加载")
+    patients_tone = "ok" if patients else ""
+
+    if st.session_state.get("_exporting_in_progress"):
+        export_value, export_tone = ("running" if lang == "en" else "进行中"), "info"
+    elif st.session_state.get("export_completed"):
+        export_value, export_tone = ("completed" if lang == "en" else "已完成"), "ok"
+    elif st.session_state.get("step3_confirmed") and selected:
+        export_value, export_tone = ("ready" if lang == "en" else "就绪"), "info"
+    else:
+        export_value, export_tone = ("not started" if lang == "en" else "未开始"), ""
+
+    labels = {
+        "mode": "Mode" if lang == "en" else "模式",
+        "db": "Database" if lang == "en" else "数据库",
+        "path": "Path" if lang == "en" else "路径",
+        "cohort": "Cohort" if lang == "en" else "队列",
+        "features": "Features" if lang == "en" else "特征",
+        "patients": "Patients" if lang == "en" else "患者",
+        "export": "Export" if lang == "en" else "导出",
+        "privacy": "Privacy" if lang == "en" else "隐私",
+    }
+    items = [
+        (labels["mode"], mode_value, mode_tone),
+        (labels["db"], db_label, ""),
+        (labels["path"], path_value, path_tone),
+        (labels["cohort"], cohort_value, cohort_tone),
+        (labels["features"], features_value, features_tone),
+        (labels["patients"], patients_value, patients_tone),
+        (labels["export"], export_value, export_tone),
+        (labels["privacy"], "local only" if lang == "en" else "仅本地", "ok"),
+    ]
+    body = "".join(
+        '<div class="eu-status-item">'
+        f'<span class="label">{html.escape(label)}</span>'
+        f'<span class="value {html.escape(tone)}">{html.escape(str(value))}</span>'
+        '</div>'
+        for label, value, tone in items
+    )
+    st.markdown(f'<div class="eu-status-strip">{body}</div>', unsafe_allow_html=True)
+
+
 
 
 
@@ -2955,79 +3045,186 @@ def main():
         'research_agent': 'Research Agent' if lang == 'en' else '研究 Agent',
     }
     _crumb_label = _page_labels_for_topbar.get(_active, _active)
+    _crumbs = ['EasyICU', _crumb_label]
+    if _active == 'extract':
+        if not st.session_state.get('step1_confirmed'):
+            _step_crumb = 'Step 1 · Data source' if lang == 'en' else '第 1 步 · 数据源'
+        elif not st.session_state.get('step2_confirmed'):
+            _step_crumb = 'Step 2 · Cohort' if lang == 'en' else '第 2 步 · 队列'
+        elif not st.session_state.get('step3_confirmed'):
+            _step_crumb = 'Step 3 · Concepts' if lang == 'en' else '第 3 步 · 变量'
+        else:
+            _step_crumb = 'Step 4 · Export' if lang == 'en' else '第 4 步 · 导出'
+        _mode_crumb = 'Demo' if entry_mode == 'demo' else ('Real Data' if lang == 'en' else '真实数据')
+        _crumbs = ['Data extraction' if lang == 'en' else '数据提取', _step_crumb, _mode_crumb]
     _topbar_pills: list[tuple[str, str]] = []
-    if entry_mode == 'demo':
+    _agent_wb_state = st.session_state.get('_agent_workbench')
+    _agent_wb_is_real = (
+        _active == 'research_agent'
+        and st.session_state.get('_ra_view') == 'workbench'
+        and isinstance(_agent_wb_state, dict)
+        and not _agent_wb_state.get('is_demo')
+    )
+    if _agent_wb_is_real:
+        _topbar_pills.append(('Real run manifest' if lang == 'en' else '真实 run manifest', 'real'))
+    elif entry_mode == 'demo':
         _topbar_pills.append(('Demo · simulated' if lang == 'en' else '演示 · 模拟数据', 'demo'))
     elif entry_mode == 'real':
         _topbar_pills.append(('Real data' if lang == 'en' else '真实数据', 'real'))
     if st.session_state.get('export_completed'):
         _topbar_pills.append(('Export complete' if lang == 'en' else '导出完成', 'ok'))
 
-    # Shell-A topbar: render a 4-col layout — breadcrumb / pills / icon
-    # buttons / primary action. The breadcrumb + pills are HTML; the
-    # buttons stay real ``st.button`` so callbacks survive a rerun.
-    _tb_left, _tb_pill, _tb_hist, _tb_agent, _tb_run = st.columns(
-        [7, 4, 2.2, 2.2, 2.2], gap="small"
-    )
-    with _tb_left:
-        _render_topbar(['EasyICU', _crumb_label], pills=())
-    with _tb_pill:
-        # Auto-saved + status pills row, right-aligned with the action group.
-        _auto_pill = _render_pill_html(
-            'Auto-saved 2m ago' if lang == 'en' else '自动保存 · 2 分钟前',
-            tone='neutral',
+    if _active == "extract":
+        if not st.session_state.get('step1_confirmed'):
+            _stage_label = '1/4  Data source' if lang == 'en' else '1/4  数据源'
+            _secondary_label = 'Cancel' if lang == 'en' else '取消'
+            _primary_label = 'Confirm & continue' if lang == 'en' else '确认并继续'
+            _primary_key = "_eu_topbar_confirm_step1"
+        elif not st.session_state.get('step2_confirmed'):
+            _stage_label = '2/4  Cohort' if lang == 'en' else '2/4  队列'
+            _secondary_label = 'Back' if lang == 'en' else '返回'
+            _primary_label = 'Confirm cohort' if lang == 'en' else '确认队列'
+            _primary_key = "_eu_topbar_confirm_step2"
+        elif not st.session_state.get('step3_confirmed'):
+            _stage_label = '3/4  Concepts' if lang == 'en' else '3/4  变量'
+            _secondary_label = 'Back' if lang == 'en' else '返回'
+            _primary_label = 'Confirm selection' if lang == 'en' else '确认选择'
+            _primary_key = "_eu_topbar_confirm_step3"
+        else:
+            _stage_label = '4/4  Export' if lang == 'en' else '4/4  导出'
+            _secondary_label = 'Back' if lang == 'en' else '返回'
+            _primary_label = 'Export bundle' if lang == 'en' else '导出包'
+            _primary_key = "_eu_topbar_confirm_step4"
+
+        _tb_left, _tb_stage, _tb_cancel, _tb_primary = st.columns(
+            [8.2, 1.45, 0.7, 2.15], gap="small"
         )
-        _other_pills = " ".join(_render_pill_html(label, tone=tone) for label, tone in _topbar_pills)
-        st.markdown(
-            '<div style="display:flex;gap:6px;justify-content:flex-end;'
-            'align-items:center;padding-top:6px;flex-wrap:wrap">'
-            f'{_auto_pill}{_other_pills}</div>',
-            unsafe_allow_html=True,
-        )
-    with _tb_hist:
-        if st.button(
-            ("⟳ History" if lang == 'en' else "⟳ 历史"),
-            key="_eu_topbar_history",
-            use_container_width=True,
-            help=("Show recent activity" if lang == 'en' else "查看近期活动"),
-        ):
-            st.session_state['_eu_show_history'] = not st.session_state.get('_eu_show_history', False)
-    with _tb_agent:
-        if st.button(
-            ("✦ Ask Agent" if lang == 'en' else "✦ 询问 Agent"),
-            key="_eu_topbar_agent",
-            use_container_width=True,
-            help=("Open the floating research-agent dock" if lang == 'en' else "打开浮动研究 Agent"),
-        ):
-            if not _is_screenshot_mode():
-                st.session_state['_floating_ai_open'] = True
-                st.rerun()
-    with _tb_run:
-        _run_label_map = {
-            'tutorial':       ('▶ Run',       '▶ 运行'),
-            'quick_viz':      ('▶ Render',    '▶ 渲染'),
-            'cohort':         ('▶ Re-run',    '▶ 重新运行'),
-            'cross_db':       ('▶ Compare',   '▶ 对比'),
-            'research_agent': ('▶ Launch',    '▶ 启动'),
-        }
-        _run_en, _run_zh = _run_label_map.get(_active, ('▶ Run', '▶ 运行'))
-        if st.button(
-            _run_en if lang == 'en' else _run_zh,
-            key="_eu_topbar_run",
-            type="primary",
-            use_container_width=True,
-        ):
-            # Surface a queued-action token; pages that listen for it
-            # can pick it up on their next render. Keeping the wiring
-            # cooperative avoids reaching across page boundaries.
-            st.session_state['_eu_topbar_run_request'] = {
-                'page': _active,
-                'requested_at': 'now',
-            }
-            st.toast(
-                ('Action queued — page picks it up on render.'
-                 if lang == 'en' else '已加入队列 — 页面会在渲染时接收。')
+        with _tb_left:
+            _render_topbar(_crumbs, pills=())
+        with _tb_stage:
+            st.markdown(
+                '<div class="eu-topbar-stage">'
+                f'{_render_pill_html(_stage_label, tone="neutral")}'
+                '</div>',
+                unsafe_allow_html=True,
             )
+        with _tb_cancel:
+            if st.button(
+                _secondary_label,
+                key="_eu_topbar_cancel",
+                use_container_width=True,
+            ):
+                if not st.session_state.get('step1_confirmed'):
+                    st.session_state["_active_main_page"] = "tutorial"
+                elif not st.session_state.get('step2_confirmed'):
+                    st.session_state.step1_confirmed = False
+                elif not st.session_state.get('step3_confirmed'):
+                    st.session_state.step2_confirmed = False
+                else:
+                    st.session_state.step3_confirmed = False
+                st.rerun()
+        with _tb_primary:
+            if st.button(
+                _primary_label,
+                key=_primary_key,
+                type="primary",
+                use_container_width=True,
+            ):
+                if _primary_key == "_eu_topbar_confirm_step1":
+                    st.session_state.step1_confirmed = True
+                    st.rerun()
+                elif _primary_key == "_eu_topbar_confirm_step2":
+                    st.session_state.step2_confirmed = True
+                    st.rerun()
+                elif _primary_key == "_eu_topbar_confirm_step3":
+                    if st.session_state.get("selected_concepts"):
+                        st.session_state.step3_confirmed = True
+                        st.rerun()
+                    else:
+                        st.toast(
+                            ('Select at least one concept first.'
+                             if lang == 'en' else '请先至少选择一个变量。')
+                        )
+                else:
+                    st.session_state['_eu_topbar_run_request'] = {
+                        'page': _active,
+                        'requested_at': 'now',
+                    }
+                    st.toast(
+                        ('Use the page controls below to confirm this step.'
+                         if lang == 'en' else '请使用下方页面控件确认此步骤。')
+                    )
+    else:
+        # Shell-A topbar: render a 4-col layout — breadcrumb / pills / icon
+        # buttons / primary action. The breadcrumb + pills are HTML; the
+        # buttons stay real ``st.button`` so callbacks survive a rerun.
+        _tb_left, _tb_pill, _tb_hist, _tb_agent, _tb_run = st.columns(
+            [7, 4, 2.2, 2.2, 2.2], gap="small"
+        )
+        with _tb_left:
+            _render_topbar(_crumbs, pills=())
+        with _tb_pill:
+            # Auto-saved + status pills row, right-aligned with the action group.
+            _auto_pill = _render_pill_html(
+                'Auto-saved 2m ago' if lang == 'en' else '自动保存 · 2 分钟前',
+                tone='neutral',
+            )
+            _other_pills = " ".join(_render_pill_html(label, tone=tone) for label, tone in _topbar_pills)
+            st.markdown(
+                '<div style="display:flex;gap:6px;justify-content:flex-end;'
+                'align-items:center;padding-top:6px;flex-wrap:wrap">'
+                f'{_auto_pill}{_other_pills}</div>',
+                unsafe_allow_html=True,
+            )
+        with _tb_hist:
+            if st.button(
+                ("History" if lang == 'en' else "历史"),
+                key="_eu_topbar_history",
+                use_container_width=True,
+                icon=":material/history:",
+                help=("Show recent activity" if lang == 'en' else "查看近期活动"),
+            ):
+                st.session_state['_eu_show_history'] = not st.session_state.get('_eu_show_history', False)
+        with _tb_agent:
+            if st.button(
+                ("Ask Agent" if lang == 'en' else "询问 Agent"),
+                key="_eu_topbar_agent",
+                use_container_width=True,
+                icon=":material/auto_awesome:",
+                help=("Open the floating research-agent dock" if lang == 'en' else "打开浮动研究 Agent"),
+            ):
+                if not _is_screenshot_mode():
+                    st.session_state['_floating_ai_open'] = True
+                    st.rerun()
+        with _tb_run:
+            _run_label_map = {
+                'tutorial':       ('Run',       '运行'),
+                'quick_viz':      ('Render',    '渲染'),
+                'cohort':         ('Re-run',    '重新运行'),
+                'cross_db':       ('Compare',   '对比'),
+                'research_agent': ('Launch',    '启动'),
+            }
+            _run_en, _run_zh = _run_label_map.get(_active, ('▶ Run', '▶ 运行'))
+            if st.button(
+                _run_en if lang == 'en' else _run_zh,
+                key="_eu_topbar_run",
+                type="primary",
+                use_container_width=True,
+                icon=":material/play_arrow:",
+            ):
+                # Surface a queued-action token; pages that listen for it
+                # can pick it up on their next render. Keeping the wiring
+                # cooperative avoids reaching across page boundaries.
+                st.session_state['_eu_topbar_run_request'] = {
+                    'page': _active,
+                    'requested_at': 'now',
+                }
+                st.toast(
+                    ('Action queued — page picks it up on render.'
+                     if lang == 'en' else '已加入队列 — 页面会在渲染时接收。')
+                )
+
+    _render_global_status_strip(lang, entry_mode)
 
     if st.session_state.get('_eu_show_history'):
         with st.expander(
@@ -3315,23 +3512,59 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{ra_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            # Shell-A redesign: the real research_agent module renders
-            # its own page header (now restyled by shell_styles), so
-            # we don't add a duplicate above it.
-            try:
-                from easyicu.webapp.research_agent import (
-                    render_research_agent_demo_page,
-                    render_research_agent_page,
-                )
-                if st.session_state.get('entry_mode') == 'demo':
-                    render_research_agent_demo_page()
-                else:
-                    render_research_agent_page()
-            except Exception as _ra_exc:  # pragma: no cover - defensive
-                st.error(get_text("ra_page_load_failed").format(
-                    error=f"{type(_ra_exc).__name__}: {_ra_exc}",
-                ))
-                st.caption(get_text("ra_optional_deps_hint"))
+            # Shell-A redesign: Research Agent now has two views —
+            # "Setup" (the real research_agent module: cohort handoff,
+            # question, plan, run controls, bound outputs) and
+            # "Workbench" (the live 3-column run view from
+            # page-agent-workbench.jsx). A segmented control switches
+            # between them; the workbench reads
+            # st.session_state['_agent_workbench'] when a run streams
+            # into it, else primes the latest local manifest before using
+            # the representative snapshot fallback.
+            _ra_view = st.session_state.get('_ra_view', 'setup')
+            _seg_l, _seg_r, _ = st.columns([1.3, 1.3, 6])
+            with _seg_l:
+                if st.button(
+                    ("● Setup" if _ra_view == 'setup' else "Setup") if lang == 'en'
+                    else ("● 配置" if _ra_view == 'setup' else "配置"),
+                    key="_eu_ra_view_setup", use_container_width=True,
+                    type="primary" if _ra_view == 'setup' else "secondary",
+                ):
+                    st.session_state['_ra_view'] = 'setup'
+                    st.rerun()
+            with _seg_r:
+                if st.button(
+                    ("● Workbench" if _ra_view == 'workbench' else "Workbench") if lang == 'en'
+                    else ("● 工作台" if _ra_view == 'workbench' else "工作台"),
+                    key="_eu_ra_view_workbench", use_container_width=True,
+                    type="primary" if _ra_view == 'workbench' else "secondary",
+                ):
+                    st.session_state['_ra_view'] = 'workbench'
+                    try:
+                        from easyicu.webapp.agent_workbench import prime_agent_workbench_state
+                        prime_agent_workbench_state(lang)
+                    except Exception:
+                        pass
+                    st.rerun()
+
+            if _ra_view == 'workbench':
+                from easyicu.webapp.agent_workbench import render_agent_workbench
+                render_agent_workbench(lang)
+            else:
+                try:
+                    from easyicu.webapp.research_agent import (
+                        render_research_agent_demo_page,
+                        render_research_agent_page,
+                    )
+                    if st.session_state.get('entry_mode') == 'demo':
+                        render_research_agent_demo_page()
+                    else:
+                        render_research_agent_page()
+                except Exception as _ra_exc:  # pragma: no cover - defensive
+                    st.error(get_text("ra_page_load_failed").format(
+                        error=f"{type(_ra_exc).__name__}: {_ra_exc}",
+                    ))
+                    st.caption(get_text("ra_optional_deps_hint"))
 
     # 🔧 处理侧边栏触发的导出（在标签页渲染后执行，确保 Guide: Complete 中的 container 已创建）
     if st.session_state.get('trigger_export', False):
@@ -3435,7 +3668,10 @@ def main():
                 "Floating chat dock failed to render", exc_info=True
             )
 
-    if not _is_screenshot_mode():
+    # Shell-A carries status, navigation, and help affordances in the top bar
+    # and sidebar. Suppress the legacy footer row so the design canvas starts
+    # and ends cleanly.
+    if False and not _is_screenshot_mode():
         # 底部状态栏
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 

@@ -956,6 +956,31 @@ def _load_run_manifest(run_dir: Path) -> Tuple[Dict[str, Any], Optional[Path], b
     return manifest, manifest_path, manifest_path.name == "manifest_partial.json"
 
 
+def _bind_workbench_state(
+    *,
+    run_dir: Path,
+    manifest: Dict[str, Any],
+    partial: Optional[bool] = None,
+    progress_events: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    """Populate the Shell-A Workbench from a real run manifest."""
+    try:
+        from easyicu.webapp.agent_workbench import build_workbench_state_from_manifest
+
+        st.session_state["_agent_workbench"] = build_workbench_state_from_manifest(
+            run_dir,
+            manifest,
+            lang=st.session_state.get("language", "en"),
+            partial=partial,
+            progress_events=progress_events,
+        )
+        st.session_state["_agent_workbench_source_run_dir"] = str(run_dir)
+    except Exception:
+        # Workbench binding is an observation layer; the canonical report
+        # renderer below must remain available even if the visual adapter fails.
+        pass
+
+
 def _safe_step_status(record: Dict[str, Any]) -> str:
     status = str(record.get("status") or "").strip()
     if status:
@@ -3074,12 +3099,34 @@ def _render_run_history(workdir: Path) -> None:
         manifest, manifest_path, _partial = _load_run_manifest(selected_run["run_dir"])
         if manifest:
             st.markdown(f"### {_ra_text('history_selected')}: `{selected_run['run_id']}`")
-            _render_run_manifest(
-                run_dir=selected_run["run_dir"],
-                manifest=manifest,
-                manifest_path=manifest_path,
-                key_prefix=f"research_agent_history_{selected_run['run_id']}",
-            )
+            cols = st.columns([1.4, 1.0, 1.0, 4.0])
+            cols[0].metric(_ra_text("history_steps"), f"{selected_run['step_ok']}/{selected_run['step_total']}")
+            cols[1].metric(_ra_text("history_findings"), f"{selected_run['finding_errors']}E / {selected_run['finding_warnings']}W")
+            cols[2].metric(_ra_text("history_figures"), selected_run["figure_count"])
+            safe_run_id = re.sub(r"[^A-Za-z0-9_]+", "_", str(selected_run["run_id"]))
+            if cols[3].button(
+                "Open in Workbench" if st.session_state.get("language", "en") == "en" else "在工作台打开",
+                key=f"research_agent_history_open_wb_{safe_run_id}",
+                type="primary",
+                use_container_width=True,
+            ):
+                _bind_workbench_state(
+                    run_dir=selected_run["run_dir"],
+                    manifest=manifest,
+                    partial=_partial,
+                )
+                st.session_state["_ra_view"] = "workbench"
+                st.rerun()
+            with st.expander(
+                "Detailed report and artefacts" if st.session_state.get("language", "en") == "en" else "详细报告与产物",
+                expanded=False,
+            ):
+                _render_run_manifest(
+                    run_dir=selected_run["run_dir"],
+                    manifest=manifest,
+                    manifest_path=manifest_path,
+                    key_prefix=f"research_agent_history_{selected_run['run_id']}",
+                )
 
 
 def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
@@ -3494,6 +3541,26 @@ def render_research_agent_page() -> None:
         if run_id:
             manifest, _manifest_path, _partial = _load_run_manifest(workdir / str(run_id))
             if manifest:
+                _bind_workbench_state(
+                    run_dir=workdir / str(run_id),
+                    manifest=manifest,
+                    partial=_partial,
+                    progress_events=progress_events,
+                )
+            else:
+                _bind_workbench_state(
+                    run_dir=workdir / str(run_id),
+                    manifest={
+                        "run_id": str(run_id),
+                        "research_question": free_question or target_outcome or str(run_id),
+                        "per_step_records": [],
+                        "evidence": [],
+                        "findings": [],
+                    },
+                    partial=True,
+                    progress_events=progress_events,
+                )
+            if manifest:
                 with live_steps.container():
                     st.markdown(f"### {_ra_text('live_steps')}")
                     _render_literature_and_plan(workdir / str(run_id), manifest)
@@ -3541,6 +3608,17 @@ def render_research_agent_page() -> None:
         "skill_or_question": skill_key or (free_question or "")[:60] + "…",
         "stop_after_analysis": stop_after_analysis,
     }
+    final_manifest, _final_manifest_path, _final_partial = _load_run_manifest(Path(result.workdir))
+    if final_manifest:
+        _bind_workbench_state(
+            run_dir=Path(result.workdir),
+            manifest=final_manifest,
+            partial=_final_partial,
+            progress_events=progress_events,
+        )
+        if "entry_mode" in st.session_state:
+            st.session_state["_ra_view"] = "workbench"
+            st.rerun()
     _render_run_outputs(result, Path(result.workdir))
 
 

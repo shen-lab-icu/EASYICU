@@ -101,7 +101,7 @@ def render_compact_kpi_grid(
             f'<div style="font-size:9.5px;color:var(--ink-4);letter-spacing:.06em;'
             f'text-transform:uppercase;font-weight:500">{_esc(label)}</div>'
             f'<div class="mono" style="font-size:16px;font-weight:500;margin-top:2px;'
-            f'color:{color};font-family:var(--font-mono);letter-spacing:-0.01em">{_esc(value)}</div>'
+            f'color:{color};font-family:var(--font-mono);letter-spacing:0">{_esc(value)}</div>'
             '</div>'
         )
     return (
@@ -469,7 +469,7 @@ def render_snapshot_card(
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
         f'letter-spacing:.06em;text-transform:uppercase">{_esc(meta)}</div>'
         f'<h2 style="margin:6px 0 4px;font-size:22px;font-weight:500;'
-        f'letter-spacing:-0.015em">{_esc(name)}</h2>'
+        f'letter-spacing:0">{_esc(name)}</h2>'
         f'<div style="font-size:12.5px;color:var(--ink-3)">{_esc(description)}</div>'
         '</div>'
         f'<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;'
@@ -649,7 +649,7 @@ def render_design_page_header(
         f'letter-spacing:0.06em;text-transform:uppercase">{_esc(kicker)}</div>'
         '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-top:6px">'
         '<div>'
-        f'<h1 style="margin:0;font-size:22px;font-weight:500;letter-spacing:-0.015em;color:var(--ink)">'
+        f'<h1 style="margin:0;font-size:22px;font-weight:500;letter-spacing:0;color:var(--ink)">'
         f'{_esc(title)}'
         '</h1>'
         f'<div style="margin-top:4px;color:var(--ink-3);font-size:12.5px">{_esc(desc)}</div>'
